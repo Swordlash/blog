@@ -1,0 +1,54 @@
+# Haskell / cabal
+dist
+dist-*
+cabal-dev
+*.o
+*.hi
+*.hie
+*.dyn_o
+*.dyn_hi
+*.p_o
+*.p_hi
+*.chi
+*.chs.h
+*.prof
+*.aux
+*.hp
+*.eventlog
+.hpc
+.hsenv
+.cabal-sandbox/
+cabal.sandbox.config
+cabal.project.local
+cabal.project.local~
+.HTF/
+.ghc.environment.*
+.stack-work/
+stack.yaml.lock
+*.tix
+.hie/
+
+# Haskell Language Server
+hie.yaml.local
+.hls/
+
+# wasm / JS build output
+*.wasm
+*.jsexe/
+ghc_wasm_jsffi.js
+public/
+node_modules/
+*.tsbuildinfo
+
+# Tools and editors
+.direnv/
+.envrc.local
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Test output
+test-results/
+playwright-report/
