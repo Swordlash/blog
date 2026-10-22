@@ -103,8 +103,7 @@ per package once there is a release to speak of.
 
 ### Phase 0: foundation
 
-Goal: an empty Halogen app builds natively and for wasm, in CI and in a cloud session,
-and deploys to GitHub Pages.
+Goal: an empty Halogen app builds natively and for wasm, in CI and in a cloud session.
 
 - **WP0.1 Scaffold.** `cabal.project` with `source-repository-package` pins for
   haskell-halogen (core, jsbits, hooks, router, th, hspec-halogen), the four packages
@@ -119,10 +118,12 @@ and deploys to GitHub Pages.
   the pinned revision, Node 24, Chromium for Playwright, then `cabal build all --only-dependencies`
   for both projects; idempotent and quiet when already done. Acceptance: a fresh session
   can run the three commands above.
-- **WP0.3 CI and deploy.** `build.yml` (native build + tests; wasm build + tests; caches
-  for the cabal store and the wasm toolchain, copied from haskell-halogen's workflow)
-  and `build-deploy.yml` publishing the wasm demo to GitHub Pages under the project's
-  base path. Acceptance: green CI on the PR, the demo URL serves the hello page.
+- **WP0.3 CI.** `build.yml` (native build + tests; wasm build + tests + the Chromium smoke
+  test; a fourmolu check; caches for the cabal store and the wasm toolchain, copied from
+  haskell-halogen's workflow). The repository is private, so there is no GitHub Pages
+  deploy: the wasm job uploads the built page as a workflow artifact instead, and the
+  demo of Phase 1 is run from that artifact or locally with `npm run serve-wasm`.
+  Acceptance: green CI on the PR.
 
 ### Phase 1: spike to MVP, serverless demo
 
@@ -161,9 +162,10 @@ point of this phase.
 - **WP1.6 Editor with live preview.** Split view, debounced re-render, attachment
   drag-and-drop/upload inserting the right Markdown, save/cancel, unsaved-changes
   guard. Browser tests: type Markdown, see the preview update, save, read back.
-- **WP1.7 Demo polish and release of the MVP.** Seeded tour page, README with the demo
-  link, `test-gallery`-style Playwright smoke test of the deployed artefact (every
-  route mounts, back/forward/reload work). Tag `v0.1.0-demo`.
+- **WP1.7 Demo polish and release of the MVP.** Seeded tour page, README saying how to run
+  the demo (`npm run serve-wasm`, or the CI artifact), the Playwright smoke test grown
+  into a gallery-style test of the built page (every route mounts, back/forward/reload
+  work). Tag `v0.1.0-demo`.
 
 ### Phase 2: server and persistence
 
@@ -274,3 +276,6 @@ Amended by the planning session after each work package's report.
   `dev-test.sh` was left out until the first browser suite exists. Carried over to WP1.5:
   nothing depends on `th` yet, so its first use adds a long one-off `ghc-lib-parser`
   build on both backends.
+- **Phase 1 started** with WP0.3, WP1.1, WP1.2 and WP1.3 in parallel, each in its own
+  worktree and branch, since none depends on another; WP1.4 follows WP1.1, WP1.5 follows
+  WP1.4, WP1.6 follows WP1.2, WP1.3 and WP1.5.
