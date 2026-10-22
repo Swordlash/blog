@@ -53,6 +53,10 @@ library
   exposed-modules:
       Wiki.Core.Attachment
       Wiki.Core.Id
+      Wiki.Core.Markdown
+      Wiki.Core.Markdown.Ast
+      Wiki.Core.Markdown.Link
+      Wiki.Core.Markdown.Render
       Wiki.Core.Page
       Wiki.Core.Path
       Wiki.Core.Permission
@@ -62,8 +66,13 @@ library
   build-depends:
       aeson,
       base,
+      bytestring,
+      commonmark >= 0.3.1 && < 0.4,
+      commonmark-extensions >= 0.2.7.3 && < 0.3,
       containers,
+      haskell-halogen-core,
       protolude,
+      row-types,
       text,
       time
 
@@ -77,6 +86,8 @@ test-suite wiki-core-test
       Test.Attachment
       Test.Gen
       Test.Json
+      Test.Markdown.Ast
+      Test.Markdown.Link
       Test.Path
       Test.Permission
       Test.Slug
@@ -89,3 +100,27 @@ test-suite wiki-core-test
       text,
       time,
       wiki-core
+
+-- The markup the renderer makes, through Halogen.Static's in-memory
+-- document, which exists natively only (as wiki-app-test). The tree it is
+-- made from is tested on both backends, in wiki-core-test.
+test-suite wiki-core-html-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test-html
+  main-is:          Test.hs
+
+  if arch(wasm32)
+    buildable: False
+  else
+    other-modules:
+        Test.Markdown.Document
+        Test.Markdown.Html
+        Test.Markdown.Render
+    build-depends:
+        hspec >= 2,
+        haskell-halogen-core,
+        protolude,
+        row-types,
+        text,
+        wiki-core
