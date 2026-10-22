@@ -19,6 +19,14 @@
 # written into each page's <base href>. Finally the sizes of what is served are
 # reported, raw, gzipped and brotli'd (toolchain/compress.mjs).
 #
+# WASM_PROJECT and WASM_BUILDDIR choose the cabal project file and the build
+# directory (default cabal-wasm.project and dist-newstyle/wasm); the output is
+# then $WASM_BUILDDIR/public/app. `npm run build-wasm-opt` sets them to
+# cabal-wasm-opt.project and dist-newstyle/wasm-opt for the -O2 production
+# build toolchain/deploy-local.sh deploys, which is otherwise built exactly as
+# this one. The prerender is a native program and is built the same way for
+# both.
+#
 # Adapted from haskell-halogen's script of the same name, which builds one of
 # its examples by name; here there is one application.
 set -eu
@@ -27,7 +35,8 @@ cd "$(dirname "$0")/.."
 . "$HOME/.ghc-wasm/env"
 
 package=wiki-app
-build_dir=dist-newstyle/wasm
+project=${WASM_PROJECT:-cabal-wasm.project}
+build_dir=${WASM_BUILDDIR:-dist-newstyle/wasm}
 public_dir=$build_dir/public/app
 
 wasm_ghc=$(command -v wasm32-wasi-ghc)
@@ -38,7 +47,7 @@ wasm_hsc2hs=$(command -v wasm32-wasi-hsc2hs)
 rm -f "$build_dir/cache/compiler"
 
 set -- \
-  --project-file=cabal-wasm.project \
+  --project-file="$project" \
   --builddir="$build_dir" \
   --with-compiler="$wasm_ghc" \
   --with-hc-pkg="$wasm_ghc_pkg" \

@@ -7,7 +7,7 @@
 #   sh toolchain/bootstrap.sh env         # print the PATH lines a shell needs
 #   sh toolchain/bootstrap.sh path        # the same directories, one per line
 #   sh toolchain/bootstrap.sh check       # read-only inventory; never installs
-#   sh toolchain/bootstrap.sh ready [build-native|test-native|build-wasm|test-wasm|test|dev-test|serve-wasm]
+#   sh toolchain/bootstrap.sh ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]
 #                                        # strict, read-only npm readiness gate
 #
 # It reuses compatible tools on PATH first. Missing tools are installed on
@@ -109,7 +109,7 @@ mode=${1:-all}
 case $mode in
   all | toolchain | warm | env | path | check | ready) ;;
   *)
-    printf 'usage: %s [all|toolchain|warm|env|path|check|ready [build-native|test-native|build-wasm|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
     exit 2
     ;;
 esac
@@ -341,7 +341,7 @@ require_generators() {
 ready() {
   target=${2:-build-wasm}
   case $target in
-    build-native | test-native | build-wasm | test-wasm | test | dev-test | serve-wasm) ;;
+    build-native | test-native | build-wasm | build-wasm-opt | test-wasm | test | dev-test | serve-wasm) ;;
     *) printf 'bootstrap: unknown readiness target: %s\n' "$target" >&2; return 2 ;;
   esac
   ready_failed=0

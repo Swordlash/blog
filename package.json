@@ -14,6 +14,7 @@
     "build-native": "sh toolchain/npm-command.sh build-native",
     "test-native": "sh toolchain/npm-command.sh test-native",
     "build-wasm": "sh toolchain/npm-command.sh build-wasm",
+    "build-wasm-opt": "sh toolchain/npm-command.sh build-wasm-opt",
     "serve-wasm": "sh toolchain/npm-command.sh serve-wasm",
     "test-wasm": "sh toolchain/npm-command.sh test-wasm",
     "test": "sh toolchain/npm-command.sh test",

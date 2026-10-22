@@ -5,10 +5,10 @@
 # ~/.wiki-toolchain/env runs them as it runs a build.
 set -eu
 cd "$(dirname "$0")/.."
-command=${1:?usage: npm-command.sh <build-native|test-native|build-wasm|test-wasm|test|dev-test|serve-wasm> [args...]}
+command=${1:?usage: npm-command.sh <build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm> [args...]}
 shift
 case $command in
-  build-native | test-native | build-wasm | test-wasm | test | dev-test | serve-wasm) ;;
+  build-native | test-native | build-wasm | build-wasm-opt | test-wasm | test | dev-test | serve-wasm) ;;
   *) printf 'Unknown npm command: %s\n' "$command" >&2; exit 2 ;;
 esac
 # Bootstrap's environment only adjusts the native toolchain PATH. The wasm
@@ -27,6 +27,12 @@ case $command in
   build-native) exec cabal build all --builddir=dist-newstyle/native "$@" ;;
   test-native) exec cabal test all --builddir=dist-newstyle/native "$@" ;;
   build-wasm) exec sh toolchain/build-wasm.sh "$@" ;;
+  # The -O2 production build, in a build directory of its own so that it and
+  # the everyday build never invalidate each other (cabal-wasm-opt.project).
+  build-wasm-opt)
+    WASM_PROJECT=cabal-wasm-opt.project WASM_BUILDDIR=dist-newstyle/wasm-opt
+    export WASM_PROJECT WASM_BUILDDIR
+    exec sh toolchain/build-wasm.sh "$@" ;;
   test-wasm) exec sh toolchain/test-wasm.sh "$@" ;;
   test) exec sh toolchain/run-tests.sh "$@" ;;
   dev-test) exec sh toolchain/dev-test.sh "$@" ;;

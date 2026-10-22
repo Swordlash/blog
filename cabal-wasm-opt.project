@@ -1,0 +1,16 @@
+-- The production build of the browser application, which
+-- toolchain/deploy-local.sh deploys: the same project as cabal-wasm.project,
+-- which it imports so that the compiler pins, allow-newer and shared stay in
+-- one place, with every package compiled at -O2, dependencies included.
+--
+-- It exists beside cabal-wasm.project rather than as a flag to it because a
+-- change of optimisation level rebuilds everything it touches: build it with
+-- `npm run build-wasm-opt`, which uses its own build directory
+-- (dist-newstyle/wasm-opt), so that switching between this and the everyday
+-- build in dist-newstyle/wasm never invalidates either. The first build
+-- compiles every dependency again at -O2, ghc-lib-parser among them, and can
+-- take over an hour; later ones only rebuild what changed.
+import: cabal-wasm.project
+
+package *
+  ghc-options: -O2

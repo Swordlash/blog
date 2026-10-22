@@ -254,8 +254,8 @@ EOF
 set -eu
 cd "$(dirname "$0")/.."
 . "$HOME/.ghc-wasm/env"
-{ printf 'wasm CC=%s' "$CC"; printf ' <%s>' "$@"; printf '\n'; } >>"$EVENTS"
-mkdir -p dist-newstyle/wasm/public/app
+{ printf 'wasm CC=%s project=%s builddir=%s' "$CC" "${WASM_PROJECT:-}" "${WASM_BUILDDIR:-}"; printf ' <%s>' "$@"; printf '\n'; } >>"$EVENTS"
+mkdir -p "${WASM_BUILDDIR:-dist-newstyle/wasm}/public/app"
 EOF
   # The test scripts stand in the same way: each records that it ran, with
   # the wasm CC it saw (none, since only the wasm scripts load that
@@ -283,14 +283,14 @@ pass 'strict readiness is read-only and accepts automatically loaded wasm tools'
 
 GHC_REPORT=9.12.2
 export GHC_REPORT
-for command in build serve build-native build-wasm serve-wasm test-native test-wasm test dev-test; do
+for command in build serve build-native build-wasm build-wasm-opt serve-wasm test-native test-wasm test dev-test; do
   if npm_command "$command" >"$case_dir/$command" 2>&1; then fail "$command bypassed readiness"; fi
   assert_contains "$case_dir/$command" 'sh toolchain/bootstrap.sh toolchain'
   assert_contains "$case_dir/$command" '. ~/.wiki-toolchain/env'
   assert_contains "$case_dir/$command" 'found: 9.12.2'
 done
 [ ! -s "$EVENTS" ] || fail 'a rejected npm command reached build or server'
-pass 'all nine npm entry points stop before compilation, tests or server startup on a wrong compiler'
+pass 'all ten npm entry points stop before compilation, tests or server startup on a wrong compiler'
 
 GHC_REPORT=9.14.1
 export GHC_REPORT
@@ -300,12 +300,16 @@ assert_contains "$case_dir/native" 'cabal <build> <all> <--builddir=dist-newstyl
 for command in build build-wasm serve serve-wasm; do
   : >"$EVENTS"
   npm_command "$command" -- '--constraint=example ==1' -j2 >"$case_dir/$command" 2>&1
-  assert_contains "$EVENTS" 'wasm CC=wasm-only-cc <--constraint=example ==1> <-j2>'
+  assert_contains "$EVENTS" 'wasm CC=wasm-only-cc project= builddir= <--constraint=example ==1> <-j2>'
   [ "$(grep -c 'bootstrap: ready for' "$case_dir/$command")" = 1 ] || fail "$command checked readiness twice"
   case $command in
     serve*) assert_contains "$EVENTS" 'server <.> <-p> <8080>' ;;
   esac
 done
+: >"$EVENTS"
+npm_command build-wasm-opt -- -j2 >"$case_dir/build-wasm-opt" 2>&1
+assert_contains "$EVENTS" 'wasm CC=wasm-only-cc project=cabal-wasm-opt.project builddir=dist-newstyle/wasm-opt <-j2>'
+[ "$(grep -c 'bootstrap: ready for build-wasm-opt' "$case_dir/build-wasm-opt")" = 1 ] || fail 'build-wasm-opt checked readiness twice'
 npm_command test-native -- -j2 >"$case_dir/test-native" 2>&1
 assert_contains "$case_dir/test-native" 'cabal <test> <all> <--builddir=dist-newstyle/native> <-j2>'
 for command in test-wasm test dev-test; do
@@ -339,7 +343,7 @@ for command in build-native build build-wasm serve serve-wasm test-native test-w
     build-native) assert_contains "$case_dir/$command" 'cabal <build> <all> <--builddir=dist-newstyle/native> <-j2>' ;;
     test-native) assert_contains "$case_dir/$command" 'cabal <test> <all> <--builddir=dist-newstyle/native> <-j2>' ;;
     test-wasm) assert_contains "$EVENTS" 'test-wasm CC= <-j2>' ;;
-    *) assert_contains "$EVENTS" 'wasm CC=wasm-only-cc <-j2>' ;;
+    *) assert_contains "$EVENTS" 'wasm CC=wasm-only-cc project= builddir= <-j2>' ;;
   esac
   case $command in
     serve*) assert_contains "$EVENTS" 'server <.> <-p> <8080>' ;;
@@ -368,7 +372,7 @@ printf 'case ":$PATH:" in *":%s/.ghcup/bin:"*) ;; *) PATH="%s/.ghcup/bin:$PATH" 
 cp "$HOME/.wiki-toolchain/env" "$case_dir/env-before"
 if bootstrap ready >"$case_dir/before" 2>&1; then fail 'initial old PATH unexpectedly passed'; fi
 npm_command serve-wasm -- -j2 >"$case_dir/serve" 2>&1
-assert_contains "$EVENTS" 'wasm CC=wasm-only-cc <-j2>'
+assert_contains "$EVENTS" 'wasm CC=wasm-only-cc project= builddir= <-j2>'
 assert_contains "$EVENTS" 'server <.> <-p> <8080>'
 cmp "$case_dir/env-before" "$HOME/.wiki-toolchain/env" || fail 'npm rewrote an old env file'
 generated_env=$(bootstrap env)

@@ -224,6 +224,7 @@ npm ci                          # once: Playwright, http-server, esbuild, KaTeX,
 npm run build-native            # every package, host GHC, into dist-newstyle/native
 npm run test-native             # the test suites, natively
 npm run build-wasm              # wiki-app to wasm, a prerendered page per route, the islands bundle, into dist-newstyle/wasm/public/app
+npm run build-wasm-opt          # the same with every package at -O2 (cabal-wasm-opt.project), into dist-newstyle/wasm-opt/public/app
 npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
 npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
@@ -259,6 +260,15 @@ from `HALOGEN_BASE_PATH` (default `/`), so the built directory can be served fro
 sub-path: `HALOGEN_BASE_PATH=/wiki/ npm run build-wasm`. It writes an `index.html` for
 every route the demo starts with and a `404.html` for the rest, which GitHub Pages and
 http-server serve for an address with no file.
+
+`build-wasm-opt` is the production build, the one `toolchain/deploy-local.sh`
+deploys (see [Deploying on your own machine](#deploying-on-your-own-machine)):
+`cabal-wasm-opt.project` imports `cabal-wasm.project`, so it has the same pins, and
+compiles every package at `-O2`, dependencies included, into its own build directory
+`dist-newstyle/wasm-opt`, so that it and the everyday build never invalidate each
+other. Its first run compiles every dependency again at `-O2`, `ghc-lib-parser`
+among them, and can take over an hour; later runs rebuild only what changed. CI
+and `build-wasm` keep the default optimisation.
 
 `serve-wasm` opens the page in a browser; set `PORT` for another port, `NO_OPEN=1` to
 not open one. Builds go to `dist-newstyle/native` and `dist-newstyle/wasm`; always
