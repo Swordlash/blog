@@ -196,6 +196,16 @@ point of this phase.
   on the Markdown source, or the AST's plain text), ranked by title match first. Keyboard:
   focus with `/`, arrows and Enter to pick a result. Browser tests: typing narrows the
   results, the space filter excludes the other spaces, a result navigates.
+- **WP1.9 Quoter pass.** After everything of Phase 1 is on `main`: one agent reads every
+  view module of `wiki-app` (and `wiki-core`'s Markdown renderer) and decides, module by
+  module, where `hh` makes the HTML simpler and where the combinators stay (dynamic trees
+  such as the rendered Markdown, the search results, the space tree), and whether any of
+  `web/style.css` reads better as `clay` next to its component. It rewrites what it chose,
+  behaviour unchanged (the browser tests and the prerendered pages are the oracle: a
+  prerender diff before and after must be empty or explained), adds `haskell-halogen-th`
+  to `wiki-app` and `alex`/`happy < 2.2` to the wasm job, records the build-time cost of
+  `ghc-lib-parser` on both backends, and reports the rule it applied so later packages
+  follow it.
 
 ### Phase 2: server and persistence
 
@@ -427,8 +437,9 @@ Amended by the planning session after each work package's report.
   merges `wp1.6-editor` into `wp1.8-search` and restacks #14 on #13, then WP1.7 branches
   from there. Merge order once CI runs: #6, #9, #10, #11, #12, #13, #14, then WP1.7.
 - **Quoters, owner's rule:** use `hh` (and `clay`) wherever they simplify the code,
-  which for HTML is usual; decision 3 amended. The next package that writes views
-  (WP1.7's polish if it touches a view, else WP3.3's panel) introduces `th`.
+  which for HTML is usual; decision 3 amended. WP1.9, after the Phase 1 merges, is one
+  agent's pass over the existing views deciding where `hh`/`clay` go and where not;
+  until then a new view in WP1.7 uses `hh`, and later packages follow WP1.9's rule.
 - **Administration from localhost planned (owner's request):** decision 11 adds a
   loopback-only admin listener to `wiki-server`, where a user is marked as administrator
   without a login; an administrator then has the panel remotely. WP2.3 gains the listener,
