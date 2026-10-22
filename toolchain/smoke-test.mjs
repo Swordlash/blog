@@ -23,12 +23,14 @@
 //    seen and marked; then the program has to replace it with the same
 //    route: the same title, heading and error, if any, and the same footer.
 // 2. One long walk in one page, as someone would take it: the front page,
-//    every root space and a page in each, the editor as admin with a save,
-//    search, then back through the whole history and forward again, each
-//    step checked by its address and what is on screen. Then leaving the
-//    editor with changes by the back button (Stay, then Leave), a reload,
-//    and 404.html for an address with no file.
-// 3. The same page in a dark scheme and at a phone's width.
+//    every root space and a page in each, a page's source and back, the
+//    editor as admin with a save, search, then back through the whole
+//    history and forward again, each step checked by its address and what
+//    is on screen. Then leaving the editor with changes by the back button
+//    (Stay, then Leave), a reload on a page and on its source, and 404.html
+//    for an address with no file.
+// 3. The same page in a dark scheme and at a phone's width, and a page's
+//    source copied to the clipboard.
 //
 // Needs the Chromium that Playwright's version in package-lock.json launches
 // (toolchain/bootstrap.sh installs it), and no network: index.js loads
@@ -164,6 +166,20 @@ async function load(page, path) {
   return before;
 }
 
+// Reload the page, and wait as 'load' does for the program to have replaced
+// what the server sent.
+async function reload(page) {
+  let release;
+  page.gate = new Promise((go) => (release = go));
+  await page.reload({ waitUntil: "commit" });
+  const prerendered = page.locator("#app .wiki");
+  await prerendered.waitFor({ timeout });
+  await prerendered.evaluate((shell) => (shell.dataset.prerendered = "true"));
+  release();
+  page.gate = null;
+  await page.locator("#app .wiki:not([data-prerendered])").waitFor({ timeout });
+}
+
 async function eventually(check, what) {
   let last;
   for (const deadline = Date.now() + timeout; Date.now() < deadline; await new Promise((later) => setTimeout(later, 100))) {
@@ -217,7 +233,7 @@ try {
 
   const paths = await prerenderedPaths(root);
   assert.ok(paths.length >= 10, `only ${paths.length} pages were prerendered`);
-  for (const path of ["/", "/search/", "/s/docs/", "/s/docs/p/tour/", "/s/team/p/team-handbook/"]) {
+  for (const path of ["/", "/search/", "/s/docs/", "/s/docs/p/tour/", "/s/docs/p/tour/source/", "/s/team/p/team-handbook/"]) {
     assert.ok(paths.includes(path), `${path} was not prerendered`);
   }
   const visitor = await newPage();
@@ -310,6 +326,17 @@ try {
   await arrive({ path: "/s/blog/", view: "space-view", crumb: "Blog" }, "Blog again");
   await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
   await arrive({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "Hello, world");
+
+  // Its source, and back to it by the link.
+  await page.locator("#app .page-view .actions a", { hasText: "View source" }).click();
+  await arrive(
+    { path: "/s/blog/p/hello-world/source/", view: "source-view", crumb: "Source", text: "# Hello, world" },
+    "Hello, world's source",
+  );
+  await page.locator("#app .source-view a.source-back").click();
+  await arrive({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "back from the source");
+  console.log("ok: a page's source opens from the page, and its link leads back");
+
   await page.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
   await arrive({ path: "/s/blog/p/hello-world/edit/", view: "editor", crumb: "Edit" }, "the editor");
   const textarea = page.locator("#app .editor-text");
@@ -388,7 +415,12 @@ try {
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "the reload");
   await page.locator("#app .user-switcher-toggle", { hasText: "Not signed in" }).waitFor({ timeout });
   assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit survived a reload");
-  console.log("ok: a reload arrives at the same page, with the demo started over");
+  // And on a page's source, which a reader not signed in may read too.
+  await page.locator("#app .page-view .actions a", { hasText: "View source" }).click();
+  await check({ path: "/s/blog/p/hello-world/source/", view: "source-view", crumb: "Source" }, "the source");
+  await reload(page);
+  await check({ path: "/s/blog/p/hello-world/source/", view: "source-view", crumb: "Source", text: "# Hello, world" }, "the source reloaded");
+  console.log("ok: a reload arrives at the same page, with the demo started over, and at a page's source");
 
   // An address with no file: 404.html, which the program reads as its own.
   const missing = await fetch(url("/no/such/address/"));
@@ -453,8 +485,24 @@ try {
   await phone.locator("#app .editor-preview .page-body h1").waitFor({ timeout });
   assert.ok(!(await phone.locator("#app .editor-text").isVisible()), "the Markdown beside the preview on a phone");
   assert.ok(await fits(), "the editor is wider than a phone");
+  // A page's source wraps its long lines rather than widening the page.
+  await load(phone, "/s/docs/p/tour/source/");
+  await phone.locator("#app .source-text").waitFor({ timeout });
+  assert.ok(await fits(), "a page's source is wider than a phone");
   await phone.context().close();
-  console.log("ok: a page and the editor fit a phone's width");
+  console.log("ok: a page, the editor and a page's source fit a phone's width");
+
+  // Copy puts the Markdown on the clipboard, as written. Headless Chromium
+  // lets a page at it only with the permissions granted.
+  const copier = await newPage({ permissions: ["clipboard-read", "clipboard-write"] });
+  await load(copier, "/s/docs/p/tour/source/");
+  const source = await copier.locator("#app .source-text").textContent();
+  assert.ok(source.startsWith("# Tour\n"), "the source is not the tour's Markdown");
+  await copier.locator("#app .source-view button.source-copy").click();
+  await copier.locator("#app .source-copied", { hasText: "Copied" }).waitFor({ timeout });
+  assert.equal(await copier.evaluate(() => navigator.clipboard.readText()), source, "the clipboard has something else");
+  await copier.context().close();
+  console.log("ok: Copy puts a page's source on the clipboard");
 } catch (error) {
   // What the page reported is usually why it did not get there.
   failures.push(String(error.stack ?? error));
