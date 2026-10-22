@@ -105,6 +105,79 @@ main = putStrLn "Hello, wiki"
 
 Code indented by four spaces is a block too, without a language.
 
+These languages are highlighted, by the names a fence may give them (in
+any case); code in any other language is shown as it is, unhighlighted:
+
+| Language | Fence names |
+|----------|-------------|
+| Ada | `ada`, `adb`, `ads` |
+| ARM assembly | `armasm`, `arm` |
+| Awk | `awk` |
+| Bash and other shells' scripts | `bash`, `sh`, `zsh`, `shell-script` |
+| Batch files | `dos`, `bat`, `batch`, `cmd` |
+| C | `c`, `h` |
+| C++ | `cpp`, `c++`, `cc`, `cxx`, `hpp`, `h++`, `hh`, `hxx` |
+| C# | `csharp`, `cs`, `c#` |
+| Clojure | `clojure`, `clj`, `edn` |
+| CMake | `cmake` |
+| CSS, Less, SCSS | `css`, `less`, `scss` |
+| Dart | `dart` |
+| Delphi and Object Pascal | `delphi`, `pascal`, `pas`, `dpr` |
+| diff | `diff`, `patch` |
+| Dockerfile | `dockerfile`, `docker` |
+| Elixir | `elixir`, `ex`, `exs` |
+| Elm | `elm` |
+| Erlang | `erlang`, `erl` |
+| Fortran | `fortran`, `f90`, `f95`, `f`, `for`, `f77`, `f03`, `f08` |
+| Go | `go`, `golang` |
+| GraphQL | `graphql`, `gql` |
+| Groovy | `groovy`, `gradle` |
+| Haskell | `haskell`, `hs` |
+| HTML and XML | `html`, `xml`, `svg`, `xhtml` |
+| INI and TOML | `ini`, `toml` |
+| Java | `java`, `jsp` |
+| JavaScript | `javascript`, `js`, `jsx`, `mjs`, `cjs` |
+| JSON | `json` |
+| Julia | `julia`, `jl` |
+| Kotlin | `kotlin`, `kt`, `kts` |
+| LaTeX | `latex`, `tex` |
+| Lisp | `lisp`, `cl`, `common-lisp`, `elisp`, `el` |
+| Lua | `lua` |
+| Makefile | `makefile`, `make`, `mk` |
+| Markdown | `markdown`, `md` |
+| MATLAB | `matlab`, `m`, `octave` |
+| MIPS assembly | `mipsasm`, `mips` |
+| Nginx configuration | `nginx` |
+| Nix | `nix` |
+| Objective-C | `objectivec`, `objc`, `mm` |
+| OCaml | `ocaml`, `ml` |
+| Perl | `perl`, `pl`, `pm` |
+| PHP | `php` |
+| PowerShell | `powershell`, `ps1`, `pwsh`, `ps` |
+| Prolog | `prolog` |
+| Protocol Buffers | `protobuf`, `proto` |
+| Python, and its sessions | `python`, `py`, `gyp`; `python-repl`, `pycon` |
+| R | `r` |
+| Ruby | `ruby`, `rb`, `gemspec` |
+| Rust | `rust`, `rs` |
+| SAS | `sas` |
+| Scala | `scala` |
+| Scheme | `scheme`, `scm` |
+| Shell sessions (commands and their output) | `shell`, `console`, `shellsession` |
+| SQL | `sql` |
+| Swift | `swift` |
+| Tcl | `tcl`, `tk` |
+| TypeScript | `typescript`, `ts`, `tsx`, `mts`, `cts` |
+| VBScript and VBA | `vbscript`, `vbs`, `vba` |
+| Visual Basic .NET | `vbnet`, `vb` |
+| WebAssembly text | `wasm` |
+| x86 assembly | `x86asm`, `asm`, `nasm`, `x86` |
+| YAML | `yaml`, `yml` |
+
+`m` is MATLAB; Objective-C is `objc`. COBOL, Fish, Zig and Scratch are not
+highlighted: highlight.js, which the wiki highlights with, has no grammar
+for them.
+
 ## Math
 
 Inline math is between single dollars: $e^{i\pi} + 1 = 0$. The opening

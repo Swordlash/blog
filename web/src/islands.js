@@ -22,27 +22,70 @@
 import "./archive.js";
 import katex from "katex";
 import hljs from "highlight.js/lib/common";
-// highlight.js's common set, and the languages this wiki's authors write that
-// it leaves out. Each is a few kilobytes; all 190-odd would triple the bundle.
+// highlight.js's common set (C, C++, C#, Java, Python, JavaScript and
+// TypeScript, Go, Rust, PHP, Ruby, Kotlin, Swift, SQL, Visual Basic .NET,
+// Perl, R, Lua, Objective-C, Bash, shell sessions, JSON, YAML, XML and HTML,
+// CSS, Markdown, Makefile, diff, …), and the languages this wiki's authors
+// write that it leaves out: every language of the TIOBE index's top 20 that
+// highlight.js has (COBOL and Scratch it has not), assemblers, Lisps, and
+// the shells and configuration languages of a wiki about software. Each is
+// a few kilobytes; all 190-odd would triple the bundle. docs/markdown.md
+// lists them, with the names a fence may give them.
+import ada from "highlight.js/lib/languages/ada";
+import armasm from "highlight.js/lib/languages/armasm";
+import awk from "highlight.js/lib/languages/awk";
 import clojure from "highlight.js/lib/languages/clojure";
 import cmake from "highlight.js/lib/languages/cmake";
+import dart from "highlight.js/lib/languages/dart";
+import delphi from "highlight.js/lib/languages/delphi";
 import dockerfile from "highlight.js/lib/languages/dockerfile";
+import dos from "highlight.js/lib/languages/dos";
 import elixir from "highlight.js/lib/languages/elixir";
 import elm from "highlight.js/lib/languages/elm";
 import erlang from "highlight.js/lib/languages/erlang";
+import fortran from "highlight.js/lib/languages/fortran";
+import groovy from "highlight.js/lib/languages/groovy";
 import haskell from "highlight.js/lib/languages/haskell";
+import julia from "highlight.js/lib/languages/julia";
 import latex from "highlight.js/lib/languages/latex";
+import lisp from "highlight.js/lib/languages/lisp";
+import matlab from "highlight.js/lib/languages/matlab";
+import mipsasm from "highlight.js/lib/languages/mipsasm";
 import nginx from "highlight.js/lib/languages/nginx";
 import nix from "highlight.js/lib/languages/nix";
 import ocaml from "highlight.js/lib/languages/ocaml";
 import powershell from "highlight.js/lib/languages/powershell";
+import prolog from "highlight.js/lib/languages/prolog";
 import protobuf from "highlight.js/lib/languages/protobuf";
+import sas from "highlight.js/lib/languages/sas";
 import scala from "highlight.js/lib/languages/scala";
+import scheme from "highlight.js/lib/languages/scheme";
+import tcl from "highlight.js/lib/languages/tcl";
+import vbscript from "highlight.js/lib/languages/vbscript";
+import x86asm from "highlight.js/lib/languages/x86asm";
 
 for (const [name, language] of Object.entries({
-  clojure, cmake, dockerfile, elixir, elm, erlang, haskell, latex, nginx, nix, ocaml, powershell, protobuf, scala,
+  ada, armasm, awk, clojure, cmake, dart, delphi, dockerfile, dos, elixir, elm, erlang, fortran, groovy, haskell, julia, latex, lisp, matlab, mipsasm, nginx, nix, ocaml, powershell, prolog, protobuf, sas, scala, scheme, tcl, vbscript, x86asm,
 })) {
   hljs.registerLanguage(name, language);
+}
+
+// Names a fence often gives a language that highlight.js does not know it
+// by. `m` is MATLAB's: Objective-C, which shares the extension, answers to
+// `objc` and `objectivec`.
+const aliases = {
+  x86asm: ["asm", "nasm", "x86"],
+  matlab: ["m", "octave"],
+  fortran: ["f", "for", "f77", "f03", "f08"],
+  julia: ["jl"],
+  lisp: ["cl", "common-lisp", "elisp", "emacs-lisp", "el", "lsp"],
+  ada: ["adb", "ads"],
+  groovy: ["gradle", "gvy"],
+  vbscript: ["vba"],
+  bash: ["shell-script"],
+};
+for (const [language, names] of Object.entries(aliases)) {
+  hljs.registerAliases(names, { languageName: language });
 }
 
 // Mermaid's and TikZJax's bundles sit next to this script. The URL is taken

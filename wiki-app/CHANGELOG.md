@@ -32,6 +32,13 @@ the built page a link followed while a page's diagram or picture was still
 being drawn then left the page as it was; the smoke test now follows links
 from a page whose picture is held back.
 
+Code is highlighted in many more languages: on top of highlight.js's common
+set, every language of the TIOBE index's top 20 it has (Fortran, Delphi and
+Object Pascal, Ada, MATLAB, assembly for x86, ARM and MIPS, Prolog, Lisp,
+Scheme, Dart, Julia, Groovy, SAS, among others), and batch files, Awk,
+VBScript and Tcl, with the fence names authors use (`asm`, `m`, `f`, `jl`,
+`vba` and others added as aliases). `docs/markdown.md` lists them.
+
 The demo's whole wiki can be exported and imported as one zip file, from the
 foot of the user menu. "Export the wiki" downloads `wiki-<date>.zip`, an
 archive in `wiki-core`'s `Wiki.Core.Export` format (see `docs/export.md`): a

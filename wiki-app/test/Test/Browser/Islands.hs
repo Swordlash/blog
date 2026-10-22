@@ -147,6 +147,20 @@ spec m = do
       code `shouldHaveText` "const x = 1;"
       count ui "pre.wiki-code code" `shouldReturn` 1
 
+    it "highlights the languages added to highlight.js's common set" $ runPage $ do
+      ui <- mount m harness (CodeBlock (Just "fortran") "program hello\n  print *, 'Hello'\nend program hello")
+      _ <- find ui "pre.wiki-code > code.hljs.language-fortran span.hljs-keyword"
+      changeTo ui (CodeBlock (Just "matlab") "function y = f(x)\n  y = x;\nend")
+      _ <- find ui "pre.wiki-code > code.hljs.language-matlab span.hljs-keyword"
+      pure ()
+
+    it "knows a language by the names fences give it" $ runPage $ do
+      ui <- mount m harness (CodeBlock (Just "c++") "int main() { return 0; }")
+      _ <- find ui "pre.wiki-code > code.hljs.language-c\\+\\+ span.hljs-type"
+      changeTo ui (CodeBlock (Just "asm") "mov eax, 1")
+      _ <- find ui "pre.wiki-code > code.hljs.language-asm span.hljs-keyword"
+      pure ()
+
     it "shows code in a language it does not know as plain text" $ runPage $ do
       ui <- mount m harness (CodeBlock (Just "no-such-language") "a <b> c")
       code <- find ui "pre.wiki-code > code.hljs"
