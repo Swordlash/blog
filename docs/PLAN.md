@@ -45,10 +45,14 @@ confirms it against reality and the plan is amended if it does not hold.
 3. **Depend on haskell-halogen through `source-repository-package` pinned to a commit.**
    Only `haskell-halogen-core` 0.9.0 is on Hackage; `hooks`, `router`, `th` and `jsbits`
    are not, and the app needs the router and `jsbits`. The `th` quoters (`hh`, `clay`)
-   are available from the same pin but unused (WP1.5): the views are plain combinators
-   with dynamic content and the CSS is one file, and `th` would add a long
-   `ghc-lib-parser` build on both backends for little. Reversible in one package if a
-   view ever reads better as a quoter. The pin is bumped deliberately, in its own commit.
+   are available from the same pin and so far unused (WP1.5 chose plain combinators and
+   one CSS file). The owner's rule: **use the quoters where they simplify the code, and
+   for HTML they usually do**, so a package that writes a view of any size should reach
+   for `hh` rather than nest combinators, and say so in its report; the first use adds
+   `th` to `wiki-app`'s dependencies and native `alex` and `happy < 2.2` to the wasm job
+   (a one-off `ghc-lib-parser` build on both backends, accepted). `clay` is optional:
+   `web/style.css` stays the home of the stylesheet. The pin is bumped deliberately, in
+   its own commit.
 4. **Targets: native GHC and wasm.** Not the JavaScript backend: `th` does not build
    there and nothing here needs it. Native builds everything that can be built natively
    (domain, markdown, server, tests, the prerender), wasm builds the browser app.
@@ -422,6 +426,9 @@ Amended by the planning session after each work package's report.
 - **Integration and WP1.7 started:** #13 and #14 conflict in ten files; the integration
   merges `wp1.6-editor` into `wp1.8-search` and restacks #14 on #13, then WP1.7 branches
   from there. Merge order once CI runs: #6, #9, #10, #11, #12, #13, #14, then WP1.7.
+- **Quoters, owner's rule:** use `hh` (and `clay`) wherever they simplify the code,
+  which for HTML is usual; decision 3 amended. The next package that writes views
+  (WP1.7's polish if it touches a view, else WP3.3's panel) introduces `th`.
 - **Administration from localhost planned (owner's request):** decision 11 adds a
   loopback-only admin listener to `wiki-server`, where a user is marked as administrator
   without a login; an administrator then has the panel remotely. WP2.3 gains the listener,
