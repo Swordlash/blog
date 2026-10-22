@@ -1098,3 +1098,11 @@ Amended by the planning session after each work package's report.
   CI on #34 green. After a pin change, a local wasm build can keep the old pin
   (`cabal-wasm.project` only imports `cabal.project`); delete `dist-newstyle/wasm/cache` and
   the fetched `dist-newstyle/wasm/src/haskell-h_-*` first. CI is unaffected (fresh checkout).
+- **haskell-halogen pinned to `00dfe13`** ([#35](https://github.com/Swordlash/blog/pull/35),
+  `2644dc1`): haskell-halogen#55. `crypto.randomUUID` exists only in a secure context, so
+  the demo served over plain HTTP (the owner's machine, reached over Tailscale by its
+  address) failed at start; core now makes a version 4 UUID from `getRandomValues` there.
+  `v0.1.0-demo` was already pushed (at `1202e4c`), so this one is `v0.1.1-demo`, at
+  `2644dc1`, pushed by the owner. The editor's "loses no keystroke" test timed out once on
+  #35 while the runner's machine was busy with another build, and passed when re-run: it
+  types against a 5 s limit per call, so it stays sensitive to a loaded machine.
