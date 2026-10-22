@@ -1026,3 +1026,37 @@ Amended by the planning session after each work package's report.
   `initialState` stands.
 - **WP1.16 (math macros and mhchem) added to the MVP** by the owner, after WP1.15; the tag
   waits for it.
+- **WP1.15 done and merged** ([#32](https://github.com/Swordlash/blog/pull/32), `f9a995a`).
+  `@drgrice1/tikzjax` 1.0.0-beta24 copied by `web/bundle.sh` into `tikzjax/` and driven by
+  our own `islands/tikz.js` over its worker's message protocol, loaded only for a page's
+  first picture; a worker of ours refuses TeX any fetch off the page's origin. Pictures
+  drawn one at a time, cached by their TeX (64), 30 s timeout with a worker restart; the SVG
+  is copied through an allowlist (DOMPurify empties TikZJax's private-use glyphs), ids made
+  unique, TeX's black rewritten to `currentColor` for dark mode. `Wiki.Core.Markdown.Tikz`
+  (`tikzDocument`) builds the TeX: bare commands wrapped, a whole `tikzpicture`/`tikzcd`
+  kept, `\usepackage`/`\usetikzlibrary` lines moved to the preamble, `tikz-cd`/`pgfplots`
+  loaded when used, TeX's error line mapped back to the author's. First picture 3.0–3.8 s,
+  6.4 MiB fetched (mostly `core.dump.gz`), later ones about 330 ms. Also: many more
+  highlight.js languages and aliases (TIOBE top 20, shells; `m` is MATLAB; COBOL, Fish, Zig
+  not available), listed in `docs/markdown.md`. **Owner's decisions:** TikZJax is
+  GPL-3.0-or-later beside a proprietary repository; it is served unmodified as a separate
+  worker with `tikzjax/NOTICE.txt`, which is fine while nothing is conveyed, and needs a
+  decision before any public deployment (Phase 2 may render on the server instead); the
+  Computer Modern fonts came with no licence file. **Found:** following a link while a
+  Mermaid or TikZ island was drawing stalled navigation for 30 s and more when the island
+  awaited the drawing in `lift`; worked around (drawings start and return, `islands.js`
+  fills the element), reproduced by reverting `b65ad6e` and running the smoke test; the
+  cause is probably haskell-halogen's (cancelling a fiber whose worker waits on a JSFFI
+  promise may wait for the promise), handed to the owner for its agent there.
+- **WP0.6 done and merged** ([#31](https://github.com/Swordlash/blog/pull/31), `e3e5dd5`), at
+  the owner's request: `sh toolchain/deploy-local.sh --port N` builds with
+  `cabal-wasm-opt.project` (`package *` at `-O2`, own build directory
+  `dist-newstyle/wasm-opt`; `build-wasm.sh` takes `WASM_PROJECT`/`WASM_BUILDDIR`; first build
+  about 24 min, `app.wasm` about 14 % larger than the default build), installs into
+  `~/wiki-demo` (marked, never outside `~` without `--force`), serves it with a
+  dependency-free `deploy-server.mjs` (types, precompressed siblings, `404.html`, TikZJax's
+  `.gz` files raw) as a systemd user service, binds to the Tailscale address, and moves a
+  ufw rule on `tailscale0` from the old port to the new one; `undeploy-local.sh` takes it
+  down (`--purge` deletes the files). Tested against fakes and once for real here without
+  systemd; the first real run is the owner's. `test-bootstrap.sh` and the deploy tests do
+  not run in CI. The tag `v0.1.0-demo` waits for WP1.16 only.
