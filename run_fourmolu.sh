@@ -3,4 +3,4 @@
 # the settings in fourmolu.yaml (haskell-halogen's).
 set -eu
 cd "$(dirname "$0")"
-fourmolu -i wiki-core/src wiki-core/test wiki-api/src wiki-api/test wiki-app/src wiki-app/app wiki-app/test wiki-server/app
+fourmolu -i wiki-core/src wiki-core/test wiki-core/test-html wiki-api/src wiki-api/test wiki-app/src wiki-app/app wiki-app/test wiki-server/app
