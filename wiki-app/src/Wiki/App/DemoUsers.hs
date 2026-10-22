@@ -33,8 +33,8 @@ class (Monad m) => MonadDemoUsers m where
   default switchTo :: (MonadTrans t, m ~ t n, MonadDemoUsers n) => Maybe UserId -> m ()
   switchTo = lift . switchTo
 
-  -- | Put the demo's content back as it was at the start, wherever it is
-  -- kept, staying who one is.
+  -- | Put the demo back as it was at the start, wherever it is kept, who is
+  -- signed in included.
   resetDemo :: m ()
   default resetDemo :: (MonadTrans t, m ~ t n, MonadDemoUsers n) => m ()
   resetDemo = lift resetDemo

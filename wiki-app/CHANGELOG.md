@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The demo starts signed in as `admin`, Ada Admin, so that a newcomer sees
+everything it has at once: `Wiki.App.Demo.demoState` has `admin` as its
+current user, the prerendered pages show the admin's view (Edit and the
+private spaces among them), and a reload or "Reset the demo content" starts
+there again. The tour says so, and walks through being nobody from there.
+
 The program adopts the page it arrives in rather than replace it: `Main.hs`
 mounts the shell with haskell-halogen's `hydrateUI`, which keeps the
 prerendered elements and text, attaches the listeners and sets what HTML
@@ -35,7 +41,7 @@ is kept and how: the stores `spaces`, `pages`, `attachments` (an upload's bytes,
 as bytes, under its blob's id), `grants` (a space's grants, under the space's
 id) and `meta` (the id counter), each record JSON through the same instances
 as the API. The demo's people and global grants are not kept, since nothing
-changes them; neither is who is signed in, so a reload starts as nobody, nor
+changes them; neither is who is signed in, so a reload starts as the demo does, nor
 an attachment's object URL, made again when the attachment is first shown. A
 database that cannot be read (a record that does not decode, or one a newer
 version wrote) is deleted and the demo's content written out in its place; a
@@ -45,8 +51,8 @@ wins. `newMemWiki` and `runMemWiki` are unchanged and keep the wiki in memory
 only, as the prerender and most tests want.
 
 The user menu ends with "Reset the demo content…", which asks in place and
-then puts the demo's content back as it was, in memory and in the browser
-(the database is deleted and written out again), keeping who is signed in. It
+then puts the demo back as it was, in memory and in the browser (the
+database is deleted and written out again), signed in as the demo starts. It
 says whether changes are kept in this browser. `MonadDemoUsers` gains
 `resetDemo` and `demoKept` for it. The demo's page loads the wiki from the
 database `wiki` (`Wiki.App.Demo.demoDatabase`) before it mounts the

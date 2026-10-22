@@ -423,7 +423,12 @@ try {
   await page.locator("#app .home a", { hasText: "Take the tour" }).click();
   await arrive({ path: "/s/docs/p/tour/", view: "page-view", crumb: "Tour" }, "the tour");
 
-  // Who one is, from the menu at the top right: admin sees every space.
+  // Who one is, from the menu at the top right. The demo starts as admin;
+  // nobody sees no private space, and admin every one.
+  await page.locator("#app .user-switcher-toggle").click();
+  await page.locator("#app .user-menu button[data-login='']").click();
+  await page.locator("#app .user-switcher-toggle", { hasText: "Not signed in" }).waitFor({ timeout });
+  assert.equal(await page.locator("#app .wiki-sidebar a[href='/s/team/']").count(), 0, "nobody sees Team");
   await page.locator("#app .user-switcher-toggle").click();
   await page.locator("#app .user-menu button[data-login=admin]").click();
   await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
@@ -544,7 +549,8 @@ try {
   console.log("ok: leaving the editor by the back button asks; Stay returns to its entry, Leave drops the draft");
 
   // A reload arrives at the same page, with the edit kept in the browser
-  // (IndexedDB), as nobody: who one was is not kept.
+  // (IndexedDB), as admin again: who one was is not kept, and the demo
+  // starts as admin.
   await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
   await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", text: "Smoke test" }, "the edited page");
@@ -553,7 +559,7 @@ try {
   const edited = await reload(page);
   assert.ok(!noRepairs(edited.repairs), "a page edited in the browser was adopted with nothing to repair");
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text: "Smoke test" }, "the reload");
-  await page.locator("#app .user-switcher-toggle", { hasText: "Not signed in" }).waitFor({ timeout });
+  await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
   // Resetting the demo's content, from the user menu and after asking,
   // takes the edit away, and a reload does not bring it back.
   await page.locator("#app .user-switcher-toggle").click();
@@ -590,7 +596,8 @@ try {
   await load(page, "/s/blog/p/hello-world/edit/");
   await stillPrerendered(page, "an editor's address");
   await check({ path: "/s/blog/p/hello-world/edit/", view: "editor", crumb: "Edit" }, "an editor's address");
-  await page.locator("#app .editor .sign-in-hint").waitFor({ timeout });
+  // The demo starts as admin, who may edit it.
+  await page.locator("#app .editor .editor-text").waitFor({ timeout });
   console.log("ok: 404.html stands in for an address with no file, and the program shows its route");
   await page.context().close();
 

@@ -28,8 +28,8 @@ spec m = do
     unmount ui
     again <- startKept m db Nothing (Page (slugs ["blog"]) (slugs ["hello-world"]))
     find again ".page-view .page-body p" >>= (`shouldHaveText` "Kept for the next visit.")
-    -- Who was signed in is not kept: the next visit starts as nobody.
-    find again ".user-switcher-toggle" >>= (`shouldHaveText` "Not signed in")
+    -- Who was signed in is not kept: the next visit starts as the demo does.
+    find again ".user-switcher-toggle" >>= (`shouldHaveText` "Ada Admin")
 
   it "puts the demo's content back when told to, after asking" $ runPage $ do
     db <- fresh m "reset"
@@ -48,8 +48,8 @@ spec m = do
     clickButton ui ".demo-reset-confirm button" "Reset"
     find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Hello, world")
     length <$> findAll ui ".user-menu" `shouldReturn` 0
-    -- Who is signed in stays.
-    find ui ".user-switcher-toggle" >>= (`shouldHaveText` "Edgar Editor")
+    -- Signed in as the demo starts, too.
+    find ui ".user-switcher-toggle" >>= (`shouldHaveText` "Ada Admin")
     unmount ui
     again <- startKept m db Nothing (Page (slugs ["blog"]) (slugs ["hello-world"]))
     find again ".page-view .page-body h1" >>= (`shouldHaveText` "Hello, world")

@@ -208,17 +208,16 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       runMemDOM (IDB.keys db spacesStore) `shouldReturn` []
 
   describe "resetting" $
-    it "puts the seed back in memory and in the database, keeping who is signed in" $ do
+    it "puts the seed back in memory and in the database, who is signed in included" $ do
       db <- freshDatabase
       opened <- open db
       let run :: MemWiki IO x -> IO x
           run = runKept opened
-      run (switchUser (Just (UserId "user-admin")))
+      run (switchUser (Just (UserId "user-editor")))
       _ <- run (createSpace Nothing "Gone after the reset") >>= ok
       run (resetMemWiki seed)
       st <- readIORef opened.wiki
-      st.current `shouldBe` Just (UserId "user-admin")
-      lasting st `shouldBe` lasting seed
+      st `shouldBe` seed
       shouldReload db opened.wiki
 
   Contract.spec (type (MemWiki IO)) keptFixture

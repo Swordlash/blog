@@ -279,14 +279,14 @@ openMemWiki db seed = withRunInIO $ \run -> do
   wiki <- newIORef start
   pure Opened {wiki, store, found}
 
--- | Put the wiki back as the seed has it, but for who is signed in, and, if
--- it is kept, delete the database and write the seed out again: the demo's
--- "Reset the demo content".
+-- | Put the wiki back as the seed has it, who is signed in included, and,
+-- if it is kept, delete the database and write the seed out again: the
+-- demo's "Reset the demo content".
 resetMemWiki :: (MonadIO m) => MemState -> MemWiki m ()
 resetMemWiki seed = MemWiki $ do
   env <- ask
   liftIO . serially env $ do
-    old <- atomicModifyIORef' env.wiki (\st -> (seed {current = st.current}, st))
+    old <- atomicModifyIORef' env.wiki (seed,)
     traverse_ (js_revoke_object_url . toJSText) (Map.elems old.objectUrls)
     for_ env.store $ \store -> do
       outcome <- tried $ do

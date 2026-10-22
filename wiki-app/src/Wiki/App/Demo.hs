@@ -11,6 +11,9 @@
 --   shows the private @Team@ above it in the space tree, but not its pages.
 -- * Someone who is not signed in reads the public @Blog@ and @Docs@.
 --
+-- The demo starts signed in as @admin@, so that a newcomer sees everything
+-- it has at once; the tour says how to be someone else.
+--
 -- The spaces are a public @Blog@, a private @Team@ with a subspace
 -- @Team / Projects@, and a public @Docs@ whose @Tour@ page explains all of
 -- this to whoever opens the demo. The image and the video on the pages are
@@ -51,7 +54,7 @@ demoDatabase :: Database
 demoDatabase = memDatabase "wiki"
 
 -- | The demo's wiki, as it is at the time given: the pages were written in
--- the weeks before it. Nobody is signed in.
+-- the weeks before it. @admin@ is signed in.
 demoState :: UTCTime -> MemState
 demoState now = flip execState emptyState $ do
   modify $
@@ -85,7 +88,7 @@ demoState now = flip execState emptyState $ do
   modify (fst . attachUrl guide "earth.jpg" "image/jpeg" 267290 earthUrl)
   _ <- page docs (Just guide) "Diagrams" 3 diagrams
   _ <- page docs (Just guide) "Mathematics" 3 mathematics
-  pass
+  modify (\st -> st {current = Just adminId})
   where
     adminId = UserId "user-admin"
     editorId = UserId "user-editor"
@@ -240,16 +243,18 @@ tour =
   , "This is the demo of a wiki written in Haskell: spaces of Markdown pages,"
   , "an editor with the page rendered beside it as you type, search, and"
   , "permissions on spaces. It runs entirely in your browser, over a wiki kept"
-  , "in memory, and nothing you do here is sent anywhere."
+  , "in your browser too, and nothing you do here is sent anywhere."
   , ""
   , "> [!NOTE]"
-  , "> Edits are lost when you reload: the demo has no server to keep them, and"
-  , "> a reload starts it over with the pages you see now."
+  , "> Your edits are kept in this browser, so a reload finds them. **Reset the"
+  , "> demo content**, at the foot of the menu at the top right, puts back the"
+  , "> pages you see now."
   , ""
   , "## Who you can be"
   , ""
-  , "There are no passwords in the demo. Choose who you are with the menu at the"
-  , "top right, and the same wiki shows what that person may read and do:"
+  , "You start as `admin`, Ada Admin, who may do everything. There are no"
+  , "passwords in the demo: choose who you are with the menu at the top right,"
+  , "and the same wiki shows what that person may read and do:"
   , ""
   , "| Who                      | May                                                  |"
   , "| ------------------------ | ---------------------------------------------------- |"
@@ -264,8 +269,8 @@ tour =
   , "where this page is, are public: anyone may read them, signed in or not."
   , "**Team** is private, and so is its subspace **Team / Projects**, which"
   , "`reader` has been let into: `reader` sees Team in the tree only as the way"
-  , "there. Look at the tree of spaces as nobody, then as `reader`, then as"
-  , "`admin`. (A link to a space you may not see shows as broken, since for"
+  , "there. Look at the tree of spaces as `admin`, then as nobody, then as"
+  , "`reader`. (A link to a space you may not see shows as broken, since for"
   , "you there is nothing there.)"
   , ""
   , "## What a page can be"
@@ -279,9 +284,9 @@ tour =
   , ""
   , "## Writing"
   , ""
-  , "1. Be `editor` and open a post in the Blog, such as"
-  , "   [Hello, world](/blog/hello-world), or be `admin` and open any page,"
-  , "   this one too. Choose **Edit**."
+  , "1. As `admin`, open any page, this one too, or be `editor` and open a"
+  , "   post in the Blog, such as [Hello, world](/blog/hello-world). Choose"
+  , "   **Edit**."
   , "2. Type on the left: the preview on the right follows when you stop."
   , "3. Drag an image, or any other file, onto the editor to attach it to the"
   , "   page: the Markdown that shows it goes in where the cursor is."
@@ -298,13 +303,13 @@ tour =
   , "The selector beside the box keeps the search to one space and its"
   , "subspaces. The arrow keys choose a page and Enter opens it; Enter with"
   , "none chosen opens the page of every result. Search finds only what you"
-  , "may read: search for *on-call* as nobody, then as `admin`."
+  , "may read: search for *on-call* as `admin`, then as nobody."
   , ""
   , "## Not there yet"
   , ""
   , "This is the first demo. Still to come:"
   , ""
-  , "- a server that keeps the pages, so that they outlive a reload;"
+  , "- a server that keeps the pages for everyone, not in one browser only;"
   , "- signing in with a password, instead of choosing who you are;"
   , "- the permissions enforced by that server, and pages to administer them;"
   , "- the history of every page, with what changed between its versions."

@@ -137,8 +137,8 @@ data Stored
   deriving stock (Eq, Show)
 
 -- | The wiki the stores hold, with the rest of the state (the people, the
--- global grants) from the seed. Nobody is signed in, and no attachment has
--- an object URL yet: the tab makes one when one is first asked for, as it
+-- global grants, and who is signed in at the start) from the seed. No
+-- attachment has an object URL yet: the tab makes one when one is first asked for, as it
 -- does for an upload.
 restore :: MemState -> Records -> Stored
 restore seed stored = case Map.lookup counterKey (holding metaStore) of
