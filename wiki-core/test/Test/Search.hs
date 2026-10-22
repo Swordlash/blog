@@ -85,6 +85,12 @@ spec = describe "Wiki.Core.Search" $ do
       titles (search "flowchart" pages) `shouldBe` ["Diagrams"]
       titles (search "e^{i\\pi}" pages) `shouldBe` ["Mathematics"]
 
+    it "searches the text of HTML in a page, not its tags or what it drops" $ do
+      let html = [page "docs" "Markup" "<details>\n<summary>Spoiler</summary>\n<b>hidden</b> answer\n</details>\n\n<div><script>secret()</script></div>" ["markup"]]
+      titles (search "spoiler hidden answer" html) `shouldBe` ["Markup"]
+      search "details" html `shouldBe` []
+      search "secret" html `shouldBe` []
+
     it "ranks a match in the title above one in the text" $ do
       titles (search "diagrams" pages) `shouldBe` ["Diagrams", "Mermaid tails"]
 

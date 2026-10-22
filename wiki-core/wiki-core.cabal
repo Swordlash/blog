@@ -55,6 +55,7 @@ library
       Wiki.Core.Id
       Wiki.Core.Markdown
       Wiki.Core.Markdown.Ast
+      Wiki.Core.Markdown.Html
       Wiki.Core.Markdown.Link
       Wiki.Core.Markdown.Render
       Wiki.Core.Page
@@ -74,6 +75,7 @@ library
       haskell-halogen-core,
       protolude,
       row-types,
+      tagsoup >= 0.14.8 && < 0.15,
       text,
       time
 
@@ -87,6 +89,7 @@ test-suite wiki-core-test
       Test.Attachment
       Test.Gen
       Test.Json
+      Test.Markdown.Allowlist
       Test.Markdown.Ast
       Test.Markdown.Link
       Test.Path
@@ -119,8 +122,10 @@ test-suite wiki-core-html-test
     other-modules:
         Test.Markdown.Document
         Test.Markdown.Html
+        Test.Markdown.RawHtml
         Test.Markdown.Render
     build-depends:
+        QuickCheck,
         hspec >= 2,
         haskell-halogen-core,
         protolude,

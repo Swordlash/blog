@@ -43,6 +43,7 @@ import Data.Text qualified as T
 import Protolude
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Markdown.Ast (Block (..), Footnote (..), ListItem (..), parseMarkdown, plainText)
+import Wiki.Core.Markdown.Html (htmlText, parseHtml)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (Slug, foldLetter)
 
@@ -149,9 +150,9 @@ searchPlain q candidates
 
 -- | The text of a page's Markdown as a reader sees it, in one line: the
 -- words of its blocks without their syntax, and the sources of its code,
--- diagrams and formulas. Raw HTML, which a page shows as written but which is
--- markup rather than prose, is left out. The source as it is, if it does not
--- parse.
+-- diagrams and formulas. Of raw HTML, the text the page shows
+-- ("Wiki.Core.Markdown.Html"), without the tags. The source as it is, if it
+-- does not parse.
 bodyText :: Text -> Text
 bodyText source =
   T.unwords (T.words (either (const source) blocks (parseMarkdown source)))
@@ -171,7 +172,7 @@ bodyText source =
       Div _ bs -> blocks bs
       Alert _ bs -> blocks bs
       Footnotes notes -> T.intercalate "\n" [blocks bs | Footnote _ _ bs <- notes]
-      RawHtmlBlock _ -> ""
+      RawHtmlBlock raw -> htmlText (parseHtml raw)
 
 -- | A text as it is compared: each character as 'foldLetter' folds it,
 -- ignoring case and diacritics.

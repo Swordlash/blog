@@ -1,11 +1,13 @@
 -- | A page's Markdown tree ("Wiki.Core.Markdown.Ast") as Halogen HTML.
 --
 -- The HTML is built element by element, never from an HTML string: the
--- author's text is always text, and raw HTML in the source is shown as text
--- too (HTML comments are dropped). Links and embeds are resolved through the
--- 'Options' the caller passes, and only a URL whose scheme is harmless is
--- written ("Wiki.Core.Markdown.Link"); an external link gets
--- @rel=\"noopener\"@.
+-- author's text is always text. Raw HTML in the source is read in Haskell
+-- and what an allowlist admits of it is built as elements too
+-- ("Wiki.Core.Markdown.Html"; 'renderRawHtml'); tags among the text hold
+-- the Markdown between them. Links and embeds are resolved through the
+-- 'Options' the caller passes, the links and sources of raw HTML as well,
+-- and only a URL whose scheme is harmless is written
+-- ("Wiki.Core.Markdown.Link"); an external link gets @rel=\"noopener\"@.
 --
 -- __Islands.__ Code, math and Mermaid diagrams are drawn by JavaScript
 -- libraries into elements Halogen does not look inside. The renderer leaves
@@ -38,17 +40,19 @@ module Wiki.Core.Markdown.Render
   , defaultOptions
   , defaultResolveLink
   , renderBlocks
+  , renderRawHtml
   )
 where
 
 import DOM.HTML.Indexed qualified as I
 import Data.Map.Strict qualified as M
-import Data.Row (HasType)
+import Data.Row (Empty, HasType)
 import Data.Text qualified as T
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
 import Protolude
 import Wiki.Core.Markdown.Ast
+import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
 
 -- | What the renderer leaves to its caller.
@@ -133,9 +137,7 @@ renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts 
         let (cls, title) = alertName kind
         pure [HH.div [classesProp ["alert", "alert-" <> cls]] (HH.p [classesProp ["alert-title"]] [HH.text title] : inner)]
       Footnotes notes -> single . HH.section [classesProp ["footnotes"]] . single . HH.ol_ <$> traverse renderNote notes
-      RawHtmlBlock raw
-        | isComment raw -> pure []
-        | otherwise -> pure [HH.pre [classesProp ["raw-html"]] [HH.text raw]]
+      RawHtmlBlock raw -> pure (renderRawHtml opts raw)
 
     renderBlocks' :: [Block] -> R [HH.HTML w i]
     renderBlocks' bs = concat <$> traverse renderBlock bs
@@ -176,18 +178,48 @@ renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts 
     -- Inlines between extra pieces, with adjacent text as one text node.
     withPieces :: [Piece w i] -> [Inline] -> [Piece w i] -> R [HH.HTML w i]
     withPieces before xs after = do
-      middle <- concat <$> traverse renderInline xs
+      middle <- inlinePieces False xs
       pure (fromPieces (before <> middle <> after))
 
-    renderInline :: Inline -> R [Piece w i]
-    renderInline = \case
+    -- A sequence of inlines, and whether it is a link's text (where a
+    -- link is shown as its text, since a link cannot hold one). Raw HTML
+    -- among them is read with the Markdown between it, so that a tag holds
+    -- what is written up to its end tag ("Wiki.Core.Markdown.Html").
+    inlinePieces :: Bool -> [Inline] -> R [Piece w i]
+    inlinePieces inLink xs
+      | any isRawHtml xs = htmlPieces inLink (Html.parseFragments context (map fragment xs))
+      | otherwise = concat <$> traverse (renderInline inLink) xs
+      where
+        context = if inLink then Html.PhrasingInLink else Html.Phrasing
+        fragment = \case
+          RawHtml raw -> Html.Markup raw
+          x -> Html.Markdown x
+        isRawHtml = \case
+          RawHtml _ -> True
+          _ -> False
+
+    htmlPieces :: Bool -> [Html.Node Inline] -> R [Piece w i]
+    htmlPieces inLink =
+      fmap concat
+        . traverse
+          ( \case
+              Html.Element name attrs children -> do
+                inner <- htmlPieces (inLink || name == "a") children
+                pure [PNode (htmlElement opts name attrs (fromPieces inner))]
+              Html.TextNode t -> pure [PText t]
+              Html.Content x -> renderInline inLink x
+          )
+
+    renderInline :: Bool -> Inline -> R [Piece w i]
+    renderInline inLink = \case
       Str t -> pure [PText t]
       SoftBreak -> pure [PText "\n"]
       LineBreak -> pure [PNode HH.br_, PText "\n"]
-      Emph xs -> node HH.em_ <$> renderInlines xs
-      Strong xs -> node HH.strong_ <$> renderInlines xs
-      Strikeout xs -> node HH.del_ <$> renderInlines xs
+      Emph xs -> node HH.em_ . fromPieces <$> inlinePieces inLink xs
+      Strong xs -> node HH.strong_ . fromPieces <$> inlinePieces inLink xs
+      Strikeout xs -> node HH.del_ . fromPieces <$> inlinePieces inLink xs
       Code attrs code -> pure [PNode (HH.code (idAndClasses attrs []) [HH.text code])]
+      Link _ _ _ xs | inLink -> inlinePieces True xs
       Link attrs dest title xs -> renderLink attrs dest title xs
       Image attrs dest title xs -> pure (renderEmbed attrs dest title (plainText xs))
       Math InlineMath tex -> island tex <&> \k -> [PNode (opts.mathInline k tex)]
@@ -196,13 +228,13 @@ renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts 
         ident <- footnoteRefId n
         pure [PNode (HH.sup [classesProp ["footnote-ref"]] [HH.a [HP.href ("#fn-" <> show n), HP.id ident] [HH.text (show n)]])]
       Emoji keyword emoji -> pure [PNode (HH.span [classesProp ["emoji"], HP.title (":" <> keyword <> ":")] [HH.text emoji])]
-      RawHtml raw
-        | isComment raw -> pure []
-        | otherwise -> pure [PText raw]
+      -- Raw HTML is read with its neighbours, by 'inlinePieces', and does
+      -- not get here; on its own it would be read the same way.
+      RawHtml raw -> htmlPieces inLink (Html.parseFragments (if inLink then Html.PhrasingInLink else Html.Phrasing) [Html.Markup raw])
 
     renderLink :: Attributes -> Text -> Text -> [Inline] -> R [Piece w i]
     renderLink attrs dest title xs = do
-      pieces <- concat <$> traverse renderInline xs
+      pieces <- inlinePieces True xs
       let inner = fromPieces pieces
           anchor props = [PNode (HH.a (props <> titleProp title <> idAndClasses attrs []) inner)]
           -- What a link that may not be followed is shown as: its text.
@@ -292,9 +324,6 @@ nonEmptyOr fallback t = if T.null t then fallback else t
 isTask :: ListItem -> Bool
 isTask (ListItem task _) = isJust task
 
-isComment :: Text -> Bool
-isComment = T.isPrefixOf "<!--" . T.stripStart
-
 headingOf :: Int -> [HP.IProp I.HTMLh1 i] -> [HH.HTML w i] -> HH.HTML w i
 headingOf level = case level of
   1 -> HH.h1
@@ -339,3 +368,62 @@ idAndClasses attrs own =
 
 titleProp :: (HasType "title" Text r) => Text -> [HP.IProp r i]
 titleProp title = [HP.title title | not (T.null title)]
+
+-- | A raw block of HTML: what the allowlist keeps of it
+-- ("Wiki.Core.Markdown.Html"), with its links and sources resolved as the
+-- Markdown's are, through the options. Nothing for a comment.
+renderRawHtml :: forall page w i. Options page w i -> Text -> [HH.HTML w i]
+renderRawHtml opts raw = fromPieces (concatMap pieces (Html.parseHtml raw))
+  where
+    pieces :: Html.Node Void -> [Piece w i]
+    pieces = \case
+      Html.Element name attrs children -> [PNode (htmlElement opts name attrs (fromPieces (concatMap pieces children)))]
+      Html.TextNode t -> [PText t]
+
+-- | An element the allowlist kept, with its attributes. A URL is resolved
+-- as a Markdown link's or embed's is ('resolveLink'), except that a
+-- relative address is an attachment's too: a source is looked up as one
+-- first (a page cannot be shown in an @img@), a link if it names no page.
+-- The resolved URL is written only if its scheme is harmless; otherwise the
+-- attribute goes, and an @a@ that leads nowhere gets the class
+-- @link-unresolved@, as a Markdown link would show it. A link to an
+-- attachment downloads it, and one that leaves the wiki gets
+-- @rel=\"noopener\"@, as in Markdown.
+htmlElement :: forall page w i. Options page w i -> Text -> [Html.Attribute] -> [HH.HTML w i] -> HH.HTML w i
+htmlElement opts name attrs = HH.element (HH.ElemName name) (concatMap prop attrs <> unresolvedClass)
+  where
+    -- The element is made by name, so its properties are typed by no
+    -- element's row.
+    href :: Maybe [HP.IProp Empty i]
+    href = linkProps <$> attribute "href" attrs
+    broken = maybe False null href
+    unresolvedClass = [attr "class" "link-unresolved" | broken, isNothing (attribute "class" attrs)]
+    prop (key, value) = case key of
+      "href" -> fromMaybe [] href
+      "src" -> sourceProp key value
+      "poster" -> sourceProp key value
+      "class" | broken -> [attr key (value <> " link-unresolved")]
+      _ -> [attr key value]
+    linkProps dest = case relativeFirst False dest of
+      External url
+        | safeHref url -> attr "href" url : [attr "rel" "noopener" | isExternal url]
+      Page page -> [attr "href" (opts.pageHref page)]
+      Attachment ref
+        | safeHref ref.url -> [attr "href" ref.url, attr "download" ref.name]
+      _ -> []
+    sourceProp key dest = case relativeFirst True dest of
+      External url | safeSrc url -> [attr key url]
+      Attachment ref | safeSrc ref.url -> [attr key ref.url]
+      _ -> []
+    -- A path, resolved as an attachment's name before (a source) or after
+    -- (a link) it is resolved as what the wiki makes of it.
+    relativeFirst asAttachment dest = case classifyDestination dest of
+      ToPath path
+        | asAttachment -> unlessResolved (opts.resolveLink ("attachment:" <> path)) (opts.resolveLink dest)
+        | otherwise -> unlessResolved (opts.resolveLink dest) (opts.resolveLink ("attachment:" <> path))
+      _ -> opts.resolveLink dest
+    unlessResolved target fallback = case target of
+      Unresolved -> fallback
+      found -> found
+    attr :: Text -> Text -> HP.IProp Empty i
+    attr key = HP.attr (HH.AttrName key)

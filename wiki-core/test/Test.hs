@@ -4,6 +4,7 @@ import Protolude
 import Test.Attachment qualified as Attachment
 import Test.Hspec (hspec)
 import Test.Json qualified as Json
+import Test.Markdown.Allowlist qualified as Allowlist
 import Test.Markdown.Ast qualified as Ast
 import Test.Markdown.Link qualified as Link
 import Test.Path qualified as Path
@@ -16,6 +17,7 @@ main :: IO ()
 main = hspec $ do
   Slug.spec
   Ast.spec
+  Allowlist.spec
   Link.spec
   Path.spec
   Permission.spec
