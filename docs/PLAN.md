@@ -602,6 +602,31 @@ Amended by the planning session after each work package's report.
   has Web Storage only, so HH-1 adds `Web.Storage.IndexedDB` to its `core` (delegated now,
   independent of the Phase 1 merges) and WP1.11 makes `MemWiki` write through to it after
   WP1.10's pin bump.
+- **HH-1 done** ([haskell-halogen#50](https://github.com/Swordlash/haskell-halogen/pull/50),
+  branch `indexeddb-store`, head `d2ce06d`; the owner merges there). `Web.Storage.IndexedDB`:
+  `Database {name, version, stores}`, `MonadIndexedDB` with `get`, `put`, `delete`, `keys`,
+  `getAll` (a `Map`), `clear`, `writeMany` (one transaction, all or nothing, resolves on
+  commit) and `deleteDatabase`; typed `getItem`/`setItem`/`getAllItems` over
+  `StorageSerialize`, `itemWrite`/`itemDeletion` for batches; `BrowserDOM` and `MemDOM`
+  instances in the class's module (no orphans, no CPP), lifted defaults. Errors are the
+  exception `IndexedDBError {database, failure}` with `Unavailable`, `UpgradeBlocked`,
+  `VersionTooLow`, `StoreNotFound`, `QuotaExceeded`, `NotBytes`, `OtherFailure`. No handle:
+  `Database` goes to every call, the first opens a cached connection per name, reopened on a
+  version change, dropped on `versionchange`. Upgrades create missing stores and never
+  delete one. FFI: unsafe bindings build an operation object, one awaited `halogen_idb_run`
+  runs it and never rejects (the JS backend's awaited bindings may only return `()`), the
+  outcome is read back; `jsbits` gains `toJSBytes`/`fromJSBytes` (bytes copied in one call,
+  the only new CPP, in `Value.hs`). Tests: 14 native on `MemDOM`, 9 in Chromium (2 MB
+  values, 20 concurrent writers, version bumps, a component finding an earlier mount's
+  data), jsbits byte round trip. JS backend not built here. Found: an awaited import in a
+  wasm *command* module (a `main` run by `wasi.start` under Node, like core's suite) hangs
+  rather than fails, so `BrowserDOM` IndexedDB is never tested under Node. For WP1.11:
+  one `Database {name = "wiki", version = 1, stores = ["spaces", "pages", "attachments",
+  "grants"]}`, calls through `lift` from `HalogenM` or plain IO before mounting, never
+  `H.liftEffect`; `MemDOM`'s store is process-global per database name (two `MemWiki`s on
+  one name see each other, which is the reload test; distinct names isolate tests); the pin
+  bump must cover `jsbits` as well as `core`; `VersionTooLow` on an old on-disk version is
+  the demo's to handle (reset).
 - **Footer (owner's request):** "Built with haskell-halogen" linking to the repository,
   on every page; added to WP1.9 as the first `hh` view.
 - **Toolbar and HTML in pages (owner's request):** decision 13, WP1.12 (toolbar over pure
