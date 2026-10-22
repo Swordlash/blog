@@ -44,8 +44,11 @@ confirms it against reality and the plan is amended if it does not hold.
    consistency with server-side rendering matters.
 3. **Depend on haskell-halogen through `source-repository-package` pinned to a commit.**
    Only `haskell-halogen-core` 0.9.0 is on Hackage; `hooks`, `router`, `th` and `jsbits`
-   are not, and the app needs the router and the th quoters. The pin is bumped
-   deliberately, in its own commit.
+   are not, and the app needs the router and `jsbits`. The `th` quoters (`hh`, `clay`)
+   are available from the same pin but unused (WP1.5): the views are plain combinators
+   with dynamic content and the CSS is one file, and `th` would add a long
+   `ghc-lib-parser` build on both backends for little. Reversible in one package if a
+   view ever reads better as a quoter. The pin is bumped deliberately, in its own commit.
 4. **Targets: native GHC and wasm.** Not the JavaScript backend: `th` does not build
    there and nothing here needs it. Native builds everything that can be built natively
    (domain, markdown, server, tests, the prerender), wasm builds the browser app.
