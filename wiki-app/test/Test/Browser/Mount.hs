@@ -5,6 +5,7 @@
 module Test.Browser.Mount
   ( start
   , startWith
+  , adopt
   , clickButton
   , slugs
   )
@@ -54,12 +55,33 @@ startWith
   -> Route
   -> PageM s (Mounted s Shell.Query Void m, IORef MemState)
 startWith m who at = do
+  (wiki, router) <- prepare who at
+  ui <- mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
+  pure (ui, wiki)
+
+-- | 'start', in a container that holds the shell's HTML for the route
+-- already ('htmlContainer'), as a prerendered page does: the shell adopts
+-- it ('hydrate').
+adopt
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  => Element s
+  -> Maybe Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+adopt m page who at = do
+  (wiki, router) <- prepare who at
+  hydrate m page (H.hoist (NT (runMemWiki wiki)) component) (input router)
+
+-- | A fresh demo, as someone, and a router at the route, with nothing in
+-- the browser's local storage.
+prepare :: Maybe Text -> Route -> PageM s (IORef MemState, Router Route)
+prepare who at = do
   wiki <- unsafeIOToPageM (newMemWiki ((demoState demoNow) {current = UserId <$> who}))
   router <- unsafeIOToPageM testRouter
   unsafeIOToPageM forgetStorage
   unsafeIOToPageM (Router.redirect router at)
-  ui <- mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
-  pure (ui, wiki)
+  pure (wiki, router)
 
 -- | A router that keeps the route in the test page's fragment. Natively
 -- there is no browser to make one in, and the suite only reports that it

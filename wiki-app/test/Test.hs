@@ -4,6 +4,7 @@ import Protolude
 import Test.Backend.Mem qualified as Mem
 import Test.Demo qualified as Demo
 import Test.Hspec (hspec)
+import Test.Hydrate qualified as Hydrate
 import Test.Islands qualified as Islands
 import Test.Link qualified as Link
 import Test.Route qualified as Route
@@ -17,3 +18,4 @@ main = hspec $ do
   Route.spec
   Link.spec
   Shell.spec
+  Hydrate.spec

@@ -86,7 +86,11 @@ component :: forall query m. (MonadWiki m, MonadIslands m, MonadUUID m, MonadIO 
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input -> pure State {input, loaded = Loading, mode = Viewing, problem = Nothing}
+      { -- Loaded at once rather than in 'Initialize', so that the first
+        -- render is the page the prerender shows (see "Wiki.App.Shell").
+        initialState = \input -> do
+          loaded <- fetch input
+          pure State {input, loaded, mode = Viewing, problem = Nothing}
       , render
       , eval =
           H.mkEval
@@ -207,7 +211,8 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
-      Initialize -> load
+      -- The page was loaded with the initial state: the shell is told.
+      Initialize -> H.raise Loaded
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
@@ -261,10 +266,7 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      result <- getPage input.space.id input.path
-      loaded <- case result of
-        Left e -> pure (Failed e)
-        Right page -> Ready page . Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
+      loaded <- fetch input
       -- Only if the page asked for is still the one to show: another
       -- navigation may have overtaken this load.
       now <- gets (\st -> st.input)
@@ -284,6 +286,14 @@ component =
       Right a -> do
         modify (\st -> st {mode = Viewing, problem = Nothing})
         H.raise (Changed (next a))
+
+-- | The page the input names, with where each of its attachments is fetched
+-- from, or why it cannot be shown.
+fetch :: (MonadWiki n) => Input -> n Loaded
+fetch input =
+  getPage input.space.id input.path >>= \case
+    Left e -> pure (Failed e)
+    Right page -> Ready page . Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
 
 -- | The spaces a page may be moved to: those where the rules allow it.
 targetSpaces :: Context -> Page -> [Space]

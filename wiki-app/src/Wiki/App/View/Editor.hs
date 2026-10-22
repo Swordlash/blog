@@ -165,7 +165,7 @@ data Draft = Draft
   , urls :: Map AttachmentId Text
   }
 
-data Loaded = Loading | Failed WikiError | Ready Draft
+data Loaded = Failed WikiError | Ready Draft
 
 -- | What the editor shows: the Markdown (beside the preview, if the reader
 -- asked for both), or the preview alone.
@@ -242,10 +242,14 @@ component =
           textarea <- H.newRefLabel "editor-text"
           fileInput <- H.newRefLabel "editor-files"
           backButton <- H.newRefLabel "editor-back"
+          -- Loaded at once rather than in 'Initialize', so that the first
+          -- render is the editor a page rendered ahead would show (see
+          -- "Wiki.App.Shell").
+          loaded <- fetchDraft input
           pure
             State
               { input
-              , loaded = Loading
+              , loaded
               , pending = Nothing
               , problem = Nothing
               , saving = False
@@ -258,7 +262,7 @@ component =
               , textarea
               , fileInput
               , backButton
-              , loads = 0
+              , loads = 1
               }
       , render
       , eval =
@@ -285,7 +289,6 @@ component =
         body = case st.loaded of
           _ | isNothing ctx.session.user -> [signInHint]
           _ | not (mayEdit ctx st.input.space.id) -> [errorView Forbidden]
-          Loading -> [[hh|<p class="loading">Loading…</p>|]]
           Failed e -> [errorView e]
           Ready draft -> [editing st draft]
 
@@ -508,7 +511,9 @@ component =
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})
-        load
+        -- The page was loaded with the initial state.
+        syncGuard
+        H.raise Loaded
       -- A pending wait is killed with the component; the browser's warning
       -- is not, so it is let go here.
       Finalize -> H.liftEffect (guardUnload False)
@@ -596,17 +601,7 @@ component =
     -- The page as it is now, or a new one's empty draft.
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
-      input <- gets (\st -> st.input)
-      loaded <- case input.target of
-        Existing path ->
-          getPage input.space.id path >>= \case
-            Left e -> pure (Failed e)
-            Right page -> do
-              urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
-              pure (Ready (draftOf (Just page) page.title page.body page.attachments urls))
-        New parent -> pure $ case parentOf input parent of
-          Left e -> Failed e
-          Right _ -> Ready (draftOf Nothing "" "" [] mempty)
+      loaded <- fetchDraft =<< gets (\st -> st.input)
       modify (\st -> st {loaded, loads = st.loads + 1})
       syncGuard
       H.raise Loaded
@@ -711,6 +706,20 @@ component =
 
     syncGuard :: H.HalogenM State Action Slots ViewOutput m ()
     syncGuard = gets isDirty >>= H.liftEffect . guardUnload
+
+-- | The draft of the page the input names, as it is now, or why it cannot be
+-- edited.
+fetchDraft :: (MonadWiki n) => Input -> n Loaded
+fetchDraft input = case input.target of
+  Existing path ->
+    getPage input.space.id path >>= \case
+      Left e -> pure (Failed e)
+      Right page -> do
+        urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
+        pure (Ready (draftOf (Just page) page.title page.body page.attachments urls))
+  New parent -> pure $ case parentOf input parent of
+    Left e -> Failed e
+    Right _ -> Ready (draftOf Nothing "" "" [] mempty)
 
 draftOf :: Maybe Page -> Text -> Text -> [Attachment] -> Map AttachmentId Text -> Draft
 draftOf page title body attachments urls =

@@ -36,8 +36,7 @@ data Input = Input
 
 -- | What the page shows for its input.
 data Results
-  = Loading
-  | -- | Nothing typed to search for.
+  = -- | Nothing typed to search for.
     NoQuery
   | -- | The space searched is not one the user can see.
     NoSpace
@@ -48,7 +47,7 @@ data State = State
   , results :: Results
   }
 
-data Action = Load | Receive Input | Followed (Follow Route)
+data Action = Initialize | Receive Input | Followed (Follow Route)
 
 -- | As many hits as a page of results lists: more than anyone reads through,
 -- few enough that the page stays quick to render.
@@ -59,13 +58,15 @@ component :: forall query m. (MonadWiki m, MonadIO m) => H.Component query Input
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \input -> pure State {input, results = Loading}
+      { -- Searched at once rather than in 'Initialize', so that the first
+        -- render is the page the prerender shows (see "Wiki.App.Shell").
+        initialState = \input -> State input <$> search input
       , render
       , eval =
           H.mkEval
             H.defaultEval
               { H.handleAction = handleAction
-              , H.initialize = Just Load
+              , H.initialize = Just Initialize
               , H.receive = Just . Receive
               }
       }
@@ -80,7 +81,6 @@ component =
       |]
       where
         found = case results of
-          Loading -> [[hh|<p class="loading">Searching…</p>|]]
           NoQuery -> [[hh|<p class="empty">Type what to look for in the search box at the top of the page, or press / to get there.</p>|]]
           NoSpace -> [[hh|<p class="empty">There is no such space to search in, or you may not see it.</p>|]]
           Hits hits ->
@@ -97,7 +97,8 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case
-      Load -> load
+      -- The results came with the initial state: the shell is told.
+      Initialize -> H.raise Loaded
       Receive input -> do
         before <- gets (\st -> st.input)
         modify (\st -> st {input})
@@ -106,29 +107,34 @@ component =
 
     load :: H.HalogenM State Action Empty ViewOutput m ()
     load = do
-      Input {context, text, space, subspaces} <- gets (\st -> st.input)
-      results <- case (T.strip <$> text, traverse (findSpace context.spaces) space) of
-        (Nothing, _) -> pure NoQuery
-        (Just "", _) -> pure NoQuery
-        (_, Nothing) -> pure NoSpace
-        (Just wanted, Just chain)
-          | Just sid <- (\c -> (\s -> s.id) <$> lastMay c) =<< chain
-          , not (mayView context sid || subspaces) ->
-              pure NoSpace
-          | otherwise ->
-              Hits
-                <$> searchPages
-                  SearchQuery
-                    { text = wanted
-                    , space = (\c -> (\s -> s.id) <$> lastMay c) =<< chain
-                    , includeSubspaces = subspaces
-                    , limit = limitOf
-                    }
+      input <- gets (\st -> st.input)
+      results <- search input
       -- Unless the input has changed meanwhile, whose own load will come.
       now <- gets (\st -> st.input)
-      unless (differs now Input {context, text, space, subspaces}) $ do
+      unless (differs now input) $ do
         modify (\st -> st {results})
         H.raise Loaded
+
+-- | The pages the input asks for, or why there are none to look for.
+search :: (MonadWiki n) => Input -> n Results
+search Input {context, text, space, subspaces} =
+  case (T.strip <$> text, traverse (findSpace context.spaces) space) of
+    (Nothing, _) -> pure NoQuery
+    (Just "", _) -> pure NoQuery
+    (_, Nothing) -> pure NoSpace
+    (Just wanted, Just chain)
+      | Just sid <- (\c -> (\s -> s.id) <$> lastMay c) =<< chain
+      , not (mayView context sid || subspaces) ->
+          pure NoSpace
+      | otherwise ->
+          Hits
+            <$> searchPages
+              SearchQuery
+                { text = wanted
+                , space = (\c -> (\s -> s.id) <$> lastMay c) =<< chain
+                , includeSubspaces = subspaces
+                , limit = limitOf
+                }
 
 -- | Whether the page has to search again: for other words or another space,
 -- or because who is asking or the wiki has changed. The tree of spaces counts

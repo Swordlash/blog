@@ -3,19 +3,29 @@
 -- every route, and what the native tests look at.
 --
 -- "Halogen.Static" takes the HTML as soon as the component has started,
--- which is before anything it loads through the backend has arrived (a
--- component waits for the backend on a worker, as for any other 'lift').
--- So this asks the shell whether it has loaded what the route shows
--- ('Shell.Settled'), and then waits for the HTML to stop changing, for the
--- islands that write their source in on a worker too.
+-- which is before anything it loads through the backend on a worker has
+-- arrived. The shell and its views load what a route shows in their initial
+-- states, so that is there from the first render, but a view still says when
+-- it is done ('Shell.Settled'), and the islands write their source in from
+-- their initializers. So this asks the shell whether it has loaded what the
+-- route shows, and then waits for the HTML to stop changing.
+--
+-- The program adopts this HTML in the browser
+-- ('Halogen.VDom.Driver.hydrateUI'), so its first render has to be the same
+-- page; 'startRoute' can start the application either way, which is how the
+-- native tests check that it is.
 --
 -- Natively only: the in-memory document exists on a host GHC only.
 module Wiki.App.Static
   ( renderRoute
   , Rendered (..)
+  , prerenderedRoutes
+  , Start (..)
+  , startRoute
   )
 where
 
+import Data.Map.Strict qualified as Map
 import Halogen qualified as H
 import Halogen.HTML.Core (ElemName (..))
 import Halogen.IO.Driver (HalogenSocket (..))
@@ -23,13 +33,16 @@ import Halogen.IO.Driver qualified as AD
 import Halogen.Router qualified as Router
 import Halogen.VDom.DOM.Monad (MemDOM, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
-import Halogen.VDom.Driver (renderSpec)
+import Halogen.VDom.Driver (hydrateUI, renderSpec)
 import Protolude
 import Wiki.App (component, input)
 import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
-import Wiki.App.Backend.Mem.State (MemState)
+import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Route (Route (..), route)
 import Wiki.App.Shell qualified as Shell
+import Wiki.Core.Page (Page (id, space))
+import Wiki.Core.Path (pathOf)
+import Wiki.Core.Space (Space (id))
 
 -- | A route's page: the application's HTML, for the mount point, and the
 -- document's title.
@@ -43,20 +56,54 @@ data Rendered = Rendered
 -- the state says otherwise.
 renderRoute :: MemState -> Text -> Route -> IO Rendered
 renderRoute wiki base at = do
+  container <- N.newElement Nothing (ElemName "div")
+  (title, dispose) <- startRoute Build wiki base at container
+  html <- (mconcat <$> (traverse N.renderToText =<< N.childNodes container)) `finally` dispose
+  pure Rendered {html, title}
+
+-- | The routes the build writes a page for: the front page, the page of
+-- search results, every space, and every page of the wiki with its source.
+-- (Every other address gets the page for 'Unknown'.)
+prerenderedRoutes :: MemState -> [Route]
+prerenderedRoutes st =
+  Home
+    : Search Nothing Nothing True
+    : [Space path | s <- Map.elems st.spaces, Just path <- [spacePath s.id]]
+      <> [ r
+         | p <- Map.elems st.pages
+         , Just sp <- [spacePath p.space]
+         , Just pp <- [pathOf (`Map.lookup` st.pages) p.id]
+         , r <- [Page sp pp, PageSource sp pp]
+         ]
+  where
+    spacePath = pathOf (`Map.lookup` st.spaces)
+
+-- | How the application starts in its container: building its HTML there,
+-- as the prerender does, or adopting the HTML already there, as the
+-- program does in the browser.
+data Start = Build | Adopt
+
+-- | Start the application at a route in a container, over a wiki in this
+-- state, under this base path, and wait until it has loaded what the route
+-- shows and its HTML has stopped changing. The document's title then, and
+-- how to dispose of the application, which takes its HTML out of the
+-- container again.
+startRoute :: Start -> MemState -> Text -> Route -> N.NativeNode -> IO (Text, IO ())
+startRoute how wiki base at container = do
   ref <- newMemWiki wiki
   let run :: MemWiki MemDOM a -> IO a
       run = runMemDOM . runMemWiki ref
   router <- run (Router.newRouter base Unknown route)
   Router.redirect router at
   document <- N.newDocument
-  container <- N.newElement Nothing (ElemName "div")
-  HalogenSocket {query = send, dispose} <-
-    run (AD.runUI (renderSpec (N.fromNative document) (N.fromNative container)) (component @Void) (input router))
+  HalogenSocket {query = send, dispose} <- run $ case how of
+    Build -> AD.runUI (renderSpec (N.fromNative document) (N.fromNative container)) (component @Void) (input router)
+    Adopt -> hydrateUI (component @Void) (input router) (N.fromNative container)
   let snapshot = mconcat <$> (traverse N.renderToText =<< N.childNodes container)
-  flip finally (run dispose) $ do
+  flip onException (run dispose) $ do
     title <- settled (run (join <$> send (H.mkRequest Shell.Settled)))
-    html <- stable snapshot
-    pure Rendered {html, title}
+    void (stable snapshot)
+    pure (title, run dispose)
 
 -- | Ask until the answer is there; ten seconds is far longer than an
 -- in-memory wiki takes, and longer means something is wrong.

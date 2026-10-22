@@ -80,7 +80,10 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           source <- H.newRefLabel "page-source"
-          pure State {input, loaded = Loading, source, copied = NotYet, copies = 0}
+          -- Loaded at once rather than in 'Initialize', so that the first
+          -- render is the page the prerender shows (see "Wiki.App.Shell").
+          loaded <- fetch input
+          pure State {input, loaded, source, copied = NotYet, copies = 0}
       , render
       , eval =
           H.mkEval
@@ -127,7 +130,8 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case
-      Initialize -> load
+      -- The page was loaded with the initial state: the shell is told.
+      Initialize -> H.raise Loaded
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
@@ -160,10 +164,14 @@ component =
     load :: H.HalogenM State Action Empty ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      result <- getPage input.space.id input.path
+      loaded <- fetch input
       -- Only if the page asked for is still the one to show: another
       -- navigation may have overtaken this load.
       now <- gets (\st -> st.input)
       when (now.space.id == input.space.id && now.path == input.path) $ do
-        modify (\st -> st {loaded = either Failed Ready result})
+        modify (\st -> st {loaded})
         H.raise Loaded
+
+-- | The page the input names, or why it cannot be shown.
+fetch :: (MonadWiki n) => Input -> n Loaded
+fetch input = either Failed Ready <$> getPage input.space.id input.path

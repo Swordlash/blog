@@ -44,7 +44,7 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous)
+import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Browser (historyEntry, historyGo, setDocumentTitle)
 import Wiki.App.DemoUsers (MonadDemoUsers (..))
 import Wiki.App.Islands (MonadIslands)
@@ -133,17 +133,24 @@ component
 component =
   H.mkComponent
     H.ComponentSpec
-      { initialState = \Input {router, welcome} -> do
+      { -- Loaded here rather than in 'Initialize', so that the first render
+        -- is the page as the prerender left it, after its initializers:
+        -- that is the HTML 'Halogen.VDom.Driver.hydrateUI' adopts, and a
+        -- first render of the empty state would take it all apart, only for
+        -- the initializer to build it again.
+        initialState = \Input {router, welcome} -> do
           route <- Router.current router
+          (signedIn, users, spaces) <- fetchWorld
+          here <- maybe (pure NoSpace) fetchHere (spaceOfRoute route)
           pure
             State
               { router
               , welcome
               , route
-              , session = anonymous
-              , users = []
-              , spaces = []
-              , here = NoSpace
+              , session = signedIn
+              , users
+              , spaces
+              , here
               , collapsed = mempty
               , generation = 0
               , menuOpen = False
@@ -379,8 +386,8 @@ component =
         void $ H.subscribe (Arrived <$> Router.changes router)
         entry <- H.liftEffect historyEntry
         modify (\st -> st {entry})
-        loadWorld
-        loadHere True
+        -- What the route shows was loaded with the initial state.
+        announce
       Arrived r -> do
         now <- H.liftEffect historyEntry
         before <- gets (\st -> st.route)
@@ -439,9 +446,7 @@ component =
 
     loadWorld :: H.HalogenM State Action Slots output m ()
     loadWorld = do
-      s <- session
-      us <- listUsers
-      ss <- listSpaces
+      (s, us, ss) <- fetchWorld
       modify (\st -> st {session = s, users = us, spaces = ss})
 
     -- The space the route is in, unless it is the one loaded already
@@ -456,20 +461,22 @@ component =
           | otherwise -> do
               -- Reloading the space being shown keeps it on screen meanwhile.
               unless (hereIs path st.here) $ modify (\s -> s {here = LoadingSpace path})
-              result <- runExceptT $ do
-                space <- ExceptT (getSpace path)
-                pages <- ExceptT (listPages space.id)
-                pure (InSpace path space pages)
+              result <- fetchHere path
               -- Unless the route has moved on to another space meanwhile.
               now <- gets (\s -> s.route)
               when (spaceOfRoute now == Just path) $
-                modify (\s -> s {here = either (SpaceFailed path) identity result})
-      st' <- get
-      H.liftEffect (setDocumentTitle (documentTitle st'))
-      -- A page's view, or the editor, says when it has loaded the page, and
-      -- the results of a search when they have come; everything else is
-      -- loaded now.
-      unless (waitsForPage st') settle
+                modify (\s -> s {here = result})
+      announce
+
+    -- Title the document for what is shown, and say whether that is all of
+    -- it. A page's view, or the editor, says when it has loaded the page,
+    -- and the results of a search when they have come; everything else is
+    -- loaded by now.
+    announce :: H.HalogenM State Action Slots output m ()
+    announce = do
+      st <- get
+      H.liftEffect (setDocumentTitle (documentTitle st))
+      unless (waitsForPage st) settle
 
     settle :: H.HalogenM State Action Slots output m ()
     settle = modify (\st -> st {settled = True})
@@ -478,6 +485,22 @@ component =
     handleQuery (Settled reply) = do
       st <- get
       pure (Just (reply (if st.settled then Just (documentTitle st) else Nothing)))
+
+-- | What every route shows around it: who is signed in, who else one may
+-- be in the demo, and the tree of spaces.
+fetchWorld :: (MonadWiki n, MonadDemoUsers n) => n (Session, [User], [Space])
+fetchWorld = (,,) <$> session <*> listUsers <*> listSpaces
+
+-- | The space at a path, with its pages, or why it cannot be shown.
+fetchHere :: (MonadWiki n) => [Slug] -> n Here
+fetchHere path =
+  either (SpaceFailed path) identity
+    <$> runExceptT
+      ( do
+          space <- ExceptT (getSpace path)
+          pages <- ExceptT (listPages space.id)
+          pure (InSpace path space pages)
+      )
 
 context :: State -> Context
 context st = Context {router = st.router, session = st.session, spaces = st.spaces, revision = st.generation}

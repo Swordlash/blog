@@ -29,7 +29,6 @@
 module Main (main) where
 
 import Data.ByteString qualified as B
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Halogen.Router qualified as Router
 import Halogen.Static (fillMountPoint)
@@ -39,12 +38,8 @@ import System.Directory (createDirectoryIfMissing)
 import System.Environment (lookupEnv)
 import System.FilePath (takeDirectory, (</>))
 import Wiki.App (Route (..), route)
-import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.App.Static (Rendered (..), renderRoute)
-import Wiki.Core.Page (Page (id, space))
-import Wiki.Core.Path (pathOf)
-import Wiki.Core.Space (Space (id))
+import Wiki.App.Static (Rendered (..), prerenderedRoutes, renderRoute)
 
 main :: IO ()
 main = do
@@ -58,7 +53,7 @@ main = do
   -- Only for its addresses: 'Router.href' with the base, natively.
   router <- runMemDOM (Router.newRouter base Unknown route)
   let home = Router.href router Home
-  for_ (Unknown : routes demo) $ \r -> do
+  for_ (Unknown : prerenderedRoutes demo) $ \r -> do
     Rendered {html, title} <- renderRoute demo base r
     filled <- either (die . ((toS template <> ": ") <>)) pure (fillMountPoint "app" html (withBase home (withTitle title page)))
     let file = case r of
@@ -66,22 +61,6 @@ main = do
           _ -> outputDir </> toS (T.drop (T.length home) (Router.href router r)) </> "index.html"
     createDirectoryIfMissing True (takeDirectory file)
     B.writeFile file (encodeUtf8 filled)
-
--- | The front page, the page of search results, every space, and every page
--- of the demo with its source.
-routes :: MemState -> [Route]
-routes st =
-  Home
-    : Search Nothing Nothing True
-    : [Space path | s <- Map.elems st.spaces, Just path <- [spacePath s.id]]
-      <> [ r
-         | p <- Map.elems st.pages
-         , Just sp <- [spacePath p.space]
-         , Just pp <- [pathOf (`Map.lookup` st.pages) p.id]
-         , r <- [Page sp pp, PageSource sp pp]
-         ]
-  where
-    spacePath = pathOf (`Map.lookup` st.spaces)
 
 -- | The page with a @\<base href>@ first in its head, before anything it
 -- applies to.

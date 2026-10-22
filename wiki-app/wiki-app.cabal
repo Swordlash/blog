@@ -151,15 +151,13 @@ executable wiki-app-prerender
     build-depends:
         base,
         bytestring,
-        containers,
         directory,
         filepath,
         protolude,
         text,
         haskell-halogen-core,
         haskell-halogen-router,
-        wiki-app,
-        wiki-core
+        wiki-app
 
 -- What the component renders, through Halogen.Static's in-memory document,
 -- which exists natively only, and the backend's contract, run against the
@@ -178,6 +176,7 @@ test-suite wiki-app-test
         Test.Backend.Contract
         Test.Backend.Mem
         Test.Demo
+        Test.Hydrate
         Test.Islands
         Test.Link
         Test.Route
@@ -210,6 +209,7 @@ test-suite wiki-app-browser-test
   main-is:          BrowserTest.hs
   other-modules:
       Test.Browser.Editor
+      Test.Browser.Hydrate
       Test.Browser.Islands
       Test.Browser.Mount
       Test.Browser.Search
