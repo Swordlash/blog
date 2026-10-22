@@ -9,12 +9,13 @@
 -- and only a URL whose scheme is harmless is written
 -- ("Wiki.Core.Markdown.Link"); an external link gets @rel=\"noopener\"@.
 --
--- __Islands.__ Code, math and Mermaid diagrams are drawn by JavaScript
--- libraries into elements Halogen does not look inside. The renderer leaves
--- them to 'Options' callbacks, which by default write the source as text in
--- the elements those libraries look for: @\<pre>\<code class=\"language-x\">@,
--- @\<span class=\"math inline\">@, @\<div class=\"math display\">@ and
--- @\<pre class=\"mermaid\">@. A caller that renders them as child
+-- __Islands.__ Code, math, Mermaid diagrams and TikZ pictures are drawn by
+-- JavaScript libraries into elements Halogen does not look inside. The
+-- renderer leaves them to 'Options' callbacks, which by default write the
+-- source as text in the elements those libraries look for:
+-- @\<pre>\<code class=\"language-x\">@, @\<span class=\"math inline\">@,
+-- @\<div class=\"math display\">@, @\<pre class=\"mermaid\">@ and
+-- @\<pre class=\"tikz\">@. A caller that renders them as child
 -- components gets an 'IslandKey' with each, unique in the document, to use as
 -- the slot's index: Halogen tells two children apart by their slot address,
 -- and a document can hold the same formula twice.
@@ -72,6 +73,9 @@ data Options page w i = Options
   -- except in a heading or a table cell.
   , mermaid :: IslandKey -> Text -> HH.HTML w i
   -- ^ A Mermaid diagram: its source.
+  , tikz :: IslandKey -> Text -> HH.HTML w i
+  -- ^ A TikZ picture: its source, as written in the fence
+  -- ("Wiki.Core.Markdown.Tikz" makes it TeX).
   , resolveLink :: Text -> LinkTarget page
   -- ^ What a link's or an embed's destination, as written, points at.
   , pageHref :: page -> Text
@@ -103,6 +107,7 @@ defaultOptions =
     , mathInline = \_ tex -> HH.span [HP.class_ (HH.ClassName "math inline")] [HH.text tex]
     , mathDisplay = \_ tex -> HH.div [HP.class_ (HH.ClassName "math display")] [HH.text tex]
     , mermaid = \_ src -> HH.pre [HP.class_ (HH.ClassName "mermaid")] [HH.text src]
+    , tikz = \_ src -> HH.pre [HP.class_ (HH.ClassName "tikz")] [HH.text src]
     , resolveLink = defaultResolveLink
     , pageHref = identity
     }
@@ -128,6 +133,7 @@ renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts 
       BlockQuote bs -> single . HH.blockquote_ <$> renderBlocks' bs
       CodeBlock _ lang code -> island code <&> \k -> [opts.codeBlock k lang code]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]
+      Tikz src -> island src <&> \k -> [opts.tikz k src]
       MathBlock tex -> island tex <&> \k -> [opts.mathDisplay k tex]
       List kind items -> single . listOf kind (any isTask items) <$> traverse renderItem items
       Table aligns header rows -> single <$> renderTable aligns header rows

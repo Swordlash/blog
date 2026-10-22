@@ -6,7 +6,7 @@
 -- author wrote and nothing about how it is shown: a link keeps its
 -- destination as written, to be resolved when it is rendered; an embed
 -- (@![caption](…)@) does not yet know whether it is an image, a video or a
--- download; a code block in a @mermaid@ or @math@ fence is already told apart
+-- download; a code block in a @mermaid@, @tikz@ or @math@ fence is already told apart
 -- from other code, because what it is does not depend on the wiki.
 --
 -- 'parseMarkdown' reads CommonMark with these extensions:
@@ -82,6 +82,9 @@ data Block
     CodeBlock Attributes (Maybe Text) Text
   | -- | A @mermaid@ fence: the diagram's source.
     Mermaid Text
+  | -- | A @tikz@ fence: the picture's TeX, as written ("Wiki.Core.Markdown.Tikz"
+    -- reads it).
+    Tikz Text
   | -- | Display math: a @math@ fence, or @$$…$$@ in a paragraph. The TeX
     -- source, as written between the delimiters.
     MathBlock Text
@@ -367,12 +370,13 @@ listKind = \case
   CM.BulletList _ -> BulletList
   CM.OrderedList start _ _ -> OrderedList start
 
--- | A code block, or a Mermaid diagram or display math when its language
--- says so. The language is the first word of the info string; a fence
+-- | A code block, or a Mermaid diagram, a TikZ picture or display math when
+-- its language says so. The language is the first word of the info string; a fence
 -- written with attributes alone (@```{.mermaid}@) gives it as a class.
 codeBlockWith :: Attributes -> Maybe Text -> Text -> Block
 codeBlockWith attrs info code = case info <|> head (classes attrs) of
   Just "mermaid" -> Mermaid code
+  Just "tikz" -> Tikz code
   Just "math" -> MathBlock code
   lang -> CodeBlock attrs lang code
 

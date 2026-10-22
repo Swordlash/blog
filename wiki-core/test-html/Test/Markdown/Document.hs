@@ -20,7 +20,7 @@ spec = describe "docs/markdown.md" $ do
   it "parses into every kind of block it describes" $ do
     doc <- either (panic . show) identity . parseMarkdown <$> T.readFile guidePath
     let kinds = map kind (universe doc)
-    for_ ["heading", "para", "list", "task", "quote", "break", "code", "mermaid", "math", "table", "footnotes", "alert", "div"] $ \k ->
+    for_ ["heading", "para", "list", "task", "quote", "break", "code", "mermaid", "tikz", "math", "table", "footnotes", "alert", "div"] $ \k ->
       (k, k `elem` kinds) `shouldBe` (k, True)
 
   it "renders, with the constructs it shows" $ do
@@ -37,6 +37,7 @@ spec = describe "docs/markdown.md" $ do
       , "prices such as $5 and $10 stay text"
       , "<div class=\"math display\">\n\\int_0^1"
       , "<pre class=\"mermaid\">graph LR"
+      , "<pre class=\"tikz\">\\draw[-&gt;] (0,0) -- (2,0) node[right] {$x$};"
       , "<th style=\"text-align: center\">Syntax</th>"
       , "<input checked disabled type=\"checkbox\"> write the page"
       , "<section class=\"footnotes\"><ol><li id=\"fn-1\">"
@@ -71,6 +72,7 @@ kind = \case
   BlockQuote _ -> "quote"
   CodeBlock {} -> "code"
   Mermaid _ -> "mermaid"
+  Tikz _ -> "tikz"
   MathBlock _ -> "math"
   List _ items
     | any (\(ListItem task _) -> isJust task) items -> "task"

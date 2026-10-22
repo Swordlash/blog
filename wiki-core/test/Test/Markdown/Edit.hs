@@ -122,6 +122,11 @@ spec = describe "Wiki.Core.Markdown.Edit" $ do
     Mermaid `turns` "«graph TD\n  X --> Y»" `into` "```mermaid\n«graph TD\n  X --> Y»\n```"
     Mermaid `turns` "«```mermaid\ngraph TD\n```»" `into` "«graph TD»"
 
+  describe "Tikz" $ do
+    Tikz `turns` "‸" `into` "```tikz\n«\\draw[->] (0,0) -- (2,1) node[right] {$x$};»\n```"
+    Tikz `turns` "«\\draw (0,0) circle (1);»" `into` "```tikz\n«\\draw (0,0) circle (1);»\n```"
+    Tikz `turns` "«```tikz\n\\draw (0,0) circle (1);\n```»" `into` "«\\draw (0,0) circle (1);»"
+
   describe "Link" $ do
     Link `turns` "‸" `into` "[«link text»](https://)"
     it "makes the selection the text, and selects the address to type" $

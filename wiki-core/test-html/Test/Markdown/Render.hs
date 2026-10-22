@@ -72,6 +72,10 @@ spec = describe "Markdown.Render" $ do
       "```\nx\n```" `shows'` "<pre><code>x\n</code></pre>"
     it "writes a Mermaid diagram's source in a pre.mermaid" $
       "```mermaid\ngraph TD; A-->B\n```" `shows'` "<pre class=\"mermaid\">graph TD; A--&gt;B\n</pre>"
+    it "writes a TikZ picture's source in a pre.tikz, in either form" $ do
+      "```tikz\n\\draw (0,0) -- (1,1);\n```" `shows'` "<pre class=\"tikz\">\\draw (0,0) -- (1,1);\n</pre>"
+      "```tikz\n\\begin{tikzpicture}\n\\draw (0,0) circle (1);\n\\end{tikzpicture}\n```"
+        `shows'` "<pre class=\"tikz\">\\begin{tikzpicture}\n\\draw (0,0) circle (1);\n\\end{tikzpicture}\n</pre>"
     it "writes inline math in a span" $
       "So $x^2$ holds." `shows'` "<p>So <span class=\"math inline\">x^2</span> holds.</p>"
     it "writes display math in a div, out of the paragraph" $
@@ -85,11 +89,13 @@ spec = describe "Markdown.Render" $ do
             , mathInline = \key tex -> HH.span [HP.title (keyed key)] [HH.text ("i:" <> tex)]
             , mathDisplay = \key tex -> HH.span [HP.title (keyed key)] [HH.text ("d:" <> tex)]
             , mermaid = \key src -> HH.span [HP.title (keyed key)] [HH.text ("m:" <> src)]
+            , tikz = \key src -> HH.span [HP.title (keyed key)] [HH.text ("t:" <> src)]
             }
     it "hands each island its source"
-      $ showsWith opts "```js\nx\n```\n\n```mermaid\ny\n```\n\n$z$ $$w$$"
+      $ showsWith opts "```js\nx\n```\n\n```mermaid\ny\n```\n\n$z$ $$w$$\n\n```tikz\nv\n```\n\n```tikz\n\\begin{tikzpicture}u\\end{tikzpicture}\n```"
       $ "<span title=\"0\">js:x\n</span><span title=\"0\">m:y\n</span>"
         <> "<p><span title=\"0\">i:z</span></p><span title=\"0\">d:w</span>"
+        <> "<span title=\"0\">t:v\n</span><span title=\"0\">t:\\begin{tikzpicture}u\\end{tikzpicture}\n</span>"
     it "counts islands with the same source, of any kind, so that each key is unique"
       $ showsWith opts "$x$ $x$ $y$\n\n```\nx\n```\n\n```math\nx\n```"
       $ "<p><span title=\"0\">i:x</span> <span title=\"1\">i:x</span> <span title=\"0\">i:y</span></p>"

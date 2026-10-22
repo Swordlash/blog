@@ -1,8 +1,8 @@
 # Writing pages
 
 Pages are written in Markdown: [CommonMark](https://commonmark.org) with
-GitHub's extensions, math, Mermaid diagrams, attachments and links between
-pages. The editor's "Show preview" shows a page as readers will see it, and
+GitHub's extensions, math, Mermaid diagrams, TikZ pictures, attachments
+and links between pages. The editor's "Show preview" shows a page as readers will see it, and
 its toolbar writes the Markdown for you: select some text and choose a
 button, or choose one with nothing selected and type over what it puts in.
 Each button's title names its shortcut (Ctrl+B bold, Ctrl+I italic, Ctrl+K
@@ -130,6 +130,47 @@ A `mermaid` fence is drawn as a [Mermaid](https://mermaid.js.org) diagram:
 graph LR
   Write --> Preview --> Save
 ```
+
+## Pictures
+
+A `tikz` fence is drawn with [TikZ](https://tikz.dev), for a figure whose
+every point you place: a geometry sketch, a plot with labelled axes, a
+commutative diagram. The fence holds the commands of a picture, which are
+drawn as a `tikzpicture`:
+
+```tikz
+\draw[->] (0,0) -- (2,0) node[right] {$x$};
+\draw[->] (0,0) -- (0,1.5) node[above] {$y$};
+\draw[thick] (0,0) parabola (1.8,1.3);
+```
+
+or a whole `\begin{tikzpicture}[...]` ... `\end{tikzpicture}`, or a
+`\begin{tikzcd}` ... `\end{tikzcd}` diagram. Lines at the top that load a
+package or a library (`\usepackage{...}`, `\usetikzlibrary{...}`) are read
+before the picture, as LaTeX wants; a `tikzcd` diagram loads `tikz-cd`, and
+an `axis` loads `pgfplots`, by themselves.
+
+The picture is drawn in your browser by [TikZJax](https://github.com/drgrice1/tikzjax),
+real TeX, so the first picture a page shows takes a moment while TeX
+loads; a page without one never loads it. Black in a picture is drawn in
+the page's text colour, so it shows on a dark page too; other colours
+stay as you chose them. A picture TeX cannot draw shows its source with
+TeX's error under it, and the line TeX names is the fence's.
+
+What TeX has, besides TikZ itself and nearly every TikZ library
+(`arrows.meta`, `calc`, `positioning`, `decorations.*`, `shapes.*`,
+`patterns`, `shadows`, `automata`, `graphs`, `matrix`, `trees`, `3d`,
+`angles`, `quotes`, `intersections` and most of the rest; not `external`,
+which has no use here):
+
+- `tikz-cd`, commutative diagrams;
+- `pgfplots`, plots (version 1.18, without its own libraries such as
+  `fillbetween` or `groupplots`);
+- `tikz-3dplot`, three-dimensional pictures;
+- `amsmath`, `amssymb`, `amsfonts`, for the mathematics in labels;
+- `array`, `etoolbox`, `ifthen`, `xparse` and `hf-tikz`.
+
+Any other package is not there, and asking for it is an error.
 
 ## Tables
 

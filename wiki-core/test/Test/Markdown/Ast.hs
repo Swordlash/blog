@@ -102,6 +102,10 @@ spec = describe "Markdown.Ast" $ do
       "``` {.python}\nx\n```" `parses` [CodeBlock [("class", "python")] (Just "python") "x\n"]
     it "reads a mermaid fence as a diagram" $
       "```mermaid\ngraph TD; A-->B\n```" `parses` [Mermaid "graph TD; A-->B\n"]
+    it "reads a tikz fence as a picture, a body or a whole environment" $ do
+      "```tikz\n\\draw (0,0) -- (1,1);\n```" `parses` [Tikz "\\draw (0,0) -- (1,1);\n"]
+      "```tikz\n\\begin{tikzpicture}\n\\draw (0,0) circle (1);\n\\end{tikzpicture}\n```"
+        `parses` [Tikz "\\begin{tikzpicture}\n\\draw (0,0) circle (1);\n\\end{tikzpicture}\n"]
     it "reads a math fence as display math" $
       "```math\nx^2\n```" `parses` [MathBlock "x^2\n"]
 

@@ -8,6 +8,7 @@ import Test.Markdown.Allowlist qualified as Allowlist
 import Test.Markdown.Ast qualified as Ast
 import Test.Markdown.Edit qualified as Edit
 import Test.Markdown.Link qualified as Link
+import Test.Markdown.Tikz qualified as Tikz
 import Test.Path qualified as Path
 import Test.Permission qualified as Permission
 import Test.Permission.Writes qualified as Writes
@@ -19,6 +20,7 @@ main = hspec $ do
   Slug.spec
   Ast.spec
   Edit.spec
+  Tikz.spec
   Allowlist.spec
   Link.spec
   Path.spec

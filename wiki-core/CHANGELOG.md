@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+A `tikz` fence is a TikZ picture: the Markdown tree has `Tikz Text` (the
+fence's source as written), the renderer's `Options` has `tikz`, which by
+default writes `<pre class="tikz">` with the source, and search reads the
+source as a diagram's. The new `Wiki.Core.Markdown.Tikz.tikzDocument` makes
+the TeX that draws it, as a `TikzDocument` of a `preamble` and a `picture`:
+the commands alone are wrapped in a `tikzpicture`, a whole `tikzpicture` or
+`tikzcd` is kept as written, `\usepackage`, `\usetikzlibrary` and
+`\usepgfplotslibrary` lines at the top go to the preamble, and a `tikzcd`
+diagram or a pgfplots axis loads its package by itself. Every line of the
+author's stays on its own line, so that the line TeX names in an error can be
+counted back to the author's. The editor gains the `Tikz` command, which
+fences the selection or puts in a small picture.
+
 A whole wiki can be written as an archive and read back: `Wiki.Core.Export`
 has `Archive` (the people, the grants, the spaces, the pages with their
 attachments, and the attachments' bytes), `writeArchive`, which gives the

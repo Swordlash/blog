@@ -22,7 +22,7 @@
 --   command turns a list of another kind into its own; 'Heading' cycles
 --   through levels one to three and back to none.
 --
--- * Block ones ('CodeBlock', 'DisplayMath', 'Mermaid', 'Html' 'Details')
+-- * Block ones ('CodeBlock', 'DisplayMath', 'Mermaid', 'Tikz', 'Html' 'Details')
 --   put fences around the lines the selection touches, or a template after
 --   the cursor's line when nothing is selected; on lines fenced already they
 --   take the fences away.
@@ -79,6 +79,8 @@ data Command
     CodeBlock
   | DisplayMath
   | Mermaid
+  | -- | A TikZ picture: the body of a @tikzpicture@.
+    Tikz
   | Link
   | -- | An image by its address. (An attachment is uploaded instead, and its
     -- reference put in by the editor.)
@@ -136,6 +138,7 @@ apply command text selection = case command of
   CodeBlock -> fenced (Fence "```" "```" "" False) text sel
   DisplayMath -> fenced (Fence "$$" "$$" "E = mc^2" True) text sel
   Mermaid -> fenced (Fence "```mermaid" "```" "graph LR\n  A --> B" True) text sel
+  Tikz -> fenced (Fence "```tikz" "```" "\\draw[->] (0,0) -- (2,1) node[right] {$x$};" True) text sel
   Link -> link "" "link text" text sel
   Image -> link "!" "description" text sel
   Table -> template tableTemplate (Just (2, T.length "Column 1")) text sel

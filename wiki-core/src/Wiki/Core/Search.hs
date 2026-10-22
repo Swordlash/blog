@@ -166,6 +166,7 @@ bodyText source =
       BlockQuote bs -> blocks bs
       CodeBlock _ _ code -> code
       Mermaid diagram -> diagram
+      Tikz picture -> picture
       MathBlock tex -> tex
       List _ items -> T.intercalate "\n" [blocks bs | ListItem _ bs <- items]
       Table _ header rows -> T.intercalate "\n" (map (T.unwords . map plainText) (header : rows))
