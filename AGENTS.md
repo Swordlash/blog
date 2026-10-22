@@ -67,6 +67,7 @@ ghc-wasm-meta revision haskell-halogen's `.github/workflows/build.yml` names, No
 Chromium for Playwright. Targets are native GHC and wasm; the GHC JavaScript backend is not a
 target here. Cloud sessions start without GHC: the `SessionStart` hook under `.claude/` installs
 the toolchain, and a session where it has not run should run it before building.
+The hook runs `toolchain/bootstrap.sh` (`sh toolchain/bootstrap.sh` by hand; see the README).
 
 Only `haskell-halogen-core` is on Hackage, so every haskell-halogen package comes from a
 `source-repository-package` stanza in `cabal.project` pinned to one commit. Bumping the pin is
