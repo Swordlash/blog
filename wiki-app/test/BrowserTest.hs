@@ -8,6 +8,7 @@ import Test.Hspec.Halogen (describe, runBrowserTests)
 import Test.Browser.Editor qualified as Editor
 import Test.Browser.Search qualified as Search
 import Test.Browser.Shell qualified as Shell
+import Test.Browser.Source qualified as Source
 #endif
 
 -- | Built as a reactor exporting @hs_start@, which the browser test runner
@@ -30,6 +31,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.Shell" (Shell.spec BrowserDOM)
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
+  describe "Wiki.App.View.Source" (Source.spec BrowserDOM)
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

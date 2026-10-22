@@ -9,6 +9,7 @@
 -- > /s/team/projects/              Space [team, projects]
 -- > /s/docs/p/markdown-guide/      Page [docs] [markdown-guide]
 -- > /s/docs/p/tour/edit/           EditPage [docs] [tour]
+-- > /s/docs/p/tour/source/         PageSource [docs] [tour]
 -- > /s/docs/new-page/              NewPage [docs] Nothing
 -- > /s/docs/new-page/tour/         NewPage [docs] (Just [tour])
 -- > /new-space/                    NewSpace Nothing
@@ -24,8 +25,9 @@
 -- works too.
 --
 -- A space's path and a page's path are separated by the segment @p@, an
--- edit route ends in @edit@, and a new page's route has @new-page@ after the
--- space's path; a slug may be any of these words too (a page titled "P"), so
+-- edit route ends in @edit@, a page's source in @source@, and a new page's
+-- route has @new-page@ after the space's path; a slug may be any of these
+-- words too (a page titled "P"), so
 -- a slug that is one of them is written with a @~@ before it (@\/s\/~p\/@),
 -- which no slug can start with. That keeps every route's
 -- address its own: 'route' reads back exactly the route it wrote.
@@ -65,6 +67,9 @@ data Route
     Page [Slug] [Slug]
   | -- | The editor for a page: its space's path, and its own path there.
     EditPage [Slug] [Slug]
+  | -- | A page's Markdown, for anyone who may read the page: its space's
+    -- path, and its own path there.
+    PageSource [Slug] [Slug]
   | -- | The form for a new space, at the top level or under a space.
     NewSpace (Maybe [Slug])
   | -- | An address that is none of the above.
@@ -82,8 +87,8 @@ data Route
   deriving stock (Eq, Show)
 
 -- | The routes' codec. Parsing tries the routes in this order and takes the
--- first that reads the whole path; since a slug is never @p@, @edit@ or
--- @new-page@ as written, no address reads as two routes.
+-- first that reads the whole path; since a slug is never @p@, @edit@,
+-- @source@ or @new-page@ as written, no address reads as two routes.
 route :: RouteDuplex' Route
 route =
   root $
@@ -98,6 +103,10 @@ route =
           (\case EditPage s p -> Just (s, p); _ -> Nothing)
           (uncurry EditPage)
           (prefix "s" (directory (spaceAndPage (`suffix` "edit"))))
+      , alternative
+          (\case PageSource s p -> Just (s, p); _ -> Nothing)
+          (uncurry PageSource)
+          (prefix "s" (directory (spaceAndPage (`suffix` "source"))))
       , alternative
           (\case NewSpace parent -> Just parent; _ -> Nothing)
           NewSpace
@@ -133,7 +142,8 @@ route =
 slugs :: RouteDuplex' [Slug]
 slugs = many1 slugSegment
 
--- | A slug as a segment, with the route's own words (@p@, @edit@) escaped.
+-- | A slug as a segment, with the route's own words (@p@, @edit@, @source@,
+-- @new-page@) escaped.
 slugSegment :: RouteDuplex' Slug
 slugSegment = as written readSlug segment
   where
@@ -143,7 +153,7 @@ slugSegment = as written readSlug segment
       _
         | t `elem` reserved -> Left (t <> " separates paths here")
         | otherwise -> first show (mkSlug t)
-    reserved = ["p", "edit", "new-page"] :: [Text]
+    reserved = ["p", "edit", "source", "new-page"] :: [Text]
 
 -- | A route's address ends in a slash ('route' says why), and is read
 -- without one too.

@@ -10,7 +10,7 @@
 -- in, the tree of spaces, and the space the route is in with its pages
 -- (through 'getSpace' and 'listPages', so that a space the user may not see
 -- is refused in place). The views are child components ("Wiki.App.View.*"):
--- a space, a page, the form for a new space. They are handed that context,
+-- a space, a page, a page's source, the form for a new space. They are handed that context,
 -- and they tell the shell when they have changed the wiki ('Changed'), which
 -- it then reloads, counting up the context's revision so that they reload
 -- what they hold as well, and goes where the change leads.
@@ -55,6 +55,7 @@ import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.Page qualified as PageView
 import Wiki.App.View.Search qualified as SearchBox
 import Wiki.App.View.SearchResults qualified as SearchResultsView
+import Wiki.App.View.Source qualified as SourceView
 import Wiki.App.View.Space qualified as SpaceView
 import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Page (Page (id, title))
@@ -79,6 +80,7 @@ data Query a = Settled (Maybe Text -> a)
 type Slots =
   ("space" .== H.Slot (Const Void) ViewOutput ())
     .+ ("page" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("source" .== H.Slot (Const Void) ViewOutput ())
     .+ ("newSpace" .== H.Slot (Const Void) ViewOutput ())
     .+ ("editor" .== H.Slot Editor.Query ViewOutput Editor.Target)
     .+ ("searchBox" .== H.Slot (Const Void) Void ())
@@ -299,6 +301,7 @@ component =
         SpaceFailed _ e -> errorView e
         InSpace _ space pages -> case st.route of
           Page _ path -> HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path} FromView
+          PageSource _ path -> HH.slot "source" () SourceView.component SourceView.Input {context = context st, space, path} FromView
           EditPage _ path -> editor (Editor.Existing path)
           NewPage _ parent -> editor (Editor.New parent)
           _ -> HH.slot "space" () SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
@@ -484,6 +487,7 @@ spaceOfRoute = \case
   Space path -> Just path
   Page path _ -> Just path
   EditPage path _ -> Just path
+  PageSource path _ -> Just path
   NewPage path _ -> Just path
   _ -> Nothing
 
@@ -503,6 +507,7 @@ waitsForPage :: State -> Bool
 waitsForPage st = case (st.route, st.here) of
   (Page _ _, InSpace {}) -> True
   (EditPage _ _, InSpace {}) -> True
+  (PageSource _ _, InSpace {}) -> True
   (NewPage _ _, InSpace {}) -> True
   (Search {}, _) -> True
   _ -> False
@@ -514,6 +519,7 @@ currentPage :: State -> Maybe Page
 currentPage st = case (st.route, st.here) of
   (Page _ path, InSpace _ _ pages) -> currentPageOf pages path
   (EditPage _ path, InSpace _ _ pages) -> currentPageOf pages path
+  (PageSource _ path, InSpace _ _ pages) -> currentPageOf pages path
   _ -> Nothing
 
 -- | What the route is, as far as it has been loaded: a title for it.
@@ -523,6 +529,11 @@ crumbs st = case st.route of
   Space path -> spaceCrumbs path
   Page path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath
   EditPage path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath <> [("Edit", Nothing)]
+  -- The source of a page in a space that cannot be shown is not named
+  -- either, so that its title says why, as the page's would.
+  PageSource path pagePath ->
+    let page = spaceCrumbs path <> pageCrumbs path pagePath
+     in page <> [("Source", Nothing) | not (null page)]
   NewPage path parent -> spaceCrumbs path <> foldMap (pageCrumbs path) parent <> [("New page", Nothing)]
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]

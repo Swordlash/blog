@@ -20,7 +20,7 @@ slugs = map slug
 
 -- | Slugs, the route's own words among them, which have to be escaped.
 genSlug :: Gen Slug
-genSlug = slug <$> elements ["docs", "team", "p", "edit", "new-page", "new-space", "s", "not-found", "a-b", "x1"]
+genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "new-page", "new-space", "s", "not-found", "a-b", "x1"]
 
 genPath :: Gen [Slug]
 genPath = chooseInt (1, 4) >>= (`vectorOf` genSlug)
@@ -32,6 +32,7 @@ genRoute =
     , Space <$> genPath
     , Page <$> genPath <*> genPath
     , EditPage <$> genPath <*> genPath
+    , PageSource <$> genPath <*> genPath
     , NewSpace <$> oneof [pure Nothing, Just <$> genPath]
     , pure Unknown
     , NewPage <$> genPath <*> oneof [pure Nothing, Just <$> genPath]
@@ -53,6 +54,8 @@ spec = describe "Wiki.App.Route" $ do
       print route (Space (slugs ["team", "projects"])) `shouldBe` "/s/team/projects/"
       print route (Page (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"])) `shouldBe` "/s/docs/p/markdown-guide/diagrams/"
       print route (EditPage (slugs ["docs"]) (slugs ["tour"])) `shouldBe` "/s/docs/p/tour/edit/"
+      print route (PageSource (slugs ["docs"]) (slugs ["tour"])) `shouldBe` "/s/docs/p/tour/source/"
+      print route (PageSource (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"])) `shouldBe` "/s/docs/p/markdown-guide/diagrams/source/"
       print route (NewSpace Nothing) `shouldBe` "/new-space/"
       print route (NewSpace (Just (slugs ["team"]))) `shouldBe` "/new-space/team/"
       print route Unknown `shouldBe` "/not-found/"
@@ -71,9 +74,21 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/s/new-page/" `shouldSatisfy` isLeft
       parse route "/s/a/new-page/b/" `shouldBe` Right (NewPage (slugs ["a"]) (Just (slugs ["b"])))
 
+    it "keeps a page called source apart from a page's source" $ do
+      print route (Page (slugs ["a"]) (slugs ["source"])) `shouldBe` "/s/a/p/~source/"
+      print route (Page (slugs ["a"]) (slugs ["b", "source"])) `shouldBe` "/s/a/p/b/~source/"
+      print route (PageSource (slugs ["a"]) (slugs ["source"])) `shouldBe` "/s/a/p/~source/source/"
+      print route (Space (slugs ["source"])) `shouldBe` "/s/~source/"
+      parse route "/s/a/p/b/source/" `shouldBe` Right (PageSource (slugs ["a"]) (slugs ["b"]))
+      parse route "/s/a/p/b/~source/" `shouldBe` Right (Page (slugs ["a"]) (slugs ["b", "source"]))
+      parse route "/s/a/p/~source/source/" `shouldBe` Right (PageSource (slugs ["a"]) (slugs ["source"]))
+      parse route "/s/a/p/b/source/edit/" `shouldSatisfy` isLeft
+      parse route "/s/a/p/source/" `shouldSatisfy` isLeft
+
     it "reads an address without its last slash too" $ do
       parse route "/s/docs" `shouldBe` Right (Space (slugs ["docs"]))
       parse route "/s/docs/p/tour" `shouldBe` Right (Page (slugs ["docs"]) (slugs ["tour"]))
+      parse route "/s/docs/p/tour/source" `shouldBe` Right (PageSource (slugs ["docs"]) (slugs ["tour"]))
       parse route "/new-space" `shouldBe` Right (NewSpace Nothing)
       parse route "/search?q=x" `shouldBe` Right (Search (Just "x") Nothing True)
       parse route "/s/docs/new-page" `shouldBe` Right (NewPage (slugs ["docs"]) Nothing)

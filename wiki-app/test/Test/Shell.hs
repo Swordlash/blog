@@ -130,9 +130,50 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     page `contains` "href=\"/s/blog/new-page/hello-world/\">New subpage</a>"
     page `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a>"
 
+  it "offers every reader of a page its source, and only an editor the rest" $ do
+    Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["tour"]))
+    html `contains` "<div class=\"actions\"><a class=\"button\" href=\"/s/docs/p/tour/source/\">View source</a></div>"
+    html `lacks` ">Edit</a>"
+    Rendered {html = asReader} <- render (as (Just "user-reader")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    asReader `contains` "href=\"/s/blog/p/hello-world/source/\">View source</a>"
+    asReader `lacks` ">Edit</a>"
+    Rendered {html = asEditor} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    asEditor `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a><a class=\"button\" href=\"/s/blog/p/hello-world/source/\">View source</a>"
+
+  it "shows a page's Markdown to someone not signed in, with the way back to the page" $ do
+    Rendered {html, title} <- render (as Nothing) (PageSource (slugs ["docs"]) (slugs ["tour"]))
+    title `shouldBe` "Source · Tour · Wiki"
+    html `contains` "<div class=\"source-view\"><header class=\"view-header\"><h1>Tour</h1>"
+    html `contains` "<a class=\"button source-back\" href=\"/s/docs/p/tour/\">Back</a><button class=\"source-copy\" type=\"button\">Copy</button>"
+    html `contains` "<pre class=\"source-text\"># Tour\n\nThis is the demo of a wiki"
+    -- The Markdown as it is written, not rendered: a table's pipes, a
+    -- callout's marker, and markup escaped as text.
+    html `contains` "&gt; [!NOTE]"
+    html `contains` "| Who "
+    html `lacks` "<article"
+    html `contains` "<a href=\"/s/docs/p/tour/\">Tour</a>"
+    html `contains` "<span aria-current=\"page\">Source</span>"
+
+  it "shows the source to a reader who may not edit the page" $ do
+    Rendered {html} <- render (as (Just "user-reader")) (PageSource (slugs ["team", "projects"]) (slugs ["the-wiki"]))
+    html `contains` "<pre class=\"source-text\">"
+    html `lacks` ">Edit</a>"
+
+  it "refuses the source where the page is refused, for the same reasons" $ do
+    Rendered {html, title} <- render (as Nothing) (PageSource (slugs ["team"]) (slugs ["team-handbook"]))
+    html `contains` "class=\"error error-forbidden\""
+    html `contains` "Switch to someone who has, at the top right."
+    html `lacks` "source-text"
+    title `shouldBe` "Private · Wiki"
+    Rendered {html = missing} <- render (as Nothing) (PageSource (slugs ["docs"]) (slugs ["no-such-page"]))
+    missing `contains` "class=\"error error-not-found\""
+    missing `lacks` "source-text"
+    Rendered {html = projects} <- render (as Nothing) (PageSource (slugs ["team", "projects"]) (slugs ["the-wiki"]))
+    projects `contains` "class=\"error error-forbidden\""
+
   it "ends every page with the footer, linking to haskell-halogen" $ do
     let footer = "<footer class=\"wiki-footer\">Built with <a href=\"https://github.com/Swordlash/haskell-halogen\">haskell-halogen</a></footer>"
-    for_ [Home, Unknown, Space (slugs ["docs"]), Page (slugs ["docs"]) (slugs ["tour"]), EditPage (slugs ["docs"]) (slugs ["tour"])] $ \r -> do
+    for_ [Home, Unknown, Space (slugs ["docs"]), Page (slugs ["docs"]) (slugs ["tour"]), EditPage (slugs ["docs"]) (slugs ["tour"]), PageSource (slugs ["docs"]) (slugs ["tour"])] $ \r -> do
       Rendered {html} <- render (as Nothing) r
       html `contains` footer
       -- The frame's last element, after its body.
