@@ -1,27 +1,18 @@
--- | A page, read: its Markdown rendered by "Wiki.Core.Markdown" with its
--- formulas, diagrams and code drawn by the islands ("Wiki.App.Islands"), its
--- attachments, and what the current user may do to it (edit, rename, move,
--- delete).
---
--- Links in the Markdown are resolved here, where the page and its space are
--- known: a path to a route by 'resolvePageLink', an @attachment:@ name to
--- the attachment's URL ('attachmentUrl', asked once per load), anything else
--- as it is. The rendered links are plain @\<a href>@s, so a click on one
--- that leads somewhere in the wiki is caught on the article around them and
--- followed by the router ("Wiki.App.Browser").
+-- | A page, read: its Markdown rendered as "Wiki.App.View.Body" renders it
+-- (with its links resolved and its islands drawn), its attachments, and what
+-- the current user may do to it (edit, add a page under it, rename, move,
+-- delete). The URLs of its attachments are asked of the backend
+-- ('attachmentUrl') once per load.
 module Wiki.App.View.Page
   ( Input (..)
   , Slots
   , component
-  , startsWithHeading
   )
 where
 
 import Control.Monad.UUID (MonadUUID)
 import DOM.HTML.Indexed qualified as I
 import Data.Map.Strict qualified as Map
-import Data.Row (type (.==))
-import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -29,19 +20,17 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
-import Numeric.Natural (Natural)
 import Protolude hiding (State)
 import Web.Event.Event (Event, preventDefault)
 import Web.UIEvent.MouseEvent (MouseEvent)
 import Wiki.App.Backend (MonadWiki (..), WikiError)
 import Wiki.App.Browser (followArticleClick)
 import Wiki.App.Islands (MonadIslands)
-import Wiki.App.Islands qualified as Islands
-import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink)
+import Wiki.App.Route (Route (..))
+import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
-import Wiki.Core.Attachment (Attachment (..), findAttachment)
+import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Id (AttachmentId, PageId, SpaceId)
-import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Page (Page (attachments, body, id, parent, slug, space, title, updatedAt))
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slug (Slug)
@@ -56,7 +45,7 @@ data Input = Input
   , path :: [Slug]
   }
 
-type Slots = ("island" .== H.Slot (Const Void) Void Md.IslandKey)
+type Slots = Body.IslandSlots
 
 data Loaded
   = Loading
@@ -117,7 +106,7 @@ component =
           ( [HH.div [HP.class_ "actions"] (actions input page) | mayEdit input.context page.space]
               <> form input page mode
               <> foldMap (pure . errorView) problem
-              <> [HH.h1 [HP.class_ "page-title"] [HH.text page.title] | not (startsWithHeading page.body)]
+              <> Body.heading page.title page.body
               <> [body input page urls]
               <> attachments page urls
               <> [HH.footer [HP.class_ "page-meta"] [HH.text ("Last changed " <> day page.updatedAt)]]
@@ -125,11 +114,14 @@ component =
 
     actions :: Input -> Page -> [H.ComponentHTML Action Slots m]
     actions input page =
-      [ Router.link input.context.router Followed (EditPage (spacePathOf input.context.spaces input.space.id) input.path) [HP.class_ "button"] [HH.text "Edit"]
+      [ Router.link input.context.router Followed (EditPage spacePath input.path) [HP.class_ "button"] [HH.text "Edit"]
+      , Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
       , button "Rename" (Open (Renaming page.title))
       , button "Move" StartMove
       , button "Delete" (Open ConfirmingDelete)
       ]
+      where
+        spacePath = spacePathOf input.context.spaces input.space.id
 
     form :: Input -> Page -> Mode -> [H.ComponentHTML Action Slots m]
     form input page = \case
@@ -169,40 +161,11 @@ component =
         (fields <> [HH.button [HP.type_ I.ButtonSubmit, HP.class_ "primary"] [HH.text submit], button "Cancel" (Open Viewing)])
 
     body :: Input -> Page -> Map AttachmentId Text -> H.ComponentHTML Action Slots m
-    body input page urls = case Md.renderMarkdown (options input page urls) page.body of
-      Right nodes -> HH.article [HP.class_ "page-body", HE.onClick ArticleClicked] nodes
-      Left e ->
-        HH.div_
-          [ errorView' ("This page's Markdown could not be read: " <> show e)
-          , HH.pre [HP.class_ "page-source"] [HH.text page.body]
-          ]
-
-    errorView' t = HH.div [HP.class_ "error", attr "role" "alert"] [HH.text t]
-
-    options :: Input -> Page -> Map AttachmentId Text -> Md.Options PageLink (H.ComponentSlot Slots m Action) Action
-    options input page urls =
-      Md.defaultOptions
-        { Md.codeBlock = \k language code -> island k (Islands.CodeBlock language code)
-        , Md.mathInline = \k tex -> island k (Islands.MathInline tex)
-        , Md.mathDisplay = \k tex -> island k (Islands.MathDisplay tex)
-        , Md.mermaid = \k source -> island k (Islands.Mermaid source)
-        , Md.resolveLink = resolve input page urls
-        , Md.pageHref = \(PageLink r fragment) -> Router.href input.context.router r <> fragment
-        }
-
-    island :: Md.IslandKey -> Islands.Island -> H.ComponentHTML Action Slots m
-    island key = HH.slot_ "island" key Islands.component
-
-    resolve :: Input -> Page -> Map AttachmentId Text -> Text -> Md.LinkTarget PageLink
-    resolve input page urls destination = case Md.classifyDestination destination of
-      Md.ToAttachment name -> case findAttachment name page.attachments of
-        Just a -> Md.Attachment Md.AttachmentRef {name = a.name, url = Map.findWithDefault "" a.id urls, mediaType = Just a.mediaType}
-        Nothing -> Md.Unresolved
-      Md.ToUrl url -> Md.External url
-      Md.ToAnchor fragment -> Md.External ("#" <> fragment)
-      Md.ToPath _ ->
-        maybe Md.Unresolved Md.Page $
-          resolvePageLink input.context.spaces (spacePathOf input.context.spaces input.space.id) input.pages input.path destination
+    body input page urls =
+      Body.article
+        ArticleClicked
+        Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls}
+        page.body
 
     attachments :: Page -> Map AttachmentId Text -> [H.ComponentHTML Action Slots m]
     attachments page urls = case page.attachments of
@@ -214,7 +177,7 @@ component =
             , HH.ul_
                 [ HH.li_
                     [ HH.a [HP.href (Map.findWithDefault "" a.id urls), HP.download a.name] [HH.text a.name]
-                    , HH.span [HP.class_ "attachment-meta"] [HH.text (a.mediaType <> ", " <> size a.size)]
+                    , HH.span [HP.class_ "attachment-meta"] [HH.text (a.mediaType <> ", " <> fileSize a.size)]
                     ]
                 | a <- files
                 ]
@@ -302,11 +265,6 @@ component =
         modify (\st -> st {mode = Viewing, problem = Nothing})
         H.raise (Changed (next a))
 
--- | Whether a page's Markdown starts with a level-one heading, which is then
--- its title on the page; otherwise the view shows the title above it.
-startsWithHeading :: Text -> Bool
-startsWithHeading = T.isPrefixOf "# " . T.stripStart
-
 -- | The spaces a page may be moved to: those where the rules allow it.
 targetSpaces :: Context -> Page -> [Space]
 targetSpaces ctx page =
@@ -334,10 +292,3 @@ spaceName ctx s = mconcat (intersperse " / " (map (\c -> c.name) (chainOf ctx s.
 
 day :: UTCTime -> Text
 day = toS . formatTime defaultTimeLocale "%-d %B %Y"
-
--- | A size in bytes, as people read it.
-size :: Natural -> Text
-size n
-  | n < 1024 = show n <> " bytes"
-  | n < 1024 * 1024 = show (n `div` 1024) <> " KB"
-  | otherwise = show (n `div` (1024 * 1024)) <> " MB"

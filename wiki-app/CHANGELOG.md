@@ -86,6 +86,32 @@ The shell and the pages, read: the serverless demo without its editor.
 - `Wiki.App.Backend.Rules` is gone: its rules are `wiki-core`'s, in
   `Wiki.Core.Permission`.
 
+The editor, with a live preview.
+
+- `Wiki.App.View.Editor` edits a page's title and Markdown side by side with
+  the page as it will read, rendered in the browser about 200 ms after the
+  typing stops; formulas and diagrams the edit did not touch are not drawn
+  again. Save (or Ctrl+S, Cmd+S) saves against the version the edit started
+  from, so that a save over someone else's newer one is shown as a conflict
+  in place, with the draft kept and a button to reload and lose it. Cancel
+  goes back to the page. Tab indents by two spaces. On a narrow screen one
+  pane shows at a time, with a switch between them.
+- Files dropped onto the editor, or chosen with its *Attach files*, are
+  uploaded to the page and referred to at the cursor (`![name](attachment:name)`
+  for an image, a video or audio, `[name](attachment:name)` otherwise), and
+  listed below with a button that inserts the reference again. A new page
+  takes files once it has been saved.
+- Leaving the editor with unsaved changes by a link or the back button asks
+  first, in the page; a reload or closing the tab gets the browser's own
+  warning.
+- A new route, `NewPage`, at `/s/<space path>/new-page/` and
+  `/s/<space path>/new-page/<parent page path>/`, opens the editor on a page
+  not yet written; saving creates it. A space's *New page* and a page's new
+  *New subpage* lead there. A slug that is `new-page` is written
+  `~new-page`, as `p` and `edit` are.
+- `Wiki.App.View.Body` renders a page's Markdown for both the page view and
+  the editor's preview, so that the two agree.
+
 Searching pages.
 
 - `MonadWiki` has `searchPages`, which takes a `wiki-core` `SearchQuery` and

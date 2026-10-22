@@ -5,7 +5,7 @@ module Test.Browser.Search (spec) where
 import Control.Monad.UUID (MonadUUID)
 import Data.Text qualified as T
 import Protolude hiding (find)
-import Test.Browser.Shell (slugs, start)
+import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
