@@ -775,8 +775,14 @@ Amended by the planning session after each work package's report.
   from `initialState`), 3 of 6 examples failed before, all pass after; one example states
   that an action-side `preventDefault` is too late. The th and hooks examples' forms
   fixed; hooks' `Extra.Actions.Events` helpers documented as action-side. Blog places with
-  the same race listed under WP1.10. Possible core follow-up, not done: `continueAsync`
-  running the listener's own thread before other runnable threads.
+  the same race listed under WP1.10. Possible core follow-up, owned by haskell-halogen's
+  own plan, low priority: when the loop is busy, `enterWith` queues a listener's work and
+  returns (`Queued`), so the listener returns before its action runs, and an action's
+  focus, DOM read or `dataTransfer` read comes too late when a user's event lands before
+  the glue's `postTask` resumes the runnable loop holder. The fix waits in the `Queued`
+  branch while the loop makes progress and gives up when it stops (the holder may be under
+  the listener on the JavaScript stack, as in `Busy`), wasm only; `HE.preventingDefault`
+  stays the only guarantee for nested dispatch and the JavaScript backend.
 - **WP1.13 done** ([#18](https://github.com/Swordlash/blog/pull/18), branch `wp1.13-html`).
   `Wiki.Core.Markdown.Html`: tagsoup (already in both stores) splits the tags and the module
   builds the tree with a browser's closing rules; `parseHtml` for a raw block, `parseFragments`
@@ -868,3 +874,55 @@ Amended by the planning session after each work package's report.
   in parallel; then the tag `v0.1.0-demo`, which the owner pushes once the editor and
   source view are on `main`; then WP1.10 (hydration and the remaining forms and links on
   the listener-side API) and WP1.11 (IndexedDB, after HH-3's pin).
+- **WP1.14 done and merged** ([#22](https://github.com/Swordlash/blog/pull/22)).
+  `PageSource` at `/s/<space>/p/<page>/source/`; `source` joins the reserved route words,
+  so a page or space slugged `source` is written `~source` (the demo has none). The view
+  loads the page as the page view does and shows the same errors; "View source" is among
+  every reader's page actions, after "Edit" for an editor. Copy goes through
+  `Wiki.App.Browser.copyText` (clipboard API, then `execCommand("copy")`, then the text left
+  selected). The source routes are prerendered (9 more pages) so an arrival by the address
+  is not the 404 page first. For later packages: a new route word goes into `reserved` in
+  `Route.hs`; for WP1.10, a `<pre>` whose text starts with a newline loses it when the
+  browser parses the prerender (the demo has none); the refused editor route is still
+  titled "Edit · Wiki" rather than "Private · Wiki".
+- **Test commands through the readiness gate** ([#23](https://github.com/Swordlash/blog/pull/23)):
+  `npm run test-native`, `test-wasm`, `test` and `dev-test` load `~/.wiki-toolchain/env` and
+  run `bootstrap.sh ready` as the build and serve commands do; `test-bootstrap.sh` covers them.
+- **HH-3 done** ([haskell-halogen#53](https://github.com/Swordlash/haskell-halogen/pull/53),
+  branch `quoter-fixes`, head `58c7e3e`, CI green on all three backends; the owner merges
+  there). #51's three review notes; `th`'s text follows JSX's rule per piece of text (a tag,
+  `{{ }}` or `{% %}` ends a text; a line break next to one of them is no text, a line break
+  between words is one space, the edge spaces of a text's first and last line are kept);
+  `Router.linkProps router onFollow route` gives the `href` and the preventing click
+  handler as properties, and `link` is `HH.a (props <> linkProps …)`. For WP1.11's pin
+  bump: switch the shell's `Router.link` holes to `<a … {{ Router.linkProps … }}>`, keep
+  `linkProps` after any `href` or click handler on the element, drop WP1.9's one-line
+  workaround for holes, and expect the prerender to move only where a word sits directly
+  above a line starting with a hole (it loses its space, as in JSX; grep before bumping).
+- **WP1.12 done** ([#24](https://github.com/Swordlash/blog/pull/24), branch `wp1.12-editor`).
+  Pin at `08f9093` (nothing in the app broke; `hydrateUI` not adopted).
+  `Wiki.Core.Markdown.Edit.apply` with 88 native tests; inline commands wrap per paragraph
+  and unwrap when already wrapped, line commands toggle and convert list kinds, block
+  commands fence or unfence by counting fences, italic is `_` so it composes with bold.
+  The toolbar is `hh`, memoized, with an HTML menu (mark, kbd, sup, sub, u, small,
+  details). Keys and drops are decided in the listener: a pure `browserJS` import read in
+  `HE.handler'` under `HE.preventingDefault`, with what is read from the event forced
+  there (`Just $! …`), since `dataTransfer` is emptied when the dispatch ends. Writes use
+  `execCommand("insertText")`, not `setRangeText`, because only the former is undone by
+  Ctrl+Z in Chromium (`setRangeText` stays as the fallback when the textarea cannot take
+  focus). Preview mode: a class change, nothing unmounted, so the textarea keeps text,
+  selection, undo and scroll (tested); the preview is mounted on first show and kept; it
+  follows the typing only side by side; shortcut Ctrl/Cmd+Alt+P (Ctrl+Shift+P cannot be
+  prevented in Firefox); the side-by-side choice is read in `Initialize`, after the first
+  render, under `editor-side-by-side` in local storage. Costs to know: `MonadBrowserDOM` is
+  now required by `Editor`, `Shell` and `Mount`, so the browser specs are picked on wasm
+  only; the browser test page loads `web/style.css`; "loses no keystroke" takes 42 to 48 s
+  (was 37 s) and failed once in seven runs on Playwright's 5 s per typing call, a CI risk.
+  `app.wasm` 6515 KiB. For WP1.10: what is left on action-side `preventDefault` is the form
+  submits in `Space`, `Page` and `NewSpace` and the search box's keys and mousedown; check
+  that `hydrateUI` adopts the toolbar's `HH.memoized` thunk.
+- **WP1.12 merged** (`40d2230`). With WP1.14 and the test commands, `main` at `40d2230` is
+  the tag point the owner chose for `v0.1.0-demo` (editor toolbar, preview mode, view
+  source). HH-3 merged in haskell-halogen as `a889566`. Next: WP1.10 (hydration, the
+  remaining listener-side forms and keys) and WP1.11 (IndexedDB, pin to `a889566`,
+  `linkProps`) in parallel, each told what the other touches.
