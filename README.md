@@ -63,8 +63,8 @@ the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 
 `.github/workflows/build.yml` runs three jobs on every pull request to `main` and every
 push to it: `native` (build and test natively), `wasm` (build for wasm, run the test
-suites and the smoke test in headless Chromium, and keep the built page as the run's
-`app` artifact) and `format` (`npm run format-check`).
+suites and the smoke test in headless Chromium, and on a hosted runner keep the built
+page as the run's `app` artifact) and `format` (`npm run format-check`).
 
 They run on the self-hosted runner registered for this repository (`runs-on: self-hosted`
 in every job); GitHub's hosted runners are refused by the account's Actions budget. To go
@@ -74,9 +74,10 @@ and caches of the cabal store and the wasm tools, as in haskell-halogen. On a
 self-hosted runner every job runs `sh toolchain/bootstrap.sh toolchain` instead, which
 installs the toolchain into the runner user's home the first time (a while: GHC, the
 wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and puts it on
-`PATH` with `sh toolchain/bootstrap.sh path`. Nothing is cached to GitHub there: the
-toolchain and the cabal store stay on the machine. One runner runs one job at a time,
-so the three jobs queue.
+`PATH` with `sh toolchain/bootstrap.sh path`. Nothing is cached or uploaded to GitHub
+there (the account's artifact storage quota refuses uploads): the toolchain, the cabal
+store and the built page stay on the machine. One runner runs one job at a time, so
+the three jobs queue.
 
 To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 

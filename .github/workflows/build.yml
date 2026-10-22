@@ -305,8 +305,12 @@ jobs:
       run: npm run smoke-test
 
     # The repository is private, so nothing is deployed: the built page is
-    # kept with the run instead, to download and serve.
+    # kept with the run instead, to download and serve. Only on a hosted
+    # runner: the account's artifact storage quota refuses uploads, and on
+    # the self-hosted runner the page stays on the machine under
+    # dist-newstyle/wasm/public/app anyway.
     - name: Upload the built page
+      if: runner.environment == 'github-hosted'
       uses: actions/upload-artifact@v5
       with:
         name: app
