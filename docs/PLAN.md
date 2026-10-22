@@ -644,7 +644,12 @@ Amended by the planning session after each work package's report.
   `H.liftEffect`; `MemDOM`'s store is process-global per database name (two `MemWiki`s on
   one name see each other, which is the reload test; distinct names isolate tests); the pin
   bump must cover `jsbits` as well as `core`; `VersionTooLow` on an old on-disk version is
-  the demo's to handle (reset).
+  the demo's to handle (reset). Codex's three findings on #50 were real and are fixed in
+  `52e4abd`: `get` reads through a cursor so a present non-byte record is `NotBytes`, not
+  `Nothing`; a `SecurityError` from `open`/`deleteDatabase` (sandboxed frame, opaque
+  origin) is `Unavailable`; `MemDOM`'s `keys` sort by UTF-16 code units as the browser
+  does (tested natively and in Chromium), while `getAll` is a `Map` in `Text` order on
+  both. Head of #50 is now `52e4abd`.
 - **HH-2 done** ([haskell-halogen#51](https://github.com/Swordlash/haskell-halogen/pull/51),
   branch `router-prevent-default`, head `3347986`; the owner merges there). Cause,
   corrected: on wasm a render never yields midway; a trusted click's listener is a sync
