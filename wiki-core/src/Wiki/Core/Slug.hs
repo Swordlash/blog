@@ -14,6 +14,7 @@ module Wiki.Core.Slug
   , slugText
   , slugify
   , freshSlug
+  , foldLetter
   )
 where
 
@@ -92,7 +93,23 @@ slugify title =
       | isMark c = ""
       | otherwise = "-"
     apostrophes = ['\'', '\x2019', '\x02BC'] :: [Char]
-    isMark c = generalCategory c `elem` [NonSpacingMark, SpacingCombiningMark, EnclosingMark]
+
+-- | A character as 'slugify' folds a letter: lowercased, a letter with an
+-- obvious ASCII spelling written so (@Ż@ is @z@, @ß@ is @ss@), a combining
+-- mark dropped. Everything else is only lowercased, so that the fold of a
+-- text keeps its spaces and punctuation, and a script with no ASCII spelling
+-- folds to itself.
+--
+-- It is what makes search ("Wiki.Core.Search") find @zazolc@ in @Zażółć@ the
+-- way the slug of a title does, one character at a time, so that a match in
+-- the fold can be traced back to the characters it came from.
+foldLetter :: Char -> Text
+foldLetter c
+  | isMark c = ""
+  | otherwise = T.concatMap (\l -> fromMaybe (T.singleton l) (Map.lookup l asciiFolds)) (T.toLower (T.singleton c))
+
+isMark :: Char -> Bool
+isMark c = generalCategory c `elem` [NonSpacingMark, SpacingCombiningMark, EnclosingMark]
 
 -- | The ASCII spelling of the lowercase letters of Latin-1 and Latin
 -- Extended-A that have an obvious one: Polish first, since that is what the

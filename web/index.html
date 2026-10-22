@@ -4,10 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Wiki</title>
+    <link rel="stylesheet" href="./islands.css">
     <link rel="stylesheet" href="./style.css">
   </head>
   <body>
     <div id="app"></div>
+    <!-- The islands' libraries (web/bundle.sh): run before the application,
+         which calls them, as deferred scripts run in order. -->
+    <script src="./islands.js" defer></script>
     <script src="./index.js" defer type="module"></script>
   </body>
 </html>

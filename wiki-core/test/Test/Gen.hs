@@ -26,6 +26,8 @@ module Test.Gen
   , genPrincipal
   , genMaybePrincipal
   , genChain
+  , genSearchQuery
+  , genSearchHit
   )
 where
 
@@ -39,6 +41,7 @@ import Wiki.Core.Attachment
 import Wiki.Core.Id
 import Wiki.Core.Page
 import Wiki.Core.Permission
+import Wiki.Core.Search
 import Wiki.Core.Slug
 import Wiki.Core.Space
 import Wiki.Core.User
@@ -185,3 +188,24 @@ genChain = do
     slug <- genSlug
     public <- frequency [(1, pure True), (3, pure False)]
     pure Space {id, name = "", slug, parent, public}
+
+genSearchQuery :: Gen SearchQuery
+genSearchQuery = do
+  text <- genText
+  space <- oneof [pure Nothing, Just <$> genSpaceId]
+  includeSubspaces <- arbitrary
+  limit <- arbitrary
+  pure SearchQuery {text, space, includeSubspaces, limit}
+
+genSnippet :: Gen Snippet
+genSnippet = Snippet <$> listOf (Piece <$> genText <*> arbitrary)
+
+genSearchHit :: Gen SearchHit
+genSearchHit = do
+  page <- genPageId
+  space <- genSpaceId
+  title <- genSnippet
+  spacePath <- genSlugs
+  pagePath <- genSlugs
+  snippet <- genSnippet
+  pure SearchHit {page, space, title, spacePath, pagePath, snippet}

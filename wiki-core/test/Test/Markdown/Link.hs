@@ -1,9 +1,13 @@
--- | How destinations are told apart, which URLs may be written, and how an
--- embed's kind is found.
+-- | How destinations are told apart, which URLs may be written, how an
+-- embed's kind is found, and how a reference to an attachment is written.
 module Test.Markdown.Link (spec) where
 
+import Data.Text qualified as T
 import Protolude
 import Test.Hspec
+import Test.Hspec.QuickCheck (prop)
+import Test.QuickCheck (Gen, elements, forAll, listOf1, (===))
+import Wiki.Core.Markdown.Ast (Block (..), Inline (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Link
 
 spec :: Spec
@@ -72,3 +76,34 @@ spec = describe "Markdown.Link" $ do
       mediaKindOfPath "spec.pdf" `shouldBe` OtherMedia
       mediaKindOfPath "https://x.png/download" `shouldBe` OtherMedia
       mediaKindOfPath "README" `shouldBe` OtherMedia
+
+  describe "attachmentReference" $ do
+    it "embeds images, video and audio, and links anything else" $ do
+      attachmentReference "tree.png" "image/png" `shouldBe` "![tree.png](attachment:tree.png)"
+      attachmentReference "talk.mp4" "video/mp4" `shouldBe` "![talk.mp4](attachment:talk.mp4)"
+      attachmentReference "theme.ogg" "audio/ogg" `shouldBe` "![theme.ogg](attachment:theme.ogg)"
+      attachmentReference "spec.pdf" "application/pdf" `shouldBe` "[spec.pdf](attachment:spec.pdf)"
+    it "goes by the extension when the media type is unknown" $ do
+      attachmentReference "photo.JPG" "" `shouldBe` "![photo.JPG](attachment:photo.JPG)"
+      attachmentReference "notes" "" `shouldBe` "[notes](attachment:notes)"
+    it "puts a name with spaces in angle brackets" $
+      attachmentReference "meeting notes.txt" "text/plain" `shouldBe` "[meeting notes.txt](<attachment:meeting notes.txt>)"
+    it "escapes what would be read as Markdown or as an escape" $
+      attachmentReference "a_b*[1]% & c.txt" "text/plain"
+        `shouldBe` "[a\\_b\\*\\[1\\]% \\& c.txt](<attachment:a_b*[1]%25 %26 c.txt>)"
+    prop "is read back as the attachment it names, labelled with its name" $
+      forAll ((<>) <$> genName <*> elements ["", ".png", ".pdf"]) $ \name ->
+        readBack (attachmentReference name "") === Just (ToAttachment name, name)
+
+-- | Names of files, with everything Markdown or a destination might read
+-- as something else in them.
+genName :: Gen Text
+genName = (\n -> if T.null n then "x" else n) . T.strip . toS <$> listOf1 (elements "abz09.-_ ()[]<>{}%&\\*`$~:!|#^\"'ż😀")
+
+-- | The destination of the one link or embed in a paragraph, as
+-- 'classifyDestination' reads it, and its label as text.
+readBack :: Text -> Maybe (Destination, Text)
+readBack source = case parseMarkdown source of
+  Right [Para [Link _ destination _ label]] -> Just (classifyDestination destination, plainText label)
+  Right [Para [Image _ destination _ label]] -> Just (classifyDestination destination, plainText label)
+  _ -> Nothing

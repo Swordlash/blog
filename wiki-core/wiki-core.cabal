@@ -60,6 +60,7 @@ library
       Wiki.Core.Page
       Wiki.Core.Path
       Wiki.Core.Permission
+      Wiki.Core.Search
       Wiki.Core.Slug
       Wiki.Core.Space
       Wiki.Core.User
@@ -90,6 +91,8 @@ test-suite wiki-core-test
       Test.Markdown.Link
       Test.Path
       Test.Permission
+      Test.Permission.Writes
+      Test.Search
       Test.Slug
   build-depends:
       QuickCheck,

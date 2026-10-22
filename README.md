@@ -15,11 +15,53 @@ interface, implemented once in memory (a serverless demo deployable as static fi
 and once over HTTP to a Haskell server with persistence. Markdown is parsed and
 rendered to Halogen HTML in the browser, so the preview never waits for a server.
 
-So far there is the scaffold, a placeholder page that builds and runs, and the
-Markdown renderer, whose syntax is described for authors in
-[docs/markdown.md](docs/markdown.md). The plan of work is in
-[docs/PLAN.md](docs/PLAN.md): phases from a serverless MVP demo through a
-server with persistence to authentication and authorisation.
+So far there is the MVP demo: the whole reading and writing experience,
+serverless, over an in-memory wiki seeded with demo content, deployable as static
+files. Reloading the page starts it over: keeping pages is the server's job, in the
+next phase. The plan of work is in [docs/PLAN.md](docs/PLAN.md): phases from the
+serverless MVP demo through a server with persistence to authentication and
+authorisation.
+
+## What works
+
+- Spaces in a tree, public or private, each holding a tree of pages; creating,
+  renaming, moving and deleting spaces and pages as the permissions allow.
+- Pages written in Markdown, whose syntax is described for authors in
+  [docs/markdown.md](docs/markdown.md): GitHub's extensions, footnotes, alerts,
+  wiki links, formulas drawn by KaTeX, diagrams by Mermaid, code highlighted by
+  highlight.js, images, video and attachments.
+- An editor with the Markdown beside a live preview, files dropped or chosen into
+  it as attachments, Ctrl+S, a conflict shown in place when someone else saved
+  first, and a guard against losing unsaved changes.
+- Search by title and text from a box in the header (`/` to focus it), in every
+  space or in one, with a page of results at an address of its own.
+- Three demo users and nobody, switched between in the header instead of a
+  sign-in, each seeing the wiki through their permissions.
+- An address for every route, and a prerendered page for each route the demo
+  starts with, so that a link or a reload lands on the page before the program
+  has loaded.
+
+## Running the demo
+
+Build it and serve it on <http://127.0.0.1:8080>, with the toolchain below:
+
+```sh
+npm ci
+npm run serve-wasm      # runs build-wasm first; or build-wasm alone, to build only
+```
+
+Or, without a toolchain, take the page a CI run built: download the `app`
+artifact of a run of the `CI` workflow on GitHub (the run's page, under
+*Artifacts*), unzip it, and serve the directory with any static server that
+answers an address with no file of its own with the directory's `404.html`, as
+GitHub Pages does. `npx http-server <dir>` does:
+
+```sh
+unzip app.zip -d app && npx http-server app -p 8080
+```
+
+The front page invites you to the tour, which says what to try. Nothing you do is
+sent anywhere, and a reload starts the demo over.
 
 ## Working on it
 
@@ -104,7 +146,7 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 | [wiki-api/](wiki-api/) | `wiki-api` | Request and response types (aeson), shared by the client and the server. |
 | [wiki-app/](wiki-app/) | `wiki-app` | The Halogen application: `wiki-app` (the wasm program) and `wiki-app-prerender` (native: writes the page with the application already rendered into it). |
 | [wiki-server/](wiki-server/) | `wiki-server` | The server, native only. A placeholder until Phase 2. |
-| [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS. |
+| [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS, and `bundle.sh`, which bundles the islands' libraries from `web/src/`. |
 | [toolchain/](toolchain/) | | Build and test scripts, adapted from haskell-halogen's. |
 
 haskell-halogen's packages come from one `source-repository-package` stanza in
@@ -114,18 +156,43 @@ haskell-halogen's packages come from one `source-repository-package` stanza in
 ## Commands
 
 ```sh
-npm install                     # once: Playwright, http-server, esbuild
+npm ci                          # once: Playwright, http-server, esbuild, KaTeX, Mermaid, highlight.js
 npm run build-native            # every package, host GHC, into dist-newstyle/native
 npm run test-native             # the test suites, natively
-npm run build-wasm              # wiki-app to wasm, prerendered, into dist-newstyle/wasm/public/app
+npm run build-wasm              # wiki-app to wasm, a prerendered page per route, the islands bundle, into dist-newstyle/wasm/public/app
 npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
-npm run test-wasm               # the test suites on wasm, under Node (browser suites in Chromium)
+npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
-npm run smoke-test              # the built page in headless Chromium: it renders, mounts, counts clicks
+npm run smoke-test              # the built page in headless Chromium: every prerendered route, a walk with back, forward and reload, dark and phone
+npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
 npm run format                  # fourmolu over every package
 npm run format-check            # the same, failing on what it would change (as CI does)
 npm run clean                   # remove dist-newstyle/wasm/public
 ```
+
+The islands bundle is `web/bundle.sh <output-dir>`: esbuild bundles KaTeX and
+highlight.js (with `web/src/islands.js`) into `islands.js`, which publishes
+`globalThis.wikiIslands`; Mermaid into `islands/` as ES modules that `islands.js`
+imports the first time it draws a diagram; and KaTeX's stylesheet and fonts into
+`islands.css` and `fonts/`. `build-wasm` runs it into the page it builds, and
+the browser suite's `wiki-app/test/web/bundle.sh` into the test page. npm 11
+runs esbuild's install script only because `package.json`'s `allowScripts`
+approves it (`npm install-scripts approve esbuild`).
+
+The browser suite, `wiki-app-browser-test`, is a wasm reactor built with
+hspec-halogen: `toolchain/wasm-test-wrapper.sh` recognises it and hands it to
+the `hspec-halogen` executable (built natively by `toolchain/build-hspec-halogen.sh`),
+which loads it into headless Chromium. Natively it builds and reports that it
+skipped. `npm run dev-test` runs it in browser GHCi under ghciwatch;
+`sh toolchain/dev-test.sh --repl` and `--open-browser` (from another terminal)
+do the same by hand, with `:main` typed into GHCi.
+
+The application routes by path (`/s/<space path>/p/<page path>/`, see
+`Wiki.App.Route`) under the page's `<base href>`, which `wiki-app-prerender` writes
+from `HALOGEN_BASE_PATH` (default `/`), so the built directory can be served from a
+sub-path: `HALOGEN_BASE_PATH=/wiki/ npm run build-wasm`. It writes an `index.html` for
+every route the demo starts with and a `404.html` for the rest, which GitHub Pages and
+http-server serve for an address with no file.
 
 `serve-wasm` opens the page in a browser; set `PORT` for another port, `NO_OPEN=1` to
 not open one. Builds go to `dist-newstyle/native` and `dist-newstyle/wasm`; always

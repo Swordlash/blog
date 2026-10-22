@@ -8,6 +8,16 @@ maintainer:         mateusz.goslinowski@gmail.com
 category:           Web
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
+-- Embedded into the wasm binary at compile time by Halogen.JSBits: the
+-- application's, and the browser test suite's own.
+extra-source-files:
+    jsbits/*.js
+    test/jsbits/*.js
+
+flag interactive
+  description: Build the browser test suite for browser GHCi (toolchain/dev-test.sh)
+  default:     False
+  manual:      True
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built
 -- with (cabal.project makes them errors) and the extensions its code assumes.
@@ -50,10 +60,51 @@ common shared
 library
   import:           shared
   hs-source-dirs:   src
-  exposed-modules:  Wiki.App
+  exposed-modules:
+      Wiki.App
+      Wiki.App.Backend
+      Wiki.App.Backend.Mem
+      Wiki.App.Backend.Mem.State
+      Wiki.App.Browser
+      Wiki.App.Demo
+      Wiki.App.DemoUsers
+      Wiki.App.Islands
+      Wiki.App.Islands.Monad
+      Wiki.App.Route
+      Wiki.App.Shell
+      Wiki.App.Editor.Browser
+      Wiki.App.View.Body
+      Wiki.App.View.Common
+      Wiki.App.View.Editor
+      Wiki.App.View.NewSpace
+      Wiki.App.View.Page
+      Wiki.App.View.Preview
+      Wiki.App.View.Search
+      Wiki.App.View.SearchResults
+      Wiki.App.View.Space
+
+  -- Rendering for the prerender and the native tests, through the in-memory
+  -- document, which exists on a host GHC only.
+  if !arch(wasm32)
+    exposed-modules:
+        Wiki.App.Static
+
   build-depends:
+      base,
+      base64-bytestring,
+      bytestring,
+      containers,
+      primitive,
       protolude,
-      haskell-halogen-core
+      row-types,
+      text,
+      time,
+      transformers,
+      unliftio-core,
+      haskell-halogen-core,
+      haskell-halogen-jsbits,
+      haskell-halogen-router,
+      wiki-core
 
 -- The application itself: a wasm reactor whose hs_start web/index.js calls.
 executable wiki-app
@@ -68,6 +119,7 @@ executable wiki-app
   -- mounted in a browser alone.
   if arch(wasm32)
     build-depends:
+        haskell-halogen-router,
         wiki-app
     ghc-options:
       -no-hs-main
@@ -86,14 +138,21 @@ executable wiki-app-prerender
     buildable: False
   else
     build-depends:
+        base,
         bytestring,
+        containers,
+        directory,
         filepath,
         protolude,
+        text,
         haskell-halogen-core,
-        wiki-app
+        haskell-halogen-router,
+        wiki-app,
+        wiki-core
 
 -- What the component renders, through Halogen.Static's in-memory document,
--- which exists natively only. In a browser, toolchain/smoke-test.mjs drives
+-- which exists natively only, and the backend's contract, run against the
+-- in-memory backend over IO. In a browser, toolchain/smoke-test.mjs drives
 -- the built page.
 test-suite wiki-app-test
   import:           shared
@@ -104,10 +163,67 @@ test-suite wiki-app-test
   if arch(wasm32)
     buildable: False
   else
-    other-modules:  Test.Hello
+    other-modules:
+        Test.Backend.Contract
+        Test.Backend.Mem
+        Test.Demo
+        Test.Islands
+        Test.Link
+        Test.Route
+        Test.Shell
     build-depends:
+        HUnit,
+        QuickCheck,
+        base,
+        base64-bytestring,
+        bytestring,
+        containers,
         hspec >= 2,
         protolude,
         text,
+        time,
         haskell-halogen-core,
-        wiki-app
+        haskell-halogen-router,
+        wiki-app,
+        wiki-core
+
+-- The islands in headless Chromium, with the page's islands.js and
+-- islands.css loaded (test/web/bundle.sh): the hspec-halogen executable, as
+-- toolchain/wasm-test-wrapper.sh hands it the suite, loads the wasm reactor
+-- into a page with them. Natively it builds, so that it type-checks, and
+-- reports that it skipped.
+test-suite wiki-app-browser-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          BrowserTest.hs
+  other-modules:
+      Test.Browser.Editor
+      Test.Browser.Islands
+      Test.Browser.Mount
+      Test.Browser.Search
+      Test.Browser.Shell
+  build-depends:
+      base,
+      protolude,
+      row-types,
+      text,
+      haskell-halogen-core,
+      haskell-halogen-jsbits,
+      haskell-halogen-router,
+      hspec-halogen,
+      wiki-app,
+      wiki-core
+
+  if arch(wasm32) && !flag(interactive)
+    ghc-options:
+      -no-hs-main
+      -optl-mexec-model=reactor
+      "-optl-Wl,--export=hs_start"
+
+  -- GHCi's :main (under the interactive flag) runs
+  -- System.Environment.withArgs and Control.Monad.void, which it finds only in
+  -- a package the suite depends on: base, which the suite needs anyway for
+  -- Data.IORef, which Protolude does not export.
+  if flag(interactive)
+    cpp-options: -DINTERACTIVE

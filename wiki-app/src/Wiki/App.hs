@@ -1,38 +1,24 @@
--- | The wiki's application. For now a placeholder that proves the pieces fit:
--- a heading, and a counter with a button, so that there is an event to click
--- in a browser.
---
--- Like every component here it is polymorphic in its monad, so that the same
--- component runs in the browser ('Halogen.VDom.DOM.Monad.BrowserDOM', picked by
--- @Main.hs@) and is rendered natively into the page ahead of the program
--- (@Prerender.hs@, through "Halogen.Static").
-module Wiki.App (component) where
+-- | The wiki's application: the shell ("Wiki.App.Shell") and its views,
+-- polymorphic in the monad like every component here, so that the same
+-- application runs in the browser (@Main.hs@ picks the in-memory backend
+-- over 'Halogen.VDom.DOM.Monad.BrowserDOM') and is rendered natively into
+-- the page for each route ahead of the program (@Prerender.hs@, through
+-- "Wiki.App.Static").
+module Wiki.App
+  ( component
+  , input
+  , module Wiki.App.Route
+  )
+where
 
-import Halogen qualified as H
-import Halogen.HTML qualified as HH
-import Halogen.HTML.Events qualified as HE
-import Halogen.HTML.Properties qualified as HP
+import Halogen.Router (Router)
 import Protolude
+import Wiki.App.Demo (tourPath)
+import Wiki.App.Route
+import Wiki.App.Shell (component)
+import Wiki.App.Shell qualified as Shell
 
-data Action = Increment
-
-component :: forall query input output m. (Applicative m) => H.Component query input output m
-component =
-  H.mkComponent $
-    H.ComponentSpec
-      { initialState = \_ -> pure (0 :: Int)
-      , render
-      , eval = H.mkEval $ H.defaultEval {H.handleAction = handleAction}
-      }
-  where
-    render count =
-      HH.main_
-        [ HH.h1_ [HH.text "Wiki"]
-        , HH.p_ [HH.text "Nothing here yet: this is the scaffold the wiki grows from."]
-        , HH.button
-            [HP.class_ (HH.ClassName "counter"), HE.onClick (const Increment)]
-            [HH.text ("Clicked " <> show count <> " times")]
-        ]
-
-    handleAction = \case
-      Increment -> modify (+ 1)
+-- | The shell's input for the demo: the router, and the demo's tour for a
+-- newcomer.
+input :: Router Route -> Shell.Input
+input router = Shell.Input {router, welcome = Just (uncurry Page tourPath)}

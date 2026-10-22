@@ -1,18 +1,50 @@
-/* Base styles for the wiki's page. Components add their own classes on top. */
+/* The wiki's page: the shell (header, sidebar, content), the views in it,
+   and pages rendered from Markdown. Colours are tokens, redefined for a dark
+   scheme. */
 :root {
   color-scheme: light dark;
   --text: #1f2328;
   --background: #ffffff;
+  --surface: #f6f8fa;
+  --border: #d1d9e0;
   --muted: #59636e;
   --accent: #0969da;
+  --danger: #cf222e;
+  --code: #eff2f5;
+  --note: #0969da;
+  --tip: #1a7f37;
+  --important: #8250df;
+  --warning: #9a6700;
+  --caution: #cf222e;
+  --hl-keyword: #cf222e;
+  --hl-string: #0a3069;
+  --hl-title: #8250df;
+  --hl-type: #953800;
+  --hl-number: #0550ae;
+  --hl-comment: #59636e;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --text: #e6edf3;
     --background: #0d1117;
+    --surface: #151b23;
+    --border: #3d444d;
     --muted: #9198a1;
     --accent: #4493f8;
+    --danger: #f85149;
+    --code: #1f262f;
+    --note: #4493f8;
+    --tip: #3fb950;
+    --important: #ab7df8;
+    --warning: #d29922;
+    --caution: #f85149;
+    --hl-keyword: #ff7b72;
+    --hl-string: #a5d6ff;
+    --hl-title: #d2a8ff;
+    --hl-type: #ffa657;
+    --hl-number: #79c0ff;
+    --hl-comment: #9198a1;
   }
 }
 
@@ -30,22 +62,861 @@ body {
   background: var(--background);
 }
 
-main {
-  max-width: 48rem;
-  margin: 0 auto;
-  padding: 2rem 1rem;
+a {
+  color: var(--accent);
+  text-decoration: none;
 }
 
-p {
+a:hover {
+  text-decoration: underline;
+}
+
+/* ---- Controls ---------------------------------------------------------- */
+
+button,
+.button {
+  display: inline-block;
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+button:hover,
+.button:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+button.primary {
+  color: #ffffff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+button.danger {
+  color: #ffffff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+input,
+select {
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--background);
+}
+
+/* ---- The frame ----------------------------------------------------------- */
+
+.wiki {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.wiki-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.55rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.wiki-brand {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.92rem;
+}
+
+.breadcrumbs li + li::before {
+  content: "/";
+  margin-right: 0.3rem;
   color: var(--muted);
 }
 
-button {
-  font: inherit;
-  padding: 0.4rem 0.9rem;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  color: var(--accent);
+.breadcrumbs [aria-current="page"] {
+  font-weight: 600;
+}
+
+/* The search box takes the room between the breadcrumbs and the switcher;
+   its results hang under it (see "Search" below). */
+.wiki-search {
+  position: relative;
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.user-switcher {
+  position: relative;
+}
+
+.user-switcher-toggle::after {
+  content: " ▾";
+  color: var(--muted);
+}
+
+.user-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  min-width: 15rem;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+}
+
+.user-menu button {
+  width: 100%;
+  text-align: left;
+  border: none;
   background: transparent;
+}
+
+.user-menu button:hover {
+  background: var(--surface);
+}
+
+.user-menu button[aria-pressed="true"] {
+  font-weight: 600;
+}
+
+.wiki-body {
+  display: flex;
+  flex: 1;
+}
+
+.wiki-sidebar {
+  flex-shrink: 0;
+  width: 16rem;
+  padding: 1rem 1rem 2rem;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.93rem;
+}
+
+.wiki-sidebar h2 {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.wiki-content {
+  flex: 1;
+  min-width: 0;
+  max-width: 54rem;
+  padding: 1.5rem 2.25rem 4rem;
+}
+
+@media (max-width: 760px) {
+  .wiki-header {
+    flex-wrap: wrap;
+  }
+
+  .wiki-body {
+    flex-direction: column;
+  }
+
+  .wiki-sidebar {
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .wiki-content {
+    padding: 1rem 1rem 3rem;
+  }
+}
+
+/* ---- Trees of spaces and pages ------------------------------------------ */
+
+.space-tree,
+.page-tree {
+  margin: 0;
+  padding-left: 0.9rem;
+  list-style: none;
+}
+
+.wiki-sidebar > .space-tree {
+  padding-left: 0;
+}
+
+.space-row {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.1rem 0;
+}
+
+.tree-toggle {
+  width: 1.2rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* A space without subspaces lines up with those that have a toggle. */
+.space-row > :first-child:not(.tree-toggle) {
+  margin-left: 1.35rem;
+}
+
+.space-node.current > .space-row a,
+.page-node.current > a {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wiki-sidebar .page-tree {
+  margin: 0.1rem 0 0.3rem 1.35rem;
+  padding-left: 0.6rem;
+  border-left: 1px solid var(--border);
+}
+
+.page-node {
+  padding: 0.08rem 0;
+}
+
+.unviewable {
+  color: var(--muted);
+  font-style: italic;
+  cursor: default;
+}
+
+.new-space-link {
+  display: inline-block;
+  margin-top: 1rem;
+}
+
+/* ---- Views ---------------------------------------------------------------- */
+
+.view-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.view-header h1 {
+  margin-bottom: 0.25rem;
+}
+
+.badge {
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  vertical-align: middle;
+}
+
+.view-header .badge {
+  margin-left: 0;
+}
+
+.badge-public {
+  color: var(--tip);
+  border-color: var(--tip);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0 1rem;
+}
+
+.inline-form,
+.confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin: 0 0 1rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.confirm p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.field {
+  display: flex;
+  flex: 1 1 14rem;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.error {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.loading,
+.empty {
+  color: var(--muted);
+}
+
+.space-list {
+  padding-left: 1.2rem;
+}
+
+.space-list li {
+  margin: 0.3rem 0;
+}
+
+.welcome {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* ---- Search --------------------------------------------------------------- */
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  max-width: 34rem;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 6rem;
+}
+
+.search-space {
+  max-width: 11rem;
+}
+
+.search-subspaces {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* The list under the box: as wide as the bar, over the page. */
+.search-results {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 20;
+  width: 100%;
+  max-width: 34rem;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+}
+
+.search-hits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-hit {
+  display: block;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  color: var(--text);
+}
+
+.search-hit:hover,
+.search-hit.selected {
+  text-decoration: none;
+  background: var(--surface);
+}
+
+.search-hit.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.search-hit-title {
+  display: block;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.search-hit-space {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.search-hit-snippet {
+  display: block;
+  font-size: 0.88rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.search-hit mark {
+  font-weight: 700;
+  color: inherit;
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  border-radius: 2px;
+}
+
+.search-status {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  color: var(--muted);
+}
+
+.search-all {
+  display: block;
+  margin-top: 0.2rem;
+  padding: 0.4rem 0.6rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.88rem;
+}
+
+/* The page of all results lists them as the box does, with more room. */
+.search-view .search-hits li + li {
+  margin-top: 0.3rem;
+}
+
+.search-view .search-hit {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+}
+
+.search-summary {
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  .wiki-search {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .search-bar,
+  .search-results {
+    max-width: none;
+  }
+}
+
+/* ---- A page --------------------------------------------------------------- */
+
+.page-body {
+  overflow-wrap: break-word;
+}
+
+.page-body h1,
+.page-title {
+  margin-top: 0.5rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-body h2 {
+  margin-top: 2rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-body img,
+.page-body video {
+  max-width: 100%;
+  height: auto;
+}
+
+.page-body blockquote {
+  margin: 1rem 0;
+  padding: 0 1rem;
+  border-left: 4px solid var(--border);
+  color: var(--muted);
+}
+
+.page-body table {
+  border-collapse: collapse;
+  margin: 1rem 0;
+  display: block;
+  overflow-x: auto;
+}
+
+.page-body th,
+.page-body td {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+}
+
+.page-body th {
+  background: var(--surface);
+}
+
+.page-body code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.88em;
+  background: var(--code);
+}
+
+.page-body pre {
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  background: var(--code);
+  line-height: 1.45;
+}
+
+.page-body pre code {
+  padding: 0;
+  font-size: 0.85rem;
+  background: transparent;
+}
+
+.page-body .task-list {
+  padding-left: 1.2rem;
+  list-style: none;
+}
+
+.page-body .task-list-item input {
+  margin: 0 0.4rem 0 -1.2rem;
+}
+
+.page-body .footnotes {
+  margin-top: 2.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.page-body .footnote-ref a,
+.page-body .footnote-back {
+  text-decoration: none;
+}
+
+.page-body .alert {
+  margin: 1rem 0;
+  padding: 0.5rem 1rem;
+  border-left: 4px solid var(--note);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface);
+}
+
+.page-body .alert > :last-child {
+  margin-bottom: 0.25rem;
+}
+
+.page-body .alert-title {
+  margin: 0.25rem 0;
+  font-weight: 600;
+}
+
+.page-body .alert-note { border-color: var(--note); }
+.page-body .alert-note .alert-title { color: var(--note); }
+.page-body .alert-tip { border-color: var(--tip); }
+.page-body .alert-tip .alert-title { color: var(--tip); }
+.page-body .alert-important { border-color: var(--important); }
+.page-body .alert-important .alert-title { color: var(--important); }
+.page-body .alert-warning { border-color: var(--warning); }
+.page-body .alert-warning .alert-title { color: var(--warning); }
+.page-body .alert-caution { border-color: var(--caution); }
+.page-body .alert-caution .alert-title { color: var(--caution); }
+
+/* A link or an embed that names nothing the wiki has. */
+.page-body .link-unresolved,
+.page-body .embed-unresolved {
+  color: var(--danger);
+  text-decoration: underline dotted;
+  cursor: help;
+}
+
+/* Raw HTML in the Markdown is shown as its text, not run. */
+.page-body .raw-html {
+  white-space: pre-wrap;
+  color: var(--muted);
+}
+
+.page-body .wikilink {
+  border-bottom: 1px dashed currentColor;
+}
+
+.page-body .wikilink:hover {
+  text-decoration: none;
+}
+
+.page-body .emoji {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+
+.page-source {
+  white-space: pre-wrap;
+}
+
+.attachments {
+  margin-top: 2.5rem;
+}
+
+.attachments h2 {
+  font-size: 1.1rem;
+}
+
+.attachments ul {
+  padding-left: 1.2rem;
+}
+
+.attachment-meta {
+  margin-left: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.page-meta {
+  margin-top: 2rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* ---- The editor ------------------------------------------------------------ */
+
+/* The editor takes the whole width the sidebar leaves: two panes side by side
+   want more than a page's reading width. */
+.wiki-content:has(> .editor) {
+  max-width: none;
+}
+
+.editor-heading {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 1.4rem;
+}
+
+.editor-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.editor-title {
+  flex: 1 1 18rem;
+}
+
+.editor-title input {
+  font-size: 1.05rem;
+}
+
+.editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* The file input is the label's: the label is what shows, as a button. */
+.editor-attach {
+  position: relative;
+  overflow: hidden;
+}
+
+.editor-attach input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
   cursor: pointer;
+}
+
+.editor-attach.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.editor-attach.disabled input {
+  cursor: not-allowed;
+}
+
+/* Which pane to show is a question only on a narrow screen. */
+.editor-panes-switch {
+  display: none;
+  gap: 0.25rem;
+}
+
+.editor-panes-switch button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.editor-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+  border-radius: 8px;
+}
+
+.editor-panes.dropping {
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
+}
+
+.editor-source {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.editor-text {
+  flex: 1;
+  width: 100%;
+  min-height: 65vh;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 0.9rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+  background: var(--background);
+  resize: vertical;
+  tab-size: 2;
+}
+
+.editor-text:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-color: var(--accent);
+}
+
+.editor-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.editor-preview {
+  max-height: calc(65vh + 2rem);
+  overflow-y: auto;
+  padding: 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+}
+
+.editor-attachments {
+  margin-top: 1.5rem;
+}
+
+.editor-attachments h2 {
+  font-size: 1.05rem;
+}
+
+.editor-attachments ul {
+  padding-left: 1.2rem;
+}
+
+.attachment-insert {
+  margin-left: 0.6rem;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 960px) {
+  .editor-panes-switch {
+    display: flex;
+  }
+
+  .editor-panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .editor-panes .editor-preview,
+  .editor-panes.showing-preview .editor-source {
+    display: none;
+  }
+
+  .editor-panes.showing-preview .editor-preview {
+    display: block;
+    max-height: none;
+  }
+}
+
+/* ---- highlight.js, in the colours above ----------------------------------- */
+
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-literal,
+.hljs-built_in {
+  color: var(--hl-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string {
+  color: var(--hl-string);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section {
+  color: var(--hl-title);
+}
+
+.hljs-type,
+.hljs-title.class_,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable {
+  color: var(--hl-type);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--hl-number);
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-meta {
+  color: var(--hl-comment);
+  font-style: italic;
 }
