@@ -64,6 +64,11 @@ const types = {
   ".webm": "video/webm",
   ".pdf": "application/pdf",
   ".zip": "application/zip",
+  // A file whose own name ends in .gz is data its reader inflates itself
+  // (TikZJax's worker fetches tikzjax/core.dump.gz, tex.wasm.gz and
+  // tex_files/*.gz), so it goes out as it is, with no Content-Encoding, as
+  // GitHub Pages sends it.
+  ".gz": "application/gzip",
 };
 
 // The encodings the client accepts, from Accept-Encoding, leaving out those it
@@ -95,9 +100,13 @@ const inside = async (path) => {
 
 // Send a file, or its precompressed sibling when the client takes it. The
 // media type is always the original file's, and Vary tells caches that the
-// body depends on Accept-Encoding.
+// body depends on Accept-Encoding. A file that is itself compressed (its name
+// ends in .gz or .br) is always sent as its own bytes: only an answer from a
+// sibling carries Content-Encoding, or a browser would inflate what its
+// reader expects to inflate.
 const send = async (request, response, file, info, status) => {
-  const encodings = accepted(request.headers["accept-encoding"]);
+  const compressed = [".gz", ".br"].includes(extname(file).toLowerCase());
+  const encodings = compressed ? new Set() : accepted(request.headers["accept-encoding"]);
   let body = file;
   let size = info.size;
   let encoding = null;

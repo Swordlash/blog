@@ -49,6 +49,12 @@ try {
   write("style.css", "body {}");
   write("fonts/KaTeX_Main-Regular.woff2", "woff2");
   write("logo.svg", "<svg/>");
+  // TikZJax's own compressed files, which its worker inflates itself; a
+  // sibling of one must not be used.
+  const dump = gzipSync("core dump");
+  write("tikzjax/core.dump.gz", dump);
+  write("tikzjax/core.dump.gz.br", brotliCompressSync(dump));
+  write("tikzjax/tex_files/amsmath.sty.gz", gzipSync("amsmath"));
   write("s/blog/index.html", "<!doctype html><title>blog</title>");
   writeFileSync(join(tmp, "secret.txt"), "secret");
   symlinkSync(join(tmp, "secret.txt"), join(root, "link.txt"));
@@ -98,6 +104,15 @@ try {
   assert.equal(refused.headers["content-encoding"], undefined);
   assert.equal(refused.body.length, 8);
   ok("serves a precompressed sibling to a client that accepts its encoding, and only then");
+
+  for (const path of ["/tikzjax/core.dump.gz", "/tikzjax/tex_files/amsmath.sty.gz"]) {
+    const raw = await get(path, { "accept-encoding": "gzip, deflate, br" });
+    assert.equal(raw.status, 200, path);
+    assert.equal(raw.headers["content-type"], "application/gzip", path);
+    assert.equal(raw.headers["content-encoding"], undefined, path);
+  }
+  assert.deepEqual((await get("/tikzjax/core.dump.gz", { "accept-encoding": "br" })).body, dump);
+  ok("serves a file that is itself compressed (TikZJax's .gz) as its raw bytes, with no Content-Encoding");
 
   const missing = await get("/s/blog/p/no-such-page/");
   assert.equal(missing.status, 404);
