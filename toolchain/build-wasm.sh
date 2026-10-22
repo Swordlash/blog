@@ -42,6 +42,11 @@ set -- \
   "$package:exe:$package" "$@"
 
 cabal build "$@"
+# Again: in a build directory that did not exist before, the build above
+# leaves the host ghc-pkg in this cache despite --with-hc-pkg, and list-bin
+# then fails with "Version mismatch between ghc and ghc-pkg" (a second run
+# would pass).
+rm -f "$build_dir/cache/compiler"
 wasm_binary=$(cabal list-bin "$@")
 wasm_libdir=$($wasm_ghc --print-libdir)
 
