@@ -186,6 +186,15 @@ Goal: the same app, with pages that survive a reload, served by one binary.
   `HttpWiki` at start from a flag in `index.html`, so Pages keeps serving the demo.
 - **WP2.5 Page history.** Every save is a version; a history view with diff (a pure
   Markdown diff rendered in Halogen) and restore.
+- **WP2.6 Server-side rendering with hydration.** haskell-halogen is about to gain full
+  SSR with hydration (the program adopts the server-rendered tree instead of replacing
+  it). Once it lands: bump the `source-repository-package` pin, have `wiki-server` render
+  each route's page with the component already run against the store (the page a reader
+  gets is complete before `app.wasm` loads, which also makes public spaces readable
+  without JavaScript and crawlable), and have `wiki-app` hydrate it. Until then `Main.hs`
+  empties `#app` and renders afresh, as haskell-halogen's examples do. The serverless
+  demo keeps its build-time prerender and may hydrate too, if the API allows it with no
+  server.
 
 ### Phase 3: authentication and authorisation
 
@@ -213,7 +222,6 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
 - Comments on pages, labels, favourites, recently viewed.
 - A table of contents panel and anchors; page templates; a "blog" view listing a
   space's pages by date with RSS.
-- Hydration once haskell-halogen has it (the prerendered shell is thrown away today).
 - Skylighting instead of highlight.js if server-side rendering of code is wanted.
 
 ## Delegation protocol
@@ -279,3 +287,5 @@ Amended by the planning session after each work package's report.
 - **Phase 1 started** with WP0.3, WP1.1, WP1.2 and WP1.3 in parallel, each in its own
   worktree and branch, since none depends on another; WP1.4 follows WP1.1, WP1.5 follows
   WP1.4, WP1.6 follows WP1.2, WP1.3 and WP1.5.
+- **Owner's note (2026-10-22):** haskell-halogen is about to gain SSR with hydration; it is
+  planned as WP2.6 rather than a Phase 4 item.
