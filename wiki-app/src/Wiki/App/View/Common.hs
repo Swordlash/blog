@@ -27,6 +27,7 @@ module Wiki.App.View.Common
   , button
   , textField
   , attr
+  , fileSize
   )
 where
 
@@ -36,6 +37,7 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
+import Numeric.Natural (Natural)
 import Protolude
 import Wiki.App.Backend (Session (grants), WikiError (..), sessionPrincipal)
 import Wiki.App.Route (Route (..))
@@ -154,3 +156,10 @@ textField label value onInput =
 -- | An attribute Halogen has no property for (@role@, @aria-*@).
 attr :: Text -> Text -> HH.IProp r i
 attr name = HP.attr (HH.AttrName name)
+
+-- | A size in bytes, as people read it.
+fileSize :: Natural -> Text
+fileSize n
+  | n < 1024 = show n <> " bytes"
+  | n < 1024 * 1024 = show (n `div` 1024) <> " KB"
+  | otherwise = show (n `div` (1024 * 1024)) <> " MB"

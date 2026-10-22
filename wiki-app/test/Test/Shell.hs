@@ -89,6 +89,42 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["no-such-page"]))
     html `contains` "class=\"error error-not-found\""
 
+  it "opens the editor on a page with its Markdown in the textarea and its preview beside it" $ do
+    Rendered {html, title} <- render (as (Just "user-editor")) (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    title `shouldBe` "Edit · Hello, world · Wiki"
+    html `contains` "<h1 class=\"editor-heading\">Editing Hello, world</h1>"
+    html `contains` "class=\"editor-text\"># Hello, world\n\nThis is the first post"
+    html `contains` "<div class=\"preview\"><article class=\"page-body\"><h1 id=\"hello-world\">Hello, world</h1>"
+    html `contains` "href=\"/s/blog/p/hello-world/\">Cancel</a>"
+
+  it "asks someone not signed in to choose who they are before editing" $ do
+    Rendered {html} <- render (as Nothing) (EditPage (slugs ["docs"]) (slugs ["tour"]))
+    html `contains` "class=\"error sign-in-hint\""
+    html `lacks` "<textarea"
+
+  it "says in place that a reader may not edit a page" $ do
+    Rendered {html} <- render (as (Just "user-reader")) (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    html `contains` "class=\"error error-forbidden\""
+    html `lacks` "<textarea"
+
+  it "opens the editor on a new page, under a page or at the space's top level" $ do
+    Rendered {html, title} <- render (as (Just "user-editor")) (NewPage (slugs ["blog"]) Nothing)
+    title `shouldBe` "New page · Blog · Wiki"
+    html `contains` "<h1 class=\"editor-heading\">New page in Blog</h1>"
+    html `contains` "<textarea"
+    html `contains` "Save the page first; then files can be attached to it."
+    Rendered {html = under} <- render (as (Just "user-editor")) (NewPage (slugs ["blog"]) (Just (slugs ["hello-world"])))
+    under `contains` "<h1 class=\"editor-heading\">New page under Hello, world</h1>"
+    Rendered {html = nowhere} <- render (as (Just "user-editor")) (NewPage (slugs ["blog"]) (Just (slugs ["no-such-page"])))
+    nowhere `contains` "class=\"error error-not-found\""
+
+  it "offers to write a new page in a space, and under a page" $ do
+    Rendered {html} <- render (as (Just "user-editor")) (Space (slugs ["blog"]))
+    html `contains` "href=\"/s/blog/new-page/\">New page</a>"
+    Rendered {html = page} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    page `contains` "href=\"/s/blog/new-page/hello-world/\">New subpage</a>"
+    page `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a>"
+
   it "writes its links under the base path" $ do
     Rendered {html} <- renderRoute (as Nothing) "/wiki/" Home
     html `contains` "href=\"/wiki/s/docs/\""

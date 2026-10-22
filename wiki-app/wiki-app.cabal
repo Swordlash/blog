@@ -8,8 +8,11 @@ maintainer:         mateusz.goslinowski@gmail.com
 category:           Web
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
--- Embedded into the wasm binary at compile time by Halogen.JSBits.
-extra-source-files: jsbits/*.js
+-- Embedded into the wasm binary at compile time by Halogen.JSBits: the
+-- application's, and the browser test suite's own.
+extra-source-files:
+    jsbits/*.js
+    test/jsbits/*.js
 
 flag interactive
   description: Build the browser test suite for browser GHCi (toolchain/dev-test.sh)
@@ -69,9 +72,13 @@ library
       Wiki.App.Islands.Monad
       Wiki.App.Route
       Wiki.App.Shell
+      Wiki.App.Editor.Browser
+      Wiki.App.View.Body
       Wiki.App.View.Common
+      Wiki.App.View.Editor
       Wiki.App.View.NewSpace
       Wiki.App.View.Page
+      Wiki.App.View.Preview
       Wiki.App.View.Space
 
   -- Rendering for the prerender and the native tests, through the in-memory
@@ -189,13 +196,17 @@ test-suite wiki-app-browser-test
   hs-source-dirs:   test
   main-is:          BrowserTest.hs
   other-modules:
+      Test.Browser.Editor
       Test.Browser.Islands
+      Test.Browser.Mount
       Test.Browser.Shell
   build-depends:
+      base,
       protolude,
       row-types,
       text,
       haskell-halogen-core,
+      haskell-halogen-jsbits,
       haskell-halogen-router,
       hspec-halogen,
       wiki-app,
@@ -207,9 +218,9 @@ test-suite wiki-app-browser-test
       -optl-mexec-model=reactor
       "-optl-Wl,--export=hs_start"
 
+  -- GHCi's :main (under the interactive flag) runs
+  -- System.Environment.withArgs and Control.Monad.void, which it finds only in
+  -- a package the suite depends on: base, which the suite needs anyway for
+  -- Data.IORef, which Protolude does not export.
   if flag(interactive)
     cpp-options: -DINTERACTIVE
-    -- GHCi's :main runs System.Environment.withArgs and Control.Monad.void,
-    -- which it finds only in a package the suite depends on. The suite's own
-    -- code needs nothing of base's beyond Protolude, so only GHCi gets it.
-    build-depends: base

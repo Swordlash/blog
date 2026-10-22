@@ -15,6 +15,13 @@
 -- The route is the router's ('Router.current' at the start, then
 -- 'Router.changes'), so links, the back and forward buttons and a reload all
 -- arrive at the same place.
+--
+-- The one route the shell does not simply follow is one away from an editor
+-- with unsaved changes: it asks the editor ('Editor.IsDirty') and, if the
+-- draft would be lost, asks the reader in place whether to leave. By then
+-- the browser's address is the new route's already (a link was followed, or
+-- the back button pressed), so staying puts the editor's address back, in
+-- place of the one that was not followed.
 module Wiki.App.Shell
   ( Input (..)
   , Query (..)
@@ -39,6 +46,7 @@ import Wiki.App.DemoUsers (MonadDemoUsers (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
+import Wiki.App.View.Editor qualified as Editor
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.Page qualified as PageView
 import Wiki.App.View.Space qualified as SpaceView
@@ -66,6 +74,7 @@ type Slots =
   ("space" .== H.Slot (Const Void) ViewOutput ())
     .+ ("page" .== H.Slot (Const Void) ViewOutput ())
     .+ ("newSpace" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("editor" .== H.Slot Editor.Query ViewOutput Editor.Target)
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -88,6 +97,9 @@ data State = State
   -- after a change.
   , menuOpen :: Bool
   , settled :: Bool
+  , leaving :: Maybe Route
+  -- ^ A route followed away from an editor with unsaved changes, which the
+  -- reader is being asked about.
   }
 
 data Action
@@ -98,6 +110,8 @@ data Action
   | ToggleMenu
   | SwitchTo (Maybe UserId)
   | FromView ViewOutput
+  | Leave
+  | Stay
 
 component
   :: forall output m
@@ -121,6 +135,7 @@ component =
               , generation = 0
               , menuOpen = False
               , settled = False
+              , leaving = Nothing
               }
       , render
       , eval =
@@ -140,7 +155,7 @@ component =
         , HH.div
             [HP.class_ "wiki-body"]
             [ sidebar st
-            , HH.main [HP.class_ "wiki-content"] [content st]
+            , HH.main [HP.class_ "wiki-content"] (leaveConfirm st <> [content st])
             ]
         ]
 
@@ -259,14 +274,25 @@ component =
         SpaceFailed _ e -> errorView e
         InSpace _ space pages -> case st.route of
           Page _ path -> HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path} FromView
-          EditPage spacePath path ->
-            HH.section
-              [HP.class_ "edit-placeholder"]
-              [ HH.h1_ [HH.text ("Editing " <> maybe "a page" (\p -> p.title) (currentPageOf pages path))]
-              , HH.p_ [HH.text "The editor is not here yet: it comes with the next version of the demo."]
-              , Router.link st.router Followed (Page spacePath path) [HP.class_ "button"] [HH.text "Back to the page"]
-              ]
+          EditPage _ path -> editor (Editor.Existing path)
+          NewPage _ parent -> editor (Editor.New parent)
           _ -> HH.slot "space" () SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
+          where
+            -- One editor per page edited: another page's is a component
+            -- of its own, with a draft of its own.
+            editor target = HH.slot "editor" target Editor.component Editor.Input {context = context st, space, pages, target} FromView
+
+    leaveConfirm :: State -> [H.ComponentHTML Action Slots m]
+    leaveConfirm st = case st.leaving of
+      Nothing -> []
+      Just _ ->
+        [ HH.div
+            [HP.classes ["confirm", "leave-confirm"], attr "role" "alertdialog"]
+            [ HH.p_ [HH.text "This page has changes that are not saved. Leave the editor and lose them?"]
+            , HH.button [HP.type_ I.ButtonButton, HP.class_ "danger", HE.onClick (const Leave)] [HH.text "Leave"]
+            , HH.button [HP.type_ I.ButtonButton, HE.onClick (const Stay)] [HH.text "Stay"]
+            ]
+        ]
 
     home :: State -> H.ComponentHTML Action Slots m
     home st =
@@ -317,8 +343,17 @@ component =
       Arrived r -> do
         before <- gets (\st -> st.route)
         unless (r == before) $ do
-          modify (\st -> st {route = r, settled = False, menuOpen = False})
-          loadHere False
+          dirty <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
+          if dirty
+            then modify (\st -> st {leaving = Just r, menuOpen = False})
+            else arrive r
+      Leave -> gets (\st -> st.leaving) >>= traverse_ arrive
+      Stay -> do
+        st <- get
+        modify (\s -> s {leaving = Nothing})
+        -- The address is the one not followed: the editor's goes back in
+        -- its place, which the router announces as the route already shown.
+        Router.redirect st.router st.route
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
       Toggle sid -> modify $ \st ->
         st {collapsed = if sid `Set.member` st.collapsed then Set.delete sid st.collapsed else Set.insert sid st.collapsed}
@@ -330,12 +365,17 @@ component =
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
 
+    arrive :: Route -> H.HalogenM State Action Slots output m ()
+    arrive r = do
+      modify (\st -> st {route = r, settled = False, menuOpen = False, leaving = Nothing})
+      loadHere False
+
     -- After a change: everything again, and every view's own data too.
     reload :: Maybe Route -> H.HalogenM State Action Slots output m ()
     reload next = do
       loadWorld
       modify (\st -> st {generation = st.generation + 1})
-      for_ next $ \r -> modify (\st -> st {route = r, settled = False})
+      for_ next $ \r -> modify (\st -> st {route = r, settled = False, leaving = Nothing})
       loadHere True
       -- The router is told last, so that the route it announces is the one
       -- already shown, which 'Arrived' leaves alone.
@@ -371,7 +411,8 @@ component =
                 modify (\s -> s {here = either (SpaceFailed path) identity result})
       st' <- get
       H.liftEffect (setDocumentTitle (documentTitle st'))
-      -- A page's view says when it has loaded the page; everything else is
+      -- A page's view, or the editor, says when it has loaded the page;
+      -- everything else is
       -- loaded now.
       unless (waitsForPage st') settle
 
@@ -391,6 +432,7 @@ spaceOfRoute = \case
   Space path -> Just path
   Page path _ -> Just path
   EditPage path _ -> Just path
+  NewPage path _ -> Just path
   _ -> Nothing
 
 isSpaceRoute :: Route -> Bool
@@ -408,6 +450,8 @@ hereIs path = \case
 waitsForPage :: State -> Bool
 waitsForPage st = case (st.route, st.here) of
   (Page _ _, InSpace {}) -> True
+  (EditPage _ _, InSpace {}) -> True
+  (NewPage _ _, InSpace {}) -> True
   _ -> False
 
 currentPageOf :: [Page] -> [Slug] -> Maybe Page
@@ -426,6 +470,7 @@ crumbs st = case st.route of
   Space path -> spaceCrumbs path
   Page path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath
   EditPage path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath <> [("Edit", Nothing)]
+  NewPage path parent -> spaceCrumbs path <> foldMap (pageCrumbs path) parent <> [("New page", Nothing)]
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]
   where
