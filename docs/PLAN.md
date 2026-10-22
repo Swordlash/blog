@@ -604,8 +604,10 @@ Amended by the planning session after each work package's report.
   WP1.10's pin bump.
 - **Phase 1 merged, MVP demo released.** #6, #9, #10, #11, #12, #13, #14 and #16 are on
   `main` in that order, each after a green run on the self-hosted runner (about 4 minutes
-  warm; the first run installed the toolchain in 22 minutes). Tag `v0.1.0-demo` on the
-  merge of #16 (`d62a857`). What remains of Phase 1 is the owner's additions: WP1.9, WP1.10,
+  warm; the first run installed the toolchain in 22 minutes). Tag `v0.1.0-demo` belongs on
+  the merge of #16 (`d62a857`); pushing a tag from the planning session is refused (HTTP
+  403: its credentials push branches only), so the owner tags it:
+  `git tag -a v0.1.0-demo d62a857 -m "The MVP demo" && git push origin v0.1.0-demo`. What remains of Phase 1 is the owner's additions: WP1.9, WP1.10,
   WP1.11, WP1.12, WP1.13, with HH-1 and HH-2 in haskell-halogen.
 - **HH-1 done** ([haskell-halogen#50](https://github.com/Swordlash/haskell-halogen/pull/50),
   branch `indexeddb-store`, head `d2ce06d`; the owner merges there). `Web.Storage.IndexedDB`:
