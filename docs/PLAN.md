@@ -296,6 +296,17 @@ point of this phase.
   chooses, with the reason, and keeps `H.liftEffect`'s contract. Report what else in the
   examples relies on `preventDefault` from a handler (forms, keyboard shortcuts), since the
   same race applies.
+- **HH-3 Two small things in haskell-halogen for the quoters** (one PR there, after HH-2
+  merges). First, `th`'s `textItems`: a line break between two holes or statements with no
+  tag between them becomes a single space text node, so `{{ a }}` and `{{ b }}` on separate
+  lines render `" "` between them, which the README does not promise and JSX would drop;
+  make a line break between holes (and between a hole and a line's edge) vanish as
+  whitespace-only text does in JSX, with a test and a README line, and check the examples
+  still render the same. Second, `Halogen.Router.linkProps` (or a name of its choosing)
+  returning the `[IProp]` a router link needs (`href` and the preventing click handler
+  `link` uses), so a link can be written `<a {{ Router.linkProps router route }}>` inside
+  an `hh` quote; `link` is then `a` applied to it. The blog's shell switches to it in
+  WP1.10's pin bump where a link sits in a quote.
 - **WP1.11 Persist the demo.** After HH-1 and WP1.10: bump the pin to HH-1's commit (its
   own commit). `MemWiki` writes through to IndexedDB after every successful write, the
   records it changed in one `writeMany` (spaces, pages, attachments with their bytes,
@@ -698,6 +709,35 @@ Amended by the planning session after each work package's report.
   treat `attachment:` and relative paths as the client does or hydration repairs the links;
   the tree is built to read back unchanged from `Halogen.Static` (tested). For WP1.12: an
   HTML command writes an inline tag pair in the line or a whole block with no blank line in it.
+- **WP1.9 done** ([#19](https://github.com/Swordlash/blog/pull/19), branch `wp1.9-quoters`;
+  CI's first run installs th's build: `ghc-lib-parser` cold is 11 min native and 13.5 min
+  wasm, measured alone under load). The rule for later packages: `hh` wherever the element
+  names are known when the code is written (forms, dialogs, headers, empty and error states,
+  island elements, trees whose per-node markup is fixed, recursing through a hole);
+  combinators stay where the element is chosen by data (the Markdown renderer, the snippet's
+  text-or-`mark`), for helpers that make their own element (`Router.link`, `HH.slot`), for
+  what the quoter cannot say (`HH.keyed`, a textarea with text content) and for code that
+  only assembles other functions' results. Module by module: `Shell`, `View/Common`
+  (`errorView`, `pageTree`, `button`, `textField`, new `ariaBool`), `NewSpace`, `Space`,
+  `Page`, `SearchResults`, `Preview`, `Islands`, `Editor` (except the keyed title and
+  textarea), `Search` (box, dropdown, `hitContents`; `snippetHtml` stays), `Body` (`heading`,
+  frame); `App`, `Static`, `Prerender` have no HTML. No CSS to `clay`. `wiki-app` depends on
+  `haskell-halogen-th` and natively on `th-plugin` (`-fplugin=Halogen.TH.Plugin`, errors at
+  the hole); `bootstrap.sh` installs `alex` 3.5.4.2 and `happy` 2.1.7 pinned into ghcup's
+  bin, the hosted CI path in a step. Oracle: the prerender of 16 pages is byte-identical but
+  for `<!---->` between a literal and an adjacent hole (two text nodes, which hydration
+  wants), browser tests and smoke test unchanged, `app.wasm` 5927 KiB. The footer
+  `<footer class="wiki-footer">Built with <a href=…>haskell-halogen</a></footer>` is the
+  shell's last element, prerendered and in `404.html`, tested natively on 5 routes and in
+  the smoke test. Things to know about `hh` (also for WP1.12): a line break between two
+  holes with no tag between them becomes a `" "` text node (put them on one line, or one
+  hole; HH-3 fixes it upstream); `value={{ x }}` and `value="{{ x }}"` both set the
+  property, so an uncontrolled input takes `{{ attr "value" x }}`; a `Text` hole that is
+  not plainly `Text` needs `:: Text`; `QuasiQuotes` goes on per module, never in the
+  `.cabal` (a list comprehension `[x|x <- xs]` would parse as a quote); handlers come
+  from the quoter's table (`onClick={{ … }}`) or as `{{ HE.handler … }}` among the
+  attributes; `aria-label` and `title` are plain attributes; `<svg>` inside `hh` is SVG with
+  `viewBox` and `d` as text. Suggested upstream `Router.linkProps` is HH-3.
 - **Footer (owner's request):** "Built with haskell-halogen" linking to the repository,
   on every page; added to WP1.9 as the first `hh` view.
 - **Toolbar and HTML in pages (owner's request):** decision 13, WP1.12 (toolbar over pure
