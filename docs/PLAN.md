@@ -289,3 +289,36 @@ Amended by the planning session after each work package's report.
   WP1.4, WP1.6 follows WP1.2, WP1.3 and WP1.5.
 - **Owner's note (2026-10-22):** haskell-halogen is about to gain SSR with hydration; it is
   planned as WP2.6 rather than a Phase 4 item.
+- **WP0.3 done except the run** ([#6](https://github.com/Swordlash/blog/pull/6)). `build.yml`
+  with `native`, `wasm` (toolchain cached as haskell-halogen's, host GHC alongside, Node
+  suites, browser suite, Chromium smoke test, `app` artifact) and `format` (fourmolu
+  0.21.0.0 from its release); fourmolu added to the bootstrap with a Hackage fallback; a
+  new `npm run format-check`. GitHub never started the jobs: "The job was not started
+  because an Actions budget is preventing further use", which the owner fixes under
+  Billing → Budgets. Carried over to the first real run: pin `FOURMOLU_SHA256` in the
+  workflow and the bootstrap from the format job's log, confirm the asset name, record the
+  cold run time. Carried over to WP1.5: add native `alex` and `happy < 2.2` to the wasm
+  job when `th` is first used.
+- **WP1.1 done** ([#7](https://github.com/Swordlash/blog/pull/7)). `Wiki.Core.{Id, Slug, Path,
+  Space, Page, Attachment, User, Permission}`, 145 tests on both backends. Decision 9
+  confirmed and sharpened: `public` is a `View` grant for everyone and inherits, so a
+  subspace of a public space cannot be private (no denials); rules are pure functions over
+  the chain of spaces from the root. `slugify` folds Latin letters, drops apostrophes, and
+  gives `Nothing` for a title with no foldable letters. Found and handed to WP1.3:
+  `build-wasm.sh` fails once on a fresh build directory at `cabal list-bin`.
+- **WP1.2 done** ([#8](https://github.com/Swordlash/blog/pull/8)). `Wiki.Core.Markdown` (own
+  AST from commonmark + GFM, math, wikilinks, fenced divs, attributes), rendered through an
+  `Options` record; `docs/markdown.md` is the authors' guide. Decision 1 confirmed: both
+  packages build on wasm (dependencies about 2.5 minutes native, 3.5 minutes wasm).
+  Amendment accepted: each island callback takes an `IslandKey {source, occurrence}`, unique
+  in a document, which WP1.6 uses as the slot index for island components. Syntax decided:
+  `![caption](attachment:name)` embeds by media type, `[label](attachment:name)` downloads,
+  external embeds by extension; raw HTML shown as text; `href` limited to http(s), mailto,
+  tel, blob. Carried over to WP1.6: heading and footnote ids are unprefixed, so preview and
+  page view on one screen need a prefix or a single rendered copy.
+- **Rules decided for WP1.4** (added to Decision 9): a root space needs global
+  `CreateSpaces`; a subspace `CreateSpaces` or `AdministerSpace` on the parent; moving a
+  space needs `AdministerSpace` on it and the right to create at the destination; rename,
+  delete and `public` need `AdministerSpace`; page and attachment writes need `Edit`.
+  Attachments cross the backend interface as bytes; `MemWiki` is polymorphic in its base
+  monad (`IO` in tests, `BrowserDOM` in the page) and has a demo-only `switchUser`.
