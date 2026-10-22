@@ -24,10 +24,13 @@ delegates it to an implementing agent, reviews what comes back, and amends the p
 decision confirmed or changed, acceptance criteria met or carried over. It may make small
 edits of its own (the plan, a README line, a one-line fix found in review).
 
-**An implementing agent** does one work package. It is a subagent of the planning session,
-started with the `implementer` definition in `.claude/agents/implementer.md`: Opus 5.5 at
-high reasoning effort. One package per agent, one agent per package; independent packages
-may run in parallel, each on its own branch.
+**An implementing agent** does one work package. It is a subagent of the planning session.
+In Claude Code, start it with the `implementer` definition in
+`.claude/agents/implementer.md`: Opus 5.5 at high reasoning effort. In Codex, start a
+subagent with model `gpt-6.1-sol` and reasoning effort `high`, following the same
+implementer instructions; the Claude model setting does not apply to Codex.
+One package per agent, one agent per package; independent packages may run in parallel,
+each on its own branch.
 
 A brief contains, in this order:
 

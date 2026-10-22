@@ -72,16 +72,18 @@ follow haskell-halogen's.
 ## Toolchain
 
 The toolchain is haskell-halogen's, at the same pins: GHC 9.14.1, cabal 3.16.1.0,
-`wasm32-wasi-ghc` 9.14.1.20260731 from ghc-wasm-meta, Node 24 and Chromium for
-Playwright. On x86_64 Linux one script installs all of it:
+`wasm32-wasi-ghc` 9.14.1.20260731 from ghc-wasm-meta, Node 24 or later and Chromium
+for Playwright. On x86_64 Linux one script checks what is available and installs
+what is missing:
 
 ```sh
 sh toolchain/bootstrap.sh
 ```
 
-It installs ghcup into `~/.ghcup` (unless one is already on `PATH`) and through it GHC
-and cabal, making them ghcup's defaults; the wasm sysroot into `~/.ghc-wasm` and the
-cross compiler through ghcup, as haskell-halogen's CI does; Node into
+It reuses the pinned GHC, cabal and wasm compiler found on `PATH`, and any Node
+24 or later with npm. When a compiler is missing, it installs ghcup into `~/.ghcup`
+(unless one is already on `PATH`) and through it the pinned compiler, making it
+ghcup's default. Missing tools go to: the wasm sysroot into `~/.ghc-wasm`; Node into
 `~/.wiki-toolchain/node`; Chromium's headless shell where Playwright keeps its
 browsers; and fourmolu, the formatter, into ghcup's bin directory (its release binary,
 or built from Hackage where GitHub's downloads are refused, as in Claude Code's cloud
@@ -92,12 +94,64 @@ installs with `apt-get` when it runs as root or with password-less `sudo`, and n
 otherwise. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
 into the cabal store, so the first build compiles only this repository.
 
-Each step checks whether its tool is already there and working, so running it again is
-quick and quiet, and finishes an install that was interrupted. Commands' output goes to
-`~/.wiki-toolchain/bootstrap.log`. Afterwards, put `. ~/.wiki-toolchain/env` in your
-shell profile for `ghc`, `cabal` and Node 24 on `PATH`; the build scripts source
+The wasm sysroot is reused when its `.paladyn-rev` matches the pinned ghc-wasm-meta
+revision (or a previous bootstrap marked that revision) and its tools and libc are
+present and working. An existing unrecognised or incomplete sysroot is refused before
+any changes: inspect it and move it aside yourself if you want a fresh install.
+The bootstrap reuses the project's installed Playwright when it matches the lockfile,
+otherwise keeps its own installation under `~/.wiki-toolchain`. It reuses Chromium's
+cache using the executable path reported by that Playwright's browser registry, and
+checks that the browser launches on each install-mode run. The formatter and parser
+generators must match their exact pins; alex and happy are detected with `--version`.
+
+Inspect the decisions without downloading tools, writing logs or changing installations:
+
+```sh
+sh toolchain/bootstrap.sh check
+```
+
+This lists tools to reuse or install and exits unsuccessfully for a blocked sysroot.
+For a strict check of the current shell and the npm dependencies a command uses:
+
+```sh
+sh toolchain/bootstrap.sh ready build-wasm  # or build-native / serve-wasm
+```
+
+`npm run build`, `npm run serve`, `build-native`, `build-wasm` and `serve-wasm`
+automatically load an existing `~/.wiki-toolchain/env`, then run this check before
+compiling or starting a server. No manual environment loading is needed for these npm
+commands; if the file is missing, an already configured `PATH` still works.
+Managed Node and ghcup directories take precedence even if they were already later
+on `PATH`. npm also applies the current environment directives after loading an old
+generated env file, so existing installations need no bootstrap reinstall for this fix.
+`build` and `serve` are aliases
+for the wasm commands and accept the same extra cabal arguments after `--`. The gate
+checks the complete pinned toolchain, including the formatter, parser generators and
+Chromium cache; browser launch validation stays in install mode. It checks package
+entry points and local executables needed by the selected command (`http-server` for
+serve, and the islands packages and esbuild for wasm), without downloads or writes.
+Missing tools or incompatible versions stop with instructions to run
+`sh toolchain/bootstrap.sh toolchain`, then retry. Missing npm dependencies require
+`npm ci` separately. A direct `bootstrap.sh ready` check uses the caller's `PATH`
+without loading the environment; for direct tool commands in an unloaded shell,
+run `. ~/.wiki-toolchain/env`. The wasm environment is checked in a subshell and is still
+loaded automatically by the wasm scripts; do not export its wasm `CC` globally.
+
+Install modes also check system packages and the cabal index. Each step checks whether
+its tool is already there and working, so running it again is quick and repairs missing
+tools. Commands' output goes to
+`~/.wiki-toolchain/bootstrap.log`. For direct `ghc` and `cabal` commands, put
+`. ~/.wiki-toolchain/env` in your shell profile to load their `PATH`; npm build/serve
+commands load it themselves. The build scripts source
 `~/.ghc-wasm/env` for the wasm tools themselves. `sh toolchain/bootstrap.sh toolchain`
 skips the store.
+
+The discovery and reuse regression tests run with fake tools and isolated temporary
+homes, without downloads or changes to your installations:
+
+```sh
+sh toolchain/test-bootstrap.sh
+```
 
 Claude Code cloud sessions run it from the `SessionStart` hooks in `.claude/`: the
 toolchain before the session starts, the store in the background. A command that needs
