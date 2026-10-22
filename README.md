@@ -220,7 +220,7 @@ haskell-halogen's packages come from one `source-repository-package` stanza in
 ## Commands
 
 ```sh
-npm ci                          # once: Playwright, http-server, esbuild, KaTeX, Mermaid, highlight.js
+npm ci                          # once: Playwright, http-server, esbuild, KaTeX, Mermaid, TikZJax, highlight.js
 npm run build-native            # every package, host GHC, into dist-newstyle/native
 npm run test-native             # the test suites, natively
 npm run build-wasm              # wiki-app to wasm, a prerendered page per route, the islands bundle, into dist-newstyle/wasm/public/app
@@ -237,8 +237,10 @@ npm run clean                   # remove dist-newstyle/wasm/public
 The islands bundle is `web/bundle.sh <output-dir>`: esbuild bundles KaTeX and
 highlight.js (with `web/src/islands.js`) into `islands.js`, which publishes
 `globalThis.wikiIslands`; Mermaid into `islands/` as ES modules that `islands.js`
-imports the first time it draws a diagram; and KaTeX's stylesheet and fonts into
-`islands.css` and `fonts/`. `build-wasm` runs it into the page it builds, and
+imports the first time it draws a diagram; `web/src/tikz.js` into
+`islands/tikz.js`, which it imports the first time it draws a TikZ picture, with
+TikZJax's worker, TeX and fonts copied from npm's `@drgrice1/tikzjax` into
+`tikzjax/`; and KaTeX's stylesheet and fonts into `islands.css` and `fonts/`. `build-wasm` runs it into the page it builds, and
 the browser suite's `wiki-app/test/web/bundle.sh` into the test page. npm 11
 runs esbuild's install script only because `package.json`'s `allowScripts`
 approves it (`npm install-scripts approve esbuild`).

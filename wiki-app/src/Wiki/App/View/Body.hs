@@ -113,6 +113,7 @@ options place =
     , Md.mathInline = \k tex -> island k (Islands.MathInline tex)
     , Md.mathDisplay = \k tex -> island k (Islands.MathDisplay tex)
     , Md.mermaid = \k source -> island k (Islands.Mermaid source)
+    , Md.tikz = \k source -> island k (Islands.Tikz source)
     , Md.resolveLink = resolve place
     , Md.pageHref = \(PageLink r fragment) -> Router.href place.context.router r <> fragment
     }

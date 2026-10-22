@@ -109,6 +109,9 @@ const standInImage = Buffer.from(
 async function newPage(options = {}) {
   const context = await browser.newContext(options);
   const page = await context.newPage();
+  // Every address the page and its workers ask for, until it is emptied.
+  page.requested = [];
+  context.on("request", (request) => page.requested.push(request.url()));
   page.on("pageerror", (error) => failures.push(`page error at ${page.url()}: ${error.message}`));
   page.on("console", (message) => {
     // An address with no file of its own is served 404.html with a 404,
@@ -171,7 +174,7 @@ async function programStarted(page) {
 // or attributes, so that what the program does to the page when it adopts
 // it can be told afterwards. A MutationObserver notes when the page last
 // changed outside the islands, whose content their libraries write.
-const islands = ".wiki-math, .wiki-mermaid, .wiki-code";
+const islands = ".wiki-math, .wiki-mermaid, .wiki-tikz, .wiki-code";
 const markPrerendered = (page) =>
   page.evaluate((islands) => {
     const app = document.querySelector("#app");
@@ -340,6 +343,7 @@ try {
   // ---- 1. Every prerendered page ---------------------------------------------
 
   const paths = await prerenderedPaths(root);
+  let guideAndDiagrams = 0;
   assert.ok(paths.length >= 10, `only ${paths.length} pages were prerendered`);
   for (const path of ["/", "/search/", "/s/docs/", "/s/docs/p/tour/", "/s/docs/p/tour/source/", "/s/team/p/team-handbook/"]) {
     assert.ok(paths.includes(path), `${path} was not prerendered`);
@@ -351,10 +355,17 @@ try {
   for (const path of paths) {
     // As a server sends it, before any script runs.
     const html = await (await fetch(url(path))).text();
+    if (html.includes('<div class="wiki-tikz">')) guideAndDiagrams += 1;
     assert.match(html, /<base href="\/">/, `${path}: no <base href>`);
     assert.match(html, /<div id="app"><div class="wiki">/, `${path}: not prerendered`);
     assert.ok(html.includes(footerHtml), `${path}: no footer prerendered`);
+    visitor.requested.length = 0;
     const { before, repairs } = await load(visitor, path);
+    // TikZJax is fetched by a page with a picture, and by no other.
+    if (!html.includes('<div class="wiki-tikz">')) {
+      const tikz = visitor.requested.filter((address) => /\/(islands\/tikz\.js|tikzjax\/)/.test(address));
+      assert.deepEqual(tikz, [], `${path}: a page without a TikZ picture fetched TikZJax`);
+    }
     if (path !== "/") assert.notEqual(before.title, "Wiki", `${path}: no title of its own`);
     // The program shows the same route, on the same nodes.
     assert.deepEqual(await shown(visitor), before, `${path}: the program shows another page`);
@@ -384,8 +395,41 @@ try {
   await visitor.locator("#app .wiki-mermaid > svg").first().waitFor({ timeout });
   await visitor.locator("#app .wiki-code code.hljs.language-haskell .hljs-type").first().waitFor({ timeout });
   assert.ok(await visitor.evaluate(() => document.fonts.check('16px "KaTeX_Main"')), "KaTeX's fonts did not load");
-  console.log("ok: a page's islands are drawn: KaTeX, Mermaid, highlight.js");
+  // The guide's TikZ picture, with its labels in TeX's fonts.
+  const tikzLabel = visitor.locator("#app .wiki-tikz > svg text").first();
+  await tikzLabel.waitFor({ timeout });
+  assert.notEqual((await tikzLabel.textContent()).length, 0, "the TikZ picture's label is empty");
+  await eventually(
+    async () => assert.ok(await visitor.evaluate(() => document.fonts.check("10px cmr10")), "not yet"),
+    "TeX's fonts loading",
+  );
+  console.log("ok: a page's islands are drawn: KaTeX, Mermaid, TikZ, highlight.js");
+  console.log(`ok: no page without a TikZ picture fetched TikZJax (${guideAndDiagrams} pages have one)`);
   await visitor.context().close();
+
+  // The first TikZ picture, in a browser that has fetched nothing yet: how
+  // long it takes, and what it fetches (TikZJax's worker, TeX, the format,
+  // the TeX files and fonts the picture uses).
+  const cold = await newPage();
+  const tikzBytes = new Map();
+  cold.context().on("requestfinished", async (request) => {
+    if (!/\/(islands\/tikz\.js|tikzjax\/)/.test(request.url())) return;
+    const sizes = await request.sizes().catch(() => null);
+    if (sizes) tikzBytes.set(request.url(), sizes.responseBodySize);
+  });
+  const asked = Date.now();
+  await cold.goto(url("/s/docs/p/markdown-guide/"), { waitUntil: "commit" });
+  await cold.locator("#app .wiki-tikz > svg").first().waitFor({ timeout });
+  const drawn = Date.now() - asked;
+  const fetchedTikz = await eventually(async () => {
+    assert.ok([...tikzBytes.keys()].some((address) => address.endsWith("core.dump.gz")), "not yet");
+    return [...tikzBytes.values()].reduce((a, b) => a + b, 0);
+  }, "TikZJax's files being counted");
+  console.log(
+    `note: the first TikZ picture was drawn ${drawn} ms after the page was asked for, with nothing cached;` +
+      ` TikZJax's files fetched for it: ${tikzBytes.size}, ${Math.round(fetchedTikz / 1024)} KiB`,
+  );
+  await cold.context().close();
 
   // ---- 2. A walk through the demo, in one page -------------------------------
 
@@ -639,12 +683,18 @@ try {
   assert.ok(luminance(night.background) < 0.25, `a dark scheme's background is ${night.background}`);
   assert.ok(luminance(night.text) > 0.6, `a dark scheme's text is ${night.text}`);
   assert.ok(luminance(night.sidebar) < 0.25, `a dark scheme's sidebar is ${night.sidebar}`);
+  // TeX's black is drawn in the text's colour, so a picture shows on a dark page.
+  await dark.locator("#app .wiki-tikz > svg").first().waitFor({ timeout });
+  const ink = () =>
+    dark.evaluate(() => getComputedStyle(document.querySelector('#app .wiki-tikz > svg [stroke="currentColor"]')).stroke);
+  assert.ok(luminance(await ink()) > 0.6, `a dark scheme's TikZ lines are ${await ink()}`);
   await dark.emulateMedia({ colorScheme: "light" });
   const day = await colours(dark);
   assert.ok(luminance(day.background) > 0.75, `a light scheme's background is ${day.background}`);
   assert.ok(luminance(day.text) < 0.4, `a light scheme's text is ${day.text}`);
+  assert.ok(luminance(await ink()) < 0.4, `a light scheme's TikZ lines are ${await ink()}`);
   await dark.context().close();
-  console.log("ok: a page follows the dark scheme, and the light one");
+  console.log("ok: a page follows the dark scheme, and the light one, TikZ pictures too");
 
   const phone = await newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await load(phone, "/s/docs/p/markdown-guide/");

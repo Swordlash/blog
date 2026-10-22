@@ -20,7 +20,7 @@ function wikiTestSerialize(node) {
   const attributes = [...node.attributes].map((a) => ` ${a.name}="${wikiTestEscape(a.value, true)}"`).join("");
   if (wikiTestVoid.has(name)) return `<${name}${attributes}>`;
   let inner = "";
-  if (!node.matches(".wiki-math, .wiki-mermaid, .wiki-code")) {
+  if (!node.matches(".wiki-math, .wiki-mermaid, .wiki-tikz, .wiki-code")) {
     let previousText = false;
     for (const child of node.childNodes) {
       const text = child.nodeType === Node.TEXT_NODE;

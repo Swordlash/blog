@@ -19,6 +19,13 @@ function wiki_islands_render_mermaid(element, source) {
   return Promise.resolve();
 }
 
+function wiki_islands_render_tikz(element, source, preamble, picture) {
+  const islands = globalThis.wikiIslands;
+  if (islands) return islands.renderTikz(element, source, preamble, picture);
+  element.textContent = source;
+  return Promise.resolve();
+}
+
 function wiki_islands_highlight(element, language, code) {
   const islands = globalThis.wikiIslands;
   if (islands) islands.highlight(element, language, code);

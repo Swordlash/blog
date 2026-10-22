@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+TikZ pictures are drawn in the browser. A `tikz` fence is an island,
+`Island`'s new `Tikz`, rendered as an empty `<div class="wiki-tikz">` by the
+program and with its source by the prerender, as a Mermaid diagram is, and
+drawn by `MonadIslands`' new `renderTikz` with TikZJax (npm's
+`@drgrice1/tikzjax` 1.0.0-beta24): TeX compiled to WebAssembly, run in a
+worker, its DVI turned into SVG. `web/bundle.sh` copies TikZJax's worker,
+TeX, its format, the TeX files of the packages and libraries it has and the
+Computer Modern fonts into `tikzjax/`, and bundles `web/src/tikz.js`, which
+drives the worker, into `islands/tikz.js`; `islands.js` imports it the first
+time a page has a picture, so no other page fetches any of it, and nothing is
+fetched from anywhere but the page's own origin (the worker,
+`web/src/tikz-worker.js`, refuses TeX any other address). A first picture
+fetches about 6.4 MB; later ones are drawn in a few hundred milliseconds, one
+at a time, and a picture drawn once is kept, so a preview does not run TeX
+again for a picture that did not change. The SVG is copied into the page
+element by element through an allowlist, never set as HTML; black is drawn
+in the page's text colour, so pictures show in the dark scheme. A picture
+TeX cannot draw shows its source with TeX's error under it, its line counted
+as the author's; one that takes TeX more than 30 seconds is given up on. The
+editor's toolbar has a TikZ button, the Markdown guide a picture, and the
+Diagrams page a commutative diagram and a plot. (A demo kept in a browser
+from before shows the new pages after "Reset the demo content".)
+
 The demo's whole wiki can be exported and imported as one zip file, from the
 foot of the user menu. "Export the wiki" downloads `wiki-<date>.zip`, an
 archive in `wiki-core`'s `Wiki.Core.Export` format (see `docs/export.md`): a

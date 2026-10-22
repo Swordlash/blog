@@ -1,13 +1,16 @@
 // The wiki's islands: elements the Halogen application creates and holds by
-// ref but never looks inside, filled here by KaTeX, Mermaid and highlight.js.
+// ref but never looks inside, filled here by KaTeX, Mermaid, TikZJax and
+// highlight.js.
 //
 // web/bundle.sh bundles this file, with its libraries, into islands.js, a
-// classic script the page loads before app.wasm; Mermaid, much the heaviest,
-// is bundled separately under islands/ and fetched the first time a diagram
-// is drawn. What the page gets is one object on globalThis:
+// classic script the page loads before app.wasm; Mermaid and TikZJax, much
+// the heaviest, are bundled separately under islands/ (and TikZJax's TeX
+// under tikzjax/), and fetched the first time a diagram or a picture is
+// drawn. What the page gets is one object on globalThis:
 //
 //   wikiIslands.renderMath(element, tex, displayMode)
 //   wikiIslands.renderMermaid(element, source): Promise<void>
+//   wikiIslands.renderTikz(element, source, preamble, picture): Promise<void>
 //   wikiIslands.highlight(element, language, code)
 //
 // Each writes into the element it is given and nowhere else, replacing what
@@ -42,21 +45,23 @@ for (const [name, language] of Object.entries({
   hljs.registerLanguage(name, language);
 }
 
-// Mermaid's bundle sits next to this script. The URL is taken now, while the
-// script runs: document.currentScript is only set during that.
+// Mermaid's and TikZJax's bundles sit next to this script. The URL is taken
+// now, while the script runs: document.currentScript is only set during that.
 const scriptUrl = document.currentScript?.src ?? document.baseURI;
-let mermaid = null;
-const loadMermaid = () => {
-  // A failed load is forgotten, so that the next diagram tries again.
-  mermaid ??= import(new URL("islands/mermaid.js", scriptUrl).href).then(
-    (module) => module.default,
-    (error) => {
-      mermaid = null;
+// A module imported the first time it is needed. A failed load is
+// forgotten, so that the next island tries again.
+const lazily = (path) => {
+  let loading = null;
+  return () => {
+    loading ??= import(new URL(path, scriptUrl).href).catch((error) => {
+      loading = null;
       throw error;
-    },
-  );
-  return mermaid;
+    });
+    return loading;
+  };
 };
+const loadMermaid = lazily("islands/mermaid.js");
+const loadTikz = lazily("islands/tikz.js");
 
 // How many times each element has been asked to render. Mermaid renders
 // asynchronously, so a diagram can finish after the element was asked for
@@ -93,11 +98,34 @@ let diagrams = 0;
 const renderMermaid = async (element, source) => {
   const generation = nextGeneration(element);
   try {
-    const renderer = await loadMermaid();
+    const renderer = (await loadMermaid()).default;
     const { svg, bindFunctions } = await renderer.render(`wiki-mermaid-${++diagrams}`, String(source));
     if (!isCurrent(element, generation)) return;
     element.innerHTML = svg;
     bindFunctions?.(element);
+  } catch (error) {
+    if (isCurrent(element, generation)) showError(element, error);
+  }
+};
+
+// A TikZ picture: `source` as the author wrote it, `preamble` and `picture`
+// the TeX that draws it (Wiki.Core.Markdown.Tikz). TeX's error is shown
+// under the source, so that the author sees both.
+const renderTikz = async (element, source, preamble, picture) => {
+  const generation = nextGeneration(element);
+  try {
+    const tikz = await loadTikz();
+    const drawing = await tikz.draw(String(preamble), String(picture), () => isCurrent(element, generation));
+    if (drawing === null || !isCurrent(element, generation)) return;
+    if (drawing.svg) {
+      element.replaceChildren(tikz.picture(drawing.svg));
+    } else {
+      const shown = document.createElement("pre");
+      shown.className = "wiki-tikz-source";
+      shown.textContent = String(source);
+      showError(element, drawing.error);
+      element.prepend(shown);
+    }
   } catch (error) {
     if (isCurrent(element, generation)) showError(element, error);
   }
@@ -124,4 +152,4 @@ const highlight = (element, language, code) => {
   }
 };
 
-globalThis.wikiIslands = Object.freeze({ renderMath, renderMermaid, highlight });
+globalThis.wikiIslands = Object.freeze({ renderMath, renderMermaid, renderTikz, highlight });

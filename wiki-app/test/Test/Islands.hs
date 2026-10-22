@@ -24,6 +24,10 @@ spec = describe "Wiki.App.Islands, prerendered" $ do
     renderToHtml Islands.component (Mermaid "graph LR\n  a --> b")
       `shouldReturn` "<div class=\"wiki-mermaid\">graph LR\n  a --&gt; b</div>"
 
+  it "shows a TikZ picture as its source, as written" $
+    renderToHtml Islands.component (Tikz "\\draw (0,0) -- (1,1) node {$a<b$};")
+      `shouldReturn` "<div class=\"wiki-tikz\">\\draw (0,0) -- (1,1) node {$a&lt;b$};</div>"
+
   it "shows code as plain text, escaped" $
     renderToHtml Islands.component (CodeBlock (Just "haskell") "x < y && y > z")
       `shouldReturn` "<pre class=\"wiki-code\">x &lt; y &amp;&amp; y &gt; z</pre>"

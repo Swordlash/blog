@@ -1,7 +1,8 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | Islands: the parts of a page a JavaScript library draws. Mathematics
--- (KaTeX), diagrams (Mermaid) and highlighted code (highlight.js) each render
+-- (KaTeX), diagrams (Mermaid), TikZ pictures (TikZJax) and highlighted code
+-- (highlight.js) each render
 -- as one element that Halogen creates, holds by ref and never looks inside:
 -- it has no children in the virtual DOM, so no render touches what the
 -- library wrote there.
@@ -29,6 +30,7 @@ import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element)
 import Wiki.App.Islands.Monad (MathMode (..), MonadIslands (..))
+import Wiki.Core.Markdown.Tikz (tikzDocument)
 
 -- | An island and its source.
 data Island
@@ -38,6 +40,8 @@ data Island
     MathDisplay Text
   | -- | A Mermaid diagram's source, as a @mermaid@ fence.
     Mermaid Text
+  | -- | A TikZ picture's source, as a @tikz@ fence.
+    Tikz Text
   | -- | Code, in a language if the fence names one.
     CodeBlock (Maybe Text) Text
   deriving stock (Eq, Show)
@@ -69,6 +73,7 @@ component =
       MathInline _ -> [hh|<span ref={{ ref }} class="wiki-math wiki-math-inline"></span>|]
       MathDisplay _ -> [hh|<div ref={{ ref }} class="wiki-math wiki-math-display"></div>|]
       Mermaid _ -> [hh|<div ref={{ ref }} class="wiki-mermaid"></div>|]
+      Tikz _ -> [hh|<div ref={{ ref }} class="wiki-tikz"></div>|]
       CodeBlock _ _ -> [hh|<pre ref={{ ref }} class="wiki-code"></pre>|]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
@@ -95,4 +100,7 @@ component =
       -- it runs off the loop, and the page goes on meanwhile. A newer
       -- input's drawing can overtake it; islands.js keeps the newer one.
       Mermaid source -> lift (renderMermaid source element)
+      -- As a diagram: TeX's files are fetched the first time, and TeX runs
+      -- in a worker.
+      Tikz source -> lift (renderTikz source (tikzDocument source) element)
       CodeBlock language code -> H.liftEffect (highlightCode language code element)

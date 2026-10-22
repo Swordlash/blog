@@ -62,6 +62,7 @@ spec = describe "Wiki.App.Demo" $ do
           , ("an alert", "> [!NOTE]")
           , ("a wiki link", "[[")
           , ("a mermaid diagram", "```mermaid")
+          , ("a TikZ picture", "```tikz")
           , ("an image by URL", "](https://upload.wikimedia.org/wikipedia/commons/thumb/")
           , ("a video by URL", ".webm)")
           , ("an attachment", "](attachment:")

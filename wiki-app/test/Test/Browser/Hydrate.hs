@@ -29,7 +29,7 @@ $( browserJS
 -- | Every element of the shell, but what is inside an island, which its
 -- library fills after the shell has adopted it.
 adoptable :: Text
-adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-code *)"
+adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-tikz *, .wiki-code *)"
 
 -- | A container holding the shell's HTML at a route, as someone, as a page
 -- rendered ahead of the program holds it.

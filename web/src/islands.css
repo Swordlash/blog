@@ -16,6 +16,27 @@
   white-space: pre-wrap;
 }
 
+.wiki-tikz {
+  overflow-x: auto;
+  text-align: center;
+  /* Until it is drawn (a prerendered page), a picture shows as its source. */
+  white-space: pre-wrap;
+  /* No color of its own: TeX's black is drawn in currentColor
+     (web/src/tikz.js), so a picture takes the text's colour, light or dark. */
+}
+
+.wiki-tikz > svg {
+  /* TeX sizes a picture in points; a wide one is scaled down to the column. */
+  max-width: 100%;
+  height: auto;
+}
+
+.wiki-tikz-source {
+  /* A picture that does not compile: its source, with TeX's error under it. */
+  margin: 0 0 0.5em;
+  text-align: left;
+}
+
 .wiki-code {
   overflow-x: auto;
 }

@@ -83,4 +83,4 @@ isIsland node = do
   attributes <- N.attributeList node
   properties <- N.propertyList node
   let classes = concatMap T.words ([v | ((_, "class"), v) <- attributes] <> [v | ("className", v) <- properties])
-  pure (any (`elem` ["wiki-math", "wiki-mermaid", "wiki-code"]) classes)
+  pure (any (`elem` ["wiki-math", "wiki-mermaid", "wiki-tikz", "wiki-code"]) classes)
