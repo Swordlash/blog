@@ -341,13 +341,24 @@ try {
   await arrive({ path: "/s/blog/p/hello-world/edit/", view: "editor", crumb: "Edit" }, "the editor");
   const textarea = page.locator("#app .editor-text");
   await textarea.press("Control+End");
-  await textarea.pressSequentially("\n\n## Smoke test\n\nWritten by $x^2$.");
+  await textarea.pressSequentially("\n\n## Smoke test\n\nWritten by ");
+  // A toolbar shortcut, whose placeholder is selected for the typing.
+  await textarea.press("Control+b");
+  await textarea.pressSequentially("Ada");
+  await textarea.press("End");
+  await textarea.pressSequentially(" with $x^2$.");
+  // The Markdown is shown alone until the preview is asked for, which
+  // replaces it; Save is still there.
+  assert.ok(!(await page.locator("#app .editor-preview").isVisible()), "the preview shows before it is asked for");
+  await page.locator("#app .editor-show-preview").click();
   await page.locator("#app .editor-preview h2", { hasText: "Smoke test" }).waitFor({ timeout });
+  await page.locator("#app .editor-preview strong", { hasText: "Ada" }).waitFor({ timeout });
   await page.locator("#app .editor-preview .wiki-math-inline .katex").last().waitFor({ timeout });
+  assert.ok(!(await textarea.isVisible()), "the Markdown beside the preview shown on its own");
   await page.locator("#app .editor-form button.primary").click();
   await arrive({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text: "Smoke test" }, "the page saved");
   await samePage("editing");
-  console.log("ok: the editor previews what is typed, with its formulas, and saves it");
+  console.log("ok: the editor formats from a shortcut, previews what is typed, with its formulas, and saves it");
 
   // Search from the keyboard: "/" to the box, words, an arrow and Enter.
   // "/" is a character to type in a field, so nothing is focused first.
@@ -472,19 +483,24 @@ try {
   assert.ok(await fits(), "a page is wider than a phone");
   assert.ok(await phone.locator("#app .search-input").isVisible(), "no search box on a phone");
   assert.ok(await phone.locator("#app .user-switcher-toggle").isVisible(), "no user menu on a phone");
-  // The editor shows one pane at a time there, with a switch between them.
+  // The editor shows the Markdown there, its toolbar wrapped to the width,
+  // and the preview instead of it when asked.
   await phone.locator("#app .user-switcher-toggle").tap();
   await phone.locator("#app .user-menu button[data-login=admin]").tap();
   await phone.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
   await settleAfterSwitch(phone);
   await phone.locator("#app .page-view .actions a", { hasText: "Edit" }).tap();
   await phone.locator("#app .editor-text").waitFor({ timeout });
-  assert.ok(await phone.locator("#app .editor-panes-switch").isVisible(), "no switch between the editor's panes");
-  assert.ok(!(await phone.locator("#app .editor-preview").isVisible()), "both panes at once on a phone");
-  await phone.locator("#app .editor-panes-switch button", { hasText: "Preview" }).tap();
+  assert.ok(await phone.locator("#app .editor-toolbar").isVisible(), "no toolbar on a phone");
+  assert.ok(!(await phone.locator("#app .editor-side-by-side").isVisible()), "a side by side preview offered on a phone");
+  assert.ok(await fits(), "the editor is wider than a phone");
+  await phone.locator("#app .editor-show-preview").tap();
   await phone.locator("#app .editor-preview .page-body h1").waitFor({ timeout });
   assert.ok(!(await phone.locator("#app .editor-text").isVisible()), "the Markdown beside the preview on a phone");
-  assert.ok(await fits(), "the editor is wider than a phone");
+  assert.ok(await fits(), "the editor's preview is wider than a phone");
+  await phone.locator("#app .editor-back").tap();
+  await phone.locator("#app .editor-text").waitFor({ timeout });
+  assert.ok(!(await phone.locator("#app .editor-preview").isVisible()), "the preview stays after Back to editing");
   // A page's source wraps its long lines rather than widening the page.
   await load(phone, "/s/docs/p/tour/source/");
   await phone.locator("#app .source-text").waitFor({ timeout });

@@ -17,6 +17,38 @@ address (`/s/docs/p/~source/`), where before it was `source`. The prerender
 writes each page's source as well, so a static host serves it at its address.
 `Wiki.App.Browser` has `copyText`, the clipboard behind the button.
 
+The editor has a toolbar above the Markdown: bold, italic, strikethrough,
+heading (each press a level smaller, then none), bulleted, numbered and task
+lists, quote, inline code, code block, link, image or attachment (the
+upload, for a page that can have attachments), table, inline and display
+math, a Mermaid diagram, a horizontal rule, and a menu of HTML elements
+(highlight, keyboard key, superscript, subscript, underline, small print, a
+collapsible section). A button wraps the selection, unwraps one already
+wrapped, or puts in a placeholder selected for the typing; the edits are
+`wiki-core`'s `Wiki.Core.Markdown.Edit`, and the browser's undo takes each
+back as one step. Shortcuts: Ctrl/Cmd+B, I, K and E, Ctrl/Cmd+Shift+8 and 7
+for the lists, Ctrl/Cmd+Alt+P for the preview; each button's title names
+its own. The editor's keys, its drag-over and its drop are handled in their
+listeners with haskell-halogen's `HE.preventingDefault`, so Ctrl+K and
+Ctrl+E no longer reach the browser and nothing depends on the component
+being free when the key arrives.
+
+The editor shows the Markdown alone at every width. "Show preview" replaces
+it with the draft as readers will see it, "Back to editing" returns to the
+Markdown with its text, cursor, undo and scroll as they were, and Save and
+Cancel are there in both. A "Side by side preview" checkbox brings back the
+two panes on a wide screen and is remembered by the browser (local storage,
+under `editor-side-by-side`); the narrow screen's Markdown/Preview switch is
+gone. The editor and the shell now ask for `MonadBrowserDOM`. `kbd`, `mark`
+and `details` in a page have a look of their own.
+
+`Wiki.App.Editor.Browser` changed with it: `takeFiles` is now
+`droppedFiles` (pure, for a drop's listener) or `chosenFiles`, then
+`pickedFiles`; `editorKey` is pure and gives `Maybe EditorKey`; new are
+`applyCommand`, `focusElement` and `clickElement`.
+
+haskell-halogen is pinned at `08f9093`.
+
 Every page ends with a footer, "Built with haskell-halogen", the name a link to
 haskell-halogen's repository; the prerendered pages have it too.
 

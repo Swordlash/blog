@@ -1,7 +1,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The editor: a page's title and Markdown on the left, the page as it will
--- read on the right, and its attachments below.
+-- | The editor: a page's title, a toolbar, the Markdown, and its attachments
+-- below; the page as it will read on demand.
 --
 -- It edits a page that exists ('Existing') or one that does not yet
 -- ('New'), and holds the draft until it is saved: 'savePage' against the
@@ -9,12 +9,39 @@
 -- one is refused as a 'Conflict' and shown in place, with the draft kept;
 -- or 'createPage'. Once saved it tells the shell, which goes to the page.
 --
--- The preview ("Wiki.App.View.Preview") follows the draft about
--- 'previewDelay' after the typing stops: each change forks a wait, killing
--- the one before, and the wait that is not killed hands the draft on. The
--- preview is a child component, so a keystroke re-renders the textarea and
--- nothing of the preview; its islands keep their slots, keyed by their
--- source, and only one whose source changed is drawn again.
+-- The Markdown is shown alone by default, at every width (decision 10 as
+-- amended). "Show preview" ('ShowPreview') replaces the editing view with
+-- the draft rendered ("Wiki.App.View.Preview"), with "Back to editing" and
+-- Save and Cancel still there: a change of the editor's state, not a route,
+-- since the draft is not in the address. The title and the textarea stay
+-- mounted while hidden, so that their text, the selection, the undo stack
+-- and the scroll are where they were on the way back. A "Side by side
+-- preview" checkbox brings back the two panes on a wide screen; the choice
+-- is kept per browser in local storage, read in 'Initialize', after the
+-- first render, so that the first render is the same in the browser as
+-- where nothing is stored (a prerender).
+--
+-- The preview is mounted the first time it is shown and kept from then on,
+-- hidden while the Markdown is shown alone: drawing a page's diagrams again
+-- each time the preview is shown would cost more than keeping them. It
+-- follows the draft only while it can be seen beside the Markdown, about
+-- 'previewDelay' after the typing stops (each change forks a wait, killing
+-- the one before, and the wait that is not killed hands the draft on);
+-- shown on its own, it takes the draft as it is at once. It is a child
+-- component, so a keystroke re-renders the textarea and nothing of the
+-- preview; its islands keep their slots, keyed by their source, and only one
+-- whose source changed is drawn again.
+--
+-- The toolbar's commands are pure ("Wiki.Core.Markdown.Edit"): a button or
+-- a shortcut reads the textarea's text and selection, applies the command,
+-- and writes the change back as an edit the browser's undo takes back, with
+-- the input event typing would make, so the draft and the preview learn of
+-- it as of any other keystroke ("Wiki.App.Editor.Browser"). The keys the
+-- editor answers to are decided in the keydown's listener, which keeps the
+-- browser from acting on them (Ctrl+K and Ctrl+E have defaults of their
+-- own) while the event is dispatched, whatever the component is busy with;
+-- so are a drag's and a drop's, and a drop's files are taken there, as the
+-- browser empties the drop once it has been dispatched.
 --
 -- Files dropped onto the editor, or chosen with its file input, are read
 -- into bytes in the browser ("Wiki.App.Editor.Browser"), uploaded to the
@@ -60,14 +87,27 @@ import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
-import Web.Event.Event (Event, preventDefault)
-import Web.HTML.Event.DragEvent (DragEvent)
-import Web.HTML.Event.DragEvent qualified as DragEvent
-import Web.UIEvent.KeyboardEvent (KeyboardEvent)
-import Web.UIEvent.KeyboardEvent qualified as KeyboardEvent
+import Web.Event.Event (Event, EventType (..))
+import Web.Storage.Storage (StorageKind (..))
+import Web.Storage.Storage qualified as Storage
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
-import Wiki.App.Editor.Browser (EditorKey (..), PickedFile (..), editorKey, guardUnload, insertAtCursor, readPickedFile, takeFiles)
+import Wiki.App.Editor.Browser
+  ( EditorKey (..)
+  , Files
+  , PickedFile (..)
+  , applyCommand
+  , chosenFiles
+  , clickElement
+  , droppedFiles
+  , editorKey
+  , focusElement
+  , guardUnload
+  , insertAtCursor
+  , pickedFiles
+  , readPickedFile
+  )
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Body qualified as Body
@@ -76,6 +116,7 @@ import Wiki.App.View.Preview qualified as Preview
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Id (AttachmentId, PageId)
 import Wiki.Core.Markdown (attachmentReference)
+import Wiki.Core.Markdown.Edit (Command (..), HtmlTag (..), htmlTagLabel, htmlTagName)
 import Wiki.Core.Page (Page)
 -- Qualified, so that its fields (read with a dot) are not confused with the
 -- draft's of the same names.
@@ -126,8 +167,9 @@ data Draft = Draft
 
 data Loaded = Loading | Failed WikiError | Ready Draft
 
--- | Which pane a narrow screen shows; a wide one shows both.
-data Pane = SourcePane | PreviewPane
+-- | What the editor shows: the Markdown (beside the preview, if the reader
+-- asked for both), or the preview alone.
+data Mode = Editing | Previewing
   deriving stock (Eq)
 
 data State = State
@@ -141,8 +183,16 @@ data State = State
   -- ^ How many files are being read or uploaded.
   , dropping :: Bool
   -- ^ Whether files are being dragged over the editor.
-  , pane :: Pane
+  , mode :: Mode
+  , sideBySide :: Bool
+  -- ^ Whether the preview is shown beside the Markdown on a wide screen.
+  , previewMounted :: Bool
+  -- ^ Whether the preview has been shown yet: it is mounted then, and kept.
+  , htmlMenu :: Bool
+  -- ^ Whether the toolbar's menu of HTML elements is open.
   , textarea :: H.RefLabel
+  , fileInput :: H.RefLabel
+  , backButton :: H.RefLabel
   , loads :: Int
   -- ^ How many times the page has been loaded: the key of the title and the
   -- textarea, which a reload replaces.
@@ -155,15 +205,25 @@ data Action
   | Followed (Follow Route)
   | TypedTitle Text
   | Typed Text
-  | Key KeyboardEvent
-  | Submit Event
+  | Key EditorKey
+  | Submit
   | Reload
   | Picked Event
-  | DragOver DragEvent
-  | DragLeave DragEvent
-  | Dropped DragEvent
+  | DragOver
+  | DragLeave
+  | Dropped Files
   | Insert Attachment
-  | Show Pane
+  | Run Command
+  | AttachOrImage
+  | ToggleHtmlMenu
+  | CloseHtmlMenu
+  | ShowPreview
+  | BackToEditing
+  | SideBySide Bool
+
+-- | Where the browser keeps whether the preview goes beside the Markdown.
+sideBySideKey :: Text
+sideBySideKey = "editor-side-by-side"
 
 -- | How long the typing has to stop for before the preview follows: long
 -- enough not to re-render a long page on every keystroke, short enough to
@@ -173,13 +233,15 @@ previewDelay = 200_000
 
 component
   :: forall m
-   . (MonadWiki m, MonadIslands m, MonadUUID m, MonadIO m)
+   . (MonadWiki m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
   => H.Component Query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
       { initialState = \input -> do
           textarea <- H.newRefLabel "editor-text"
+          fileInput <- H.newRefLabel "editor-files"
+          backButton <- H.newRefLabel "editor-back"
           pure
             State
               { input
@@ -189,8 +251,13 @@ component =
               , saving = False
               , uploading = 0
               , dropping = False
-              , pane = SourcePane
+              , mode = Editing
+              , sideBySide = False
+              , previewMounted = False
+              , htmlMenu = False
               , textarea
+              , fileInput
+              , backButton
               , loads = 0
               }
       , render
@@ -225,36 +292,121 @@ component =
     signInHint :: H.ComponentHTML Action Slots m
     signInHint = [hh|<p class="error sign-in-hint" role="alert">You are not signed in. To edit pages, choose who you are at the top right.</p>|]
 
+    -- The form holds both views, the Markdown's and the preview's, and
+    -- the style sheet shows one of them (or both side by side) by the
+    -- form's classes, so that what is hidden stays mounted.
     editing :: State -> Draft -> H.ComponentHTML Action Slots m
     editing st draft =
       [hh|
-        <form class="editor-form" onSubmit={{ Submit }} onKeyDown={{ Key }}>
+        <form
+          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}"
+          {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}
+          {{ HE.preventingDefault (HE.handler' (EventType "keydown") (keyAction st)) }}
+        >
           <div class="editor-bar">
             {{ titleField st draft }}
             <div class="editor-actions">
+              <button type="button" class="editor-back" hidden={{ st.mode /= Previewing }} onClick={{ const BackToEditing }} {{ HP.ref st.backButton }}>Back to editing</button>
               <button type="submit" class="primary" disabled={{ st.saving }}>{{ if st.saving then "Saving…" else "Save" :: Text }}</button>
               {{ Router.link st.input.context.router Followed (leaving st.input) [HP.classes ["button", "editor-cancel"]] [HH.text "Cancel"] }}
               <label class="button editor-attach{% if isNothing draft.page %} disabled{% end %}">
                 Attach files
-                <input type="file" multiple disabled={{ isNothing draft.page }} onChange={{ Picked }}>
+                <input type="file" multiple disabled={{ isNothing draft.page }} onChange={{ Picked }} {{ HP.ref st.fileInput }}>
               </label>
-              <div class="editor-panes-switch" role="group" aria-label="Show">{{ paneButton st SourcePane "Markdown" }}{{ paneButton st PreviewPane "Preview" }}</div>
             </div>
           </div>
-          {{ problemView st }}
+          {{ problemView st }}{{ toolbar Bar {menuOpen = st.htmlMenu, twoPanes = st.sideBySide, attaches = isJust draft.page} }}
           <div
-            class="editor-panes{% if st.dropping %} dropping{% end %}{% if st.pane == PreviewPane %} showing-preview{% end %}"
-            onDragOver={{ DragOver }}
-            onDragLeave={{ DragLeave }}
-            onDrop={{ Dropped }}
+            class="editor-panes{% if st.dropping %} dropping{% end %}"
+            {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
+            {{ HE.handler' (EventType "dragleave") (const (Just DragLeave)) }}
+            {{ HE.preventingDefault (HE.handler' (EventType "drop") dropped) }}
           >
-            {{ source st draft }}
-            <div class="editor-preview" aria-label="Preview">
-              {{ HH.slot_ "preview" () Preview.component Preview.Input {place = placeOf st.input draft, title = draft.shownTitle, body = draft.shownBody} }}
-            </div>
+            {{ source st draft }}{{ previewPane st draft }}
           </div>
           {{ attachmentList draft }}
         </form>
+      |]
+
+    -- A drop's files, taken in its listener and forced there: once the
+    -- browser has dispatched the drop, it has none.
+    dropped :: Event -> Maybe Action
+    dropped ev = Just $! Dropped (droppedFiles ev)
+
+    -- The keys the editor answers to, decided in the keydown's listener,
+    -- which keeps the browser from acting on them; any other key makes no
+    -- action and is the browser's. Escape is the editor's only while the
+    -- menu is open, to close it.
+    keyAction :: State -> Event -> Maybe Action
+    keyAction st ev = case editorKey ev of
+      Just EscapeKey | st.htmlMenu -> Just CloseHtmlMenu
+      Just EscapeKey -> Nothing
+      Just key -> Just (Key key)
+      Nothing -> Nothing
+
+    previewPane :: State -> Draft -> Maybe (H.ComponentHTML Action Slots m)
+    previewPane st draft
+      | st.previewMounted =
+          Just
+            [hh|
+              <div class="editor-preview" aria-label="Preview">
+                {{ HH.slot_ "preview" () Preview.component Preview.Input {place = placeOf st.input draft, title = draft.shownTitle, body = draft.shownBody} }}
+              </div>
+            |]
+      | otherwise = Nothing
+
+    -- The toolbar: its commands in groups, then the preview's controls.
+    -- It changes with little of the state ('Bar'), so it is rendered and
+    -- diffed again only when that changes, not on every keystroke.
+    toolbar :: Bar -> H.ComponentHTML Action Slots m
+    toolbar = HH.memoized (==) toolbarOf
+
+    toolbarOf :: Bar -> H.ComponentHTML Action Slots m
+    toolbarOf bar =
+      [hh|
+        <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
+          <div class="toolbar-group">{{ map toolButton textTools }}</div>
+          <div class="toolbar-group">{{ map toolButton listTools }}</div>
+          <div class="toolbar-group">{{ map toolButton codeTools }}{{ imageButton bar }}{{ toolButton tableTool }}</div>
+          <div class="toolbar-group">{{ map toolButton blockTools }}{{ htmlMenu bar }}</div>
+          <div class="toolbar-end">
+            <label class="editor-side-by-side">
+              <input type="checkbox" checked={{ bar.twoPanes }} {{ HE.onChecked SideBySide }}>
+              Side by side preview
+            </label>
+            <button type="button" class="editor-show-preview" title="Show preview (Ctrl+Alt+P)" onClick={{ const ShowPreview }}>{{ icon previewIcon }}<span>Show preview</span></button>
+          </div>
+        </div>
+      |]
+
+    toolButton :: Tool -> H.ComponentHTML Action Slots m
+    toolButton tool =
+      [hh|<button type="button" class="tool" title={{ toolTitle tool }} aria-label={{ tool.label }} onClick={{ const (Run tool.command) }}>{{ icon tool.icon }}</button>|]
+
+    -- An image: an attachment, through the file input, for a page that can
+    -- have attachments; one by its address for a new page, which cannot yet.
+    imageButton :: Bar -> H.ComponentHTML Action Slots m
+    imageButton bar =
+      [hh|<button type="button" class="tool" title={{ title }} aria-label="Image or attachment" onClick={{ const AttachOrImage }}>{{ icon imageIcon }}</button>|]
+      where
+        title :: Text
+        title
+          | bar.attaches = "Image or attachment: upload a file"
+          | otherwise = "Image by its address (save the page first to attach files)"
+
+    htmlMenu :: Bar -> H.ComponentHTML Action Slots m
+    htmlMenu bar =
+      [hh|
+        <div class="toolbar-menu-holder">
+          <button type="button" class="tool" title="HTML" aria-label="HTML" aria-haspopup="menu" aria-expanded={{ ariaBool bar.menuOpen }} onClick={{ const ToggleHtmlMenu }}>{{ icon htmlIcon }}</button>
+          {% if bar.menuOpen %}
+            <div class="toolbar-menu" role="menu" aria-label="HTML">
+              {% for tag in htmlTags %}
+                <button type="button" role="menuitem" onClick={{ const (Run (Html tag)) }}>{{ htmlTagLabel tag }}<code>{{ "<" <> htmlTagName tag <> ">" :: Text }}</code></button>
+              {% end %}
+            </div>
+          {% end %}
+        </div>
       |]
 
     -- The title's input, keyed by the load (see the module's comment). Its
@@ -304,10 +456,6 @@ component =
     loadKey :: State -> Text
     loadKey st = "load-" <> show st.loads
 
-    paneButton :: State -> Pane -> Text -> H.ComponentHTML Action Slots m
-    paneButton st pane label =
-      [hh|<button type="button" aria-pressed={{ ariaBool (st.pane == pane) }} onClick={{ const (Show pane) }}>{{ label }}</button>|]
-
     problemView :: State -> Maybe (H.ComponentHTML Action Slots m)
     problemView st = case st.problem of
       Nothing -> Nothing
@@ -354,7 +502,13 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
-      Initialize -> load
+      -- After the first render, which is therefore the same whatever the
+      -- browser remembers.
+      Initialize -> do
+        remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
+        when (remembered == Just (Right True)) $
+          modify (\st -> st {sideBySide = True, previewMounted = True})
+        load
       -- A pending wait is killed with the component; the browser's warning
       -- is not, so it is let go here.
       Finalize -> H.liftEffect (guardUnload False)
@@ -364,33 +518,80 @@ component =
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       TypedTitle t -> edit (\d -> d {title = t})
       Typed t -> edit (\d -> d {body = t})
-      Key ev -> do
-        let event = KeyboardEvent.toEvent ev
-        H.liftEffect (editorKey event) >>= \case
-          SaveKey -> H.liftEffect (preventDefault event) >> save
-          IndentKey -> do
-            H.liftEffect (preventDefault event)
-            insert "  "
-          OtherKey -> pass
-      Submit ev -> H.liftEffect (preventDefault ev) >> save
+      Key key -> case key of
+        SaveKey -> save
+        IndentKey -> insert "  "
+        CommandKey command -> run command
+        PreviewKey ->
+          gets (\st -> st.mode) >>= \case
+            Editing -> showPreview
+            Previewing -> backToEditing
+        EscapeKey -> closeHtmlMenu
+      Submit -> save
       Reload -> do
         cancelPreview
         modify (\st -> st {problem = Nothing})
         load
-      Picked ev -> H.liftEffect (takeFiles ev) >>= upload
-      DragOver ev -> do
-        -- Without this the browser would not let the files be dropped here.
-        H.liftEffect (preventDefault (DragEvent.toEvent ev))
-        unlessM (gets (\st -> st.dropping)) $ modify (\st -> st {dropping = True})
-      DragLeave _ -> modify (\st -> st {dropping = False})
-      Dropped ev -> do
-        -- Otherwise the browser would open the file in place of the page.
-        H.liftEffect (preventDefault (DragEvent.toEvent ev))
-        files <- H.liftEffect (takeFiles (DragEvent.toEvent ev))
+      Picked ev -> H.liftEffect (chosenFiles ev >>= pickedFiles) >>= upload
+      -- The listener has let the files be dropped here, by preventing the
+      -- drag's default.
+      DragOver -> unlessM (gets (\st -> st.dropping)) $ modify (\st -> st {dropping = True})
+      DragLeave -> modify (\st -> st {dropping = False})
+      -- The listener has kept the browser from opening the file in place
+      -- of the page, and taken its files.
+      Dropped files -> do
         modify (\st -> st {dropping = False})
-        upload files
+        H.liftEffect (pickedFiles files) >>= upload
       Insert a -> insert (attachmentReference a.name a.mediaType)
-      Show pane -> modify (\st -> st {pane})
+      Run command -> run command
+      AttachOrImage ->
+        gets (\st -> (st.loaded, st.fileInput)) >>= \case
+          (Ready Draft {page = Just _}, ref) -> do
+            closeHtmlMenu
+            H.getRef ref >>= traverse_ (H.liftEffect . clickElement)
+          _ -> run Image
+      ToggleHtmlMenu -> modify (\st -> st {htmlMenu = not st.htmlMenu})
+      CloseHtmlMenu -> closeHtmlMenu
+      ShowPreview -> showPreview
+      BackToEditing -> backToEditing
+      SideBySide wanted -> do
+        modify (\st -> st {sideBySide = wanted, previewMounted = st.previewMounted || wanted})
+        if wanted then catchUp else cancelPreview
+        H.liftEffect (Storage.setItem LocalStorage sideBySideKey wanted)
+
+    -- A toolbar command on the textarea; its input event, handled before
+    -- this returns, brings the change into the draft.
+    run :: Command -> H.HalogenM State Action Slots ViewOutput m ()
+    run command = do
+      closeHtmlMenu
+      st <- get
+      when (st.mode == Editing && not st.saving) $
+        H.getRef st.textarea >>= traverse_ (\element -> H.liftEffect (applyCommand element command))
+
+    closeHtmlMenu :: H.HalogenM State Action Slots ViewOutput m ()
+    closeHtmlMenu = whenM (gets (\st -> st.htmlMenu)) $ modify (\st -> st {htmlMenu = False})
+
+    -- The draft rendered on its own, as it is now, with the focus on the
+    -- way back.
+    showPreview :: H.HalogenM State Action Slots ViewOutput m ()
+    showPreview = do
+      catchUp
+      modify (\st -> st {mode = Previewing, previewMounted = True, htmlMenu = False})
+      gets (\st -> st.backButton) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
+
+    -- Back to the Markdown, which kept its text, selection and scroll while
+    -- hidden; the focus goes back to it, at its selection.
+    backToEditing :: H.HalogenM State Action Slots ViewOutput m ()
+    backToEditing = do
+      modify (\st -> st {mode = Editing})
+      gets (\st -> st.textarea) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
+
+    -- The preview shows the draft as it is now, without waiting for the
+    -- typing to stop.
+    catchUp :: H.HalogenM State Action Slots ViewOutput m ()
+    catchUp = do
+      cancelPreview
+      modifyDraft (\d -> d {shownTitle = d.title, shownBody = d.body})
 
     -- The page as it is now, or a new one's empty draft.
     load :: H.HalogenM State Action Slots ViewOutput m ()
@@ -414,7 +615,11 @@ component =
     edit f = do
       modifyDraft f
       syncGuard
-      schedulePreview
+      -- Only a preview that can be seen beside the Markdown follows the
+      -- typing; one shown on its own catches up when it is shown.
+      gets (\st -> st.sideBySide) >>= \case
+        True -> schedulePreview
+        False -> cancelPreview
 
     -- Hand the draft to the preview once the typing has stopped for
     -- 'previewDelay': a wait of its own, which the next change kills.
@@ -569,3 +774,62 @@ placeOf input draft =
     }
   where
     placeholder = either (panic . show) identity (mkSlug "new-page")
+
+-- | What the toolbar shows depends on.
+data Bar = Bar
+  { menuOpen :: Bool
+  , twoPanes :: Bool
+  , attaches :: Bool
+  -- ^ Whether the page can have attachments yet.
+  }
+  deriving stock (Eq)
+
+-- | A toolbar button: the command it runs, what it is called, the shortcut
+-- that runs it too, and its icon (an SVG path in a 16 by 16 box, drawn as
+-- a line in the text's colour by the style sheet).
+data Tool = Tool {command :: Command, label :: Text, shortcut :: Maybe Text, icon :: Text}
+
+-- | What a button's title says: its name, and its shortcut.
+toolTitle :: Tool -> Text
+toolTitle tool = tool.label <> maybe "" (\k -> " (" <> k <> ")") tool.shortcut
+
+textTools, listTools, codeTools, blockTools :: [Tool]
+textTools =
+  [ Tool Bold "Bold" (Just "Ctrl+B") "M4.5 2.5h4a2.75 2.75 0 0 1 0 5.5h-4zM4.5 8h4.75a2.75 2.75 0 0 1 0 5.5H4.5z"
+  , Tool Italic "Italic" (Just "Ctrl+I") "M7 2.5h5M4 13.5h5M10 2.5l-4 11"
+  , Tool Strikethrough "Strikethrough" Nothing "M2 8h12M11.5 4.5c-.5-1.3-1.8-2-3.5-2-2 0-3.5 1-3.5 2.5 0 1.2 1 2 2.5 2.5M5 11c.4 1.5 1.7 2.5 3.3 2.5 2 0 3.3-1 3.3-2.5"
+  , Tool Heading "Heading (again for a smaller one, then none)" Nothing "M3 2.5v11M10 2.5v11M3 8h7M12.5 7.5l1.5-1v7"
+  ]
+listTools =
+  [ Tool BulletList "Bulleted list" (Just "Ctrl+Shift+8") "M6 4h8M6 8h8M6 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"
+  , Tool NumberedList "Numbered list" (Just "Ctrl+Shift+7") "M6 4h8M6 8h8M6 12h8M2 2.5l1-.5v3.5M2 9.5c.3-.6 1.7-.7 1.7.2 0 .7-1.7 1.3-1.7 2.3h1.8"
+  , Tool TaskList "Task list" Nothing "M2 2.5h3.5V6H2zM2 10.5l1.2 1.2 2.3-2.7M8 4.25h6M8 11h6"
+  , Tool Quote "Quote" Nothing "M2.5 3v10M6 4.5h7.5M6 8h7.5M6 11.5h5"
+  ]
+codeTools =
+  [ Tool InlineCode "Inline code" (Just "Ctrl+E") "M5.5 4 1.5 8l4 4M10.5 4l4 4-4 4"
+  , Tool CodeBlock "Code block" Nothing "M1.5 2.5h13v11h-13zM6 6 4 8l2 2M10 6l2 2-2 2"
+  , Tool Link "Link" (Just "Ctrl+K") "M6.8 9.2a2.8 2.8 0 0 0 4 0l2.2-2.2a2.8 2.8 0 0 0-4-4l-.9.9M9.2 6.8a2.8 2.8 0 0 0-4 0L3 9a2.8 2.8 0 0 0 4 4l.9-.9"
+  ]
+blockTools =
+  [ Tool InlineMath "Inline math" Nothing "M12.5 3h-8l4.5 5-4.5 5h8"
+  , Tool DisplayMath "Display math" Nothing "M1.5 2.5h13v11h-13zM11 5H5.5L8.5 8l-3 3H11"
+  , Tool Mermaid "Mermaid diagram" Nothing "M1.5 2.5h5v4h-5zM9.5 9.5h5v4h-5zM4 6.5v5h5.5"
+  , Tool HorizontalRule "Horizontal rule" Nothing "M1.5 8h13M4 4.5h8M4 11.5h8"
+  ]
+
+tableTool :: Tool
+tableTool = Tool Table "Table" Nothing "M1.5 2.5h13v11h-13zM1.5 6h13M6 2.5v11M10.5 2.5v11"
+
+imageIcon, htmlIcon, previewIcon :: Text
+imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
+htmlIcon = "M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11"
+previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
+
+-- | The HTML elements the toolbar's menu offers.
+htmlTags :: [HtmlTag]
+htmlTags = [minBound .. maxBound]
+
+-- | An icon: one SVG path, drawn by the style sheet.
+icon :: Text -> HH.HTML w i
+icon d = [hh|<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path {{ attr "d" d }}></path></svg>|]

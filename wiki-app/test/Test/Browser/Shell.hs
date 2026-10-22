@@ -5,13 +5,14 @@ module Test.Browser.Shell (spec) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Text qualified as T
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start)
 import Test.Hspec.Halogen
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
-spec :: forall m -> (MonadBrowserTest m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
 spec m = do
   it "lists the public spaces on the front page for someone not signed in" $ runPage $ do
     ui <- start m Nothing Home

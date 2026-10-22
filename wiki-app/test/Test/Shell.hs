@@ -94,12 +94,17 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["no-such-page"]))
     html `contains` "class=\"error error-not-found\""
 
-  it "opens the editor on a page with its Markdown in the textarea and its preview beside it" $ do
+  it "opens the editor on a page with its Markdown in the textarea, alone, under a toolbar" $ do
     Rendered {html, title} <- render (as (Just "user-editor")) (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     title `shouldBe` "Edit · Hello, world · Wiki"
     html `contains` "<h1 class=\"editor-heading\">Editing Hello, world</h1>"
     html `contains` "class=\"editor-text\"># Hello, world\n\nThis is the first post"
-    html `contains` "<div class=\"preview\"><article class=\"page-body\"><h1 id=\"hello-world\">Hello, world</h1>"
+    html `contains` "</div><div aria-label=\"Formatting\" class=\"editor-toolbar\" role=\"toolbar\">"
+    html `contains` "<button aria-label=\"Bold\" class=\"tool\" title=\"Bold (Ctrl+B)\" type=\"button\">"
+    html `contains` "<span>Show preview</span>"
+    -- The preview is drawn the first time it is asked for.
+    html `lacks` "<div class=\"preview\">"
+    html `contains` "<form class=\"editor-form\">"
     html `contains` "href=\"/s/blog/p/hello-world/\">Cancel</a>"
 
   it "asks someone not signed in to choose who they are before editing" $ do
