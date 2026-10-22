@@ -107,6 +107,18 @@ confirms it against reality and the plan is amended if it does not hold.
     browser backends. `MemWiki` then writes through to it, record by record, and
     reloads from it at start, so the demo keeps its edits across reloads with no
     server. The same store is where an offline cache would go later.
+13. **The editor is for people who do not know Markdown, and HTML in a page is
+    rendered through an allowlist.** The textarea stays the source of truth (decision
+    10), but a toolbar above it writes the Markdown for the author: a button wraps the
+    selection or inserts a template, with keyboard shortcuts, and the editing commands
+    are pure functions over text and a selection, tested natively, so the JavaScript
+    only moves the selection in and out. Raw HTML in Markdown (inline and block) is
+    rendered, not shown as text, by parsing it in Haskell and keeping only the elements
+    and attributes of an allowlist, turned into Halogen `HTML` values; never
+    `innerHTML`, so the rule that a page is always Halogen elements holds, and a script,
+    an event handler attribute or a `javascript:` link written into a page by a user
+    never runs. The allowlist is in `wiki-core`, shared by the preview, the prerender
+    and the server's render.
 10. **Markdown stays the source of truth.** The editor is a split view: a textarea with
     the Markdown on the left and the rendered page on the right, re-rendered on each
     change (debounced through `hooks`' debouncer). No WYSIWYG.
@@ -267,6 +279,43 @@ point of this phase.
   last writer of a record wins. Tests: native, `MemWiki` over `MemDOM` with the in-memory
   store (write, start a fresh `MemWiki` from the store, same state); browser, save a page
   in one mounted application, mount another from the same store, the page is there.
+- **WP1.12 Editor toolbar.** A toolbar above the editor's textarea, written with `hh`:
+  bold, italic, strikethrough, heading (cycles H1 to H3 and off), bulleted list,
+  numbered list, task list, quote, inline code, code block (fenced, cursor on the
+  language), link, image or attachment (opens WP1.6's upload), table (a three-column
+  template), inline and display math, a Mermaid block, a horizontal rule. A command on a
+  selection wraps it (`**text**`); on no selection inserts a placeholder and selects it
+  (`**bold text**` with the words selected, so typing replaces them); on a selection
+  already wrapped, unwraps it; a line command (lists, quote, heading) applies to every
+  line the selection touches and toggles off when every line already has it. The commands
+  are pure, `Wiki.Core.Markdown.Edit`: `apply :: Command -> Text -> Selection -> (Text,
+  Selection)`, with native tests per command (wrap, unwrap, placeholder, multi-line,
+  cursor position afterwards). The browser side reads the selection, applies, writes
+  with `setRangeText` and dispatches `input`, so the browser's undo stack and the preview
+  debounce both see one edit. Shortcuts: Ctrl/Cmd+B, I, K (link), E (code), Shift+7/8
+  (lists); the title of each button names its shortcut; buttons are inline SVG icons with
+  `aria-label`s and the toolbar wraps on a narrow screen. Browser tests: select a word,
+  click bold, the textarea has `**word**` and the preview a `<strong>`; a list button on
+  three lines; Ctrl+B with no selection leaves the placeholder selected.
+- **WP1.13 HTML in pages.** Render `RawHtml` and `RawHtmlBlock` instead of showing them
+  as text: `Wiki.Core.Markdown.Html` parses the HTML (`tagsoup`, pure Haskell, so it
+  builds for wasm; `html-parse` if tagsoup's HTML5 handling falls short, reported) and
+  keeps what an allowlist admits, as Halogen elements. Elements: formatting (`b`, `i`,
+  `em`, `strong`, `u`, `s`, `sub`, `sup`, `mark`, `small`, `abbr`, `kbd`, `code`, `span`,
+  `br`), structure (`div`, `p`, `details`, `summary`, `blockquote`, `pre`, `hr`, `ul`,
+  `ol`, `li`, `dl`, `dt`, `dd`, the `table` family, `figure`, `figcaption`), media (`img`,
+  `video`, `audio`, `source`). Attributes: `class`, `id`, `title`, `alt`, `width`,
+  `height`, `colspan`, `rowspan`, `open`, `controls`, `poster`, `start`, `href` and `src`
+  only with `http:`, `https:`, `mailto:` or a relative address (an attachment's);
+  everything else dropped, so `script`, `style`, `iframe`, `on*` attributes, `javascript:`
+  and `data:` URLs never reach the page. Unclosed tags close as a browser would; what
+  CommonMark hands over as one raw block is parsed as one document, and Markdown inside an
+  HTML block stays as CommonMark defines it (not parsed). Native tests: the allowlist on
+  each element and attribute class, and the classics (`<script>`, `<img onerror>`,
+  `<a href="javascript:…">`, `<svg onload>`, nesting that never closes). `docs/markdown.md`
+  gains the HTML section with the list. Why an allowlist now, in a demo of one user: Phase 3
+  brings other editors and the renderer is shared with the server (WP2.6), so the rule has
+  to be in `wiki-core` from the first page that uses it.
 
 ### Phase 2: server and persistence
 
@@ -512,6 +561,10 @@ Amended by the planning session after each work package's report.
   has Web Storage only, so HH-1 adds `Web.Storage.IndexedDB` to its `core` (delegated now,
   independent of the Phase 1 merges) and WP1.11 makes `MemWiki` write through to it after
   WP1.10's pin bump.
+- **Toolbar and HTML in pages (owner's request):** decision 13, WP1.12 (toolbar over pure
+  editing commands) and WP1.13 (raw HTML rendered through an allowlist in `wiki-core`).
+  WP1.13 touches `wiki-core` only and can run beside WP1.9; WP1.12 waits for WP1.9's rule
+  on `hh`.
 - **Administration from localhost planned (owner's request):** decision 11 adds a
   loopback-only admin listener to `wiki-server`, where a user is marked as administrator
   without a login; an administrator then has the panel remotely. WP2.3 gains the listener,
