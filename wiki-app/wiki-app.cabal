@@ -8,6 +8,8 @@ maintainer:         mateusz.goslinowski@gmail.com
 category:           Web
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
+-- Embedded into the wasm binary at compile time by Halogen.JSBits.
+extra-source-files: jsbits/*.js
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built
 -- with (cabal.project makes them errors) and the extensions its code assumes.
@@ -50,10 +52,27 @@ common shared
 library
   import:           shared
   hs-source-dirs:   src
-  exposed-modules:  Wiki.App
+  exposed-modules:
+      Wiki.App
+      Wiki.App.Backend
+      Wiki.App.Backend.Mem
+      Wiki.App.Backend.Mem.State
+      Wiki.App.Backend.Rules
+      Wiki.App.Demo
   build-depends:
+      base,
+      base64-bytestring,
+      bytestring,
+      containers,
+      primitive,
       protolude,
-      haskell-halogen-core
+      text,
+      time,
+      transformers,
+      unliftio-core,
+      haskell-halogen-core,
+      haskell-halogen-jsbits,
+      wiki-core
 
 -- The application itself: a wasm reactor whose hs_start web/index.js calls.
 executable wiki-app
@@ -93,7 +112,8 @@ executable wiki-app-prerender
         wiki-app
 
 -- What the component renders, through Halogen.Static's in-memory document,
--- which exists natively only. In a browser, toolchain/smoke-test.mjs drives
+-- which exists natively only, and the backend's contract, run against the
+-- in-memory backend over IO. In a browser, toolchain/smoke-test.mjs drives
 -- the built page.
 test-suite wiki-app-test
   import:           shared
@@ -104,10 +124,22 @@ test-suite wiki-app-test
   if arch(wasm32)
     buildable: False
   else
-    other-modules:  Test.Hello
+    other-modules:
+        Test.Backend.Contract
+        Test.Backend.Mem
+        Test.Backend.Rules
+        Test.Demo
+        Test.Hello
     build-depends:
+        HUnit,
+        base,
+        base64-bytestring,
+        bytestring,
+        containers,
         hspec >= 2,
         protolude,
         text,
+        time,
         haskell-halogen-core,
-        wiki-app
+        wiki-app,
+        wiki-core
