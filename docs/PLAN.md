@@ -166,6 +166,15 @@ point of this phase.
   the demo (`npm run serve-wasm`, or the CI artifact), the Playwright smoke test grown
   into a gallery-style test of the built page (every route mounts, back/forward/reload
   work). Tag `v0.1.0-demo`.
+- **WP1.8 Search bar.** A search box in the shell's header that searches pages by title
+  and body, with a filter by space (one space and, by default, its subspaces; "all
+  spaces" otherwise), showing results as title, space path and a snippet around the
+  first match, each a link. It goes through a `searchPages :: SearchQuery -> m [SearchHit]`
+  method of `MonadWiki`, so the UI does not change when the server takes over the work:
+  `MemWiki` scans the pages the current user may view (case-insensitive substring match
+  on the Markdown source, or the AST's plain text), ranked by title match first. Keyboard:
+  focus with `/`, arrows and Enter to pick a result. Browser tests: typing narrows the
+  results, the space filter excludes the other spaces, a result navigates.
 
 ### Phase 2: server and persistence
 
@@ -195,6 +204,11 @@ Goal: the same app, with pages that survive a reload, served by one binary.
   empties `#app` and renders afresh, as haskell-halogen's examples do. The serverless
   demo keeps its build-time prerender and may hydrate too, if the API allows it with no
   server.
+- **WP2.7 Server-side search.** `HttpWiki.searchPages` calls `/api/v1/search`, backed by
+  SQLite FTS5 over title and body (a contentless or external-content table kept in step by
+  triggers on page saves), with the same space filter and snippets from FTS5's `snippet()`,
+  ranked by `bm25`. Hidden from users who may not view a space. The contract tests of WP1.4
+  gain search cases that both backends pass.
 
 ### Phase 3: authentication and authorisation
 
@@ -216,7 +230,6 @@ Goal: who you are decides what you see and may do, on both sides.
 
 Candidates, ordered by likely value; each becomes a work package when it comes up.
 
-- Full-text search (SQLite FTS5) with a search box in the shell.
 - Export (PDF, DOCX, HTML) and import (Confluence XHTML/HTML, DOCX) with pandoc on the
   server.
 - Comments on pages, labels, favourites, recently viewed.
@@ -322,3 +335,6 @@ Amended by the planning session after each work package's report.
   delete and `public` need `AdministerSpace`; page and attachment writes need `Edit`.
   Attachments cross the backend interface as bytes; `MemWiki` is polymorphic in its base
   monad (`IO` in tests, `BrowserDOM` in the page) and has a demo-only `switchUser`.
+- **Owner's note (2026-10-22):** a search bar for pages with a filter by space is wanted;
+  planned as WP1.8 (client-side over `MonadWiki`) and WP2.7 (SQLite FTS5 behind the same
+  method).
