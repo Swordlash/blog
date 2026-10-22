@@ -775,8 +775,14 @@ Amended by the planning session after each work package's report.
   from `initialState`), 3 of 6 examples failed before, all pass after; one example states
   that an action-side `preventDefault` is too late. The th and hooks examples' forms
   fixed; hooks' `Extra.Actions.Events` helpers documented as action-side. Blog places with
-  the same race listed under WP1.10. Possible core follow-up, not done: `continueAsync`
-  running the listener's own thread before other runnable threads.
+  the same race listed under WP1.10. Possible core follow-up, owned by haskell-halogen's
+  own plan, low priority: when the loop is busy, `enterWith` queues a listener's work and
+  returns (`Queued`), so the listener returns before its action runs, and an action's
+  focus, DOM read or `dataTransfer` read comes too late when a user's event lands before
+  the glue's `postTask` resumes the runnable loop holder. The fix waits in the `Queued`
+  branch while the loop makes progress and gives up when it stops (the holder may be under
+  the listener on the JavaScript stack, as in `Busy`), wasm only; `HE.preventingDefault`
+  stays the only guarantee for nested dispatch and the JavaScript backend.
 - **WP1.13 done** ([#18](https://github.com/Swordlash/blog/pull/18), branch `wp1.13-html`).
   `Wiki.Core.Markdown.Html`: tagsoup (already in both stores) splits the tags and the module
   builds the tree with a browser's closing rules; `parseHtml` for a raw block, `parseFragments`
