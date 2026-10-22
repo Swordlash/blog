@@ -15,6 +15,7 @@
     "serve-wasm": "sh toolchain/serve-wasm.sh",
     "test-wasm": "sh toolchain/test-wasm.sh",
     "test": "sh toolchain/run-tests.sh",
+    "smoke-test": "node toolchain/smoke-test.mjs",
     "format": "sh run_fourmolu.sh",
     "clean": "rm -rf dist-newstyle/wasm/public"
   }
