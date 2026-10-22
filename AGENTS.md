@@ -49,7 +49,8 @@ A brief contains, in this order:
 3. What is already decided (the relevant items of the plan's "Decisions"), so the agent does
    not reopen them, and what it is free to choose, which it must report.
 4. The verification gate (below).
-5. The branch to work on, the commit style, and that the result is one draft pull request.
+5. The branch to work on, the commit style, and that the result is one pull request, opened
+   ready for review, not as a draft.
 
 An implementing agent reports back with what it built, the choices it made, what it could not
 do and why, and what the next package should know. It does not edit `docs/PLAN.md`; the
