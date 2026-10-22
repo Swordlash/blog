@@ -20,6 +20,7 @@
 module Wiki.App.Demo
   ( demoState
   , demoNow
+  , demoDatabase
   , tourPath
   )
 where
@@ -28,6 +29,8 @@ import Data.ByteString.Base64 qualified as Base64
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, fromGregorian)
 import Protolude
+import Web.Storage.IndexedDB (Database)
+import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Backend.Mem.State
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
@@ -41,6 +44,11 @@ import Wiki.Core.User (Group (..), User (..))
 -- tests.
 demoNow :: UTCTime
 demoNow = UTCTime (fromGregorian 2026 10 1) 43200
+
+-- | Where the browser keeps the demo's wiki between visits: the IndexedDB
+-- database @wiki@ of the page's origin.
+demoDatabase :: Database
+demoDatabase = memDatabase "wiki"
 
 -- | The demo's wiki, as it is at the time given: the pages were written in
 -- the weeks before it. Nobody is signed in.

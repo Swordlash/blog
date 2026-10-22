@@ -64,6 +64,7 @@ library
       Wiki.App
       Wiki.App.Backend
       Wiki.App.Backend.Mem
+      Wiki.App.Backend.Mem.Persist
       Wiki.App.Backend.Mem.State
       Wiki.App.Browser
       Wiki.App.Demo
@@ -91,6 +92,7 @@ library
         Wiki.App.Static
 
   build-depends:
+      aeson,
       base,
       base64-bytestring,
       bytestring,
@@ -175,6 +177,7 @@ test-suite wiki-app-test
     other-modules:
         Test.Backend.Contract
         Test.Backend.Mem
+        Test.Backend.Persist
         Test.Demo
         Test.Hydrate
         Test.Islands
@@ -212,6 +215,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Hydrate
       Test.Browser.Islands
       Test.Browser.Mount
+      Test.Browser.Persist
       Test.Browser.Search
       Test.Browser.Shell
       Test.Browser.Source

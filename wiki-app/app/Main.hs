@@ -9,8 +9,8 @@ import Halogen.Router qualified as Router
 import Halogen.VDom.Driver (hydrateUI)
 import Web.DOM.ParentNode (QuerySelector (..))
 import Wiki.App (Route (Unknown), component, input, route)
-import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
-import Wiki.App.Demo (demoNow, demoState)
+import Wiki.App.Backend.Mem (Opened (..), openMemWiki, runMemWikiWith)
+import Wiki.App.Demo (demoDatabase, demoNow, demoState)
 #endif
 
 -- | Mount the application into the page's @#app@, over the in-memory wiki
@@ -26,13 +26,15 @@ attachComponent = do
   -- The page arrives with the route already rendered into #app (see
   -- Prerender.hs), so that it shows before this binary has loaded. The
   -- application adopts that HTML rather than render afresh in its place:
-  -- its first render is the same page, from the same demo.
-  -- The demo as it was at the time the prerendered pages show it, so that
-  -- they agree on when each page was last changed.
-  wiki <- newMemWiki (demoState demoNow)
+  -- its first render is the same page, from the same demo, unless the
+  -- browser keeps edits to it, which the adoption then repairs.
+  -- The demo as the browser keeps it, or, the first time, as it was at the
+  -- time the prerendered pages show it, so that they agree on when each
+  -- page was last changed.
+  opened <- openMemWiki demoDatabase (demoState demoNow)
   base <- Router.pageBase
   router <- Router.newRouter base Unknown route
-  void $ runMemWiki wiki (hydrateUI component (input router) app)
+  void $ runMemWikiWith opened.store opened.wiki (hydrateUI component (input router) app)
 #else
 -- Natively there is no page to mount into: this executable builds so that it
 -- type-checks with the rest, and the native program that renders the

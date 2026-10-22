@@ -1,6 +1,7 @@
 -- | Who the demo is being looked at as: the in-memory backend has no
 -- passwords, so the shell offers its users to switch between instead of a
--- sign-in form.
+-- sign-in form. And, in the same menu, starting the demo over: its content
+-- is kept in the browser, so a reload no longer does.
 --
 -- A class of its own, apart from 'Wiki.App.Backend.MonadWiki', so that the
 -- switcher is written against a capability rather than the in-memory
@@ -15,7 +16,8 @@ import Control.Monad.Trans.Class (MonadTrans)
 import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Protolude
-import Wiki.App.Backend.Mem (MemWiki, memUsers, switchUser)
+import Wiki.App.Backend.Mem (MemWiki, memKept, memUsers, resetMemWiki, switchUser)
+import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Id (UserId)
 import Wiki.Core.User (User)
 
@@ -31,9 +33,23 @@ class (Monad m) => MonadDemoUsers m where
   default switchTo :: (MonadTrans t, m ~ t n, MonadDemoUsers n) => Maybe UserId -> m ()
   switchTo = lift . switchTo
 
+  -- | Put the demo's content back as it was at the start, wherever it is
+  -- kept, staying who one is.
+  resetDemo :: m ()
+  default resetDemo :: (MonadTrans t, m ~ t n, MonadDemoUsers n) => m ()
+  resetDemo = lift resetDemo
+
+  -- | Whether changes outlive the page: kept in the browser, or lost when
+  -- it is closed (a browser that keeps nothing for it).
+  demoKept :: m Bool
+  default demoKept :: (MonadTrans t, m ~ t n, MonadDemoUsers n) => m Bool
+  demoKept = lift demoKept
+
 instance (MonadIO m) => MonadDemoUsers (MemWiki m) where
   listUsers = memUsers
   switchTo = switchUser
+  resetDemo = resetMemWiki (demoState demoNow)
+  demoKept = memKept
 
 -- | A component's handlers switch through its monad.
 instance (MonadDemoUsers m) => MonadDemoUsers (HalogenM st act slots output m)

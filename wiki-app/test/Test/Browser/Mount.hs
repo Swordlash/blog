@@ -6,6 +6,7 @@ module Test.Browser.Mount
   ( start
   , startWith
   , adopt
+  , startKept
   , clickButton
   , slugs
   )
@@ -20,8 +21,9 @@ import Halogen.Router qualified as Router
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Hspec.Halogen
+import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.App (component, input)
-import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
+import Wiki.App.Backend.Mem (Opened (..), newMemWiki, openMemWiki, runMemWiki, runMemWikiWith, switchUser)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
@@ -82,6 +84,25 @@ prepare who at = do
   unsafeIOToPageM forgetStorage
   unsafeIOToPageM (Router.redirect router at)
   pure (wiki, router)
+
+-- | The shell mounted as the demo's page mounts it: over the wiki kept in
+-- a database (read back, or the demo written out into it), writing through
+-- to it, as someone, at a route. Two of these on one database are a page
+-- and the same page reloaded.
+startKept
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+  => Database
+  -> Maybe Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+startKept m db who at = do
+  opened <- unsafeIOToPageM (runTest (openMemWiki db (demoState demoNow) :: m Opened))
+  unsafeIOToPageM (runMemWiki opened.wiki (switchUser (UserId <$> who)))
+  router <- unsafeIOToPageM testRouter
+  unsafeIOToPageM forgetStorage
+  unsafeIOToPageM (Router.redirect router at)
+  mount m (H.hoist (NT (runMemWikiWith opened.store opened.wiki)) component) (input router)
 
 -- | A router that keeps the route in the test page's fragment. Natively
 -- there is no browser to make one in, and the suite only reports that it

@@ -2,6 +2,7 @@ module Main (main) where
 
 import Protolude
 import Test.Backend.Mem qualified as Mem
+import Test.Backend.Persist qualified as Persist
 import Test.Demo qualified as Demo
 import Test.Hspec (hspec)
 import Test.Hydrate qualified as Hydrate
@@ -14,6 +15,7 @@ main :: IO ()
 main = hspec $ do
   Islands.spec
   Mem.spec
+  Persist.spec
   Demo.spec
   Route.spec
   Link.spec

@@ -29,8 +29,10 @@
 //    editor as admin with a save, search, then back through the whole
 //    history and forward again, each step checked by its address and what
 //    is on screen. Then leaving the editor with changes by the back button
-//    (Stay, then Leave), a reload on a page and on its source, and 404.html
-//    for an address with no file.
+//    (Stay, then Leave), a reload on a page that keeps the edit (the demo
+//    keeps its content in IndexedDB), the user menu's reset taking it away
+//    for good, a reload on a page's source, and 404.html for an address
+//    with no file.
 // 3. The same page in a dark scheme and at a phone's width, and a page's
 //    source copied to the clipboard.
 //
@@ -541,21 +543,37 @@ try {
   await samePage("leaving the editor");
   console.log("ok: leaving the editor by the back button asks; Stay returns to its entry, Leave drops the draft");
 
-  // A reload starts the demo over, on the same page: as nobody, and with
-  // the edit gone.
+  // A reload arrives at the same page, with the edit kept in the browser
+  // (IndexedDB), as nobody: who one was is not kept.
   await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
   await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", text: "Smoke test" }, "the edited page");
-  await reload(page);
-  await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "the reload");
+  // The prerendered page shows the demo's own content, so adopting it
+  // repairs the edited page into what the browser keeps.
+  const edited = await reload(page);
+  assert.ok(!noRepairs(edited.repairs), "a page edited in the browser was adopted with nothing to repair");
+  await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text: "Smoke test" }, "the reload");
   await page.locator("#app .user-switcher-toggle", { hasText: "Not signed in" }).waitFor({ timeout });
-  assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit survived a reload");
+  // Resetting the demo's content, from the user menu and after asking,
+  // takes the edit away, and a reload does not bring it back.
+  await page.locator("#app .user-switcher-toggle").click();
+  await page.locator("#app .user-menu .demo-kept", { hasText: "kept in this browser" }).waitFor({ timeout });
+  await page.locator("#app .user-menu .demo-reset-ask").click();
+  await page.locator("#app .demo-reset-confirm button", { hasText: "Reset" }).click();
+  await eventually(async () => {
+    assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit is still there");
+  }, "resetting the demo's content");
+  // The demo's own content again, which the prerendered page shows as it is.
+  const reset = await reload(page);
+  assert.ok(noRepairs(reset.repairs), `the page after a reset needed repairs: ${JSON.stringify(reset.repairs)}`);
+  await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "the reload after the reset");
+  assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit came back after a reset");
   // And on a page's source, which a reader not signed in may read too.
   await page.locator("#app .page-view .actions a", { hasText: "View source" }).click();
   await check({ path: "/s/blog/p/hello-world/source/", view: "source-view", crumb: "Source" }, "the source");
   await reload(page);
   await check({ path: "/s/blog/p/hello-world/source/", view: "source-view", crumb: "Source", text: "# Hello, world" }, "the source reloaded");
-  console.log("ok: a reload arrives at the same page, with the demo started over, and at a page's source");
+  console.log("ok: a reload arrives at the same page with the edit kept, a reset takes it away for good, and a reload works on a page's source");
 
   // An address with no file: 404.html, which the program reads as its own.
   const missing = await fetch(url("/no/such/address/"));

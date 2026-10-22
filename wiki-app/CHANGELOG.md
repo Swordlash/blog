@@ -25,6 +25,40 @@ Enter, and a press on its list; a click on a link in a page's Markdown, which
 `followArticleClick`; the action then calls `followArticleLink`). Escape in the
 search box is still also the browser's (a search input clears its text).
 
+The demo keeps its content in the browser. `Wiki.App.Backend.Mem.openMemWiki`
+reads the wiki back from an IndexedDB database (haskell-halogen's
+`Web.Storage.IndexedDB`), or writes the seed out into it the first time, and a
+`MemWiki` run with `runMemWikiWith` and the store it gives writes through to
+it: after every successful write, the records that write changed, in one
+transaction, before the write returns. `Wiki.App.Backend.Mem.Persist` says what
+is kept and how: the stores `spaces`, `pages`, `attachments` (an upload's bytes,
+as bytes, under its blob's id), `grants` (a space's grants, under the space's
+id) and `meta` (the id counter), each record JSON through the same instances
+as the API. The demo's people and global grants are not kept, since nothing
+changes them; neither is who is signed in, so a reload starts as nobody, nor
+an attachment's object URL, made again when the attachment is first shown. A
+database that cannot be read (a record that does not decode, or one a newer
+version wrote) is deleted and the demo's content written out in its place; a
+browser with no IndexedDB runs the demo in memory as before. Either way the
+console says why. Nothing is shared between tabs: the last to write a record
+wins. `newMemWiki` and `runMemWiki` are unchanged and keep the wiki in memory
+only, as the prerender and most tests want.
+
+The user menu ends with "Reset the demo content…", which asks in place and
+then puts the demo's content back as it was, in memory and in the browser
+(the database is deleted and written out again), keeping who is signed in. It
+says whether changes are kept in this browser. `MonadDemoUsers` gains
+`resetDemo` and `demoKept` for it. The demo's page loads the wiki from the
+database `wiki` (`Wiki.App.Demo.demoDatabase`) before it mounts the
+application; the prerendered pages still show the demo's own content, so
+after an edit the first render differs from them, and adopting the page
+repairs what differs.
+
+The shell's router links are written as `<a>` elements in its `hh` quotes with
+haskell-halogen's `Router.linkProps`, and the holes that were kept on one line
+for the quoter's old whitespace rule are on lines of their own; what is
+rendered is unchanged.
+
 Anyone who may read a page may read its Markdown: a page has a source view on a
 route of its own, `PageSource`, at `…/p/<page path>/source/`, which shows the
 page's title, a "Back" link to the page and the Markdown as written, in a

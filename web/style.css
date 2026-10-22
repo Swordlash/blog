@@ -209,6 +209,45 @@ select {
   font-weight: 600;
 }
 
+/* The foot of the user menu: whether the demo's changes are kept, and
+   putting its content back as it was, which asks first in place. */
+.user-menu .demo-reset {
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid var(--border);
+}
+
+.user-menu .demo-reset p {
+  margin: 0.2rem 0.5rem 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.user-menu .demo-reset-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.user-menu .demo-reset-confirm p {
+  flex-basis: 100%;
+  color: var(--text);
+}
+
+.user-menu .demo-reset-confirm button {
+  flex: 1;
+  width: auto;
+  text-align: center;
+  border: 1px solid var(--border);
+}
+
+.user-menu button.danger,
+.user-menu button.danger:hover {
+  color: #ffffff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
 .wiki-body {
   display: flex;
   flex: 1;

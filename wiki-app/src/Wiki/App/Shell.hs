@@ -2,7 +2,7 @@
 
 -- | The application's frame, around whatever the route shows: a header with
 -- the site's name, breadcrumbs, the search box ("Wiki.App.View.Search") and
--- the demo's user switcher; a sidebar with the tree of spaces, the current space's
+-- the demo's user switcher, which also resets the demo's content; a sidebar with the tree of spaces, the current space's
 -- pages under it; the content of the route; and a footer saying what the wiki
 -- is built with.
 --
@@ -105,6 +105,10 @@ data State = State
   -- ^ The views' 'revision': how many times the wiki has been reloaded
   -- after a change.
   , menuOpen :: Bool
+  , confirmingReset :: Bool
+  -- ^ Whether the user menu asks whether to reset the demo's content.
+  , kept :: Bool
+  -- ^ Whether the demo's changes are kept in the browser ('demoKept').
   , settled :: Bool
   , leaving :: Maybe Route
   -- ^ A route followed away from an editor with unsaved changes, which the
@@ -121,6 +125,9 @@ data Action
   | Toggle SpaceId
   | ToggleMenu
   | SwitchTo (Maybe UserId)
+  | AskReset
+  | CancelReset
+  | ResetDemo
   | FromView ViewOutput
   | Leave
   | Stay
@@ -140,6 +147,7 @@ component =
         initialState = \Input {router, welcome} -> do
           route <- Router.current router
           (signedIn, users, spaces) <- fetchWorld
+          kept <- demoKept
           here <- maybe (pure NoSpace) fetchHere (spaceOfRoute route)
           pure
             State
@@ -153,6 +161,8 @@ component =
               , collapsed = mempty
               , generation = 0
               , menuOpen = False
+              , confirmingReset = False
+              , kept
               , settled = False
               , leaving = Nothing
               , entry = 0
@@ -220,7 +230,9 @@ component =
           Just r -> [hh|<a {{ Router.linkProps st.router Followed r }}>{{ label }}</a>|]
           Nothing -> [hh|<span class="unviewable">{{ label }}</span>|]
 
-    -- The demo's menu of who one is: nobody, or one of its users.
+    -- The demo's menu of who one is: nobody, or one of its users; and, at
+    -- its foot, putting the demo's content back as it was, which asks
+    -- first, in place.
     userSwitcher :: State -> H.ComponentHTML Action Slots m
     userSwitcher st =
       [hh|
@@ -243,10 +255,34 @@ component =
                   </button>
                 </li>
               {% end %}
+              <li class="demo-reset">{{ resetControl st }}</li>
             </ul>
           {% end %}
         </div>
       |]
+
+    resetControl :: State -> H.ComponentHTML Action Slots m
+    resetControl st
+      | st.confirmingReset =
+          [hh|
+            <div class="demo-reset-confirm" role="alertdialog">
+              <p>Put the demo's content back as it was at the start? Every change made to it in this browser is lost.</p>
+              <button type="button" class="danger" onClick={{ const ResetDemo }}>Reset</button>
+              <button type="button" onClick={{ const CancelReset }}>Cancel</button>
+            </div>
+          |]
+      | otherwise =
+          [hh|
+            <div>
+              <p class="demo-kept">{{ keptNote }}</p>
+              <button type="button" class="demo-reset-ask" onClick={{ const AskReset }}>Reset the demo content…</button>
+            </div>
+          |]
+      where
+        keptNote :: Text
+        keptNote
+          | st.kept = "Changes to the demo are kept in this browser."
+          | otherwise = "This browser keeps nothing for the demo: changes last until the page is closed."
 
     sidebar :: State -> H.ComponentHTML Action Slots m
     sidebar st =
@@ -445,10 +481,18 @@ component =
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
       Toggle sid -> modify $ \st ->
         st {collapsed = if sid `Set.member` st.collapsed then Set.delete sid st.collapsed else Set.insert sid st.collapsed}
-      ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen})
+      ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen, confirmingReset = False})
       SwitchTo user -> do
         modify (\st -> st {menuOpen = False, settled = False})
         switchTo user
+        reload Nothing
+      AskReset -> modify (\st -> st {confirmingReset = True})
+      CancelReset -> modify (\st -> st {confirmingReset = False})
+      -- The route stays: a page the reset took away is then not found,
+      -- which is what has become of it.
+      ResetDemo -> do
+        modify (\st -> st {menuOpen = False, confirmingReset = False, settled = False})
+        resetDemo
         reload Nothing
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
@@ -473,7 +517,8 @@ component =
     loadWorld :: H.HalogenM State Action Slots output m ()
     loadWorld = do
       (s, us, ss) <- fetchWorld
-      modify (\st -> st {session = s, users = us, spaces = ss})
+      kept <- demoKept
+      modify (\st -> st {session = s, users = us, spaces = ss, kept})
 
     -- The space the route is in, unless it is the one loaded already
     -- (or even so, if forced).
