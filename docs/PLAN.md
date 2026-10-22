@@ -922,7 +922,44 @@ Amended by the planning session after each work package's report.
   submits in `Space`, `Page` and `NewSpace` and the search box's keys and mousedown; check
   that `hydrateUI` adopts the toolbar's `HH.memoized` thunk.
 - **WP1.12 merged** (`40d2230`). With WP1.14 and the test commands, `main` at `40d2230` is
-  the tag point the owner chose for `v0.1.0-demo` (editor toolbar, preview mode, view
-  source). HH-3 merged in haskell-halogen as `a889566`. Next: WP1.10 (hydration, the
+  a candidate tag point (editor toolbar, preview mode, view source); the owner then chose
+  to tag after WP1.10 and WP1.11 instead. HH-3 merged in haskell-halogen as `a889566`. Next: WP1.10 (hydration, the
   remaining listener-side forms and keys) and WP1.11 (IndexedDB, pin to `a889566`,
   `linkProps`) in parallel, each told what the other touches.
+- **CI and merging changed** ([#26](https://github.com/Swordlash/blog/pull/26),
+  [#27](https://github.com/Swordlash/blog/pull/27)). Pull requests are rebased onto `main`
+  and `main` is fast-forwarded to their head (`git push origin <head>:main`); a first job
+  on pushes to `main`, `tested` (`toolchain/ci-already-tested.sh`), finds the head's
+  passing pull request run and skips the build, so a merge costs about a minute of the one
+  runner instead of eight. The Actions runs listing lagged 2.5 minutes once, so the gate
+  asks twice, 30 seconds apart; a third try is the fix if it misses again. Markdown alone
+  runs no CI. Plan-only changes go straight to `main`, and are pushed when no pull request
+  is waiting to be fast-forwarded (else it needs another rebase and run). Pull requests
+  are opened ready for review, not as drafts (AGENTS.md, `implementer.md`).
+- **WP1.10 done and merged** ([#28](https://github.com/Swordlash/blog/pull/28), `aaf941e`).
+  The space, page and new-space forms, the search box's keys and press, and links in a
+  page's Markdown decide in the listener under `HE.preventingDefault`; no action-side
+  `preventDefault` is left. `Main.hs` mounts with `hydrateUI`. The views load what they
+  show in `initialState` (through `MonadWiki`, at once) so that the first render is the
+  prerendered page; `Wiki.App.Static` has `prerenderedRoutes` and `startRoute Build|Adopt`.
+  Repairs, checked natively (`Test.Hydrate`, all 24 routes), in the browser
+  (`Test.Browser.Hydrate`, the toolbar's memoized thunk adopted) and on the built pages
+  (the smoke test records every node before `app.wasm` runs): none, but the islands' source
+  text (by design: the program renders islands empty and draws them) and the demo's
+  uploaded `tree.png` (`data:` in the prerender, refused by `wiki-core`; `blob:` in the
+  browser). The 300 ms pause in the smoke test is gone.
+  **Open decision for WP2.4/WP2.6:** loading in `initialState` runs `MonadWiki` on the
+  tree's loop; over `HttpWiki` that blocks the loop on a fetch at every navigation.
+  `readEmbedded` covers the first mount; later mounts need a client cache answering at
+  once, or `Loading` first with the fetch in `Initialize` (a repair only on a
+  server-rendered page). WP2.6 must also resolve links and attachment URLs as the client
+  does (the `data:`/`blob:` case is the example).
+- **WP1.11 grows** at the owner's request: export and import of the whole demo state as
+  one zip (`manifest.json` with `formatVersion`, a JSON file per kind of record,
+  attachments as files), validated whole before an all-or-nothing replace. The record
+  JSON has named fields, in one `wiki-core` module the Phase 2 server can import from too.
+  Compatibility: unknown fields are ignored and optional ones defaulted (additive changes
+  need no bump, and an older app reads a newer file); a breaking change bumps
+  `formatVersion` and the reader migrates older versions step by step; a newer
+  `formatVersion` is refused whole. A golden v1 archive in the tests must import forever.
+  The tag `v0.1.0-demo` waits for WP1.11.
