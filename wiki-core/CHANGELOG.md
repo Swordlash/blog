@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+The wiki's domain model, as plain data with JSON instances that the client and
+the server share.
+
+Identifiers (`SpaceId`, `PageId`, `AttachmentId`, `BlobId`, `UserId`,
+`GroupId`, in `Wiki.Core.Id`) are newtypes over `Text`, written in JSON as the
+bare string; how a new one is made is up to the backend. `Space` (name, slug,
+parent, public flag) and `Page` (space, parent page, title, slug, Markdown
+body, attachments, creation and update times) form trees, spaces of spaces and
+pages within a space, with slugs unique among siblings. An `Attachment` has a
+name, a media type, a size and a `Source`, a URL now and a server blob later;
+`mediaKind` says whether a media type is shown as an image, a video, audio or a
+link. `User`, `Group` and `Membership` describe who is who, with no secrets.
+
+`Wiki.Core.Slug` makes a slug out of a title with `slugify`, which lowercases,
+spells Polish and other European letters in ASCII (`Zażółć` is `zazolc`) and
+turns everything else into single dashes, and finds a free one among siblings
+with `freshSlug` (`notes`, `notes-2`, …). A slug in JSON is read through the
+same rules as `mkSlug`.
+
+`Wiki.Core.Path` resolves a path of slugs to the chain of nodes it goes
+through (`resolvePath`, or `resolvePathM` for a lookup with effects), walks a
+node's parents back to the root (`ancestry`, `pathOf`), and reads and writes
+paths as text (`a/b`). It works for spaces and pages alike, over whatever
+lookup the backend has.
+
+`Wiki.Core.Permission` is the permission model and its rules: the global
+permissions `Administer` and `CreateSpaces`, the space permissions `View`,
+`Edit` and `AdministerSpace`, granted to users or groups, inherited by
+subspaces, and `View` for everyone on a public space and its subspaces. The
+rules (`spacePermissions`, `canView`, `canEdit`, `canAdministerSpace`,
+`canCreateSpaces`) take the signed-in user if any, their groups, the grants and
+the chain of spaces, and read no store, so the server enforces exactly what the
+client uses to hide what someone cannot do.
+
 Markdown, parsed and rendered to Halogen HTML, in `Wiki.Core.Markdown`.
 `parseMarkdown` reads a page into a tree of the wiki's own
 (`Wiki.Core.Markdown.Ast`): CommonMark with GitHub's extensions (tables,

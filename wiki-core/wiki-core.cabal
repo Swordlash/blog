@@ -51,12 +51,21 @@ library
   import:           shared
   hs-source-dirs:   src
   exposed-modules:
+      Wiki.Core.Attachment
+      Wiki.Core.Id
       Wiki.Core.Markdown
       Wiki.Core.Markdown.Ast
       Wiki.Core.Markdown.Link
       Wiki.Core.Markdown.Render
+      Wiki.Core.Page
+      Wiki.Core.Path
+      Wiki.Core.Permission
       Wiki.Core.Slug
+      Wiki.Core.Space
+      Wiki.Core.User
   build-depends:
+      aeson,
+      base,
       bytestring,
       commonmark >= 0.3.1 && < 0.4,
       commonmark-extensions >= 0.2.7.3 && < 0.3,
@@ -64,7 +73,8 @@ library
       haskell-halogen-core,
       protolude,
       row-types,
-      text
+      text,
+      time
 
 -- Runs natively, and under Node on wasm through toolchain/test-wasm.sh.
 test-suite wiki-core-test
@@ -73,12 +83,22 @@ test-suite wiki-core-test
   hs-source-dirs:   test
   main-is:          Test.hs
   other-modules:
+      Test.Attachment
+      Test.Gen
+      Test.Json
       Test.Markdown.Ast
       Test.Markdown.Link
+      Test.Path
+      Test.Permission
       Test.Slug
   build-depends:
+      QuickCheck,
+      aeson,
+      containers,
       hspec >= 2,
       protolude,
+      text,
+      time,
       wiki-core
 
 -- The markup the renderer makes, through Halogen.Static's in-memory
