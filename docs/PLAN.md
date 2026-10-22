@@ -687,8 +687,11 @@ Amended by the planning session after each work package's report.
   alone); `renderRawHtml` is the entry point from `Render`. The allowlist as implemented:
   formatting elements, `a` (the plan's list forgot it), structure (`div`, `p`, `details`,
   `summary`, `blockquote`, `pre`, `hr`, lists, `dl`, `figure`), the table family without
-  `colgroup`/`col`, media (`img`, `video`, `audio`, `source`); `h1` to `h6` were also missing
-  from the list and are being added in a follow-up on the same branch. Dropped with content:
+  `colgroup`/`col`, media (`img`, `video`, `audio`, `source`), and `h1` to `h6` (also
+  missing from the plan's list; added in a follow-up with a browser's closing rules). The
+  first CI run failed the editor's "loses no keystroke" browser test on a Playwright 5 s
+  limit per typing call; the preview had not slowed (3.3 ms per render of the guide on
+  both `main` and the branch), so the test now types in calls of 5 words. Dropped with content:
   `script`, `style`, `iframe`, `object`, `embed`, `template`, `noscript`, `svg`, `math`,
   `textarea`, `select` and a few more; anything else unlisted loses its tag and keeps its
   content. Attributes: `class`/`id`/`title` everywhere, the rest only where they mean
