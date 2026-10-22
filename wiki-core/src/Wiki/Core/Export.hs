@@ -30,8 +30,8 @@
 --
 -- * __Additions need no new version.__ A reader ignores the fields it does
 --   not know, and a field that may be missing has a default (a space is
---   private, a page has no parent and an empty body, a group no members,
---   unless the record says otherwise). So an older program reads a newer
+--   private and has no math macros, a page has no parent and an empty
+--   body, a group no members, unless the record says otherwise). So an older program reads a newer
 --   archive of the same version, and a newer one an older archive.
 -- * __Anything else bumps 'formatVersion'__: a field removed or renamed, or
 --   one whose meaning changes. The reader then migrates an archive of every
@@ -84,6 +84,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -335,17 +336,22 @@ checkArchive a attachments = do
 --------------------------------------------------------------------------------
 -- Records
 
--- | @{"id", "name", "slug", "parent", "public"}@: @parent@ is @null@ or
--- missing for a top-level space, @public@ false if missing.
+-- | @{"id", "name", "slug", "parent", "public", "mathMacros"}@: @parent@
+-- is @null@ or missing for a top-level space, @public@ false if missing,
+-- and @mathMacros@ (the space's TeX macros, added after version 1 was
+-- first written: an additive field, so no new version) the empty text if
+-- missing. It is written only when the space has macros, so that the
+-- record of a space without them is what it was before the field.
 encodeSpace :: Space -> Value
 encodeSpace s =
-  object
+  object $
     [ "id" .= s.id.text
     , "name" .= s.name
     , "slug" .= s.slug
     , "parent" .= fmap (\p -> p.text) s.parent
     , "public" .= s.public
     ]
+      <> ["mathMacros" .= s.mathMacros | not (T.null s.mathMacros)]
 
 parseSpace :: Value -> Parser Space
 parseSpace = withObject "space" $ \o -> do
@@ -354,7 +360,8 @@ parseSpace = withObject "space" $ \o -> do
   slug <- o .: "slug"
   parent <- fmap SpaceId <$> o .:? "parent"
   public <- o .:? "public" .!= False
-  pure Space {id, name, slug, parent, public}
+  mathMacros <- o .:? "mathMacros" .!= ""
+  pure Space {id, name, slug, parent, public, mathMacros}
 
 -- | @{"id", "space", "parent", "title", "slug", "body", "createdAt",
 -- "updatedAt"}@, without the page's attachments, which are records of their

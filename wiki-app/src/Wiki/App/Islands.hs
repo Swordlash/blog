@@ -8,9 +8,11 @@
 -- library wrote there.
 --
 -- One component draws every kind, so that a page renders its islands into
--- one slot type: its input says which island and its source. It fills the
--- element once it is in the page, and again whenever the input changes;
--- an input equal to the last one leaves the element alone.
+-- one slot type: its input says which island and its source (and, for a
+-- formula, the macros it is set with). It fills the element once it is in
+-- the page, and again whenever the input changes; an input equal to the
+-- last one leaves the element alone. So a formula is set again when a
+-- definition before it changes, though its own TeX did not.
 --
 -- The page (@web/index.html@) must load @islands.js@ and @islands.css@ from
 -- @web/bundle.sh@. Natively the element holds its source as text instead (see
@@ -20,6 +22,7 @@ module Wiki.App.Islands
   , component
   , MonadIslands (..)
   , MathMode (..)
+  , Macros (..)
   )
 where
 
@@ -31,13 +34,15 @@ import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element)
 import Wiki.App.Islands.Monad (MathMode (..), MonadIslands (..))
 import Wiki.Core.Markdown.Tikz (tikzDocument)
+import Wiki.Core.Math (Macros (..))
 
 -- | An island and its source.
 data Island
-  = -- | TeX set in the line, as Markdown's @$…$@.
-    MathInline Text
-  | -- | TeX set on its own, as Markdown's @$$…$$@.
-    MathDisplay Text
+  = -- | TeX set in the line, as Markdown's @$…$@, with the macros it is
+    -- set with besides the built-in ones ("Wiki.Core.Math").
+    MathInline Macros Text
+  | -- | TeX set on its own, as Markdown's @$$…$$@, with its macros.
+    MathDisplay Macros Text
   | -- | A Mermaid diagram's source, as a @mermaid@ fence.
     Mermaid Text
   | -- | A TikZ picture's source, as a @tikz@ fence.
@@ -70,8 +75,8 @@ component =
   where
     render :: State -> H.ComponentHTML Action Empty m
     render State {island, ref} = case island of
-      MathInline _ -> [hh|<span ref={{ ref }} class="wiki-math wiki-math-inline"></span>|]
-      MathDisplay _ -> [hh|<div ref={{ ref }} class="wiki-math wiki-math-display"></div>|]
+      MathInline _ _ -> [hh|<span ref={{ ref }} class="wiki-math wiki-math-inline"></span>|]
+      MathDisplay _ _ -> [hh|<div ref={{ ref }} class="wiki-math wiki-math-display"></div>|]
       Mermaid _ -> [hh|<div ref={{ ref }} class="wiki-mermaid"></div>|]
       Tikz _ -> [hh|<div ref={{ ref }} class="wiki-tikz"></div>|]
       CodeBlock _ _ -> [hh|<pre ref={{ ref }} class="wiki-code"></pre>|]
@@ -94,8 +99,8 @@ component =
 
     into :: Island -> Element -> H.HalogenM State Action Empty output m ()
     into island element = case island of
-      MathInline tex -> H.liftEffect (renderMath Inline tex element)
-      MathDisplay tex -> H.liftEffect (renderMath Display tex element)
+      MathInline macros tex -> H.liftEffect (renderMath Inline macros tex element)
+      MathDisplay macros tex -> H.liftEffect (renderMath Display macros tex element)
       -- A diagram and a picture are only started here, and drawn into the
       -- element when they are done (Mermaid's bundle, TeX's files are
       -- fetched the first time; TeX runs in a worker); the page goes on

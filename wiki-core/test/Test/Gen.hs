@@ -112,7 +112,8 @@ genSpace = do
   slug <- genSlug
   parent <- oneof [pure Nothing, Just <$> genSpaceId]
   public <- arbitrary
-  pure Space {id, name, slug, parent, public}
+  mathMacros <- oneof [pure "", genText]
+  pure Space {id, name, slug, parent, public, mathMacros}
 
 genPage :: Gen Page
 genPage = do
@@ -187,7 +188,7 @@ genChain = do
   for (zip chainIds (Nothing : map Just chainIds)) $ \(id, parent) -> do
     slug <- genSlug
     public <- frequency [(1, pure True), (3, pure False)]
-    pure Space {id, name = "", slug, parent, public}
+    pure Space {id, name = "", slug, parent, public, mathMacros = ""}
 
 genSearchQuery :: Gen SearchQuery
 genSearchQuery = do

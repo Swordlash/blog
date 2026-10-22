@@ -20,6 +20,12 @@
 -- the slot's index: Halogen tells two children apart by their slot address,
 -- and a document can hold the same formula twice.
 --
+-- __Macros.__ A formula is handed the formulas before it in the document
+-- that define macros ("Wiki.Core.Math"), in their order: a page's
+-- definitions hold in every formula after them, as in a LaTeX document,
+-- and what a formula is set with depends on the page alone, not on the
+-- order its island is drawn in.
+--
 -- __Embeds.__ @![caption](destination)@ shows what the destination resolves
 -- to by its media type: an attachment by the type the wiki knows for it, or
 -- failing that its name's extension; a URL by its extension. Images become
@@ -55,6 +61,7 @@ import Protolude
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
+import Wiki.Core.Math (Macros (..), definesMacros)
 
 -- | What the renderer leaves to its caller.
 --
@@ -66,11 +73,13 @@ import Wiki.Core.Markdown.Link
 data Options page w i = Options
   { codeBlock :: IslandKey -> Maybe Text -> Text -> HH.HTML w i
   -- ^ A code block: its language, if it has one, and its code.
-  , mathInline :: IslandKey -> Text -> HH.HTML w i
-  -- ^ Inline math, @$…$@: its TeX.
-  , mathDisplay :: IslandKey -> Text -> HH.HTML w i
-  -- ^ Display math, @$$…$$@ or a @math@ fence: its TeX. Rendered as a block
-  -- except in a heading or a table cell.
+  , mathInline :: IslandKey -> Macros -> Text -> HH.HTML w i
+  -- ^ Inline math, @$…$@: the formulas before it that define macros, and
+  -- its TeX.
+  , mathDisplay :: IslandKey -> Macros -> Text -> HH.HTML w i
+  -- ^ Display math, @$$…$$@ or a @math@ fence: the formulas before it that
+  -- define macros, and its TeX. Rendered as a block except in a heading or
+  -- a table cell.
   , mermaid :: IslandKey -> Text -> HH.HTML w i
   -- ^ A Mermaid diagram: its source.
   , tikz :: IslandKey -> Text -> HH.HTML w i
@@ -104,8 +113,8 @@ defaultOptions =
   Options
     { codeBlock = \_ lang code ->
         HH.pre_ [HH.code (foldMap (\l -> [HP.class_ (HH.ClassName ("language-" <> l))]) lang) [HH.text code]]
-    , mathInline = \_ tex -> HH.span [HP.class_ (HH.ClassName "math inline")] [HH.text tex]
-    , mathDisplay = \_ tex -> HH.div [HP.class_ (HH.ClassName "math display")] [HH.text tex]
+    , mathInline = \_ _ tex -> HH.span [HP.class_ (HH.ClassName "math inline")] [HH.text tex]
+    , mathDisplay = \_ _ tex -> HH.div [HP.class_ (HH.ClassName "math display")] [HH.text tex]
     , mermaid = \_ src -> HH.pre [HP.class_ (HH.ClassName "mermaid")] [HH.text src]
     , tikz = \_ src -> HH.pre [HP.class_ (HH.ClassName "tikz")] [HH.text src]
     , resolveLink = defaultResolveLink
@@ -122,7 +131,7 @@ defaultResolveLink dest = case classifyDestination dest of
 
 -- | The document's blocks as HTML, in order.
 renderBlocks :: forall page w i. Options page w i -> [Block] -> [HH.HTML w i]
-renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts M.empty M.empty)
+renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts M.empty M.empty [])
   where
     renderBlock :: Block -> R [HH.HTML w i]
     renderBlock = \case
@@ -134,7 +143,7 @@ renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts 
       CodeBlock _ lang code -> island code <&> \k -> [opts.codeBlock k lang code]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]
       Tikz src -> island src <&> \k -> [opts.tikz k src]
-      MathBlock tex -> island tex <&> \k -> [opts.mathDisplay k tex]
+      MathBlock tex -> formula tex <&> \(k, ms) -> [opts.mathDisplay k ms tex]
       List kind items -> single . listOf kind (any isTask items) <$> traverse renderItem items
       Table aligns header rows -> single <$> renderTable aligns header rows
       Div attrs bs -> single . HH.div (idAndClasses attrs []) <$> renderBlocks' bs
@@ -228,8 +237,8 @@ renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts 
       Link _ _ _ xs | inLink -> inlinePieces True xs
       Link attrs dest title xs -> renderLink attrs dest title xs
       Image attrs dest title xs -> pure (renderEmbed attrs dest title (plainText xs))
-      Math InlineMath tex -> island tex <&> \k -> [PNode (opts.mathInline k tex)]
-      Math DisplayMath tex -> island tex <&> \k -> [PNode (opts.mathDisplay k tex)]
+      Math InlineMath tex -> formula tex <&> \(k, ms) -> [PNode (opts.mathInline k ms tex)]
+      Math DisplayMath tex -> formula tex <&> \(k, ms) -> [PNode (opts.mathDisplay k ms tex)]
       FootnoteRef n _ -> do
         ident <- footnoteRefId n
         pure [PNode (HH.sup [classesProp ["footnote-ref"]] [HH.a [HP.href ("#fn-" <> show n), HP.id ident] [HH.text (show n)]])]
@@ -289,6 +298,16 @@ renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts 
       let n = M.findWithDefault 0 src c.islands
        in (IslandKey src n, c {islands = M.insert src (n + 1) c.islands})
 
+    -- A formula's key, and the formulas before it that define macros;
+    -- then it is one of them, if it defines any.
+    formula :: Text -> R (IslandKey, Macros)
+    formula tex = do
+      k <- island tex
+      state $ \c ->
+        ( (k, Macros (reverse c.definitions))
+        , if definesMacros tex then c {definitions = tex : c.definitions} else c
+        )
+
     footnoteRefId :: Int -> R Text
     footnoteRefId n = state $ \c ->
       let seen = M.findWithDefault 0 n c.footnoteRefs
@@ -296,10 +315,12 @@ renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts 
        in (ident, c {footnoteRefs = M.insert n (seen + 1) c.footnoteRefs})
 
 -- | What rendering keeps count of as it goes: islands by source, for their
--- keys, and references to each footnote, for their ids.
+-- keys, references to each footnote, for their ids, and the formulas so far
+-- that define macros, the latest first.
 data Counts = Counts
   { islands :: Map Text Int
   , footnoteRefs :: Map Int Int
+  , definitions :: [Text]
   }
 
 type R = State Counts

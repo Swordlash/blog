@@ -8,7 +8,8 @@
 // under tikzjax/), and fetched the first time a diagram or a picture is
 // drawn. What the page gets is one object on globalThis:
 //
-//   wikiIslands.renderMath(element, tex, displayMode)
+//   wikiIslands.renderMath(element, tex, displayMode, macros)
+//   wikiIslands.checkMacros(macros, block): string
 //   wikiIslands.renderMermaid(element, source): Promise<void>
 //   wikiIslands.renderTikz(element, source, preamble, picture): Promise<void>
 //   wikiIslands.highlight(element, language, code)
@@ -18,9 +19,16 @@
 // rejects shows the library's error in the element instead, which is what an
 // author previewing a page wants to see. wiki-app/jsbits/islands.js is the
 // application's side of this.
+//
+// KaTeX comes with mhchem (\ce and \pu, its contrib extension) and the
+// wiki's built-in macros (katex-macros.tex, bundled as text), under the
+// macros of a formula's space and page (macros.mjs).
 // The demo's export and import, which have nowhere better to be bundled.
 import "./archive.js";
 import katex from "katex";
+import "katex/contrib/mhchem";
+import builtinTex from "./katex-macros.tex";
+import { forgetting, macroReader, readMacros } from "./macros.mjs";
 import hljs from "highlight.js/lib/common";
 // highlight.js's common set (C, C++, C#, Java, Python, JavaScript and
 // TypeScript, Go, Rust, PHP, Ruby, Kotlin, Swift, SQL, Visual Basic .NET,
@@ -125,15 +133,47 @@ const showError = (element, error) => {
   element.replaceChildren(message);
 };
 
-const renderMath = (element, tex, displayMode) => {
+// The built-in macros, read once; web/bundle.sh has checked that KaTeX
+// reads all of them. Should it not, the page still draws, with what it did.
+const builtin = readMacros({}, builtinTex);
+if (builtin.error) console.error("The wiki's built-in macros:", builtin.error);
+const macrosOf = macroReader(builtin.macros);
+
+// `macros` is the blocks of definitions the formula is set with besides the
+// built-in ones, farthest first: its space's chain, then the formulas before
+// it on its page that define something (Wiki.Core.Math). A block KaTeX
+// cannot read gives what it defined before the error; it is the settings
+// where the block is edited that show the error (checkMacros), not every
+// formula of every page under it.
+const renderMath = (element, tex, displayMode, macros) => {
   nextGeneration(element);
   try {
     // throwOnError: false renders a formula KaTeX cannot parse as its source,
     // in red, with the error as its title: the author sees where it went wrong
     // in place. The catch is for everything else (an option KaTeX rejects).
-    katex.render(String(tex), element, { displayMode: Boolean(displayMode), throwOnError: false, output: "htmlAndMathml" });
+    // The formula is rendered in a group of its own, so what it defines
+    // stays in it: a later formula has it from its own `macros`.
+    const defined = macrosOf(Array.isArray(macros) ? macros : []).macros;
+    katex.render(String(tex), element, {
+      displayMode: Boolean(displayMode),
+      throwOnError: false,
+      output: "htmlAndMathml",
+      macros: forgetting(defined, tex),
+    });
   } catch (error) {
     showError(element, error);
+  }
+};
+
+// KaTeX's error for a block of macros read over others (the blocks of the
+// space's ancestors), or the empty string if it reads the whole block: the
+// space's settings show it as the block is edited.
+const checkMacros = (macros, block) => {
+  try {
+    const { error } = readMacros(macrosOf(Array.isArray(macros) ? macros : []).macros, String(block));
+    return error ? String(error.message ?? error) : "";
+  } catch (error) {
+    return String(error?.message ?? error);
   }
 };
 
@@ -195,4 +235,4 @@ const highlight = (element, language, code) => {
   }
 };
 
-globalThis.wikiIslands = Object.freeze({ renderMath, renderMermaid, renderTikz, highlight });
+globalThis.wikiIslands = Object.freeze({ renderMath, checkMacros, renderMermaid, renderTikz, highlight });

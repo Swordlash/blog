@@ -1,0 +1,46 @@
+% The wiki's built-in macros, for the formulas of every page: one \newcommand
+% a line, read by KaTeX itself (web/src/islands.js, bundled as text by
+% web/bundle.sh, which checks that KaTeX reads all of it). A space's macros
+% and a page's own come after these, so either may define one of them again
+% with \newcommand. docs/markdown.md lists them.
+%
+% KaTeX already has \N, \R, \Z (and \Complex, \cnums), \set and \Set,
+% \argmin and \argmax, \gcd, \ker, \Re and \Im, \bra, \ket and \braket, so
+% they are not here: a \newcommand of one of KaTeX's own commands is an
+% error, and one of them changed is \renewcommand's work.
+
+% Number sets, beside KaTeX's \N, \R and \Z.
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\Q}{\mathbb{Q}}
+\newcommand{\F}{\mathbb{F}}
+
+% Delimiters that grow with what they hold.
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\floor}[1]{\left\lfloor #1 \right\rfloor}
+\newcommand{\ceil}[1]{\left\lceil #1 \right\rceil}
+\newcommand{\inner}[2]{\left\langle #1, #2 \right\rangle}
+
+% Calculus: an upright d, and the two-argument derivatives of physics' \dv
+% and \pdv.
+\newcommand{\dd}{\mathop{}\!\mathrm{d}}
+\newcommand{\dv}[2]{\frac{\mathrm{d} #1}{\mathrm{d} #2}}
+\newcommand{\pdv}[2]{\frac{\partial #1}{\partial #2}}
+
+% Operators.
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\rank}{\operatorname{rank}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\lcm}{\operatorname{lcm}}
+
+% Probability.
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+
+% Odds and ends.
+\newcommand{\eps}{\varepsilon}
+\newcommand{\bigO}{\mathcal{O}}
+\newcommand{\defeq}{\mathrel{\vcentcolon=}}

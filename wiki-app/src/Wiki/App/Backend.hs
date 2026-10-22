@@ -40,8 +40,8 @@
 -- * moving a space needs 'AdministerSpace' on it and, for the destination,
 --   'CreateSpaces' to make it top-level or 'AdministerSpace' on the new
 --   parent;
--- * renaming a space, deleting it and making it public or private need
---   'AdministerSpace' on it;
+-- * renaming a space, deleting it, making it public or private and giving
+--   it math macros need 'AdministerSpace' on it;
 -- * creating, saving, moving and deleting pages, and uploading and deleting
 --   attachments, need 'Edit' on the page's space (on both spaces, for a page
 --   moved from one to another).
@@ -186,6 +186,15 @@ class (Monad m) => MonadWiki m where
   setSpacePublic :: SpaceId -> Bool -> m (Either WikiError Space)
   default setSpacePublic :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Bool -> m (Either WikiError Space)
   setSpacePublic s = lift . setSpacePublic s
+
+  -- | Give a space its math macros ('Wiki.Core.Space.mathMacros'), which
+  -- its subspaces inherit; the empty text for none. Blank lines at either
+  -- end are dropped. The text is kept as it is: whether KaTeX can read it is
+  -- for the browser to say as it is edited, and a block it cannot read never
+  -- stops a page from being drawn.
+  setSpaceMathMacros :: SpaceId -> Text -> m (Either WikiError Space)
+  default setSpaceMathMacros :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Text -> m (Either WikiError Space)
+  setSpaceMathMacros s = lift . setSpaceMathMacros s
 
   -- | Move a space, with its subspaces and pages, under another space or to
   -- the top level. A move under the space itself or one of its subspaces is

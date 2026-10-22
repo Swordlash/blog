@@ -10,6 +10,10 @@
 -- preview shows a page exactly as it will be read: the same links resolved
 -- the same way, the same islands in the same slots.
 --
+-- A formula is set with the macros of the space's chain and of the
+-- formulas before it on the page ("Wiki.Core.Math"), so the page and its
+-- preview set it the same.
+--
 -- Links in the Markdown are resolved here, against the 'Place' the page is
 -- in: a path to a route by 'resolvePageLink', an @attachment:@ name to the
 -- attachment's URL (which the caller asks the backend for, once per load),
@@ -45,6 +49,7 @@ import Wiki.App.View.Common
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
 import Wiki.Core.Id (AttachmentId)
 import Wiki.Core.Markdown qualified as Md
+import Wiki.Core.Math (spaceMacros)
 import Wiki.Core.Page (Page)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
@@ -110,8 +115,8 @@ options :: (MonadIslands m, MonadUUID m) => Place -> Md.Options PageLink (H.Comp
 options place =
   Md.defaultOptions
     { Md.codeBlock = \k language code -> island k (Islands.CodeBlock language code)
-    , Md.mathInline = \k tex -> island k (Islands.MathInline tex)
-    , Md.mathDisplay = \k tex -> island k (Islands.MathDisplay tex)
+    , Md.mathInline = \k before tex -> island k (Islands.MathInline (spaceDefined <> before) tex)
+    , Md.mathDisplay = \k before tex -> island k (Islands.MathDisplay (spaceDefined <> before) tex)
     , Md.mermaid = \k source -> island k (Islands.Mermaid source)
     , Md.tikz = \k source -> island k (Islands.Tikz source)
     , Md.resolveLink = resolve place
@@ -119,6 +124,10 @@ options place =
     }
   where
     island key = HH.slot_ "island" key Islands.component
+    -- The macros of the space's chain come before the page's own: a page
+    -- defines a macro again over its space's, as a subspace does over its
+    -- parent's.
+    spaceDefined = spaceMacros place.context.spaces place.space.id
 
 resolve :: Place -> Text -> Md.LinkTarget PageLink
 resolve place destination = case Md.classifyDestination destination of

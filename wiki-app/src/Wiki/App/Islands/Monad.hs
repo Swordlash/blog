@@ -16,12 +16,16 @@ module Wiki.App.Islands.Monad
 where
 
 import Control.Monad.Trans.Class (MonadTrans)
+import Data.Aeson (encode)
+import Data.ByteString.Lazy qualified as BSL
+import Data.Text qualified as T
 import Data.Type.Equality (type (~))
-import Halogen.JSBits (JSText, Safety (..), browserJS, toJSText)
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad (BrowserDOM)
 import Protolude
 import Web.DOM.Internal.Types (Element (..))
 import Wiki.Core.Markdown.Tikz (TikzDocument (..))
+import Wiki.Core.Math (Macros (..))
 
 #if !defined(wasm32_HOST_ARCH) && !defined(javascript_HOST_ARCH)
 import Halogen.VDom.DOM.Monad (MemDOM, elementToNode, setTextContent)
@@ -34,7 +38,8 @@ import Halogen.VDom.DOM.Monad (MemDOM, elementToNode, setTextContent)
 -- 'renderMermaid'.
 $( browserJS
      ["jsbits/islands.js"]
-     [ ("js_render_math", "wiki_islands_render_math", Unsafe, [t|Element -> JSText -> Bool -> IO ()|])
+     [ ("js_render_math", "wiki_islands_render_math", Unsafe, [t|Element -> JSText -> Bool -> JSText -> IO ()|])
+     , ("js_check_macros", "wiki_islands_check_macros", Unsafe, [t|JSText -> JSText -> IO JSText|])
      , ("js_render_mermaid", "wiki_islands_render_mermaid", Unsafe, [t|Element -> JSText -> IO ()|])
      , ("js_render_tikz", "wiki_islands_render_tikz", Unsafe, [t|Element -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_highlight", "wiki_islands_highlight", Unsafe, [t|Element -> JSText -> JSText -> IO ()|])
@@ -62,9 +67,20 @@ data MathMode = Inline | Display
 -- An application monad over one that has an instance gets the methods lifted,
 -- so @instance MonadIslands App@ is enough for a transformer stack.
 class (Monad m) => MonadIslands m where
-  renderMath :: MathMode -> Text -> Element -> m ()
-  default renderMath :: (MonadTrans t, MonadIslands n, m ~ t n) => MathMode -> Text -> Element -> m ()
-  renderMath mode tex = lift . renderMath mode tex
+  -- | A formula, set with the macros of its space and of the formulas
+  -- before it on its page ("Wiki.Core.Math"), over the built-in ones.
+  renderMath :: MathMode -> Macros -> Text -> Element -> m ()
+  default renderMath :: (MonadTrans t, MonadIslands n, m ~ t n) => MathMode -> Macros -> Text -> Element -> m ()
+  renderMath mode macros tex = lift . renderMath mode macros tex
+
+  -- | KaTeX's error for a block of macros read over others (those of a
+  -- space's ancestors, for the space's own), if it cannot read all of it:
+  -- what the space's settings show as the block is edited. Natively, and
+  -- in a page without the islands' script, there is no KaTeX to ask, and
+  -- every block reads.
+  checkMacros :: Macros -> Text -> m (Maybe Text)
+  default checkMacros :: (MonadTrans t, MonadIslands n, m ~ t n) => Macros -> Text -> m (Maybe Text)
+  checkMacros macros = lift . checkMacros macros
 
   renderMermaid :: Text -> Element -> m ()
   default renderMermaid :: (MonadTrans t, MonadIslands n, m ~ t n) => Text -> Element -> m ()
@@ -89,7 +105,11 @@ instance (MonadIslands m) => MonadIslands (ReaderT r m)
 -- nothing; nothing runs 'BrowserDOM' there, but code written against it (a
 -- browser test suite) still type-checks.
 instance MonadIslands BrowserDOM where
-  renderMath mode tex element = liftIO $ js_render_math element (toJSText tex) (mode == Display)
+  renderMath mode macros tex element = liftIO $ js_render_math element (toJSText tex) (mode == Display) (macrosJSON macros)
+
+  checkMacros macros block = liftIO $ do
+    message <- fromJSText <$> js_check_macros (macrosJSON macros) (toJSText block)
+    pure (if T.null message then Nothing else Just message)
 
   renderMermaid source element = liftIO $ js_render_mermaid element (toJSText source)
 
@@ -98,11 +118,17 @@ instance MonadIslands BrowserDOM where
 
   highlightCode language code element = liftIO $ js_highlight element (toJSText (fromMaybe "" language)) (toJSText code)
 
+-- | The blocks as a JSON array of strings, the one shape a binding can pass
+-- a list in.
+macrosJSON :: Macros -> JSText
+macrosJSON (Macros blocks) = toJSText (decodeUtf8 (BSL.toStrict (encode blocks)))
+
 #if !defined(wasm32_HOST_ARCH) && !defined(javascript_HOST_ARCH)
 -- | The in-memory document "Halogen.Static" prerenders into: each island
 -- holds its source as text, so a page arrives readable, if unrendered.
 instance MonadIslands MemDOM where
-  renderMath _ = asText
+  renderMath _ _ = asText
+  checkMacros _ _ = pure Nothing
   renderMermaid = asText
   renderTikz source _ = asText source
   highlightCode _ = asText

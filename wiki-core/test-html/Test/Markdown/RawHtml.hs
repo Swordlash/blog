@@ -47,7 +47,7 @@ spec = describe "Markdown.Render, raw HTML" $ do
     it "drops a block element among the text and keeps what is in it" $
       "a <div>b</div> c" `shows'` "<p>a b c</p>"
     it "renders an island between tags, with its key" $ do
-      let opts = defaultOptions {mathInline = \key tex -> HH.span [HP.title (show key.occurrence)] [HH.text tex]}
+      let opts = defaultOptions {mathInline = \key _ tex -> HH.span [HP.title (show key.occurrence)] [HH.text tex]}
       showsWith opts "<mark>$x$</mark> $x$" "<p><mark><span title=\"0\">x</span></mark> <span title=\"1\">x</span></p>"
     it "makes no link inside a link" $ do
       "<a href=\"https://a.example\">x [y](https://b.example)</a>"

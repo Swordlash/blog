@@ -145,6 +145,12 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
             other -> expectationFailure ("expected bytes.bin, kept as bytes, got " <> show other)
           length (Map.toList archive.membership) `shouldBe` 1
 
+    it "imports with no math macros, which version 1 was first written without" $ do
+      golden <- BS.readFile goldenPath
+      case readBack golden of
+        Left why -> expectationFailure (toS why)
+        Right archive -> map (\s -> (s.name, s.mathMacros)) archive.spaces `shouldSatisfy` all ((== "") . snd)
+
   describe "compatibility" $ do
     it "reads a file with fields it does not know, ignoring them" $ do
       st <- edited
@@ -152,13 +158,29 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
           extra = Map.insert "notes.json" "[]" (editRecords "spaces.json" (KeyMap.insert "colour" (String "teal")) (editRecords "manifest.json" (KeyMap.insert "producer" (String "a later wiki")) files))
       fromArchive <$> readArchive extra `shouldBe` Right st
 
+    it "keeps a space's math macros, written only for a space that has them" $ do
+      st <- edited
+      let macros = "\\newcommand{\\vect}[1]{\\mathbf{#1}}\n\\def\\x{1}"
+      ref <- newMemWiki st {current = Just (UserId "user-admin")}
+      _ <- runMemWiki ref $ do
+        exported <- getSpace (path "docs/exported") >>= either (panic . show) pure
+        setSpaceMathMacros exported.id macros
+      withMacros <- (\x -> x {current = Nothing}) <$> readIORef ref
+      let files = filesOf (toArchive goldenTime "test" withMacros)
+          written = case decodeStrict' =<< Map.lookup "spaces.json" files of
+            Just (Array records) -> [(KeyMap.lookup "name" o, KeyMap.lookup "mathMacros" o) | Object o <- toList records]
+            _ -> []
+      [m | (Just (String "Exported"), m) <- written] `shouldBe` [Just (String macros)]
+      [m | (Just (String "Blog"), m) <- written] `shouldBe` [Nothing]
+      fromArchive <$> readArchive files `shouldBe` Right withMacros
+
     it "defaults the fields that may be missing" $ do
       st <- edited
       let files = filesOf (toArchive goldenTime "test" st)
-          thin = editRecords "spaces.json" (KeyMap.delete "public" . KeyMap.delete "parent") files
+          thin = editRecords "spaces.json" (KeyMap.delete "public" . KeyMap.delete "parent" . KeyMap.delete "mathMacros") files
       case readArchive thin of
         Left why -> expectationFailure (toS why)
-        Right archive -> all (\s -> not s.public && isNothing s.parent) archive.spaces `shouldBe` True
+        Right archive -> all (\s -> not s.public && isNothing s.parent && s.mathMacros == "") archive.spaces `shouldBe` True
 
     it "refuses an archive of a newer version, saying so" $ do
       st <- edited

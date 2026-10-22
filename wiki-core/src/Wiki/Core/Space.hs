@@ -25,6 +25,11 @@ data Space = Space
   , public :: Bool
   -- ^ Whether anyone may read it, signed in or not; its subspaces inherit
   -- that as they inherit any grant (see "Wiki.Core.Permission").
+  , mathMacros :: Text
+  -- ^ TeX macros for the formulas of its pages and of its subspaces' pages,
+  -- as @\\newcommand@ lines (or any definitions KaTeX reads); empty for
+  -- none. A subspace's own come after its parent's, so that a macro it
+  -- defines again is its own ("Wiki.Core.Math").
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

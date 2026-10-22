@@ -13,11 +13,11 @@ import Wiki.App.Islands qualified as Islands
 spec :: Spec
 spec = describe "Wiki.App.Islands, prerendered" $ do
   it "shows inline mathematics as its TeX, in a span" $
-    renderToHtml Islands.component (MathInline "x^2")
+    renderToHtml Islands.component (MathInline mempty "x^2")
       `shouldReturn` "<span class=\"wiki-math wiki-math-inline\">x^2</span>"
 
   it "shows displayed mathematics as its TeX, in a div" $
-    renderToHtml Islands.component (MathDisplay "\\frac{1}{2}")
+    renderToHtml Islands.component (MathDisplay mempty "\\frac{1}{2}")
       `shouldReturn` "<div class=\"wiki-math wiki-math-display\">\\frac{1}{2}</div>"
 
   it "shows a diagram as its Mermaid source" $

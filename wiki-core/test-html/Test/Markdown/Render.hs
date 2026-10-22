@@ -11,6 +11,7 @@ import Protolude
 import Test.Hspec
 import Test.Markdown.Html
 import Wiki.Core.Markdown
+import Wiki.Core.Math (Macros (..))
 
 shows' :: Text -> Text -> Expectation
 shows' source expected = markdown source `shouldReturn` expected
@@ -86,8 +87,8 @@ spec = describe "Markdown.Render" $ do
         opts =
           defaultOptions
             { codeBlock = \key lang code -> HH.span [HP.title (keyed key)] [HH.text (fromMaybe "-" lang <> ":" <> code)]
-            , mathInline = \key tex -> HH.span [HP.title (keyed key)] [HH.text ("i:" <> tex)]
-            , mathDisplay = \key tex -> HH.span [HP.title (keyed key)] [HH.text ("d:" <> tex)]
+            , mathInline = \key _ tex -> HH.span [HP.title (keyed key)] [HH.text ("i:" <> tex)]
+            , mathDisplay = \key _ tex -> HH.span [HP.title (keyed key)] [HH.text ("d:" <> tex)]
             , mermaid = \key src -> HH.span [HP.title (keyed key)] [HH.text ("m:" <> src)]
             , tikz = \key src -> HH.span [HP.title (keyed key)] [HH.text ("t:" <> src)]
             }
@@ -100,6 +101,23 @@ spec = describe "Markdown.Render" $ do
       $ showsWith opts "$x$ $x$ $y$\n\n```\nx\n```\n\n```math\nx\n```"
       $ "<p><span title=\"0\">i:x</span> <span title=\"1\">i:x</span> <span title=\"0\">i:y</span></p>"
         <> "<span title=\"0\">-:x\n</span><span title=\"1\">d:x\n</span>"
+    it "hands each formula the formulas before it that define macros, in the document's order" $ do
+      let defined (Macros blocks) = T.intercalate "|" blocks
+          withMacros =
+            defaultOptions
+              { mathInline = \_ earlier tex -> HH.span [HP.title (defined earlier)] [HH.text tex]
+              , mathDisplay = \_ earlier tex -> HH.div [HP.title (defined earlier)] [HH.text tex]
+              }
+      showsWith withMacros "$\\newcommand{\\a}{1}$ $x$\n\n| $\\def\\b{2}$ |\n|---|\n\n$$\\a\\b$$\n\n```math\n\\renewcommand{\\a}{3}\n```\n\nLast $y$[^1]\n\n[^1]: $z$" $
+        "<p><span title=\"\">\\newcommand{\\a}{1}</span> <span title=\"\\newcommand{\\a}{1}\">x</span></p>"
+          <> "<table><thead><tr><th><span title=\"\\newcommand{\\a}{1}\">\\def\\b{2}</span></th></tr></thead></table>"
+          <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\a\\b</div>"
+          <> "<div title=\"\\newcommand{\\a}{1}|\\def\\b{2}\">\\renewcommand{\\a}{3}\n</div>"
+          <> "<p>Last <span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">y</span>"
+          <> "<sup class=\"footnote-ref\"><a href=\"#fn-1\" id=\"fnref-1\">1</a></sup></p>"
+          <> "<section class=\"footnotes\"><ol><li id=\"fn-1\"><p><span title=\"\\newcommand{\\a}{1}|\\def\\b{2}|\\renewcommand{\\a}{3}\n\">z</span>"
+          <> " <a class=\"footnote-back\" href=\"#fnref-1\">↩</a></p></li></ol></section>"
+
     it "renders islands as child components in slots indexed by their keys" $ do
       let child :: H.Component H.VoidF Text Void MemDOM
           child =

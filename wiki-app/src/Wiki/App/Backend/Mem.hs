@@ -155,6 +155,7 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   createSpace parent = write . createSpaceIn parent
   renameSpace sid = write . renameSpaceIn sid
   setSpacePublic sid = write . setSpacePublicIn sid
+  setSpaceMathMacros sid = write . setSpaceMathMacrosIn sid
   moveSpace sid = write . moveSpaceIn sid
   deleteSpace = write . deleteSpaceIn
   listPages = query . listPagesIn

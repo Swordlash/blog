@@ -21,6 +21,7 @@ space s parent public =
     , slug = either (panic . show) identity (mkSlug s)
     , parent = (\p -> p.id) <$> parent
     , public
+    , mathMacros = ""
     }
 
 -- | Two private trees and a public one:

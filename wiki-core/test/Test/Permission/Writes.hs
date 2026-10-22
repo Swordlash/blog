@@ -17,6 +17,7 @@ space s parent =
     , slug = either (panic . show) identity (mkSlug s)
     , parent = (\p -> p.id) <$> parent
     , public = False
+    , mathMacros = ""
     }
 
 -- | @eng ── backend@ and @ops@.

@@ -37,6 +37,7 @@ module Wiki.App.Backend.Mem.State
   , createSpaceIn
   , renameSpaceIn
   , setSpacePublicIn
+  , setSpaceMathMacrosIn
   , moveSpaceIn
   , deleteSpaceIn
   , createPageIn
@@ -167,7 +168,7 @@ insertSpace parent name public st0 =
   let (i, st) = newId "space" st0
       base = fromMaybe (fallbackSlug "space") (slugify name)
       slug = freshSlug (isJust . findChild (Map.elems st.spaces) parent) base
-      space = Space {id = SpaceId i, name, slug, parent, public}
+      space = Space {id = SpaceId i, name, slug, parent, public, mathMacros = ""}
    in (st {spaces = Map.insert space.id space st.spaces}, space)
 
 -- | Add a page with a slug made from its title and free among its siblings,
@@ -288,7 +289,7 @@ nonBlank what t = case T.strip t of
 -- @parent@ and @slug@ are fields of pages too, which a record update could
 -- not tell apart.
 respace :: Maybe SpaceId -> Slug -> Space -> Space
-respace parent slug s = Space {id = s.id, name = s.name, slug, parent, public = s.public}
+respace parent slug s = Space {id = s.id, name = s.name, slug, parent, public = s.public, mathMacros = s.mathMacros}
 
 -- | A page in another place, perhaps in another space; see 'respace'.
 repage :: SpaceId -> Maybe PageId -> Slug -> Page -> Page
@@ -411,11 +412,22 @@ adjustSpace sid f st = do
 renameSpaceIn :: SpaceId -> Text -> Write Space
 renameSpaceIn sid name = adjustSpace sid $ \s -> do
   n <- nonBlank "A space's name" name
-  pure Space {id = s.id, name = n, slug = s.slug, parent = s.parent, public = s.public}
+  pure Space {id = s.id, name = n, slug = s.slug, parent = s.parent, public = s.public, mathMacros = s.mathMacros}
 
 -- | Make a space public or private.
 setSpacePublicIn :: SpaceId -> Bool -> Write Space
 setSpacePublicIn sid public = adjustSpace sid (\s -> pure s {public})
+
+-- | Give a space new math macros: the text as it is, but for blank lines
+-- at its ends, and nothing when it is blank. Whether KaTeX can read it is
+-- not checked here: KaTeX runs in the browser, which checks a block as it
+-- is edited, and a block it cannot read never stops a page from being
+-- drawn ("Wiki.Core.Math").
+setSpaceMathMacrosIn :: SpaceId -> Text -> Write Space
+setSpaceMathMacrosIn sid macros = adjustSpace sid (\s -> pure s {mathMacros = trimLines macros})
+  where
+    trimLines = T.intercalate "\n" . reverse . dropWhile blank . reverse . dropWhile blank . T.lines
+    blank = T.null . T.strip
 
 -- | Move a space under another or to the top level.
 moveSpaceIn :: SpaceId -> Maybe SpaceId -> Write Space

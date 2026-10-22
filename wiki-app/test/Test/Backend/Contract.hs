@@ -56,6 +56,7 @@ spec _ newFixture = before newFixture $ describe "MonadWiki contract" $ do
   readingPages
   creatingSpaces
   changingSpaces
+  mathMacros
   movingSpaces
   deletingSpaces
   creatingPages
@@ -324,6 +325,48 @@ changingSpaces = describe "renameSpace and setSpacePublic" $ do
     spaceNames run Anonymous `shouldReturn` ["Blog", "Docs", "Projects", "Team"]
     void (run admin (setSpacePublic team.id False) >>= ok)
     getPageAt run Anonymous "team" "team-handbook" `shouldReturn` Left Forbidden
+
+mathMacros :: (MonadWiki m) => SpecWith (Fixture m)
+mathMacros = describe "setSpaceMathMacros" $ do
+  it "gives a space math macros, which every reader of the space sees" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    let block = "\\newcommand{\\vect}[1]{\\mathbf{#1}}\n\\newcommand{\\Hom}{\\operatorname{Hom}}"
+    s <- run admin (setSpaceMathMacros blog.id block) >>= ok
+    (s.mathMacros, s.name, slugOf s, s.public) `shouldBe` (block, blog.name, slugOf blog, blog.public)
+    found <- spaceAt run Anonymous "blog"
+    found.mathMacros `shouldBe` block
+    listed <- run Anonymous listSpaces
+    [x.mathMacros | x <- listed, x.id == blog.id] `shouldBe` [block]
+
+  it "keeps the block as written, but for blank lines at its ends, and takes them away with a blank one" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    s <- run admin (setSpaceMathMacros blog.id "\n  \n\\def\\a{1}\n\n  \\def\\b{2}  \n\n") >>= ok
+    s.mathMacros `shouldBe` "\\def\\a{1}\n\n  \\def\\b{2}  "
+    cleared <- run admin (setSpaceMathMacros blog.id " \n ") >>= ok
+    cleared.mathMacros `shouldBe` ""
+
+  it "keeps a block KaTeX may not read: that is the browser's to say" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    s <- run admin (setSpaceMathMacros blog.id "\\newcommand{\\x}{\\frac{") >>= ok
+    s.mathMacros `shouldBe` "\\newcommand{\\x}{\\frac{"
+
+  it "keeps a space's macros when it is renamed, made public and moved" $ \(Fixture run) -> do
+    projects <- spaceAt run admin "team/projects"
+    _ <- run admin (setSpaceMathMacros projects.id "\\def\\x{1}") >>= ok
+    _ <- run admin (renameSpace projects.id "Plans") >>= ok
+    _ <- run admin (setSpacePublic projects.id True) >>= ok
+    moved <- run admin (moveSpace projects.id Nothing) >>= ok
+    moved.mathMacros `shouldBe` "\\def\\x{1}"
+
+  it "takes AdministerSpace" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    team <- spaceAt run admin "team"
+    run editor (setSpaceMathMacros blog.id "\\def\\x{1}") >>= (`shouldFailWith` Forbidden)
+    run Anonymous (setSpaceMathMacros blog.id "\\def\\x{1}") >>= (`shouldFailWith` Forbidden)
+    run reader (setSpaceMathMacros team.id "\\def\\x{1}") >>= (`shouldFailWith` Forbidden)
+    run admin (setSpaceMathMacros (SpaceId "no-such-space") "") >>= (`shouldFailWith` NotFound)
+    unchanged <- spaceAt run admin "blog"
+    unchanged.mathMacros `shouldBe` ""
 
 --------------------------------------------------------------------------------
 -- Moving spaces
@@ -714,6 +757,7 @@ neverThrown = describe "errors" $ do
           , void <$> createSpace (Just s) "X"
           , void <$> renameSpace s "X"
           , void <$> setSpacePublic s True
+          , void <$> setSpaceMathMacros s "\\newcommand{\\x}{1}"
           , void <$> moveSpace s Nothing
           , deleteSpace s
           , void <$> listPages s

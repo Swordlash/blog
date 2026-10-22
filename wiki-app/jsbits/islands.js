@@ -6,10 +6,20 @@
 // A page without that script (a bundle that failed to load) still shows each
 // island's source, as the prerendered page does, rather than nothing.
 
-function wiki_islands_render_math(element, tex, displayMode) {
+// `macros` is a JSON array of blocks of TeX definitions (Wiki.Core.Math's
+// Macros), since a binding passes text rather than arrays.
+function wiki_islands_render_math(element, tex, displayMode, macros) {
   const islands = globalThis.wikiIslands;
-  if (islands) islands.renderMath(element, tex, displayMode);
+  if (islands) islands.renderMath(element, tex, displayMode, JSON.parse(macros));
   else element.textContent = tex;
+}
+
+// KaTeX's error for a block of macros over others (a JSON array, as
+// above), or the empty string; also the empty string without the page's
+// islands.js, which has nothing to check a block with.
+function wiki_islands_check_macros(macros, block) {
+  const islands = globalThis.wikiIslands;
+  return islands ? islands.checkMacros(JSON.parse(macros), block) : "";
 }
 
 function wiki_islands_render_mermaid(element, source) {

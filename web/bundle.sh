@@ -8,7 +8,9 @@
 # It writes:
 #
 #   islands.js       a classic script publishing globalThis.wikiIslands
-#                    (web/src/islands.js), with KaTeX and highlight.js in it,
+#                    (web/src/islands.js), with KaTeX (and its mhchem, and
+#                    the wiki's built-in macros, web/src/katex-macros.tex)
+#                    and highlight.js in it,
 #                    and globalThis.wikiArchive (web/src/archive.js), the zip
 #                    files of the demo's export and import, with fflate;
 #   islands/         Mermaid, as ES modules split by diagram type, which
@@ -33,8 +35,12 @@ mkdir -p "$out_dir"
 # A classic script, not a module: the page and the browser test runner load it
 # with a plain <script>, before the application, so that the global is there
 # by the time the application first fills an island.
+# KaTeX's built-in macros (web/src/katex-macros.tex) go in as text, once
+# KaTeX has been seen to read every one of them.
+node web/check-macros.mjs
 npx esbuild web/src/islands.js \
   --bundle --minify --format=iife --target=es2022 --log-level=warning \
+  --loader:.tex=text \
   --outfile="$out_dir/islands.js"
 
 # Mermaid loads each kind of diagram with a dynamic import of its own; split

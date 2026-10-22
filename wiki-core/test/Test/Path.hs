@@ -20,7 +20,7 @@ slugs :: [Text] -> [Slug]
 slugs = map slug
 
 space :: Text -> Text -> Maybe Text -> Space
-space i s parent = Space {id = SpaceId i, name = s, slug = slug s, parent = SpaceId <$> parent, public = False}
+space i s parent = Space {id = SpaceId i, name = s, slug = slug s, parent = SpaceId <$> parent, public = False, mathMacros = ""}
 
 -- | Two trees, with a slug (@backend@) under two parents.
 eng, backend, api, blog, blogBackend :: Space

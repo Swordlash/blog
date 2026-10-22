@@ -31,7 +31,7 @@ spec m = do
   describe "a page without a TikZ picture" $
     it "never fetches TikZJax, whatever other islands it draws" $
       runPage $ do
-        ui <- mount m harness (MathInline "x^2")
+        ui <- mount m harness (MathInline mempty "x^2")
         _ <- find ui "span.wiki-math-inline .katex"
         changeTo ui (Mermaid "graph LR\n  a --> b")
         _ <- waitForDiagram ui
@@ -85,7 +85,7 @@ spec m = do
 
   describe "MathInline" $ do
     it "is set by KaTeX, in the line" $ runPage $ do
-      ui <- mount m harness (MathInline "x^2")
+      ui <- mount m harness (MathInline mempty "x^2")
       island <- find ui "span.wiki-math-inline"
       _ <- findIn island ".katex .katex-html"
       countIn island ".katex-display" `shouldReturn` 0
@@ -93,21 +93,21 @@ spec m = do
       findIn island "annotation" >>= (`shouldHaveText` "x^2")
 
     it "is set again when its TeX changes" $ runPage $ do
-      ui <- mount m harness (MathInline "x^2")
+      ui <- mount m harness (MathInline mempty "x^2")
       island <- find ui "span.wiki-math-inline"
       findIn island "annotation" >>= (`shouldHaveText` "x^2")
-      changeTo ui (MathInline "y_1")
+      changeTo ui (MathInline mempty "y_1")
       findIn island "annotation" >>= (`shouldHaveText` "y_1")
       find ui "span.wiki-math-inline" >>= (`shouldBeSameElement` island)
 
     it "shows what KaTeX cannot parse as an error in its place" $ runPage $ do
-      ui <- mount m harness (MathInline "\\frac{")
+      ui <- mount m harness (MathInline mempty "\\frac{")
       find ui "span.wiki-math-inline .katex-error" >>= (`shouldHaveText` "\\frac{")
 
   describe "MathDisplay" $
     it "is set by KaTeX, on its own" $
       runPage $ do
-        ui <- mount m harness (MathDisplay "\\int_0^1 x \\, dx")
+        ui <- mount m harness (MathDisplay mempty "\\int_0^1 x \\, dx")
         _ <- find ui "div.wiki-math-display .katex-display .katex-html"
         pure ()
 
@@ -173,7 +173,7 @@ spec m = do
       runPage $ do
         ui <- mount m harness (CodeBlock Nothing "x^2")
         _ <- find ui "pre.wiki-code code"
-        changeTo ui (MathInline "x^2")
+        changeTo ui (MathInline mempty "x^2")
         _ <- find ui "span.wiki-math-inline .katex"
         count ui "pre" `shouldReturn` 0
   where
