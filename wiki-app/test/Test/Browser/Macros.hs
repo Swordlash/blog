@@ -50,6 +50,13 @@ spec m = do
       set <- find ui ".wiki-math .katex"
       withoutError set
 
+    it "has the definitions of a display formula before it that is tagged, without its tag" $ runPage $ do
+      ui <- mount m (island (MathDisplay (Macros ["x \\tag{1} \\newcommand{\\after}{\\mathsf{A}}"]) "\\after")) ()
+      set <- find ui ".wiki-math-display .katex-display"
+      withoutError set
+      countIn set ".tag" `shouldReturn` 0
+      outerHTML set >>= (`shouldSatisfy` T.isInfixOf "<mi mathvariant=\"sans-serif\">A</mi>")
+
     it "keeps its own definitions to itself" $ runPage $ do
       ui <- mount m (island (MathInline mempty "\\newcommand{\\own}{o}\\own")) ()
       _ <- find ui ".wiki-math .katex"

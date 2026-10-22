@@ -16,6 +16,9 @@ import katex from "katex";
 // \newcommand\name. A control word is letters (and @, as KaTeX reads
 // them); a control symbol one other character.
 const newcommand = /\\newcommand\s*(?:\{\s*(\\(?:[A-Za-z@]+|[^A-Za-z@\s]))\s*\}|(\\(?:[A-Za-z@]+|[^A-Za-z@\s])))/g;
+// The macros KaTeX sets in the course of reading a formula, which are its
+// own business and not a definition (see readMacros).
+const internal = ["\\df@tag", "\\@eqnsw", "\\current@color", "\\cr", "|", "\\|"];
 // A comment, to the end of its line; not an escaped \%.
 const comment = /(^|[^\\])%.*$/gm;
 
@@ -41,15 +44,22 @@ export const forgetting = (macros, tex) => {
 // handed and these are shared), and KaTeX's error if it could not read all
 // of the block. Read as one group, so that a \newcommand or a \def at its
 // top level holds after it, and one inside braces only there, as in TeX.
-// What it defined before an error is kept.
+// What it defined before an error is kept. Read as display math, which
+// takes everything inline math does and more (\tag, align), so that a
+// display formula's definitions after one of those are not lost.
 export const readMacros = (macros, tex) => {
   const read = forgetting(macros, tex);
   let error = null;
   try {
-    katex.renderToString(String(tex), { macros: read, globalGroup: true, throwOnError: true, strict: "ignore" });
+    katex.renderToString(String(tex), { macros: read, globalGroup: true, displayMode: true, throwOnError: true, strict: "ignore" });
   } catch (caught) {
     error = caught;
   }
+  // What KaTeX sets for itself as it reads: a block's \tag, an align's
+  // equation numbering, a \color's colour, an environment's \cr. Read as
+  // one group, these would outlive the block and reach the formulas after
+  // it (every one of them tagged), so they go.
+  for (const name of internal) delete read[name];
   return { macros: Object.freeze(read), error };
 };
 
