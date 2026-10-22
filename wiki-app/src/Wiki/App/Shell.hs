@@ -3,7 +3,8 @@
 -- | The application's frame, around whatever the route shows: a header with
 -- the site's name, breadcrumbs, the search box ("Wiki.App.View.Search") and
 -- the demo's user switcher; a sidebar with the tree of spaces, the current space's
--- pages under it; and the content of the route.
+-- pages under it; the content of the route; and a footer saying what the wiki
+-- is built with.
 --
 -- The shell holds what every view needs and loads it itself: who is signed
 -- in, the tree of spaces, and the space the route is in with its pages
@@ -166,6 +167,7 @@ component =
             {{ sidebar st }}
             <main class="wiki-content">{% if isJust st.leaving %}{{ leaveConfirm }}{% end %}{{ content st }}</main>
           </div>
+          {{ footer }}
         </div>
       |]
 
@@ -357,6 +359,13 @@ component =
           <p>There is nothing at this address.</p>
           {{ Router.link st.router Followed Home [HP.class_ "button"] [HH.text "Go to the front page"] }}
         </section>
+      |]
+
+    -- One line at the foot of every page, the prerendered ones too.
+    footer :: H.ComponentHTML Action Slots m
+    footer =
+      [hh|
+        <footer class="wiki-footer">Built with <a href="https://github.com/Swordlash/haskell-halogen">haskell-halogen</a></footer>
       |]
 
     handleAction :: Action -> H.HalogenM State Action Slots output m ()

@@ -238,6 +238,26 @@ select {
   padding: 1.5rem 2.25rem 4rem;
 }
 
+/* One quiet line under everything: what the wiki is built with. */
+.wiki-footer {
+  padding: 0.6rem 1.25rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.wiki-footer a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+}
+
+.wiki-footer a:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
 @media (max-width: 760px) {
   .wiki-header {
     flex-wrap: wrap;

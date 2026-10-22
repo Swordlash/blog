@@ -130,6 +130,14 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     page `contains` "href=\"/s/blog/new-page/hello-world/\">New subpage</a>"
     page `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a>"
 
+  it "ends every page with the footer, linking to haskell-halogen" $ do
+    let footer = "<footer class=\"wiki-footer\">Built with <a href=\"https://github.com/Swordlash/haskell-halogen\">haskell-halogen</a></footer>"
+    for_ [Home, Unknown, Space (slugs ["docs"]), Page (slugs ["docs"]) (slugs ["tour"]), EditPage (slugs ["docs"]) (slugs ["tour"])] $ \r -> do
+      Rendered {html} <- render (as Nothing) r
+      html `contains` footer
+      -- The frame's last element, after its body.
+      (footer <> "</div>") `T.isSuffixOf` html `shouldBe` True
+
   it "writes its links under the base path" $ do
     Rendered {html} <- renderRoute (as Nothing) "/wiki/" Home
     html `contains` "href=\"/wiki/s/docs/\""

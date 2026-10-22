@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+Every page ends with a footer, "Built with haskell-halogen", the name a link to
+haskell-halogen's repository; the prerendered pages have it too.
+
 The views are written as HTML: the markup of the shell, the space, page, new
 space, editor, search and search results views and the islands is in
 haskell-halogen-th's `hh` quotes rather than nested `Halogen.HTML` calls, with
