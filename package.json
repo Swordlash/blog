@@ -18,6 +18,7 @@
     "dev-test": "sh toolchain/dev-test.sh",
     "smoke-test": "node toolchain/smoke-test.mjs",
     "format": "sh run_fourmolu.sh",
+    "format-check": "sh run_fourmolu.sh --mode check",
     "clean": "rm -rf dist-newstyle/wasm/public"
   },
   "allowScripts": {
