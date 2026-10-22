@@ -14,16 +14,14 @@ function wiki_islands_render_math(element, tex, displayMode) {
 
 function wiki_islands_render_mermaid(element, source) {
   const islands = globalThis.wikiIslands;
-  if (islands) return islands.renderMermaid(element, source);
-  element.textContent = source;
-  return Promise.resolve();
+  if (islands) islands.renderMermaid(element, source);
+  else element.textContent = source;
 }
 
 function wiki_islands_render_tikz(element, source, preamble, picture) {
   const islands = globalThis.wikiIslands;
-  if (islands) return islands.renderTikz(element, source, preamble, picture);
-  element.textContent = source;
-  return Promise.resolve();
+  if (islands) islands.renderTikz(element, source, preamble, picture);
+  else element.textContent = source;
 }
 
 function wiki_islands_highlight(element, language, code) {

@@ -96,11 +96,11 @@ component =
     into island element = case island of
       MathInline tex -> H.liftEffect (renderMath Inline tex element)
       MathDisplay tex -> H.liftEffect (renderMath Display tex element)
-      -- Drawing a diagram waits (for Mermaid's bundle, the first time), so
-      -- it runs off the loop, and the page goes on meanwhile. A newer
-      -- input's drawing can overtake it; islands.js keeps the newer one.
-      Mermaid source -> lift (renderMermaid source element)
-      -- As a diagram: TeX's files are fetched the first time, and TeX runs
-      -- in a worker.
-      Tikz source -> lift (renderTikz source (tikzDocument source) element)
+      -- A diagram and a picture are only started here, and drawn into the
+      -- element when they are done (Mermaid's bundle, TeX's files are
+      -- fetched the first time; TeX runs in a worker); the page goes on
+      -- meanwhile. A newer input's drawing can overtake an older one;
+      -- islands.js keeps the newer.
+      Mermaid source -> H.liftEffect (renderMermaid source element)
+      Tikz source -> H.liftEffect (renderTikz source (tikzDocument source) element)
       CodeBlock language code -> H.liftEffect (highlightCode language code element)

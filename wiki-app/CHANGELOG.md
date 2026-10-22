@@ -25,6 +25,13 @@ editor's toolbar has a TikZ button, the Markdown guide a picture, and the
 Diagrams page a commutative diagram and a plot. (A demo kept in a browser
 from before shows the new pages after "Reset the demo content".)
 
+`renderMermaid` and `renderTikz` start the drawing and return, and the
+island component calls them with `liftEffect`: islands.js fills the element
+when the drawing is done. They used to wait for it, from a `lift`, and in
+the built page a link followed while a page's diagram or picture was still
+being drawn then left the page as it was; the smoke test now follows links
+from a page whose picture is held back.
+
 The demo's whole wiki can be exported and imported as one zip file, from the
 foot of the user menu. "Export the wiki" downloads `wiki-<date>.zip`, an
 archive in `wiki-core`'s `Wiki.Core.Export` format (see `docs/export.md`): a

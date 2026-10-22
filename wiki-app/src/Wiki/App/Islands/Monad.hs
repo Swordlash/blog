@@ -29,13 +29,14 @@ import Halogen.VDom.DOM.Monad (MemDOM, elementToNode, setTextContent)
 
 -- One binding list for every backend: embedded in the wasm JSFFI module there,
 -- an inert stub natively. Mermaid and TikZJax draw asynchronously (they may
--- fetch their own bundles first, and TeX runs in a worker), so their bindings
--- are safe imports, which wait for the promise.
+-- fetch their own bundles first, and TeX runs in a worker), but their
+-- bindings only start the drawing and do not wait for it: see
+-- 'renderMermaid'.
 $( browserJS
      ["jsbits/islands.js"]
      [ ("js_render_math", "wiki_islands_render_math", Unsafe, [t|Element -> JSText -> Bool -> IO ()|])
-     , ("js_render_mermaid", "wiki_islands_render_mermaid", Safe, [t|Element -> JSText -> IO ()|])
-     , ("js_render_tikz", "wiki_islands_render_tikz", Safe, [t|Element -> JSText -> JSText -> JSText -> IO ()|])
+     , ("js_render_mermaid", "wiki_islands_render_mermaid", Unsafe, [t|Element -> JSText -> IO ()|])
+     , ("js_render_tikz", "wiki_islands_render_tikz", Unsafe, [t|Element -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_highlight", "wiki_islands_highlight", Unsafe, [t|Element -> JSText -> JSText -> IO ()|])
      ]
  )
@@ -47,12 +48,16 @@ data MathMode = Inline | Display
 
 -- | Filling an island's element, replacing whatever it held.
 --
--- 'renderMath' and 'highlightCode' are synchronous: a component calls them
--- with 'Halogen.liftEffect'. 'renderMermaid' and 'renderTikz' return once
--- the drawing is done, which can take a fetch (and for TikZ a run of TeX),
--- so a component calls them with 'lift' and the rest of the page goes on
--- meanwhile. None of them fails: what a library rejects is shown in the
--- element as the library's error.
+-- Each returns at once, so a component calls them with 'Halogen.liftEffect'.
+-- 'renderMath' and 'highlightCode' have filled the element by then.
+-- 'renderMermaid' and 'renderTikz' have only started: a drawing can take a
+-- fetch (and for TikZ a run of TeX), and the library fills the element when
+-- it is done, unless the element was asked for something newer meanwhile
+-- (@web/src/islands.js@ keeps count). They do not wait for it: when they
+-- did (a safe import, forced, from a component's 'lift'), following a link
+-- in the built page while a page's diagram or picture was still being drawn
+-- left the page as it was, for as long as anyone watched. Why is not known
+-- yet (the browser tests' harness does not show it); not waiting avoids it.
 --
 -- An application monad over one that has an instance gets the methods lifted,
 -- so @instance MonadIslands App@ is enough for a transformer stack.
@@ -86,12 +91,10 @@ instance (MonadIslands m) => MonadIslands (ReaderT r m)
 instance MonadIslands BrowserDOM where
   renderMath mode tex element = liftIO $ js_render_math element (toJSText tex) (mode == Display)
 
-  -- On wasm a safe import's result is a thunk that waits for the promise
-  -- only when forced: unforced, this would return while Mermaid still drew.
-  renderMermaid source element = liftIO $ evaluate =<< js_render_mermaid element (toJSText source)
+  renderMermaid source element = liftIO $ js_render_mermaid element (toJSText source)
 
   renderTikz source TikzDocument {preamble, picture} element =
-    liftIO $ evaluate =<< js_render_tikz element (toJSText source) (toJSText preamble) (toJSText picture)
+    liftIO $ js_render_tikz element (toJSText source) (toJSText preamble) (toJSText picture)
 
   highlightCode language code element = liftIO $ js_highlight element (toJSText (fromMaybe "" language)) (toJSText code)
 

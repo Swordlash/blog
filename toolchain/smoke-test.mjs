@@ -431,6 +431,27 @@ try {
   );
   await cold.context().close();
 
+  // A page left while its picture is still being drawn: the next page shows
+  // at once. (When an island's component waited for its drawing, following
+  // a link then left the page as it was; see Wiki.App.Islands.Monad.) TeX's
+  // format is held back for a while, so that the picture is still being
+  // drawn when the links are followed.
+  const hurried = await newPage();
+  await hurried.route("**/tikzjax/core.dump.gz", async (route) => {
+    await new Promise((later) => setTimeout(later, 5000));
+    await route.continue();
+  });
+  await load(hurried, "/s/docs/p/markdown-guide/");
+  assert.equal(await hurried.locator("#app .wiki-tikz > svg").count(), 0, "the picture was drawn before the page was left");
+  await hurried.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
+  await hurried.locator("#app .editor-text").waitFor({ timeout: 5000 });
+  await hurried.goBack();
+  await hurried.locator("#app .page-view h1", { hasText: "Markdown guide" }).waitFor({ timeout: 5000 });
+  await hurried.locator("#app .wiki-sidebar .page-tree a", { hasText: "Mathematics" }).click();
+  await hurried.locator("#app .page-view h1", { hasText: "Mathematics" }).waitFor({ timeout: 5000 });
+  await hurried.context().close();
+  console.log("ok: a page left while its TikZ picture is being drawn gives way to the next at once");
+
   // ---- 2. A walk through the demo, in one page -------------------------------
 
   const page = await newPage();
