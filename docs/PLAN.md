@@ -233,8 +233,19 @@ point of this phase.
   at the bottom of every page, "Built with haskell-halogen", with the name linking to
   https://github.com/Swordlash/haskell-halogen, styled quietly in `web/style.css`,
   present in the prerendered pages too (the smoke test checks it is there).
-- **WP1.10 Hydrate the demo.** haskell-halogen `7c78cfb` ("Hydrate prerendered pages
-  instead of rendering over them") adds `hydrateUI`, with `runUI`'s signature, which
+- **WP1.10 Hydrate the demo and take HH-2's fix.** One pin bump (its own commit) to
+  haskell-halogen's `master` once the owner has merged haskell-halogen#50 (IndexedDB)
+  and #51 (listener-side `preventDefault`); the bump must cover `jsbits` as well as
+  `core` (`Value.hs` changed). Then two things. First, HH-2's API: wrap the form submits
+  in `View/Space.hs`, `View/Page.hs`, `View/NewSpace.hs` and `View/Editor.hs` in
+  `HE.preventingDefault` and drop their `H.liftEffect (preventDefault ev)`; move the
+  editor's key decision (Ctrl+S, Tab) and the search box's (arrows, Enter, mousedown
+  `KeepFocus`) into the handler functions as pure reads so the property can be wrapped;
+  do the same for `followArticleClick` in `Page.hs` and `Preview.hs` (the `js_clicked_href`
+  decision into a pure handler); for the editor's `DragOver`/`Dropped`, prevent in the
+  listener and read `dataTransfer` files there too, since they are gone once the dispatch
+  is over (report what that needs); remove the 300 ms `settleAfterSwitch` pause from the
+  smoke test, which then guards the fix. Second, hydration: `7c78cfb` adds `hydrateUI`, with `runUI`'s signature, which
   adopts the HTML `Halogen.Static` prerendered instead of emptying `#app` and building it
   again: text and elements are kept, listeners attached, every mismatch repaired. Bump
   the `source-repository-package` pin to it (its own commit; `MonadDOM` gains
@@ -634,6 +645,24 @@ Amended by the planning session after each work package's report.
   one name see each other, which is the reload test; distinct names isolate tests); the pin
   bump must cover `jsbits` as well as `core`; `VersionTooLow` on an old on-disk version is
   the demo's to handle (reset).
+- **HH-2 done** ([haskell-halogen#51](https://github.com/Swordlash/haskell-halogen/pull/51),
+  branch `router-prevent-default`, head `3347986`; the owner merges there). Cause,
+  corrected: on wasm a render never yields midway; a trusted click's listener is a sync
+  export that, while waiting for its own thread, runs whatever Haskell threads are
+  runnable (the rest of the switch's work, a render), and when one takes the loop first
+  the click's action is queued past the browser's default. Measured on the built demo
+  (fresh page, tour, switch to admin, click at once): 25 of 60 loaded a page before,
+  0 of 60 after. API: `HE.preventingDefault` and `HE.stoppingPropagation` wrap any
+  handler property; the listener applies them while the event is dispatched, only when
+  the handler makes an action; `Router.link` uses it by default; `follow` still prevents
+  for a hand-made `Follow`; `H.liftEffect` unchanged. Breaking: `Prop`'s `Handler` gains
+  `HandlerOptions` (`Core.withHandlerOptions`), `buildProp` needs `MonadIO`. Deterministic
+  reproduction in hspec-halogen (`Busy`: a child created during a render clicks the link
+  from `initialState`), 3 of 6 examples failed before, all pass after; one example states
+  that an action-side `preventDefault` is too late. The th and hooks examples' forms
+  fixed; hooks' `Extra.Actions.Events` helpers documented as action-side. Blog places with
+  the same race listed under WP1.10. Possible core follow-up, not done: `continueAsync`
+  running the listener's own thread before other runnable threads.
 - **Footer (owner's request):** "Built with haskell-halogen" linking to the repository,
   on every page; added to WP1.9 as the first `hh` view.
 - **Toolbar and HTML in pages (owner's request):** decision 13, WP1.12 (toolbar over pure
