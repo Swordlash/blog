@@ -2,16 +2,18 @@ module Main (main) where
 
 import Protolude
 import Test.Backend.Mem qualified as Mem
-import Test.Backend.Rules qualified as Rules
 import Test.Demo qualified as Demo
-import Test.Hello qualified as Hello
 import Test.Hspec (hspec)
 import Test.Islands qualified as Islands
+import Test.Link qualified as Link
+import Test.Route qualified as Route
+import Test.Shell qualified as Shell
 
 main :: IO ()
 main = hspec $ do
-  Hello.spec
-  Rules.spec
+  Islands.spec
   Mem.spec
   Demo.spec
-  Islands.spec
+  Route.spec
+  Link.spec
+  Shell.spec

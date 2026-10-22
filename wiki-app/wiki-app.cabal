@@ -62,10 +62,24 @@ library
       Wiki.App.Backend
       Wiki.App.Backend.Mem
       Wiki.App.Backend.Mem.State
-      Wiki.App.Backend.Rules
+      Wiki.App.Browser
       Wiki.App.Demo
+      Wiki.App.DemoUsers
       Wiki.App.Islands
       Wiki.App.Islands.Monad
+      Wiki.App.Route
+      Wiki.App.Shell
+      Wiki.App.View.Common
+      Wiki.App.View.NewSpace
+      Wiki.App.View.Page
+      Wiki.App.View.Space
+
+  -- Rendering for the prerender and the native tests, through the in-memory
+  -- document, which exists on a host GHC only.
+  if !arch(wasm32)
+    exposed-modules:
+        Wiki.App.Static
+
   build-depends:
       base,
       base64-bytestring,
@@ -80,6 +94,7 @@ library
       unliftio-core,
       haskell-halogen-core,
       haskell-halogen-jsbits,
+      haskell-halogen-router,
       wiki-core
 
 -- The application itself: a wasm reactor whose hs_start web/index.js calls.
@@ -95,6 +110,7 @@ executable wiki-app
   -- mounted in a browser alone.
   if arch(wasm32)
     build-depends:
+        haskell-halogen-router,
         wiki-app
     ghc-options:
       -no-hs-main
@@ -113,11 +129,17 @@ executable wiki-app-prerender
     buildable: False
   else
     build-depends:
+        base,
         bytestring,
+        containers,
+        directory,
         filepath,
         protolude,
+        text,
         haskell-halogen-core,
-        wiki-app
+        haskell-halogen-router,
+        wiki-app,
+        wiki-core
 
 -- What the component renders, through Halogen.Static's in-memory document,
 -- which exists natively only, and the backend's contract, run against the
@@ -135,12 +157,14 @@ test-suite wiki-app-test
     other-modules:
         Test.Backend.Contract
         Test.Backend.Mem
-        Test.Backend.Rules
         Test.Demo
-        Test.Hello
         Test.Islands
+        Test.Link
+        Test.Route
+        Test.Shell
     build-depends:
         HUnit,
+        QuickCheck,
         base,
         base64-bytestring,
         bytestring,
@@ -150,6 +174,7 @@ test-suite wiki-app-test
         text,
         time,
         haskell-halogen-core,
+        haskell-halogen-router,
         wiki-app,
         wiki-core
 
@@ -163,14 +188,18 @@ test-suite wiki-app-browser-test
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test
   main-is:          BrowserTest.hs
-  other-modules:    Test.Browser.Islands
+  other-modules:
+      Test.Browser.Islands
+      Test.Browser.Shell
   build-depends:
       protolude,
       row-types,
       text,
       haskell-halogen-core,
+      haskell-halogen-router,
       hspec-halogen,
-      wiki-app
+      wiki-app,
+      wiki-core
 
   if arch(wasm32) && !flag(interactive)
     ghc-options:

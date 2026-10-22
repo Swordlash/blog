@@ -24,6 +24,7 @@ where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.Primitive (PrimMonad)
+import Control.Monad.UUID (MonadUUID (..))
 import Data.ByteString.Base64 qualified as Base64
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
@@ -33,6 +34,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import Wiki.App.Backend (MonadWiki (..), WikiError)
 import Wiki.App.Backend.Mem.State
+import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id (UserId)
 import Wiki.Core.User (User (..))
@@ -59,6 +61,13 @@ deriving newtype instance (MonadDOM m) => MonadDOM (MemWiki m)
 deriving newtype instance (MonadAttributes m) => MonadAttributes (MemWiki m)
 
 deriving newtype instance (MonadBrowserDOM m) => MonadBrowserDOM (MemWiki m)
+
+-- What the application's components need of their monad besides the wiki:
+-- the islands' libraries, and fresh ids for their refs.
+deriving newtype instance (MonadIslands m) => MonadIslands (MemWiki m)
+
+instance (MonadUUID m) => MonadUUID (MemWiki m) where
+  generateV4 = MemWiki (lift generateV4)
 
 -- | Run a program against the wiki in the 'IORef'.
 runMemWiki :: IORef MemState -> MemWiki m a -> m a

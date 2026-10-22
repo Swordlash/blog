@@ -90,6 +90,7 @@ test-suite wiki-core-test
       Test.Markdown.Link
       Test.Path
       Test.Permission
+      Test.Permission.Writes
       Test.Slug
   build-depends:
       QuickCheck,

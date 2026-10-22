@@ -7,13 +7,16 @@
 # stale ships: app.wasm (size-optimised with wasm-opt), ghc_wasm_jsffi.js (the
 # JSFFI glue for that binary), the page from web/ and the islands bundle
 # web/bundle.sh writes (islands.js, islands.css, fonts/, islands/). Its
-# index.html is then written by wiki-app-prerender, a native program built
-# with the host GHC (into dist-newstyle/native) and run as
+# pages are then written by wiki-app-prerender, a native program built with
+# the host GHC (into dist-newstyle/native) and run as
 #
 #   wiki-app-prerender web/index.html <output dir>
 #
-# to render the application natively into the page (see Halogen.Static), so
-# it shows before app.wasm has loaded. Finally the sizes of what is served are
+# to render the application natively into a page for each route of the demo
+# (index.html, s/<space>/index.html, s/<space>/p/<page>/index.html, and
+# 404.html for every other address), so that each shows before app.wasm has
+# loaded. HALOGEN_BASE_PATH, if set, is the path the site is served under,
+# written into each page's <base href>. Finally the sizes of what is served are
 # reported, raw, gzipped and brotli'd (toolchain/compress.mjs).
 #
 # Adapted from haskell-halogen's script of the same name, which builds one of

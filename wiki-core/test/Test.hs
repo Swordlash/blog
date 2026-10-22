@@ -8,6 +8,7 @@ import Test.Markdown.Ast qualified as Ast
 import Test.Markdown.Link qualified as Link
 import Test.Path qualified as Path
 import Test.Permission qualified as Permission
+import Test.Permission.Writes qualified as Writes
 import Test.Slug qualified as Slug
 
 main :: IO ()
@@ -17,5 +18,6 @@ main = hspec $ do
   Link.spec
   Path.spec
   Permission.spec
+  Writes.spec
   Attachment.spec
   Json.spec

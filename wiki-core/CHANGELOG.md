@@ -34,7 +34,12 @@ subspaces, and `View` for everyone on a public space and its subspaces. The
 rules (`spacePermissions`, `canView`, `canEdit`, `canAdministerSpace`,
 `canCreateSpaces`) take the signed-in user if any, their groups, the grants and
 the chain of spaces, and read no store, so the server enforces exactly what the
-client uses to hide what someone cannot do.
+client uses to hide what someone cannot do. The rules for writes say what
+creating and moving a space or a page takes where those leave it open:
+`mayCreateSpace` (`CreateSpaces` for the top level, that or `AdministerSpace`
+on a parent the user can see for a subspace), `mayMoveSpace` and `mayMovePage`;
+`spaceChain` makes the chain of a space from a list of spaces, and `isFor`
+says whether a grant's subject is a given user or one of their groups.
 
 Markdown, parsed and rendered to Halogen HTML, in `Wiki.Core.Markdown`.
 `parseMarkdown` reads a page into a tree of the wiki's own
