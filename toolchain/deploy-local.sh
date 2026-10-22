@@ -264,9 +264,12 @@ for file in index.html 404.html app.wasm; do
 done
 
 # The service's Node, by absolute path: the managed one if the bootstrap
-# installed it, otherwise the one it found on PATH.
+# installed it, otherwise the one it found on PATH. The managed one is named
+# through ~/.wiki-toolchain/node, the link the bootstrap moves to a new
+# version, not the versioned directory behind it, which an upgrade leaves
+# behind to be cleaned up.
 if [ -x "$HOME/.wiki-toolchain/node/bin/node" ]; then
-  node=$(realpath "$HOME/.wiki-toolchain/node/bin/node")
+  node=$HOME/.wiki-toolchain/node/bin/node
 elif node=$(command -v node); then
   node=$(realpath "$node")
   warn "using $node for the service; it must stay where it is (the bootstrap's own Node, in ~/.wiki-toolchain, would)"
