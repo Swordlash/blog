@@ -59,6 +59,45 @@ Claude Code cloud sessions run it from the `SessionStart` hooks in `.claude/`: t
 toolchain before the session starts, the store in the background. A command that needs
 the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 
+## CI
+
+`.github/workflows/build.yml` runs three jobs on every pull request to `main` and every
+push to it: `native` (build and test natively), `wasm` (build for wasm, run the test
+suites and the smoke test in headless Chromium, and keep the built page as the run's
+`app` artifact) and `format` (`npm run format-check`).
+
+They run on GitHub's hosted `ubuntu-latest` unless the repository variable `CI_RUNS_ON`
+names another runner label, such as `self-hosted`; it is one label, read by every job's
+`runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-latest' }}` (a list of labels is not
+supported: a runner registered for this repository alone needs none). On a hosted
+runner the toolchain comes from `haskell-actions/setup`, `setup-node`, ghc-wasm-meta
+and caches of the cabal store and the wasm tools, as in haskell-halogen. On a
+self-hosted runner every job runs `sh toolchain/bootstrap.sh toolchain` instead, which
+installs the toolchain into the runner user's home the first time (a while: GHC, the
+wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and puts it on
+`PATH` with `sh toolchain/bootstrap.sh path`. Nothing is cached to GitHub there: the
+toolchain and the cabal store stay on the machine. One runner runs one job at a time,
+so the three jobs queue.
+
+To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
+
+1. Register a runner for this repository (Settings, Actions, Runners, New self-hosted
+   runner, Linux x64), running as an ordinary user. Its own user is best: the
+   bootstrap makes the pinned GHC and cabal ghcup's defaults for whoever runs it.
+2. Install, once, the Debian packages the bootstrap and Chromium need, since the
+   runner cannot `sudo`. The bootstrap's own are `build-essential curl git jq unzip
+   xz-utils zstd libgmp-dev`. Chromium's are those `npx playwright install-deps
+   --dry-run chromium` names in a checkout after `npm ci` (and that the bootstrap
+   prints when Chromium does not start); on Ubuntu 24.04 they are `libasound2t64
+   libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64
+   libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0
+   libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0
+   libxrandr2`; on Ubuntu 22.04 and Debian 12 they are the same without the `t64`
+   suffixes, and 22.04 adds `libwayland-client0`.
+3. Set the repository variable `CI_RUNS_ON` to `self-hosted` (Settings, Secrets and
+   variables, Actions, Variables), or to a label of the runner's own.
+4. Re-run the workflow. Deleting the variable sends the jobs back to hosted runners.
+
 ## Layout
 
 | Directory | Package | What it is |
