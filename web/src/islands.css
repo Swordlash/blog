@@ -1,0 +1,27 @@
+/* The islands' styles: KaTeX's own (its fonts land in fonts/ beside the
+   bundled stylesheet, where its url()s look for them), and the little the
+   wiki adds around the libraries' output. */
+@import "katex/dist/katex.css";
+
+.wiki-math-display {
+  /* A long formula scrolls rather than widening the page. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.wiki-mermaid {
+  overflow-x: auto;
+  text-align: center;
+  /* Until it is drawn (a prerendered page), a diagram shows as its source. */
+  white-space: pre-wrap;
+}
+
+.wiki-code {
+  overflow-x: auto;
+}
+
+.wiki-island-error {
+  margin: 0;
+  white-space: pre-wrap;
+  color: #cf222e;
+}
