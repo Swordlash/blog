@@ -74,6 +74,20 @@ confirms it against reality and the plan is amended if it does not hold.
    - No page-level permissions in the first versions.
    - Pure functions over plain data in `wiki-core`, with native tests, shared by server
      and client.
+11. **Administration is bootstrapped from the machine the server runs on.** `wiki-server`
+    listens twice: on the public address, and on a loopback-only *admin listener*
+    (default `127.0.0.1:8081`, never published by the `docker-compose.yml`) that serves
+    the administration panel without a login: being able to reach the machine is the
+    credential, as with a database's local socket. The panel marks a user as an
+    administrator (the global `administer` permission of decision 9) or takes it away,
+    and an administrator then has the same panel, and everything else, remotely over
+    the public listener through an ordinary session. So there is no admin password in
+    the configuration and no first-run token to lose: the first administrator is made
+    from the console, and locked-out installations are recovered the same way. One
+    Halogen component serves both listeners; only the server's idea of who is asking
+    differs (the local operator on the admin listener, the session's user on the
+    public one). The admin listener is not restricted beyond loopback: a remote
+    operator reaches it through an SSH tunnel.
 10. **Markdown stays the source of truth.** The editor is a split view: a textarea with
     the Markdown on the left and the rendered page on the right, re-rendered on each
     change (debounced through `hooks`' debouncer). No WYSIWYG.
@@ -188,8 +202,12 @@ Goal: the same app, with pages that survive a reload, served by one binary.
   tests as `MemWiki` (WP1.4) run against a temporary database. Attachments on disk under
   a content hash.
 - **WP2.3 Server.** The servant handlers, static serving of the wasm bundle with the
-  prerendered shell, configuration (port, data dir, base path), structured logging,
-  a `Dockerfile`, a `docker-compose.yml` for a one-command run.
+  prerendered shell, configuration (public and admin listen addresses, data dir, base
+  path), structured logging, a `Dockerfile`, a `docker-compose.yml` for a one-command
+  run that publishes the public port only. The admin listener (decision 11) exists
+  from here: bound to loopback (the server refuses any other address unless
+  `--admin-listen-unsafe` says so), serving status (version, data dir, counts) and the
+  same wasm bundle under `/admin/`; the panel's content comes with Phase 3.
 - **WP2.4 HTTP backend in the app.** `HttpWiki`: `MonadWiki` over `fetch` (JSFFI), with
   errors surfaced in the UI (not found, conflict, offline). The app picks `MemWiki` or
   `HttpWiki` at start from a flag in `index.html`, so Pages keeps serving the demo.
@@ -215,16 +233,31 @@ Goal: the same app, with pages that survive a reload, served by one binary.
 Goal: who you are decides what you see and may do, on both sides.
 
 - **WP3.1 Accounts and sessions.** Users with argon2id password hashes, login/logout,
-  HttpOnly cookie sessions, CSRF protection, a first admin created from the
-  configuration. Rate-limited login.
+  HttpOnly cookie sessions, CSRF protection, rate-limited login. No admin account from
+  the configuration: administrators are made in WP3.3.
 - **WP3.2 Authorisation.** The permission rules of `wiki-core` enforced in every handler
   (space view/edit/admin, global create-spaces/administer, public spaces for
   anonymous), with tests per rule. Anonymous read of public spaces so the site works
-  as a blog.
-- **WP3.3 Administration UI.** Users, groups and membership; per-space permissions
-  (grant/revoke to user or group, toggle public); global permissions; the UI hides
-  what the current user cannot do, using the same pure rules.
-- **WP3.4 OIDC login** (GitHub, Google) as an alternative to passwords; account linking.
+  as a blog. The principal of a request is either the session's user or, on the admin
+  listener only, the *local operator*, who passes every check; a handler never knows
+  which listener it serves, the principal does.
+- **WP3.3 Administration panel on the admin listener.** The panel of decision 11, at
+  `/admin/` on the loopback listener: the list of users with whether each is an
+  administrator; mark and unmark a user as administrator (the global `administer`
+  permission); create a user, reset a password, disable a login; the status page of
+  WP2.3. A Halogen component over an `MonadAdmin`-style interface, implemented over
+  the admin API (`/api/v1/admin/…`, served only to the local operator or an
+  administrator) and in memory for the demo and the browser tests. Tests: the server's,
+  that the admin API answers on the admin listener without a session and on the public
+  listener only to an administrator's session, and refuses the loopback bind check;
+  hspec-halogen for the component.
+- **WP3.4 Administration UI for administrators, remotely.** The same panel served on
+  the public listener to users with global `administer`, extended with what needs an
+  authenticated user: groups and membership; per-space permissions (grant/revoke to
+  user or group, toggle public); `create-spaces`. The UI hides what the current user
+  cannot do, using the same pure rules. An administrator who demotes themself is
+  refused in the UI and allowed by the server (the admin listener can always undo it).
+- **WP3.5 OIDC login** (GitHub, Google) as an alternative to passwords; account linking.
 
 ### Phase 4: beyond the MVP
 
@@ -269,6 +302,9 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
 - Blog view: is the public face a plain Confluence-style space, or a dated post list
   (Phase 4 item)? Assumed: both, with the post list later.
 - Attachment size limit and storage budget: assumed 50 MB per file, local disk.
+- Admin listener: assumed a second TCP port on loopback (`127.0.0.1:8081`); a Unix
+  socket with file permissions would be stricter on a shared machine and is a small
+  change in WP2.3 if wanted.
 
 ## Progress
 
@@ -383,3 +419,9 @@ Amended by the planning session after each work package's report.
 - **Integration and WP1.7 started:** #13 and #14 conflict in ten files; the integration
   merges `wp1.6-editor` into `wp1.8-search` and restacks #14 on #13, then WP1.7 branches
   from there. Merge order once CI runs: #6, #9, #10, #11, #12, #13, #14, then WP1.7.
+- **Administration from localhost planned (owner's request):** decision 11 adds a
+  loopback-only admin listener to `wiki-server`, where a user is marked as administrator
+  without a login; an administrator then has the panel remotely. WP2.3 gains the listener,
+  Phase 3 is recut into WP3.1 to WP3.5 (the panel on the admin listener is WP3.3, the
+  remote one WP3.4, OIDC moves to WP3.5), and WP3.1 no longer creates an admin from the
+  configuration.
