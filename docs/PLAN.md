@@ -234,9 +234,9 @@ point of this phase.
   https://github.com/Swordlash/haskell-halogen, styled quietly in `web/style.css`,
   present in the prerendered pages too (the smoke test checks it is there).
 - **WP1.10 Hydrate the demo and take HH-2's fix.** One pin bump (its own commit) to
-  haskell-halogen's `master` once the owner has merged haskell-halogen#50 (IndexedDB)
-  and #51 (listener-side `preventDefault`); the bump must cover `jsbits` as well as
-  `core` (`Value.hs` changed). Then two things. First, HH-2's API: wrap the form submits
+  haskell-halogen's `master` at `08f9093`, which has #50 (IndexedDB) and #51
+  (listener-side `preventDefault`) merged; the bump covers every package of the stanza
+  (`jsbits`' `Value.hs` changed too). Then two things. First, HH-2's API: wrap the form submits
   in `View/Space.hs`, `View/Page.hs`, `View/NewSpace.hs` and `View/Editor.hs` in
   `HE.preventingDefault` and drop their `H.liftEffect (preventDefault ev)`; move the
   editor's key decision (Ctrl+S, Tab) and the search box's (arrows, Enter, mousedown
@@ -296,8 +296,13 @@ point of this phase.
   chooses, with the reason, and keeps `H.liftEffect`'s contract. Report what else in the
   examples relies on `preventDefault` from a handler (forms, keyboard shortcuts), since the
   same race applies.
-- **HH-3 Two small things in haskell-halogen for the quoters** (one PR there, after HH-2
-  merges). First, `th`'s `textItems`: a line break between two holes or statements with no
+- **HH-3 Small things in haskell-halogen for the quoters and after #51's review** (one PR
+  there). It starts with the three non-blocking notes of #51's review, already written as a
+  patch the planning session hands over: `Example.Busy`'s click through `browserJS` over
+  `hspec-halogen/test/jsbits/busy.js` instead of per-backend CPP, `preventingDefault` and
+  `stoppingPropagation` as record updates on `HandlerOptions`, and AGENTS.md saying that
+  "at once" in `H.liftEffect` is inside the dispatch only when the loop was free. Then two
+  things for the quoters. First, `th`'s `textItems`: a line break between two holes or statements with no
   tag between them becomes a single space text node, so `{{ a }}` and `{{ b }}` on separate
   lines render `" "` between them, which the README does not promise and JSX would drop;
   make a line break between holes (and between a hole and a line's edge) vanish as
@@ -305,8 +310,8 @@ point of this phase.
   still render the same. Second, `Halogen.Router.linkProps` (or a name of its choosing)
   returning the `[IProp]` a router link needs (`href` and the preventing click handler
   `link` uses), so a link can be written `<a {{ Router.linkProps router route }}>` inside
-  an `hh` quote; `link` is then `a` applied to it. The blog's shell switches to it in
-  WP1.10's pin bump where a link sits in a quote.
+  an `hh` quote; `link` is then `a` applied to it. The blog's shell switches to it at
+  its next pin bump after HH-3 merges (WP1.11's), not in WP1.10, which does not wait for it.
 - **WP1.11 Persist the demo.** After HH-1 and WP1.10: bump the pin to HH-1's commit (its
   own commit). `MemWiki` writes through to IndexedDB after every successful write, the
   records it changed in one `writeMany` (spaces, pages, attachments with their bytes,
@@ -712,6 +717,9 @@ Amended by the planning session after each work package's report.
   treat `attachment:` and relative paths as the client does or hydration repairs the links;
   the tree is built to read back unchanged from `Halogen.Static` (tested). For WP1.12: an
   HTML command writes an inline tag pair in the line or a whole block with no blank line in it.
+- **HH-2 merged** by the owner (haskell-halogen `08f9093`), reviewed as sound with three
+  non-blocking notes, carried into HH-3. WP1.10 and HH-3 start now, in parallel; #18
+  (WP1.13) waits on CI.
 - **WP1.9 done** ([#19](https://github.com/Swordlash/blog/pull/19), branch `wp1.9-quoters`;
   CI's first run installs th's build: `ghc-lib-parser` cold is 11 min native and 13.5 min
   wasm, measured alone under load). The rule for later packages: `hh` wherever the element
