@@ -149,9 +149,12 @@ spec m = do
     for_ (zip pieces pauses) $ \(word, pause) -> do
       typeText text word
       unsafeIOToPageM (threadDelay (pause * 1000))
-    -- In three calls, one after another, since one call may take at most
-    -- five seconds and the test build types slower than the real one.
-    replicateM_ 3 (typeText text sentence)
+    -- In calls of five words, one after another with no pause between
+    -- them, since one call may take at most five seconds and the test build
+    -- types slower than the real one, slower still on a busy machine (a
+    -- call of a whole sentence timed out on CI).
+    for_ (chunksOf 5 [" " <> w | w <- T.words long]) $ \run ->
+      typeText text (mconcat run)
     let expected = original <> mconcat pieces <> long
     eventually $ getProperty text "value" `shouldReturn` expected
     eventually $ find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "w24 the quick")
@@ -203,3 +206,9 @@ chooseFile selector name mediaType base64 = evaluate =<< js_choose_file (toJSTex
 -- | A PNG of one pixel, as base64.
 dotPng :: Text
 dotPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+-- | A list cut into runs of at most @n@.
+chunksOf :: Int -> [a] -> [[a]]
+chunksOf n = \case
+  [] -> []
+  xs -> let (run, rest) = splitAt n xs in run : chunksOf n rest
