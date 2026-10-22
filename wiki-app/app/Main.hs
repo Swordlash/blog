@@ -6,9 +6,7 @@ import Protolude
 #if defined(wasm32_HOST_ARCH)
 import Halogen.IO.Util qualified as HA
 import Halogen.Router qualified as Router
-import Halogen.VDom.DOM.Monad (setTextContent)
-import Halogen.VDom.Driver (runUI)
-import Web.DOM.Internal.Types (toNode)
+import Halogen.VDom.Driver (hydrateUI)
 import Web.DOM.ParentNode (QuerySelector (..))
 import Wiki.App (Route (Unknown), component, input, route)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
@@ -26,16 +24,15 @@ attachComponent = do
   HA.awaitLoad
   app <- HA.selectElement (QuerySelector "#app") >>= maybe (panic "index.html has no #app to mount the wiki into") pure
   -- The page arrives with the route already rendered into #app (see
-  -- Prerender.hs), so that it shows before this binary has loaded. That HTML
-  -- is replaced rather than adopted: the application renders afresh in its
-  -- place.
-  setTextContent "" (toNode app)
+  -- Prerender.hs), so that it shows before this binary has loaded. The
+  -- application adopts that HTML rather than render afresh in its place:
+  -- its first render is the same page, from the same demo.
   -- The demo as it was at the time the prerendered pages show it, so that
   -- they agree on when each page was last changed.
   wiki <- newMemWiki (demoState demoNow)
   base <- Router.pageBase
   router <- Router.newRouter base Unknown route
-  void $ runMemWiki wiki (runUI component (input router) app)
+  void $ runMemWiki wiki (hydrateUI component (input router) app)
 #else
 -- Natively there is no page to mount into: this executable builds so that it
 -- type-checks with the rest, and the native program that renders the

@@ -138,8 +138,8 @@ search Input {context, text, space, subspaces} =
 
 -- | Whether the page has to search again: for other words or another space,
 -- or because who is asking or the wiki has changed. The tree of spaces counts
--- too: the shell starts its views before it has loaded the tree, and a space
--- searched in is looked up there.
+-- too: a space searched in is looked up there, and it changes when the shell
+-- reloads the wiki.
 differs :: Input -> Input -> Bool
 differs a b =
   a.text /= b.text

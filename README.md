@@ -39,7 +39,7 @@ authorisation.
   sign-in, each seeing the wiki through their permissions.
 - An address for every route, and a prerendered page for each route the demo
   starts with, so that a link or a reload lands on the page before the program
-  has loaded.
+  has loaded, which then adopts the page rather than render it again.
 
 ## Running the demo
 

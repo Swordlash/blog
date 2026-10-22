@@ -8,7 +8,7 @@
 //                                           # open pages into <dir>
 //
 // This is what the unit tests cannot see: the size-optimised app.wasm loading
-// in a real browser on every page the build wrote, in place of the page
+// in a real browser on every page the build wrote, adopting the page
 // prerendered into it; its links followed without loading a page; the back
 // and forward buttons and a reload arriving where they should; the editor,
 // search and the islands bundle (web/bundle.sh) working in the built page;
@@ -20,8 +20,10 @@
 //
 // 1. Every prerendered page (each index.html under the directory) is loaded
 //    by its address, app.wasm held back until the prerendered page has been
-//    seen and marked; then the program has to replace it with the same
-//    route: the same title, heading and error, if any, and the same footer.
+//    seen and every node of it marked; then the program has to adopt it
+//    (Halogen's hydrateUI) as the same route, with nothing to repair: every
+//    node it arrived with kept, no text changed, nothing built that it did
+//    not have, outside the islands, which their libraries fill.
 // 2. One long walk in one page, as someone would take it: the front page,
 //    every root space and a page in each, a page's source and back, the
 //    editor as admin with a save, search, then back through the whole
@@ -149,36 +151,149 @@ const shown = (page) =>
     };
   });
 
-// Go to an address and wait for the program to have replaced the page
-// prerendered there, which is returned as it was shown.
+// Whether the program has started on the page: the brand's link in the
+// header, which the page arrives with, has the click listener the program
+// attaches when it adopts it. Only the DevTools protocol can see listeners.
+async function programStarted(page) {
+  page.devtools ??= await page.context().newCDPSession(page);
+  const { result } = await page.devtools.send("Runtime.evaluate", { expression: 'document.querySelector("#app .wiki-brand")' });
+  if (result.objectId === undefined) return false;
+  const { listeners } = await page.devtools.send("DOMDebugger.getEventListeners", { objectId: result.objectId });
+  await page.devtools.send("Runtime.releaseObject", { objectId: result.objectId });
+  return listeners.some((listener) => listener.type === "click");
+}
+
+// Mark what the server sent, before the program runs: the shell's element
+// (data-prerendered, which the program leaves alone, as it does every
+// attribute it does not render), and every node under #app, with its text
+// or attributes, so that what the program does to the page when it adopts
+// it can be told afterwards. A MutationObserver notes when the page last
+// changed outside the islands, whose content their libraries write.
+const islands = ".wiki-math, .wiki-mermaid, .wiki-code";
+const markPrerendered = (page) =>
+  page.evaluate((islands) => {
+    const app = document.querySelector("#app");
+    app.querySelector(".wiki").dataset.prerendered = "true";
+    const marks = new Map();
+    const walker = document.createTreeWalker(app, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      const text = node.nodeType === Node.TEXT_NODE;
+      marks.set(node, {
+        text: text ? node.data : null,
+        attributes: text ? null : Object.fromEntries([...node.attributes].map((a) => [a.name, a.value])),
+        parent: node.parentElement,
+        island: node.parentElement?.closest(islands) != null,
+      });
+    }
+    window.smokePrerendered = marks;
+    window.smokeLastChange = Date.now();
+    const inIsland = (node) => (node instanceof Element ? node : node.parentElement)?.closest(islands);
+    new MutationObserver((records) => {
+      if (records.some((record) => !inIsland(record.target))) window.smokeLastChange = Date.now();
+    }).observe(app, { subtree: true, childList: true, characterData: true, attributes: true });
+  }, islands);
+
+// What adopting the page changed in it, once the program has started and
+// the page has been still for a moment: the nodes of the page that went
+// (other than comments, which only separate texts for the parser, and blank
+// text around the shell), the nodes built that the page did not have (other
+// than empty texts, which no HTML has), the texts set to something else, and
+// the attributes. Each is HTML a page rendered on a server would get wrong
+// as well. What is inside an island is not counted: its library fills it,
+// adopted or not.
+//
+// One difference is the demo's own and set apart ('objectUrls'): an
+// attachment uploaded as bytes is served from an object URL, which exists
+// in the browser only. The prerender has a data: URL there instead, which a
+// page's Markdown may not embed, so its image is prerendered as its
+// description; the program then builds the image and gives the attachment's
+// link its object URL.
+async function repairsOf(page) {
+  await eventually(
+    async () => assert.ok(await page.evaluate(() => Date.now() - window.smokeLastChange > 300), "still changing"),
+    "the page settling after the program started",
+  );
+  return page.evaluate((islands) => {
+    const app = document.querySelector("#app");
+    const describe = (node, parent = node.parentElement) => {
+      if (node.nodeType === Node.TEXT_NODE) return `text ${JSON.stringify(node.data.slice(0, 60))} in <${parent?.localName ?? "?"}>`;
+      const cls = node.getAttribute("class");
+      return `<${node.localName}${cls ? ` class="${cls}"` : ""}>`;
+    };
+    const objectImage = (node) => node instanceof HTMLImageElement && node.getAttribute("src")?.startsWith("blob:");
+    const removed = [];
+    const changed = [];
+    const attributes = [];
+    const objectUrls = [];
+    let islandSources = 0;
+    for (const [node, mark] of window.smokePrerendered) {
+      if (mark.island) {
+        if (!app.contains(node)) islandSources += 1;
+        continue;
+      }
+      if (!app.contains(node)) {
+        if (mark.text !== null && node.parentNode === null && mark.text.trim() === "") continue;
+        const description = describe(node, mark.parent);
+        const imaged = mark.text !== null && [...(mark.parent?.children ?? [])].some((e) => objectImage(e) && e.alt === mark.text);
+        (imaged ? objectUrls : removed).push(description);
+      } else if (mark.text !== null) {
+        if (node.data !== mark.text) changed.push(`${describe(node)} was ${JSON.stringify(mark.text.slice(0, 60))}`);
+      } else {
+        const now = Object.fromEntries([...node.attributes].map((a) => [a.name, a.value]));
+        for (const name of new Set([...Object.keys(mark.attributes), ...Object.keys(now)])) {
+          if (name === "data-prerendered" || mark.attributes[name] === now[name]) continue;
+          const change = `${describe(node)} ${name}: ${JSON.stringify(mark.attributes[name]?.slice(0, 40))} -> ${JSON.stringify(now[name]?.slice(0, 40))}`;
+          (mark.attributes[name]?.startsWith("data:") && now[name]?.startsWith("blob:") ? objectUrls : attributes).push(change);
+        }
+      }
+    }
+    const built = [];
+    const walker = document.createTreeWalker(app, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      if (node.parentElement?.closest(islands) || window.smokePrerendered.has(node)) continue;
+      if (node.nodeType === Node.TEXT_NODE && node.data === "") continue;
+      (objectImage(node) ? objectUrls : built).push(describe(node));
+    }
+    return { removed, built, changed, attributes, objectUrls, islandSources };
+  }, islands);
+}
+
+// Go to an address and wait for the program to have adopted the page
+// prerendered there. What the page showed before the program ran is
+// returned, with what adopting it had to repair ('repairsOf').
 async function load(page, path) {
   let release;
   page.gate = new Promise((go) => (release = go));
   await page.goto(url(path), { waitUntil: "commit" });
-  const prerendered = page.locator("#app .wiki");
-  await prerendered.waitFor({ timeout });
-  const before = await shown(page);
-  await prerendered.evaluate((shell) => (shell.dataset.prerendered = "true"));
-  release();
-  page.gate = null;
-  await page.locator("#app .wiki:not([data-prerendered])").waitFor({ timeout });
-  assert.equal(await page.locator("#app .wiki").count(), 1, `${path}: the prerendered shell is still there`);
-  return before;
+  return adopted(page, path, release);
 }
 
-// Reload the page, and wait as 'load' does for the program to have replaced
+// Reload the page, and wait as 'load' does for the program to have adopted
 // what the server sent.
 async function reload(page) {
   let release;
   page.gate = new Promise((go) => (release = go));
   await page.reload({ waitUntil: "commit" });
-  const prerendered = page.locator("#app .wiki");
-  await prerendered.waitFor({ timeout });
-  await prerendered.evaluate((shell) => (shell.dataset.prerendered = "true"));
+  return adopted(page, here(page), release);
+}
+
+async function adopted(page, path, release) {
+  await page.locator("#app .wiki").waitFor({ timeout });
+  const before = await shown(page);
+  await markPrerendered(page);
   release();
   page.gate = null;
-  await page.locator("#app .wiki:not([data-prerendered])").waitFor({ timeout });
+  await eventually(async () => assert.ok(await programStarted(page), "no listener yet"), `${path}: the program starting`);
+  assert.equal(await page.locator("#app .wiki").count(), 1, `${path}: more than one shell`);
+  await stillPrerendered(page, path);
+  return { before, repairs: await repairsOf(page) };
 }
+
+// The shell the page arrived with is the one on the page.
+const stillPrerendered = async (page, where) =>
+  assert.equal(await page.locator("#app > .wiki[data-prerendered]").count(), 1, `${where}: the prerendered shell was replaced`);
+
+const noRepairs = (repairs) => [repairs.removed, repairs.built, repairs.changed, repairs.attributes].every((found) => found.length === 0);
 
 async function eventually(check, what) {
   let last;
@@ -228,20 +343,33 @@ try {
     assert.ok(paths.includes(path), `${path} was not prerendered`);
   }
   const visitor = await newPage();
+  const repaired = [];
+  const objectUrls = [];
+  let islandSources = 0;
   for (const path of paths) {
     // As a server sends it, before any script runs.
     const html = await (await fetch(url(path))).text();
     assert.match(html, /<base href="\/">/, `${path}: no <base href>`);
     assert.match(html, /<div id="app"><div class="wiki">/, `${path}: not prerendered`);
     assert.ok(html.includes(footerHtml), `${path}: no footer prerendered`);
-    const before = await load(visitor, path);
+    const { before, repairs } = await load(visitor, path);
     if (path !== "/") assert.notEqual(before.title, "Wiki", `${path}: no title of its own`);
-    // The program shows the same route, once it has loaded what it shows.
-    await eventually(async () => assert.deepEqual(await shown(visitor), before), `${path}: the program shows another page`);
+    // The program shows the same route, on the same nodes.
+    assert.deepEqual(await shown(visitor), before, `${path}: the program shows another page`);
+    if (!noRepairs(repairs)) repaired.push(`${path}: ${JSON.stringify(repairs, null, 2)}`);
+    if (repairs.objectUrls.length > 0) objectUrls.push(`${path}: ${repairs.objectUrls.join("; ")}`);
+    islandSources += repairs.islandSources;
     await footerShown(visitor, path);
     if (process.env.SMOKE_DEBUG) console.log(path, JSON.stringify(before));
   }
-  console.log(`ok: each of the ${paths.length} prerendered pages is replaced by the program, showing the same, footer included`);
+  // Every page's repairs at once, since one cause usually shows on several.
+  assert.deepEqual(repaired, [], "adopting these pages repaired them");
+  // An island is rendered empty, and the prerender writes its source in, so
+  // that a page reads before its libraries have loaded; the program takes
+  // the source out as it adopts the island, and the library fills it.
+  console.log(`note: ${islandSources} islands' prerendered sources were taken out for their libraries to fill`);
+  if (objectUrls.length > 0) console.log(`note: attachments the browser serves from object URLs:\n  ${objectUrls.join("\n  ")}`);
+  console.log(`ok: each of the ${paths.length} prerendered pages is adopted by the program, every node kept, footer included`);
 
   // A page's islands are prerendered as their sources, and drawn once the
   // program has loaded: KaTeX (with its fonts), Mermaid, highlight.js.
@@ -261,9 +389,13 @@ try {
 
   const page = await newPage();
   await load(page, "/");
-  // No click from here on may load a page: a mark on the window would go.
+  // No click from here on may load a page: a mark on the window would go,
+  // and so would the shell the page arrived with.
   await page.evaluate(() => (window.stillTheSamePage = true));
-  const samePage = async (step) => assert.ok(await page.evaluate(() => window.stillTheSamePage), `${step} loaded a page`);
+  const samePage = async (step) => {
+    assert.ok(await page.evaluate(() => window.stillTheSamePage), `${step} loaded a page`);
+    await stillPrerendered(page, step);
+  };
 
   // Every entry of the history the walk makes, and what it shows.
   const visits = [];
@@ -414,9 +546,7 @@ try {
   await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
   await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", text: "Smoke test" }, "the edited page");
-  await page.reload();
-  await page.waitForFunction(() => window.stillTheSamePage === undefined, null, { timeout });
-  await page.locator("#app .wiki:not([data-prerendered])").waitFor({ timeout });
+  await reload(page);
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "the reload");
   await page.locator("#app .user-switcher-toggle", { hasText: "Not signed in" }).waitFor({ timeout });
   assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit survived a reload");
@@ -431,12 +561,16 @@ try {
   const missing = await fetch(url("/no/such/address/"));
   assert.equal(missing.status, 404);
   assert.ok((await missing.text()).includes(footerHtml), "404.html has no footer");
-  await load(page, "/no/such/address/");
+  const notFound = await load(page, "/no/such/address/");
+  assert.ok(noRepairs(notFound.repairs), `404.html: adopting the page repaired it: ${JSON.stringify(notFound.repairs, null, 2)}`);
   await check({ path: "/no/such/address/", view: "not-found" }, "an address the wiki does not have");
   await footerShown(page, "404.html");
   // An editor's address has no page of its own either; the program opens it.
   assert.equal((await fetch(url("/s/blog/p/hello-world/edit/"))).status, 404);
+  // 404.html is the page of no route, so the program repairs it into the
+  // editor's: the shell is kept, what differs is built afresh.
   await load(page, "/s/blog/p/hello-world/edit/");
+  await stillPrerendered(page, "an editor's address");
   await check({ path: "/s/blog/p/hello-world/edit/", view: "editor", crumb: "Edit" }, "an editor's address");
   await page.locator("#app .editor .sign-in-hint").waitFor({ timeout });
   console.log("ok: 404.html stands in for an address with no file, and the program shows its route");

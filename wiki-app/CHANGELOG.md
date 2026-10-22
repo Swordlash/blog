@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+The program adopts the page it arrives in rather than replace it: `Main.hs`
+mounts the shell with haskell-halogen's `hydrateUI`, which keeps the
+prerendered elements and text, attaches the listeners and sets what HTML
+cannot carry, so the page no longer flashes as the program starts, and focus,
+selection and scroll survive it. For that the program's first render has to be
+the prerendered page, so the shell, the page, source, search results and editor
+views now load what they show in their `initialState` (through `MonadWiki`, at
+once) instead of in `Initialize`, which only tells the shell they are done; the
+results view and the editor lost their `Loading` state, which nothing reached
+any more. `Wiki.App.Static` has `prerenderedRoutes` (the list `wiki-app-prerender`
+writes) and `startRoute`, which starts the application at a route either way,
+building or adopting. An island's prerendered source is taken out as the
+program adopts it, and its library draws it as before.
+
+Forms, the search box and links in a page now keep the browser from their
+defaults in the event's listener (`HE.preventingDefault`), not from the action
+afterwards, which ran too late whenever the component was busy as the event
+arrived: the space, page and new-space forms; the search box's arrows and
+Enter, and a press on its list; a click on a link in a page's Markdown, which
+`Wiki.App.Browser.articleLink` now decides, pure, in the listener (it replaces
+`followArticleClick`; the action then calls `followArticleLink`). Escape in the
+search box is still also the browser's (a search input clears its text).
+
 Anyone who may read a page may read its Markdown: a page has a source view on a
 route of its own, `PageSource`, at `…/p/<page path>/source/`, which shows the
 page's title, a "Back" link to the page and the Markdown as written, in a
