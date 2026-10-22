@@ -2,11 +2,14 @@
 
 -- | The little the shell asks of the browser that Halogen does not say: the
 -- link a click in a rendered page landed on, scrolling to a heading or a
--- footnote, and the document's title. See @jsbits/browser.js@. Natively there
--- is no browser: no click lands on a link, and the rest does nothing.
+-- footnote, the document's title, and where in the session history it is.
+-- See @jsbits/browser.js@. Natively there is no browser: no click lands on a
+-- link, every entry of the history is the first, and the rest does nothing.
 module Wiki.App.Browser
   ( followArticleClick
   , setDocumentTitle
+  , historyEntry
+  , historyGo
   )
 where
 
@@ -25,6 +28,8 @@ $( browserJS
      [ ("js_clicked_href", "wiki_clicked_href", Unsafe, [t|Event -> IO JSText|])
      , ("js_scroll_to", "wiki_scroll_to", Unsafe, [t|JSText -> IO ()|])
      , ("js_set_title", "wiki_set_title", Unsafe, [t|JSText -> IO ()|])
+     , ("js_history_entry", "wiki_history_entry", Unsafe, [t|IO Int|])
+     , ("js_history_go", "wiki_history_go", Unsafe, [t|Int -> IO ()|])
      ]
  )
 
@@ -51,3 +56,16 @@ followArticleClick router click = liftIO $ do
 -- | Title the browser's tab and its history entry.
 setDocumentTitle :: (MonadIO m) => Text -> m ()
 setDocumentTitle = liftIO . js_set_title . toJSText
+
+-- | The number of the session history's current entry: entries the shell
+-- has seen are numbered in order, so that 'historyGo' can return to one.
+-- The router keeps no such number, nor any state of its own in the entry.
+-- Natively 0, always.
+historyEntry :: (MonadIO m) => m Int
+historyEntry = liftIO js_history_entry
+
+-- | Go this many entries forward in the session history (back, if
+-- negative), as the browser's buttons do: the router hears it as it hears
+-- them.
+historyGo :: (MonadIO m) => Int -> m ()
+historyGo = liftIO . js_history_go

@@ -20,8 +20,9 @@
 -- with unsaved changes: it asks the editor ('Editor.IsDirty') and, if the
 -- draft would be lost, asks the reader in place whether to leave. By then
 -- the browser's address is the new route's already (a link was followed, or
--- the back button pressed), so staying puts the editor's address back, in
--- place of the one that was not followed.
+-- the back button pressed), so staying goes back to the editor's entry of
+-- the session history, by as many entries as lie between ('historyEntry'
+-- numbers them), as the browser's buttons would.
 module Wiki.App.Shell
   ( Input (..)
   , Query (..)
@@ -41,7 +42,7 @@ import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError, anonymous)
-import Wiki.App.Browser (setDocumentTitle)
+import Wiki.App.Browser (historyEntry, historyGo, setDocumentTitle)
 import Wiki.App.DemoUsers (MonadDemoUsers (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
@@ -104,6 +105,9 @@ data State = State
   , leaving :: Maybe Route
   -- ^ A route followed away from an editor with unsaved changes, which the
   -- reader is being asked about.
+  , entry :: Int
+  -- ^ The number of the session history's entry for the route shown
+  -- ('historyEntry'), which staying in the editor goes back to.
   }
 
 data Action
@@ -140,6 +144,7 @@ component =
               , menuOpen = False
               , settled = False
               , leaving = Nothing
+              , entry = 0
               }
       , render
       , eval =
@@ -343,22 +348,38 @@ component =
       Initialize -> do
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
+        entry <- H.liftEffect historyEntry
+        modify (\st -> st {entry})
         loadWorld
         loadHere True
       Arrived r -> do
+        now <- H.liftEffect historyEntry
         before <- gets (\st -> st.route)
-        unless (r == before) $ do
-          dirty <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
-          if dirty
-            then modify (\st -> st {leaving = Just r, menuOpen = False})
-            else arrive r
-      Leave -> gets (\st -> st.leaving) >>= traverse_ arrive
+        if r == before
+          then -- The route shown, at an entry of its own: one the shell
+          -- pushed itself after a change ('reload'), or the editor's gone
+          -- back to after staying.
+            modify (\st -> st {entry = now})
+          else do
+            dirty <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
+            if dirty
+              then modify (\st -> st {leaving = Just r, menuOpen = False})
+              else arrive r now
+      Leave -> do
+        now <- H.liftEffect historyEntry
+        gets (\st -> st.leaving) >>= traverse_ (`arrive` now)
       Stay -> do
         st <- get
         modify (\s -> s {leaving = Nothing})
-        -- The address is the one not followed: the editor's goes back in
-        -- its place, which the router announces as the route already shown.
-        Router.redirect st.router st.route
+        -- The address is the one not followed. Going back to the editor's
+        -- entry leaves the history as the browser's buttons would, with
+        -- the route not followed ahead, where it was; the router announces
+        -- the route already shown. Without a number for that entry (there
+        -- is none natively) the editor's address replaces the other.
+        now <- H.liftEffect historyEntry
+        if st.entry /= now
+          then H.liftEffect (historyGo (st.entry - now))
+          else Router.redirect st.router st.route
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
       Toggle sid -> modify $ \st ->
         st {collapsed = if sid `Set.member` st.collapsed then Set.delete sid st.collapsed else Set.insert sid st.collapsed}
@@ -370,9 +391,9 @@ component =
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
 
-    arrive :: Route -> H.HalogenM State Action Slots output m ()
-    arrive r = do
-      modify (\st -> st {route = r, settled = False, menuOpen = False, leaving = Nothing})
+    arrive :: Route -> Int -> H.HalogenM State Action Slots output m ()
+    arrive r entry = do
+      modify (\st -> st {route = r, settled = False, menuOpen = False, leaving = Nothing, entry})
       loadHere False
 
     -- After a change: everything again, and every view's own data too.
