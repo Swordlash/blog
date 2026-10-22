@@ -233,8 +233,19 @@ point of this phase.
   at the bottom of every page, "Built with haskell-halogen", with the name linking to
   https://github.com/Swordlash/haskell-halogen, styled quietly in `web/style.css`,
   present in the prerendered pages too (the smoke test checks it is there).
-- **WP1.10 Hydrate the demo.** haskell-halogen `7c78cfb` ("Hydrate prerendered pages
-  instead of rendering over them") adds `hydrateUI`, with `runUI`'s signature, which
+- **WP1.10 Hydrate the demo and take HH-2's fix.** One pin bump (its own commit) to
+  haskell-halogen's `master` at `08f9093`, which has #50 (IndexedDB) and #51
+  (listener-side `preventDefault`) merged; the bump covers every package of the stanza
+  (`jsbits`' `Value.hs` changed too). Then two things. First, HH-2's API: wrap the form submits
+  in `View/Space.hs`, `View/Page.hs`, `View/NewSpace.hs` and `View/Editor.hs` in
+  `HE.preventingDefault` and drop their `H.liftEffect (preventDefault ev)`; move the
+  editor's key decision (Ctrl+S, Tab) and the search box's (arrows, Enter, mousedown
+  `KeepFocus`) into the handler functions as pure reads so the property can be wrapped;
+  do the same for `followArticleClick` in `Page.hs` and `Preview.hs` (the `js_clicked_href`
+  decision into a pure handler); for the editor's `DragOver`/`Dropped`, prevent in the
+  listener and read `dataTransfer` files there too, since they are gone once the dispatch
+  is over (report what that needs); remove the 300 ms `settleAfterSwitch` pause from the
+  smoke test, which then guards the fix. Second, hydration: `7c78cfb` adds `hydrateUI`, with `runUI`'s signature, which
   adopts the HTML `Halogen.Static` prerendered instead of emptying `#app` and building it
   again: text and elements are kept, listeners attached, every mismatch repaired. Bump
   the `source-repository-package` pin to it (its own commit; `MonadDOM` gains
@@ -285,6 +296,22 @@ point of this phase.
   chooses, with the reason, and keeps `H.liftEffect`'s contract. Report what else in the
   examples relies on `preventDefault` from a handler (forms, keyboard shortcuts), since the
   same race applies.
+- **HH-3 Small things in haskell-halogen for the quoters and after #51's review** (one PR
+  there). It starts with the three non-blocking notes of #51's review, already written as a
+  patch the planning session hands over: `Example.Busy`'s click through `browserJS` over
+  `hspec-halogen/test/jsbits/busy.js` instead of per-backend CPP, `preventingDefault` and
+  `stoppingPropagation` as record updates on `HandlerOptions`, and AGENTS.md saying that
+  "at once" in `H.liftEffect` is inside the dispatch only when the loop was free. Then two
+  things for the quoters. First, `th`'s `textItems`: a line break between two holes or statements with no
+  tag between them becomes a single space text node, so `{{ a }}` and `{{ b }}` on separate
+  lines render `" "` between them, which the README does not promise and JSX would drop;
+  make a line break between holes (and between a hole and a line's edge) vanish as
+  whitespace-only text does in JSX, with a test and a README line, and check the examples
+  still render the same. Second, `Halogen.Router.linkProps` (or a name of its choosing)
+  returning the `[IProp]` a router link needs (`href` and the preventing click handler
+  `link` uses), so a link can be written `<a {{ Router.linkProps router route }}>` inside
+  an `hh` quote; `link` is then `a` applied to it. The blog's shell switches to it at
+  its next pin bump after HH-3 merges (WP1.11's), not in WP1.10, which does not wait for it.
 - **WP1.11 Persist the demo.** After HH-1 and WP1.10: bump the pin to HH-1's commit (its
   own commit). `MemWiki` writes through to IndexedDB after every successful write, the
   records it changed in one `writeMany` (spaces, pages, attachments with their bytes,
@@ -633,7 +660,100 @@ Amended by the planning session after each work package's report.
   `H.liftEffect`; `MemDOM`'s store is process-global per database name (two `MemWiki`s on
   one name see each other, which is the reload test; distinct names isolate tests); the pin
   bump must cover `jsbits` as well as `core`; `VersionTooLow` on an old on-disk version is
-  the demo's to handle (reset).
+  the demo's to handle (reset). Codex's three findings on #50 were real and are fixed in
+  `52e4abd`: `get` reads through a cursor so a present non-byte record is `NotBytes`, not
+  `Nothing`; a `SecurityError` from `open`/`deleteDatabase` (sandboxed frame, opaque
+  origin) is `Unavailable`; `MemDOM`'s `keys` sort by UTF-16 code units as the browser
+  does (tested natively and in Chromium), while `getAll` is a `Map` in `Text` order on
+  both. Head of #50 is now `52e4abd`.
+- **HH-2 done** ([haskell-halogen#51](https://github.com/Swordlash/haskell-halogen/pull/51),
+  branch `router-prevent-default`, head `3347986`; the owner merges there). Cause,
+  corrected: on wasm a render never yields midway; a trusted click's listener is a sync
+  export that, while waiting for its own thread, runs whatever Haskell threads are
+  runnable (the rest of the switch's work, a render), and when one takes the loop first
+  the click's action is queued past the browser's default. Measured on the built demo
+  (fresh page, tour, switch to admin, click at once): 25 of 60 loaded a page before,
+  0 of 60 after. API: `HE.preventingDefault` and `HE.stoppingPropagation` wrap any
+  handler property; the listener applies them while the event is dispatched, only when
+  the handler makes an action; `Router.link` uses it by default; `follow` still prevents
+  for a hand-made `Follow`; `H.liftEffect` unchanged. Breaking: `Prop`'s `Handler` gains
+  `HandlerOptions` (`Core.withHandlerOptions`), `buildProp` needs `MonadIO`. Deterministic
+  reproduction in hspec-halogen (`Busy`: a child created during a render clicks the link
+  from `initialState`), 3 of 6 examples failed before, all pass after; one example states
+  that an action-side `preventDefault` is too late. The th and hooks examples' forms
+  fixed; hooks' `Extra.Actions.Events` helpers documented as action-side. Blog places with
+  the same race listed under WP1.10. Possible core follow-up, not done: `continueAsync`
+  running the listener's own thread before other runnable threads.
+- **WP1.13 done** ([#18](https://github.com/Swordlash/blog/pull/18), branch `wp1.13-html`).
+  `Wiki.Core.Markdown.Html`: tagsoup (already in both stores) splits the tags and the module
+  builds the tree with a browser's closing rules; `parseHtml` for a raw block, `parseFragments`
+  with a `Context` (`Flow`, `Phrasing`, `PhrasingInLink`) for inline tags read together with
+  the Markdown between them (`<mark>a *b*</mark>` works, since commonmark hands each tag over
+  alone); `renderRawHtml` is the entry point from `Render`. The allowlist as implemented:
+  formatting elements, `a` (the plan's list forgot it), structure (`div`, `p`, `details`,
+  `summary`, `blockquote`, `pre`, `hr`, lists, `dl`, `figure`), the table family without
+  `colgroup`/`col`, media (`img`, `video`, `audio`, `source`), and `h1` to `h6` (also
+  missing from the plan's list; added in a follow-up with a browser's closing rules). The
+  first CI run failed the editor's "loses no keystroke" browser test on a Playwright 5 s
+  limit per typing call; the preview had not slowed (3.3 ms per render of the guide on
+  both `main` and the branch), so the test now types in calls of 5 words. Dropped with content:
+  `script`, `style`, `iframe`, `object`, `embed`, `template`, `noscript`, `svg`, `math`,
+  `textarea`, `select` and a few more; anything else unlisted loses its tag and keeps its
+  content. Attributes: `class`/`id`/`title` everywhere, the rest only where they mean
+  something; numeric ones digits only; first of a duplicate wins as in a browser. URLs:
+  `href` relative, `http`, `https`, `mailto`, `attachment`; `src`/`poster` the same without
+  `mailto`; disguised `javascript:`/`data:` (entities, tabs, case, control characters)
+  rejected, and a QuickCheck property over tag soup checks only allowlisted output comes out.
+  Resolution goes through `Options.resolveLink` as for Markdown, a bare relative path is also
+  tried as an attachment (first for `src`, second for `href`), attachments get `download`,
+  external links `rel="noopener"`, an unresolved `href` becomes `link-unresolved`. Search
+  text now includes raw blocks. Decision kept: one raw block is parsed alone, so a `<details>`
+  with Markdown between blank lines inside does not wrap it (the guide says so); GitHub-like
+  stitching is a small change if ever wanted. Carry-overs: `.raw-html` in `web/style.css` is
+  dead (delete after WP1.9 merges); `kbd`, `mark`, `details` use the browser's default look
+  (WP1.9 or WP1.12 may style them); a footnote reference inside a link still nests links
+  (pre-existing). `app.wasm` grew to 6225 KiB (1460 KiB brotli), probably tagsoup's entity
+  table; not measured against `main` exactly. For WP2.6: the server's `resolveLink` must
+  treat `attachment:` and relative paths as the client does or hydration repairs the links;
+  the tree is built to read back unchanged from `Halogen.Static` (tested). For WP1.12: an
+  HTML command writes an inline tag pair in the line or a whole block with no blank line in it.
+- **HH-2 merged** by the owner (haskell-halogen `08f9093`), reviewed as sound with three
+  non-blocking notes, carried into HH-3. #18 (WP1.13) merged after its CI went green.
+- **Paused by the owner** after that, to keep the session's budget: HH-3 and WP1.10 were
+  started and stopped before they committed anything, so nothing of theirs exists on a
+  branch; the patch with #51's review notes went with the session and is rewritten from
+  the HH-3 text (a few lines each). `main` holds Phase 1 complete plus WP1.9 and WP1.13.
+  Next, when work resumes: WP1.10 and HH-3 in parallel (briefs as written in their
+  entries), then WP1.11 (needs HH-3's pin), WP1.12, then Phase 2.
+- **WP1.9 done** ([#19](https://github.com/Swordlash/blog/pull/19), branch `wp1.9-quoters`;
+  CI's first run installs th's build: `ghc-lib-parser` cold is 11 min native and 13.5 min
+  wasm, measured alone under load). The rule for later packages: `hh` wherever the element
+  names are known when the code is written (forms, dialogs, headers, empty and error states,
+  island elements, trees whose per-node markup is fixed, recursing through a hole);
+  combinators stay where the element is chosen by data (the Markdown renderer, the snippet's
+  text-or-`mark`), for helpers that make their own element (`Router.link`, `HH.slot`), for
+  what the quoter cannot say (`HH.keyed`, a textarea with text content) and for code that
+  only assembles other functions' results. Module by module: `Shell`, `View/Common`
+  (`errorView`, `pageTree`, `button`, `textField`, new `ariaBool`), `NewSpace`, `Space`,
+  `Page`, `SearchResults`, `Preview`, `Islands`, `Editor` (except the keyed title and
+  textarea), `Search` (box, dropdown, `hitContents`; `snippetHtml` stays), `Body` (`heading`,
+  frame); `App`, `Static`, `Prerender` have no HTML. No CSS to `clay`. `wiki-app` depends on
+  `haskell-halogen-th` and natively on `th-plugin` (`-fplugin=Halogen.TH.Plugin`, errors at
+  the hole); `bootstrap.sh` installs `alex` 3.5.4.2 and `happy` 2.1.7 pinned into ghcup's
+  bin, the hosted CI path in a step. Oracle: the prerender of 16 pages is byte-identical but
+  for `<!---->` between a literal and an adjacent hole (two text nodes, which hydration
+  wants), browser tests and smoke test unchanged, `app.wasm` 5927 KiB. The footer
+  `<footer class="wiki-footer">Built with <a href=…>haskell-halogen</a></footer>` is the
+  shell's last element, prerendered and in `404.html`, tested natively on 5 routes and in
+  the smoke test. Things to know about `hh` (also for WP1.12): a line break between two
+  holes with no tag between them becomes a `" "` text node (put them on one line, or one
+  hole; HH-3 fixes it upstream); `value={{ x }}` and `value="{{ x }}"` both set the
+  property, so an uncontrolled input takes `{{ attr "value" x }}`; a `Text` hole that is
+  not plainly `Text` needs `:: Text`; `QuasiQuotes` goes on per module, never in the
+  `.cabal` (a list comprehension `[x|x <- xs]` would parse as a quote); handlers come
+  from the quoter's table (`onClick={{ … }}`) or as `{{ HE.handler … }}` among the
+  attributes; `aria-label` and `title` are plain attributes; `<svg>` inside `hh` is SVG with
+  `viewBox` and `d` as text. Suggested upstream `Router.linkProps` is HH-3.
 - **Footer (owner's request):** "Built with haskell-halogen" linking to the repository,
   on every page; added to WP1.9 as the first `hh` view.
 - **Toolbar and HTML in pages (owner's request):** decision 13, WP1.12 (toolbar over pure
