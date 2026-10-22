@@ -5,32 +5,41 @@ import Protolude
 
 #if defined(wasm32_HOST_ARCH)
 import Halogen.IO.Util qualified as HA
+import Halogen.Router qualified as Router
 import Halogen.VDom.DOM.Monad (setTextContent)
 import Halogen.VDom.Driver (runUI)
 import Web.DOM.Internal.Types (toNode)
 import Web.DOM.ParentNode (QuerySelector (..))
-import Wiki.App (component)
+import Wiki.App (Route (Unknown), component, input, route)
+import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
+import Wiki.App.Demo (demoNow, demoState)
 #endif
 
--- | Mount the application into the page's @#app@. The component monad is the
--- browser backend itself; an application with effects of its own stacks them
--- on it and derives the DOM classes through.
+-- | Mount the application into the page's @#app@, over the in-memory wiki
+-- with the demo's content, routed by the page's address under its
+-- @\<base href>@. This is the one place that picks the component's monad:
+-- 'Wiki.App.Backend.Mem.MemWiki' over the browser's DOM.
 attachComponent :: BrowserDOM ()
 
 #if defined(wasm32_HOST_ARCH)
 attachComponent = do
   HA.awaitLoad
   app <- HA.selectElement (QuerySelector "#app") >>= maybe (panic "index.html has no #app to mount the wiki into") pure
-  -- The page arrives with the component already rendered into #app (see
+  -- The page arrives with the route already rendered into #app (see
   -- Prerender.hs), so that it shows before this binary has loaded. That HTML
-  -- is replaced rather than adopted: the component renders afresh in its
+  -- is replaced rather than adopted: the application renders afresh in its
   -- place.
   setTextContent "" (toNode app)
-  void $ runUI component () app
+  -- The demo as it was at the time the prerendered pages show it, so that
+  -- they agree on when each page was last changed.
+  wiki <- newMemWiki (demoState demoNow)
+  base <- Router.pageBase
+  router <- Router.newRouter base Unknown route
+  void $ runMemWiki wiki (runUI component (input router) app)
 #else
 -- Natively there is no page to mount into: this executable builds so that it
 -- type-checks with the rest, and the native program that renders the
--- component is wiki-app-prerender.
+-- application is wiki-app-prerender.
 attachComponent = panic "wiki-app runs in a browser: build it with toolchain/build-wasm.sh"
 #endif
 

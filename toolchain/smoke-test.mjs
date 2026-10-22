@@ -1,19 +1,21 @@
-// Drive the built application in headless Chromium: the page arrives with the
-// component prerendered into it, app.wasm loads and mounts the component in
-// its place, and a click reaches it.
+// Drive the built application in headless Chromium, as a static host serves
+// it: every route of the demo is a page of its own with the application
+// prerendered into it, app.wasm loads and mounts the application in its
+// place, and from then on the application routes by itself.
 //
 //   npm run smoke-test                      # after: npm run build-wasm
 //   node toolchain/smoke-test.mjs [dir]     # default dist-newstyle/wasm/public/app
 //
 // This is what the unit tests cannot see: the size-optimised app.wasm loading
-// in a real browser and its event handlers running, and the islands bundle
-// (web/bundle.sh) loading next to it and drawing into the page. Needs the Chromium that
-// Playwright's version in package-lock.json launches (toolchain/bootstrap.sh
-// installs it). index.js loads @bjorn3/browser_wasi_shim from jsDelivr; the
-// test serves it from node_modules instead, the same version, so that it needs
-// no network.
+// in a real browser from a deep link, its links followed without loading a
+// page, the back button and a reload arriving where they should, and the
+// islands bundle (web/bundle.sh) loading next to it and drawing into the
+// page. Needs the Chromium that Playwright's version in package-lock.json
+// launches (toolchain/bootstrap.sh installs it). index.js loads
+// @bjorn3/browser_wasi_shim from jsDelivr; the test serves it from
+// node_modules instead, the same version, so that it needs no network.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,40 +37,43 @@ const types = {
   ".ttf": "font/ttf",
 };
 
-// A static server, as Pages is: a directory's address serves its index.html.
+// A static server, as Pages is: a directory's address serves its index.html,
+// a directory's address without its slash is redirected to the one with it,
+// and an address with no file serves 404.html.
 const server = createServer(async (request, response) => {
   const path = decodeURIComponent(new URL(request.url, "http://x").pathname);
   const file = join(root, normalize(path.endsWith("/") ? `${path}index.html` : path));
   try {
+    if ((await stat(file)).isDirectory()) {
+      response.writeHead(301, { location: `${path}/` }).end();
+      return;
+    }
     const body = await readFile(file);
     response.writeHead(200, { "content-type": types[extname(file)] ?? "application/octet-stream" });
     response.end(body);
   } catch {
-    response.writeHead(404).end();
+    response.writeHead(404, { "content-type": "text/html" });
+    response.end(await readFile(join(root, "404.html")).catch(() => ""));
   }
 });
 await new Promise((ready) => server.listen(0, "127.0.0.1", ready));
-const url = `http://127.0.0.1:${server.address().port}/`;
+const origin = `http://127.0.0.1:${server.address().port}`;
+const url = (path) => `${origin}${path}`;
 
 const timeout = 30_000;
 const browser = await chromium.launch();
 const failures = [];
-try {
-  // The page as a server sends it, before any script runs: the component is
-  // in it already.
-  const html = await (await fetch(url)).text();
-  assert.match(html, /<div id="app"><main><h1>Wiki<\/h1>/, "index.html is not prerendered");
-  assert.match(html, />Clicked 0 times<\/button>/, "index.html has no counter");
-  // Natively there is nothing to draw the islands with: they arrive as their
-  // sources.
-  assert.match(html, /<span class="wiki-math wiki-math-inline">e\^\{i\\pi\} \+ 1 = 0<\/span>/, "index.html has no inline formula");
-  assert.match(html, /<div class="wiki-mermaid">graph LR/, "index.html has no diagram source");
-  console.log("ok: index.html arrives with the component prerendered, islands as their sources");
 
+// A page that reports what goes wrong in it, with the shim served locally.
+async function newPage() {
   const page = await browser.newPage();
   page.on("pageerror", (error) => failures.push(`page error: ${error.message}`));
   page.on("console", (message) => {
-    if (message.type() === "error") failures.push(`console error: ${message.text()}`);
+    // An address with no file of its own is served 404.html with a 404,
+    // which Chromium reports; that is how it is meant to work.
+    if (message.type() === "error" && !message.text().includes("404")) {
+      failures.push(`console error: ${message.text()}`);
+    }
   });
   await page.route("https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@*/dist/**", async (route) => {
     const file = new URL(route.request().url()).pathname.replace(/^.*\/dist\//, "");
@@ -77,46 +82,105 @@ try {
       body: await readFile(join(shimDir, normalize(file))),
     });
   });
+  return page;
+}
 
-  // app.wasm is held back until the prerendered button is marked, so that the
-  // button found afterwards without the mark is the one the program rendered.
+// The heading of what the content area shows, once the program shows it.
+async function heading(page) {
+  const h1 = page.locator("#app .wiki-content h1").first();
+  await h1.waitFor({ timeout });
+  return (await h1.textContent()).trim();
+}
+
+async function headingBecomes(page, text) {
+  await page.locator("#app .wiki-content h1", { hasText: text }).first().waitFor({ timeout });
+}
+
+try {
+  // The pages as a server sends them, before any script runs: each route's
+  // has the application in it already, for that route.
+  const front = await (await fetch(url("/"))).text();
+  assert.match(front, /<base href="\/">/, "index.html has no <base href>");
+  assert.match(front, /<div id="app"><div class="wiki">/, "index.html is not prerendered");
+  assert.match(front, />Take the tour<\/a>/, "index.html does not invite to the tour");
+  const maths = await (await fetch(url("/s/docs/p/markdown-guide/mathematics/"))).text();
+  assert.match(maths, /<title>Mathematics · Markdown guide · Wiki<\/title>/, "the page has no title of its own");
+  assert.match(maths, /<h1 id="mathematics">Mathematics<\/h1>/, "the page is not prerendered");
+  // Natively there is nothing to draw the islands with: they arrive as their
+  // sources.
+  assert.match(maths, /<span class="wiki-math wiki-math-inline">/, "the page has no formula's source");
+  console.log("ok: every route's page arrives with the application prerendered for it");
+
+  const page = await newPage();
+  // app.wasm is held back until the prerendered shell is marked, so that the
+  // shell found afterwards without the mark is the one the program rendered.
   let releaseWasm;
   const wasmHeld = new Promise((release) => (releaseWasm = release));
   await page.route("**/app.wasm", async (route) => {
     await wasmHeld;
     await route.continue();
   });
-
-  await page.goto(url, { waitUntil: "commit" });
-  const prerendered = page.locator("#app button");
+  await page.goto(url("/"), { waitUntil: "commit" });
+  const prerendered = page.locator("#app .wiki");
   await prerendered.waitFor({ timeout });
-  await prerendered.evaluate((button) => (button.dataset.prerendered = "true"));
+  await prerendered.evaluate((shell) => (shell.dataset.prerendered = "true"));
   releaseWasm();
+  await page.locator("#app .wiki:not([data-prerendered])").waitFor({ timeout });
+  assert.equal(await page.locator("#app .wiki").count(), 1, "the prerendered shell was not replaced");
+  assert.equal(await heading(page), "Welcome to the wiki");
+  console.log("ok: app.wasm mounts the application in place of the prerendered one");
 
-  const button = page.locator("#app button:not([data-prerendered])");
-  await button.waitFor({ timeout });
-  assert.equal(await page.locator("#app button").count(), 1, "the prerendered button was not replaced");
-  assert.equal(await page.locator("#app h1").textContent(), "Wiki");
-  console.log("ok: app.wasm mounts the component in place of the prerendered one");
+  // From here on no click may load a page: a mark on the window would go.
+  await page.evaluate(() => (window.stillTheSamePage = true));
+  await page.locator("#app a", { hasText: "Take the tour" }).click();
+  await headingBecomes(page, "Tour");
+  assert.equal(new URL(page.url()).pathname, "/s/docs/p/tour/");
+  await page.locator("#app .page-body a", { hasText: "diagrams" }).first().click();
+  await headingBecomes(page, "Diagrams");
+  assert.equal(new URL(page.url()).pathname, "/s/docs/p/markdown-guide/diagrams/");
+  await page.locator("#app .wiki-mermaid > svg").first().waitFor({ timeout });
+  assert.ok(await page.evaluate(() => window.stillTheSamePage), "following a link loaded a page");
+  console.log("ok: links in the shell and in a page's Markdown are followed without loading a page");
 
-  for (const n of [1, 2]) {
-    await button.click();
-    await page.locator("#app button", { hasText: `Clicked ${n} times` }).waitFor({ timeout });
-  }
-  console.log("ok: clicking the button counts");
+  await page.goBack();
+  await headingBecomes(page, "Tour");
+  assert.equal(new URL(page.url()).pathname, "/s/docs/p/tour/");
+  assert.ok(await page.evaluate(() => window.stillTheSamePage), "going back loaded a page");
+  console.log("ok: the back button goes back to the page before");
 
+  await page.reload();
+  await page.locator("#app .wiki").waitFor({ timeout });
+  await page.waitForFunction(() => document.querySelector("#app .page-body") !== null && window.stillTheSamePage === undefined, null, { timeout });
+  await headingBecomes(page, "Tour");
+  console.log("ok: a reload arrives at the same page");
+
+  // Deep links: a page and a private space, each opened straight away.
+  const guide = await newPage();
+  await guide.goto(url("/s/docs/p/markdown-guide/"));
+  await headingBecomes(guide, "Markdown guide");
   // Mermaid's own bundle is fetched for the first diagram, so allow it time.
-  await page.locator("#app .wiki-math-inline .katex").waitFor({ timeout });
-  await page.locator("#app .wiki-math-display .katex-display").waitFor({ timeout });
-  await page.locator("#app .wiki-mermaid > svg").waitFor({ timeout });
-  await page.locator("#app .wiki-code code.hljs.language-haskell .hljs-type").first().waitFor({ timeout });
+  await guide.locator("#app .wiki-math-inline .katex").first().waitFor({ timeout });
+  await guide.locator("#app .wiki-math-display .katex-display").first().waitFor({ timeout });
+  await guide.locator("#app .wiki-mermaid > svg").first().waitFor({ timeout });
+  await guide.locator("#app .wiki-code code.hljs.language-haskell .hljs-type").first().waitFor({ timeout });
   // A font KaTeX's stylesheet names that did not load would leave the formula
   // in a fallback font; the request for it would also have failed above.
   assert.ok(
-    await page.evaluate(() => document.fonts.check('16px "KaTeX_Main"')),
+    await guide.evaluate(() => document.fonts.check('16px "KaTeX_Main"')),
     "KaTeX's fonts did not load",
   );
-  console.log("ok: the islands are drawn: KaTeX, Mermaid, highlight.js");
+  console.log("ok: a deep link to a page draws its islands: KaTeX, Mermaid, highlight.js");
+
+  const team = await newPage();
+  await team.goto(url("/s/team"));
+  await team.locator("#app .wiki-content .error-forbidden").waitFor({ timeout });
+  assert.equal(new URL(team.url()).pathname, "/s/team/");
+  console.log("ok: a deep link to a private space says, in place, that it is private");
+
+  const nowhere = await newPage();
+  await nowhere.goto(url("/no/such/address/"));
+  await headingBecomes(nowhere, "Not found");
+  console.log("ok: an address the wiki does not have shows that it is not found");
 } catch (error) {
   // What the page reported is usually why it did not get there.
   failures.push(String(error.stack ?? error));

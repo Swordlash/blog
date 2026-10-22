@@ -20,6 +20,7 @@
 module Wiki.App.Demo
   ( demoState
   , demoNow
+  , tourPath
   )
 where
 
@@ -31,6 +32,7 @@ import Wiki.App.Backend.Mem.State
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalPermission (..), SpacePermission (..), Subject (..))
+import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), User (..))
 
@@ -92,6 +94,13 @@ demoState now = flip execState emptyState $ do
 
     ago :: NominalDiffTime -> UTCTime
     ago days = addUTCTime (negate (days * 86400)) now
+
+-- | Where the tour is: the path of its space, and its own path there. The
+-- shell's front page points a newcomer to it.
+tourPath :: ([Slug], [Slug])
+tourPath = (slugs ["docs"], slugs ["tour"])
+  where
+    slugs = map (either (panic . show) identity . mkSlug)
 
 -- | The small diagram of a tree the demo attaches to pages: a 32×32 PNG, small
 -- enough to be written here.
