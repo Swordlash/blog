@@ -44,8 +44,15 @@ confirms it against reality and the plan is amended if it does not hold.
    consistency with server-side rendering matters.
 3. **Depend on haskell-halogen through `source-repository-package` pinned to a commit.**
    Only `haskell-halogen-core` 0.9.0 is on Hackage; `hooks`, `router`, `th` and `jsbits`
-   are not, and the app needs the router and the th quoters. The pin is bumped
-   deliberately, in its own commit.
+   are not, and the app needs the router and `jsbits`. The `th` quoters (`hh`, `clay`)
+   are available from the same pin and so far unused (WP1.5 chose plain combinators and
+   one CSS file). The owner's rule: **use the quoters where they simplify the code, and
+   for HTML they usually do**, so a package that writes a view of any size should reach
+   for `hh` rather than nest combinators, and say so in its report; the first use adds
+   `th` to `wiki-app`'s dependencies and native `alex` and `happy < 2.2` to the wasm job
+   (a one-off `ghc-lib-parser` build on both backends, accepted). `clay` is optional:
+   `web/style.css` stays the home of the stylesheet. The pin is bumped deliberately, in
+   its own commit.
 4. **Targets: native GHC and wasm.** Not the JavaScript backend: `th` does not build
    there and nothing here needs it. Native builds everything that can be built natively
    (domain, markdown, server, tests, the prerender), wasm builds the browser app.
@@ -74,6 +81,20 @@ confirms it against reality and the plan is amended if it does not hold.
    - No page-level permissions in the first versions.
    - Pure functions over plain data in `wiki-core`, with native tests, shared by server
      and client.
+11. **Administration is bootstrapped from the machine the server runs on.** `wiki-server`
+    listens twice: on the public address, and on a loopback-only *admin listener*
+    (default `127.0.0.1:8081`, never published by the `docker-compose.yml`) that serves
+    the administration panel without a login: being able to reach the machine is the
+    credential, as with a database's local socket. The panel marks a user as an
+    administrator (the global `administer` permission of decision 9) or takes it away,
+    and an administrator then has the same panel, and everything else, remotely over
+    the public listener through an ordinary session. So there is no admin password in
+    the configuration and no first-run token to lose: the first administrator is made
+    from the console, and locked-out installations are recovered the same way. One
+    Halogen component serves both listeners; only the server's idea of who is asking
+    differs (the local operator on the admin listener, the session's user on the
+    public one). The admin listener is not restricted beyond loopback: a remote
+    operator reaches it through an SSH tunnel.
 10. **Markdown stays the source of truth.** The editor is a split view: a textarea with
     the Markdown on the left and the rendered page on the right, re-rendered on each
     change (debounced through `hooks`' debouncer). No WYSIWYG.
@@ -166,6 +187,42 @@ point of this phase.
   the demo (`npm run serve-wasm`, or the CI artifact), the Playwright smoke test grown
   into a gallery-style test of the built page (every route mounts, back/forward/reload
   work). Tag `v0.1.0-demo`.
+- **WP1.8 Search bar.** A search box in the shell's header that searches pages by title
+  and body, with a filter by space (one space and, by default, its subspaces; "all
+  spaces" otherwise), showing results as title, space path and a snippet around the
+  first match, each a link. It goes through a `searchPages :: SearchQuery -> m [SearchHit]`
+  method of `MonadWiki`, so the UI does not change when the server takes over the work:
+  `MemWiki` scans the pages the current user may view (case-insensitive substring match
+  on the Markdown source, or the AST's plain text), ranked by title match first. Keyboard:
+  focus with `/`, arrows and Enter to pick a result. Browser tests: typing narrows the
+  results, the space filter excludes the other spaces, a result navigates.
+- **WP1.9 Quoter pass.** After everything of Phase 1 is on `main`: one agent reads every
+  view module of `wiki-app` (and `wiki-core`'s Markdown renderer) and decides, module by
+  module, where `hh` makes the HTML simpler and where the combinators stay (dynamic trees
+  such as the rendered Markdown, the search results, the space tree), and whether any of
+  `web/style.css` reads better as `clay` next to its component. It rewrites what it chose,
+  behaviour unchanged (the browser tests and the prerendered pages are the oracle: a
+  prerender diff before and after must be empty or explained), adds `haskell-halogen-th`
+  to `wiki-app` and `alex`/`happy < 2.2` to the wasm job, records the build-time cost of
+  `ghc-lib-parser` on both backends, and reports the rule it applied so later packages
+  follow it.
+- **WP1.10 Hydrate the demo.** haskell-halogen `7c78cfb` ("Hydrate prerendered pages
+  instead of rendering over them") adds `hydrateUI`, with `runUI`'s signature, which
+  adopts the HTML `Halogen.Static` prerendered instead of emptying `#app` and building it
+  again: text and elements are kept, listeners attached, every mismatch repaired. Bump
+  the `source-repository-package` pin to it (its own commit; `MonadDOM` gains
+  `firstChild`, `nodeKind`, `nodeToElement` and takes `nextSibling` from
+  `MonadBrowserDOM`, all with lifted defaults, so the app's transformer instances need
+  nothing), mount with `hydrateUI` in `Main.hs`, and make sure the prerender and the
+  program agree on the first render, which the mismatch repair would otherwise hide: the
+  islands render as empty ref'd elements both ways, and the demo's seeded `MemWiki` is
+  the same on both sides so no state needs embedding (`Halogen.Static.embed` and
+  `readEmbedded` are for WP2.6). The smoke test does what haskell-halogen's test-gallery
+  does: mark a prerendered node before `app.wasm` is let through and check it is still
+  the one on the page after the program started and after navigating. Browser tests use
+  the harness's new `htmlContainer`/`hydrate` for the shell and a page view. Report
+  anything the repair had to fix, since each such case is HTML the server-rendered page
+  of WP2.6 would also get wrong.
 
 ### Phase 2: server and persistence
 
@@ -179,44 +236,69 @@ Goal: the same app, with pages that survive a reload, served by one binary.
   tests as `MemWiki` (WP1.4) run against a temporary database. Attachments on disk under
   a content hash.
 - **WP2.3 Server.** The servant handlers, static serving of the wasm bundle with the
-  prerendered shell, configuration (port, data dir, base path), structured logging,
-  a `Dockerfile`, a `docker-compose.yml` for a one-command run.
+  prerendered shell, configuration (public and admin listen addresses, data dir, base
+  path), structured logging, a `Dockerfile`, a `docker-compose.yml` for a one-command
+  run that publishes the public port only. The admin listener (decision 11) exists
+  from here: bound to loopback (the server refuses any other address unless
+  `--admin-listen-unsafe` says so), serving status (version, data dir, counts) and the
+  same wasm bundle under `/admin/`; the panel's content comes with Phase 3.
 - **WP2.4 HTTP backend in the app.** `HttpWiki`: `MonadWiki` over `fetch` (JSFFI), with
   errors surfaced in the UI (not found, conflict, offline). The app picks `MemWiki` or
   `HttpWiki` at start from a flag in `index.html`, so Pages keeps serving the demo.
 - **WP2.5 Page history.** Every save is a version; a history view with diff (a pure
   Markdown diff rendered in Halogen) and restore.
-- **WP2.6 Server-side rendering with hydration.** haskell-halogen is about to gain full
-  SSR with hydration (the program adopts the server-rendered tree instead of replacing
-  it). Once it lands: bump the `source-repository-package` pin, have `wiki-server` render
-  each route's page with the component already run against the store (the page a reader
-  gets is complete before `app.wasm` loads, which also makes public spaces readable
-  without JavaScript and crawlable), and have `wiki-app` hydrate it. Until then `Main.hs`
-  empties `#app` and renders afresh, as haskell-halogen's examples do. The serverless
-  demo keeps its build-time prerender and may hydrate too, if the API allows it with no
-  server.
+- **WP2.6 Server-side rendering with hydration.** Hydration itself is in since WP1.10;
+  this is the server's side of it. `wiki-server` renders each route's page per request
+  with `Halogen.Static` against the store, as the principal of the request (so a public
+  space's page is complete before `app.wasm` loads, readable without JavaScript and
+  crawlable, and a private one renders nothing it may not show), and writes the data the
+  render used into the page with `Halogen.Static.embed` (a JSON script by id; every `<`
+  escaped) so that `HttpWiki`'s `initialState`, through `readEmbedded`, starts from the
+  same data instead of fetching it again and re-rendering through the empty state, which
+  `hydrateUI` would otherwise do. Which data to embed (the page, the space tree, the
+  user) and its encoding are this package's to decide; `wiki-api`'s types are the
+  obvious ones. The serverless demo keeps its build-time prerender.
+- **WP2.7 Server-side search.** `HttpWiki.searchPages` calls `/api/v1/search`, backed by
+  SQLite FTS5 over title and body (a contentless or external-content table kept in step by
+  triggers on page saves), with the same space filter and snippets from FTS5's `snippet()`,
+  ranked by `bm25`. Hidden from users who may not view a space. The contract tests of WP1.4
+  gain search cases that both backends pass.
 
 ### Phase 3: authentication and authorisation
 
 Goal: who you are decides what you see and may do, on both sides.
 
 - **WP3.1 Accounts and sessions.** Users with argon2id password hashes, login/logout,
-  HttpOnly cookie sessions, CSRF protection, a first admin created from the
-  configuration. Rate-limited login.
+  HttpOnly cookie sessions, CSRF protection, rate-limited login. No admin account from
+  the configuration: administrators are made in WP3.3.
 - **WP3.2 Authorisation.** The permission rules of `wiki-core` enforced in every handler
   (space view/edit/admin, global create-spaces/administer, public spaces for
   anonymous), with tests per rule. Anonymous read of public spaces so the site works
-  as a blog.
-- **WP3.3 Administration UI.** Users, groups and membership; per-space permissions
-  (grant/revoke to user or group, toggle public); global permissions; the UI hides
-  what the current user cannot do, using the same pure rules.
-- **WP3.4 OIDC login** (GitHub, Google) as an alternative to passwords; account linking.
+  as a blog. The principal of a request is either the session's user or, on the admin
+  listener only, the *local operator*, who passes every check; a handler never knows
+  which listener it serves, the principal does.
+- **WP3.3 Administration panel on the admin listener.** The panel of decision 11, at
+  `/admin/` on the loopback listener: the list of users with whether each is an
+  administrator; mark and unmark a user as administrator (the global `administer`
+  permission); create a user, reset a password, disable a login; the status page of
+  WP2.3. A Halogen component over an `MonadAdmin`-style interface, implemented over
+  the admin API (`/api/v1/admin/…`, served only to the local operator or an
+  administrator) and in memory for the demo and the browser tests. Tests: the server's,
+  that the admin API answers on the admin listener without a session and on the public
+  listener only to an administrator's session, and refuses the loopback bind check;
+  hspec-halogen for the component.
+- **WP3.4 Administration UI for administrators, remotely.** The same panel served on
+  the public listener to users with global `administer`, extended with what needs an
+  authenticated user: groups and membership; per-space permissions (grant/revoke to
+  user or group, toggle public); `create-spaces`. The UI hides what the current user
+  cannot do, using the same pure rules. An administrator who demotes themself is
+  refused in the UI and allowed by the server (the admin listener can always undo it).
+- **WP3.5 OIDC login** (GitHub, Google) as an alternative to passwords; account linking.
 
 ### Phase 4: beyond the MVP
 
 Candidates, ordered by likely value; each becomes a work package when it comes up.
 
-- Full-text search (SQLite FTS5) with a search box in the shell.
 - Export (PDF, DOCX, HTML) and import (Confluence XHTML/HTML, DOCX) with pandoc on the
   server.
 - Comments on pages, labels, favourites, recently viewed.
@@ -256,6 +338,9 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
 - Blog view: is the public face a plain Confluence-style space, or a dated post list
   (Phase 4 item)? Assumed: both, with the post list later.
 - Attachment size limit and storage budget: assumed 50 MB per file, local disk.
+- Admin listener: assumed a second TCP port on loopback (`127.0.0.1:8081`); a Unix
+  socket with file permissions would be stricter on a shared machine and is a small
+  change in WP2.3 if wanted.
 
 ## Progress
 
@@ -289,3 +374,99 @@ Amended by the planning session after each work package's report.
   WP1.4, WP1.6 follows WP1.2, WP1.3 and WP1.5.
 - **Owner's note (2026-10-22):** haskell-halogen is about to gain SSR with hydration; it is
   planned as WP2.6 rather than a Phase 4 item.
+- **WP0.3 done except the run** ([#6](https://github.com/Swordlash/blog/pull/6)). `build.yml`
+  with `native`, `wasm` (toolchain cached as haskell-halogen's, host GHC alongside, Node
+  suites, browser suite, Chromium smoke test, `app` artifact) and `format` (fourmolu
+  0.21.0.0 from its release); fourmolu added to the bootstrap with a Hackage fallback; a
+  new `npm run format-check`. GitHub never started the jobs: "The job was not started
+  because an Actions budget is preventing further use", which the owner fixes under
+  Billing → Budgets. Carried over to the first real run: pin `FOURMOLU_SHA256` in the
+  workflow and the bootstrap from the format job's log, confirm the asset name, record the
+  cold run time. Carried over to WP1.5: add native `alex` and `happy < 2.2` to the wasm
+  job when `th` is first used.
+- **WP1.1 done** ([#7](https://github.com/Swordlash/blog/pull/7)). `Wiki.Core.{Id, Slug, Path,
+  Space, Page, Attachment, User, Permission}`, 145 tests on both backends. Decision 9
+  confirmed and sharpened: `public` is a `View` grant for everyone and inherits, so a
+  subspace of a public space cannot be private (no denials); rules are pure functions over
+  the chain of spaces from the root. `slugify` folds Latin letters, drops apostrophes, and
+  gives `Nothing` for a title with no foldable letters. Found and handed to WP1.3:
+  `build-wasm.sh` fails once on a fresh build directory at `cabal list-bin`.
+- **WP1.2 done** ([#8](https://github.com/Swordlash/blog/pull/8)). `Wiki.Core.Markdown` (own
+  AST from commonmark + GFM, math, wikilinks, fenced divs, attributes), rendered through an
+  `Options` record; `docs/markdown.md` is the authors' guide. Decision 1 confirmed: both
+  packages build on wasm (dependencies about 2.5 minutes native, 3.5 minutes wasm).
+  Amendment accepted: each island callback takes an `IslandKey {source, occurrence}`, unique
+  in a document, which WP1.6 uses as the slot index for island components. Syntax decided:
+  `![caption](attachment:name)` embeds by media type, `[label](attachment:name)` downloads,
+  external embeds by extension; raw HTML shown as text; `href` limited to http(s), mailto,
+  tel, blob. Carried over to WP1.6: heading and footnote ids are unprefixed, so preview and
+  page view on one screen need a prefix or a single rendered copy.
+- **Rules decided for WP1.4** (added to Decision 9): a root space needs global
+  `CreateSpaces`; a subspace `CreateSpaces` or `AdministerSpace` on the parent; moving a
+  space needs `AdministerSpace` on it and the right to create at the destination; rename,
+  delete and `public` need `AdministerSpace`; page and attachment writes need `Edit`.
+  Attachments cross the backend interface as bytes; `MemWiki` is polymorphic in its base
+  monad (`IO` in tests, `BrowserDOM` in the page) and has a demo-only `switchUser`.
+- **Owner's note (2026-10-22):** a search bar for pages with a filter by space is wanted;
+  planned as WP1.8 (client-side over `MonadWiki`) and WP2.7 (SQLite FTS5 behind the same
+  method).
+- **WP0.3b** ([#6](https://github.com/Swordlash/blog/pull/6)): the workflow runs on a
+  self-hosted runner when the repository variable `CI_RUNS_ON` says so (the owner has one;
+  hosted jobs are refused by the Actions budget), with the toolchain from
+  `toolchain/bootstrap.sh` in the runner user's home and no cache steps; the README lists
+  the Debian packages the runner needs. Still unverified on a real runner.
+- **WP1.3 done** ([#10](https://github.com/Swordlash/blog/pull/10)). One parameterised
+  island component behind a `MonadIslands` class (`BrowserDOM` draws, `MemDOM` writes the
+  source for the prerender); `web/bundle.sh` bundles KaTeX and highlight.js (455 KiB,
+  141 KiB gzip) and lazy-loads Mermaid on the first diagram; the first hspec-halogen
+  browser suite runs in Chromium through `test-wasm.sh`. Decision 2 confirmed. Fixed on
+  the way: `build-wasm.sh` on a fresh build directory, esbuild's postinstall approval.
+  Carried over: cloud sessions preset `NODE_PATH`, which hides ghc-wasm-meta's `ws` from
+  browser GHCi (`dev-test.sh` works around it; the bootstrap could too); non-ASCII in a
+  jsbits file breaks the wasm build (worth an upstream report to haskell-halogen).
+- **WP1.4 done** ([#11](https://github.com/Swordlash/blog/pull/11)). `MonadWiki` with
+  `Either WikiError` results and lifting defaults, `MemWiki` polymorphic in its base monad,
+  demo content with `admin`, `editor`, `reader`, 64 contract tests for the HTTP backend to
+  reuse. Amendment accepted: `savePage` takes the `updatedAt` the edit started from and
+  answers `Conflict` (WP2.1's `If-Match`). Creating a space grants its creator
+  `AdministerSpace`; uploads replace by name and do not bump `updatedAt`.
+- **WP1.5 done** ([#12](https://github.com/Swordlash/blog/pull/12)). Path routing with a
+  hand-built codec (`~` escapes slugs that collide with route words, trailing slashes for
+  static hosts, `Unknown` as the fallback), the shell with space tree, breadcrumbs, user
+  switcher behind `MonadDemoUsers`, page view with islands as slots, create/rename/move/
+  delete, a prerendered `index.html` per demo route plus `404.html`, 21 browser tests.
+  The write rules moved into `Wiki.Core.Permission`. Decision: no `th` quoters in the app
+  (plain combinators and `web/style.css`), so no `ghc-lib-parser` build. `app.wasm` grew
+  to about 5.6 MB (1.3 MB brotli) with commonmark's Unicode tables; WP1.7 looks at it.
+- **WP1.6 done** ([#13](https://github.com/Swordlash/blog/pull/13), stacked on #12). Editor
+  at `/edit/`, a `NewPage` route, shared `View.Body` for page view and preview, a 200 ms
+  forked debounce (not hooks' debouncer: the editor is a plain component; Decision 10
+  amended), islands kept by `IslandKey` while typing, versioned saves with `Conflict` in
+  place, uploads through `browserJS` with `attachmentReference` in `wiki-core`, a leave
+  guard in the shell plus `beforeunload`. Uploads wait until a new page is saved.
+- **WP1.8 done** ([#14](https://github.com/Swordlash/blog/pull/14), stacked on #12).
+  `Wiki.Core.Search` (query, hit with marked snippets, matcher folding diacritics the way
+  `slugify` does, every query word must match, titles rank first), `searchPages` on
+  `MonadWiki` with contract cases, the header box with `/`, arrows, Enter, Escape, a space
+  filter, and a `/search/` route with a `Bool` for "without subspaces". Found: a controlled
+  input loses a keystroke when a render lands between the key and its handler, so inputs
+  that take typing are uncontrolled; the editor is checked for the same race in the
+  integration before WP1.7.
+- **Integration and WP1.7 started:** #13 and #14 conflict in ten files; the integration
+  merges `wp1.6-editor` into `wp1.8-search` and restacks #14 on #13, then WP1.7 branches
+  from there. Merge order once CI runs: #6, #9, #10, #11, #12, #13, #14, then WP1.7.
+- **Quoters, owner's rule:** use `hh` (and `clay`) wherever they simplify the code,
+  which for HTML is usual; decision 3 amended. WP1.9, after the Phase 1 merges, is one
+  agent's pass over the existing views deciding where `hh`/`clay` go and where not;
+  until then a new view in WP1.7 uses `hh`, and later packages follow WP1.9's rule.
+- **Hydration landed in haskell-halogen** (`7c78cfb`, after our pin `7744471`):
+  `hydrateUI`, `Halogen.Static.embed` with `Halogen.IO.Util.readEmbedded`, hspec-halogen's
+  `htmlContainer`/`hydrate`; its examples adopt the prerender. Planned as WP1.10 (pin bump
+  and hydrating the demo, right after the quoter pass) and WP2.6 recut to the server's part:
+  per-request render as the principal plus embedded data so the client starts from it.
+- **Administration from localhost planned (owner's request):** decision 11 adds a
+  loopback-only admin listener to `wiki-server`, where a user is marked as administrator
+  without a login; an administrator then has the panel remotely. WP2.3 gains the listener,
+  Phase 3 is recut into WP3.1 to WP3.5 (the panel on the admin listener is WP3.3, the
+  remote one WP3.4, OIDC moves to WP3.5), and WP3.1 no longer creates an admin from the
+  configuration.

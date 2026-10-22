@@ -11,6 +11,11 @@ extra-doc-files:    CHANGELOG.md
 -- Embedded into the wasm binary at compile time by Halogen.JSBits.
 extra-source-files: jsbits/*.js
 
+flag interactive
+  description: Build the browser test suite for browser GHCi (toolchain/dev-test.sh)
+  default:     False
+  manual:      True
+
 -- haskell-halogen's examples' stanza: the warnings every package here is built
 -- with (cabal.project makes them errors) and the extensions its code assumes.
 common shared
@@ -59,6 +64,8 @@ library
       Wiki.App.Backend.Mem.State
       Wiki.App.Backend.Rules
       Wiki.App.Demo
+      Wiki.App.Islands
+      Wiki.App.Islands.Monad
   build-depends:
       base,
       base64-bytestring,
@@ -66,6 +73,7 @@ library
       containers,
       primitive,
       protolude,
+      row-types,
       text,
       time,
       transformers,
@@ -130,6 +138,7 @@ test-suite wiki-app-test
         Test.Backend.Rules
         Test.Demo
         Test.Hello
+        Test.Islands
     build-depends:
         HUnit,
         base,
@@ -143,3 +152,35 @@ test-suite wiki-app-test
         haskell-halogen-core,
         wiki-app,
         wiki-core
+
+-- The islands in headless Chromium, with the page's islands.js and
+-- islands.css loaded (test/web/bundle.sh): the hspec-halogen executable, as
+-- toolchain/wasm-test-wrapper.sh hands it the suite, loads the wasm reactor
+-- into a page with them. Natively it builds, so that it type-checks, and
+-- reports that it skipped.
+test-suite wiki-app-browser-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          BrowserTest.hs
+  other-modules:    Test.Browser.Islands
+  build-depends:
+      protolude,
+      row-types,
+      text,
+      haskell-halogen-core,
+      hspec-halogen,
+      wiki-app
+
+  if arch(wasm32) && !flag(interactive)
+    ghc-options:
+      -no-hs-main
+      -optl-mexec-model=reactor
+      "-optl-Wl,--export=hs_start"
+
+  if flag(interactive)
+    cpp-options: -DINTERACTIVE
+    -- GHCi's :main runs System.Environment.withArgs and Control.Monad.void,
+    -- which it finds only in a package the suite depends on. The suite's own
+    -- code needs nothing of base's beyond Protolude, so only GHCi gets it.
+    build-depends: base
