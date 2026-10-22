@@ -138,7 +138,7 @@ The demo, ready to show.
 - The demo's *Tour* (`Wiki.App.Demo`) walks through what the demo shows: the
   three users and what each may do, public and private spaces, the Markdown
   guide, the editor, search, what is not there yet, and that edits are lost
-  on reload. Its links to other spaces are absolute (`/blog`, `/team/projects`).
+  on reload. Its links to other spaces are absolute (`/blog`, `/docs`).
 - Staying in the editor after its back-button question goes back to the
   editor's entry of the session history (`Wiki.App.Browser.historyEntry`
   numbers the entries in their state), rather than writing the editor's

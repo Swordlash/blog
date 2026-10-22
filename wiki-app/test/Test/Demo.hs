@@ -97,10 +97,13 @@ spec = describe "Wiki.App.Demo" $ do
               Route.PageLink _ _ -> Nothing
       ((p.title, t), isJust target) `shouldBe` ((p.title, t), True)
 
-  it "links the tour to every space, and to a page in each public one" $ do
+  -- Not to the private ones: someone not signed in, who reads the tour
+  -- first, would see those links as broken.
+  it "links the tour to the public spaces, and to a page in each" $ do
     let tour = find (\p -> p.title == "Tour") pages
         targets = foldMap (\p -> linkTargets p.body) tour
-    for_ ["/blog", "/docs", "/team", "/team/projects", "/blog/hello-world", "markdown-guide"] $ \t ->
+    targets `shouldSatisfy` all (\t -> not ("/team" `T.isPrefixOf` t))
+    for_ ["/blog", "/docs", "/blog/hello-world", "markdown-guide"] $ \t ->
       (t, t `elem` targets) `shouldBe` (t, True)
   where
     spacePath sid = fromMaybe [] (pathOf (`Map.lookup` demo.spaces) sid)
