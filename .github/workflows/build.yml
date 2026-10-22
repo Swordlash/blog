@@ -18,9 +18,10 @@ concurrency:
 permissions:
   contents: read
 
-# Where the jobs run: GitHub's hosted runners unless the repository variable
-# CI_RUNS_ON names a runner label (`self-hosted`, or the label a self-hosted
-# runner registered for this repository carries); see the README's CI section.
+# Where the jobs run: the self-hosted runner registered for this repository
+# (the owner's; GitHub's hosted runners are refused by the account's Actions
+# budget). To go back to hosted runners, set `runs-on: ubuntu-latest` here;
+# the hosted steps below still work. See the README's CI section.
 #
 # The two kinds of runner get the toolchain differently, and every step that
 # differs says which it is for with `runner.environment`. A hosted runner
@@ -56,7 +57,7 @@ env:
 
 jobs:
   native:
-    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-latest' }}
+    runs-on: self-hosted
 
     steps:
     - name: Checkout code
@@ -140,7 +141,7 @@ jobs:
       run: npm run test-native
 
   wasm:
-    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-latest' }}
+    runs-on: self-hosted
 
     steps:
     - name: Checkout code
@@ -313,7 +314,7 @@ jobs:
         if-no-files-found: error
 
   format:
-    runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-latest' }}
+    runs-on: self-hosted
 
     steps:
     - name: Checkout code

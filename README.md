@@ -66,10 +66,9 @@ push to it: `native` (build and test natively), `wasm` (build for wasm, run the 
 suites and the smoke test in headless Chromium, and keep the built page as the run's
 `app` artifact) and `format` (`npm run format-check`).
 
-They run on GitHub's hosted `ubuntu-latest` unless the repository variable `CI_RUNS_ON`
-names another runner label, such as `self-hosted`; it is one label, read by every job's
-`runs-on: ${{ vars.CI_RUNS_ON || 'ubuntu-latest' }}` (a list of labels is not
-supported: a runner registered for this repository alone needs none). On a hosted
+They run on the self-hosted runner registered for this repository (`runs-on: self-hosted`
+in every job); GitHub's hosted runners are refused by the account's Actions budget. To go
+back to them, change `runs-on` to `ubuntu-latest`: the hosted steps are kept. On a hosted
 runner the toolchain comes from `haskell-actions/setup`, `setup-node`, ghc-wasm-meta
 and caches of the cabal store and the wasm tools, as in haskell-halogen. On a
 self-hosted runner every job runs `sh toolchain/bootstrap.sh toolchain` instead, which
@@ -94,9 +93,7 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
    libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0
    libxrandr2`; on Ubuntu 22.04 and Debian 12 they are the same without the `t64`
    suffixes, and 22.04 adds `libwayland-client0`.
-3. Set the repository variable `CI_RUNS_ON` to `self-hosted` (Settings, Secrets and
-   variables, Actions, Variables), or to a label of the runner's own.
-4. Re-run the workflow. Deleting the variable sends the jobs back to hosted runners.
+3. Re-run the workflow.
 
 ## Layout
 
