@@ -430,6 +430,28 @@ point of this phase.
   TikZ example is drawn. Measure and report the bytes added and the time to the first
   drawing. In Phase 2 the server may render TikZ with a real `latex` and `dvisvgm` to
   cached SVG (all packages, no wait), keeping TikZJax for the editor's preview.
+- **WP1.16 Math macros and chemistry.** After WP1.15, before the tag, at the owner's
+  request. KaTeX has no `\usepackage`: what it supports is fixed, so a wiki extends it with
+  macros, in three layers, nearest wins. (1) Built-in, for every page: a plain TeX file in
+  the repository (`web/src/katex-macros.tex`, one `\newcommand` per line: `\R`, `\N`,
+  `\Z`, `\Q`, `\C`, `\abs`, `\norm`, `\set`, `\floor`, `\ceil` and the like), bundled
+  as text by `web/bundle.sh` and handed to KaTeX by `islands.js`; Haskell does not read it
+  (if the server ever must, `addDependentFile` as `browserJS` does). (2) A space's: a new
+  optional field of `Space`, "math macros", a block of `\newcommand` lines edited in the
+  space's settings by whoever may administer the space, inherited by its subspaces (a nearer
+  space overrides); it goes into the zip export as an additive field, with no
+  `formatVersion` bump (the first use of `docs/export.md`'s rules; the golden v1 archive
+  must still import). (3) A page's: a `\newcommand` in one formula holds in every later
+  formula of the same page, as in a LaTeX document, through one KaTeX `macros` object per
+  rendered page (and per editor preview). A macro block that does not parse shows KaTeX's
+  error where it is edited, never breaks the page. Also mhchem (`\ce{…}`, KaTeX's contrib
+  extension) bundled with KaTeX. Islands keep rendering independently and hydration keeps
+  zero repairs (macros change only what the islands draw, after the first render). Docs:
+  `docs/markdown.md` lists what KaTeX supports and what it does not (`siunitx`, `physics`,
+  text-mode LaTeX), the built-in macros, and the three layers. Tests: native, a space's
+  macros inherited and overridden through the tree, export and import keep them, the
+  golden v1 archive imports with none; browser, a built-in macro, a page macro used in a
+  later formula, a space macro in a subspace's page, `\ce` renders.
 - **WP1.13 HTML in pages.** Render `RawHtml` and `RawHtmlBlock` instead of showing them
   as text: `Wiki.Core.Markdown.Html` parses the HTML (`tagsoup`, pure Haskell, so it
   builds for wasm; `html-parse` if tagsoup's HTML5 handling falls short, reported) and
@@ -1002,3 +1024,4 @@ Amended by the planning session after each work package's report.
   imports through `readArchive` and assigns its own blob ids; `MonadDemoUsers` (six methods
   now) must become optional for `HttpWiki`; WP1.10's open decision on loading in
   `initialState` stands.
+\n- **WP1.16 (math macros and mhchem) added to the MVP** by the owner, after WP1.15; the tag waits for it.\n
