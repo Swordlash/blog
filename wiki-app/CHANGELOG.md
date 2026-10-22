@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-22
+
 The interface the application talks to the wiki through, and the in-memory
 backend the serverless demo runs on.
 
@@ -130,3 +132,16 @@ Searching pages.
   `/search/?q=…&space=…` (`&only` when a space's subspaces are left out),
   shown by `Wiki.App.View.SearchResults`, and prerendered with nothing searched
   for at `/search/`.
+
+The demo, ready to show.
+
+- The demo's *Tour* (`Wiki.App.Demo`) walks through what the demo shows: the
+  three users and what each may do, public and private spaces, the Markdown
+  guide, the editor, search, what is not there yet, and that edits are lost
+  on reload. Its links to other spaces are absolute (`/blog`, `/team/projects`).
+- Staying in the editor after its back-button question goes back to the
+  editor's entry of the session history (`Wiki.App.Browser.historyEntry`
+  numbers the entries in their state), rather than writing the editor's
+  address over the entry left for, which had left two editor entries behind.
+- A route in a space the reader may not see is titled *Private · Wiki*, or
+  *Not found · Wiki* for a space that is not there, rather than just *Wiki*.
