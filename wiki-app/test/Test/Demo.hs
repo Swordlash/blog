@@ -7,10 +7,11 @@ import Protolude
 import Test.Hspec
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
+import Wiki.App.Route qualified as Route
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
 import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Page (Page (..))
-import Wiki.Core.Path (findChild, parsePath, pathOf, resolvePath)
+import Wiki.Core.Path (findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 
@@ -78,13 +79,29 @@ spec = describe "Wiki.App.Demo" $ do
       for_ (mapMaybe (T.stripPrefix "attachment:") (linkTargets p.body)) $ \name ->
         ((p.title, name), (\a -> a.name) <$> findAttachment name p.attachments) `shouldBe` ((p.title, name), Just name)
 
-  it "links pages to pages that are there, by their paths from the page" $ do
-    let relative t = not (any (`T.isPrefixOf` t) ["https://", "http://", "attachment:", "<", "#"])
-        links = [(p, t) | p <- pages, t <- linkTargets p.body, relative t]
+  it "links pages to spaces and pages that are there, as the application reads the links" $ do
+    let internal t = not (any (`T.isPrefixOf` t) ["https://", "http://", "attachment:", "<", "#"])
+        links = [(p, t) | p <- pages, t <- linkTargets p.body, internal t]
+        spaces = Map.elems demo.spaces
     links `shouldSatisfy` (not . null)
-    for_ links $ \(p, t) -> case parsePath t of
-      Left e -> expectationFailure (show (p.title, t, e))
-      Right target -> do
-        let resolved = take (length (pagePath p) - 1) (pagePath p) <> target
-            inSpace = filter (\q -> q.space == p.space) pages
-        ((p.title, t), isRight (resolvePath (findChild inSpace) resolved)) `shouldBe` ((p.title, t), True)
+    for_ links $ \(p, t) -> do
+      let inSpace sid = filter (\q -> q.space == sid) pages
+          target =
+            Route.resolvePageLink spaces (spacePath p.space) (inSpace p.space) (pagePath p) t >>= \case
+              Route.PageLink (Route.Space path) _ -> void (spaceAt path)
+              -- A page in another space is not checked by the link: check
+              -- it here.
+              Route.PageLink (Route.Page path pagePath') _ -> do
+                s <- spaceAt path
+                void (rightToMaybe (resolvePath (findChild (inSpace s.id)) pagePath'))
+              Route.PageLink _ _ -> Nothing
+      ((p.title, t), isJust target) `shouldBe` ((p.title, t), True)
+
+  it "links the tour to every space, and to a page in each public one" $ do
+    let tour = find (\p -> p.title == "Tour") pages
+        targets = foldMap (\p -> linkTargets p.body) tour
+    for_ ["/blog", "/docs", "/team", "/team/projects", "/blog/hello-world", "markdown-guide"] $ \t ->
+      (t, t `elem` targets) `shouldBe` (t, True)
+  where
+    spacePath sid = fromMaybe [] (pathOf (`Map.lookup` demo.spaces) sid)
+    spaceAt path = rightToMaybe (resolvePath (findChild (Map.elems demo.spaces)) path) >>= lastMay
