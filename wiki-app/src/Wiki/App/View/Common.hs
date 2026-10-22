@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | What the shell's views share: the context the shell hands each of them,
 -- what they tell it back, the permission questions they ask of the context,
 -- and a few pieces of HTML they all render.
@@ -27,16 +29,16 @@ module Wiki.App.View.Common
   , button
   , textField
   , attr
+  , ariaBool
   , fileSize
   )
 where
 
-import DOM.HTML.Indexed qualified as I
 import Halogen.HTML qualified as HH
-import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
+import Halogen.TH (hh)
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.App.Backend (Session (grants), WikiError (..), sessionPrincipal)
@@ -105,8 +107,9 @@ descendsFrom spaces ancestor sid = any (\s -> s.id == ancestor) (spaceChain spac
 
 -- | What went wrong, said in place of what could not be shown or done.
 errorView :: WikiError -> HH.HTML w i
-errorView e = HH.div [HP.classes ["error", HH.ClassName (errorClass e)], attr "role" "alert"] [HH.text (errorMessage e)]
+errorView e = [hh|<div class="error {{ errorClass e }}" role="alert">{{ errorMessage e }}</div>|]
   where
+    errorClass :: WikiError -> Text
     errorClass = \case
       NotFound -> "error-not-found"
       Forbidden -> "error-forbidden"
@@ -125,37 +128,37 @@ pageTree :: Router Route -> (Follow Route -> action) -> [Slug] -> [Page] -> Mayb
 pageTree router onFollow spacePath pages current = level Nothing
   where
     level parent =
-      HH.ul
-        [HP.class_ "page-tree"]
-        [ HH.li
-            [HP.classes ("page-node" : ["current" | Just p.id == current])]
-            ( Router.link
-                router
-                onFollow
-                (Page spacePath (pagePathOf pages p.id))
-                [attr "aria-current" "page" | Just p.id == current]
-                [HH.text p.title]
-                : [level (Just p.id) | not (null (childrenOf pages (Just p.id)))]
-            )
-        | p <- childrenOf pages parent
-        ]
+      [hh|
+        <ul class="page-tree">
+          {% for p in childrenOf pages parent %}{% let here = Just p.id == current %}
+            <li class="page-node{% if here %} current{% end %}">{{ pageLink p here }}{{ below p }}</li>
+          {% end %}
+        </ul>
+      |]
+    pageLink p here = Router.link router onFollow (Page spacePath (pagePathOf pages p.id)) [attr "aria-current" "page" | here] [HH.text p.title]
+    below p = [level (Just p.id) | not (null (childrenOf pages (Just p.id)))]
 
 -- | A button that does one thing.
 button :: Text -> i -> HH.HTML w i
-button label action = HH.button [HP.type_ I.ButtonButton, HE.onClick (const action)] [HH.text label]
+button label action = [hh|<button type="button" onClick={{ const action }}>{{ label }}</button>|]
 
 -- | A labelled text field, its value kept by the component.
 textField :: Text -> Text -> (Text -> i) -> HH.HTML w i
 textField label value onInput =
-  HH.label
-    [HP.class_ "field"]
-    [ HH.span_ [HH.text label]
-    , HH.input [HP.type_ I.InputText, HP.value value, HE.onValueInput onInput, HP.required True, HP.autofocus True]
-    ]
+  [hh|
+    <label class="field">
+      <span>{{ label }}</span>
+      <input type="text" value={{ value }} onValueInput={{ onInput }} required autofocus>
+    </label>
+  |]
 
 -- | An attribute Halogen has no property for (@role@, @aria-*@).
 attr :: Text -> Text -> HH.IProp r i
 attr name = HP.attr (HH.AttrName name)
+
+-- | A boolean ARIA state (@aria-expanded@, @aria-pressed@), as ARIA writes it.
+ariaBool :: Bool -> Text
+ariaBool b = if b then "true" else "false"
 
 -- | A size in bytes, as people read it.
 fileSize :: Natural -> Text

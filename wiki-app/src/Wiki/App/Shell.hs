@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | The application's frame, around whatever the route shows: a header with
 -- the site's name, breadcrumbs, the search box ("Wiki.App.View.Search") and
 -- the demo's user switcher; a sidebar with the tree of spaces, the current space's
@@ -31,15 +33,14 @@ module Wiki.App.Shell
 where
 
 import Control.Monad.UUID (MonadUUID)
-import DOM.HTML.Indexed qualified as I
 import Data.Row (type (.+), type (.==))
 import Data.Set qualified as Set
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
-import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
+import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous)
 import Wiki.App.Browser (historyEntry, historyGo, setDocumentTitle)
@@ -158,103 +159,114 @@ component =
   where
     render :: State -> H.ComponentHTML Action Slots m
     render st =
-      HH.div
-        [HP.class_ "wiki"]
-        [ header st
-        , HH.div
-            [HP.class_ "wiki-body"]
-            [ sidebar st
-            , HH.main [HP.class_ "wiki-content"] (leaveConfirm st <> [content st])
-            ]
-        ]
+      [hh|
+        <div class="wiki">
+          {{ header st }}
+          <div class="wiki-body">
+            {{ sidebar st }}
+            <main class="wiki-content">{% if isJust st.leaving %}{{ leaveConfirm }}{% end %}{{ content st }}</main>
+          </div>
+        </div>
+      |]
 
     header :: State -> H.ComponentHTML Action Slots m
     header st =
-      HH.header
-        [HP.class_ "wiki-header"]
-        [ Router.link st.router Followed Home [HP.class_ "wiki-brand"] [HH.text "Wiki"]
-        , breadcrumbs st
-        , HH.slot_ "searchBox" () SearchBox.component SearchBox.Input {context = context st}
-        , userSwitcher st
-        ]
+      [hh|
+        <header class="wiki-header">{{ brand }}{{ breadcrumbs st }}{{ searchBox }}{{ userSwitcher st }}</header>
+      |]
+      where
+        brand = Router.link st.router Followed Home [HP.class_ "wiki-brand"] [HH.text "Wiki"]
+        searchBox = HH.slot_ "searchBox" () SearchBox.component SearchBox.Input {context = context st}
 
     breadcrumbs :: State -> H.ComponentHTML Action Slots m
     breadcrumbs st =
-      HH.nav
-        [HP.class_ "breadcrumbs", attr "aria-label" "Breadcrumbs"]
-        [ HH.ol_ $ case unsnoc (crumbs st) of
-            Nothing -> []
-            Just (before, final) ->
-              map crumb before <> [HH.li_ [HH.span [attr "aria-current" "page"] [HH.text (fst final)]]]
-        ]
+      [hh|
+        <nav class="breadcrumbs" aria-label="Breadcrumbs">
+          <ol>
+            {% for (label, target, final) in marked (crumbs st) %}
+              <li>{{ crumb label target final }}</li>
+            {% end %}
+          </ol>
+        </nav>
+      |]
       where
-        crumb (label, target) = HH.li_ [maybe (HH.span [HP.class_ "unviewable"] [HH.text label]) (\r -> Router.link st.router Followed r [] [HH.text label]) target]
+        -- Each crumb, and whether it is the last one: the route itself,
+        -- which is not a link.
+        marked cs = zipWith (\n (label, target) -> (label, target, n == length cs)) [1 :: Int ..] cs
+        -- The last crumb names the route shown; one on the way is a link,
+        -- unless the user may not go there.
+        crumb label target final = case target of
+          _ | final -> [hh|<span aria-current="page">{{ label }}</span>|]
+          Just r -> Router.link st.router Followed r [] [HH.text label]
+          Nothing -> [hh|<span class="unviewable">{{ label }}</span>|]
 
+    -- The demo's menu of who one is: nobody, or one of its users.
     userSwitcher :: State -> H.ComponentHTML Action Slots m
     userSwitcher st =
-      HH.div
-        [HP.class_ "user-switcher"]
-        ( HH.button
-            [ HP.type_ I.ButtonButton
-            , HP.class_ "user-switcher-toggle"
-            , attr "aria-expanded" (if st.menuOpen then "true" else "false")
-            , HE.onClick (const ToggleMenu)
-            ]
-            [HH.text (maybe "Not signed in" (\u -> u.displayName) st.session.user)]
-            : [ HH.ul
-                  [HP.class_ "user-menu"]
-                  [ HH.li_
-                      [ HH.button
-                          [ HP.type_ I.ButtonButton
-                          , HP.class_ "user-option"
-                          , attr "data-login" (maybe "" (\u -> u.login) candidate)
-                          , attr "aria-pressed" (if ((\u -> u.id) <$> candidate) == ((\u -> u.id) <$> st.session.user) then "true" else "false")
-                          , HE.onClick (const (SwitchTo ((\u -> u.id) <$> candidate)))
-                          ]
-                          [HH.text (maybe "Nobody (not signed in)" (\u -> u.displayName <> " (" <> u.login <> ")") candidate)]
-                      ]
-                  | candidate <- Nothing : map Just st.users
-                  ]
-              | st.menuOpen
-              ]
-        )
+      [hh|
+        <div class="user-switcher">
+          <button type="button" class="user-switcher-toggle" aria-expanded={{ ariaBool st.menuOpen }} onClick={{ const ToggleMenu }}>
+            {{ maybe "Not signed in" (\u -> u.displayName) st.session.user }}
+          </button>
+          {% if st.menuOpen %}
+            <ul class="user-menu">
+              {% for candidate in Nothing : map Just st.users %}
+                <li>
+                  <button
+                    type="button"
+                    class="user-option"
+                    data-login={{ maybe "" (\u -> u.login) candidate }}
+                    aria-pressed={{ ariaBool (((\u -> u.id) <$> candidate) == ((\u -> u.id) <$> st.session.user)) }}
+                    onClick={{ const (SwitchTo ((\u -> u.id) <$> candidate)) }}
+                  >
+                    {{ maybe "Nobody (not signed in)" (\u -> u.displayName <> " (" <> u.login <> ")") candidate }}
+                  </button>
+                </li>
+              {% end %}
+            </ul>
+          {% end %}
+        </div>
+      |]
 
     sidebar :: State -> H.ComponentHTML Action Slots m
     sidebar st =
-      HH.nav
-        [HP.class_ "wiki-sidebar", attr "aria-label" "Spaces"]
-        ( [HH.h2_ [HH.text "Spaces"], spaceLevel st Nothing]
-            <> [ Router.link st.router Followed (NewSpace Nothing) [HP.class_ "new-space-link"] [HH.text "New space"]
-               | mayCreateSpace (principalOf (context st)) st.session.grants Nothing
-               ]
-        )
+      [hh|
+        <nav class="wiki-sidebar" aria-label="Spaces">
+          <h2>Spaces</h2>
+          {{ spaceLevel st Nothing }}{{ newSpace st "new-space-link" }}
+        </nav>
+      |]
+
+    -- A link to a new space at the top level, for someone who may make one.
+    newSpace :: State -> Text -> Maybe (H.ComponentHTML Action Slots m)
+    newSpace st cls =
+      guard (mayCreateSpace (principalOf (context st)) st.session.grants Nothing)
+        $> Router.link st.router Followed (NewSpace Nothing) [HP.class_ (HH.ClassName cls)] [HH.text "New space"]
 
     spaceLevel :: State -> Maybe SpaceId -> H.ComponentHTML Action Slots m
-    spaceLevel st parent = HH.ul [HP.class_ "space-tree"] (map (spaceNode st) (childrenOf st.spaces parent))
+    spaceLevel st parent = [hh|<ul class="space-tree">{{ map (spaceNode st) (childrenOf st.spaces parent) }}</ul>|]
 
     spaceNode :: State -> Space -> H.ComponentHTML Action Slots m
     spaceNode st s =
-      HH.li
-        [HP.classes ("space-node" : ["current" | current])]
-        ( [ HH.div
-              [HP.class_ "space-row"]
-              ( [ HH.button
-                    [ HP.type_ I.ButtonButton
-                    , HP.class_ "tree-toggle"
-                    , attr "aria-expanded" (if open then "true" else "false")
-                    , attr "aria-label" ((if open then "Collapse " else "Expand ") <> s.name)
-                    , HE.onClick (const (Toggle s.id))
-                    ]
-                    [HH.text (if open then "▾" else "▸")]
-                | hasChildren
-                ]
-                  <> [spaceLabel]
-              )
-          ]
-            <> pagesHere
-            <> [spaceLevel st (Just s.id) | hasChildren, open]
-        )
+      [hh|
+        <li class="space-node{% if current %} current{% end %}">
+          <div class="space-row">{% if hasChildren %}{{ toggle }}{% end %}{{ spaceLabel }}</div>
+          {{ pagesHere }}{% if hasChildren && open %}{{ spaceLevel st (Just s.id) }}{% end %}
+        </li>
+      |]
       where
+        toggle =
+          [hh|
+            <button
+              type="button"
+              class="tree-toggle"
+              aria-expanded={{ ariaBool open }}
+              aria-label={{ (if open then "Collapse " else "Expand ") <> s.name }}
+              onClick={{ const (Toggle s.id) }}
+            >
+              {{ if open then "▾" else "▸" :: Text }}
+            </button>
+          |]
         ctx = context st
         path = spacePathOf st.spaces s.id
         hasChildren = not (null (childrenOf st.spaces (Just s.id)))
@@ -266,10 +278,10 @@ component =
           | mayView ctx s.id =
               Router.link st.router Followed (Space path) ([HP.class_ "space-link"] <> [attr "aria-current" "page" | current && isSpaceRoute st.route]) [HH.text s.name]
           | otherwise =
-              HH.span [HP.class_ "unviewable", HP.title "You do not have permission to see this space"] [HH.text s.name]
+              [hh|<span class="unviewable" title="You do not have permission to see this space">{{ s.name }}</span>|]
         pagesHere = case st.here of
-          InSpace _ here pages | here.id == s.id, not (null pages) -> [pageTree st.router Followed path pages ((\p -> p.id) <$> currentPage st)]
-          _ -> []
+          InSpace _ here pages | here.id == s.id, not (null pages) -> Just (pageTree st.router Followed path pages ((\p -> p.id) <$> currentPage st))
+          _ -> Nothing
 
     content :: State -> H.ComponentHTML Action Slots m
     content st = case st.route of
@@ -280,7 +292,7 @@ component =
         HH.slot "searchResults" () SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
       _ -> case st.here of
         NoSpace -> notFound st
-        LoadingSpace _ -> HH.p [HP.class_ "loading"] [HH.text "Loading…"]
+        LoadingSpace _ -> [hh|<p class="loading">Loading…</p>|]
         SpaceFailed _ e -> errorView e
         InSpace _ space pages -> case st.route of
           Page _ path -> HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path} FromView
@@ -292,56 +304,60 @@ component =
             -- of its own, with a draft of its own.
             editor target = HH.slot "editor" target Editor.component Editor.Input {context = context st, space, pages, target} FromView
 
-    leaveConfirm :: State -> [H.ComponentHTML Action Slots m]
-    leaveConfirm st = case st.leaving of
-      Nothing -> []
-      Just _ ->
-        [ HH.div
-            [HP.classes ["confirm", "leave-confirm"], attr "role" "alertdialog"]
-            [ HH.p_ [HH.text "This page has changes that are not saved. Leave the editor and lose them?"]
-            , HH.button [HP.type_ I.ButtonButton, HP.class_ "danger", HE.onClick (const Leave)] [HH.text "Leave"]
-            , HH.button [HP.type_ I.ButtonButton, HE.onClick (const Stay)] [HH.text "Stay"]
-            ]
-        ]
+    -- Asked when a route is followed away from unsaved changes ('leaving').
+    leaveConfirm :: H.ComponentHTML Action Slots m
+    leaveConfirm =
+      [hh|
+        <div class="confirm leave-confirm" role="alertdialog">
+          <p>This page has changes that are not saved. Leave the editor and lose them?</p>
+          <button type="button" class="danger" onClick={{ const Leave }}>Leave</button>
+          <button type="button" onClick={{ const Stay }}>Stay</button>
+        </div>
+      |]
 
     home :: State -> H.ComponentHTML Action Slots m
     home st =
-      HH.section
-        [HP.class_ "home"]
-        ( [ HH.h1_ [HH.text "Welcome to the wiki"]
-          , HH.p_ [HH.text "Spaces hold pages written in Markdown, and spaces can hold other spaces. Who may read, edit or administer a space is up to its permissions; a public space is open to everyone."]
-          ]
-            <> [ HH.p [HP.class_ "welcome"] [HH.text "New here? ", Router.link st.router Followed r [] [HH.text "Take the tour"], HH.text "."]
-               | Just r <- [st.welcome]
-               ]
-            <> [ HH.h2_ [HH.text "Spaces"]
-               , case childrenOf st.spaces Nothing of
-                   [] -> HH.p [HP.class_ "empty"] [HH.text "There are no spaces you can see."]
-                   roots -> HH.ul [HP.class_ "space-list"] (map (rootSpace st) roots)
-               ]
-            <> [ Router.link st.router Followed (NewSpace Nothing) [HP.class_ "button"] [HH.text "New space"]
-               | mayCreateSpace (principalOf (context st)) st.session.grants Nothing
-               ]
-        )
+      [hh|
+        <section class="home">
+          <h1>Welcome to the wiki</h1>
+          <p>
+            Spaces hold pages written in Markdown, and spaces can hold other spaces. Who may
+            read, edit or administer a space is up to its permissions; a public space is open to
+            everyone.
+          </p>
+          {% for r in maybeToList st.welcome %}
+            <p class="welcome">New here? {{ Router.link st.router Followed r [] [HH.text "Take the tour"] }}.</p>
+          {% end %}
+          <h2>Spaces</h2>
+          {{ spaceList }}{{ newSpace st "button" }}
+        </section>
+      |]
+      where
+        spaceList = case childrenOf st.spaces Nothing of
+          [] -> [hh|<p class="empty">There are no spaces you can see.</p>|]
+          roots -> [hh|<ul class="space-list">{{ map (rootSpace st) roots }}</ul>|]
 
     rootSpace :: State -> Space -> H.ComponentHTML Action Slots m
     rootSpace st s
       | mayView (context st) s.id =
-          HH.li_
-            [ Router.link st.router Followed (Space [s.slug]) [] [HH.text s.name]
-            , HH.span [HP.classes ["badge", if s.public then "badge-public" else "badge-private"]] [HH.text (if s.public then "Public" else "Private")]
-            ]
+          [hh|
+            <li>
+              {{ Router.link st.router Followed (Space [s.slug]) [] [HH.text s.name] }}
+              <span class="badge {{ if s.public then "badge-public" else "badge-private" :: Text }}">{{ if s.public then "Public" else "Private" :: Text }}</span>
+            </li>
+          |]
       | otherwise =
-          HH.li_ [HH.span [HP.class_ "unviewable", HP.title "You can see only a subspace of this space"] [HH.text s.name]]
+          [hh|<li><span class="unviewable" title="You can see only a subspace of this space">{{ s.name }}</span></li>|]
 
     notFound :: State -> H.ComponentHTML Action Slots m
     notFound st =
-      HH.section
-        [HP.class_ "not-found"]
-        [ HH.h1_ [HH.text "Not found"]
-        , HH.p_ [HH.text "There is nothing at this address."]
-        , Router.link st.router Followed Home [HP.class_ "button"] [HH.text "Go to the front page"]
-        ]
+      [hh|
+        <section class="not-found">
+          <h1>Not found</h1>
+          <p>There is nothing at this address.</p>
+          {{ Router.link st.router Followed Home [HP.class_ "button"] [HH.text "Go to the front page"] }}
+        </section>
+      |]
 
     handleAction :: Action -> H.HalogenM State Action Slots output m ()
     handleAction = \case

@@ -1,3 +1,4 @@
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 -- | The search box in the shell's header, and how a hit is shown, here and
@@ -28,16 +29,15 @@ module Wiki.App.View.Search
 where
 
 import Control.Monad.UUID (MonadUUID)
-import DOM.HTML.Indexed qualified as I
 import Data.Row (Empty)
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
-import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event (..), preventDefault)
@@ -150,89 +150,72 @@ component =
   where
     render :: State -> H.ComponentHTML Action Empty m
     render st =
-      HH.div
-        [ HP.ref st.box
-        , HP.classes ("wiki-search" : ["open" | listShown st])
-        , attr "role" "search"
-        , HE.onFocusIn (const FocusIn)
-        , HE.onFocusOut FocusOut
-        ]
-        ( [ HH.div
-              [HP.class_ "search-bar"]
-              ( [ HH.input
-                    [ HP.ref st.input
-                    , HP.type_ I.InputSearch
-                    , HP.class_ "search-input"
-                    , HP.placeholder "Search pages… (/)"
-                    , attr "aria-label" "Search pages"
-                    , attr "aria-expanded" (if listShown st then "true" else "false")
-                    , attr "aria-controls" "wiki-search-results"
-                    , attr "autocomplete" "off"
-                    , HP.spellcheck False
-                    , -- No value: the box never sets the text itself, and a
-                      -- rendered value is put back on every render (Halogen
-                      -- compares it with the element's), which would undo a
-                      -- key typed between a render and the handling of the
-                      -- key before it, such as the first one after "/".
-                      HE.onValueInput Typed
-                    , HE.onKeyDown Key
-                    ]
-                , HH.select
-                    [HP.class_ "search-space", attr "aria-label" "Space to search", HE.onValueChange Chose]
-                    ( HH.option [HP.value "", HP.selected (isNothing st.space)] [HH.text "All spaces"]
-                        : [ HH.option [HP.value sid.text, HP.selected (st.space == Just sid)] [HH.text label]
-                          | (sid, label) <- choices st.context
-                          ]
-                    )
-                ]
-                  <> [ HH.label
-                         [HP.class_ "search-subspaces"]
-                         [ HH.input [HP.type_ I.InputCheckbox, HP.checked st.subspaces, HE.onChecked Subspaces]
-                         , HH.text " and subspaces"
-                         ]
-                     | isJust st.space
-                     ]
-              )
-          ]
-            <> [dropdown st | listShown st]
-        )
+      [hh|
+        <div
+          ref={{ st.box }}
+          class="wiki-search{% if listShown st %} open{% end %}"
+          role="search"
+          onFocusIn={{ const FocusIn }}
+          onFocusOut={{ FocusOut }}
+        >
+          <div class="search-bar">
+            {# No value: the box never sets the text itself, and a rendered
+               value is put back on every render (Halogen compares it with the
+               element's), which would undo a key typed between a render and
+               the handling of the key before it, such as the first one after
+               "/". #}
+            <input
+              ref={{ st.input }}
+              type="search"
+              class="search-input"
+              placeholder="Search pages… (/)"
+              aria-label="Search pages"
+              aria-expanded={{ ariaBool (listShown st) }}
+              aria-controls="wiki-search-results"
+              autocomplete="off"
+              spellcheck={{ False }}
+              onValueInput={{ Typed }}
+              onKeyDown={{ Key }}
+            >
+            <select class="search-space" aria-label="Space to search" onValueChange={{ Chose }}>
+              <option value="" selected={{ isNothing st.space }}>All spaces</option>
+              {% for (sid, label) in choices st.context %}
+                <option value={{ sid.text }} selected={{ st.space == Just sid }}>{{ label }}</option>
+              {% end %}
+            </select>
+            {% if isJust st.space %}
+              <label class="search-subspaces"><input type="checkbox" checked={{ st.subspaces }} onChecked={{ Subspaces }}> and subspaces</label>
+            {% end %}
+          </div>
+          {% if listShown st %}{{ dropdown st }}{% end %}
+        </div>
+      |]
 
+    -- The list under the input. A press on it would take focus from the
+    -- input before the click it starts lands, closing the list under the
+    -- pointer, so the press is kept from doing that ('KeepFocus').
     dropdown :: State -> H.ComponentHTML Action Empty m
     dropdown st =
-      HH.div
-        [ HP.class_ "search-results"
-        , HP.id "wiki-search-results"
-        , -- A press on the list would take focus from the input before the
-          -- click it starts lands, closing the list under the pointer.
-          HE.onMouseDown KeepFocus
-        ]
-        ( ( case st.results of
-              NotSearched -> [HH.p [HP.class_ "search-status"] [HH.text "Searching…"]]
-              Found _ [] -> [HH.p [HP.class_ "search-status search-empty"] [HH.text "No results"]]
-              Found _ hits ->
-                [ HH.ul
-                    [HP.class_ "search-hits", attr "role" "listbox"]
-                    [ HH.li
-                        [attr "role" "option", attr "aria-selected" (if Just i == st.selected then "true" else "false")]
-                        [ Router.link
-                            st.context.router
-                            Followed
-                            (Page hit.spacePath hit.pagePath)
-                            [HP.classes ("search-hit" : ["selected" | Just i == st.selected])]
-                            (hitContents st.context.spaces hit)
-                        ]
-                    | (i, hit) <- zip [0 ..] (take shown hits)
-                    ]
-                ]
-          )
-            <> [ Router.link
-                   st.context.router
-                   Followed
-                   (resultsRoute st)
-                   [HP.class_ "search-all"]
-                   [HH.text ("All results for “" <> T.strip st.text <> "”")]
-               ]
-        )
+      [hh|
+        <div class="search-results" id="wiki-search-results" onMouseDown={{ KeepFocus }}>
+          {{ status }}{{ allResults }}
+        </div>
+      |]
+      where
+        allResults = Router.link st.context.router Followed (resultsRoute st) [HP.class_ "search-all"] [HH.text ("All results for “" <> T.strip st.text <> "”")]
+        status = case st.results of
+          NotSearched -> [hh|<p class="search-status">Searching…</p>|]
+          Found _ [] -> [hh|<p class="search-status search-empty">No results</p>|]
+          Found _ hits ->
+            [hh|
+              <ul class="search-hits" role="listbox">
+                {% for (i, hit) in zip [0 ..] (take shown hits) %}{% let chosen = Just i == st.selected %}
+                  <li role="option" aria-selected={{ ariaBool chosen }}>
+                    {{ Router.link st.context.router Followed (Page hit.spacePath hit.pagePath) [HP.classes ("search-hit" : ["selected" | chosen])] (hitContents st.context.spaces hit) }}
+                  </li>
+                {% end %}
+              </ul>
+            |]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
     handleAction = \case
@@ -386,10 +369,11 @@ spaceNamesOf spaces path = case findSpace spaces path of
 -- snippet, the matches marked in both.
 hitContents :: [Space] -> SearchHit -> [HH.HTML w i]
 hitContents spaces hit =
-  [ HH.span [HP.class_ "search-hit-title"] (snippetHtml hit.title)
-  , HH.span [HP.class_ "search-hit-space"] [HH.text (T.intercalate " / " (spaceNamesOf spaces hit.spacePath))]
-  , HH.span [HP.class_ "search-hit-snippet"] (snippetHtml hit.snippet)
-  ]
+  [hhs|
+    <span class="search-hit-title">{{ snippetHtml hit.title }}</span>
+    <span class="search-hit-space">{{ T.intercalate " / " (spaceNamesOf spaces hit.spacePath) }}</span>
+    <span class="search-hit-snippet">{{ snippetHtml hit.snippet }}</span>
+  |]
 
 -- | A snippet's text, its matches in @\<mark>@.
 snippetHtml :: Snippet -> [HH.HTML w i]

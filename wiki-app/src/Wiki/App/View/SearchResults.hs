@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | The page of all results of a search (the route 'Search'): what the box
 -- in the header lists the best of, in full, each hit shown as the box shows
 -- it. The search box is where a search is typed; this page is where Enter in
@@ -11,10 +13,10 @@ where
 import Data.Row (Empty)
 import Data.Text qualified as T
 import Halogen qualified as H
-import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Route (Route (..))
@@ -70,28 +72,28 @@ component =
   where
     render :: State -> H.ComponentHTML Action Empty m
     render State {input, results} =
-      HH.section [HP.class_ "search-view"] $
-        [HH.h1_ [HH.text "Search"]]
-          <> case results of
-            Loading -> [HH.p [HP.class_ "loading"] [HH.text "Searching…"]]
-            NoQuery -> [HH.p [HP.class_ "empty"] [HH.text "Type what to look for in the search box at the top of the page, or press / to get there."]]
-            NoSpace -> [HH.p [HP.class_ "empty"] [HH.text "There is no such space to search in, or you may not see it."]]
-            Hits hits ->
-              HH.p [HP.class_ "search-summary"] [HH.text (summary input (length hits))]
-                : [ HH.ol
-                      [HP.class_ "search-hits"]
-                      [ HH.li_
-                          [ Router.link
-                              input.context.router
-                              Followed
-                              (Page hit.spacePath hit.pagePath)
-                              [HP.class_ "search-hit"]
-                              (hitContents input.context.spaces hit)
-                          ]
-                      | hit <- hits
-                      ]
-                  | not (null hits)
-                  ]
+      [hh|
+        <section class="search-view">
+          <h1>Search</h1>
+          {{ found }}
+        </section>
+      |]
+      where
+        found = case results of
+          Loading -> [[hh|<p class="loading">Searching…</p>|]]
+          NoQuery -> [[hh|<p class="empty">Type what to look for in the search box at the top of the page, or press / to get there.</p>|]]
+          NoSpace -> [[hh|<p class="empty">There is no such space to search in, or you may not see it.</p>|]]
+          Hits hits ->
+            [hhs|
+              <p class="search-summary">{{ summary input (length hits) }}</p>
+              {% if not (null hits) %}
+                <ol class="search-hits">
+                  {% for hit in hits %}
+                    <li>{{ Router.link input.context.router Followed (Page hit.spacePath hit.pagePath) [HP.class_ "search-hit"] (hitContents input.context.spaces hit) }}</li>
+                  {% end %}
+                </ol>
+              {% end %}
+            |]
 
     handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case

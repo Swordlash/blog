@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | A page, read: its Markdown rendered as "Wiki.App.View.Body" renders it
 -- (with its links resolved and its islands drawn), its attachments, and what
 -- the current user may do to it (edit, add a page under it, rename, move,
@@ -11,15 +13,14 @@ module Wiki.App.View.Page
 where
 
 import Control.Monad.UUID (MonadUUID)
-import DOM.HTML.Indexed qualified as I
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
-import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Web.Event.Event (Event, preventDefault)
 import Web.UIEvent.MouseEvent (MouseEvent)
@@ -98,19 +99,25 @@ component =
   where
     render :: State -> H.ComponentHTML Action Slots m
     render State {input, loaded, mode, problem} = case loaded of
-      Loading -> HH.p [HP.class_ "loading"] [HH.text "Loading…"]
+      Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> errorView e
       Ready page urls ->
-        HH.div
-          [HP.class_ "page-view"]
-          ( [HH.div [HP.class_ "actions"] (actions input page) | mayEdit input.context page.space]
-              <> form input page mode
-              <> foldMap (pure . errorView) problem
+        [hh|
+          <div class="page-view">
+            {{ parts }}
+            <footer class="page-meta">Last changed {{ day page.updatedAt }}</footer>
+          </div>
+        |]
+        where
+          -- Several computed parts in a row are one hole: on lines of their
+          -- own, each line break between them would be a space.
+          parts =
+            [[hh|<div class="actions">{{ actions input page }}</div>|] | mayEdit input.context page.space]
+              <> toList (form input page mode)
+              <> toList (errorView <$> problem)
               <> Body.heading page.title page.body
               <> [body input page urls]
               <> attachments page urls
-              <> [HH.footer [HP.class_ "page-meta"] [HH.text ("Last changed " <> day page.updatedAt)]]
-          )
 
     actions :: Input -> Page -> [H.ComponentHTML Action Slots m]
     actions input page =
@@ -123,42 +130,50 @@ component =
       where
         spacePath = spacePathOf input.context.spaces input.space.id
 
-    form :: Input -> Page -> Mode -> [H.ComponentHTML Action Slots m]
+    form :: Input -> Page -> Mode -> Maybe (H.ComponentHTML Action Slots m)
     form input page = \case
-      Viewing -> []
-      Renaming title -> [inForm [textField "New title" title Typed] "Rename"]
+      Viewing -> Nothing
+      Renaming title -> Just (inForm [textField "New title" title Typed] "Rename")
       Moving chosen targetPages parent ->
         let spaces = targetSpaces input.context page
             target = (\s -> s.id) <$> atMay spaces chosen
             parents = Nothing : map Just (allowedParents page target targetPages)
-         in [ inForm
+         in Just $
+              inForm
                 [ select "Move to the space" ChoseSpace [(n == chosen, spaceName input.context s) | (n, s) <- zip [0 ..] spaces]
                 , select "Under" ChoseParent [(p == parent, maybe "Its top level" (\q -> q.title) (findPage targetPages =<< p)) | p <- parents]
                 ]
                 "Move"
-            ]
       ConfirmingDelete ->
-        [ HH.div
-            [HP.class_ "confirm", attr "role" "alertdialog"]
-            [ HH.p_ [HH.text ("Delete " <> page.title <> ", with the pages under it and their attachments? This cannot be undone.")]
-            , HH.button [HP.type_ I.ButtonButton, HP.class_ "danger", HE.onClick (const Delete)] [HH.text "Delete"]
-            , button "Cancel" (Open Viewing)
-            ]
-        ]
+        Just
+          [hh|
+            <div class="confirm" role="alertdialog">
+              <p>Delete {{ page.title }}, with the pages under it and their attachments? This cannot be undone.</p>
+              <button type="button" class="danger" onClick={{ const Delete }}>Delete</button>
+              {{ button "Cancel" (Open Viewing) }}
+            </div>
+          |]
 
     select :: Text -> (Int -> Action) -> [(Bool, Text)] -> H.ComponentHTML Action Slots m
     select label onChoose choices =
-      HH.label
-        [HP.class_ "field"]
-        [ HH.span_ [HH.text label]
-        , HH.select [HE.onSelectedIndexChange onChoose] [HH.option [HP.selected chosen] [HH.text name] | (chosen, name) <- choices]
-        ]
+      [hh|
+        <label class="field">
+          <span>{{ label }}</span>
+          <select onSelectedIndexChange={{ onChoose }}>
+            {% for (chosen, name) in choices %}<option selected={{ chosen }}>{{ name }}</option>{% end %}
+          </select>
+        </label>
+      |]
 
     inForm :: [H.ComponentHTML Action Slots m] -> Text -> H.ComponentHTML Action Slots m
     inForm fields submit =
-      HH.form
-        [HP.class_ "inline-form", HE.onSubmit Submit]
-        (fields <> [HH.button [HP.type_ I.ButtonSubmit, HP.class_ "primary"] [HH.text submit], button "Cancel" (Open Viewing)])
+      [hh|
+        <form class="inline-form" onSubmit={{ Submit }}>
+          {{ fields }}
+          <button type="submit" class="primary">{{ submit }}</button>
+          {{ button "Cancel" (Open Viewing) }}
+        </form>
+      |]
 
     body :: Input -> Page -> Map AttachmentId Text -> H.ComponentHTML Action Slots m
     body input page urls =
@@ -168,21 +183,22 @@ component =
         page.body
 
     attachments :: Page -> Map AttachmentId Text -> [H.ComponentHTML Action Slots m]
-    attachments page urls = case page.attachments of
-      [] -> []
-      files ->
-        [ HH.section
-            [HP.class_ "attachments"]
-            [ HH.h2_ [HH.text "Attachments"]
-            , HH.ul_
-                [ HH.li_
-                    [ HH.a [HP.href (Map.findWithDefault "" a.id urls), HP.download a.name] [HH.text a.name]
-                    , HH.span [HP.class_ "attachment-meta"] [HH.text (a.mediaType <> ", " <> fileSize a.size)]
-                    ]
-                | a <- files
-                ]
-            ]
-        ]
+    attachments page urls =
+      [hhs|
+        {% if not (null page.attachments) %}
+          <section class="attachments">
+            <h2>Attachments</h2>
+            <ul>
+              {% for a in page.attachments %}
+                <li>
+                  <a href={{ Map.findWithDefault "" a.id urls }} download={{ a.name }}>{{ a.name }}</a>
+                  <span class="attachment-meta">{{ a.mediaType }}, {{ fileSize a.size }}</span>
+                </li>
+              {% end %}
+            </ul>
+          </section>
+        {% end %}
+      |]
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
