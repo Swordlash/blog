@@ -1091,3 +1091,10 @@ Amended by the planning session after each work package's report.
   unknown command in red without `.katex-error`, so "no error" tests check both.
 - **Phase 1 complete.** `main` at `84f791c` is the tag point for `v0.1.0-demo`, which the
   owner pushes (the session's credentials cannot push tags). Next: Phase 2.
+- **haskell-halogen pinned to `05b9160`** ([#34](https://github.com/Swordlash/blog/pull/34),
+  `1202e4c`): the owner's merge of haskell-halogen#54, the initialization fix for the island
+  hang above. Checked here before the merge: with the islands put back to wait in Initialize,
+  the smoke test hangs on `a889566` and passes on the fix; the full gate on the fix is green.
+  CI on #34 green. After a pin change, a local wasm build can keep the old pin
+  (`cabal-wasm.project` only imports `cabal.project`); delete `dist-newstyle/wasm/cache` and
+  the fetched `dist-newstyle/wasm/src/haskell-h_-*` first. CI is unaffected (fresh checkout).
