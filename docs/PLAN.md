@@ -266,6 +266,22 @@ point of this phase.
   haskell-halogen's conventions and its three-backend gate apply; the JavaScript backend
   is not installed in the blog's sessions, so that build is reported as not run and
   left to haskell-halogen's CI.
+- **HH-2 Router links followed by the browser, in haskell-halogen.** Found by WP1.7: a
+  router link clicked right after a user switch is sometimes followed by the browser (a
+  full page load) instead of the router: 1 click in 20 made at once after the switch, none
+  100 ms later, none of 126 without a switch. `Halogen.Router.follow` calls
+  `preventDefault` from the action handler, and a handler is work for the tree's loop
+  (AGENTS.md: one piece of work at a time, by whichever thread brings it while it is
+  idle), so when the loop is busy with the render the switch caused, the handler runs as a
+  later task and the browser has already navigated. Reproduce it in hspec-halogen (a
+  component whose render is slow, a link clicked while it renders), then fix it where it
+  belongs: `preventDefault` must run synchronously in the DOM callback, before the handler
+  is queued, so either the router's link handler asks for it at the listener (an `HE`
+  combinator or event-handler option that calls `preventDefault` in the callback and then
+  dispatches), or core's listener does it for handlers that declare it. The implementer
+  chooses, with the reason, and keeps `H.liftEffect`'s contract. Report what else in the
+  examples relies on `preventDefault` from a handler (forms, keyboard shortcuts), since the
+  same race applies.
 - **WP1.11 Persist the demo.** After HH-1 and WP1.10: bump the pin to HH-1's commit (its
   own commit). `MemWiki` writes through to IndexedDB after every successful write, the
   records it changed in one `writeMany` (spaces, pages, attachments with their bytes,
@@ -547,7 +563,29 @@ Amended by the planning session after each work package's report.
   integration before WP1.7.
 - **Integration and WP1.7 started:** #13 and #14 conflict in ten files; the integration
   merges `wp1.6-editor` into `wp1.8-search` and restacks #14 on #13, then WP1.7 branches
-  from there. Merge order once CI runs: #6, #9, #10, #11, #12, #13, #14, then WP1.7.
+  from there. Merge order once CI runs: #6, #9, #10, #11, #12, #13, #14, then WP1.7 (#16).
+- **Integration done, WP1.7 done** ([#16](https://github.com/Swordlash/blog/pull/16),
+  stacked on #14, which now targets #13). The editor's controlled-input race was real:
+  the preview's forked update re-rendered the editor and `HP.value` dropped keys (1 run
+  in 3); fixed by making the title's `value` and the textarea's text the loaded content
+  only, keyed by a load counter so a reload after a conflict makes fresh elements; a
+  30 s browser test types against a long page. `textField` (rename, new space) is still
+  controlled and does not race today; it must become uncontrolled with `HttpWiki`
+  (WP2.4). WP1.7: the tour rewritten as a guided walk, README "What works" and "Running
+  the demo", the smoke test grown into a gallery-style test (every prerendered page with
+  `app.wasm` held back, one long walk through tour, spaces, editor, search, 14 history
+  entries, the leave guard, a reload, `404.html`; dark and light schemes; a 390 px phone),
+  no network needed; Stay no longer duplicates the editor's history entry (the shell
+  numbers entries in `history.state`); private pages titled "Private · Wiki"; CHANGELOGs
+  cut as 0.1.0. Tag `v0.1.0-demo` goes on the merge of #16. Bundle: `app.wasm` 5928 KiB
+  (1385 KiB brotli); commonmark and its extensions are 44% of the code, `wasm-opt
+  --converge`, `-O3`, `split-sections` and dropping emoji save nothing worth having, so
+  the remaining options are a lighter Markdown parser or serving brotli; parked. No view
+  added, so `hh` is still unused. New haskell-halogen defect, planned as HH-2: a router
+  link clicked right after a user switch is sometimes followed by the browser. For Phase
+  2: the shell reloads session, users, spaces and every page body after each change,
+  so the API wants page summaries or the client a cache; `attachmentUrl` over HTTP is
+  the download endpoint's address; `MonadDemoUsers` must become optional or be replaced.
 - **Quoters, owner's rule:** use `hh` (and `clay`) wherever they simplify the code,
   which for HTML is usual; decision 3 amended. WP1.9, after the Phase 1 merges, is one
   agent's pass over the existing views deciding where `hh`/`clay` go and where not;
