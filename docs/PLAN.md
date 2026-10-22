@@ -206,6 +206,23 @@ point of this phase.
   to `wiki-app` and `alex`/`happy < 2.2` to the wasm job, records the build-time cost of
   `ghc-lib-parser` on both backends, and reports the rule it applied so later packages
   follow it.
+- **WP1.10 Hydrate the demo.** haskell-halogen `7c78cfb` ("Hydrate prerendered pages
+  instead of rendering over them") adds `hydrateUI`, with `runUI`'s signature, which
+  adopts the HTML `Halogen.Static` prerendered instead of emptying `#app` and building it
+  again: text and elements are kept, listeners attached, every mismatch repaired. Bump
+  the `source-repository-package` pin to it (its own commit; `MonadDOM` gains
+  `firstChild`, `nodeKind`, `nodeToElement` and takes `nextSibling` from
+  `MonadBrowserDOM`, all with lifted defaults, so the app's transformer instances need
+  nothing), mount with `hydrateUI` in `Main.hs`, and make sure the prerender and the
+  program agree on the first render, which the mismatch repair would otherwise hide: the
+  islands render as empty ref'd elements both ways, and the demo's seeded `MemWiki` is
+  the same on both sides so no state needs embedding (`Halogen.Static.embed` and
+  `readEmbedded` are for WP2.6). The smoke test does what haskell-halogen's test-gallery
+  does: mark a prerendered node before `app.wasm` is let through and check it is still
+  the one on the page after the program started and after navigating. Browser tests use
+  the harness's new `htmlContainer`/`hydrate` for the shell and a page view. Report
+  anything the repair had to fix, since each such case is HTML the server-rendered page
+  of WP2.6 would also get wrong.
 
 ### Phase 2: server and persistence
 
@@ -230,15 +247,17 @@ Goal: the same app, with pages that survive a reload, served by one binary.
   `HttpWiki` at start from a flag in `index.html`, so Pages keeps serving the demo.
 - **WP2.5 Page history.** Every save is a version; a history view with diff (a pure
   Markdown diff rendered in Halogen) and restore.
-- **WP2.6 Server-side rendering with hydration.** haskell-halogen is about to gain full
-  SSR with hydration (the program adopts the server-rendered tree instead of replacing
-  it). Once it lands: bump the `source-repository-package` pin, have `wiki-server` render
-  each route's page with the component already run against the store (the page a reader
-  gets is complete before `app.wasm` loads, which also makes public spaces readable
-  without JavaScript and crawlable), and have `wiki-app` hydrate it. Until then `Main.hs`
-  empties `#app` and renders afresh, as haskell-halogen's examples do. The serverless
-  demo keeps its build-time prerender and may hydrate too, if the API allows it with no
-  server.
+- **WP2.6 Server-side rendering with hydration.** Hydration itself is in since WP1.10;
+  this is the server's side of it. `wiki-server` renders each route's page per request
+  with `Halogen.Static` against the store, as the principal of the request (so a public
+  space's page is complete before `app.wasm` loads, readable without JavaScript and
+  crawlable, and a private one renders nothing it may not show), and writes the data the
+  render used into the page with `Halogen.Static.embed` (a JSON script by id; every `<`
+  escaped) so that `HttpWiki`'s `initialState`, through `readEmbedded`, starts from the
+  same data instead of fetching it again and re-rendering through the empty state, which
+  `hydrateUI` would otherwise do. Which data to embed (the page, the space tree, the
+  user) and its encoding are this package's to decide; `wiki-api`'s types are the
+  obvious ones. The serverless demo keeps its build-time prerender.
 - **WP2.7 Server-side search.** `HttpWiki.searchPages` calls `/api/v1/search`, backed by
   SQLite FTS5 over title and body (a contentless or external-content table kept in step by
   triggers on page saves), with the same space filter and snippets from FTS5's `snippet()`,
@@ -440,6 +459,11 @@ Amended by the planning session after each work package's report.
   which for HTML is usual; decision 3 amended. WP1.9, after the Phase 1 merges, is one
   agent's pass over the existing views deciding where `hh`/`clay` go and where not;
   until then a new view in WP1.7 uses `hh`, and later packages follow WP1.9's rule.
+- **Hydration landed in haskell-halogen** (`7c78cfb`, after our pin `7744471`):
+  `hydrateUI`, `Halogen.Static.embed` with `Halogen.IO.Util.readEmbedded`, hspec-halogen's
+  `htmlContainer`/`hydrate`; its examples adopt the prerender. Planned as WP1.10 (pin bump
+  and hydrating the demo, right after the quoter pass) and WP2.6 recut to the server's part:
+  per-request render as the principal plus embedded data so the client starts from it.
 - **Administration from localhost planned (owner's request):** decision 11 adds a
   loopback-only admin listener to `wiki-server`, where a user is marked as administrator
   without a login; an administrator then has the panel remotely. WP2.3 gains the listener,
