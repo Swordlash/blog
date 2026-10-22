@@ -797,8 +797,10 @@ warm_wasm() {
     # shellcheck source=/dev/null
     . "$WASM_PREFIX/env"
     cd "$ROOT"
-    # Cabal may reuse the host ghc-pkg from this cache when switching toolchains.
-    rm -f dist-newstyle/wasm/cache/compiler
+    # Cabal may reuse the host ghc-pkg from this cache when switching toolchains,
+    # and miss a change to cabal.project, which cabal-wasm.project imports, in
+    # this one (see build-wasm.sh).
+    rm -f dist-newstyle/wasm/cache/compiler dist-newstyle/wasm/cache/config
     cabal build all --only-dependencies --project-file=cabal-wasm.project \
       --builddir=dist-newstyle/wasm \
       --with-compiler="$(command -v wasm32-wasi-ghc)" \

@@ -45,6 +45,13 @@ wasm_hsc2hs=$(command -v wasm32-wasi-hsc2hs)
 
 # Cabal may reuse the host ghc-pkg from this cache when switching toolchains.
 rm -f "$build_dir/cache/compiler"
+# And it keeps the parsed project in cache/config, checked against the project
+# file but not reliably against the files it imports: cabal-wasm-opt.project
+# imports cabal-wasm.project, which imports cabal.project, and after a change
+# to haskell-halogen's pin there the -O2 build went on building the old
+# commit's sources, however often it ran. Reading the project afresh costs a
+# few seconds.
+rm -f "$build_dir/cache/config"
 
 set -- \
   --project-file="$project" \

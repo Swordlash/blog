@@ -86,8 +86,10 @@ case "$mode" in
     ;;
   repl)
     [ -f "$public_dir/index.html" ] || prepare_page
-    # Cabal may reuse the host ghc-pkg from this cache when switching toolchains.
-    rm -f dist-newstyle/wasm-dev/cache/compiler
+    # Cabal may reuse the host ghc-pkg from this cache when switching toolchains,
+    # and miss a change to cabal.project, which cabal-wasm.project imports, in
+    # this one (see build-wasm.sh).
+    rm -f dist-newstyle/wasm-dev/cache/compiler dist-newstyle/wasm-dev/cache/config
     # Browser GHCi's interpreter needs ghc-wasm-meta's npm packages (ws).
     # ~/.ghc-wasm/env points NODE_PATH at them only when it was unset, and a
     # shell (a cloud session's) may have set it already.

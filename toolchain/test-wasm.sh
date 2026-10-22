@@ -24,8 +24,10 @@ build_dir=dist-newstyle/wasm
 
 sh toolchain/test-wasm-runner.sh
 
-# Cabal may reuse the host ghc-pkg from this cache when switching toolchains.
-rm -f "$build_dir/cache/compiler"
+# Cabal may reuse the host ghc-pkg from this cache when switching toolchains,
+# and miss a change to cabal.project, which cabal-wasm.project imports, in
+# this one (see build-wasm.sh).
+rm -f "$build_dir/cache/compiler" "$build_dir/cache/config"
 
 exec cabal test all \
   --project-file=cabal-wasm.project \
