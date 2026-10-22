@@ -1060,3 +1060,12 @@ Amended by the planning session after each work package's report.
   down (`--purge` deletes the files). Tested against fakes and once for real here without
   systemd; the first real run is the owner's. `test-bootstrap.sh` and the deploy tests do
   not run in CI. The tag `v0.1.0-demo` waits for WP1.16 only.
+- **The island hang's cause, found in haskell-halogen** (the owner's agent there): a
+  component created in the same render as an island awaits its children's initializers
+  before running its own Initialize and before flushing its pending queries and outputs, as
+  purescript-halogen's `handleLifecycle` does; with the island's `Fill` waiting in `lift`
+  for the drawing, queries to and outputs from that subtree waited too, and the next route
+  change stalled behind them. Not hooks (`wiki-app` has none), not the subscription or the
+  router (both launch a fiber per value). haskell-halogen changes core: a component counts as
+  initialized once its Initialize reaches its first wait or ends. The blog takes it at its
+  next pin bump; `b65ad6e`'s fire-and-forget drawing stays either way.
