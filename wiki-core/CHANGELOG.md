@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+The editor's toolbar is pure: the new `Wiki.Core.Markdown.Edit` has
+`apply :: Command -> Text -> Selection -> (Text, Selection)`, which takes a
+page's Markdown with what is selected in it (`Selection`, offsets in
+characters, `cursor` for none) and gives back the Markdown a toolbar button
+or shortcut makes, with what to select afterwards. Inline commands (`Bold`,
+`Italic`, `Strikethrough`, `InlineCode`, `InlineMath`, and `Html` with
+`Mark`, `Kbd`, `Sup`, `Sub`, `Underline` or `Small`) wrap the selection,
+each of its paragraphs on its own and without the spaces at its ends, put a
+selected placeholder in when nothing is selected, and unwrap markers inside
+or just around the selection. Line commands (`BulletList`, `NumberedList`,
+`TaskList`, `Quote`, `Heading`, which cycles through levels one to three and
+none) change every line the selection touches and toggle off when every
+line has them already; a list command turns a list of another kind into its
+own. Block commands (`CodeBlock`, with the cursor where the language goes,
+`DisplayMath`, `Mermaid`, and `Html Details`, a collapsible section written
+without blank lines so that it stays one HTML block) fence the lines
+touched, or unfence lines fenced already; `Link` and `Image` wrap the
+selection or a selected address; `Table` (three columns) and
+`HorizontalRule` go after the line. Every block is kept a blank line apart
+from the text around it. `htmlTagName` and `htmlTagLabel` name the tags the
+toolbar offers.
+
 HTML in a page is rendered rather than shown as text, through an allowlist.
 The new `Wiki.Core.Markdown.Html` reads raw HTML with `tagsoup` and builds it
 into a tree the way a browser's parser would (an open `p` ends at a block,

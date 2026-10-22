@@ -6,6 +6,7 @@ import Test.Hspec (hspec)
 import Test.Json qualified as Json
 import Test.Markdown.Allowlist qualified as Allowlist
 import Test.Markdown.Ast qualified as Ast
+import Test.Markdown.Edit qualified as Edit
 import Test.Markdown.Link qualified as Link
 import Test.Path qualified as Path
 import Test.Permission qualified as Permission
@@ -17,6 +18,7 @@ main :: IO ()
 main = hspec $ do
   Slug.spec
   Ast.spec
+  Edit.spec
   Allowlist.spec
   Link.spec
   Path.spec
