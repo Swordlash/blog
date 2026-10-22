@@ -718,8 +718,13 @@ Amended by the planning session after each work package's report.
   the tree is built to read back unchanged from `Halogen.Static` (tested). For WP1.12: an
   HTML command writes an inline tag pair in the line or a whole block with no blank line in it.
 - **HH-2 merged** by the owner (haskell-halogen `08f9093`), reviewed as sound with three
-  non-blocking notes, carried into HH-3. WP1.10 and HH-3 start now, in parallel; #18
-  (WP1.13) waits on CI.
+  non-blocking notes, carried into HH-3. #18 (WP1.13) merged after its CI went green.
+- **Paused by the owner** after that, to keep the session's budget: HH-3 and WP1.10 were
+  started and stopped before they committed anything, so nothing of theirs exists on a
+  branch; the patch with #51's review notes went with the session and is rewritten from
+  the HH-3 text (a few lines each). `main` holds Phase 1 complete plus WP1.9 and WP1.13.
+  Next, when work resumes: WP1.10 and HH-3 in parallel (briefs as written in their
+  entries), then WP1.11 (needs HH-3's pin), WP1.12, then Phase 2.
 - **WP1.9 done** ([#19](https://github.com/Swordlash/blog/pull/19), branch `wp1.9-quoters`;
   CI's first run installs th's build: `ghc-lib-parser` cold is 11 min native and 13.5 min
   wasm, measured alone under load). The rule for later packages: `hh` wherever the element
