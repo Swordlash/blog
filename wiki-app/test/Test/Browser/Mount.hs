@@ -5,6 +5,7 @@
 module Test.Browser.Mount
   ( start
   , startWith
+  , startChanged
   , adopt
   , startKept
   , startKeptWith
@@ -14,7 +15,7 @@ module Test.Browser.Mount
 where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.IORef (IORef)
+import Data.IORef (IORef, modifyIORef')
 import Data.NT (type (~>) (..))
 import Halogen qualified as H
 import Halogen.Router (Router)
@@ -61,6 +62,20 @@ startWith m who at = do
   (wiki, router) <- prepare who at
   ui <- mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
   pure (ui, wiki)
+
+-- | 'start', over the demo changed first: for a test that needs content
+-- of its own (a space with macros, a page with formulas).
+startChanged
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  => (MemState -> MemState)
+  -> Maybe Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+startChanged m change who at = do
+  (wiki, router) <- prepare who at
+  unsafeIOToPageM (modifyIORef' wiki change)
+  mount m (H.hoist (NT (runMemWiki wiki)) component) (input router)
 
 -- | 'start', in a container that holds the shell's HTML for the route
 -- already ('htmlContainer'), as a prerendered page does: the shell adopts

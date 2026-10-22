@@ -7,6 +7,7 @@ import Test.Hspec.Halogen (describe, runBrowserTests)
 #if defined(wasm32_HOST_ARCH)
 import Test.Browser.Editor qualified as Editor
 import Test.Browser.Hydrate qualified as Hydrate
+import Test.Browser.Macros qualified as Macros
 import Test.Browser.Persist qualified as Persist
 import Test.Browser.Search qualified as Search
 import Test.Browser.Shell qualified as Shell
@@ -34,6 +35,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
   describe "Wiki.App.View.Source" (Source.spec BrowserDOM)
+  describe "Math macros" (Macros.spec BrowserDOM)
   describe "Hydration" (Hydrate.spec BrowserDOM)
   describe "Wiki.App.Backend.Mem kept in IndexedDB" (Persist.spec BrowserDOM)
 #endif

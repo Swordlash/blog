@@ -223,6 +223,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Editor
       Test.Browser.Hydrate
       Test.Browser.Islands
+      Test.Browser.Macros
       Test.Browser.Mount
       Test.Browser.Persist
       Test.Browser.Search
@@ -231,6 +232,7 @@ test-suite wiki-app-browser-test
   build-depends:
       base,
       base64-bytestring,
+      containers,
       protolude,
       row-types,
       text,
