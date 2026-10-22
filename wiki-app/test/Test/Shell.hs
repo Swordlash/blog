@@ -59,8 +59,13 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     guide `contains` "<a download=\"earth.jpg\" href=\"https://upload.wikimedia.org/"
 
   it "says in place that a private space is not for someone not signed in" $ do
-    Rendered {html} <- render (as Nothing) (Space (slugs ["team"]))
+    Rendered {html, title} <- render (as Nothing) (Space (slugs ["team"]))
     html `contains` "class=\"error error-forbidden\""
+    title `shouldBe` "Private · Wiki"
+    Rendered {html = handbook, title = handbookTitle} <- render (as Nothing) (Page (slugs ["team"]) (slugs ["team-handbook"]))
+    handbook `contains` "class=\"error error-forbidden\""
+    handbook `lacks` "Ada"
+    handbookTitle `shouldBe` "Private · Wiki"
 
   it "shows a private space to someone it is granted to, with what they may do" $ do
     Rendered {html} <- render (as (Just "user-admin")) (Space (slugs ["team"]))

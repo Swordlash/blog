@@ -41,7 +41,7 @@ import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
 import Protolude hiding (State)
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError, anonymous)
+import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous)
 import Wiki.App.Browser (historyEntry, historyGo, setDocumentTitle)
 import Wiki.App.DemoUsers (MonadDemoUsers (..))
 import Wiki.App.Islands (MonadIslands)
@@ -515,5 +515,10 @@ crumbs st = case st.route of
 
 documentTitle :: State -> Text
 documentTitle st = case reverse (map fst (crumbs st)) of
-  [] -> "Wiki"
+  -- A space that cannot be shown has no name to show either: what is in
+  -- its place says why.
+  [] -> case st.here of
+    SpaceFailed _ Forbidden -> "Private · Wiki"
+    SpaceFailed _ NotFound -> "Not found · Wiki"
+    _ -> "Wiki"
   names -> mconcat (intersperse " · " (take 2 names)) <> " · Wiki"
