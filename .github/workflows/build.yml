@@ -54,6 +54,10 @@ env:
   # The format job prints the binary's checksum; copy it here and into
   # toolchain/bootstrap.sh.
   FOURMOLU_SHA256: ''
+  # Native lexer and parser generators for the wasm build of ghc-lib-parser,
+  # under haskell-halogen-th: a happy it accepts, not 2.2.
+  ALEX_VERSION: '3.5.4.2'
+  HAPPY_VERSION: '2.1.7'
 
 jobs:
   native:
@@ -254,6 +258,20 @@ jobs:
         restore-keys: |
           ${{ env.key }}-${{ env.plan }}-
           ${{ env.key }}-
+
+    # ghc-lib-parser (under haskell-halogen-th) runs alex and happy while it
+    # compiles. For the wasm build cabal makes them for wasm too (alex.wasm,
+    # happy.wasm), cannot run those, and falls back to PATH, where native ones
+    # have to be, as in haskell-halogen's workflow. Hosted runners only: on a
+    # self-hosted one toolchain/bootstrap.sh has installed the same pins into
+    # ghcup's bin directory, already on PATH.
+    - name: Install alex and happy
+      if: runner.environment == 'github-hosted'
+      run: |
+        cabal install "alex-$ALEX_VERSION" "happy-$HAPPY_VERSION" --ignore-project \
+          --with-compiler="$(ghcup whereis ghc "$GHC_VERSION")" --installdir="$CABAL_DIR/bin" \
+          --install-method=copy --overwrite-policy=always
+        echo "$CABAL_DIR/bin" >> "$GITHUB_PATH"
 
     # Everything the later steps take from the store, built here so that it
     # is saved even if they fail: the native dependencies of the prerender,
