@@ -203,15 +203,6 @@ async function footerShown(page, where) {
   assert.equal(await footer.locator("a").getAttribute("href"), footerLink, `${where}: the footer's link`);
 }
 
-// A link clicked while the shell is still reloading the wiki for someone
-// just switched to is now and then followed by the browser, loading the page
-// afresh (and so starting the demo over): Halogen.Router's link stops the
-// browser in the click's handler, and that handler, then, now and then runs
-// only after the browser has gone on. A person does not click that fast; the
-// test waits as long as one would. (About one click in twenty made at once
-// after a switch was followed, none made 100 ms after it.)
-const settleAfterSwitch = (page) => page.waitForTimeout(300);
-
 // The breadcrumb of the route shown, which names it: a space's or a page's
 // name, "Edit", "Search"; the front page has none.
 const crumb = (page) => page.locator("#app .breadcrumbs [aria-current=page]").textContent();
@@ -303,7 +294,10 @@ try {
   await page.locator("#app .user-menu button[data-login=admin]").click();
   await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
   await page.locator("#app .wiki-sidebar a[href='/s/team/']").waitFor({ timeout });
-  await settleAfterSwitch(page);
+  // The spaces are clicked at once, while the shell may still be busy with
+  // the switch. A link's handler then runs only once the shell is done, after
+  // the browser would have followed the link; the browser is kept from it in
+  // the click's listener instead, so no click here may load a page.
 
   // Every root space, and a page in each, from the tree of spaces.
   const roots = await page.locator("#app .wiki-sidebar > .space-tree > li > .space-row a").evaluateAll((links) =>
@@ -488,7 +482,6 @@ try {
   await phone.locator("#app .user-switcher-toggle").tap();
   await phone.locator("#app .user-menu button[data-login=admin]").tap();
   await phone.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
-  await settleAfterSwitch(phone);
   await phone.locator("#app .page-view .actions a", { hasText: "Edit" }).tap();
   await phone.locator("#app .editor-text").waitFor({ timeout });
   assert.ok(await phone.locator("#app .editor-toolbar").isVisible(), "no toolbar on a phone");

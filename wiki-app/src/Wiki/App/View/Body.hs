@@ -15,7 +15,8 @@
 -- attachment's URL (which the caller asks the backend for, once per load),
 -- anything else as it is. The rendered links are plain @\<a href>@s, so a
 -- click on one that leads somewhere in the wiki is caught on the article
--- around them and followed by the router ("Wiki.App.Browser").
+-- around them, kept from the browser in the click's listener, and followed
+-- by the router ("Wiki.App.Browser").
 module Wiki.App.View.Body
   ( Place (..)
   , IslandSlots
@@ -31,10 +32,12 @@ import Data.Row (type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
+import Halogen.HTML.Events qualified as HE
 import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude
-import Web.UIEvent.MouseEvent (MouseEvent)
+import Web.Event.Event (EventType (..))
+import Wiki.App.Browser (ArticleLink, articleLink)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (PageLink (..), resolvePageLink)
@@ -75,18 +78,20 @@ heading title body = [hhs|{% if not (startsWithHeading body) %}<h1 class="page-t
 startsWithHeading :: Text -> Bool
 startsWithHeading = T.isPrefixOf "# " . T.stripStart
 
--- | The page's Markdown rendered, in an @\<article class="page-body">@ whose
--- clicks go to @onClick@ (for 'Wiki.App.Browser.followArticleClick'); or,
--- if it cannot be read, why, with the source as it is.
+-- | The page's Markdown rendered, in an @\<article class="page-body">@; or,
+-- if it cannot be read, why, with the source as it is. A click on one of
+-- its links that the application follows itself ('articleLink') is kept
+-- from the browser in the click's listener and handed to @onLink@ (for
+-- 'Wiki.App.Browser.followArticleLink'); any other click is the browser's.
 article
   :: forall action m
    . (MonadIslands m, MonadUUID m)
-  => (MouseEvent -> action)
+  => (ArticleLink -> action)
   -> Place
   -> Text
   -> H.ComponentHTML action IslandSlots m
-article onClick place source = case Md.renderMarkdown (options place) source of
-  Right nodes -> [hh|<article class="page-body" onClick={{ onClick }}>{{ nodes }}</article>|]
+article onLink place source = case Md.renderMarkdown (options place) source of
+  Right nodes -> [hh|<article class="page-body" {{ HE.preventingDefault (HE.handler' (EventType "click") clicked) }}>{{ nodes }}</article>|]
   Left e ->
     [hh|
       <div>
@@ -94,6 +99,12 @@ article onClick place source = case Md.renderMarkdown (options place) source of
         <pre class="page-source">{{ source }}</pre>
       </div>
     |]
+  where
+    -- Decided in the listener: the link's 'Just' is what prevents the
+    -- browser from following it.
+    clicked event = case articleLink place.context.router event of
+      Nothing -> Nothing
+      Just target -> Just $! onLink target
 
 options :: (MonadIslands m, MonadUUID m) => Place -> Md.Options PageLink (H.ComponentSlot IslandSlots m action) action
 options place =

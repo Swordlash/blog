@@ -33,6 +33,7 @@ import Data.Row (Empty)
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
+import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
 import Halogen.Router (Follow)
@@ -40,13 +41,9 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element (..))
-import Web.Event.Event (Event (..), preventDefault)
+import Web.Event.Event (Event (..), EventType (..))
 import Web.UIEvent.FocusEvent (FocusEvent)
 import Web.UIEvent.FocusEvent qualified as FE
-import Web.UIEvent.KeyboardEvent (KeyboardEvent)
-import Web.UIEvent.KeyboardEvent qualified as KE
-import Web.UIEvent.MouseEvent (MouseEvent)
-import Web.UIEvent.MouseEvent qualified as ME
 import Wiki.App.Backend (MonadWiki (..), Session)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
@@ -56,9 +53,11 @@ import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id, name))
 
+-- The key is read in the keydown's listener, while the browser dispatches
+-- it, and the event does not change meanwhile, so that binding is pure.
 $( browserJS
      ["jsbits/search.js"]
-     [ ("js_search_key", "wiki_search_key", Unsafe, [t|Event -> IO JSText|])
+     [ ("js_search_key", "wiki_search_key", Unsafe, [t|Event -> JSText|])
      , ("js_search_focus_leaves", "wiki_search_focus_leaves", Unsafe, [t|Element -> Event -> IO Bool|])
      , ("js_search_blur", "wiki_search_blur", Unsafe, [t|Element -> IO ()|])
      , ("js_search_bind_shortcut", "wiki_search_bind_shortcut", Unsafe, [t|Element -> IO ()|])
@@ -99,10 +98,12 @@ data Action
   | Chose Text
   | Subspaces Bool
   | Run
-  | Key KeyboardEvent
+  | Move Int
+  | Pick
+  | Close
   | FocusIn
   | FocusOut FocusEvent
-  | KeepFocus MouseEvent
+  | KeepFocus
   | Followed (Follow Route)
 
 -- | How long typing has to pause before what is typed is searched for: long
@@ -157,6 +158,7 @@ component =
           role="search"
           onFocusIn={{ const FocusIn }}
           onFocusOut={{ FocusOut }}
+          {{ HE.handler' (EventType "keydown") closeKey }}
         >
           <div class="search-bar">
             {# No value: the box never sets the text itself, and a rendered
@@ -175,7 +177,7 @@ component =
               autocomplete="off"
               spellcheck={{ False }}
               onValueInput={{ Typed }}
-              onKeyDown={{ Key }}
+              {{ HE.preventingDefault (HE.handler' (EventType "keydown") listKey) }}
             >
             <select class="search-space" aria-label="Space to search" onValueChange={{ Chose }}>
               <option value="" selected={{ isNothing st.space }}>All spaces</option>
@@ -191,13 +193,33 @@ component =
         </div>
       |]
 
+    -- The keys that move through the list and pick from it, decided in the
+    -- input's listener, which keeps the browser from acting on them (moving
+    -- the cursor, submitting) while it dispatches the key, whatever the
+    -- component is busy with; any other key makes no action and is the
+    -- browser's.
+    listKey :: Event -> Maybe Action
+    listKey event = case fromJSText (js_search_key event) of
+      "ArrowDown" -> Just (Move 1)
+      "ArrowUp" -> Just (Move (-1))
+      "Enter" -> Just Pick
+      _ -> Nothing
+
+    -- Escape, anywhere in the box, closes the list, and does what the
+    -- browser does with it as well (a search input clears its text).
+    closeKey :: Event -> Maybe Action
+    closeKey event = case fromJSText (js_search_key event) of
+      "Escape" -> Just Close
+      _ -> Nothing
+
     -- The list under the input. A press on it would take focus from the
     -- input before the click it starts lands, closing the list under the
-    -- pointer, so the press is kept from doing that ('KeepFocus').
+    -- pointer, so the press is kept from doing that, in its listener
+    -- ('KeepFocus' itself does nothing).
     dropdown :: State -> H.ComponentHTML Action Empty m
     dropdown st =
       [hh|
-        <div class="search-results" id="wiki-search-results" onMouseDown={{ KeepFocus }}>
+        <div class="search-results" id="wiki-search-results" {{ HE.preventingDefault (HE.onMouseDown (const KeepFocus)) }}>
           {{ status }}{{ allResults }}
         </div>
       |]
@@ -251,18 +273,9 @@ component =
           -- own search will come.
           current <- gets queryOf
           when (current == q) $ modify (\st -> st {results = Found q hits, selected = Nothing})
-      Key ev -> do
-        let event = KE.toEvent ev
-        key <- H.liftEffect . liftIO $ do
-          k <- fromJSText <$> js_search_key event
-          when (k `elem` ["ArrowDown", "ArrowUp", "Enter"]) (preventDefault event)
-          pure k
-        case key of
-          "ArrowDown" -> move 1
-          "ArrowUp" -> move (-1)
-          "Enter" -> pick
-          "Escape" -> modify (\st -> st {open = False, selected = Nothing})
-          _ -> pass
+      Move step -> move step
+      Pick -> pick
+      Close -> modify (\st -> st {open = False, selected = Nothing})
       FocusIn -> modify (\st -> st {open = True})
       FocusOut ev -> do
         ref <- gets (\st -> st.box)
@@ -270,7 +283,7 @@ component =
         for_ container' $ \container -> do
           leaving <- H.liftEffect (liftIO (js_search_focus_leaves container (FE.toEvent ev)))
           when leaving $ modify (\st -> st {open = False, selected = Nothing})
-      KeepFocus ev -> H.liftEffect (liftIO (preventDefault (ME.toEvent ev)))
+      KeepFocus -> pass
       Followed f -> do
         router <- gets (\st -> st.context.router)
         Router.follow router f

@@ -21,8 +21,7 @@ import Control.Monad.UUID (MonadUUID)
 import Halogen qualified as H
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Web.UIEvent.MouseEvent (MouseEvent)
-import Wiki.App.Browser (followArticleClick)
+import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.View.Body (IslandSlots, Place (..))
 import Wiki.App.View.Body qualified as Body
@@ -35,7 +34,7 @@ data Input = Input
   , body :: Text
   }
 
-data Action = Receive Input | ArticleClicked MouseEvent
+data Action = Receive Input | FollowLink ArticleLink
 
 component :: forall query output m. (MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input output m
 component =
@@ -49,7 +48,7 @@ component =
     render :: Input -> H.ComponentHTML Action IslandSlots m
     render Input {place, title, body} =
       [hh|
-        <div class="preview">{{ Body.heading title body }}{{ Body.article ArticleClicked place body }}</div>
+        <div class="preview">{{ Body.heading title body }}{{ Body.article FollowLink place body }}</div>
       |]
 
     handleAction :: Action -> H.HalogenM Input Action IslandSlots output m ()
@@ -59,9 +58,9 @@ component =
         unless (same old new) (put new)
       -- A link in the preview is followed as in the page: the shell asks
       -- before it leaves unsaved changes behind.
-      ArticleClicked click -> do
+      FollowLink target -> do
         router <- gets (\i -> i.place.context.router)
-        H.liftEffect (followArticleClick router click)
+        H.liftEffect (followArticleLink router target)
 
 -- | Whether two inputs show the same: the same draft, read in the same
 -- place, as of the same revision of the wiki. (The router, the one thing in

@@ -12,12 +12,12 @@ where
 import Data.Row (Empty)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
+import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Web.Event.Event (Event, preventDefault)
 import Wiki.App.Backend (MonadWiki (..), WikiError (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
@@ -39,7 +39,7 @@ data State = State
   , problem :: Maybe WikiError
   }
 
-data Action = Receive Input | Followed (Follow Route) | Typed Text | Submit Event
+data Action = Receive Input | Followed (Follow Route) | Typed Text | Submit
 
 component :: forall query m. (MonadWiki m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -64,7 +64,7 @@ component =
           <section class="new-space-view">
             <h1>{{ maybe "New space" (\c -> "New space in " <> spaceNames c) chain }}</h1>
             <p>A new space is private: only you can see it until you grant others permissions or make it public.</p>
-            <form class="inline-form" onSubmit={{ Submit }}>
+            <form class="inline-form" {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}>
               {{ textField "Name" draft Typed }}
               <button type="submit" class="primary">Create</button>
               {{ Router.link ctx.router Followed (maybe Home (Space . map (\s -> s.slug)) chain) [HP.class_ "button"] [HH.text "Cancel"] }}
@@ -78,8 +78,7 @@ component =
       Receive input -> modify (\st -> st {input})
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       Typed draft -> modify (\st -> st {draft})
-      Submit ev -> do
-        H.liftEffect (preventDefault ev)
+      Submit -> do
         State {input = Input {context = ctx, parent}, draft} <- get
         for_ (rightToMaybe (where_ ctx parent)) $ \chain ->
           createSpace ((\c -> (\s -> s.id) <$> lastMay c) =<< chain) draft >>= \case

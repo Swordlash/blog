@@ -18,15 +18,14 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
+import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
-import Web.Event.Event (Event, preventDefault)
-import Web.UIEvent.MouseEvent (MouseEvent)
 import Wiki.App.Backend (MonadWiki (..), WikiError)
-import Wiki.App.Browser (followArticleClick)
+import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Body qualified as Body
@@ -74,13 +73,13 @@ data Action
   = Initialize
   | Receive Input
   | Followed (Follow Route)
-  | ArticleClicked MouseEvent
+  | FollowLink ArticleLink
   | Open Mode
   | Typed Text
   | StartMove
   | ChoseSpace Int
   | ChoseParent Int
-  | Submit Event
+  | Submit
   | Delete
 
 component :: forall query m. (MonadWiki m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
@@ -174,7 +173,7 @@ component =
     inForm :: [H.ComponentHTML Action Slots m] -> Text -> H.ComponentHTML Action Slots m
     inForm fields submit =
       [hh|
-        <form class="inline-form" onSubmit={{ Submit }}>
+        <form class="inline-form" {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}>
           {{ fields }}
           <button type="submit" class="primary">{{ submit }}</button>
           {{ button "Cancel" (Open Viewing) }}
@@ -184,7 +183,7 @@ component =
     body :: Input -> Page -> Map AttachmentId Text -> H.ComponentHTML Action Slots m
     body input page urls =
       Body.article
-        ArticleClicked
+        FollowLink
         Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls}
         page.body
 
@@ -218,9 +217,9 @@ component =
           modify (\st -> st {mode = Viewing, problem = Nothing})
           load
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
-      ArticleClicked click -> do
+      FollowLink target -> do
         router <- gets (\st -> st.input.context.router)
-        H.liftEffect (followArticleClick router click)
+        H.liftEffect (followArticleLink router target)
       Open mode -> modify (\st -> st {mode, problem = Nothing})
       Typed t -> modify $ \st -> case st.mode of
         Renaming _ -> st {mode = Renaming t}
@@ -242,8 +241,7 @@ component =
             let target = (\s -> s.id) <$> atMay (targetSpaces st.input.context page) chosen
              in st {mode = Moving chosen ps (join (atMay (Nothing : map Just (allowedParents page target ps)) n))}
           other -> st {mode = other}
-      Submit ev -> do
-        H.liftEffect (preventDefault ev)
+      Submit -> do
         withPage $ \page -> do
           State {input, mode} <- get
           let ctx = input.context

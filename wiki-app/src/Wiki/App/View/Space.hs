@@ -14,12 +14,12 @@ where
 import Data.Row (Empty)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
+import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
-import Web.Event.Event (Event, preventDefault)
 import Wiki.App.Backend (MonadWiki (..), WikiError)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
@@ -55,7 +55,7 @@ data Action
   | Open Mode
   | Typed Text
   | Chose Int
-  | Submit Event
+  | Submit
   | TogglePublic
   | Delete
 
@@ -132,7 +132,7 @@ component =
     inForm :: H.ComponentHTML Action Empty m -> Text -> H.ComponentHTML Action Empty m
     inForm field submit =
       [hh|
-        <form class="inline-form" onSubmit={{ Submit }}>
+        <form class="inline-form" {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}>
           {{ field }}
           <button type="submit" class="primary">{{ submit }}</button>
           {{ button "Cancel" (Open Viewing) }}
@@ -167,8 +167,7 @@ component =
         Renaming _ -> st {mode = Renaming t}
         other -> st {mode = other}
       Chose n -> modify (\st -> st {mode = Moving n})
-      Submit ev -> do
-        H.liftEffect (preventDefault ev)
+      Submit -> do
         State {input = Input {context = ctx, space}, mode} <- get
         case mode of
           Renaming name -> renameSpace space.id name >>= done (const Nothing)
