@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+HTML in a page is rendered rather than shown as text, through an allowlist.
+The new `Wiki.Core.Markdown.Html` reads raw HTML with `tagsoup` and builds it
+into a tree the way a browser's parser would (an open `p` ends at a block,
+an `li` at the next, a row gets its `tbody`, an unclosed element ends where
+its block does), keeping only the allowed elements (formatting, links,
+structure, tables, figures, `details`, media) and attributes (`class`, `id`,
+`title`, and `href`, `src`, `alt`, `width`, `height`, `colspan`, `rowspan`,
+`open`, `controls`, `poster`, `start` where they mean something), and only
+URLs that are relative or `http`, `https`, `attachment` (and `mailto` for a
+link). Other elements are left out with their content kept, except `script`,
+`style`, `iframe`, `svg` and the like, which go with their content.
+`parseHtml` reads a raw block as one document and `parseFragments` reads the
+tags among a paragraph's text together with the Markdown between them, so
+that `<kbd>Ctrl</kbd>` holds its text; `htmlText` is the text of the result,
+which search now reads too. `renderBlocks` renders both through the same
+`Options`: a raw link or source is resolved by `resolveLink` as a Markdown
+one is, a relative address also as an attachment's name, and a link that
+leads nowhere gets the class `link-unresolved`. `renderRawHtml` renders one
+block of HTML on its own. Nothing renders raw HTML as text any more, so the
+`raw-html` class is no longer written.
+
 ## 0.1.0 - 2026-10-22
 
 The wiki's domain model, as plain data with JSON instances that the client and
