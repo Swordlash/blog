@@ -50,8 +50,15 @@ common shared
 library
   import:           shared
   hs-source-dirs:   src
-  exposed-modules:  Wiki.Core.Slug
+  exposed-modules:
+      Wiki.Core.Markdown.Ast
+      Wiki.Core.Markdown.Link
+      Wiki.Core.Slug
   build-depends:
+      bytestring,
+      commonmark >= 0.3.1 && < 0.4,
+      commonmark-extensions >= 0.2.7.3 && < 0.3,
+      containers,
       protolude,
       text
 
@@ -61,7 +68,10 @@ test-suite wiki-core-test
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test
   main-is:          Test.hs
-  other-modules:    Test.Slug
+  other-modules:
+      Test.Markdown.Ast
+      Test.Markdown.Link
+      Test.Slug
   build-depends:
       hspec >= 2,
       protolude,
