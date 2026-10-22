@@ -38,8 +38,10 @@ sh toolchain/bootstrap.sh
 It installs ghcup into `~/.ghcup` (unless one is already on `PATH`) and through it GHC
 and cabal, making them ghcup's defaults; the wasm sysroot into `~/.ghc-wasm` and the
 cross compiler through ghcup, as haskell-halogen's CI does; Node into
-`~/.wiki-toolchain/node`; and Chromium's headless shell where Playwright keeps its
-browsers. Debian packages it needs (GMP's headers, `zstd`, `jq` and a few more) it
+`~/.wiki-toolchain/node`; Chromium's headless shell where Playwright keeps its
+browsers; and fourmolu, the formatter, into ghcup's bin directory (its release binary,
+or built from Hackage where GitHub's downloads are refused, as in Claude Code's cloud
+sessions). Debian packages it needs (GMP's headers, `zstd`, `jq` and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
 otherwise. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
 into the cabal store, so the first build compiles only this repository.
@@ -82,6 +84,7 @@ npm run test-wasm               # the test suites on wasm, under Node (browser s
 npm run test                    # test-native, then test-wasm
 npm run smoke-test              # the built page in headless Chromium: it renders, mounts, counts clicks
 npm run format                  # fourmolu over every package
+npm run format-check            # the same, failing on what it would change (as CI does)
 npm run clean                   # remove dist-newstyle/wasm/public
 ```
 
@@ -100,7 +103,7 @@ cabal test wiki-core:test:wiki-core-test --builddir=dist-newstyle/native \
 sh toolchain/test-wasm.sh --test-options='--match "/Slug/"'   # extra args go to cabal
 ```
 
-`npm run format` needs `fourmolu` on `PATH` (`cabal install fourmolu`).
+`npm run format` needs fourmolu 0.21.0.0 on `PATH`; `toolchain/bootstrap.sh` installs it.
 
 ## License
 

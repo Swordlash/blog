@@ -17,6 +17,9 @@
 #   - Chromium's headless shell for Playwright, the revision the project's
 #     Playwright (package-lock.json, or $PLAYWRIGHT_VERSION before there is
 #     one) asks for, into $PLAYWRIGHT_BROWSERS_PATH or Playwright's default;
+#   - fourmolu $FOURMOLU_VERSION, which `npm run format` runs, into ghcup's bin
+#     directory: its release binary, or where that download is refused, built
+#     from Hackage with cabal (about a quarter of an hour, once);
 #   - the Debian packages these need, if they are missing and it can (root or
 #     password-less sudo); otherwise it names them and stops.
 #
@@ -64,6 +67,14 @@ GHCUP_SHA256=9ed5da5449b48043a0d17e767c05d2ef585e25a639bb934329496c6d2fad9cf8
 NODE_VERSION=24.21.0
 NODE_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
 PLAYWRIGHT_VERSION=1.63.0
+# The formatter, at the version the README names and CI checks with
+# (.github/workflows/build.yml holds the same version and checksum). The
+# checksum is that of the release's linux-x86_64 binary, checked when it is
+# set. It is not set yet: the release could not be downloaded where this was
+# written, and CI prints it (the format job's "Install fourmolu" step), so
+# copy it from there into both places.
+FOURMOLU_VERSION=0.21.0.0
+FOURMOLU_SHA256=
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 STATE=$HOME/.wiki-toolchain
@@ -328,6 +339,38 @@ install_chromium() {
   CHROMIUM=$location
 }
 
+# Any fourmolu on PATH that reports the pinned version will do, wherever it
+# came from. Otherwise the release binary goes into ghcup's bin directory, which
+# the env file already puts on PATH; a network that refuses GitHub's release
+# downloads (Claude Code's cloud sessions do) gets one built from Hackage
+# instead, which is slow but needs nothing else. The log says which it was.
+install_fourmolu() {
+  if [ "$(fourmolu --version 2>/dev/null | head -n 1 || true)" = "fourmolu $FOURMOLU_VERSION" ]; then
+    FOURMOLU=$(command -v fourmolu)
+    return 0
+  fi
+  FOURMOLU=$GHCUP_BIN/fourmolu
+  tmp=$FOURMOLU.download
+  rm -f "$tmp"
+  printf '+ fetch fourmolu %s release binary\n' "$FOURMOLU_VERSION" >>"$LOG"
+  if fetch "https://github.com/fourmolu/fourmolu/releases/download/v$FOURMOLU_VERSION/fourmolu-$FOURMOLU_VERSION-linux-x86_64" \
+    "$tmp" >>"$LOG" 2>&1; then
+    if [ -n "$FOURMOLU_SHA256" ]; then
+      check_sha256 "$tmp" "$FOURMOLU_SHA256" || fail "checking fourmolu's checksum"
+    fi
+    chmod 755 "$tmp"
+    mv "$tmp" "$FOURMOLU"
+    say "installed fourmolu $FOURMOLU_VERSION's release binary into $GHCUP_BIN"
+  else
+    rm -f "$tmp"
+    say "fourmolu's release binary could not be downloaded; building fourmolu $FOURMOLU_VERSION from Hackage into $GHCUP_BIN (this takes a while)"
+    run "building fourmolu" sh -c "cd '$STATE' && cabal install 'fourmolu-$FOURMOLU_VERSION' \
+      --with-compiler='ghc-$GHC_VERSION' --installdir='$GHCUP_BIN' \
+      --install-method=copy --overwrite-policy=always"
+    say "built fourmolu $FOURMOLU_VERSION from Hackage into $GHCUP_BIN"
+  fi
+}
+
 update_cabal_index() {
   index=$(cd "$STATE" && cabal path --remote-repo-cache 2>>"$LOG")/hackage.haskell.org/01-index.tar
   if [ ! -f "$index" ] || [ -n "${1:-}" ]; then
@@ -363,8 +406,9 @@ toolchain() {
   install_node
   install_chromium
   update_cabal_index
+  install_fourmolu
   write_env
-  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $NODE_VERSION, Chromium in $CHROMIUM"
+  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $NODE_VERSION, Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU"
   if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
     printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
   else
