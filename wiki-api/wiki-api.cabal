@@ -1,0 +1,68 @@
+cabal-version:      3.0
+name:               wiki-api
+version:            0.1.0.0
+synopsis:           Request and response types shared by the wiki's client and server
+license:            NONE
+author:             Mateusz Goślinowski
+maintainer:         mateusz.goslinowski@gmail.com
+category:           Web
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+
+-- haskell-halogen's examples' stanza: the warnings every package here is built
+-- with (cabal.project makes them errors) and the extensions its code assumes.
+common shared
+  default-language: GHC2021
+  ghc-options: -Wall -Wextra -Wcompat -Wno-partial-type-signatures -Wterm-variable-capture -Wredundant-constraints -Wunused-packages
+
+  default-extensions:
+      RankNTypes
+      GeneralizedNewtypeDeriving
+      MultiParamTypeClasses
+      FunctionalDependencies
+      FlexibleContexts
+      FlexibleInstances
+      UndecidableInstances
+      GADTs
+      DeriveFunctor
+      DerivingStrategies
+      NoImplicitPrelude
+      KindSignatures
+      DataKinds
+      OverloadedStrings
+      TypeOperators
+      LambdaCase
+      TypeFamilies
+      OverloadedRecordDot
+      RecordWildCards
+      NamedFieldPuns
+      DuplicateRecordFields
+      PartialTypeSignatures
+      DefaultSignatures
+      StandaloneKindSignatures
+      NoFieldSelectors
+      DerivingVia
+      CPP
+      StrictData
+      RequiredTypeArguments
+      ExplicitNamespaces
+
+library
+  import:           shared
+  hs-source-dirs:   src
+  exposed-modules:  Wiki.Api.Info
+  build-depends:
+      aeson,
+      protolude
+
+test-suite wiki-api-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Test.hs
+  other-modules:    Test.Info
+  build-depends:
+      aeson,
+      hspec >= 2,
+      protolude,
+      wiki-api

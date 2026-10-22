@@ -1,0 +1,11 @@
+import: cabal.project
+
+allow-newer: *:*
+
+-- The cross compiler haskell-halogen pins in its own cabal-wasm.project, from
+-- the ghc-wasm-meta revision toolchain/bootstrap.sh installs.
+with-compiler: wasm32-wasi-ghc-9.14.1.20260731
+with-hc-pkg: wasm32-wasi-ghc-pkg-9.14.1.20260731
+
+-- WASM Template Haskell loads dynamic objects in its external interpreter.
+shared: True

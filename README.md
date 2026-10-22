@@ -15,7 +15,8 @@ interface, implemented once in memory (a serverless demo deployable as static fi
 and once over HTTP to a Haskell server with persistence. Markdown is parsed and
 rendered to Halogen HTML in the browser, so the preview never waits for a server.
 
-Nothing is built yet. The plan of work is in [docs/PLAN.md](docs/PLAN.md): phases from a serverless MVP demo through a
+So far there is the scaffold: a placeholder page that builds and runs. The plan of work is in
+[docs/PLAN.md](docs/PLAN.md): phases from a serverless MVP demo through a
 server with persistence to authentication and authorisation.
 
 ## Working on it
@@ -53,6 +54,53 @@ skips the store.
 Claude Code cloud sessions run it from the `SessionStart` hooks in `.claude/`: the
 toolchain before the session starts, the store in the background. A command that needs
 the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
+
+## Layout
+
+| Directory | Package | What it is |
+| --- | --- | --- |
+| [wiki-core/](wiki-core/) | `wiki-core` | The domain: types, Markdown rendering, permission rules. Native and wasm. |
+| [wiki-api/](wiki-api/) | `wiki-api` | Request and response types (aeson), shared by the client and the server. |
+| [wiki-app/](wiki-app/) | `wiki-app` | The Halogen application: `wiki-app` (the wasm program) and `wiki-app-prerender` (native: writes the page with the application already rendered into it). |
+| [wiki-server/](wiki-server/) | `wiki-server` | The server, native only. A placeholder until Phase 2. |
+| [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS. |
+| [toolchain/](toolchain/) | | Build and test scripts, adapted from haskell-halogen's. |
+
+haskell-halogen's packages come from one `source-repository-package` stanza in
+`cabal.project`, pinned to a commit. `cabal.project` builds every package natively;
+`cabal-wasm.project` imports it and builds for wasm with the pinned cross compiler.
+
+## Commands
+
+```sh
+npm install                     # once: Playwright, http-server, esbuild
+npm run build-native            # every package, host GHC, into dist-newstyle/native
+npm run test-native             # the test suites, natively
+npm run build-wasm              # wiki-app to wasm, prerendered, into dist-newstyle/wasm/public/app
+npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
+npm run test-wasm               # the test suites on wasm, under Node (browser suites in Chromium)
+npm run test                    # test-native, then test-wasm
+npm run smoke-test              # the built page in headless Chromium: it renders, mounts, counts clicks
+npm run format                  # fourmolu over every package
+npm run clean                   # remove dist-newstyle/wasm/public
+```
+
+`serve-wasm` opens the page in a browser; set `PORT` for another port, `NO_OPEN=1` to
+not open one. Builds go to `dist-newstyle/native` and `dist-newstyle/wasm`; always
+build for wasm through the `toolchain/` scripts, which pass the cross compiler to
+cabal explicitly and keep the wasm tools' `CC` away from native builds.
+
+The test suites are hspec, each `main-is: Test.hs` aggregating `Test.*` modules; a
+new test module goes into the suite's `other-modules` and `test/Test.hs`. Run one
+suite, or one test, with hspec's `--match`:
+
+```sh
+cabal test wiki-core:test:wiki-core-test --builddir=dist-newstyle/native \
+  --test-options='--match "/Slug/"'
+sh toolchain/test-wasm.sh --test-options='--match "/Slug/"'   # extra args go to cabal
+```
+
+`npm run format` needs `fourmolu` on `PATH` (`cabal install fourmolu`).
 
 ## License
 

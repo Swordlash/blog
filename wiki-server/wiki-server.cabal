@@ -1,0 +1,60 @@
+cabal-version:      3.0
+name:               wiki-server
+version:            0.1.0.0
+synopsis:           The wiki's server: persistence, and the application's files
+license:            NONE
+author:             Mateusz Goślinowski
+maintainer:         mateusz.goslinowski@gmail.com
+category:           Web
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+
+-- haskell-halogen's examples' stanza: the warnings every package here is built
+-- with (cabal.project makes them errors) and the extensions its code assumes.
+common shared
+  default-language: GHC2021
+  ghc-options: -Wall -Wextra -Wcompat -Wno-partial-type-signatures -Wterm-variable-capture -Wredundant-constraints -Wunused-packages
+
+  default-extensions:
+      RankNTypes
+      GeneralizedNewtypeDeriving
+      MultiParamTypeClasses
+      FunctionalDependencies
+      FlexibleContexts
+      FlexibleInstances
+      UndecidableInstances
+      GADTs
+      DeriveFunctor
+      DerivingStrategies
+      NoImplicitPrelude
+      KindSignatures
+      DataKinds
+      OverloadedStrings
+      TypeOperators
+      LambdaCase
+      TypeFamilies
+      OverloadedRecordDot
+      RecordWildCards
+      NamedFieldPuns
+      DuplicateRecordFields
+      PartialTypeSignatures
+      DefaultSignatures
+      StandaloneKindSignatures
+      NoFieldSelectors
+      DerivingVia
+      CPP
+      StrictData
+      RequiredTypeArguments
+      ExplicitNamespaces
+
+-- Native only: a server has no business in the browser.
+executable wiki-server
+  import:           shared
+  main-is:          Main.hs
+  hs-source-dirs:   app
+
+  if arch(wasm32)
+    buildable: False
+  else
+    build-depends:
+        protolude
