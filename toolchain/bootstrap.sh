@@ -5,6 +5,7 @@
 #   sh toolchain/bootstrap.sh toolchain   # the toolchain only
 #   sh toolchain/bootstrap.sh warm        # the toolchain if missing, then warm
 #   sh toolchain/bootstrap.sh env         # print the PATH lines a shell needs
+#   sh toolchain/bootstrap.sh path        # the same directories, one per line
 #
 # It installs, on x86_64 Linux:
 #
@@ -17,8 +18,11 @@
 #   - Chromium's headless shell for Playwright, the revision the project's
 #     Playwright (package-lock.json, or $PLAYWRIGHT_VERSION before there is
 #     one) asks for, into $PLAYWRIGHT_BROWSERS_PATH or Playwright's default;
-#   - the Debian packages these need, if they are missing and it can (root or
-#     password-less sudo); otherwise it names them and stops.
+#   - fourmolu $FOURMOLU_VERSION, which `npm run format` runs, into ghcup's bin
+#     directory: its release binary, or where that download is refused, built
+#     from Hackage with cabal (about a quarter of an hour, once);
+#   - the Debian packages these need, Chromium's included, if they are missing
+#     and it can (root or password-less sudo); otherwise it names them and stops.
 #
 # Then, for each of cabal.project and cabal-wasm.project that exists in the
 # repository, it runs `cabal build all --only-dependencies` with the flags
@@ -44,6 +48,10 @@
 #
 # in your shell profile (or run it in the shell you build from), and source
 # ~/.ghc-wasm/env where a script needs the wasm tools, as the build scripts do.
+#
+# CI on a self-hosted runner runs it the same way (`toolchain`), and appends
+# what `path` prints to $GITHUB_PATH: one directory per line, in the order
+# GitHub wants them there, where the last line is searched first.
 set -eu
 
 # Pins. They must match haskell-halogen's .github/workflows/build.yml
@@ -64,6 +72,14 @@ GHCUP_SHA256=9ed5da5449b48043a0d17e767c05d2ef585e25a639bb934329496c6d2fad9cf8
 NODE_VERSION=24.21.0
 NODE_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
 PLAYWRIGHT_VERSION=1.63.0
+# The formatter, at the version the README names and CI checks with
+# (.github/workflows/build.yml holds the same version and checksum). The
+# checksum is that of the release's linux-x86_64 binary, checked when it is
+# set. It is not set yet: the release could not be downloaded where this was
+# written, and CI prints it (the format job's "Install fourmolu" step), so
+# copy it from there into both places.
+FOURMOLU_VERSION=0.21.0.0
+FOURMOLU_SHA256=
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 STATE=$HOME/.wiki-toolchain
@@ -74,9 +90,9 @@ NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
 mode=${1:-all}
 case $mode in
-  all | toolchain | warm | env) ;;
+  all | toolchain | warm | env | path) ;;
   *)
-    printf 'usage: %s [all|toolchain|warm|env]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|warm|env|path]\n' "$0" >&2
     exit 2
     ;;
 esac
@@ -103,10 +119,22 @@ export PATH
 EOF
 }
 
-if [ "$mode" = env ]; then
-  env_lines
-  exit 0
-fi
+# The same two directories for $GITHUB_PATH, which prepends each line in turn:
+# ghcup's first, so that Node's, written last, ends up first, as in env_lines.
+path_lines() {
+  printf '%s\n' "$GHCUP_BIN" "$STATE/node/bin"
+}
+
+case $mode in
+  env)
+    env_lines
+    exit 0
+    ;;
+  path)
+    path_lines
+    exit 0
+    ;;
+esac
 
 mkdir -p "$STATE"
 PATH=$STATE/node/bin:$GHCUP_BIN:$PATH
@@ -151,6 +179,18 @@ lock() {
 
 # --- Toolchain --------------------------------------------------------------
 
+# Set $sudo to what runs a command as root (nothing when this already is root),
+# or fail when that would need a password: this script never asks for one.
+as_root() {
+  if [ "$(id -u)" = 0 ]; then
+    sudo=
+  elif sudo -n true 2>/dev/null; then
+    sudo=sudo
+  else
+    return 1
+  fi
+}
+
 # Debian packages: a C toolchain (GHC links with it), GMP's development files
 # (native programs link libgmp), and what ghc-wasm-meta's setup.sh runs.
 system_packages() {
@@ -172,11 +212,7 @@ system_packages() {
     return 0
   fi
   [ -n "$missing" ] || return 0
-  if [ "$(id -u)" = 0 ]; then
-    sudo=
-  elif sudo -n true 2>/dev/null; then
-    sudo=sudo
-  else
+  if ! as_root; then
     say "missing Debian packages:$missing; install them (sudo apt-get install$missing) and run this again"
     exit 1
   fi
@@ -300,6 +336,13 @@ install_node() {
 # tests run with, so it is installed by that Playwright, kept in its own npm
 # prefix here so that this works before (and without) the project's
 # node_modules. Only the headless shell, as haskell-halogen's CI installs.
+#
+# The shared libraries it needs are Debian packages that differ between
+# releases (Ubuntu 24.04 renamed several), so they are not in system_packages:
+# Playwright knows the list for each release. When Chromium does not start,
+# Playwright installs them if this can run it as root, and otherwise this names
+# them and stops. Until Chromium has once started, every run tries again, so a
+# run after the packages were installed by hand finishes the job.
 install_chromium() {
   version=$PLAYWRIGHT_VERSION
   if [ -f "$ROOT/package-lock.json" ]; then
@@ -320,12 +363,65 @@ install_chromium() {
   if [ ! -f "$location/INSTALLATION_COMPLETE" ]; then
     say "installing Chromium (headless shell) for Playwright $version into $location"
     run "installing Chromium" node "$cli" install --only-shell chromium
-    run "launching Chromium" node -e '
-      const { chromium } = require(process.argv[1]);
-      chromium.launch().then((browser) => browser.close());
-    ' "$prefix/node_modules/playwright-core"
+  fi
+  launched=$location/.bootstrap-launched
+  if [ ! -f "$launched" ]; then
+    if ! launch_chromium "$prefix"; then
+      if ! as_root; then
+        say "Chromium does not start (the end of $LOG says why); the Debian packages Playwright would install or upgrade for it:"
+        node "$cli" install-deps --dry-run chromium 2>&1 | sed 's/^/bootstrap:   /'
+        say "install them (sudo apt-get install ...) and run this again"
+        exit 1
+      fi
+      say "installing the Debian packages Chromium needs"
+      # $sudo is empty when this already runs as root.
+      # shellcheck disable=SC2086
+      run "installing Chromium's Debian packages" $sudo "$(command -v node)" "$cli" install-deps chromium
+      launch_chromium "$prefix" || fail "launching Chromium"
+    fi
+    touch "$launched"
   fi
   CHROMIUM=$location
+}
+
+launch_chromium() {
+  printf '+ launch Chromium\n' >>"$LOG"
+  node -e '
+    const { chromium } = require(process.argv[1]);
+    chromium.launch().then((browser) => browser.close());
+  ' "$1/node_modules/playwright-core" >>"$LOG" 2>&1
+}
+
+# Any fourmolu on PATH that reports the pinned version will do, wherever it
+# came from. Otherwise the release binary goes into ghcup's bin directory, which
+# the env file already puts on PATH; a network that refuses GitHub's release
+# downloads (Claude Code's cloud sessions do) gets one built from Hackage
+# instead, which is slow but needs nothing else. The log says which it was.
+install_fourmolu() {
+  if [ "$(fourmolu --version 2>/dev/null | head -n 1 || true)" = "fourmolu $FOURMOLU_VERSION" ]; then
+    FOURMOLU=$(command -v fourmolu)
+    return 0
+  fi
+  FOURMOLU=$GHCUP_BIN/fourmolu
+  tmp=$FOURMOLU.download
+  rm -f "$tmp"
+  printf '+ fetch fourmolu %s release binary\n' "$FOURMOLU_VERSION" >>"$LOG"
+  if fetch "https://github.com/fourmolu/fourmolu/releases/download/v$FOURMOLU_VERSION/fourmolu-$FOURMOLU_VERSION-linux-x86_64" \
+    "$tmp" >>"$LOG" 2>&1; then
+    if [ -n "$FOURMOLU_SHA256" ]; then
+      check_sha256 "$tmp" "$FOURMOLU_SHA256" || fail "checking fourmolu's checksum"
+    fi
+    chmod 755 "$tmp"
+    mv "$tmp" "$FOURMOLU"
+    say "installed fourmolu $FOURMOLU_VERSION's release binary into $GHCUP_BIN"
+  else
+    rm -f "$tmp"
+    say "fourmolu's release binary could not be downloaded; building fourmolu $FOURMOLU_VERSION from Hackage into $GHCUP_BIN (this takes a while)"
+    run "building fourmolu" sh -c "cd '$STATE' && cabal install 'fourmolu-$FOURMOLU_VERSION' \
+      --with-compiler='ghc-$GHC_VERSION' --installdir='$GHCUP_BIN' \
+      --install-method=copy --overwrite-policy=always"
+    say "built fourmolu $FOURMOLU_VERSION from Hackage into $GHCUP_BIN"
+  fi
 }
 
 update_cabal_index() {
@@ -363,8 +459,9 @@ toolchain() {
   install_node
   install_chromium
   update_cabal_index
+  install_fourmolu
   write_env
-  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $NODE_VERSION, Chromium in $CHROMIUM"
+  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $NODE_VERSION, Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU"
   if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
     printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
   else
@@ -435,7 +532,7 @@ warm_one() {
 }
 
 warm() {
-  found= updated=
+  found='' updated=''
   warm_one cabal.project warm_native cabal.project
   warm_one cabal-wasm.project warm_wasm cabal.project cabal-wasm.project
   [ -n "$found" ] || printf 'bootstrap: no cabal.project yet, nothing to warm\n'
