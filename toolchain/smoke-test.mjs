@@ -6,7 +6,8 @@
 //   node toolchain/smoke-test.mjs [dir]     # default dist-newstyle/wasm/public/app
 //
 // This is what the unit tests cannot see: the size-optimised app.wasm loading
-// in a real browser and its event handlers running. Needs the Chromium that
+// in a real browser and its event handlers running, and the islands bundle
+// (web/bundle.sh) loading next to it and drawing into the page. Needs the Chromium that
 // Playwright's version in package-lock.json launches (toolchain/bootstrap.sh
 // installs it). index.js loads @bjorn3/browser_wasi_shim from jsDelivr; the
 // test serves it from node_modules instead, the same version, so that it needs
@@ -29,6 +30,9 @@ const types = {
   ".js": "text/javascript",
   ".css": "text/css",
   ".wasm": "application/wasm",
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".ttf": "font/ttf",
 };
 
 // A static server, as Pages is: a directory's address serves its index.html.
@@ -55,7 +59,11 @@ try {
   const html = await (await fetch(url)).text();
   assert.match(html, /<div id="app"><main><h1>Wiki<\/h1>/, "index.html is not prerendered");
   assert.match(html, />Clicked 0 times<\/button>/, "index.html has no counter");
-  console.log("ok: index.html arrives with the component prerendered");
+  // Natively there is nothing to draw the islands with: they arrive as their
+  // sources.
+  assert.match(html, /<span class="wiki-math wiki-math-inline">e\^\{i\\pi\} \+ 1 = 0<\/span>/, "index.html has no inline formula");
+  assert.match(html, /<div class="wiki-mermaid">graph LR/, "index.html has no diagram source");
+  console.log("ok: index.html arrives with the component prerendered, islands as their sources");
 
   const page = await browser.newPage();
   page.on("pageerror", (error) => failures.push(`page error: ${error.message}`));
@@ -96,6 +104,19 @@ try {
     await page.locator("#app button", { hasText: `Clicked ${n} times` }).waitFor({ timeout });
   }
   console.log("ok: clicking the button counts");
+
+  // Mermaid's own bundle is fetched for the first diagram, so allow it time.
+  await page.locator("#app .wiki-math-inline .katex").waitFor({ timeout });
+  await page.locator("#app .wiki-math-display .katex-display").waitFor({ timeout });
+  await page.locator("#app .wiki-mermaid > svg").waitFor({ timeout });
+  await page.locator("#app .wiki-code code.hljs.language-haskell .hljs-type").first().waitFor({ timeout });
+  // A font KaTeX's stylesheet names that did not load would leave the formula
+  // in a fallback font; the request for it would also have failed above.
+  assert.ok(
+    await page.evaluate(() => document.fonts.check('16px "KaTeX_Main"')),
+    "KaTeX's fonts did not load",
+  );
+  console.log("ok: the islands are drawn: KaTeX, Mermaid, highlight.js");
 } catch (error) {
   // What the page reported is usually why it did not get there.
   failures.push(String(error.stack ?? error));
