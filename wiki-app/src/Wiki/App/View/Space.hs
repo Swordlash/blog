@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | A space: its pages as a tree, its subspaces, and what the current user
 -- may do to it (a new page, in the editor; a new subspace, renaming it, making it public or
 -- private, moving it, deleting it). An action the rules forbid is not
@@ -9,14 +11,13 @@ module Wiki.App.View.Space
   )
 where
 
-import DOM.HTML.Indexed qualified as I
 import Data.Row (Empty)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
-import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Web.Event.Event (Event, preventDefault)
 import Wiki.App.Backend (MonadWiki (..), WikiError)
@@ -69,24 +70,22 @@ component =
   where
     render :: State -> H.ComponentHTML Action Empty m
     render State {input = Input {context = ctx, space, pages}, mode, problem} =
-      HH.section
-        [HP.class_ "space-view"]
-        ( [ HH.header
-              [HP.class_ "view-header"]
-              [ HH.h1_ [HH.text space.name]
-              , HH.span [HP.classes ["badge", if space.public then "badge-public" else "badge-private"]] [HH.text (if space.public then "Public" else "Private")]
-              ]
-          , HH.div [HP.class_ "actions"] (actions ctx space)
-          ]
-            <> form ctx space mode
-            <> foldMap (pure . errorView) problem
-            <> [ HH.h2_ [HH.text "Pages"]
-               , if null pages
-                   then HH.p [HP.class_ "empty"] [HH.text "No pages yet."]
-                   else pageTree ctx.router Followed (spacePathOf ctx.spaces space.id) pages Nothing
-               ]
-            <> subspaces ctx space
-        )
+      [hh|
+        <section class="space-view">
+          <header class="view-header">
+            <h1>{{ space.name }}</h1>
+            <span class="badge {{ if space.public then "badge-public" else "badge-private" :: Text }}">{{ if space.public then "Public" else "Private" :: Text }}</span>
+          </header>
+          <div class="actions">{{ actions ctx space }}</div>
+          {{ form ctx space mode }}{{ errorView <$> problem }}
+          <h2>Pages</h2>
+          {{ pageList }}{{ subspaces ctx space }}
+        </section>
+      |]
+      where
+        pageList
+          | null pages = [hh|<p class="empty">No pages yet.</p>|]
+          | otherwise = pageTree ctx.router Followed (spacePathOf ctx.spaces space.id) pages Nothing
 
     actions :: Context -> Space -> [H.ComponentHTML Action Empty m]
     actions ctx space =
@@ -102,50 +101,56 @@ component =
         admin = mayAdminister ctx space.id
         path = spacePathOf ctx.spaces space.id
 
-    form :: Context -> Space -> Mode -> [H.ComponentHTML Action Empty m]
+    form :: Context -> Space -> Mode -> Maybe (H.ComponentHTML Action Empty m)
     form ctx space = \case
-      Viewing -> []
-      Renaming name -> [inForm [textField "New name" name Typed] "Rename"]
+      Viewing -> Nothing
+      Renaming name -> Just (inForm (textField "New name" name Typed) "Rename")
       Moving chosen ->
-        [ inForm
-            [ HH.label
-                [HP.class_ "field"]
-                [ HH.span_ [HH.text "Move to"]
-                , HH.select
-                    [HE.onSelectedIndexChange Chose]
-                    [ HH.option [HP.selected (n == chosen)] [HH.text (destinationName ctx d)]
-                    | (n, d) <- zip [0 ..] (destinations ctx space)
-                    ]
-                ]
-            ]
+        Just $
+          inForm
+            [hh|
+              <label class="field">
+                <span>Move to</span>
+                <select onSelectedIndexChange={{ Chose }}>
+                  {% for (n, d) in zip [0 ..] (destinations ctx space) %}
+                    <option selected={{ n == chosen }}>{{ destinationName ctx d }}</option>
+                  {% end %}
+                </select>
+              </label>
+            |]
             "Move"
-        ]
       ConfirmingDelete ->
-        [ HH.div
-            [HP.class_ "confirm", attr "role" "alertdialog"]
-            [ HH.p_ [HH.text ("Delete " <> space.name <> ", with its subspaces and all their pages? This cannot be undone.")]
-            , HH.button [HP.type_ I.ButtonButton, HP.class_ "danger", HE.onClick (const Delete)] [HH.text "Delete"]
-            , button "Cancel" (Open Viewing)
-            ]
-        ]
+        Just
+          [hh|
+            <div class="confirm" role="alertdialog">
+              <p>Delete {{ space.name }}, with its subspaces and all their pages? This cannot be undone.</p>
+              <button type="button" class="danger" onClick={{ const Delete }}>Delete</button>
+              {{ button "Cancel" (Open Viewing) }}
+            </div>
+          |]
 
-    inForm :: [H.ComponentHTML Action Empty m] -> Text -> H.ComponentHTML Action Empty m
-    inForm fields submit =
-      HH.form
-        [HP.class_ "inline-form", HE.onSubmit Submit]
-        (fields <> [HH.button [HP.type_ I.ButtonSubmit, HP.class_ "primary"] [HH.text submit], button "Cancel" (Open Viewing)])
+    inForm :: H.ComponentHTML Action Empty m -> Text -> H.ComponentHTML Action Empty m
+    inForm field submit =
+      [hh|
+        <form class="inline-form" onSubmit={{ Submit }}>
+          {{ field }}
+          <button type="submit" class="primary">{{ submit }}</button>
+          {{ button "Cancel" (Open Viewing) }}
+        </form>
+      |]
 
     subspaces :: Context -> Space -> [H.ComponentHTML Action Empty m]
     subspaces ctx space = case childrenOf ctx.spaces (Just space.id) of
       [] -> []
       children ->
-        [ HH.h2_ [HH.text "Subspaces"]
-        , HH.ul
-            [HP.class_ "space-list"]
-            [ HH.li_ [Router.link ctx.router Followed (Space (spacePathOf ctx.spaces s.id)) [] [HH.text s.name]]
-            | s <- children
-            ]
-        ]
+        [hhs|
+          <h2>Subspaces</h2>
+          <ul class="space-list">
+            {% for s in children %}
+              <li>{{ Router.link ctx.router Followed (Space (spacePathOf ctx.spaces s.id)) [] [HH.text s.name] }}</li>
+            {% end %}
+          </ul>
+        |]
 
     handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case

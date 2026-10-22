@@ -21,7 +21,7 @@
 // 1. Every prerendered page (each index.html under the directory) is loaded
 //    by its address, app.wasm held back until the prerendered page has been
 //    seen and marked; then the program has to replace it with the same
-//    route: the same title, heading and error, if any.
+//    route: the same title, heading and error, if any, and the same footer.
 // 2. One long walk in one page, as someone would take it: the front page,
 //    every root space and a page in each, the editor as admin with a save,
 //    search, then back through the whole history and forward again, each
@@ -176,6 +176,17 @@ async function eventually(check, what) {
   throw new Error(`${what}: ${last?.message ?? last}`);
 }
 
+// The footer every page ends with, prerendered or not, as the server sends
+// it and as the page shows it.
+const footerLink = "https://github.com/Swordlash/haskell-halogen";
+const footerHtml = `<footer class="wiki-footer">Built with <a href="${footerLink}">haskell-halogen</a></footer>`;
+async function footerShown(page, where) {
+  const footer = page.locator("#app .wiki > footer.wiki-footer");
+  assert.equal(await footer.count(), 1, `${where}: no footer`);
+  assert.equal((await footer.textContent()).trim(), "Built with haskell-halogen", `${where}: the footer's text`);
+  assert.equal(await footer.locator("a").getAttribute("href"), footerLink, `${where}: the footer's link`);
+}
+
 // A link clicked while the shell is still reloading the wiki for someone
 // just switched to is now and then followed by the browser, loading the page
 // afresh (and so starting the demo over): Halogen.Router's link stops the
@@ -215,13 +226,15 @@ try {
     const html = await (await fetch(url(path))).text();
     assert.match(html, /<base href="\/">/, `${path}: no <base href>`);
     assert.match(html, /<div id="app"><div class="wiki">/, `${path}: not prerendered`);
+    assert.ok(html.includes(footerHtml), `${path}: no footer prerendered`);
     const before = await load(visitor, path);
     if (path !== "/") assert.notEqual(before.title, "Wiki", `${path}: no title of its own`);
     // The program shows the same route, once it has loaded what it shows.
     await eventually(async () => assert.deepEqual(await shown(visitor), before), `${path}: the program shows another page`);
+    await footerShown(visitor, path);
     if (process.env.SMOKE_DEBUG) console.log(path, JSON.stringify(before));
   }
-  console.log(`ok: each of the ${paths.length} prerendered pages is replaced by the program, showing the same`);
+  console.log(`ok: each of the ${paths.length} prerendered pages is replaced by the program, showing the same, footer included`);
 
   // A page's islands are prerendered as their sources, and drawn once the
   // program has loaded: KaTeX (with its fonts), Mermaid, highlight.js.
@@ -380,8 +393,10 @@ try {
   // An address with no file: 404.html, which the program reads as its own.
   const missing = await fetch(url("/no/such/address/"));
   assert.equal(missing.status, 404);
+  assert.ok((await missing.text()).includes(footerHtml), "404.html has no footer");
   await load(page, "/no/such/address/");
   await check({ path: "/no/such/address/", view: "not-found" }, "an address the wiki does not have");
+  await footerShown(page, "404.html");
   // An editor's address has no page of its own either; the program opens it.
   assert.equal((await fetch(url("/s/blog/p/hello-world/edit/"))).status, 404);
   await load(page, "/s/blog/p/hello-world/edit/");

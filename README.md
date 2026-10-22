@@ -85,7 +85,9 @@ cross compiler through ghcup, as haskell-halogen's CI does; Node into
 `~/.wiki-toolchain/node`; Chromium's headless shell where Playwright keeps its
 browsers; and fourmolu, the formatter, into ghcup's bin directory (its release binary,
 or built from Hackage where GitHub's downloads are refused, as in Claude Code's cloud
-sessions). Debian packages it needs (GMP's headers, `zstd`, `jq` and a few more) it
+sessions); and native `alex` and `happy` (pinned, happy below 2.2) into the same
+directory, which the wasm build of `ghc-lib-parser`, under the `hh` quoter, runs from
+`PATH`. Debian packages it needs (GMP's headers, `zstd`, `jq` and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
 otherwise. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
 into the cabal store, so the first build compiles only this repository.

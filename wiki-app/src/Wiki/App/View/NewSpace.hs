@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | The form for a new space, at the top level or under another space. Only
 -- someone the rules let create a space there is shown the form; the backend
 -- checks again, and a refusal is shown in place.
@@ -7,14 +9,13 @@ module Wiki.App.View.NewSpace
   )
 where
 
-import DOM.HTML.Indexed qualified as I
 import Data.Row (Empty)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
-import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.Event.Event (Event, preventDefault)
 import Wiki.App.Backend (MonadWiki (..), WikiError (..))
@@ -50,20 +51,27 @@ component =
       }
   where
     render :: State -> H.ComponentHTML Action Empty m
-    render State {input = Input {context = ctx, parent}, draft, problem} =
-      HH.section [HP.class_ "new-space-view"] $ case where_ ctx parent of
-        Left e -> [HH.h1_ [HH.text "New space"], errorView e]
-        Right chain ->
-          [ HH.h1_ [HH.text (maybe "New space" (\c -> "New space in " <> spaceNames c) chain)]
-          , HH.p_ [HH.text "A new space is private: only you can see it until you grant others permissions or make it public."]
-          , HH.form
-              [HP.class_ "inline-form", HE.onSubmit Submit]
-              [ textField "Name" draft Typed
-              , HH.button [HP.type_ I.ButtonSubmit, HP.class_ "primary"] [HH.text "Create"]
-              , Router.link ctx.router Followed (maybe Home (Space . map (\s -> s.slug)) chain) [HP.class_ "button"] [HH.text "Cancel"]
-              ]
-          ]
-            <> foldMap (pure . errorView) problem
+    render State {input = Input {context = ctx, parent}, draft, problem} = case where_ ctx parent of
+      Left e ->
+        [hh|
+          <section class="new-space-view">
+            <h1>New space</h1>
+            {{ errorView e }}
+          </section>
+        |]
+      Right chain ->
+        [hh|
+          <section class="new-space-view">
+            <h1>{{ maybe "New space" (\c -> "New space in " <> spaceNames c) chain }}</h1>
+            <p>A new space is private: only you can see it until you grant others permissions or make it public.</p>
+            <form class="inline-form" onSubmit={{ Submit }}>
+              {{ textField "Name" draft Typed }}
+              <button type="submit" class="primary">Create</button>
+              {{ Router.link ctx.router Followed (maybe Home (Space . map (\s -> s.slug)) chain) [HP.class_ "button"] [HH.text "Cancel"] }}
+            </form>
+            {{ errorView <$> problem }}
+          </section>
+        |]
 
     handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case

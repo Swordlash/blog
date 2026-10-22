@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | A page's Markdown as the application shows it, read or previewed: the
 -- title above it unless it starts with its own, and the body rendered by
 -- "Wiki.Core.Markdown" with its formulas, diagrams and code drawn by the
@@ -29,9 +31,8 @@ import Data.Row (type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
-import Halogen.HTML.Events qualified as HE
-import Halogen.HTML.Properties qualified as HP
 import Halogen.Router qualified as Router
+import Halogen.TH (hh, hhs)
 import Protolude
 import Web.UIEvent.MouseEvent (MouseEvent)
 import Wiki.App.Islands (MonadIslands)
@@ -67,7 +68,7 @@ type IslandSlots = ("island" .== H.Slot (Const Void) Void Md.IslandKey)
 
 -- | The page's title as a heading, unless its Markdown starts with its own.
 heading :: Text -> Text -> [HH.HTML w i]
-heading title body = [HH.h1 [HP.class_ "page-title"] [HH.text title] | not (startsWithHeading body)]
+heading title body = [hhs|{% if not (startsWithHeading body) %}<h1 class="page-title">{{ title }}</h1>{% end %}|]
 
 -- | Whether a page's Markdown starts with a level-one heading, which is then
 -- its title on the page; otherwise the title is shown above it.
@@ -85,12 +86,14 @@ article
   -> Text
   -> H.ComponentHTML action IslandSlots m
 article onClick place source = case Md.renderMarkdown (options place) source of
-  Right nodes -> HH.article [HP.class_ "page-body", HE.onClick onClick] nodes
+  Right nodes -> [hh|<article class="page-body" onClick={{ onClick }}>{{ nodes }}</article>|]
   Left e ->
-    HH.div_
-      [ HH.div [HP.class_ "error", attr "role" "alert"] [HH.text ("This page's Markdown could not be read: " <> show e)]
-      , HH.pre [HP.class_ "page-source"] [HH.text source]
-      ]
+    [hh|
+      <div>
+        <div class="error" role="alert">This page's Markdown could not be read: {{ show e :: Text }}</div>
+        <pre class="page-source">{{ source }}</pre>
+      </div>
+    |]
 
 options :: (MonadIslands m, MonadUUID m) => Place -> Md.Options PageLink (H.ComponentSlot IslandSlots m action) action
 options place =

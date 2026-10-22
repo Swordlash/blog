@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | The editor: a page's title and Markdown on the left, the page as it will
 -- read on the right, and its attachments below.
 --
@@ -57,6 +59,7 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.Event.Event (Event, preventDefault)
 import Web.HTML.Event.DragEvent (DragEvent)
@@ -204,132 +207,120 @@ component =
   where
     render :: State -> H.ComponentHTML Action Slots m
     render st =
-      HH.section [HP.class_ "editor"] $
-        HH.h1 [HP.class_ "editor-heading"] [HH.text (headingOf st)] : case st.loaded of
-          _ | isNothing ctx.session.user -> [signInHint]
-          _ | not (mayEdit ctx st.input.space.id) -> [errorView Forbidden]
-          Loading -> [HH.p [HP.class_ "loading"] [HH.text "Loading…"]]
-          Failed e -> [errorView e]
-          Ready draft -> editing st draft
+      [hh|
+        <section class="editor">
+          <h1 class="editor-heading">{{ headingOf st }}</h1>
+          {{ body }}
+        </section>
+      |]
       where
         ctx = st.input.context
+        body = case st.loaded of
+          _ | isNothing ctx.session.user -> [signInHint]
+          _ | not (mayEdit ctx st.input.space.id) -> [errorView Forbidden]
+          Loading -> [[hh|<p class="loading">Loading…</p>|]]
+          Failed e -> [errorView e]
+          Ready draft -> [editing st draft]
 
     signInHint :: H.ComponentHTML Action Slots m
-    signInHint =
-      HH.p
-        [HP.classes ["error", "sign-in-hint"], attr "role" "alert"]
-        [HH.text "You are not signed in. To edit pages, choose who you are at the top right."]
+    signInHint = [hh|<p class="error sign-in-hint" role="alert">You are not signed in. To edit pages, choose who you are at the top right.</p>|]
 
-    editing :: State -> Draft -> [H.ComponentHTML Action Slots m]
+    editing :: State -> Draft -> H.ComponentHTML Action Slots m
     editing st draft =
-      [ HH.form
-          [HP.class_ "editor-form", HE.onSubmit Submit, HE.onKeyDown Key]
-          ( [ HH.div
-                [HP.class_ "editor-bar"]
-                [ HH.keyed
-                    @I.HTMLlabel
-                    (HH.ElemName "label")
-                    [HP.class_ "field editor-title"]
-                    [ ("caption", HH.span_ [HH.text "Title"])
-                    ,
-                      ( loadKey
-                      , HH.input
-                          [ HP.type_ I.InputText
-                          , -- The attribute, the text the input starts with,
-                            -- rather than the property: see the module's
-                            -- comment.
-                            attr "value" draft.savedTitle
-                          , HE.onValueInput TypedTitle
-                          , HP.required True
-                          , HP.autofocus (isNothing draft.page)
-                          ]
-                      )
-                    ]
-                , HH.div
-                    [HP.class_ "editor-actions"]
-                    [ HH.button [HP.type_ I.ButtonSubmit, HP.class_ "primary", HP.disabled st.saving] [HH.text (if st.saving then "Saving…" else "Save")]
-                    , Router.link st.input.context.router Followed (leaving st.input) [HP.classes ["button", "editor-cancel"]] [HH.text "Cancel"]
-                    , HH.label
-                        [HP.classes (["button", "editor-attach"] <> ["disabled" | isNothing draft.page])]
-                        [ HH.text "Attach files"
-                        , HH.input [HP.type_ I.InputFile, HP.multiple True, HP.disabled (isNothing draft.page), HE.onChange Picked]
-                        ]
-                    , HH.div
-                        [HP.class_ "editor-panes-switch", attr "role" "group", attr "aria-label" "Show"]
-                        [ paneButton st SourcePane "Markdown"
-                        , paneButton st PreviewPane "Preview"
-                        ]
-                    ]
-                ]
-            ]
-              <> problemView st
-              <> [ HH.div
-                     [ HP.classes
-                         ( ["editor-panes"]
-                             <> ["dropping" | st.dropping]
-                             <> ["showing-preview" | st.pane == PreviewPane]
-                         )
-                     , HE.onDragOver DragOver
-                     , HE.onDragLeave DragLeave
-                     , HE.onDrop Dropped
-                     ]
-                     [ HH.keyed
-                         @I.HTMLdiv
-                         (HH.ElemName "div")
-                         [HP.class_ "editor-source"]
-                         [
-                           ( loadKey
-                           , -- The text the textarea starts with is its
-                             -- content, not its value: see the module's
-                             -- comment.
-                             HH.element
-                               @I.HTMLtextarea
-                               (HH.ElemName "textarea")
-                               [ HP.ref st.textarea
-                               , HP.class_ "editor-text"
-                               , attr "aria-label" "The page's Markdown"
-                               , HE.onValueInput Typed
-                               , HP.readOnly st.saving
-                               , HP.autofocus (isJust draft.page)
-                               ]
-                               [HH.text draft.savedBody]
-                           )
-                         , ("hint", HH.p [HP.class_ "editor-hint"] [HH.text (hint st draft)])
-                         ]
-                     , HH.div
-                         [HP.class_ "editor-preview", attr "aria-label" "Preview"]
-                         [ HH.slot_
-                             "preview"
-                             ()
-                             Preview.component
-                             Preview.Input {place = placeOf st.input draft, title = draft.shownTitle, body = draft.shownBody}
-                         ]
-                     ]
-                 , attachmentList draft
-                 ]
+      [hh|
+        <form class="editor-form" onSubmit={{ Submit }} onKeyDown={{ Key }}>
+          <div class="editor-bar">
+            {{ titleField st draft }}
+            <div class="editor-actions">
+              <button type="submit" class="primary" disabled={{ st.saving }}>{{ if st.saving then "Saving…" else "Save" :: Text }}</button>
+              {{ Router.link st.input.context.router Followed (leaving st.input) [HP.classes ["button", "editor-cancel"]] [HH.text "Cancel"] }}
+              <label class="button editor-attach{% if isNothing draft.page %} disabled{% end %}">
+                Attach files
+                <input type="file" multiple disabled={{ isNothing draft.page }} onChange={{ Picked }}>
+              </label>
+              <div class="editor-panes-switch" role="group" aria-label="Show">{{ paneButton st SourcePane "Markdown" }}{{ paneButton st PreviewPane "Preview" }}</div>
+            </div>
+          </div>
+          {{ problemView st }}
+          <div
+            class="editor-panes{% if st.dropping %} dropping{% end %}{% if st.pane == PreviewPane %} showing-preview{% end %}"
+            onDragOver={{ DragOver }}
+            onDragLeave={{ DragLeave }}
+            onDrop={{ Dropped }}
+          >
+            {{ source st draft }}
+            <div class="editor-preview" aria-label="Preview">
+              {{ HH.slot_ "preview" () Preview.component Preview.Input {place = placeOf st.input draft, title = draft.shownTitle, body = draft.shownBody} }}
+            </div>
+          </div>
+          {{ attachmentList draft }}
+        </form>
+      |]
+
+    -- The title's input, keyed by the load (see the module's comment). Its
+    -- text is the @value@ attribute, what the input starts with, rather than
+    -- the property, which a quote's @value={{ … }}@ would set: so it is
+    -- written as an attribute among the others.
+    titleField :: State -> Draft -> H.ComponentHTML Action Slots m
+    titleField st draft =
+      HH.keyed
+        @I.HTMLlabel
+        (HH.ElemName "label")
+        [HP.class_ "field editor-title"]
+        [ ("caption", [hh|<span>Title</span>|])
+        ,
+          ( loadKey st
+          , [hh|<input type="text" {{ attr "value" draft.savedTitle }} onValueInput={{ TypedTitle }} required autofocus={{ isNothing draft.page }}>|]
           )
-      ]
-      where
-        loadKey = "load-" <> show st.loads
+        ]
+
+    -- The Markdown's textarea, keyed by the load like the title, with the
+    -- text it starts with as its content rather than its value (see the
+    -- module's comment). Neither a keyed element nor a textarea with content
+    -- can be written in a quote.
+    source :: State -> Draft -> H.ComponentHTML Action Slots m
+    source st draft =
+      HH.keyed
+        @I.HTMLdiv
+        (HH.ElemName "div")
+        [HP.class_ "editor-source"]
+        [
+          ( loadKey st
+          , HH.element
+              @I.HTMLtextarea
+              (HH.ElemName "textarea")
+              [ HP.ref st.textarea
+              , HP.class_ "editor-text"
+              , attr "aria-label" "The page's Markdown"
+              , HE.onValueInput Typed
+              , HP.readOnly st.saving
+              , HP.autofocus (isJust draft.page)
+              ]
+              [HH.text draft.savedBody]
+          )
+        , ("hint", [hh|<p class="editor-hint">{{ hint st draft }}</p>|])
+        ]
+
+    loadKey :: State -> Text
+    loadKey st = "load-" <> show st.loads
 
     paneButton :: State -> Pane -> Text -> H.ComponentHTML Action Slots m
     paneButton st pane label =
-      HH.button
-        [HP.type_ I.ButtonButton, attr "aria-pressed" (if st.pane == pane then "true" else "false"), HE.onClick (const (Show pane))]
-        [HH.text label]
+      [hh|<button type="button" aria-pressed={{ ariaBool (st.pane == pane) }} onClick={{ const (Show pane) }}>{{ label }}</button>|]
 
-    problemView :: State -> [H.ComponentHTML Action Slots m]
+    problemView :: State -> Maybe (H.ComponentHTML Action Slots m)
     problemView st = case st.problem of
-      Nothing -> []
+      Nothing -> Nothing
       Just (Conflict why) ->
-        [ HH.div
-            [HP.classes ["error", "error-conflict"], attr "role" "alert"]
-            [ HH.p_ [HH.text why]
-            , HH.p_ [HH.text "Your changes are still here. Copy what you want to keep before you reload the page as it is now."]
-            , HH.button [HP.type_ I.ButtonButton, HP.class_ "danger", HE.onClick (const Reload)] [HH.text "Reload and lose my changes"]
-            ]
-        ]
-      Just e -> [errorView e]
+        Just
+          [hh|
+            <div class="error error-conflict" role="alert">
+              <p>{{ why }}</p>
+              <p>Your changes are still here. Copy what you want to keep before you reload the page as it is now.</p>
+              <button type="button" class="danger" onClick={{ const Reload }}>Reload and lose my changes</button>
+            </div>
+          |]
+      Just e -> Just (errorView e)
 
     hint :: State -> Draft -> Text
     hint st draft
@@ -339,21 +330,24 @@ component =
 
     attachmentList :: Draft -> H.ComponentHTML Action Slots m
     attachmentList draft =
-      HH.section
-        [HP.class_ "editor-attachments"]
-        [ HH.h2_ [HH.text "Attachments"]
-        , case draft.attachments of
-            [] -> HH.p [HP.class_ "empty"] [HH.text "None yet."]
-            files ->
-              HH.ul_
-                [ HH.li_
-                    [ HH.a [HP.href (Map.findWithDefault "" a.id draft.urls), HP.download a.name] [HH.text a.name]
-                    , HH.span [HP.class_ "attachment-meta"] [HH.text (a.mediaType <> ", " <> fileSize a.size)]
-                    , HH.button [HP.type_ I.ButtonButton, HP.class_ "attachment-insert", HE.onClick (const (Insert a))] [HH.text "Insert"]
-                    ]
-                | a <- files
-                ]
-        ]
+      [hh|
+        <section class="editor-attachments">
+          <h2>Attachments</h2>
+          {% if null draft.attachments %}
+            <p class="empty">None yet.</p>
+          {% else %}
+            <ul>
+              {% for a in draft.attachments %}
+                <li>
+                  <a href={{ Map.findWithDefault "" a.id draft.urls }} download={{ a.name }}>{{ a.name }}</a>
+                  <span class="attachment-meta">{{ a.mediaType }}, {{ fileSize a.size }}</span>
+                  <button type="button" class="attachment-insert" onClick={{ const (Insert a) }}>Insert</button>
+                </li>
+              {% end %}
+            </ul>
+          {% end %}
+        </section>
+      |]
 
     handleQuery :: Query a -> H.HalogenM State Action Slots ViewOutput m (Maybe a)
     handleQuery (IsDirty reply) = Just . reply . isDirty <$> get

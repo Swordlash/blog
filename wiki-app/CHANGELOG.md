@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+Every page ends with a footer, "Built with haskell-halogen", the name a link to
+haskell-halogen's repository; the prerendered pages have it too.
+
+The views are written as HTML: the markup of the shell, the space, page, new
+space, editor, search and search results views and the islands is in
+haskell-halogen-th's `hh` quotes rather than nested `Halogen.HTML` calls, with
+the same elements, attributes and handlers, so what is rendered is unchanged.
+What has no markup of its own stays Haskell: a `Router.link`, a child
+component's slot, and the editor's keyed title and textarea (a keyed element
+and a textarea with text in it cannot be written in a quote); the Markdown is
+still rendered by `wiki-core`. The library now depends on
+`haskell-halogen-th`, and natively on `haskell-halogen-th-plugin`, whose GHC
+plugin reports an error inside a quote at its line and column. Building it
+compiles `ghc-lib-parser` once per compiler; the wasm build needs native
+`alex` and `happy` below 2.2 on `PATH`, which `toolchain/bootstrap.sh` installs.
+
 ## 0.1.0 - 2026-10-22
 
 The interface the application talks to the wiki through, and the in-memory
