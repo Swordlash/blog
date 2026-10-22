@@ -1024,4 +1024,5 @@ Amended by the planning session after each work package's report.
   imports through `readArchive` and assigns its own blob ids; `MonadDemoUsers` (six methods
   now) must become optional for `HttpWiki`; WP1.10's open decision on loading in
   `initialState` stands.
-\n- **WP1.16 (math macros and mhchem) added to the MVP** by the owner, after WP1.15; the tag waits for it.\n
+- **WP1.16 (math macros and mhchem) added to the MVP** by the owner, after WP1.15; the tag
+  waits for it.
