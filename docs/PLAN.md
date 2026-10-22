@@ -95,6 +95,18 @@ confirms it against reality and the plan is amended if it does not hold.
     differs (the local operator on the admin listener, the session's user on the
     public one). The admin listener is not restricted beyond loopback: a remote
     operator reaches it through an SSH tunnel.
+12. **The serverless demo persists in IndexedDB, through an API added to
+    haskell-halogen.** haskell-halogen has Web Storage (`Web.Storage.Storage` over
+    `MonadBrowserDOM`: synchronous, text, a few megabytes) and nothing for IndexedDB,
+    which is what pages, versions and attachments (bytes, tens of megabytes) need:
+    asynchronous, large, bytes kept as bytes. Rather than JavaScript of this
+    repository's own, haskell-halogen gets a key-value store over IndexedDB in `core`,
+    in the shape of `Web.Storage`: a class with the browser instance over the JSFFI,
+    an in-memory instance natively for tests, lifted defaults for transformers, typed
+    reads and writes through `StorageSerialize`, tested in hspec-halogen on both
+    browser backends. `MemWiki` then writes through to it, record by record, and
+    reloads from it at start, so the demo keeps its edits across reloads with no
+    server. The same store is where an offline cache would go later.
 10. **Markdown stays the source of truth.** The editor is a split view: a textarea with
     the Markdown on the left and the rendered page on the right, re-rendered on each
     change (debounced through `hooks`' debouncer). No WYSIWYG.
@@ -223,6 +235,38 @@ point of this phase.
   the harness's new `htmlContainer`/`hydrate` for the shell and a page view. Report
   anything the repair had to fix, since each such case is HTML the server-rendered page
   of WP2.6 would also get wrong.
+- **HH-1 IndexedDB key-value store, in haskell-halogen** (a pull request there, not
+  here). In `core`, `Web.Storage.IndexedDB`: a `Database` descriptor (name, version,
+  the object stores it has; stores are created on the upgrade event, so adding one is a
+  version bump), and a class `MonadIndexedDB m` with `get`, `put`, `delete`, `keys`,
+  `getAll` and `clear` on one store, keys `Text` and values `ByteString` (kept as a
+  `Uint8Array`, never base64), plus `writeMany :: Database -> [(StoreName, Text, Maybe
+  ByteString)] -> m ()` as one read-write transaction, so a backend can save a page and
+  its attachments atomically. Typed `getItem`/`setItem` over `StorageSerialize`, as
+  `Web.Storage.Storage` has. Instances: `BrowserDOM` for both browser backends (jsbits
+  shared by both, `safe` imports on wasm so the thread waits on the request; a cached
+  connection per database name), `MemDOM` natively over an `IORef`, and lifted defaults
+  so `ReaderT`/`IdentityT` instances are empty. Errors (a blocked upgrade from another
+  tab, quota exceeded, a version lower than the one on disk) surface as a documented
+  exception or `Either`, the implementer's choice, reported. Tests: the native suite
+  against `MemDOM`, hspec-halogen in Chromium on wasm and JS (write, read back, keys,
+  clear, `writeMany` all-or-nothing, a value that is not text), and the CHANGELOG entry.
+  haskell-halogen's conventions and its three-backend gate apply; the JavaScript backend
+  is not installed in the blog's sessions, so that build is reported as not run and
+  left to haskell-halogen's CI.
+- **WP1.11 Persist the demo.** After HH-1 and WP1.10: bump the pin to HH-1's commit (its
+  own commit). `MemWiki` writes through to IndexedDB after every successful write, the
+  records it changed in one `writeMany` (spaces, pages, attachments with their bytes,
+  grants, each under its id in its own store), and `main` loads the records before
+  mounting; an empty database is seeded with `demoState` and written out. A "reset the
+  demo content" action in the user switcher clears the database and reseeds it. Object
+  URLs for attachments are made when they are loaded, as now when uploaded. The
+  prerendered page shows the seeded demo; when the store holds edits the first render
+  differs and `hydrateUI` repairs it, which is accepted for the demo (a flash of the
+  seeded content; the server of Phase 2 renders the real state). No cross-tab sync: the
+  last writer of a record wins. Tests: native, `MemWiki` over `MemDOM` with the in-memory
+  store (write, start a fresh `MemWiki` from the store, same state); browser, save a page
+  in one mounted application, mount another from the same store, the page is there.
 
 ### Phase 2: server and persistence
 
@@ -464,6 +508,10 @@ Amended by the planning session after each work package's report.
   `htmlContainer`/`hydrate`; its examples adopt the prerender. Planned as WP1.10 (pin bump
   and hydrating the demo, right after the quoter pass) and WP2.6 recut to the server's part:
   per-request render as the principal plus embedded data so the client starts from it.
+- **Persistence of the demo in IndexedDB (owner's request):** decision 12. haskell-halogen
+  has Web Storage only, so HH-1 adds `Web.Storage.IndexedDB` to its `core` (delegated now,
+  independent of the Phase 1 merges) and WP1.11 makes `MemWiki` write through to it after
+  WP1.10's pin bump.
 - **Administration from localhost planned (owner's request):** decision 11 adds a
   loopback-only admin listener to `wiki-server`, where a user is marked as administrator
   without a login; an administrator then has the panel remotely. WP2.3 gains the listener,
