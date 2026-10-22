@@ -6,10 +6,13 @@
 -- The template, @web/index.html@, has an empty @\<div id=\"app\">\<\/div>@.
 -- The front page goes to @OUTPUT-DIR\/index.html@, each space's to
 -- @OUTPUT-DIR\/s\/\<space path>\/index.html@ and each page's to
--- @OUTPUT-DIR\/s\/\<space path>\/p\/\<page path>\/index.html@, and the page
--- of search results to @OUTPUT-DIR\/search\/index.html@ with nothing searched
--- for (a search's words are in its query, which a static host ignores; the
--- program searches once it has loaded). So a static host has a file at every
+-- @OUTPUT-DIR\/s\/\<space path>\/p\/\<page path>\/index.html@, each
+-- page's source to @…\/p\/\<page path>\/source\/index.html@ (anyone who
+-- may read a page may read its source, and may well arrive there by its
+-- address, so it is served as the page is), and the page of search results
+-- to @OUTPUT-DIR\/search\/index.html@ with nothing searched for (a search's
+-- words are in its query, which a static host ignores; the program searches
+-- once it has loaded). So a static host has a file at every
 -- address the demo starts with: a link from elsewhere and a reload load that
 -- route's page straight away. Every other address (a space made in the demo,
 -- an editor) gets @404.html@, which GitHub Pages and http-server serve for an
@@ -64,17 +67,18 @@ main = do
     createDirectoryIfMissing True (takeDirectory file)
     B.writeFile file (encodeUtf8 filled)
 
--- | The front page, the page of search results, every space and every page
--- of the demo.
+-- | The front page, the page of search results, every space, and every page
+-- of the demo with its source.
 routes :: MemState -> [Route]
 routes st =
   Home
     : Search Nothing Nothing True
     : [Space path | s <- Map.elems st.spaces, Just path <- [spacePath s.id]]
-      <> [ Page sp pp
+      <> [ r
          | p <- Map.elems st.pages
          , Just sp <- [spacePath p.space]
          , Just pp <- [pathOf (`Map.lookup` st.pages) p.id]
+         , r <- [Page sp pp, PageSource sp pp]
          ]
   where
     spacePath = pathOf (`Map.lookup` st.spaces)

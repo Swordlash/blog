@@ -48,3 +48,26 @@ function wiki_history_entry() {
 function wiki_history_go(delta) {
   history.go(delta);
 }
+
+// Put a page's source on the clipboard, and say whether it is there. The
+// asynchronous clipboard first; where there is none (a page served over
+// plain HTTP from another machine) or it refuses, the element showing the
+// text is selected and copied the old way, and if even that fails it stays
+// selected, for the reader to copy with the keyboard.
+async function wiki_copy_text(element, text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    try {
+      return document.execCommand("copy");
+    } catch {
+      return false;
+    }
+  }
+}
