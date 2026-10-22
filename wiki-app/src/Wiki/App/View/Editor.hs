@@ -315,8 +315,7 @@ component =
               </label>
             </div>
           </div>
-          {{ problemView st }}
-          {{ toolbar Bar {menuOpen = st.htmlMenu, twoPanes = st.sideBySide, attaches = isJust draft.page} }}
+          {{ problemView st }}{{ toolbar Bar {menuOpen = st.htmlMenu, twoPanes = st.sideBySide, attaches = isJust draft.page} }}
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
