@@ -982,3 +982,23 @@ Amended by the planning session after each work package's report.
   `formatVersion` is refused whole. A golden v1 archive in the tests must import forever.
   The tag `v0.1.0-demo` waits for WP1.11.
 - **WP1.15 (TikZ) added to the MVP** by the owner, after WP1.11; the tag waits for both.
+- **WP1.11 done and merged** ([#29](https://github.com/Swordlash/blog/pull/29), `8118eaa`;
+  a follow-up, [#30](https://github.com/Swordlash/blog/pull/30), `50cc881`, merged after the
+  first was fast-forwarded too early, before the agent's report: wait for the report). Pin at
+  haskell-halogen `a889566`; the shell's links use `Router.linkProps`; prerender byte-identical
+  across both. `openMemWiki` reads IndexedDB database `wiki` (version 1, seven stores:
+  `users`, `groups`, `spaces`, `pages` with their attachments' records, `attachments` as raw
+  bytes, `grants`, `meta` with the id counter and global grants), seeds an empty one, and
+  `MemWiki` writes the difference after every write in one `writeMany` (a failed write is
+  retried by the next). An undecodable record, `VersionTooLow` or a missing store deletes and
+  reseeds; no IndexedDB or a blocked upgrade runs in memory and says so in the user menu.
+  The demo starts signed in as admin (in `demoState`, so the prerender shows the admin's
+  view); who is signed in is not kept across reloads. Export and import: `Wiki.Core.Export`
+  (hand-written aeson codecs with named fields, used by the store too; `readArchive` checks
+  the whole archive first; `migrations` empty at version 1; rules in `docs/export.md`;
+  golden `wiki-app/test/data/wiki-export-v1.zip`); fflate in the browser (`zip-archive` needs
+  C zlib, absent on wasm), `zip-archive` natively for the tests and the Phase 2 server.
+  `app.wasm` 7007 KiB (1641 KiB brotli), up 492 KiB, mostly aeson. For Phase 2: the server
+  imports through `readArchive` and assigns its own blob ids; `MonadDemoUsers` (six methods
+  now) must become optional for `HttpWiki`; WP1.10's open decision on loading in
+  `initialState` stands.
