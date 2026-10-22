@@ -62,7 +62,6 @@ library
       Wiki.App.Backend
       Wiki.App.Backend.Mem
       Wiki.App.Backend.Mem.State
-      Wiki.App.Backend.Rules
       Wiki.App.Demo
       Wiki.App.Islands
       Wiki.App.Islands.Monad
@@ -135,7 +134,6 @@ test-suite wiki-app-test
     other-modules:
         Test.Backend.Contract
         Test.Backend.Mem
-        Test.Backend.Rules
         Test.Demo
         Test.Hello
         Test.Islands

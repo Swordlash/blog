@@ -18,11 +18,12 @@ pages (`listPages`, `getPage` by path, `createPage`, `savePage`, `movePage`,
 `Conflict` to save over a newer version. Slugs are made from names and titles
 when something is created and kept when it is renamed, so addresses last.
 `HalogenM` is an instance, so a component's handlers call the methods
-directly. `Wiki.App.Backend.Rules` says what each write needs where
-`wiki-core` leaves it open: creating a space at the top level takes
-`CreateSpaces`, under a parent `CreateSpaces` or `AdministerSpace` there;
-moving one takes `AdministerSpace` on it and on its new parent (or
-`CreateSpaces` for the top level); whoever creates a space administers it.
+directly. Each write is checked by the rules of `wiki-core`'s
+`Wiki.Core.Permission`, including its rules for writes (creating a space at
+the top level takes `CreateSpaces`, under a parent `CreateSpaces` or
+`AdministerSpace` there; moving one takes `AdministerSpace` on it and on its
+new parent, or `CreateSpaces` for the top level), which the server will
+enforce too; whoever creates a space administers it.
 
 `Wiki.App.Backend.Mem` is `MemWiki`, the whole wiki in an `IORef` under any
 base monad, deriving the DOM classes so that components run in it over

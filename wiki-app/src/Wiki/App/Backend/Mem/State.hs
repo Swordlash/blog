@@ -56,7 +56,6 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymous, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
-import Wiki.App.Backend.Rules (mayCreateSpace, mayMovePage, mayMoveSpace)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
@@ -72,6 +71,10 @@ import Wiki.Core.Permission
   , canAdministerSpace
   , canEdit
   , canView
+  , isFor
+  , mayCreateSpace
+  , mayMovePage
+  , mayMoveSpace
   , principal
   )
 -- Qualified, since the store has fields of the same names (grants, spaces,
@@ -129,12 +132,6 @@ currentPrincipal st = do
   u <- st.current
   guard (Map.member u st.users)
   pure (principal st.membership u)
-
--- | Whether a grant's subject is this principal or one of their groups.
-isFor :: Principal -> Subject -> Bool
-isFor p = \case
-  SubjectUser u -> u == p.user
-  SubjectGroup g -> g `Set.member` p.groups
 
 --------------------------------------------------------------------------------
 -- Building

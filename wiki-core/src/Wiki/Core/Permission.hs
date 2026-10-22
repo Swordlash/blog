@@ -31,6 +31,7 @@ module Wiki.Core.Permission
     -- * Who is asking
   , Principal (..)
   , principal
+  , isFor
 
     -- * Rules
   , hasGlobalPermission
@@ -40,6 +41,13 @@ module Wiki.Core.Permission
   , canView
   , canEdit
   , canAdministerSpace
+
+    -- * Rules for writes
+    -- $writes
+  , spaceChain
+  , mayCreateSpace
+  , mayMoveSpace
+  , mayMovePage
   )
 where
 
@@ -47,6 +55,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Set qualified as Set
 import Protolude
 import Wiki.Core.Id
+import Wiki.Core.Path (ancestry)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Membership, groupsOf)
 
@@ -138,7 +147,9 @@ data Principal = Principal
 principal :: Membership -> UserId -> Principal
 principal membership user = Principal {user, groups = groupsOf membership user}
 
--- | Whether a grant to this subject is a grant to this principal.
+-- | Whether a grant to this subject is a grant to this principal: it names
+-- them, or one of the groups they are in. A backend uses it to pick out the
+-- grants that concern the current user, which is all the client is told.
 isFor :: Principal -> Subject -> Bool
 isFor p = \case
   SubjectUser u -> u == p.user
@@ -195,3 +206,48 @@ canEdit who grants chain = hasSpacePermission who grants chain Edit
 -- delete it or move it.
 canAdministerSpace :: Maybe Principal -> Grants -> [Space] -> Bool
 canAdministerSpace who grants chain = hasSpacePermission who grants chain AdministerSpace
+
+--------------------------------------------------------------------------------
+-- Rules for writes
+
+-- $writes
+-- Which permissions, on which spaces, creating or moving a space takes, where
+-- the rules above leave the combination open. The rest of what can be
+-- written is one rule each: renaming, deleting and making a space public or
+-- private is 'canAdministerSpace' on it, and everything done to pages and
+-- attachments is 'canEdit' on their space. The server enforces these and the
+-- client hides what they forbid, so they live here rather than in either.
+
+-- | The chain of a space, from its top-level ancestor down to the space
+-- itself, among the spaces given (a backend's @listSpaces@ gives enough for
+-- every space it lists). Empty when the space or one of its ancestors is not
+-- among them.
+spaceChain :: [Space] -> SpaceId -> [Space]
+spaceChain spaces sid = fromMaybe [] (ancestry (\i -> find (\s -> s.id == i) spaces) sid)
+
+-- | Whether someone may create a space under a parent (given by its chain),
+-- or at the top level ('Nothing'). The top level takes the global
+-- 'CreateSpaces'; a subspace takes that or 'AdministerSpace' on the parent,
+-- which has to be one they can see.
+mayCreateSpace :: Maybe Principal -> Grants -> Maybe [Space] -> Bool
+mayCreateSpace who grants = \case
+  Nothing -> canCreateSpaces who grants
+  Just parent ->
+    canView who grants parent
+      && (canCreateSpaces who grants || canAdministerSpace who grants parent)
+
+-- | Whether someone may move the space at the end of the first chain under
+-- the space at the end of the second, or to the top level ('Nothing'): they
+-- administer the space, and they may put a space where it goes, which is
+-- 'CreateSpaces' for the top level and 'AdministerSpace' on a new parent.
+mayMoveSpace :: Maybe Principal -> Grants -> [Space] -> Maybe [Space] -> Bool
+mayMoveSpace who grants space destination =
+  canAdministerSpace who grants space && case destination of
+    Nothing -> canCreateSpaces who grants
+    Just parent -> canAdministerSpace who grants parent
+
+-- | Whether someone may move a page from the space at the end of the first
+-- chain to the space at the end of the second (the same one, for a move
+-- within a space): they edit both.
+mayMovePage :: Maybe Principal -> Grants -> [Space] -> [Space] -> Bool
+mayMovePage who grants source target = canEdit who grants source && canEdit who grants target

@@ -31,7 +31,8 @@
 -- includes so that its spaces have paths), and every write checks the rules
 -- of "Wiki.Core.Permission" against the current user before it changes
 -- anything. The rules for each write are those of
--- "Wiki.App.Backend.Rules", which say in one place what each method needs:
+-- "Wiki.Core.Permission" (its rules for writes), which say in one place what
+-- each method needs:
 --
 -- * creating a top-level space needs the global 'CreateSpaces';
 -- * creating a subspace needs 'CreateSpaces' or 'AdministerSpace' on the

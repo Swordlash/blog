@@ -1,10 +1,9 @@
--- | The rules of "Wiki.App.Backend.Rules", for combinations of grants the
--- demo does not have.
-module Test.Backend.Rules (spec) where
+-- | The rules for writes of "Wiki.Core.Permission": what creating and moving
+-- spaces and pages takes.
+module Test.Permission.Writes (spec) where
 
 import Protolude
 import Test.Hspec
-import Wiki.App.Backend.Rules
 import Wiki.Core.Id
 import Wiki.Core.Permission
 import Wiki.Core.Slug (mkSlug)
@@ -43,7 +42,7 @@ chain :: Text -> [Space]
 chain s = spaceChain spaces (SpaceId s)
 
 spec :: Spec
-spec = describe "Wiki.App.Backend.Rules" $ do
+spec = describe "Wiki.Core.Permission, rules for writes" $ do
   it "spaceChain gives the chain from the top level, or nothing" $ do
     map (\s -> s.id) (chain "backend") `shouldBe` [SpaceId "eng", SpaceId "backend"]
     chain "nowhere" `shouldBe` []
