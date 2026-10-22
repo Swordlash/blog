@@ -20,6 +20,7 @@ module Wiki.App.Backend.Mem.State
   , grantGlobal
   , grantSpace
   , insertSpace
+  , setMathMacros
   , insertPage
   , attachBytes
   , attachUrl
@@ -170,6 +171,10 @@ insertSpace parent name public st0 =
       slug = freshSlug (isJust . findChild (Map.elems st.spaces) parent) base
       space = Space {id = SpaceId i, name, slug, parent, public, mathMacros = ""}
    in (st {spaces = Map.insert space.id space st.spaces}, space)
+
+-- | Give a space math macros, checking nothing.
+setMathMacros :: SpaceId -> Text -> MemState -> MemState
+setMathMacros sid macros st = st {spaces = Map.adjust (\s -> s {mathMacros = macros}) sid st.spaces}
 
 -- | Add a page with a slug made from its title and free among its siblings,
 -- created and last updated at the time given, checking nothing else.

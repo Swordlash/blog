@@ -69,6 +69,7 @@ demoState now = flip execState emptyState $ do
   team <- space Nothing "Team" False
   projects <- space (Just team) "Projects" False
   docs <- space Nothing "Docs" True
+  modify (setMathMacros docs (T.intercalate "\n" docsMacros))
   modify $
     grantSpace blog (SubjectGroup writers) Edit
       . grantSpace projects (SubjectUser readerId) View
@@ -105,6 +106,15 @@ demoState now = flip execState emptyState $ do
 
     ago :: NominalDiffTime -> UTCTime
     ago days = addUTCTime (negate (days * 86400)) now
+
+-- | The math macros of @Docs@, which its @Mathematics@ page uses: two of
+-- its own, and one that the space defines again over the built-in one.
+docsMacros :: [Text]
+docsMacros =
+  [ "\\newcommand{\\vect}[1]{\\boldsymbol{#1}}"
+  , "\\newcommand{\\Hom}{\\operatorname{Hom}}"
+  , "\\newcommand{\\eps}{\\epsilon}"
+  ]
 
 -- | Where the tour is: the path of its space, and its own path there. The
 -- shell's front page points a newcomer to it.
@@ -372,6 +382,9 @@ markdownGuide =
   , ""
   , "$$\\int_{-\\infty}^{\\infty} e^{-x^2} \\, dx = \\sqrt{\\pi}$$"
   , ""
+  , "Chemistry with `\\ce`: $\\ce{2 H2 + O2 -> 2 H2O}$. Macros, built in, of the"
+  , "space or of the page, are on [Mathematics](markdown-guide/mathematics)."
+  , ""
   , "## Diagrams"
   , ""
   , "```mermaid"
@@ -469,4 +482,36 @@ mathematics =
   , "```math"
   , "\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}"
   , "```"
+  , ""
+  , "## Macros"
+  , ""
+  , "KaTeX has no `\\usepackage`, so the wiki has macros instead, in three"
+  , "layers, the nearest winning. Some are built in, for every page:"
+  , "$\\abs{x}$, $\\norm{v}$, $\\floor{x} \\le x \\le \\ceil{x}$,"
+  , "$\\Q \\subset \\R \\subset \\C$, $\\E[X]$ and $\\Var(X)$."
+  , ""
+  , "This space has its own, in its settings, which its pages and its"
+  , "subspaces' pages may use: $\\vect{v} \\in V$, $f \\in \\Hom(V, W)$; and"
+  , "here $\\eps$ is $\\epsilon$, where the built-in one is $\\varepsilon$."
+  , ""
+  , "And a formula may define its own, which hold in every formula after it on"
+  , "the page, as in a LaTeX document:"
+  , ""
+  , "$$"
+  , "\\newcommand{\\dist}[2]{d\\left(#1, #2\\right)}"
+  , "\\dist{x}{z} \\le \\dist{x}{y} + \\dist{y}{z}"
+  , "$$"
+  , ""
+  , "so that from here on $\\dist{x}{x} = 0$."
+  , ""
+  , "## Chemistry"
+  , ""
+  , "`\\ce` writes chemical formulas and equations (mhchem): $\\ce{H2O}$,"
+  , "$\\ce{SO4^2-}$, and"
+  , ""
+  , "$$\\ce{CO2 + C -> 2 CO}$$"
+  , ""
+  , "$$\\ce{Hg^2+ ->[I-] HgI2 ->[I-] [Hg^{II}I4]^2-}$$"
+  , ""
+  , "and `\\pu` quantities with their units: $\\pu{123 kJ/mol}$."
   ]
