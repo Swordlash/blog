@@ -14,8 +14,8 @@
 --
 -- __Elements__ ('allowedElements'): formatting (@b@, @i@, @em@, @strong@,
 -- @u@, @s@, @sub@, @sup@, @mark@, @small@, @abbr@, @kbd@, @code@, @span@,
--- @br@), links (@a@), structure (@div@, @p@, @details@, @summary@,
--- @blockquote@, @pre@, @hr@, @ul@, @ol@, @li@, @dl@, @dt@, @dd@, @table@,
+-- @br@), links (@a@), structure (@h1@ to @h6@, @div@, @p@, @details@,
+-- @summary@, @blockquote@, @pre@, @hr@, @ul@, @ol@, @li@, @dl@, @dt@, @dd@, @table@,
 -- @caption@, @thead@, @tbody@, @tfoot@, @tr@, @th@, @td@, @figure@,
 -- @figcaption@) and media (@img@, @video@, @audio@, @source@). An element
 -- that is not among them is dropped and its content kept, as for a @font@
@@ -162,7 +162,7 @@ allowedElements :: [Text]
 allowedElements = phrasingElements <> structure <> tableElements
   where
     structure =
-      ["div", "p", "details", "summary", "blockquote", "pre", "hr", "ul", "ol", "li", "dl", "dt", "dd", "figure", "figcaption"]
+      headings <> ["div", "p", "details", "summary", "blockquote", "pre", "hr", "ul", "ol", "li", "dl", "dt", "dd", "figure", "figcaption"]
 
 -- | The elements kept among the text of a paragraph: formatting, links,
 -- line breaks and media.
@@ -447,7 +447,7 @@ prepare name s0
         Just "table" -> opened "tr" (opened "tbody" s)
         Just "tr" -> s
         _ -> opened "tr" s
-  | otherwise = Just (closeA (closeP (closeItems s0)))
+  | otherwise = Just (closeHeading (closeA (closeP (closeItems s0))))
   where
     never = const False
     opened n s = Open n [] [] : s
@@ -466,6 +466,10 @@ prepare name s0
     closeA s
       | name == "a" = closeIf (== "a") (`elem` scopeBoundaries) s
       | otherwise = s
+    -- A heading started straight inside a heading ends it.
+    closeHeading s
+      | name `elem` headings, Just h <- top s, h `elem` headings = closeOne s
+      | otherwise = s
 
 -- | The stack after an end tag: the element it names closed with those
 -- inside it, if it is open in reach; otherwise as it was.
@@ -474,6 +478,8 @@ end name s
   | name `elem` voidElements || name `notElem` allowedElements = s
   | name == "table" = closeIf (== name) (const False) s
   | name `elem` tableElements = closeIf (== name) (== "table") s
+  -- Any heading's end tag ends the open heading, whatever its level.
+  | name `elem` headings = closeIf (`elem` headings) (`elem` scopeBoundaries) s
   | otherwise = closeIf (== name) (`elem` scopeBoundaries) s
 
 voidElements :: [Text]
@@ -486,7 +492,8 @@ scopeBoundaries = ["table", "caption", "td", "th"]
 -- | The block elements whose start ends an open @p@.
 closesParagraph :: [Text]
 closesParagraph =
-  ["blockquote", "details", "div", "dl", "dd", "dt", "figcaption", "figure", "hr", "li", "ol", "p", "pre", "summary", "table", "ul"]
+  headings
+    <> ["blockquote", "details", "div", "dl", "dd", "dt", "figcaption", "figure", "hr", "li", "ol", "p", "pre", "summary", "table", "ul"]
 
 -- | Of the allowed elements, those the parser counts as special: an @li@,
 -- @dt@ or @dd@ does not end one of its kind past them (except a @div@ or a
@@ -508,4 +515,8 @@ specialElements =
   , "figure"
   , "figcaption"
   ]
+    <> headings
     <> tableElements
+
+headings :: [Text]
+headings = ["h1", "h2", "h3", "h4", "h5", "h6"]

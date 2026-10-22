@@ -7,7 +7,7 @@ The new `Wiki.Core.Markdown.Html` reads raw HTML with `tagsoup` and builds it
 into a tree the way a browser's parser would (an open `p` ends at a block,
 an `li` at the next, a row gets its `tbody`, an unclosed element ends where
 its block does), keeping only the allowed elements (formatting, links,
-structure, tables, figures, `details`, media) and attributes (`class`, `id`,
+headings, structure, tables, figures, `details`, media) and attributes (`class`, `id`,
 `title`, and `href`, `src`, `alt`, `width`, `height`, `colspan`, `rowspan`,
 `open`, `controls`, `poster`, `start` where they mean something), and only
 URLs that are relative or `http`, `https`, `attachment` (and `mailto` for a

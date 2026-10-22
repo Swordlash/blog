@@ -64,7 +64,7 @@ spec = describe "Markdown.Html" $ do
         `reads'` [txt "a", el "br" [], txt "b", el "hr" [], Element "img" [("alt", "i")] [], Element "source" [("src", "v.mp4")] []]
     it "keeps a link, which the list of elements forgot" $
       "<a href=\"https://example.com\">x</a>" `reads'` [Element "a" [("href", "https://example.com")] [txt "x"]]
-    for_ ["font", "center", "h1", "button", "label", "form", "marquee", "section", "article", "nav", "canvas", "blink", "custom-element"] $ \name ->
+    for_ ["font", "center", "button", "label", "form", "marquee", "section", "article", "nav", "canvas", "blink", "custom-element"] $ \name ->
       it ("drops " <> toS name <> " and keeps its content") $
         ("a<" <> name <> " class=\"c\">b <em>c</em></" <> name <> ">d") `reads'` [txt "ab ", el "em" [txt "c"], txt "d"]
     for_ (filter (/= "embed") droppedElements) $ \name ->
@@ -188,6 +188,12 @@ spec = describe "Markdown.Html" $ do
       "<p>a<p>b" `reads'` [el "p" [txt "a"], el "p" [txt "b"]]
     it "keeps a paragraph open past phrasing elements" $
       "<p>a<b>b</b><br>c</p>" `reads'` [el "p" [txt "a", el "b" [txt "b"], el "br" [], txt "c"]]
+    it "ends a paragraph at a heading, and a heading at a heading started in it" $
+      "<p>a<h2>b<h3>c</h3>d" `reads'` [el "p" [txt "a"], el "h2" [txt "b"], el "h3" [txt "c"], txt "d"]
+    it "ends a heading at the end tag of any heading" $
+      "<h2>a <b>b</h3>c" `reads'` [el "h2" [txt "a ", el "b" [txt "b"]], txt "c"]
+    it "keeps class, id and title on a heading, and nothing else" $
+      attrsOf "h2" "id=\"intro\" class=\"lead\" title=\"t\" style=\"x\" onclick=\"y()\"" `shouldBe` [("id", "intro"), ("class", "lead"), ("title", "t")]
     it "ends a list item at the next" $
       "<ul><li>a<li>b<ul><li>c<li>d</ul><li>e</ul>"
         `reads'` [el "ul" [el "li" [txt "a"], el "li" [txt "b", el "ul" [el "li" [txt "c"], el "li" [txt "d"]]], el "li" [txt "e"]]]
@@ -230,6 +236,8 @@ spec = describe "Markdown.Html" $ do
     it "closes what is never closed at the end of the sequence" $
       parseFragments Phrasing [Markup "<mark>", Markdown (1 :: Int), Markup "<b>", Markdown 2]
         `shouldBe` [el "mark" [Content 1, el "b" [Content 2]]]
+    it "drops a heading among the text to its content" $
+      parseFragments Phrasing [Markup "<h1>", Markdown (1 :: Int), Markup "</h1>"] `shouldBe` [Content 1]
     it "keeps only what may be in a paragraph, and the content of the rest" $
       parseFragments Phrasing [Markup "<div>", Markdown (1 :: Int), Markup "<p>", Markup "<b>", Markdown 2, Markup "</b>", Markup "</p></div>"]
         `shouldBe` [Content 1, el "b" [Content 2]]

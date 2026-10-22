@@ -187,7 +187,7 @@ page cannot run code or change the page around it. The elements:
 
 - formatting: `b`, `i`, `em`, `strong`, `u`, `s`, `sub`, `sup`, `mark`,
   `small`, `abbr`, `kbd`, `code`, `span`, `br`, and links, `a`;
-- structure: `div`, `p`, `details`, `summary`, `blockquote`, `pre`, `hr`,
+- structure: `h1` to `h6`, `div`, `p`, `details`, `summary`, `blockquote`, `pre`, `hr`,
   `ul`, `ol`, `li`, `dl`, `dt`, `dd`, `table`, `caption`, `thead`,
   `tbody`, `tfoot`, `tr`, `th`, `td`, `figure`, `figcaption`;
 - media: `img`, `video`, `audio`, `source`.

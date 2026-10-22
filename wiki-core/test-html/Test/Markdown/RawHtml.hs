@@ -69,6 +69,9 @@ spec = describe "Markdown.Render, raw HTML" $ do
     it "reads Markdown between blocks, which close where each block ends" $
       "<div class=\"note\">\n\n*Markdown*\n\n</div>"
         `shows'` "<div class=\"note\">\n</div><p><em>Markdown</em></p>"
+    it "renders a heading block, and drops a heading among the text to its text" $ do
+      "<h2 id=\"intro\" onclick=\"x()\">Intro</h2>" `shows'` "<h2 id=\"intro\">Intro</h2>"
+      "a <h2>b</h2> c" `shows'` "<p>a b c</p>"
     it "drops a script block" $
       "<script>alert(1)</script>" `shows'` ""
     it "drops an svg with its onload" $
