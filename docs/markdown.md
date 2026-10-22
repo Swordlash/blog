@@ -2,8 +2,13 @@
 
 Pages are written in Markdown: [CommonMark](https://commonmark.org) with
 GitHub's extensions, math, Mermaid diagrams, attachments and links between
-pages. The preview next to the editor shows a page as readers will see it.
-This page is written in everything it describes, so its source shows how.
+pages. The editor's "Show preview" shows a page as readers will see it, and
+its toolbar writes the Markdown for you: select some text and choose a
+button, or choose one with nothing selected and type over what it puts in.
+Each button's title names its shortcut (Ctrl+B bold, Ctrl+I italic, Ctrl+K
+link, Ctrl+E code, Ctrl+Shift+8 and Ctrl+Shift+7 lists, Ctrl+Alt+P the
+preview; Cmd for Ctrl on a Mac). This page is written in everything it
+describes, so its source shows how.
 
 ## Text
 
