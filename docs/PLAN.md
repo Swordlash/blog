@@ -1069,3 +1069,16 @@ Amended by the planning session after each work package's report.
   router (both launch a fiber per value). haskell-halogen changes core: a component counts as
   initialized once its Initialize reaches its first wait or ends. The blog takes it at its
   next pin bump; `b65ad6e`'s fire-and-forget drawing stays either way.
+- **WP1.16 done and merged** ([#33](https://github.com/Swordlash/blog/pull/33), `84f791c`).
+  Built-in macros in `web/src/katex-macros.tex` (checked by KaTeX at bundle time; `\N`, `\R`,
+  `\Z`, `\set` are KaTeX's own and left out), `Space.mathMacros` set under
+  `AdministerSpace` (`setSpaceMathMacros`), inherited farthest first, and a page's defining
+  formulas carried to the formulas after them in document order, never by render order;
+  KaTeX is the only TeX parser (no Haskell `\newcommand` parser), a nearer `\newcommand`
+  replaces a farther one; mhchem (`\ce`, `\pu`). Export: `mathMacros` is the first additive
+  field, no `formatVersion` bump, the golden v1 archive imports. For Phase 2: `HttpWiki`
+  must deliver `mathMacros` for a chain's hidden ancestors too; the server stores blocks
+  unchecked (no KaTeX there); an endpoint for `setSpaceMathMacros` is needed; KaTeX shows an
+  unknown command in red without `.katex-error`, so "no error" tests check both.
+- **Phase 1 complete.** `main` at `84f791c` is the tag point for `v0.1.0-demo`, which the
+  owner pushes (the session's credentials cannot push tags). Next: Phase 2.
