@@ -70,7 +70,7 @@ and `details` in a page have a look of their own.
 `pickedFiles`; `editorKey` is pure and gives `Maybe EditorKey`; new are
 `applyCommand`, `focusElement` and `clickElement`.
 
-haskell-halogen is pinned at `08f9093`.
+haskell-halogen is pinned at `a889566`.
 
 Every page ends with a footer, "Built with haskell-halogen", the name a link to
 haskell-halogen's repository; the prerendered pages have it too.
