@@ -33,20 +33,34 @@ if second=$(git rev-parse --verify --quiet "$sha^2"); then
   fi
 fi
 
-for candidate in $candidates; do
-  count=$(curl -fsS \
-    -H "Authorization: Bearer $GH_TOKEN" \
-    -H "Accept: application/vnd.github+json" \
-    "$api/repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/runs?head_sha=$candidate&event=pull_request&status=success&per_page=1" |
-    jq -r '.total_count' 2>/dev/null || true)
-  case $count in
-    '' | *[!0-9]*) count=0 ;;
-  esac
-  if [ "$count" -gt 0 ]; then
-    printf 'A pull request run already tested %s and passed.\n' "$candidate" >&2
-    echo tested=true
-    exit 0
-  fi
-done
+# The runs listing can lag a run that has just finished (the pull request's
+# often has, by minutes), so a miss is asked again once after a pause.
+look() {
+  for candidate in $candidates; do
+    # Plain text tools only: the runner need not have jq, and a missing tool
+    # must not pass for "no run found" without saying so.
+    response=$(curl -fsS \
+      -H "Authorization: Bearer $GH_TOKEN" \
+      -H "Accept: application/vnd.github+json" \
+      "$api/repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/runs?head_sha=$candidate&event=pull_request&status=success&per_page=1") ||
+      response=
+    count=$(printf '%s' "$response" | tr -d '\n' | grep -o '"total_count": *[0-9]*' | head -n 1 | grep -o '[0-9]*$' || true)
+    if [ -z "$count" ]; then
+      printf 'Could not read the runs of %s from the API (response: %.200s).\n' "$candidate" "$response" >&2
+      continue
+    fi
+    printf '%s passing pull request run(s) of %s.\n' "$count" "$candidate" >&2
+    if [ "$count" -gt 0 ]; then
+      printf 'A pull request run already tested %s and passed.\n' "$candidate" >&2
+      return 0
+    fi
+  done
+  return 1
+}
+
+if look || { sleep "${RETRY_AFTER:-30}" && look; }; then
+  echo tested=true
+  exit 0
+fi
 printf 'No passing pull request run tested %s: running the full CI.\n' "$sha" >&2
 echo tested=false
