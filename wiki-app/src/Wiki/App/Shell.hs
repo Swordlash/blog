@@ -42,6 +42,7 @@ import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous)
 import Wiki.App.Browser (historyEntry, historyGo, setDocumentTitle)
@@ -125,7 +126,7 @@ data Action
 
 component
   :: forall output m
-   . (MonadWiki m, MonadDemoUsers m, MonadIslands m, MonadUUID m, MonadIO m)
+   . (MonadWiki m, MonadDemoUsers m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
   => H.Component Query Input output m
 component =
   H.mkComponent
