@@ -1,0 +1,43 @@
+packages:
+  wiki-core
+  wiki-api
+  wiki-app
+  wiki-server
+
+-- haskell-halogen comes from one pinned commit: only haskell-halogen-core is on
+-- Hackage, and the application needs the router, the hooks and the th quoters
+-- as well. Every package it is used from is listed, jsbits included (the WASM
+-- FFI embeds its JavaScript at compile time), so all of them are at the same
+-- commit. Bump the tag deliberately, in its own commit, together with the
+-- toolchain pins in toolchain/bootstrap.sh and cabal-wasm.project.
+source-repository-package
+  type: git
+  location: https://github.com/Swordlash/haskell-halogen
+  tag: 77444712fc605d0ed939feb9dbabbaad79b1db56
+  subdir:
+    core
+    jsbits
+    hooks
+    router
+    th
+    th-plugin
+    hspec-halogen
+
+-- As in haskell-halogen's own cabal.project: protolude's upper bounds lag
+-- behind the GHC this builds with.
+allow-newer: protolude:*
+
+-- A test suite's dependencies are optional goals unless this says otherwise:
+-- rather than report that it cannot satisfy them, the solver is free to hand
+-- back a plan with no test suites in it, and `cabal test` then fails with
+-- nothing to run. Asking for them here makes an unsatisfiable test dependency
+-- an error that names itself, and gives the build and test steps one plan
+-- between them rather than one each.
+tests: True
+
+-- Warnings are errors in this repository's own packages (program-options
+-- applies to local packages only, not to dependencies). It lives here rather
+-- than in the .cabal files so that a newer GHC warning about something new
+-- does not stop a package from building for someone else.
+program-options
+  ghc-options: -Werror

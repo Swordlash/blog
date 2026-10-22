@@ -1,0 +1,113 @@
+cabal-version:      3.0
+name:               wiki-app
+version:            0.1.0.0
+synopsis:           The wiki's browser application, in Halogen
+license:            NONE
+author:             Mateusz Goślinowski
+maintainer:         mateusz.goslinowski@gmail.com
+category:           Web
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+
+-- haskell-halogen's examples' stanza: the warnings every package here is built
+-- with (cabal.project makes them errors) and the extensions its code assumes.
+common shared
+  default-language: GHC2021
+  ghc-options: -Wall -Wextra -Wcompat -Wno-partial-type-signatures -Wterm-variable-capture -Wredundant-constraints -Wunused-packages
+
+  default-extensions:
+      RankNTypes
+      GeneralizedNewtypeDeriving
+      MultiParamTypeClasses
+      FunctionalDependencies
+      FlexibleContexts
+      FlexibleInstances
+      UndecidableInstances
+      GADTs
+      DeriveFunctor
+      DerivingStrategies
+      NoImplicitPrelude
+      KindSignatures
+      DataKinds
+      OverloadedStrings
+      TypeOperators
+      LambdaCase
+      TypeFamilies
+      OverloadedRecordDot
+      RecordWildCards
+      NamedFieldPuns
+      DuplicateRecordFields
+      PartialTypeSignatures
+      DefaultSignatures
+      StandaloneKindSignatures
+      NoFieldSelectors
+      DerivingVia
+      CPP
+      StrictData
+      RequiredTypeArguments
+      ExplicitNamespaces
+
+library
+  import:           shared
+  hs-source-dirs:   src
+  exposed-modules:  Wiki.App
+  build-depends:
+      protolude,
+      haskell-halogen-core
+
+-- The application itself: a wasm reactor whose hs_start web/index.js calls.
+executable wiki-app
+  import:           shared
+  main-is:          Main.hs
+  hs-source-dirs:   app
+  build-depends:
+      protolude,
+      haskell-halogen-core
+
+  -- Natively Main.hs only type-checks the entry point: the component is
+  -- mounted in a browser alone.
+  if arch(wasm32)
+    build-depends:
+        wiki-app
+    ghc-options:
+      -no-hs-main
+      -optl-mexec-model=reactor
+      "-optl-Wl,--export=hs_start"
+
+-- The page with the component already rendered into it, written natively at
+-- build time (toolchain/build-wasm.sh runs it). Only a host GHC renders to
+-- HTML, so there is nothing to build on wasm.
+executable wiki-app-prerender
+  import:           shared
+  main-is:          Prerender.hs
+  hs-source-dirs:   app
+
+  if arch(wasm32)
+    buildable: False
+  else
+    build-depends:
+        bytestring,
+        filepath,
+        protolude,
+        haskell-halogen-core,
+        wiki-app
+
+-- What the component renders, through Halogen.Static's in-memory document,
+-- which exists natively only. In a browser, toolchain/smoke-test.mjs drives
+-- the built page.
+test-suite wiki-app-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Test.hs
+
+  if arch(wasm32)
+    buildable: False
+  else
+    other-modules:  Test.Hello
+    build-depends:
+        hspec >= 2,
+        protolude,
+        text,
+        haskell-halogen-core,
+        wiki-app
