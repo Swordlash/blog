@@ -63,6 +63,77 @@ unzip app.zip -d app && npx http-server app -p 8080
 The front page invites you to the tour, which says what to try. Nothing you do is
 sent anywhere, and a reload starts the demo over.
 
+## Deploying on your own machine
+
+`toolchain/deploy-local.sh` builds the demo and serves it from a Linux machine of
+your own (x86_64 Debian or Ubuntu) as a systemd user service, for you and your
+devices on its Tailscale network. Run it from the checkout, as the user the service
+should run as (not root):
+
+```sh
+sh toolchain/deploy-local.sh --port 8080    # or: npm run deploy-local -- --port 8080
+```
+
+It runs the bootstrap (`toolchain/bootstrap.sh toolchain`), `npm ci` and
+`npm run build-wasm-opt`, the `-O2` production build, and stops on any failure
+before touching what is running. The first `-O2` build compiles every dependency
+again and can take over an hour; later ones take minutes. Then it stops the running
+service, empties `~/wiki-demo` (or `--dir`) and copies into it the built page
+(`app/`, with a brotli'd copy of each compressible file for browsers that accept it)
+and `server.mjs`, a static server with no dependencies that serves the page as
+GitHub Pages does, `404.html` included. It writes and enables
+`~/.config/systemd/user/wiki-demo.service`, which runs that server with the Node the
+bootstrap installed, by absolute path, so the service depends on neither the checkout
+nor its `node_modules`; starts it, checks that it answers, and prints the address to
+open, `http://<tailscale address or MagicDNS name>:8080/`.
+
+- It listens on the machine's Tailscale address (`tailscale ip -4`), so only your
+  tailnet reaches it; when Tailscale does not answer it listens on 127.0.0.1 and
+  says so. `--bind 0.0.0.0` listens everywhere.
+- If ufw is installed and active, it allows the port on `tailscale0` only
+  (`ufw allow in on tailscale0 to any port 8080 proto tcp comment 'wiki-demo'`),
+  through `sudo -n`; when sudo needs a password it prints the commands for you to
+  run instead. `--no-firewall` leaves the firewall alone. Without ufw it changes
+  nothing: Tailscale's ACLs and the bind address already limit who can connect.
+  With nftables instead, add the rule yourself, for example
+  `sudo nft add rule inet filter input iifname "tailscale0" tcp dport 8080 accept`
+  (and the same in `/etc/nftables.conf` to keep it after a reboot).
+- A user service stops when you log out and does not start at boot unless lingering
+  is on for your user. It says whether it is; `sudo loginctl enable-linger $USER`
+  (or `--enable-linger`) turns it on.
+- Running it again rebuilds and replaces the deployment: the old service stops
+  before its files are replaced, and when the port changes the old port's rule is
+  deleted and the new one added. Options not given are those of the previous run,
+  kept in `~/.config/wiki-demo/wiki-demo.state`; `--no-build` redeploys the last
+  build as it is, for a quick change of port.
+- It only ever empties a directory it created (it leaves a `.wiki-demo-deployment`
+  marker in it), an empty one or a new one; never `~`, `/` or above `~`, and nothing
+  outside `~` without `--force`.
+- `--name NAME` (default `wiki-demo`) names the deployment and its unit, so that two
+  can run side by side, each with its own `--dir` (default `~/NAME`) and port.
+
+`journalctl --user -u wiki-demo -f` shows the requests, one line each;
+`sh toolchain/deploy-local.sh --status` the deployment and its service. To take it
+down without deploying anything new:
+
+```sh
+sh toolchain/undeploy-local.sh              # or: npm run undeploy-local
+```
+
+which stops and disables the service, removes its unit and closes the port it
+opened (as above, printing the commands when sudo needs a password), and keeps the
+files; `--purge` deletes them and the deployment's state as well, `--name` picks the
+deployment. It needs no toolchain, and with nothing deployed it says so and
+succeeds. `sh toolchain/deploy-local.sh --stop` does the same.
+
+The regression tests run both scripts against fakes of systemctl, loginctl, ufw,
+sudo and tailscale in a temporary home, start the installed server as the unit
+would, and test the server itself over HTTP:
+
+```sh
+sh toolchain/test-deploy-local.sh
+```
+
 ## Working on it
 
 `AGENTS.md` describes how the work is organised: a planning session cuts the plan into
