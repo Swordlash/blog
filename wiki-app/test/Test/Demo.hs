@@ -8,6 +8,7 @@ import Test.Hspec
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
+import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, parsePath, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
@@ -56,6 +57,9 @@ spec = describe "Wiki.App.Demo" $ do
           , ("a fence with a language", "```haskell")
           , ("inline math", " $")
           , ("display math", "$$")
+          , ("a math fence", "```math")
+          , ("an alert", "> [!NOTE]")
+          , ("a wiki link", "[[")
           , ("a mermaid diagram", "```mermaid")
           , ("an image by URL", "](https://upload.wikimedia.org/wikipedia/commons/thumb/")
           , ("a video by URL", ".webm)")
@@ -64,6 +68,10 @@ spec = describe "Wiki.App.Demo" $ do
             :: [(Text, Text)]
     for_ features $ \(feature, marker) ->
       (feature, marker `T.isInfixOf` everything) `shouldBe` (feature, True)
+
+  it "is Markdown every page of which parses" $
+    for_ pages $
+      \p -> (p.title, isRight (parseMarkdown p.body)) `shouldBe` (p.title, True)
 
   it "attaches every file a page refers to" $
     for_ pages $ \p ->
