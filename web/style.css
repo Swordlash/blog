@@ -814,6 +814,65 @@ select {
   white-space: pre-wrap;
 }
 
+/* A space's math macros: the form that edits them, with KaTeX's error
+   and a formula to try them on, and the list a reader can open. */
+.macros-form .field {
+  flex-basis: 100%;
+}
+
+.macros-source {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 0.85rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+  background: var(--background);
+  resize: vertical;
+}
+
+.macros-hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.macros-form .macros-error {
+  flex-basis: 100%;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.macros-preview {
+  flex-basis: 100%;
+  min-height: 1.5rem;
+  overflow-x: auto;
+}
+
+.space-macros {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+
+.space-macros summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.space-macros p {
+  margin: 0.5rem 0 0.2rem;
+}
+
+.space-macros pre {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font: 0.85rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  background: var(--surface);
+}
+
 .attachments {
   margin-top: 2.5rem;
 }
