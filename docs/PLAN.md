@@ -170,6 +170,28 @@ Goal: an empty Halogen app builds natively and for wasm, in CI and in a cloud se
   demo of Phase 1 is run from that artifact or locally with `npm run serve-wasm`.
   Acceptance: green CI on the PR.
 
+- **WP0.4 Reuse an existing developer toolchain.** Make `toolchain/bootstrap.sh`
+  recognise working installations before downloading replacements. Acceptance: reuse
+  compatible Node and pinned native/wasm compilers from PATH; reuse a complete wasm
+  sysroot with the pinned `.paladyn-rev` without deleting it; refuse to overwrite an
+  unrecognised existing sysroot; correctly detect alex and happy versions; reuse the
+  project's Playwright installation and cached Chromium where possible; provide a
+  read-only `check` mode listing what would be reused or installed; document the
+  behaviour and verify it with isolated shell regression tests.
+
+- **WP0.5 Check toolchain readiness before npm build and serve.** Add a read-only,
+  strict bootstrap readiness check shared by npm build/serve commands. Acceptance:
+  npm commands automatically source an existing `~/.wiki-toolchain/env` before the
+  check; missing tools or incompatible versions stop before compilation/server startup
+  with explicit bootstrap instructions; direct readiness checks still inspect the
+  caller's PATH without loading it; readiness checks never install or change files; add `build`/`serve`
+  aliases and cover existing `build-native`, `build-wasm` and `serve-wasm`; check npm
+  dependencies used by the commands; preserve automatic wasm environment loading
+  inside wasm scripts; document and test both rejection and successful delegation.
+  Follow-up acceptance: managed PATH entries take precedence even when already
+  present later on PATH; old generated env files work without bootstrap reinstallation;
+  Chromium cache detection uses the executable path reported by installed Playwright.
+
 ### Phase 1: spike to MVP, serverless demo
 
 Goal: the full editing and reading experience, in the browser, over in-memory state
@@ -482,6 +504,30 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
   change in WP2.3 if wanted.
 
 ## Progress
+
+- **WP0.5 implemented locally.** `bootstrap.sh ready <target>` checks the caller's
+  PATH, the pinned toolchain, effective wasm environment and command-specific npm
+  packages without installing. Five npm build/serve entry points share one guard;
+  they automatically source an existing `~/.wiki-toolchain/env` before checking,
+  so the owner need not load it manually. The direct readiness command stays strict.
+  Follow-up fixes managed PATH precedence even with old env files and uses
+  Playwright's registry to locate Chromium. Eighteen isolated cases pass; the
+  owner's installed toolchain reports `ready for serve-wasm` without reinstalling.
+  failures name bootstrap, environment loading and `npm ci` as appropriate.
+  Sixteen isolated regression cases pass, including blocked startup, successful
+  delegation, argument forwarding and unloaded PATH. Real `npm run build` and
+  `npm run serve` correctly stop before compilation on missing prerequisites.
+  Full application verification remains pending the missing toolchain/npm packages.
+
+- **WP0.4 implemented locally, full gate pending.** Bootstrap reuses compatible
+  PATH tools and a complete sysroot carrying the pinned `.paladyn-rev`, refuses an
+  unknown or incomplete existing sysroot, detects alex/happy with `--version`, and
+  reuses matching project Playwright and Chromium caches. The read-only `check`
+  passes on the owner's environment; nine isolated shell regression cases pass.
+  Native/wasm build and test gate attempts started cold dependency builds but were
+  stopped at time limits, so are not passed. Formatting was checked without edits
+  with installed fourmolu 0.19.0.1, not the required 0.21.0.0; it reports existing
+  layout differences. No bootstrap installation was run on the owner's account.
 
 Amended by the planning session after each work package's report.
 

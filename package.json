@@ -9,10 +9,12 @@
     "playwright": "^1.63.0"
   },
   "scripts": {
-    "build-native": "cabal build all --builddir=dist-newstyle/native",
+    "build": "sh toolchain/npm-command.sh build-wasm",
+    "serve": "sh toolchain/npm-command.sh serve-wasm",
+    "build-native": "sh toolchain/npm-command.sh build-native",
     "test-native": "cabal test all --builddir=dist-newstyle/native",
-    "build-wasm": "sh toolchain/build-wasm.sh",
-    "serve-wasm": "sh toolchain/serve-wasm.sh",
+    "build-wasm": "sh toolchain/npm-command.sh build-wasm",
+    "serve-wasm": "sh toolchain/npm-command.sh serve-wasm",
     "test-wasm": "sh toolchain/test-wasm.sh",
     "test": "sh toolchain/run-tests.sh",
     "dev-test": "sh toolchain/dev-test.sh",

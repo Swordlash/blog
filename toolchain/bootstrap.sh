@@ -6,8 +6,12 @@
 #   sh toolchain/bootstrap.sh warm        # the toolchain if missing, then warm
 #   sh toolchain/bootstrap.sh env         # print the PATH lines a shell needs
 #   sh toolchain/bootstrap.sh path        # the same directories, one per line
+#   sh toolchain/bootstrap.sh check       # read-only inventory; never installs
+#   sh toolchain/bootstrap.sh ready [build-native|build-wasm|serve-wasm]
+#                                        # strict, read-only npm readiness gate
 #
-# It installs, on x86_64 Linux:
+# It reuses compatible tools on PATH first. Missing tools are installed on
+# x86_64 Linux as follows:
 #
 #   - ghcup (into ~/.ghcup, unless one is already on PATH), and through it
 #     GHC $GHC_VERSION and cabal $CABAL_VERSION, both made the default;
@@ -45,8 +49,9 @@
 # header per run); the terminal gets a line per step, and on a failure the end
 # of the log.
 #
-# A developer runs it by hand the same way. It changes ghcup's default GHC and
-# cabal to the pinned ones, and leaves the shell's PATH alone: afterwards, put
+# A developer runs it by hand the same way. When PATH lacks a pinned compiler,
+# it installs or activates it through ghcup, and leaves the shell's PATH alone:
+# afterwards, put
 #
 #   . ~/.wiki-toolchain/env
 #
@@ -102,16 +107,16 @@ NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
 mode=${1:-all}
 case $mode in
-  all | toolchain | warm | env | path) ;;
+  all | toolchain | warm | env | path | check | ready) ;;
   *)
-    printf 'usage: %s [all|toolchain|warm|env|path]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|warm|env|path|check|ready [build-native|build-wasm|serve-wasm]]\n' "$0" >&2
     exit 2
     ;;
 esac
 
 # Where ghcup puts its symlinks: the bin directory of a ghcup already on PATH,
 # or the default one this script installs into.
-if command -v ghcup >/dev/null 2>&1; then
+if [ "$mode" != ready ] && command -v ghcup >/dev/null 2>&1; then
   GHCUP=$(command -v ghcup)
   GHCUP_BIN=$("$GHCUP" whereis bindir)
 else
@@ -125,8 +130,21 @@ fi
 env_lines() {
   cat <<EOF
 # Written by toolchain/bootstrap.sh: Node $NODE_VERSION, then ghcup's GHC and cabal, ahead of the rest of PATH.
-case ":\$PATH:" in *":$GHCUP_BIN:"*) ;; *) PATH="$GHCUP_BIN:\$PATH" ;; esac
-case ":\$PATH:" in *":$STATE/node/bin:"*) ;; *) PATH="$STATE/node/bin:\$PATH" ;; esac
+PATH=\$(
+  remaining=\$PATH
+  printf '%s' "$STATE/node/bin:$GHCUP_BIN"
+  while :; do
+    case \$remaining in
+      *:*) entry=\${remaining%%:*}; remaining=\${remaining#*:}; last= ;;
+      *) entry=\$remaining; last=1 ;;
+    esac
+    case \$entry in
+      "$STATE/node/bin" | "$GHCUP_BIN") ;;
+      *) printf ':%s' "\$entry" ;;
+    esac
+    [ -z "\$last" ] || break
+  done
+)
 export PATH
 EOF
 }
@@ -148,9 +166,257 @@ case $mode in
     ;;
 esac
 
+# Inventory and installation discover managed tools too. Readiness must see
+# the caller's actual PATH: finding an unloaded installation would hide why
+# the command this gate protects cannot run it.
+if [ "$mode" != ready ]; then
+  PATH=$STATE/node/bin:$GHCUP_BIN:$PATH
+  export PATH
+fi
+
+numeric_version() {
+  "$1" --numeric-version 2>/dev/null || true
+}
+
+# Use --version for alex and happy: their older releases do not implement
+# --numeric-version. Match a whole version, not a prefix such as 2.1.70.
+generator_version() {
+  "$1" --version 2>/dev/null | sed -n '1s/^[^0-9]*\([0-9][0-9.]*\).*$/\1/p'
+}
+
+compatible_node() {
+  node_major=$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')
+  [ -n "$node_major" ] && [ "$node_major" -ge 24 ] && command -v npm >/dev/null 2>&1
+}
+
+# A provenance marker alone does not prove setup finished. Check the actual
+# tools and libc, without sourcing an unrecognised env file.
+wasm_sysroot_ready() {
+  { [ -f "$WASM_PREFIX/.bootstrap-$GHC_WASM_META_REV" ] ||
+    [ "$(cat "$WASM_PREFIX/.paladyn-rev" 2>/dev/null || true)" = "$GHC_WASM_META_REV" ]; } &&
+    [ -r "$WASM_PREFIX/env" ] &&
+    [ -x "$WASM_PREFIX/add_to_github_path.sh" ] &&
+    [ -f "$WASM_PREFIX/wasi-sdk/share/wasi-sysroot/lib/wasm32-wasi/libc.a" ] &&
+    "$WASM_PREFIX/wasi-sdk/bin/wasm32-wasi-clang" --version >/dev/null 2>&1 &&
+    "$WASM_PREFIX/binaryen/bin/wasm-opt" --version >/dev/null 2>&1 &&
+    "$WASM_PREFIX/wasmtime/bin/wasmtime" --version >/dev/null 2>&1 &&
+    "$WASM_PREFIX/nodejs/bin/node" --version >/dev/null 2>&1
+}
+
+guard_wasm_sysroot() {
+  wasm_sysroot_ready && return 0
+  if [ -e "$WASM_PREFIX" ] || [ -L "$WASM_PREFIX" ]; then
+    if [ ! -d "$WASM_PREFIX" ] || [ -L "$WASM_PREFIX" ] ||
+      [ -n "$(find "$WASM_PREFIX" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+      printf 'bootstrap: BLOCKED: %s is unrecognised or incomplete; refusing to overwrite it. Inspect it and move it aside yourself before retrying.\n' "$WASM_PREFIX" >&2
+      return 1
+    fi
+  fi
+}
+
+playwright_location() {
+  version=$PLAYWRIGHT_VERSION
+  if [ -f "$ROOT/package-lock.json" ] && command -v node >/dev/null 2>&1; then
+    locked=$(node -e 'const p=require(process.argv[1]); process.stdout.write(p.packages?.["node_modules/playwright-core"]?.version || "")' "$ROOT/package-lock.json")
+    version=${locked:-$version}
+  fi
+  prefix=$STATE/playwright-$version
+  for candidate in "$ROOT" "$prefix"; do
+    if [ -f "$candidate/node_modules/playwright-core/cli.js" ] &&
+      [ "$(node -p 'require(process.argv[1]).version' "$candidate/node_modules/playwright-core/package.json" 2>/dev/null || true)" = "$version" ]; then
+      prefix=$candidate
+      cli=$prefix/node_modules/playwright-core/cli.js
+      return 0
+    fi
+  done
+  # A stale private installation is replaced; a project's other version is
+  # left alone, since the lockfile decides which Chromium the tests need.
+  prefix=$STATE/playwright-$version
+  cli=
+}
+
+check_tool() {
+  name=$1 expected=$2 managed_tool=$3 managed_version=$4
+  if [ "$(numeric_version "$name")" = "$expected" ]; then
+    printf 'bootstrap: reuse %s %s (%s)\n' "$name" "$expected" "$(command -v "$name")"
+  elif managed_tool_ready "$managed_tool" "$managed_version" "$name-$expected" "$expected"; then
+    printf 'bootstrap: reuse %s (%s); activate pinned default\n' "$name-$expected" "$GHCUP_BIN/$name-$expected"
+  else
+    printf 'bootstrap: install %s %s\n' "$name" "$expected"
+  fi
+}
+
+managed_tool_ready() {
+  [ "$("$GHCUP_BIN/$3" --numeric-version 2>/dev/null || true)" = "$4" ] &&
+    "$GHCUP" whereis "$1" "$2" >/dev/null 2>&1
+}
+
+chromium_cached() {
+  # Playwright changed the archive's executable name from headless_shell to
+  # chrome-headless-shell. Its registry knows both the platform and revision;
+  # ask it rather than duplicating the archive layout here.
+  node -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const root = process.argv[1];
+    const bundled = path.join(root, "lib/coreBundle.js");
+    const { registry } = fs.existsSync(bundled)
+      ? require(bundled).registry
+      : require(path.join(root, "lib/server/registry/index.js"));
+    const browser = registry.findExecutable("chromium-headless-shell");
+    fs.accessSync(path.join(browser.directory, "INSTALLATION_COMPLETE"), fs.constants.R_OK);
+    fs.accessSync(browser.executablePath(), fs.constants.X_OK);
+  ' "$prefix/node_modules/playwright-core" >/dev/null 2>&1
+}
+
+check() {
+  blocked=0
+  check_tool ghc "$GHC_VERSION" ghc "$GHC_VERSION"
+  check_tool cabal "$CABAL_VERSION" cabal "$CABAL_VERSION"
+  check_tool wasm32-wasi-ghc "$WASM_GHC_VERSION" ghc "wasm32-wasi-$WASM_GHC_VERSION"
+  if wasm_sysroot_ready; then
+    printf 'bootstrap: reuse wasm sysroot %s\n' "$WASM_PREFIX"
+  elif guard_wasm_sysroot; then
+    printf 'bootstrap: install wasm sysroot %s\n' "$WASM_PREFIX"
+  else
+    blocked=1
+  fi
+  if compatible_node; then
+    printf 'bootstrap: reuse Node %s (%s), npm (%s)\n' "$(node --version)" "$(command -v node)" "$(command -v npm)"
+  else
+    printf 'bootstrap: install Node %s (requires Node >=24 and npm)\n' "$NODE_VERSION"
+  fi
+  for spec in "alex:$ALEX_VERSION" "happy:$HAPPY_VERSION"; do
+    name=${spec%%:*} expected=${spec#*:}
+    if [ "$(generator_version "$name")" = "$expected" ]; then
+      printf 'bootstrap: reuse %s %s (%s)\n' "$name" "$expected" "$(command -v "$name")"
+    else
+      printf 'bootstrap: install %s %s (found: %s)\n' "$name" "$expected" "$(generator_version "$name")"
+    fi
+  done
+  if [ "$(fourmolu --version 2>/dev/null | head -n 1 || true)" = "fourmolu $FOURMOLU_VERSION" ]; then
+    printf 'bootstrap: reuse fourmolu %s (%s)\n' "$FOURMOLU_VERSION" "$(command -v fourmolu)"
+  else
+    printf 'bootstrap: install fourmolu %s\n' "$FOURMOLU_VERSION"
+  fi
+  playwright_location
+  if [ -n "$cli" ]; then
+    printf 'bootstrap: reuse playwright-core %s (%s)\n' "$version" "$prefix"
+    location=$(node "$cli" install --dry-run --only-shell chromium 2>/dev/null | sed -n 's/^ *Install location: *//p' | head -n 1)
+    if [ -n "$location" ] && chromium_cached; then
+      printf 'bootstrap: reuse Chromium cache %s (launch checked during install mode)\n' "$location"
+    else
+      printf 'bootstrap: install Chromium headless shell for Playwright %s\n' "$version"
+    fi
+  else
+    printf 'bootstrap: install playwright-core %s and its Chromium headless shell\n' "$version"
+  fi
+  printf 'bootstrap: install modes also check system packages and the cabal index; all/warm build dependencies.\n'
+  return "$blocked"
+}
+
+require_version() {
+  if [ "$(numeric_version "$1")" != "$2" ]; then
+    printf 'bootstrap: not ready: %s%s %s is required on PATH (found: %s; path: %s).\n' \
+      "${ready_context:-}" "$1" "$2" "$(numeric_version "$1")" "$(command -v "$1" || true)" >&2
+    ready_failed=1
+  fi
+}
+
+require_generators() {
+  for spec in "alex:$ALEX_VERSION" "happy:$HAPPY_VERSION"; do
+    name=${spec%%:*} expected=${spec#*:}
+    if [ "$(generator_version "$name")" != "$expected" ]; then
+      printf 'bootstrap: not ready: %s%s %s is required on PATH (found: %s; path: %s).\n' \
+        "${ready_context:-}" "$name" "$expected" "$(generator_version "$name")" "$(command -v "$name" || true)" >&2
+      ready_failed=1
+    fi
+  done
+}
+
+# Do not launch Chromium here: its cache can be checked without creating a
+# browser profile or lock files. Install mode verifies runtime libraries by
+# launching it. Wasm's env is loaded only in a subshell, as the build does,
+# so native tools are checked before its CC and PATH can take over.
+ready() {
+  target=${2:-build-wasm}
+  case $target in
+    build-native | build-wasm | serve-wasm) ;;
+    *) printf 'bootstrap: unknown readiness target: %s\n' "$target" >&2; return 2 ;;
+  esac
+  ready_failed=0
+  ready_context=
+  require_version ghc "$GHC_VERSION"
+  require_version cabal "$CABAL_VERSION"
+  require_generators
+  if [ "$(fourmolu --version 2>/dev/null | head -n 1 || true)" != "fourmolu $FOURMOLU_VERSION" ]; then
+    printf 'bootstrap: not ready: fourmolu %s is required on PATH (found: %s; path: %s).\n' \
+      "$FOURMOLU_VERSION" "$(fourmolu --version 2>/dev/null | head -n 1 || true)" "$(command -v fourmolu || true)" >&2
+    ready_failed=1
+  fi
+  if ! wasm_sysroot_ready; then
+    printf 'bootstrap: not ready: the pinned wasm sysroot in %s is missing or incomplete.\n' "$WASM_PREFIX" >&2
+    ready_failed=1
+  elif ! (
+    . "$WASM_PREFIX/env" || exit 1
+    ready_failed=0
+    ready_context='wasm environment: '
+    require_version wasm32-wasi-ghc "$WASM_GHC_VERSION"
+    require_version ghc "$GHC_VERSION"
+    require_version cabal "$CABAL_VERSION"
+    require_generators
+    if ! compatible_node; then
+      printf 'bootstrap: not ready: the wasm environment must provide Node >=24 and npm.\n' >&2
+      ready_failed=1
+    fi
+    for name in wasm32-wasi-ghc-pkg wasm32-wasi-hsc2hs wasm-opt; do
+      if ! command -v "$name" >/dev/null 2>&1; then
+        printf 'bootstrap: not ready: %s is missing after loading the wasm environment.\n' "$name" >&2
+        ready_failed=1
+      fi
+    done
+    [ "$ready_failed" = 0 ]
+  ); then
+    printf 'bootstrap: not ready: loading or checking the wasm environment failed.\n' >&2
+    ready_failed=1
+  fi
+  if ! compatible_node; then
+    printf 'bootstrap: not ready: Node >=24 and npm are required on PATH.\n' >&2
+    ready_failed=1
+  else
+    playwright_location
+    location=
+    if [ -n "$cli" ]; then
+      location=$(node "$cli" install --dry-run --only-shell chromium 2>/dev/null | sed -n 's/^ *Install location: *//p' | head -n 1)
+    fi
+    if [ -z "$location" ] || ! chromium_cached; then
+      printf 'bootstrap: not ready: Chromium headless shell for Playwright %s is missing.\n' "$version" >&2
+      ready_failed=1
+    fi
+    if ! node "$ROOT/toolchain/check-npm-deps.cjs" "$ROOT" "$target"; then
+      ready_failed=1
+    fi
+  fi
+  if [ "$ready_failed" != 0 ]; then
+    printf 'bootstrap: run `sh toolchain/bootstrap.sh toolchain`, then retry. npm build/serve commands load ~/.wiki-toolchain/env automatically; for direct commands, load `. ~/.wiki-toolchain/env` in this shell.\n' >&2
+    return 1
+  fi
+  printf 'bootstrap: ready for %s.\n' "$target"
+}
+
+if [ "$mode" = ready ]; then
+  ready "$@"
+  exit $?
+fi
+
+if [ "$mode" = check ]; then
+  check
+  exit $?
+fi
+
+# setup.sh deletes its prefix: refuse unsafe state before changing anything.
+guard_wasm_sysroot || exit 1
 mkdir -p "$STATE"
-PATH=$STATE/node/bin:$GHCUP_BIN:$PATH
-export PATH
 
 say() {
   printf 'bootstrap: %s\n' "$*"
@@ -260,7 +526,7 @@ install_ghcup() {
 ghcup_tool() {
   tool=$1 version=$2 binary=$3 reports=$4
   shift 4
-  if [ "$("$GHCUP_BIN/$binary" --numeric-version 2>/dev/null || true)" != "$reports" ]; then
+  if ! managed_tool_ready "$tool" "$version" "$binary" "$reports"; then
     say "installing $tool $version with ghcup"
     if "$GHCUP" whereis "$tool" "$version" >/dev/null 2>&1; then
       run "removing a broken $tool $version" "$GHCUP" rm "$tool" "$version"
@@ -270,22 +536,23 @@ ghcup_tool() {
 }
 
 install_native() {
-  ghcup_tool ghc "$GHC_VERSION" "ghc-$GHC_VERSION" "$GHC_VERSION" \
-    "$GHCUP" install ghc "$GHC_VERSION"
   if [ "$(ghc --numeric-version 2>/dev/null || true)" != "$GHC_VERSION" ]; then
+    install_ghcup
+    ghcup_tool ghc "$GHC_VERSION" "ghc-$GHC_VERSION" "$GHC_VERSION" \
+      "$GHCUP" install ghc "$GHC_VERSION"
     run "making GHC $GHC_VERSION the default" "$GHCUP" set ghc "$GHC_VERSION"
   fi
-  ghcup_tool cabal "$CABAL_VERSION" "cabal-$CABAL_VERSION" "$CABAL_VERSION" \
-    "$GHCUP" install cabal "$CABAL_VERSION"
   if [ "$(cabal --numeric-version 2>/dev/null || true)" != "$CABAL_VERSION" ]; then
+    install_ghcup
+    ghcup_tool cabal "$CABAL_VERSION" "cabal-$CABAL_VERSION" "$CABAL_VERSION" \
+      "$GHCUP" install cabal "$CABAL_VERSION"
     run "making cabal $CABAL_VERSION the default" "$GHCUP" set cabal "$CABAL_VERSION"
   fi
 }
 
 # ghc-wasm-meta's setup.sh starts by deleting ~/.ghc-wasm, so the stamp it is
 # given at the end only exists after a complete run, and only for this revision.
-install_wasm_sysroot() {
-  stamp=$WASM_PREFIX/.bootstrap-$GHC_WASM_META_REV
+fetch_wasm_meta() {
   if [ ! -f "$META_DIR/ghcup-wasm-0.0.9.yaml" ]; then
     say "fetching ghc-wasm-meta $GHC_WASM_META_REV"
     rm -rf "$META_DIR" "$META_DIR.tmp"
@@ -297,16 +564,24 @@ install_wasm_sysroot() {
     rm -f "$META_DIR.tmp.tar.gz"
     mv "$META_DIR.tmp" "$META_DIR"
   fi
-  if [ ! -f "$stamp" ] || [ ! -x "$WASM_PREFIX/add_to_github_path.sh" ]; then
+}
+
+install_wasm_sysroot() {
+  if ! wasm_sysroot_ready; then
+    guard_wasm_sysroot || exit 1
+    fetch_wasm_meta
     say "installing the wasm sysroot into $WASM_PREFIX (wasi-sdk, binaryen, wasmtime, Node)"
-    run "installing the wasm sysroot" env SKIP_GHC=1 FLAVOUR="$GHC_WASM_FLAVOUR" bash "$META_DIR/setup.sh"
-    touch "$stamp"
+    run "installing the wasm sysroot" env PREFIX="$WASM_PREFIX" SKIP_GHC=1 FLAVOUR="$GHC_WASM_FLAVOUR" bash "$META_DIR/setup.sh"
+    touch "$WASM_PREFIX/.bootstrap-$GHC_WASM_META_REV"
+    wasm_sysroot_ready || fail "verifying the wasm sysroot (inspect it before retrying)"
   fi
 }
 
 # The cross compiler, installed from ghc-wasm-meta's ghcup metadata with the
 # configure arguments its env file exports, as haskell-halogen's CI does.
 install_wasm_ghc() {
+  [ "$(wasm32-wasi-ghc --numeric-version 2>/dev/null || true)" != "$WASM_GHC_VERSION" ] || return 0
+  install_ghcup
   ghcup_tool ghc "wasm32-wasi-$WASM_GHC_VERSION" "wasm32-wasi-ghc-$WASM_GHC_VERSION" "$WASM_GHC_VERSION" \
     ghcup_wasm_install
   if [ "$("$GHCUP_BIN/wasm32-wasi-ghc" --numeric-version 2>/dev/null || true)" != "$WASM_GHC_VERSION" ]; then
@@ -318,6 +593,7 @@ install_wasm_ghc() {
 # In a subshell: ~/.ghc-wasm/env exports CC and friends for the wasm target,
 # which the native steps after this one must not see.
 ghcup_wasm_install() {
+  fetch_wasm_meta
   (
     # shellcheck source=/dev/null
     . "$WASM_PREFIX/env"
@@ -328,6 +604,7 @@ ghcup_wasm_install() {
 }
 
 install_node() {
+  compatible_node && return 0
   if [ "$("$NODE_DIR/bin/node" --version 2>/dev/null || true)" != "v$NODE_VERSION" ]; then
     say "installing Node $NODE_VERSION into $NODE_DIR"
     rm -rf "$NODE_DIR" "$NODE_DIR.tmp"
@@ -356,42 +633,35 @@ install_node() {
 # them and stops. Until Chromium has once started, every run tries again, so a
 # run after the packages were installed by hand finishes the job.
 install_chromium() {
-  version=$PLAYWRIGHT_VERSION
-  if [ -f "$ROOT/package-lock.json" ]; then
-    locked=$(jq -r '.packages["node_modules/playwright-core"].version // empty' "$ROOT/package-lock.json")
-    version=${locked:-$version}
-  fi
-  prefix=$STATE/playwright-$version
-  cli=$prefix/node_modules/playwright-core/cli.js
-  if [ ! -f "$cli" ]; then
+  playwright_location
+  if [ -z "$cli" ]; then
     say "installing playwright-core $version into $prefix"
     rm -rf "$prefix"
     run "installing playwright-core" npm install --prefix "$prefix" --no-save --no-audit --no-fund \
       "playwright-core@$version"
+    cli=$prefix/node_modules/playwright-core/cli.js
   fi
   location=$(node "$cli" install --dry-run --only-shell chromium 2>>"$LOG" |
     sed -n 's/^ *Install location: *//p' | head -n 1)
   [ -n "$location" ] || fail "asking Playwright $version where Chromium goes"
-  if [ ! -f "$location/INSTALLATION_COMPLETE" ]; then
+  if ! chromium_cached; then
     say "installing Chromium (headless shell) for Playwright $version into $location"
     run "installing Chromium" node "$cli" install --only-shell chromium
   fi
-  launched=$location/.bootstrap-launched
-  if [ ! -f "$launched" ]; then
-    if ! launch_chromium "$prefix"; then
-      if ! as_root; then
-        say "Chromium does not start (the end of $LOG says why); the Debian packages Playwright would install or upgrade for it:"
-        node "$cli" install-deps --dry-run chromium 2>&1 | sed 's/^/bootstrap:   /'
-        say "install them (sudo apt-get install ...) and run this again"
-        exit 1
-      fi
-      say "installing the Debian packages Chromium needs"
-      # $sudo is empty when this already runs as root.
-      # shellcheck disable=SC2086
-      run "installing Chromium's Debian packages" $sudo "$(command -v node)" "$cli" install-deps chromium
-      launch_chromium "$prefix" || fail "launching Chromium"
+  # A previous launch stamp cannot prove today's shared libraries or browser
+  # binary still work. Launch the cached browser on each install-mode run.
+  if ! launch_chromium "$prefix"; then
+    if ! as_root; then
+      say "Chromium does not start (the end of $LOG says why); the Debian packages Playwright would install or upgrade for it:"
+      node "$cli" install-deps --dry-run chromium 2>&1 | sed 's/^/bootstrap:   /'
+      say "install them (sudo apt-get install ...) and run this again"
+      exit 1
     fi
-    touch "$launched"
+    say "installing the Debian packages Chromium needs"
+    # $sudo is empty when this already runs as root.
+    # shellcheck disable=SC2086
+    run "installing Chromium's Debian packages" $sudo "$(command -v node)" "$cli" install-deps chromium
+    launch_chromium "$prefix" || fail "launching Chromium"
   fi
   CHROMIUM=$location
 }
@@ -415,6 +685,7 @@ install_fourmolu() {
     return 0
   fi
   FOURMOLU=$GHCUP_BIN/fourmolu
+  mkdir -p "$GHCUP_BIN"
   tmp=$FOURMOLU.download
   rm -f "$tmp"
   printf '+ fetch fourmolu %s release binary\n' "$FOURMOLU_VERSION" >>"$LOG"
@@ -429,9 +700,9 @@ install_fourmolu() {
   else
     rm -f "$tmp"
     say "fourmolu's release binary could not be downloaded; building fourmolu $FOURMOLU_VERSION from Hackage into $GHCUP_BIN (this takes a while)"
-    run "building fourmolu" sh -c "cd '$STATE' && cabal install 'fourmolu-$FOURMOLU_VERSION' \
-      --with-compiler='ghc-$GHC_VERSION' --installdir='$GHCUP_BIN' \
-      --install-method=copy --overwrite-policy=always"
+    run "building fourmolu" cabal install "fourmolu-$FOURMOLU_VERSION" --ignore-project \
+      --with-compiler="$(command -v ghc)" --installdir="$GHCUP_BIN" \
+      --install-method=copy --overwrite-policy=always
     say "built fourmolu $FOURMOLU_VERSION from Hackage into $GHCUP_BIN"
   fi
 }
@@ -440,14 +711,15 @@ install_fourmolu() {
 # file and `path` put on PATH ahead of anything else; skipped when the ones
 # found there already report the pinned versions.
 install_parser_generators() {
-  if [ "$("$GHCUP_BIN/alex" --numeric-version 2>/dev/null || true)" = "$ALEX_VERSION" ] &&
-    [ "$("$GHCUP_BIN/happy" --numeric-version 2>/dev/null || true)" = "$HAPPY_VERSION" ]; then
-    return 0
-  fi
-  say "building alex $ALEX_VERSION and happy $HAPPY_VERSION from Hackage into $GHCUP_BIN"
-  run "building alex and happy" sh -c "cd '$STATE' && cabal install 'alex-$ALEX_VERSION' 'happy-$HAPPY_VERSION' \
-    --ignore-project --with-compiler='ghc-$GHC_VERSION' --installdir='$GHCUP_BIN' \
-    --install-method=copy --overwrite-policy=always"
+  for spec in "alex:$ALEX_VERSION" "happy:$HAPPY_VERSION"; do
+    generator=${spec%%:*} wanted=${spec#*:}
+    [ "$(generator_version "$generator")" != "$wanted" ] || continue
+    mkdir -p "$GHCUP_BIN"
+    say "building $generator $wanted from Hackage into $GHCUP_BIN"
+    run "building $generator" cabal install "$generator-$wanted" \
+      --ignore-project --with-compiler="$(command -v ghc)" --installdir="$GHCUP_BIN" \
+      --install-method=copy --overwrite-policy=always
+  done
 }
 
 update_cabal_index() {
@@ -478,7 +750,6 @@ toolchain() {
   started=$(date +%s)
   quiet_before=$(wc -c <"$LOG")
   system_packages
-  install_ghcup
   install_native
   install_wasm_sysroot
   install_wasm_ghc
@@ -488,7 +759,7 @@ toolchain() {
   install_fourmolu
   install_parser_generators
   write_env
-  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $NODE_VERSION, Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU, alex $ALEX_VERSION, happy $HAPPY_VERSION"
+  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $(node --version), Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU, alex $ALEX_VERSION, happy $HAPPY_VERSION"
   if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
     printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
   else
@@ -509,7 +780,7 @@ fingerprint() {
     find "$ROOT" \( -name dist-newstyle -o -name node_modules -o -name .git \) -prune \
       -o -name '*.cabal' -type f -print | LC_ALL=C sort | xargs cat
     ghc --numeric-version
-    "$GHCUP_BIN/wasm32-wasi-ghc-$WASM_GHC_VERSION" --numeric-version
+    wasm32-wasi-ghc --numeric-version
   } | sha256sum | cut -d' ' -f1
 }
 
