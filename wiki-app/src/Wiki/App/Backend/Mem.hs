@@ -127,6 +127,7 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
     result <- write (deleteAttachmentIn aid)
     for_ result (liftIO . traverse_ (js_revoke_object_url . toJSText))
     pure (void result)
+  searchPages = query . searchPagesIn
   attachmentUrl a = case a.source of
     SourceUrl url -> pure url
     SourceBlob blob ->

@@ -83,6 +83,7 @@ import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page)
 import Wiki.Core.Permission (Grants, Principal (..))
+import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
 import Wiki.Core.User (User (..))
@@ -268,6 +269,23 @@ class (Monad m) => MonadWiki m where
   attachmentUrl :: Attachment -> m Text
   default attachmentUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => Attachment -> m Text
   attachmentUrl = lift . attachmentUrl
+
+  -- * Search
+
+  -- | The pages whose title and text have every word of the query in them
+  -- (see "Wiki.Core.Search" for how words are matched and hits ranked), among
+  -- the pages of the spaces the current user may view: of every such space,
+  -- or of the query's space, and with 'Wiki.Core.Search.includeSubspaces'
+  -- its subspaces' too. Those of a subspace the user may view are found even
+  -- when the space above it is one they may not.
+  --
+  -- A query with no words, a space that is not there and a space the user
+  -- may view nothing in all give no hits rather than an error: a search box
+  -- shows "no results" for each, and an error would tell whoever is typing
+  -- whether a space they may not see exists.
+  searchPages :: SearchQuery -> m [SearchHit]
+  default searchPages :: (MonadTrans t, m ~ t n, MonadWiki n) => SearchQuery -> m [SearchHit]
+  searchPages = lift . searchPages
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadWiki m) => MonadWiki (HalogenM st act slots output m)
