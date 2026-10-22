@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Formulas have macros, in three layers, the nearest winning. A `Space` has
+`mathMacros`, a block of TeX definitions (empty for none), which its
+subspaces inherit: the new `Wiki.Core.Math.spaceMacros` gives the blocks of
+a space's chain as `Macros`, its top-level ancestor's first and its own
+last. The renderer hands each formula the formulas before it in the
+document, in order, that define something (`definesMacros`), so `Options`'
+`mathInline` and `mathDisplay` take a `Macros` after the `IslandKey`;
+`defaultOptions` ignores it. Reading the blocks is KaTeX's, in the browser.
+The export format writes a space's `mathMacros` only when it has some and
+reads a record without it as none: an additive field, so `formatVersion`
+stays 1 and the golden archive of version 1 imports as before.
+
 A `tikz` fence is a TikZ picture: the Markdown tree has `Tikz Text` (the
 fence's source as written), the renderer's `Options` has `tikz`, which by
 default writes `<pre class="tikz">` with the source, and search reads the

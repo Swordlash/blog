@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+Formulas are set with macros, and with chemistry. KaTeX comes with mhchem
+(`\ce`, `\pu`) and the wiki's built-in macros, `web/src/katex-macros.tex`
+(`\C`, `\Q`, `\abs`, `\norm`, `\floor`, `\ceil`, `\dd`, `\E`, `\Var` and
+more), which `web/bundle.sh` bundles as text after checking that KaTeX reads
+every line. Over them come a space's macros and its ancestors', and the
+definitions of the formulas before a formula on its page: `Island`'s
+`MathInline` and `MathDisplay` carry these as `Macros`, and `MonadIslands`'
+`renderMath` takes them, so a formula is set again when a definition before
+it changes and is set the same whatever order the islands are drawn in.
+`web/src/macros.mjs` reads each block over the ones before it, a
+`\newcommand` of a macro defined farther away replacing it rather than
+failing; a block KaTeX cannot read keeps what it defined and the page is
+drawn regardless. `MonadIslands` has `checkMacros`, KaTeX's error for a
+block. `islands.js` is 35 KiB larger (8 KiB with brotli).
+
+`MonadWiki` has `setSpaceMathMacros`, which takes `AdministerSpace`. A space
+offers its administrators "Math macros": the block in a textarea, KaTeX's
+error under it as it is typed, a formula to try it on, and Save, which a
+block KaTeX cannot read does not pass. Every reader sees the macros a
+space's pages have under "Math macros" on the space. The demo's Docs has
+three macros, which its Mathematics page uses with a definition of its own
+and with `\ce`; the Markdown guide has a `\ce` line. (A demo kept in a
+browser from before shows them after "Reset the demo content".) Records
+kept in IndexedDB use the export's codecs, so a space kept before reads as
+one with no macros, and the database's version is unchanged.
+
 TikZ pictures are drawn in the browser. A `tikz` fence is an island,
 `Island`'s new `Tikz`, rendered as an empty `<div class="wiki-tikz">` by the
 program and with its source by the prerender, as a Mermaid diagram is, and

@@ -404,6 +404,24 @@ try {
     "TeX's fonts loading",
   );
   console.log("ok: a page's islands are drawn: KaTeX, Mermaid, TikZ, highlight.js");
+  // The Mathematics page sets every formula with the macros it uses: the
+  // built-in ones, Docs' own, the page's \dist, and mhchem's \ce. KaTeX
+  // shows a macro it does not know in red, and what it cannot parse in a
+  // .katex-error.
+  await load(visitor, "/s/docs/p/markdown-guide/mathematics/");
+  const formulas = visitor.locator("#app .page-body .wiki-math");
+  await eventually(async () => {
+    const count = await formulas.count();
+    const set = await visitor.locator("#app .page-body .wiki-math .katex").count();
+    assert.ok(count >= 20 && set === count, "not yet");
+  }, "the Mathematics page's formulas being set");
+  const unset = await visitor.evaluate(() =>
+    Array.from(document.querySelectorAll("#app .page-body .wiki-math"))
+      .filter((f) => f.querySelector(".katex-error") || f.innerHTML.includes("#cc0000"))
+      .map((f) => f.querySelector("annotation")?.textContent ?? f.textContent),
+  );
+  assert.deepEqual(unset, [], "formulas KaTeX could not set with their macros");
+  console.log("ok: the Mathematics page sets its formulas with built-in, space and page macros, and \\ce");
   console.log(`ok: no page without a TikZ picture fetched TikZJax (${guideAndDiagrams} pages have one)`);
   await visitor.context().close();
 

@@ -14,7 +14,7 @@ Haddock says the same as this page.
 | `users.json`                     | `[{"id", "login", "displayName"}]` |
 | `groups.json`                    | `[{"id", "name", "members": [user id]}]` |
 | `grants.json`                    | `{"global": [{"subject", "permission"}], "spaces": [{"space", "subject", "permission"}]}` |
-| `spaces.json`                    | `[{"id", "name", "slug", "parent", "public"}]` |
+| `spaces.json`                    | `[{"id", "name", "slug", "parent", "public", "mathMacros"}]`, `mathMacros` only for a space that has math macros |
 | `pages.json`                     | `[{"id", "space", "parent", "title", "slug", "body", "createdAt", "updatedAt"}]` |
 | `attachments.json`               | `[{"id", "page", "name", "mediaType", "size", "url"}]` for a file on the web, `[{…, "blob", "file"}]` for one whose bytes the wiki keeps |
 | `attachments/<id>/<name>`        | an attachment's bytes, as `file` names them |
@@ -34,11 +34,15 @@ record exported are one format.
 
 - **Additions need no new version.** A reader ignores the fields it does not
   know, and a field that may be missing has a default: a space is private
-  and at the top level, a page has no parent and an empty body and was last
+  and at the top level and has no math macros, a page has no parent and an empty body and was last
   updated when it was created, a user's display name is their login, a
   group has no members, an attachment's media type is
   `application/octet-stream`. So an older program reads a newer archive of
   the same version, and a newer one an older archive.
+  A space's `mathMacros` (its block of TeX macros, which its subspaces
+  inherit) is the first such addition: it came after version 1 was first
+  written, is written only for a space that has macros, and an archive
+  without it, the golden one included, imports with none.
 - **Anything else bumps `formatVersion`**: a field removed or renamed, or one
   whose meaning changes. The reader migrates an archive of every older
   version to the current one, a version at a time (`migrations` in

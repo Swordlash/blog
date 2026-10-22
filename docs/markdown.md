@@ -195,6 +195,82 @@ A `math` fence is display math too:
 \sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}
 ```
 
+### What KaTeX sets
+
+Formulas are set by [KaTeX](https://katex.org), in the browser. It reads
+the mathematics of LaTeX with `amsmath`, `amssymb` and much of
+`mathtools`: fractions, roots, sums and integrals, matrices (`matrix`,
+`pmatrix`, `bmatrix` and the rest), `cases`, `aligned`, `gathered`, `array`, and in
+display math `align`, `gather`, `equation`, `split` and `CD`; accents,
+arrows (`\xrightarrow{f}`), `\operatorname`, `\text`, `\textbf`, `\color`,
+`\boxed`, `\cancel`, `\bm`, `\mathbb`, `\mathcal`, `\mathfrak`, `\mathscr`
+and `\tag`. [KaTeX's list](https://katex.org/docs/supported) has all of it.
+
+It has no `\usepackage`: what it supports is fixed. So it does not have:
+
+- `siunitx` (`\SI`, `\si`, `\num`): write quantities with mhchem's `\pu`
+  (below), or by hand, `3\,\mathrm{m/s}`;
+- `physics` (`\qty`, `\dv`, `\pdv`, `\abs`, `\norm` with its own spacing):
+  the built-in macros below have the common ones;
+- `\DeclareMathOperator`: write `\operatorname{Tr}`, or a macro for it,
+  `\newcommand{\Tr}{\operatorname{Tr}}`;
+- `\label`, `\ref` and `\eqref`: each formula is set on its own, with no
+  numbering across a page; `\tag{1}` labels one by hand;
+- `\newenvironment`, and LaTeX's text mode: `\section`, `itemize`, a
+  paragraph of text. Write those in Markdown around the formula;
+- `\href` and `\includegraphics`, which a page could misuse, are off;
+- TikZ, which has a fence of its own (see Pictures).
+
+Chemistry is mhchem's `\ce`, which KaTeX comes with: $\ce{2 H2 + O2 -> 2 H2O}$,
+$\ce{SO4^2-}$, $\ce{CO2 + C <=> 2 CO}$, and its quantities with units,
+$\pu{123 kJ/mol}$.
+
+### Macros
+
+KaTeX extends with macros instead, in three layers; the nearest wins.
+
+1. **Built in**, for every page (`web/src/katex-macros.tex`):
+
+   | Macro | Is | Example |
+   | --- | --- | --- |
+   | `\C`, `\Q`, `\F` | $\C$, $\Q$, $\F$ | with KaTeX's own `\N`, `\Z`, `\R` |
+   | `\abs{x}`, `\norm{x}` | $\abs{x}$, $\norm{x}$ | delimiters that grow with what they hold |
+   | `\floor{x}`, `\ceil{x}` | $\floor{x}$, $\ceil{x}$ | |
+   | `\inner{u}{v}` | $\inner{u}{v}$ | |
+   | `\dd` | $\int f(x) \dd x$ | an upright d |
+   | `\dv{f}{x}`, `\pdv{f}{x}` | $\dv{f}{x}$, $\pdv{f}{x}$ | `physics`' two-argument forms |
+   | `\sgn`, `\tr`, `\rank`, `\diag`, `\lcm` | $\sgn$, $\tr$, $\rank$, $\diag$, $\lcm$ | operators |
+   | `\E`, `\Prob`, `\Var`, `\Cov` | $\E$, $\Prob$, $\Var$, $\Cov$ | probability |
+   | `\eps`, `\bigO`, `\defeq` | $\eps$, $\bigO(n)$, $\defeq$ | |
+
+   KaTeX itself has `\N`, `\R`, `\Z`, `\set{x \mid x > 0}`, `\argmin`,
+   `\argmax`, `\bra`, `\ket` and `\braket`, among others.
+2. **A space's**: in a space's settings, "Math macros" (for whoever may
+   administer the space) takes a block of definitions, one `\newcommand` a
+   line, which every page of the space and of its subspaces has. A subspace
+   has its parent's and its own, its own winning. The form shows KaTeX's
+   error for a block it cannot read, and does not save it; a formula typed
+   under the block shows what the macros make. Everyone sees a space's
+   macros, and its ancestors', under "Math macros" on the space.
+3. **A page's**: a definition in one formula holds in every later formula
+   of the page, in the order of the page, as in a LaTeX document:
+
+   $$
+   \newcommand{\dist}[2]{d\left(#1, #2\right)}
+   \dist{x}{z} \le \dist{x}{y} + \dist{y}{z}
+   $$
+
+   and from here on $\dist{x}{x} = 0$. A definition inside braces holds
+   only inside them, as in TeX. The editor's preview sets a page the same
+   way.
+
+A nearer layer may define a macro of a farther one again with
+`\newcommand`, without an error: a page's `\newcommand{\eps}{\epsilon}`
+replaces the built-in `\eps` on that page, from that formula on.
+`\renewcommand` works too. KaTeX's own commands (`\R`, `\vec`, `\set` and the rest)
+are another matter: one of those is changed with `\renewcommand` only, as
+in LaTeX. `\def`, `\gdef` and `\let` are read too.
+
 ## Diagrams
 
 A `mermaid` fence is drawn as a [Mermaid](https://mermaid.js.org) diagram:
