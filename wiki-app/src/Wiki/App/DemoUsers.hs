@@ -1,7 +1,8 @@
 -- | Who the demo is being looked at as: the in-memory backend has no
 -- passwords, so the shell offers its users to switch between instead of a
--- sign-in form. And, in the same menu, starting the demo over: its content
--- is kept in the browser, so a reload no longer does.
+-- sign-in form. And, in the same menu, the demo's content as a whole: kept
+-- in the browser, so a reload no longer starts it over, it is reset there,
+-- and exported and imported as one file.
 --
 -- A class of its own, apart from 'Wiki.App.Backend.MonadWiki', so that the
 -- switcher is written against a capability rather than the in-memory
@@ -14,10 +15,13 @@ where
 
 import Control.Monad.Trans.Class (MonadTrans)
 import Data.Type.Equality (type (~))
+import Data.Version (showVersion)
 import Halogen.Query.HalogenM (HalogenM)
+import Paths_wiki_app qualified as Paths
 import Protolude
-import Wiki.App.Backend.Mem (MemWiki, memKept, memUsers, resetMemWiki, switchUser)
+import Wiki.App.Backend.Mem (MemWiki, importMemWiki, memArchive, memKept, memUsers, resetMemWiki, switchUser)
 import Wiki.App.Demo (demoNow, demoState)
+import Wiki.Core.Export (Archive)
 import Wiki.Core.Id (UserId)
 import Wiki.Core.User (User)
 
@@ -45,11 +49,25 @@ class (Monad m) => MonadDemoUsers m where
   default demoKept :: (MonadTrans t, m ~ t n, MonadDemoUsers n) => m Bool
   demoKept = lift demoKept
 
+  -- | The whole wiki as an export archive ("Wiki.Core.Export"), for the
+  -- demo's "Export the wiki".
+  exportDemo :: m Archive
+  default exportDemo :: (MonadTrans t, m ~ t n, MonadDemoUsers n) => m Archive
+  exportDemo = lift exportDemo
+
+  -- | Replace the whole wiki with an archive's, checked already, all of it
+  -- or, if it cannot be kept, none of it and why.
+  importDemo :: Archive -> m (Either Text ())
+  default importDemo :: (MonadTrans t, m ~ t n, MonadDemoUsers n) => Archive -> m (Either Text ())
+  importDemo = lift . importDemo
+
 instance (MonadIO m) => MonadDemoUsers (MemWiki m) where
   listUsers = memUsers
   switchTo = switchUser
   resetDemo = resetMemWiki (demoState demoNow)
   demoKept = memKept
+  exportDemo = memArchive ("wiki-app " <> toS (showVersion Paths.version))
+  importDemo = importMemWiki
 
 -- | A component's handlers switch through its monad.
 instance (MonadDemoUsers m) => MonadDemoUsers (HalogenM st act slots output m)

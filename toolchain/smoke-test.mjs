@@ -560,10 +560,15 @@ try {
   assert.ok(!noRepairs(edited.repairs), "a page edited in the browser was adopted with nothing to repair");
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text: "Smoke test" }, "the reload");
   await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
-  // Resetting the demo's content, from the user menu and after asking,
-  // takes the edit away, and a reload does not bring it back.
+  // Exporting the wiki downloads a zip file of it, edit and all.
   await page.locator("#app .user-switcher-toggle").click();
   await page.locator("#app .user-menu .demo-kept", { hasText: "kept in this browser" }).waitFor({ timeout });
+  const [exported] = await Promise.all([page.waitForEvent("download", { timeout }), page.locator("#app .user-menu .demo-export").click()]);
+  assert.match(exported.suggestedFilename(), /^wiki-\d{4}-\d{2}-\d{2}\.zip$/, "the export's name");
+  const exportPath = await exported.path();
+  assert.equal((await readFile(exportPath)).subarray(0, 2).toString(), "PK", "the export is not a zip file");
+  // Resetting the demo's content, from the user menu and after asking,
+  // takes the edit away, and a reload does not bring it back.
   await page.locator("#app .user-menu .demo-reset-ask").click();
   await page.locator("#app .demo-reset-confirm button", { hasText: "Reset" }).click();
   await eventually(async () => {
@@ -574,6 +579,17 @@ try {
   assert.ok(noRepairs(reset.repairs), `the page after a reset needed repairs: ${JSON.stringify(reset.repairs)}`);
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "the reload after the reset");
   assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit came back after a reset");
+  // Importing the export brings it back, after asking.
+  await page.locator("#app .user-switcher-toggle").click();
+  await page.locator("#app .user-menu .demo-import input").setInputFiles({
+    name: exported.suggestedFilename(),
+    mimeType: "application/zip",
+    buffer: await readFile(exportPath),
+  });
+  await page.locator("#app .demo-import-confirm button", { hasText: "Replace" }).click();
+  await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text: "Smoke test" }, "the import");
+  await page.locator("#app .user-menu .demo-told", { hasText: "Imported" }).waitFor({ timeout });
+  console.log("ok: exporting downloads a zip file of the wiki, and importing it after a reset brings the edit back");
   // And on a page's source, which a reader not signed in may read too.
   await page.locator("#app .page-view .actions a", { hasText: "View source" }).click();
   await check({ path: "/s/blog/p/hello-world/source/", view: "source-view", crumb: "Source" }, "the source");

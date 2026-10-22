@@ -1,19 +1,18 @@
 -- | The in-memory wiki as the browser keeps it between visits: the records
 -- of a 'MemState' in IndexedDB ("Web.Storage.IndexedDB"), one record per
--- space, page, attachment and space's grants, each under its id in a store
--- of its own, and the state read back from them.
+-- user, group, space, page, attachment and space's grants, each under its
+-- id in a store of its own, and the state read back from them.
 --
--- Only what the wiki's writes change is kept. The demo's people (users,
--- groups, who is in which) and its global grants are never changed by a
--- 'Wiki.App.Backend.MonadWiki' method, so they come from the program each
--- time, as the seed 'restore' is given; who is signed in, and the object
--- URLs a tab has made for attachments, last as long as the tab does.
---
--- Records are JSON through the same @aeson@ instances the server's API will
--- use, but for an attachment's bytes, which are kept as bytes. The id
--- counter is kept as well (store @meta@, key @counter@): ids are made from
--- it, and a counter that started over would make an id again that a record
--- already has.
+-- The records are JSON written and read by "Wiki.Core.Export", the codec of
+-- the export archive, so that a record kept and a record exported are one
+-- format, with the same rules for what may change without a new version: a
+-- page is the export's page record with its attachments' records in a
+-- field @attachments@, and an attachment's bytes are kept as bytes, under
+-- the id of its blob. Besides the records, the store @meta@ keeps the id
+-- counter (ids are made from it, and a counter that started over would make
+-- an id again that a record already has) and the global grants. Who is
+-- signed in, and the object URLs a tab has made for attachments, last as
+-- long as the tab does.
 --
 -- Everything here is pure: "Wiki.App.Backend.Mem" reads and writes the
 -- store, and works out what to write from two sets of 'records' with
@@ -21,6 +20,8 @@
 module Wiki.App.Backend.Mem.Persist
   ( -- * The database
     memDatabase
+  , usersStore
+  , groupsStore
   , spacesStore
   , pagesStore
   , attachmentsStore
@@ -37,66 +38,97 @@ module Wiki.App.Backend.Mem.Persist
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON, eitherDecodeStrict', encode)
-import Data.ByteString.Lazy qualified as BSL
+import Control.Monad.Fail (fail)
+import Data.Aeson (Value (..), eitherDecodeStrict', toJSON, withObject, (.!=), (.:?))
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (Parser)
 import Data.Map.Merge.Strict qualified as Merge
 import Data.Map.Strict qualified as Map
+import Numeric.Natural (Natural)
 import Protolude
 import Web.Storage.IndexedDB (Database (..), StoreName)
 import Web.Storage.IndexedDB qualified as IDB
-import Wiki.App.Backend.Mem.State (MemState (..))
-import Wiki.Core.Id (BlobId (..), PageId (..), SpaceId (..))
+import Wiki.App.Backend.Mem.State (MemState (..), emptyState)
+import Wiki.Core.Export
+import Wiki.Core.Id (BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (Grants (..), SpaceGrant (..))
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.User (Group (..), User (..))
 
 -- | The database a wiki is kept in under this name. Its stores are made
 -- when it is first opened; adding one later is a version bump.
 memDatabase :: Text -> Database
 memDatabase name = Database {name, version = 1, stores = storeNames}
 
-spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore :: StoreName
+usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore :: StoreName
 
--- | A space's JSON, under its id.
+-- | A user's record, under their id.
+usersStore = "users"
+
+-- | A group's record, with its members, under its id.
+groupsStore = "groups"
+
+-- | A space's record, under its id.
 spacesStore = "spaces"
 
--- | A page's JSON, with its attachments' names, types and sizes, under its id.
+-- | A page's record with its attachments' records, under its id.
 pagesStore = "pages"
 
 -- | An uploaded attachment's bytes, under the id of its blob, which the
 -- attachment on its page names.
 attachmentsStore = "attachments"
 
--- | The grants on a space, a JSON list, under the space's id.
+-- | The grants on a space, a list of records, under the space's id.
 grantsStore = "grants"
 
--- | The id counter, under @counter@; a wiki that has never been written out
--- has none.
+-- | The id counter, under @counter@ (a wiki that has never been written out
+-- has none), and the global grants, under @globalGrants@.
 metaStore = "meta"
 
 -- | Every store of 'memDatabase'.
 storeNames :: [StoreName]
-storeNames = [spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore]
+storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore]
 
 -- | What a store holds, by store and key.
 type Records = Map StoreName (Map Text ByteString)
 
-counterKey :: Text
+counterKey, globalGrantsKey :: Text
 counterKey = "counter"
+globalGrantsKey = "globalGrants"
 
 -- | The state as the stores keep it: every store, even an empty one.
 records :: MemState -> Records
 records st =
   Map.fromList
-    [ (spacesStore, Map.fromList [(s.id.text, json s) | s <- Map.elems st.spaces])
-    , (pagesStore, Map.fromList [(p.id.text, json p) | p <- Map.elems st.pages])
+    [ (usersStore, Map.fromList [(u.id.text, encodeJson (encodeUser u)) | u <- Map.elems st.users])
+    , (groupsStore, Map.fromList [(g.id.text, encodeJson (encodeGroup g (Map.findWithDefault mempty g.id st.membership))) | g <- Map.elems st.groups])
+    , (spacesStore, Map.fromList [(s.id.text, encodeJson (encodeSpace s)) | s <- Map.elems st.spaces])
+    , (pagesStore, Map.fromList [(p.id.text, encodeJson (storedPage p)) | p <- Map.elems st.pages])
     , (attachmentsStore, Map.mapKeys (\b -> b.text) st.blobs)
-    , (grantsStore, Map.fromList [(sid.text, json gs) | (sid, gs) <- Map.toList (spaceGrants st)])
-    , (metaStore, Map.singleton counterKey (json st.counter))
+    , (grantsStore, Map.fromList [(sid.text, encodeJson (map encodeSpaceGrant gs)) | (sid, gs) <- Map.toList (spaceGrants st)])
+    ,
+      ( metaStore
+      , Map.fromList
+          [ (counterKey, encodeJson st.counter)
+          , (globalGrantsKey, encodeJson (map encodeGlobalGrant st.grants.global))
+          ]
+      )
     ]
-  where
-    json :: (ToJSON a) => a -> ByteString
-    json = BSL.toStrict . encode
+
+-- | A page as the store keeps it: the export's record, with its
+-- attachments' records in it.
+storedPage :: Page -> Value
+storedPage p = case encodePage p of
+  Object o -> Object (KeyMap.insert "attachments" (toJSON [encodeAttachment p.id x | x <- p.attachments]) o)
+  other -> other
+
+parseStoredPage :: Value -> Parser Page
+parseStoredPage value = do
+  page <- parsePage value
+  attached <- withObject "page" (\o -> o .:? "attachments" .!= []) value
+  xs <- traverse parseAttachment attached
+  pure page {attachments = map (\r -> r.attachment) xs}
 
 -- | The grants on each space that has any, in the order the state has them.
 spaceGrants :: MemState -> Map SpaceId [SpaceGrant]
@@ -136,41 +168,50 @@ data Stored
     Stored MemState
   deriving stock (Eq, Show)
 
--- | The wiki the stores hold, with the rest of the state (the people, the
--- global grants, and who is signed in at the start) from the seed. No
--- attachment has an object URL yet: the tab makes one when one is first asked for, as it
--- does for an upload.
-restore :: MemState -> Records -> Stored
-restore seed stored = case Map.lookup counterKey (holding metaStore) of
+-- | The wiki the stores hold, with nobody signed in (the caller says who
+-- is) and no attachment with an object URL yet: the tab makes one when one
+-- is first asked for, as it does for an upload.
+restore :: Records -> Stored
+restore stored = case Map.lookup counterKey (holding metaStore) of
   Nothing -> Unseeded
   Just counterBytes -> either Unreadable Stored $ do
-    counter <- decoding metaStore counterKey counterBytes
-    spaces <- keyed spacesStore (\s -> s.id.text) SpaceId
-    pages <- keyed pagesStore (\p -> p.id.text) PageId
+    counter <- first (failure metaStore counterKey . toS) (eitherDecodeStrict' counterBytes :: Either [Char] Natural)
+    global <- maybe (Right []) (decoding metaStore globalGrantsKey (listOf parseGlobalGrant)) (Map.lookup globalGrantsKey (holding metaStore))
+    users <- keyed usersStore parseUser (\u -> u.id.text) UserId
+    groupsAndMembers <- keyed groupsStore parseGroup (\(g, _) -> g.id.text) GroupId
+    spaces <- keyed spacesStore parseSpace (\s -> s.id.text) SpaceId
+    pages <- keyed pagesStore parseStoredPage (\p -> p.id.text) PageId
     grants <- fmap concat . for (Map.toList (holding grantsStore)) $ \(key, bytes) -> do
-      gs <- decoding grantsStore key bytes
+      gs <- decoding grantsStore key (listOf parseSpaceGrant) bytes
       if all (\g -> g.space.text == key) gs
         then Right gs
         else Left (failure grantsStore key "has grants on another space")
     pure
-      seed
-        { spaces
+      emptyState
+        { users
+        , groups = map fst groupsAndMembers
+        , membership = map snd groupsAndMembers
+        , spaces
         , pages
         , blobs = Map.mapKeys BlobId (holding attachmentsStore)
-        , grants = Grants {global = seed.grants.global, spaces = grants}
-        , objectUrls = mempty
+        , grants = Grants {global, spaces = grants}
         , counter
         }
   where
     holding store = Map.findWithDefault mempty store stored
 
-    keyed :: (FromJSON a, Ord k) => StoreName -> (a -> Text) -> (Text -> k) -> Either Text (Map k a)
-    keyed store idOf key = fmap Map.fromList . for (Map.toList (holding store)) $ \(k, bytes) -> do
-      a <- decoding store k bytes
+    keyed :: (Ord k) => StoreName -> (Value -> Parser a) -> (a -> Text) -> (Text -> k) -> Either Text (Map k a)
+    keyed store parse idOf key = fmap Map.fromList . for (Map.toList (holding store)) $ \(k, bytes) -> do
+      a <- decoding store k parse bytes
       if idOf a == k then Right (key k, a) else Left (failure store k ("holds " <> idOf a))
 
-    decoding :: (FromJSON a) => StoreName -> Text -> ByteString -> Either Text a
-    decoding store k = first (failure store k . toS) . eitherDecodeStrict'
+    decoding :: StoreName -> Text -> (Value -> Parser a) -> ByteString -> Either Text a
+    decoding store k parse = first (failure store k) . decodeJson parse
 
     failure :: StoreName -> Text -> Text -> Text
-    failure store k why = "the record " <> show store <> " " <> show k <> " " <> why
+    failure store k why = "the record " <> show store <> " " <> show k <> ": " <> why
+
+    listOf :: (Value -> Parser a) -> Value -> Parser [a]
+    listOf parse = \case
+      Array values -> traverse parse (toList values)
+      _ -> fail "not a list"

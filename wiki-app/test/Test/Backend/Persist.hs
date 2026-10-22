@@ -99,7 +99,7 @@ spec :: Spec
 spec = describe "MemWiki kept in IndexedDB" $ do
   describe "records" $ do
     it "read back as the wiki they were made from" $
-      case restore seed (records seed) of
+      case restore (records seed) of
         Stored st -> lasting st `shouldBe` lasting seed
         other -> expectationFailure ("expected the wiki, got " <> show other)
 
@@ -112,15 +112,15 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       Map.elems held `shouldBe` Map.elems seed.blobs
 
     it "read back as nothing written out when there is no counter" $ do
-      restore seed mempty `shouldBe` Unseeded
-      restore seed (Map.delete metaStore (records seed)) `shouldBe` Unseeded
+      restore mempty `shouldBe` Unseeded
+      restore (Map.delete metaStore (records seed)) `shouldBe` Unseeded
 
     it "do not read back when one of them is not what it should be" $ do
       let page = fromMaybe (panic "the demo has no pages") (head (Map.keys seed.pages))
           broken = Map.adjust (Map.insert page.text "{ not json") pagesStore (records seed)
           moved = Map.adjust (\pages -> Map.insert "page-x" (pages Map.! page.text) pages) pagesStore (records seed)
-      restore seed broken `shouldSatisfy` unreadable
-      restore seed moved `shouldSatisfy` unreadable
+      restore broken `shouldSatisfy` unreadable
+      restore moved `shouldSatisfy` unreadable
 
   describe "opening" $ do
     it "writes the seed out into an empty database, and reads it back next time" $ do

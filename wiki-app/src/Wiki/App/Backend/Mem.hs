@@ -36,6 +36,10 @@ module Wiki.App.Backend.Mem
   , runMemWikiWith
   , resetMemWiki
   , memKept
+
+    -- * Export and import
+  , memArchive
+  , importMemWiki
   )
 where
 
@@ -52,10 +56,12 @@ import Protolude
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailure (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Backend (MonadWiki (..), WikiError)
+import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
 import Wiki.App.Backend.Mem.Persist (Records, Stored (..), changes, records, restore, storeNames)
 import Wiki.App.Backend.Mem.State
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Export (Archive)
 import Wiki.Core.Id (UserId)
 import Wiki.Core.User (User (..))
 
@@ -268,8 +274,9 @@ openMemWiki db seed = withRunInIO $ \run -> do
       Left e
         | e.failure == VersionTooLow -> (seed,) <$> reseed (describe e)
         | otherwise -> pure (seed, (Nothing, NotKept (describe e)))
-      Right held -> case restore seed held of
-        Stored restored -> (restored,) . (,Restored) . Just <$> storeHolding held
+      Right held -> case restore held of
+        -- Signed in as the seed is, as the prerendered page shows it.
+        Stored restored -> (restored {current = seed.current},) . (,Restored) . Just <$> storeHolding held
         Unseeded -> (seed,) . either (\e -> (Nothing, NotKept (describe e))) ((,Seeded) . Just) <$> writeOut held
         Unreadable why -> (seed,) <$> reseed why
   case found of
@@ -296,6 +303,34 @@ resetMemWiki seed = MemWiki $ do
         writeIORef store.kept (records seed)
       for_ (lefts [outcome]) $ \e ->
         warn ("The demo's content could not be written out again (" <> describe e <> "); it is tried again with the next change.")
+
+-- | The whole wiki as an export archive, written now by this program.
+memArchive :: (MonadIO m) => Text -> MemWiki m Archive
+memArchive app = do
+  now <- liftIO getCurrentTime
+  toArchive now app <$> readState
+
+-- | Replace the whole wiki with what an archive holds, staying signed in as
+-- the same user if the archive has them. If the wiki is kept, the database
+-- gets the archive's records in one transaction first, and if that fails
+-- nothing changes, in the database or in memory, and the reason is given.
+importMemWiki :: (MonadIO m) => Archive -> MemWiki m (Either Text ())
+importMemWiki archive = MemWiki $ do
+  env <- ask
+  liftIO . serially env $ do
+    current <- (\st -> st.current) <$> readIORef env.wiki
+    let new = (fromArchive archive) {current}
+    written <- case env.store of
+      Nothing -> pure (Right ())
+      Just store -> do
+        before <- readIORef store.kept
+        tried (store.writeAll (changes before (records new))) >>= \case
+          Left e -> pure (Left ("The browser would not keep it (" <> describe e <> ")"))
+          Right () -> Right <$> writeIORef store.kept (records new)
+    for_ written $ \() -> do
+      old <- atomicModifyIORef' env.wiki (new,)
+      traverse_ (js_revoke_object_url . toJSText) (Map.elems old.objectUrls)
+    pure written
 
 -- | Whether the wiki is kept anywhere but in memory.
 memKept :: (Monad m) => MemWiki m Bool

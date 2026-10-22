@@ -52,6 +52,7 @@ library
   hs-source-dirs:   src
   exposed-modules:
       Wiki.Core.Attachment
+      Wiki.Core.Export
       Wiki.Core.Id
       Wiki.Core.Markdown
       Wiki.Core.Markdown.Ast
@@ -79,6 +80,13 @@ library
       tagsoup >= 0.14.8 && < 0.15,
       text,
       time
+
+  -- An archive as a zip file, natively only: zip-archive needs the C zlib
+  -- through digest, which the WebAssembly toolchain lacks; the browser zips
+  -- with fflate instead (web/src/archive.js).
+  if !arch(wasm32)
+    exposed-modules: Wiki.Core.Export.Zip
+    build-depends:   zip-archive >= 0.4.3 && < 0.6
 
 -- Runs natively, and under Node on wasm through toolchain/test-wasm.sh.
 test-suite wiki-core-test

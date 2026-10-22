@@ -3,7 +3,8 @@
 -- | The little the shell asks of the browser that Halogen does not say: the
 -- link a click in a rendered page landed on, scrolling to a heading or a
 -- footnote, the document's title, where in the session history it is, and
--- the clipboard. See @jsbits/browser.js@. Natively there is no browser: no
+-- the clipboard; and the demo's zip files, made, read and saved (see
+-- @jsbits/archive.js@). See @jsbits/browser.js@. Natively there is no browser: no
 -- click lands on a link, every entry of the history is the first, nothing is
 -- copied, and the rest does nothing.
 module Wiki.App.Browser
@@ -14,11 +15,15 @@ module Wiki.App.Browser
   , historyEntry
   , historyGo
   , copyText
+  , zipFiles
+  , unzipFiles
+  , download
   )
 where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, toJSBytes, toJSText)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
 import Halogen.Router.Duplex (decodeComponent)
@@ -34,13 +39,22 @@ import Wiki.App.Route (Route, routeOfHref)
 -- dispatches it, and the click does not change meanwhile, so that binding is
 -- pure.
 $( browserJS
-     ["jsbits/browser.js"]
+     ["jsbits/browser.js", "jsbits/archive.js"]
      [ ("js_clicked_href", "wiki_clicked_href", Unsafe, [t|Event -> JSText|])
      , ("js_scroll_to", "wiki_scroll_to", Unsafe, [t|JSText -> IO ()|])
      , ("js_set_title", "wiki_set_title", Unsafe, [t|JSText -> IO ()|])
      , ("js_history_entry", "wiki_history_entry", Unsafe, [t|IO Int|])
      , ("js_history_go", "wiki_history_go", Unsafe, [t|Int -> IO ()|])
      , ("js_copy_text", "wiki_copy_text", Safe, [t|Element -> JSText -> IO Bool|])
+     , ("js_archive_new", "wiki_archive_new", Unsafe, [t|IO JSVal|])
+     , ("js_archive_add", "wiki_archive_add", Unsafe, [t|JSVal -> JSText -> JSVal -> IO ()|])
+     , ("js_archive_zip", "wiki_archive_zip", Unsafe, [t|JSVal -> IO JSVal|])
+     , ("js_archive_unzip", "wiki_archive_unzip", Unsafe, [t|JSVal -> IO JSVal|])
+     , ("js_archive_error", "wiki_archive_error", Unsafe, [t|JSVal -> IO JSText|])
+     , ("js_archive_count", "wiki_archive_count", Unsafe, [t|JSVal -> IO Int|])
+     , ("js_archive_path", "wiki_archive_path", Unsafe, [t|JSVal -> Int -> IO JSText|])
+     , ("js_archive_bytes", "wiki_archive_bytes", Unsafe, [t|JSVal -> Int -> IO JSVal|])
+     , ("js_download", "wiki_download", Unsafe, [t|JSText -> JSText -> JSVal -> IO ()|])
      ]
  )
 
@@ -107,3 +121,31 @@ copyText element text =
   -- On wasm a safe import's result is a thunk that waits for the promise
   -- only when forced.
   liftIO (evaluate =<< js_copy_text element (toJSText text))
+
+-- | A zip file of these files, by path. Natively there is no zip here, and
+-- the file is empty: the native programs zip with @zip-archive@.
+zipFiles :: (MonadIO m) => [(Text, ByteString)] -> m ByteString
+zipFiles files
+  | not inBrowser = pure mempty
+  | otherwise = liftIO $ do
+      archive <- js_archive_new
+      for_ files $ \(path, bytes) -> js_archive_add archive (toJSText path) =<< toJSBytes bytes
+      fromJSBytes =<< js_archive_zip archive
+
+-- | The files a zip file holds, by path, or why it cannot be read.
+unzipFiles :: (MonadIO m) => ByteString -> m (Either Text (Map Text ByteString))
+unzipFiles bytes
+  | not inBrowser = pure (Left "there is no zip natively")
+  | otherwise = liftIO $ do
+      unzipped <- js_archive_unzip =<< toJSBytes bytes
+      fromJSText <$> js_archive_error unzipped >>= \case
+        "" -> do
+          n <- js_archive_count unzipped
+          fmap (Right . Map.fromList) . for [0 .. n - 1] $ \i ->
+            (,) <$> (fromJSText <$> js_archive_path unzipped i) <*> (fromJSBytes =<< js_archive_bytes unzipped i)
+        why -> pure (Left why)
+
+-- | Hand bytes to the browser to save as a file of this name and media
+-- type. Natively nothing is saved.
+download :: (MonadIO m) => Text -> Text -> ByteString -> m ()
+download name mediaType bytes = liftIO . when inBrowser $ js_download (toJSText name) (toJSText mediaType) =<< toJSBytes bytes

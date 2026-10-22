@@ -15,6 +15,7 @@ const packages = ["build-native", "test-native"].includes(target) ? [] : [
   ["katex", ["katex", "katex/dist/katex.min.css"]],
   ["highlight.js", ["highlight.js/lib/common", "highlight.js/lib/languages/haskell"]],
   ["mermaid", ["mermaid"]],
+  ["fflate", ["fflate"]],
 ];
 if (target === "serve-wasm") packages.push(["http-server", ["http-server"]]);
 

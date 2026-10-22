@@ -36,6 +36,8 @@ where
 import Control.Monad.UUID (MonadUUID)
 import Data.Row (type (.+), type (.==))
 import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.Router (Follow, Router)
@@ -43,9 +45,11 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
+import Web.Event.Event (Event)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
-import Wiki.App.Browser (historyEntry, historyGo, setDocumentTitle)
+import Wiki.App.Browser (download, historyEntry, historyGo, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (MonadDemoUsers (..))
+import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
@@ -56,8 +60,9 @@ import Wiki.App.View.Search qualified as SearchBox
 import Wiki.App.View.SearchResults qualified as SearchResultsView
 import Wiki.App.View.Source qualified as SourceView
 import Wiki.App.View.Space qualified as SpaceView
+import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (SpaceId, UserId)
-import Wiki.Core.Page (Page (id, title))
+import Wiki.Core.Page (Page (attachments, id, title))
 import Wiki.Core.Path (PathError (..), childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (mayCreateSpace)
 import Wiki.Core.Slug (Slug)
@@ -105,8 +110,8 @@ data State = State
   -- ^ The views' 'revision': how many times the wiki has been reloaded
   -- after a change.
   , menuOpen :: Bool
-  , confirmingReset :: Bool
-  -- ^ Whether the user menu asks whether to reset the demo's content.
+  , panel :: Panel
+  -- ^ What the foot of the user menu shows.
   , kept :: Bool
   -- ^ Whether the demo's changes are kept in the browser ('demoKept').
   , settled :: Bool
@@ -118,6 +123,22 @@ data State = State
   -- ('historyEntry'), which staying in the editor goes back to.
   }
 
+-- | What the foot of the user menu shows.
+data Panel
+  = -- | What can be done with the demo's content, under what the last
+    -- export or import did, if anything.
+    Actions (Maybe Told)
+  | ConfirmingReset
+  | -- | An archive read and checked, from the file of this name, waiting to
+    -- replace the wiki.
+    ConfirmingImport Text Archive
+
+-- | What an export or an import did, or why it did nothing.
+data Told = Told
+  { refused :: Bool
+  , message :: Text
+  }
+
 data Action
   = Initialize
   | Arrived Route
@@ -126,8 +147,11 @@ data Action
   | ToggleMenu
   | SwitchTo (Maybe UserId)
   | AskReset
-  | CancelReset
   | ResetDemo
+  | Export
+  | ImportChosen Event
+  | ConfirmImport
+  | CancelPanel
   | FromView ViewOutput
   | Leave
   | Stay
@@ -161,7 +185,7 @@ component =
               , collapsed = mempty
               , generation = 0
               , menuOpen = False
-              , confirmingReset = False
+              , panel = Actions Nothing
               , kept
               , settled = False
               , leaving = Nothing
@@ -255,29 +279,47 @@ component =
                   </button>
                 </li>
               {% end %}
-              <li class="demo-reset">{{ resetControl st }}</li>
+              <li class="demo-reset">{{ demoControls st }}</li>
             </ul>
           {% end %}
         </div>
       |]
 
-    resetControl :: State -> H.ComponentHTML Action Slots m
-    resetControl st
-      | st.confirmingReset =
-          [hh|
-            <div class="demo-reset-confirm" role="alertdialog">
-              <p>Put the demo's content back as it was at the start? Every change made to it in this browser is lost.</p>
-              <button type="button" class="danger" onClick={{ const ResetDemo }}>Reset</button>
-              <button type="button" onClick={{ const CancelReset }}>Cancel</button>
-            </div>
-          |]
-      | otherwise =
-          [hh|
-            <div>
-              <p class="demo-kept">{{ keptNote }}</p>
-              <button type="button" class="demo-reset-ask" onClick={{ const AskReset }}>Reset the demo content…</button>
-            </div>
-          |]
+    -- The demo's content as a whole: whether it is kept, exporting it,
+    -- importing one, and resetting it, the last two asking first, in place.
+    demoControls :: State -> H.ComponentHTML Action Slots m
+    demoControls st = case st.panel of
+      ConfirmingReset ->
+        [hh|
+          <div class="demo-confirm demo-reset-confirm" role="alertdialog">
+            <p>Put the demo back as it was at the start? Every change made to it in this browser is lost.</p>
+            <button type="button" class="danger" onClick={{ const ResetDemo }}>Reset</button>
+            <button type="button" onClick={{ const CancelPanel }}>Cancel</button>
+          </div>
+        |]
+      ConfirmingImport name archive ->
+        [hh|
+          <div class="demo-confirm demo-import-confirm" role="alertdialog">
+            <p>Replace everything in this wiki with {{ name }}, which holds {{ archiveSummary archive }}? What is in the wiki now is lost.</p>
+            <button type="button" class="danger" onClick={{ const ConfirmImport }}>Replace</button>
+            <button type="button" onClick={{ const CancelPanel }}>Cancel</button>
+          </div>
+        |]
+      Actions told ->
+        [hh|
+          <div>
+            {% for t in maybeToList told %}
+              <p class="demo-told{% if t.refused %} demo-refused{% end %}" role="status">{{ t.message }}</p>
+            {% end %}
+            <p class="demo-kept">{{ keptNote }}</p>
+            <button type="button" class="demo-export" onClick={{ const Export }}>Export the wiki</button>
+            <label class="demo-import">
+              Import a wiki…
+              <input type="file" accept=".zip,application/zip" onChange={{ ImportChosen }}>
+            </label>
+            <button type="button" class="demo-reset-ask" onClick={{ const AskReset }}>Reset the demo content…</button>
+          </div>
+        |]
       where
         keptNote :: Text
         keptNote
@@ -481,21 +523,50 @@ component =
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
       Toggle sid -> modify $ \st ->
         st {collapsed = if sid `Set.member` st.collapsed then Set.delete sid st.collapsed else Set.insert sid st.collapsed}
-      ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen, confirmingReset = False})
+      ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen, panel = Actions Nothing})
       SwitchTo user -> do
         modify (\st -> st {menuOpen = False, settled = False})
         switchTo user
         reload Nothing
-      AskReset -> modify (\st -> st {confirmingReset = True})
-      CancelReset -> modify (\st -> st {confirmingReset = False})
+      AskReset -> modify (\st -> st {panel = ConfirmingReset})
+      CancelPanel -> modify (\st -> st {panel = Actions Nothing})
       -- The route stays: a page the reset took away is then not found,
       -- which is what has become of it.
       ResetDemo -> do
-        modify (\st -> st {menuOpen = False, confirmingReset = False, settled = False})
+        modify (\st -> st {menuOpen = False, panel = Actions Nothing, settled = False})
         resetDemo
         reload Nothing
+      Export -> do
+        archive <- exportDemo
+        let name = "wiki-" <> toS (formatTime defaultTimeLocale "%Y-%m-%d" archive.createdAt) <> ".zip"
+        download name "application/zip" =<< zipFiles (writeArchive archive)
+        report False ("Exported the wiki as " <> name <> ".")
+      -- The file is read and checked whole before anything is asked: what
+      -- cannot be imported is refused here, with the reason.
+      ImportChosen ev -> do
+        picked <- H.liftEffect (chosenFiles ev >>= pickedFiles)
+        for_ (head picked) $ \file -> do
+          bytes <- readPickedFile file
+          unzipped <- first (\why -> "It is not a zip file the wiki can read (" <> why <> ").") <$> unzipFiles bytes
+          case unzipped >>= readArchive of
+            Left why -> report True ("Not imported: " <> file.name <> ". " <> why)
+            Right archive -> modify (\st -> st {panel = ConfirmingImport file.name archive})
+      ConfirmImport ->
+        gets (\st -> st.panel) >>= \case
+          ConfirmingImport name archive ->
+            importDemo archive >>= \case
+              Left why -> report True ("Not imported: " <> name <> ". " <> why <> ".")
+              Right () -> do
+                modify (\st -> st {settled = False})
+                reload Nothing
+                report False ("Imported " <> name <> ": " <> archiveSummary archive <> ".")
+          _ -> pass
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
+
+    -- Say in the user menu what an export or an import did.
+    report :: Bool -> Text -> H.HalogenM State Action Slots output m ()
+    report refused message = modify (\st -> st {panel = Actions (Just Told {refused, message})})
 
     arrive :: Route -> Int -> H.HalogenM State Action Slots output m ()
     arrive r entry = do
@@ -653,3 +724,17 @@ documentTitle st = case reverse (map fst (crumbs st)) of
     SpaceFailed _ NotFound -> "Not found · Wiki"
     _ -> "Wiki"
   names -> mconcat (intersperse " · " (take 2 names)) <> " · Wiki"
+
+-- | How much an archive holds, for a person to read.
+archiveSummary :: Archive -> Text
+archiveSummary a =
+  T.intercalate
+    ", "
+    [ counted (length a.users) "user" "users"
+    , counted (length a.spaces) "space" "spaces"
+    , counted (length a.pages) "page" "pages"
+    , counted (sum [length p.attachments | p <- a.pages]) "attachment" "attachments"
+    ]
+  where
+    counted :: Int -> Text -> Text -> Text
+    counted n singular plural = show n <> " " <> if n == 1 then singular else plural

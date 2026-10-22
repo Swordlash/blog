@@ -1,13 +1,16 @@
 #!/bin/sh
 # Bundle the islands' JavaScript libraries and styles: KaTeX, Mermaid and
-# highlight.js, from node_modules (npm ci first), with esbuild.
+# highlight.js, and fflate for the demo's zip files, from node_modules (npm
+# ci first), with esbuild.
 #
 #   sh web/bundle.sh <output-dir>
 #
 # It writes:
 #
 #   islands.js       a classic script publishing globalThis.wikiIslands
-#                    (web/src/islands.js), with KaTeX and highlight.js in it;
+#                    (web/src/islands.js), with KaTeX and highlight.js in it,
+#                    and globalThis.wikiArchive (web/src/archive.js), the zip
+#                    files of the demo's export and import, with fflate;
 #   islands/         Mermaid, as ES modules split by diagram type, which
 #                    islands.js imports the first time it draws a diagram;
 #   islands.css      KaTeX's stylesheet and the islands' own (web/src/islands.css);

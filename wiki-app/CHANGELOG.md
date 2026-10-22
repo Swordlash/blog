@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+The demo's whole wiki can be exported and imported as one zip file, from the
+foot of the user menu. "Export the wiki" downloads `wiki-<date>.zip`, an
+archive in `wiki-core`'s `Wiki.Core.Export` format (see `docs/export.md`): a
+manifest, a JSON file per kind of record and each attachment's bytes as a
+file. "Import a wiki" reads such a file, checks all of it, says how much it
+holds and asks before it replaces the wiki, in memory and in the browser in
+one transaction; what it refuses, it refuses with the reason. The zip files
+are made and read in the browser with fflate, bundled into `islands.js` as
+`globalThis.wikiArchive` (`web/src/archive.js`); `Wiki.App.Browser` has
+`zipFiles`, `unzipFiles` and `download`. The browser's records are now that
+format's records too, and the people, the groups and the global grants are
+kept with the rest, since an import replaces them (stores `users` and
+`groups`; the global grants under `meta`). `MonadDemoUsers` gains
+`exportDemo` and `importDemo`; `Wiki.App.Backend.Mem` has `memArchive` and
+`importMemWiki`, and `Wiki.App.Backend.Mem.Archive` turns the wiki into an
+archive and back.
+
 The demo starts signed in as `admin`, Ada Admin, so that a newcomer sees
 everything it has at once: `Wiki.App.Demo.demoState` has `admin` as its
 current user, the prerendered pages show the admin's view (Edit and the
@@ -37,12 +54,12 @@ reads the wiki back from an IndexedDB database (haskell-halogen's
 `MemWiki` run with `runMemWikiWith` and the store it gives writes through to
 it: after every successful write, the records that write changed, in one
 transaction, before the write returns. `Wiki.App.Backend.Mem.Persist` says what
-is kept and how: the stores `spaces`, `pages`, `attachments` (an upload's bytes,
-as bytes, under its blob's id), `grants` (a space's grants, under the space's
-id) and `meta` (the id counter), each record JSON through the same instances
-as the API. The demo's people and global grants are not kept, since nothing
-changes them; neither is who is signed in, so a reload starts as the demo does, nor
-an attachment's object URL, made again when the attachment is first shown. A
+is kept and how: the stores `users`, `groups`, `spaces`, `pages`,
+`attachments` (an upload's bytes, as bytes, under its blob's id), `grants` (a
+space's grants, under the space's id) and `meta` (the id counter and the
+global grants), each record JSON in the export's format. Who is signed in is
+not kept, so a reload starts as the demo does, nor is an attachment's object
+URL, made again when the attachment is first shown. A
 database that cannot be read (a record that does not decode, or one a newer
 version wrote) is deleted and the demo's content written out in its place; a
 browser with no IndexedDB runs the demo in memory as before. Either way the

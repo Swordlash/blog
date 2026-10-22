@@ -1,0 +1,75 @@
+-- | The in-memory wiki as an export archive ("Wiki.Core.Export") and back:
+-- what the demo's "Export the wiki" writes and "Import a wiki" reads.
+module Wiki.App.Backend.Mem.Archive
+  ( toArchive
+  , fromArchive
+  , nextCounter
+  )
+where
+
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Numeric.Natural (Natural)
+import Protolude
+import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Export (Archive (..))
+import Wiki.Core.Id
+import Wiki.Core.Page (Page (..))
+import Wiki.Core.Space (Space (..))
+import Wiki.Core.User (Group (..), User (..))
+
+-- | The whole wiki, as written at this time by this program.
+toArchive :: UTCTime -> Text -> MemState -> Archive
+toArchive createdAt app st =
+  Archive
+    { createdAt
+    , app
+    , users = Map.elems st.users
+    , groups = Map.elems st.groups
+    , membership = st.membership
+    , grants = st.grants
+    , spaces = Map.elems st.spaces
+    , pages = Map.elems st.pages
+    , blobs = st.blobs
+    }
+
+-- | The wiki an archive holds, with nobody signed in. Its ids are the
+-- archive's, and the counter new ids are made from starts after the
+-- largest of them ('nextCounter').
+fromArchive :: Archive -> MemState
+fromArchive a =
+  st {counter = nextCounter st}
+  where
+    st =
+      MemState
+        { users = Map.fromList [(u.id, u) | u <- a.users]
+        , groups = Map.fromList [(g.id, g) | g <- a.groups]
+        , membership = a.membership
+        , grants = a.grants
+        , spaces = Map.fromList [(s.id, s) | s <- a.spaces]
+        , pages = Map.fromList [(p.id, p) | p <- a.pages]
+        , blobs = a.blobs
+        , objectUrls = mempty
+        , current = Nothing
+        , counter = 1
+        }
+
+-- | The number after the largest that ends one of the wiki's ids: the
+-- in-memory wiki makes them as @space-7@, @page-8@, and a new one must not
+-- be one an imported record has. Ids made some other way (a server's) end
+-- in no number and do not count.
+nextCounter :: MemState -> Natural
+nextCounter st = 1 + foldl' max 0 (mapMaybe numbered ids)
+  where
+    ids =
+      map (\u -> u.text) (Map.keys st.users)
+        <> map (\g -> g.text) (Map.keys st.groups)
+        <> map (\s -> s.text) (Map.keys st.spaces)
+        <> map (\p -> p.text) (Map.keys st.pages)
+        <> [x.id.text | p <- Map.elems st.pages, x <- p.attachments]
+        <> [b.text | p <- Map.elems st.pages, x <- p.attachments, SourceBlob b <- [x.source]]
+    numbered i = case T.breakOnEnd "-" i of
+      (prefix, digits) | not (T.null prefix), not (T.null digits), T.all isDigit digits -> readMaybe (T.unpack digits)
+      _ -> Nothing

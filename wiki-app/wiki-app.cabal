@@ -13,6 +13,8 @@ extra-doc-files:    CHANGELOG.md
 extra-source-files:
     jsbits/*.js
     test/jsbits/*.js
+    -- The export archive of version 1, which every later version imports.
+    test/data/*.zip
 
 flag interactive
   description: Build the browser test suite for browser GHCi (toolchain/dev-test.sh)
@@ -64,6 +66,7 @@ library
       Wiki.App
       Wiki.App.Backend
       Wiki.App.Backend.Mem
+      Wiki.App.Backend.Mem.Archive
       Wiki.App.Backend.Mem.Persist
       Wiki.App.Backend.Mem.State
       Wiki.App.Browser
@@ -84,6 +87,10 @@ library
       Wiki.App.View.SearchResults
       Wiki.App.View.Source
       Wiki.App.View.Space
+
+  -- The version "Export the wiki" writes into an archive's manifest.
+  other-modules:    Paths_wiki_app
+  autogen-modules:  Paths_wiki_app
 
   -- Rendering for the prerender and the native tests, through the in-memory
   -- document, which exists on a host GHC only.
@@ -179,6 +186,7 @@ test-suite wiki-app-test
         Test.Backend.Mem
         Test.Backend.Persist
         Test.Demo
+        Test.Export
         Test.Hydrate
         Test.Islands
         Test.Link
@@ -187,6 +195,7 @@ test-suite wiki-app-test
     build-depends:
         HUnit,
         QuickCheck,
+        aeson,
         base,
         base64-bytestring,
         bytestring,
@@ -221,6 +230,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Source
   build-depends:
       base,
+      base64-bytestring,
       protolude,
       row-types,
       text,

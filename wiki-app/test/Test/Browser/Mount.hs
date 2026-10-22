@@ -7,6 +7,7 @@ module Test.Browser.Mount
   , startWith
   , adopt
   , startKept
+  , startKeptWith
   , clickButton
   , slugs
   )
@@ -87,8 +88,8 @@ prepare who at = do
 
 -- | The shell mounted as the demo's page mounts it: over the wiki kept in
 -- a database (read back, or the demo written out into it), writing through
--- to it, as someone, at a route. Two of these on one database are a page
--- and the same page reloaded.
+-- to it, as someone (by user id), or as the demo starts, at a route. Two of
+-- these on one database are a page and the same page reloaded.
 startKept
   :: forall m
   ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
@@ -96,13 +97,24 @@ startKept
   -> Maybe Text
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
-startKept m db who at = do
+startKept m db who at = fst <$> startKeptWith m db who at
+
+-- | 'startKept', and the wiki it runs over, for a test to read it.
+startKeptWith
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+  => Database
+  -> Maybe Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m, Opened)
+startKeptWith m db who at = do
   opened <- unsafeIOToPageM (runTest (openMemWiki db (demoState demoNow) :: m Opened))
-  unsafeIOToPageM (runMemWiki opened.wiki (switchUser (UserId <$> who)))
+  for_ who $ \login -> unsafeIOToPageM (runMemWiki opened.wiki (switchUser (Just (UserId login))))
   router <- unsafeIOToPageM testRouter
   unsafeIOToPageM forgetStorage
   unsafeIOToPageM (Router.redirect router at)
-  mount m (H.hoist (NT (runMemWikiWith opened.store opened.wiki)) component) (input router)
+  ui <- mount m (H.hoist (NT (runMemWikiWith opened.store opened.wiki)) component) (input router)
+  pure (ui, opened)
 
 -- | A router that keeps the route in the test page's fragment. Natively
 -- there is no browser to make one in, and the suite only reports that it

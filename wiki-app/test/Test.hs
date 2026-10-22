@@ -4,6 +4,7 @@ import Protolude
 import Test.Backend.Mem qualified as Mem
 import Test.Backend.Persist qualified as Persist
 import Test.Demo qualified as Demo
+import Test.Export qualified as Export
 import Test.Hspec (hspec)
 import Test.Hydrate qualified as Hydrate
 import Test.Islands qualified as Islands
@@ -17,6 +18,7 @@ main = hspec $ do
   Mem.spec
   Persist.spec
   Demo.spec
+  Export.spec
   Route.spec
   Link.spec
   Shell.spec

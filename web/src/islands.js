@@ -15,6 +15,8 @@
 // rejects shows the library's error in the element instead, which is what an
 // author previewing a page wants to see. wiki-app/jsbits/islands.js is the
 // application's side of this.
+// The demo's export and import, which have nowhere better to be bundled.
+import "./archive.js";
 import katex from "katex";
 import hljs from "highlight.js/lib/common";
 // highlight.js's common set, and the languages this wiki's authors write that

@@ -1,0 +1,223 @@
+-- | The demo's export and import: the in-memory wiki as an archive
+-- ("Wiki.Core.Export") in a zip file and back, natively through
+-- @zip-archive@ ("Wiki.Core.Export.Zip"), what an import refuses, and the
+-- archive of version 1 checked in under @test/data@, which every later
+-- version must still import.
+module Test.Export (spec, goldenArchive, goldenPath) where
+
+import Data.Aeson (Value (..), decodeStrict', toJSON)
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
+import Data.IORef (readIORef)
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Time (UTCTime (..), fromGregorian)
+import Halogen.VDom.DOM.Monad (runMemDOM)
+import Protolude
+import Test.HUnit (assertFailure)
+import Test.Hspec
+import Web.Storage.IndexedDB (Database (..))
+import Web.Storage.IndexedDB qualified as IDB
+import Wiki.App.Backend (MonadWiki (..), WikiError)
+import Wiki.App.Backend.Mem
+import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
+import Wiki.App.Backend.Mem.Persist (memDatabase, spacesStore)
+import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Demo (demoNow, demoState)
+import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Export (Archive, encodeJson, readArchive, writeArchive)
+-- Qualified, for the fields of an archive, which the in-memory wiki has too.
+import Wiki.Core.Export qualified as Export
+import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
+import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Page (Page (..))
+import Wiki.Core.Path (parsePath)
+import Wiki.Core.Permission (Grants (..))
+import Wiki.Core.Slug (Slug)
+import Wiki.Core.Space (Space (..))
+import Wiki.Core.User (User (..))
+
+-- | The golden archive: the demo as it was when version 1 of the format was
+-- made, written once by 'goldenArchive' below (in GHCi:
+-- @goldenArchive >>= Data.ByteString.writeFile goldenPath@) and checked in.
+-- It is never written again; a version 2 adds a file of its own beside it.
+goldenPath :: FilePath
+goldenPath = "test/data/wiki-export-v1.zip"
+
+-- | When the golden archive says it was written.
+goldenTime :: UTCTime
+goldenTime = UTCTime (fromGregorian 2026 10 22) 0
+
+-- | What the golden archive holds: the demo, with a file uploaded that is
+-- not text, as the demo's export at version 1 wrote it.
+goldenArchive :: IO ByteString
+goldenArchive = do
+  st <- edited
+  pure (zipFiles goldenTime (writeArchive (toArchive goldenTime "wiki-app 0.1.0.0" st)))
+
+-- | The demo with some of everything changed: a space and a page made, a
+-- page saved, a file of every byte uploaded.
+edited :: IO MemState
+edited = do
+  ref <- newMemWiki (demoState demoNow)
+  runMemWiki ref $ do
+    switchUser (Just (UserId "user-admin"))
+    docs <- ok' =<< getSpace (path "docs")
+    tour <- ok' =<< getPage docs.id (path "tour")
+    _ <- ok' =<< uploadAttachment tour.id "bytes.bin" "application/octet-stream" (BS.pack [0 .. 255])
+    space <- ok' =<< createSpace (Just docs.id) "Exported"
+    page <- ok' =<< createPage space.id Nothing "Exported page" "# Exported\n\nWith *Markdown*."
+    _ <- ok' =<< savePage page.id page.updatedAt "Exported page" "# Exported, then saved"
+    pass
+  st <- readIORef ref
+  pure st {current = Nothing, objectUrls = mempty}
+  where
+    ok' :: (MonadIO m) => Either WikiError a -> m a
+    ok' = either (\e -> liftIO (assertFailure ("expected success, got " <> show e))) pure
+
+-- | The files every archive has, besides the attachments'.
+recordFiles :: [Text]
+recordFiles = ["manifest.json", "users.json", "groups.json", "grants.json", "spaces.json", "pages.json", "attachments.json"]
+
+-- | A wiki with its space grants in an order of their own: the store keeps
+-- them by space.
+normal :: MemState -> MemState
+normal st = st {grants = Grants {global = st.grants.global, spaces = sort st.grants.spaces}}
+
+path :: Text -> [Slug]
+path t = either (panic . show) identity (parsePath t)
+
+-- | What an archive's files read back as.
+readBack :: ByteString -> Either Text Archive
+readBack zipped = unzipFiles zipped >>= readArchive
+
+-- | The archive's files, by path.
+filesOf :: Archive -> Map Text ByteString
+filesOf = Map.fromList . writeArchive
+
+-- | A JSON file's records, each changed.
+editRecords :: Text -> (KeyMap.KeyMap Value -> KeyMap.KeyMap Value) -> Map Text ByteString -> Map Text ByteString
+editRecords file f = Map.adjust change file
+  where
+    change bytes = case decodeStrict' bytes of
+      Just (Array values) -> encodeJson (Array (map (\case Object o -> Object (f o); v -> v) values))
+      Just (Object o) -> encodeJson (Object (f o))
+      _ -> bytes
+
+refused :: (HasCallStack) => Text -> Either Text a -> Expectation
+refused saying = \case
+  Left why -> (saying, saying `T.isInfixOf` why) `shouldBe` (saying, True)
+  Right _ -> expectationFailure ("expected a refusal saying " <> show saying)
+
+spec :: Spec
+spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
+  it "reads a wiki back from its zip file as it was, attachments' bytes included" $ do
+    st <- edited
+    let zipped = zipFiles goldenTime (writeArchive (toArchive goldenTime "test" st))
+    case readBack zipped of
+      Left why -> expectationFailure (toS why)
+      Right archive -> do
+        fromArchive archive `shouldBe` st
+        archive.createdAt `shouldBe` goldenTime
+        Map.elems archive.blobs `shouldContain` [BS.pack [0 .. 255]]
+
+  it "writes the manifest and a file per kind of record, and each attachment's bytes as a file" $ do
+    st <- edited
+    let files = filesOf (toArchive goldenTime "test" st)
+    filter (`Map.member` files) recordFiles `shouldBe` recordFiles
+    [p | p <- Map.keys files, "attachments/" `T.isPrefixOf` p] `shouldSatisfy` (\ps -> length ps == Map.size st.blobs)
+    (decodeStrict' =<< Map.lookup "manifest.json" files) `shouldSatisfy` \case
+      Just (Object o) -> KeyMap.lookup "format" o == Just (String "wiki-export") && KeyMap.lookup "formatVersion" o == Just (toJSON (1 :: Int))
+      _ -> False
+
+  describe "the archive of version 1" $ do
+    it "still imports, with everything it held" $ do
+      golden <- BS.readFile goldenPath
+      case readBack golden of
+        Left why -> expectationFailure (toS why)
+        Right archive -> do
+          map (\u -> u.login) archive.users `shouldBe` ["admin", "editor", "reader"]
+          sort (map (\s -> s.name) archive.spaces) `shouldBe` ["Blog", "Docs", "Exported", "Projects", "Team"]
+          map (\p -> p.body) archive.pages `shouldContain` ["# Exported, then saved"]
+          let bytes = [x | p <- archive.pages, x <- p.attachments, x.name == "bytes.bin"]
+          case bytes of
+            [Attachment {source = SourceBlob blob}] -> Map.lookup blob archive.blobs `shouldBe` Just (BS.pack [0 .. 255])
+            other -> expectationFailure ("expected bytes.bin, kept as bytes, got " <> show other)
+          length (Map.toList archive.membership) `shouldBe` 1
+
+  describe "compatibility" $ do
+    it "reads a file with fields it does not know, ignoring them" $ do
+      st <- edited
+      let files = filesOf (toArchive goldenTime "test" st)
+          extra = Map.insert "notes.json" "[]" (editRecords "spaces.json" (KeyMap.insert "colour" (String "teal")) (editRecords "manifest.json" (KeyMap.insert "producer" (String "a later wiki")) files))
+      fromArchive <$> readArchive extra `shouldBe` Right st
+
+    it "defaults the fields that may be missing" $ do
+      st <- edited
+      let files = filesOf (toArchive goldenTime "test" st)
+          thin = editRecords "spaces.json" (KeyMap.delete "public" . KeyMap.delete "parent") files
+      case readArchive thin of
+        Left why -> expectationFailure (toS why)
+        Right archive -> all (\s -> not s.public && isNothing s.parent) archive.spaces `shouldBe` True
+
+    it "refuses an archive of a newer version, saying so" $ do
+      st <- edited
+      let files = editRecords "manifest.json" (KeyMap.insert "formatVersion" (toJSON (2 :: Int))) (filesOf (toArchive goldenTime "test" st))
+      refused "newer version of the wiki" (readArchive files)
+
+  describe "refusing" $ do
+    it "a file that is not a zip file" $
+      refused "" (unzipFiles "not a zip file at all" >> pure ())
+
+    it "an archive without one of its record files" $ do
+      st <- edited
+      refused "It has no pages.json." (readArchive (Map.delete "pages.json" (filesOf (toArchive goldenTime "test" st))))
+
+    it "a zip file that is not an export" $
+      refused "no manifest.json" (readBack (zipFiles goldenTime [("readme.txt", "hello")]))
+
+    it "an attachment whose file is missing, or of the wrong size" $ do
+      st <- edited
+      let files = filesOf (toArchive goldenTime "test" st)
+          file = fromMaybe (panic "no bytes.bin") (head [p | p <- Map.keys files, "bytes.bin" `T.isSuffixOf` p])
+      refused "is not in the archive" (readArchive (Map.delete file files))
+      refused "bytes, where attachments.json says" (readArchive (Map.insert file "short" files))
+
+    it "a page in a space that is not there" $ do
+      st <- edited
+      let files = filesOf (toArchive goldenTime "test" st)
+      refused "which is not in spaces.json" (readArchive (editRecords "pages.json" (KeyMap.insert "space" (String "space-nowhere")) files))
+
+    it "a record that does not read" $ do
+      st <- edited
+      let files = filesOf (toArchive goldenTime "test" st)
+      refused "pages.json" (readArchive (Map.insert "pages.json" "{ not json" files))
+
+  describe "importing into a kept wiki" $ do
+    it "replaces the wiki in memory and in the database, staying signed in as before" $ do
+      st <- edited
+      db <- fresh "import"
+      opened <- runMemDOM (openMemWiki db (demoState demoNow))
+      archive <- either (panic . toS) pure (readBack (zipFiles goldenTime (writeArchive (toArchive goldenTime "test" st))))
+      runMemWikiWith opened.store opened.wiki (importMemWiki archive) `shouldReturn` Right ()
+      now <- readIORef opened.wiki
+      normal now `shouldBe` normal st {current = (demoState demoNow).current}
+      reopened <- runMemDOM (openMemWiki db (demoState demoNow))
+      normal <$> readIORef reopened.wiki `shouldReturn` normal st {current = (demoState demoNow).current}
+
+    it "changes nothing when the database will not take it" $ do
+      st <- edited
+      db <- fresh "import-refused"
+      opened <- runMemDOM (openMemWiki db (demoState demoNow))
+      was <- readIORef opened.wiki
+      -- A newer version of the program upgrades the database meanwhile.
+      runMemDOM (IDB.put db {version = 2} spacesStore "space-1" "{}")
+      archive <- either (panic . toS) pure (readArchive (filesOf (toArchive goldenTime "test" st)))
+      result <- runMemWikiWith opened.store opened.wiki (importMemWiki archive)
+      result `shouldSatisfy` isLeft
+      readIORef opened.wiki `shouldReturn` was
+  where
+    fresh name = do
+      let db = memDatabase ("wiki-export-test-" <> name)
+      runMemDOM (IDB.deleteDatabase db.name)
+      pure db

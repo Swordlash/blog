@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+A whole wiki can be written as an archive and read back: `Wiki.Core.Export`
+has `Archive` (the people, the grants, the spaces, the pages with their
+attachments, and the attachments' bytes), `writeArchive`, which gives the
+archive's files by path (`manifest.json`, a JSON file per kind of record,
+`attachments/<id>/<name>`), and `readArchive`, which reads them back and
+checks all of it first, refusing with the reason what does not fit together.
+Records are JSON with named fields, by the hand-written `encode…`/`parse…`
+functions it exports, not by the types' derived instances; a reader ignores
+fields it does not know and defaults the ones that may be missing, a change
+of anything else bumps `formatVersion` with a migration from the version
+before, and a newer version is refused. `docs/export.md` describes the
+format. Natively, `Wiki.Core.Export.Zip` makes the zip file and reads it
+with `zip-archive`, which needs the C zlib and is not built for WebAssembly.
+
 The editor's toolbar is pure: the new `Wiki.Core.Markdown.Edit` has
 `apply :: Command -> Text -> Selection -> (Text, Selection)`, which takes a
 page's Markdown with what is selected in it (`Selection`, offsets in

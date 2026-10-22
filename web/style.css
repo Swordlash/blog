@@ -209,8 +209,9 @@ select {
   font-weight: 600;
 }
 
-/* The foot of the user menu: whether the demo's changes are kept, and
-   putting its content back as it was, which asks first in place. */
+/* The foot of the user menu: whether the demo's changes are kept, export,
+   import (a label around a hidden file input, looking like the buttons
+   beside it), and reset; import and reset ask first, in place. */
 .user-menu .demo-reset {
   margin-top: 0.3rem;
   padding-top: 0.3rem;
@@ -223,18 +224,48 @@ select {
   color: var(--muted);
 }
 
-.user-menu .demo-reset-confirm {
+.user-menu .demo-reset p.demo-told {
+  color: var(--text);
+}
+
+.user-menu .demo-reset p.demo-refused {
+  color: var(--danger);
+}
+
+.user-menu .demo-import {
+  display: block;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  padding: 0.3rem 0.8rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.user-menu .demo-import:hover,
+.user-menu .demo-import:focus-within {
+  background: var(--surface);
+}
+
+.user-menu .demo-import input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.user-menu .demo-confirm {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
 }
 
-.user-menu .demo-reset-confirm p {
+.user-menu .demo-confirm p {
   flex-basis: 100%;
   color: var(--text);
 }
 
-.user-menu .demo-reset-confirm button {
+.user-menu .demo-confirm button {
   flex: 1;
   width: auto;
   text-align: center;
