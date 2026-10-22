@@ -738,6 +738,34 @@ select {
   color: var(--muted);
 }
 
+/* ---- A page's source ------------------------------------------------------- */
+
+/* The Markdown as it is written, in the page's code font and colours, its long
+   lines wrapped rather than scrolled, so that it reads on a phone too. */
+.source-text {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+
+.source-view .actions {
+  align-items: center;
+}
+
+/* What Copy did, said beside it for a moment. */
+.source-copied {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
 /* ---- The editor ------------------------------------------------------------ */
 
 /* The editor takes the whole width the sidebar leaves: two panes side by side

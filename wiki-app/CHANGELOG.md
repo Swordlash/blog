@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Anyone who may read a page may read its Markdown: a page has a source view on a
+route of its own, `PageSource`, at `…/p/<page path>/source/`, which shows the
+page's title, a "Back" link to the page and the Markdown as written, in a
+monospace block that wraps long lines, with a "Copy" button that puts it on the
+clipboard (and says whether it could; where the browser will not, the text is
+left selected to copy by hand). The view is `Wiki.App.View.Source`; it asks for
+the page as the page view does, so it is refused where the page is, with the
+same message, and whether the reader may edit the page plays no part. Every
+page's actions now start with a "View source" link, for every reader, after
+"Edit" for those who may edit. `source` is one of the route's own words, like
+`edit`: a page or space whose slug is `source` is now written `~source` in its
+address (`/s/docs/p/~source/`), where before it was `source`. The prerender
+writes each page's source as well, so a static host serves it at its address.
+`Wiki.App.Browser` has `copyText`, the clipboard behind the button.
+
 Every page ends with a footer, "Built with haskell-halogen", the name a link to
 haskell-halogen's repository; the prerendered pages have it too.
 

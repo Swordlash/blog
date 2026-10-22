@@ -2,14 +2,16 @@
 
 -- | The little the shell asks of the browser that Halogen does not say: the
 -- link a click in a rendered page landed on, scrolling to a heading or a
--- footnote, the document's title, and where in the session history it is.
--- See @jsbits/browser.js@. Natively there is no browser: no click lands on a
--- link, every entry of the history is the first, and the rest does nothing.
+-- footnote, the document's title, where in the session history it is, and
+-- the clipboard. See @jsbits/browser.js@. Natively there is no browser: no
+-- click lands on a link, every entry of the history is the first, nothing is
+-- copied, and the rest does nothing.
 module Wiki.App.Browser
   ( followArticleClick
   , setDocumentTitle
   , historyEntry
   , historyGo
+  , copyText
   )
 where
 
@@ -19,10 +21,14 @@ import Halogen.Router (Router)
 import Halogen.Router qualified as Router
 import Halogen.Router.Duplex (decodeComponent)
 import Protolude
+-- With its constructor: the FFI passes the value inside the newtype.
+import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event (..), preventDefault)
 import Web.UIEvent.MouseEvent (MouseEvent, toEvent)
 import Wiki.App.Route (Route, routeOfHref)
 
+-- Copying waits for the browser's clipboard, so that binding is a safe
+-- import, which waits for the promise; the rest return on the spot.
 $( browserJS
      ["jsbits/browser.js"]
      [ ("js_clicked_href", "wiki_clicked_href", Unsafe, [t|Event -> IO JSText|])
@@ -30,6 +36,7 @@ $( browserJS
      , ("js_set_title", "wiki_set_title", Unsafe, [t|JSText -> IO ()|])
      , ("js_history_entry", "wiki_history_entry", Unsafe, [t|IO Int|])
      , ("js_history_go", "wiki_history_go", Unsafe, [t|Int -> IO ()|])
+     , ("js_copy_text", "wiki_copy_text", Safe, [t|Element -> JSText -> IO Bool|])
      ]
  )
 
@@ -69,3 +76,14 @@ historyEntry = liftIO js_history_entry
 -- them.
 historyGo :: (MonadIO m) => Int -> m ()
 historyGo = liftIO . js_history_go
+
+-- | Put text on the clipboard, given the element that shows it, and say
+-- whether it is there. If the browser will not copy it, the element's text
+-- is left selected, for the reader to copy with the keyboard. This waits for
+-- the browser, so a component calls it off its loop ('liftIO' in
+-- 'Halogen.HalogenM', not 'Halogen.liftEffect'). Natively nothing is copied.
+copyText :: (MonadIO m) => Element -> Text -> m Bool
+copyText element text =
+  -- On wasm a safe import's result is a thunk that waits for the promise
+  -- only when forced.
+  liftIO (evaluate =<< js_copy_text element (toJSText text))

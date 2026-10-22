@@ -2,8 +2,9 @@
 
 -- | A page, read: its Markdown rendered as "Wiki.App.View.Body" renders it
 -- (with its links resolved and its islands drawn), its attachments, and what
--- the current user may do to it (edit, add a page under it, rename, move,
--- delete). The URLs of its attachments are asked of the backend
+-- the current user may do to it: read its source, which anyone who may read
+-- the page may, and, for someone who may edit it, edit it, add a page under
+-- it, rename, move or delete it. The URLs of its attachments are asked of the backend
 -- ('attachmentUrl') once per load.
 module Wiki.App.View.Page
   ( Input (..)
@@ -112,23 +113,28 @@ component =
           -- Several computed parts in a row are one hole: on lines of their
           -- own, each line break between them would be a space.
           parts =
-            [[hh|<div class="actions">{{ actions input page }}</div>|] | mayEdit input.context page.space]
-              <> toList (form input page mode)
-              <> toList (errorView <$> problem)
-              <> Body.heading page.title page.body
-              <> [body input page urls]
-              <> attachments page urls
+            [hh|<div class="actions">{{ actions input page }}</div>|]
+              : toList (form input page mode)
+                <> toList (errorView <$> problem)
+                <> Body.heading page.title page.body
+                <> [body input page urls]
+                <> attachments page urls
 
     actions :: Input -> Page -> [H.ComponentHTML Action Slots m]
-    actions input page =
-      [ Router.link input.context.router Followed (EditPage spacePath input.path) [HP.class_ "button"] [HH.text "Edit"]
-      , Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
-      , button "Rename" (Open (Renaming page.title))
-      , button "Move" StartMove
-      , button "Delete" (Open ConfirmingDelete)
-      ]
+    actions input page
+      | mayEdit input.context page.space =
+          [ Router.link input.context.router Followed (EditPage spacePath input.path) [HP.class_ "button"] [HH.text "Edit"]
+          , viewSource
+          , Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
+          , button "Rename" (Open (Renaming page.title))
+          , button "Move" StartMove
+          , button "Delete" (Open ConfirmingDelete)
+          ]
+      | otherwise = [viewSource]
       where
         spacePath = spacePathOf input.context.spaces input.space.id
+        -- For every reader: the source is theirs to read as the page is.
+        viewSource = Router.link input.context.router Followed (PageSource spacePath input.path) [HP.class_ "button"] [HH.text "View source"]
 
     form :: Input -> Page -> Mode -> Maybe (H.ComponentHTML Action Slots m)
     form input page = \case
