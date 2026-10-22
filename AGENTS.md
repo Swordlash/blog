@@ -25,6 +25,14 @@ decision confirmed or changed, acceptance criteria met or carried over. It may m
 edits of its own (the plan, a README line, a one-line fix found in review). Changes to
 `docs/PLAN.md` alone go straight to `main`, without a pull request; code goes through one.
 
+Pull requests are rebased onto `main`, never merged with it. When `main` has moved, the
+branch is rebased (and force-pushed: work-package branches belong to the session), its
+CI runs on the rebased head, and once that is green the planning session fast-forwards
+`main` to it (`git push origin <head>:main`), which GitHub records as the pull request's
+merge. CI on `main` then finds the head's passing run and skips the build
+(`toolchain/ci-already-tested.sh`). An implementing agent that needs `main`'s changes
+rebases onto it too.
+
 **An implementing agent** does one work package. It is a subagent of the planning session.
 In Claude Code, start it with the `implementer` definition in
 `.claude/agents/implementer.md`: Opus 5.5 at high reasoning effort. In Codex, start a

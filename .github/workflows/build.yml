@@ -1,12 +1,18 @@
 name: CI
 
+# Markdown alone (the plan, the README, notes) builds nothing, so a change
+# to it alone runs no CI.
 on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '**.md'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
 
 # A new push to a branch (or to a pull request's branch) cancels the run still
@@ -60,7 +66,35 @@ env:
   HAPPY_VERSION: '2.1.7'
 
 jobs:
+  # On a push to main, whether a pull request's run has already built and
+  # tested this tree and passed: pull requests are rebased and main is
+  # fast-forwarded to their head (AGENTS.md), so the push is usually the
+  # very commit the pull request's last run tested. The build jobs then
+  # skip. Not run for pull requests or by hand, where they always run.
+  tested:
+    if: github.event_name == 'push'
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tested: ${{ steps.check.outputs.tested }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+
+    - name: Look for a passing pull request run of this tree
+      id: check
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: sh toolchain/ci-already-tested.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
   native:
+    needs: tested
+    if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
     runs-on: self-hosted
 
     steps:
@@ -145,6 +179,8 @@ jobs:
       run: npm run test-native
 
   wasm:
+    needs: tested
+    if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
     runs-on: self-hosted
 
     steps:
@@ -336,6 +372,8 @@ jobs:
         if-no-files-found: error
 
   format:
+    needs: tested
+    if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
     runs-on: self-hosted
 
     steps:

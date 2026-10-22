@@ -165,6 +165,13 @@ push to it: `native` (build and test natively), `wasm` (build for wasm, run the 
 suites and the smoke test in headless Chromium, and on a hosted runner keep the built
 page as the run's `app` artifact) and `format` (`npm run format-check`).
 
+Two things keep it from building the same tree twice. A change to Markdown files alone
+runs nothing. And on a push to `main`, a first job, `tested`
+(`toolchain/ci-already-tested.sh`), looks for a passing pull request run of the pushed
+commit, or of a merge commit's second parent with the same tree, and when there is one
+the three jobs are skipped. Pull requests are rebased onto `main` and `main` is
+fast-forwarded to their head, so the push to `main` is normally that very commit.
+
 They run on the self-hosted runner registered for this repository (`runs-on: self-hosted`
 in every job); GitHub's hosted runners are refused by the account's Actions budget. To go
 back to them, change `runs-on` to `ubuntu-latest`: the hosted steps are kept. On a hosted
@@ -176,7 +183,7 @@ wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and puts
 `PATH` with `sh toolchain/bootstrap.sh path`. Nothing is cached or uploaded to GitHub
 there (the account's artifact storage quota refuses uploads): the toolchain, the cabal
 store and the built page stay on the machine. One runner runs one job at a time, so
-the three jobs queue.
+the jobs queue.
 
 To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 
