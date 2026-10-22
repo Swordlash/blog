@@ -147,6 +147,14 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       lasting <$> readIORef reopened.wiki `shouldReturn` lasting seed
       shouldReload db reopened.wiki
 
+    it "starts over from the seed when the database lacks a store this version keeps" $ do
+      db <- freshDatabase
+      -- As an earlier build of this version left it, with fewer stores.
+      runMemDOM (IDB.put db {stores = [spacesStore]} spacesStore "space-1" "{}")
+      reopened <- open db
+      reopened.found `shouldSatisfy` reseeded
+      shouldReload db reopened.wiki
+
     it "keeps nothing where there is no IndexedDB, and says why" $ do
       db <- freshDatabase
       -- The browser's instance, natively, where there is none.

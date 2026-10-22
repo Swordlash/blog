@@ -60,8 +60,8 @@ space's grants, under the space's id) and `meta` (the id counter and the
 global grants), each record JSON in the export's format. Who is signed in is
 not kept, so a reload starts as the demo does, nor is an attachment's object
 URL, made again when the attachment is first shown. A
-database that cannot be read (a record that does not decode, or one a newer
-version wrote) is deleted and the demo's content written out in its place; a
+database that cannot be read (a record that does not decode, one a newer
+version wrote, or one without every store this version keeps) is deleted and the demo's content written out in its place; a
 browser with no IndexedDB runs the demo in memory as before. Either way the
 console says why. Nothing is shared between tabs: the last to write a record
 wins. `newMemWiki` and `runMemWiki` are unchanged and keep the wiki in memory

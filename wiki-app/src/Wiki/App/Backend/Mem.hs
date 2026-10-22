@@ -53,7 +53,7 @@ import Data.Time (UTCTime, getCurrentTime)
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
-import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailure (..), MonadIndexedDB)
+import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailure (..), MonadIndexedDB, StoreName (..))
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Backend (MonadWiki (..), WikiError)
 import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
@@ -231,9 +231,10 @@ data Found
     Restored
   | -- | Nothing: it wrote the seed out.
     Seeded
-  | -- | Something it could not read (a record that does not decode, or a
-    -- database a newer version of the program has upgraded), and why: it
-    -- deleted the database and wrote the seed out.
+  | -- | Something it could not read (a record that does not decode, a
+    -- database a newer version of the program has upgraded, or one without
+    -- a store this version keeps), and why: it deleted the database and
+    -- wrote the seed out.
     Reseeded Text
   | -- | No way to keep anything (no IndexedDB, or one that refuses), and
     -- why: the wiki is the seed, kept in memory only.
@@ -272,7 +273,9 @@ openMemWiki db seed = withRunInIO $ \run -> do
   (start, (store, found)) <-
     tried readAll >>= \case
       Left e
-        | e.failure == VersionTooLow -> (seed,) <$> reseed (describe e)
+        -- Not the database this program keeps: one a newer version has
+        -- upgraded, or one an older build made with fewer stores.
+        | notOurs e.failure -> (seed,) <$> reseed (describe e)
         | otherwise -> pure (seed, (Nothing, NotKept (describe e)))
       Right held -> case restore held of
         -- Signed in as the seed is, as the prerendered page shows it.
@@ -365,6 +368,14 @@ keep store st = do
         Left e -> warn ("A change to the wiki could not be kept in this browser (" <> describe e <> "); it is tried again with the next one.")
         Right () -> writeIORef store.kept after
 
+-- | Whether a failure to read says the database is not the one this
+-- program keeps, rather than that there is no keeping anything.
+notOurs :: IndexedDBFailure -> Bool
+notOurs = \case
+  VersionTooLow -> True
+  StoreNotFound _ -> True
+  _ -> False
+
 tried :: IO a -> IO (Either IndexedDBError a)
 tried = try
 
@@ -374,7 +385,7 @@ describe e = case e.failure of
   Unavailable -> "this browser does not let the page use IndexedDB"
   UpgradeBlocked -> "another tab holds the database open"
   VersionTooLow -> "a newer version of the demo has written it"
-  StoreNotFound name -> "it has no store " <> show name
+  StoreNotFound (StoreName name) -> "it has no store " <> show name
   QuotaExceeded -> "the browser will not let it keep more"
   NotBytes key -> "something else wrote " <> key
   OtherFailure name message -> name <> ": " <> message
