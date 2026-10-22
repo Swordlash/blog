@@ -94,6 +94,7 @@ test-suite wiki-core-html-test
     buildable: False
   else
     other-modules:
+        Test.Markdown.Document
         Test.Markdown.Html
         Test.Markdown.Render
     build-depends:
