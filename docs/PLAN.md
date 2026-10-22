@@ -229,7 +229,10 @@ point of this phase.
   prerender diff before and after must be empty or explained), adds `haskell-halogen-th`
   to `wiki-app` and `alex`/`happy < 2.2` to the wasm job, records the build-time cost of
   `ghc-lib-parser` on both backends, and reports the rule it applied so later packages
-  follow it.
+  follow it. It also adds the shell's footer, the first view written with `hh`: one line
+  at the bottom of every page, "Built with haskell-halogen", with the name linking to
+  https://github.com/Swordlash/haskell-halogen, styled quietly in `web/style.css`,
+  present in the prerendered pages too (the smoke test checks it is there).
 - **WP1.10 Hydrate the demo.** haskell-halogen `7c78cfb` ("Hydrate prerendered pages
   instead of rendering over them") adds `hydrateUI`, with `runUI`'s signature, which
   adopts the HTML `Halogen.Static` prerendered instead of emptying `#app` and building it
@@ -599,6 +602,8 @@ Amended by the planning session after each work package's report.
   has Web Storage only, so HH-1 adds `Web.Storage.IndexedDB` to its `core` (delegated now,
   independent of the Phase 1 merges) and WP1.11 makes `MemWiki` write through to it after
   WP1.10's pin bump.
+- **Footer (owner's request):** "Built with haskell-halogen" linking to the repository,
+  on every page; added to WP1.9 as the first `hh` view.
 - **Toolbar and HTML in pages (owner's request):** decision 13, WP1.12 (toolbar over pure
   editing commands) and WP1.13 (raw HTML rendered through an allowlist in `wiki-core`).
   WP1.13 touches `wiki-core` only and can run beside WP1.9; WP1.12 waits for WP1.9's rule
