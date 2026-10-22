@@ -15,8 +15,8 @@ interface, implemented once in memory (a serverless demo deployable as static fi
 and once over HTTP to a Haskell server with persistence. Markdown is parsed and
 rendered to Halogen HTML in the browser, so the preview never waits for a server.
 
-So far there is the scaffold: a placeholder page that builds and runs. Work
-is planned in phases, from a serverless MVP demo through a
+So far there is the scaffold: a placeholder page that builds and runs. The plan of work is in
+[docs/PLAN.md](docs/PLAN.md): phases from a serverless MVP demo through a
 server with persistence to authentication and authorisation.
 
 ## Working on it
