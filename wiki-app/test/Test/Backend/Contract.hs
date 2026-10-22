@@ -24,8 +24,9 @@ import Wiki.App.Backend
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
-import Wiki.Core.Path (parsePath)
+import Wiki.Core.Path (parsePath, renderPath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
+import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (User (..))
@@ -62,6 +63,7 @@ spec _ newFixture = before newFixture $ describe "MonadWiki contract" $ do
   movingPages
   deletingPages
   attachments
+  searching
   neverThrown
 
 --------------------------------------------------------------------------------
@@ -638,6 +640,63 @@ attachments = describe "uploadAttachment, deleteAttachment and attachmentUrl" $ 
     run editor (uploadAttachment hello.id "a/b.png" "image/png" bytes) >>= shouldBeInvalid
     let tooLarge = BS.replicate (fromIntegral maxAttachmentSize + 1) 0
     run editor (uploadAttachment hello.id "big.bin" "application/octet-stream" tooLarge) >>= shouldBeInvalid
+
+--------------------------------------------------------------------------------
+-- Search
+
+-- | What someone finds: each hit's space path and title, in order.
+hitsFor :: (MonadWiki m) => Run m -> As -> SearchQuery -> IO [(Text, Text)]
+hitsFor run who q = map (\h -> (renderPath h.spacePath, snippetText h.title)) <$> run who (searchPages q)
+
+-- | The paths of the spaces someone finds hits in.
+spacesFound :: (MonadWiki m) => Run m -> As -> SearchQuery -> IO (Set Text)
+spacesFound run who q = Set.fromList . map fst <$> hitsFor run who q
+
+-- | A query for these words in a space, with or without its subspaces.
+inSpace :: SpaceId -> Bool -> Text -> SearchQuery
+inSpace sid includeSubspaces text = SearchQuery {text, space = Just sid, includeSubspaces, limit = 50}
+
+searching :: (MonadWiki m) => SpecWith (Fixture m)
+searching = describe "searchPages" $ do
+  it "finds only what someone may view" $ \(Fixture run) -> do
+    hitsFor run admin (searchQuery "handbook") `shouldReturn` [("team", "Team handbook")]
+    hitsFor run Anonymous (searchQuery "handbook") `shouldReturn` []
+    hitsFor run reader (searchQuery "handbook") `shouldReturn` []
+    spacesFound run Anonymous (searchQuery "the") `shouldReturn` Set.fromList ["blog", "docs"]
+    spacesFound run editor (searchQuery "the") `shouldReturn` Set.fromList ["blog", "docs"]
+
+  it "finds in a subspace someone may view, under a space they may not" $ \(Fixture run) -> do
+    spacesFound run reader (searchQuery "the") `shouldReturn` Set.fromList ["blog", "docs", "team/projects"]
+    spacesFound run admin (searchQuery "the") `shouldReturn` Set.fromList ["blog", "docs", "team", "team/projects"]
+    hitsFor run reader (searchQuery "milestones") `shouldReturn` [("team/projects", "The wiki")]
+
+  it "keeps to one space, with or without its subspaces" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    spacesFound run admin (inSpace team.id True "the") `shouldReturn` Set.fromList ["team", "team/projects"]
+    spacesFound run admin (inSpace team.id False "the") `shouldReturn` Set.fromList ["team"]
+    spacesFound run reader (inSpace team.id True "the") `shouldReturn` Set.fromList ["team/projects"]
+    spacesFound run reader (inSpace team.id False "the") `shouldReturn` Set.empty
+    docs <- spaceAt run admin "docs"
+    spacesFound run Anonymous (inSpace docs.id True "the") `shouldReturn` Set.fromList ["docs"]
+
+  it "ranks a match in the title above one in the text" $ \(Fixture run) -> do
+    hits <- hitsFor run Anonymous (searchQuery "diagrams")
+    take 1 hits `shouldBe` [("docs", "Diagrams")]
+    map snd (drop 1 hits) `shouldSatisfy` all (not . T.isInfixOf "iagrams")
+    length hits `shouldSatisfy` (> 1)
+
+  it "finds nothing for no words, in a space that is not there, or past its limit" $ \(Fixture run) -> do
+    hitsFor run admin (searchQuery "  ") `shouldReturn` []
+    hitsFor run admin (inSpace (SpaceId "no-such-space") True "the") `shouldReturn` []
+    length <$> hitsFor run admin (searchQuery "the") {limit = 2} `shouldReturn` 2
+
+  it "finds a page by what it was last saved with" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    p <- run editor (createPage blog.id Nothing "Marsupials" "The quokka smiles.") >>= ok
+    hitsFor run Anonymous (searchQuery "QUOKKA") `shouldReturn` [("blog", "Marsupials")]
+    void (run editor (savePage p.id p.updatedAt "Marsupials" "The wombat digs.") >>= ok)
+    hitsFor run Anonymous (searchQuery "quokka") `shouldReturn` []
+    hitsFor run Anonymous (searchQuery "wombat") `shouldReturn` [("blog", "Marsupials")]
 
 --------------------------------------------------------------------------------
 -- Errors are values

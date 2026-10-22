@@ -63,3 +63,18 @@ image, a video or audio, a link otherwise, by the media type or else the
 name's extension. Any name reads back as itself: one with spaces or
 parentheses goes in angle brackets, `%`, `&`, `\`, `<` and `>` are
 percent-encoded, and the label's Markdown characters are escaped.
+
+Searching pages, in `Wiki.Core.Search`. A `SearchQuery` is words, an optional
+space (with or without its subspaces) and a limit; a `SearchHit` is a page's
+id, space, paths and title, with a `Snippet` of its text, each a list of
+pieces with the matches marked, so that a list of results can show why a page
+is in it without the page's body. `searchPlain` is the matcher the in-memory
+backend runs: a page matches when every word of the query is in its title or
+its text, ignoring case and diacritics as slugs do (`zazolc` finds `Zażółć`,
+`strasse` finds `Straße`), its text being what a reader sees of the Markdown
+(`bodyText`: prose without syntax, with the sources of code, diagrams and
+formulas). More of the words in the title rank first, then the path. The
+snippet is about 160 characters from a little before the first match, cut at
+blanks, with an ellipsis where it was cut. `Wiki.Core.Slug.foldLetter` folds
+one character as `slugify` does, which is what search compares by. The query
+and the hit have JSON instances, for the server's search.

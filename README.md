@@ -16,12 +16,13 @@ and once over HTTP to a Haskell server with persistence. Markdown is parsed and
 rendered to Halogen HTML in the browser, so the preview never waits for a server.
 
 So far there is the serverless demo: the shell (spaces in a tree, their pages,
-breadcrumbs, a user switcher instead of a sign-in) over an in-memory wiki seeded with
-demo content, pages rendered from Markdown, whose syntax is described for authors in
-[docs/markdown.md](docs/markdown.md), with their formulas, diagrams and code drawn by
-KaTeX, Mermaid and highlight.js; an editor with the Markdown beside a live preview,
-attachments dropped or chosen into it, and a guard against losing unsaved changes; and
-creating, renaming, moving and deleting spaces and pages as the permissions allow. Every route has an address of its own and a
+breadcrumbs, a search box, a user switcher instead of a sign-in) over an in-memory
+wiki seeded with demo content, pages rendered from Markdown, whose syntax is
+described for authors in [docs/markdown.md](docs/markdown.md), with their formulas,
+diagrams and code drawn by KaTeX, Mermaid and highlight.js; an editor with the
+Markdown beside a live preview, attachments dropped or chosen into it, and a guard
+against losing unsaved changes; and creating, renaming, moving and deleting spaces
+and pages as the permissions allow. Every route has an address of its own and a
 prerendered page. The plan of work is in
 [docs/PLAN.md](docs/PLAN.md): phases from a serverless MVP demo through a
 server with persistence to authentication and authorisation.

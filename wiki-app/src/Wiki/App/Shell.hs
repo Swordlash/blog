@@ -1,6 +1,6 @@
 -- | The application's frame, around whatever the route shows: a header with
--- the site's name, breadcrumbs, the place for a search box and the demo's
--- user switcher; a sidebar with the tree of spaces, the current space's
+-- the site's name, breadcrumbs, the search box ("Wiki.App.View.Search") and
+-- the demo's user switcher; a sidebar with the tree of spaces, the current space's
 -- pages under it; and the content of the route.
 --
 -- The shell holds what every view needs and loads it itself: who is signed
@@ -49,6 +49,8 @@ import Wiki.App.View.Common
 import Wiki.App.View.Editor qualified as Editor
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.Page qualified as PageView
+import Wiki.App.View.Search qualified as SearchBox
+import Wiki.App.View.SearchResults qualified as SearchResultsView
 import Wiki.App.View.Space qualified as SpaceView
 import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Page (Page (id, title))
@@ -75,6 +77,8 @@ type Slots =
     .+ ("page" .== H.Slot (Const Void) ViewOutput ())
     .+ ("newSpace" .== H.Slot (Const Void) ViewOutput ())
     .+ ("editor" .== H.Slot Editor.Query ViewOutput Editor.Target)
+    .+ ("searchBox" .== H.Slot (Const Void) Void ())
+    .+ ("searchResults" .== H.Slot (Const Void) ViewOutput ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -165,8 +169,7 @@ component =
         [HP.class_ "wiki-header"]
         [ Router.link st.router Followed Home [HP.class_ "wiki-brand"] [HH.text "Wiki"]
         , breadcrumbs st
-        , -- Where the search box goes (WP1.8).
-          HH.div [HP.class_ "wiki-search"] []
+        , HH.slot_ "searchBox" () SearchBox.component SearchBox.Input {context = context st}
         , userSwitcher st
         ]
 
@@ -268,6 +271,8 @@ component =
       Home -> home st
       Unknown -> notFound st
       NewSpace parent -> HH.slot "newSpace" () NewSpaceView.component NewSpaceView.Input {context = context st, parent} FromView
+      Search text space subspaces ->
+        HH.slot "searchResults" () SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> HH.p [HP.class_ "loading"] [HH.text "Loading…"]
@@ -411,8 +416,8 @@ component =
                 modify (\s -> s {here = either (SpaceFailed path) identity result})
       st' <- get
       H.liftEffect (setDocumentTitle (documentTitle st'))
-      -- A page's view, or the editor, says when it has loaded the page;
-      -- everything else is
+      -- A page's view, or the editor, says when it has loaded the page, and
+      -- the results of a search when they have come; everything else is
       -- loaded now.
       unless (waitsForPage st') settle
 
@@ -452,6 +457,7 @@ waitsForPage st = case (st.route, st.here) of
   (Page _ _, InSpace {}) -> True
   (EditPage _ _, InSpace {}) -> True
   (NewPage _ _, InSpace {}) -> True
+  (Search {}, _) -> True
   _ -> False
 
 currentPageOf :: [Page] -> [Slug] -> Maybe Page
@@ -473,6 +479,7 @@ crumbs st = case st.route of
   NewPage path parent -> spaceCrumbs path <> foldMap (pageCrumbs path) parent <> [("New page", Nothing)]
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]
+  Search {} -> [("Search", Nothing)]
   where
     spaceCrumbs path =
       [ (s.name, if mayView (context st) s.id then Just (Space (spacePathOf st.spaces s.id)) else Nothing)

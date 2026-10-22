@@ -20,6 +20,20 @@
 -- ('Wiki.Core.Markdown.attachmentReference'). A new page has nothing to
 -- attach them to until it is saved, so it takes no files until then.
 --
+-- The title and the textarea are not controlled: the component never sets
+-- their text while the reader types, only when it loads the page (the first
+-- time, and again after a conflict). Halogen writes a rendered @value@ back
+-- to its element on every patch where the two differ, and a render can come
+-- between a key and the handling of its input event (the preview's turn to
+-- follow the draft re-renders the editor around the textarea), which would
+-- put the text back as it was before that key and lose it. So the title is
+-- rendered as the input's @value@ attribute, the Markdown as the textarea's
+-- content, both what was loaded and so the same on every render, and both
+-- keyed by how many times the page has been loaded ('loads'), so that a
+-- reload makes new elements with the new text. The draft follows the
+-- elements through their input events, and 'insertAtCursor' changes the
+-- textarea's text the way typing does.
+--
 -- Leaving with unsaved changes is guarded twice: the shell asks this
 -- component ('IsDirty') before it follows a route away, and the browser
 -- warns before a reload or a close while the draft differs from what was
@@ -126,6 +140,9 @@ data State = State
   -- ^ Whether files are being dragged over the editor.
   , pane :: Pane
   , textarea :: H.RefLabel
+  , loads :: Int
+  -- ^ How many times the page has been loaded: the key of the title and the
+  -- textarea, which a reload replaces.
   }
 
 data Action
@@ -171,6 +188,7 @@ component =
               , dropping = False
               , pane = SourcePane
               , textarea
+              , loads = 0
               }
       , render
       , eval =
@@ -208,16 +226,24 @@ component =
           [HP.class_ "editor-form", HE.onSubmit Submit, HE.onKeyDown Key]
           ( [ HH.div
                 [HP.class_ "editor-bar"]
-                [ HH.label
+                [ HH.keyed
+                    @I.HTMLlabel
+                    (HH.ElemName "label")
                     [HP.class_ "field editor-title"]
-                    [ HH.span_ [HH.text "Title"]
-                    , HH.input
-                        [ HP.type_ I.InputText
-                        , HP.value draft.title
-                        , HE.onValueInput TypedTitle
-                        , HP.required True
-                        , HP.autofocus (isNothing draft.page)
-                        ]
+                    [ ("caption", HH.span_ [HH.text "Title"])
+                    ,
+                      ( loadKey
+                      , HH.input
+                          [ HP.type_ I.InputText
+                          , -- The attribute, the text the input starts with,
+                            -- rather than the property: see the module's
+                            -- comment.
+                            attr "value" draft.savedTitle
+                          , HE.onValueInput TypedTitle
+                          , HP.required True
+                          , HP.autofocus (isNothing draft.page)
+                          ]
+                      )
                     ]
                 , HH.div
                     [HP.class_ "editor-actions"]
@@ -247,18 +273,28 @@ component =
                      , HE.onDragLeave DragLeave
                      , HE.onDrop Dropped
                      ]
-                     [ HH.div
+                     [ HH.keyed
+                         @I.HTMLdiv
+                         (HH.ElemName "div")
                          [HP.class_ "editor-source"]
-                         [ HH.textarea
-                             [ HP.ref st.textarea
-                             , HP.class_ "editor-text"
-                             , attr "aria-label" "The page's Markdown"
-                             , HP.value draft.body
-                             , HE.onValueInput Typed
-                             , HP.readOnly st.saving
-                             , HP.autofocus (isJust draft.page)
-                             ]
-                         , HH.p [HP.class_ "editor-hint"] [HH.text (hint st draft)]
+                         [
+                           ( loadKey
+                           , -- The text the textarea starts with is its
+                             -- content, not its value: see the module's
+                             -- comment.
+                             HH.element
+                               @I.HTMLtextarea
+                               (HH.ElemName "textarea")
+                               [ HP.ref st.textarea
+                               , HP.class_ "editor-text"
+                               , attr "aria-label" "The page's Markdown"
+                               , HE.onValueInput Typed
+                               , HP.readOnly st.saving
+                               , HP.autofocus (isJust draft.page)
+                               ]
+                               [HH.text draft.savedBody]
+                           )
+                         , ("hint", HH.p [HP.class_ "editor-hint"] [HH.text (hint st draft)])
                          ]
                      , HH.div
                          [HP.class_ "editor-preview", attr "aria-label" "Preview"]
@@ -273,6 +309,8 @@ component =
                  ]
           )
       ]
+      where
+        loadKey = "load-" <> show st.loads
 
     paneButton :: State -> Pane -> Text -> H.ComponentHTML Action Slots m
     paneButton st pane label =
@@ -374,7 +412,7 @@ component =
         New parent -> pure $ case parentOf input parent of
           Left e -> Failed e
           Right _ -> Ready (draftOf Nothing "" "" [] mempty)
-      modify (\st -> st {loaded})
+      modify (\st -> st {loaded, loads = st.loads + 1})
       syncGuard
       H.raise Loaded
 

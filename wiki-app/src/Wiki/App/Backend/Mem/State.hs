@@ -30,6 +30,7 @@ module Wiki.App.Backend.Mem.State
   , getSpaceIn
   , listPagesIn
   , getPageIn
+  , searchPagesIn
 
     -- * Writes
   , Write
@@ -59,7 +60,7 @@ import Wiki.App.Backend qualified as B
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
-import Wiki.Core.Path (ancestry, findChild, resolvePath)
+import Wiki.Core.Path (ancestry, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission
   ( GlobalGrant (GlobalGrant)
   , GlobalPermission
@@ -80,6 +81,7 @@ import Wiki.Core.Permission
 -- Qualified, since the store has fields of the same names (grants, spaces,
 -- groups) and a record update could not tell them apart.
 import Wiki.Core.Permission qualified as P
+import Wiki.Core.Search (SearchHit, SearchQuery (..), searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), Membership, User (..))
@@ -354,6 +356,27 @@ getPageIn sid path st = do
   case resolvePath (findChild (pagesOf sid st)) path of
     Right ps | Just p <- lastMay ps -> pure p
     _ -> Left NotFound
+
+-- | The pages the current user may view that match a query, in the spaces it
+-- asks for: the same visibility 'listPagesIn' checks, space by space.
+searchPagesIn :: SearchQuery -> MemState -> [SearchHit]
+searchPagesIn q st =
+  searchPlain
+    q
+    [ (p, map (\s -> s.slug) c, pagePath)
+    | (sid, c) <- Map.toList chains
+    , wanted c
+    , canView (currentPrincipal st) st.grants c
+    , p <- pagesOf sid st
+    , Just pagePath <- [pathOf (`Map.lookup` st.pages) p.id]
+    ]
+  where
+    chains = Map.mapWithKey (\sid _ -> chainOf st sid) st.spaces
+    wanted c = case q.space of
+      Nothing -> True
+      Just sid
+        | q.includeSubspaces -> within sid c
+        | otherwise -> fmap (\s -> s.id) (lastMay c) == Just sid
 
 --------------------------------------------------------------------------------
 -- Writes

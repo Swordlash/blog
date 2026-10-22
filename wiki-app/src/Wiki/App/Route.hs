@@ -14,6 +14,8 @@
 -- > /new-space/                    NewSpace Nothing
 -- > /new-space/team/               NewSpace (Just [team])
 -- > /not-found/                    Unknown
+-- > /search/?q=mermaid&space=docs  Search (Just "mermaid") (Just [docs]) True
+-- > /search/?q=x&space=team&only   Search (Just "x") (Just [team]) False
 --
 -- Every address but the home's ends in a slash, because each is a directory
 -- with an @index.html@ in it on a static host (the prerender writes one per
@@ -43,12 +45,12 @@ where
 import Data.Text qualified as T
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
-import Halogen.Router.Duplex (RouteDuplex (..), RouteDuplex', as, many1, noArgs, prefix, root, segment, suffix)
+import Halogen.Router.Duplex (RouteDuplex (..), RouteDuplex', as, flag, many1, noArgs, param, prefix, root, segment, suffix)
 import Halogen.Router.Duplex qualified as Duplex
 import Protolude
 import Wiki.Core.Id (SpaceId)
 import Wiki.Core.Page (Page)
-import Wiki.Core.Path (findChild, resolvePath)
+import Wiki.Core.Path (findChild, parsePath, renderPath, resolvePath)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (slug))
@@ -70,6 +72,13 @@ data Route
   | -- | The editor for a new page in a space: the space's path, and the path
     -- of the page to put it under, or 'Nothing' for the space's top level.
     NewPage [Slug] (Maybe [Slug])
+  | -- | The results of a search: the words, if any; the path of the space
+    -- searched, or 'Nothing' for every space (a path that is not one is
+    -- empty, which names no space); and whether its subspaces are
+    -- searched too. They are the query's parameters (@q@, @space@, and
+    -- @only@ when the subspaces are left out), so that the address of a
+    -- search can be kept and shared like any other.
+    Search (Maybe Text) (Maybe [Slug]) Bool
   deriving stock (Eq, Show)
 
 -- | The routes' codec. Parsing tries the routes in this order and takes the
@@ -98,12 +107,27 @@ route =
           (\case NewPage s p -> Just (s, p); _ -> Nothing)
           (uncurry NewPage)
           (prefix "s" (directory ((,) <$> Duplex.lmap fst slugs <*> Duplex.lmap snd (prefix "new-page" optionalSlugs))))
+      , alternative
+          (\case Search q s subspaces -> Just (q, s, subspaces); _ -> Nothing)
+          (\(q, s, subspaces) -> Search q s subspaces)
+          (prefix "search" (directory searchParams))
       ]
   where
     spaceAndPage :: (RouteDuplex' [Slug] -> RouteDuplex' [Slug]) -> RouteDuplex' ([Slug], [Slug])
     spaceAndPage after = (,) <$> Duplex.lmap fst slugs <*> Duplex.lmap snd (prefix "p" (after slugs))
     optionalSlugs :: RouteDuplex' (Maybe [Slug])
     optionalSlugs = RouteDuplex (maybe mempty slugs.printer) ((Just <$> slugs.parser) <|> pure Nothing)
+    searchParams :: RouteDuplex' (Maybe Text, Maybe [Slug], Bool)
+    searchParams =
+      (,,)
+        <$> Duplex.lmap (\(q, _, _) -> q) (Duplex.optional (param "q"))
+        <*> Duplex.lmap (\(_, s, _) -> s) (Duplex.optional (as renderPath readPath (param "space")))
+        <*> Duplex.lmap (\(_, _, subspaces) -> subspaces) (not <$> Duplex.lmap not (flag (param "only")))
+    -- A parameter that is not a path is read as the empty path, which names
+    -- no space, rather than refused: an optional parameter that is refused
+    -- reads as left out, which would search every space instead.
+    readPath :: Text -> Either Text [Slug]
+    readPath = Right . fromRight [] . parsePath
 
 -- | One or more slugs, one per segment.
 slugs :: RouteDuplex' [Slug]
@@ -142,8 +166,8 @@ alternatives alts = RouteDuplex (\r -> foldMap (\a -> a.printer r) alts) (asum (
 
 -- | The route a link's @href@ leads to, if it is one of the router's own
 -- addresses ('Router.href' wrote it): what a click on a link the page's
--- Markdown made is followed to. The fragment and the query are not part of
--- the route.
+-- Markdown made is followed to. The fragment is not part of the route, and
+-- the query only of a search's.
 routeOfHref :: Router Route -> Text -> Maybe Route
 routeOfHref router href = do
   -- The home's address is the base, with a slash after it.

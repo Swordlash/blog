@@ -96,6 +96,26 @@ async function headingBecomes(page, text) {
   await page.locator("#app .wiki-content h1", { hasText: text }).first().waitFor({ timeout });
 }
 
+// A page at an address, once app.wasm has mounted the application in place of
+// the prerendered one: app.wasm is held back until the prerendered shell is
+// marked, so that a shell without the mark is the program's.
+async function mounted(path) {
+  const page = await newPage();
+  let releaseWasm;
+  const wasmHeld = new Promise((release) => (releaseWasm = release));
+  await page.route("**/app.wasm", async (route) => {
+    await wasmHeld;
+    await route.continue();
+  });
+  await page.goto(url(path), { waitUntil: "commit" });
+  const prerendered = page.locator("#app .wiki");
+  await prerendered.waitFor({ timeout });
+  await prerendered.evaluate((shell) => (shell.dataset.prerendered = "true"));
+  releaseWasm();
+  await page.locator("#app .wiki:not([data-prerendered])").waitFor({ timeout });
+  return page;
+}
+
 try {
   // The pages as a server sends them, before any script runs: each route's
   // has the application in it already, for that route.
@@ -176,6 +196,29 @@ try {
   await team.locator("#app .wiki-content .error-forbidden").waitFor({ timeout });
   assert.equal(new URL(team.url()).pathname, "/s/team/");
   console.log("ok: a deep link to a private space says, in place, that it is private");
+
+  // Search from the keyboard: "/" to the box, words, an arrow and Enter.
+  const searching = await mounted("/");
+  await searching.evaluate(() => (window.stillTheSamePage = true));
+  await searching.keyboard.press("/");
+  await searching.keyboard.type("mermaid diagrams");
+  await searching.locator("#app .search-results .search-hit", { hasText: "Diagrams" }).first().waitFor({ timeout });
+  assert.equal(await searching.locator("#app .search-input").inputValue(), "mermaid diagrams");
+  // Diagrams has a word of the query in its title, so it comes first.
+  assert.equal(await searching.locator("#app .search-results .search-hit-title").first().textContent(), "Diagrams");
+  await searching.keyboard.press("ArrowDown");
+  await searching.keyboard.press("Enter");
+  await headingBecomes(searching, "Diagrams");
+  assert.equal(new URL(searching.url()).pathname, "/s/docs/p/markdown-guide/diagrams/");
+  assert.ok(await searching.evaluate(() => window.stillTheSamePage), "opening a search's hit loaded a page");
+  console.log("ok: / focuses the search box, and a hit chosen with the keyboard opens its page");
+
+  // A search's address: the prerendered page of results, searched once loaded.
+  const results = await mounted("/search/?q=mermaid&space=docs");
+  await headingBecomes(results, "Search");
+  await results.locator("#app .search-view a.search-hit[href='/s/docs/p/markdown-guide/diagrams/']").waitFor({ timeout });
+  assert.match(await results.locator("#app .search-summary").textContent(), /for “mermaid” in Docs and its subspaces\./);
+  console.log("ok: a search's address shows its results");
 
   // The editor, as someone who may edit: switched to in the header, since
   // the demo has no passwords.

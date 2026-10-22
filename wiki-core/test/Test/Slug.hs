@@ -39,6 +39,12 @@ spec = describe "Slug" $ do
   it "reports the first character that breaks the rules" $
     mkSlug "a B?" `shouldBe` Left (SlugBadCharacter ' ')
 
+  describe "foldLetter" $ do
+    it "lowercases, and spells a letter in ASCII where slugify does" $
+      map foldLetter "AżÓßÆ" `shouldBe` ["a", "z", "o", "ss", "ae"]
+    it "drops a combining mark, and keeps whatever else it is given" $
+      map foldLetter "e\x0301 -日" `shouldBe` ["e", "", " ", "-", "日"]
+
   describe "slugify" $ do
     -- Test names stay ASCII: hspec prints them in the locale's encoding,
     -- which need not be UTF-8.

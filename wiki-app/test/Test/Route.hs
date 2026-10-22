@@ -35,6 +35,10 @@ genRoute =
     , NewSpace <$> oneof [pure Nothing, Just <$> genPath]
     , pure Unknown
     , NewPage <$> genPath <*> oneof [pure Nothing, Just <$> genPath]
+    , Search
+        <$> oneof [pure Nothing, Just <$> elements ["mermaid", "mermaid flow", "", "a&b=c", "100% ?#/", "zażółć", "+x+"]]
+        <*> oneof [pure Nothing, pure (Just []), Just <$> genPath]
+        <*> elements [False, True]
     ]
 
 spec :: Spec
@@ -54,6 +58,10 @@ spec = describe "Wiki.App.Route" $ do
       print route Unknown `shouldBe` "/not-found/"
       print route (NewPage (slugs ["docs"]) Nothing) `shouldBe` "/s/docs/new-page/"
       print route (NewPage (slugs ["team", "projects"]) (Just (slugs ["the-wiki"]))) `shouldBe` "/s/team/projects/new-page/the-wiki/"
+      print route (Search Nothing Nothing True) `shouldBe` "/search/"
+      print route (Search (Just "mermaid flow") (Just (slugs ["team", "projects"])) True)
+        `shouldBe` "/search/?q=mermaid%20flow&space=team%2Fprojects"
+      print route (Search (Just "x") (Just (slugs ["team"])) False) `shouldBe` "/search/?q=x&space=team&only"
 
     it "escapes a slug that is one of its words" $ do
       print route (Space (slugs ["p"])) `shouldBe` "/s/~p/"
@@ -67,7 +75,17 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/s/docs" `shouldBe` Right (Space (slugs ["docs"]))
       parse route "/s/docs/p/tour" `shouldBe` Right (Page (slugs ["docs"]) (slugs ["tour"]))
       parse route "/new-space" `shouldBe` Right (NewSpace Nothing)
+      parse route "/search?q=x" `shouldBe` Right (Search (Just "x") Nothing True)
       parse route "/s/docs/new-page" `shouldBe` Right (NewPage (slugs ["docs"]) Nothing)
+
+    it "reads a search's parameters in any order, and leaves out what is not there" $ do
+      parse route "/search/?space=docs&q=a+b" `shouldBe` Right (Search (Just "a+b") (Just (slugs ["docs"])) True)
+      parse route "/search/?only&space=docs" `shouldBe` Right (Search Nothing (Just (slugs ["docs"])) False)
+      parse route "/search/?q=x&utm_source=elsewhere" `shouldBe` Right (Search (Just "x") Nothing True)
+
+    it "reads a search's space that is not a path as the empty path, which names no space" $ do
+      parse route "/search/?q=x&space=Not%20a%20slug" `shouldBe` Right (Search (Just "x") (Just []) True)
+      parse route "/search/?q=x&space=" `shouldBe` Right (Search (Just "x") (Just []) True)
 
     it "reads no route from what is not one" $ do
       parse route "/s/" `shouldSatisfy` isLeft
@@ -82,6 +100,7 @@ spec = describe "Wiki.App.Route" $ do
       routeOfHref router "/wiki/s/docs/" `shouldBe` Just (Space (slugs ["docs"]))
       routeOfHref router "/wiki/s/docs/p/tour/#who-you-can-be" `shouldBe` Just (Page (slugs ["docs"]) (slugs ["tour"]))
       routeOfHref router "/wiki/" `shouldBe` Just Home
+      routeOfHref router "/wiki/search/?q=x" `shouldBe` Just (Search (Just "x") Nothing True)
 
     it "leaves everything else alone" $ do
       router <- runMemDOM (Router.newRouter "/wiki/" Unknown route)

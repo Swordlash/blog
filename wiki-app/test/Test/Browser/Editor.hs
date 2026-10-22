@@ -131,6 +131,36 @@ spec m = do
     find ui ".editor-preview .page-body p" >>= (`shouldHaveText` "Someone else's words.")
     length <$> findAll ui ".error-conflict" `shouldReturn` 0
 
+  it "loses no keystroke while the preview catches up with a long page" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-admin") (EditPage (slugs ["docs"]) (slugs ["markdown-guide"]))
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing Markdown guide")
+    text <- find ui ".editor-text"
+    original <- getProperty text "value"
+    focus text
+    press "Control+End"
+    -- Words typed with pauses about as long as the preview's delay, so that
+    -- the preview's turn to follow the draft (which re-renders the editor
+    -- around the textarea) comes as the next key is typed; then a long run
+    -- typed without pauses, while the preview of the long page is drawn.
+    let pauses = cycle [150, 180, 190, 195, 200, 205, 210, 220, 250]
+        pieces = [" w" <> show i | i <- [1 .. 24 :: Int]]
+        sentence = " the quick brown fox jumps over the lazy dog"
+        long = T.replicate 3 sentence
+    for_ (zip pieces pauses) $ \(word, pause) -> do
+      typeText text word
+      unsafeIOToPageM (threadDelay (pause * 1000))
+    -- In three calls, one after another, since one call may take at most
+    -- five seconds and the test build types slower than the real one.
+    replicateM_ 3 (typeText text sentence)
+    let expected = original <> mconcat pieces <> long
+    eventually $ getProperty text "value" `shouldReturn` expected
+    eventually $ find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "w24 the quick")
+    getProperty text "value" `shouldReturn` expected
+    find ui ".editor-form button.primary" >>= click
+    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Markdown guide")
+    saved <- readPage wiki ["docs"] ["markdown-guide"]
+    saved.body `shouldBe` expected
+
   it "attaches a dropped image and embeds it at the cursor" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- find ui ".editor-text"
