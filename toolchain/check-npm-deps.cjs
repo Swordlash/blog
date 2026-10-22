@@ -9,7 +9,8 @@ const { execFileSync } = require("node:child_process");
 const [root, target] = process.argv.slice(2);
 const localRequire = createRequire(path.join(root, "package.json"));
 const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
-const packages = target === "build-native" ? [] : [
+// The native commands need no npm package; every wasm one bundles the islands.
+const packages = ["build-native", "test-native"].includes(target) ? [] : [
   ["esbuild", ["esbuild"]],
   ["katex", ["katex", "katex/dist/katex.min.css"]],
   ["highlight.js", ["highlight.js/lib/common", "highlight.js/lib/languages/haskell"]],

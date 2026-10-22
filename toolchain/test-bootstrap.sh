@@ -41,7 +41,7 @@ case $name in
     case $1 in
       --numeric-version) printf '3.16.1.0\n' ;;
       path) printf '%s/index\n' "$HOME" ;;
-      build) printf 'cabal'; printf ' <%s>' "$@"; printf '\n' ;;
+      build | test) printf 'cabal'; printf ' <%s>' "$@"; printf '\n' ;;
       install)
         printf 'cabal %s\n' "$*" >>"$EVENTS"
         for arg do case $arg in --installdir=*) dest=${arg#*=} ;; esac; done
@@ -254,6 +254,15 @@ cd "$(dirname "$0")/.."
 { printf 'wasm CC=%s' "$CC"; printf ' <%s>' "$@"; printf '\n'; } >>"$EVENTS"
 mkdir -p dist-newstyle/wasm/public/app
 EOF
+  # The test scripts stand in the same way: each records that it ran, with
+  # the wasm CC it saw (none, since only the wasm scripts load that
+  # environment themselves) and its arguments.
+  for script in test-wasm run-tests dev-test; do
+    cat >"$case_dir/repo/toolchain/$script.sh" <<EOF
+#!/bin/sh
+{ printf '$script CC=%s' "\${CC:-}"; printf ' <%s>' "\$@"; printf '\\n'; } >>"\$EVENTS"
+EOF
+  done
 }
 
 npm_command() {
@@ -271,14 +280,14 @@ pass 'strict readiness is read-only and accepts automatically loaded wasm tools'
 
 GHC_REPORT=9.12.2
 export GHC_REPORT
-for command in build serve build-native build-wasm serve-wasm; do
+for command in build serve build-native build-wasm serve-wasm test-native test-wasm test dev-test; do
   if npm_command "$command" >"$case_dir/$command" 2>&1; then fail "$command bypassed readiness"; fi
   assert_contains "$case_dir/$command" 'sh toolchain/bootstrap.sh toolchain'
   assert_contains "$case_dir/$command" '. ~/.wiki-toolchain/env'
   assert_contains "$case_dir/$command" 'found: 9.12.2'
 done
 [ ! -s "$EVENTS" ] || fail 'a rejected npm command reached build or server'
-pass 'all five npm entry points stop before compilation/server startup on a wrong compiler'
+pass 'all nine npm entry points stop before compilation, tests or server startup on a wrong compiler'
 
 GHC_REPORT=9.14.1
 export GHC_REPORT
@@ -294,6 +303,18 @@ for command in build build-wasm serve serve-wasm; do
     serve*) assert_contains "$EVENTS" 'server <.> <-p> <8080>' ;;
   esac
 done
+npm_command test-native -- -j2 >"$case_dir/test-native" 2>&1
+assert_contains "$case_dir/test-native" 'cabal <test> <all> <--builddir=dist-newstyle/native> <-j2>'
+for command in test-wasm test dev-test; do
+  : >"$EVENTS"
+  npm_command "$command" -- -j2 >"$case_dir/$command" 2>&1
+  case $command in
+    test-wasm) assert_contains "$EVENTS" 'test-wasm CC= <-j2>' ;;
+    test) assert_contains "$EVENTS" 'run-tests CC= <-j2>' ;;
+    dev-test) assert_contains "$EVENTS" 'dev-test CC= <-j2>' ;;
+  esac
+  [ "$(grep -c 'bootstrap: ready for' "$case_dir/$command")" = 1 ] || fail "$command checked readiness twice"
+done
 pass 'ready PATH works without an env file; npm delegates once, preserves arguments and uses the local server'
 
 readiness_fixture unloaded
@@ -307,12 +328,14 @@ assert_contains "$case_dir/unloaded" 'ghc 9.14.1 is required on PATH'
 bootstrap check >"$case_dir/inventory"
 assert_contains "$case_dir/inventory" 'reuse ghc 9.14.1'
 cp "$HOME/.wiki-toolchain/env" "$case_dir/env-before"
-for command in build-native build build-wasm serve serve-wasm; do
+for command in build-native build build-wasm serve serve-wasm test-native test-wasm; do
   : >"$EVENTS"
   npm_command "$command" -- -j2 >"$case_dir/$command" 2>&1
   assert_contains "$case_dir/$command" 'bootstrap: ready for'
   case $command in
     build-native) assert_contains "$case_dir/$command" 'cabal <build> <all> <--builddir=dist-newstyle/native> <-j2>' ;;
+    test-native) assert_contains "$case_dir/$command" 'cabal <test> <all> <--builddir=dist-newstyle/native> <-j2>' ;;
+    test-wasm) assert_contains "$EVENTS" 'test-wasm CC= <-j2>' ;;
     *) assert_contains "$EVENTS" 'wasm CC=wasm-only-cc <-j2>' ;;
   esac
   case $command in
@@ -324,7 +347,7 @@ cmp "$case_dir/env-before" "$HOME/.wiki-toolchain/env" || fail 'npm rewrote the 
 if bootstrap ready >"$case_dir/still-unloaded" 2>&1; then fail 'npm changed caller PATH'; fi
 . "$HOME/.wiki-toolchain/env"
 bootstrap ready >"$case_dir/loaded"
-pass 'direct readiness rejects unloaded PATH while every npm build/serve entry point automatically loads env'
+pass 'direct readiness rejects unloaded PATH while every npm build, serve and test entry point automatically loads env'
 
 readiness_fixture old-env
 mkdir -p "$HOME/.ghcup/bin" "$HOME/.wiki-toolchain"

@@ -114,12 +114,13 @@ This lists tools to reuse or install and exits unsuccessfully for a blocked sysr
 For a strict check of the current shell and the npm dependencies a command uses:
 
 ```sh
-sh toolchain/bootstrap.sh ready build-wasm  # or build-native / serve-wasm
+sh toolchain/bootstrap.sh ready build-wasm  # or build-native / serve-wasm / test-native / test-wasm
 ```
 
-`npm run build`, `npm run serve`, `build-native`, `build-wasm` and `serve-wasm`
-automatically load an existing `~/.wiki-toolchain/env`, then run this check before
-compiling or starting a server. No manual environment loading is needed for these npm
+`npm run build`, `npm run serve`, `build-native`, `build-wasm`, `serve-wasm` and the
+test commands (`test-native`, `test-wasm`, `test`, `dev-test`) automatically load an
+existing `~/.wiki-toolchain/env`, then run this check before compiling, testing or
+starting a server. No manual environment loading is needed for these npm
 commands; if the file is missing, an already configured `PATH` still works.
 Managed Node and ghcup directories take precedence even if they were already later
 on `PATH`. npm also applies the current environment directives after loading an old

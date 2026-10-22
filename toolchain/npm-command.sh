@@ -1,12 +1,14 @@
 #!/bin/sh
 # Guard each npm entry point once. Serve calls the raw build script, so its
 # rebuild does not repeat discovery, and npm arguments reach cabal unchanged.
+# The test commands go through the same gate, so a shell that has not loaded
+# ~/.wiki-toolchain/env runs them as it runs a build.
 set -eu
 cd "$(dirname "$0")/.."
-command=${1:?usage: npm-command.sh <build-native|build-wasm|serve-wasm> [args...]}
+command=${1:?usage: npm-command.sh <build-native|test-native|build-wasm|test-wasm|test|dev-test|serve-wasm> [args...]}
 shift
 case $command in
-  build-native | build-wasm | serve-wasm) ;;
+  build-native | test-native | build-wasm | test-wasm | test | dev-test | serve-wasm) ;;
   *) printf 'Unknown npm command: %s\n' "$command" >&2; exit 2 ;;
 esac
 # Bootstrap's environment only adjusts the native toolchain PATH. The wasm
@@ -23,6 +25,10 @@ eval "$bootstrap_env"
 sh toolchain/bootstrap.sh ready "$command"
 case $command in
   build-native) exec cabal build all --builddir=dist-newstyle/native "$@" ;;
+  test-native) exec cabal test all --builddir=dist-newstyle/native "$@" ;;
   build-wasm) exec sh toolchain/build-wasm.sh "$@" ;;
+  test-wasm) exec sh toolchain/test-wasm.sh "$@" ;;
+  test) exec sh toolchain/run-tests.sh "$@" ;;
+  dev-test) exec sh toolchain/dev-test.sh "$@" ;;
   serve-wasm) exec sh toolchain/serve-wasm.sh "$@" ;;
 esac
