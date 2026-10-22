@@ -10,6 +10,7 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, Property, forAll, (===))
 import Wiki.Core.Id
 import Wiki.Core.Permission
+import Wiki.Core.Search
 import Wiki.Core.Slug
 import Wiki.Core.Space
 import Wiki.Core.User (Membership)
@@ -39,6 +40,8 @@ spec = describe "JSON" $ do
     prop "SpaceGrant" $ roundTrips genSpaceGrant
     prop "Grants" $ roundTrips genGrants
     prop "Principal" $ roundTrips genPrincipal
+    prop "SearchQuery" $ roundTrips genSearchQuery
+    prop "SearchHit" $ roundTrips genSearchHit
 
   describe "is written" $ do
     it "with an identifier as its bare text" $
@@ -56,6 +59,9 @@ spec = describe "JSON" $ do
     it "with membership as an object keyed by group" $
       toJSON (Map.fromList [(GroupId "devs", Set.fromList [UserId "bob"])] :: Membership)
         `shouldBe` object ["devs" .= ["bob" :: Text]]
+    it "with a snippet as a list of pieces of text, each marked or not" $
+      toJSON (Snippet [Piece "a " False, Piece "match" True])
+        `shouldBe` toJSON [object ["text" .= ("a " :: Text), "match" .= False], object ["text" .= ("match" :: Text), "match" .= True]]
     it "with a permission as its name" $
       toJSON [View, Edit, AdministerSpace] `shouldBe` toJSON ["View", "Edit", "AdministerSpace" :: Text]
 
