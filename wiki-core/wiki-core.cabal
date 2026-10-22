@@ -51,15 +51,19 @@ library
   import:           shared
   hs-source-dirs:   src
   exposed-modules:
+      Wiki.Core.Markdown
       Wiki.Core.Markdown.Ast
       Wiki.Core.Markdown.Link
+      Wiki.Core.Markdown.Render
       Wiki.Core.Slug
   build-depends:
       bytestring,
       commonmark >= 0.3.1 && < 0.4,
       commonmark-extensions >= 0.2.7.3 && < 0.3,
       containers,
+      haskell-halogen-core,
       protolude,
+      row-types,
       text
 
 -- Runs natively, and under Node on wasm through toolchain/test-wasm.sh.
@@ -76,3 +80,26 @@ test-suite wiki-core-test
       hspec >= 2,
       protolude,
       wiki-core
+
+-- The markup the renderer makes, through Halogen.Static's in-memory
+-- document, which exists natively only (as wiki-app-test). The tree it is
+-- made from is tested on both backends, in wiki-core-test.
+test-suite wiki-core-html-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test-html
+  main-is:          Test.hs
+
+  if arch(wasm32)
+    buildable: False
+  else
+    other-modules:
+        Test.Markdown.Html
+        Test.Markdown.Render
+    build-depends:
+        hspec >= 2,
+        haskell-halogen-core,
+        protolude,
+        row-types,
+        text,
+        wiki-core
