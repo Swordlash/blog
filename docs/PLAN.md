@@ -668,6 +668,36 @@ Amended by the planning session after each work package's report.
   fixed; hooks' `Extra.Actions.Events` helpers documented as action-side. Blog places with
   the same race listed under WP1.10. Possible core follow-up, not done: `continueAsync`
   running the listener's own thread before other runnable threads.
+- **WP1.13 done** ([#18](https://github.com/Swordlash/blog/pull/18), branch `wp1.13-html`).
+  `Wiki.Core.Markdown.Html`: tagsoup (already in both stores) splits the tags and the module
+  builds the tree with a browser's closing rules; `parseHtml` for a raw block, `parseFragments`
+  with a `Context` (`Flow`, `Phrasing`, `PhrasingInLink`) for inline tags read together with
+  the Markdown between them (`<mark>a *b*</mark>` works, since commonmark hands each tag over
+  alone); `renderRawHtml` is the entry point from `Render`. The allowlist as implemented:
+  formatting elements, `a` (the plan's list forgot it), structure (`div`, `p`, `details`,
+  `summary`, `blockquote`, `pre`, `hr`, lists, `dl`, `figure`), the table family without
+  `colgroup`/`col`, media (`img`, `video`, `audio`, `source`); `h1` to `h6` were also missing
+  from the list and are being added in a follow-up on the same branch. Dropped with content:
+  `script`, `style`, `iframe`, `object`, `embed`, `template`, `noscript`, `svg`, `math`,
+  `textarea`, `select` and a few more; anything else unlisted loses its tag and keeps its
+  content. Attributes: `class`/`id`/`title` everywhere, the rest only where they mean
+  something; numeric ones digits only; first of a duplicate wins as in a browser. URLs:
+  `href` relative, `http`, `https`, `mailto`, `attachment`; `src`/`poster` the same without
+  `mailto`; disguised `javascript:`/`data:` (entities, tabs, case, control characters)
+  rejected, and a QuickCheck property over tag soup checks only allowlisted output comes out.
+  Resolution goes through `Options.resolveLink` as for Markdown, a bare relative path is also
+  tried as an attachment (first for `src`, second for `href`), attachments get `download`,
+  external links `rel="noopener"`, an unresolved `href` becomes `link-unresolved`. Search
+  text now includes raw blocks. Decision kept: one raw block is parsed alone, so a `<details>`
+  with Markdown between blank lines inside does not wrap it (the guide says so); GitHub-like
+  stitching is a small change if ever wanted. Carry-overs: `.raw-html` in `web/style.css` is
+  dead (delete after WP1.9 merges); `kbd`, `mark`, `details` use the browser's default look
+  (WP1.9 or WP1.12 may style them); a footnote reference inside a link still nests links
+  (pre-existing). `app.wasm` grew to 6225 KiB (1460 KiB brotli), probably tagsoup's entity
+  table; not measured against `main` exactly. For WP2.6: the server's `resolveLink` must
+  treat `attachment:` and relative paths as the client does or hydration repairs the links;
+  the tree is built to read back unchanged from `Halogen.Static` (tested). For WP1.12: an
+  HTML command writes an inline tag pair in the line or a whole block with no blank line in it.
 - **Footer (owner's request):** "Built with haskell-halogen" linking to the repository,
   on every page; added to WP1.9 as the first `hh` view.
 - **Toolbar and HTML in pages (owner's request):** decision 13, WP1.12 (toolbar over pure
