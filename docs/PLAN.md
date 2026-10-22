@@ -1106,3 +1106,10 @@ Amended by the planning session after each work package's report.
   `2644dc1`, pushed by the owner. The editor's "loses no keystroke" test timed out once on
   #35 while the runner's machine was busy with another build, and passed when re-run: it
   types against a 5 s limit per call, so it stays sensitive to a loaded machine.
+- **Wasm builds read the project afresh** ([#36](https://github.com/Swordlash/blog/pull/36),
+  `7485ac5`). The owner's redeploy after #35 still served the old haskell-halogen: cabal
+  keeps the parsed project in `<builddir>/cache/config` and missed the change to
+  `cabal.project` under `cabal-wasm-opt.project`'s two levels of imports, so the fetched
+  sources stayed at the old pin through repeated builds. Every wasm build script now deletes
+  `cache/config` with `cache/compiler`. The prerender is built natively at the default
+  optimisation even for the `-O2` deploy.
