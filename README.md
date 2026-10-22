@@ -40,8 +40,10 @@ sh toolchain/bootstrap.sh
 It installs ghcup into `~/.ghcup` (unless one is already on `PATH`) and through it GHC
 and cabal, making them ghcup's defaults; the wasm sysroot into `~/.ghc-wasm` and the
 cross compiler through ghcup, as haskell-halogen's CI does; Node into
-`~/.wiki-toolchain/node`; and Chromium's headless shell where Playwright keeps its
-browsers. Debian packages it needs (GMP's headers, `zstd`, `jq` and a few more) it
+`~/.wiki-toolchain/node`; Chromium's headless shell where Playwright keeps its
+browsers; and fourmolu, the formatter, into ghcup's bin directory (its release binary,
+or built from Hackage where GitHub's downloads are refused, as in Claude Code's cloud
+sessions). Debian packages it needs (GMP's headers, `zstd`, `jq` and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
 otherwise. Then it builds the dependencies of `cabal.project` and `cabal-wasm.project`
 into the cabal store, so the first build compiles only this repository.
@@ -56,6 +58,43 @@ skips the store.
 Claude Code cloud sessions run it from the `SessionStart` hooks in `.claude/`: the
 toolchain before the session starts, the store in the background. A command that needs
 the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
+
+## CI
+
+`.github/workflows/build.yml` runs three jobs on every pull request to `main` and every
+push to it: `native` (build and test natively), `wasm` (build for wasm, run the test
+suites and the smoke test in headless Chromium, and on a hosted runner keep the built
+page as the run's `app` artifact) and `format` (`npm run format-check`).
+
+They run on the self-hosted runner registered for this repository (`runs-on: self-hosted`
+in every job); GitHub's hosted runners are refused by the account's Actions budget. To go
+back to them, change `runs-on` to `ubuntu-latest`: the hosted steps are kept. On a hosted
+runner the toolchain comes from `haskell-actions/setup`, `setup-node`, ghc-wasm-meta
+and caches of the cabal store and the wasm tools, as in haskell-halogen. On a
+self-hosted runner every job runs `sh toolchain/bootstrap.sh toolchain` instead, which
+installs the toolchain into the runner user's home the first time (a while: GHC, the
+wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and puts it on
+`PATH` with `sh toolchain/bootstrap.sh path`. Nothing is cached or uploaded to GitHub
+there (the account's artifact storage quota refuses uploads): the toolchain, the cabal
+store and the built page stay on the machine. One runner runs one job at a time, so
+the three jobs queue.
+
+To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
+
+1. Register a runner for this repository (Settings, Actions, Runners, New self-hosted
+   runner, Linux x64), running as an ordinary user. Its own user is best: the
+   bootstrap makes the pinned GHC and cabal ghcup's defaults for whoever runs it.
+2. Install, once, the Debian packages the bootstrap and Chromium need, since the
+   runner cannot `sudo`. The bootstrap's own are `build-essential curl git jq unzip
+   xz-utils zstd libgmp-dev`. Chromium's are those `npx playwright install-deps
+   --dry-run chromium` names in a checkout after `npm ci` (and that the bootstrap
+   prints when Chromium does not start); on Ubuntu 24.04 they are `libasound2t64
+   libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64
+   libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0
+   libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0
+   libxrandr2`; on Ubuntu 22.04 and Debian 12 they are the same without the `t64`
+   suffixes, and 22.04 adds `libwayland-client0`.
+3. Re-run the workflow.
 
 ## Layout
 
@@ -84,6 +123,7 @@ npm run test-wasm               # the test suites on wasm, under Node (browser s
 npm run test                    # test-native, then test-wasm
 npm run smoke-test              # the built page in headless Chromium: it renders, mounts, counts clicks
 npm run format                  # fourmolu over every package
+npm run format-check            # the same, failing on what it would change (as CI does)
 npm run clean                   # remove dist-newstyle/wasm/public
 ```
 
@@ -102,7 +142,7 @@ cabal test wiki-core:test:wiki-core-test --builddir=dist-newstyle/native \
 sh toolchain/test-wasm.sh --test-options='--match "/Slug/"'   # extra args go to cabal
 ```
 
-`npm run format` needs `fourmolu` on `PATH` (`cabal install fourmolu`).
+`npm run format` needs fourmolu 0.21.0.0 on `PATH`; `toolchain/bootstrap.sh` installs it.
 
 ## License
 
