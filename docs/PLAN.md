@@ -119,9 +119,18 @@ confirms it against reality and the plan is amended if it does not hold.
     an event handler attribute or a `javascript:` link written into a page by a user
     never runs. The allowlist is in `wiki-core`, shared by the preview, the prerender
     and the server's render.
-10. **Markdown stays the source of truth.** The editor is a split view: a textarea with
-    the Markdown on the left and the rendered page on the right, re-rendered on each
-    change (debounced through `hooks`' debouncer). No WYSIWYG.
+14. **Anyone who may read a page may read its source.** A page has a "View source"
+    view on its own route (`…/p/<page path>/source`), which replaces the page with its
+    Markdown and a "Back" link to the page, for every reader, signed in or not; it is
+    gated by the permission to view the page, not to edit it. Until now the source was
+    reachable only through the editor.
+10. **Markdown stays the source of truth.** The editor is a textarea with the Markdown;
+    the rendered page is a preview of it, re-rendered on each change (debounced). No
+    WYSIWYG. Amended by the owner after the MVP demo: the split view is no longer the
+    default. The editor shows the source alone at every width; "Show preview" replaces
+    the whole editing view with the rendered draft and a "Back to editing" button, a
+    change of the editor's state, not a route (the draft is not in the URL). A "Side by
+    side preview" checkbox, off by default, brings back the two panes on a wide screen.
 
 ## Repository layout
 
@@ -255,7 +264,9 @@ point of this phase.
   at the bottom of every page, "Built with haskell-halogen", with the name linking to
   https://github.com/Swordlash/haskell-halogen, styled quietly in `web/style.css`,
   present in the prerendered pages too (the smoke test checks it is there).
-- **WP1.10 Hydrate the demo and take HH-2's fix.** One pin bump (its own commit) to
+- **WP1.10 Hydrate the demo and take HH-2's fix.** Reordered after the MVP demo: it runs
+  after WP1.12 and WP1.14 have merged, the pin bump done by WP1.12 and the editor's part
+  done there too; what is left is the rest of this entry. One pin bump (its own commit) to
   haskell-halogen's `master` at `08f9093`, which has #50 (IndexedDB) and #51
   (listener-side `preventDefault`) merged; the bump covers every package of the stanza
   (`jsbits`' `Value.hs` changed too). Then two things. First, HH-2's API: wrap the form submits
@@ -365,6 +376,42 @@ point of this phase.
   `aria-label`s and the toolbar wraps on a narrow screen. Browser tests: select a word,
   click bold, the textarea has `**word**` and the preview a `<strong>`; a list button on
   three lines; Ctrl+B with no selection leaves the placeholder selected.
+  Recut after the MVP demo, the whole editor package now (one agent, since all of it
+  is `View/Editor.hs`): it starts with the pin bump planned for WP1.10 (its own commit,
+  haskell-halogen `08f9093`, every package of the stanza), because Ctrl+K and Ctrl+E
+  have browser defaults and need `HE.preventingDefault` in the listener; the editor's own
+  key handling (Ctrl+S, Tab, the new shortcuts) and its drag-and-drop move to the
+  listener-side API in this package, so WP1.10 no longer touches the editor. The toolbar
+  also gets an inline HTML command (decision 13, WP1.13's note: an inline tag pair in the
+  line, or a whole block with no blank line in it; a small menu of the allowlisted tags
+  that are useful, such as `mark`, `kbd`, `sup`, `sub`, `details`). Then the preview mode
+  of decision 10 as amended: the source alone at every width by default; a "Show preview"
+  button (on the toolbar's end, with a shortcut the agent picks) replaces the editing view
+  with the rendered draft, a "Back to editing" button and Save/Cancel still reachable; the
+  textarea stays mounted while hidden (it is uncontrolled: its text, selection, undo stack
+  and scroll must survive the round trip); a "Side by side preview" checkbox, off by
+  default, restores today's two panes on a wide screen, and on a narrow one it has no
+  effect. The checkbox is remembered per browser in local storage (`Web.Storage`); the
+  agent reports how the first render stays the same as the prerender. The present
+  Markdown/Preview switch for narrow screens goes, as "Show preview" covers it. While
+  the preview is hidden it need not follow every pause in the typing; showing it renders
+  the current draft at once. Carry-overs: delete the dead `.raw-html` rule in
+  `web/style.css`, and give `kbd`, `mark` and `details` a look of their own. Browser tests
+  add: show preview, back, the typed text and the cursor are where they were; the
+  checkbox on, both panes visible; Ctrl+K with no selection does not reach the browser.
+- **WP1.14 View source.** Decision 14: a `PageSource` route (`…/p/<page path>/source`) in
+  `Wiki.App.Route`'s codec, a view `View/Source.hs` in `hh` showing the page's title, a
+  "Back" `Router.link` to the page (a link, not `history.back`, since a reader may arrive
+  by the URL) and the Markdown in a `<pre>` (monospace, wrapping long lines, a "Copy"
+  button through the clipboard), gated on the permission to view the page (the same
+  errors as the page view: not found, forbidden, sign-in hint), never on `mayEdit`. A
+  "View source" link among the page's actions for every reader, next to "Edit" for those
+  who may edit. Prerender: the agent checks how `Prerender`/`Static` enumerate routes and
+  whether the source routes are prerendered or left to the 404 fallback, and reports it.
+  Tests: native, the route round-trips through the codec and the view renders through
+  `Halogen.Static`; browser, an anonymous reader of a public space opens the source from
+  the page and comes back, a reader without access sees the error; the smoke test visits a
+  source route, back and reload.
 - **WP1.13 HTML in pages.** Render `RawHtml` and `RawHtmlBlock` instead of showing them
   as text: `Wiki.Core.Markdown.Html` parses the HTML (`tagsoup`, pure Haskell, so it
   builds for wasm; `html-parse` if tagsoup's HTML5 handling falls short, reported) and
@@ -812,3 +859,12 @@ Amended by the planning session after each work package's report.
   Phase 3 is recut into WP3.1 to WP3.5 (the panel on the admin listener is WP3.3, the
   remote one WP3.4, OIDC moves to WP3.5), and WP3.1 no longer creates an admin from the
   configuration.
+- **Resumed** after the owner's #20 (bootstrap safeguards, readiness check, the Fable
+  advisor in `.claude/settings.json`). New asks from the owner: the editor's preview as a
+  view of its own instead of the split view (decision 10 amended), and a source view for
+  every reader (decision 14, WP1.14). The editor package WP1.12 is recut to hold the
+  toolbar, the inline HTML command, the preview mode and the pin bump to `08f9093`
+  (shortcuts need the listener-side `preventDefault`). Order now: WP1.12, WP1.14 and HH-3
+  in parallel; then the tag `v0.1.0-demo`, which the owner pushes once the editor and
+  source view are on `main`; then WP1.10 (hydration and the remaining forms and links on
+  the listener-side API) and WP1.11 (IndexedDB, after HH-3's pin).
