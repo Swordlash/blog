@@ -177,6 +177,27 @@ try {
   assert.equal(new URL(team.url()).pathname, "/s/team/");
   console.log("ok: a deep link to a private space says, in place, that it is private");
 
+  // The editor, as someone who may edit: switched to in the header, since
+  // the demo has no passwords.
+  const editor = await newPage();
+  await editor.goto(url("/s/docs/p/tour/"));
+  await headingBecomes(editor, "Tour");
+  await editor.locator("#app .user-switcher-toggle").click();
+  await editor.locator("#app .user-menu button[data-login=admin]").click();
+  await editor.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
+  await headingBecomes(editor, "Editing Tour");
+  await editor.waitForURL((address) => address.pathname === "/s/docs/p/tour/edit/", { timeout });
+  const textarea = editor.locator("#app .editor-text");
+  await textarea.press("Control+End");
+  await textarea.pressSequentially("\n\n## Smoke test\n\nWritten by $x^2$.");
+  await editor.locator("#app .editor-preview h2", { hasText: "Smoke test" }).waitFor({ timeout });
+  await editor.locator("#app .editor-preview .wiki-math-inline .katex").last().waitFor({ timeout });
+  await editor.locator("#app .editor-form button.primary").click();
+  await editor.locator("#app .page-view .page-body h2", { hasText: "Smoke test" }).waitFor({ timeout });
+  // The shell shows the page first and then tells the router.
+  await editor.waitForURL((address) => address.pathname === "/s/docs/p/tour/", { timeout });
+  console.log("ok: the editor previews what is typed, with its formulas, and saves it");
+
   const nowhere = await newPage();
   await nowhere.goto(url("/no/such/address/"));
   await headingBecomes(nowhere, "Not found");

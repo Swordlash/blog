@@ -82,6 +82,12 @@ extension is not a known image, video or audio format is shown as an image.
 Width and height in pixels can follow an image or a video in braces:
 `![Logo](attachment:logo.png){width=120}`.
 
+The editor writes these references for you: a file dropped onto the editor,
+or chosen with *Attach files*, is attached to the page and its reference put
+in where the cursor is, embedded with `!` if it is an image, a video or
+audio and a link otherwise, its name in angle brackets if it has spaces. A
+new page takes files once it has been saved.
+
 ## Code
 
 Inline code is in backticks: `git status`. A block of code is fenced with

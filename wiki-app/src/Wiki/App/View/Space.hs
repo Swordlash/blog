@@ -1,5 +1,5 @@
 -- | A space: its pages as a tree, its subspaces, and what the current user
--- may do to it (a new page, a new subspace, renaming it, making it public or
+-- may do to it (a new page, in the editor; a new subspace, renaming it, making it public or
 -- private, moving it, deleting it). An action the rules forbid is not
 -- offered; the backend checks the rules again, and a refusal is shown in
 -- place.
@@ -22,7 +22,7 @@ import Web.Event.Event (Event, preventDefault)
 import Wiki.App.Backend (MonadWiki (..), WikiError)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
-import Wiki.Core.Page (Page (slug))
+import Wiki.Core.Page (Page)
 import Wiki.Core.Path (childrenOf)
 import Wiki.Core.Permission (mayCreateSpace, mayMoveSpace)
 import Wiki.Core.Slug (Slug)
@@ -37,7 +37,6 @@ data Input = Input
 
 data Mode
   = Viewing
-  | NewPage Text
   | Renaming Text
   | -- | Moving to the destination at this index of 'destinations'.
     Moving Int
@@ -91,7 +90,7 @@ component =
 
     actions :: Context -> Space -> [H.ComponentHTML Action Empty m]
     actions ctx space =
-      [button "New page" (Open (NewPage "")) | mayEdit ctx space.id]
+      [Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button"] [HH.text "New page"] | mayEdit ctx space.id]
         <> [ Router.link ctx.router Followed (NewSpace (Just path)) [HP.class_ "button"] [HH.text "New subspace"]
            | mayCreateSpace (principalOf ctx) (grantsOf ctx) (Just (chainOf ctx space.id))
            ]
@@ -106,7 +105,6 @@ component =
     form :: Context -> Space -> Mode -> [H.ComponentHTML Action Empty m]
     form ctx space = \case
       Viewing -> []
-      NewPage title -> [inForm [textField "Title of the new page" title Typed] "Create"]
       Renaming name -> [inForm [textField "New name" name Typed] "Rename"]
       Moving chosen ->
         [ inForm
@@ -161,18 +159,13 @@ component =
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       Open mode -> modify (\st -> st {mode, problem = Nothing})
       Typed t -> modify $ \st -> case st.mode of
-        NewPage _ -> st {mode = NewPage t}
         Renaming _ -> st {mode = Renaming t}
         other -> st {mode = other}
       Chose n -> modify (\st -> st {mode = Moving n})
       Submit ev -> do
         H.liftEffect (preventDefault ev)
         State {input = Input {context = ctx, space}, mode} <- get
-        let path = spacePathOf ctx.spaces space.id
         case mode of
-          NewPage title ->
-            createPage space.id Nothing title ("# " <> title <> "\n")
-              >>= done (\p -> Just (Page path [p.slug]))
           Renaming name -> renameSpace space.id name >>= done (const Nothing)
           Moving n -> for_ (atMay (destinations ctx space) n) $ \destination ->
             moveSpace space.id (map (\d -> d.id) destination) >>= done (\moved -> Just (Space (destinationPath ctx destination <> [moved.slug])))

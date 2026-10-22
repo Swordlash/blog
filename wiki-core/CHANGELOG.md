@@ -56,3 +56,10 @@ is a URL, a page, an attachment or nothing known; an embedded attachment shows
 as an image, a video, an audio player or a download link by its media type.
 `renderMarkdown` does both in one call. The syntax is described for authors
 in `docs/markdown.md`.
+
+`Wiki.Core.Markdown.Link.attachmentReference` writes the Markdown that refers
+to an attachment, as the editor inserts it after an upload: embedded for an
+image, a video or audio, a link otherwise, by the media type or else the
+name's extension. Any name reads back as itself: one with spaces or
+parentheses goes in angle brackets, `%`, `&`, `\`, `<` and `>` are
+percent-encoded, and the label's Markdown characters are escaped.

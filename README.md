@@ -15,12 +15,13 @@ interface, implemented once in memory (a serverless demo deployable as static fi
 and once over HTTP to a Haskell server with persistence. Markdown is parsed and
 rendered to Halogen HTML in the browser, so the preview never waits for a server.
 
-So far there is the serverless demo without its editor: the shell (spaces in a tree,
-their pages, breadcrumbs, a user switcher instead of a sign-in) over an in-memory wiki
-seeded with demo content, pages rendered from Markdown, whose syntax is described for
-authors in [docs/markdown.md](docs/markdown.md), with their formulas, diagrams and code
-drawn by KaTeX, Mermaid and highlight.js, and creating, renaming, moving and deleting
-spaces and pages as the permissions allow. Every route has an address of its own and a
+So far there is the serverless demo: the shell (spaces in a tree, their pages,
+breadcrumbs, a user switcher instead of a sign-in) over an in-memory wiki seeded with
+demo content, pages rendered from Markdown, whose syntax is described for authors in
+[docs/markdown.md](docs/markdown.md), with their formulas, diagrams and code drawn by
+KaTeX, Mermaid and highlight.js; an editor with the Markdown beside a live preview,
+attachments dropped or chosen into it, and a guard against losing unsaved changes; and
+creating, renaming, moving and deleting spaces and pages as the permissions allow. Every route has an address of its own and a
 prerendered page. The plan of work is in
 [docs/PLAN.md](docs/PLAN.md): phases from a serverless MVP demo through a
 server with persistence to authentication and authorisation.
@@ -125,7 +126,7 @@ npm run build-wasm              # wiki-app to wasm, a prerendered page per route
 npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
 npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
-npm run smoke-test              # the built pages in headless Chromium: deep links, clicks, back, reload, islands
+npm run smoke-test              # the built pages in headless Chromium: deep links, clicks, back, reload, islands, the editor
 npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
 npm run format                  # fourmolu over every package
 npm run format-check            # the same, failing on what it would change (as CI does)
