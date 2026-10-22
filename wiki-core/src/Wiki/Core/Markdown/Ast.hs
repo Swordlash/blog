@@ -21,9 +21,10 @@
 -- * wiki links, @[[page]]@ and @[[page|label]]@, read as ordinary links to
 --   @page@.
 --
--- Raw HTML in the source is kept, as 'RawHtml' and 'RawHtmlBlock', so that
--- nothing the author wrote is lost, but it is never rendered as HTML: the
--- renderer shows it as text, and drops HTML comments.
+-- Raw HTML in the source is kept as written, as 'RawHtml' (one tag or
+-- comment each, with the Markdown between them as ordinary inlines) and
+-- 'RawHtmlBlock'. What of it reaches the page is decided by the allowlist
+-- in "Wiki.Core.Markdown.Html", when it is rendered.
 --
 -- Source positions are not kept: nothing needs them yet. Adding them means
 -- giving 'Rangeable' a real instance and a field to the constructors.
@@ -96,7 +97,8 @@ data Block
   | -- | The footnotes, in the order they were defined. Comes last in the
     -- document, once, when it has any.
     Footnotes [Footnote]
-  | -- | Raw HTML, kept as written and never rendered as HTML.
+  | -- | A block of raw HTML, as written: rendered through the allowlist of
+    -- "Wiki.Core.Markdown.Html", read as one document.
     RawHtmlBlock Text
   deriving stock (Eq, Show)
 
@@ -127,7 +129,9 @@ data Inline
     FootnoteRef Int Text
   | -- | An emoji shortcode: the keyword (@tada@) and the emoji.
     Emoji Text Text
-  | -- | Raw HTML, kept as written and never rendered as HTML.
+  | -- | Raw HTML among the text, as written: a tag (opening or closing) or
+    -- a comment. Rendered through the allowlist of
+    -- "Wiki.Core.Markdown.Html", read with the inlines around it.
     RawHtml Text
   deriving stock (Eq, Show)
 
