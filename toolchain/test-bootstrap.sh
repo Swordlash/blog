@@ -231,13 +231,16 @@ readiness_fixture() {
   done
   printf 'export PATH="%s/compiler/bin:$PATH"\nexport CC=wasm-only-cc\n' "$HOME/.ghc-wasm" >"$HOME/.ghc-wasm/env"
   unset CC
-  for package in esbuild katex highlight.js mermaid http-server; do
+  for package in esbuild katex highlight.js mermaid fflate @drgrice1/tikzjax http-server; do
     mkdir -p "$case_dir/repo/node_modules/$package"
     printf '{"main":"index.js"}\n' >"$case_dir/repo/node_modules/$package/package.json"
     printf 'module.exports = {};\n' >"$case_dir/repo/node_modules/$package/index.js"
   done
-  mkdir -p "$case_dir/repo/node_modules/katex/dist" "$case_dir/repo/node_modules/highlight.js/lib/languages"
+  mkdir -p "$case_dir/repo/node_modules/katex/dist" "$case_dir/repo/node_modules/highlight.js/lib/languages" \
+    "$case_dir/repo/node_modules/@drgrice1/tikzjax/dist"
   touch "$case_dir/repo/node_modules/katex/dist/katex.min.css" \
+    "$case_dir/repo/node_modules/@drgrice1/tikzjax/dist/run-tex.js" \
+    "$case_dir/repo/node_modules/@drgrice1/tikzjax/dist/core.dump.gz" \
     "$case_dir/repo/node_modules/highlight.js/lib/common.js" \
     "$case_dir/repo/node_modules/highlight.js/lib/languages/haskell.js"
   printf '#!/bin/sh\nprintf "0.28.2\\n"\n' >"$case_dir/repo/node_modules/.bin/esbuild"

@@ -16,6 +16,9 @@ const packages = ["build-native", "test-native"].includes(target) ? [] : [
   ["highlight.js", ["highlight.js/lib/common", "highlight.js/lib/languages/haskell"]],
   ["mermaid", ["mermaid"]],
   ["fflate", ["fflate"]],
+  // Its package.json names no file it ships as its main; web/bundle.sh copies
+  // dist/ as it is.
+  ["@drgrice1/tikzjax", ["@drgrice1/tikzjax/dist/run-tex.js", "@drgrice1/tikzjax/dist/core.dump.gz"]],
 ];
 if (target === "serve-wasm") packages.push(["http-server", ["http-server"]]);
 
