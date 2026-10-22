@@ -318,14 +318,16 @@ component =
               </label>
             </div>
           </div>
-          {{ problemView st }}{{ toolbar Bar {menuOpen = st.htmlMenu, twoPanes = st.sideBySide, attaches = isJust draft.page} }}
+          {{ problemView st }}
+          {{ toolbar Bar {menuOpen = st.htmlMenu, twoPanes = st.sideBySide, attaches = isJust draft.page} }}
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
             {{ HE.handler' (EventType "dragleave") (const (Just DragLeave)) }}
             {{ HE.preventingDefault (HE.handler' (EventType "drop") dropped) }}
           >
-            {{ source st draft }}{{ previewPane st draft }}
+            {{ source st draft }}
+            {{ previewPane st draft }}
           </div>
           {{ attachmentList draft }}
         </form>

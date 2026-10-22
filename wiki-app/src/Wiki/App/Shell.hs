@@ -38,7 +38,6 @@ import Data.Row (type (.+), type (.==))
 import Data.Set qualified as Set
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
-import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
@@ -175,7 +174,12 @@ component =
           {{ header st }}
           <div class="wiki-body">
             {{ sidebar st }}
-            <main class="wiki-content">{% if isJust st.leaving %}{{ leaveConfirm }}{% end %}{{ content st }}</main>
+            <main class="wiki-content">
+              {% if isJust st.leaving %}
+                {{ leaveConfirm }}
+              {% end %}
+              {{ content st }}
+            </main>
           </div>
           {{ footer }}
         </div>
@@ -184,10 +188,14 @@ component =
     header :: State -> H.ComponentHTML Action Slots m
     header st =
       [hh|
-        <header class="wiki-header">{{ brand }}{{ breadcrumbs st }}{{ searchBox }}{{ userSwitcher st }}</header>
+        <header class="wiki-header">
+          <a class="wiki-brand" {{ Router.linkProps st.router Followed Home }}>Wiki</a>
+          {{ breadcrumbs st }}
+          {{ searchBox }}
+          {{ userSwitcher st }}
+        </header>
       |]
       where
-        brand = Router.link st.router Followed Home [HP.class_ "wiki-brand"] [HH.text "Wiki"]
         searchBox = HH.slot_ "searchBox" () SearchBox.component SearchBox.Input {context = context st}
 
     breadcrumbs :: State -> H.ComponentHTML Action Slots m
@@ -209,7 +217,7 @@ component =
         -- unless the user may not go there.
         crumb label target final = case target of
           _ | final -> [hh|<span aria-current="page">{{ label }}</span>|]
-          Just r -> Router.link st.router Followed r [] [HH.text label]
+          Just r -> [hh|<a {{ Router.linkProps st.router Followed r }}>{{ label }}</a>|]
           Nothing -> [hh|<span class="unviewable">{{ label }}</span>|]
 
     -- The demo's menu of who one is: nobody, or one of its users.
@@ -245,7 +253,8 @@ component =
       [hh|
         <nav class="wiki-sidebar" aria-label="Spaces">
           <h2>Spaces</h2>
-          {{ spaceLevel st Nothing }}{{ newSpace st "new-space-link" }}
+          {{ spaceLevel st Nothing }}
+          {{ newSpace st "new-space-link" }}
         </nav>
       |]
 
@@ -253,7 +262,7 @@ component =
     newSpace :: State -> Text -> Maybe (H.ComponentHTML Action Slots m)
     newSpace st cls =
       guard (mayCreateSpace (principalOf (context st)) st.session.grants Nothing)
-        $> Router.link st.router Followed (NewSpace Nothing) [HP.class_ (HH.ClassName cls)] [HH.text "New space"]
+        $> [hh|<a class="{{ cls }}" {{ Router.linkProps st.router Followed (NewSpace Nothing) }}>New space</a>|]
 
     spaceLevel :: State -> Maybe SpaceId -> H.ComponentHTML Action Slots m
     spaceLevel st parent = [hh|<ul class="space-tree">{{ map (spaceNode st) (childrenOf st.spaces parent) }}</ul>|]
@@ -262,8 +271,16 @@ component =
     spaceNode st s =
       [hh|
         <li class="space-node{% if current %} current{% end %}">
-          <div class="space-row">{% if hasChildren %}{{ toggle }}{% end %}{{ spaceLabel }}</div>
-          {{ pagesHere }}{% if hasChildren && open %}{{ spaceLevel st (Just s.id) }}{% end %}
+          <div class="space-row">
+            {% if hasChildren %}
+              {{ toggle }}
+            {% end %}
+            {{ spaceLabel }}
+          </div>
+          {{ pagesHere }}
+          {% if hasChildren && open %}
+            {{ spaceLevel st (Just s.id) }}
+          {% end %}
         </li>
       |]
       where
@@ -288,7 +305,15 @@ component =
           _ -> False
         spaceLabel
           | mayView ctx s.id =
-              Router.link st.router Followed (Space path) ([HP.class_ "space-link"] <> [attr "aria-current" "page" | current && isSpaceRoute st.route]) [HH.text s.name]
+              [hh|
+                <a
+                  class="space-link"
+                  {{ [attr "aria-current" "page" | current && isSpaceRoute st.route] }}
+                  {{ Router.linkProps st.router Followed (Space path) }}
+                >
+                  {{ s.name }}
+                </a>
+              |]
           | otherwise =
               [hh|<span class="unviewable" title="You do not have permission to see this space">{{ s.name }}</span>|]
         pagesHere = case st.here of
@@ -339,10 +364,11 @@ component =
             everyone.
           </p>
           {% for r in maybeToList st.welcome %}
-            <p class="welcome">New here? {{ Router.link st.router Followed r [] [HH.text "Take the tour"] }}.</p>
+            <p class="welcome">New here? <a {{ Router.linkProps st.router Followed r }}>Take the tour</a>.</p>
           {% end %}
           <h2>Spaces</h2>
-          {{ spaceList }}{{ newSpace st "button" }}
+          {{ spaceList }}
+          {{ newSpace st "button" }}
         </section>
       |]
       where
@@ -355,7 +381,7 @@ component =
       | mayView (context st) s.id =
           [hh|
             <li>
-              {{ Router.link st.router Followed (Space [s.slug]) [] [HH.text s.name] }}
+              <a {{ Router.linkProps st.router Followed (Space [s.slug]) }}>{{ s.name }}</a>
               <span class="badge {{ if s.public then "badge-public" else "badge-private" :: Text }}">{{ if s.public then "Public" else "Private" :: Text }}</span>
             </li>
           |]
@@ -368,7 +394,7 @@ component =
         <section class="not-found">
           <h1>Not found</h1>
           <p>There is nothing at this address.</p>
-          {{ Router.link st.router Followed Home [HP.class_ "button"] [HH.text "Go to the front page"] }}
+          <a class="button" {{ Router.linkProps st.router Followed Home }}>Go to the front page</a>
         </section>
       |]
 
