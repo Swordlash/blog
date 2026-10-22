@@ -338,3 +338,48 @@ Amended by the planning session after each work package's report.
 - **Owner's note (2026-10-22):** a search bar for pages with a filter by space is wanted;
   planned as WP1.8 (client-side over `MonadWiki`) and WP2.7 (SQLite FTS5 behind the same
   method).
+- **WP0.3b** ([#6](https://github.com/Swordlash/blog/pull/6)): the workflow runs on a
+  self-hosted runner when the repository variable `CI_RUNS_ON` says so (the owner has one;
+  hosted jobs are refused by the Actions budget), with the toolchain from
+  `toolchain/bootstrap.sh` in the runner user's home and no cache steps; the README lists
+  the Debian packages the runner needs. Still unverified on a real runner.
+- **WP1.3 done** ([#10](https://github.com/Swordlash/blog/pull/10)). One parameterised
+  island component behind a `MonadIslands` class (`BrowserDOM` draws, `MemDOM` writes the
+  source for the prerender); `web/bundle.sh` bundles KaTeX and highlight.js (455 KiB,
+  141 KiB gzip) and lazy-loads Mermaid on the first diagram; the first hspec-halogen
+  browser suite runs in Chromium through `test-wasm.sh`. Decision 2 confirmed. Fixed on
+  the way: `build-wasm.sh` on a fresh build directory, esbuild's postinstall approval.
+  Carried over: cloud sessions preset `NODE_PATH`, which hides ghc-wasm-meta's `ws` from
+  browser GHCi (`dev-test.sh` works around it; the bootstrap could too); non-ASCII in a
+  jsbits file breaks the wasm build (worth an upstream report to haskell-halogen).
+- **WP1.4 done** ([#11](https://github.com/Swordlash/blog/pull/11)). `MonadWiki` with
+  `Either WikiError` results and lifting defaults, `MemWiki` polymorphic in its base monad,
+  demo content with `admin`, `editor`, `reader`, 64 contract tests for the HTTP backend to
+  reuse. Amendment accepted: `savePage` takes the `updatedAt` the edit started from and
+  answers `Conflict` (WP2.1's `If-Match`). Creating a space grants its creator
+  `AdministerSpace`; uploads replace by name and do not bump `updatedAt`.
+- **WP1.5 done** ([#12](https://github.com/Swordlash/blog/pull/12)). Path routing with a
+  hand-built codec (`~` escapes slugs that collide with route words, trailing slashes for
+  static hosts, `Unknown` as the fallback), the shell with space tree, breadcrumbs, user
+  switcher behind `MonadDemoUsers`, page view with islands as slots, create/rename/move/
+  delete, a prerendered `index.html` per demo route plus `404.html`, 21 browser tests.
+  The write rules moved into `Wiki.Core.Permission`. Decision: no `th` quoters in the app
+  (plain combinators and `web/style.css`), so no `ghc-lib-parser` build. `app.wasm` grew
+  to about 5.6 MB (1.3 MB brotli) with commonmark's Unicode tables; WP1.7 looks at it.
+- **WP1.6 done** ([#13](https://github.com/Swordlash/blog/pull/13), stacked on #12). Editor
+  at `/edit/`, a `NewPage` route, shared `View.Body` for page view and preview, a 200 ms
+  forked debounce (not hooks' debouncer: the editor is a plain component; Decision 10
+  amended), islands kept by `IslandKey` while typing, versioned saves with `Conflict` in
+  place, uploads through `browserJS` with `attachmentReference` in `wiki-core`, a leave
+  guard in the shell plus `beforeunload`. Uploads wait until a new page is saved.
+- **WP1.8 done** ([#14](https://github.com/Swordlash/blog/pull/14), stacked on #12).
+  `Wiki.Core.Search` (query, hit with marked snippets, matcher folding diacritics the way
+  `slugify` does, every query word must match, titles rank first), `searchPages` on
+  `MonadWiki` with contract cases, the header box with `/`, arrows, Enter, Escape, a space
+  filter, and a `/search/` route with a `Bool` for "without subspaces". Found: a controlled
+  input loses a keystroke when a render lands between the key and its handler, so inputs
+  that take typing are uncontrolled; the editor is checked for the same race in the
+  integration before WP1.7.
+- **Integration and WP1.7 started:** #13 and #14 conflict in ten files; the integration
+  merges `wp1.6-editor` into `wp1.8-search` and restacks #14 on #13, then WP1.7 branches
+  from there. Merge order once CI runs: #6, #9, #10, #11, #12, #13, #14, then WP1.7.
