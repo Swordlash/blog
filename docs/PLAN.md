@@ -95,6 +95,30 @@ confirms it against reality and the plan is amended if it does not hold.
     differs (the local operator on the admin listener, the session's user on the
     public one). The admin listener is not restricted beyond loopback: a remote
     operator reaches it through an SSH tunnel.
+12. **The serverless demo persists in IndexedDB, through an API added to
+    haskell-halogen.** haskell-halogen has Web Storage (`Web.Storage.Storage` over
+    `MonadBrowserDOM`: synchronous, text, a few megabytes) and nothing for IndexedDB,
+    which is what pages, versions and attachments (bytes, tens of megabytes) need:
+    asynchronous, large, bytes kept as bytes. Rather than JavaScript of this
+    repository's own, haskell-halogen gets a key-value store over IndexedDB in `core`,
+    in the shape of `Web.Storage`: a class with the browser instance over the JSFFI,
+    an in-memory instance natively for tests, lifted defaults for transformers, typed
+    reads and writes through `StorageSerialize`, tested in hspec-halogen on both
+    browser backends. `MemWiki` then writes through to it, record by record, and
+    reloads from it at start, so the demo keeps its edits across reloads with no
+    server. The same store is where an offline cache would go later.
+13. **The editor is for people who do not know Markdown, and HTML in a page is
+    rendered through an allowlist.** The textarea stays the source of truth (decision
+    10), but a toolbar above it writes the Markdown for the author: a button wraps the
+    selection or inserts a template, with keyboard shortcuts, and the editing commands
+    are pure functions over text and a selection, tested natively, so the JavaScript
+    only moves the selection in and out. Raw HTML in Markdown (inline and block) is
+    rendered, not shown as text, by parsing it in Haskell and keeping only the elements
+    and attributes of an allowlist, turned into Halogen `HTML` values; never
+    `innerHTML`, so the rule that a page is always Halogen elements holds, and a script,
+    an event handler attribute or a `javascript:` link written into a page by a user
+    never runs. The allowlist is in `wiki-core`, shared by the preview, the prerender
+    and the server's render.
 10. **Markdown stays the source of truth.** The editor is a split view: a textarea with
     the Markdown on the left and the rendered page on the right, re-rendered on each
     change (debounced through `hooks`' debouncer). No WYSIWYG.
@@ -205,7 +229,10 @@ point of this phase.
   prerender diff before and after must be empty or explained), adds `haskell-halogen-th`
   to `wiki-app` and `alex`/`happy < 2.2` to the wasm job, records the build-time cost of
   `ghc-lib-parser` on both backends, and reports the rule it applied so later packages
-  follow it.
+  follow it. It also adds the shell's footer, the first view written with `hh`: one line
+  at the bottom of every page, "Built with haskell-halogen", with the name linking to
+  https://github.com/Swordlash/haskell-halogen, styled quietly in `web/style.css`,
+  present in the prerendered pages too (the smoke test checks it is there).
 - **WP1.10 Hydrate the demo.** haskell-halogen `7c78cfb` ("Hydrate prerendered pages
   instead of rendering over them") adds `hydrateUI`, with `runUI`'s signature, which
   adopts the HTML `Halogen.Static` prerendered instead of emptying `#app` and building it
@@ -223,6 +250,91 @@ point of this phase.
   the harness's new `htmlContainer`/`hydrate` for the shell and a page view. Report
   anything the repair had to fix, since each such case is HTML the server-rendered page
   of WP2.6 would also get wrong.
+- **HH-1 IndexedDB key-value store, in haskell-halogen** (a pull request there, not
+  here). In `core`, `Web.Storage.IndexedDB`: a `Database` descriptor (name, version,
+  the object stores it has; stores are created on the upgrade event, so adding one is a
+  version bump), and a class `MonadIndexedDB m` with `get`, `put`, `delete`, `keys`,
+  `getAll` and `clear` on one store, keys `Text` and values `ByteString` (kept as a
+  `Uint8Array`, never base64), plus `writeMany :: Database -> [(StoreName, Text, Maybe
+  ByteString)] -> m ()` as one read-write transaction, so a backend can save a page and
+  its attachments atomically. Typed `getItem`/`setItem` over `StorageSerialize`, as
+  `Web.Storage.Storage` has. Instances: `BrowserDOM` for both browser backends (jsbits
+  shared by both, `safe` imports on wasm so the thread waits on the request; a cached
+  connection per database name), `MemDOM` natively over an `IORef`, and lifted defaults
+  so `ReaderT`/`IdentityT` instances are empty. Errors (a blocked upgrade from another
+  tab, quota exceeded, a version lower than the one on disk) surface as a documented
+  exception or `Either`, the implementer's choice, reported. Tests: the native suite
+  against `MemDOM`, hspec-halogen in Chromium on wasm and JS (write, read back, keys,
+  clear, `writeMany` all-or-nothing, a value that is not text), and the CHANGELOG entry.
+  haskell-halogen's conventions and its three-backend gate apply; the JavaScript backend
+  is not installed in the blog's sessions, so that build is reported as not run and
+  left to haskell-halogen's CI.
+- **HH-2 Router links followed by the browser, in haskell-halogen.** Found by WP1.7: a
+  router link clicked right after a user switch is sometimes followed by the browser (a
+  full page load) instead of the router: 1 click in 20 made at once after the switch, none
+  100 ms later, none of 126 without a switch. `Halogen.Router.follow` calls
+  `preventDefault` from the action handler, and a handler is work for the tree's loop
+  (AGENTS.md: one piece of work at a time, by whichever thread brings it while it is
+  idle), so when the loop is busy with the render the switch caused, the handler runs as a
+  later task and the browser has already navigated. Reproduce it in hspec-halogen (a
+  component whose render is slow, a link clicked while it renders), then fix it where it
+  belongs: `preventDefault` must run synchronously in the DOM callback, before the handler
+  is queued, so either the router's link handler asks for it at the listener (an `HE`
+  combinator or event-handler option that calls `preventDefault` in the callback and then
+  dispatches), or core's listener does it for handlers that declare it. The implementer
+  chooses, with the reason, and keeps `H.liftEffect`'s contract. Report what else in the
+  examples relies on `preventDefault` from a handler (forms, keyboard shortcuts), since the
+  same race applies.
+- **WP1.11 Persist the demo.** After HH-1 and WP1.10: bump the pin to HH-1's commit (its
+  own commit). `MemWiki` writes through to IndexedDB after every successful write, the
+  records it changed in one `writeMany` (spaces, pages, attachments with their bytes,
+  grants, each under its id in its own store), and `main` loads the records before
+  mounting; an empty database is seeded with `demoState` and written out. A "reset the
+  demo content" action in the user switcher clears the database and reseeds it. Object
+  URLs for attachments are made when they are loaded, as now when uploaded. The
+  prerendered page shows the seeded demo; when the store holds edits the first render
+  differs and `hydrateUI` repairs it, which is accepted for the demo (a flash of the
+  seeded content; the server of Phase 2 renders the real state). No cross-tab sync: the
+  last writer of a record wins. Tests: native, `MemWiki` over `MemDOM` with the in-memory
+  store (write, start a fresh `MemWiki` from the store, same state); browser, save a page
+  in one mounted application, mount another from the same store, the page is there.
+- **WP1.12 Editor toolbar.** A toolbar above the editor's textarea, written with `hh`:
+  bold, italic, strikethrough, heading (cycles H1 to H3 and off), bulleted list,
+  numbered list, task list, quote, inline code, code block (fenced, cursor on the
+  language), link, image or attachment (opens WP1.6's upload), table (a three-column
+  template), inline and display math, a Mermaid block, a horizontal rule. A command on a
+  selection wraps it (`**text**`); on no selection inserts a placeholder and selects it
+  (`**bold text**` with the words selected, so typing replaces them); on a selection
+  already wrapped, unwraps it; a line command (lists, quote, heading) applies to every
+  line the selection touches and toggles off when every line already has it. The commands
+  are pure, `Wiki.Core.Markdown.Edit`: `apply :: Command -> Text -> Selection -> (Text,
+  Selection)`, with native tests per command (wrap, unwrap, placeholder, multi-line,
+  cursor position afterwards). The browser side reads the selection, applies, writes
+  with `setRangeText` and dispatches `input`, so the browser's undo stack and the preview
+  debounce both see one edit. Shortcuts: Ctrl/Cmd+B, I, K (link), E (code), Shift+7/8
+  (lists); the title of each button names its shortcut; buttons are inline SVG icons with
+  `aria-label`s and the toolbar wraps on a narrow screen. Browser tests: select a word,
+  click bold, the textarea has `**word**` and the preview a `<strong>`; a list button on
+  three lines; Ctrl+B with no selection leaves the placeholder selected.
+- **WP1.13 HTML in pages.** Render `RawHtml` and `RawHtmlBlock` instead of showing them
+  as text: `Wiki.Core.Markdown.Html` parses the HTML (`tagsoup`, pure Haskell, so it
+  builds for wasm; `html-parse` if tagsoup's HTML5 handling falls short, reported) and
+  keeps what an allowlist admits, as Halogen elements. Elements: formatting (`b`, `i`,
+  `em`, `strong`, `u`, `s`, `sub`, `sup`, `mark`, `small`, `abbr`, `kbd`, `code`, `span`,
+  `br`), structure (`div`, `p`, `details`, `summary`, `blockquote`, `pre`, `hr`, `ul`,
+  `ol`, `li`, `dl`, `dt`, `dd`, the `table` family, `figure`, `figcaption`), media (`img`,
+  `video`, `audio`, `source`). Attributes: `class`, `id`, `title`, `alt`, `width`,
+  `height`, `colspan`, `rowspan`, `open`, `controls`, `poster`, `start`, `href` and `src`
+  only with `http:`, `https:`, `mailto:` or a relative address (an attachment's);
+  everything else dropped, so `script`, `style`, `iframe`, `on*` attributes, `javascript:`
+  and `data:` URLs never reach the page. Unclosed tags close as a browser would; what
+  CommonMark hands over as one raw block is parsed as one document, and Markdown inside an
+  HTML block stays as CommonMark defines it (not parsed). Native tests: the allowlist on
+  each element and attribute class, and the classics (`<script>`, `<img onerror>`,
+  `<a href="javascript:…">`, `<svg onload>`, nesting that never closes). `docs/markdown.md`
+  gains the HTML section with the list. Why an allowlist now, in a demo of one user: Phase 3
+  brings other editors and the renderer is shared with the server (WP2.6), so the rule has
+  to be in `wiki-core` from the first page that uses it.
 
 ### Phase 2: server and persistence
 
@@ -454,7 +566,29 @@ Amended by the planning session after each work package's report.
   integration before WP1.7.
 - **Integration and WP1.7 started:** #13 and #14 conflict in ten files; the integration
   merges `wp1.6-editor` into `wp1.8-search` and restacks #14 on #13, then WP1.7 branches
-  from there. Merge order once CI runs: #6, #9, #10, #11, #12, #13, #14, then WP1.7.
+  from there. Merge order once CI runs: #6, #9, #10, #11, #12, #13, #14, then WP1.7 (#16).
+- **Integration done, WP1.7 done** ([#16](https://github.com/Swordlash/blog/pull/16),
+  stacked on #14, which now targets #13). The editor's controlled-input race was real:
+  the preview's forked update re-rendered the editor and `HP.value` dropped keys (1 run
+  in 3); fixed by making the title's `value` and the textarea's text the loaded content
+  only, keyed by a load counter so a reload after a conflict makes fresh elements; a
+  30 s browser test types against a long page. `textField` (rename, new space) is still
+  controlled and does not race today; it must become uncontrolled with `HttpWiki`
+  (WP2.4). WP1.7: the tour rewritten as a guided walk, README "What works" and "Running
+  the demo", the smoke test grown into a gallery-style test (every prerendered page with
+  `app.wasm` held back, one long walk through tour, spaces, editor, search, 14 history
+  entries, the leave guard, a reload, `404.html`; dark and light schemes; a 390 px phone),
+  no network needed; Stay no longer duplicates the editor's history entry (the shell
+  numbers entries in `history.state`); private pages titled "Private · Wiki"; CHANGELOGs
+  cut as 0.1.0. Tag `v0.1.0-demo` goes on the merge of #16. Bundle: `app.wasm` 5928 KiB
+  (1385 KiB brotli); commonmark and its extensions are 44% of the code, `wasm-opt
+  --converge`, `-O3`, `split-sections` and dropping emoji save nothing worth having, so
+  the remaining options are a lighter Markdown parser or serving brotli; parked. No view
+  added, so `hh` is still unused. New haskell-halogen defect, planned as HH-2: a router
+  link clicked right after a user switch is sometimes followed by the browser. For Phase
+  2: the shell reloads session, users, spaces and every page body after each change,
+  so the API wants page summaries or the client a cache; `attachmentUrl` over HTTP is
+  the download endpoint's address; `MonadDemoUsers` must become optional or be replaced.
 - **Quoters, owner's rule:** use `hh` (and `clay`) wherever they simplify the code,
   which for HTML is usual; decision 3 amended. WP1.9, after the Phase 1 merges, is one
   agent's pass over the existing views deciding where `hh`/`clay` go and where not;
@@ -464,6 +598,48 @@ Amended by the planning session after each work package's report.
   `htmlContainer`/`hydrate`; its examples adopt the prerender. Planned as WP1.10 (pin bump
   and hydrating the demo, right after the quoter pass) and WP2.6 recut to the server's part:
   per-request render as the principal plus embedded data so the client starts from it.
+- **Persistence of the demo in IndexedDB (owner's request):** decision 12. haskell-halogen
+  has Web Storage only, so HH-1 adds `Web.Storage.IndexedDB` to its `core` (delegated now,
+  independent of the Phase 1 merges) and WP1.11 makes `MemWiki` write through to it after
+  WP1.10's pin bump.
+- **Phase 1 merged, MVP demo released.** #6, #9, #10, #11, #12, #13, #14 and #16 are on
+  `main` in that order, each after a green run on the self-hosted runner (about 4 minutes
+  warm; the first run installed the toolchain in 22 minutes). Tag `v0.1.0-demo` belongs on
+  the merge of #16 (`d62a857`); pushing a tag from the planning session is refused (HTTP
+  403: its credentials push branches only), so the owner tags it:
+  `git tag -a v0.1.0-demo d62a857 -m "The MVP demo" && git push origin v0.1.0-demo`. What remains of Phase 1 is the owner's additions: WP1.9, WP1.10,
+  WP1.11, WP1.12, WP1.13, with HH-1 and HH-2 in haskell-halogen.
+- **HH-1 done** ([haskell-halogen#50](https://github.com/Swordlash/haskell-halogen/pull/50),
+  branch `indexeddb-store`, head `d2ce06d`; the owner merges there). `Web.Storage.IndexedDB`:
+  `Database {name, version, stores}`, `MonadIndexedDB` with `get`, `put`, `delete`, `keys`,
+  `getAll` (a `Map`), `clear`, `writeMany` (one transaction, all or nothing, resolves on
+  commit) and `deleteDatabase`; typed `getItem`/`setItem`/`getAllItems` over
+  `StorageSerialize`, `itemWrite`/`itemDeletion` for batches; `BrowserDOM` and `MemDOM`
+  instances in the class's module (no orphans, no CPP), lifted defaults. Errors are the
+  exception `IndexedDBError {database, failure}` with `Unavailable`, `UpgradeBlocked`,
+  `VersionTooLow`, `StoreNotFound`, `QuotaExceeded`, `NotBytes`, `OtherFailure`. No handle:
+  `Database` goes to every call, the first opens a cached connection per name, reopened on a
+  version change, dropped on `versionchange`. Upgrades create missing stores and never
+  delete one. FFI: unsafe bindings build an operation object, one awaited `halogen_idb_run`
+  runs it and never rejects (the JS backend's awaited bindings may only return `()`), the
+  outcome is read back; `jsbits` gains `toJSBytes`/`fromJSBytes` (bytes copied in one call,
+  the only new CPP, in `Value.hs`). Tests: 14 native on `MemDOM`, 9 in Chromium (2 MB
+  values, 20 concurrent writers, version bumps, a component finding an earlier mount's
+  data), jsbits byte round trip. JS backend not built here. Found: an awaited import in a
+  wasm *command* module (a `main` run by `wasi.start` under Node, like core's suite) hangs
+  rather than fails, so `BrowserDOM` IndexedDB is never tested under Node. For WP1.11:
+  one `Database {name = "wiki", version = 1, stores = ["spaces", "pages", "attachments",
+  "grants"]}`, calls through `lift` from `HalogenM` or plain IO before mounting, never
+  `H.liftEffect`; `MemDOM`'s store is process-global per database name (two `MemWiki`s on
+  one name see each other, which is the reload test; distinct names isolate tests); the pin
+  bump must cover `jsbits` as well as `core`; `VersionTooLow` on an old on-disk version is
+  the demo's to handle (reset).
+- **Footer (owner's request):** "Built with haskell-halogen" linking to the repository,
+  on every page; added to WP1.9 as the first `hh` view.
+- **Toolbar and HTML in pages (owner's request):** decision 13, WP1.12 (toolbar over pure
+  editing commands) and WP1.13 (raw HTML rendered through an allowlist in `wiki-core`).
+  WP1.13 touches `wiki-core` only and can run beside WP1.9; WP1.12 waits for WP1.9's rule
+  on `hh`.
 - **Administration from localhost planned (owner's request):** decision 11 adds a
   loopback-only admin listener to `wiki-server`, where a user is marked as administrator
   without a login; an administrator then has the panel remotely. WP2.3 gains the listener,
