@@ -22,7 +22,8 @@ Two roles, two kinds of session.
 implement work packages itself. It cuts the plan into work packages, writes a brief for each,
 delegates it to an implementing agent, reviews what comes back, and amends the plan: a
 decision confirmed or changed, acceptance criteria met or carried over. It may make small
-edits of its own (the plan, a README line, a one-line fix found in review).
+edits of its own (the plan, a README line, a one-line fix found in review). Changes to
+`docs/PLAN.md` alone go straight to `main`, without a pull request; code goes through one.
 
 **An implementing agent** does one work package. It is a subagent of the planning session.
 In Claude Code, start it with the `implementer` definition in
