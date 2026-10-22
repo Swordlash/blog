@@ -16,7 +16,7 @@ and once over HTTP to a Haskell server with persistence. Markdown is parsed and
 rendered to Halogen HTML in the browser, so the preview never waits for a server.
 
 So far there is the serverless demo without its editor: the shell (spaces in a tree,
-their pages, breadcrumbs, a user switcher instead of a sign-in) over an in-memory wiki
+their pages, breadcrumbs, a search box, a user switcher instead of a sign-in) over an in-memory wiki
 seeded with demo content, pages rendered from Markdown, whose syntax is described for
 authors in [docs/markdown.md](docs/markdown.md), with their formulas, diagrams and code
 drawn by KaTeX, Mermaid and highlight.js, and creating, renaming, moving and deleting

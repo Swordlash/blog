@@ -6,12 +6,15 @@
 -- The template, @web/index.html@, has an empty @\<div id=\"app\">\<\/div>@.
 -- The front page goes to @OUTPUT-DIR\/index.html@, each space's to
 -- @OUTPUT-DIR\/s\/\<space path>\/index.html@ and each page's to
--- @OUTPUT-DIR\/s\/\<space path>\/p\/\<page path>\/index.html@, so that a
--- static host has a file at every address the demo starts with: a link from
--- elsewhere and a reload load that route's page straight away. Every other
--- address (a space made in the demo, an editor) gets @404.html@, which
--- GitHub Pages and http-server serve for an address they have no file for;
--- the program, once loaded, reads the address and shows its route.
+-- @OUTPUT-DIR\/s\/\<space path>\/p\/\<page path>\/index.html@, and the page
+-- of search results to @OUTPUT-DIR\/search\/index.html@ with nothing searched
+-- for (a search's words are in its query, which a static host ignores; the
+-- program searches once it has loaded). So a static host has a file at every
+-- address the demo starts with: a link from elsewhere and a reload load that
+-- route's page straight away. Every other address (a space made in the demo,
+-- an editor) gets @404.html@, which GitHub Pages and http-server serve for an
+-- address they have no file for; the program, once loaded, reads the address
+-- and shows its route.
 --
 -- Each page is rendered as the demo starts, with nobody signed in
 -- ("Wiki.App.Static"), so a private space's page says that it is private.
@@ -61,10 +64,12 @@ main = do
     createDirectoryIfMissing True (takeDirectory file)
     B.writeFile file (encodeUtf8 filled)
 
--- | The front page, every space and every page of the demo.
+-- | The front page, the page of search results, every space and every page
+-- of the demo.
 routes :: MemState -> [Route]
 routes st =
   Home
+    : Search Nothing Nothing True
     : [Space path | s <- Map.elems st.spaces, Just path <- [spacePath s.id]]
       <> [ Page sp pp
          | p <- Map.elems st.pages

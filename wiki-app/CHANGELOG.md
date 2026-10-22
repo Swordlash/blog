@@ -85,3 +85,22 @@ The shell and the pages, read: the serverless demo without its editor.
   in `HALOGEN_BASE_PATH`.
 - `Wiki.App.Backend.Rules` is gone: its rules are `wiki-core`'s, in
   `Wiki.Core.Permission`.
+
+Searching pages.
+
+- `MonadWiki` has `searchPages`, which takes a `wiki-core` `SearchQuery` and
+  gives the `SearchHit`s among the pages of the spaces the current user may
+  view: of every such space, or of one space with or without its subspaces. A
+  query with no words, or for a space that is not there, finds nothing rather
+  than failing. `MemWiki` runs `wiki-core`'s `searchPlain` over the pages
+  `listPages` would show; the server will answer the same query from an index.
+- The shell's header has a search box (`Wiki.App.View.Search`): what is typed
+  is searched for once typing pauses, in every space or in one chosen with the
+  selector beside it (and its subspaces, unless unticked), and the best hits
+  are listed under it with their space and a snippet, the matches marked. `/`
+  anywhere outside a field focuses it; the arrows choose a hit, Enter opens it,
+  or with none chosen the page of all results; Escape closes the list.
+- A route for the page of all results, `Search`, at
+  `/search/?q=…&space=…` (`&only` when a space's subspaces are left out),
+  shown by `Wiki.App.View.SearchResults`, and prerendered with nothing searched
+  for at `/search/`.

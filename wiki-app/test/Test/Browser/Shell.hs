@@ -4,7 +4,7 @@
 -- Each test starts on a fresh copy of the demo, with a router of its own
 -- that keeps the route in the fragment ('Router.newHashRouter'), so that a
 -- test navigating does not move the test page itself to another path.
-module Test.Browser.Shell (spec) where
+module Test.Browser.Shell (spec, start, slugs) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.NT (type (~>) (..))

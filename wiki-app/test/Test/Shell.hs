@@ -93,3 +93,47 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html} <- renderRoute (as Nothing) "/wiki/" Home
     html `contains` "href=\"/wiki/s/docs/\""
     html `contains` "href=\"/wiki/\""
+
+  it "has a search box in its header" $ do
+    Rendered {html} <- render (as Nothing) Home
+    html `contains` "<div class=\"wiki-search\" role=\"search\">"
+    html `contains` "placeholder=\"Search pages… (/)\""
+    html `contains` "<option selected value=\"\">All spaces</option>"
+
+  it "offers to search only the spaces someone may view" $ do
+    Rendered {html} <- render (as (Just "user-reader")) Home
+    html `contains` ">Team / Projects</option>"
+    html `lacks` ">Team</option>"
+
+  it "shows the search route with nothing to search for" $ do
+    Rendered {html, title} <- render (as Nothing) (Search Nothing Nothing True)
+    title `shouldBe` "Search · Wiki"
+    html `contains` "<h1>Search</h1>"
+    html `contains` "Type what to look for in the search box"
+
+  it "lists the results of a search, the matches marked" $ do
+    Rendered {html} <- render (as Nothing) (Search (Just "mermaid") Nothing True)
+    html `contains` "pages for “mermaid” in every space."
+    html `contains` "<a class=\"search-hit\" href=\"/s/docs/p/markdown-guide/diagrams/\">"
+    html `contains` "<span class=\"search-hit-space\">Docs</span>"
+    html `contains` "<mark>mermaid</mark>"
+    html `lacks` "Team"
+
+  it "keeps a search to a space, and its subspaces only when asked" $ do
+    Rendered {html = only} <- render (as (Just "user-admin")) (Search (Just "the") (Just (slugs ["team"])) False)
+    only `contains` "in Team."
+    only `contains` "href=\"/s/team/p/team-handbook/\""
+    only `lacks` "href=\"/s/team/projects/p/"
+    Rendered {html = all'} <- render (as (Just "user-admin")) (Search (Just "the") (Just (slugs ["team"])) True)
+    all' `contains` "in Team and its subspaces."
+    all' `contains` "href=\"/s/team/projects/p/the-wiki/\""
+
+  it "says when a search finds nothing" $ do
+    Rendered {html} <- render (as Nothing) (Search (Just "handbook") Nothing True)
+    html `contains` "No results for “handbook” in every space."
+
+  it "says so when the space searched is not one" $ do
+    Rendered {html} <- render (as Nothing) (Search (Just "the") (Just []) True)
+    html `contains` "There is no such space to search in"
+    Rendered {html = team} <- render (as Nothing) (Search (Just "the") (Just (slugs ["team"])) False)
+    team `contains` "There is no such space to search in"

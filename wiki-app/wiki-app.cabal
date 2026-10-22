@@ -72,6 +72,8 @@ library
       Wiki.App.View.Common
       Wiki.App.View.NewSpace
       Wiki.App.View.Page
+      Wiki.App.View.Search
+      Wiki.App.View.SearchResults
       Wiki.App.View.Space
 
   -- Rendering for the prerender and the native tests, through the in-memory
@@ -190,6 +192,7 @@ test-suite wiki-app-browser-test
   main-is:          BrowserTest.hs
   other-modules:
       Test.Browser.Islands
+      Test.Browser.Search
       Test.Browser.Shell
   build-depends:
       protolude,
