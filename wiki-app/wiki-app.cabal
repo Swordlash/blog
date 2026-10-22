@@ -8,8 +8,8 @@ maintainer:         mateusz.goslinowski@gmail.com
 category:           Web
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
--- Embedded into the wasm JSFFI module at compile time (Halogen.JSBits).
-extra-source-files: jsbits/islands.js
+-- Embedded into the wasm binary at compile time by Halogen.JSBits.
+extra-source-files: jsbits/*.js
 
 flag interactive
   description: Build the browser test suite for browser GHCi (toolchain/dev-test.sh)
@@ -59,15 +59,28 @@ library
   hs-source-dirs:   src
   exposed-modules:
       Wiki.App
+      Wiki.App.Backend
+      Wiki.App.Backend.Mem
+      Wiki.App.Backend.Mem.State
+      Wiki.App.Backend.Rules
+      Wiki.App.Demo
       Wiki.App.Islands
       Wiki.App.Islands.Monad
   build-depends:
       base,
+      base64-bytestring,
+      bytestring,
+      containers,
+      primitive,
       protolude,
       row-types,
+      text,
+      time,
       transformers,
+      unliftio-core,
       haskell-halogen-core,
-      haskell-halogen-jsbits
+      haskell-halogen-jsbits,
+      wiki-core
 
 -- The application itself: a wasm reactor whose hs_start web/index.js calls.
 executable wiki-app
@@ -107,7 +120,8 @@ executable wiki-app-prerender
         wiki-app
 
 -- What the component renders, through Halogen.Static's in-memory document,
--- which exists natively only. In a browser, toolchain/smoke-test.mjs drives
+-- which exists natively only, and the backend's contract, run against the
+-- in-memory backend over IO. In a browser, toolchain/smoke-test.mjs drives
 -- the built page.
 test-suite wiki-app-test
   import:           shared
@@ -119,14 +133,25 @@ test-suite wiki-app-test
     buildable: False
   else
     other-modules:
+        Test.Backend.Contract
+        Test.Backend.Mem
+        Test.Backend.Rules
+        Test.Demo
         Test.Hello
         Test.Islands
     build-depends:
+        HUnit,
+        base,
+        base64-bytestring,
+        bytestring,
+        containers,
         hspec >= 2,
         protolude,
         text,
+        time,
         haskell-halogen-core,
-        wiki-app
+        wiki-app,
+        wiki-core
 
 -- The islands in headless Chromium, with the page's islands.js and
 -- islands.css loaded (test/web/bundle.sh): the hspec-halogen executable, as
