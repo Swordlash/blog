@@ -104,7 +104,17 @@ library
       haskell-halogen-core,
       haskell-halogen-jsbits,
       haskell-halogen-router,
+      haskell-halogen-th,
       wiki-core
+
+  -- The views are written as HTML through haskell-halogen-th's hh quoter.
+  -- Natively its plugin expands each quote as the module is parsed, so that
+  -- an error inside one is reported at its line and column (and a language
+  -- server shows it there); a plugin cannot run in the WebAssembly cross
+  -- compiler, where the quoter itself does the same work.
+  if !arch(wasm32)
+    build-depends: haskell-halogen-th-plugin
+    ghc-options:   -fplugin=Halogen.TH.Plugin
 
 -- The application itself: a wasm reactor whose hs_start web/index.js calls.
 executable wiki-app

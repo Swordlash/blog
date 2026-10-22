@@ -21,6 +21,10 @@
 #   - fourmolu $FOURMOLU_VERSION, which `npm run format` runs, into ghcup's bin
 #     directory: its release binary, or where that download is refused, built
 #     from Hackage with cabal (about a quarter of an hour, once);
+#   - alex $ALEX_VERSION and happy $HAPPY_VERSION, native, into ghcup's bin
+#     directory, built from Hackage with the host GHC (a couple of minutes,
+#     once): the wasm build of ghc-lib-parser (under haskell-halogen-th) runs
+#     them from PATH;
 #   - the Debian packages these need, Chromium's included, if they are missing
 #     and it can (root or password-less sudo); otherwise it names them and stops.
 #
@@ -80,6 +84,14 @@ PLAYWRIGHT_VERSION=1.63.0
 # copy it from there into both places.
 FOURMOLU_VERSION=0.21.0.0
 FOURMOLU_SHA256=
+# The lexer and parser generators ghc-lib-parser runs while it compiles. For a
+# cross build cabal makes them for wasm too (alex.wasm, happy.wasm), cannot run
+# those, and falls back to the alex and happy on PATH, which must be native
+# programs and a happy ghc-lib-parser accepts: it refuses 2.2. haskell-halogen's
+# CI installs them the same way (with `--constraint='happy <2.2'`); here they
+# are pinned so that every machine runs the same ones.
+ALEX_VERSION=3.5.4.2
+HAPPY_VERSION=2.1.7
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 STATE=$HOME/.wiki-toolchain
@@ -424,6 +436,20 @@ install_fourmolu() {
   fi
 }
 
+# Native alex and happy at the pins, into ghcup's bin directory, which the env
+# file and `path` put on PATH ahead of anything else; skipped when the ones
+# found there already report the pinned versions.
+install_parser_generators() {
+  if [ "$("$GHCUP_BIN/alex" --numeric-version 2>/dev/null || true)" = "$ALEX_VERSION" ] &&
+    [ "$("$GHCUP_BIN/happy" --numeric-version 2>/dev/null || true)" = "$HAPPY_VERSION" ]; then
+    return 0
+  fi
+  say "building alex $ALEX_VERSION and happy $HAPPY_VERSION from Hackage into $GHCUP_BIN"
+  run "building alex and happy" sh -c "cd '$STATE' && cabal install 'alex-$ALEX_VERSION' 'happy-$HAPPY_VERSION' \
+    --ignore-project --with-compiler='ghc-$GHC_VERSION' --installdir='$GHCUP_BIN' \
+    --install-method=copy --overwrite-policy=always"
+}
+
 update_cabal_index() {
   index=$(cd "$STATE" && cabal path --remote-repo-cache 2>>"$LOG")/hackage.haskell.org/01-index.tar
   if [ ! -f "$index" ] || [ -n "${1:-}" ]; then
@@ -460,8 +486,9 @@ toolchain() {
   install_chromium
   update_cabal_index
   install_fourmolu
+  install_parser_generators
   write_env
-  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $NODE_VERSION, Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU"
+  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $NODE_VERSION, Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU, alex $ALEX_VERSION, happy $HAPPY_VERSION"
   if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
     printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
   else

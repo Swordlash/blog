@@ -165,5 +165,54 @@ Three colons, a class, the content, three colons.
 
 ## HTML
 
-HTML in a page is not rendered: it is shown as it is written, <b>like
-this</b>, and an HTML comment is left out. <!-- Like this one. -->
+Where Markdown has no word for something, HTML may say it: press
+<kbd>Ctrl</kbd>+<kbd>S</kbd> to save, H<sub>2</sub>O, x<sup>2</sup>,
+<mark>a highlight</mark>, <abbr title="HyperText Markup Language">HTML</abbr>.
+Among the text of a paragraph, what is between two tags is still Markdown:
+<mark>this is *emphasised*</mark>.
+
+A line that starts with a block's tag (`<div>`, `<details>`, `<table>` and
+the like) starts a block of HTML, which goes on to the next blank line.
+Inside it the text is not Markdown, so write the whole element in one
+block, without blank lines; an element left open ends where its block
+ends.
+
+<details>
+<summary>A part of the page that opens on a click</summary>
+Written in HTML, so <b>this is bold</b> and **this is not**.
+</details>
+
+Only some elements and attributes are kept, so that what is written in a
+page cannot run code or change the page around it. The elements:
+
+- formatting: `b`, `i`, `em`, `strong`, `u`, `s`, `sub`, `sup`, `mark`,
+  `small`, `abbr`, `kbd`, `code`, `span`, `br`, and links, `a`;
+- structure: `h1` to `h6`, `div`, `p`, `details`, `summary`, `blockquote`, `pre`, `hr`,
+  `ul`, `ol`, `li`, `dl`, `dt`, `dd`, `table`, `caption`, `thead`,
+  `tbody`, `tfoot`, `tr`, `th`, `td`, `figure`, `figcaption`;
+- media: `img`, `video`, `audio`, `source`.
+
+Among the text of a paragraph only formatting, links and media count: a
+paragraph cannot hold a block. Any other element is left out and its
+content kept (the text of a `<font>` shows, without the font), except
+`script`, `style`, `iframe`, `object`, `embed`, `template`, `noscript`,
+`svg`, `math`, `textarea` and `select`, which are left out with everything
+in them.
+
+The attributes: `class`, `id` and `title` on any element, and where they
+mean something `href` (`a`), `src` (`img`, `video`, `audio`, `source`),
+`alt` (`img`), `width` and `height` in pixels (`img`, `video`; `width` on
+tables and cells too), `colspan` and `rowspan` (cells), `open`
+(`details`), `controls` (`video`, `audio`), `poster` (`video`) and `start`
+(`ol`). Every other attribute is left out: no `style`, and no `onclick` or
+other event handler.
+
+An address in `href`, `src` or `poster` is a URL starting with `http:` or
+`https:` (or `mailto:`, for a link), or a path. A path is read as in a
+Markdown link, and failing that as the name of one of the page's
+attachments, so `<img src="team.jpg">` shows the attachment `team.jpg`; a
+source is looked for among the attachments first. `attachment:name` works
+as in Markdown. Any other address, such as `javascript:` or `data:`, is
+left out, and a link that leads nowhere is shown as broken.
+
+An HTML comment is left out. <!-- Like this one. -->

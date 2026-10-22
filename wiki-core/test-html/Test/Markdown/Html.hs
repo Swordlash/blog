@@ -6,6 +6,7 @@ module Test.Markdown.Html
   , markdownWith
   , markdown
   , renderMarkdownOr
+  , wiki
   )
 where
 
@@ -37,3 +38,26 @@ markdownWith opts source = renderHtml =<< renderMarkdownOr opts source
 
 markdown :: Text -> IO Text
 markdown = markdownWith defaultOptions
+
+-- | A small wiki: three pages and some attachments, one of them with a URL
+-- no browser should follow.
+wiki :: Options Text w i
+wiki = defaultOptions {resolveLink, pageHref = ("/wiki/" <>)}
+  where
+    resolveLink dest = case classifyDestination dest of
+      ToAttachment name -> maybe Unresolved Attachment (attachment name)
+      ToPath path
+        | path `elem` ["guide", "onboarding", "eng/setup"] -> Page path
+        | otherwise -> Unresolved
+      ToUrl url -> External url
+      ToAnchor _ -> External dest
+    attachment name = case name of
+      "demo.mp4" -> Just (AttachmentRef name "/files/demo.mp4" (Just "video/mp4"))
+      "team" -> Just (AttachmentRef name "/files/team" (Just "image/jpeg"))
+      "song" -> Just (AttachmentRef name "/files/song" (Just "audio/ogg"))
+      "spec.pdf" -> Just (AttachmentRef name "/files/spec.pdf" (Just "application/pdf"))
+      "clip.webm" -> Just (AttachmentRef name "blob:https://wiki.example/1" Nothing)
+      "notes.txt" -> Just (AttachmentRef name "/files/notes.txt" Nothing)
+      "my file.txt" -> Just (AttachmentRef name "/files/my%20file.txt" (Just "text/plain"))
+      "evil" -> Just (AttachmentRef name "javascript:alert(1)" (Just "image/png"))
+      _ -> Nothing

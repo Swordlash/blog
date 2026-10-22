@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | The editor's preview: a draft rendered as the page view will show it
 -- once it is saved ("Wiki.App.View.Body").
 --
@@ -17,8 +19,7 @@ where
 
 import Control.Monad.UUID (MonadUUID)
 import Halogen qualified as H
-import Halogen.HTML qualified as HH
-import Halogen.HTML.Properties qualified as HP
+import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.UIEvent.MouseEvent (MouseEvent)
 import Wiki.App.Browser (followArticleClick)
@@ -47,9 +48,9 @@ component =
   where
     render :: Input -> H.ComponentHTML Action IslandSlots m
     render Input {place, title, body} =
-      HH.div
-        [HP.class_ "preview"]
-        (Body.heading title body <> [Body.article ArticleClicked place body])
+      [hh|
+        <div class="preview">{{ Body.heading title body }}{{ Body.article ArticleClicked place body }}</div>
+      |]
 
     handleAction :: Action -> H.HalogenM Input Action IslandSlots output m ()
     handleAction = \case

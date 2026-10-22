@@ -42,7 +42,10 @@ spec = describe "docs/markdown.md" $ do
       , "<section class=\"footnotes\"><ol><li id=\"fn-1\">"
       , "<div class=\"alert alert-warning\">"
       , "<div class=\"summary\">"
-      , "&lt;b&gt;like\nthis&lt;/b&gt;"
+      , "<kbd>Ctrl</kbd>+<kbd>S</kbd>"
+      , "<abbr title=\"HyperText Markup Language\">HTML</abbr>"
+      , "<mark>this is <em>emphasised</em></mark>"
+      , "<details>\n<summary>A part of the page that opens on a click</summary>\nWritten in HTML, so <b>this is bold</b> and **this is not**.\n</details>"
       ]
       $ \fragment -> html `shouldSatisfy` T.isInfixOf fragment
     html `shouldNotSatisfy` T.isInfixOf "Like this one. -->"

@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 -- | Islands: the parts of a page a JavaScript library draws. Mathematics
 -- (KaTeX), diagrams (Mermaid) and highlighted code (highlight.js) each render
 -- as one element that Halogen creates, holds by ref and never looks inside:
@@ -23,8 +25,7 @@ where
 import Control.Monad.UUID (MonadUUID)
 import Data.Row (Empty)
 import Halogen qualified as H
-import Halogen.HTML qualified as HH
-import Halogen.HTML.Properties qualified as HP
+import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element)
 import Wiki.App.Islands.Monad (MathMode (..), MonadIslands (..))
@@ -65,10 +66,10 @@ component =
   where
     render :: State -> H.ComponentHTML Action Empty m
     render State {island, ref} = case island of
-      MathInline _ -> HH.span [HP.ref ref, HP.classes ["wiki-math", "wiki-math-inline"]] []
-      MathDisplay _ -> HH.div [HP.ref ref, HP.classes ["wiki-math", "wiki-math-display"]] []
-      Mermaid _ -> HH.div [HP.ref ref, HP.class_ "wiki-mermaid"] []
-      CodeBlock _ _ -> HH.pre [HP.ref ref, HP.class_ "wiki-code"] []
+      MathInline _ -> [hh|<span ref={{ ref }} class="wiki-math wiki-math-inline"></span>|]
+      MathDisplay _ -> [hh|<div ref={{ ref }} class="wiki-math wiki-math-display"></div>|]
+      Mermaid _ -> [hh|<div ref={{ ref }} class="wiki-mermaid"></div>|]
+      CodeBlock _ _ -> [hh|<pre ref={{ ref }} class="wiki-code"></pre>|]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
     handleAction = \case
