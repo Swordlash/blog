@@ -24,6 +24,9 @@ module Wiki.Core.Markdown.Link
   , Destination (..)
   , classifyDestination
 
+    -- * Writing a reference
+  , attachmentReference
+
     -- * What an embed shows as
   , MediaKind (..)
   , mediaKindOfType
@@ -39,6 +42,7 @@ where
 
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Numeric (showHex)
 import Protolude
 
 -- | What a destination resolves to, as the wiki says. @page@ is the wiki's
@@ -87,6 +91,42 @@ classifyDestination dest
   | otherwise = ToPath dest
   where
     stripped = T.strip dest
+
+-- | The Markdown that refers to a page's attachment, as the editor inserts
+-- it when a file is uploaded: embedded (@![name](attachment:name)@) when it
+-- is an image, a video or audio, which the page then shows as what it is;
+-- a link to it (@[name](attachment:name)@) otherwise, which downloads it.
+-- The media type decides, or failing that the name's extension, as
+-- for the renderer.
+--
+-- The name is written so that 'classifyDestination' reads it back exactly,
+-- whatever it holds: in angle brackets if it has spaces or parentheses
+-- (@\<attachment:meeting notes.txt\>@), and with the characters a
+-- destination would otherwise read as something else (@%@, @&@, @\\@, @\<@,
+-- @\>@) percent-encoded. In the label, the characters that are Markdown
+-- (@*@, @_@, @[@, @$@, @:@ and the like) are escaped, so the label reads as
+-- the name.
+attachmentReference
+  :: Text
+  -- ^ The attachment's name.
+  -> Text
+  -- ^ Its media type; empty if unknown.
+  -> Text
+attachmentReference name mediaType =
+  (if embedded then "!" else "") <> "[" <> T.concatMap escapeLabel name <> "](" <> destination <> ")"
+  where
+    kind = if T.null (T.strip mediaType) then mediaKindOfPath name else mediaKindOfType mediaType
+    embedded = kind /= OtherMedia
+    encoded = "attachment:" <> T.concatMap encode name
+    destination
+      | T.any (\c -> isSpace c || c `elem` ['(', ')']) name = "<" <> encoded <> ">"
+      | otherwise = encoded
+    encode c
+      | c `elem` ['%', '&', '\\', '<', '>'] = "%" <> T.justifyRight 2 '0' (T.toUpper (toS (showHex (ord c) "")))
+      | otherwise = T.singleton c
+    escapeLabel c
+      | c `elem` ("\\[]*_`$<>&~:!|{}#^" :: [Char]) = "\\" <> T.singleton c
+      | otherwise = T.singleton c
 
 -- | How an embed shows: as an image, a video, an audio player, or (anything
 -- else) a download link.
