@@ -1,0 +1,21 @@
+{
+  "name": "wiki",
+  "version": "0.1.0",
+  "private": true,
+  "devDependencies": {
+    "@bjorn3/browser_wasi_shim": "^0.3.0",
+    "esbuild": "^0.28.2",
+    "http-server": "^14.1.1",
+    "playwright": "^1.63.0"
+  },
+  "scripts": {
+    "build-native": "cabal build all --builddir=dist-newstyle/native",
+    "test-native": "cabal test all --builddir=dist-newstyle/native",
+    "build-wasm": "sh toolchain/build-wasm.sh",
+    "serve-wasm": "sh toolchain/serve-wasm.sh",
+    "test-wasm": "sh toolchain/test-wasm.sh",
+    "test": "sh toolchain/run-tests.sh",
+    "format": "sh run_fourmolu.sh",
+    "clean": "rm -rf dist-newstyle/wasm/public"
+  }
+}
