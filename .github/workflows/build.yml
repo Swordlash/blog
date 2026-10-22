@@ -1,0 +1,281 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# A new push to a branch (or to a pull request's branch) cancels the run still
+# going for the previous one: only the newest commit's result matters.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# The pins, in one place. toolchain/bootstrap.sh holds the same values (it is
+# what a developer or a cloud session installs from); change them together, and
+# together with the haskell-halogen commit cabal.project pins, whose own CI
+# these follow.
+env:
+  GHC_VERSION: '9.14.1'
+  CABAL_VERSION: '3.16.1.0'
+  # Keep WASM_GHC_VERSION in step with with-compiler in cabal-wasm.project.
+  WASM_GHC_VERSION: '9.14.1.20260731'
+  GHC_WASM_META_REV: '358ea50b8496a69da6ce375c0c58bc049dbcb92d'
+  GHC_WASM_FLAVOUR: '9.14'
+  NODE_VERSION: '24'
+  FOURMOLU_VERSION: '0.21.0.0'
+  # Of the release's fourmolu-<version>-linux-x86_64 binary, checked when set.
+  # Not set yet: the release could not be downloaded where this was written.
+  # The format job prints the binary's checksum; copy it here and into
+  # toolchain/bootstrap.sh.
+  FOURMOLU_SHA256: ''
+  # Pin the cabal layout so the store is where the cache steps look for it
+  # (cabal otherwise picks XDG directories).
+  CABAL_DIR: /home/runner/.cabal
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - uses: haskell-actions/setup@v2
+      id: setup
+      with:
+        ghc-version: ${{ env.GHC_VERSION }}
+        cabal-version: ${{ env.CABAL_VERSION }}
+        cabal-update: true
+
+    # Only for `npm run`: the native commands need no JavaScript packages.
+    - name: Setup Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+
+    # As haskell-halogen's workflow does, and for its reasons: the store is
+    # additive and partitioned by compiler, so it is carried forward from run
+    # to run rather than rebuilt when the dependencies change. The key is
+    # unique to the run, so it is always written back (an exact hit would
+    # never be saved again, and a store that had grown would be lost); the
+    # restore keys take the newest store made from the same project files,
+    # package descriptions and haskell-halogen pin (cabal.project holds the
+    # tag), and failing that the newest of any.
+    - name: Restore cached dependencies
+      uses: actions/cache/restore@v5
+      id: cache
+      env:
+        key: ${{ runner.os }}-native-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}
+        plan: ${{ hashFiles('cabal.project', '**/*.cabal') }}
+      with:
+        path: ${{ steps.setup.outputs.cabal-store }}
+        key: ${{ env.key }}-${{ env.plan }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ${{ env.key }}-${{ env.plan }}-
+          ${{ env.key }}-
+
+    # Cheap when the restored store already satisfies the plan, and it keeps
+    # dependency failures apart from failures in our own packages.
+    - name: Install dependencies
+      run: cabal build all --builddir=dist-newstyle/native --only-dependencies
+
+    # Before the build, so a run that fails on our own code still banks the
+    # dependencies it compiled.
+    - name: Save cached dependencies
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.setup.outputs.cabal-store }}
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+
+    - name: Build
+      run: npm run build-native
+
+    - name: Test
+      run: npm run test-native
+
+  wasm:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: npm
+
+    # Only ~/.ghc-wasm (wasi-sdk, binaryen, wasmtime, its own Node) and the
+    # one cross compiler are cached: ghcup's base directory is
+    # /usr/local/.ghcup on the runner image and also holds the image's own
+    # GHC, cabal, stack and HLS, which are not ours to archive.
+    - name: Cache wasm sysroot
+      uses: actions/cache@v5
+      with:
+        path: ~/.ghc-wasm
+        key: ${{ runner.os }}-ghc-wasm-sysroot-${{ env.GHC_WASM_META_REV }}
+
+    - name: Cache wasm cross-compiler
+      uses: actions/cache@v5
+      with:
+        path: /usr/local/.ghcup/ghc/wasm32-wasi-${{ env.WASM_GHC_VERSION }}
+        key: ${{ runner.os }}-ghcup-wasm32-wasi-${{ env.WASM_GHC_VERSION }}
+
+    # Exactly haskell-halogen's steps. Each half checks for itself rather than
+    # trusting cache-hit, so a cache that turns out not to carry a toolchain
+    # repairs itself instead of failing the build several steps later. The
+    # wasm environment is sourced here only: the build scripts source it
+    # themselves, and exporting its CC and its Node for every later step would
+    # reach the native builds and the npm commands too.
+    - name: Install GHC WebAssembly toolchain
+      run: |
+        mkdir -p "$RUNNER_TEMP/ghc-wasm-meta"
+        curl --fail --location --retry 5 "https://gitlab.haskell.org/haskell-wasm/ghc-wasm-meta/-/archive/$GHC_WASM_META_REV/ghc-wasm-meta-$GHC_WASM_META_REV.tar.gz" | tar xz --strip-components=1 --directory "$RUNNER_TEMP/ghc-wasm-meta"
+        if [ ! -x "$HOME/.ghc-wasm/add_to_github_path.sh" ]; then
+          SKIP_GHC=1 FLAVOUR="$GHC_WASM_FLAVOUR" "$RUNNER_TEMP/ghc-wasm-meta/setup.sh"
+        fi
+        # shellcheck source=/dev/null
+        . ~/.ghc-wasm/env
+        if ! ghcup whereis cabal "$CABAL_VERSION" >/dev/null 2>&1; then
+          ghcup install cabal "$CABAL_VERSION"
+        fi
+        ghcup set cabal "$CABAL_VERSION"
+        if ! ghcup whereis ghc "wasm32-wasi-$WASM_GHC_VERSION" >/dev/null 2>&1; then
+          # CONFIGURE_ARGS is a list of arguments, split on purpose.
+          # shellcheck disable=SC2086
+          ghcup -s "file://$RUNNER_TEMP/ghc-wasm-meta/ghcup-wasm-0.0.9.yaml" install ghc "wasm32-wasi-$WASM_GHC_VERSION" --set -- $CONFIGURE_ARGS
+        fi
+        ghcup set ghc "wasm32-wasi-$WASM_GHC_VERSION"
+
+    # The wasm job needs the host GHC as well: the prerender (build-wasm) and
+    # the hspec-halogen executable that runs browser suites (test-wasm) are
+    # native programs. The runner image ships this GHC under ghcup, so this
+    # usually only makes it the default.
+    - name: Install host GHC
+      run: |
+        if ! ghcup whereis ghc "$GHC_VERSION" >/dev/null 2>&1; then
+          ghcup install ghc "$GHC_VERSION"
+        fi
+        ghcup set ghc "$GHC_VERSION"
+
+    # The cross compiler's own bin directory as well as ghcup's: the versioned
+    # links in ghcup's bin are made at install time, so they are missing when
+    # the compiler came back from the cache instead.
+    - name: Activate toolchain
+      run: |
+        echo "$(ghcup whereis basedir)/ghc/wasm32-wasi-$WASM_GHC_VERSION/bin" >> "$GITHUB_PATH"
+        echo "$(ghcup whereis basedir)/bin" >> "$GITHUB_PATH"
+
+    - name: Install JavaScript dependencies
+      run: npm ci
+
+    - name: Update Cabal package index
+      run: cabal update
+
+    # One store for both compilers (cabal partitions it by compiler), restored
+    # and saved as in the native job.
+    - name: Restore cached dependencies
+      uses: actions/cache/restore@v5
+      id: cache
+      env:
+        key: ${{ runner.os }}-wasm-${{ env.WASM_GHC_VERSION }}-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}
+        plan: ${{ hashFiles('cabal.project', 'cabal-wasm.project', '**/*.cabal') }}
+      with:
+        path: ${{ env.CABAL_DIR }}/store
+        key: ${{ env.key }}-${{ env.plan }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          ${{ env.key }}-${{ env.plan }}-
+          ${{ env.key }}-
+
+    # Everything the later steps take from the store, built here so that it
+    # is saved even if they fail: the native dependencies of the prerender,
+    # the hspec-halogen executable (a haskell-halogen package, so it lives in
+    # the store, and `--only-dependencies` does not reach it), and the wasm
+    # dependencies, with the arguments toolchain/bootstrap.sh's warm-up uses.
+    - name: Install dependencies
+      run: |
+        cabal build all --only-dependencies --project-file=cabal.project --builddir=dist-newstyle/native
+        sh toolchain/build-hspec-halogen.sh
+        (
+          # shellcheck source=/dev/null
+          . ~/.ghc-wasm/env
+          rm -f dist-newstyle/wasm/cache/compiler
+          cabal build all --only-dependencies --project-file=cabal-wasm.project \
+            --builddir=dist-newstyle/wasm \
+            --with-compiler="$(command -v wasm32-wasi-ghc)" \
+            --with-hc-pkg="$(command -v wasm32-wasi-ghc-pkg)" \
+            --with-hsc2hs="$(command -v wasm32-wasi-hsc2hs)"
+        )
+
+    - name: Save cached dependencies
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ env.CABAL_DIR }}/store
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+
+    - name: Build
+      run: npm run build-wasm
+
+    # Before the tests: browser suites and the smoke test run in headless
+    # Chromium.
+    - name: Install Chromium
+      run: npx playwright install --with-deps --only-shell chromium
+
+    - name: Test
+      run: npm run test-wasm
+
+    - name: Smoke-test the page in a browser
+      run: npm run smoke-test
+
+    # The repository is private, so nothing is deployed: the built page is
+    # kept with the run instead, to download and serve.
+    - name: Upload the built page
+      uses: actions/upload-artifact@v5
+      with:
+        name: app
+        path: dist-newstyle/wasm/public/app/
+        if-no-files-found: error
+
+  format:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+
+    - name: Cache fourmolu
+      uses: actions/cache@v5
+      with:
+        path: ~/fourmolu
+        key: ${{ runner.os }}-fourmolu-${{ env.FOURMOLU_VERSION }}-${{ env.FOURMOLU_SHA256 }}
+
+    # The release binary. Its checksum is printed, and checked against the
+    # pinned one (when there is one) whether it was downloaded or restored.
+    - name: Install fourmolu
+      run: |
+        mkdir -p ~/fourmolu
+        if [ ! -x ~/fourmolu/fourmolu ]; then
+          curl --fail --location --retry 5 --output ~/fourmolu/fourmolu.download \
+            "https://github.com/fourmolu/fourmolu/releases/download/v$FOURMOLU_VERSION/fourmolu-$FOURMOLU_VERSION-linux-x86_64"
+          chmod 755 ~/fourmolu/fourmolu.download
+          mv ~/fourmolu/fourmolu.download ~/fourmolu/fourmolu
+        fi
+        sha256sum ~/fourmolu/fourmolu
+        if [ -n "$FOURMOLU_SHA256" ]; then
+          printf '%s  %s\n' "$FOURMOLU_SHA256" ~/fourmolu/fourmolu | sha256sum --check
+        fi
+        echo ~/fourmolu >> "$GITHUB_PATH"
+
+    - name: Check formatting
+      run: |
+        fourmolu --version
+        sh run_fourmolu.sh --mode check
