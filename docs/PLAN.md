@@ -412,6 +412,24 @@ point of this phase.
   `Halogen.Static`; browser, an anonymous reader of a public space opens the source from
   the page and comes back, a reader without access sees the error; the smoke test visits a
   source route, back and reload.
+- **WP1.15 TikZ drawings.** After WP1.11, the last package before the tag, at the owner's
+  request: Mermaid lays diagrams out by itself and cannot draw a figure at given
+  coordinates, a plot with labelled axes or a drawing for a proof. A fenced ` ```tikz `
+  block (the body of a `tikzpicture`, or a whole `\begin{tikzpicture}…\end{tikzpicture}`)
+  becomes an island like Mermaid's: empty in the program's render, its source as text in
+  the prerender, drawn in the browser to SVG by TikZJax (TeX compiled to WebAssembly),
+  which is loaded only when a page or the editor's preview has such a block, so no other
+  page pays for its size. Libraries the build supports (`tikz-cd`, `pgfplots` and the like)
+  are listed in `docs/markdown.md`; a block that fails to compile shows TeX's error under
+  the source instead of a picture; the drawing follows the page's colours in dark mode if
+  TikZJax's output allows it (the agent reports). The editor's toolbar gets a TikZ block
+  command. TikZJax's files are served from the page's own origin, bundled or copied by
+  `web/bundle.sh`, never from a CDN at run time. Tests: hspec-halogen, a block draws an
+  `<svg>`, a broken block shows the error, a page without a block never fetches TikZJax;
+  native, the renderer makes the island for both fence forms; smoke test, the guide's
+  TikZ example is drawn. Measure and report the bytes added and the time to the first
+  drawing. In Phase 2 the server may render TikZ with a real `latex` and `dvisvgm` to
+  cached SVG (all packages, no wait), keeping TikZJax for the editor's preview.
 - **WP1.13 HTML in pages.** Render `RawHtml` and `RawHtmlBlock` instead of showing them
   as text: `Wiki.Core.Markdown.Html` parses the HTML (`tagsoup`, pure Haskell, so it
   builds for wasm; `html-parse` if tagsoup's HTML5 handling falls short, reported) and
@@ -963,3 +981,4 @@ Amended by the planning session after each work package's report.
   `formatVersion` and the reader migrates older versions step by step; a newer
   `formatVersion` is refused whole. A golden v1 archive in the tests must import forever.
   The tag `v0.1.0-demo` waits for WP1.11.
+- **WP1.15 (TikZ) added to the MVP** by the owner, after WP1.11; the tag waits for both.
