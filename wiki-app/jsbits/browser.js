@@ -1,6 +1,6 @@
 // What the shell asks of the browser beyond Halogen's DOM: which link a
-// click landed on, scrolling to an element by id, and the document's title
-// (Wiki.App.Browser).
+// click landed on, scrolling to an element by id, the document's title, and
+// where in the session history it is (Wiki.App.Browser).
 
 // The href attribute, as written, of the link a plain click landed on: the
 // main button with no modifier, on a link that opens in its own tab and is
@@ -22,4 +22,29 @@ function wiki_scroll_to(id) {
 
 function wiki_set_title(title) {
   document.title = title;
+}
+
+// The number of the session history's current entry, written into the
+// entry's state the first time the shell sees it: the one after the last
+// entry seen, since an entry the shell has not seen is one just pushed (the
+// router's own pushState writes no state). An entry keeps its number when
+// the page is reloaded or gone back to, so that the numbers of two entries
+// tell how far apart they are, which history.go wants.
+let wikiLastEntry = 0;
+
+function wiki_history_entry() {
+  const state = history.state;
+  if (state !== null && typeof state === "object" && Number.isInteger(state.wikiEntry)) {
+    wikiLastEntry = state.wikiEntry;
+    return state.wikiEntry;
+  }
+  const entry = wikiLastEntry + 1;
+  const kept = state !== null && typeof state === "object" ? state : {};
+  history.replaceState({ ...kept, wikiEntry: entry }, "");
+  wikiLastEntry = entry;
+  return entry;
+}
+
+function wiki_history_go(delta) {
+  history.go(delta);
 }

@@ -1,26 +1,48 @@
-// Drive the built application in headless Chromium, as a static host serves
-// it: every route of the demo is a page of its own with the application
-// prerendered into it, app.wasm loads and mounts the application in its
-// place, and from then on the application routes by itself.
+// Drive the built demo in headless Chromium, as a static host serves it, the
+// way haskell-halogen's toolchain/test-gallery.mjs drives its gallery.
 //
 //   npm run smoke-test                      # after: npm run build-wasm
 //   node toolchain/smoke-test.mjs [dir]     # default dist-newstyle/wasm/public/app
+//   SMOKE_DEBUG=<dir> npm run smoke-test    # also print what each prerendered page
+//                                           # shows, and on failure screenshot the
+//                                           # open pages into <dir>
 //
 // This is what the unit tests cannot see: the size-optimised app.wasm loading
-// in a real browser from a deep link, its links followed without loading a
-// page, the back button and a reload arriving where they should, and the
-// islands bundle (web/bundle.sh) loading next to it and drawing into the
-// page. Needs the Chromium that Playwright's version in package-lock.json
-// launches (toolchain/bootstrap.sh installs it). index.js loads
-// @bjorn3/browser_wasi_shim from jsDelivr; the test serves it from
-// node_modules instead, the same version, so that it needs no network.
+// in a real browser on every page the build wrote, in place of the page
+// prerendered into it; its links followed without loading a page; the back
+// and forward buttons and a reload arriving where they should; the editor,
+// search and the islands bundle (web/bundle.sh) working in the built page;
+// 404.html standing in for every address with no file; and the page in a
+// dark scheme and at a phone's width. Any error in a page, or on its console,
+// fails it.
+//
+// It has three parts:
+//
+// 1. Every prerendered page (each index.html under the directory) is loaded
+//    by its address, app.wasm held back until the prerendered page has been
+//    seen and marked; then the program has to replace it with the same
+//    route: the same title, heading and error, if any.
+// 2. One long walk in one page, as someone would take it: the front page,
+//    every root space and a page in each, the editor as admin with a save,
+//    search, then back through the whole history and forward again, each
+//    step checked by its address and what is on screen. Then leaving the
+//    editor with changes by the back button (Stay, then Leave), a reload,
+//    and 404.html for an address with no file.
+// 3. The same page in a dark scheme and at a phone's width.
+//
+// Needs the Chromium that Playwright's version in package-lock.json launches
+// (toolchain/bootstrap.sh installs it), and no network: index.js loads
+// @bjorn3/browser_wasi_shim from jsDelivr, which the test serves from
+// node_modules (the same version), and the demo's NASA image and video on
+// Wikimedia Commons are answered locally with stand-ins.
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
-import { dirname, extname, join, normalize, resolve } from "node:path";
+import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
+const started = Date.now();
 const root = resolve(process.argv[2] ?? "dist-newstyle/wasm/public/app");
 // The directory of the shim's index.js, which index.js imports from the CDN.
 const shimDir = dirname(fileURLToPath(import.meta.resolve("@bjorn3/browser_wasi_shim")));
@@ -39,7 +61,7 @@ const types = {
 
 // A static server, as Pages is: a directory's address serves its index.html,
 // a directory's address without its slash is redirected to the one with it,
-// and an address with no file serves 404.html.
+// and an address with no file serves 404.html, with a 404.
 const server = createServer(async (request, response) => {
   const path = decodeURIComponent(new URL(request.url, "http://x").pathname);
   const file = join(root, normalize(path.endsWith("/") ? `${path}index.html` : path));
@@ -59,20 +81,34 @@ const server = createServer(async (request, response) => {
 await new Promise((ready) => server.listen(0, "127.0.0.1", ready));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const url = (path) => `${origin}${path}`;
+const here = (page) => {
+  const address = new URL(page.url());
+  return address.pathname + address.search;
+};
 
 const timeout = 30_000;
 const browser = await chromium.launch();
 const failures = [];
 
-// A page that reports what goes wrong in it, with the shim served locally.
-async function newPage() {
-  const page = await browser.newPage();
-  page.on("pageerror", (error) => failures.push(`page error: ${error.message}`));
+// A 32×32 PNG, standing in for the demo's photograph from Wikimedia Commons.
+const standInImage = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAASklEQVR42mP48OUXTRHDCLDAJHUJHjRqwagFI8MCZFTR1ANENMzJoxbQyQKIKeShwWQBqeX+sLeAvPKAGF2jFoxaMHQsGG384kYAzNSeSHKJ2CAAAAAASUVORK5CYII=",
+  "base64",
+);
+
+// A page that reports what goes wrong in it, with what it would fetch from
+// elsewhere answered locally. Its app.wasm waits for `release` when a gate
+// is set, so that the prerendered page can be seen before the program
+// replaces it.
+async function newPage(options = {}) {
+  const context = await browser.newContext(options);
+  const page = await context.newPage();
+  page.on("pageerror", (error) => failures.push(`page error at ${page.url()}: ${error.message}`));
   page.on("console", (message) => {
     // An address with no file of its own is served 404.html with a 404,
     // which Chromium reports; that is how it is meant to work.
     if (message.type() === "error" && !message.text().includes("404")) {
-      failures.push(`console error: ${message.text()}`);
+      failures.push(`console error at ${page.url()}: ${message.text()}`);
     }
   });
   await page.route("https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@*/dist/**", async (route) => {
@@ -82,172 +118,339 @@ async function newPage() {
       body: await readFile(join(shimDir, normalize(file))),
     });
   });
+  // The video gets no answer it can play, which a page shows as a player
+  // with nothing in it, as it would offline; that is not an error.
+  await page.route("https://upload.wikimedia.org/**", (route) =>
+    /\.webm$/.test(route.request().url())
+      ? route.fulfill({ status: 204 })
+      : route.fulfill({ contentType: "image/png", body: standInImage }),
+  );
+  page.gate = null;
+  await page.route("**/app.wasm", async (route) => {
+    await page.gate;
+    await route.continue();
+  });
   return page;
 }
 
-// The heading of what the content area shows, once the program shows it.
-async function heading(page) {
-  const h1 = page.locator("#app .wiki-content h1").first();
-  await h1.waitFor({ timeout });
-  return (await h1.textContent()).trim();
-}
-
-async function headingBecomes(page, text) {
-  await page.locator("#app .wiki-content h1", { hasText: text }).first().waitFor({ timeout });
-}
-
-// A page at an address, once app.wasm has mounted the application in place of
-// the prerendered one: app.wasm is held back until the prerendered shell is
-// marked, so that a shell without the mark is the program's.
-async function mounted(path) {
-  const page = await newPage();
-  let releaseWasm;
-  const wasmHeld = new Promise((release) => (releaseWasm = release));
-  await page.route("**/app.wasm", async (route) => {
-    await wasmHeld;
-    await route.continue();
+// What a page shows of its route: the document's title, the heading of the
+// content, the view it is in, and the error shown in its place, if any.
+const shown = (page) =>
+  page.evaluate(() => {
+    const content = document.querySelector("#app .wiki-content");
+    const view = content?.querySelector(":scope > *:not(.leave-confirm)");
+    return {
+      title: document.title,
+      heading: content?.querySelector("h1")?.textContent.trim() ?? null,
+      view: view ? view.className.split(" ")[0] : null,
+      error: content?.querySelector(".error")?.className ?? null,
+    };
   });
+
+// Go to an address and wait for the program to have replaced the page
+// prerendered there, which is returned as it was shown.
+async function load(page, path) {
+  let release;
+  page.gate = new Promise((go) => (release = go));
   await page.goto(url(path), { waitUntil: "commit" });
   const prerendered = page.locator("#app .wiki");
   await prerendered.waitFor({ timeout });
+  const before = await shown(page);
   await prerendered.evaluate((shell) => (shell.dataset.prerendered = "true"));
-  releaseWasm();
+  release();
+  page.gate = null;
   await page.locator("#app .wiki:not([data-prerendered])").waitFor({ timeout });
-  return page;
+  assert.equal(await page.locator("#app .wiki").count(), 1, `${path}: the prerendered shell is still there`);
+  return before;
+}
+
+async function eventually(check, what) {
+  let last;
+  for (const deadline = Date.now() + timeout; Date.now() < deadline; await new Promise((later) => setTimeout(later, 100))) {
+    try {
+      return await check();
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw new Error(`${what}: ${last?.message ?? last}`);
+}
+
+// A link clicked while the shell is still reloading the wiki for someone
+// just switched to is now and then followed by the browser, loading the page
+// afresh (and so starting the demo over): Halogen.Router's link stops the
+// browser in the click's handler, and that handler, then, now and then runs
+// only after the browser has gone on. A person does not click that fast; the
+// test waits as long as one would. (About one click in twenty made at once
+// after a switch was followed, none made 100 ms after it.)
+const settleAfterSwitch = (page) => page.waitForTimeout(300);
+
+// The breadcrumb of the route shown, which names it: a space's or a page's
+// name, "Edit", "Search"; the front page has none.
+const crumb = (page) => page.locator("#app .breadcrumbs [aria-current=page]").textContent();
+
+// Every index.html under the directory, as the address that serves it.
+async function prerenderedPaths(dir) {
+  const paths = [];
+  for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+    if (entry.isFile() && entry.name === "index.html") {
+      const rel = relative(root, entry.parentPath ?? entry.path).split(sep).join("/");
+      paths.push(rel === "" ? "/" : `/${rel}/`);
+    }
+  }
+  return paths.sort();
 }
 
 try {
-  // The pages as a server sends them, before any script runs: each route's
-  // has the application in it already, for that route.
-  const front = await (await fetch(url("/"))).text();
-  assert.match(front, /<base href="\/">/, "index.html has no <base href>");
-  assert.match(front, /<div id="app"><div class="wiki">/, "index.html is not prerendered");
-  assert.match(front, />Take the tour<\/a>/, "index.html does not invite to the tour");
+  // ---- 1. Every prerendered page ---------------------------------------------
+
+  const paths = await prerenderedPaths(root);
+  assert.ok(paths.length >= 10, `only ${paths.length} pages were prerendered`);
+  for (const path of ["/", "/search/", "/s/docs/", "/s/docs/p/tour/", "/s/team/p/team-handbook/"]) {
+    assert.ok(paths.includes(path), `${path} was not prerendered`);
+  }
+  const visitor = await newPage();
+  for (const path of paths) {
+    // As a server sends it, before any script runs.
+    const html = await (await fetch(url(path))).text();
+    assert.match(html, /<base href="\/">/, `${path}: no <base href>`);
+    assert.match(html, /<div id="app"><div class="wiki">/, `${path}: not prerendered`);
+    const before = await load(visitor, path);
+    if (path !== "/") assert.notEqual(before.title, "Wiki", `${path}: no title of its own`);
+    // The program shows the same route, once it has loaded what it shows.
+    await eventually(async () => assert.deepEqual(await shown(visitor), before), `${path}: the program shows another page`);
+    if (process.env.SMOKE_DEBUG) console.log(path, JSON.stringify(before));
+  }
+  console.log(`ok: each of the ${paths.length} prerendered pages is replaced by the program, showing the same`);
+
+  // A page's islands are prerendered as their sources, and drawn once the
+  // program has loaded: KaTeX (with its fonts), Mermaid, highlight.js.
   const maths = await (await fetch(url("/s/docs/p/markdown-guide/mathematics/"))).text();
-  assert.match(maths, /<title>Mathematics · Markdown guide · Wiki<\/title>/, "the page has no title of its own");
-  assert.match(maths, /<h1 id="mathematics">Mathematics<\/h1>/, "the page is not prerendered");
-  // Natively there is nothing to draw the islands with: they arrive as their
-  // sources.
   assert.match(maths, /<span class="wiki-math wiki-math-inline">/, "the page has no formula's source");
-  console.log("ok: every route's page arrives with the application prerendered for it");
+  await load(visitor, "/s/docs/p/markdown-guide/");
+  await visitor.locator("#app .wiki-math-inline .katex").first().waitFor({ timeout });
+  await visitor.locator("#app .wiki-math-display .katex-display").first().waitFor({ timeout });
+  // Mermaid's own bundle is fetched for the first diagram, so allow it time.
+  await visitor.locator("#app .wiki-mermaid > svg").first().waitFor({ timeout });
+  await visitor.locator("#app .wiki-code code.hljs.language-haskell .hljs-type").first().waitFor({ timeout });
+  assert.ok(await visitor.evaluate(() => document.fonts.check('16px "KaTeX_Main"')), "KaTeX's fonts did not load");
+  console.log("ok: a page's islands are drawn: KaTeX, Mermaid, highlight.js");
+  await visitor.context().close();
+
+  // ---- 2. A walk through the demo, in one page -------------------------------
 
   const page = await newPage();
-  // app.wasm is held back until the prerendered shell is marked, so that the
-  // shell found afterwards without the mark is the one the program rendered.
-  let releaseWasm;
-  const wasmHeld = new Promise((release) => (releaseWasm = release));
-  await page.route("**/app.wasm", async (route) => {
-    await wasmHeld;
-    await route.continue();
-  });
-  await page.goto(url("/"), { waitUntil: "commit" });
-  const prerendered = page.locator("#app .wiki");
-  await prerendered.waitFor({ timeout });
-  await prerendered.evaluate((shell) => (shell.dataset.prerendered = "true"));
-  releaseWasm();
-  await page.locator("#app .wiki:not([data-prerendered])").waitFor({ timeout });
-  assert.equal(await page.locator("#app .wiki").count(), 1, "the prerendered shell was not replaced");
-  assert.equal(await heading(page), "Welcome to the wiki");
-  console.log("ok: app.wasm mounts the application in place of the prerendered one");
-
-  // From here on no click may load a page: a mark on the window would go.
+  await load(page, "/");
+  // No click from here on may load a page: a mark on the window would go.
   await page.evaluate(() => (window.stillTheSamePage = true));
-  await page.locator("#app a", { hasText: "Take the tour" }).click();
-  await headingBecomes(page, "Tour");
-  assert.equal(new URL(page.url()).pathname, "/s/docs/p/tour/");
-  await page.locator("#app .page-body a", { hasText: "diagrams" }).first().click();
-  await headingBecomes(page, "Diagrams");
-  assert.equal(new URL(page.url()).pathname, "/s/docs/p/markdown-guide/diagrams/");
-  await page.locator("#app .wiki-mermaid > svg").first().waitFor({ timeout });
-  assert.ok(await page.evaluate(() => window.stillTheSamePage), "following a link loaded a page");
-  console.log("ok: links in the shell and in a page's Markdown are followed without loading a page");
+  const samePage = async (step) => assert.ok(await page.evaluate(() => window.stillTheSamePage), `${step} loaded a page`);
 
-  await page.goBack();
-  await headingBecomes(page, "Tour");
-  assert.equal(new URL(page.url()).pathname, "/s/docs/p/tour/");
-  assert.ok(await page.evaluate(() => window.stillTheSamePage), "going back loaded a page");
-  console.log("ok: the back button goes back to the page before");
+  // Every entry of the history the walk makes, and what it shows.
+  const visits = [];
+  const check = async (visit, step) => {
+    await eventually(async () => {
+      assert.equal(here(page), visit.path, "the address");
+      const now = await shown(page);
+      assert.equal(now.view, visit.view, "the view");
+      if (visit.crumb !== undefined) assert.equal(await crumb(page), visit.crumb, "the breadcrumb");
+      if (visit.text !== undefined) {
+        assert.ok((await page.locator("#app .wiki-content").textContent()).includes(visit.text), `no "${visit.text}"`);
+      }
+    }, `${step} at ${visit.path}`);
+  };
+  const arrive = async (visit, step) => {
+    await check(visit, step);
+    await samePage(step);
+    visits.push({ ...visit, step });
+  };
+  await arrive({ path: "/", view: "home" }, "the front page");
 
-  await page.reload();
-  await page.locator("#app .wiki").waitFor({ timeout });
-  await page.waitForFunction(() => document.querySelector("#app .page-body") !== null && window.stillTheSamePage === undefined, null, { timeout });
-  await headingBecomes(page, "Tour");
-  console.log("ok: a reload arrives at the same page");
+  // The tour, from the front page's invitation.
+  await page.locator("#app .home a", { hasText: "Take the tour" }).click();
+  await arrive({ path: "/s/docs/p/tour/", view: "page-view", crumb: "Tour" }, "the tour");
 
-  // Deep links: a page and a private space, each opened straight away.
-  const guide = await newPage();
-  await guide.goto(url("/s/docs/p/markdown-guide/"));
-  await headingBecomes(guide, "Markdown guide");
-  // Mermaid's own bundle is fetched for the first diagram, so allow it time.
-  await guide.locator("#app .wiki-math-inline .katex").first().waitFor({ timeout });
-  await guide.locator("#app .wiki-math-display .katex-display").first().waitFor({ timeout });
-  await guide.locator("#app .wiki-mermaid > svg").first().waitFor({ timeout });
-  await guide.locator("#app .wiki-code code.hljs.language-haskell .hljs-type").first().waitFor({ timeout });
-  // A font KaTeX's stylesheet names that did not load would leave the formula
-  // in a fallback font; the request for it would also have failed above.
-  assert.ok(
-    await guide.evaluate(() => document.fonts.check('16px "KaTeX_Main"')),
-    "KaTeX's fonts did not load",
+  // Who one is, from the menu at the top right: admin sees every space.
+  await page.locator("#app .user-switcher-toggle").click();
+  await page.locator("#app .user-menu button[data-login=admin]").click();
+  await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
+  await page.locator("#app .wiki-sidebar a[href='/s/team/']").waitFor({ timeout });
+  await settleAfterSwitch(page);
+
+  // Every root space, and a page in each, from the tree of spaces.
+  const roots = await page.locator("#app .wiki-sidebar > .space-tree > li > .space-row a").evaluateAll((links) =>
+    links.map((a) => ({ href: a.getAttribute("href"), name: a.textContent })),
   );
-  console.log("ok: a deep link to a page draws its islands: KaTeX, Mermaid, highlight.js");
+  assert.deepEqual(roots.map((r) => r.name), ["Blog", "Docs", "Team"]);
+  for (const space of roots) {
+    await page.locator(`#app .wiki-sidebar a[href='${space.href}']`).click();
+    await arrive({ path: space.href, view: "space-view", crumb: space.name }, `the space ${space.name}`);
+    const first = page.locator("#app .space-view .page-tree a").first();
+    const target = { href: await first.getAttribute("href"), title: await first.textContent() };
+    await first.click();
+    await arrive({ path: target.href, view: "page-view", crumb: target.title }, `the page ${target.title}`);
+  }
+  await samePage("going through the spaces");
+  console.log("ok: every root space, and a page in each, by clicking");
 
-  const team = await newPage();
-  await team.goto(url("/s/team"));
-  await team.locator("#app .wiki-content .error-forbidden").waitFor({ timeout });
-  assert.equal(new URL(team.url()).pathname, "/s/team/");
-  console.log("ok: a deep link to a private space says, in place, that it is private");
-
-  // Search from the keyboard: "/" to the box, words, an arrow and Enter.
-  const searching = await mounted("/");
-  await searching.evaluate(() => (window.stillTheSamePage = true));
-  await searching.keyboard.press("/");
-  await searching.keyboard.type("mermaid diagrams");
-  await searching.locator("#app .search-results .search-hit", { hasText: "Diagrams" }).first().waitFor({ timeout });
-  assert.equal(await searching.locator("#app .search-input").inputValue(), "mermaid diagrams");
-  // Diagrams has a word of the query in its title, so it comes first.
-  assert.equal(await searching.locator("#app .search-results .search-hit-title").first().textContent(), "Diagrams");
-  await searching.keyboard.press("ArrowDown");
-  await searching.keyboard.press("Enter");
-  await headingBecomes(searching, "Diagrams");
-  assert.equal(new URL(searching.url()).pathname, "/s/docs/p/markdown-guide/diagrams/");
-  assert.ok(await searching.evaluate(() => window.stillTheSamePage), "opening a search's hit loaded a page");
-  console.log("ok: / focuses the search box, and a hit chosen with the keyboard opens its page");
-
-  // A search's address: the prerendered page of results, searched once loaded.
-  const results = await mounted("/search/?q=mermaid&space=docs");
-  await headingBecomes(results, "Search");
-  await results.locator("#app .search-view a.search-hit[href='/s/docs/p/markdown-guide/diagrams/']").waitFor({ timeout });
-  assert.match(await results.locator("#app .search-summary").textContent(), /for “mermaid” in Docs and its subspaces\./);
-  console.log("ok: a search's address shows its results");
-
-  // The editor, as someone who may edit: switched to in the header, since
-  // the demo has no passwords.
-  const editor = await newPage();
-  await editor.goto(url("/s/docs/p/tour/"));
-  await headingBecomes(editor, "Tour");
-  await editor.locator("#app .user-switcher-toggle").click();
-  await editor.locator("#app .user-menu button[data-login=admin]").click();
-  await editor.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
-  await headingBecomes(editor, "Editing Tour");
-  await editor.waitForURL((address) => address.pathname === "/s/docs/p/tour/edit/", { timeout });
-  const textarea = editor.locator("#app .editor-text");
+  // The editor, as admin, with a save: Hello, world.
+  await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
+  await arrive({ path: "/s/blog/", view: "space-view", crumb: "Blog" }, "Blog again");
+  await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
+  await arrive({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "Hello, world");
+  await page.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
+  await arrive({ path: "/s/blog/p/hello-world/edit/", view: "editor", crumb: "Edit" }, "the editor");
+  const textarea = page.locator("#app .editor-text");
   await textarea.press("Control+End");
   await textarea.pressSequentially("\n\n## Smoke test\n\nWritten by $x^2$.");
-  await editor.locator("#app .editor-preview h2", { hasText: "Smoke test" }).waitFor({ timeout });
-  await editor.locator("#app .editor-preview .wiki-math-inline .katex").last().waitFor({ timeout });
-  await editor.locator("#app .editor-form button.primary").click();
-  await editor.locator("#app .page-view .page-body h2", { hasText: "Smoke test" }).waitFor({ timeout });
-  // The shell shows the page first and then tells the router.
-  await editor.waitForURL((address) => address.pathname === "/s/docs/p/tour/", { timeout });
+  await page.locator("#app .editor-preview h2", { hasText: "Smoke test" }).waitFor({ timeout });
+  await page.locator("#app .editor-preview .wiki-math-inline .katex").last().waitFor({ timeout });
+  await page.locator("#app .editor-form button.primary").click();
+  await arrive({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text: "Smoke test" }, "the page saved");
+  await samePage("editing");
   console.log("ok: the editor previews what is typed, with its formulas, and saves it");
 
-  const nowhere = await newPage();
-  await nowhere.goto(url("/no/such/address/"));
-  await headingBecomes(nowhere, "Not found");
-  console.log("ok: an address the wiki does not have shows that it is not found");
+  // Search from the keyboard: "/" to the box, words, an arrow and Enter.
+  // "/" is a character to type in a field, so nothing is focused first.
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.press("/");
+  await page.keyboard.type("handbook");
+  await page.locator("#app .search-results .search-hit", { hasText: "Team handbook" }).first().waitFor({ timeout });
+  assert.equal(await page.locator("#app .search-input").inputValue(), "handbook");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await arrive({ path: "/s/team/p/team-handbook/", view: "page-view", crumb: "Team handbook" }, "a search's hit");
+  // Enter with no hit chosen: the page of every result, at an address of
+  // its own.
+  await page.keyboard.press("/");
+  await page.keyboard.type("mermaid");
+  await page.locator("#app .search-results .search-hit").first().waitFor({ timeout });
+  await page.keyboard.press("Enter");
+  await arrive({ path: "/search/?q=mermaid", view: "search-view", crumb: "Search", text: "Diagrams" }, "the results");
+  await samePage("searching");
+  console.log("ok: / focuses the search box; a hit opens with the keyboard, Enter alone the page of results");
+
+  // Back through the whole history, then forward through it again.
+  for (let i = visits.length - 2; i >= 0; i--) {
+    await page.goBack();
+    await check(visits[i], `back to ${visits[i].step}`);
+  }
+  for (let i = 1; i < visits.length; i++) {
+    await page.goForward();
+    await check(visits[i], `forward to ${visits[i].step}`);
+  }
+  await samePage("going back and forward");
+  console.log(`ok: back through all ${visits.length} entries of the history and forward again, each showing its route`);
+
+  // Leaving the editor with changes by the back button asks first. Staying
+  // goes back to the editor's entry, so the history is as long as before,
+  // and the next back asks again; leaving then shows the page as it was.
+  await page.locator("#app .search-view a.search-hit[href='/s/docs/p/markdown-guide/diagrams/']").click();
+  await check({ path: "/s/docs/p/markdown-guide/diagrams/", view: "page-view", crumb: "Diagrams" }, "Diagrams");
+  await page.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
+  await check({ path: "/s/docs/p/markdown-guide/diagrams/edit/", view: "editor", crumb: "Edit" }, "editing Diagrams");
+  await page.locator("#app .editor-text").press("Control+End");
+  await page.locator("#app .editor-text").pressSequentially("\nNot to be kept.");
+  const entries = await page.evaluate(() => history.length);
+  await page.goBack();
+  await page.locator("#app .leave-confirm").waitFor({ timeout });
+  await page.locator("#app .leave-confirm button", { hasText: "Stay" }).click();
+  await check({ path: "/s/docs/p/markdown-guide/diagrams/edit/", view: "editor" }, "staying in the editor");
+  assert.ok((await page.locator("#app .editor-text").inputValue()).endsWith("Not to be kept."), "staying lost the draft");
+  assert.equal(await page.evaluate(() => history.length), entries, "staying added an entry to the history");
+  await page.goBack();
+  await page.locator("#app .leave-confirm button", { hasText: "Leave" }).click();
+  await check({ path: "/s/docs/p/markdown-guide/diagrams/", view: "page-view", crumb: "Diagrams" }, "leaving the editor");
+  assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Not to be kept."), "leaving kept the draft");
+  await samePage("leaving the editor");
+  console.log("ok: leaving the editor by the back button asks; Stay returns to its entry, Leave drops the draft");
+
+  // A reload starts the demo over, on the same page: as nobody, and with
+  // the edit gone.
+  await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
+  await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
+  await check({ path: "/s/blog/p/hello-world/", view: "page-view", text: "Smoke test" }, "the edited page");
+  await page.reload();
+  await page.waitForFunction(() => window.stillTheSamePage === undefined, null, { timeout });
+  await page.locator("#app .wiki:not([data-prerendered])").waitFor({ timeout });
+  await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "the reload");
+  await page.locator("#app .user-switcher-toggle", { hasText: "Not signed in" }).waitFor({ timeout });
+  assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit survived a reload");
+  console.log("ok: a reload arrives at the same page, with the demo started over");
+
+  // An address with no file: 404.html, which the program reads as its own.
+  const missing = await fetch(url("/no/such/address/"));
+  assert.equal(missing.status, 404);
+  await load(page, "/no/such/address/");
+  await check({ path: "/no/such/address/", view: "not-found" }, "an address the wiki does not have");
+  // An editor's address has no page of its own either; the program opens it.
+  assert.equal((await fetch(url("/s/blog/p/hello-world/edit/"))).status, 404);
+  await load(page, "/s/blog/p/hello-world/edit/");
+  await check({ path: "/s/blog/p/hello-world/edit/", view: "editor", crumb: "Edit" }, "an editor's address");
+  await page.locator("#app .editor .sign-in-hint").waitFor({ timeout });
+  console.log("ok: 404.html stands in for an address with no file, and the program shows its route");
+  await page.context().close();
+
+  // ---- 3. A dark scheme, and a phone -----------------------------------------
+
+  const luminance = (rgb) => {
+    const [r, g, b] = rgb.match(/\d+/g).map(Number);
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  };
+  const colours = (p) =>
+    p.evaluate(() => {
+      const style = (selector) => getComputedStyle(document.querySelector(selector));
+      return {
+        background: style("body").backgroundColor,
+        text: style("#app .page-body p").color,
+        sidebar: style("#app .wiki-sidebar").backgroundColor,
+      };
+    });
+  const dark = await newPage({ colorScheme: "dark" });
+  await load(dark, "/s/docs/p/markdown-guide/");
+  await dark.locator("#app .page-body p").first().waitFor({ timeout });
+  const night = await colours(dark);
+  assert.ok(luminance(night.background) < 0.25, `a dark scheme's background is ${night.background}`);
+  assert.ok(luminance(night.text) > 0.6, `a dark scheme's text is ${night.text}`);
+  assert.ok(luminance(night.sidebar) < 0.25, `a dark scheme's sidebar is ${night.sidebar}`);
+  await dark.emulateMedia({ colorScheme: "light" });
+  const day = await colours(dark);
+  assert.ok(luminance(day.background) > 0.75, `a light scheme's background is ${day.background}`);
+  assert.ok(luminance(day.text) < 0.4, `a light scheme's text is ${day.text}`);
+  await dark.context().close();
+  console.log("ok: a page follows the dark scheme, and the light one");
+
+  const phone = await newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await load(phone, "/s/docs/p/markdown-guide/");
+  const fits = () => phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+  assert.ok(await fits(), "a page is wider than a phone");
+  assert.ok(await phone.locator("#app .search-input").isVisible(), "no search box on a phone");
+  assert.ok(await phone.locator("#app .user-switcher-toggle").isVisible(), "no user menu on a phone");
+  // The editor shows one pane at a time there, with a switch between them.
+  await phone.locator("#app .user-switcher-toggle").tap();
+  await phone.locator("#app .user-menu button[data-login=admin]").tap();
+  await phone.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
+  await settleAfterSwitch(phone);
+  await phone.locator("#app .page-view .actions a", { hasText: "Edit" }).tap();
+  await phone.locator("#app .editor-text").waitFor({ timeout });
+  assert.ok(await phone.locator("#app .editor-panes-switch").isVisible(), "no switch between the editor's panes");
+  assert.ok(!(await phone.locator("#app .editor-preview").isVisible()), "both panes at once on a phone");
+  await phone.locator("#app .editor-panes-switch button", { hasText: "Preview" }).tap();
+  await phone.locator("#app .editor-preview .page-body h1").waitFor({ timeout });
+  assert.ok(!(await phone.locator("#app .editor-text").isVisible()), "the Markdown beside the preview on a phone");
+  assert.ok(await fits(), "the editor is wider than a phone");
+  await phone.context().close();
+  console.log("ok: a page and the editor fit a phone's width");
 } catch (error) {
   // What the page reported is usually why it did not get there.
   failures.push(String(error.stack ?? error));
+  if (process.env.SMOKE_DEBUG) {
+    for (const [i, context] of browser.contexts().entries()) {
+      for (const [j, p] of context.pages().entries()) {
+        await p.screenshot({ path: `${process.env.SMOKE_DEBUG}/failure-${i}-${j}.png` }).catch(() => {});
+        console.error("open page", i, j, p.url());
+      }
+    }
+  }
 } finally {
   await browser.close();
   server.close();
@@ -257,4 +460,4 @@ if (failures.length > 0) {
   console.error(failures.join("\n"));
   process.exit(1);
 }
-console.log("Smoke test passed.");
+console.log(`Smoke test passed in ${Math.round((Date.now() - started) / 1000)} s.`);

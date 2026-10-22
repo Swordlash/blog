@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0 - 2026-10-22
+
 The wiki's domain model, as plain data with JSON instances that the client and
 the server share.
 

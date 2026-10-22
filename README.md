@@ -15,17 +15,53 @@ interface, implemented once in memory (a serverless demo deployable as static fi
 and once over HTTP to a Haskell server with persistence. Markdown is parsed and
 rendered to Halogen HTML in the browser, so the preview never waits for a server.
 
-So far there is the serverless demo: the shell (spaces in a tree, their pages,
-breadcrumbs, a search box, a user switcher instead of a sign-in) over an in-memory
-wiki seeded with demo content, pages rendered from Markdown, whose syntax is
-described for authors in [docs/markdown.md](docs/markdown.md), with their formulas,
-diagrams and code drawn by KaTeX, Mermaid and highlight.js; an editor with the
-Markdown beside a live preview, attachments dropped or chosen into it, and a guard
-against losing unsaved changes; and creating, renaming, moving and deleting spaces
-and pages as the permissions allow. Every route has an address of its own and a
-prerendered page. The plan of work is in
-[docs/PLAN.md](docs/PLAN.md): phases from a serverless MVP demo through a
-server with persistence to authentication and authorisation.
+So far there is the MVP demo: the whole reading and writing experience,
+serverless, over an in-memory wiki seeded with demo content, deployable as static
+files. Reloading the page starts it over: keeping pages is the server's job, in the
+next phase. The plan of work is in [docs/PLAN.md](docs/PLAN.md): phases from the
+serverless MVP demo through a server with persistence to authentication and
+authorisation.
+
+## What works
+
+- Spaces in a tree, public or private, each holding a tree of pages; creating,
+  renaming, moving and deleting spaces and pages as the permissions allow.
+- Pages written in Markdown, whose syntax is described for authors in
+  [docs/markdown.md](docs/markdown.md): GitHub's extensions, footnotes, alerts,
+  wiki links, formulas drawn by KaTeX, diagrams by Mermaid, code highlighted by
+  highlight.js, images, video and attachments.
+- An editor with the Markdown beside a live preview, files dropped or chosen into
+  it as attachments, Ctrl+S, a conflict shown in place when someone else saved
+  first, and a guard against losing unsaved changes.
+- Search by title and text from a box in the header (`/` to focus it), in every
+  space or in one, with a page of results at an address of its own.
+- Three demo users and nobody, switched between in the header instead of a
+  sign-in, each seeing the wiki through their permissions.
+- An address for every route, and a prerendered page for each route the demo
+  starts with, so that a link or a reload lands on the page before the program
+  has loaded.
+
+## Running the demo
+
+Build it and serve it on <http://127.0.0.1:8080>, with the toolchain below:
+
+```sh
+npm ci
+npm run serve-wasm      # runs build-wasm first; or build-wasm alone, to build only
+```
+
+Or, without a toolchain, take the page a CI run built: download the `app`
+artifact of a run of the `CI` workflow on GitHub (the run's page, under
+*Artifacts*), unzip it, and serve the directory with any static server that
+answers an address with no file of its own with the directory's `404.html`, as
+GitHub Pages does. `npx http-server <dir>` does:
+
+```sh
+unzip app.zip -d app && npx http-server app -p 8080
+```
+
+The front page invites you to the tour, which says what to try. Nothing you do is
+sent anywhere, and a reload starts the demo over.
 
 ## Working on it
 
@@ -127,7 +163,7 @@ npm run build-wasm              # wiki-app to wasm, a prerendered page per route
 npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
 npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
-npm run smoke-test              # the built pages in headless Chromium: deep links, clicks, back, reload, islands, the editor
+npm run smoke-test              # the built page in headless Chromium: every prerendered route, a walk with back, forward and reload, dark and phone
 npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
 npm run format                  # fourmolu over every package
 npm run format-check            # the same, failing on what it would change (as CI does)
