@@ -5,21 +5,38 @@
 -- that it reads the same in an address bar, a link and a file name, needs no
 -- escaping anywhere, and two slugs that look alike are alike. The rules are
 -- checked once, by 'mkSlug', and a 'Slug' is proof that they hold: there is no
--- other way to make one.
+-- other way to make one ('slugify' and 'freshSlug' build on what 'mkSlug'
+-- accepts).
 module Wiki.Core.Slug
   ( Slug
   , SlugError (..)
   , mkSlug
   , slugText
+  , slugify
+  , freshSlug
   )
 where
 
+import Control.Monad.Fail (fail)
+import Data.Aeson (FromJSON (..), ToJSON (..), withText)
+import Data.Char (GeneralCategory (..), generalCategory, isAsciiLower)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Protolude
 
 -- | A string that keeps the slug rules. Its constructor is not exported.
 newtype Slug = Slug Text
   deriving stock (Eq, Ord, Show)
+
+-- | Written as the bare string; read back through 'mkSlug', so JSON cannot
+-- smuggle in a slug that breaks the rules.
+instance ToJSON Slug where
+  toJSON = toJSON . slugText
+  toEncoding = toEncoding . slugText
+
+instance FromJSON Slug where
+  parseJSON = withText "Slug" $ \t ->
+    either (\e -> fail ("not a slug: " <> show t <> ", " <> show e)) pure (mkSlug t)
 
 -- | Why a string is not a slug: the first rule it breaks, in the order they
 -- are listed here.
@@ -35,8 +52,8 @@ data SlugError
   deriving stock (Eq, Show)
 
 -- | The slug this text is, or the first rule it breaks. The text is taken as
--- it is: making a slug out of a title (lowercasing, replacing spaces) is a
--- different function, since it has choices to make.
+-- it is: making a slug out of a title (lowercasing, replacing spaces) is
+-- 'slugify', since it has choices to make.
 mkSlug :: Text -> Either SlugError Slug
 mkSlug t
   | T.null t = Left SlugEmpty
@@ -45,8 +62,85 @@ mkSlug t
   | "--" `T.isInfixOf` t = Left SlugDoubleDash
   | otherwise = Right (Slug t)
   where
-    allowed c = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'
+    allowed c = isAsciiLower c || isDigit c || c == '-'
 
 -- | The slug as it is written in an address.
 slugText :: Slug -> Text
 slugText (Slug t) = t
+
+-- | The slug a title suggests, or 'Nothing' when nothing of the title
+-- survives (a title of punctuation, or in a script with no ASCII fold).
+--
+-- The title is lowercased. A letter with an obvious ASCII spelling is
+-- written so: diacritics go (@ż@ is @z@, @é@ is @e@, also when the accent is
+-- a separate combining mark), and a few letters become two (@ß@ is @ss@, @æ@
+-- is @ae@). Apostrophes are dropped, so that @Mateusz's notes@ is
+-- @mateuszs-notes@ rather than a word @s@. Everything else, spaces and
+-- punctuation and letters with no fold, separates words: it becomes a dash,
+-- and dashes are collapsed and trimmed.
+--
+-- A slug is its own slug: @slugify (slugText s) == Just s@.
+slugify :: Text -> Maybe Slug
+slugify title =
+  rightToMaybe (mkSlug (T.intercalate "-" (filter (not . T.null) (T.split (== '-') folded))))
+  where
+    folded = T.concatMap toAscii (T.toLower title)
+    toAscii c
+      | isAsciiLower c || isDigit c = T.singleton c
+      | Just ascii <- Map.lookup c asciiFolds = ascii
+      | c `elem` apostrophes = ""
+      | isMark c = ""
+      | otherwise = "-"
+    apostrophes = ['\'', '\x2019', '\x02BC'] :: [Char]
+    isMark c = generalCategory c `elem` [NonSpacingMark, SpacingCombiningMark, EnclosingMark]
+
+-- | The ASCII spelling of the lowercase letters of Latin-1 and Latin
+-- Extended-A that have an obvious one: Polish first, since that is what the
+-- owner writes, and the rest of the European Latin alphabets with it.
+asciiFolds :: Map Char Text
+asciiFolds =
+  Map.fromList
+    [ (c, ascii)
+    | (letters, ascii) <-
+        [ ("ąàáâãäåāă", "a")
+        , ("æ", "ae")
+        , ("ćçĉċč", "c")
+        , ("ďđð", "d")
+        , ("ęèéêëēĕėě", "e")
+        , ("ĝğġģ", "g")
+        , ("ĥħ", "h")
+        , ("ìíîïĩīĭįı", "i")
+        , ("ĳ", "ij")
+        , ("ĵ", "j")
+        , ("ķ", "k")
+        , ("łĺļľŀ", "l")
+        , ("ńñņň", "n")
+        , ("óòôõöøōŏő", "o")
+        , ("œ", "oe")
+        , ("ŕŗř", "r")
+        , ("śŝşšș", "s")
+        , ("ß", "ss")
+        , ("ţťŧț", "t")
+        , ("þ", "th")
+        , ("ùúûüũūŭůűų", "u")
+        , ("ŵ", "w")
+        , ("ýÿŷ", "y")
+        , ("źżž", "z")
+        ]
+          :: [([Char], Text)]
+    , c <- letters
+    ]
+
+-- | The slug itself if it is free, and otherwise the first of @slug-2@,
+-- @slug-3@, … that is: how a backend names a new page whose title's slug a
+-- sibling already has. The predicate says whether a slug is taken.
+freshSlug :: (Slug -> Bool) -> Slug -> Slug
+freshSlug taken base
+  | not (taken base) = base
+  | otherwise = go (2 :: Int)
+  where
+    -- A slug ends in a letter or a digit, so a dash and a number after it
+    -- keep every rule.
+    go n =
+      let candidate = Slug (slugText base <> "-" <> show n)
+       in if taken candidate then go (n + 1) else candidate
