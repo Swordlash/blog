@@ -246,3 +246,31 @@ These do not block Phase 0 or 1; defaults are stated so work can proceed.
 - Blog view: is the public face a plain Confluence-style space, or a dated post list
   (Phase 4 item)? Assumed: both, with the post list later.
 - Attachment size limit and storage budget: assumed 50 MB per file, local disk.
+
+## Progress
+
+Amended by the planning session after each work package's report.
+
+- **WP0.2 done** ([#2](https://github.com/Swordlash/blog/pull/2)). `toolchain/bootstrap.sh`
+  installs the pinned toolchain idempotently; two `SessionStart` hooks (toolchain
+  synchronously, cabal store in the background). Cold bootstrap: about 10 minutes. Not
+  yet verified inside a fresh cloud session, only by hand with the same variables.
+  Carried over: `fourmolu` is not installed by the bootstrap (GitHub release downloads are
+  refused by the session proxy; `cabal install fourmolu-0.21.0.0` works but takes about
+  15 minutes), so add it to the bootstrap, and the hspec-halogen executable's
+  dependencies are not covered by `cabal build all --only-dependencies`, so the first
+  `test-wasm` builds them.
+- **WP0.1 done** ([#3](https://github.com/Swordlash/blog/pull/3), stacked on #2). The four
+  packages build and test on both backends, `wiki-app` is prerendered into the page and
+  mounts in Chromium (`npm run smoke-test`). Decision 3 confirmed: the pinned commit is
+  `77444712fc605d0ed939feb9dbabbaad79b1db56`, nothing got in the way. Choices accepted:
+  `license: NONE` in the `.cabal` files, the wasm reactor's `Main.hs` is a stub natively,
+  `wiki-app-test` checks `Halogen.Static` output natively only. Carried over to WP0.3: CI's
+  wasm job needs the host GHC too (prerender and the hspec-halogen executable); the deploy
+  artefact is `dist-newstyle/wasm/public/app/`; the page uses relative URLs and ignores
+  `HALOGEN_BASE_PATH` until WP1.5 adds the router and a `<base>`; the page imports
+  `@bjorn3/browser_wasi_shim` from jsDelivr as haskell-halogen does. Carried over to
+  WP1.3: `npm` did not run esbuild's postinstall script, check that `npx esbuild` works;
+  `dev-test.sh` was left out until the first browser suite exists. Carried over to WP1.5:
+  nothing depends on `th` yet, so its first use adds a long one-off `ghc-lib-parser`
+  build on both backends.
