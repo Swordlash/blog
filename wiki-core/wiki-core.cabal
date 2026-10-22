@@ -50,10 +50,22 @@ common shared
 library
   import:           shared
   hs-source-dirs:   src
-  exposed-modules:  Wiki.Core.Slug
+  exposed-modules:
+      Wiki.Core.Attachment
+      Wiki.Core.Id
+      Wiki.Core.Page
+      Wiki.Core.Path
+      Wiki.Core.Permission
+      Wiki.Core.Slug
+      Wiki.Core.Space
+      Wiki.Core.User
   build-depends:
+      aeson,
+      base,
+      containers,
       protolude,
-      text
+      text,
+      time
 
 -- Runs natively, and under Node on wasm through toolchain/test-wasm.sh.
 test-suite wiki-core-test
@@ -61,8 +73,19 @@ test-suite wiki-core-test
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test
   main-is:          Test.hs
-  other-modules:    Test.Slug
+  other-modules:
+      Test.Attachment
+      Test.Gen
+      Test.Json
+      Test.Path
+      Test.Permission
+      Test.Slug
   build-depends:
+      QuickCheck,
+      aeson,
+      containers,
       hspec >= 2,
       protolude,
+      text,
+      time,
       wiki-core
