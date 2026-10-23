@@ -527,6 +527,24 @@ point of this phase.
   key is lost while the preview catches up. Browser tests: the formatting classes appear on
   `**bold**`, `_it_` and `# h`; every existing editor test passes, adapted only where it
   reached into the textarea directly.
+- **WP1.21 Administration page.** At the owner's request: export, import and reset sit at
+  the foot of the user switcher's menu (`demoControls` in `Shell.hs`), where nobody looks
+  for them. A new route `Admin` (`/admin`) shows an "Administration" page, linked from the
+  header ("Administration") for whoever holds the global `Administer` permission (the demo
+  starts signed in as one). Its first section, "Wiki data", holds what the menu held: the
+  note on whether this browser keeps the demo's changes, "Export the wiki", "Import a
+  wiki…" and "Reset the demo content…", with the same confirmations in place and the same
+  messages; the user menu keeps only switching users. Someone without `Administer` who
+  arrives at `/admin` (or nobody signed in) sees that the page is for administrators, with
+  the demo's hint that the user menu switches to one, never the controls. The page is laid
+  out to take further sections (Phase 3's users and groups) without a redesign: a heading
+  per section. The route goes through the codec (round trip tested) and is left to the 404
+  fallback or prerendered as the agent finds simplest (reported); hydration keeps zero
+  repairs on the prerendered routes. Tests: native, the route round trips; browser, an
+  administrator opens the page from the header and exports (a download), imports with the
+  confirmation, and resets; a reader sees no link and, at `/admin`, the refusal; the
+  existing persistence tests move from the menu to the page; the smoke test visits
+  `/admin`.
 - **WP1.13 HTML in pages.** Render `RawHtml` and `RawHtmlBlock` instead of showing them
   as text: `Wiki.Core.Markdown.Html` parses the HTML (`tagsoup`, pure Haskell, so it
   builds for wasm; `html-parse` if tagsoup's HTML5 handling falls short, reported) and
@@ -1209,3 +1227,6 @@ Amended by the planning session after each work package's report.
   ends are computed from the spaces a user can see, the backend reorders over all
   siblings, so a move can pass an invisible sibling; `parseSpace` needs a default
   `createdAt`; endpoints for the three operations.
+- **WP1.21 added** (the owner could not find export and import in the user menu): an
+  `/admin` page, linked from the header for administrators, whose first section holds the
+  wiki's data controls; it runs beside WP1.18.
