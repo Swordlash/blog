@@ -80,6 +80,7 @@ library
       Wiki.App.View.Body
       Wiki.App.View.Common
       Wiki.App.View.Editor
+      Wiki.App.View.NewPage
       Wiki.App.View.NewSpace
       Wiki.App.View.Page
       Wiki.App.View.Preview

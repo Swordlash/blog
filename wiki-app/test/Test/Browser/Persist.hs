@@ -3,8 +3,9 @@
 -- | The demo kept in the browser's IndexedDB, in a browser: what one
 -- mounted application saves, the next one mounted from the same database
 -- finds, as a reload of the demo's page does; and the user menu's reset
--- puts the demo's content back, there and in the database; and an export
--- imported again brings back what it held.
+-- puts the demo's content back, there and in the database; an export
+-- imported again brings back what it held; and a draft the editor saved by
+-- itself is there after a reload, until it is discarded.
 module Test.Browser.Persist (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -37,7 +38,7 @@ spec m = do
     text <- find ui ".editor-text"
     clear text
     typeText text "Kept for the next visit."
-    find ui ".editor-form button.primary" >>= click
+    find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body p" >>= (`shouldHaveText` "Kept for the next visit.")
     unmount ui
     again <- startKept m db Nothing (Page (slugs ["blog"]) (slugs ["hello-world"]))
@@ -45,13 +46,35 @@ spec m = do
     -- Who was signed in is not kept: the next visit starts as the demo does.
     find again ".user-switcher-toggle" >>= (`shouldHaveText` "Ada Admin")
 
+  it "restores a draft saved while typing after a reload, and discards it when told to" $ runPage $ do
+    db <- fresh m "draft"
+    ui <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    text <- find ui ".editor-text"
+    original <- getProperty text "value"
+    clear text
+    typeText text "Not saved, but kept."
+    -- Quietly, a few seconds after the typing stops.
+    eventuallyWithin 10000 $ find ui ".editor-draft-status" >>= (`shouldHaveText` "Draft saved")
+    unmount ui
+    again <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    find again ".editor-draft-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Restored your unsaved draft from")
+    find again ".editor-text" >>= \t -> getProperty t "value" `shouldReturn` "Not saved, but kept."
+    -- Discarded, the page is as it was saved.
+    find again ".editor-draft-discard" >>= click
+    length <$> findAll again ".editor-draft-found" `shouldReturn` 0
+    find again ".editor-text" >>= \t -> eventually (getProperty t "value" `shouldReturn` original)
+    unmount again
+    third <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    find third ".editor-text" >>= \t -> getProperty t "value" `shouldReturn` original
+    length <$> findAll third ".editor-draft-found" `shouldReturn` 0
+
   it "puts the demo's content back when told to, after asking" $ runPage $ do
     db <- fresh m "reset"
     ui <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     text <- find ui ".editor-text"
     clear text
     typeText text "Soon gone."
-    find ui ".editor-form button.primary" >>= click
+    find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body p" >>= (`shouldHaveText` "Soon gone.")
     find ui ".user-switcher-toggle" >>= click
     find ui ".user-menu .demo-kept" >>= (`shouldHaveText` "Changes to the demo are kept in this browser.")
@@ -74,7 +97,7 @@ spec m = do
     text <- find ui ".editor-text"
     clear text
     typeText text "Exported, and brought back."
-    find ui ".editor-form button.primary" >>= click
+    find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body p" >>= (`shouldHaveText` "Exported, and brought back.")
     find ui ".user-switcher-toggle" >>= click
     find ui ".user-menu .demo-export" >>= click

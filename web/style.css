@@ -1009,13 +1009,68 @@ select {
   cursor: pointer;
 }
 
-.editor-attach.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+/* Whether the work is kept as a draft: quiet, beside the buttons. */
+.editor-draft-status {
+  font-size: 0.85rem;
+  color: var(--muted);
 }
 
-.editor-attach.disabled input {
-  cursor: not-allowed;
+/* A draft found when the page was opened, taken up or offered. */
+.editor-draft-found {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--note);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--note) 8%, transparent);
+}
+
+.editor-draft-found p {
+  flex: 1 1 20rem;
+  margin: 0;
+}
+
+.editor-draft-offered {
+  border-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+/* "Saved", for a few seconds after a save that stays in the editor, in the
+   corner of the window. The element is always there, empty and so with no
+   size when there is nothing to say, so that a screen reader has its live
+   region before the word arrives in it. */
+.editor-saved-notice {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 20;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  color: var(--background);
+  background: var(--tip);
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
+}
+
+.editor-saved-notice:empty {
+  padding: 0;
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .editor-saved-notice:not(:empty) {
+    animation: saved-notice-in 150ms ease-out;
+  }
+}
+
+@keyframes saved-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
 }
 
 /* The toolbar: groups of icon buttons that wrap onto more lines on a narrow

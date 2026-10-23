@@ -2,8 +2,8 @@
 
 -- | The little the shell asks of the browser that Halogen does not say: the
 -- link a click in a rendered page landed on, scrolling to a heading or a
--- footnote, the document's title, where in the session history it is, and
--- the clipboard; and the demo's zip files, made, read and saved (see
+-- footnote, the document's title, where in the session history it is, the
+-- clipboard, and a time as the reader's clock and language write it; and the demo's zip files, made, read and saved (see
 -- @jsbits/archive.js@). See @jsbits/browser.js@. Natively there is no browser: no
 -- click lands on a link, every entry of the history is the first, nothing is
 -- copied, and the rest does nothing.
@@ -18,11 +18,14 @@ module Wiki.App.Browser
   , zipFiles
   , unzipFiles
   , download
+  , localTime
   )
 where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, toJSBytes, toJSText)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
@@ -55,6 +58,7 @@ $( browserJS
      , ("js_archive_path", "wiki_archive_path", Unsafe, [t|JSVal -> Int -> IO JSText|])
      , ("js_archive_bytes", "wiki_archive_bytes", Unsafe, [t|JSVal -> Int -> IO JSVal|])
      , ("js_download", "wiki_download", Unsafe, [t|JSText -> JSText -> JSVal -> IO ()|])
+     , ("js_local_time", "wiki_local_time", Unsafe, [t|Double -> IO JSText|])
      ]
  )
 
@@ -149,3 +153,11 @@ unzipFiles bytes
 -- type. Natively nothing is saved.
 download :: (MonadIO m) => Text -> Text -> ByteString -> m ()
 download name mediaType bytes = liftIO . when inBrowser $ js_download (toJSText name) (toJSText mediaType) =<< toJSBytes bytes
+
+-- | A time as the reader reads one: in their time zone, written the way
+-- their browser's language writes a date and a time. Natively, where there
+-- is no reader, in UTC, and saying so.
+localTime :: (MonadIO m) => UTCTime -> m Text
+localTime t
+  | inBrowser = liftIO (fromJSText <$> js_local_time (realToFrac (utcTimeToPOSIXSeconds t) * 1000))
+  | otherwise = pure (toS (formatTime defaultTimeLocale "%-d %B %Y, %H:%M UTC" t))

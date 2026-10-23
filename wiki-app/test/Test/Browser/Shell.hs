@@ -75,8 +75,11 @@ spec m = do
     ui <- start m (Just "user-editor") (Space (slugs ["blog"]))
     find ui ".space-view .actions a[href='#/s/blog/new-page/']" >>= (`shouldHaveText` "New page")
     find ui ".space-view .actions a[href='#/s/blog/new-page/']" >>= click
-    find ui ".editor-title input" >>= (`typeText` "Third post")
-    find ui ".editor-form button.primary" >>= click
+    find ui ".new-page-title" >>= (`typeText` "Third post")
+    find ui ".new-page-view button.primary" >>= click
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing Third post")
+    -- Made already: left without a word written, it stays, empty.
+    find ui ".editor-cancel" >>= click
     find ui ".page-view .page-title" >>= (`shouldHaveText` "Third post")
     clickButton ui ".page-view .actions button" "Rename"
     field <- find ui ".page-view form input"

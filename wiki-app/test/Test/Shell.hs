@@ -3,14 +3,18 @@
 -- with: the shell around the route, with what the route shows loaded.
 module Test.Shell (spec) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime, addUTCTime)
 import Protolude
 import Test.Hspec
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Static (Rendered (..), renderRoute)
+import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (Slug, mkSlug)
 
 slugs :: [Text] -> [Slug]
@@ -22,6 +26,27 @@ as who = (demoState demoNow) {current = UserId <$> who}
 
 render :: MemState -> Route -> IO Rendered
 render st = renderRoute st "/"
+
+-- | The editor on the demo's first post.
+helloEditor :: Route
+helloEditor = EditPage (slugs ["blog"]) (slugs ["hello-world"])
+
+-- | The demo's first post, as a wiki has it.
+helloOf :: MemState -> P.Page
+helloOf st = fromMaybe (panic "the demo has no Hello, world") (find (\p -> p.title == "Hello, world") (Map.elems st.pages))
+
+-- | A draft of a page, by a user, of the version saved at a time, saved a
+-- minute after the page.
+draftOf :: P.Page -> Text -> UTCTime -> Draft
+draftOf p author base =
+  Draft
+    { page = p.id
+    , author = UserId author
+    , title = "Hello, draft"
+    , body = "Unsaved words"
+    , base
+    , savedAt = addUTCTime 60 p.updatedAt
+    }
 
 contains :: Text -> Text -> Expectation
 contains html part = (part, part `T.isInfixOf` html) `shouldBe` (part, True)
@@ -117,16 +142,63 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     html `contains` "class=\"error error-forbidden\""
     html `lacks` "<textarea"
 
-  it "opens the editor on a new page, under a page or at the space's top level" $ do
+  it "asks a new page's title first, under a page or at the space's top level" $ do
     Rendered {html, title} <- render (as (Just "user-editor")) (NewPage (slugs ["blog"]) Nothing)
     title `shouldBe` "New page · Blog · Wiki"
-    html `contains` "<h1 class=\"editor-heading\">New page in Blog</h1>"
-    html `contains` "<textarea"
-    html `contains` "Save the page first; then files can be attached to it."
+    html `contains` "<section class=\"new-page-view\"><h1>New page in Blog</h1>"
+    html `contains` "class=\"new-page-title\""
+    html `contains` ">Create and edit</button>"
+    html `contains` "href=\"/s/blog/\">Cancel</a>"
+    html `lacks` "<textarea"
+    html `lacks` "Save the page first"
     Rendered {html = under} <- render (as (Just "user-editor")) (NewPage (slugs ["blog"]) (Just (slugs ["hello-world"])))
-    under `contains` "<h1 class=\"editor-heading\">New page under Hello, world</h1>"
+    under `contains` "<h1>New page under Hello, world</h1>"
+    under `contains` "href=\"/s/blog/p/hello-world/\">Cancel</a>"
     Rendered {html = nowhere} <- render (as (Just "user-editor")) (NewPage (slugs ["blog"]) (Just (slugs ["no-such-page"])))
     nowhere `contains` "class=\"error error-not-found\""
+    Rendered {html = refused} <- render (as (Just "user-reader")) (NewPage (slugs ["blog"]) Nothing)
+    refused `contains` "class=\"error error-forbidden\""
+    refused `lacks` "new-page-title"
+
+  it "offers Save, Save and close, and Cancel in the editor, and an empty notice of saves" $ do
+    Rendered {html} <- render (as (Just "user-editor")) helloEditor
+    html `contains` ">Save</button>"
+    html `contains` ">Save and close</button>"
+    html `contains` "<div class=\"editor-saved-notice\" role=\"status\"></div>"
+    html `contains` "<span class=\"editor-draft-status\"></span>"
+    html `lacks` "editor-draft-found"
+
+  it "takes up the author's draft of the page as it is, and says so" $ do
+    let st = as (Just "user-editor")
+        hello = helloOf st
+        draft = draftOf hello "user-editor" hello.updatedAt
+    Rendered {html} <- render st {drafts = Map.singleton (hello.id, UserId "user-editor") draft} helloEditor
+    html `contains` "Restored your unsaved draft from "
+    html `contains` ">Discard it and go back to the saved page</button>"
+    html `contains` ">Unsaved words</textarea>"
+    html `contains` "value=\"Hello, draft\""
+    -- Cancel asks what becomes of the draft rather than leaving.
+    html `lacks` "href=\"/s/blog/p/hello-world/\">Cancel</a>"
+
+  it "only offers a draft of an older version of the page" $ do
+    let st = as (Just "user-editor")
+        hello = helloOf st
+        draft = draftOf hello "user-editor" (addUTCTime (-3600) hello.updatedAt)
+    Rendered {html} <- render st {drafts = Map.singleton (hello.id, UserId "user-editor") draft} helloEditor
+    html `contains` "You have an unsaved draft from "
+    html `contains` ">Open the draft</button>"
+    html `contains` "class=\"editor-text\"># Hello, world"
+    html `lacks` "Unsaved words"
+
+  it "shows nobody else's draft" $ do
+    let st = as (Just "user-editor")
+        hello = helloOf st
+        draft = draftOf hello "user-admin" hello.updatedAt
+    Rendered {html} <- render st {drafts = Map.singleton (hello.id, UserId "user-admin") draft} helloEditor
+    html `lacks` "editor-draft-found"
+    html `lacks` "Unsaved words"
+    Rendered {html = page} <- render st {drafts = Map.singleton (hello.id, UserId "user-editor") (draftOf hello "user-editor" hello.updatedAt)} (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    page `lacks` "Unsaved words"
 
   it "offers to write a new page in a space, and under a page" $ do
     Rendered {html} <- render (as (Just "user-editor")) (Space (slugs ["blog"]))

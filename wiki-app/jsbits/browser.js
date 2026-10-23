@@ -71,3 +71,9 @@ async function wiki_copy_text(element, text) {
     }
   }
 }
+
+// A time, given in milliseconds since 1970, in the reader's time zone and
+// as their language writes a date and a time.
+function wiki_local_time(ms) {
+  return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}

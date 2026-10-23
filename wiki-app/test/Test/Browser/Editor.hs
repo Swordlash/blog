@@ -1,11 +1,12 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 -- | The editor in a browser, in the shell, over the demo's wiki: typing
--- Markdown and seeing the preview follow, saving and reading the page back
--- from the backend, a new page, leaving with and without unsaved changes, a
--- save over someone else's, files attached by a drop or a file input, the
--- toolbar and its shortcuts, and the preview shown on its own or beside the
--- Markdown.
+-- Markdown and seeing the preview follow, saving (and staying, or closing)
+-- and reading the page back from the backend, a new page made from its
+-- title and given a file before anything is saved, leaving with and without
+-- unsaved changes, Cancel keeping or discarding the draft, a save over
+-- someone else's, files attached by a drop or a file input, the toolbar and
+-- its shortcuts, and the preview shown on its own or beside the Markdown.
 module Test.Browser.Editor (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -55,15 +56,18 @@ spec m = do
     typeText text "\n\nAnd more."
     eventually $ find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "And more.")
     find ui ".editor-preview .wiki-math-inline" >>= (`shouldBeSameElement` island)
-    find ui ".editor-form button.primary" >>= click
+    find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Hello again")
     _ <- find ui ".page-view .wiki-math-inline .katex"
     saved <- readPage wiki ["blog"] ["hello-world"]
     saved.body `shouldBe` "# Hello again\n\nEuler: $e^{i\\pi} + 1 = 0$\n\nAnd more."
 
-  it "saves with Ctrl+S, and indents with Tab" $ runPage $ do
+  it "saves with Ctrl+S and stays, saying Saved for a while, and indents with Tab" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- find ui ".editor-text"
+    notice <- find ui ".editor-saved-notice"
+    getAttribute notice "role" `shouldReturn` Just "status"
+    notice `shouldHaveText` ""
     clear text
     typeText text "- a list"
     press "Enter"
@@ -71,21 +75,55 @@ spec m = do
     typeText text "- nested"
     getProperty text "value" `shouldReturn` "- a list\n  - nested"
     press "Control+s"
-    find ui ".page-view .page-body ul ul li" >>= (`shouldHaveText` "nested")
+    notice `shouldHaveText` "Saved"
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
     saved <- readPage wiki ["blog"] ["hello-world"]
     saved.body `shouldBe` "- a list\n  - nested"
+    -- Still the same textarea, with the cursor where it was.
+    find ui ".editor-text" >>= (`shouldBeSameElement` text)
+    typeText text "\n- more"
+    -- The notice goes by itself.
+    eventuallyWithin 6000 (notice `shouldHaveText` "")
+    -- A second save is made against the first: no conflict.
+    press "Control+s"
+    notice `shouldHaveText` "Saved"
+    length <$> findAll ui ".error-conflict" `shouldReturn` 0
+    again <- readPage wiki ["blog"] ["hello-world"]
+    again.body `shouldBe` "- a list\n  - nested\n- more"
+    again.updatedAt `shouldSatisfy` (> saved.updatedAt)
 
-  it "writes a new page from the space's New page" $ runPage $ do
+  it "saves, saves again, and shows the page after Save and close" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
+    text <- find ui ".editor-text"
+    clear text
+    typeText text "One."
+    find ui ".editor-save" >>= click
+    find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
+    typeText text " Two."
+    find ui ".editor-save" >>= click
+    eventually $ (\p -> p.body) <$> readPage wiki ["blog"] ["hello-world"] >>= (`shouldBe` "One. Two.")
+    typeText text " Three."
+    find ui ".editor-save-close" >>= click
+    find ui ".page-view .page-body p" >>= (`shouldHaveText` "One. Two. Three.")
+    length <$> findAll ui ".error-conflict" `shouldReturn` 0
+
+  it "writes a new page from the space's New page, made from its title first" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") (Space (slugs ["blog"]))
     find ui ".space-view .actions a[href='#/s/blog/new-page/']" >>= click
-    find ui ".editor-heading" >>= (`shouldHaveText` "New page in Blog")
-    find ui ".editor-title input" >>= (`typeText` "Third post")
+    find ui ".new-page-view h1" >>= (`shouldHaveText` "New page in Blog")
+    find ui ".new-page-title" >>= (`typeText` "Third post")
+    find ui ".new-page-view button.primary" >>= click
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing Third post")
+    -- Made, empty, before anything is written.
+    made <- readPage wiki ["blog"] ["third-post"]
+    made.body `shouldBe` ""
+    find ui ".editor-title input" >>= \t -> getProperty t "value" `shouldReturn` "Third post"
     find ui ".editor-text" >>= (`typeText` "Some **news**.")
     -- Shown on its own, the preview has the draft at once; Save is there.
     find ui ".editor-show-preview" >>= click
     find ui ".editor-preview .page-title" >>= (`shouldHaveText` "Third post")
     find ui ".editor-preview .page-body strong" >>= (`shouldHaveText` "news")
-    find ui ".editor-form button.primary" >>= click
+    find ui ".editor-save-close" >>= click
     find ui ".page-view .page-title" >>= (`shouldHaveText` "Third post")
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Third post")
     created <- readPage wiki ["blog"] ["third-post"]
@@ -94,12 +132,61 @@ spec m = do
   it "writes a new page under another from its New subpage" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["hello-world"]))
     find ui ".page-view .actions a[href='#/s/blog/new-page/hello-world/']" >>= click
-    find ui ".editor-heading" >>= (`shouldHaveText` "New page under Hello, world")
-    find ui ".editor-title input" >>= (`typeText` "Follow-up")
-    find ui ".editor-form button.primary" >>= click
+    find ui ".new-page-view h1" >>= (`shouldHaveText` "New page under Hello, world")
+    find ui ".new-page-title" >>= (`typeText` "Follow-up")
+    find ui ".new-page-view button.primary" >>= click
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing Follow-up")
+    find ui ".editor-save-close" >>= click
     find ui ".page-view .page-title" >>= (`shouldHaveText` "Follow-up")
     created <- readPage wiki ["blog"] ["hello-world", "follow-up"]
     created.title `shouldBe` "Follow-up"
+
+  it "attaches a file to a new page before anything is saved" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") (NewPage (slugs ["blog"]) Nothing)
+    find ui ".new-page-title" >>= (`typeText` "With a picture")
+    find ui ".new-page-view button.primary" >>= click
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing With a picture")
+    length <$> findAll ui ".editor-attach.disabled" `shouldReturn` 0
+    text <- find ui ".editor-text"
+    unsafeIOToPageM (chooseFile ".editor-attach input" "dot.png" "image/png" dotPng)
+    settle
+    eventually $ getProperty text "value" `shouldReturn` "![dot.png](attachment:dot.png)"
+    find ui ".editor-attachments li a" >>= (`shouldHaveText` "dot.png")
+    find ui ".editor-hint" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "first"))
+    attached <- readPage wiki ["blog"] ["with-a-picture"]
+    map (\a -> a.name) attached.attachments `shouldBe` ["dot.png"]
+    find ui ".editor-save-close" >>= click
+    _ <- find ui ".page-view .page-body img[alt='dot.png']"
+    pass
+
+  it "asks on Cancel with changes whether to keep the draft, and keeps it or not as told" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
+    text <- find ui ".editor-text"
+    clear text
+    typeText text "Kept for later."
+    find ui ".editor-cancel" >>= click
+    _ <- find ui ".editor-cancel-confirm"
+    -- Going on editing leaves everything as it was.
+    clickButton ui ".editor-cancel-confirm button" "Go on editing"
+    length <$> findAll ui ".editor-cancel-confirm" `shouldReturn` 0
+    find ui ".editor-cancel" >>= click
+    clickButton ui ".editor-cancel-confirm button" "Keep the draft"
+    -- Gone to the page, without being asked again whether to leave.
+    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Hello, world")
+    length <$> findAll ui ".leave-confirm" `shouldReturn` 0
+    -- The draft is there the next time, and readers never see it.
+    unchanged <- readPage wiki ["blog"] ["hello-world"]
+    unchanged.body `shouldSatisfy` T.isPrefixOf "# Hello, world"
+    find ui ".page-view .actions a[href$='/edit/']" >>= click
+    find ui ".editor-draft-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Restored your unsaved draft from")
+    find ui ".editor-text" >>= \t -> getProperty t "value" `shouldReturn` "Kept for later."
+    -- This time the changes are let go, and the draft with them.
+    find ui ".editor-cancel" >>= click
+    clickButton ui ".editor-cancel-confirm button" "Discard my changes"
+    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Hello, world")
+    find ui ".page-view .actions a[href$='/edit/']" >>= click
+    find ui ".editor-text" >>= \t -> getProperty t "value" >>= (`shouldSatisfy` T.isPrefixOf "# Hello, world")
+    length <$> findAll ui ".editor-draft-found" `shouldReturn` 0
 
   it "goes back to the page on Cancel when nothing has changed" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
@@ -133,7 +220,7 @@ spec m = do
       savePage page.id page.updatedAt page.title "Someone else's words." >>= either (panic . show) (const pass)
     clear text
     typeText text "My words."
-    find ui ".editor-form button.primary" >>= click
+    find ui ".editor-save" >>= click
     _ <- find ui ".editor .error-conflict"
     getProperty text "value" `shouldReturn` "My words."
     clickButton ui ".error-conflict button" "Reload and lose my changes"
@@ -171,7 +258,7 @@ spec m = do
     eventually $ getProperty text "value" `shouldReturn` expected
     eventually $ find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "w24 the quick")
     getProperty text "value" `shouldReturn` expected
-    find ui ".editor-form button.primary" >>= click
+    find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Markdown guide")
     saved <- readPage wiki ["docs"] ["markdown-guide"]
     saved.body `shouldBe` expected
@@ -188,7 +275,7 @@ spec m = do
     image <- find ui ".editor-preview .page-body img[alt='dot.png']"
     getAttribute image "src" >>= (`shouldSatisfy` maybe False (T.isPrefixOf "blob:"))
     find ui ".editor-attachments li a" >>= (`shouldHaveText` "dot.png")
-    find ui ".editor-form button.primary" >>= click
+    find ui ".editor-save-close" >>= click
     _ <- find ui ".page-view .page-body img[alt='dot.png']"
     saved <- readPage wiki ["blog"] ["hello-world"]
     map (\a -> a.name) saved.attachments `shouldBe` ["dot.png"]
@@ -289,7 +376,7 @@ spec m = do
     find ui ".editor-show-preview" >>= click
     shouldBeHidden text
     find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Typed last.")
-    find ui ".editor-form button.primary" >>= shouldBeVisible
+    find ui ".editor-save" >>= shouldBeVisible
     find ui ".editor-back" >>= click
     shouldBeVisible text
     shouldBeHidden =<< find ui ".editor-preview"

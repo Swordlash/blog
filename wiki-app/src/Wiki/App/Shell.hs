@@ -10,7 +10,8 @@
 -- in, the tree of spaces, and the space the route is in with its pages
 -- (through 'getSpace' and 'listPages', so that a space the user may not see
 -- is refused in place). The views are child components ("Wiki.App.View.*"):
--- a space, a page, a page's source, the form for a new space. They are handed that context,
+-- a space, a page, a page's source, the forms for a new space and a new page,
+-- the editor. They are handed that context,
 -- and they tell the shell when they have changed the wiki ('Changed'), which
 -- it then reloads, counting up the context's revision so that they reload
 -- what they hold as well, and goes where the change leads.
@@ -54,6 +55,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.App.View.Editor qualified as Editor
+import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.Page qualified as PageView
 import Wiki.App.View.Search qualified as SearchBox
@@ -86,7 +88,8 @@ type Slots =
     .+ ("page" .== H.Slot (Const Void) ViewOutput ())
     .+ ("source" .== H.Slot (Const Void) ViewOutput ())
     .+ ("newSpace" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("editor" .== H.Slot Editor.Query ViewOutput Editor.Target)
+    .+ ("newPage" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("editor" .== H.Slot Editor.Query ViewOutput [Slug])
     .+ ("searchBox" .== H.Slot (Const Void) Void ())
     .+ ("searchResults" .== H.Slot (Const Void) ViewOutput ())
 
@@ -412,13 +415,11 @@ component =
         InSpace _ space pages -> case st.route of
           Page _ path -> HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path} FromView
           PageSource _ path -> HH.slot "source" () SourceView.component SourceView.Input {context = context st, space, path} FromView
-          EditPage _ path -> editor (Editor.Existing path)
-          NewPage _ parent -> editor (Editor.New parent)
+          -- One editor per page edited: another page's is a component of
+          -- its own, with a draft of its own.
+          EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path} FromView
+          NewPage _ parent -> HH.slot "newPage" () NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
           _ -> HH.slot "space" () SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
-          where
-            -- One editor per page edited: another page's is a component
-            -- of its own, with a draft of its own.
-            editor target = HH.slot "editor" target Editor.component Editor.Input {context = context st, space, pages, target} FromView
 
     -- Asked when a route is followed away from unsaved changes ('leaving').
     leaveConfirm :: H.ComponentHTML Action Slots m
@@ -673,7 +674,6 @@ waitsForPage st = case (st.route, st.here) of
   (Page _ _, InSpace {}) -> True
   (EditPage _ _, InSpace {}) -> True
   (PageSource _ _, InSpace {}) -> True
-  (NewPage _ _, InSpace {}) -> True
   (Search {}, _) -> True
   _ -> False
 
