@@ -1,10 +1,11 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The application's frame, around whatever the route shows: a header with
--- the site's name, breadcrumbs, the search box ("Wiki.App.View.Search") and
--- the demo's user switcher, which also resets the demo's content; a sidebar with the tree of spaces, the current space's
--- pages under it; the content of the route; and a footer saying what the wiki
--- is built with.
+-- the site's name, breadcrumbs, the search box ("Wiki.App.View.Search"), a
+-- link to the administration for an administrator, and the demo's user
+-- switcher; a sidebar with the tree of spaces, the current space's pages
+-- under it; the content of the route; and a footer saying what the wiki is
+-- built with.
 --
 -- The shell holds what every view needs and loads it itself: who is signed
 -- in, the tree of spaces, and the space the route is in with its pages
@@ -15,6 +16,13 @@
 -- and they tell the shell when they have changed the wiki ('Changed'), which
 -- it then reloads, counting up the context's revision so that they reload
 -- what they hold as well, and goes where the change leads.
+--
+-- The administration page ('Admin') is the shell's own rather than a view's:
+-- what it does (export, import, reset) acts on the whole wiki and on how the
+-- demo keeps it, which the shell holds and reloads after, so its controls and
+-- their state stay here and the page is only where they are shown. It is
+-- laid out as a heading per section, the wiki's data the first, so that later
+-- sections (users and groups) go beside it.
 --
 -- The route is the router's ('Router.current' at the start, then
 -- 'Router.changes'), so links, the back and forward buttons and a reload all
@@ -66,7 +74,7 @@ import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Page (Page (attachments, id, title))
 import Wiki.Core.Path (PathError (..), childrenOf, findChild, resolvePath)
-import Wiki.Core.Permission (mayCreateSpace)
+import Wiki.Core.Permission (GlobalPermission (Administer), hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id, name, pageOrder, public, slug), subspacesOf)
 import Wiki.Core.User (User (..))
@@ -114,7 +122,7 @@ data State = State
   -- after a change.
   , menuOpen :: Bool
   , panel :: Panel
-  -- ^ What the foot of the user menu shows.
+  -- ^ What the administration's section on the wiki's data shows.
   , kept :: Bool
   -- ^ Whether the demo's changes are kept in the browser ('demoKept').
   , settled :: Bool
@@ -126,7 +134,7 @@ data State = State
   -- ('historyEntry'), which staying in the editor goes back to.
   }
 
--- | What the foot of the user menu shows.
+-- | What the administration's section on the wiki's data shows.
 data Panel
   = -- | What can be done with the demo's content, under what the last
     -- export or import did, if anything.
@@ -229,6 +237,7 @@ component =
           <a class="wiki-brand" {{ Router.linkProps st.router Followed Home }}>Wiki</a>
           {{ breadcrumbs st }}
           {{ searchBox }}
+          {{ adminLink st }}
           {{ userSwitcher st }}
         </header>
       |]
@@ -257,9 +266,22 @@ component =
           Just r -> [hh|<a {{ Router.linkProps st.router Followed r }}>{{ label }}</a>|]
           Nothing -> [hh|<span class="unviewable">{{ label }}</span>|]
 
-    -- The demo's menu of who one is: nobody, or one of its users; and, at
-    -- its foot, putting the demo's content back as it was, which asks
-    -- first, in place.
+    -- The way to the administration, for someone who may administer the
+    -- wiki; nobody else is shown it.
+    adminLink :: State -> Maybe (H.ComponentHTML Action Slots m)
+    adminLink st =
+      guard (isAdministrator st)
+        $> [hh|
+          <a
+            class="admin-link"
+            {{ [attr "aria-current" "page" | st.route == Admin] }}
+            {{ Router.linkProps st.router Followed Admin }}
+          >
+            Administration
+          </a>
+        |]
+
+    -- The demo's menu of who one is: nobody, or one of its users.
     userSwitcher :: State -> H.ComponentHTML Action Slots m
     userSwitcher st =
       [hh|
@@ -282,11 +304,42 @@ component =
                   </button>
                 </li>
               {% end %}
-              <li class="demo-reset">{{ demoControls st }}</li>
             </ul>
           {% end %}
         </div>
       |]
+
+    -- The administration of the wiki, for someone who may administer it;
+    -- anyone else is told whom it is for, and how to become one in the demo.
+    admin :: State -> H.ComponentHTML Action Slots m
+    admin st
+      | isAdministrator st =
+          [hh|
+            <section class="admin-view">
+              <h1>Administration</h1>
+              <section class="admin-section admin-data">
+                <h2>Wiki data</h2>
+                <p class="admin-intro">
+                  The whole wiki as one file: export it to keep a copy or to take it to another
+                  browser, or import one to replace everything here.
+                </p>
+                {{ demoControls st }}
+              </section>
+            </section>
+          |]
+      | otherwise =
+          [hh|
+            <section class="admin-view">
+              <h1>Administration</h1>
+              <div class="error error-forbidden" role="alert">{{ refusal }}</div>
+            </section>
+          |]
+      where
+        refusal :: Text
+        refusal
+          | isNothing st.session.user =
+              "This page is for the wiki's administrators, and you are not signed in. To sign in as one, choose who you are at the top right."
+          | otherwise = "This page is for the wiki's administrators, which you are not. Switch to one at the top right."
 
     -- The demo's content as a whole: whether it is kept, exporting it,
     -- importing one, and resetting it, the last two asking first, in place.
@@ -294,7 +347,7 @@ component =
     demoControls st = case st.panel of
       ConfirmingReset ->
         [hh|
-          <div class="demo-confirm demo-reset-confirm" role="alertdialog">
+          <div class="confirm demo-confirm demo-reset-confirm" role="alertdialog">
             <p>Put the demo back as it was at the start? Every change made to it in this browser is lost.</p>
             <button type="button" class="danger" onClick={{ const ResetDemo }}>Reset</button>
             <button type="button" onClick={{ const CancelPanel }}>Cancel</button>
@@ -302,7 +355,7 @@ component =
         |]
       ConfirmingImport name archive ->
         [hh|
-          <div class="demo-confirm demo-import-confirm" role="alertdialog">
+          <div class="confirm demo-confirm demo-import-confirm" role="alertdialog">
             <p>Replace everything in this wiki with {{ name }}, which holds {{ archiveSummary archive }}? What is in the wiki now is lost.</p>
             <button type="button" class="danger" onClick={{ const ConfirmImport }}>Replace</button>
             <button type="button" onClick={{ const CancelPanel }}>Cancel</button>
@@ -310,17 +363,19 @@ component =
         |]
       Actions told ->
         [hh|
-          <div>
+          <div class="demo-controls">
             {% for t in maybeToList told %}
               <p class="demo-told{% if t.refused %} demo-refused{% end %}" role="status">{{ t.message }}</p>
             {% end %}
             <p class="demo-kept">{{ keptNote }}</p>
-            <button type="button" class="demo-export" onClick={{ const Export }}>Export the wiki</button>
-            <label class="demo-import">
-              Import a wiki…
-              <input type="file" accept=".zip,application/zip" onChange={{ ImportChosen }}>
-            </label>
-            <button type="button" class="demo-reset-ask" onClick={{ const AskReset }}>Reset the demo content…</button>
+            <div class="actions">
+              <button type="button" class="demo-export" onClick={{ const Export }}>Export the wiki</button>
+              <label class="button demo-import">
+                Import a wiki…
+                <input type="file" accept=".zip,application/zip" onChange={{ ImportChosen }}>
+              </label>
+              <button type="button" class="demo-reset-ask" onClick={{ const AskReset }}>Reset the demo content…</button>
+            </div>
           </div>
         |]
       where
@@ -405,6 +460,7 @@ component =
     content st = case st.route of
       Home -> home st
       Unknown -> notFound st
+      Admin -> admin st
       NewSpace parent -> HH.slot "newSpace" () NewSpaceView.component NewSpaceView.Input {context = context st, parent} FromView
       Search text space subspaces ->
         HH.slot "searchResults" () SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
@@ -524,19 +580,22 @@ component =
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
       Toggle sid -> modify $ \st ->
         st {collapsed = if sid `Set.member` st.collapsed then Set.delete sid st.collapsed else Set.insert sid st.collapsed}
-      ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen, panel = Actions Nothing})
+      ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen})
+      -- What was asked or told about the wiki's data was asked of, or told
+      -- to, the user one was.
       SwitchTo user -> do
-        modify (\st -> st {menuOpen = False, settled = False})
+        modify (\st -> st {menuOpen = False, panel = Actions Nothing, settled = False})
         switchTo user
         reload Nothing
       AskReset -> modify (\st -> st {panel = ConfirmingReset})
       CancelPanel -> modify (\st -> st {panel = Actions Nothing})
-      -- The route stays: a page the reset took away is then not found,
-      -- which is what has become of it.
+      -- The route stays, the administration, and says what was done, since
+      -- nothing else there shows it.
       ResetDemo -> do
-        modify (\st -> st {menuOpen = False, panel = Actions Nothing, settled = False})
+        modify (\st -> st {panel = Actions Nothing, settled = False})
         resetDemo
         reload Nothing
+        report False "The demo's content is back as it was at the start."
       Export -> do
         archive <- exportDemo
         let name = "wiki-" <> toS (formatTime defaultTimeLocale "%Y-%m-%d" archive.createdAt) <> ".zip"
@@ -565,13 +624,15 @@ component =
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
 
-    -- Say in the user menu what an export or an import did.
+    -- Say in the administration what an export, an import or a reset did.
     report :: Bool -> Text -> H.HalogenM State Action Slots output m ()
     report refused message = modify (\st -> st {panel = Actions (Just Told {refused, message})})
 
     arrive :: Route -> Int -> H.HalogenM State Action Slots output m ()
     arrive r entry = do
-      modify (\st -> st {route = r, settled = False, menuOpen = False, leaving = Nothing, entry})
+      -- What was asked or told about the wiki's data is not shown again on
+      -- coming back to the administration.
+      modify (\st -> st {route = r, settled = False, menuOpen = False, panel = Actions Nothing, leaving = Nothing, entry})
       loadHere False
 
     -- After a change: everything again, and every view's own data too.
@@ -645,6 +706,13 @@ fetchHere path =
           pure (InSpace path space pages)
       )
 
+-- | Whether the user may administer the wiki as a whole: who is shown the
+-- administration.
+isAdministrator :: State -> Bool
+isAdministrator st = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer
+  where
+    ctx = context st
+
 context :: State -> Context
 context st = Context {router = st.router, session = st.session, spaces = st.spaces, revision = st.generation}
 
@@ -703,6 +771,7 @@ crumbs st = case st.route of
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]
   Search {} -> [("Search", Nothing)]
+  Admin -> [("Administration", Nothing)]
   where
     spaceCrumbs path =
       [ (s.name, if mayView (context st) s.id then Just (Space (spacePathOf st.spaces s.id)) else Nothing)

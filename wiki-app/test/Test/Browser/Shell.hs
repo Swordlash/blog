@@ -102,6 +102,36 @@ spec m = do
     _ <- find ui ".wiki-sidebar > .space-tree > li > .space-row a[href='#/s/projects/']"
     pure ()
 
+  it "takes an administrator to the administration from the header" $ runPage $ do
+    ui <- start m (Just "user-admin") Home
+    find ui ".wiki-header a.admin-link" >>= click
+    find ui ".admin-view h1" >>= (`shouldHaveText` "Administration")
+    find ui ".admin-view .admin-data h2" >>= (`shouldHaveText` "Wiki data")
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Administration")
+    _ <- find ui ".wiki-header a.admin-link[aria-current=page]"
+    _ <- find ui ".admin-view .demo-export"
+    pure ()
+
+  it "shows a reader no way to the administration, and at its address only whom it is for" $ runPage $ do
+    ui <- start m (Just "user-reader") Home
+    _ <- find ui ".home h1"
+    length <$> findAll ui ".admin-link" `shouldReturn` 0
+    unmount ui
+    there <- start m (Just "user-reader") Admin
+    find there ".admin-view .error-forbidden" >>= (`shouldSatisfy'` "for the wiki's administrators")
+    length <$> findAll there ".admin-view .demo-export" `shouldReturn` 0
+    length <$> findAll there ".admin-link" `shouldReturn` 0
+    -- Switching to an administrator shows the page where the refusal was.
+    find there ".user-switcher-toggle" >>= click
+    find there ".user-menu button[data-login=admin]" >>= click
+    _ <- find there ".admin-view .demo-export"
+    length <$> findAll there ".admin-view .error-forbidden" `shouldReturn` 0
+    -- And switching to nobody takes it away again.
+    find there ".user-switcher-toggle" >>= click
+    find there ".user-menu button[data-login='']" >>= click
+    find there ".admin-view .error-forbidden" >>= (`shouldSatisfy'` "you are not signed in")
+    length <$> findAll there ".admin-view .demo-export" `shouldReturn` 0
+
   it "shows that an address is nothing" $ runPage $ do
     ui <- start m Nothing Unknown
     find ui ".not-found h1" >>= (`shouldHaveText` "Not found")

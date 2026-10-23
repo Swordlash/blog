@@ -31,9 +31,10 @@
 //    history and forward again, each step checked by its address and what
 //    is on screen. Then leaving the editor with changes by the back button
 //    (Stay, then Leave), a reload on a page that keeps the edit (the demo
-//    keeps its content in IndexedDB), the user menu's reset taking it away
-//    for good, a reload on a page's source, and 404.html for an address
-//    with no file.
+//    keeps its content in IndexedDB), the administration's export, its
+//    reset taking the edit away for good and its import bringing it back, a
+//    reload on a page's source, and 404.html for an address with no file,
+//    the administration's among them.
 // 3. The same page in a dark scheme and at a phone's width, and a page's
 //    source copied to the clipboard.
 //
@@ -668,36 +669,50 @@ try {
   assert.ok(!noRepairs(edited.repairs), "a page edited in the browser was adopted with nothing to repair");
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text: "Smoke test" }, "the reload");
   await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
-  // Exporting the wiki downloads a zip file of it, edit and all.
+  // The user menu only switches users: the wiki's data is the
+  // administration's, linked from the header for an administrator.
   await page.locator("#app .user-switcher-toggle").click();
-  await page.locator("#app .user-menu .demo-kept", { hasText: "kept in this browser" }).waitFor({ timeout });
-  const [exported] = await Promise.all([page.waitForEvent("download", { timeout }), page.locator("#app .user-menu .demo-export").click()]);
+  await page.locator("#app .user-menu button[data-login=admin]").waitFor({ timeout });
+  assert.equal(await page.locator("#app .user-menu .demo-export").count(), 0, "the user menu still exports the wiki");
+  await page.locator("#app .user-switcher-toggle").click();
+  await page.locator("#app .wiki-header a.admin-link").click();
+  await check({ path: "/admin/", view: "admin-view", crumb: "Administration" }, "the administration");
+  await page.locator("#app .admin-view .demo-kept", { hasText: "kept in this browser" }).waitFor({ timeout });
+  // Exporting the wiki downloads a zip file of it, edit and all.
+  const [exported] = await Promise.all([page.waitForEvent("download", { timeout }), page.locator("#app .admin-view .demo-export").click()]);
   assert.match(exported.suggestedFilename(), /^wiki-\d{4}-\d{2}-\d{2}\.zip$/, "the export's name");
   const exportPath = await exported.path();
   assert.equal((await readFile(exportPath)).subarray(0, 2).toString(), "PK", "the export is not a zip file");
-  // Resetting the demo's content, from the user menu and after asking,
+  await page.locator("#app .admin-view .demo-told", { hasText: `Exported the wiki as ${exported.suggestedFilename()}.` }).waitFor({ timeout });
+  // Resetting the demo's content, from the administration and after asking,
   // takes the edit away, and a reload does not bring it back.
-  await page.locator("#app .user-menu .demo-reset-ask").click();
+  await page.locator("#app .admin-view .demo-reset-ask").click();
   await page.locator("#app .demo-reset-confirm button", { hasText: "Reset" }).click();
-  await eventually(async () => {
-    assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit is still there");
-  }, "resetting the demo's content");
+  await page.locator("#app .admin-view .demo-told", { hasText: "back as it was at the start" }).waitFor({ timeout });
+  const toHelloWorld = async (step, text) => {
+    await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
+    await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
+    await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text }, step);
+  };
+  await toHelloWorld("the page after the reset");
+  assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit is still there");
   // The demo's own content again, which the prerendered page shows as it is.
   const reset = await reload(page);
   assert.ok(noRepairs(reset.repairs), `the page after a reset needed repairs: ${JSON.stringify(reset.repairs)}`);
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "the reload after the reset");
   assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Smoke test"), "the edit came back after a reset");
   // Importing the export brings it back, after asking.
-  await page.locator("#app .user-switcher-toggle").click();
-  await page.locator("#app .user-menu .demo-import input").setInputFiles({
+  await page.locator("#app .wiki-header a.admin-link").click();
+  await check({ path: "/admin/", view: "admin-view", crumb: "Administration" }, "the administration again");
+  await page.locator("#app .admin-view .demo-import input").setInputFiles({
     name: exported.suggestedFilename(),
     mimeType: "application/zip",
     buffer: await readFile(exportPath),
   });
   await page.locator("#app .demo-import-confirm button", { hasText: "Replace" }).click();
-  await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text: "Smoke test" }, "the import");
-  await page.locator("#app .user-menu .demo-told", { hasText: "Imported" }).waitFor({ timeout });
-  console.log("ok: exporting downloads a zip file of the wiki, and importing it after a reset brings the edit back");
+  await page.locator("#app .admin-view .demo-told", { hasText: "Imported" }).waitFor({ timeout });
+  await toHelloWorld("the import", "Smoke test");
+  console.log("ok: the administration, from the header, exports a zip file of the wiki, resets it, and imports the export back");
   // And on a page's source, which a reader not signed in may read too.
   await page.locator("#app .page-view .actions a", { hasText: "View source" }).click();
   await check({ path: "/s/blog/p/hello-world/source/", view: "source-view", crumb: "Source" }, "the source");
@@ -713,6 +728,14 @@ try {
   assert.ok(noRepairs(notFound.repairs), `404.html: adopting the page repaired it: ${JSON.stringify(notFound.repairs, null, 2)}`);
   await check({ path: "/no/such/address/", view: "not-found" }, "an address the wiki does not have");
   await footerShown(page, "404.html");
+  // Nor has the administration's, which the program opens for an
+  // administrator, as the demo starts.
+  assert.equal((await fetch(url("/admin/"))).status, 404);
+  await load(page, "/admin/");
+  await stillPrerendered(page, "the administration's address");
+  await check({ path: "/admin/", view: "admin-view", crumb: "Administration" }, "the administration's address");
+  await page.locator("#app .admin-view .demo-export").waitFor({ timeout });
+  console.log("ok: the administration opens at its own address");
   // An editor's address has no page of its own either; the program opens it.
   assert.equal((await fetch(url("/s/blog/p/hello-world/edit/"))).status, 404);
   // 404.html is the page of no route, so the program repairs it into the

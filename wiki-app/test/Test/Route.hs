@@ -20,7 +20,7 @@ slugs = map slug
 
 -- | Slugs, the route's own words among them, which have to be escaped.
 genSlug :: Gen Slug
-genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "new-page", "new-space", "s", "not-found", "a-b", "x1"]
+genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "new-page", "new-space", "s", "not-found", "admin", "a-b", "x1"]
 
 genPath :: Gen [Slug]
 genPath = chooseInt (1, 4) >>= (`vectorOf` genSlug)
@@ -40,6 +40,7 @@ genRoute =
         <$> oneof [pure Nothing, Just <$> elements ["mermaid", "mermaid flow", "", "a&b=c", "100% ?#/", "zażółć", "+x+"]]
         <*> oneof [pure Nothing, pure (Just []), Just <$> genPath]
         <*> elements [False, True]
+    , pure Admin
     ]
 
 spec :: Spec
@@ -59,6 +60,7 @@ spec = describe "Wiki.App.Route" $ do
       print route (NewSpace Nothing) `shouldBe` "/new-space/"
       print route (NewSpace (Just (slugs ["team"]))) `shouldBe` "/new-space/team/"
       print route Unknown `shouldBe` "/not-found/"
+      print route Admin `shouldBe` "/admin/"
       print route (NewPage (slugs ["docs"]) Nothing) `shouldBe` "/s/docs/new-page/"
       print route (NewPage (slugs ["team", "projects"]) (Just (slugs ["the-wiki"]))) `shouldBe` "/s/team/projects/new-page/the-wiki/"
       print route (Search Nothing Nothing True) `shouldBe` "/search/"
@@ -92,6 +94,12 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/new-space" `shouldBe` Right (NewSpace Nothing)
       parse route "/search?q=x" `shouldBe` Right (Search (Just "x") Nothing True)
       parse route "/s/docs/new-page" `shouldBe` Right (NewPage (slugs ["docs"]) Nothing)
+      parse route "/admin" `shouldBe` Right Admin
+
+    it "keeps a space called admin apart from the administration" $ do
+      print route (Space (slugs ["admin"])) `shouldBe` "/s/admin/"
+      parse route "/s/admin/" `shouldBe` Right (Space (slugs ["admin"]))
+      parse route "/admin/" `shouldBe` Right Admin
 
     it "reads a search's parameters in any order, and leaves out what is not there" $ do
       parse route "/search/?space=docs&q=a+b" `shouldBe` Right (Search (Just "a+b") (Just (slugs ["docs"])) True)

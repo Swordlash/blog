@@ -250,7 +250,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "ends every page with the footer, linking to haskell-halogen" $ do
     let footer = "<footer class=\"wiki-footer\">Built with <a href=\"https://github.com/Swordlash/haskell-halogen\">haskell-halogen</a></footer>"
-    for_ [Home, Unknown, Space (slugs ["docs"]), Page (slugs ["docs"]) (slugs ["tour"]), EditPage (slugs ["docs"]) (slugs ["tour"]), PageSource (slugs ["docs"]) (slugs ["tour"])] $ \r -> do
+    for_ [Home, Unknown, Admin, Space (slugs ["docs"]), Page (slugs ["docs"]) (slugs ["tour"]), EditPage (slugs ["docs"]) (slugs ["tour"]), PageSource (slugs ["docs"]) (slugs ["tour"])] $ \r -> do
       Rendered {html} <- render (as Nothing) r
       html `contains` footer
       -- The frame's last element, after its body.
@@ -304,3 +304,28 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     html `contains` "There is no such space to search in"
     Rendered {html = team} <- render (as Nothing) (Search (Just "the") (Just (slugs ["team"])) False)
     team `contains` "There is no such space to search in"
+
+  it "links an administrator to the administration, whose first section is the wiki's data" $ do
+    Rendered {html = home} <- render (as (Just "user-admin")) Home
+    home `contains` "<a class=\"admin-link\" href=\"/admin/\">Administration</a>"
+    Rendered {html, title} <- render (as (Just "user-admin")) Admin
+    title `shouldBe` "Administration · Wiki"
+    html `contains` "<a aria-current=\"page\" class=\"admin-link\" href=\"/admin/\">Administration</a>"
+    html `contains` "<section class=\"admin-view\"><h1>Administration</h1><section class=\"admin-section admin-data\"><h2>Wiki data</h2>"
+    html `contains` ">Export the wiki</button>"
+    html `contains` "Import a wiki…"
+    html `contains` ">Reset the demo content…</button>"
+    -- In the menu no longer: it only switches users.
+    html `lacks` "user-menu"
+
+  it "shows nobody else the way to the administration, nor its controls there" $
+    for_ [Nothing, Just "user-reader", Just "user-editor"] $ \who -> do
+      Rendered {html = home} <- render (as who) Home
+      home `lacks` "admin-link"
+      Rendered {html, title} <- render (as who) Admin
+      title `shouldBe` "Administration · Wiki"
+      html `contains` "<section class=\"admin-view\"><h1>Administration</h1><div class=\"error error-forbidden\" role=\"alert\">This page is for the wiki's administrators"
+      html `contains` "at the top right."
+      html `lacks` "admin-link"
+      html `lacks` "Export the wiki"
+      html `lacks` "demo-"

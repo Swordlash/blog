@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Export, import and reset have moved from the foot of the user menu, where
+nobody looked for them, to an "Administration" page at `/admin` (the route
+`Admin`), linked from the header for whoever holds the global `Administer`
+permission. Its first section, "Wiki data", has the note on whether this
+browser keeps the demo's changes, "Export the wiki", "Import a wiki…" and
+"Reset the demo content…", with the same confirmations and messages, and a
+reset now says that it is done, since nothing else on the page shows it.
+The page has a heading per section, so that later sections (users and
+groups) go beside it. Anyone else at `/admin`, signed in or not, is told
+that the page is for administrators and how to switch to one; the controls
+are never shown to them. The user menu only switches users. The page is not
+prerendered: its address gets `404.html`, as an editor's does, because what
+it says about the browser keeping the demo is known only in the browser.
+
 A space's subspaces and pages are listed in an order its administrators
 choose under "Order" in the space's view, one for each: by name (natural
 order, so "Part 2" before "Part 11"; the default), by date, newest or oldest

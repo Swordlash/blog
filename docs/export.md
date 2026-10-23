@@ -1,7 +1,7 @@
 # The export format
 
-A wiki is exported as one zip file, and imported from one: the demo's user
-menu has "Export the wiki" and "Import a wiki", and the server of Phase 2
+A wiki is exported as one zip file, and imported from one: the demo's
+administration page has "Export the wiki" and "Import a wiki", and the server of Phase 2
 will read and write the same files. The code is `Wiki.Core.Export` in
 `wiki-core`, which writes and reads the files inside the zip, and its
 Haddock says the same as this page.

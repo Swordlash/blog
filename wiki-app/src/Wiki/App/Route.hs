@@ -15,6 +15,7 @@
 -- > /new-space/                    NewSpace Nothing
 -- > /new-space/team/               NewSpace (Just [team])
 -- > /not-found/                    Unknown
+-- > /admin/                        Admin
 -- > /search/?q=mermaid&space=docs  Search (Just "mermaid") (Just [docs]) True
 -- > /search/?q=x&space=team&only   Search (Just "x") (Just [team]) False
 --
@@ -84,6 +85,9 @@ data Route
     -- @only@ when the subspaces are left out), so that the address of a
     -- search can be kept and shared like any other.
     Search (Maybe Text) (Maybe [Slug]) Bool
+  | -- | The administration of the wiki as a whole, for whoever holds the
+    -- global 'Wiki.Core.Permission.Administer'.
+    Admin
   deriving stock (Eq, Show)
 
 -- | The routes' codec. Parsing tries the routes in this order and takes the
@@ -120,6 +124,7 @@ route =
           (\case Search q s subspaces -> Just (q, s, subspaces); _ -> Nothing)
           (\(q, s, subspaces) -> Search q s subspaces)
           (prefix "search" (directory searchParams))
+      , alternative (\case Admin -> Just (); _ -> Nothing) (const Admin) (prefix "admin" (directory noArgs))
       ]
   where
     spaceAndPage :: (RouteDuplex' [Slug] -> RouteDuplex' [Slug]) -> RouteDuplex' ([Slug], [Slug])
