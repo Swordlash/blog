@@ -52,6 +52,9 @@ fromArchive a =
         , pages = Map.fromList [(p.id, p) | p <- a.pages]
         , blobs = a.blobs
         , objectUrls = mempty
+        , -- An archive has no drafts: they are their authors' own, and the
+          -- pages they were written for are not these.
+          drafts = mempty
         , current = Nothing
         , counter = 1
         }

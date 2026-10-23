@@ -12,7 +12,9 @@
 -- counter (ids are made from it, and a counter that started over would make
 -- an id again that a record already has) and the global grants. Who is
 -- signed in, and the object URLs a tab has made for attachments, last as
--- long as the tab does.
+-- long as the tab does. Drafts ("Wiki.Core.Draft") are kept too, in a store
+-- of their own, though the export has none: the demo's author may close the
+-- tab and come back to their draft, which is what drafts are for.
 --
 -- Everything here is pure: "Wiki.App.Backend.Mem" reads and writes the
 -- store, and works out what to write from two sets of 'records' with
@@ -27,6 +29,7 @@ module Wiki.App.Backend.Mem.Persist
   , attachmentsStore
   , grantsStore
   , metaStore
+  , draftsStore
   , storeNames
 
     -- * Records
@@ -39,7 +42,7 @@ module Wiki.App.Backend.Mem.Persist
 where
 
 import Control.Monad.Fail (fail)
-import Data.Aeson (Value (..), eitherDecodeStrict', toJSON, withObject, (.!=), (.:?))
+import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
 import Data.Map.Merge.Strict qualified as Merge
@@ -50,6 +53,7 @@ import Protolude
 import Web.Storage.IndexedDB (Database (..), StoreName)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Backend.Mem.State (MemState (..), emptyState)
+import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export
 import Wiki.Core.Id (BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page (Page (..))
@@ -58,11 +62,13 @@ import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), User (..))
 
 -- | The database a wiki is kept in under this name. Its stores are made
--- when it is first opened; adding one later is a version bump.
+-- when it is first opened; adding one later is a version bump, on which
+-- IndexedDB makes the new store and keeps the others with what they hold.
+-- Version 2 added 'draftsStore'.
 memDatabase :: Text -> Database
-memDatabase name = Database {name, version = 1, stores = storeNames}
+memDatabase name = Database {name, version = 2, stores = storeNames}
 
-usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore :: StoreName
+usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore :: StoreName
 
 -- | A user's record, under their id.
 usersStore = "users"
@@ -87,9 +93,16 @@ grantsStore = "grants"
 -- has none), and the global grants, under @globalGrants@.
 metaStore = "meta"
 
+-- | Each user's draft of a page, under 'draftKey'.
+draftsStore = "drafts"
+
 -- | Every store of 'memDatabase'.
 storeNames :: [StoreName]
-storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore]
+storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore]
+
+-- | A draft's key: its page's id and its author's, which are one draft's.
+draftKey :: Draft -> Text
+draftKey d = d.page.text <> "/" <> d.author.text
 
 -- | What a store holds, by store and key.
 type Records = Map StoreName (Map Text ByteString)
@@ -115,7 +128,31 @@ records st =
           , (globalGrantsKey, encodeJson (map encodeGlobalGrant st.grants.global))
           ]
       )
+    , (draftsStore, Map.fromList [(draftKey d, encodeJson (encodeDraft d)) | d <- Map.elems st.drafts])
     ]
+
+-- | A draft's record, with named fields, as the export's records have.
+encodeDraft :: Draft -> Value
+encodeDraft d =
+  object
+    [ "page" .= d.page
+    , "author" .= d.author
+    , "title" .= d.title
+    , "body" .= d.body
+    , "base" .= d.base
+    , "savedAt" .= d.savedAt
+    ]
+
+parseDraft :: Value -> Parser Draft
+parseDraft = withObject "draft" $ \o ->
+  Draft
+    <$> o
+    .: "page"
+    <*> o .: "author"
+    <*> o .:? "title" .!= ""
+    <*> o .:? "body" .!= ""
+    <*> o .: "base"
+    <*> o .: "savedAt"
 
 -- | A page as the store keeps it: the export's record, with its
 -- attachments' records in it.
@@ -186,6 +223,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
     -- page of the wiki: the nearest the records tell.
     let firstPage = fromMaybe (UTCTime (ModifiedJulianDay 0) 0) (minimumMay [p.createdAt | p <- Map.elems pages])
     spaces <- keyed spacesStore (parseSpace (spaceCreatedDefault firstPage (Map.elems pages))) (\s -> s.id.text) SpaceId
+    kept <- keyed draftsStore parseDraft draftKey identity
     grants <- fmap concat . for (Map.toList (holding grantsStore)) $ \(key, bytes) -> do
       gs <- decoding grantsStore key (listOf parseSpaceGrant) bytes
       if all (\g -> g.space.text == key) gs
@@ -199,6 +237,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
         , spaces
         , pages
         , blobs = Map.mapKeys BlobId (holding attachmentsStore)
+        , drafts = Map.fromList [((d.page, d.author), d) | d <- Map.elems kept]
         , grants = Grants {global, spaces = grants}
         , counter
         }

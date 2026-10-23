@@ -295,7 +295,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       opened <- runMemDOM (openMemWiki db (demoState demoNow))
       was <- readIORef opened.wiki
       -- A newer version of the program upgrades the database meanwhile.
-      runMemDOM (IDB.put db {version = 2} spacesStore "space-1" "{}")
+      runMemDOM (IDB.put db {version = db.version + 1} spacesStore "space-1" "{}")
       archive <- either (panic . toS) pure (readArchive (filesOf (toArchive goldenTime "test" st)))
       result <- runMemWikiWith opened.store opened.wiki (importMemWiki archive)
       result `shouldSatisfy` isLeft

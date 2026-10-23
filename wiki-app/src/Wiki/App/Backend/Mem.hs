@@ -173,6 +173,9 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
     for_ result (liftIO . traverse_ (js_revoke_object_url . toJSText))
     pure (void result)
   searchPages = query . searchPagesIn
+  getDraft = query . getDraftIn
+  saveDraft pid base title body = writeAt (saveDraftIn pid base title body)
+  discardDraft = write . discardDraftIn
   attachmentUrl a = case a.source of
     SourceUrl url -> pure url
     SourceBlob blob ->

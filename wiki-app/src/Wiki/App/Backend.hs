@@ -47,7 +47,9 @@
 --   attachments, need 'Edit' on the page's space (on both spaces, for a page
 --   moved from one to another);
 -- * moving a child up or down its list by hand needs 'Edit' on the space
---   whose list it is: a page's own space, a subspace's parent.
+--   whose list it is: a page's own space, a subspace's parent;
+-- * reading, saving and discarding one's draft of a page need someone signed
+--   in, with 'Edit' on the page's space.
 --
 -- Whoever creates a space is granted 'AdministerSpace' on it, so that a user
 -- with 'CreateSpaces' alone can do something with the space they made.
@@ -102,6 +104,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Core.Attachment (Attachment)
+import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Page (Page)
@@ -283,8 +286,9 @@ class (Monad m) => MonadWiki m where
   -- | Save a page's title and body. The time is the 'Wiki.Core.Page.Page'
   -- @updatedAt@ of the version the edit started from: if the page has been
   -- saved since, the save is a 'Conflict' rather than a silent overwrite of
-  -- someone else's work. On success @updatedAt@ is later than it was, and
-  -- the slug is unchanged.
+  -- someone else's work. On success @updatedAt@ is later than it was, the
+  -- slug is unchanged, and the saver's draft of the page ('saveDraft') is
+  -- gone.
   savePage :: PageId -> UTCTime -> Text -> Text -> m (Either WikiError Page)
   default savePage :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> UTCTime -> Text -> Text -> m (Either WikiError Page)
   savePage p v t = lift . savePage p v t
@@ -347,6 +351,35 @@ class (Monad m) => MonadWiki m where
   searchPages :: SearchQuery -> m [SearchHit]
   default searchPages :: (MonadTrans t, m ~ t n, MonadWiki n) => SearchQuery -> m [SearchHit]
   searchPages = lift . searchPages
+
+  -- * Drafts
+
+  -- | The signed-in user's draft of a page ("Wiki.Core.Draft"), if they
+  -- have one. Only the user's own: nobody else's draft of the page is ever
+  -- given out.
+  getDraft :: PageId -> m (Either WikiError (Maybe Draft))
+  default getDraft :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> m (Either WikiError (Maybe Draft))
+  getDraft = lift . getDraft
+
+  -- | Keep the signed-in user's unsaved title and body of a page as their
+  -- draft of it, in place of the one they had. The time is the
+  -- 'Wiki.Core.Page.Page' @updatedAt@ of the version the work started from,
+  -- as for 'savePage'; the draft's @savedAt@ is now. The title may be blank:
+  -- a draft is not checked as a page is, since it is not one yet.
+  --
+  -- A draft is never shown to anyone but its author: the page, its search
+  -- hits and its readers are as they were. 'savePage' discards the saver's
+  -- draft of the page, since what was unsaved is then saved; deleting the
+  -- page, or its space, discards every draft of it; moving it keeps them.
+  saveDraft :: PageId -> UTCTime -> Text -> Text -> m (Either WikiError Draft)
+  default saveDraft :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> UTCTime -> Text -> Text -> m (Either WikiError Draft)
+  saveDraft p v t = lift . saveDraft p v t
+
+  -- | Discard the signed-in user's draft of a page; nothing happens if they
+  -- have none.
+  discardDraft :: PageId -> m (Either WikiError ())
+  default discardDraft :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> m (Either WikiError ())
+  discardDraft = lift . discardDraft
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadWiki m) => MonadWiki (HalogenM st act slots output m)

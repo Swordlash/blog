@@ -161,7 +161,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
 
     it "starts over from the seed when a newer version wrote the database" $ do
       db <- freshDatabase
-      runMemDOM (IDB.put db {version = 2} pagesStore "page-1" "from the future")
+      runMemDOM (IDB.put db {version = db.version + 1} pagesStore "page-1" "from the future")
       reopened <- open db
       reopened.found `shouldSatisfy` reseeded
       lasting <$> readIORef reopened.wiki `shouldReturn` lasting seed
@@ -173,6 +173,22 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       runMemDOM (IDB.put db {stores = [spacesStore]} spacesStore "space-1" "{}")
       reopened <- open db
       reopened.found `shouldSatisfy` reseeded
+      shouldReload db reopened.wiki
+
+    it "reads a database of version 1, from before drafts, and keeps drafts in it from then on" $ do
+      db <- freshDatabase
+      let versionOne = db {version = 1, stores = filter (/= draftsStore) db.stores}
+      old <- runMemDOM (openMemWiki versionOne seed)
+      runKept old (switchUser (Just (UserId "user-admin")))
+      made <- runKept old (createSpace Nothing "From version 1") >>= ok
+      reopened <- open db
+      reopened.found `shouldBe` Restored
+      runKept reopened (switchUser (Just (UserId "user-admin")))
+      names <- runKept reopened (map (\s -> s.name) <$> listSpaces)
+      names `shouldContain` [made.name]
+      docs <- runKept reopened (getSpace (path "docs")) >>= ok
+      tour <- runKept reopened (getPage docs.id (path "tour")) >>= ok
+      _ <- runKept reopened (saveDraft tour.id tour.updatedAt "Tour" "A draft") >>= ok
       shouldReload db reopened.wiki
 
     it "keeps nothing where there is no IndexedDB, and says why" $ do
@@ -212,6 +228,24 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       upload.size `shouldBe` 4
       -- A space deleted takes its pages, attachments and grants with it.
       _ <- run (deleteSpace space.id) >>= ok
+      shouldReload db opened.wiki
+
+    it "keeps a draft for its author's next visit, and an import takes every draft away" $ do
+      db <- freshDatabase
+      opened <- open db
+      let run :: MemWiki IO x -> IO x
+          run = runKept opened
+      run (switchUser (Just (UserId "user-editor")))
+      blog <- run (getSpace (path "blog")) >>= ok
+      hello <- run (getPage blog.id (path "hello-world")) >>= ok
+      draft <- run (saveDraft hello.id hello.updatedAt "Hello" "Not saved yet") >>= ok
+      shouldReload db opened.wiki
+      reopened <- open db
+      runKept reopened (switchUser (Just (UserId "user-editor")) >> getDraft hello.id) `shouldReturn` Right (Just draft)
+      -- The export has no drafts, and what is imported replaces them all.
+      archive <- run (memArchive "test")
+      run (importMemWiki archive) `shouldReturn` Right ()
+      run (getDraft hello.id) `shouldReturn` Right Nothing
       shouldReload db opened.wiki
 
     it "makes ids after the ones kept, not over them" $ do

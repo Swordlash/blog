@@ -33,6 +33,7 @@ module Wiki.App.Backend.Mem.State
   , listPagesIn
   , getPageIn
   , searchPagesIn
+  , getDraftIn
 
     -- * Writes
   , Write
@@ -51,6 +52,8 @@ module Wiki.App.Backend.Mem.State
   , deletePageIn
   , uploadAttachmentIn
   , deleteAttachmentIn
+  , saveDraftIn
+  , discardDraftIn
   )
 where
 
@@ -64,6 +67,8 @@ import Protolude
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymous, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Draft (Draft (Draft))
+import Wiki.Core.Draft qualified as D
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), childPages, pageTreeOrder, positionPage)
@@ -107,6 +112,8 @@ data MemState = MemState
   , objectUrls :: Map BlobId Text
   -- ^ The URLs blobs have been given so far: a browser makes one per blob
   -- and keeps its bytes for as long as it lives, so it is made once.
+  , drafts :: Map (PageId, UserId) Draft
+  -- ^ Each user's draft of a page, by the page and the user.
   , current :: Maybe UserId
   -- ^ Who is signed in. A user who is not in 'users' is nobody.
   , counter :: Natural
@@ -127,6 +134,7 @@ emptyState =
     , pages = mempty
     , blobs = mempty
     , objectUrls = mempty
+    , drafts = mempty
     , current = Nothing
     , counter = 1
     }
@@ -541,6 +549,7 @@ deleteSpaceIn sid st = do
     ( st1
         { spaces = Map.withoutKeys st.spaces gone
         , pages = alive
+        , drafts = Map.filterWithKey (\(pid, _) _ -> Map.member pid alive) st.drafts
         , grants =
             Grants
               { P.global = st.grants.global
@@ -615,7 +624,9 @@ savePageIn pid base title body now st = do
   -- versions of a page have the same time.
   let updatedAt = if now > p.updatedAt then now else addUTCTime 0.000001 p.updatedAt
       p' = p {title = t, body, updatedAt}
-  pure (st {pages = Map.insert pid p' st.pages}, p')
+      -- What was unsaved is saved now.
+      drafts = maybe identity (\u -> Map.delete (pid, u)) (currentUserId st) st.drafts
+  pure (st {pages = Map.insert pid p' st.pages, drafts}, p')
 
 -- | The page and the pages under it, by id.
 subtreeOf :: MemState -> PageId -> Set PageId
@@ -659,7 +670,13 @@ deletePageIn pid st = do
   requireEdit st (chainOf st p.space)
   let gone = subtreeOf st pid
       st1 = dropAttachments (Map.elems (Map.restrictKeys st.pages gone)) st
-  pure (st1 {pages = Map.withoutKeys st.pages gone}, ())
+  pure
+    ( st1
+        { pages = Map.withoutKeys st.pages gone
+        , drafts = Map.filterWithKey (\(i, _) _ -> not (i `Set.member` gone)) st.drafts
+        }
+    , ()
+    )
 
 -- | Attach a file to a page.
 uploadAttachmentIn :: PageId -> Text -> Text -> ByteString -> Write Attachment
@@ -688,3 +705,38 @@ deleteAttachmentIn aid st = do
         SourceUrl _ -> Nothing
       p' = p {attachments = filter (\x -> x.id /= aid) p.attachments}
   pure (dropSource a.source st {pages = Map.insert p.id p' st.pages}, url)
+
+--------------------------------------------------------------------------------
+-- Drafts
+
+-- | The signed-in user's id, if they are one of the users.
+currentUserId :: MemState -> Maybe UserId
+currentUserId st = (\p -> p.user) <$> currentPrincipal st
+
+-- | A page someone signed in may edit, and who they are: what each of the
+-- draft operations needs, checked in the class's order.
+draftable :: MemState -> PageId -> Either WikiError (Page, UserId)
+draftable st pid = do
+  p <- findPage st pid
+  requireEdit st (chainOf st p.space)
+  u <- maybe (Left Forbidden) Right (currentUserId st)
+  pure (p, u)
+
+-- | The signed-in user's draft of a page.
+getDraftIn :: PageId -> MemState -> Either WikiError (Maybe Draft)
+getDraftIn pid st = do
+  (_, u) <- draftable st pid
+  pure (Map.lookup (pid, u) st.drafts)
+
+-- | Keep the signed-in user's draft of a page, in place of the one they had.
+saveDraftIn :: PageId -> UTCTime -> Text -> Text -> UTCTime -> Write Draft
+saveDraftIn pid base title body now st = do
+  (_, u) <- draftable st pid
+  let draft = Draft {D.page = pid, D.author = u, D.title = title, D.body = body, D.base = base, D.savedAt = now}
+  pure (st {drafts = Map.insert (pid, u) draft st.drafts}, draft)
+
+-- | Discard the signed-in user's draft of a page, if they have one.
+discardDraftIn :: PageId -> Write ()
+discardDraftIn pid st = do
+  (_, u) <- draftable st pid
+  pure (st {drafts = Map.delete (pid, u) st.drafts}, ())

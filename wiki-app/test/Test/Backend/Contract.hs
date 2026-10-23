@@ -22,6 +22,7 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.App.Backend
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
+import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
@@ -67,6 +68,7 @@ spec _ newFixture = before newFixture $ describe "MonadWiki contract" $ do
   deletingPages
   attachments
   searching
+  drafts
   neverThrown
 
 --------------------------------------------------------------------------------
@@ -892,6 +894,89 @@ searching = describe "searchPages" $ do
     hitsFor run Anonymous (searchQuery "wombat") `shouldReturn` [("blog", "Marsupials")]
 
 --------------------------------------------------------------------------------
+-- Drafts
+
+drafts :: (MonadWiki m) => SpecWith (Fixture m)
+drafts = describe "getDraft, saveDraft and discardDraft" $ do
+  it "keep the signed-in user's unsaved work on a page, and give it back to them" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    run editor (getDraft hello.id) `shouldReturn` Right Nothing
+    d <- run editor (saveDraft hello.id hello.updatedAt "Hello, draft" "Half a thought") >>= ok
+    (d.page, d.title, d.body, d.base) `shouldBe` (hello.id, "Hello, draft", "Half a thought", hello.updatedAt)
+    editorUser <- run editor currentUser
+    Just d.author `shouldBe` ((\u -> u.id) <$> editorUser)
+    run editor (getDraft hello.id) `shouldReturn` Right (Just d)
+
+  it "keep one draft of a page for each user, the last one saved" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    older <- run editor (saveDraft hello.id hello.updatedAt "Hello" "First") >>= ok
+    newer <- run editor (saveDraft hello.id hello.updatedAt "Hello" "Second") >>= ok
+    newer.savedAt `shouldSatisfy` (>= older.savedAt)
+    run editor (getDraft hello.id) `shouldReturn` Right (Just newer)
+
+  it "keep a blank title, since a draft is not a page yet" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    d <- run editor (saveDraft hello.id hello.updatedAt "  " "") >>= ok
+    d.title `shouldBe` "  "
+
+  it "are private to their author, and never shown to readers of the page" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    _ <- run editor (saveDraft hello.id hello.updatedAt "Secret title" "zebracorn") >>= ok
+    run admin (getDraft hello.id) `shouldReturn` Right Nothing
+    pageAt run Anonymous "blog" "hello-world" `shouldReturn` hello
+    pageAt run editor "blog" "hello-world" `shouldReturn` hello
+    run editor (searchPages (searchQuery "zebracorn")) `shouldReturn` []
+
+  it "are discarded by their author, and discarding none is no error" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    _ <- run editor (saveDraft hello.id hello.updatedAt "Hello" "Gone soon") >>= ok
+    _ <- run admin (saveDraft hello.id hello.updatedAt "Hello" "The admin's") >>= ok
+    run editor (discardDraft hello.id) >>= ok
+    run editor (getDraft hello.id) `shouldReturn` Right Nothing
+    run editor (discardDraft hello.id) >>= ok
+    (fmap (fmap (\d -> d.body)) <$> run admin (getDraft hello.id)) `shouldReturn` Right (Just "The admin's")
+
+  it "go when their author saves the page, and stay for others" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    _ <- run editor (saveDraft hello.id hello.updatedAt "Hello" "The editor's") >>= ok
+    _ <- run admin (saveDraft hello.id hello.updatedAt "Hello" "The admin's") >>= ok
+    _ <- run editor (savePage hello.id hello.updatedAt "Hello" "The editor's") >>= ok
+    run editor (getDraft hello.id) `shouldReturn` Right Nothing
+    -- The admin's is still there, from a version saved over since.
+    (fmap (fmap (\d -> (d.body, d.base))) <$> run admin (getDraft hello.id)) `shouldReturn` Right (Just ("The admin's", hello.updatedAt))
+
+  it "stay with a page that is moved, and go with one that is deleted" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    hello <- pageAt run admin "blog" "hello-world"
+    notes <- pageAt run admin "blog" "notes-on-haskell"
+    d <- run editor (saveDraft hello.id hello.updatedAt "Hello" "Kept") >>= ok
+    _ <- run editor (movePage hello.id blog.id (Just notes.id)) >>= ok
+    run editor (getDraft hello.id) `shouldReturn` Right (Just d)
+    _ <- run editor (deletePage notes.id) >>= ok
+    run editor (getDraft hello.id) >>= (`shouldFailWith` NotFound)
+    -- A page made again gets a new id, and no draft.
+    again <- run editor (createPage blog.id Nothing "Hello, world" "") >>= ok
+    run editor (getDraft again.id) `shouldReturn` Right Nothing
+
+  it "go with a space that is deleted" $ \(Fixture run) -> do
+    guide <- pageAt run admin "docs" "markdown-guide"
+    docs <- spaceAt run admin "docs"
+    _ <- run admin (saveDraft guide.id guide.updatedAt "Guide" "Kept") >>= ok
+    run admin (deleteSpace docs.id) >>= ok
+    run admin (getDraft guide.id) >>= (`shouldFailWith` NotFound)
+
+  it "take someone signed in with Edit on the page's space" $ \(Fixture run) -> do
+    tour <- pageAt run admin "docs" "tour"
+    wiki <- pageAt run admin "team/projects" "the-wiki"
+    hello <- pageAt run admin "blog" "hello-world"
+    for_ [(editor, tour), (reader, wiki), (Anonymous, hello)] $ \(who, p) -> do
+      run who (getDraft p.id) >>= (`shouldFailWith` Forbidden)
+      run who (saveDraft p.id p.updatedAt "X" "") >>= (`shouldFailWith` Forbidden)
+      run who (discardDraft p.id) >>= (`shouldFailWith` Forbidden)
+    run editor (getDraft (PageId "no-such-page")) >>= (`shouldFailWith` NotFound)
+    run Anonymous (saveDraft (PageId "no-such-page") hello.updatedAt "X" "") >>= (`shouldFailWith` NotFound)
+
+--------------------------------------------------------------------------------
 -- Errors are values
 
 -- | Every method, asked about what is not there or by someone who may not,
@@ -921,6 +1006,9 @@ neverThrown = describe "errors" $ do
           , deletePage p
           , void <$> uploadAttachment p "x" "text/plain" ""
           , deleteAttachment (AttachmentId "no-such-attachment")
+          , void <$> getDraft p
+          , void <$> saveDraft p hello.updatedAt "X" ""
+          , discardDraft p
           ]
     for_ [Anonymous, admin] $ \who -> for_ (zip [0 :: Int ..] calls) $ \(i, call) -> do
       result <- try (run who call >>= evaluate)

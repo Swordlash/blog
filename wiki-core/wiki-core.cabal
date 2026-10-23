@@ -52,6 +52,7 @@ library
   hs-source-dirs:   src
   exposed-modules:
       Wiki.Core.Attachment
+      Wiki.Core.Draft
       Wiki.Core.Export
       Wiki.Core.Id
       Wiki.Core.Markdown
