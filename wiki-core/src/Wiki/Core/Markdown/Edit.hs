@@ -30,6 +30,20 @@
 -- * Templates ('Table', 'HorizontalRule') go after the line the selection
 --   ends on.
 --
+-- * Colours ('TextColour', 'Highlight') wrap the selection in an element
+--   whose class names a colour of the palette: @<span class="c-red">@ for
+--   the text's colour, @<mark class="h-yellow">@ for a highlight. A class,
+--   not a @style@, which the HTML allowlist refuses ("Wiki.Core.Markdown.Html");
+--   the style sheet gives each class its look in either theme. The words
+--   selected end up in exactly the colour chosen: wrappers of the same kind
+--   in or around them are taken away rather than nested, and where the
+--   selection covers part of one, the part outside keeps its colour in a
+--   wrapper of its own. Wrappers go around each line on its own, and
+--   around the line's text after a list item's marker, a quote's @>@ or a
+--   heading's @#@: a tag pair across a line break would take in the next
+--   line's marker and break its list or quote, and an inline tag pair is
+--   kept in its line (decision 13). See 'colour'.
+--
 -- A block is kept apart from the text around it by a blank line, without
 -- which it would not be one: a @---@ under a paragraph makes the paragraph a
 -- heading, and text under a @<details>@ block would end up inside it.
@@ -44,11 +58,19 @@ module Wiki.Core.Markdown.Edit
   , HtmlTag (..)
   , htmlTagName
   , htmlTagLabel
+  , Colour (..)
+  , colourName
+  , colourLabel
+  , textColours
+  , highlightColours
+  , textColourClass
+  , highlightClass
   , apply
   )
 where
 
-import Data.List (findIndex, span, zip3)
+import Data.List (findIndex, lookup, span, zip3)
+import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Protolude hiding (link, list, replace)
 
@@ -89,6 +111,10 @@ data Command
     Table
   | HorizontalRule
   | Html HtmlTag
+  | -- | The text in a colour, or, for 'Nothing', in none (the page's own).
+    TextColour (Maybe Colour)
+  | -- | A highlight in a colour, or, for 'Nothing', none.
+    Highlight (Maybe Colour)
   deriving stock (Eq, Show)
 
 -- | The HTML the toolbar offers: elements of the allowlist
@@ -119,6 +145,38 @@ htmlTagLabel = \case
   Small -> "Small print"
   Details -> "Collapsible section"
 
+-- | A colour of the toolbar's palette. The text colours are 'textColours'
+-- and the highlights 'highlightColours'; the style sheet has a look for
+-- those, in the light theme and the dark one, and for no others.
+data Colour = Red | Orange | Yellow | Green | Teal | Blue | Purple | Pink | Grey
+  deriving stock (Eq, Show, Enum, Bounded)
+
+-- | The colour's name, as its class has it.
+colourName :: Colour -> Text
+colourName = T.toLower . show
+
+-- | What the palette calls it.
+colourLabel :: Colour -> Text
+colourLabel = show
+
+-- | The colours text can be written in: none of them pale, so that each
+-- reads on the page's background.
+textColours :: [Colour]
+textColours = [Red, Orange, Green, Teal, Blue, Purple, Pink, Grey]
+
+-- | The colours of a highlight: pale ones in the light theme, deep ones in
+-- the dark, so that the text on them reads.
+highlightColours :: [Colour]
+highlightColours = [Yellow, Green, Blue, Pink, Purple]
+
+-- | The class of text in this colour: @c-red@.
+textColourClass :: Colour -> Text
+textColourClass c = "c-" <> colourName c
+
+-- | The class of a highlight in this colour: @h-yellow@.
+highlightClass :: Colour -> Text
+highlightClass c = "h-" <> colourName c
+
 -- | Apply a command to the text with this selection: the text it makes, and
 -- what is selected in it afterwards.
 apply :: Command -> Text -> Selection -> (Text, Selection)
@@ -143,6 +201,8 @@ apply command text selection = case command of
   Image -> link "!" "description" text sel
   Table -> template tableTemplate (Just (2, T.length "Column 1")) text sel
   HorizontalRule -> template "---" Nothing text sel
+  TextColour c -> colour textWrapper (textColourClass <$> c) text sel
+  Highlight c -> colour highlightWrapper (highlightClass <$> c) text sel
   where
     sel = normalise text selection
     inline :: Markers -> Text -> (Text, Selection)
@@ -560,3 +620,316 @@ link bang placeholder text (Selection s e)
                 Just target | (addr, closing) <- T.break (\c -> c == ')' || c == '\n') target, T.isPrefixOf ")" closing -> Just (2 + T.length addr + 1)
                 _ -> Nothing
       | otherwise = Nothing
+
+-- Colours
+
+-- | A kind of colour wrapper: its element, the prefix of the classes that
+-- name its colours, and whether the element with no class is one too. A
+-- bare @<mark>@ is a highlight (the HTML menu's, in the default colour), so
+-- choosing a colour for it gives it a class; a bare @<span>@ is no colour.
+data Wrapper = Wrapper {element :: Text, prefix :: Text, bare :: Bool}
+
+textWrapper, highlightWrapper :: Wrapper
+textWrapper = Wrapper "span" "c-" False
+highlightWrapper = Wrapper "mark" "h-" True
+
+-- | A wrapper's colour: its class, or nothing for a bare one.
+type Paint = Text
+
+openTag :: Wrapper -> Paint -> Text
+openTag w paint
+  | T.null paint = "<" <> w.element <> ">"
+  | otherwise = "<" <> w.element <> " class=\"" <> paint <> "\">"
+
+closeTag :: Wrapper -> Text
+closeTag w = "</" <> w.element <> ">"
+
+-- | Put the words selected in this colour, or in none ('Nothing').
+--
+-- On each line the selection touches, the words selected on it (without
+-- the white space at either end, or a block's marker at the start of the
+-- line, 'blockPrefix') end up in exactly the colour asked for. Every
+-- wrapper of this kind the selection reaches into is taken apart: what of
+-- its text is selected takes the new colour, and what is not keeps the old
+-- one, in a wrapper of its own. So re-colouring a coloured word replaces
+-- its class instead of nesting another wrapper in it, re-colouring part of
+-- it splits it in two or three, and no colour takes the wrapper away.
+-- Neighbouring text of one colour comes out in one wrapper. The text
+-- outside the wrappers reached is left as it is.
+--
+-- With nothing selected, the cursor inside a wrapper's text stands for all
+-- of it, so that a colour can be changed or taken away without selecting
+-- the word first. Anywhere else, a colour puts in a placeholder in its
+-- wrapper and selects it, as the other inline commands do, and no colour
+-- does nothing.
+--
+-- Only the wrappers this command writes are recognised (@<span
+-- class="c-…">@, or @<mark>@ with or without @class="h-…"@), each with its
+-- closing tag on the same line. Other elements on the line (the other
+-- kind's wrappers, @<b>@, a @<span>@ of another class) are kept whole: a
+-- wrapper goes around one whose text is all in its colour, or inside it
+-- otherwise, so that the elements stay nested. A tag that is not closed on
+-- its line, or closes nothing, is text.
+colour :: Wrapper -> Maybe Paint -> Text -> Selection -> (Text, Selection)
+colour w wanted text sel@(Selection s e)
+  | s == e = maybe placeholder (\(lo, hi) -> fromMaybe (text, sel) (paintRange lo hi)) wrapperAtCursor
+  | otherwise = fromMaybe placeholder (paintRange s e)
+  where
+    ls = allLines text
+    placeholder = case wanted of
+      Nothing -> (text, sel)
+      Just paint ->
+        let opening = openTag w paint
+            placeholderText = if w.bare then "highlighted text" else "coloured text"
+            begin = outsideTags + T.length opening
+         in (replace [Replacement outsideTags 0 (opening <> placeholderText <> closeTag w)] text, Selection begin (begin + T.length placeholderText))
+    -- Where the placeholder goes: at the end of the selection, or after
+    -- the tag the selection ends in.
+    outsideTags = fromMaybe e $ do
+      l <- find (\l -> l.at <= e && e <= l.at + T.length l.line) ls
+      tag <- find (\p -> l.at + p.from < e && e < l.at + p.to) (piecesOf w l.line)
+      pure (l.at + tag.to)
+    -- The text of the innermost wrapper the cursor is in, if any.
+    wrapperAtCursor = do
+      l <- find (\l -> l.at <= s && s <= l.at + T.length l.line) ls
+      let at = s - l.at
+          around = [inner | (_, inner@(lo, hi)) <- wrappersOf (readLine w l.line), lo <= at, at <= hi]
+      (lo, hi) <- lastMay (sortOn fst around)
+      pure (l.at + lo, l.at + hi)
+    -- Every line painted from lo to hi; nothing when no words are there.
+    paintRange lo hi =
+      let painted = [paintLine w wanted l.line (max lo l.at - l.at) (min hi (l.at + T.length l.line) - l.at) | l <- ls]
+          newLines = map fst painted
+          starts = scanl (\at l -> at + T.length l + 1) 0 newLines
+          spans = [(at + a, at + b) | (at, Just (a, b)) <- zip starts (map snd painted)]
+       in case (head spans, lastMay spans) of
+            (Just (a, _), Just (_, b)) -> Just (T.intercalate "\n" newLines, Selection a b)
+            _ -> Nothing
+
+-- | A part of a line as this command reads it: a character, a tag that
+-- opens an element (with, for a wrapper of the command's kind, its colour),
+-- one that closes an element, or one that stands alone (@<br>@, @<img>@,
+-- @<x/>@).
+data Piece = Piece {from :: Int, to :: Int, kind :: PieceKind}
+
+data PieceKind = Letter | Opening Text (Maybe Paint) | Closing Text | Lone
+
+-- | A line as this command reads it: its pieces, the elements on it (each
+-- opening tag that is closed on the line, by its start, with its closing
+-- tag), and the colour each piece is in.
+data Line' = Line'
+  { pieces :: [Piece]
+  , pairs :: [(Int, Piece)]
+  , paints :: [(Int, Maybe Paint)]
+  }
+
+-- | Read a line. An opening tag is closed by the next closing tag of its
+-- name with every element opened after it closed already; a tag that is
+-- not, opening or closing, is text.
+readLine :: Wrapper -> Text -> Line'
+readLine w line = Line' {pieces = ps, pairs, paints = colours [] ps}
+  where
+    ps = piecesOf w line
+    pairs = go [] ps
+      where
+        go stack = \case
+          [] -> []
+          p : rest -> case p.kind of
+            Opening _ _ -> go (p : stack) rest
+            Closing name
+              | o : outer <- stack
+              , Opening open _ <- o.kind
+              , open == name ->
+                  (o.from, p) : go outer rest
+            _ -> go stack rest
+    closings = map ((\p -> p.from) . snd) pairs
+    -- The colours of the elements open around a piece, innermost first:
+    -- 'Nothing' for an element that is not a wrapper.
+    colours stack = \case
+      [] -> []
+      p : rest ->
+        (p.from, asum stack) : case p.kind of
+          Opening _ paint | isJust (lookup p.from pairs) -> colours (paint : stack) rest
+          Closing _ | p.from `elem` closings -> colours (drop 1 stack) rest
+          _ -> colours stack rest
+
+-- | The wrappers of a line: the part of the line each takes, tags
+-- included, and the part its text takes.
+wrappersOf :: Line' -> [((Int, Int), (Int, Int))]
+wrappersOf l = [((p.from, c.to), (p.to, c.from)) | p@Piece {kind = Opening _ (Just _)} <- l.pieces, Just c <- [lookup p.from l.pairs]]
+
+-- | A line's pieces.
+piecesOf :: Wrapper -> Text -> [Piece]
+piecesOf w = go 0
+  where
+    go at rest = case tagAt w rest of
+      Just (len, k) -> Piece at (at + len) k : go (at + len) (T.drop len rest)
+      Nothing
+        | T.null rest -> []
+        | otherwise -> Piece at (at + 1) Letter : go (at + 1) (T.drop 1 rest)
+
+-- | The tag at the start of the text, if there is one: its length and what
+-- it is. Element names are read in any case, as in HTML.
+tagAt :: Wrapper -> Text -> Maybe (Int, PieceKind)
+tagAt w t
+  | Just r <- T.stripPrefix "</" t
+  , Just name <- nameOf r
+  , (blank, r') <- T.span isSpace (T.drop (T.length name) r)
+  , T.isPrefixOf ">" r' =
+      Just (2 + T.length name + T.length blank + 1, Closing (T.toLower name))
+  | Just r <- T.stripPrefix "<" t
+  , Just name <- nameOf r
+  , Just (c, _) <- T.uncons (T.drop (T.length name) r)
+  , isSpace c || c == '>' || c == '/'
+  , (attributes, closing) <- T.break (== '>') (T.drop (T.length name) r)
+  , not (T.null closing) =
+      let element = T.toLower name
+          len = 1 + T.length name + T.length attributes + 1
+       in Just $
+            if T.isSuffixOf "/" attributes || element `elem` voidElements
+              then (len, Lone)
+              else (len, Opening element (if element == w.element then paintOf attributes else Nothing))
+  | otherwise = Nothing
+  where
+    nameOf r = case T.takeWhile (\c -> isAsciiLetter c || isDigit c || c == '-') r of
+      name | Just (c, _) <- T.uncons name, isAsciiLetter c -> Just name
+      _ -> Nothing
+    isAsciiLetter c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    voidElements = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]
+    -- The colour the attributes give: a class of the wrapper's and nothing
+    -- else, or none at all where a bare element is a wrapper.
+    paintOf attributes = case T.strip attributes of
+      "" | w.bare -> Just ""
+      a -> do
+        value <- classValue a
+        name <- T.stripPrefix w.prefix value
+        guard (not (T.null name) && T.all (\c -> (c >= 'a' && c <= 'z') || isDigit c || c == '-') name)
+        pure value
+    -- The value of a lone class attribute, quoted or not.
+    classValue a = do
+      guard (T.toLower (T.take 5 a) == "class")
+      r <- T.stripPrefix "=" (T.stripStart (T.drop 5 a))
+      let r' = T.stripStart r
+      case T.uncons r' of
+        Just (q, quoted) | q == '"' || q == '\'' -> do
+          let (value, after) = T.break (== q) quoted
+          guard (T.drop 1 after == "" && not (T.null after))
+          pure value
+        _ -> do
+          guard (not (T.any isSpace r'))
+          pure r'
+
+-- | What is written anew of a line: its text, and the elements other than
+-- wrappers, with what is in them. The wrappers are taken out, to be put
+-- back where the colours ask for them.
+data Node = Leaf Piece | Element Piece [Node] Piece
+
+-- | One line painted from @a@ to @b@, offsets in the line: the line it
+-- makes, and where the words painted are in it, if there were any.
+--
+-- The part of the line written anew is what the selection touches, with
+-- the wrappers it reaches into, and every element with one tag in that
+-- part and the other outside it, so that the part holds whole elements.
+-- Its text is written with each run of one colour in one wrapper, inside
+-- the other elements where an element's text is not all of one colour and
+-- around them where it is, so the elements stay nested as they were.
+paintLine :: Wrapper -> Maybe Paint -> Text -> Int -> Int -> (Text, Maybe (Int, Int))
+paintLine w wanted line a b = case (head chosen, lastMay chosen) of
+  (Just firstLeaf, Just lastLeaf)
+    | a < b ->
+        let painted p
+              | p.from >= firstLeaf.from && p.to <= lastLeaf.to = wanted
+              | otherwise = fromMaybe Nothing (lookup p.from l.paints)
+            (body, placed) = emit painted Nothing lo (tree region)
+            at p = fromMaybe lo (lookup p.from placed)
+         in (T.take lo line <> body <> T.drop hi line, Just (at firstLeaf, at lastLeaf + (lastLeaf.to - lastLeaf.from)))
+  _ -> (line, Nothing)
+  where
+    l = readLine w line
+    reached = [outer | (outer@(o, c), _) <- wrappersOf l, o < b, c > a]
+    touched' = [(p.from, p.to) | p <- l.pieces, p.from < b, p.to > a]
+    (lo, hi) = widen (foldr (min . fst) a (reached <> touched'), foldr (max . snd) b (reached <> touched'))
+    -- Take in each element with one tag in the part and the other out.
+    widen (x, y) =
+      let inside p = p.from >= x && p.to <= y
+          crossing = [(o.from, c.to) | o <- l.pieces, Just c <- [lookup o.from l.pairs], inside o /= inside c]
+          x' = foldr (min . fst) x crossing
+          y' = foldr (max . snd) y crossing
+       in if (x', y') == (x, y) then (x, y) else widen (x', y')
+    region = [p | p <- l.pieces, p.from >= lo, p.to <= hi]
+    isWrapper p = case p.kind of
+      Opening _ (Just _) -> isJust (lookup p.from l.pairs)
+      _ -> False
+    wrapperClosings = [c.from | (o, c) <- l.pairs, Just p <- [find (\q -> q.from == o) l.pieces], isWrapper p]
+    -- The region's pieces as a tree, without the wrappers' tags.
+    tree = fst . build
+      where
+        build = \case
+          [] -> ([], [])
+          p : rest
+            | isWrapper p || p.from `elem` wrapperClosings -> build rest
+            | Just c <- lookup p.from l.pairs ->
+                let (inner, afterInner) = build rest
+                    (siblings, remaining) = build (drop 1 afterInner)
+                 in (Element p inner c : siblings, remaining)
+            | Closing _ <- p.kind, p.from `elem` map ((\q -> q.from) . snd) l.pairs -> ([], p : rest)
+            | otherwise -> let (siblings, remaining) = build rest in (Leaf p : siblings, remaining)
+    leaves = \case
+      Leaf p -> [p]
+      Element _ inner _ -> concatMap leaves inner
+    isText p = case p.kind of
+      Letter -> True
+      Lone -> True
+      _ -> isNothing (lookup p.from l.pairs) && notElem p.from (map ((\q -> q.from) . snd) l.pairs)
+    start = max a (blockPrefix line)
+    blank p = case p.kind of
+      Letter -> T.all isSpace (slice p)
+      _ -> False
+    chosen = reverse (dropWhile blank (reverse (dropWhile blank [p | p <- region, isText p, p.from >= start, p.to <= b])))
+    slice p = T.take (p.to - p.from) (T.drop p.from line)
+    -- The colour a node is all in, if it is all in one: an element with no
+    -- text in it takes its opening tag's.
+    colourOf painted = \case
+      Leaf p -> Just (painted p)
+      Element o inner _ -> case map painted (concatMap leaves inner) of
+        [] -> Just (painted o)
+        c : cs -> if all (== c) cs then Just c else Nothing
+    -- The nodes from an offset, in a wrapper of the colour around them
+    -- ('Nothing' for none): their text, and where each piece of text is in
+    -- it, by where it was.
+    emit painted around at nodes = foldl' step ("", [], at) (NE.groupBy sameColour nodes) & \(t, placed, _) -> (t, placed)
+      where
+        sameColour x y = isJust (colourOf painted x) && colourOf painted x == colourOf painted y
+        step (t, placed, o) run =
+          let (t', placed') = case colourOf painted (NE.head run) of
+                Just c
+                  | c /= around ->
+                      let opening = maybe "" (openTag w) c
+                          closing = maybe "" (const (closeTag w)) c
+                          (inner, innerPlaced) = nodesText c (o + T.length opening) (toList run)
+                       in (opening <> inner <> closing, innerPlaced)
+                _ -> nodesText around o (toList run)
+           in (t <> t', placed <> placed', o + T.length t')
+        nodesText c o = foldl' (\(t, placed) node -> let (t', placed') = nodeText c (o + T.length t) node in (t <> t', placed <> placed')) ("", [])
+        nodeText c o = \case
+          Leaf p -> (slice p, [(p.from, o)])
+          Element open inner close ->
+            let (t, placed) = emit painted c (o + T.length (slice open)) inner
+             in (slice open <> t <> slice close, placed)
+
+-- | How much of a line is its block's syntax rather than its text: a
+-- quote's @>@s, then a list item's marker or a heading's @#@s, with the
+-- space after each.
+blockPrefix :: Text -> Int
+blockPrefix l = T.length l - T.length (afterMarker (afterQuotes l))
+  where
+    afterQuotes t = case T.stripPrefix ">" (T.dropWhile (== ' ') t) of
+      Just r -> afterQuotes (fromMaybe r (T.stripPrefix " " r))
+      Nothing -> t
+    afterMarker t = case listMarker t of
+      (indent, Just (_, len)) -> T.drop (indent + len) t
+      _ ->
+        let r = T.dropWhile (== ' ') t
+            hashes = T.takeWhile (== '#') r
+            rest = T.drop (T.length hashes) r
+         in if T.length hashes `elem` [1 .. 6] && T.isPrefixOf " " rest then T.drop 1 rest else t

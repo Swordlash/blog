@@ -15,6 +15,7 @@ import Test.Hspec.QuickCheck (prop)
 import Test.Markdown.Html
 import Test.QuickCheck (Gen, elements, forAll, frequency, ioProperty, listOf, (===))
 import Wiki.Core.Markdown
+import Wiki.Core.Markdown.Edit (Colour (..), Command (..), Selection (..), apply)
 import Wiki.Core.Markdown.Html (parseHtml)
 
 shows' :: Text -> Text -> Expectation
@@ -57,6 +58,16 @@ spec = describe "Markdown.Render, raw HTML" $ do
     it "renders in headings and table cells" $ do
       "# A <small>b</small>" `shows'` "<h1 id=\"a-b\">A <small>b</small></h1>"
       "| a |\n|---|\n| <kbd>k</kbd> |" `shows'` "<table><thead><tr><th>a</th></tr></thead><tbody><tr><td><kbd>k</kbd></td></tr></tbody></table>"
+    it "renders the colours the toolbar writes, line by line, in lists and headings" $ do
+      let coloured command source = fst (apply command source (Selection 0 (T.length source)))
+      coloured (TextColour (Just Red)) "one\ntwo"
+        `shows'` "<p><span class=\"c-red\">one</span>\n<span class=\"c-red\">two</span></p>"
+      coloured (Highlight (Just Yellow)) "- a\n- b"
+        `shows'` "<ul><li><mark class=\"h-yellow\">a</mark></li><li><mark class=\"h-yellow\">b</mark></li></ul>"
+      coloured (TextColour (Just Blue)) "# Title"
+        `shows'` "<h1 id=\"title\"><span class=\"c-blue\">Title</span></h1>"
+      coloured (Highlight (Just Yellow)) (coloured (TextColour (Just Red)) "*x*")
+        `shows'` "<p><mark class=\"h-yellow\"><span class=\"c-red\"><em>x</em></span></mark></p>"
     it "drops HTML comments" $
       "a <!-- note --> b\n\n<!-- block -->" `shows'` "<p>a  b</p>"
 
