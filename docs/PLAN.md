@@ -1230,3 +1230,19 @@ Amended by the planning session after each work package's report.
 - **WP1.21 added** (the owner could not find export and import in the user menu): an
   `/admin` page, linked from the header for administrators, whose first section holds the
   wiki's data controls; it runs beside WP1.18.
+- **WP1.18 done and merged** ([#38](https://github.com/Swordlash/blog/pull/38), `e7cd07e`).
+  "New page" is a form at the `NewPage` route ("Create and edit" makes an empty page and
+  opens its editor; the editor's `Target` is gone, its slot is keyed by the path). "Save"
+  (the form's submit, so Ctrl+S) stays and shows a `role="status"` "Saved" for 3 s; "Save
+  and close" leaves; each save moves the version the next is checked against. Drafts:
+  `Wiki.Core.Draft`, `getDraft`/`saveDraft`/`discardDraft` (edit on the space, own draft
+  only), `savePage` discards the saver's draft, deleting a page or space discards its
+  drafts; `Mem` keeps them in an IndexedDB store `drafts` (database version 2); not
+  exported, an import clears them. Autosave 2 s after the edits go quiet (2–4 s after the
+  last key). A draft whose base is the page's current version is loaded; one older is
+  offered. Cancel asks in place when there is unsaved work or a draft. Known limits: keys
+  typed in the last 2 s before closing the tab are not in the draft (a save on `pagehide`
+  would close it); Back from the new page's editor returns to the form, which would make a
+  second page. For WP1.20: CodeMirror must deliver the same `Typed`/`TypedTitle` actions
+  and be rebuilt (or have its document replaced) when `loads` changes. Phase 2: draft
+  endpoints, a table of their own, `savePage` discarding the draft in its transaction.
