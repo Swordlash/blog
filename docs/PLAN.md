@@ -452,6 +452,81 @@ point of this phase.
   macros inherited and overridden through the tree, export and import keep them, the
   golden v1 archive imports with none; browser, a built-in macro, a page macro used in a
   later formula, a space macro in a subspace's page, `\ce` renders.
+- **WP1.17 Order of pages and subspaces.** After the tag, at the owner's request: today a
+  space lists its subspaces and pages by name (`sortByName` in `Backend/Mem/State.hs`), so a
+  blog written in order needs numbers in its titles, and then "11" comes before "2". A
+  space gets an order for its subspaces and one for its pages (child pages of a page follow
+  the page's space's page order), each one of: by name (as today, but in natural order, so
+  that a run of digits compares as a number: "2" before "11"; the default, so nothing an
+  existing space shows changes but that), by creation date, newest first or oldest first
+  (`createdAt`, which every page and space already has or gets), and by hand. By hand, a
+  space's children carry a position; whoever may edit the space moves one up or down (and
+  to the top or bottom) from the space's view, and a new child goes last. The order is set
+  in the space's settings by whoever may administer the space. New `Space` fields and a
+  position on `Space` and `Page` are additive fields of the export (no `formatVersion`
+  bump; an archive without them gets the defaults; the golden v1 archive still imports);
+  new `MonadWiki` operations, implemented in `Mem` and in the backend contract tests, so
+  that Phase 2's server has a contract to meet; a moved page keeps its address. The
+  sidebar or tree, the space's page list and every other place that lists children use the
+  same order (one function in `wiki-core`, tested). Tests: native, natural order (`a2` <
+  `a11`, case, leading zeros, ties), each mode, positions after moves, insertions and
+  deletions, export round trip and old archives; browser, an administrator switches a space
+  to by date, newest first, and the list follows; an editor moves a page up and the order
+  stays after a reload (IndexedDB); a reader sees the order and no move buttons.
+- **WP1.18 Pages made first, Save and Save and close, drafts.** After the tag, at the
+  owner's request; independent of WP1.17. (1) "New page" asks for the title (and the
+  parent, as now) in a small form, then creates the page with an empty body and opens the
+  editor on it, so a page has an id from the start and files can be attached at once: the
+  "save the page first" state and its messages go. (2) The editor's buttons become "Save"
+  (stays in the editor) and "Save and close" (saves and shows the page), plus "Cancel";
+  Ctrl+S is "Save" and no longer leaves. A save that stays shows a small green "Saved"
+  notice in a corner, which goes by itself after a few seconds and is announced to screen
+  readers (`role="status"`); a failed save shows the error as now and stays. Conflict
+  detection keeps working across several saves in one editing session (each save moves the
+  version the next one is checked against). (3) Autosave to a draft: a few seconds after
+  the last change the editor saves a draft of the title and body, private to its author and
+  never shown to readers, through new `MonadWiki` operations (save, load, discard a draft of
+  a page for the signed-in user), kept by `Mem` in its state and so in IndexedDB; in Phase 2
+  the server keeps them. "Save" and "Save and close" clear the draft, "Cancel" asks whether
+  to keep it. Opening the editor on a page with a draft newer than the page loads the draft,
+  says so ("Restored your unsaved draft from …") with a button to discard it and go back to
+  the saved page; a draft older than the page (someone saved since) is offered, not loaded.
+  A quiet "Draft saved" next to the buttons shows the autosave worked; no popup for it.
+  Drafts are not in the export (they are per user and per browser session's work; the agent
+  may argue otherwise and report). A page created and left without a save stays, empty
+  (the owner's choice); "Cancel" on it does not delete it. Tests: native, the draft
+  operations and their permissions in the backend contract; browser, new page then attach a
+  file before any save, Ctrl+S stays in the editor and shows "Saved", "Save and close"
+  shows the page, a draft restored after a reload (IndexedDB) and discarded, the
+  "loses no keystroke" test still passes; the smoke test makes a page through the new flow.
+- **WP1.19 Colours from the toolbar.** After WP1.18 (the same file). A colour button on
+  the editor's toolbar opens a small palette: about eight text colours and four or five
+  highlight colours, each wrapping the selection in `<span class="c-…">…</span>` or
+  `<mark class="h-…">…</mark>` (an existing class is replaced, not nested), and a "no
+  colour" entry that removes the wrapper. The colours are classes, never `style`: the HTML
+  allowlist keeps refusing `style` (WP1.13), and the palette is defined in `web/style.css`
+  for the light and the dark theme, readable in both. `docs/markdown.md` lists the classes.
+  The commands are pure, in `Wiki.Core.Markdown.Edit`, with native tests (wrap, replace,
+  remove, a selection across a line break); a browser test colours a word and the preview
+  shows it.
+- **WP1.20 Formatting shown while typing (CodeMirror).** After WP1.18 and WP1.19, at the
+  owner's request: the editor's text area shows the Markdown as it will look while it is
+  typed: emphasis in italics and strong in bold with their markers kept but dimmed,
+  headings larger by level with their `#` dimmed, inline code and fenced blocks in
+  monospace on their own background (fenced code highlighted by language if it is cheap),
+  links, `==mark==` if the renderer has it, quotes and lists set off. The textarea becomes
+  CodeMirror 6 (`@codemirror/view`, `state`, `lang-markdown`, bundled by `web/bundle.sh`
+  and loaded only by the editor, never by a reader's page; bytes reported), styled to look
+  like today's editor: the same fonts, colours, padding, dark theme, no line numbers or
+  other chrome. Everything else stays Halogen's and behaves as now: the toolbar and its
+  commands (applied through CodeMirror's transactions, so the browser's undo still takes a
+  command back), the shortcuts (Ctrl+B, Ctrl+K, Ctrl+S, Tab), drag and drop and pasted
+  files, the preview modes, autosave, hydration (the prerendered editor shows the Markdown
+  as text until CodeMirror takes over, without a jump) and the "loses no keystroke"
+  guarantee, whose test may type through CodeMirror differently but must still check that no
+  key is lost while the preview catches up. Browser tests: the formatting classes appear on
+  `**bold**`, `_it_` and `# h`; every existing editor test passes, adapted only where it
+  reached into the textarea directly.
 - **WP1.13 HTML in pages.** Render `RawHtml` and `RawHtmlBlock` instead of showing them
   as text: `Wiki.Core.Markdown.Html` parses the HTML (`tagsoup`, pure Haskell, so it
   builds for wasm; `html-parse` if tagsoup's HTML5 handling falls short, reported) and
@@ -1113,3 +1188,11 @@ Amended by the planning session after each work package's report.
   sources stayed at the old pin through repeated builds. Every wasm build script now deletes
   `cache/config` with `cache/compiler`. The prerender is built natively at the default
   optimisation even for the `-O2` deploy.
+- **After the tag, the owner's requests** (2026-10-23): WP1.17 (order of pages and
+  subspaces, sort modes per space), WP1.18 (pages made before the editor opens, "Save" and
+  "Save and close", a "Saved" notice, autosave to a private draft; the owner chose the
+  draft over saving the page itself), WP1.19 (a colour palette on the toolbar, classes
+  only) and WP1.20 (formatting shown while typing, with CodeMirror 6 in place of the
+  textarea; the owner chose it for headings that are larger, over a styled layer under
+  the textarea, which would have kept every heading at the text's size). WP1.17 and WP1.18
+  run in parallel; WP1.19 after WP1.18, WP1.20 after both.
