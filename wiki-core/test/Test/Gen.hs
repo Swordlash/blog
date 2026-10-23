@@ -39,6 +39,7 @@ import Protolude
 import Test.QuickCheck
 import Wiki.Core.Attachment
 import Wiki.Core.Id
+import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page
 import Wiki.Core.Permission
 import Wiki.Core.Search
@@ -113,7 +114,11 @@ genSpace = do
   parent <- oneof [pure Nothing, Just <$> genSpaceId]
   public <- arbitrary
   mathMacros <- oneof [pure "", genText]
-  pure Space {id, name, slug, parent, public, mathMacros}
+  createdAt <- genUtcTime
+  position <- arbitrary
+  subspaceOrder <- arbitraryBoundedEnum
+  pageOrder <- arbitraryBoundedEnum
+  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder}
 
 genPage :: Gen Page
 genPage = do
@@ -126,7 +131,8 @@ genPage = do
   attachments <- resize 3 (listOf genAttachment)
   createdAt <- genUtcTime
   updatedAt <- genUtcTime
-  pure Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt}
+  position <- arbitrary
+  pure Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt, position}
 
 genUser :: Gen User
 genUser = do
@@ -188,7 +194,7 @@ genChain = do
   for (zip chainIds (Nothing : map Just chainIds)) $ \(id, parent) -> do
     slug <- genSlug
     public <- frequency [(1, pure True), (3, pure False)]
-    pure Space {id, name = "", slug, parent, public, mathMacros = ""}
+    pure Space {id, name = "", slug, parent, public, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName}
 
 genSearchQuery :: Gen SearchQuery
 genSearchQuery = do

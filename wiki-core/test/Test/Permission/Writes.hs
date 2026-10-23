@@ -2,9 +2,11 @@
 -- spaces and pages takes.
 module Test.Permission.Writes (spec) where
 
+import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Hspec
 import Wiki.Core.Id
+import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Permission
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
@@ -18,6 +20,10 @@ space s parent =
     , parent = (\p -> p.id) <$> parent
     , public = False
     , mathMacros = ""
+    , createdAt = UTCTime (fromGregorian 2026 1 1) 0
+    , position = 0
+    , subspaceOrder = ByName
+    , pageOrder = ByName
     }
 
 -- | @eng ── backend@ and @ops@.

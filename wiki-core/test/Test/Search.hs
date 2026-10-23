@@ -27,6 +27,7 @@ page spaceSlug title body path =
       , attachments = []
       , createdAt = epoch
       , updatedAt = epoch
+      , position = 0
       }
   , [slug spaceSlug]
   , map slug path

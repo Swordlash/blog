@@ -214,8 +214,11 @@ canAdministerSpace who grants chain = hasSpacePermission who grants chain Admini
 -- Which permissions, on which spaces, creating or moving a space takes, where
 -- the rules above leave the combination open. The rest of what can be
 -- written is one rule each: renaming, deleting and making a space public or
--- private is 'canAdministerSpace' on it, and everything done to pages and
--- attachments is 'canEdit' on their space. The server enforces these and the
+-- private, and choosing the order it lists its subspaces and pages in, is
+-- 'canAdministerSpace' on it; everything done to pages and attachments is
+-- 'canEdit' on their space, and so is moving a child of a space up or down
+-- its list by hand (a page, or a subspace: 'canEdit' on the space whose
+-- list it is, which for a subspace is its parent). The server enforces these and the
 -- client hides what they forbid, so they live here rather than in either.
 
 -- | The chain of a space, from its top-level ancestor down to the space

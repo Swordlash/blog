@@ -30,8 +30,10 @@
 --
 -- * __Additions need no new version.__ A reader ignores the fields it does
 --   not know, and a field that may be missing has a default (a space is
---   private and has no math macros, a page has no parent and an empty
---   body, a group no members, unless the record says otherwise). So an older program reads a newer
+--   private and has no math macros, lists its children by name and was
+--   made with its first page, a page has no parent and an empty body, a
+--   child put by hand is at position 0, a group has no members, unless the
+--   record says otherwise). So an older program reads a newer
 --   archive of the same version, and a newer one an older archive.
 -- * __Anything else bumps 'formatVersion'__: a field removed or renamed, or
 --   one whose meaning changes. The reader then migrates an archive of every
@@ -57,6 +59,7 @@ module Wiki.Core.Export
     -- * Records
   , encodeSpace
   , parseSpace
+  , spaceCreatedDefault
   , encodePage
   , parsePage
   , encodeAttachment
@@ -89,6 +92,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id
+import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, slugText)
@@ -201,8 +205,8 @@ readArchive entries = do
   users <- records current "users.json" parseUser
   groupsAndMembers <- records current "groups.json" parseGroup
   grants <- inFile "grants.json" (parsed parseGrants (Map.findWithDefault Null "grants.json" current))
-  spaces <- records current "spaces.json" parseSpace
   pages <- records current "pages.json" parsePage
+  spaces <- records current "spaces.json" (parseSpace (spaceCreatedDefault createdAt pages))
   attachments <- records current "attachments.json" parseAttachment
   blobs <- fmap Map.fromList . for [(x, file) | AttachmentRecord {attachment = x, file = Just file} <- attachments] $ \(x, file) -> do
     blob <- case x.source of
@@ -336,12 +340,19 @@ checkArchive a attachments = do
 --------------------------------------------------------------------------------
 -- Records
 
--- | @{"id", "name", "slug", "parent", "public", "mathMacros"}@: @parent@
--- is @null@ or missing for a top-level space, @public@ false if missing,
--- and @mathMacros@ (the space's TeX macros, added after version 1 was
--- first written: an additive field, so no new version) the empty text if
--- missing. It is written only when the space has macros, so that the
--- record of a space without them is what it was before the field.
+-- | @{"id", "name", "slug", "parent", "public", "createdAt", "mathMacros",
+-- "position", "subspaceOrder", "pageOrder"}@: @parent@ is @null@ or
+-- missing for a top-level space, @public@ false if missing. The rest were
+-- added after version 1 was first written, as additive fields, so no new
+-- version: @mathMacros@ (the space's TeX macros) is the empty text if
+-- missing; @createdAt@, if missing, is the time the reader is given for the
+-- space (an archive's reader gives the time of the earliest page in it, or
+-- the archive's own); @position@ (among its siblings, by hand) is 0 if
+-- missing; @subspaceOrder@ and @pageOrder@ (@"name"@, @"newest-first"@,
+-- @"oldest-first"@ or @"by-hand"@) are by name if missing, or if they name
+-- an order this program does not know. Those that have a default are
+-- written only when they are not it, so that the record of a space that
+-- does not use them is what it was before they were added.
 encodeSpace :: Space -> Value
 encodeSpace s =
   object $
@@ -350,26 +361,62 @@ encodeSpace s =
     , "slug" .= s.slug
     , "parent" .= fmap (\p -> p.text) s.parent
     , "public" .= s.public
+    , "createdAt" .= s.createdAt
     ]
       <> ["mathMacros" .= s.mathMacros | not (T.null s.mathMacros)]
+      <> ["position" .= s.position | s.position /= 0]
+      <> ["subspaceOrder" .= orderText s.subspaceOrder | s.subspaceOrder /= ByName]
+      <> ["pageOrder" .= orderText s.pageOrder | s.pageOrder /= ByName]
 
-parseSpace :: Value -> Parser Space
-parseSpace = withObject "space" $ \o -> do
+-- | A space read back. A record without a @createdAt@ (one written before
+-- spaces had one) is given the time the function says for its id.
+parseSpace :: (SpaceId -> UTCTime) -> Value -> Parser Space
+parseSpace createdBefore = withObject "space" $ \o -> do
   id <- SpaceId <$> o .: "id"
   name <- o .: "name"
   slug <- o .: "slug"
   parent <- fmap SpaceId <$> o .:? "parent"
   public <- o .:? "public" .!= False
+  createdAt <- o .:? "createdAt" .!= createdBefore id
   mathMacros <- o .:? "mathMacros" .!= ""
-  pure Space {id, name, slug, parent, public, mathMacros}
+  position <- o .:? "position" .!= 0
+  subspaceOrder <- maybe ByName readOrder <$> o .:? "subspaceOrder"
+  pageOrder <- maybe ByName readOrder <$> o .:? "pageOrder"
+  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder}
+
+-- | An order as the archive writes it.
+orderText :: ChildOrder -> Text
+orderText = \case
+  ByName -> "name"
+  NewestFirst -> "newest-first"
+  OldestFirst -> "oldest-first"
+  ByHand -> "by-hand"
+
+-- | An order read back; one this program does not know (a later one's) is
+-- by name, so that the archive still imports, as it would without the
+-- field.
+readOrder :: Text -> ChildOrder
+readOrder t = fromMaybe ByName (find (\o -> orderText o == t) [minBound .. maxBound])
+
+-- | When a space read without a @createdAt@ is taken to have been made:
+-- when the earliest of its pages was, or, if it has none, at the time
+-- given. Not before it, as the space was made, but the nearest a record
+-- written without the time tells.
+spaceCreatedDefault :: UTCTime -> [Page] -> SpaceId -> UTCTime
+spaceCreatedDefault fallback pages sid = Map.findWithDefault fallback sid earliest
+  where
+    earliest = Map.fromListWith min [(p.space, p.createdAt) | p <- pages]
 
 -- | @{"id", "space", "parent", "title", "slug", "body", "createdAt",
 -- "updatedAt"}@, without the page's attachments, which are records of their
 -- own ('encodeAttachment'): @parent@ is @null@ or missing for a top-level
 -- page, @body@ empty if missing, @updatedAt@ the creation if missing.
+-- @position@, among its siblings by hand, was added after version 1 was
+-- first written (an additive field): 0 if missing, and written only when it
+-- is not.
 encodePage :: Page -> Value
 encodePage p =
-  object
+  object $
     [ "id" .= p.id.text
     , "space" .= p.space.text
     , "parent" .= fmap (\q -> q.text) p.parent
@@ -379,6 +426,7 @@ encodePage p =
     , "createdAt" .= p.createdAt
     , "updatedAt" .= p.updatedAt
     ]
+      <> ["position" .= p.position | p.position /= 0]
 
 -- | A page read back, with no attachments yet.
 parsePage :: Value -> Parser Page
@@ -391,7 +439,8 @@ parsePage = withObject "page" $ \o -> do
   body <- o .:? "body" .!= ""
   createdAt <- o .: "createdAt"
   updatedAt <- o .:? "updatedAt" .!= createdAt
-  pure Page {id, space, parent, title, slug, body, attachments = [], createdAt, updatedAt}
+  position <- o .:? "position" .!= 0
+  pure Page {id, space, parent, title, slug, body, attachments = [], createdAt, updatedAt, position}
 
 -- | An attachment's record as it was read: the page it is attached to, the
 -- attachment, and the file of the archive its bytes are in, if it names

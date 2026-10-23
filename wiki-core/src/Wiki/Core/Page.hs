@@ -3,6 +3,9 @@
 -- | Pages: Markdown in a tree within a space.
 module Wiki.Core.Page
   ( Page (..)
+  , childPages
+  , positionPage
+  , pageTreeOrder
   )
 where
 
@@ -11,6 +14,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Id
+import Wiki.Core.Order (ChildOrder, Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Slug
 
@@ -35,6 +39,9 @@ data Page = Page
   -- ^ Set by the backend when the page is created.
   , updatedAt :: UTCTime
   -- ^ Set by the backend on every save.
+  , position :: Int
+  -- ^ Where it was put among its siblings by hand, for a space that orders
+  -- its pages 'Wiki.Core.Order.ByHand'.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -44,3 +51,25 @@ instance TreeNode Page where
   nodeId p = p.id
   nodeParent p = p.parent
   nodeSlug p = p.slug
+
+instance Sibling Page where
+  siblingName p = p.title
+  siblingCreatedAt p = p.createdAt
+  siblingPosition p = p.position
+
+-- | The pages under a page ('Nothing' for the space's top level), among the
+-- pages of its space, in the space's page order
+-- ('Wiki.Core.Space.pageOrder'): what every list of pages shows.
+childPages :: ChildOrder -> [Page] -> Maybe PageId -> [Page]
+childPages = childrenInOrder
+
+-- | All the pages of a space as one list, each followed by the pages under
+-- it, in the space's page order.
+pageTreeOrder :: ChildOrder -> [Page] -> [Page]
+pageTreeOrder order = treeOrder (const order)
+
+-- | The page at another position among its siblings. (A function, since a
+-- record update of @position@ cannot tell a page's from a space's where
+-- both are in scope.)
+positionPage :: Int -> Page -> Page
+positionPage position p = p {position}

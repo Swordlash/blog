@@ -2,12 +2,14 @@ module Test.Permission (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Gen
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (forAll, (===))
 import Wiki.Core.Id
+import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Permission
 import Wiki.Core.Slug
 import Wiki.Core.Space
@@ -22,6 +24,10 @@ space s parent public =
     , parent = (\p -> p.id) <$> parent
     , public
     , mathMacros = ""
+    , createdAt = UTCTime (fromGregorian 2026 1 1) 0
+    , position = 0
+    , subspaceOrder = ByName
+    , pageOrder = ByName
     }
 
 -- | Two private trees and a public one:

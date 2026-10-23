@@ -62,6 +62,7 @@ library
       Wiki.Core.Markdown.Render
       Wiki.Core.Markdown.Tikz
       Wiki.Core.Math
+      Wiki.Core.Order
       Wiki.Core.Page
       Wiki.Core.Path
       Wiki.Core.Permission
@@ -106,6 +107,7 @@ test-suite wiki-core-test
       Test.Markdown.Link
       Test.Markdown.Tikz
       Test.Math
+      Test.Order
       Test.Path
       Test.Permission
       Test.Permission.Writes

@@ -8,6 +8,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (forAll, (===))
 import Wiki.Core.Id
+import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page
 import Wiki.Core.Path
 import Wiki.Core.Slug
@@ -20,7 +21,7 @@ slugs :: [Text] -> [Slug]
 slugs = map slug
 
 space :: Text -> Text -> Maybe Text -> Space
-space i s parent = Space {id = SpaceId i, name = s, slug = slug s, parent = SpaceId <$> parent, public = False, mathMacros = ""}
+space i s parent = Space {id = SpaceId i, name = s, slug = slug s, parent = SpaceId <$> parent, public = False, mathMacros = "", createdAt = UTCTime (fromGregorian 2026 1 1) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName}
 
 -- | Two trees, with a slug (@backend@) under two parents.
 eng, backend, api, blog, blogBackend :: Space
@@ -48,6 +49,7 @@ page sp i s parent =
     , attachments = []
     , createdAt = epoch
     , updatedAt = epoch
+    , position = 0
     }
   where
     epoch = UTCTime (fromGregorian 2026 1 1) 0

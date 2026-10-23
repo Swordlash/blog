@@ -10,6 +10,7 @@ import Test.Markdown.Edit qualified as Edit
 import Test.Markdown.Link qualified as Link
 import Test.Markdown.Tikz qualified as Tikz
 import Test.Math qualified as Math
+import Test.Order qualified as Order
 import Test.Path qualified as Path
 import Test.Permission qualified as Permission
 import Test.Permission.Writes qualified as Writes
@@ -26,6 +27,7 @@ main = hspec $ do
   Allowlist.spec
   Link.spec
   Path.spec
+  Order.spec
   Permission.spec
   Writes.spec
   Attachment.spec

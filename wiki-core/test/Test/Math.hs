@@ -6,10 +6,12 @@
 -- a formula gets, and in what order: the nearer, the later.
 module Test.Math (spec) where
 
+import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Hspec
 import Wiki.Core.Id (SpaceId (..))
 import Wiki.Core.Math
+import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
 
@@ -22,6 +24,10 @@ space i parent mathMacros =
     , parent = SpaceId <$> parent
     , public = False
     , mathMacros
+    , createdAt = UTCTime (fromGregorian 2026 1 1) 0
+    , position = 0
+    , subspaceOrder = ByName
+    , pageOrder = ByName
     }
 
 -- | A tree: @maths@ defines two macros; @algebra@ under it defines one of
