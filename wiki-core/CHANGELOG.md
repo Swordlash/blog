@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+A space chooses the order it lists its children in, one for its subspaces
+and one for its pages (the pages under a page follow its space's): the new
+`Wiki.Core.Order` has `ChildOrder` (`ByName`, the default, `NewestFirst`,
+`OldestFirst`, `ByHand`) and `orderSiblings`, the one ordering every list of
+children goes through, with `childrenInOrder` and `treeOrder` (a whole tree
+as one list, each node followed by its children), and
+`Wiki.Core.Space.subspacesOf`/`spaceTreeOrder` and
+`Wiki.Core.Page.childPages`/`pageTreeOrder` over them. By name is now
+natural order (`naturalCompare`): a run of digits compares as its number, so
+"Part 2" comes before "Part 11"; nothing else about an order by name
+changes. Ties are broken by name, then slug, then id, so the order is total.
+By hand is by a position: `reposition` moves a child up, down, to the top or
+to the bottom (`Shift`), `renumber` gives siblings positions in an order,
+`nextPosition` puts a new child last. `Space` has `createdAt`, `position`,
+`subspaceOrder` and `pageOrder`, `Page` has `position` (set with
+`positionSpace`/`positionPage`, since a record update of `position` is
+ambiguous where both types are in scope), and both are `Sibling`s. The
+export writes them as additive fields, with no new `formatVersion`: the
+orders and positions only when they are not the default, and a space read
+without `createdAt` is taken to have been made with its first page, or,
+without pages, when the archive was written (`parseSpace` takes the
+function that says so, `spaceCreatedDefault`). The rules for writes say that
+choosing the order takes administering the space and moving a child by hand
+editing it.
+
 Formulas have macros, in three layers, the nearest winning. A `Space` has
 `mathMacros`, a block of TeX definitions (empty for none), which its
 subspaces inherit: the new `Wiki.Core.Math.spaceMacros` gives the blocks of

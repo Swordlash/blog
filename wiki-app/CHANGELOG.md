@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+A space's subspaces and pages are listed in an order its administrators
+choose under "Order" in the space's view, one for each: by name (natural
+order, so "Part 2" before "Part 11"; the default), by date, newest or oldest
+first, or by hand. By hand, whoever may edit the space has buttons beside
+each page and subspace in the space's view that move it to the top, up, down
+or to the bottom; a new page or subspace goes last, and a space switched to
+by hand keeps the order it showed. The sidebar, the space's view, the front
+page and the backend's lists all order with `Wiki.Core.Order`; `listSpaces`
+and `listPages` now give a tree in order, each space or page followed by
+those under it, rather than one list sorted by name. `MonadWiki` has
+`setSpaceOrder` (`AdministerSpace`), `shiftSpace` (`Edit` on the parent) and
+`shiftPage` (`Edit` on the space), with contract tests; `createSpace` stamps
+the space's `createdAt`, and the demo's spaces have times of their own.
+`pageTree` takes the space's order and a function for what follows each
+link. Records kept in IndexedDB before read as by name, at position 0, and a
+space as made with its first page; the database's version is unchanged.
+
 Formulas are set with macros, and with chemistry. KaTeX comes with mhchem
 (`\ce`, `\pu`) and the wiki's built-in macros, `web/src/katex-macros.tex`
 (`\C`, `\Q`, `\abs`, `\norm`, `\floor`, `\ceil`, `\dd`, `\E`, `\Var` and

@@ -3,9 +3,14 @@
 -- | A space: its pages as a tree, its subspaces, the math macros its pages
 -- are set with, and what the current user may do to it (a new page, in the
 -- editor; a new subspace, renaming it, making it public or private, giving
--- it math macros, moving it, deleting it). An action the rules forbid is
--- not offered; the backend checks the rules again, and a refusal is shown
--- in place.
+-- it math macros, choosing the order of its subspaces and of its pages,
+-- moving it, deleting it). An action the rules forbid is not offered; the
+-- backend checks the rules again, and a refusal is shown in place.
+--
+-- __Order__ ("Wiki.Core.Order"): the pages and the subspaces are listed in
+-- the orders the space has, which whoever administers it chooses here. An
+-- order by hand gives each page and subspace buttons that move it up, down,
+-- to the top and to the bottom, for whoever may edit the space.
 --
 -- __Math macros__ ("Wiki.Core.Math") are edited as a block of TeX in a
 -- textarea. KaTeX reads the block, over the macros of the space's
@@ -37,12 +42,13 @@ import Wiki.App.Islands (Island (..), MonadIslands (..))
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
+import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Math (Macros (..), spaceMacros)
-import Wiki.Core.Page (Page)
-import Wiki.Core.Path (childrenOf)
+import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, orderName)
+import Wiki.Core.Page (Page (id, title))
 import Wiki.Core.Permission (mayCreateSpace, mayMoveSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id, mathMacros, name, parent, public, slug))
+import Wiki.Core.Space (Space (id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), subspacesOf)
 
 -- | The space, as the shell has loaded it, with its pages.
 data Input = Input
@@ -60,6 +66,8 @@ data Mode
   | -- | Editing the math macros: the block, KaTeX's error for it if it has
     -- one, and a formula to try them on.
     EditingMacros Text (Maybe Text) Text
+  | -- | Choosing the orders: of the subspaces, and of the pages.
+    Ordering ChildOrder ChildOrder
 
 data State = State
   { input :: Input
@@ -83,6 +91,10 @@ data Action
   | Submit
   | TogglePublic
   | Delete
+  | EditOrder
+  | ChoseOrder Children Int
+  | ShiftPage PageId Shift
+  | ShiftSpace SpaceId Shift
 
 component :: forall query m. (MonadWiki m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -110,7 +122,9 @@ component =
       where
         pageList
           | null pages = [hh|<p class="empty">No pages yet.</p>|]
-          | otherwise = pageTree ctx.router Followed (spacePathOf ctx.spaces space.id) pages Nothing
+          | otherwise = pageTree ctx.router Followed (spacePathOf ctx.spaces space.id) space.pageOrder pages Nothing pageControls
+        pageControls p atTop atBottom =
+          [moveButtons p.title atTop atBottom (ShiftPage p.id) | space.pageOrder == ByHand, mayEdit ctx space.id]
 
     actions :: Context -> Space -> [H.ComponentHTML Action Slots m]
     actions ctx space =
@@ -121,6 +135,7 @@ component =
         <> [button "Rename" (Open (Renaming space.name)) | admin]
         <> [button (if space.public then "Make private" else "Make public") TogglePublic | admin]
         <> [button "Math macros" EditMacros | admin]
+        <> [button "Order" EditOrder | admin]
         <> [button "Move" (Open (Moving 0)) | admin, not (null (destinations ctx space))]
         <> [button "Delete" (Open ConfirmingDelete) | admin]
       where
@@ -146,6 +161,13 @@ component =
             |]
             "Move"
       EditingMacros block macroError sample -> Just (macrosForm ctx space block macroError sample)
+      Ordering subspaceOrder pageOrder ->
+        Just $
+          inForm
+            [hh|
+              <div class="order-fields">{{ orderField ChildSpaces "Subspaces" subspaceOrder }}{{ orderField ChildPages "Pages, and the pages under each page" pageOrder }}</div>
+            |]
+            "Save order"
       ConfirmingDelete ->
         Just
           [hh|
@@ -183,6 +205,19 @@ component =
         </form>
       |]
 
+    orderField :: Children -> Text -> ChildOrder -> H.ComponentHTML Action Slots m
+    orderField kind label chosen =
+      [hh|
+        <label class="field order-field order-{{ kindClass kind }}">
+          <span>{{ label }}</span>
+          <select onSelectedIndexChange={{ ChoseOrder kind }}>
+            {% for o in orders %}
+              <option selected={{ o == chosen }}>{{ orderName o }}</option>
+            {% end %}
+          </select>
+        </label>
+      |]
+
     -- What the space's pages are set with besides the built-in macros:
     -- the blocks of the space's chain, each under the name of its space,
     -- for whoever writes a page here to know what they may use.
@@ -212,17 +247,19 @@ component =
       |]
 
     subspaces :: Context -> Space -> [H.ComponentHTML Action Slots m]
-    subspaces ctx space = case childrenOf ctx.spaces (Just space.id) of
+    subspaces ctx space = case subspacesOf ctx.spaces (Just space.id) of
       [] -> []
       children ->
-        [hhs|
-          <h2>Subspaces</h2>
-          <ul class="space-list">
-            {% for s in children %}
-              <li>{{ Router.link ctx.router Followed (Space (spacePathOf ctx.spaces s.id)) [] [HH.text s.name] }}</li>
-            {% end %}
-          </ul>
-        |]
+        let count = length children
+            byHand = space.subspaceOrder == ByHand && mayEdit ctx space.id
+         in [hhs|
+              <h2>Subspaces</h2>
+              <ul class="space-list">
+                {% for (n, s) in zip [1 :: Int ..] children %}
+                  <li>{{ Router.link ctx.router Followed (Space (spacePathOf ctx.spaces s.id)) [] [HH.text s.name] }}{% if byHand %}{{ moveButtons s.name (n == 1) (n == count) (ShiftSpace s.id) }}{% end %}</li>
+                {% end %}
+              </ul>
+            |]
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
@@ -239,6 +276,15 @@ component =
         Renaming _ -> st {mode = Renaming t}
         other -> st {mode = other}
       Chose n -> modify (\st -> st {mode = Moving n})
+      EditOrder -> do
+        space <- gets (\st -> st.input.space)
+        modify (\st -> st {mode = Ordering space.subspaceOrder space.pageOrder, problem = Nothing})
+      ChoseOrder kind n -> for_ (atMay orders n) $ \o -> modify $ \st -> case (st.mode, kind) of
+        (Ordering _ pageOrder, ChildSpaces) -> st {mode = Ordering o pageOrder}
+        (Ordering subspaceOrder _, ChildPages) -> st {mode = Ordering subspaceOrder o}
+        (other, _) -> st {mode = other}
+      ShiftPage pid how -> shiftPage pid how >>= done (const Nothing)
+      ShiftSpace sid how -> shiftSpace sid how >>= done (const Nothing)
       EditMacros -> do
         Input {context = ctx, space} <- gets (\st -> st.input)
         macroError <- H.liftEffect (checkMacros (parentMacros ctx space) space.mathMacros)
@@ -263,6 +309,15 @@ component =
             H.liftEffect (checkMacros (parentMacros ctx space) block) >>= \case
               Just e -> modify (\st -> st {mode = EditingMacros block (Just e) sample})
               Nothing -> setSpaceMathMacros space.id block >>= done (const Nothing)
+          Ordering subspaceOrder pageOrder ->
+            -- One order at a time, each only if it changed; the first
+            -- refusal is shown and stops the rest.
+            runExceptT
+              ( do
+                  when (subspaceOrder /= space.subspaceOrder) $ void (ExceptT (setSpaceOrder space.id ChildSpaces subspaceOrder))
+                  when (pageOrder /= space.pageOrder) $ void (ExceptT (setSpaceOrder space.id ChildPages pageOrder))
+              )
+              >>= done (const Nothing)
           Moving n -> for_ (atMay (destinations ctx space) n) $ \destination ->
             moveSpace space.id (map (\d -> d.id) destination) >>= done (\moved -> Just (Space (destinationPath ctx destination <> [moved.slug])))
           _ -> pass
@@ -280,6 +335,15 @@ component =
       Right a -> do
         modify (\st -> st {mode = Viewing, problem = Nothing})
         H.raise (Changed (next a))
+
+-- | Every order, as the order form's menus list them.
+orders :: [ChildOrder]
+orders = [minBound .. maxBound]
+
+kindClass :: Children -> Text
+kindClass = \case
+  ChildSpaces -> "subspaces"
+  ChildPages -> "pages"
 
 -- | The macros the space's own are read over: those of the spaces above it.
 parentMacros :: Context -> Space -> Macros

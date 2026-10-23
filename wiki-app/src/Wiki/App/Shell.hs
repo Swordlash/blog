@@ -66,7 +66,7 @@ import Wiki.Core.Page (Page (attachments, id, title))
 import Wiki.Core.Path (PathError (..), childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (mayCreateSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id, name, public, slug))
+import Wiki.Core.Space (Space (id, name, pageOrder, public, slug), subspacesOf)
 import Wiki.Core.User (User (..))
 
 -- | The router, and a route the home page invites a newcomer to (the
@@ -343,7 +343,7 @@ component =
         $> [hh|<a class="{{ cls }}" {{ Router.linkProps st.router Followed (NewSpace Nothing) }}>New space</a>|]
 
     spaceLevel :: State -> Maybe SpaceId -> H.ComponentHTML Action Slots m
-    spaceLevel st parent = [hh|<ul class="space-tree">{{ map (spaceNode st) (childrenOf st.spaces parent) }}</ul>|]
+    spaceLevel st parent = [hh|<ul class="space-tree">{{ map (spaceNode st) (subspacesOf st.spaces parent) }}</ul>|]
 
     spaceNode :: State -> Space -> H.ComponentHTML Action Slots m
     spaceNode st s =
@@ -395,7 +395,7 @@ component =
           | otherwise =
               [hh|<span class="unviewable" title="You do not have permission to see this space">{{ s.name }}</span>|]
         pagesHere = case st.here of
-          InSpace _ here pages | here.id == s.id, not (null pages) -> Just (pageTree st.router Followed path pages ((\p -> p.id) <$> currentPage st))
+          InSpace _ here pages | here.id == s.id, not (null pages) -> Just (pageTree st.router Followed path here.pageOrder pages ((\p -> p.id) <$> currentPage st) (\_ _ _ -> []))
           _ -> Nothing
 
     content :: State -> H.ComponentHTML Action Slots m
@@ -450,7 +450,7 @@ component =
         </section>
       |]
       where
-        spaceList = case childrenOf st.spaces Nothing of
+        spaceList = case subspacesOf st.spaces Nothing of
           [] -> [hh|<p class="empty">There are no spaces you can see.</p>|]
           roots -> [hh|<ul class="space-list">{{ map (rootSpace st) roots }}</ul>|]
 

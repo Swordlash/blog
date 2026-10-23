@@ -30,6 +30,7 @@ import Wiki.Core.Export (Archive, encodeJson, readArchive, writeArchive)
 import Wiki.Core.Export qualified as Export
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (Grants (..))
@@ -74,6 +75,22 @@ edited = do
   where
     ok' :: (MonadIO m) => Either WikiError a -> m a
     ok' = either (\e -> liftIO (assertFailure ("expected success, got " <> show e))) pure
+
+-- | 'edited', with the orders of its spaces changed and its children moved
+-- by hand: Team lists its subspaces newest first and its pages by hand,
+-- with a page moved, and has a subspace with no pages.
+ordered :: IO MemState
+ordered = do
+  st <- edited
+  ref <- newMemWiki st {current = Just (UserId "user-admin")}
+  runMemWiki ref $ do
+    team <- either (panic . show) pure =<< getSpace (path "team")
+    _ <- either (panic . show) pure =<< createSpace (Just team.id) "Empty"
+    _ <- either (panic . show) pure =<< setSpaceOrder team.id ChildSpaces NewestFirst
+    _ <- either (panic . show) pure =<< setSpaceOrder team.id ChildPages ByHand
+    made <- either (panic . show) pure =<< createPage team.id Nothing "Second" ""
+    either (panic . show) (const pass) =<< shiftPage made.id ShiftToTop
+  (\x -> x {current = Nothing}) <$> readIORef ref
 
 -- | The files every archive has, besides the attachments'.
 recordFiles :: [Text]
@@ -145,6 +162,16 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
             other -> expectationFailure ("expected bytes.bin, kept as bytes, got " <> show other)
           length (Map.toList archive.membership) `shouldBe` 1
 
+    it "imports with every space listing its children by name, made with its first page, and no positions" $ do
+      golden <- BS.readFile goldenPath
+      case readBack golden of
+        Left why -> expectationFailure (toS why)
+        Right archive -> do
+          [(s.name, s.subspaceOrder, s.pageOrder, s.position) | s <- archive.spaces, s.subspaceOrder /= ByName || s.pageOrder /= ByName || s.position /= 0] `shouldBe` []
+          [p.title | p <- archive.pages, p.position /= 0] `shouldBe` []
+          let firstPage s = minimumMay [p.createdAt | p <- archive.pages, p.space == s.id]
+          for_ archive.spaces $ \s -> Just s.createdAt `shouldBe` (firstPage s <|> Just archive.createdAt)
+
     it "imports with no math macros, which version 1 was first written without" $ do
       golden <- BS.readFile goldenPath
       case readBack golden of
@@ -174,13 +201,48 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       [m | (Just (String "Blog"), m) <- written] `shouldBe` [Nothing]
       fromArchive <$> readArchive files `shouldBe` Right withMacros
 
-    it "defaults the fields that may be missing" $ do
-      st <- edited
+    it "keeps the order of a space's children, and their positions, written only when not the default" $ do
+      st <- ordered
       let files = filesOf (toArchive goldenTime "test" st)
-          thin = editRecords "spaces.json" (KeyMap.delete "public" . KeyMap.delete "parent" . KeyMap.delete "mathMacros") files
+          written file = case decodeStrict' =<< Map.lookup file files of
+            Just (Array records) -> [o | Object o <- toList records]
+            _ -> []
+          field name o = KeyMap.lookup name o
+      [(field "subspaceOrder" o, field "pageOrder" o) | o <- written "spaces.json", field "name" o == Just (String "Team")]
+        `shouldBe` [(Just (String "newest-first"), Just (String "by-hand"))]
+      [(field "subspaceOrder" o, field "pageOrder" o) | o <- written "spaces.json", field "name" o == Just (String "Blog")] `shouldBe` [(Nothing, Nothing)]
+      [field "position" o | o <- written "pages.json", field "title" o == Just (String "Team handbook")] `shouldBe` [Just (toJSON (1 :: Int))]
+      [field "position" o | o <- written "pages.json", field "title" o == Just (String "Second")] `shouldBe` [Nothing]
+      fromArchive <$> readArchive files `shouldBe` Right st
+
+    it "reads an order it does not know as by name" $ do
+      st <- ordered
+      let files = editRecords "spaces.json" (\o -> if KeyMap.member "pageOrder" o then KeyMap.insert "pageOrder" (String "by-colour") o else o) (filesOf (toArchive goldenTime "test" st))
+      case readArchive files of
+        Left why -> expectationFailure (toS why)
+        Right archive -> [(s.name, s.pageOrder) | s <- archive.spaces, s.name == "Team"] `shouldBe` [("Team", ByName)]
+
+    it "defaults the fields that may be missing" $ do
+      st <- ordered
+      let files = filesOf (toArchive goldenTime "test" st)
+          thin =
+            editRecords "pages.json" (KeyMap.delete "position") $
+              editRecords
+                "spaces.json"
+                (KeyMap.delete "public" . KeyMap.delete "parent" . KeyMap.delete "mathMacros" . KeyMap.delete "createdAt" . KeyMap.delete "position" . KeyMap.delete "subspaceOrder" . KeyMap.delete "pageOrder")
+                files
       case readArchive thin of
         Left why -> expectationFailure (toS why)
-        Right archive -> all (\s -> not s.public && isNothing s.parent && s.mathMacros == "") archive.spaces `shouldBe` True
+        Right archive -> do
+          all (\s -> not s.public && isNothing s.parent && s.mathMacros == "" && s.position == 0 && s.subspaceOrder == ByName && s.pageOrder == ByName) archive.spaces `shouldBe` True
+          all (\p -> p.position == 0) archive.pages `shouldBe` True
+          -- A space is taken to have been made with its first page, and
+          -- one without pages when the archive was.
+          let made name = [s.createdAt | s <- archive.spaces, s.name == name]
+              firstPage name = [minimum [p.createdAt | p <- archive.pages, p.space == s.id] | s <- archive.spaces, s.name == name]
+          made "Team" `shouldBe` firstPage "Team"
+          made "Exported" `shouldBe` firstPage "Exported"
+          made "Empty" `shouldBe` [goldenTime]
 
     it "refuses an archive of a newer version, saying so" $ do
       st <- edited

@@ -65,10 +65,10 @@ demoState now = flip execState emptyState $ do
       . grantGlobal (SubjectUser adminId) Administer
       . grantGlobal (SubjectUser editorId) CreateSpaces
 
-  blog <- space Nothing "Blog" True
-  team <- space Nothing "Team" False
-  projects <- space (Just team) "Projects" False
-  docs <- space Nothing "Docs" True
+  blog <- space Nothing "Blog" True 45
+  team <- space Nothing "Team" False 40
+  projects <- space (Just team) "Projects" False 28
+  docs <- space Nothing "Docs" True 10
   modify (setMathMacros docs (T.intercalate "\n" docsMacros))
   modify $
     grantSpace blog (SubjectGroup writers) Edit
@@ -96,8 +96,8 @@ demoState now = flip execState emptyState $ do
     readerId = UserId "user-reader"
     writers = GroupId "group-writers"
 
-    space parent name public = state $ \st ->
-      let (st', s) = insertSpace parent name public st in (s.id, st')
+    space parent name public daysAgo = state $ \st ->
+      let (st', s) = insertSpace parent name public (ago daysAgo) st in (s.id, st')
 
     page sid parent title daysAgo body = state $ \st ->
       let (st', p) = insertPage sid parent title (T.unlines body) (ago daysAgo) st in (p.id, st')

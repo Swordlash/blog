@@ -44,6 +44,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
 import Data.Map.Merge.Strict qualified as Merge
 import Data.Map.Strict qualified as Map
+import Data.Time (Day (ModifiedJulianDay), UTCTime (..))
 import Numeric.Natural (Natural)
 import Protolude
 import Web.Storage.IndexedDB (Database (..), StoreName)
@@ -179,8 +180,12 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
     global <- maybe (Right []) (decoding metaStore globalGrantsKey (listOf parseGlobalGrant)) (Map.lookup globalGrantsKey (holding metaStore))
     users <- keyed usersStore parseUser (\u -> u.id.text) UserId
     groupsAndMembers <- keyed groupsStore parseGroup (\(g, _) -> g.id.text) GroupId
-    spaces <- keyed spacesStore parseSpace (\s -> s.id.text) SpaceId
     pages <- keyed pagesStore parseStoredPage (\p -> p.id.text) PageId
+    -- A space kept before spaces had a time they were made at is taken to
+    -- have been made with its first page, or, without one, with the first
+    -- page of the wiki: the nearest the records tell.
+    let firstPage = fromMaybe (UTCTime (ModifiedJulianDay 0) 0) (minimumMay [p.createdAt | p <- Map.elems pages])
+    spaces <- keyed spacesStore (parseSpace (spaceCreatedDefault firstPage (Map.elems pages))) (\s -> s.id.text) SpaceId
     grants <- fmap concat . for (Map.toList (holding grantsStore)) $ \(key, bytes) -> do
       gs <- decoding grantsStore key (listOf parseSpaceGrant) bytes
       if all (\g -> g.space.text == key) gs

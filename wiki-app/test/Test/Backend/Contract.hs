@@ -23,6 +23,7 @@ import Test.Hspec
 import Wiki.App.Backend
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
 import Wiki.Core.Id
+import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath, renderPath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
@@ -59,6 +60,7 @@ spec _ newFixture = before newFixture $ describe "MonadWiki contract" $ do
   mathMacros
   movingSpaces
   deletingSpaces
+  ordering
   creatingPages
   savingPages
   movingPages
@@ -161,11 +163,11 @@ readingSpaces = describe "listSpaces and getSpace" $ do
   it "list the public spaces to nobody" $ \(Fixture run) ->
     spaceNames run Anonymous `shouldReturn` ["Blog", "Docs"]
 
-  it "list every space to the administrator, in the order of their names" $ \(Fixture run) ->
-    spaceNames run admin `shouldReturn` ["Blog", "Docs", "Projects", "Team"]
+  it "list every space to the administrator, by name, each followed by its subspaces" $ \(Fixture run) ->
+    spaceNames run admin `shouldReturn` ["Blog", "Docs", "Team", "Projects"]
 
   it "list the ancestors of a space someone may view, though not the ancestors' pages" $ \(Fixture run) -> do
-    spaceNames run reader `shouldReturn` ["Blog", "Docs", "Projects", "Team"]
+    spaceNames run reader `shouldReturn` ["Blog", "Docs", "Team", "Projects"]
     team <- spaceAt run admin "team"
     run reader (getSpace (path "team")) `shouldReturn` Left Forbidden
     run reader (listPages team.id) `shouldReturn` Left Forbidden
@@ -207,8 +209,8 @@ readingSpaces = describe "listSpaces and getSpace" $ do
 
 readingPages :: (MonadWiki m) => SpecWith (Fixture m)
 readingPages = describe "listPages and getPage" $ do
-  it "list a space's pages, in the order of their titles" $ \(Fixture run) -> do
-    pageTitles run Anonymous "docs" `shouldReturn` ["Diagrams", "Markdown guide", "Mathematics", "Tour"]
+  it "list a space's pages, by title, each followed by the pages under it" $ \(Fixture run) -> do
+    pageTitles run Anonymous "docs" `shouldReturn` ["Markdown guide", "Diagrams", "Mathematics", "Tour"]
     docs <- spaceAt run admin "docs"
     pages <- run Anonymous (listPages docs.id) >>= ok
     map (\p -> p.space) pages `shouldSatisfy` all (== docs.id)
@@ -322,7 +324,7 @@ changingSpaces = describe "renameSpace and setSpacePublic" $ do
     s.public `shouldBe` True
     void (pageAt run Anonymous "team" "team-handbook")
     void (pageAt run Anonymous "team/projects" "the-wiki")
-    spaceNames run Anonymous `shouldReturn` ["Blog", "Docs", "Projects", "Team"]
+    spaceNames run Anonymous `shouldReturn` ["Blog", "Docs", "Team", "Projects"]
     void (run admin (setSpacePublic team.id False) >>= ok)
     getPageAt run Anonymous "team" "team-handbook" `shouldReturn` Left Forbidden
 
@@ -461,6 +463,154 @@ deletingSpaces = describe "deleteSpace" $ do
     void (spaceAt run admin "blog")
 
 --------------------------------------------------------------------------------
+-- Order
+
+ordering :: (MonadWiki m) => SpecWith (Fixture m)
+ordering = describe "setSpaceOrder, shiftSpace and shiftPage" $ do
+  it "list children by name in natural order unless told otherwise, a number as a number" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    blog.pageOrder `shouldBe` ByName
+    blog.subspaceOrder `shouldBe` ByName
+    for_ ["Part 11", "Part 2", "part 1"] $ \t -> run admin (createPage blog.id Nothing t "") >>= ok
+    pageTitles run Anonymous "blog" `shouldReturn` ["Hello, world", "Notes on Haskell", "part 1", "Part 2", "Part 11"]
+
+  it "list a space's pages by date, newest or oldest first, for every reader" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    newest <- run admin (setSpaceOrder blog.id ChildPages NewestFirst) >>= ok
+    (newest.pageOrder, newest.subspaceOrder, newest.name) `shouldBe` (NewestFirst, ByName, blog.name)
+    pageTitles run Anonymous "blog" `shouldReturn` ["Notes on Haskell", "Hello, world"]
+    (\s -> s.pageOrder) <$> spaceAt run Anonymous "blog" `shouldReturn` NewestFirst
+    void (run admin (setSpaceOrder blog.id ChildPages OldestFirst) >>= ok)
+    pageTitles run Anonymous "blog" `shouldReturn` ["Hello, world", "Notes on Haskell"]
+    void (run admin (setSpaceOrder blog.id ChildPages ByName) >>= ok)
+    pageTitles run Anonymous "blog" `shouldReturn` ["Hello, world", "Notes on Haskell"]
+
+  it "list a space's subspaces in its own order, and the top-level spaces by name" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    void (run admin (createSpace (Just team.id) "Archive") >>= ok)
+    spaceNames run admin `shouldReturn` ["Blog", "Docs", "Team", "Archive", "Projects"]
+    void (run admin (setSpaceOrder team.id ChildSpaces OldestFirst) >>= ok)
+    spaceNames run admin `shouldReturn` ["Blog", "Docs", "Team", "Projects", "Archive"]
+    void (run admin (setSpaceOrder team.id ChildSpaces NewestFirst) >>= ok)
+    spaceNames run admin `shouldReturn` ["Blog", "Docs", "Team", "Archive", "Projects"]
+
+  it "order the pages under a page as the space orders its pages" $ \(Fixture run) -> do
+    docs <- spaceAt run admin "docs"
+    void (run admin (setSpaceOrder docs.id ChildPages ByHand) >>= ok)
+    maths <- pageAt run admin "docs" "markdown-guide/mathematics"
+    void (run admin (shiftPage maths.id ShiftUp) >>= ok)
+    pageTitles run Anonymous "docs" `shouldReturn` ["Markdown guide", "Mathematics", "Diagrams", "Tour"]
+
+  it "keep the order a space showed when it is switched to by hand, and put a new child last" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    void (run admin (setSpaceOrder blog.id ChildPages NewestFirst) >>= ok)
+    void (run admin (setSpaceOrder blog.id ChildPages ByHand) >>= ok)
+    pageTitles run Anonymous "blog" `shouldReturn` ["Notes on Haskell", "Hello, world"]
+    void (run editor (createPage blog.id Nothing "Aardvarks" "") >>= ok)
+    pageTitles run Anonymous "blog" `shouldReturn` ["Notes on Haskell", "Hello, world", "Aardvarks"]
+
+  it "move a page up, down, to the top and to the bottom, keeping its address" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    void (run admin (setSpaceOrder blog.id ChildPages ByHand) >>= ok)
+    for_ ["C", "D"] $ \t -> run editor (createPage blog.id Nothing t "") >>= ok
+    pageTitles run editor "blog" `shouldReturn` ["Hello, world", "Notes on Haskell", "C", "D"]
+    c <- pageAt run editor "blog" "c"
+    up <- run editor (shiftPage c.id ShiftUp) >>= ok
+    (up.id, up.slug) `shouldBe` (c.id, c.slug)
+    pageTitles run editor "blog" `shouldReturn` ["Hello, world", "C", "Notes on Haskell", "D"]
+    void (run editor (shiftPage c.id ShiftToTop) >>= ok)
+    pageTitles run editor "blog" `shouldReturn` ["C", "Hello, world", "Notes on Haskell", "D"]
+    void (run editor (shiftPage c.id ShiftDown) >>= ok)
+    pageTitles run editor "blog" `shouldReturn` ["Hello, world", "C", "Notes on Haskell", "D"]
+    void (run editor (shiftPage c.id ShiftToBottom) >>= ok)
+    pageTitles run editor "blog" `shouldReturn` ["Hello, world", "Notes on Haskell", "D", "C"]
+    found <- pageAt run Anonymous "blog" "c"
+    found.id `shouldBe` c.id
+
+  it "do nothing, and succeed, moving past either end" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    void (run admin (setSpaceOrder blog.id ChildPages ByHand) >>= ok)
+    hello <- pageAt run editor "blog" "hello-world"
+    notes <- pageAt run editor "blog" "notes-on-haskell"
+    void (run editor (shiftPage hello.id ShiftUp) >>= ok)
+    void (run editor (shiftPage hello.id ShiftToTop) >>= ok)
+    void (run editor (shiftPage notes.id ShiftDown) >>= ok)
+    void (run editor (shiftPage notes.id ShiftToBottom) >>= ok)
+    pageTitles run editor "blog" `shouldReturn` ["Hello, world", "Notes on Haskell"]
+
+  it "keep the order of the rest when a page is deleted, and move past the gap" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    void (run admin (setSpaceOrder blog.id ChildPages ByHand) >>= ok)
+    for_ ["C", "D"] $ \t -> run editor (createPage blog.id Nothing t "") >>= ok
+    notes <- pageAt run editor "blog" "notes-on-haskell"
+    void (run editor (deletePage notes.id) >>= ok)
+    pageTitles run editor "blog" `shouldReturn` ["Hello, world", "C", "D"]
+    d <- pageAt run editor "blog" "d"
+    void (run editor (shiftPage d.id ShiftUp) >>= ok)
+    pageTitles run editor "blog" `shouldReturn` ["Hello, world", "D", "C"]
+    void (run editor (createPage blog.id Nothing "E" "") >>= ok)
+    pageTitles run editor "blog" `shouldReturn` ["Hello, world", "D", "C", "E"]
+
+  it "put a page moved under another parent last there, and keep the order under it" $ \(Fixture run) -> do
+    docs <- spaceAt run admin "docs"
+    void (run admin (setSpaceOrder docs.id ChildPages ByHand) >>= ok)
+    guide <- pageAt run admin "docs" "markdown-guide"
+    aardvarks <- run admin (createPage docs.id Nothing "Aardvarks" "") >>= ok
+    void (run admin (createPage docs.id (Just aardvarks.id) "Zebras" "") >>= ok)
+    void (run admin (createPage docs.id (Just aardvarks.id) "Antelopes" "") >>= ok)
+    void (run admin (movePage aardvarks.id docs.id (Just guide.id)) >>= ok)
+    pageTitles run admin "docs" `shouldReturn` ["Markdown guide", "Diagrams", "Mathematics", "Aardvarks", "Zebras", "Antelopes", "Tour"]
+
+  it "put a space moved under another parent last there" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    blog <- spaceAt run admin "blog"
+    void (run admin (setSpaceOrder team.id ChildSpaces ByHand) >>= ok)
+    alpha <- run admin (createSpace (Just blog.id) "Alpha") >>= ok
+    void (run admin (moveSpace alpha.id (Just team.id)) >>= ok)
+    spaceNames run admin `shouldReturn` ["Blog", "Docs", "Team", "Projects", "Alpha"]
+
+  it "move a subspace among its siblings, as someone who edits its parent" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    void (run admin (setSpaceOrder team.id ChildSpaces ByHand) >>= ok)
+    archive <- run admin (createSpace (Just team.id) "Archive") >>= ok
+    spaceNames run admin `shouldReturn` ["Blog", "Docs", "Team", "Projects", "Archive"]
+    moved <- run admin (shiftSpace archive.id ShiftToTop) >>= ok
+    (moved.id, moved.slug) `shouldBe` (archive.id, archive.slug)
+    spaceNames run admin `shouldReturn` ["Blog", "Docs", "Team", "Archive", "Projects"]
+    void (spaceAt run admin "team/archive")
+    run editor (shiftSpace archive.id ShiftDown) >>= (`shouldFailWith` Forbidden)
+    run reader (shiftSpace archive.id ShiftDown) >>= (`shouldFailWith` Forbidden)
+
+  it "refuse a move by hand where the order is not by hand, and for a top-level space" $ \(Fixture run) -> do
+    hello <- pageAt run editor "blog" "hello-world"
+    run editor (shiftPage hello.id ShiftDown) >>= shouldBeInvalid
+    projects <- spaceAt run admin "team/projects"
+    run admin (shiftSpace projects.id ShiftUp) >>= shouldBeInvalid
+    blog <- spaceAt run admin "blog"
+    run admin (shiftSpace blog.id ShiftDown) >>= shouldBeInvalid
+    run Anonymous (shiftSpace blog.id ShiftDown) >>= shouldBeInvalid
+
+  it "take AdministerSpace to choose an order, and Edit to move a page" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    team <- spaceAt run admin "team"
+    run editor (setSpaceOrder blog.id ChildPages ByHand) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (setSpaceOrder blog.id ChildPages ByHand) >>= (`shouldFailWith` Forbidden)
+    run reader (setSpaceOrder team.id ChildSpaces ByHand) >>= (`shouldFailWith` Forbidden)
+    (\s -> s.pageOrder) <$> spaceAt run admin "blog" `shouldReturn` ByName
+    void (run admin (setSpaceOrder blog.id ChildPages ByHand) >>= ok)
+    hello <- pageAt run admin "blog" "hello-world"
+    run reader (shiftPage hello.id ShiftDown) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (shiftPage hello.id ShiftDown) >>= (`shouldFailWith` Forbidden)
+    pageTitles run admin "blog" `shouldReturn` ["Hello, world", "Notes on Haskell"]
+    void (run editor (shiftPage hello.id ShiftDown) >>= ok)
+    pageTitles run admin "blog" `shouldReturn` ["Notes on Haskell", "Hello, world"]
+
+  it "give NotFound for a space or a page that is not there" $ \(Fixture run) -> do
+    run admin (setSpaceOrder (SpaceId "no-such-space") ChildPages ByHand) >>= (`shouldFailWith` NotFound)
+    run admin (shiftSpace (SpaceId "no-such-space") ShiftUp) >>= (`shouldFailWith` NotFound)
+    run admin (shiftPage (PageId "no-such-page") ShiftUp) >>= (`shouldFailWith` NotFound)
+
+--------------------------------------------------------------------------------
 -- Creating pages
 
 creatingPages :: (MonadWiki m) => SpecWith (Fixture m)
@@ -561,7 +711,7 @@ movingPages = describe "movePage" $ do
     diagrams <- pageAt run admin "blog" "markdown-guide/diagrams"
     diagrams.space `shouldBe` blog.id
     pageTitles run admin "docs" `shouldReturn` ["Tour"]
-    pageTitles run admin "blog" `shouldReturn` ["Diagrams", "Hello, world", "Markdown guide", "Mathematics", "Notes on Haskell"]
+    pageTitles run admin "blog" `shouldReturn` ["Hello, world", "Markdown guide", "Diagrams", "Mathematics", "Notes on Haskell"]
 
   it "refuses to put a page under itself or a page under it" $ \(Fixture run) -> do
     docs <- spaceAt run admin "docs"
@@ -760,6 +910,9 @@ neverThrown = describe "errors" $ do
           , void <$> setSpaceMathMacros s "\\newcommand{\\x}{1}"
           , void <$> moveSpace s Nothing
           , deleteSpace s
+          , void <$> setSpaceOrder s ChildPages ByHand
+          , void <$> shiftSpace s ShiftUp
+          , void <$> shiftPage p ShiftUp
           , void <$> listPages s
           , void <$> getPage s (path "x")
           , void <$> createPage s Nothing "X" ""

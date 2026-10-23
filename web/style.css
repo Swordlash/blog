@@ -398,6 +398,32 @@ select {
   padding: 0.08rem 0;
 }
 
+/* The buttons that move a page or a subspace by hand, in the space's view,
+   after its link: small and quiet, so that the list still reads as a list. */
+.move-controls {
+  display: inline-flex;
+  gap: 0.15rem;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+.move-controls .move {
+  padding: 0 0.35rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--muted);
+  background: transparent;
+}
+
+.move-controls .move:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.move-controls .move:disabled:hover {
+  border-color: var(--border);
+}
+
 .unviewable {
   color: var(--muted);
   font-style: italic;
@@ -812,6 +838,14 @@ select {
 
 .page-source {
   white-space: pre-wrap;
+}
+
+/* The orders of a space's subspaces and pages, side by side. */
+.order-fields {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  gap: 0.6rem;
 }
 
 /* A space's math macros: the form that edits them, with KaTeX's error

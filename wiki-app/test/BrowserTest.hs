@@ -8,6 +8,7 @@ import Test.Hspec.Halogen (describe, runBrowserTests)
 import Test.Browser.Editor qualified as Editor
 import Test.Browser.Hydrate qualified as Hydrate
 import Test.Browser.Macros qualified as Macros
+import Test.Browser.Order qualified as Order
 import Test.Browser.Persist qualified as Persist
 import Test.Browser.Search qualified as Search
 import Test.Browser.Shell qualified as Shell
@@ -38,6 +39,7 @@ main = runBrowserTests $ do
   describe "Math macros" (Macros.spec BrowserDOM)
   describe "Hydration" (Hydrate.spec BrowserDOM)
   describe "Wiki.App.Backend.Mem kept in IndexedDB" (Persist.spec BrowserDOM)
+  describe "The order of a space's children" (Order.spec BrowserDOM)
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

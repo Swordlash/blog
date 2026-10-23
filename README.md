@@ -33,6 +33,9 @@ authorisation.
 - An editor with the Markdown beside a live preview, files dropped or chosen into
   it as attachments, Ctrl+S, a conflict shown in place when someone else saved
   first, and a guard against losing unsaved changes.
+- Each space's subspaces and pages listed by name (a number in a name read as a
+  number), by date, newest or oldest first, or in an order put by hand, as the
+  space's administrators choose.
 - Search by title and text from a box in the header (`/` to focus it), in every
   space or in one, with a page of results at an address of its own.
 - Three demo users and nobody, switched between in the header instead of a

@@ -26,6 +26,7 @@ module Wiki.App.View.Common
   , errorView
   , errorMessage
   , pageTree
+  , moveButtons
   , button
   , textField
   , attr
@@ -44,7 +45,8 @@ import Protolude
 import Wiki.App.Backend (Session (grants), WikiError (..), sessionPrincipal)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Id (PageId, SpaceId)
-import Wiki.Core.Page (Page (id, slug, title))
+import Wiki.Core.Order (ChildOrder, Shift (..))
+import Wiki.Core.Page (Page (id, slug, title), childPages)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (Grants, Principal, canAdministerSpace, canEdit, canView, spaceChain)
 import Wiki.Core.Slug (Slug)
@@ -123,20 +125,46 @@ errorMessage = \case
   Conflict why -> why
   Invalid why -> why
 
--- | The pages of a space as a tree of links, the current page marked.
-pageTree :: Router Route -> (Follow Route -> action) -> [Slug] -> [Page] -> Maybe PageId -> HH.HTML w action
-pageTree router onFollow spacePath pages current = level Nothing
+-- | The pages of a space as a tree of links, in the space's page order, the
+-- current page marked, and after each link what the function gives for the
+-- page, told whether it is the first and the last of its siblings (the
+-- space's view puts buttons there that move it).
+pageTree
+  :: Router Route
+  -> (Follow Route -> action)
+  -> [Slug]
+  -> ChildOrder
+  -> [Page]
+  -> Maybe PageId
+  -> (Page -> Bool -> Bool -> [HH.HTML w action])
+  -> HH.HTML w action
+pageTree router onFollow spacePath order pages current controls = level Nothing
   where
     level parent =
-      [hh|
-        <ul class="page-tree">
-          {% for p in childrenOf pages parent %}{% let here = Just p.id == current %}
-            <li class="page-node{% if here %} current{% end %}">{{ pageLink p here }}{{ below p }}</li>
-          {% end %}
-        </ul>
-      |]
+      let siblings = childPages order pages parent
+          count = length siblings
+       in [hh|
+            <ul class="page-tree">
+              {% for (n, p) in zip [1 :: Int ..] siblings %}{% let here = Just p.id == current %}
+                <li class="page-node{% if here %} current{% end %}">{{ pageLink p here }}{{ controls p (n == 1) (n == count) }}{{ below p }}</li>
+              {% end %}
+            </ul>
+          |]
     pageLink p here = Router.link router onFollow (Page spacePath (pagePathOf pages p.id)) [attr "aria-current" "page" | here] [HH.text p.title]
     below p = [level (Just p.id) | not (null (childrenOf pages (Just p.id)))]
+
+-- | Buttons that move a child of a space by hand: to the top, up, down, to
+-- the bottom, told whether it is the first and the last of its siblings
+-- (where moving further that way does nothing, so the buttons are
+-- disabled). Each says what it moves, for a screen reader.
+moveButtons :: Text -> Bool -> Bool -> (Shift -> i) -> HH.HTML w i
+moveButtons name atTop atBottom onShift =
+  [hh|
+    <span class="move-controls" role="group" aria-label={{ "Move " <> name }}>{{ move ShiftToTop atTop "move-top" "⤒" "to the top" }}{{ move ShiftUp atTop "move-up" "↑" "up" }}{{ move ShiftDown atBottom "move-down" "↓" "down" }}{{ move ShiftToBottom atBottom "move-bottom" "⤓" "to the bottom" }}</span>
+  |]
+  where
+    move how atEnd cls arrow saying =
+      [hh|<button type="button" class="move {{ cls }}" disabled={{ atEnd }} title={{ "Move " <> saying }} aria-label={{ "Move " <> name <> " " <> saying }} onClick={{ const (onShift how) }}>{{ arrow :: Text }}</button>|]
 
 -- | A button that does one thing.
 button :: Text -> i -> HH.HTML w i

@@ -21,6 +21,7 @@ module Wiki.App.Backend.Mem.State
   , grantSpace
   , insertSpace
   , setMathMacros
+  , setOrder
   , insertPage
   , attachBytes
   , attachUrl
@@ -41,6 +42,9 @@ module Wiki.App.Backend.Mem.State
   , setSpaceMathMacrosIn
   , moveSpaceIn
   , deleteSpaceIn
+  , setSpaceOrderIn
+  , shiftSpaceIn
+  , shiftPageIn
   , createPageIn
   , savePageIn
   , movePageIn
@@ -61,8 +65,9 @@ import Wiki.App.Backend (Session (Session), WikiError (..), anonymous, maxAttach
 import Wiki.App.Backend qualified as B
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id
-import Wiki.Core.Page (Page (..))
-import Wiki.Core.Path (ancestry, findChild, pathOf, resolvePath)
+import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
+import Wiki.Core.Page (Page (..), childPages, pageTreeOrder, positionPage)
+import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission
   ( GlobalGrant (GlobalGrant)
   , GlobalPermission
@@ -85,7 +90,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (SearchHit, SearchQuery (..), searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
 import Wiki.Core.User (Group (..), Membership, User (..))
 
 -- | Everything the in-memory wiki holds.
@@ -163,21 +168,73 @@ grantSpace space subject permission st =
   st {grants = st.grants <> Grants {P.global = [], P.spaces = [SpaceGrant {P.space = space, P.subject = subject, P.permission = permission}]}}
 
 -- | Add a space with a slug made from its name and free among its siblings,
+-- last among them, made at the time given, listing its children by name;
 -- checking nothing else.
-insertSpace :: Maybe SpaceId -> Text -> Bool -> MemState -> (MemState, Space)
-insertSpace parent name public st0 =
+insertSpace :: Maybe SpaceId -> Text -> Bool -> UTCTime -> MemState -> (MemState, Space)
+insertSpace parent name public now st0 =
   let (i, st) = newId "space" st0
       base = fromMaybe (fallbackSlug "space") (slugify name)
       slug = freshSlug (isJust . findChild (Map.elems st.spaces) parent) base
-      space = Space {id = SpaceId i, name, slug, parent, public, mathMacros = ""}
+      space =
+        Space
+          { id = SpaceId i
+          , name
+          , slug
+          , parent
+          , public
+          , mathMacros = ""
+          , createdAt = now
+          , position = nextPosition (childrenOf (Map.elems st.spaces) parent)
+          , subspaceOrder = ByName
+          , pageOrder = ByName
+          }
    in (st {spaces = Map.insert space.id space st.spaces}, space)
 
 -- | Give a space math macros, checking nothing.
 setMathMacros :: SpaceId -> Text -> MemState -> MemState
 setMathMacros sid macros st = st {spaces = Map.adjust (\s -> s {mathMacros = macros}) sid st.spaces}
 
+-- | Choose the order a space lists one kind of its children in, checking
+-- nothing. Switched to 'ByHand' from another order, the children are first
+-- given positions in the order they were shown in, so that the list stays
+-- as it was until someone moves a child.
+setOrder :: SpaceId -> Children -> ChildOrder -> MemState -> MemState
+setOrder sid kind order st = case Map.lookup sid st.spaces of
+  Nothing -> st
+  Just s ->
+    let old = case kind of
+          ChildSpaces -> s.subspaceOrder
+          ChildPages -> s.pageOrder
+        st1 = if order == ByHand && old /= ByHand then placeAsShown s kind st else st
+        chosen x = case kind of
+          ChildSpaces -> x {subspaceOrder = order}
+          ChildPages -> x {pageOrder = order}
+     in st1 {spaces = Map.adjust chosen sid st1.spaces}
+
+-- | Give a space's children of one kind the positions of the order they are
+-- shown in now: its subspaces, or each set of sibling pages in it.
+placeAsShown :: Space -> Children -> MemState -> MemState
+placeAsShown s kind st = case kind of
+  ChildSpaces -> placeSpaces (childrenInOrder s.subspaceOrder (Map.elems st.spaces) (Just s.id)) st
+  ChildPages ->
+    let ps = pagesOf s.id st
+     in foldr (\parent -> placePages (childPages s.pageOrder ps parent)) st (ordNub (map (\p -> p.parent) ps))
+
+-- | Number these spaces 0, 1, 2, … in the order given.
+placeSpaces :: [Space] -> MemState -> MemState
+placeSpaces siblings st = st {spaces = Map.mapWithKey (\k x -> maybe x (`positionSpace` x) (Map.lookup k numbers)) st.spaces}
+  where
+    numbers = renumber (\x -> x.id) siblings
+
+-- | Number these pages 0, 1, 2, … in the order given.
+placePages :: [Page] -> MemState -> MemState
+placePages siblings st = st {pages = Map.mapWithKey (\k p -> maybe p (`positionPage` p) (Map.lookup k numbers)) st.pages}
+  where
+    numbers = renumber (\p -> p.id) siblings
+
 -- | Add a page with a slug made from its title and free among its siblings,
--- created and last updated at the time given, checking nothing else.
+-- last among them, created and last updated at the time given, checking
+-- nothing else.
 insertPage :: SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> MemState -> (MemState, Page)
 insertPage space parent title body now st0 =
   let (i, st) = newId "page" st0
@@ -194,6 +251,7 @@ insertPage space parent title body now st0 =
           , attachments = []
           , createdAt = now
           , updatedAt = now
+          , position = nextPosition (childrenOf (pagesOf space st) parent)
           }
    in (st {pages = Map.insert page.id page st.pages}, page)
 
@@ -290,15 +348,28 @@ nonBlank what t = case T.strip t of
   "" -> Left (Invalid (what <> " cannot be blank."))
   stripped -> Right stripped
 
--- | A space in another place in the tree. Written out in full because
--- @parent@ and @slug@ are fields of pages too, which a record update could
--- not tell apart.
-respace :: Maybe SpaceId -> Slug -> Space -> Space
-respace parent slug s = Space {id = s.id, name = s.name, slug, parent, public = s.public, mathMacros = s.mathMacros}
+-- | A space in another place in the tree, at a position there. Written out
+-- in full because @parent@, @slug@ and @position@ are fields of pages too,
+-- which a record update could not tell apart.
+respace :: Maybe SpaceId -> Slug -> Int -> Space -> Space
+respace parent slug position s =
+  Space
+    { id = s.id
+    , name = s.name
+    , slug
+    , parent
+    , public = s.public
+    , mathMacros = s.mathMacros
+    , createdAt = s.createdAt
+    , position
+    , subspaceOrder = s.subspaceOrder
+    , pageOrder = s.pageOrder
+    }
 
--- | A page in another place, perhaps in another space; see 'respace'.
-repage :: SpaceId -> Maybe PageId -> Slug -> Page -> Page
-repage space parent slug p =
+-- | A page in another place, perhaps in another space, at a position
+-- there; see 'respace'.
+repage :: SpaceId -> Maybe PageId -> Slug -> Int -> Page -> Page
+repage space parent slug position p =
   Page
     { id = p.id
     , space
@@ -309,12 +380,8 @@ repage space parent slug p =
     , attachments = p.attachments
     , createdAt = p.createdAt
     , updatedAt = p.updatedAt
+    , position
     }
-
--- | Siblings in the order the class promises: by name or title ignoring
--- case, then by slug.
-sortByName :: (a -> Text) -> (a -> Slug) -> [a] -> [a]
-sortByName name slug = sortOn (\a -> (T.toCaseFold (name a), slug a))
 
 --------------------------------------------------------------------------------
 -- Reads
@@ -336,7 +403,7 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
 
 -- | The spaces the current user may view, with their ancestors.
 listSpacesIn :: MemState -> [Space]
-listSpacesIn st = sortByName (\s -> s.name) (\s -> s.slug) (Map.elems (Map.restrictKeys st.spaces listed))
+listSpacesIn st = spaceTreeOrder (Map.elems (Map.restrictKeys st.spaces listed))
   where
     visible = filter (canView (currentPrincipal st) st.grants) (map (chainOf st) (Map.keys st.spaces))
     listed = Set.fromList (map (\s -> s.id) (concat visible))
@@ -350,9 +417,9 @@ getSpaceIn path st = case resolvePath (findChild (Map.elems st.spaces)) path of
 -- | The pages of a space.
 listPagesIn :: SpaceId -> MemState -> Either WikiError [Page]
 listPagesIn sid st = do
-  (_, c) <- findSpace st sid
+  (s, c) <- findSpace st sid
   requireView st c
-  pure (sortByName (\p -> p.title) (\p -> p.slug) (pagesOf sid st))
+  pure (pageTreeOrder s.pageOrder (pagesOf sid st))
 
 -- | The page at a path in a space.
 getPageIn :: SpaceId -> [Slug] -> MemState -> Either WikiError Page
@@ -392,12 +459,12 @@ searchPagesIn q st =
 type Write a = MemState -> Either WikiError (MemState, a)
 
 -- | Create a space, and grant its creator 'AdministerSpace' on it.
-createSpaceIn :: Maybe SpaceId -> Text -> Write Space
-createSpaceIn parent name st = do
+createSpaceIn :: Maybe SpaceId -> Text -> UTCTime -> Write Space
+createSpaceIn parent name now st = do
   parentChain <- traverse (fmap snd . findSpace st) parent
   require (mayCreateSpace who st.grants parentChain)
   n <- nonBlank "A space's name" name
-  let (st1, space) = insertSpace parent n False st
+  let (st1, space) = insertSpace parent n False now st
       st2 = case who of
         Just p -> grantSpace space.id (SubjectUser p.user) AdministerSpace st1
         Nothing -> st1
@@ -417,7 +484,19 @@ adjustSpace sid f st = do
 renameSpaceIn :: SpaceId -> Text -> Write Space
 renameSpaceIn sid name = adjustSpace sid $ \s -> do
   n <- nonBlank "A space's name" name
-  pure Space {id = s.id, name = n, slug = s.slug, parent = s.parent, public = s.public, mathMacros = s.mathMacros}
+  pure
+    Space
+      { id = s.id
+      , name = n
+      , slug = s.slug
+      , parent = s.parent
+      , public = s.public
+      , mathMacros = s.mathMacros
+      , createdAt = s.createdAt
+      , position = s.position
+      , subspaceOrder = s.subspaceOrder
+      , pageOrder = s.pageOrder
+      }
 
 -- | Make a space public or private.
 setSpacePublicIn :: SpaceId -> Bool -> Write Space
@@ -444,10 +523,10 @@ moveSpaceIn sid destination st = do
   when (maybe False (within sid) destinationChain) $
     Left (Invalid "A space cannot be moved into itself or one of its subspaces.")
   let others = Map.elems (Map.delete sid st.spaces)
-      slug
-        | destination == s.parent = s.slug
-        | otherwise = freshSlug (isJust . findChild others destination) s.slug
-      s' = respace destination slug s
+      (slug, position)
+        | destination == s.parent = (s.slug, s.position)
+        | otherwise = (freshSlug (isJust . findChild others destination) s.slug, nextPosition (childrenOf others destination))
+      s' = respace destination slug position s
   pure (st {spaces = Map.insert sid s' st.spaces}, s')
 
 -- | Delete a space with everything under it.
@@ -470,6 +549,46 @@ deleteSpaceIn sid st = do
         }
     , ()
     )
+
+-- | Choose the order a space lists one kind of its children in.
+setSpaceOrderIn :: SpaceId -> Children -> ChildOrder -> Write Space
+setSpaceOrderIn sid kind order st = do
+  (_, c) <- findSpace st sid
+  requireAdminister st c
+  let st' = setOrder sid kind order st
+  s' <- findSpace st' sid
+  pure (st', fst s')
+
+-- | Move a subspace among its siblings, as someone who edits its parent.
+shiftSpaceIn :: SpaceId -> Shift -> Write Space
+shiftSpaceIn sid how st = do
+  (s, c) <- findSpace st sid
+  case s.parent of
+    Nothing -> do
+      requireView st c
+      Left (Invalid "The top-level spaces are listed by name, so they cannot be moved by hand.")
+    Just parentId -> do
+      (parent, parentChain) <- findSpace st parentId
+      requireEdit st parentChain
+      unless (parent.subspaceOrder == ByHand) $
+        Left (Invalid (parent.name <> " lists its subspaces " <> T.toLower (orderName parent.subspaceOrder) <> ", not by hand."))
+      let siblings = childrenInOrder ByHand (Map.elems st.spaces) (Just parentId)
+          st' = placeSpaces (reposition (\x -> x.id) how sid siblings) st
+      (moved, _) <- findSpace st' sid
+      pure (st', moved)
+
+-- | Move a page among its siblings, as someone who edits its space.
+shiftPageIn :: PageId -> Shift -> Write Page
+shiftPageIn pid how st = do
+  p <- findPage st pid
+  (s, c) <- findSpace st p.space
+  requireEdit st c
+  unless (s.pageOrder == ByHand) $
+    Left (Invalid (s.name <> " lists its pages " <> T.toLower (orderName s.pageOrder) <> ", not by hand."))
+  let siblings = childPages ByHand (pagesOf p.space st) p.parent
+      st' = placePages (reposition (\q -> q.id) how pid siblings) st
+  moved <- findPage st' pid
+  pure (st', moved)
 
 -- | Create a page.
 createPageIn :: SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> Write Page
@@ -523,13 +642,13 @@ movePageIn pid destination parent st = do
   when (any (`Set.member` subtree) parent) $
     Left (Invalid "A page cannot be moved under itself or a page under it.")
   let others = filter (\q -> q.id /= pid) (pagesOf destination st)
-      slug
-        | destination == p.space && parent == p.parent = p.slug
-        | otherwise = freshSlug (isJust . findChild others parent) p.slug
-      p' = repage destination parent slug p
+      (slug, position)
+        | destination == p.space && parent == p.parent = (p.slug, p.position)
+        | otherwise = (freshSlug (isJust . findChild others parent) p.slug, nextPosition (childrenOf others parent))
+      p' = repage destination parent slug position p
       relocate q
         | q.id == pid = p'
-        | q.id `Set.member` subtree = repage destination q.parent q.slug q
+        | q.id `Set.member` subtree = repage destination q.parent q.slug q.position q
         | otherwise = q
   pure (st {pages = Map.map relocate st.pages}, p')
 

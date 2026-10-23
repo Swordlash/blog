@@ -225,6 +225,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Islands
       Test.Browser.Macros
       Test.Browser.Mount
+      Test.Browser.Order
       Test.Browser.Persist
       Test.Browser.Search
       Test.Browser.Shell

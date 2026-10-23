@@ -40,14 +40,36 @@
 -- * moving a space needs 'AdministerSpace' on it and, for the destination,
 --   'CreateSpaces' to make it top-level or 'AdministerSpace' on the new
 --   parent;
--- * renaming a space, deleting it, making it public or private and giving
---   it math macros need 'AdministerSpace' on it;
+-- * renaming a space, deleting it, making it public or private, giving
+--   it math macros and choosing the order of its children need
+--   'AdministerSpace' on it;
 -- * creating, saving, moving and deleting pages, and uploading and deleting
 --   attachments, need 'Edit' on the page's space (on both spaces, for a page
---   moved from one to another).
+--   moved from one to another);
+-- * moving a child up or down its list by hand needs 'Edit' on the space
+--   whose list it is: a page's own space, a subspace's parent.
 --
 -- Whoever creates a space is granted 'AdministerSpace' on it, so that a user
 -- with 'CreateSpaces' alone can do something with the space they made.
+--
+-- = Order
+--
+-- A space lists its subspaces in one order and its pages in another, each
+-- chosen by whoever administers it: by name (natural order, the default),
+-- by date, newest or oldest first, or by hand ("Wiki.Core.Order"). The
+-- lists of the class come in those orders, each parent followed by its
+-- children, so that a client can show one as it comes; and since the
+-- order is a function of what the list holds, a client ordering again with
+-- "Wiki.Core.Order" gets the same. The top-level spaces have no parent to
+-- choose for them and are listed by name.
+--
+-- By hand, each child has a position among its siblings. A new child, and
+-- one moved in from elsewhere, goes last; a child is moved up, down, to
+-- the top or to the bottom ('shiftPage', 'shiftSpace'), which gives its
+-- siblings new positions in the order they then have; a deletion leaves
+-- the others as they are. A space switched to by hand keeps the order it
+-- showed: its children are given the positions of that order. Moving a
+-- child among its siblings changes no address.
 --
 -- = Addresses
 --
@@ -81,6 +103,7 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Id
+import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Page (Page)
 import Wiki.Core.Permission (Grants, Principal (..))
 import Wiki.Core.Search (SearchHit, SearchQuery)
@@ -159,7 +182,8 @@ class (Monad m) => MonadWiki m where
   --
   -- The whole tree, rather than one level at a time, because a wiki has tens
   -- of spaces rather than thousands and the sidebar shows all of them.
-  -- Siblings come in the order of their names (ignoring case), then slugs.
+  -- Each space comes before its subspaces, which come in its order (see
+  -- "Order" above).
   listSpaces :: m [Space]
   default listSpaces :: (MonadTrans t, m ~ t n, MonadWiki n) => m [Space]
   listSpaces = lift listSpaces
@@ -171,7 +195,8 @@ class (Monad m) => MonadWiki m where
   getSpace = lift . getSpace
 
   -- | A new private space, at the top level or as a subspace of another, with
-  -- this name and a slug made from it. Its creator is granted
+  -- this name and a slug made from it, last among its siblings, listing its
+  -- children by name. Its creator is granted
   -- 'Wiki.Core.Permission.AdministerSpace' on it.
   createSpace :: Maybe SpaceId -> Text -> m (Either WikiError Space)
   default createSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => Maybe SpaceId -> Text -> m (Either WikiError Space)
@@ -197,8 +222,8 @@ class (Monad m) => MonadWiki m where
   setSpaceMathMacros s = lift . setSpaceMathMacros s
 
   -- | Move a space, with its subspaces and pages, under another space or to
-  -- the top level. A move under the space itself or one of its subspaces is
-  -- 'Invalid'.
+  -- the top level, where it goes last among its new siblings. A move under
+  -- the space itself or one of its subspaces is 'Invalid'.
   moveSpace :: SpaceId -> Maybe SpaceId -> m (Either WikiError Space)
   default moveSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Maybe SpaceId -> m (Either WikiError Space)
   moveSpace s = lift . moveSpace s
@@ -209,10 +234,35 @@ class (Monad m) => MonadWiki m where
   default deleteSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError ())
   deleteSpace = lift . deleteSpace
 
+  -- * Order
+
+  -- | Choose the order a space lists its subspaces or its pages in. Chosen
+  -- 'ByHand', the children keep the order they had: they are given
+  -- positions in it.
+  setSpaceOrder :: SpaceId -> Children -> ChildOrder -> m (Either WikiError Space)
+  default setSpaceOrder :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Children -> ChildOrder -> m (Either WikiError Space)
+  setSpaceOrder s c = lift . setSpaceOrder s c
+
+  -- | Move a subspace up, down, to the top or to the bottom of its parent's
+  -- list. Its parent has to list its subspaces 'ByHand', and a top-level
+  -- space has no parent to: either is 'Invalid'. A move past the end of the
+  -- list (up from the top) changes nothing and succeeds. What is given back
+  -- is the space with its new position.
+  shiftSpace :: SpaceId -> Shift -> m (Either WikiError Space)
+  default shiftSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Shift -> m (Either WikiError Space)
+  shiftSpace s = lift . shiftSpace s
+
+  -- | Move a page up, down, to the top or to the bottom among its siblings
+  -- (the pages with the same parent). Its space has to list its pages
+  -- 'ByHand', or it is 'Invalid'; otherwise as 'shiftSpace'.
+  shiftPage :: PageId -> Shift -> m (Either WikiError Page)
+  default shiftPage :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> Shift -> m (Either WikiError Page)
+  shiftPage p = lift . shiftPage p
+
   -- * Pages
 
-  -- | Every page of a space, its whole tree. Siblings come in the order of
-  -- their titles (ignoring case), then slugs.
+  -- | Every page of a space, its whole tree, each page before the pages
+  -- under it, siblings in the space's page order (see "Order" above).
   listPages :: SpaceId -> m (Either WikiError [Page])
   default listPages :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError [Page])
   listPages = lift . listPages
@@ -224,7 +274,8 @@ class (Monad m) => MonadWiki m where
   getPage s = lift . getPage s
 
   -- | A new page in a space, at its top level or under another of its pages,
-  -- with a title (its slug made from it) and a Markdown body.
+  -- with a title (its slug made from it) and a Markdown body. It goes last
+  -- among its siblings.
   createPage :: SpaceId -> Maybe PageId -> Text -> Text -> m (Either WikiError Page)
   default createPage :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Maybe PageId -> Text -> Text -> m (Either WikiError Page)
   createPage s p t = lift . createPage s p t
@@ -239,7 +290,8 @@ class (Monad m) => MonadWiki m where
   savePage p v t = lift . savePage p v t
 
   -- | Move a page, with the pages under it, to the top level of a space or
-  -- under another page of it; the space may be another one. A move under the
+  -- under another page of it; the space may be another one. Moved to
+  -- another parent, it goes last among its new siblings. A move under the
   -- page itself or one of the pages under it is 'Invalid'.
   movePage :: PageId -> SpaceId -> Maybe PageId -> m (Either WikiError Page)
   default movePage :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> SpaceId -> Maybe PageId -> m (Either WikiError Page)

@@ -6,6 +6,9 @@
 -- database of its own.
 module Test.Backend.Persist (spec) where
 
+import Data.Aeson (Value (..), decodeStrict')
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IORef (IORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Unique (hashUnique, newUnique)
@@ -23,7 +26,9 @@ import Wiki.App.Backend.Mem.Persist
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Export (encodeJson)
 import Wiki.Core.Id (PageId (..), UserId (..))
+import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (Grants (..))
@@ -77,6 +82,12 @@ ok = either (\e -> assertFailure ("expected success, got " <> show e)) pure
 path :: Text -> [Slug]
 path t = either (panic . show) identity (parsePath t)
 
+-- | A JSON record without these fields.
+stripFields :: [Text] -> ByteString -> ByteString
+stripFields names bytes = case decodeStrict' bytes of
+  Just (Object o) -> encodeJson (Object (foldr (KeyMap.delete . Key.fromText) o names))
+  _ -> bytes
+
 -- | The demo kept in a database of its own, run as each of its users, and
 -- after every program checked against a fresh start from the database: so
 -- every law of the contract is checked to be kept, too.
@@ -121,6 +132,15 @@ spec = describe "MemWiki kept in IndexedDB" $ do
           moved = Map.adjust (\pages -> Map.insert "page-x" (pages Map.! page.text) pages) pagesStore (records seed)
       restore broken `shouldSatisfy` unreadable
       restore moved `shouldSatisfy` unreadable
+
+    it "read a space kept before spaces had a time and an order as made with its first page, listing by name" $ do
+      let old = Map.adjust (Map.map (stripFields ["createdAt", "subspaceOrder", "pageOrder", "position"])) spacesStore (records seed)
+      case restore old of
+        Stored st -> do
+          for_ (Map.elems st.spaces) $ \s -> do
+            (s.subspaceOrder, s.pageOrder, s.position) `shouldBe` (ByName, ByName, 0)
+            Just s.createdAt `shouldBe` minimumMay [p.createdAt | p <- Map.elems st.pages, p.space == s.id]
+        other -> expectationFailure ("expected the wiki, got " <> show other)
 
   describe "opening" $ do
     it "writes the seed out into an empty database, and reads it back next time" $ do
@@ -181,6 +201,9 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       _ <- run (deleteAttachment gone.id) >>= ok
       _ <- run (renameSpace space.id "Kept and renamed") >>= ok
       _ <- run (setSpacePublic space.id True) >>= ok
+      _ <- run (setSpaceOrder docs.id ChildPages ByHand) >>= ok
+      _ <- run (setSpaceOrder docs.id ChildSpaces NewestFirst) >>= ok
+      _ <- run (shiftPage tour.id ShiftToTop) >>= ok
       shouldReload db opened.wiki
       reopened <- open db
       st <- readIORef reopened.wiki
