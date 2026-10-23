@@ -26,7 +26,8 @@
 //    not have, outside the islands, which their libraries fill.
 // 2. One long walk in one page, as someone would take it: the front page,
 //    every root space and a page in each, a page's source and back, the
-//    editor as admin with a save, search, then back through the whole
+//    editor as admin with a save, a new page made from its title and saved
+//    with Ctrl+S and with Save and close, search, then back through the whole
 //    history and forward again, each step checked by its address and what
 //    is on screen. Then leaving the editor with changes by the back button
 //    (Stay, then Leave), a reload on a page that keeps the edit (the demo
@@ -571,10 +572,34 @@ try {
   await page.locator("#app .editor-preview strong", { hasText: "Ada" }).waitFor({ timeout });
   await page.locator("#app .editor-preview .wiki-math-inline .katex").last().waitFor({ timeout });
   assert.ok(!(await textarea.isVisible()), "the Markdown beside the preview shown on its own");
-  await page.locator("#app .editor-form button.primary").click();
+  await page.locator("#app .editor-save-close").click();
   await arrive({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text: "Smoke test" }, "the page saved");
   await samePage("editing");
   console.log("ok: the editor formats from a shortcut, previews what is typed, with its formulas, and saves it");
+
+  // A new page: its title first, in a small form, which makes the page and
+  // opens the editor on it; Ctrl+S saves and stays there, saying so, and
+  // Save and close shows the page.
+  await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
+  await arrive({ path: "/s/blog/", view: "space-view", crumb: "Blog" }, "Blog, for a new page");
+  await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
+  await arrive({ path: "/s/blog/new-page/", view: "new-page-view", crumb: "New page" }, "the new page's form");
+  await page.locator("#app .new-page-title").pressSequentially("Smoke page");
+  await page.locator("#app .new-page-view button.primary").click();
+  await arrive({ path: "/s/blog/p/smoke-page/edit/", view: "editor", crumb: "Edit" }, "the new page's editor");
+  const fresh = page.locator("#app .editor-text");
+  assert.equal(await fresh.inputValue(), "", "a new page's Markdown is not empty");
+  await fresh.pressSequentially("Made through the *new* flow.");
+  await fresh.press("Control+s");
+  await page.locator("#app .editor-saved-notice", { hasText: "Saved" }).waitFor({ timeout });
+  assert.equal(here(page), "/s/blog/p/smoke-page/edit/", "Ctrl+S left the editor");
+  await page.locator("#app .editor-save-close").click();
+  await arrive(
+    { path: "/s/blog/p/smoke-page/", view: "page-view", crumb: "Smoke page", text: "Made through the new flow." },
+    "the new page saved",
+  );
+  await samePage("making a page");
+  console.log("ok: a new page is made from its title, Ctrl+S saves it and stays, and Save and close shows it");
 
   // Search from the keyboard: "/" to the box, words, an arrow and Enter.
   // "/" is a character to type in a field, so nothing is focused first.

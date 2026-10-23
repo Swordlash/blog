@@ -199,12 +199,12 @@ spec m = do
     text <- find ui ".editor-text"
     clear text
     typeText text "Draft"
-    find ui ".editor-cancel" >>= click
+    find ui ".wiki-sidebar .page-tree a[href='#/s/blog/p/notes-on-haskell/']" >>= click
     _ <- find ui ".leave-confirm"
     clickButton ui ".leave-confirm button" "Stay"
     length <$> findAll ui ".leave-confirm" `shouldReturn` 0
     find ui ".editor-text" >>= \t -> getProperty t "value" `shouldReturn` "Draft"
-    -- A link elsewhere asks too; leaving goes there, and the draft is lost.
+    -- Again, and leaving goes there; the work is lost.
     find ui ".wiki-sidebar .page-tree a[href='#/s/blog/p/notes-on-haskell/']" >>= click
     find ui ".leave-confirm button.danger" >>= click
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Notes on Haskell")

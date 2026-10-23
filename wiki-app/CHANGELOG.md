@@ -19,6 +19,30 @@ the space's `createdAt`, and the demo's spaces have times of their own.
 link. Records kept in IndexedDB before read as by name, at position 0, and a
 space as made with its first page; the database's version is unchanged.
 
+A new page is made before it is edited: `NewPage` is a small form for the
+title (`Wiki.App.View.NewPage`), which creates the page with an empty body
+and opens the editor on it, so files can be attached before anything is
+saved. The editor edits pages that exist only: `Editor.Input` has the
+page's `path` in place of `Target`, and the "save the page first" state is
+gone. Its buttons are "Save", which saves and stays (Ctrl+S and Enter in
+the title too), showing a green "Saved" notice in a corner for three
+seconds as a `role="status"` live region, and "Save and close", which saves
+and shows the page; each save moves the version the next is checked
+against. `Wiki.App.Browser.localTime` writes a time as the reader's
+browser does.
+
+Drafts. `MonadWiki` has `getDraft`, `saveDraft` and `discardDraft`, the
+signed-in user's draft of a page (`Wiki.Core.Draft`), needing `Edit` on the
+page's space; `savePage` discards the saver's draft, deleting a page or a
+space discards its drafts, and the contract tests say so. The editor saves a
+draft two to four seconds after the typing stops and says "Draft saved"
+quietly; it takes up a draft of the page's current version when it opens,
+saying so, with a button to discard it, and only offers one of an older
+version. Cancel with unsaved work asks whether to keep the draft. The demo
+keeps drafts in `MemState` and in IndexedDB, in a new store `drafts`, so the
+database is now version 2 (a database of version 1 is upgraded and read
+back as it was). Drafts are not exported, and an import discards them.
+
 Formulas are set with macros, and with chemistry. KaTeX comes with mhchem
 (`\ce`, `\pu`) and the wiki's built-in macros, `web/src/katex-macros.tex`
 (`\C`, `\Q`, `\abs`, `\norm`, `\floor`, `\ceil`, `\dd`, `\E`, `\Var` and

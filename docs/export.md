@@ -30,6 +30,12 @@ The demo keeps its records in the browser's IndexedDB in the same JSON, by
 the same functions (`Wiki.App.Backend.Mem.Persist`), so a record kept and a
 record exported are one format.
 
+Drafts (what an author has typed in the editor and not saved) are not in an
+archive: each is one person's unfinished work, private to them, and an
+archive is the wiki's content, which whoever imports it reads. Importing an
+archive discards the drafts there were, since the pages they were written
+for are replaced.
+
 ## Compatibility
 
 - **Additions need no new version.** A reader ignores the fields it does not

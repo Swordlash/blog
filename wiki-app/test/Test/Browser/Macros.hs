@@ -110,6 +110,8 @@ spec m = do
 
     it "sets the editor's preview as the page will be: its space's macros, and a definition in a later formula once typed" $ runPage $ do
       ui <- start m (Just "user-admin") (NewPage (slugs ["docs"]) Nothing)
+      find ui ".new-page-title" >>= (`typeText` "Macros")
+      find ui ".new-page-view button.primary" >>= click
       find ui ".editor-side-by-side input" >>= click
       text <- find ui ".editor-text"
       typeText text "First $\\vect{v} + \\twice{x}$"

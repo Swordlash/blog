@@ -27,6 +27,11 @@ function that says so, `spaceCreatedDefault`). The rules for writes say that
 choosing the order takes administering the space and moving a child by hand
 editing it.
 
+`Wiki.Core.Draft`: a user's unsaved title and body of a page, with the
+version of the page it was written from (`base`) and when it was saved, for
+the backends to keep and the editor to take up again. Not part of the
+export format.
+
 Formulas have macros, in three layers, the nearest winning. A `Space` has
 `mathMacros`, a block of TeX definitions (empty for none), which its
 subspaces inherit: the new `Wiki.Core.Math.spaceMacros` gives the blocks of

@@ -61,7 +61,7 @@ spec m = do
     find again ".editor-text" >>= \t -> getProperty t "value" `shouldReturn` "Not saved, but kept."
     -- Discarded, the page is as it was saved.
     find again ".editor-draft-discard" >>= click
-    length <$> findAll again ".editor-draft-found" `shouldReturn` 0
+    eventually $ length <$> findAll again ".editor-draft-found" `shouldReturn` 0
     find again ".editor-text" >>= \t -> eventually (getProperty t "value" `shouldReturn` original)
     unmount again
     third <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))

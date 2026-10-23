@@ -31,8 +31,12 @@ authorisation.
   wiki links, formulas drawn by KaTeX, diagrams by Mermaid, code highlighted by
   highlight.js, images, video and attachments.
 - An editor with the Markdown beside a live preview, files dropped or chosen into
-  it as attachments, Ctrl+S, a conflict shown in place when someone else saved
-  first, and a guard against losing unsaved changes.
+  it as attachments, Save (Ctrl+S) that stays and Save and close, a conflict
+  shown in place when someone else saved first, and a guard against losing
+  unsaved changes. A new page is made from its title first, so files can be
+  attached to it at once. What is typed is kept as a draft only its author sees,
+  a few seconds after the typing stops, and taken up again the next time they
+  edit the page.
 - Each space's subspaces and pages listed by name (a number in a name read as a
   number), by date, newest or oldest first, or in an order put by hand, as the
   space's administrators choose.
