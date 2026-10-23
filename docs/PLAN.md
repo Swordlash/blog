@@ -1196,3 +1196,16 @@ Amended by the planning session after each work package's report.
   textarea; the owner chose it for headings that are larger, over a styled layer under
   the textarea, which would have kept every heading at the text's size). WP1.17 and WP1.18
   run in parallel; WP1.19 after WP1.18, WP1.20 after both.
+- **WP1.17 done and merged** ([#37](https://github.com/Swordlash/blog/pull/37), `5e2a8d2`).
+  `Wiki.Core.Order`: `ChildOrder` (by name in natural order, the default; newest first;
+  oldest first; by hand), one total `orderSiblings` that every list goes through, and
+  integer positions renumbered on every move (a new child goes last). Spaces gained
+  `createdAt` (additive; an old archive's default is its earliest page's time), `position`,
+  `subspaceOrder` and `pageOrder`; pages `position`. `MonadWiki`: `setSpaceOrder`
+  (administer), `shiftSpace` and `shiftPage` (edit on the parent), in the contract;
+  `listSpaces`/`listPages` now return tree order. Switching to by hand keeps the order shown.
+  Top-level spaces are always by name (no parent to hold an order; a global setting is a
+  possible follow-up). No drag and drop, buttons only. For Phase 2: the move buttons'
+  ends are computed from the spaces a user can see, the backend reorders over all
+  siblings, so a move can pass an invisible sibling; `parseSpace` needs a default
+  `createdAt`; endpoints for the three operations.
