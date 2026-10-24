@@ -94,7 +94,11 @@ data Outcome
 data State m = State
   { migration :: Migration m
   , demoHere :: Maybe Bool
-  -- ^ Whether the demo's wiki is in this browser; 'Nothing' until known.
+  -- ^ Whether the demo's wiki is in this browser; 'Nothing' until known,
+  -- which is shown as not here: the server renders the administration
+  -- without knowing what the reader's browser keeps, and the program's
+  -- first render has to be that page, so the zip export is offered from
+  -- the start and the demo's data only once the browser has said.
   , step :: Step
   }
 
@@ -126,18 +130,16 @@ component =
         [hh|
           <div class="import">
             {{ outcomeView <$> outcome }}
-            {% for here in maybeToList st.demoHere %}
-              <div class="actions import-sources">
-                <label class="button import-file">
-                  Import a zip export…
-                  <input type="file" accept=".zip,application/zip" onChange={{ FileChosen }}>
-                </label>
-                {% if here %}
-                  <button type="button" class="import-demo" onClick={{ const UseDemoData }}>Import this browser's demo data…</button>
-                {% end %}
-              </div>
-              <p class="admin-note">{{ sourcesNote here }}</p>
-            {% end %}
+            <div class="actions import-sources">
+              <label class="button import-file">
+                Import a zip export…
+                <input type="file" accept=".zip,application/zip" onChange={{ FileChosen }}>
+              </label>
+              {% if st.demoHere == Just True %}
+                <button type="button" class="import-demo" onClick={{ const UseDemoData }}>Import this browser's demo data…</button>
+              {% end %}
+            </div>
+            <p class="admin-note">{{ sourcesNote (st.demoHere == Just True) }}</p>
           </div>
         |]
       ReadingDemo -> busy "Reading the demo's wiki from this browser…"

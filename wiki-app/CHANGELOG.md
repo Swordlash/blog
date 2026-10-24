@@ -32,6 +32,11 @@ the browser writes in the reader's zone and natively holds UTC: the editor's
 notices of a draft used one, and a page rendered by a server in another zone
 would differ from the program's first render. `Found` holds `UTCTime`s.
 
+The importer offers a zip export from its first render, and the demo's data
+once the browser has said it keeps some: the server renders the
+administration without knowing what the reader's browser keeps, and the
+program adopts that page as it is.
+
 The application runs over the wiki's server too. `Wiki.App.Backend.Http` is
 `HttpWiki`, a `MonadWiki` over the server's HTTP API (`wiki-api`): every
 address from `Wiki.Api.Links`, relative to the page's `<base href>`; saves

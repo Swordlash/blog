@@ -144,16 +144,16 @@ startServer
   -> PageM s (Mounted s Shell.Query Void m)
 startServer m at = do
   env <- unsafeIOToPageM (newHttpEnv browserTransport)
-  startServerWith m env at
+  startServerOver m env at
 
 -- | 'startServer', over a backend of the test's.
-startServerWith
+startServerOver
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
   => HttpEnv
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
-startServerWith m env at = do
+startServerOver m env at = do
   router <- prepare at
   mount m (H.hoist (NT (runHttpWiki env)) component) (serverInput router)
 
@@ -166,7 +166,8 @@ startServerWith
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
 startServerWith m db at = do
-  (env, router) <- prepare at
+  env <- unsafeIOToPageM (newHttpEnv browserTransport)
+  router <- prepare at
   mount m (H.hoist (NT (runHttpWiki env)) component) (serverInputWith db router)
 
 -- | 'startServer', adopting a page that holds the shell's HTML already.
@@ -178,17 +179,17 @@ adoptServer
   -> PageM s (Mounted s Shell.Query Void m)
 adoptServer m page at = do
   env <- unsafeIOToPageM (newHttpEnv browserTransport)
-  adoptServerWith m env page at
+  adoptServerOver m env page at
 
 -- | 'adoptServer', over a backend of the test's.
-adoptServerWith
+adoptServerOver
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
   => HttpEnv
   -> Element s
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
-adoptServerWith m env page at = do
+adoptServerOver m env page at = do
   router <- prepare at
   hydrate m page (H.hoist (NT (runHttpWiki env)) component) (serverInput router)
 
@@ -391,14 +392,14 @@ views m = describe "the application over it" $ do
     serverStarts
     unsafeIOToPageM (js_embed (toJSText preloadId) (toJSText (encodePreload carried)))
     rendering <- fromPage
-    first' <- startServerWith m rendering tour
+    first' <- startServerOver m rendering tour
     find first' ".page-body h1" >>= (`shouldHaveText` "Tour")
     html <- fromJSText <$> unsafeIOToPageM js_markup
     unmount first'
     page <- htmlContainer html
     before <- findAllIn page adoptable
     adopting <- fromPage
-    ui <- adoptServerWith m adopting page tour
+    ui <- adoptServerOver m adopting page tour
     after <- findAll ui adoptable
     length after `shouldBe` length before
     zipWithM_ shouldBeSameElement after before
