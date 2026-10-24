@@ -27,6 +27,7 @@ import Wiki.App.Backend.Http.Preload
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
+import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Render (routeOf)
 import Wiki.Server.Storage.Layout (databaseFile)
 
@@ -35,6 +36,7 @@ spec = describe "the pages the server renders" $ do
   anonymous
   administrator
   adminListener
+  basePathAndLoad
   preloads
   addresses
   failures
@@ -138,6 +140,21 @@ adminListener = describe "on the admin listener" $ do
     html `shouldSatisfy` T.isInfixOf "<base href=\"/admin/\">"
     appIn html `shouldSatisfy` T.isInfixOf "href=\"/admin/s/team/p/team-handbook/\""
     appIn html `shouldNotSatisfy` T.isInfixOf "href=\"/s/"
+
+basePathAndLoad :: Spec
+basePathAndLoad = describe "under a base path, and many at once" $ do
+  it "renders under the public listener's base path, with its links below it" $ withDemoRunning (\o -> o {basePath = "/wiki"}) $ \r -> do
+    (status, html) <- page r r.public "/wiki/s/docs/"
+    status `shouldBe` 200
+    html `shouldSatisfy` T.isInfixOf "<base href=\"/wiki/\">"
+    appIn html `shouldSatisfy` T.isInfixOf "href=\"/wiki/s/docs/p/tour/\""
+    appIn html `shouldNotSatisfy` T.isInfixOf "href=\"/s/"
+
+  it "renders pages asked for at once as it renders them one by one" $ withDemoRunning trusted $ \r -> do
+    let paths = concat (replicate 4 ["/", "/s/docs/", "/s/docs/p/tour/", "/s/team/p/team-handbook/", "/search/?q=haskell", "/s/blog/p/hello-world/edit/", "/nowhere"])
+    alone <- traverse (page r r.public) paths
+    together <- runConcurrently (traverse (Concurrently . page r r.public) paths)
+    together `shouldBe` alone
 
 preloads :: Spec
 preloads = describe "what a page carries for the program" $ do
