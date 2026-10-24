@@ -1590,3 +1590,22 @@ Amended by the planning session after each work package's report.
   contract's `searchPages` cases run over `HttpWiki` against the server's application, and
   search pages are server-rendered with their hits in the payload. Nothing remains.
   Remaining in Phase 2: WP2.9 (Docker) and WP2.5 (page history).
+- **WP2.9 done and merged** ([#53](https://github.com/Swordlash/blog/pull/53), `7930a78`).
+  `Dockerfile` in four stages (`toolchain`: the new `bootstrap.sh build` mode, no Chromium
+  or fourmolu, keyed on that file alone; `build`: dependencies from the `.cabal` and project
+  files, then the sources, `-O2` natively and wasm-opt in server mode, `dist-newstyle` in a
+  BuildKit cache mount; `release`; `runtime`: `debian:trixie-slim` by digest, uid 10001,
+  `/data` 700, `curl`+`libgmp10`, `LANG=C.UTF-8`, healthcheck on `api/v1/info`);
+  `toolchain/docker-entrypoint.sh` backs up before `serve` and refuses to start if that
+  fails; `docker-compose.yml` publishes 8080 only, admin on the container's loopback via
+  `exec`, volume `wiki-data`, a `backup` one-off under profile `tools`;
+  `docker-compose.trusted.yml` is trusted mode as a host-network override (in a bridge the
+  server can only bind `0.0.0.0`, which `--trust-network` refuses, and who reaches the port
+  is the host's business), the same layout `deploy-local.sh` makes; `.dockerignore`
+  allowlist. Tested here: the runtime image (238 MB, 63 MB compressed) and the compose
+  stack end to end (info, 403 for anonymous writes, a space surviving restart and
+  down/up, 8081 unreachable from the host, backups three ways, restore recipe, SSR and
+  brotli served, trusted override at the VM's IP, `0.0.0.0` refused); the from-source
+  builder was not run (needs about 15 GB free; the first build is "well over an hour").
+  CI does not build the image. The owner hosts with `deploy-local.sh`, not Docker; the
+  files are for a VPS later.
