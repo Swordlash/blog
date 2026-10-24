@@ -1246,3 +1246,11 @@ Amended by the planning session after each work package's report.
   second page. For WP1.20: CodeMirror must deliver the same `Typed`/`TypedTitle` actions
   and be rebuilt (or have its document replaced) when `loads` changes. Phase 2: draft
   endpoints, a table of their own, `savePage` discarding the draft in its transaction.
+- **WP1.21 done and merged** ([#39](https://github.com/Swordlash/blog/pull/39), `bcfa588`).
+  `Admin` route at `/admin/`, rendered by the shell (the panel state and the handlers were
+  already there), not prerendered (the "kept in this browser" note differs natively),
+  served by `404.html`. A header link for `Administer` holders; a refusal for anyone else;
+  sections are `admin-section`s with their own `h2`, so Phase 3's users and groups go in
+  beside "Wiki data". The user menu only switches users. A reset now says so. Phase 2: the
+  export, import and reset handlers do not check `Administer` (only the page hides them),
+  so the server must.
