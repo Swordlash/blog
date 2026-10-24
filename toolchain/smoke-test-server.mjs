@@ -458,17 +458,17 @@ try {
   assert.ok(versions.length >= 4, `the history lists ${versions.length} versions`);
   assert.equal(versions[0], `Version ${versions.length} (current)`, "the latest is not first");
   assert.ok((await content(page)).includes("by Administrator"), "the versions' author");
-  const restore = async (n, shows) => {
+  const restore = async (n, shows, lacks) => {
     await page.locator("#app .version-list li > a", { hasText: new RegExp(`^Version ${n}$`) }).click();
     await page.locator("#app .version-detail h2", { hasText: `Version ${n}` }).waitFor({ timeout });
     await page.locator("#app button.restore").click();
     await page.locator("#app .restore-confirm button", { hasText: "Restore" }).click();
     await page.locator("#app .page-view .page-body", { hasText: shows }).waitFor({ timeout });
+    if (lacks) assert.ok(!(await page.locator("#app .page-view .page-body").textContent()).includes(lacks), `the restored version has "${lacks}" in it`);
     await page.locator("#app .page-view .actions a", { hasText: "History" }).click();
     await page.locator("#app .history-view h1").waitFor({ timeout });
   };
-  await restore(2, "Hello from the server's smoke test.");
-  assert.ok(!(await content(page)).includes("Saved by someone else."), "the restored version has a later save in it");
+  await restore(2, "Hello from the server's smoke test.", "Saved by someone else.");
   assert.equal((await versionNames()).length, versions.length + 1, "the restore made no new version");
   await restore(versions.length, "Saved by someone else.");
   assert.equal((await versionNames())[0], `Version ${versions.length + 2} (current)`);

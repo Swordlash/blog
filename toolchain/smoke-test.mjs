@@ -709,9 +709,8 @@ try {
   assert.equal(await page.locator("#app .diff-added .diff-text").last().textContent(), "A third line.", "the latest diff");
   await eventually(async () => assert.ok((await page.locator("#app .version-meta time").first().textContent()).length > 0, "no time"), "the time written in");
   await page.locator("#app .version-list li > a", { hasText: /^Version 2$/ }).click();
-  await check({ path: "/s/blog/p/smoke-page/history/", view: "history-view" }, "version 2");
   await page.locator("#app .version-detail h2", { hasText: "Version 2" }).waitFor({ timeout });
-  assert.match(new URL(page.url()).search, /^\?version=/, "a version's address");
+  assert.match(here(page), /^\/s\/blog\/p\/smoke-page\/history\/\?version=/, "a version's address");
   await page.locator("#app button.restore").click();
   await page.locator("#app .restore-confirm button", { hasText: "Restore" }).click();
   await check({ path: "/s/blog/p/smoke-page/", view: "page-view", text: "Made through the new flow." }, "the version restored");
