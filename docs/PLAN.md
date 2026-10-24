@@ -1356,3 +1356,9 @@ Amended by the planning session after each work package's report.
   benchmark is not built by CI (`cabal.project` has `tests: True`, not benchmarks), so it
   can break unnoticed, a CI step would keep it honest. Phase 2: the index stores
   `bodyText`'s output or the fold, never reparses.
+- **haskell-halogen pinned to `f077e82`** ([#44](https://github.com/Swordlash/blog/pull/44),
+  `d3a0ed4`): #58 (a keyed element's successor keeps its ref; the editor's workaround of
+  holding the never-keyed host stays, as the simpler design) and #57 (native HTML built with
+  a text builder: the prerender serialises each page once). A further fix is open upstream,
+  haskell-halogen#59 (a patched element's `ref` kept in step with its prop: a changed label
+  or a dropped prop updates the driver's map), to be taken at the next bump.
