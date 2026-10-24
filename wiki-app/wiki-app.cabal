@@ -75,6 +75,7 @@ library
       Wiki.App.Browser
       Wiki.App.Demo
       Wiki.App.DemoUsers
+      Wiki.App.Import
       Wiki.App.Islands
       Wiki.App.Islands.Monad
       Wiki.App.Route
@@ -220,6 +221,7 @@ test-suite wiki-app-test
         Test.Demo
         Test.Export
         Test.Hydrate
+        Test.Import
         Test.Islands
         Test.Link
         Test.Route
@@ -238,6 +240,7 @@ test-suite wiki-app-test
         time,
         haskell-halogen-core,
         haskell-halogen-router,
+        wiki-api,
         wiki-app,
         wiki-app:contract,
         wiki-core

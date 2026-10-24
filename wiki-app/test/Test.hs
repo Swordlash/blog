@@ -8,6 +8,7 @@ import Test.Demo qualified as Demo
 import Test.Export qualified as Export
 import Test.Hspec (hspec)
 import Test.Hydrate qualified as Hydrate
+import Test.Import qualified as Import
 import Test.Islands qualified as Islands
 import Test.Link qualified as Link
 import Test.Route qualified as Route
@@ -25,3 +26,4 @@ main = hspec $ do
   Link.spec
   Shell.spec
   Hydrate.spec
+  Import.spec
