@@ -23,6 +23,14 @@
 //    a file attached and served; a conflict (the page saved through the API
 //    meanwhile, then saved in the editor); search; the export downloaded
 //    from the administration; and a fresh browser finding all of it there.
+// 3. The demo's pages brought into the server, as its owner would: the
+//    demo's build served at the server's address (so that the demo leaves
+//    its wiki in this origin's IndexedDB, as it does when the server takes
+//    the demo's address and port) and exported; then the server's
+//    administration imports that export through "What to migrate", with a
+//    page left out and a conflict (a page the server made first) resolved
+//    "take the imported"; then imports again, from the demo's data in this
+//    browser, and finds everything merged, nothing twice.
 //
 // Needs the native builds of wiki-server and wiki-app-prerender (npm run
 // build-native; WIKI_SERVER and WIKI_PRERENDER name other binaries), the
@@ -30,9 +38,9 @@
 // from jsDelivr is served from node_modules).
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, normalize, resolve } from "node:path";
+import { basename, dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
@@ -189,6 +197,131 @@ async function loadAdopted(page, path) {
   return { status: response.status(), repairs };
 }
 
+// The demo's build, served at the server's own address in place of the
+// server, as a static host serves it: what the owner had there before the
+// server took its address.
+const demoTypes = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".wasm": "application/wasm", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
+async function serveTheDemo(route) {
+  const path = decodeURIComponent(new URL(route.request().url()).pathname);
+  const file = join(built, normalize(path.endsWith("/") ? `${path}index.html` : path));
+  const headers = { "Cache-Control": "no-store" };
+  try {
+    if (!(await stat(file)).isDirectory()) {
+      await route.fulfill({ status: 200, headers, contentType: demoTypes[extname(file)] ?? "application/octet-stream", body: await readFile(file) });
+      return;
+    }
+  } catch {
+    // No such file: the demo's 404.html, as a static host answers.
+  }
+  await route.fulfill({ status: 404, headers, contentType: "text/html", body: await readFile(join(built, "404.html")) });
+}
+
+// What the API says, as the administrator the server takes everyone for.
+const api = async (path, init = {}) => {
+  const response = await fetch(url(`/api/v1/${path}`), { ...init, headers: { "Content-Type": "application/json", ...init.headers } });
+  return { status: response.status, body: response.status === 204 ? null : await response.json() };
+};
+const pagesOf = async (spacePath) => {
+  const space = await api(`spaces/at/${spacePath}`);
+  assert.equal(space.status, 200, `no space at ${spacePath}`);
+  return (await api(`spaces/${encodeURIComponent(space.body.id)}/pages`)).body;
+};
+
+async function migrateTheDemo() {
+  const page = await newPage();
+  // The demo's photograph and video, answered here, as the network may be
+  // out of reach.
+  await page.route("https://upload.wikimedia.org/**", (route) => route.fulfill({ status: 204 }));
+
+  // The demo, at the server's address: it keeps its wiki in this origin's
+  // IndexedDB, and its administration exports it.
+  const demoAddress = `${origin}/**`;
+  await page.route(demoAddress, serveTheDemo);
+  await page.goto(url("/"));
+  await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
+  await eventually(async () => assert.ok(await programStarted(page), "no listener yet"), "the demo's program starting");
+  await page.locator("#app .wiki-header a.admin-link").click();
+  const [exported] = await Promise.all([page.waitForEvent("download", { timeout }), page.locator("#app .admin-view .demo-export").click()]);
+  const demoExport = await readFile(await exported.path());
+  await page.unroute(demoAddress, serveTheDemo);
+  console.log(`ok: the demo, served at the server's address, keeps its wiki in this browser and exports it as ${exported.suggestedFilename()}`);
+
+  // A page the server has at a path the demo's export has too: a conflict.
+  const blog = await api("spaces", { method: "POST", body: JSON.stringify({ parent: null, name: "Blog" }) });
+  assert.equal(blog.status, 201, "the server's Blog");
+  const made = await api(`spaces/${encodeURIComponent(blog.body.id)}/pages`, {
+    method: "POST",
+    body: JSON.stringify({ parent: null, title: "Hello, world", body: "Written on the server." }),
+  });
+  assert.equal(made.status, 201, "the server's Hello, world");
+  assert.equal(made.body.slug, "hello-world");
+
+  // The server's administration offers both sources: a zip file, and the
+  // demo's data, since the demo left it in this origin.
+  await page.goto(url("/"));
+  await page.locator("#app .user-name", { hasText: "Administrator" }).waitFor({ timeout });
+  await page.locator("#app .wiki-header a.admin-link").click();
+  await page.locator("#app .admin-view .import-sources .import-demo").waitFor({ timeout });
+
+  // The export first: Notes on Haskell left out, and the demo's Hello,
+  // world taken over the server's.
+  await page.locator("#app .import-file input[type=file]").setInputFiles({ name: "demo-export.zip", mimeType: "application/zip", buffer: demoExport });
+  const dialog = page.locator("#app .import-dialog");
+  await dialog.locator("h3", { hasText: "What to migrate" }).waitFor({ timeout });
+  const spaceRow = (path) => dialog.locator(`.import-space[data-path='${path}'] > .import-row`);
+  const pageItem = (space, path) => dialog.locator(`.import-space[data-path='${space}'] .import-page[data-path='${path}']`);
+  assert.equal((await spaceRow("blog").locator(".badge").textContent()).trim(), "Already here: merged");
+  assert.equal((await spaceRow("docs").locator(".badge").textContent()).trim(), "New");
+  assert.equal((await pageItem("blog", "hello-world").locator(".badge").first().textContent()).trim(), "In conflict");
+  assert.equal(await dialog.locator("input.import-check:not(:checked)").count(), 0, "not everything is checked");
+  await pageItem("blog", "notes-on-haskell").locator("input.import-check").uncheck();
+  await pageItem("blog", "hello-world").locator("input.import-take").check();
+  await dialog.locator(".import-apply").click();
+  const summary = page.locator("#app .import-summary");
+  await summary.waitFor({ timeout });
+  const told = await summary.textContent();
+  for (const line of ["3 spaces created", "1 space merged with the server's", "7 pages created", "1 page replaced by the imported one", "1 page left out"]) {
+    assert.ok(told.includes(line), `the summary does not say "${line}": ${told}`);
+  }
+  // The shell has reloaded the tree of spaces, with the demo's in it.
+  await page.locator("#app .wiki-sidebar a", { hasText: "Docs" }).waitFor({ timeout });
+  const hello = (await pagesOf("blog")).find((p) => p.slug === "hello-world");
+  assert.ok(hello && !hello.body.includes("Written on the server."), "the server's Hello, world was not replaced");
+  assert.deepEqual((await pagesOf("blog")).map((p) => p.slug), ["hello-world"], "Notes on Haskell was imported though left out");
+  await page.goto(url("/s/docs/p/tour/"));
+  await page.locator("#app .page-view h1", { hasText: "Tour" }).waitFor({ timeout });
+  console.log("ok: the demo's export is imported through the dialog, a page left out and a conflict taking the imported page, and its summary shown");
+
+  // Again, from the demo's data in this browser: everything is merged, and
+  // nothing is there twice; the page left out comes in now.
+  await page.locator("#app .wiki-header a.admin-link").click();
+  await page.locator("#app .admin-view .import-demo").click();
+  await dialog.locator("h3", { hasText: "What to migrate" }).waitFor({ timeout });
+  assert.match(await dialog.locator(".import-from").textContent(), /^From this browser's demo data: 4 spaces \(4 already here\)/);
+  assert.equal(await dialog.locator(".import-space.import-new").count(), 0, "a space is new again");
+  assert.equal(await dialog.locator(".import-choice").count(), 0, "a page is in conflict again");
+  assert.equal((await pageItem("blog", "notes-on-haskell").locator(".badge").first().textContent()).trim(), "New");
+  await dialog.locator(".import-apply").click();
+  await summary.waitFor({ timeout });
+  const again = await summary.textContent();
+  for (const line of ["4 spaces merged with the server's", "1 page created", "8 pages kept as the server had them"]) {
+    assert.ok(again.includes(line), `the second summary does not say "${line}": ${again}`);
+  }
+  const spaces = (await api("spaces")).body;
+  const paths = spaces.map((s) => s.slug).sort();
+  assert.deepEqual(paths, [...new Set(paths)], "a space is there twice");
+  assert.deepEqual((await pagesOf("blog")).map((p) => p.slug).sort(), ["hello-world", "notes-on-haskell"]);
+  let total = 0;
+  for (const space of ["blog", "docs", "team", "team/projects"]) {
+    const slugs = (await pagesOf(space)).map((p) => `${p.parent ?? ""}/${p.slug}`);
+    assert.deepEqual(slugs, [...new Set(slugs)], `a page of ${space} is there twice`);
+    total += slugs.length;
+  }
+  assert.equal(total, 9, "the demo's nine pages, once each");
+  await page.context().close();
+  console.log("ok: imported again from the demo's data in this browser, everything is merged and nothing is there twice");
+}
+
 const editorText = "#app .editor-cm .cm-content";
 const markdownIn = (page) => page.evaluate((selector) => document.querySelector(selector)?.wikiEditor?.text() ?? null, editorText);
 const content = (page) => page.locator("#app .wiki-content").textContent();
@@ -295,7 +428,7 @@ try {
 
   // The export, from the administration.
   await page.locator("#app .wiki-header a.admin-link").click();
-  await page.locator("#app .admin-view .admin-note", { hasText: "Importing" }).waitFor({ timeout });
+  await page.locator("#app .admin-view .import-sources .import-file").waitFor({ timeout });
   const [exported] = await Promise.all([page.waitForEvent("download", { timeout }), page.locator("#app .admin-view .demo-export").click()]);
   assert.match(exported.suggestedFilename(), /^wiki-\d{4}-\d{2}-\d{2}\.zip$/, "the export's name");
   assert.equal((await readFile(await exported.path())).subarray(0, 2).toString(), "PK", "the export is not a zip file");
@@ -314,6 +447,10 @@ try {
   await fresh.locator("#app .wiki-sidebar a", { hasText: "Smoke space" }).waitFor({ timeout });
   await fresh.context().close();
   console.log("ok: a fresh browser finds the space, the page, its edits and its attachment on the server");
+
+  // ---- 3. The demo's pages brought into the server ---------------------------
+
+  await migrateTheDemo();
 } catch (error) {
   failures.push(String(error.stack ?? error));
   if (process.env.SMOKE_DEBUG) {

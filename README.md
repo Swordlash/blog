@@ -57,7 +57,9 @@ authorisation.
 - The same over `wiki-server`: the server's build shows the application while it
   loads what the route shows from the server, keeps what it has read so that going
   back to it is instant, and says so in place, with a "Try again", when the server
-  cannot be reached.
+  cannot be reached. Its administration exports the wiki and imports another into
+  it, the demo's pages among them, choosing what to bring in and which page stays
+  where both have one.
 
 ## Running the demo
 
@@ -173,8 +175,8 @@ anything, which the server serves at every address, and which reads and writes t
 wiki through the server's API (`/api/v1/…`, see `docs/api.md`). Until the server
 renders each page itself (WP2.6 of the plan), every address but the front page is
 answered with that page and a 404 status, which the application reads as its
-route. The administration's "Wiki data" section exports the server's wiki; importing
-into it comes next (WP2.8).
+route. The administration's "Wiki data" section exports the server's wiki and
+imports another's into it, merging rather than replacing (below).
 
 The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/app
 --listen <tailscale address>:8080 --admin-listen 127.0.0.1:8081`, and checks that
@@ -221,10 +223,33 @@ for the next run, like the other options; `--static` goes back to the demo.
   (listener, who, method, path, status, milliseconds), and an error line with the
   exception for anything that fails.
 
-To move the demo's pages into the server, deploy the server with the demo's name and
-port (the defaults), so that it serves the address the browser kept the demo's data
-for; the import that reads them comes with the administration's "Wiki data"
-section.
+#### Bringing the demo's pages into the server
+
+What you wrote in the demo lives in your browser (IndexedDB, kept per address), and
+the server's administration imports it from there, or from the demo's export:
+
+1. Deploy the server with the demo's name and port (the defaults, as the demo was
+   deployed), so that it serves the address the browser kept the demo's data for:
+   `sh toolchain/deploy-local.sh --server --trust-network`.
+2. In the browser you wrote the demo in, open the wiki at that address, then
+   "Administration" in the header. Under "Wiki data", "Import this browser's demo
+   data…" is offered when the demo left its wiki in this browser at this address.
+   Anywhere else (another browser, another address), export the demo first: in the
+   demo's own administration, "Export the wiki" downloads a zip file, which the
+   server's "Import a zip export…" takes. (Deploying the server over the demo keeps
+   the demo's data in the browser, but the demo itself is gone from that address,
+   so export it before switching if you want the file.)
+3. "What to migrate" lists the source's spaces as a tree with their pages, every
+   box checked, each marked against the server's content: *New*, *Already here:
+   merged* (a space at the same path: its pages are added to it and it keeps the
+   server's settings), *Already here, the same*, or *In conflict* (a page at the
+   same path that differs), where you choose "Keep the server's" (the default) or
+   "Take the imported". Uncheck what you do not want: a space unchecked leaves out
+   its pages and subspaces, a page the pages under it.
+4. "Import" brings it in, in one transaction, and says what it did. Attachments
+   come with their pages. Importing the same wiki again brings in only what is not
+   there yet: nothing is ever there twice. The demo's users, groups and
+   permissions are not imported.
 
 ### Testing the scripts
 
