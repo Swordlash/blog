@@ -18,8 +18,17 @@ set -eu
 SOURCE_DIR=$(cd "$(dirname "$0")" && pwd)
 NODE_REAL=$(command -v node)
 export NODE_REAL
-# Found before the fixtures put a fake cabal first on PATH.
-WIKI_SERVER=${WIKI_SERVER:-$(cd "$SOURCE_DIR/.." && cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server 2>/dev/null || true)}
+# Found before the fixtures put a fake cabal first on PATH, with the cabal
+# the bootstrap installed, as the npm entry points find it.
+if [ -z "${WIKI_SERVER:-}" ]; then
+  WIKI_SERVER=$(
+    if [ -r "$HOME/.wiki-toolchain/env" ]; then
+      # shellcheck source=/dev/null
+      . "$HOME/.wiki-toolchain/env"
+    fi
+    cd "$SOURCE_DIR/.." && cabal list-bin -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server 2>/dev/null || true
+  )
+fi
 TMP=$(mktemp -d)
 cleanup() {
   for pidfile in "$TMP"/*/systemd/*.pid; do
