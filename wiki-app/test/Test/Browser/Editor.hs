@@ -12,7 +12,7 @@ module Test.Browser.Editor (spec) where
 import Control.Monad.UUID (MonadUUID)
 import Data.IORef (IORef)
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, toJSText)
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, startWith)
@@ -29,13 +29,15 @@ import Wiki.Core.Space (Space (id))
 -- The page has no file dialog the harness can answer, so a test hands the
 -- editor a file the way the browser would: test/jsbits/test-files.js.
 -- Whether a key reached the browser is read by a listener of its own:
--- test/jsbits/test-keys.js.
+-- test/jsbits/test-keys.js. The colour the style sheet gives an element:
+-- test/jsbits/test-style.js.
 $( browserJS
-     ["jsbits/test-files.js", "jsbits/test-keys.js"]
+     ["jsbits/test-files.js", "jsbits/test-keys.js", "jsbits/test-style.js"]
      [ ("js_drop_file", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_watch_keys", "wiki_test_watch_keys", Unsafe, [t|IO ()|])
      , ("js_last_key_prevented", "wiki_test_last_key_prevented", Unsafe, [t|IO Bool|])
+     , ("js_computed_colour", "wiki_test_computed_colour", Unsafe, [t|JSText -> IO JSText|])
      ]
  )
 
@@ -359,6 +361,38 @@ spec m = do
     length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
     previewHas ui "mark" "here"
 
+  it "colours a word from the palette, changes its colour, highlights it and takes the colour away" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    sideBySide ui
+    text <- find ui ".editor-text"
+    clear text
+    typeText text "Look here"
+    press "Control+Shift+ArrowLeft"
+    let pick swatch = do
+          find ui ".editor-toolbar button[aria-label='Colour']" >>= click
+          find ui (".colour-menu button[aria-label='" <> swatch <> "']") >>= click
+    pick "Red text"
+    getProperty text "value" `shouldReturn` "Look <span class=\"c-red\">here</span>"
+    selection text `shouldReturn` (25, 29)
+    length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
+    previewHas ui "span.c-red" "here"
+    -- The style sheet draws the class, in a colour of its own.
+    plain <- computedColour ".editor-preview .page-body p"
+    red <- computedColour ".editor-preview .page-body span.c-red"
+    red `shouldNotBe` plain
+    red `shouldNotBe` ""
+    -- Another colour replaces the first, rather than going inside it.
+    pick "Blue text"
+    getProperty text "value" `shouldReturn` "Look <span class=\"c-blue\">here</span>"
+    previewHas ui "span.c-blue" "here"
+    pick "Yellow highlight"
+    getProperty text "value" `shouldReturn` "Look <span class=\"c-blue\"><mark class=\"h-yellow\">here</mark></span>"
+    pick "No text colour"
+    getProperty text "value" `shouldReturn` "Look <mark class=\"h-yellow\">here</mark>"
+    previewHas ui "mark.h-yellow" "here"
+    pick "No highlight"
+    getProperty text "value" `shouldReturn` "Look here"
+
   it "shows the preview on its own, and comes back to the Markdown as it was left" $ runPage $ do
     (ui, _) <- startWith m (Just "user-admin") (EditPage (slugs ["docs"]) (slugs ["markdown-guide"]))
     text <- find ui ".editor-text"
@@ -422,6 +456,10 @@ selection text = do
   start <- getProperty text "selectionStart"
   end <- getProperty text "selectionEnd"
   pure (fromMaybe (-1) (readMaybe (T.unpack start)), fromMaybe (-1) (readMaybe (T.unpack end)))
+
+-- | The colour the style sheet gives the first element a selector finds.
+computedColour :: Text -> PageM s Text
+computedColour selector = unsafeIOToPageM (fromJSText <$> js_computed_colour (toJSText selector))
 
 -- | The page at a path of the demo, as the backend has it now.
 readPage :: IORef MemState -> [Text] -> [Text] -> PageM s Page

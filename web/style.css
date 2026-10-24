@@ -22,6 +22,22 @@
   --hl-type: #953800;
   --hl-number: #0550ae;
   --hl-comment: #59636e;
+  /* The palette of the editor's colours (the classes c-NAME and h-NAME):
+     text colours of at least 4.9:1 on the background and on every
+     highlight, highlights under which the page's text is at least 12:1. */
+  --c-red: #b42228;
+  --c-orange: #a3480a;
+  --c-green: #17722f;
+  --c-teal: #0a6d69;
+  --c-blue: #075cc4;
+  --c-purple: #7342cc;
+  --c-pink: #a8317a;
+  --c-grey: #525a64;
+  --h-yellow: #fff5b8;
+  --h-green: #d8f8de;
+  --h-blue: #dbefff;
+  --h-pink: #ffe2ef;
+  --h-purple: #ece4ff;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -45,6 +61,21 @@
     --hl-type: #ffa657;
     --hl-number: #79c0ff;
     --hl-comment: #9198a1;
+    /* Light text colours and deep highlights: at least 5:1 for any
+       pair, and 10:1 for the page's text on a highlight. */
+    --c-red: #ff7b72;
+    --c-orange: #ffa657;
+    --c-green: #3fb950;
+    --c-teal: #39c5bb;
+    --c-blue: #79c0ff;
+    --c-purple: #d2a8ff;
+    --c-pink: #ff9bce;
+    --c-grey: #a2aab3;
+    --h-yellow: #3d3200;
+    --h-green: #123a1c;
+    --h-blue: #0b2e57;
+    --h-pink: #4b1834;
+    --h-purple: #30215a;
   }
 }
 
@@ -748,6 +779,29 @@ select {
   background: color-mix(in srgb, var(--warning) 28%, transparent);
 }
 
+/* The editor's palette: a page's text in a colour, or highlighted in one.
+   Classes, not styles, which a page may not have. The rules hold outside
+   a page too, for the palette's swatches. */
+.c-red { color: var(--c-red); }
+.c-orange { color: var(--c-orange); }
+.c-green { color: var(--c-green); }
+.c-teal { color: var(--c-teal); }
+.c-blue { color: var(--c-blue); }
+.c-purple { color: var(--c-purple); }
+.c-pink { color: var(--c-pink); }
+.c-grey { color: var(--c-grey); }
+
+.h-yellow,
+.page-body mark.h-yellow { background: var(--h-yellow); }
+.h-green,
+.page-body mark.h-green { background: var(--h-green); }
+.h-blue,
+.page-body mark.h-blue { background: var(--h-blue); }
+.h-pink,
+.page-body mark.h-pink { background: var(--h-pink); }
+.h-purple,
+.page-body mark.h-purple { background: var(--h-purple); }
+
 .page-body details {
   margin: 1rem 0;
   padding: 0.5rem 0.9rem;
@@ -1126,6 +1180,54 @@ select {
 .toolbar-menu code {
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+/* The palette: a row of text colours, a row of highlights. */
+.colour-menu {
+  gap: 0.25rem;
+  min-width: 0;
+  max-width: calc(100vw - 2rem);
+}
+
+.colour-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.colour-row-name {
+  width: 4.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.toolbar-menu .swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+}
+
+.swatch-sample {
+  display: inline-block;
+  min-width: 1.3rem;
+  padding: 0 0.2rem;
+  border-radius: 3px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.swatch-none .icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.4;
+  stroke-linecap: round;
 }
 
 /* The Markdown alone, by default; the preview beside it on a wide screen

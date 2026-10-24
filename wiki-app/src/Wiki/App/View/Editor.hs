@@ -140,7 +140,17 @@ import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Draft qualified as D
 import Wiki.Core.Id (AttachmentId, PageId)
 import Wiki.Core.Markdown (attachmentReference)
-import Wiki.Core.Markdown.Edit (Command (..), HtmlTag (..), htmlTagLabel, htmlTagName)
+import Wiki.Core.Markdown.Edit
+  ( Command (..)
+  , HtmlTag (..)
+  , colourLabel
+  , highlightClass
+  , highlightColours
+  , htmlTagLabel
+  , htmlTagName
+  , textColourClass
+  , textColours
+  )
 import Wiki.Core.Page (Page)
 -- Qualified, so that its fields (read with a dot) are not confused with the
 -- work's of the same names.
@@ -238,8 +248,8 @@ data State = State
   -- ^ Whether the preview is shown beside the Markdown on a wide screen.
   , previewMounted :: Bool
   -- ^ Whether the preview has been shown yet: it is mounted then, and kept.
-  , htmlMenu :: Bool
-  -- ^ Whether the toolbar's menu of HTML elements is open.
+  , menu :: Maybe Menu
+  -- ^ Which of the toolbar's menus is open, if one is.
   , textarea :: H.RefLabel
   , fileInput :: H.RefLabel
   , backButton :: H.RefLabel
@@ -270,8 +280,8 @@ data Action
   | Insert Attachment
   | Run Command
   | AttachOrImage
-  | ToggleHtmlMenu
-  | CloseHtmlMenu
+  | ToggleMenu Menu
+  | CloseMenu
   | ShowPreview
   | BackToEditing
   | SideBySide Bool
@@ -340,7 +350,7 @@ component =
               , mode = Editing
               , sideBySide = False
               , previewMounted = False
-              , htmlMenu = False
+              , menu = Nothing
               , textarea
               , fileInput
               , backButton
@@ -405,7 +415,7 @@ component =
           {{ foundView st }}
           {{ cancelQuestion st }}
           {{ problemView st }}
-          {{ toolbar Bar {menuOpen = st.htmlMenu, twoPanes = st.sideBySide} }}
+          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide} }}
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
@@ -471,11 +481,11 @@ component =
 
     -- The keys the editor answers to, decided in the keydown's listener,
     -- which keeps the browser from acting on them; any other key makes no
-    -- action and is the browser's. Escape is the editor's only while the
+    -- action and is the browser's. Escape is the editor's only while a
     -- menu is open, to close it.
     keyAction :: State -> Event -> Maybe Action
     keyAction st ev = case editorKey ev of
-      Just EscapeKey | st.htmlMenu -> Just CloseHtmlMenu
+      Just EscapeKey | isJust st.menu -> Just CloseMenu
       Just EscapeKey -> Nothing
       Just key -> Just (Key key)
       Nothing -> Nothing
@@ -501,7 +511,7 @@ component =
     toolbarOf bar =
       [hh|
         <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
-          <div class="toolbar-group">{{ map toolButton textTools }}</div>
+          <div class="toolbar-group">{{ map toolButton textTools }}{{ colourMenu bar }}</div>
           <div class="toolbar-group">{{ map toolButton listTools }}</div>
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ imageButton }}{{ toolButton tableTool }}</div>
           <div class="toolbar-group">{{ map toolButton blockTools }}{{ htmlMenu bar }}</div>
@@ -528,12 +538,42 @@ component =
     htmlMenu bar =
       [hh|
         <div class="toolbar-menu-holder">
-          <button type="button" class="tool" title="HTML" aria-label="HTML" aria-haspopup="menu" aria-expanded={{ ariaBool bar.menuOpen }} onClick={{ const ToggleHtmlMenu }}>{{ icon htmlIcon }}</button>
-          {% if bar.menuOpen %}
+          <button type="button" class="tool" title="HTML" aria-label="HTML" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just HtmlMenu) }} onClick={{ const (ToggleMenu HtmlMenu) }}>{{ icon htmlIcon }}</button>
+          {% if bar.menuOpen == Just HtmlMenu %}
             <div class="toolbar-menu" role="menu" aria-label="HTML">
               {% for tag in htmlTags %}
                 <button type="button" role="menuitem" onClick={{ const (Run (Html tag)) }}>{{ htmlTagLabel tag }}<code>{{ "<" <> htmlTagName tag <> ">" :: Text }}</code></button>
               {% end %}
+            </div>
+          {% end %}
+        </div>
+      |]
+
+    -- The palette: a row of text colours and a row of highlights, each
+    -- swatch showing its colour with the class it writes (so the palette
+    -- and the page cannot differ), and at the end of each row the entry
+    -- that takes the colour away.
+    colourMenu :: Bar -> H.ComponentHTML Action Slots m
+    colourMenu bar =
+      [hh|
+        <div class="toolbar-menu-holder">
+          <button type="button" class="tool" title="Colour" aria-label="Colour" aria-haspopup="menu" aria-expanded={{ ariaBool (bar.menuOpen == Just ColourMenu) }} onClick={{ const (ToggleMenu ColourMenu) }}>{{ icon colourIcon }}</button>
+          {% if bar.menuOpen == Just ColourMenu %}
+            <div class="toolbar-menu colour-menu" role="menu" aria-label="Colour">
+              <div class="colour-row" role="group" aria-label="Text colour">
+                <span class="colour-row-name" aria-hidden="true">Text</span>
+                {% for c in textColours %}
+                  <button type="button" role="menuitem" class="swatch" title={{ colourLabel c <> " text" }} aria-label={{ colourLabel c <> " text" }} onClick={{ const (Run (TextColour (Just c))) }}><span class="swatch-sample {{ textColourClass c }}" aria-hidden="true">A</span></button>
+                {% end %}
+                <button type="button" role="menuitem" class="swatch swatch-none" title="No text colour" aria-label="No text colour" onClick={{ const (Run (TextColour Nothing)) }}>{{ icon noColourIcon }}</button>
+              </div>
+              <div class="colour-row" role="group" aria-label="Highlight">
+                <span class="colour-row-name" aria-hidden="true">Highlight</span>
+                {% for c in highlightColours %}
+                  <button type="button" role="menuitem" class="swatch" title={{ colourLabel c <> " highlight" }} aria-label={{ colourLabel c <> " highlight" }} onClick={{ const (Run (Highlight (Just c))) }}><span class="swatch-sample {{ highlightClass c }}" aria-hidden="true">A</span></button>
+                {% end %}
+                <button type="button" role="menuitem" class="swatch swatch-none" title="No highlight" aria-label="No highlight" onClick={{ const (Run (Highlight Nothing)) }}>{{ icon noColourIcon }}</button>
+              </div>
             </div>
           {% end %}
         </div>
@@ -657,7 +697,7 @@ component =
           gets (\st -> st.mode) >>= \case
             Editing -> showPreview
             Previewing -> backToEditing
-        EscapeKey -> closeHtmlMenu
+        EscapeKey -> closeMenu
       Submit -> save Stay
       SaveAndClose -> save Close
       -- The work is let go: so is its draft.
@@ -681,10 +721,10 @@ component =
       Insert a -> insert (attachmentReference a.name a.mediaType)
       Run command -> run command
       AttachOrImage -> do
-        closeHtmlMenu
+        closeMenu
         gets (\st -> st.fileInput) >>= H.getRef >>= traverse_ (H.liftEffect . clickElement)
-      ToggleHtmlMenu -> modify (\st -> st {htmlMenu = not st.htmlMenu})
-      CloseHtmlMenu -> closeHtmlMenu
+      ToggleMenu which -> modify (\st -> st {menu = if st.menu == Just which then Nothing else Just which})
+      CloseMenu -> closeMenu
       ShowPreview -> showPreview
       BackToEditing -> backToEditing
       SideBySide wanted -> do
@@ -743,20 +783,20 @@ component =
     -- this returns, brings the change into the work.
     run :: Command -> H.HalogenM State Action Slots ViewOutput m ()
     run command = do
-      closeHtmlMenu
+      closeMenu
       st <- get
       when (st.mode == Editing && not st.saving) $
         H.getRef st.textarea >>= traverse_ (\element -> H.liftEffect (applyCommand element command))
 
-    closeHtmlMenu :: H.HalogenM State Action Slots ViewOutput m ()
-    closeHtmlMenu = whenM (gets (\st -> st.htmlMenu)) $ modify (\st -> st {htmlMenu = False})
+    closeMenu :: H.HalogenM State Action Slots ViewOutput m ()
+    closeMenu = whenM (gets (\st -> isJust st.menu)) $ modify (\st -> st {menu = Nothing})
 
     -- The work rendered on its own, as it is now, with the focus on the
     -- way back.
     showPreview :: H.HalogenM State Action Slots ViewOutput m ()
     showPreview = do
       catchUp
-      modify (\st -> st {mode = Previewing, previewMounted = True, htmlMenu = False})
+      modify (\st -> st {mode = Previewing, previewMounted = True, menu = Nothing})
       gets (\st -> st.backButton) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
 
     -- Back to the Markdown, which kept its text, selection and scroll while
@@ -1084,9 +1124,13 @@ draftStatus = \case
 
 -- | What the toolbar shows depends on.
 data Bar = Bar
-  { menuOpen :: Bool
+  { menuOpen :: Maybe Menu
   , twoPanes :: Bool
   }
+  deriving stock (Eq)
+
+-- | The toolbar's menus: the HTML elements, and the palette.
+data Menu = HtmlMenu | ColourMenu
   deriving stock (Eq)
 
 -- | A toolbar button: the command it runs, what it is called, the shortcut
@@ -1127,9 +1171,11 @@ blockTools =
 tableTool :: Tool
 tableTool = Tool Table "Table" Nothing "M1.5 2.5h13v11h-13zM1.5 6h13M6 2.5v11M10.5 2.5v11"
 
-imageIcon, htmlIcon, previewIcon :: Text
+imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon :: Text
 imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
 htmlIcon = "M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11"
+colourIcon = "M4.5 11 8 2.5l3.5 8.5M5.7 8h4.6M2 14h12"
+noColourIcon = "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 1 0 0-11zM4.1 4.1l7.8 7.8"
 previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
 
 -- | The HTML elements the toolbar's menu offers.
