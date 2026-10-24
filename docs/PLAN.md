@@ -1514,3 +1514,34 @@ Amended by the planning session after each work package's report.
   server serves the `MemWiki` build; the switch is `build_app` in `deploy-local.sh`.
   Found on the way: `test-bootstrap.sh` has failed since WP1.20 (its fake `node_modules`
   lacked CodeMirror's packages; CI does not run it), fixed in #49.
+- **WP2.4 done and merged** ([#50](https://github.com/Swordlash/blog/pull/50), `12078ca`).
+  `HttpWiki` (`Backend/Http.hs`, `Http/Request.hs`, `Http/Cache.hs`): one request per method,
+  addresses from `Wiki.Api.Links` relative to `<base href>` (so `/admin/api/v1` on the admin
+  listener), `If-Match` on saves, `ApiError` → `WikiError`, a `Transport` (one safe JSFFI
+  `fetch` in the browser; the server's WAI application in process in tests), multipart
+  written in Haskell (one `fetch`, identical bytes on every transport), 30 s timeouts (6
+  min for uploads). `WikiError.Unreachable Text` for network failure, timeouts, 5xx and
+  non-API answers, shown with "Try again" (`Common.failureView`) in the shell and views.
+  Decision 18 as `MonadLoad` (`atOnce` cache-only, `attempt`; no `HalogenM` instance on
+  purpose): views load in `initialState` through `atOnce` or render "Loading…" (faded in
+  after 0.4 s) and fetch in `Initialize`; the demo unchanged, 24 pages at zero repairs. Flag
+  `<meta name="wiki-backend" content="demo|server">`; `build-wasm.sh` takes
+  `WIKI_BACKEND`, `WIKI_PUBLIC_DIR`; the server prerender is one shell page before any data,
+  as `index.html` and `404.html`. `MonadDemoUsers` optional: `Shell.Input.demo :: Maybe (Demo
+  m)`, `Wiki.App.serverInput`; the header shows the user's name over HTTP; the admin data
+  section over HTTP has an export link and says import comes next. Cache per entity, emptied
+  by every write except a draft's; other users' changes are seen on a write or reload.
+  `wiki-app` depends on all of `wiki-api`: `app.wasm` 7339 → 7587 KiB (brotli 1717 → 1775).
+  Tests: the whole contract (95) over `HttpWiki` against the server's WAI app in process;
+  `Test.Backend.Http` 16; browser `Test.Browser.Http` 9 with a fake `fetch`; the smoke test
+  is now `smoke-test.sh`: the demo, then `smoke-test-server.mjs` against a real
+  `wiki-server --trust-network` (forms, Ctrl+S, attachment byte for byte, draft after
+  reload, 409 conflict UI, search, export, a fresh browser); it builds `wiki-server` natively
+  in CI's wasm job (a minute or two). Limits until WP2.6: every address but `/` is served
+  `404.html` with status 404; no content before the data arrives; the anonymous reader
+  (without `--trust-network`) still sees the demo's sign-in hints, true from Phase 3. For
+  WP2.6: seed the client cache from `readEmbedded` (needs a way to seed `HttpEnv`'s cache),
+  `Static.renderLoading`/`startLoading` run the app over `HttpWiki` natively. For WP2.8:
+  the admin page's server branch is `Shell.serverControls`; `Request.multipart` writes one
+  file part, `import/apply` needs the archive plus a `choices` text part; the browser's
+  IndexedDB demo data is read through `Backend.Mem`'s store separately.
