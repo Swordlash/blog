@@ -1341,3 +1341,18 @@ Amended by the planning session after each work package's report.
   over text in one paste; a paste without files is left to the editor. The HTML menu's
   `<mark>` entry is "Mark". Synthetic pastes only in the tests (no OS clipboard in the
   harness); the fallback textarea's paste is tested by dispatching on it.
+- **WP1.23 done and merged** ([#43](https://github.com/Swordlash/blog/pull/43), `0b3e454`).
+  `searchPlain` takes `Candidate`s (ids, paths, a `Searchable`: folded title and body);
+  `Folded` keeps its origins as an `IntMap` of shifts, empty for text where every character
+  folds to one; the fold slices ASCII runs of the original. `Mem` keeps a `Prepared` text
+  per page (`version` = `updatedAt`, used only when it matches, else prepared again;
+  computed lazily by the first search, never exported nor persisted). Over 1000 pages of
+  ~3.5 KiB: one word 4.95 s / 16.45 GB allocated → 3.4 ms / 389 kB; three words 4.58 s →
+  4.8 ms; the fold alone 451 ms / 2.1 GB → 44 ms / 12.7 MB. `wiki-core/bench` (Criterion,
+  `-O2`, README with the table). Noted for later: the first search after a load or import
+  parses every page once on the loop (seconds at 1000 pages on wasm; Phase 2's index removes
+  it); the commonmark parse is now the search's main cost at ~1 ms and 4 MB per KiB, which
+  the editor's preview also pays on every change, a candidate for its own look; the
+  benchmark is not built by CI (`cabal.project` has `tests: True`, not benchmarks), so it
+  can break unnoticed, a CI step would keep it honest. Phase 2: the index stores
+  `bodyText`'s output or the fold, never reparses.
