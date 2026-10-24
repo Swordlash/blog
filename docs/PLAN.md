@@ -560,6 +560,32 @@ point of this phase.
   "Highlight" (`htmlTagLabel Mark` in `Wiki.Core.Markdown.Edit`), is renamed "Mark", since
   the colour palette's highlight row (WP1.19) also says "Highlight"; its title and
   `aria-label`, `docs/markdown.md` and any test that finds it by label follow.
+- **WP1.23 Search prepared once per page, not once per keystroke.** Prompted by
+  haskell-halogen `2b54363` (native HTML built with a text builder, escaping without a
+  `Text` per character; `core/bench/README.md` there has the method and the numbers). The
+  blog's own HTML serialisation goes through halogen's `renderToText` (`Static.hs`,
+  `fillMountPoint` in the prerender), so it gains from the pin bump with no change here.
+  The blog code with the same shape, whole texts handled a character at a time and work
+  repeated that could be done once, is the search: `searchPlain` is handed every page the
+  user may view and, for each query (every keystroke, since each narrows the hits),
+  reparses the page's Markdown (`bodyText`), folds it (`folded`: `T.unpack` to a list, a
+  list cell and a `Seq` element per character) and only then looks for the words. (1)
+  `wiki-core`: `Folded` built without per-character lists: the fold as one `Text`
+  (`T.concatMap`, or a builder if it measures better) and `origins` kept only where a
+  character folds to other than one character (`ß` to `ss`), so the common case indexes the
+  original directly; `Folded` stays abstract to its users (`occurrences`, `marked`,
+  `snippetOf`). Results unchanged: the search tests pass as they are, and QuickCheck
+  properties check the new `folded` against the old definition (same fold, same origin of
+  every folded character) over arbitrary Unicode text, multi-character folds included. (2)
+  A page's text and its fold are made once per page version, not per query: `Mem` keeps
+  them beside the page in memory (made on save and import, dropped with the page; never
+  exported nor stored in IndexedDB, as derived data rebuilt on load), and `searchPlain`
+  takes each candidate with its prepared `Folded` title and body, so the server of Phase 2
+  can hand it an index's output the same way. (3) A Criterion benchmark in
+  `wiki-core/bench` (native only, `-O2`, as haskell-halogen's: time and bytes allocated
+  per run, a README with the command and a table) over a wiki of 1000 pages of a few KiB,
+  one word and three words, before and after, with the numbers in the PR and the README.
+  The search view and its browser tests are unchanged.
 - **WP1.13 HTML in pages.** Render `RawHtml` and `RawHtmlBlock` instead of showing them
   as text: `Wiki.Core.Markdown.Html` parses the HTML (`tagsoup`, pure Haskell, so it
   builds for wasm; `html-parse` if tagsoup's HTML5 handling falls short, reported) and
@@ -1301,3 +1327,11 @@ Amended by the planning session after each work package's report.
 - **WP1.22 added** (pasted files attach as dropped ones do; the HTML menu's `<mark>` entry
   is "Mark"), at the owner's word on WP1.19's and WP1.20's open points. The haskell-halogen
   ref bug WP1.20 found is raised upstream as an issue.
+- **WP1.23 added.** The owner merged haskell-halogen `2b54363` (text-builder HTML) and asked
+  for the like here. Findings: the blog serialises HTML only through halogen's
+  `renderToText`, so the pin bump brings that gain; the one place of its own with the same
+  shape is the search (a reparse and a per-character fold of every page on every keystroke),
+  hence WP1.23. `Edit.replace`, `Html.htmlText`, `Link`, `Slug` and `Prerender.escape`
+  concatenate strict `Text` too, but over one page or a few words, and stay. The pin bump
+  waits for haskell-halogen#58 (the keyed-ref fix), rebased onto `2b54363`, so one bump
+  brings both.
