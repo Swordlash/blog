@@ -1472,3 +1472,21 @@ Amended by the planning session after each work package's report.
   text with the full fraction; `importArchive` fills an empty storage only (the merge is
   WP2.8). For WP2.3: `withStorage`, `runSqliteWiki storage who`, `attachmentFile`,
   `Config.attachmentAddress`; the deploy runs `backup` before the new binary starts.
+- **WP2.1 done and merged** ([#47](https://github.com/Swordlash/blog/pull/47), `68cdd3d`).
+  `wiki-api`: servant `NamedRoutes`, one record per resource (`SpacesApi`, `PagesApi`,
+  `AttachmentsApi`, `ArchiveApi`) under `api/v1`, relative to the page's `<base href>`;
+  servant 0.20.3 builds on wasm, so the type is shared. `Wiki.Api.Links` (`links.spaces.rename
+  sid`, `attachmentUrl`, `searchUrl`). ETag = `PageVersion updatedAt` as quoted ISO 8601 with
+  the full fraction, sent as `If-Match`; mismatch 409, missing or weak 400. Errors are an
+  `ApiError` JSON body mirroring `WikiError`. Attachments download through `RawM` at
+  `attachments/<id>/<name>` (media type, streaming, `Range`). Import is stateless: the
+  archive goes with both `import/preview` (`ImportPlan`: spaces new or merged, pages with
+  `PageConflict`) and `import/apply` (`ImportChoices`: skips and `KeepServer`/`TakeImported`
+  per conflict; `ImportSummary`), matched by path. `wiki-core` gained `http-api-data`
+  instances for ids and `Slug`, and `Draft`'s aeson instances; `cabal.project` three
+  `allow-newer` entries. Tests: `wiki-api-test` (46, both backends), `wiki-api-server-test`
+  (51, native: golden JSON, `HasServer` for every endpoint). `docs/api.md` is the table. For
+  WP2.3: use `Links.attachmentUrl` as the storage's `attachmentAddress`, `ErrorFormatters`
+  in the `Context` so servant's own errors are `ApiError`, `MultipartOptions` with the 50 MB
+  limit, `<base href>` on every served page. For WP2.4: `wiki-app` does not depend on
+  `wiki-api` yet; watch `app.wasm`'s size when it does.
