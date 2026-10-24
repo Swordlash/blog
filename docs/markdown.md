@@ -367,7 +367,9 @@ Where Markdown has no word for something, HTML may say it: press
 <kbd>Ctrl</kbd>+<kbd>S</kbd> to save, H<sub>2</sub>O, x<sup>2</sup>,
 <mark>a highlight</mark>, <abbr title="HyperText Markup Language">HTML</abbr>.
 Among the text of a paragraph, what is between two tags is still Markdown:
-<mark>this is *emphasised*</mark>.
+<mark>this is *emphasised*</mark>. The toolbar's HTML menu puts these
+around the selection: Mark (`<mark>`), Keyboard key, Superscript,
+Subscript, Underline, Small print and Collapsible section (`<details>`).
 
 A line that starts with a block's tag (`<div>`, `<details>`, `<table>` and
 the like) starts a block of HTML, which goes on to the next blank line.

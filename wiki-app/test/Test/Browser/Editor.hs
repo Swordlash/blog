@@ -375,7 +375,7 @@ spec m = do
     typeText text "Look here"
     press "Control+Shift+ArrowLeft"
     find ui ".editor-toolbar button[aria-label='HTML']" >>= click
-    clickButton ui ".toolbar-menu button" "Highlight<mark>"
+    clickButton ui ".toolbar-menu button" "Mark<mark>"
     markdown ui `shouldReturn` "Look <mark>here</mark>"
     length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
     previewHas ui "mark" "here"

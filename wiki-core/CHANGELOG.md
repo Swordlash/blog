@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`htmlTagLabel Mark` is "Mark" (it was "Highlight", which the palette's
+`Highlight` command is called too).
+
 `Wiki.Core.Markdown.Edit` has colours: `TextColour` and `Highlight`
 commands, each with a `Colour` or `Nothing` for none, which wrap the
 selection in `<span class="c-NAME">` or `<mark class="h-NAME">`

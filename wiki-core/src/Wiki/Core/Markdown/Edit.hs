@@ -134,10 +134,12 @@ htmlTagName = \case
   Small -> "small"
   Details -> "details"
 
--- | What the toolbar's menu calls it.
+-- | What the toolbar's menu calls it. @<mark>@ is "Mark" rather than
+-- "Highlight", which is what the palette calls its row of highlights
+-- ('Highlight'), so that the two are not taken for one another.
 htmlTagLabel :: HtmlTag -> Text
 htmlTagLabel = \case
-  Mark -> "Highlight"
+  Mark -> "Mark"
   Kbd -> "Keyboard key"
   Sup -> "Superscript"
   Sub -> "Subscript"
