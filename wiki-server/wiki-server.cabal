@@ -8,6 +8,9 @@ maintainer:         mateusz.goslinowski@gmail.com
 category:           Web
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
+-- Embedded into the library at compile time (Wiki.Server.Storage.Migrate), so
+-- that the binary carries its schema with it.
+extra-source-files: migrations/*.sql
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built
 -- with (cabal.project makes them errors) and the extensions its code assumes.
@@ -47,6 +50,41 @@ common shared
       RequiredTypeArguments
       ExplicitNamespaces
 
+-- The storage: the wiki in SQLite and its attachments on disk, behind the
+-- application's MonadWiki. Native only, as everything of the server is.
+library
+  import:           shared
+  hs-source-dirs:   src
+
+  if arch(wasm32)
+    buildable: False
+  else
+    exposed-modules:
+        Wiki.Server.Storage
+        Wiki.Server.Storage.Backup
+        Wiki.Server.Storage.Blobs
+        Wiki.Server.Storage.Layout
+        Wiki.Server.Storage.Migrate
+        Wiki.Server.Storage.Rows
+    build-depends:
+        base,
+        bytestring,
+        containers,
+        cryptohash-sha256,
+        direct-sqlite,
+        directory,
+        file-embed,
+        filepath,
+        haskell-halogen-core,
+        protolude,
+        sqlite-simple,
+        text,
+        time,
+        unliftio-core,
+        uuid-types,
+        wiki-app,
+        wiki-core
+
 -- Native only: a server has no business in the browser.
 executable wiki-server
   import:           shared
@@ -57,4 +95,41 @@ executable wiki-server
     buildable: False
   else
     build-depends:
-        protolude
+        optparse-applicative,
+        protolude,
+        wiki-server
+
+-- The storage against the backend's contract (wiki-app:contract), over a
+-- database made afresh in a temporary directory for each example, and what
+-- only the storage does: migrations, backups, attachments on disk.
+test-suite wiki-server-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test
+  main-is:          Test.hs
+
+  if arch(wasm32)
+    buildable: False
+  else
+    other-modules:
+        Test.Storage
+        Test.Storage.Backup
+        Test.Storage.Contract
+        Test.Storage.Fixture
+        Test.Storage.Migrate
+    build-depends:
+        HUnit,
+        bytestring,
+        containers,
+        directory,
+        filepath,
+        hspec >= 2,
+        protolude,
+        sqlite-simple,
+        temporary,
+        text,
+        time,
+        wiki-app,
+        wiki-app:contract,
+        wiki-core,
+        wiki-server
