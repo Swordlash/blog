@@ -19,6 +19,11 @@
 -- Reads made through 'atOnce' ask nothing of the network: one that the
 -- cache cannot answer gives up the whole program, and the view loads in its
 -- initializer instead (decision 18 of the plan).
+--
+-- Besides @MonadWiki@, it imports another wiki into the server's, merging
+-- it with what is there ('previewImport', 'applyImport'): the
+-- administration's, which the demo, whose import replaces everything, has
+-- no counterpart of.
 module Wiki.App.Backend.Http
   ( HttpWiki (..)
   , HttpEnv

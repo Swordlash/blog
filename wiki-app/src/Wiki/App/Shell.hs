@@ -38,7 +38,9 @@
 -- reset, export and import) come with the input ('Demo'), over the
 -- backend that has them; without them the header says who is signed in,
 -- and the administration's section on the wiki's data offers the
--- server's export.
+-- server's export and, over a backend that merges an archive into what it
+-- has, the import ("Wiki.App.View.Import"), which brings the demo's pages
+-- into the server.
 --
 -- The route is the router's ('Router.current' at the start, then
 -- 'Router.changes'), so links, the back and forward buttons and a reload all
@@ -81,6 +83,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.App.View.Editor qualified as Editor
+import Wiki.App.View.Import qualified as ImportView
 import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.Page qualified as PageView
@@ -98,12 +101,13 @@ import Wiki.Core.Space (Space (id, name, pageOrder, public, slug), subspacesOf)
 import Wiki.Core.User (User (..))
 
 -- | The router, a route the home page invites a newcomer to (the demo's
--- tour), if there is one, and the demo's controls, over a backend that has
--- them.
+-- tour), if there is one, the demo's controls, over a backend that has
+-- them, and the import into a server, over one that has it.
 data Input m = Input
   { router :: Router Route
   , welcome :: Maybe Route
   , demo :: Maybe (Demo m)
+  , migration :: Maybe (ImportView.Migration m)
   }
 
 -- | Whether the shell has loaded everything the route shows; when it has,
@@ -120,6 +124,7 @@ type Slots =
     .+ ("editor" .== H.Slot Editor.Query ViewOutput [Slug])
     .+ ("searchBox" .== H.Slot (Const Void) Void ())
     .+ ("searchResults" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("importer" .== H.Slot (Const Void) ViewOutput ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -140,6 +145,7 @@ data State m = State
   { router :: Router Route
   , welcome :: Maybe Route
   , demo :: Maybe (Demo m)
+  , migration :: Maybe (ImportView.Migration m)
   , world :: World
   , route :: Route
   , session :: Session
@@ -213,7 +219,7 @@ component =
         -- the initializer to build it again.
         -- Over a backend that would wait, it is loaded in 'Initialize'
         -- instead, unless the backend has kept it.
-        initialState = \Input {router, welcome, demo} -> do
+        initialState = \Input {router, welcome, demo, migration} -> do
           route <- Router.current router
           loaded <- atOnce $ do
             world <- fetchWorld demo
@@ -225,6 +231,7 @@ component =
               { router
               , welcome
               , demo
+              , migration
               , world = if isJust loaded then WorldReady else WorldLoading
               , route
               , session = signedIn
@@ -366,10 +373,7 @@ component =
               <h1>Administration</h1>
               <section class="admin-section admin-data">
                 <h2>Wiki data</h2>
-                <p class="admin-intro">
-                  The whole wiki as one file: export it to keep a copy or to take it to another
-                  browser, or import one to replace everything here.
-                </p>
+                <p class="admin-intro">{{ dataIntro }}</p>
                 {{ dataControls st }}
               </section>
             </section>
@@ -382,6 +386,10 @@ component =
             </section>
           |]
       where
+        dataIntro :: Text
+        dataIntro
+          | isJust st.demo = "The whole wiki as one file: export it to keep a copy or to take it to another browser, or import one to replace everything here."
+          | otherwise = "The whole wiki as one file: export it to keep a copy, or import the pages of another into this one, choosing what to bring in."
         refusal :: Text
         refusal
           | isNothing st.demo = "This page is for the wiki's administrators."
@@ -391,21 +399,24 @@ component =
 
     -- What can be done with the wiki's data: the demo's, or the server's.
     dataControls :: State m -> H.ComponentHTML Action Slots m
-    dataControls st = maybe serverControls (const (demoControls st)) st.demo
+    dataControls st = maybe (serverControls st) (const (demoControls st)) st.demo
 
     -- The server's content as a whole: its export, which the browser
-    -- downloads as the file the server names. Importing into the server,
-    -- which merges an archive into what is there, is to come.
-    serverControls :: H.ComponentHTML Action Slots m
-    serverControls =
+    -- downloads as the file the server names, and the import, which merges
+    -- another wiki's pages into it, from an export or from the demo's data
+    -- in this browser.
+    serverControls :: State m -> H.ComponentHTML Action Slots m
+    serverControls st =
       [hh|
         <div class="demo-controls server-controls">
           <div class="actions">
             <a class="button demo-export" href={{ links.archive.export }} download>Export the wiki</a>
           </div>
-          <p class="admin-note">Importing a wiki into this server is not here yet: it comes with the next version.</p>
+          {{ importer <$> st.migration }}
         </div>
       |]
+      where
+        importer migration = HH.slot "importer" () ImportView.component ImportView.Input {migration} FromView
 
     -- The demo's content as a whole: whether it is kept, exporting it,
     -- importing one, and resetting it, the last two asking first, in place.

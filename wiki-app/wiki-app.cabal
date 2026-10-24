@@ -84,6 +84,7 @@ library
       Wiki.App.View.Body
       Wiki.App.View.Common
       Wiki.App.View.Editor
+      Wiki.App.View.Import
       Wiki.App.View.NewPage
       Wiki.App.View.NewSpace
       Wiki.App.View.Page
@@ -259,6 +260,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Editor
       Test.Browser.Http
       Test.Browser.Hydrate
+      Test.Browser.Import
       Test.Browser.Islands
       Test.Browser.Macros
       Test.Browser.Mount
@@ -272,10 +274,13 @@ test-suite wiki-app-browser-test
       aeson,
       base,
       base64-bytestring,
+      bytestring,
       containers,
       protolude,
       row-types,
       text,
+      time,
+      unliftio-core,
       haskell-halogen-core,
       haskell-halogen-jsbits,
       haskell-halogen-router,

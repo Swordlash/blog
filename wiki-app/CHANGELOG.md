@@ -38,9 +38,28 @@ input (`Shell.Input`'s `demo`, a `Demo` record of `Wiki.App.DemoUsers`,
 `demoControls` of the class), and `Wiki.App.input` gives them while
 `Wiki.App.serverInput` does not. Without them the header shows who is signed
 in rather than the switcher, and the administration's "Wiki data" exports the
-server's wiki (`api/v1/export`) and says that importing comes next. Before
+server's wiki (`api/v1/export`). Before
 the session and the spaces have loaded, the shell is the same at every
 address (no breadcrumbs, no spaces, "Loading…").
+
+Over the server, the administration's "Wiki data" also imports another wiki
+into the server's, merging it with what is there rather than replacing it
+(`Wiki.App.View.Import`, a child of the shell, given a `Migration` record by
+`Shell.Input`'s new `migration` field, which `Wiki.App.serverInput` fills and
+`Wiki.App.input` leaves empty). The source is a zip file of an export, or the
+wiki the demo left in this browser's IndexedDB, offered only when it is here
+(`Wiki.App.Backend.Mem.memWikiFound`, which asks without opening the
+database, since opening it would make it) and read without being written to
+(`readMemWiki`, unlike `openMemWiki`). The server's preview is shown as the
+dialog "What to migrate", whose boxes and choices are worked out by the pure
+`Wiki.App.Import`; the import is applied with them, and its summary shown.
+`HttpWiki` gains `previewImport` and `applyImport`, and
+`Wiki.App.Backend.Http.Request` a multipart form of several parts
+(`multipartForm`, `Part`), file or text, which `multipart` now writes its one
+file through, byte for byte as before. `HttpWiki` passes `MonadIndexedDB`
+through, and `serverInput` now asks for `MonadIndexedDB` and `MonadUnliftIO`
+of the base monad and gives a `Shell.Input (HttpWiki m)`;
+`serverInputWith` looks for the demo's wiki in another database.
 
 `Main.hs` picks the backend from the page's `<meta name="wiki-backend">`
 (`Wiki.App.Browser.pageBackend`): `server` runs `HttpWiki`, anything else the

@@ -1579,10 +1579,125 @@ select {
   outline-offset: 1px;
 }
 
-.demo-import input {
+.demo-import input,
+.import-file input {
   position: absolute;
   width: 1px;
   height: 1px;
   opacity: 0;
   pointer-events: none;
+}
+
+/* The import into a server: its sources, the same hidden file input as the
+   demo's, and then the dialog "What to migrate". */
+.import-file {
+  position: relative;
+}
+
+.import-file:focus-within {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.import-busy {
+  color: var(--muted);
+}
+
+.import-summary {
+  margin: 0.5rem 0 1rem;
+  padding: 0.6rem 1rem;
+  border-left: 3px solid var(--tip);
+  background: var(--surface);
+}
+
+.import-summary p,
+.import-summary ul {
+  margin: 0.2rem 0;
+}
+
+.import-dialog {
+  margin: 1rem 0;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.import-dialog h3 {
+  margin-top: 0;
+}
+
+/* The tree of spaces and pages: each level indented, a row per item with
+   its box, its name and a badge saying what the server has of it. */
+.import-tree,
+.import-pages {
+  margin: 0;
+  padding-left: 1.4rem;
+  list-style: none;
+}
+
+.import-dialog > .import-tree {
+  padding-left: 0;
+}
+
+.import-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  padding: 0.15rem 0;
+}
+
+.import-row label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.import-space > .import-row .import-name {
+  font-weight: 600;
+}
+
+.import-row .badge {
+  margin-left: 0;
+}
+
+.import-new > .import-row .badge {
+  color: var(--tip);
+  border-color: var(--tip);
+}
+
+.import-conflict > .import-row .badge {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.import-attachments {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* A conflict's choice, under its page: which of the two pages stays. */
+.import-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0 0 0.3rem 1.6rem;
+  font-size: 0.9rem;
+}
+
+.import-theirs {
+  flex-basis: 100%;
+  color: var(--muted);
+}
+
+.import-choice label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.import-selected {
+  color: var(--muted);
 }

@@ -10,7 +10,20 @@
 -- The server answers with the demo's wiki as its administrator sees it,
 -- read from the in-memory backend and written as the API writes it, so the
 -- views have something real to show.
-module Test.Browser.Http (spec) where
+module Test.Browser.Http
+  ( spec
+
+    -- * The server in fetch's place, for the other specs
+  , Asked (..)
+  , serverStarts
+  , serverStops
+  , serveDemo
+  , answerWith
+  , asked
+  , offline
+  , startServerWith
+  )
+where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (FromJSON (..), ToJSON, eitherDecodeStrict', encode, withObject, (.:))
@@ -25,10 +38,11 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs)
 import Test.Hspec.Halogen
+import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (SpacesApi (..), WikiApi (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Types (SessionInfo (..))
-import Wiki.App (component, serverInput)
+import Wiki.App (component, serverInput, serverInputWith)
 import Wiki.App.Backend
 import Wiki.App.Backend.Http (HttpEnv, browserTransport, newHttpEnv, runHttpWiki)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
@@ -66,11 +80,13 @@ data Asked = Asked
   , url :: Text
   , headers :: Map Text Text
   , body :: Text
+  , bytes :: Text
+  -- ^ The body's bytes, in base64.
   }
   deriving stock (Eq, Show)
 
 instance FromJSON Asked where
-  parseJSON = withObject "Asked" $ \o -> Asked <$> o .: "method" <*> o .: "url" <*> o .: "headers" <*> o .: "body"
+  parseJSON = withObject "Asked" $ \o -> Asked <$> o .: "method" <*> o .: "url" <*> o .: "headers" <*> o .: "body" <*> o .: "bytes"
 
 -- | The server in fetch's place, with nothing to answer yet, for the length
 -- of the test.
@@ -86,6 +102,10 @@ answerWith method url status value = unsafeIOToPageM (js_server_answer (toJSText
 -- | An answer whose body is not JSON (a proxy's, a failing server's).
 answerRaw :: Text -> Text -> Int -> Text -> PageM s ()
 answerRaw method url status body = unsafeIOToPageM (js_server_answer (toJSText method) (toJSText url) status (toJSText body))
+
+-- | Take the network away, or give it back.
+offline :: Bool -> PageM s ()
+offline = unsafeIOToPageM . js_server_offline
 
 asked :: PageM s [Asked]
 asked = unsafeIOToPageM js_server_asked >>= either (\e -> panic ("the server's requests: " <> toS e)) pure . eitherDecodeStrict' . encodeUtf8 . fromJSText
@@ -113,17 +133,29 @@ serveDemo = do
 -- route, with a router of its own that keeps the route in the fragment.
 startServer
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
   => Route
   -> PageM s (Mounted s Shell.Query Void m)
 startServer m at = do
   (env, router) <- prepare at
   mount m (H.hoist (NT (runHttpWiki env)) component) (serverInput router)
 
+-- | 'startServer', with the demo's wiki in this browser looked for in this
+-- database rather than the demo's own.
+startServerWith
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+  => Database
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+startServerWith m db at = do
+  (env, router) <- prepare at
+  mount m (H.hoist (NT (runHttpWiki env)) component) (serverInputWith db router)
+
 -- | 'startServer', adopting a page that holds the shell's HTML already.
 adoptServer
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
   => Element s
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
@@ -149,7 +181,7 @@ testRouter = panic "the backend's browser tests run in a browser"
 overHttp :: HttpEnv -> (forall n. (MonadLoad n) => n a) -> PageM s a
 overHttp env program = unsafeIOToPageM (runHttpWiki env program)
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   requests
   refusals
@@ -225,7 +257,7 @@ refusals = describe "its refusals, through fetch" $ do
     overHttp env (attempt listSpaces) `shouldReturn` Left (Unreachable "the network or the server is down")
     serverStops
 
-views :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+views :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
 views m = describe "the application over it" $ do
   let tour = Page (slugs ["docs"]) (slugs ["tour"])
   it "shows that it is loading until the server answers, then the page" $ runPage $ do
