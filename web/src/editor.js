@@ -173,7 +173,10 @@ export function attach(textarea, host, original, codeTokens) {
   const doc = untouched ? String(original) : typed;
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
   const readOnly = new Compartment();
-  const readOnlyOf = (yes) => [EditorState.readOnly.of(yes), EditorView.editable.of(!yes)];
+  // Read-only refuses typing and commands but leaves the content editable
+  // as far as the browser knows: making it not editable would take the
+  // focus from it, which coming back would not give back.
+  const readOnlyOf = (yes) => EditorState.readOnly.of(yes);
 
   const state = EditorState.create({
     doc,

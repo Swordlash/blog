@@ -80,6 +80,10 @@ spec m = do
     markdown ui `shouldReturn` "- a list\n  - nested"
     press "Control+s"
     notice `shouldHaveText` "Saved"
+    -- The focus is still in the text after the save.
+    press "x"
+    markdown ui `shouldReturn` "- a list\n  - nestedx"
+    press "Backspace"
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
     saved <- readPage wiki ["blog"] ["hello-world"]
     saved.body `shouldBe` "- a list\n  - nested"
@@ -174,6 +178,8 @@ spec m = do
     -- Going on editing leaves everything as it was.
     clickButton ui ".editor-cancel-confirm button" "Go on editing"
     length <$> findAll ui ".editor-cancel-confirm" `shouldReturn` 0
+    markdown ui `shouldReturn` "Kept for later."
+    editorText ui >>= (`shouldBeSameElement` text)
     find ui ".editor-cancel" >>= click
     clickButton ui ".editor-cancel-confirm button" "Keep the draft"
     -- Gone to the page, without being asked again whether to leave.
@@ -262,11 +268,12 @@ spec m = do
     for_ (zip pieces pauses) $ \(word, pause) -> do
       typeText text word
       unsafeIOToPageM (threadDelay (pause * 1000))
-    -- In calls of five words, one after another with no pause between
+    -- In calls of three words, one after another with no pause between
     -- them, since one call may take at most five seconds and the test build
     -- types slower than the real one, slower still on a busy machine (a
-    -- call of a whole sentence timed out on CI).
-    for_ (chunksOf 5 [" " <> w | w <- T.words long]) $ \run ->
+    -- call of a whole sentence timed out on CI, and one of five words
+    -- now and then).
+    for_ (chunksOf 3 [" " <> w | w <- T.words long]) $ \run ->
       typeText text (mconcat run)
     let expected = original <> mconcat pieces <> long
     eventually $ markdown ui `shouldReturn` expected
