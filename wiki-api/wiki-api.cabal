@@ -50,19 +50,92 @@ common shared
 library
   import:           shared
   hs-source-dirs:   src
-  exposed-modules:  Wiki.Api.Info
+  exposed-modules:
+      Wiki.Api
+      Wiki.Api.Error
+      Wiki.Api.Import
+      Wiki.Api.Info
+      Wiki.Api.Links
+      Wiki.Api.Types
+      Wiki.Api.Upload
+      Wiki.Api.Version
+      Wiki.Api.Zip
   build-depends:
       aeson,
-      protolude
+      bytestring,
+      http-api-data,
+      http-media,
+      protolude,
+      servant >= 0.20.3 && < 0.21,
+      servant-multipart-api >= 0.13 && < 0.14,
+      text,
+      time,
+      wiki-core
 
+-- The API's types, natively and under Node on wasm through
+-- toolchain/test-wasm.sh: the browser reads and writes them as much as the
+-- server does.
 test-suite wiki-api-test
   import:           shared
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test
   main-is:          Test.hs
-  other-modules:    Test.Info
+  other-modules:
+      Test.Error
+      Test.Gen
+      Test.Info
+      Test.Json
+      Test.Links
+      Test.Upload
+      Test.Url
+      Test.Version
   build-depends:
+      QuickCheck,
       aeson,
+      bytestring,
+      containers,
       hspec >= 2,
+      http-api-data,
       protolude,
-      wiki-api
+      servant-multipart-api,
+      text,
+      time,
+      wiki-api,
+      wiki-core
+
+-- The API served: golden files of the JSON a client depends on, and a server
+-- of the API's type with stub handlers, requested at the addresses
+-- Wiki.Api.Links makes. Native only, as the server is: servant-server and
+-- servant-multipart do not build for the browser, and nothing here reads
+-- files on wasm.
+test-suite wiki-api-server-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test-server
+  main-is:          Test.hs
+
+  if arch(wasm32)
+    buildable: False
+  else
+    other-modules:
+        Test.Golden
+        Test.Sample
+        Test.Server
+    build-depends:
+        aeson,
+        aeson-pretty,
+        base,
+        bytestring,
+        case-insensitive,
+        containers,
+        hspec >= 2,
+        http-types,
+        protolude,
+        servant,
+        servant-multipart,
+        servant-server,
+        time,
+        wai,
+        wai-extra,
+        wiki-api,
+        wiki-core

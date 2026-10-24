@@ -1,0 +1,160 @@
+-- | One value of each type the API sends, as a client would see it: what
+-- the golden files hold, and what the stub server answers with.
+module Test.Sample
+  ( time
+  , later
+  , slug
+  , space
+  , page
+  , attachment
+  , draft
+  , hit
+  , sessionInfo
+  , importPlan
+  , importChoices
+  , importSummary
+  )
+where
+
+import Data.Set qualified as Set
+import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
+import Protolude
+import Wiki.Api.Import
+import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Draft (Draft (..))
+import Wiki.Core.Id
+import Wiki.Core.Order (ChildOrder (..))
+import Wiki.Core.Page (Page (..))
+import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
+import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
+import Wiki.Core.Slug (Slug, mkSlug)
+import Wiki.Core.Space (Space (..))
+import Wiki.Core.User (User (..))
+
+-- | A time with a fraction of a second, as a page's version has.
+time :: UTCTime
+time = UTCTime (fromGregorian 2026 10 24) (picosecondsToDiffTime 34212345678000000)
+
+-- | A time after 'time'.
+later :: UTCTime
+later = UTCTime (fromGregorian 2026 10 25) 0
+
+slug :: Text -> Slug
+slug t = either (panic . show) identity (mkSlug t)
+
+space :: Space
+space =
+  Space
+    { id = SpaceId "s1"
+    , name = "Docs"
+    , slug = slug "docs"
+    , parent = Nothing
+    , public = True
+    , mathMacros = "\\R: \\mathbb{R}"
+    , createdAt = time
+    , position = 0
+    , subspaceOrder = ByName
+    , pageOrder = ByHand
+    }
+
+attachment :: Attachment
+attachment =
+  Attachment
+    { id = AttachmentId "a1"
+    , name = "diagram.png"
+    , mediaType = "image/png"
+    , size = 1024
+    , source = SourceBlob (BlobId "sha256-0f1e")
+    }
+
+page :: Page
+page =
+  Page
+    { id = PageId "p1"
+    , space = SpaceId "s1"
+    , parent = Nothing
+    , title = "Tour"
+    , slug = slug "tour"
+    , body = "# Tour\n\n![A diagram](diagram.png)"
+    , attachments = [attachment]
+    , createdAt = time
+    , updatedAt = time
+    , position = 2
+    }
+
+draft :: Draft
+draft =
+  Draft
+    { page = PageId "p1"
+    , author = UserId "u1"
+    , title = "Tour"
+    , body = "# Tour, unsaved"
+    , base = time
+    , savedAt = later
+    }
+
+hit :: SearchHit
+hit =
+  SearchHit
+    { page = PageId "p1"
+    , space = SpaceId "s1"
+    , title = Snippet [Piece "Tour" True]
+    , spacePath = [slug "docs"]
+    , pagePath = [slug "tour"]
+    , snippet = Snippet [Piece "… a " False, Piece "tour" True, Piece " of the wiki …" False]
+    }
+
+sessionInfo :: SessionInfo
+sessionInfo =
+  SessionInfo
+    { user = Just User {id = UserId "u1", login = "ada", displayName = "Ada"}
+    , groups = Set.fromList [GroupId "g1"]
+    , grants =
+        Grants
+          { global = [GlobalGrant {subject = SubjectUser (UserId "u1"), permission = CreateSpaces}]
+          , spaces = [SpaceGrant {space = SpaceId "s1", subject = SubjectGroup (GroupId "g1"), permission = Edit}]
+          }
+    }
+
+importPlan :: ImportPlan
+importPlan =
+  ImportPlan
+    { spaces =
+        [ SpacePlan
+            { path = [slug "docs"]
+            , name = "Docs"
+            , status = SpaceMerged
+            , pages =
+                [ PagePlan
+                    { path = [slug "tour"]
+                    , title = "Tour"
+                    , attachments = 1
+                    , conflict = Just PageConflict {title = "Tour", updatedAt = time, sameContent = False}
+                    }
+                , PagePlan {path = [slug "tour", slug "more"], title = "More", attachments = 0, conflict = Nothing}
+                ]
+            }
+        , SpacePlan {path = [slug "docs", slug "notes"], name = "Notes", status = SpaceNew, pages = []}
+        ]
+    }
+
+importChoices :: ImportChoices
+importChoices =
+  ImportChoices
+    { skipSpaces = [[slug "docs", slug "notes"]]
+    , skipPages = []
+    , conflicts = [ConflictChoice {page = PageRef {space = [slug "docs"], page = [slug "tour"]}, resolution = TakeImported}]
+    }
+
+importSummary :: ImportSummary
+importSummary =
+  ImportSummary
+    { spacesCreated = 0
+    , spacesMerged = 1
+    , pagesCreated = 1
+    , pagesReplaced = 1
+    , pagesKept = 0
+    , pagesSkipped = 0
+    , attachments = 1
+    }

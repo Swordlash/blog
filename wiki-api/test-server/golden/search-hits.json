@@ -1,0 +1,32 @@
+[
+  {
+    "page": "p1",
+    "pagePath": [
+      "tour"
+    ],
+    "snippet": [
+      {
+        "match": false,
+        "text": "… a "
+      },
+      {
+        "match": true,
+        "text": "tour"
+      },
+      {
+        "match": false,
+        "text": " of the wiki …"
+      }
+    ],
+    "space": "s1",
+    "spacePath": [
+      "docs"
+    ],
+    "title": [
+      {
+        "match": true,
+        "text": "Tour"
+      }
+    ]
+  }
+]

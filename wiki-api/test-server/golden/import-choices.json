@@ -1,0 +1,22 @@
+{
+  "conflicts": [
+    {
+      "page": {
+        "page": [
+          "tour"
+        ],
+        "space": [
+          "docs"
+        ]
+      },
+      "resolution": "TakeImported"
+    }
+  ],
+  "skipPages": [],
+  "skipSpaces": [
+    [
+      "docs",
+      "notes"
+    ]
+  ]
+}

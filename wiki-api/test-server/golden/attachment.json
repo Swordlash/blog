@@ -1,0 +1,10 @@
+{
+  "id": "a1",
+  "mediaType": "image/png",
+  "name": "diagram.png",
+  "size": 1024,
+  "source": {
+    "contents": "sha256-0f1e",
+    "tag": "SourceBlob"
+  }
+}

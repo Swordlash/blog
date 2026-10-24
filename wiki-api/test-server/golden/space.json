@@ -1,0 +1,12 @@
+{
+  "createdAt": "2026-10-24T09:30:12.345678Z",
+  "id": "s1",
+  "mathMacros": "\\R: \\mathbb{R}",
+  "name": "Docs",
+  "pageOrder": "ByHand",
+  "parent": null,
+  "position": 0,
+  "public": true,
+  "slug": "docs",
+  "subspaceOrder": "ByName"
+}

@@ -1,0 +1,31 @@
+{
+  "grants": {
+    "global": [
+      {
+        "permission": "CreateSpaces",
+        "subject": {
+          "contents": "u1",
+          "tag": "SubjectUser"
+        }
+      }
+    ],
+    "spaces": [
+      {
+        "permission": "Edit",
+        "space": "s1",
+        "subject": {
+          "contents": "g1",
+          "tag": "SubjectGroup"
+        }
+      }
+    ]
+  },
+  "groups": [
+    "g1"
+  ],
+  "user": {
+    "displayName": "Ada",
+    "id": "u1",
+    "login": "ada"
+  }
+}

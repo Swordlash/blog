@@ -1,0 +1,43 @@
+{
+  "spaces": [
+    {
+      "name": "Docs",
+      "pages": [
+        {
+          "attachments": 1,
+          "conflict": {
+            "sameContent": false,
+            "title": "Tour",
+            "updatedAt": "2026-10-24T09:30:12.345678Z"
+          },
+          "path": [
+            "tour"
+          ],
+          "title": "Tour"
+        },
+        {
+          "attachments": 0,
+          "conflict": null,
+          "path": [
+            "tour",
+            "more"
+          ],
+          "title": "More"
+        }
+      ],
+      "path": [
+        "docs"
+      ],
+      "status": "SpaceMerged"
+    },
+    {
+      "name": "Notes",
+      "pages": [],
+      "path": [
+        "docs",
+        "notes"
+      ],
+      "status": "SpaceNew"
+    }
+  ]
+}

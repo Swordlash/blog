@@ -1,0 +1,23 @@
+{
+  "attachments": [
+    {
+      "id": "a1",
+      "mediaType": "image/png",
+      "name": "diagram.png",
+      "size": 1024,
+      "source": {
+        "contents": "sha256-0f1e",
+        "tag": "SourceBlob"
+      }
+    }
+  ],
+  "body": "# Tour\n\n![A diagram](diagram.png)",
+  "createdAt": "2026-10-24T09:30:12.345678Z",
+  "id": "p1",
+  "parent": null,
+  "position": 2,
+  "slug": "tour",
+  "space": "s1",
+  "title": "Tour",
+  "updatedAt": "2026-10-24T09:30:12.345678Z"
+}
