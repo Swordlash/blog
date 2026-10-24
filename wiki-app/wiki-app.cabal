@@ -67,6 +67,7 @@ library
       Wiki.App.Backend
       Wiki.App.Backend.Http
       Wiki.App.Backend.Http.Cache
+      Wiki.App.Backend.Http.Preload
       Wiki.App.Backend.Http.Request
       Wiki.App.Backend.Mem
       Wiki.App.Backend.Mem.Archive

@@ -19,6 +19,7 @@ module Wiki.App.Browser
   , unzipFiles
   , download
   , localTime
+  , consoleWarn
   , PageBackend (..)
   , pageBackend
   )
@@ -62,6 +63,7 @@ $( browserJS
      , ("js_download", "wiki_download", Unsafe, [t|JSText -> JSText -> JSVal -> IO ()|])
      , ("js_local_time", "wiki_local_time", Unsafe, [t|Double -> IO JSText|])
      , ("js_page_backend", "wiki_page_backend", Unsafe, [t|IO JSText|])
+     , ("js_console_warn", "wiki_console_warn", Unsafe, [t|JSText -> IO ()|])
      ]
  )
 
@@ -164,6 +166,11 @@ localTime :: (MonadIO m) => UTCTime -> m Text
 localTime t
   | inBrowser = liftIO (fromJSText <$> js_local_time (realToFrac (utcTimeToPOSIXSeconds t) * 1000))
   | otherwise = pure (toS (formatTime defaultTimeLocale "%-d %B %Y, %H:%M UTC" t))
+
+-- | A word on the console, for whoever looks there, about something the
+-- program went on without. Natively nothing.
+consoleWarn :: (MonadIO m) => Text -> m ()
+consoleWarn message = when inBrowser (liftIO (js_console_warn (toJSText message)))
 
 -- | Where the page says the wiki is kept: in the browser, as the demo keeps
 -- it, or by the server that served the page.

@@ -18,7 +18,15 @@
 -- whose data has been seen shows it at once ('atOnce'); a write lets it go.
 -- Reads made through 'atOnce' ask nothing of the network: one that the
 -- cache cannot answer gives up the whole program, and the view loads in its
--- initializer instead (decision 18 of the plan).
+-- initializer instead (decision 18 of the plan). The program starts with
+-- what the server rendered its page from ('newHttpEnvWith' and
+-- "Wiki.App.Backend.Http.Preload"), so its first render is that page.
+--
+-- The server renders that page with this backend too, over a transport that
+-- answers in its own process, without a wait worth the name
+-- ('newImmediateHttpEnv'): there 'atOnce' asks the transport, so that the
+-- application is rendered with everything a route shows, and what it read
+-- is what the page carries for the program.
 --
 -- Besides @MonadWiki@, it imports another wiki into the server's, merging
 -- it with what is there ('previewImport', 'applyImport'): the
@@ -28,6 +36,8 @@ module Wiki.App.Backend.Http
   ( HttpWiki (..)
   , HttpEnv
   , newHttpEnv
+  , newHttpEnvWith
+  , newImmediateHttpEnv
   , runHttpWiki
   , cacheOf
 
@@ -130,13 +140,28 @@ silentTransport = Transport (const (forever (threadDelay maxBound)))
 data HttpEnv = HttpEnv
   { transport :: Transport
   , cache :: IORef Cache
+  , immediate :: Bool
+  -- ^ Whether the transport answers at once, so that 'atOnce' may ask it.
   , cacheOnly :: Bool
   -- ^ Within 'atOnce': a read the cache cannot answer gives up.
   }
 
 -- | A backend over this transport, with nothing read yet.
 newHttpEnv :: (MonadIO n) => Transport -> n HttpEnv
-newHttpEnv transport = liftIO $ (\cache -> HttpEnv {transport, cache, cacheOnly = False}) <$> newIORef emptyCache
+newHttpEnv transport = newHttpEnvWith transport emptyCache
+
+-- | A backend over this transport that has read this already: what the
+-- server rendered the page with, which the program starts from.
+newHttpEnvWith :: (MonadIO n) => Transport -> Cache -> n HttpEnv
+newHttpEnvWith transport start = liftIO $ (\cache -> HttpEnv {transport, cache, immediate = False, cacheOnly = False}) <$> newIORef start
+
+-- | A backend over a transport that answers at once, a server's
+-- application in the same process: 'atOnce' asks it rather than give up,
+-- so that every view loads in its initial state, as over the in-memory
+-- backend. What the server renders its pages with
+-- ("Wiki.App.Static.renderServed"); a browser's transport never is one.
+newImmediateHttpEnv :: (MonadIO n) => Transport -> n HttpEnv
+newImmediateHttpEnv transport = (\env -> env {immediate = True}) <$> newHttpEnv transport
 
 -- | What the backend keeps of what it has read, for the tests.
 cacheOf :: (MonadIO n) => HttpEnv -> n Cache
@@ -187,20 +212,30 @@ readCache = HttpWiki (ask >>= \env -> liftIO (readIORef env.cache))
 modifyCache :: (MonadIO m) => (Cache -> Cache) -> HttpWiki m ()
 modifyCache f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (f c, ()))))
 
--- | A read: from the cache, or asked and then kept.
+-- | A read: from the cache, or asked and then kept, if it is an answer to
+-- keep ('kept').
 cached
+  :: (MonadIO m, FromJSON a)
+  => (Cache -> Maybe (Either WikiError a))
+  -> Request
+  -> (Either WikiError a -> Cache -> Cache)
+  -> HttpWiki m (Either WikiError a)
+cached look request keep =
+  look <$> readCache >>= \case
+    Just a -> pure a
+    Nothing -> do
+      result <- answer <$> call request
+      when (kept result) (modifyCache (keep result))
+      pure result
+
+-- | A read that cannot be refused: kept when it succeeds.
+cachedAlways
   :: (MonadIO m, FromJSON a)
   => (Cache -> Maybe a)
   -> Request
   -> (a -> Cache -> Cache)
   -> HttpWiki m (Either WikiError a)
-cached look request keep =
-  look <$> readCache >>= \case
-    Just a -> pure (Right a)
-    Nothing -> do
-      result <- answer <$> call request
-      for_ result (modifyCache . keep)
-      pure result
+cachedAlways look request keep = cached (fmap Right . look) request (either (const identity) keep)
 
 -- | A read that has no @Either@ to return a failure in: thrown, for
 -- 'attempt' to catch.
@@ -220,13 +255,13 @@ write_ request = (answerNothing <$> call request) <* modifyCache afterWrite
 instance (MonadIO m) => MonadWiki (HttpWiki m) where
   session =
     orThrow . fmap (fmap fromInfo) $
-      cached (fmap toInfo . (\c -> c.session)) (R.get links.session) (withSession . fromInfo)
+      cachedAlways (fmap toInfo . (\c -> c.session)) (R.get links.session) (withSession . fromInfo)
     where
       fromInfo :: SessionInfo -> Session
       fromInfo s = Session {user = s.user, groups = s.groups, grants = s.grants}
       toInfo :: Session -> SessionInfo
       toInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants}
-  listSpaces = orThrow (cached (\c -> c.spaces) (R.get links.spaces.list) withSpaces)
+  listSpaces = orThrow (cachedAlways (\c -> c.spaces) (R.get links.spaces.list) withSpaces)
   getSpace path = cached (\c -> Map.lookup path c.spaceAt) (R.get (links.spaces.atPath path)) (withSpaceAt path)
   createSpace parent name = write (withJson "POST" links.spaces.create NewSpace {parent, name})
   renameSpace sid name = write (withJson "PUT" (links.spaces.rename sid) SpaceName {name})
@@ -250,25 +285,28 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- The server serves an attachment's bytes at an address of the API's,
   -- which needs no request to know.
   attachmentUrl = pure . Links.attachmentUrl
-  searchPages q = orThrow (answer <$> call (R.get (searchUrl q)))
+  searchPages q = orThrow (cachedAlways (cachedSearch q) (R.get (searchUrl q)) (withSearch q))
   getDraft pid = cached (\c -> Map.lookup pid c.drafts) (R.get (links.pages.draft pid)) (withDraft pid . Just)
 
   -- A draft's writes change that draft alone (see
   -- "Wiki.App.Backend.Http.Cache").
   saveDraft pid base title body = do
     result <- answer <$> call (withJson "PUT" (links.pages.saveDraft pid) DraftEdit {base, title, body})
-    modifyCache (withDraft pid (either (const Nothing) (Just . Just) result))
+    modifyCache (withDraft pid (either (const Nothing) (Just . Right . Just) result))
     pure result
   discardDraft pid = do
     result <- answerNothing <$> call (R.delete (links.pages.discardDraft pid))
-    modifyCache (withDraft pid (either (const Nothing) (const (Just Nothing)) result))
+    modifyCache (withDraft pid (either (const Nothing) (const (Just (Right Nothing))) result))
     pure result
 
--- | What has been read answers at once; anything else would wait.
+-- | What has been read answers at once; anything else would wait, unless
+-- the transport answers at once itself ('newImmediateHttpEnv').
 instance (MonadUnliftIO m) => MonadLoad (HttpWiki m) where
   atOnce (HttpWiki program) = HttpWiki . ReaderT $ \env ->
-    withRunInIO $ \run ->
-      (Just <$> run (runReaderT program env {cacheOnly = True})) `catch` \NotCached -> pure Nothing
+    if env.immediate
+      then Just <$> runReaderT program env
+      else withRunInIO $ \run ->
+        (Just <$> run (runReaderT program env {cacheOnly = True})) `catch` \NotCached -> pure Nothing
   attempt (HttpWiki program) = HttpWiki . ReaderT $ \env ->
     withRunInIO $ \run -> try (run (runReaderT program env))
 

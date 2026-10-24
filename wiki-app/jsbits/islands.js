@@ -39,3 +39,9 @@ function wiki_islands_highlight(element, language, code) {
   if (islands) islands.highlight(element, language, code);
   else element.textContent = code;
 }
+
+// A moment, written already in the reader's zone and language
+// (Wiki.App.Browser.localTime): no library is needed to show it.
+function wiki_islands_set_text(element, text) {
+  element.textContent = text;
+}

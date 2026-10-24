@@ -9,6 +9,11 @@
 -- reached through @jsbits/islands.js@; natively, where there is no
 -- JavaScript, an island holds its source as text, which is what the
 -- prerendered page shows until the program has loaded.
+--
+-- A moment in time is an island too ('renderTime'): the reader's browser
+-- writes it in their zone and their language, which a page rendered ahead
+-- of the program, on a server in a zone of its own, cannot know. The page
+-- holds it in UTC until then.
 module Wiki.App.Islands.Monad
   ( MonadIslands (..)
   , MathMode (..)
@@ -19,11 +24,13 @@ import Control.Monad.Trans.Class (MonadTrans)
 import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Data.Type.Equality (type (~))
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad (BrowserDOM)
 import Protolude
 import Web.DOM.Internal.Types (Element (..))
+import Wiki.App.Browser (localTime)
 import Wiki.Core.Markdown.Tikz (TikzDocument (..))
 import Wiki.Core.Math (Macros (..))
 
@@ -43,6 +50,7 @@ $( browserJS
      , ("js_render_mermaid", "wiki_islands_render_mermaid", Unsafe, [t|Element -> JSText -> IO ()|])
      , ("js_render_tikz", "wiki_islands_render_tikz", Unsafe, [t|Element -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_highlight", "wiki_islands_highlight", Unsafe, [t|Element -> JSText -> JSText -> IO ()|])
+     , ("js_set_text", "wiki_islands_set_text", Unsafe, [t|Element -> JSText -> IO ()|])
      ]
  )
 
@@ -99,6 +107,11 @@ class (Monad m) => MonadIslands m where
   default highlightCode :: (MonadTrans t, MonadIslands n, m ~ t n) => Maybe Text -> Text -> Element -> m ()
   highlightCode language code = lift . highlightCode language code
 
+  -- | A moment, as the reader reads one ('Wiki.App.Browser.localTime').
+  renderTime :: UTCTime -> Element -> m ()
+  default renderTime :: (MonadTrans t, MonadIslands n, m ~ t n) => UTCTime -> Element -> m ()
+  renderTime at = lift . renderTime at
+
 instance (MonadIslands m) => MonadIslands (ReaderT r m)
 
 -- | The page's libraries. Natively the bindings are inert stubs and this does
@@ -118,6 +131,8 @@ instance MonadIslands BrowserDOM where
 
   highlightCode language code element = liftIO $ js_highlight element (toJSText (fromMaybe "" language)) (toJSText code)
 
+  renderTime at element = liftIO $ localTime at >>= js_set_text element . toJSText
+
 -- | The blocks as a JSON array of strings, the one shape a binding can pass
 -- a list in.
 macrosJSON :: Macros -> JSText
@@ -132,6 +147,7 @@ instance MonadIslands MemDOM where
   renderMermaid = asText
   renderTikz source _ = asText source
   highlightCode _ = asText
+  renderTime at element = localTime at >>= (`asText` element)
 
 asText :: Text -> Element -> MemDOM ()
 asText text element = elementToNode element >>= setTextContent text

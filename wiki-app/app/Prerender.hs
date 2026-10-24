@@ -32,11 +32,13 @@
 -- keeps: the program is to talk to it over HTTP, which the page says by its
 -- @\<meta name=\"wiki-backend\">@ (the template's says @demo@, and this
 -- writes @server@ there; @Main.hs@ reads it). Its content is the server's,
--- unknown at build time, so there is one page to write: the application as
--- it shows before it has loaded anything ('renderLoading'), the same at
--- every address. It goes to @OUTPUT-DIR\/index.html@ and
--- @OUTPUT-DIR\/404.html@, which the server serves for every other
--- address, and any page a demo build left there is removed.
+-- unknown at build time: the server renders each route's page itself, per
+-- request, into @OUTPUT-DIR\/template.html@, the page with its mount point
+-- left empty, which this writes. What it writes besides is the page the
+-- server sends when it cannot render one: the application as it shows
+-- before it has loaded anything ('renderLoading'), the same at every
+-- address, at @OUTPUT-DIR\/index.html@ and @OUTPUT-DIR\/404.html@. Any
+-- page a demo build left there is removed.
 module Main (main) where
 
 import Data.ByteString qualified as B
@@ -50,7 +52,7 @@ import System.Environment (lookupEnv)
 import System.FilePath (takeDirectory, (</>))
 import Wiki.App (Route (..), route)
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.App.Static (Rendered (..), prerenderedRoutes, renderLoading, renderRoute)
+import Wiki.App.Static (Rendered (..), prerenderedRoutes, renderLoading, renderRoute, withBase, withTitle)
 
 main :: IO ()
 main = do
@@ -81,9 +83,9 @@ demoPages base template outputDir page = do
     createDirectoryIfMissing True (takeDirectory file)
     B.writeFile file (encodeUtf8 filled)
 
--- | The server's two pages, and none of a demo build's: a page of the
--- demo's left at a space's address would be served there in place of the
--- server's wiki.
+-- | The server's template and its two pages, and none of a demo build's: a
+-- page of the demo's left at a space's address would be served there in
+-- place of the server's wiki.
 serverPages :: Text -> FilePath -> FilePath -> Text -> IO ()
 serverPages base template outputDir page = do
   for_ ["s", "search"] $ \dir ->
@@ -93,24 +95,8 @@ serverPages base template outputDir page = do
   let served = T.replace (backendMeta "demo") (backendMeta "server") (withBase (Router.href router Home) (withTitle title page))
   filled <- either (die . ((toS template <> ": ") <>)) pure (fillMountPoint "app" html served)
   for_ ["index.html", "404.html"] $ \file -> B.writeFile (outputDir </> file) (encodeUtf8 filled)
+  B.writeFile (outputDir </> "template.html") (encodeUtf8 served)
 
 -- | The element that says which backend the page's program runs on.
 backendMeta :: Text -> Text
 backendMeta backend = "<meta name=\"wiki-backend\" content=\"" <> backend <> "\">"
-
--- | The page with a @\<base href>@ first in its head, before anything it
--- applies to.
-withBase :: Text -> Text -> Text
-withBase base = T.replace "<head>" ("<head>\n    <base href=\"" <> escape base <> "\">")
-
--- | The page titled for its route.
-withTitle :: Text -> Text -> Text
-withTitle title = T.replace "<title>Wiki</title>" ("<title>" <> escape title <> "</title>")
-
-escape :: Text -> Text
-escape = T.concatMap $ \case
-  '&' -> "&amp;"
-  '<' -> "&lt;"
-  '>' -> "&gt;"
-  '"' -> "&quot;"
-  c -> T.singleton c

@@ -17,6 +17,11 @@
 -- The page (@web/index.html@) must load @islands.js@ and @islands.css@ from
 -- @web/bundle.sh@. Natively the element holds its source as text instead (see
 -- "Wiki.App.Islands.Monad"), which is what a prerendered page shows.
+--
+-- A moment in time ('LocalTime') is one as well, though no library draws
+-- it: the reader's browser writes it in their zone, which the server that
+-- rendered the page does not know, so it is left out of what the program
+-- adopts and written in once the program runs.
 module Wiki.App.Islands
   ( Island (..)
   , component
@@ -28,6 +33,7 @@ where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Row (Empty)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.TH (hh)
 import Protolude hiding (State)
@@ -49,6 +55,8 @@ data Island
     Tikz Text
   | -- | Code, in a language if the fence names one.
     CodeBlock (Maybe Text) Text
+  | -- | A moment, as the reader reads one.
+    LocalTime UTCTime
   deriving stock (Eq, Show)
 
 data State = State
@@ -80,6 +88,7 @@ component =
       Mermaid _ -> [hh|<div ref={{ ref }} class="wiki-mermaid"></div>|]
       Tikz _ -> [hh|<div ref={{ ref }} class="wiki-tikz"></div>|]
       CodeBlock _ _ -> [hh|<pre ref={{ ref }} class="wiki-code"></pre>|]
+      LocalTime at -> [hh|<time ref={{ ref }} class="wiki-time" datetime={{ iso at }}></time>|]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
     handleAction = \case
@@ -109,3 +118,7 @@ component =
       Mermaid source -> H.liftEffect (renderMermaid source element)
       Tikz source -> H.liftEffect (renderTikz source (tikzDocument source) element)
       CodeBlock language code -> H.liftEffect (highlightCode language code element)
+      LocalTime at -> H.liftEffect (renderTime at element)
+
+    iso :: UTCTime -> Text
+    iso = toS . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"

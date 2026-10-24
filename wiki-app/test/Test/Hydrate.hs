@@ -11,25 +11,50 @@
 -- prerendered one. What the parser makes of the page differently (comments,
 -- empty texts, elements it moves) is the smoke test's to find, in the built
 -- page.
+--
+-- The pages a server renders for each request are checked the same way:
+-- rendered as @wiki-server@ renders them ('renderServed'), over a
+-- transport that answers as the API does, from the demo's wiki as someone
+-- sees it; then adopted by a fresh application whose backend starts from
+-- what the page carries, written as JSON and read back as the program reads
+-- it ("Wiki.App.Backend.Http.Preload"), over a transport it must never ask.
 module Test.Hydrate (spec) where
 
-import Data.IORef (writeIORef)
+import Data.Aeson (ToJSON, encode)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Halogen.HTML.Core (ElemName (..))
+import Halogen.Router.Duplex (decodeComponent)
 import Halogen.VDom.DOM.Monad (appendChild, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
 import Protolude
 import Test.Hspec
+import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Error (ApiError, errorStatus)
+import Wiki.Api.Error qualified as ApiError
+import Wiki.Api.Links (links, searchQueryOf)
+import Wiki.Api.Types (SessionInfo (..))
+import Wiki.App.Backend
+import Wiki.App.Backend.Http (Transport (..), cacheOf, newHttpEnvWith, newImmediateHttpEnv)
+import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
+import Wiki.App.Backend.Http.Request (Request (..), Response (..))
+import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
+import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (Route (..))
-import Wiki.App.Static (Rendered (..), Start (..), prerenderedRoutes, renderLoading, startLoading, startRoute)
-import Wiki.Core.Path (parsePath)
+import Wiki.App.Static (Rendered (..), Start (..), prerenderedRoutes, renderLoading, startLoading, startRoute, startServed)
+import Wiki.Core.Id (SpaceId (..), UserId (..))
+import Wiki.Core.Page qualified as P
+import Wiki.Core.Path (parsePath, pathOf)
+import Wiki.Core.Space qualified as S
 
 spec :: Spec
 spec = do
   demoPages
   serverPage
+  servedPages
 
 demoPages :: Spec
 demoPages = describe "Wiki.App.Static, adopted" $
@@ -82,6 +107,98 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Admin
       , Unknown
       ]
+
+-- | The pages a server renders, adopted by the program that starts from
+-- what they carry: every route the demo's build has a page for, an editor,
+-- a search, a space and a page that are not there, and an address that is
+-- none, as someone not signed in (to whom the team's space is private) and
+-- as the administrator.
+servedPages :: Spec
+servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
+  for_ [("someone not signed in", Nothing), ("the administrator", Just (UserId "user-admin"))] $ \(whom, who) ->
+    describe ("as " <> whom) $
+      for_ routes $ \at ->
+        it ("keeps every node at " <> show at <> ", and asks nothing") $ do
+          transport <- apiOver ((demoState demoNow) {current = who})
+          rendering <- newImmediateHttpEnv transport
+          container <- detached (fmap snd . startServed Build rendering "/" at)
+          original <- nodesOf container
+          html <- markup container
+          html `shouldNotSatisfy` T.isInfixOf "Loading…"
+          carried <- either (panic . ("the preload: " <>)) pure . decodePreload . encodePreload =<< cacheOf rendering
+          asked <- newIORef (0 :: Int)
+          adopting <- newHttpEnvWith (Transport (\_ -> atomicModifyIORef' asked (\n -> (n + 1, ())) $> Left "no network")) carried
+          (_, dispose) <- startServed Adopt adopting "/" at container
+          adopted <- nodesOf container
+          markup container >>= (`shouldBe` html)
+          dispose
+          readIORef asked `shouldReturn` 0
+          map fst adopted `shouldBe` map fst original
+  where
+    path = either (panic . show) identity . parsePath
+    routes =
+      prerenderedRoutes (demoState demoNow)
+        <> [ EditPage (path "blog") (path "hello-world")
+           , Search (Just "haskell") Nothing True
+           , Search (Just "tour") (Just (path "docs")) False
+           , Space (path "nowhere")
+           , Page (path "docs") (path "nowhere")
+           , NewPage (path "docs") Nothing
+           , NewSpace Nothing
+           , Admin
+           , Unknown
+           ]
+
+-- | A transport that answers the reads of the backend over HTTP as the API
+-- does, from a wiki in memory as its current user sees it: the API's
+-- answers, its refusals with their status, and a 404 for an address it does
+-- not have.
+apiOver :: MemState -> IO Transport
+apiOver st = do
+  wiki <- newMemWiki st
+  let spacePath s = fromMaybe [] (pathOf (`Map.lookup` st.spaces) s)
+      pagePath p = fromMaybe [] (pathOf (`Map.lookup` st.pages) p)
+  table <- runMemWiki wiki $ do
+    me <- session
+    spaces <- listSpaces
+    perSpace <- for (Map.elems st.spaces) $ \s -> do
+      space <- getSpace (spacePath s.id)
+      pages <- listPages s.id
+      perPage <- for [p | p <- Map.elems st.pages, p.space == s.id] $ \p -> do
+        page <- getPage s.id (pagePath p.id)
+        draft <- getDraft p.id
+        pure [(links.spaces.pageAt s.id (pagePath p.id), answerOf page), (links.pages.draft p.id, answerOf draft)]
+      pure ([(links.spaces.atPath (spacePath s.id), answerOf space), (links.spaces.listPages s.id, answerOf pages)] <> concat perPage)
+    pure
+      ( Map.fromList
+          ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants} :: Either WikiError SessionInfo))
+              : (links.spaces.list, answerOf (Right spaces :: Either WikiError [S.Space]))
+              : concat perSpace
+          )
+      )
+  pure . Transport $ \r -> case (r.method, Map.lookup r.url table, searchOf r.url) of
+    ("GET", Just answered, _) -> pure (Right answered)
+    ("GET", _, Just q) -> Right . answerOf . Right @WikiError <$> runMemWiki wiki (searchPages q)
+    _ -> pure (Right (refusal ApiError.NotFound))
+  where
+    answerOf :: (ToJSON a) => Either WikiError a -> Response
+    answerOf = \case
+      Right a -> Response 200 (toS (encode a))
+      Left e -> refusal (apiError e)
+    refusal :: ApiError -> Response
+    refusal e = Response (errorStatus e) (toS (encode e))
+    apiError = \case
+      NotFound -> ApiError.NotFound
+      Forbidden -> ApiError.Forbidden
+      Conflict t -> ApiError.Conflict t
+      Invalid t -> ApiError.Invalid t
+      Unreachable t -> ApiError.Invalid t
+    -- A search's address, read back into its query.
+    searchOf url = do
+      query <- T.stripPrefix "api/v1/search?" url
+      let params = [(k, decodeComponent (T.drop 1 v)) | pair <- T.splitOn "&" query, let (k, v) = T.breakOn "=" pair]
+          param k = snd <$> find ((== k) . fst) params
+      pure (searchQueryOf (param "q") (SpaceId <$> param "space") (isJust (param "only")) (readMaybe . T.unpack =<< param "limit"))
 
 -- | A container holding the page the prerender writes for the route, as the
 -- browser has it before the program has loaded: the application that

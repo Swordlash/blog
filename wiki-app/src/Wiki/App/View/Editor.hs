@@ -129,7 +129,8 @@ where
 import Control.Monad.UUID (MonadUUID)
 import DOM.HTML.Indexed qualified as I
 import Data.Map.Strict qualified as Map
-import Data.Row (type (.==))
+import Data.Row (type (.+), type (.==))
+import Data.Time (UTCTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -143,7 +144,6 @@ import Web.Event.Event (Event, EventType (..))
 import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
-import Wiki.App.Browser (localTime)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
@@ -165,6 +165,7 @@ import Wiki.App.Editor.Browser
   , typedText
   )
 import Wiki.App.Islands (MonadIslands)
+import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
@@ -204,7 +205,9 @@ data Input = Input
 -- before it leaves the editor.
 data Query a = IsDirty (Bool -> a)
 
-type Slots = ("preview" .== H.Slot (Const Void) Void ())
+type Slots =
+  ("preview" .== H.Slot (Const Void) Void ())
+    .+ ("time" .== H.Slot (Const Void) Void Int)
 
 -- | What is being written, and what it started from.
 data Work = Work
@@ -240,10 +243,10 @@ data Mode = Editing | Previewing
 data Found
   = -- | A draft of the page as it is, taken up in place of it: when it was
     -- saved.
-    Restored Text
+    Restored UTCTime
   | -- | A draft of an older version, only offered: the draft, when it was
     -- saved, and when the page was saved since.
-    Offered D.Draft Text Text
+    Offered D.Draft UTCTime UTCTime
 
 -- | What the quiet line beside the buttons says of the draft.
 data DraftNews = NoNews | DraftSaved | DraftFailed Text
@@ -498,6 +501,11 @@ component =
             |]
       | otherwise = Nothing
 
+    -- A moment, which the reader's browser writes in their zone: the
+    -- page this is rendered into ahead of the program does not know it.
+    time :: Int -> UTCTime -> H.ComponentHTML Action Slots m
+    time key at = HH.slot_ "time" key Islands.component (Islands.LocalTime at)
+
     -- What was found of a draft when the page was opened.
     foundView :: State -> Maybe (H.ComponentHTML Action Slots m)
     foundView st =
@@ -505,7 +513,7 @@ component =
         Restored savedAt ->
           [hh|
             <div class="editor-draft-found" role="status">
-              <p>Restored your unsaved draft from {{ savedAt }}.</p>
+              <p>Restored your unsaved draft from {{ time 0 savedAt }}.</p>
               <button type="button" class="editor-draft-discard" onClick={{ const DiscardRestored }}>Discard it and go back to the saved page</button>
             </div>
           |]
@@ -513,7 +521,7 @@ component =
           [hh|
             <div class="editor-draft-found editor-draft-offered" role="status">
               <p>
-                You have an unsaved draft from {{ savedAt }}, written before the page was saved again on {{ pageSaved }}:
+                You have an unsaved draft from {{ time 0 savedAt }}, written before the page was saved again on {{ time 1 pageSaved }}:
                 saving the draft would undo the changes of that save. What you type is kept as a draft once you have opened or discarded this one.
               </p>
               <button type="button" class="editor-draft-open" onClick={{ const TakeUpOffered }}>Open the draft</button>
@@ -1115,7 +1123,7 @@ data Fetched = Fetched Loaded (Maybe Found) Bool
 -- | The page the input names, as it is now, with the author's draft of it
 -- taken up if it is of this version and offered if it is of an older one;
 -- or why it cannot be edited.
-fetchWork :: (MonadWiki n, MonadIO n) => Input -> n Fetched
+fetchWork :: (MonadWiki n) => Input -> n Fetched
 fetchWork input =
   fetchPage input >>= \case
     Left e -> pure (Fetched (Failed e) Nothing False)
@@ -1125,13 +1133,10 @@ fetchWork input =
       -- one) is none: the editor says why it cannot edit, if it cannot.
       getDraft page.id >>= \case
         Right (Just draft)
-          | draft.base == page.updatedAt -> do
-              savedAt <- localTime draft.savedAt
-              pure (Fetched (Ready (takeUp draft work)) (Just (Restored savedAt)) True)
-          | otherwise -> do
-              savedAt <- localTime draft.savedAt
-              pageSaved <- localTime page.updatedAt
-              pure (Fetched (Ready work) (Just (Offered draft savedAt pageSaved)) True)
+          | draft.base == page.updatedAt ->
+              pure (Fetched (Ready (takeUp draft work)) (Just (Restored draft.savedAt)) True)
+          | otherwise ->
+              pure (Fetched (Ready work) (Just (Offered draft draft.savedAt page.updatedAt)) True)
         _ -> pure (Fetched (Ready work) Nothing False)
 
 -- | The page the input names, with where each of its attachments is.

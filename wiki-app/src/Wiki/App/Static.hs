@@ -10,11 +10,16 @@
 -- their initializers. So this asks the shell whether it has loaded what the
 -- route shows, and then waits for the HTML to stop changing.
 --
--- A wiki a server keeps is prerendered once, as the application shows
--- before it has loaded anything ('renderLoading'): the frame, the same at
--- every address, which the server serves for every route until it renders
--- each page itself. Its requests are never answered, so it is taken as
--- soon as it stops changing.
+-- A wiki a server keeps is rendered by the server, for each request, as
+-- the request's principal sees it ('renderServed'): the application over
+-- the backend over HTTP, whose requests the server's API answers in the
+-- same process, so that it reads exactly what the program would and the
+-- page carries what it read ("Wiki.App.Backend.Http.Preload"). The build
+-- prerenders one page for it besides, as the application shows before it
+-- has loaded anything ('renderLoading'): the frame, the same at every
+-- address, which the server sends when it cannot render a page. Its
+-- requests are never answered, so it is taken as soon as it stops
+-- changing.
 --
 -- The program adopts this HTML in the browser
 -- ('Halogen.VDom.Driver.hydrateUI'), so its first render has to be the same
@@ -30,23 +35,38 @@ module Wiki.App.Static
   , startRoute
   , renderLoading
   , startLoading
+  , Served (..)
+  , renderServed
+  , startServed
+
+    -- * Pages
+  , withBase
+  , withTitle
+  , escapeHtml
   )
 where
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
+import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML.Core (ElemName (..))
 import Halogen.IO.Driver (HalogenSocket (..))
 import Halogen.IO.Driver qualified as AD
+import Halogen.Router (Router)
 import Halogen.Router qualified as Router
-import Halogen.VDom.DOM.Monad (MemDOM, runMemDOM)
+import Halogen.VDom.DOM.Monad (MemDOM, MonadBrowserDOM, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
 import Halogen.VDom.Driver (hydrateUI, renderSpec)
 import Protolude
 import Wiki.App (component, input, serverInput)
-import Wiki.App.Backend.Http (HttpWiki, newHttpEnv, runHttpWiki, silentTransport)
+import Wiki.App.Backend (MonadLoad)
+import Wiki.App.Backend.Http (HttpEnv, Transport, cacheOf, newHttpEnv, newImmediateHttpEnv, runHttpWiki, silentTransport)
+import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..), route)
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Page (Page (id, space))
@@ -67,7 +87,7 @@ renderRoute :: MemState -> Text -> Route -> IO Rendered
 renderRoute wiki base at = do
   container <- N.newElement Nothing (ElemName "div")
   (title, dispose) <- startRoute Build wiki base at container
-  html <- (mconcat <$> (traverse N.renderToText =<< N.childNodes container)) `finally` dispose
+  html <- markup container `finally` dispose
   pure Rendered {html, title}
 
 -- | The routes the build writes a page for: the front page, the page of
@@ -102,17 +122,7 @@ startRoute how wiki base at container = do
   ref <- newMemWiki wiki
   let run :: MemWiki MemDOM a -> IO a
       run = runMemDOM . runMemWiki ref
-  router <- run (Router.newRouter base Unknown route)
-  Router.redirect router at
-  document <- N.newDocument
-  HalogenSocket {query = send, dispose} <- run $ case how of
-    Build -> AD.runUI (renderSpec (N.fromNative document) (N.fromNative container)) (component @Void) (input router)
-    Adopt -> hydrateUI (component @Void) (input router) (N.fromNative container)
-  let snapshot = mconcat <$> (traverse N.renderToText =<< N.childNodes container)
-  flip onException (run dispose) $ do
-    title <- settled (run (join <$> send (H.mkRequest Shell.Settled)))
-    void (stable snapshot)
-    pure (title, run dispose)
+  first (fromMaybe "Wiki") <$> startApp True how run input base at container
 
 -- | The application for a wiki a server keeps, under this base path, as it
 -- shows before anything has been loaded: what the server's build serves at
@@ -121,7 +131,7 @@ renderLoading :: Text -> IO Rendered
 renderLoading base = do
   container <- N.newElement Nothing (ElemName "div")
   dispose <- startLoading Build base Home container
-  html <- (mconcat <$> (traverse N.renderToText =<< N.childNodes container)) `finally` dispose
+  html <- markup container `finally` dispose
   pure Rendered {html, title = "Wiki"}
 
 -- | Start the application for a wiki a server keeps at a route in a
@@ -130,18 +140,95 @@ renderLoading base = do
 startLoading :: Start -> Text -> Route -> N.NativeNode -> IO (IO ())
 startLoading how base at container = do
   env <- newHttpEnv silentTransport
-  let run :: HttpWiki MemDOM a -> IO a
-      run = runMemDOM . runHttpWiki env
+  snd <$> startApp False how (runMemDOM . runHttpWiki env) serverInput base at container
+
+-- | A route's page as a server renders it: the application's HTML, the
+-- document's title, and what the application read, which the page
+-- carries for the program ("Wiki.App.Backend.Http.Preload").
+data Served = Served
+  { html :: Text
+  , title :: Text
+  , cache :: Cache
+  }
+
+-- | The application for a wiki a server keeps, at a route, under this
+-- base path, over a transport that answers at once (the server's API in
+-- its own process, as the request's principal): every view loads what it
+-- shows in its initial state, as over the in-memory backend, which is how
+-- the program renders it first from what the page carries. Whatever the
+-- transport answers is rendered, a failure to reach the server included:
+-- whether to send the page is the caller's to decide, by what the
+-- transport answered.
+renderServed :: Transport -> Text -> Route -> IO Served
+renderServed transport base at = do
+  env <- newImmediateHttpEnv transport
+  container <- N.newElement Nothing (ElemName "div")
+  (title, dispose) <- startServed Build env base at container
+  html <- markup container `finally` dispose
+  cache <- cacheOf env
+  pure Served {html, title, cache}
+
+-- | Start the application for a wiki a server keeps at a route in a
+-- container, over this backend, under this base path, and wait until it
+-- has loaded what the route shows (from what the backend has read, or by
+-- asking a transport that answers at once) and its HTML has stopped
+-- changing. The document's title then, and how to dispose of it.
+startServed :: Start -> HttpEnv -> Text -> Route -> N.NativeNode -> IO (Text, IO ())
+startServed how env base at container =
+  first (fromMaybe "Wiki") <$> startApp True how (runMemDOM . runHttpWiki env) serverInput base at container
+
+-- | Start the application in a container, over a backend run as given, with
+-- the shell's input for its router, at a route under a base path; wait,
+-- if asked, until the shell has loaded what the route shows, and then
+-- until its HTML has stopped changing. The document's title, if waited
+-- for, and how to dispose of the application.
+startApp
+  :: forall m
+   . (MonadLoad m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+  => Bool
+  -> Start
+  -> (forall a. m a -> IO a)
+  -> (Router Route -> Shell.Input m)
+  -> Text
+  -> Route
+  -> N.NativeNode
+  -> IO (Maybe Text, IO ())
+startApp waitForShell how run inputFor base at container = do
   router <- run (Router.newRouter base Unknown route)
   Router.redirect router at
   document <- N.newDocument
-  HalogenSocket {dispose} <- run $ case how of
-    Build -> AD.runUI (renderSpec (N.fromNative document) (N.fromNative container)) (component @Void) (serverInput router)
-    Adopt -> hydrateUI (component @Void) (serverInput router) (N.fromNative container)
-  let snapshot = mconcat <$> (traverse N.renderToText =<< N.childNodes container)
+  HalogenSocket {query = send, dispose} <- run $ case how of
+    Build -> AD.runUI (renderSpec (N.fromNative document) (N.fromNative container)) (component @Void) (inputFor router)
+    Adopt -> hydrateUI (component @Void) (inputFor router) (N.fromNative container)
   flip onException (run dispose) $ do
-    void (stable snapshot)
-    pure (run dispose)
+    title <-
+      if waitForShell
+        then Just <$> settled (run (join <$> send (H.mkRequest Shell.Settled)))
+        else pure Nothing
+    void (stable (markup container))
+    pure (title, run dispose)
+
+-- | What a container holds, as HTML.
+markup :: N.NativeNode -> IO Text
+markup container = mconcat <$> (traverse N.renderToText =<< N.childNodes container)
+
+-- | A page with a @\<base href>@ first in its head, before anything it
+-- applies to: the template's, which has none.
+withBase :: Text -> Text -> Text
+withBase base = T.replace "<head>" ("<head>\n    <base href=\"" <> escapeHtml base <> "\">")
+
+-- | A page titled for its route: the template's title, @Wiki@, replaced.
+withTitle :: Text -> Text -> Text
+withTitle title = T.replace "<title>Wiki</title>" ("<title>" <> escapeHtml title <> "</title>")
+
+-- | Text as it is written in HTML, in an element or an attribute's value.
+escapeHtml :: Text -> Text
+escapeHtml = T.concatMap $ \case
+  '&' -> "&amp;"
+  '<' -> "&lt;"
+  '>' -> "&gt;"
+  '"' -> "&quot;"
+  c -> T.singleton c
 
 -- | Ask until the answer is there; ten seconds is far longer than an
 -- in-memory wiki takes, and longer means something is wrong.

@@ -9,9 +9,11 @@ import Halogen.Router qualified as Router
 import Halogen.VDom.Driver (hydrateUI)
 import Web.DOM.ParentNode (QuerySelector (..))
 import Wiki.App (Route (Unknown), component, input, route, serverInput)
-import Wiki.App.Backend.Http (browserTransport, newHttpEnv, runHttpWiki)
+import Wiki.App.Backend.Http (browserTransport, newHttpEnvWith, runHttpWiki)
+import Wiki.App.Backend.Http.Cache (emptyCache)
+import Wiki.App.Backend.Http.Preload (embeddedCache)
 import Wiki.App.Backend.Mem (Opened (..), openMemWiki, runMemWikiWith)
-import Wiki.App.Browser (PageBackend (..), pageBackend)
+import Wiki.App.Browser (PageBackend (..), consoleWarn, pageBackend)
 import Wiki.App.Demo (demoDatabase, demoNow, demoState)
 #endif
 
@@ -32,11 +34,19 @@ attachComponent = do
   router <- Router.newRouter base Unknown route
   pageBackend >>= \case
     DemoBackend -> demo router app
-    -- The page holds the application as it shows before it has loaded
-    -- anything, the same at every address, which it adopts and then
-    -- loads what the route shows from the server.
+    -- The server rendered the route's page with what it read, which the
+    -- page carries: the backend starts with it, so that the application's
+    -- first render is that page, which it adopts, with nothing fetched
+    -- again. A page that carries nothing (the build's own, which the
+    -- server sends when it cannot render one) holds the application as it
+    -- shows before it has loaded anything, which it adopts all the same,
+    -- and then loads what the route shows.
     ServerBackend -> do
-      env <- newHttpEnv browserTransport
+      start <-
+        embeddedCache >>= \case
+          Right cache -> pure cache
+          Left why -> consoleWarn why $> emptyCache
+      env <- newHttpEnvWith browserTransport start
       void $ runHttpWiki env (hydrateUI component (serverInput router) app)
   where
       -- The page arrives with the route already rendered into #app (see

@@ -16,7 +16,8 @@ import Test.Hspec
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
 import Wiki.App.Backend
 import Wiki.App.Backend.Http
-import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage)
+import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSpaceAt, withSpaces)
+import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Http.Request
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
@@ -24,7 +25,7 @@ import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath, pathOf)
-import Wiki.Core.Search (searchQuery)
+import Wiki.Core.Search (SearchHit, searchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 
@@ -70,6 +71,7 @@ spec = describe "Wiki.App.Backend.Http" $ do
   requests
   answers
   caching
+  preload
 
 requests :: Spec
 requests = describe "its requests" $ do
@@ -256,3 +258,65 @@ caching = describe "what it keeps" $ do
     runHttpWiki env (discardDraft hello.id) `shouldReturn` Right ()
     runHttpWiki env (atOnce ((,) <$> getDraft hello.id <*> listPages hello.space)) `shouldReturn` Just (Right Nothing, Right blogPages)
     length <$> readIORef asked `shouldReturn` 3
+
+  it "keeps a refusal the wiki decided, and asks again after one it did not" $ do
+    (env, asked) <- backend $ \r ->
+      if "/team" `T.isSuffixOf` r.url then status 403 "{\"error\":\"Forbidden\"}" else status 503 ""
+    runHttpWiki env (getSpace (slugs "team")) `shouldReturn` Left Forbidden
+    runHttpWiki env (atOnce (getSpace (slugs "team"))) `shouldReturn` Just (Left Forbidden)
+    runHttpWiki env (getSpace (slugs "docs")) `shouldReturn` Left (Unreachable "the server failed, with status 503")
+    runHttpWiki env (atOnce (getSpace (slugs "docs"))) `shouldReturn` Nothing
+    length <$> readIORef asked `shouldReturn` 2
+
+  it "keeps a search's hits by its query, until a write" $ do
+    (env, asked) <- backend (\r -> if r.method == "GET" then ok ([] :: [SearchHit]) else status 204 "")
+    runHttpWiki env (searchPages (searchQuery "tour")) `shouldReturn` []
+    runHttpWiki env (atOnce (searchPages (searchQuery "tour"))) `shouldReturn` Just []
+    runHttpWiki env (atOnce (searchPages (searchQuery "other"))) `shouldReturn` Nothing
+    _ <- runHttpWiki env (deletePage (PageId "x"))
+    runHttpWiki env (atOnce (searchPages (searchQuery "tour"))) `shouldReturn` Nothing
+    length <$> readIORef asked `shouldReturn` 2
+
+  it "starts from what it is given, and asks nothing for it" $ do
+    (env, asked) <- backend (const (Left "not asked"))
+    let spaces = Map.elems demo.spaces
+    seeded <- newHttpEnvWith (Transport (\_ -> panic "asked")) . withSpaces spaces =<< cacheOf env
+    runHttpWiki seeded (atOnce listSpaces) `shouldReturn` Just spaces
+    readIORef asked `shouldReturn` []
+
+  it "asks a transport that answers at once from within atOnce" $ do
+    (transport, asked) <- scripted answering
+    env <- newImmediateHttpEnv transport
+    runHttpWiki env (atOnce (listPages hello.space)) `shouldReturn` Just (Right blogPages)
+    runHttpWiki env (atOnce (getPage hello.space (slugs "hello-world"))) `shouldReturn` Just (Right hello)
+    length <$> readIORef asked `shouldReturn` 1
+
+preload :: Spec
+preload = describe "what a page it is rendered into carries" $ do
+  let hello = demoPage "blog" "hello-world"
+      blogPages = [p | p <- Map.elems demo.pages, p.space == hello.space]
+      draft = Draft {page = hello.id, author = UserId "admin", title = "t", body = "b <script>", base = hello.updatedAt, savedAt = hello.updatedAt}
+      cache =
+        withSpaces (Map.elems demo.spaces)
+          . withSpaceAt (slugs "blog") (Right (fromMaybe (panic "blog") (Map.lookup hello.space demo.spaces)))
+          . withSpaceAt (slugs "team") (Left Forbidden)
+          . withPages hello.space (Right blogPages)
+          . withPages (SpaceId "gone") (Left NotFound)
+          . withPageAt hello.space (slugs "nowhere") (Left NotFound)
+          . withDraft hello.id (Just (Right (Just draft)))
+          . withDraft (PageId "other") (Just (Right Nothing))
+          . withSearch (searchQuery "hello") []
+          $ emptyCache
+  it "reads back as the cache it was written from" $
+    decodePreload (encodePreload cache) `shouldBe` Right cache
+
+  it "carries a page in its space's list only once, and finds it there" $ do
+    let withPage = withPageAt hello.space (slugs "hello-world") (Right hello) cache
+    decodePreload (encodePreload withPage) `shouldBe` Right cache
+    (cachedPage hello.space (slugs "hello-world") <$> decodePreload (encodePreload withPage)) `shouldBe` Right (Just (Right hello))
+
+  it "writes a refusal as the API's error" $
+    encodePreload cache `shouldSatisfy` T.isInfixOf "{\"error\":{\"error\":\"Forbidden\"},\"path\":[\"team\"]}"
+
+  it "says why a payload cannot be read" $
+    decodePreload "{\"spaces\": 3}" `shouldSatisfy` isLeft

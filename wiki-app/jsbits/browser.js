@@ -82,3 +82,8 @@ function wiki_local_time(ms) {
 function wiki_page_backend() {
   return document.querySelector('meta[name="wiki-backend"]')?.content ?? "";
 }
+
+// A word on the console about something the program went on without.
+function wiki_console_warn(message) {
+  console.warn(message);
+}
