@@ -132,6 +132,39 @@ confirms it against reality and the plan is amended if it does not hold.
     the whole editing view with the rendered draft and a "Back to editing" button, a
     change of the editor's state, not a route (the draft is not in the URL). A "Side by
     side preview" checkbox, off by default, brings back the two panes on a wide screen.
+15. **The server is hosted first on the owner's machine, as the demo is** (2026-10-24):
+    `wiki-server` runs as a systemd user service bound to the Tailscale address, through
+    `toolchain/deploy-local.sh --server`, with its data (the SQLite file and the attachments)
+    in a directory of its own under the deployment. Migrations run when the server starts;
+    before a deploy starts the new server, the database is copied aside with SQLite's own
+    backup (`VACUUM INTO` or the online backup API, never `cp` of a live file) into
+    `data/backups/<timestamp>.sqlite`, and the last few backups are kept. A `Dockerfile`
+    and `docker-compose.yml` for a VPS are a package of their own (WP2.9), after the local
+    variant works.
+16. **The server searches with the pure matcher, not FTS5.** After WP1.23 `searchPlain`
+    answers a query over 1000 pages in a few milliseconds, so the server stores each page's
+    prepared text (`bodyText`'s output, or the fold) in a column kept in step by the save
+    and runs the same `searchPlain` over the candidates the user may view. Both backends
+    give identical hits, snippets and ranking, and the contract tests hold. FTS5 (different
+    tokens, prefixes and diacritics) only if a wiki ever has tens of thousands of pages.
+17. **Defaults confirmed** (the owner left them to the planning session): the admin listener
+    is a loopback TCP port, `127.0.0.1:8081`; attachments are at most 50 MB each, on local
+    disk under their content hash.
+18. **Loading over HTTP.** A view that over `MemWiki` loads what it shows in `initialState`
+    (so that the first render is the prerendered page) must not do so over `HttpWiki`,
+    where that would hold the tree's loop on a fetch at every navigation. So: the first mount
+    reads the data the server embedded in the page (`readEmbedded`, WP2.6), a client cache
+    answers at once for data already seen, and otherwise a view renders `Loading` and
+    fetches in `Initialize` (a fiber, as the plan's model requires). `MemWiki` keeps
+    answering at once, so the demo's prerender and its zero-repair hydration are unchanged.
+    (Resolves WP1.10's open decision.)
+19. **Until Phase 3 brings sessions, the public listener has one trusted mode.**
+    `wiki-server --trust-network` treats every request on the public listener as the
+    administrator, for a private network such as the owner's Tailscale; it logs a loud
+    warning at start and is refused with the listen address `0.0.0.0` or `::`. Without the
+    flag the public listener serves an anonymous reader (public spaces only) and the admin
+    listener the administrator, as decision 11 says. Phase 3 replaces the flag with
+    accounts and sessions.
 
 ## Repository layout
 
@@ -616,14 +649,29 @@ Goal: the same app, with pages that survive a reload, served by one binary.
 - **WP2.2 Storage.** SQLite schema (spaces, pages, page versions, attachments, users,
   groups, grants), migrations run at start, a storage interface with the same contract
   tests as `MemWiki` (WP1.4) run against a temporary database. Attachments on disk under
-  a content hash.
+  a content hash. Amended 2026-10-24: the schema covers everything `MonadWiki` has gained
+  since (drafts, positions and the two orders per space, `mathMacros`, `createdAt` on
+  spaces) and a column of prepared search text per page (decision 16); migrations are
+  numbered SQL files applied in order inside a transaction at start, with a
+  `schema_version` table, and a backup step the deploy script calls (decision 15); the
+  contract tests move where both `Mem` and the SQLite storage can run them (a test
+  library, or a module of `wiki-core`), so one suite proves both. The principal of a call
+  is a parameter (anonymous, a user, or the administrator), as Phase 3 will need.
 - **WP2.3 Server.** The servant handlers, static serving of the wasm bundle with the
   prerendered shell, configuration (public and admin listen addresses, data dir, base
   path), structured logging, a `Dockerfile`, a `docker-compose.yml` for a one-command
   run that publishes the public port only. The admin listener (decision 11) exists
   from here: bound to loopback (the server refuses any other address unless
   `--admin-listen-unsafe` says so), serving status (version, data dir, counts) and the
-  same wasm bundle under `/admin/`; the panel's content comes with Phase 3.
+  same wasm bundle under `/admin/`; the panel's content comes with Phase 3. Amended
+  2026-10-24 (decisions 15, 19): the first deployment target is the owner's machine, so
+  this package extends `toolchain/deploy-local.sh` with `--server`: it builds
+  `wiki-server` natively at `-O2` and the wasm application in its `HttpWiki` mode, installs
+  the binary, the bundle and a `data/` directory under the deployment, backs the database
+  up before starting the new server, writes the unit with `--data`, `--listen
+  <tailscale address>:<port>`, `--admin-listen 127.0.0.1:8081` and, when asked,
+  `--trust-network`; `undeploy-local.sh` keeps `data/` unless told `--purge-data`. The
+  `Dockerfile` and `docker-compose.yml` move to WP2.9.
 - **WP2.4 HTTP backend in the app.** `HttpWiki`: `MonadWiki` over `fetch` (JSFFI), with
   errors surfaced in the UI (not found, conflict, offline). The app picks `MemWiki` or
   `HttpWiki` at start from a flag in `index.html`, so Pages keeps serving the demo.
@@ -644,7 +692,39 @@ Goal: the same app, with pages that survive a reload, served by one binary.
   SQLite FTS5 over title and body (a contentless or external-content table kept in step by
   triggers on page saves), with the same space filter and snippets from FTS5's `snippet()`,
   ranked by `bm25`. Hidden from users who may not view a space. The contract tests of WP1.4
-  gain search cases that both backends pass.
+  gain search cases that both backends pass. Amended 2026-10-24 by decision 16: no FTS5;
+  `/api/v1/search` runs `searchPlain` over the prepared text stored per page (WP2.2), for
+  the pages the principal may view, so the hits are the same as the demo's. Most of it is
+  done by WP2.2 and WP2.3; this package is the endpoint, `HttpWiki.searchPages` and the
+  shared search cases.
+- **WP2.8 Bringing the demo's pages into the server.** At the owner's request
+  (2026-10-24): what was written in the serverless demo must move to the server. On the
+  administration page's "Wiki data" section, over `HttpWiki`, "Export the wiki" downloads
+  the server's content as the same zip (`Wiki.Core.Export`), and "Import" takes a source:
+  a zip export, or this browser's demo data (the IndexedDB database the demo left in this
+  origin, read through the `Mem` backend's store and turned into an archive; offered only
+  when such a database exists here, which it does when the server took the demo's address
+  and port, since IndexedDB is per origin; otherwise the demo's own export is the way).
+  Then a dialog "What to migrate" lists the source's spaces as a tree with their pages,
+  each with a checkbox, all checked; against the server's content it marks what is new,
+  what exists in both, and the conflicts. A space present on both sides (same path) is
+  merged: its pages are added, its settings (public, math macros, orders) stay the
+  server's unless the server's is empty. A page present on both sides (same path) is a
+  conflict: a row with "keep the server's" or "take the imported" (the owner asked for
+  this simple choice for now), "keep the server's" by default. Attachments follow their
+  pages by content hash; positions follow the source's order after the server's. The
+  server applies the import in one transaction through a two-step API (`/api/v1/import`:
+  preview, which returns the plan with the conflicts, then apply with the choices) and
+  answers with a summary, shown afterwards. The demo keeps its replace-everything import.
+  Tests: native, the merge on archives (new space, merged space, page conflict either
+  way, attachments by hash, orders) and the API round trip; browser, the dialog over a
+  fake server; the smoke test imports the demo's export into a fresh server.
+- **WP2.9 Docker.** A `Dockerfile` (multi-stage: the native build of `wiki-server` and the
+  wasm build of the application, then a small runtime image with the binary, the bundle
+  and a volume for `data/`) and a `docker-compose.yml` that publishes the public port only
+  and keeps the admin listener on the container's loopback (reached with
+  `docker compose exec`); the same `--trust-network` flag applies. After WP2.3 works on
+  the owner's machine.
 
 ### Phase 3: authentication and authorisation
 
@@ -724,8 +804,8 @@ in the same PR.
 
 These do not block Phase 0 or 1; defaults are stated so work can proceed.
 
-- Hosting of the server (Phase 2): a VPS with Docker is assumed. A base path other than
-  `/` is supported either way.
+- Hosting of the server (Phase 2): answered 2026-10-24, decision 15: the owner's machine
+  first, as the demo; Docker as WP2.9. A base path other than `/` is supported either way.
 - Blog view: is the public face a plain Confluence-style space, or a dated post list
   (Phase 4 item)? Assumed: both, with the post list later.
 - Attachment size limit and storage budget: assumed 50 MB per file, local disk.
@@ -1365,3 +1445,13 @@ Amended by the planning session after each work package's report.
 - **haskell-halogen pinned to `f41907a`** ([#45](https://github.com/Swordlash/blog/pull/45),
   `1b239db`): haskell-halogen#59, a patched element's `ref` kept in step with its prop. The
   blog and haskell-halogen's `master` are level again; no pull request is open.
+- **Phase 2 starts** (2026-10-24). The owner's word: the server is hosted on their
+  machine through the deploy script, with migrations and a database backup; a Dockerfile
+  separately; the administrator keeps export and import, and can bring the demo's pages
+  (from this browser's IndexedDB or from a zip) into the server through a "what to
+  migrate" dialog, merging spaces and choosing old or new per conflicting page. The rest
+  was left to the planning session: decisions 15 to 19 (local hosting and backups, the
+  pure matcher instead of FTS5, the loopback admin port and the 50 MB attachment limit,
+  loading over HTTP, the `--trust-network` mode until Phase 3). WP2.8 (the migration) and
+  WP2.9 (Docker) added; WP2.2, WP2.3 and WP2.7 amended. Order: WP2.1 and WP2.2 in
+  parallel, then WP2.3, WP2.4, then WP2.8 and WP2.6, WP2.7, WP2.9, WP2.5.
