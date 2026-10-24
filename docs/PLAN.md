@@ -1455,3 +1455,20 @@ Amended by the planning session after each work package's report.
   loading over HTTP, the `--trust-network` mode until Phase 3). WP2.8 (the migration) and
   WP2.9 (Docker) added; WP2.2, WP2.3 and WP2.7 amended. Order: WP2.1 and WP2.2 in
   parallel, then WP2.3, WP2.4, then WP2.8 and WP2.6, WP2.7, WP2.9, WP2.5.
+- **WP2.2 done and merged** ([#46](https://github.com/Swordlash/blog/pull/46), `fc8fe01`).
+  `SqliteWiki` in `wiki-server/src/Wiki/Server/Storage*.hs`: one operation, one
+  transaction on one WAL connection, the same `wiki-core` rules as `Mem` in the same error
+  order; the principal per run, `Who = Anonymous | AsUser UserId | Administrator`.
+  Schema `migrations/0001-initial.sql` (users, groups, grants, spaces with orders and
+  positions, pages with `search_text`, `page_versions` a row per save, attachments by
+  sha256 on disk, drafts, `schema_version`), embedded and applied in one transaction at
+  open, a newer schema refused. `wiki-server backup --data DIR [--keep N]` by `VACUUM
+  INTO`; attachment files are collected only when neither the database nor a kept backup
+  names them. The contract is a native sublibrary `wiki-app:contract` with an `around`
+  fixture, run by `Mem`, `Persist` and SQLite (120 server tests). Choices: the
+  administrator has no `users` row and writes drafts and versions as `~administrator`
+  (refusing would show the editor's autosave error under `--trust-network`); search text
+  is `bodyText` written in the save's transaction and folded per query; times as ISO 8601
+  text with the full fraction; `importArchive` fills an empty storage only (the merge is
+  WP2.8). For WP2.3: `withStorage`, `runSqliteWiki storage who`, `attachmentFile`,
+  `Config.attachmentAddress`; the deploy runs `backup` before the new binary starts.
