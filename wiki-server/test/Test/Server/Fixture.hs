@@ -6,8 +6,10 @@ module Test.Server.Fixture
     Running (..)
   , withRunning
   , withRunningAs
+  , withDemoRunning
   , trusted
   , site
+  , template
 
     -- * Requests
   , Reply (..)
@@ -30,6 +32,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.CaseInsensitive qualified as CI
 import Data.IORef (IORef, modifyIORef', newIORef)
 import Data.List (lookup)
+import Data.Text qualified as T
 import Network.HTTP.Client (Manager, RequestBody (..), decompress, defaultManagerSettings, httpLbs, managerResponseTimeout, method, newManager, parseRequest, path, redirectCount, requestBody, requestHeaders, responseBody, responseHeaders, responseStatus, responseTimeoutMicro)
 import Network.HTTP.Types (Header, Method, hContentType, methodGet, statusCode)
 import Network.Socket (SockAddr (..))
@@ -38,9 +41,11 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.HUnit (assertFailure)
+import Test.Storage.Fixture (demoArchive)
 import Wiki.Server (Server (..), withServer)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions)
+import Wiki.Server.Storage (defaultConfig, importArchive, withStorage)
 
 -- | A server being driven by a test.
 data Running = Running
@@ -71,6 +76,34 @@ site =
   , ("style.css", "body {}")
   ]
 
+-- | The template a server's build has for the pages the server renders
+-- (@wiki-app-prerender --server@ writes it from @web\/index.html@): the
+-- page with its mount point empty, saying the program is the server's.
+template :: ByteString
+template =
+  encodeUtf8 . T.unlines $
+    [ "<!doctype html>"
+    , "<html lang=\"en\">"
+    , "  <head>"
+    , "    <base href=\"/\">"
+    , "    <meta charset=\"utf-8\">"
+    , "    <meta name=\"wiki-backend\" content=\"server\">"
+    , "    <title>Wiki</title>"
+    , "  </head>"
+    , "  <body>"
+    , "    <div id=\"app\"></div>"
+    , "    <script type=\"module\" src=\"./index.js\"></script>"
+    , "  </body>"
+    , "</html>"
+    ]
+
+-- | A server whose build is the server's (its files, and 'template'), over
+-- the demo's wiki, with its options changed as given.
+withDemoRunning :: (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
+withDemoRunning change = withRunningPrepared change $ \dataDir staticDir -> do
+  BS.writeFile (staticDir </> "template.html") template
+  withStorage defaultConfig dataDir (\st -> importArchive st demoArchive) >>= either (\e -> assertFailure ("the demo does not import: " <> toS e)) pure
+
 -- | A server with the default options but for its addresses (free ports
 -- of 127.0.0.1) and directories, run while the test runs.
 withRunning :: (Running -> IO a) -> IO a
@@ -78,13 +111,19 @@ withRunning = withRunningAs identity
 
 -- | A server with its options changed as given.
 withRunningAs :: (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
-withRunningAs change test =
+withRunningAs change = withRunningPrepared change (\_ _ -> pass)
+
+-- | A server with its options changed as given, and its data and static
+-- directories prepared as given before it starts.
+withRunningPrepared :: (ServeOptions -> ServeOptions) -> (FilePath -> FilePath -> IO ()) -> (Running -> IO a) -> IO a
+withRunningPrepared change prepare test =
   withSystemTempDirectory "wiki-server-http" $ \dir -> do
     let dataDir = dir </> "data"
         staticDir = dir </> "app"
     for_ site $ \(path, bytes) -> do
       createDirectoryIfMissing True (takeDirectory (staticDir </> path))
       BS.writeFile (staticDir </> path) bytes
+    prepare dataDir staticDir
     logged <- newIORef []
     manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 60000000}
     let options =

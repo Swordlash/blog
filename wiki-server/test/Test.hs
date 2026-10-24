@@ -6,6 +6,7 @@ import Test.Server.Api qualified as Api
 import Test.Server.Http qualified as Http
 import Test.Server.Import qualified as Import
 import Test.Server.Options qualified as Options
+import Test.Server.Render qualified as Render
 import Test.Server.Static qualified as Static
 import Test.Storage qualified as Storage
 import Test.Storage.Backup qualified as Backup
@@ -22,4 +23,5 @@ main = hspec $ do
   Options.spec
   Api.spec
   Static.spec
+  Render.spec
   Import.spec

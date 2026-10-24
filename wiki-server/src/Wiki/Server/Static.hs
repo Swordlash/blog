@@ -22,8 +22,18 @@
 -- * nothing outside the directory is ever served, a symbolic link that
 --   leads out of it included.
 --
--- One thing it does that the static server did not: every page is served
--- with the @\<base href>@ of the place it is served at. The application
+-- What it does that the static server did not: every page is served with
+-- the @\<base href>@ of the place it is served at, and a build for the
+-- server (one with a @template.html@, which @wiki-app-prerender --server@
+-- writes) has its pages rendered per request instead ('PageRenderer',
+-- "Wiki.Server.Render"): every address a page would be served at (a
+-- directory's, or one with no file) gets the application rendered at the
+-- route it names, as the request's principal sees it, and the address of
+-- a file still gets the file. When that render fails, the page is the one
+-- the address would have had without it, the build's own.
+--
+-- The @\<base href>@: every page is served with that of the place it is
+-- served at. The application
 -- resolves its scripts and its API against that base, so the same build
 -- serves under the public listener's base path and under the admin
 -- listener's @\/admin\/@; a page whose @\<base href>@ is already right goes
@@ -32,6 +42,7 @@
 module Wiki.Server.Static
   ( StaticSite
   , openStaticSite
+  , PageRenderer
   , serveStatic
   , withBaseHref
   , mediaType
@@ -64,11 +75,17 @@ openStaticSite dir =
     (Right . StaticSite <$> canonicalizePath dir)
     (pure (Left ("--static " <> toS dir <> " is not a directory")))
 
+-- | How a page is rendered for a request, into the build's template: the
+-- page and its status, or why there is none to send.
+type PageRenderer = Text -> Request -> IO (Either Text (Status, Text))
+
 -- | Answer a request for a file, by its path below the place the site is
 -- served at (the request's 'pathInfo' with that place's segments taken
--- off), whose own address is given as the @\<base href>@ its pages get.
-serveStatic :: StaticSite -> Text -> [Text] -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
-serveStatic site base segments request respond
+-- off), whose own address is given as the @\<base href>@ its pages get;
+-- or for a page, rendered if the build has a template and a renderer is
+-- given.
+serveStatic :: StaticSite -> Text -> Maybe PageRenderer -> [Text] -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+serveStatic site base renderer segments request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
       respond (plain status405 "Method not allowed" [(hAllow, "GET, HEAD")])
   | not (wellEscaped (rawPathInfo request)) || any (T.any (\c -> c == '\0' || c == '/' || c == '\\')) segments =
@@ -81,15 +98,43 @@ serveStatic site base segments request respond
             | otherwise = site.root </> joinPath (map toS segments)
       isDirectory <- doesDirectoryExist file
       found <- regularFile site file
+      let built
+            | found = send site base request status200 file >>= respond
+            | otherwise =
+                regularFile site (site.root </> "404.html") >>= \case
+                  True -> send site base request status404 (site.root </> "404.html") >>= respond
+                  False -> respond (plain status404 "Not found" [])
       if
         | isDirectory && not directoryAddress ->
             -- Inside the root or not, the redirect only adds a slash.
             respond (responseLBS status301 [(hLocation, rawPathInfo request <> "/" <> rawQueryString request)] "")
-        | found -> send site base request status200 file >>= respond
-        | otherwise ->
-            regularFile site (site.root </> "404.html") >>= \case
-              True -> send site base request status404 (site.root </> "404.html") >>= respond
-              False -> respond (plain status404 "Not found" [])
+        | found && not directoryAddress -> built
+        | Just render <- renderer ->
+            readTemplate site >>= \case
+              Nothing -> built
+              Just template ->
+                render template request >>= \case
+                  Right (status, page) -> respond (rendered status page)
+                  Left _ -> built
+        | otherwise -> built
+
+-- | The build's template for the pages the server renders, if it has one.
+readTemplate :: StaticSite -> IO (Maybe Text)
+readTemplate site = do
+  let file = site.root </> "template.html"
+  ifM (regularFile site file) (Just . decodeUtf8 <$> BS.readFile file) (pure Nothing)
+
+-- | A page rendered for this request: for no one else, so revalidated
+-- every time and never by a tag, and never compressed beforehand.
+rendered :: Status -> Text -> Response
+rendered status page =
+  responseLBS
+    status
+    [ (hContentType, "text/html; charset=utf-8")
+    , (hCacheControl, "no-cache")
+    , ("X-Content-Type-Options", "nosniff")
+    ]
+    (BSL.fromStrict (encodeUtf8 page))
 
 -- | Whether every @%@ of a raw path starts an escape, two hex digits: one
 -- that does not is no address at all, rather than an address of no file.

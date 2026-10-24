@@ -90,10 +90,14 @@ adminListener = describe "on the admin listener" $ do
     wasm <- getUrlWith r (r.admin <> "/admin/app.wasm") [("Accept-Encoding", "br")]
     (wasm.status, header "Content-Encoding" wasm) `shouldBe` (200, Just "br")
 
-  it "takes a page's prerendered links, written for the public base, to the same place below /admin/" $ withRunning $ \r -> do
-    for_ [("/s/blog/", "/admin/s/blog/"), ("/", "/admin/"), ("/app.wasm?v=2", "/admin/app.wasm?v=2"), ("/admin", "/admin/")] $ \(asked, target) -> do
+  it "redirects its root and its place without the slash there, and nothing else" $ withRunning $ \r -> do
+    for_ [("/", "/admin/"), ("/admin", "/admin/")] $ \(asked, target) -> do
       redirect <- getUrl r (r.admin <> asked)
       (redirect.status, header "Location" redirect) `shouldBe` (302, Just target)
+    -- Its pages' links are written below /admin/ (Test.Server.Render), so
+    -- an address below the public base path is none of its own.
+    for_ ["/s/blog/", "/app.wasm?v=2"] $ \asked ->
+      (.status) <$> getUrl r (r.admin <> asked) `shouldReturn` 404
     (.status) <$> send r methodPost (r.admin <> "/s/blog/") [] "" `shouldReturn` 404
 
 basePath :: Spec
@@ -107,8 +111,7 @@ basePath = describe "under a base path" $ do
         redirect <- getUrl r (r.public <> asked)
         (redirect.status, header "Location" redirect) `shouldBe` (302, Just target)
       (.status) <$> getUrl r (r.public <> "/api/v1/info") `shouldReturn` 404
-      admin <- getUrl r (r.admin <> "/wiki/s/blog/")
-      (admin.status, header "Location" admin) `shouldBe` (302, Just "/admin/s/blog/")
+      (.status) <$> getUrl r (r.admin <> "/wiki/s/blog/") `shouldReturn` 404
 
 baseHref :: Spec
 baseHref = describe "a page's <base href>" $ do

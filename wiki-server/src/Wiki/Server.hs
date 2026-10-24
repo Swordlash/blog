@@ -91,14 +91,12 @@ withServer logger raw action = do
           Listener
             { name = "public"
             , mount = options.basePath
-            , redirectFrom = Nothing
             , who = if options.trustNetwork then Administrator else Anonymous
             }
         admin =
           Listener
             { name = "admin"
             , mount = "/admin/"
-            , redirectFrom = Just options.basePath
             , who = Administrator
             }
         listeners = (options.listen, public) : [(a, admin) | Just a <- [options.adminListen]]

@@ -67,6 +67,7 @@ library
         Wiki.Server.Import
         Wiki.Server.Log
         Wiki.Server.Options
+        Wiki.Server.Render
         Wiki.Server.Static
         Wiki.Server.Version
         Wiki.Server.Storage
@@ -84,6 +85,7 @@ library
         async,
         base,
         bytestring,
+        case-insensitive,
         containers,
         cryptohash-sha256,
         direct-sqlite,
@@ -91,6 +93,7 @@ library
         file-embed,
         filepath,
         haskell-halogen-core,
+        haskell-halogen-router,
         http-types,
         network,
         optparse-applicative,
@@ -150,6 +153,7 @@ test-suite wiki-server-test
         Test.Server.Http
         Test.Server.Import
         Test.Server.Options
+        Test.Server.Render
         Test.Server.Static
         Test.Storage
         Test.Storage.Backup
@@ -175,8 +179,6 @@ test-suite wiki-server-test
         temporary,
         text,
         time,
-        wai,
-        wai-extra,
         wiki-api,
         wiki-app,
         wiki-app:contract,
