@@ -1561,3 +1561,32 @@ Amended by the planning session after each work package's report.
   browser's demo data with nothing twice. The owner's steps are in the README ("Bringing
   the demo's pages into the server"). One intermediate commit (`34c8578`) does not build its
   test suite alone; the head does.
+- **WP2.6 done and merged** ([#52](https://github.com/Swordlash/blog/pull/52), `c6a6133`).
+  `Wiki.Server.Render`: with a `template.html` in the static directory (written by
+  `wiki-app-prerender --server`), every page address is rendered per request by the
+  application itself, over `HttpWiki MemDOM` against the API in process as the listener's
+  principal (`newImmediateHttpEnv`: `atOnce` asks the transport), so the payload is the
+  cache after the render and the client's `atOnce` answers every read the server made;
+  one pass, polling `Settled` every 1 ms (about 3 ms for a simple page, 24–27 ms for a
+  Markdown-heavy one, at -O1). Status 200, 404 for an unknown route or a missing space or
+  page, 403 for a private space; a render that throws, exceeds 10 s or sees a 5xx logs
+  `event=render` and falls back to the old page, never a 500. `Preload` (`wiki-preload`
+  script, API JSON: session, space tree, current space and its pages, the page, the draft,
+  search hits; 1.2–11.4 KB, the latter because `listPages` carries page bodies: a lighter
+  list type is a candidate) seeds the backend in `Main.hs` (`newHttpEnvWith`); the cache
+  now keeps wiki refusals (`NotFound`, `Forbidden`, never `Unreachable`) and searches by
+  query, both needed for zero repairs. Times are islands (`renderTime`, `<time
+  class="wiki-time">`; the server's UTC vs the reader's zone was a repair). The admin
+  listener's 302 is gone; the importer renders its zip source from the first render.
+  `Test.Hydrate` adopts every route as anonymous and administrator over a transport that
+  must not be asked (436 app tests), 15 render cases on the server, the smoke test checks
+  11 addresses served with content before `app.wasm`, zero repairs, no API request, and a
+  page readable with JavaScript off. `app.wasm` 7637 KiB (1790 brotli). Known repairs: a
+  side-by-side preview from localStorage mounts after adoption; a Markdown body starting
+  with a newline in the editor's textarea (untested). For Phase 3: signing in or out must
+  clear the client cache, refusals included; `renderPage` takes the request's principal.
+- **WP2.7 is done by WP2.3, WP2.4 and WP2.6**: the server answers `api/v1/search` with
+  `searchPlain` over the stored text (decision 16), `HttpWiki.searchPages` calls it, the
+  contract's `searchPages` cases run over `HttpWiki` against the server's application, and
+  search pages are server-rendered with their hits in the payload. Nothing remains.
+  Remaining in Phase 2: WP2.9 (Docker) and WP2.5 (page history).
