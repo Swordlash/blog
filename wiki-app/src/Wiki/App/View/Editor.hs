@@ -391,7 +391,12 @@ component =
 
     -- The form holds both views, the Markdown's and the preview's, and
     -- the style sheet shows one of them (or both side by side) by the
-    -- form's classes, so that what is hidden stays mounted.
+    -- form's classes, so that what is hidden stays mounted. What comes and
+    -- goes above them (a draft found, Cancel's question, an error) is in a
+    -- holder of its own that is always there: an element that came or went
+    -- among the form's children would move the ones after it, and Halogen,
+    -- which matches unkeyed children by their place, would make the
+    -- textarea anew, with the text the page was loaded with.
     editing :: State -> Work -> H.ComponentHTML Action Slots m
     editing st work =
       [hh|
@@ -414,9 +419,11 @@ component =
               <span class="editor-draft-status">{{ draftStatus st.draftNews }}</span>
             </div>
           </div>
-          {{ foundView st }}
-          {{ cancelQuestion st }}
-          {{ problemView st }}
+          <div class="editor-notices">
+            {{ foundView st }}
+            {{ cancelQuestion st }}
+            {{ problemView st }}
+          </div>
           {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide} }}
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
