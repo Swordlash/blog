@@ -122,7 +122,7 @@ startRoute how wiki base at container = do
   ref <- newMemWiki wiki
   let run :: MemWiki MemDOM a -> IO a
       run = runMemDOM . runMemWiki ref
-  first (fromMaybe "Wiki") <$> startApp True how run input base at container
+  first (fromMaybe "Wiki") <$> startApp True slowly how run input base at container
 
 -- | The application for a wiki a server keeps, under this base path, as it
 -- shows before anything has been loaded: what the server's build serves at
@@ -140,7 +140,7 @@ renderLoading base = do
 startLoading :: Start -> Text -> Route -> N.NativeNode -> IO (IO ())
 startLoading how base at container = do
   env <- newHttpEnv silentTransport
-  snd <$> startApp False how (runMemDOM . runHttpWiki env) serverInput base at container
+  snd <$> startApp False slowly how (runMemDOM . runHttpWiki env) serverInput base at container
 
 -- | A route's page as a server renders it: the application's HTML, the
 -- document's title, and what the application read, which the page
@@ -175,17 +175,19 @@ renderServed transport base at = do
 -- changing. The document's title then, and how to dispose of it.
 startServed :: Start -> HttpEnv -> Text -> Route -> N.NativeNode -> IO (Text, IO ())
 startServed how env base at container =
-  first (fromMaybe "Wiki") <$> startApp True how (runMemDOM . runHttpWiki env) serverInput base at container
+  first (fromMaybe "Wiki") <$> startApp True briskly how (runMemDOM . runHttpWiki env) serverInput base at container
 
 -- | Start the application in a container, over a backend run as given, with
 -- the shell's input for its router, at a route under a base path; wait,
 -- if asked, until the shell has loaded what the route shows, and then
--- until its HTML has stopped changing. The document's title, if waited
--- for, and how to dispose of the application.
+-- until its HTML has stopped changing, looking again every so many
+-- microseconds. The document's title, if waited for, and how to dispose of
+-- the application.
 startApp
   :: forall m
    . (MonadLoad m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => Bool
+  -> Int
   -> Start
   -> (forall a. m a -> IO a)
   -> (Router Route -> Shell.Input m)
@@ -193,7 +195,7 @@ startApp
   -> Route
   -> N.NativeNode
   -> IO (Maybe Text, IO ())
-startApp waitForShell how run inputFor base at container = do
+startApp waitForShell pace how run inputFor base at container = do
   router <- run (Router.newRouter base Unknown route)
   Router.redirect router at
   document <- N.newDocument
@@ -203,9 +205,9 @@ startApp waitForShell how run inputFor base at container = do
   flip onException (run dispose) $ do
     title <-
       if waitForShell
-        then Just <$> settled (run (join <$> send (H.mkRequest Shell.Settled)))
+        then Just <$> settled pace (run (join <$> send (H.mkRequest Shell.Settled)))
         else pure Nothing
-    void (stable (markup container))
+    void (stable pace (markup container))
     pure (title, run dispose)
 
 -- | What a container holds, as HTML.
@@ -230,21 +232,32 @@ escapeHtml = T.concatMap $ \case
   '"' -> "&quot;"
   c -> T.singleton c
 
--- | Ask until the answer is there; ten seconds is far longer than an
--- in-memory wiki takes, and longer means something is wrong.
-settled :: IO (Maybe Text) -> IO Text
-settled asking = go (2000 :: Int)
+-- | How often the prerender looks, in microseconds: it writes its pages
+-- once, so it can afford to look slowly.
+slowly :: Int
+slowly = 10_000
+
+-- | How often a server's render looks: a reader is waiting for the page,
+-- and over a transport that answers at once everything is there by the
+-- first look, so this is about the time the render waits in vain.
+briskly :: Int
+briskly = 1_000
+
+-- | Ask until the answer is there, every so many microseconds; ten seconds
+-- is far longer than a render takes, and longer means something is wrong.
+settled :: Int -> IO (Maybe Text) -> IO Text
+settled pace asking = go (10_000_000 `div` pace)
   where
     go 0 = panic "Wiki.App.Static: the shell did not finish loading"
-    go n = asking >>= maybe (threadDelay 5000 >> go (n - 1)) pure
+    go n = asking >>= maybe (threadDelay pace >> go (n - 1)) pure
 
--- | The HTML once two looks at it, a few milliseconds apart, find it the
+-- | The HTML once two looks at it, so many microseconds apart, find it the
 -- same.
-stable :: IO Text -> IO Text
-stable snapshot = snapshot >>= go (200 :: Int)
+stable :: Int -> IO Text -> IO Text
+stable pace snapshot = snapshot >>= go (2_000_000 `div` pace)
   where
     go 0 html = pure html
     go n html = do
-      threadDelay 10000
+      threadDelay pace
       again <- snapshot
       if again == html then pure html else go (n - 1) again

@@ -5,7 +5,8 @@
 -- fetch's place (test/jsbits/test-fetch.js), and the application over it:
 -- what it shows while the server has not answered, once it has, and when
 -- it cannot be reached; and the server's page, adopted with nothing to
--- repair.
+-- repair: the build's, before anything is read, and one the server
+-- rendered, from what the page carries, with nothing asked.
 --
 -- The server answers with the demo's wiki as its administrator sees it,
 -- read from the in-memory backend and written as the API writes it, so the
@@ -44,7 +45,9 @@ import Wiki.Api.Links (links)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App (component, serverInput, serverInputWith)
 import Wiki.App.Backend
-import Wiki.App.Backend.Http (HttpEnv, browserTransport, newHttpEnv, runHttpWiki)
+import Wiki.App.Backend.Http (HttpEnv, browserTransport, cacheOf, newHttpEnv, newHttpEnvWith, runHttpWiki)
+import Wiki.App.Backend.Http.Cache (Cache)
+import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
@@ -58,6 +61,7 @@ import Wiki.Core.Page qualified as P
 import Wiki.Core.Space qualified as S
 #if defined(wasm32_HOST_ARCH)
 import Halogen.VDom.DOM.Monad (runBrowserDOM)
+import Wiki.App.Backend.Http.Preload (embeddedCache)
 import Wiki.App.Route (route)
 #endif
 
@@ -71,6 +75,8 @@ $( browserJS
      , ("js_server_release", "wiki_test_server_release", Unsafe, [t|IO ()|])
      , ("js_server_asked", "wiki_test_server_asked", Unsafe, [t|IO JSText|])
      , ("js_markup", "wiki_test_markup", Unsafe, [t|IO JSText|])
+     , ("js_embed", "wiki_test_embed", Unsafe, [t|JSText -> JSText -> IO ()|])
+     , ("js_unembed", "wiki_test_unembed", Unsafe, [t|JSText -> IO ()|])
      ]
  )
 
@@ -137,7 +143,18 @@ startServer
   => Route
   -> PageM s (Mounted s Shell.Query Void m)
 startServer m at = do
-  (env, router) <- prepare at
+  env <- unsafeIOToPageM (newHttpEnv browserTransport)
+  startServerWith m env at
+
+-- | 'startServer', over a backend of the test's.
+startServerWith
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  => HttpEnv
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+startServerWith m env at = do
+  router <- prepare at
   mount m (H.hoist (NT (runHttpWiki env)) component) (serverInput router)
 
 -- | 'startServer', with the demo's wiki in this browser looked for in this
@@ -160,15 +177,38 @@ adoptServer
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
 adoptServer m page at = do
-  (env, router) <- prepare at
+  env <- unsafeIOToPageM (newHttpEnv browserTransport)
+  adoptServerWith m env page at
+
+-- | 'adoptServer', over a backend of the test's.
+adoptServerWith
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  => HttpEnv
+  -> Element s
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+adoptServerWith m env page at = do
+  router <- prepare at
   hydrate m page (H.hoist (NT (runHttpWiki env)) component) (serverInput router)
 
-prepare :: Route -> PageM s (HttpEnv, Router Route)
+prepare :: Route -> PageM s (Router Route)
 prepare at = do
-  env <- unsafeIOToPageM (newHttpEnv browserTransport)
   router <- unsafeIOToPageM testRouter
   unsafeIOToPageM (Router.redirect router at)
-  pure (env, router)
+  pure router
+
+-- | A backend that starts from what the page carries, as the program's
+-- does (@Main.hs@).
+fromPage :: PageM s HttpEnv
+fromPage = unsafeIOToPageM $ readPreload >>= either (panic . ("the page's preload: " <>)) (newHttpEnvWith browserTransport)
+
+readPreload :: IO (Either Text Cache)
+#if defined(wasm32_HOST_ARCH)
+readPreload = runBrowserDOM embeddedCache
+#else
+readPreload = panic "the backend's browser tests run in a browser"
+#endif
 
 testRouter :: IO (Router Route)
 #if defined(wasm32_HOST_ARCH)
@@ -233,7 +273,9 @@ requests = describe "its requests, through fetch" $ do
 refusals :: Spec
 refusals = describe "its refusals, through fetch" $ do
   let at = links.spaces.atPath (slugs ["team"])
-      getTeam env = overHttp env (getSpace (slugs ["team"]))
+      -- With a backend of its own each time, since a refusal is kept.
+      getTeam :: HttpEnv -> PageM s (Either WikiError S.Space)
+      getTeam _ = unsafeIOToPageM (newHttpEnv browserTransport) >>= \fresh -> overHttp fresh (getSpace (slugs ["team"]))
   it "reads each refusal of the API as the backend's error of its name" $ runPage $ do
     serverStarts
     env <- unsafeIOToPageM (newHttpEnv browserTransport)
@@ -330,3 +372,43 @@ views m = describe "the application over it" $ do
     find ui ".wiki" >>= (`shouldBeSameElement` shell)
     unmount ui
     serverStops
+
+  it "adopts a page the server rendered, from what it carries, and asks nothing" $ runPage $ do
+    -- What the server's render reads at the tour: who is asking, the
+    -- spaces, the tour's space and its pages.
+    serverStarts
+    serveDemo
+    reading <- unsafeIOToPageM (newHttpEnv browserTransport)
+    overHttp reading $ do
+      _ <- session
+      _ <- listSpaces
+      docs <- getSpace (slugs ["docs"])
+      for_ docs (\s -> listPages s.id)
+    carried <- unsafeIOToPageM (cacheOf reading)
+    serverStops
+    -- A server that answers nothing from here on, and the page with what
+    -- it carries.
+    serverStarts
+    unsafeIOToPageM (js_embed (toJSText preloadId) (toJSText (encodePreload carried)))
+    rendering <- fromPage
+    first' <- startServerWith m rendering tour
+    find first' ".page-body h1" >>= (`shouldHaveText` "Tour")
+    html <- fromJSText <$> unsafeIOToPageM js_markup
+    unmount first'
+    page <- htmlContainer html
+    before <- findAllIn page adoptable
+    adopting <- fromPage
+    ui <- adoptServerWith m adopting page tour
+    after <- findAll ui adoptable
+    length after `shouldBe` length before
+    zipWithM_ shouldBeSameElement after before
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Tour")
+    find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
+    asked `shouldReturn` []
+    unmount ui
+    unsafeIOToPageM (js_unembed (toJSText preloadId))
+    serverStops
+  where
+    -- Every element but what is inside an island, which its library fills
+    -- after the shell has adopted it.
+    adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-tikz *, .wiki-code *, .wiki-time *)"

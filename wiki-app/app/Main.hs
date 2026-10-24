@@ -42,11 +42,11 @@ attachComponent = do
     -- shows before it has loaded anything, which it adopts all the same,
     -- and then loads what the route shows.
     ServerBackend -> do
-      start <-
+      carried <-
         embeddedCache >>= \case
           Right cache -> pure cache
           Left why -> consoleWarn why $> emptyCache
-      env <- newHttpEnvWith browserTransport start
+      env <- newHttpEnvWith browserTransport carried
       void $ runHttpWiki env (hydrateUI component (serverInput router) app)
   where
       -- The page arrives with the route already rendered into #app (see

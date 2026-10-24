@@ -58,3 +58,19 @@ function wiki_test_server_release() {
 function wiki_test_server_asked() {
   return JSON.stringify(wikiTestServer.asked);
 }
+
+// What a page the server rendered carries for the program
+// (Halogen.Static.embed): a JSON script by id, in the document, outside
+// anything the application is mounted in. Its text is set rather than
+// parsed, so it needs no escaping here.
+function wiki_test_embed(id, json) {
+  const script = document.createElement("script");
+  script.type = "application/json";
+  script.id = id;
+  script.textContent = json;
+  document.body.append(script);
+}
+
+function wiki_test_unembed(id) {
+  document.getElementById(id)?.remove();
+}
