@@ -124,7 +124,8 @@ confirms it against reality and the plan is amended if it does not hold.
     Markdown and a "Back" link to the page, for every reader, signed in or not; it is
     gated by the permission to view the page, not to edit it. Until now the source was
     reachable only through the editor.
-10. **Markdown stays the source of truth.** The editor is a textarea with the Markdown;
+10. **Markdown stays the source of truth.** (Amended by WP1.20: the textarea becomes
+    CodeMirror 6, still editing the Markdown itself.) The editor is a textarea with the Markdown;
     the rendered page is a preview of it, re-rendered on each change (debounced). No
     WYSIWYG. Amended by the owner after the MVP demo: the split view is no longer the
     default. The editor shows the source alone at every width; "Show preview" replaces
@@ -1254,3 +1255,13 @@ Amended by the planning session after each work package's report.
   beside "Wiki data". The user menu only switches users. A reset now says so. Phase 2: the
   export, import and reset handlers do not check `Administer` (only the page hides them),
   so the server must.
+- **WP1.19 done and merged** ([#40](https://github.com/Swordlash/blog/pull/40), `81c954b`).
+  `TextColour`/`Highlight (Maybe Colour)` in `Wiki.Core.Markdown.Edit`, writing
+  `<span class="c-…">`/`<mark class="h-…">`; a "Colour" popover with a text row and a
+  highlight row, each with its "none". The selected words end in exactly the colour picked:
+  a wrapper of the same kind is replaced (split around the selection, neighbours of one
+  colour merged), one tag pair per line (after list, quote and heading markers), other
+  elements kept whole. Contrast at least 4.9:1 in both themes. The toolbar's menus are one
+  `Maybe Menu`. For WP1.20: a colour command rewrites text outside the selection, so the
+  CodeMirror adapter diffs old against new text, never replaces only the selected range.
+  Open: the HTML menu's `<mark>` entry and the palette's row are both called "Highlight".
