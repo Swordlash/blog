@@ -1265,3 +1265,22 @@ Amended by the planning session after each work package's report.
   `Maybe Menu`. For WP1.20: a colour command rewrites text outside the selection, so the
   CodeMirror adapter diffs old against new text, never replaces only the selected range.
   Open: the HTML menu's `<mark>` entry and the palette's row are both called "Highlight".
+- **WP1.20 done and merged** ([#41](https://github.com/Swordlash/blog/pull/41), `614f28e`).
+  CodeMirror 6 (`markdownLanguage` only: no lang-html, no list continuation) in an empty
+  `.editor-cm` host Halogen never renders into, before the textarea Halogen still renders
+  with the Markdown (so the prerender and native HTML are unchanged); once loaded
+  (`islands/editor.js`, lazily, as TikZ: 296 KiB, 84 KiB brotli, editor routes only; the
+  smoke test checks no reader's page fetches it) it takes the textarea's text, selection,
+  focus and scroll in one task, and `.editor-cm:not(:empty) + .editor-text` hides the
+  textarea. Changes reach Halogen as `Typed` through a `wiki-input` event; toolbar commands
+  are one diffed transaction with `isolateHistory "full"`. Fenced code is highlighted with
+  the page's highlight.js (no extra bytes); `==mark==` is not in the renderer, so not
+  styled. Two older bugs fixed: notices among the form's children rebuilt the textarea by
+  position (now an always-present `.editor-notices`), and a keyed element's replacement
+  cleared its successor's ref, in haskell-halogen (`renderPass`'s `RefUpdate` does
+  `M.alter (const el)`, so a removal reported after the creation clears it; worked around
+  by holding the host, which is never replaced; to raise upstream). Pasting a file to
+  attach it never existed; a small follow-up. The keystroke test now types in three-word
+  calls.
+- **The owner's requests of 2026-10-23 are all merged**: WP1.17, WP1.18, WP1.19, WP1.20,
+  WP1.21.
