@@ -1609,3 +1609,36 @@ Amended by the planning session after each work package's report.
   builder was not run (needs about 15 GB free; the first build is "well over an hour").
   CI does not build the image. The owner hosts with `deploy-local.sh`, not Docker; the
   files are for a VPS later.
+- **WP2.5 done and merged** ([#54](https://github.com/Swordlash/blog/pull/54), `112631a`).
+  `Wiki.Core.Diff` (Myers on lines after trimming the common prefix and suffix, replaced
+  lines paired and compared word by word with whitespace as tokens, caps of 1000 differing
+  lines and 300 words per line after which the whole text is shown replaced; a 100 KB page
+  with two edits diffs in 6 ms natively), `Wiki.Core.Version` (`VersionInfo`, `Version`,
+  `Author`). `MonadWiki`: `listVersions` (metadata), `getVersion`, `restoreVersion pid at
+  base` (a `savePage` of the version, so the conflict check and the draft's discard
+  apply); error order page NotFound → Forbidden → version NotFound → Conflict on both
+  backends. `Mem` keeps versions in memory and in IndexedDB (store `versions`, database
+  version 3, records built lazily and written once); SQLite uses `page_versions` (sorted in
+  Haskell; authors resolved from `users`, `~administrator` shown as "Administrator"). API:
+  `GET pages/<p>/versions`, `GET pages/<p>/versions/<time>`, `POST …/restore` with
+  `If-Match`; `VersionTime` is the unquoted ISO time. Route `PageHistory` at
+  `…/p/<page>/history/?version=<iso>&against=current`, `history` a reserved slug word;
+  `View/History.hs`: versions newest first with the time island and the author, the diff
+  against the previous version or the current page, a title change as `<del>`/`<ins>`,
+  "Restore this version" for editors on any version but the latest, confirmed in place;
+  "History" next to "View source" for every reader. Prerendered in the demo at the latest
+  version (33 pages) and server-rendered (404 for a version the page lacks). Versions are
+  not exported (`docs/export.md`). `app.wasm` 7951 KiB (1857 brotli), up 314. Tests: diff
+  properties, 7 contract cases on all four backends, the IndexedDB upgrade, API goldens,
+  `Test.Hydrate` at zero repairs, 5 browser cases, both smoke tests. Later decisions if ever
+  needed: a limit or pruning of a page's history; attachments are not versioned, moves make
+  no version. For Phase 3: version authors come from the session's user; signing in or
+  out clears the client cache, `versionLists` and `versions` included.
+- **Phase 2 complete** (2026-10-24). `main` at `112631a` has the server (`wiki-server
+  serve|backup`, two listeners, `--trust-network`, per-request rendering with embedded
+  data), SQLite storage with migrations and backups, the HTTP backend in the app with the
+  demo kept for Pages, the migration of the demo's pages, page history, the local deploy
+  (`deploy-local.sh --server`) and Docker for later. Tag point for `v0.2.0-server`, which
+  the owner pushes. Next: Phase 3, pending the owner's word on its decisions (8, 9, 11:
+  argon2id passwords and cookie sessions, the Confluence-like model, the administrator
+  made from the admin listener; `--trust-network` retires once sessions exist).
