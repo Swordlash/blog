@@ -26,6 +26,10 @@ module Wiki.App.Backend.Http
   , runHttpWiki
   , cacheOf
 
+    -- * Importing into the server
+  , previewImport
+  , applyImport
+
     -- * Transports
   , Transport (..)
   , browserTransport
@@ -46,14 +50,16 @@ import Data.Text qualified as T
 import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, jsNull, toJSBytes, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
-import Wiki.Api (AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Web.Storage.IndexedDB (MonadIndexedDB)
+import Wiki.Api (ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.Api.Links qualified as Links
 import Wiki.Api.Types
-import Wiki.Api.Upload (attachmentPart)
+import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError)
 import Wiki.App.Backend.Http.Cache
-import Wiki.App.Backend.Http.Request (Body (..), Request (..), Response (..), answer, answerNothing, ifMatch, multipart, withJson)
+import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, ifMatch, multipart, multipartForm, withJson)
 import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Islands.Monad (MonadIslands)
 
@@ -144,6 +150,10 @@ deriving newtype instance (MonadAttributes m) => MonadAttributes (HttpWiki m)
 deriving newtype instance (MonadBrowserDOM m) => MonadBrowserDOM (HttpWiki m)
 
 deriving newtype instance (MonadIslands m) => MonadIslands (HttpWiki m)
+
+-- The browser's own store, where the demo leaves its wiki: what the import
+-- of "this browser's demo data" reads ("Wiki.App.Backend.Mem").
+deriving newtype instance (MonadIndexedDB m) => MonadIndexedDB (HttpWiki m)
 
 instance (MonadUUID m) => MonadUUID (HttpWiki m) where
   generateV4 = HttpWiki (lift generateV4)
@@ -256,3 +266,23 @@ instance (MonadUnliftIO m) => MonadLoad (HttpWiki m) where
       (Just <$> run (runReaderT program env {cacheOnly = True})) `catch` \NotCached -> pure Nothing
   attempt (HttpWiki program) = HttpWiki . ReaderT $ \env ->
     withRunInIO $ \run -> try (run (runReaderT program env))
+
+-- | What importing an archive (a zip file of "Wiki.Core.Export"'s) into the
+-- server would do: its plan, which changes nothing ("Wiki.Api.Import").
+-- The archive goes up as a form's file, which takes as long as an upload
+-- may ('uploadTimeout').
+previewImport :: (MonadIO m) => ByteString -> HttpWiki m (Either WikiError ImportPlan)
+previewImport zipped = answer <$> call (multipartForm links.archive.importPreview [archiveFile zipped])
+
+-- | Import an archive into the server as chosen, in one transaction: what
+-- it did, or why it did nothing. The server works the plan out again
+-- against its content as it is now, so what it did is what to show. A
+-- write: what was read before may be out of date.
+applyImport :: (MonadIO m) => ByteString -> ImportChoices -> HttpWiki m (Either WikiError ImportSummary)
+applyImport zipped choices =
+  write (multipartForm links.archive.importApply [archiveFile zipped, TextPart {part = choicesPart, value = decodeUtf8 (toS (encode choices))}])
+
+-- | An archive as the form's file; the server looks at neither its name
+-- nor its media type.
+archiveFile :: ByteString -> Part
+archiveFile zipped = FilePart {part = archivePart, name = "wiki.zip", mediaType = "application/zip", bytes = zipped}

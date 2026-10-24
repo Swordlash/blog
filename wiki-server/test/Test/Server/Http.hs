@@ -20,22 +20,76 @@ import Network.HTTP.Types (statusCode)
 import Network.Wai (defaultRequest, requestHeaders, requestMethod)
 import Network.Wai.Test (SRequest (..), SResponse (..), runSession, setPath, srequest)
 import Protolude
-import Test.Hspec (Spec, describe)
-import Test.Storage.Fixture (whoFor, withDemo)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn)
+import Test.Storage.Fixture (demoArchive, ok, path, whoFor, withDemo)
+import Wiki.Api.Import
+import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Contract (Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
-import Wiki.App.Backend.Http (HttpWiki, Transport (..), newHttpEnv, runHttpWiki)
+import Wiki.App.Backend.Http (HttpWiki, Transport (..), applyImport, newHttpEnv, previewImport, runHttpWiki)
 import Wiki.App.Backend.Http.Request (Body (..), Request (..), Response (..))
+import Wiki.App.Demo (demoNow)
+import Wiki.Core.Export (Archive (..), writeArchive)
+import Wiki.Core.Export.Zip (zipFiles)
+import Wiki.Core.Page qualified as P
+import Wiki.Core.Slug (mkSlug)
+import Wiki.Core.Space qualified as S
 import Wiki.Server.Api (Env (..), apiApplication)
-import Wiki.Server.Storage (Storage, Who)
+import Wiki.Server.Storage (Storage, Who (..))
 
 spec :: Spec
-spec =
-  describe "HttpWiki against the server's API" $
-    Contract.spec (type (HttpWiki IO)) $ \example ->
-      withDemo $ \st -> do
-        env <- apiEnv st
-        example (Fixture (\as program -> whoFor st as >>= \who -> newHttpEnv (inProcess env who) >>= \http -> runHttpWiki http program))
+spec = describe "HttpWiki against the server's API" $ do
+  Contract.spec (type (HttpWiki IO)) $ \example ->
+    withDemo $ \st -> do
+      env <- apiEnv st
+      example (Fixture (\as program -> whoFor st as >>= \who -> newHttpEnv (inProcess env who) >>= \http -> runHttpWiki http program))
+  importing
+
+-- | The import's two steps, as the administration's dialog makes them: the
+-- forms 'previewImport' and 'applyImport' write, read by the server as the
+-- archive and the choices they carry.
+--
+-- The archive is the demo's, as its export writes it, with one page
+-- changed (a conflict) and one space moved to a path the server does not
+-- have (a new space, with its subspace and its pages), into a server that
+-- has the demo already.
+importing :: Spec
+importing = describe "importing an archive" $
+  it "previews it, and imports it as chosen, once, then finds it all there" $
+    withDemo $ \st -> do
+      env <- apiEnv st
+      http <- newHttpEnv (inProcess env Administrator)
+      let run :: HttpWiki IO a -> IO a
+          run = runHttpWiki http
+          zipped = zipFiles demoNow (writeArchive changed)
+          hello = PageRef {space = path "blog", page = path "hello-world"}
+          handbook = PageRef {space = path "crew", page = path "team-handbook"}
+      plan <- ok =<< run (previewImport zipped)
+      [(s.path, s.status) | s <- plan.spaces]
+        `shouldBe` [(path "blog", SpaceMerged), (path "docs", SpaceMerged), (path "crew", SpaceNew), (path "crew/projects", SpaceNew)]
+      [(x.path, (\c -> c.sameContent) <$> x.conflict) | s <- plan.spaces, s.path == path "blog", x <- s.pages]
+        `shouldBe` [(path "hello-world", Just False), (path "notes-on-haskell", Just True)]
+      let choices = ImportChoices {skipSpaces = [], skipPages = [handbook], conflicts = [ConflictChoice {page = hello, resolution = TakeImported}]}
+      run (applyImport zipped choices)
+        `shouldReturn` Right ImportSummary {spacesCreated = 2, spacesMerged = 2, pagesCreated = 1, pagesReplaced = 1, pagesKept = 5, pagesSkipped = 2, attachments = 1}
+      blog <- ok =<< run (getSpace (path "blog"))
+      page <- ok =<< run (getPage blog.id (path "hello-world"))
+      page.body `shouldBe` "Brought in from the demo."
+      crew <- ok =<< run (getSpace (path "crew/projects"))
+      map (\p -> p.title) <$> (ok =<< run (listPages crew.id)) `shouldReturn` ["The wiki"]
+      -- Again: everything is there already, but the pages left out.
+      again <- ok =<< run (previewImport zipped)
+      [s.status | s <- again.spaces] `shouldBe` replicate 4 SpaceMerged
+      [(s.path, x.path) | s <- again.spaces, x <- s.pages, isNothing x.conflict]
+        `shouldBe` [(path "crew", path "team-handbook"), (path "crew", path "team-handbook/on-call")]
+  where
+    -- The demo, with Hello, world rewritten and Team at another path.
+    changed =
+      demoArchive
+        { pages = [if p.slug == slug "hello-world" then p {P.body = "Brought in from the demo."} else p | p <- demoArchive.pages]
+        , spaces = [if s.slug == slug "team" then s {S.slug = slug "crew"} else s | s <- demoArchive.spaces]
+        }
+    slug = either (panic . show) identity . mkSlug
 
 -- | The handlers' environment over a storage, as the server makes it.
 apiEnv :: Storage -> IO Env

@@ -5,9 +5,10 @@
 --
 -- Every address is one of "Wiki.Api.Links"', relative to the page's
 -- @\<base href>@, so the client cannot ask for a path the server does not
--- serve. A body is JSON, or, for an attachment, a multipart form written
--- here ('multipart'), so that a request is bytes on every transport and
--- the browser's half is one call of @fetch@.
+-- serve. A body is JSON, or, for an attachment or an archive to import, a
+-- multipart form written here ('multipart', 'multipartForm'), so that a
+-- request is bytes on every transport and the browser's half is one call
+-- of @fetch@.
 --
 -- An answer is read as @MonadWiki@ wants it ('answer'): a 2xx with the JSON
 -- it should have; a refusal, from its 'ApiError' body or, without one, from
@@ -23,6 +24,8 @@ module Wiki.App.Backend.Http.Request
   , withJson
   , ifMatch
   , multipart
+  , Part (..)
+  , multipartForm
 
     -- * Answers
   , Response (..)
@@ -80,31 +83,59 @@ ifMatch base r = r {headers = ("If-Match", toUrlPiece (PageVersion base)) : r.he
 -- | A @POST@ of a multipart form (@multipart\/form-data@) with one file in
 -- it: the part's name, the file's name, its media type and its bytes, as
 -- the API's uploads want them ("Wiki.Api.Upload").
+multipart :: Text -> Text -> Text -> Text -> ByteString -> Request
+multipart url part name mediaType bytes = multipartForm url [FilePart {part, name, mediaType, bytes}]
+
+-- | One part of a multipart form.
+data Part
+  = -- | A file: the part's name, the file's name, its media type and its
+    -- bytes.
+    FilePart {part :: Text, name :: Text, mediaType :: Text, bytes :: ByteString}
+  | -- | A field that is not a file, by its name, with its value: what a
+    -- server reads as text rather than as a file, since it has no file
+    -- name (an import's choices, "Wiki.Api.Upload").
+    TextPart {part :: Text, value :: Text}
+  deriving stock (Eq, Show)
+
+-- | A @POST@ of a multipart form (@multipart\/form-data@) with these parts,
+-- in this order.
 --
 -- Written here rather than by the browser's @FormData@, so that the bytes
 -- sent are the same on every transport and the tests see them. The boundary
--- is one the file does not contain; the file's name goes in quotes, with a
--- quote or a backslash in it escaped (an attachment's name has no control
--- characters, which a quoted string could not carry), and as UTF-8, which
--- is what browsers send and servers read.
-multipart :: Text -> Text -> Text -> Text -> ByteString -> Request
-multipart url part name mediaType bytes =
+-- is one no part contains; names go in quotes, with a quote or a backslash
+-- in them escaped (an attachment's name has no control characters, which a
+-- quoted string could not carry), and as UTF-8, which is what browsers send
+-- and servers read.
+multipartForm :: Text -> [Part] -> Request
+multipartForm url parts =
   Request
     { method = "POST"
     , url
     , headers = []
-    , body = Body ("multipart/form-data; boundary=" <> decodeUtf8 boundary) form
+    , body = Body ("multipart/form-data; boundary=" <> decodeUtf8 boundary) (mconcat (map partBytes parts) <> "--" <> boundary <> "--\r\n")
     }
   where
-    boundary = fromMaybe "wiki-form" (find (\b -> not (b `BS.isInfixOf` bytes)) candidates)
+    contents = \case
+      FilePart {bytes} -> bytes
+      TextPart {value} -> encodeUtf8 value
+    boundary = fromMaybe "wiki-form" (find (\b -> not (any ((b `BS.isInfixOf`) . contents) parts)) candidates)
     candidates = ["wiki-form-boundary-" <> BC.pack (show n) | n <- [0 :: Int ..]]
-    form =
+    partBytes p =
       mconcat
         [ "--" <> boundary <> "\r\n"
-        , "Content-Disposition: form-data; name=\"" <> quoted part <> "\"; filename=\"" <> quoted name <> "\"\r\n"
-        , "Content-Type: " <> encodeUtf8 mediaType <> "\r\n\r\n"
-        , bytes
-        , "\r\n--" <> boundary <> "--\r\n"
+        , case p of
+            FilePart {part, name, mediaType} ->
+              "Content-Disposition: form-data; name=\""
+                <> quoted part
+                <> "\"; filename=\""
+                <> quoted name
+                <> "\"\r\n"
+                <> "Content-Type: "
+                <> encodeUtf8 mediaType
+                <> "\r\n\r\n"
+            TextPart {part} -> "Content-Disposition: form-data; name=\"" <> quoted part <> "\"\r\n\r\n"
+        , contents p
+        , "\r\n"
         ]
     quoted = encodeUtf8 . T.concatMap (\c -> if c == '"' || c == '\\' then T.pack ['\\', c] else T.singleton c)
 

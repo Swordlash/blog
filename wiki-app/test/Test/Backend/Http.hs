@@ -13,6 +13,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Protolude
 import Test.Hspec
+import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
 import Wiki.App.Backend
 import Wiki.App.Backend.Http
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage)
@@ -130,6 +131,49 @@ requests = describe "its requests" $ do
         mediaType `shouldBe` "multipart/form-data; boundary=wiki-form-boundary-2"
         BS.length form `shouldSatisfy` (> 0)
       NoBody -> expectationFailure "no form"
+
+  it "asks for an import's preview with the archive as the form's file" $ do
+    (env, asked) <- backend (const (ok (ImportPlan [])))
+    runHttpWiki env (previewImport "PK zipped") `shouldReturn` Right (ImportPlan [])
+    [r] <- readIORef asked
+    (r.method, r.url) `shouldBe` ("POST", "api/v1/import/preview")
+    r.body
+      `shouldBe` Body
+        "multipart/form-data; boundary=wiki-form-boundary-0"
+        "--wiki-form-boundary-0\r\nContent-Disposition: form-data; name=\"archive\"; filename=\"wiki.zip\"\r\nContent-Type: application/zip\r\n\r\nPK zipped\r\n--wiki-form-boundary-0--\r\n"
+
+  it "applies an import with the archive again and the choices as a field that is not a file" $ do
+    let summary = ImportSummary {spacesCreated = 1, spacesMerged = 0, pagesCreated = 2, pagesReplaced = 0, pagesKept = 0, pagesSkipped = 0, attachments = 0}
+        choices = importEverything {skipSpaces = [slugs "docs/notes"]}
+    (env, asked) <- backend (const (ok summary))
+    runHttpWiki env (applyImport "PK zipped" choices) `shouldReturn` Right summary
+    [r] <- readIORef asked
+    (r.method, r.url) `shouldBe` ("POST", "api/v1/import/apply")
+    r.body
+      `shouldBe` Body
+        "multipart/form-data; boundary=wiki-form-boundary-0"
+        ( mconcat
+            [ "--wiki-form-boundary-0\r\nContent-Disposition: form-data; name=\"archive\"; filename=\"wiki.zip\"\r\nContent-Type: application/zip\r\n\r\nPK zipped\r\n"
+            , "--wiki-form-boundary-0\r\nContent-Disposition: form-data; name=\"choices\"\r\n\r\n"
+            , toS (encode choices)
+            , "\r\n--wiki-form-boundary-0--\r\n"
+            ]
+        )
+
+  it "chooses a boundary that no part of a form holds" $ do
+    let r = multipartForm "u" [FilePart {part = "a", name = "f", mediaType = "text/plain", bytes = "--wiki-form-boundary-0"}, TextPart {part = "b", value = "--wiki-form-boundary-1"}]
+    case r.body of
+      Body mediaType _ -> mediaType `shouldBe` "multipart/form-data; boundary=wiki-form-boundary-2"
+      NoBody -> expectationFailure "no form"
+
+  it "forgets what it read once an import has been applied" $ do
+    let summary = ImportSummary {spacesCreated = 0, spacesMerged = 0, pagesCreated = 0, pagesReplaced = 0, pagesKept = 0, pagesSkipped = 0, attachments = 0}
+    (env, _) <- backend $ \r ->
+      if r.url == "api/v1/spaces" then ok ([] :: [Space]) else ok summary
+    _ <- runHttpWiki env listSpaces
+    ((\c -> c.spaces) <$> cacheOf env) `shouldReturn` Just []
+    _ <- runHttpWiki env (applyImport "PK" importEverything)
+    ((\c -> c.spaces) <$> cacheOf env) `shouldReturn` Nothing
 
   it "gives an attachment's address without asking" $ do
     (env, asked) <- backend (const (Left "not asked"))
