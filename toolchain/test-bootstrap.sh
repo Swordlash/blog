@@ -160,6 +160,18 @@ bootstrap toolchain >"$case_dir/repair"
 [ "$(cat "$EVENTS")" = "$(printf 'chromium install\nchromium launch')" ] || fail 'broken Chromium cache was not repaired'
 pass 'a stale browser marker does not hide a missing executable'
 
+# The Dockerfile's builder installs what a build needs and nothing more: with
+# no fourmolu on PATH and no Chromium in the cache, `build` installs neither
+# (here any attempt would reach curl or Playwright and be recorded).
+fixture build-only
+sysroot
+rm "$case_dir/bin/fourmolu" "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME" "$CACHE/INSTALLATION_COMPLETE"
+bootstrap build >"$case_dir/build"
+[ ! -s "$EVENTS" ] || fail "build installed or launched something: $(cat "$EVENTS")"
+assert_contains "$case_dir/build" 'no Chromium or fourmolu (build)'
+[ -f "$HOME/.wiki-toolchain/env" ] || fail 'build did not write the environment file'
+pass 'build installs the compilers and Node, and neither Chromium nor fourmolu'
+
 fixture generators
 sysroot
 HAPPY_REPORT=2.1.70

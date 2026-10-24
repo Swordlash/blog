@@ -3,6 +3,7 @@
 #
 #   sh toolchain/bootstrap.sh             # toolchain, then warm the store
 #   sh toolchain/bootstrap.sh toolchain   # the toolchain only
+#   sh toolchain/bootstrap.sh build       # what a build needs: no Chromium, no fourmolu
 #   sh toolchain/bootstrap.sh warm        # the toolchain if missing, then warm
 #   sh toolchain/bootstrap.sh env         # print the PATH lines a shell needs
 #   sh toolchain/bootstrap.sh path        # the same directories, one per line
@@ -58,6 +59,12 @@
 # in your shell profile (or run it in the shell you build from), and source
 # ~/.ghc-wasm/env where a script needs the wasm tools, as the build scripts do.
 #
+# `build` installs what building the wiki needs and nothing that only tests or
+# formatting do: everything above but Chromium (with the Debian packages it
+# needs) and fourmolu. The Dockerfile's builder stage runs it, so that the
+# image is built with the pins below and the downloads they check, and does not
+# carry a browser it never starts.
+#
 # CI on a self-hosted runner runs it the same way (`toolchain`), and appends
 # what `path` prints to $GITHUB_PATH: one directory per line, in the order
 # GitHub wants them there, where the last line is searched first.
@@ -107,9 +114,9 @@ NODE_DIR=$STATE/node-v$NODE_VERSION-linux-x64
 
 mode=${1:-all}
 case $mode in
-  all | toolchain | warm | env | path | check | ready) ;;
+  all | toolchain | build | warm | env | path | check | ready) ;;
   *)
-    printf 'usage: %s [all|toolchain|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
+    printf 'usage: %s [all|toolchain|build|warm|env|path|check|ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]]\n' "$0" >&2
     exit 2
     ;;
 esac
@@ -754,12 +761,19 @@ toolchain() {
   install_wasm_sysroot
   install_wasm_ghc
   install_node
-  install_chromium
+  # A build (`build`, the Dockerfile's builder) runs neither the browser
+  # tests nor the formatter.
+  [ "$mode" = build ] || install_chromium
   update_cabal_index
-  install_fourmolu
+  [ "$mode" = build ] || install_fourmolu
   install_parser_generators
   write_env
-  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $(node --version), Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU, alex $ALEX_VERSION, happy $HAPPY_VERSION"
+  summary="GHC $GHC_VERSION, cabal $CABAL_VERSION, wasm32-wasi-ghc $WASM_GHC_VERSION, Node $(node --version)"
+  if [ "$mode" = build ]; then
+    summary="$summary, alex $ALEX_VERSION, happy $HAPPY_VERSION; no Chromium or fourmolu (build)"
+  else
+    summary="$summary, Chromium in $CHROMIUM, fourmolu $FOURMOLU_VERSION at $FOURMOLU, alex $ALEX_VERSION, happy $HAPPY_VERSION"
+  fi
   if [ "$(wc -c <"$LOG")" = "$quiet_before" ]; then
     printf 'bootstrap: toolchain already installed (%s)\n' "$summary"
   else
