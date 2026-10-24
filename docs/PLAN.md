@@ -1335,3 +1335,9 @@ Amended by the planning session after each work package's report.
   concatenate strict `Text` too, but over one page or a few words, and stay. The pin bump
   waits for haskell-halogen#58 (the keyed-ref fix), rebased onto `2b54363`, so one bump
   brings both.
+- **WP1.22 done and merged** ([#42](https://github.com/Swordlash/blog/pull/42), `be6a60e`). A
+  `paste` listener beside the drop's, `HE.preventingDefault`, acting only on a paste with
+  files (read in the listener, since a clipboard's data is gone after dispatch); files win
+  over text in one paste; a paste without files is left to the editor. The HTML menu's
+  `<mark>` entry is "Mark". Synthetic pastes only in the tests (no OS clipboard in the
+  harness); the fallback textarea's paste is tested by dispatching on it.
