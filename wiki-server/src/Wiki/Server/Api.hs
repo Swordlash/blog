@@ -17,6 +17,7 @@ module Wiki.Server.Api
 
     -- * Errors
   , toApiError
+  , wikiError
   , refuse
   , errorFormatters
   , jsonErrors
@@ -32,12 +33,12 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Database.SQLite.Simple (Only (..), query_)
-import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, methodGet, methodHead, status200, status304, status405)
+import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, methodGet, methodHead, status200, status304, status405, status503)
 import Network.HTTP.Types.URI (urlEncode)
 import Network.Wai (Application, Middleware, Request (..), Response, responseFile, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Parse (defaultParseRequestBodyOptions, setMaxRequestFileSize, setMaxRequestNumFiles, setMaxRequestParmsSize)
 import Protolude hiding (Handler)
-import Servant (Context (..), ErrorFormatters, Handler, NoContent (..), ServerError (..), addHeader, bodyParserErrorFormatter, defaultErrorFormatters, err500, headerParseErrorFormatter, notFoundErrorFormatter, serveWithContext, urlParseErrorFormatter)
+import Servant (Context (..), ErrorFormatters, Handler, NoContent (..), ServerError (..), addHeader, bodyParserErrorFormatter, defaultErrorFormatters, err500, err503, headerParseErrorFormatter, notFoundErrorFormatter, serveWithContext, urlParseErrorFormatter)
 import Servant.Multipart (Mem, MultipartOptions (..))
 import Servant.Server.Generic (AsServer)
 import System.Directory (doesFileExist)
@@ -134,12 +135,23 @@ jsonHeader :: Header
 jsonHeader = (hContentType, "application/json")
 
 -- | The error a refusal of the backend is over HTTP: the same, by name.
-toApiError :: WikiError -> ApiError
+-- A backend that could not be reached refused nothing, so that has no
+-- 'ApiError' ('Nothing'): it is a failure of the server ('wikiError').
+toApiError :: WikiError -> Maybe ApiError
 toApiError = \case
-  NotFound -> ApiError.NotFound
-  Forbidden -> ApiError.Forbidden
-  Conflict t -> ApiError.Conflict t
-  Invalid t -> ApiError.Invalid t
+  NotFound -> Just ApiError.NotFound
+  Forbidden -> Just ApiError.Forbidden
+  Conflict t -> Just (ApiError.Conflict t)
+  Invalid t -> Just (ApiError.Invalid t)
+  Unreachable _ -> Nothing
+
+-- | A backend's error as servant answers it: its refusal, or, for one that
+-- could not reach where it keeps the wiki, a 503, the failure of a server
+-- that may well answer if asked again. The storage is on this machine and
+-- never gives that; were it ever to, a client reads a 5xx as 'Unreachable'
+-- too.
+wikiError :: WikiError -> ServerError
+wikiError e = maybe err503 {errBody = "The wiki could not be reached: " <> BSL.fromStrict (encodeUtf8 (show e))} apiError (toApiError e)
 
 -- | A refusal as servant answers it: the error's status, and the error as
 -- the body.
@@ -223,7 +235,7 @@ handlers env who =
     ask' :: SqliteWiki IO a -> Handler a
     ask' = liftIO . runSqliteWiki env.storage who
     wiki :: SqliteWiki IO (Either WikiError a) -> Handler a
-    wiki program = ask' program >>= either (refuse . toApiError) pure
+    wiki program = ask' program >>= either (throwError . wikiError) pure
     -- Whoever holds the global administer, as the rules see them.
     administrator = do
       s <- ask' session
@@ -249,7 +261,7 @@ attachmentContent env who aid name request respond
       respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An attachment is fetched with GET or HEAD.")))
   | otherwise =
       runSqliteWiki env.storage who (attachmentFile aid) >>= \case
-        Left e -> respond (refusal (toApiError e))
+        Left e -> respond (maybe (responseLBS status503 [] "The wiki could not be reached.") refusal (toApiError e))
         Right (a, Just file) | a.name == name -> do
           present <- doesFileExist file
           if not present

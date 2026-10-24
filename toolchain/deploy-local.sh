@@ -316,11 +316,14 @@ out=$ROOT/dist-newstyle/wasm-opt/public/app
 
 # The application a deployment serves: the -O2 build of wiki-app into $out.
 # This is the one place that says how it is built, for the demo and the server
-# alike: today both serve the demo's build (the wiki in the browser's memory,
-# MemWiki). WP2.4 switches the server's ($mode = server) to its HttpWiki mode,
-# which talks to wiki-server, here.
+# alike. The binary is the same; the pages differ (toolchain/build-wasm.sh):
+# the demo's keep the wiki in the browser (MemWiki), one prerendered page per
+# route, and the server's ($mode = server) talk to wiki-server over HTTP
+# (HttpWiki), with one page, the application before it has loaded anything,
+# which the server serves at every address.
 build_app() {
-  (cd "$ROOT" && HALOGEN_BASE_PATH=/ npm run build-wasm-opt)
+  if [ "$mode" = server ]; then backend=server; else backend=demo; fi
+  (cd "$ROOT" && HALOGEN_BASE_PATH=/ WIKI_BACKEND=$backend npm run build-wasm-opt)
 }
 
 # wiki-server, natively, with this repository's packages at -O2 and the

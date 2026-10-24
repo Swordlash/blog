@@ -19,7 +19,7 @@
     "test-wasm": "sh toolchain/npm-command.sh test-wasm",
     "test": "sh toolchain/npm-command.sh test",
     "dev-test": "sh toolchain/npm-command.sh dev-test",
-    "smoke-test": "node toolchain/smoke-test.mjs",
+    "smoke-test": "sh toolchain/smoke-test.sh",
     "deploy-local": "sh toolchain/deploy-local.sh",
     "undeploy-local": "sh toolchain/undeploy-local.sh",
     "format": "sh run_fourmolu.sh",

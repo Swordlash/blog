@@ -142,7 +142,7 @@ import Protolude hiding (State)
 import Web.Event.Event (Event, EventType (..))
 import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Browser (localTime)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
@@ -228,7 +228,7 @@ data Work = Work
   , urls :: Map AttachmentId Text
   }
 
-data Loaded = Failed WikiError | Ready Work
+data Loaded = Loading | Failed WikiError | Ready Work
 
 -- | What the editor shows: the Markdown (beside the preview, if the reader
 -- asked for both), or the preview alone.
@@ -328,6 +328,7 @@ data Action
   | DiscardRestored
   | TakeUpOffered
   | DiscardOffered
+  | Retry
 
 -- | Where the browser keeps whether the preview goes beside the Markdown.
 sideBySideKey :: Text
@@ -353,7 +354,7 @@ savedNoticeTime = 3_000_000
 
 component
   :: forall m
-   . (MonadWiki m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
+   . (MonadLoad m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
   => H.Component Query Input ViewOutput m
 component =
   H.mkComponent
@@ -364,8 +365,9 @@ component =
           backButton <- H.newRefLabel "editor-back"
           -- Loaded at once rather than in 'Initialize', so that the first
           -- render is the editor a page rendered ahead would show (see
-          -- "Wiki.App.Shell").
-          Fetched loaded found hasDraft <- fetchWork input
+          -- "Wiki.App.Shell"), over a backend that can ('atOnce');
+          -- otherwise in 'Initialize'.
+          Fetched loaded found hasDraft <- fromMaybe (Fetched Loading Nothing False) <$> atOnce (fetchWork input)
           pure
             State
               { input
@@ -417,7 +419,8 @@ component =
         body = case st.loaded of
           _ | isNothing ctx.session.user -> [signInHint]
           _ | not (mayEdit ctx st.input.space.id) -> [errorView Forbidden]
-          Failed e -> [errorView e]
+          Loading -> [[hh|<p class="loading">Loading…</p>|]]
+          Failed e -> [failureView e Retry]
           Ready work -> [editing st work]
 
     signInHint :: H.ComponentHTML Action Slots m
@@ -737,10 +740,16 @@ component =
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})
-        -- The page was loaded with the initial state.
-        syncGuard
-        takeOver
-        H.raise Loaded
+        -- The page was loaded with the initial state, or is loaded now.
+        gets (\st -> st.loaded) >>= \case
+          Loading -> loadWork
+          _ -> do
+            syncGuard
+            takeOver
+            H.raise Loaded
+      Retry -> do
+        modify (\st -> st {loaded = Loading})
+        loadWork
       -- The waits are killed with the component; the browser's warning and
       -- CodeMirror are not, so they are let go here.
       Finalize -> do
@@ -854,7 +863,7 @@ component =
       st <- get
       case st.loaded of
         Ready w -> H.getRef st.host >>= traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody))
-        Failed _ -> pass
+        _ -> pass
 
     -- A toolbar command on the text; its input event, handled before this
     -- returns, brings the change into the work.
@@ -890,6 +899,17 @@ component =
     catchUp = do
       cancelPreview
       modifyWork (\w -> w {shownTitle = w.title, shownBody = w.body})
+
+    -- The page and the author's draft of it, as the initial state would
+    -- have had them: what the editor opens with over a backend that waits.
+    loadWork :: H.HalogenM State Action Slots ViewOutput m ()
+    loadWork = do
+      input <- gets (\st -> st.input)
+      Fetched loaded found hasDraft <- fetchWork input
+      modify (\st -> st {loaded, found, hasDraft, loads = st.loads + 1})
+      syncGuard
+      takeOver
+      H.raise Loaded
 
     -- The page as it is now.
     load :: H.HalogenM State Action Slots ViewOutput m ()
@@ -1078,7 +1098,7 @@ component =
     withPage f =
       gets (\st -> st.loaded) >>= \case
         Ready w -> f w.page.id
-        Failed _ -> pass
+        _ -> pass
 
     modifyWork :: (Work -> Work) -> H.HalogenM State Action Slots ViewOutput m ()
     modifyWork f = modify $ \st -> case st.loaded of
@@ -1176,7 +1196,7 @@ asksToLeave st = not st.closing && isDirty st
 headingOf :: State -> Text
 headingOf st = case st.loaded of
   Ready w -> "Editing " <> w.savedTitle
-  Failed _ -> "Editing a page"
+  _ -> "Editing a page"
 
 -- | Where Cancel, and Save and close, go: the page.
 leaving :: Input -> Route

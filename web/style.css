@@ -206,6 +206,12 @@ select {
   position: relative;
 }
 
+/* Who is signed in, where people do not switch (the server's wiki). */
+.user-name {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .user-switcher-toggle::after {
   content: " ▾";
   color: var(--muted);
@@ -484,6 +490,24 @@ select {
 .loading,
 .empty {
   color: var(--muted);
+}
+
+/* What the server has not answered yet says so quietly, and only once it
+   has been waited for long enough to notice: an answer that comes quickly
+   (most do) replaces it before it shows, so nothing flickers. */
+.loading {
+  animation: loading-appears 0.2s ease-in 0.4s backwards;
+}
+
+@keyframes loading-appears {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The server could not be reached: the reason, and a way to try again. */
+.error-unreachable .retry {
+  margin-left: 0.75rem;
 }
 
 .space-list {
@@ -1530,6 +1554,7 @@ select {
 }
 
 .admin-intro,
+.admin-note,
 .demo-kept {
   color: var(--muted);
 }

@@ -15,10 +15,15 @@ interface, implemented once in memory (a serverless demo deployable as static fi
 and once over HTTP to a Haskell server with persistence. Markdown is parsed and
 rendered to Halogen HTML in the browser, so the preview never waits for a server.
 
-So far there is the MVP demo: the whole reading and writing experience,
-serverless, over an in-memory wiki seeded with demo content, deployable as static
-files. Reloading the page starts it over: keeping pages is the server's job, in the
-next phase. The plan of work is in [docs/PLAN.md](docs/PLAN.md): phases from the
+There are two ways to run it, from the same `app.wasm`: the serverless demo,
+the whole reading and writing experience over a wiki seeded with demo content and
+kept in the browser, deployable as static files; and the wiki's server,
+`wiki-server`, which keeps the wiki in SQLite and serves the application, which
+then reads and writes the wiki over HTTP. The page says which
+(`<meta name="wiki-backend" content="demo">` or `"server"`), so the build decides
+by the pages it writes: `npm run build-wasm` writes the demo's (what GitHub Pages
+serves), `WIKI_BACKEND=server npm run build-wasm` the server's, and
+`toolchain/deploy-local.sh --server` deploys the server with those. The plan of work is in [docs/PLAN.md](docs/PLAN.md): phases from the
 serverless MVP demo through a server with persistence to authentication and
 authorisation.
 
@@ -49,6 +54,10 @@ authorisation.
 - An address for every route, and a prerendered page for each route the demo
   starts with, so that a link or a reload lands on the page before the program
   has loaded, which then adopts the page rather than render it again.
+- The same over `wiki-server`: the server's build shows the application while it
+  loads what the route shows from the server, keeps what it has read so that going
+  back to it is instant, and says so in place, with a "Try again", when the server
+  cannot be reached.
 
 ## Running the demo
 
@@ -158,10 +167,14 @@ directory:
 ~/wiki-demo/data/             the wiki: wiki.sqlite, attachments/, backups/
 ```
 
-Until the application's backend over HTTP arrives (WP2.4 of the plan), the
-application the server serves is still the demo's build, which keeps its pages in the
-browser; the server's API (`/api/v1/…`, see `docs/api.md`) is there for it, and
-`deploy-local.sh` switches the build when it does.
+The application it serves is the server's build (`WIKI_BACKEND=server`): the same
+`app.wasm` as the demo's, with one page, the application before it has loaded
+anything, which the server serves at every address, and which reads and writes the
+wiki through the server's API (`/api/v1/…`, see `docs/api.md`). Until the server
+renders each page itself (WP2.6 of the plan), every address but the front page is
+answered with that page and a 404 status, which the application reads as its
+route. The administration's "Wiki data" section exports the server's wiki; importing
+into it comes next (WP2.8).
 
 The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/app
 --listen <tailscale address>:8080 --admin-listen 127.0.0.1:8081`, and checks that
@@ -390,7 +403,7 @@ npm run build-wasm-opt          # the same with every package at -O2 (cabal-wasm
 npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:8080
 npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
-npm run smoke-test              # the built page in headless Chromium: every prerendered route, a walk with back, forward and reload, dark and phone
+npm run smoke-test              # the built page in headless Chromium: the demo (every prerendered route, a walk with back, forward and reload, dark and phone), then the server's build against a real wiki-server
 npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
 npm run format                  # fourmolu over every package
 npm run format-check            # the same, failing on what it would change (as CI does)
@@ -424,6 +437,18 @@ from `HALOGEN_BASE_PATH` (default `/`), so the built directory can be served fro
 sub-path: `HALOGEN_BASE_PATH=/wiki/ npm run build-wasm`. It writes an `index.html` for
 every route the demo starts with and a `404.html` for the rest, which GitHub Pages and
 http-server serve for an address with no file.
+
+`WIKI_BACKEND=server npm run build-wasm` (or `build-wasm-opt`) builds for
+`wiki-server` instead: the same `app.wasm`, with the page's
+`<meta name="wiki-backend">` saying `server`, which `Main.hs` reads to run the
+application over the server's API (`Wiki.App.Backend.Http`) rather than the demo's
+wiki in the browser (`Wiki.App.Backend.Mem`). The server's content is not known
+at build time, so `wiki-app-prerender --server` writes one page, the application
+as it shows before it has loaded anything, as `index.html` and `404.html`.
+`WIKI_PUBLIC_DIR` writes the build somewhere other than
+`dist-newstyle/wasm/public/app`. The smoke test's server mode
+(`toolchain/smoke-test-server.mjs`) makes that build from the demo's in a temporary
+directory, so one `npm run build-wasm` serves both.
 
 `build-wasm-opt` is the production build, the one `toolchain/deploy-local.sh`
 deploys (see [Deploying on your own machine](#deploying-on-your-own-machine)):

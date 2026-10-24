@@ -22,11 +22,17 @@ import Halogen.VDom.DOM.Monad.Native qualified as N
 import Protolude
 import Test.Hspec
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.App.Route (Route)
-import Wiki.App.Static (Start (..), prerenderedRoutes, startRoute)
+import Wiki.App.Route (Route (..))
+import Wiki.App.Static (Rendered (..), Start (..), prerenderedRoutes, renderLoading, startLoading, startRoute)
+import Wiki.Core.Path (parsePath)
 
 spec :: Spec
-spec = describe "Wiki.App.Static, adopted" $
+spec = do
+  demoPages
+  serverPage
+
+demoPages :: Spec
+demoPages = describe "Wiki.App.Static, adopted" $
   for_ (prerenderedRoutes (demoState demoNow)) $ \at ->
     it ("keeps every node of the prerendered page at " <> show at) $ do
       container <- prerendered at
@@ -42,13 +48,54 @@ spec = describe "Wiki.App.Static, adopted" $
           built = [what | (ident, what) <- adopted, not (ident `Set.member` had)]
       (lost, built) `shouldBe` ([], [])
 
+-- | The server's build has one page for every address: the application as
+-- it shows before it has loaded anything. The program adopts it at any
+-- route with nothing to repair, before the server has answered.
+serverPage :: Spec
+serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
+  it "is the frame, loading, with nothing that names a route" $ do
+    Rendered {html, title} <- renderLoading "/"
+    title `shouldBe` "Wiki"
+    html `shouldSatisfy` T.isInfixOf "<p class=\"loading\">Loading…</p>"
+    html `shouldSatisfy` T.isInfixOf "<ol></ol>"
+    html `shouldSatisfy` T.isInfixOf "<footer class=\"wiki-footer\">"
+  for_ routes $ \at ->
+    it ("keeps every node of it at " <> show at) $ do
+      container <- detached (startLoading Build "/" Home)
+      original <- nodesOf container
+      html <- markup container
+      dispose <- startLoading Adopt "/" at container
+      adopted <- nodesOf container
+      markup container >>= (`shouldBe` html)
+      dispose
+      map fst adopted `shouldBe` map fst original
+  where
+    path = either (panic . show) identity . parsePath
+    routes =
+      [ Home
+      , Space (path "docs")
+      , Page (path "docs") (path "tour")
+      , EditPage (path "blog") (path "hello-world")
+      , PageSource (path "docs") (path "tour")
+      , NewSpace Nothing
+      , Search (Just "words") Nothing True
+      , Admin
+      , Unknown
+      ]
+
 -- | A container holding the page the prerender writes for the route, as the
 -- browser has it before the program has loaded: the application that
 -- rendered it disposed of, and its nodes put back without their listeners.
 prerendered :: Route -> IO N.NativeNode
-prerendered at = do
+prerendered at = detached (fmap snd . startRoute Build (demoState demoNow) "/" at)
+
+-- | A container holding what an application started in it rendered, as
+-- the browser has it before the program has loaded: the application
+-- disposed of, and its nodes put back without their listeners.
+detached :: (N.NativeNode -> IO (IO ())) -> IO N.NativeNode
+detached start = do
   container <- N.newElement Nothing (ElemName "div")
-  (_, dispose) <- startRoute Build (demoState demoNow) "/" at container
+  dispose <- start container
   rendered <- N.childNodes container
   dispose
   for_ rendered $ \node -> do

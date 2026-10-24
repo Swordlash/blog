@@ -1,0 +1,300 @@
+{-# LANGUAGE TemplateHaskell #-}
+
+-- | The backend over HTTP in a browser: its requests made through the
+-- page's @fetch@ (jsbits/fetch.js), answered by a server the test puts in
+-- fetch's place (test/jsbits/test-fetch.js), and the application over it:
+-- what it shows while the server has not answered, once it has, and when
+-- it cannot be reached; and the server's page, adopted with nothing to
+-- repair.
+--
+-- The server answers with the demo's wiki as its administrator sees it,
+-- read from the in-memory backend and written as the API writes it, so the
+-- views have something real to show.
+module Test.Browser.Http (spec) where
+
+import Control.Monad.UUID (MonadUUID)
+import Data.Aeson (FromJSON (..), ToJSON, eitherDecodeStrict', encode, withObject, (.:))
+import Data.Map.Strict qualified as Map
+import Data.NT (type (~>) (..))
+import Data.Text qualified as T
+import Halogen qualified as H
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
+import Halogen.Router (Router)
+import Halogen.Router qualified as Router
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
+import Protolude hiding (find)
+import Test.Browser.Mount (slugs)
+import Test.Hspec.Halogen
+import Wiki.Api (SpacesApi (..), WikiApi (..))
+import Wiki.Api.Links (links)
+import Wiki.Api.Types (SessionInfo (..))
+import Wiki.App (component, serverInput)
+import Wiki.App.Backend
+import Wiki.App.Backend.Http (HttpEnv, browserTransport, newHttpEnv, runHttpWiki)
+import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
+import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Demo (demoNow, demoState)
+import Wiki.App.Islands (MonadIslands)
+import Wiki.App.Route (Route (..))
+import Wiki.App.Shell qualified as Shell
+import Wiki.App.View.Common (spacePathOf)
+import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Id (AttachmentId (..), PageId (..), UserId (..))
+import Wiki.Core.Page qualified as P
+import Wiki.Core.Space qualified as S
+#if defined(wasm32_HOST_ARCH)
+import Halogen.VDom.DOM.Monad (runBrowserDOM)
+import Wiki.App.Route (route)
+#endif
+
+$( browserJS
+     ["jsbits/test-fetch.js", "jsbits/test-markup.js"]
+     [ ("js_server_start", "wiki_test_server_start", Unsafe, [t|IO ()|])
+     , ("js_server_stop", "wiki_test_server_stop", Unsafe, [t|IO ()|])
+     , ("js_server_answer", "wiki_test_server_answer", Unsafe, [t|JSText -> JSText -> Int -> JSText -> IO ()|])
+     , ("js_server_offline", "wiki_test_server_offline", Unsafe, [t|Bool -> IO ()|])
+     , ("js_server_hold", "wiki_test_server_hold", Unsafe, [t|IO ()|])
+     , ("js_server_release", "wiki_test_server_release", Unsafe, [t|IO ()|])
+     , ("js_server_asked", "wiki_test_server_asked", Unsafe, [t|IO JSText|])
+     , ("js_markup", "wiki_test_markup", Unsafe, [t|IO JSText|])
+     ]
+ )
+
+-- | A request the server was asked.
+data Asked = Asked
+  { method :: Text
+  , url :: Text
+  , headers :: Map Text Text
+  , body :: Text
+  }
+  deriving stock (Eq, Show)
+
+instance FromJSON Asked where
+  parseJSON = withObject "Asked" $ \o -> Asked <$> o .: "method" <*> o .: "url" <*> o .: "headers" <*> o .: "body"
+
+-- | The server in fetch's place, with nothing to answer yet, for the length
+-- of the test.
+serverStarts :: PageM s ()
+serverStarts = unsafeIOToPageM js_server_start
+
+serverStops :: PageM s ()
+serverStops = unsafeIOToPageM js_server_stop
+
+answerWith :: (ToJSON a) => Text -> Text -> Int -> a -> PageM s ()
+answerWith method url status value = unsafeIOToPageM (js_server_answer (toJSText method) (toJSText url) status (toJSText (decodeUtf8 (toS (encode value)))))
+
+-- | An answer whose body is not JSON (a proxy's, a failing server's).
+answerRaw :: Text -> Text -> Int -> Text -> PageM s ()
+answerRaw method url status body = unsafeIOToPageM (js_server_answer (toJSText method) (toJSText url) status (toJSText body))
+
+asked :: PageM s [Asked]
+asked = unsafeIOToPageM js_server_asked >>= either (\e -> panic ("the server's requests: " <> toS e)) pure . eitherDecodeStrict' . encodeUtf8 . fromJSText
+
+-- | The demo's wiki as its administrator sees it, answered at the
+-- addresses the shell and its views read it from: who is asking, the
+-- spaces, each space by its path and its pages, and no drafts.
+serveDemo :: PageM s ()
+serveDemo = do
+  (me, spaces, pages) <- unsafeIOToPageM $ do
+    wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
+    runMemWiki wiki $ do
+      me <- session
+      spaces <- listSpaces
+      pages <- for spaces $ \s -> (s,) . fromRight [] <$> listPages s.id
+      pure (me, spaces, pages)
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants}
+  answerWith "GET" "api/v1/spaces" 200 spaces
+  for_ pages $ \(s, ps) -> do
+    answerWith "GET" (links.spaces.atPath (spacePathOf spaces s.id)) 200 s
+    answerWith "GET" (links.spaces.listPages s.id) 200 ps
+    for_ ps $ \p -> answerWith "GET" ("api/v1/pages/" <> p.id.text <> "/draft") 200 (Nothing :: Maybe ())
+
+-- | The shell over the backend over HTTP, through the page's fetch, at a
+-- route, with a router of its own that keeps the route in the fragment.
+startServer
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  => Route
+  -> PageM s (Mounted s Shell.Query Void m)
+startServer m at = do
+  (env, router) <- prepare at
+  mount m (H.hoist (NT (runHttpWiki env)) component) (serverInput router)
+
+-- | 'startServer', adopting a page that holds the shell's HTML already.
+adoptServer
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  => Element s
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+adoptServer m page at = do
+  (env, router) <- prepare at
+  hydrate m page (H.hoist (NT (runHttpWiki env)) component) (serverInput router)
+
+prepare :: Route -> PageM s (HttpEnv, Router Route)
+prepare at = do
+  env <- unsafeIOToPageM (newHttpEnv browserTransport)
+  router <- unsafeIOToPageM testRouter
+  unsafeIOToPageM (Router.redirect router at)
+  pure (env, router)
+
+testRouter :: IO (Router Route)
+#if defined(wasm32_HOST_ARCH)
+testRouter = runBrowserDOM (Router.newHashRouter Unknown route)
+#else
+testRouter = panic "the backend's browser tests run in a browser"
+#endif
+
+-- | A program against the server, through the page's fetch.
+overHttp :: HttpEnv -> (forall n. (MonadLoad n) => n a) -> PageM s a
+overHttp env program = unsafeIOToPageM (runHttpWiki env program)
+
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec m = do
+  requests
+  refusals
+  views m
+
+-- | Hello, world, from the demo.
+helloWorld :: IO P.Page
+helloWorld = do
+  wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
+  runMemWiki wiki $ do
+    blog <- getSpace (slugs ["blog"])
+    either (panic . show) pure =<< either (pure . Left) (\s -> getPage s.id (slugs ["hello-world"])) blog
+
+requests :: Spec
+requests = describe "its requests, through fetch" $ do
+  let page = PageId "page 1"
+  it "saves with the version it started from in If-Match, and the edit as JSON" $ runPage $ do
+    serverStarts
+    env <- unsafeIOToPageM (newHttpEnv browserTransport)
+    hello <- unsafeIOToPageM helloWorld
+    answerWith "PUT" ("api/v1/pages/" <> hello.id.text) 200 hello
+    overHttp env (savePage hello.id hello.updatedAt "Title" "Body") `shouldReturn` Right hello
+    [r] <- asked
+    (r.method, r.url) `shouldBe` ("PUT", "api/v1/pages/" <> hello.id.text)
+    r.headers `shouldBe` Map.fromList [("If-Match", "\"2026-09-01T12:00:00Z\""), ("Content-Type", "application/json")]
+    r.body `shouldBe` "{\"body\":\"Body\",\"title\":\"Title\"}"
+    serverStops
+
+  it "uploads a file as a multipart form" $ runPage $ do
+    serverStarts
+    env <- unsafeIOToPageM (newHttpEnv browserTransport)
+    let made = Attachment {id = AttachmentId "a1", name = "notes.txt", mediaType = "text/plain", size = 5, source = SourceUrl "https://example.org/notes.txt"}
+    answerWith "POST" "api/v1/pages/page%201/attachments" 201 made
+    overHttp env (uploadAttachment page "notes.txt" "text/plain" "hello") `shouldReturn` Right made
+    [r] <- asked
+    (r.method, r.url) `shouldBe` ("POST", "api/v1/pages/page%201/attachments")
+    fromMaybe "" (Map.lookup "Content-Type" r.headers) `shouldSatisfy` T.isPrefixOf "multipart/form-data; boundary="
+    r.body `shouldSatisfy` T.isInfixOf "Content-Disposition: form-data; name=\"file\"; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n"
+    serverStops
+
+  it "deletes with DELETE, and takes a 204 for done" $ runPage $ do
+    serverStarts
+    env <- unsafeIOToPageM (newHttpEnv browserTransport)
+    answerRaw "DELETE" "api/v1/pages/page%201/draft" 204 ""
+    overHttp env (discardDraft page) `shouldReturn` Right ()
+    map (\r -> (r.method, r.url)) <$> asked `shouldReturn` [("DELETE", "api/v1/pages/page%201/draft")]
+    serverStops
+
+refusals :: Spec
+refusals = describe "its refusals, through fetch" $ do
+  let at = links.spaces.atPath (slugs ["team"])
+      getTeam env = overHttp env (getSpace (slugs ["team"]))
+  it "reads each refusal of the API as the backend's error of its name" $ runPage $ do
+    serverStarts
+    env <- unsafeIOToPageM (newHttpEnv browserTransport)
+    answerRaw "GET" at 404 "{\"error\":\"NotFound\"}"
+    getTeam env `shouldReturn` Left NotFound
+    answerRaw "GET" at 403 "{\"error\":\"Forbidden\"}"
+    getTeam env `shouldReturn` Left Forbidden
+    answerRaw "GET" at 409 "{\"error\":\"Conflict\",\"message\":\"Saved since.\"}"
+    getTeam env `shouldReturn` Left (Conflict "Saved since.")
+    answerRaw "GET" at 400 "{\"error\":\"Invalid\",\"message\":\"No.\"}"
+    getTeam env `shouldReturn` Left (Invalid "No.")
+    serverStops
+
+  it "takes a failing server, and no network, for out of reach" $ runPage $ do
+    serverStarts
+    env <- unsafeIOToPageM (newHttpEnv browserTransport)
+    answerRaw "GET" at 503 "<html>down for maintenance</html>"
+    getTeam env `shouldReturn` Left (Unreachable "the server failed, with status 503")
+    unsafeIOToPageM (js_server_offline True)
+    getTeam env `shouldReturn` Left (Unreachable "the network or the server is down")
+    overHttp env (attempt listSpaces) `shouldReturn` Left (Unreachable "the network or the server is down")
+    serverStops
+
+views :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+views m = describe "the application over it" $ do
+  let tour = Page (slugs ["docs"]) (slugs ["tour"])
+  it "shows that it is loading until the server answers, then the page" $ runPage $ do
+    serverStarts
+    serveDemo
+    unsafeIOToPageM js_server_hold
+    ui <- startServer m tour
+    find ui ".wiki-content > .loading" >>= (`shouldHaveText` "Loading…")
+    length <$> findAll ui ".breadcrumbs li" `shouldReturn` 0
+    unsafeIOToPageM js_server_release
+    find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Tour")
+    find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
+    -- The page came with its space's pages: it was not asked for again.
+    urls <- map (\r -> r.url) <$> asked
+    filter (T.isInfixOf "/pages/at/") urls `shouldBe` []
+    -- A page of the same space opens at once, from what was read.
+    before <- length <$> asked
+    find ui ".wiki-sidebar .page-tree a[href='#/s/docs/p/markdown-guide/']" >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
+    length <$> asked `shouldReturn` before
+    unmount ui
+    serverStops
+
+  it "opens the editor once the page and the draft have come, and saves against the page's version" $ runPage $ do
+    serverStarts
+    serveDemo
+    hello <- unsafeIOToPageM helloWorld
+    answerWith "PUT" ("api/v1/pages/" <> hello.id.text) 200 hello
+    ui <- startServer m (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
+    find ui ".editor-save" >>= click
+    find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
+    saves <- filter (\r -> r.method == "PUT" && not ("/draft" `T.isSuffixOf` r.url)) <$> asked
+    map (\r -> Map.lookup "If-Match" r.headers) saves `shouldBe` [Just "\"2026-09-01T12:00:00Z\""]
+    unmount ui
+    serverStops
+
+  it "says when the server cannot be reached, and tries again when asked" $ runPage $ do
+    serverStarts
+    serveDemo
+    unsafeIOToPageM (js_server_offline True)
+    ui <- startServer m (Space (slugs ["docs"]))
+    find ui ".wiki-content .error-unreachable" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "could not be reached")
+    unsafeIOToPageM (js_server_offline False)
+    find ui ".wiki-content .error-unreachable button.retry" >>= click
+    find ui ".space-view h1" >>= (`shouldHaveText` "Docs")
+    unmount ui
+    serverStops
+
+  it "adopts the server's page with nothing to repair, then loads into it" $ runPage $ do
+    serverStarts
+    serveDemo
+    unsafeIOToPageM js_server_hold
+    -- The page as the server's build has it: the shell before anything
+    -- has come, which is the same at every address.
+    first' <- startServer m Home
+    _ <- find first' ".wiki-content > .loading"
+    html <- fromJSText <$> unsafeIOToPageM js_markup
+    unmount first'
+    page <- htmlContainer html
+    shell <- findIn page ".wiki"
+    before <- findAllIn page "*"
+    ui <- adoptServer m page tour
+    after <- findAll ui "*"
+    length after `shouldBe` length before
+    zipWithM_ shouldBeSameElement after before
+    unsafeIOToPageM js_server_release
+    find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
+    find ui ".wiki" >>= (`shouldBeSameElement` shell)
+    unmount ui
+    serverStops

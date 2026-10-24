@@ -16,7 +16,16 @@
 # (index.html, s/<space>/index.html, s/<space>/p/<page>/index.html, and
 # 404.html for every other address), so that each shows before app.wasm has
 # loaded. HALOGEN_BASE_PATH, if set, is the path the site is served under,
-# written into each page's <base href>. Finally the sizes of what is served are
+# written into each page's <base href>.
+#
+# WIKI_BACKEND says which wiki the pages are for: demo (the default), the
+# serverless demo, whose program keeps the wiki in the browser, with a page
+# per route of the demo's content; or server, for wiki-server, whose program
+# asks it over HTTP, with one page, the application before it has loaded
+# anything, written as index.html and 404.html (wiki-app-prerender --server).
+# app.wasm is the same either way: the page's <meta name="wiki-backend"> says
+# which backend it runs on. WIKI_PUBLIC_DIR, if set, is the output directory
+# instead of $WASM_BUILDDIR/public/app. Finally the sizes of what is served are
 # reported, raw, gzipped and brotli'd (toolchain/compress.mjs).
 #
 # WASM_PROJECT and WASM_BUILDDIR choose the cabal project file and the build
@@ -37,7 +46,13 @@ cd "$(dirname "$0")/.."
 package=wiki-app
 project=${WASM_PROJECT:-cabal-wasm.project}
 build_dir=${WASM_BUILDDIR:-dist-newstyle/wasm}
-public_dir=$build_dir/public/app
+public_dir=${WIKI_PUBLIC_DIR:-$build_dir/public/app}
+backend=${WIKI_BACKEND:-demo}
+case $backend in
+  demo) prerender_args= ;;
+  server) prerender_args=--server ;;
+  *) printf 'build-wasm.sh: WIKI_BACKEND is demo or server, not %s\n' "$backend" >&2; exit 2 ;;
+esac
 
 wasm_ghc=$(command -v wasm32-wasi-ghc)
 wasm_ghc_pkg=$(command -v wasm32-wasi-ghc-pkg)
@@ -99,8 +114,9 @@ prerender_bin=$(
   cabal build -v0 "$package:exe:$prerender" --builddir=dist-newstyle/native >&2
   cabal list-bin -v0 "$package:exe:$prerender" --builddir=dist-newstyle/native
 )
-"$prerender_bin" web/index.html "$public_dir"
-printf 'Prerendered %s with %s.\n' "$public_dir/index.html" "$prerender"
+# shellcheck disable=SC2086 # empty, or one flag
+"$prerender_bin" $prerender_args web/index.html "$public_dir"
+printf 'Prerendered %s with %s, for the %s.\n' "$public_dir/index.html" "$prerender" "$backend"
 
 # GitHub Pages compresses on the fly, so only report the sizes rather than
 # writing precompressed copies next to the files.

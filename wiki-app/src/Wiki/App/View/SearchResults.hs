@@ -18,7 +18,7 @@ import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
-import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.App.View.Search (hitContents, spaceNamesOf)
@@ -41,26 +41,31 @@ data Results
   | -- | The space searched is not one the user can see.
     NoSpace
   | Hits [SearchHit]
+  | -- | Not searched yet: the backend would have waited.
+    Searching
+  | -- | The search could not be made.
+    SearchFailed WikiError
 
 data State = State
   { input :: Input
   , results :: Results
   }
 
-data Action = Initialize | Receive Input | Followed (Follow Route)
+data Action = Initialize | Receive Input | Followed (Follow Route) | Retry
 
 -- | As many hits as a page of results lists: more than anyone reads through,
 -- few enough that the page stays quick to render.
 limitOf :: Int
 limitOf = 200
 
-component :: forall query m. (MonadWiki m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
       { -- Searched at once rather than in 'Initialize', so that the first
-        -- render is the page the prerender shows (see "Wiki.App.Shell").
-        initialState = \input -> State input <$> search input
+        -- render is the page the prerender shows (see "Wiki.App.Shell"),
+        -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
+        initialState = \input -> State input . fromMaybe Searching <$> atOnce (search input)
       , render
       , eval =
           H.mkEval
@@ -83,6 +88,8 @@ component =
         found = case results of
           NoQuery -> [[hh|<p class="empty">Type what to look for in the search box at the top of the page, or press / to get there.</p>|]]
           NoSpace -> [[hh|<p class="empty">There is no such space to search in, or you may not see it.</p>|]]
+          Searching -> [[hh|<p class="loading">Searching…</p>|]]
+          SearchFailed e -> [failureView e Retry]
           Hits hits ->
             [hhs|
               <p class="search-summary">{{ summary input (length hits) }}</p>
@@ -97,8 +104,15 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case
-      -- The results came with the initial state: the shell is told.
-      Initialize -> H.raise Loaded
+      -- The results came with the initial state, and the shell is told;
+      -- or they are searched for now.
+      Initialize ->
+        gets (\st -> st.results) >>= \case
+          Searching -> load
+          _ -> H.raise Loaded
+      Retry -> do
+        modify (\st -> st {results = Searching})
+        load
       Receive input -> do
         before <- gets (\st -> st.input)
         modify (\st -> st {input})
@@ -108,7 +122,8 @@ component =
     load :: H.HalogenM State Action Empty ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      results <- search input
+      -- On a worker, where the backend's failure to answer is caught.
+      results <- either SearchFailed identity <$> lift (attempt (search input))
       -- Unless the input has changed meanwhile, whose own load will come.
       now <- gets (\st -> st.input)
       unless (differs now input) $ do

@@ -24,6 +24,7 @@ module Wiki.App.View.Common
 
     -- * HTML
   , errorView
+  , failureView
   , errorMessage
   , pageTree
   , moveButtons
@@ -117,6 +118,21 @@ errorView e = [hh|<div class="error {{ errorClass e }}" role="alert">{{ errorMes
       Forbidden -> "error-forbidden"
       Conflict _ -> "error-conflict"
       Invalid _ -> "error-invalid"
+      Unreachable _ -> "error-unreachable"
+
+-- | What could not be loaded, and why: 'errorView', with a button to try
+-- again when the backend could not be reached, which is the one error that
+-- trying again may cure.
+failureView :: WikiError -> i -> HH.HTML w i
+failureView e again = case e of
+  Unreachable _ ->
+    [hh|
+      <div class="error error-unreachable" role="alert">
+        {{ errorMessage e }}
+        <button type="button" class="retry" onClick={{ const again }}>Try again</button>
+      </div>
+    |]
+  _ -> errorView e
 
 errorMessage :: WikiError -> Text
 errorMessage = \case
@@ -124,6 +140,7 @@ errorMessage = \case
   Forbidden -> "You do not have permission for this. Switch to someone who has, at the top right."
   Conflict why -> why
   Invalid why -> why
+  Unreachable why -> "The wiki's server could not be reached (" <> why <> "). Check the connection, and try again."
 
 -- | The pages of a space as a tree of links, in the space's page order, the
 -- current page marked, and after each link what the function gives for the

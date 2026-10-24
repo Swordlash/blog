@@ -1,9 +1,11 @@
 -- | What the application asks of wherever the wiki is kept.
 --
 -- Components never know which backend they run on: they are polymorphic in
--- their monad and ask for @'MonadWiki' m@. There are two implementations, the
--- in-memory one of the serverless demo ("Wiki.App.Backend.Mem") and, from
--- Phase 2, one over HTTP; the server keeps the wiki in its own, over SQLite.
+-- their monad and ask for @'MonadWiki' m@. There are two implementations in
+-- the browser, the in-memory one of the serverless demo
+-- ("Wiki.App.Backend.Mem") and one over the server's HTTP API
+-- ("Wiki.App.Backend.Http"); the server keeps the wiki in its own, over
+-- SQLite.
 -- All of them pass the same contract tests ("Wiki.App.Backend.Contract", the
 -- library @wiki-app:contract@), which is what this module's prose promises.
 --
@@ -23,6 +25,14 @@
 --    move that would make a space its own ancestor, an attachment too large).
 -- 4. 'Conflict': the request was right when it was made, but the wiki has
 --    changed since (a save based on an older version of the page).
+--
+-- A backend that keeps the wiki elsewhere (over HTTP) can fail to ask at
+-- all: the network is down, the server does not answer in time, or it
+-- breaks. That is 'Unreachable', which no rule decides and which may well
+-- not happen again: a component offers to try again. The three reads that
+-- cannot be refused, and so have no @Either@ ('session', 'listSpaces',
+-- 'searchPages'), throw it instead, and whoever shows what they read
+-- catches it with 'attempt' ("Loading" below).
 --
 -- = Permissions
 --
@@ -53,6 +63,20 @@
 --
 -- Whoever creates a space is granted 'AdministerSpace' on it, so that a user
 -- with 'CreateSpaces' alone can do something with the space they made.
+--
+-- = Loading
+--
+-- The in-memory backend answers at once; one over HTTP waits for the
+-- network, except for what it has seen already and keeps. A component
+-- loads what it shows in its initial state when the backend can answer at
+-- once ('atOnce'), so that its first render is the page a prerender shows,
+-- and otherwise renders that it is loading and loads in its initializer, as
+-- a fiber, so that the tree's loop never waits on the network (decision 18
+-- of the plan). That is 'MonadLoad', a class of its own beside this one
+-- because its methods take a program of the backend's rather than return
+-- one, which a monad transformer cannot lift: it is asked of the
+-- component's own monad, in an initial state or through
+-- 'Halogen.Query.HalogenM.lift', never of 'HalogenM'.
 --
 -- = Order
 --
@@ -85,6 +109,10 @@ module Wiki.App.Backend
   ( -- * The interface
     MonadWiki (..)
   , WikiError (..)
+
+    -- * Loading
+  , MonadLoad (..)
+  , unreachable
 
     -- * Who is asking
   , Session (..)
@@ -127,7 +155,21 @@ data WikiError
   | -- | The request cannot be carried out as it is: the text says why, for a
     -- person to read.
     Invalid Text
+  | -- | The backend could not be asked, or failed to answer: the network is
+    -- down, the server took too long or broke. Nothing was refused, and
+    -- trying again may well work. The text says what happened, for a
+    -- person to read. The in-memory backend never gives it.
+    Unreachable Text
   deriving stock (Eq, Show)
+
+-- | 'Unreachable', thrown by the reads that have no @Either@ to return it
+-- in ('session', 'listSpaces', 'searchPages'), for 'attempt' to catch.
+instance Exception WikiError
+
+-- | Throw that the backend could not be asked, from a read that has no
+-- @Either@ to say so in.
+unreachable :: (MonadIO m) => Text -> m a
+unreachable = liftIO . throwIO . Unreachable
 
 -- | Who the current user is, as the client needs it to run the permission
 -- rules itself and hide what it cannot do.
@@ -383,3 +425,21 @@ class (Monad m) => MonadWiki m where
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadWiki m) => MonadWiki (HalogenM st act slots output m)
+
+-- | How a backend answers: at once, or after a wait that may fail. See
+-- "Loading" in the module's Haddock.
+--
+-- There is deliberately no instance for 'HalogenM': both methods run a
+-- program of the backend's own, which a component reaches through
+-- 'Halogen.Query.HalogenM.lift' (@H.lift (attempt fetchWorld)@), on a
+-- worker, so that the loop goes on meanwhile.
+class (MonadWiki m) => MonadLoad m where
+  -- | What these reads give, if the backend can answer all of them without
+  -- waiting: the in-memory backend always can, one over HTTP for what it
+  -- has seen and kept since the wiki last changed. 'Nothing' means the
+  -- reads would wait; nothing is asked of the network then.
+  atOnce :: m a -> m (Maybe a)
+
+  -- | Run a program, with 'Unreachable' thrown by 'session', 'listSpaces'
+  -- or 'searchPages' given back as the error rather than thrown on.
+  attempt :: m a -> m (Either WikiError a)

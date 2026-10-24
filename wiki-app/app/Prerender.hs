@@ -1,7 +1,8 @@
 -- | Write the application's pages, one per route of the demo, each with the
--- application already rendered into it for that route.
+-- application already rendered into it for that route; or, for a wiki a
+-- server keeps, the two pages its build serves.
 --
---   wiki-app-prerender TEMPLATE OUTPUT-DIR
+--   wiki-app-prerender [--server] TEMPLATE OUTPUT-DIR
 --
 -- The template, @web/index.html@, has an empty @\<div id=\"app\">\<\/div>@.
 -- The front page goes to @OUTPUT-DIR\/index.html@, each space's to
@@ -26,6 +27,16 @@
 -- @\<base href>@: the template's relative @.\/index.js@ and @.\/style.css@
 -- then resolve to the same files from every directory, and the program reads
 -- its router's base from it ('Halogen.Router.pageBase').
+--
+-- With @--server@, the build is for @wiki-server@, which serves the wiki it
+-- keeps: the program is to talk to it over HTTP, which the page says by its
+-- @\<meta name=\"wiki-backend\">@ (the template's says @demo@, and this
+-- writes @server@ there; @Main.hs@ reads it). Its content is the server's,
+-- unknown at build time, so there is one page to write: the application as
+-- it shows before it has loaded anything ('renderLoading'), the same at
+-- every address. It goes to @OUTPUT-DIR\/index.html@ and
+-- @OUTPUT-DIR\/404.html@, which the server serves for every other
+-- address, and any page a demo build left there is removed.
 module Main (main) where
 
 import Data.ByteString qualified as B
@@ -34,21 +45,29 @@ import Halogen.Router qualified as Router
 import Halogen.Static (fillMountPoint)
 import Halogen.VDom.DOM.Monad (runMemDOM)
 import Protolude
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist, removeDirectoryRecursive)
 import System.Environment (lookupEnv)
 import System.FilePath (takeDirectory, (</>))
 import Wiki.App (Route (..), route)
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.App.Static (Rendered (..), prerenderedRoutes, renderRoute)
+import Wiki.App.Static (Rendered (..), prerenderedRoutes, renderLoading, renderRoute)
 
 main :: IO ()
 main = do
-  (template, outputDir) <-
+  (server, template, outputDir) <-
     getArgs >>= \case
-      [template, outputDir] -> pure (template, outputDir)
-      _ -> die "usage: wiki-app-prerender TEMPLATE OUTPUT-DIR"
+      [template, outputDir] -> pure (False, template, outputDir)
+      ["--server", template, outputDir] -> pure (True, template, outputDir)
+      _ -> die "usage: wiki-app-prerender [--server] TEMPLATE OUTPUT-DIR"
   base <- maybe "/" toS <$> lookupEnv "HALOGEN_BASE_PATH"
   page <- decodeUtf8 <$> B.readFile template
+  unless (backendMeta "demo" `T.isInfixOf` page) $
+    die (toS template <> ": no " <> backendMeta "demo" <> " to say which backend the page runs on")
+  if server then serverPages base template outputDir page else demoPages base template outputDir page
+
+-- | The demo's pages, one per route.
+demoPages :: Text -> FilePath -> FilePath -> Text -> IO ()
+demoPages base template outputDir page = do
   let demo = demoState demoNow
   -- Only for its addresses: 'Router.href' with the base, natively.
   router <- runMemDOM (Router.newRouter base Unknown route)
@@ -61,6 +80,23 @@ main = do
           _ -> outputDir </> toS (T.drop (T.length home) (Router.href router r)) </> "index.html"
     createDirectoryIfMissing True (takeDirectory file)
     B.writeFile file (encodeUtf8 filled)
+
+-- | The server's two pages, and none of a demo build's: a page of the
+-- demo's left at a space's address would be served there in place of the
+-- server's wiki.
+serverPages :: Text -> FilePath -> FilePath -> Text -> IO ()
+serverPages base template outputDir page = do
+  for_ ["s", "search"] $ \dir ->
+    doesDirectoryExist (outputDir </> dir) >>= (`when` removeDirectoryRecursive (outputDir </> dir))
+  router <- runMemDOM (Router.newRouter base Unknown route)
+  Rendered {html, title} <- renderLoading base
+  let served = T.replace (backendMeta "demo") (backendMeta "server") (withBase (Router.href router Home) (withTitle title page))
+  filled <- either (die . ((toS template <> ": ") <>)) pure (fillMountPoint "app" html served)
+  for_ ["index.html", "404.html"] $ \file -> B.writeFile (outputDir </> file) (encodeUtf8 filled)
+
+-- | The element that says which backend the page's program runs on.
+backendMeta :: Text -> Text
+backendMeta backend = "<meta name=\"wiki-backend\" content=\"" <> backend <> "\">"
 
 -- | The page with a @\<base href>@ first in its head, before anything it
 -- applies to.

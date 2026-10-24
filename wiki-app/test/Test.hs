@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Protolude
+import Test.Backend.Http qualified as Http
 import Test.Backend.Mem qualified as Mem
 import Test.Backend.Persist qualified as Persist
 import Test.Demo qualified as Demo
@@ -16,6 +17,7 @@ main :: IO ()
 main = hspec $ do
   Islands.spec
   Mem.spec
+  Http.spec
   Persist.spec
   Demo.spec
   Export.spec

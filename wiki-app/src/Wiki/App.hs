@@ -7,6 +7,7 @@
 module Wiki.App
   ( component
   , input
+  , serverInput
   , module Wiki.App.Route
   )
 where
@@ -14,11 +15,18 @@ where
 import Halogen.Router (Router)
 import Protolude
 import Wiki.App.Demo (tourPath)
+import Wiki.App.DemoUsers (MonadDemoUsers, demoControls)
 import Wiki.App.Route
 import Wiki.App.Shell (component)
 import Wiki.App.Shell qualified as Shell
 
--- | The shell's input for the demo: the router, and the demo's tour for a
--- newcomer.
-input :: Router Route -> Shell.Input
-input router = Shell.Input {router, welcome = Just (uncurry Page tourPath)}
+-- | The shell's input for the demo: the router, the demo's tour for a
+-- newcomer, and its controls.
+input :: (MonadDemoUsers m) => Router Route -> Shell.Input m
+input router = Shell.Input {router, welcome = Just (uncurry Page tourPath), demo = Just demoControls}
+
+-- | The shell's input for a wiki a server keeps: the router alone. The
+-- server's wiki is its owner's, with no tour in it, and people sign in to
+-- it rather than switch.
+serverInput :: Router Route -> Shell.Input m
+serverInput router = Shell.Input {router, welcome = Nothing, demo = Nothing}

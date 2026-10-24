@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+`toApiError` gives `Maybe ApiError`: the application's `WikiError` has an
+`Unreachable`, which is no refusal and has no `ApiError`. `wikiError` answers
+it with a 503, which a client reads as the server failing; the storage never
+gives it.
+
 The server. `wiki-server serve` (also what runs with no command) opens the
 storage in `--data DIR` and serves the wiki on two listeners, each a Warp
 server, in one process over one storage:

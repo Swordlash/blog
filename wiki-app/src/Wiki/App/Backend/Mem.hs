@@ -55,7 +55,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailure (..), MonadIndexedDB, StoreName (..))
 import Web.Storage.IndexedDB qualified as IDB
-import Wiki.App.Backend (MonadWiki (..), WikiError)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
 import Wiki.App.Backend.Mem.Persist (Records, Stored (..), changes, records, restore, storeNames)
 import Wiki.App.Backend.Mem.State
@@ -196,6 +196,12 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
                   | otherwise -> (s, made)
               when (kept /= made) (js_revoke_object_url (toJSText made))
               pure kept
+
+-- | Everything is in memory: every read answers at once, and nothing is
+-- ever out of reach.
+instance (MonadIO m) => MonadLoad (MemWiki m) where
+  atOnce = fmap Just
+  attempt = fmap Right
 
 -- | A URL for these bytes: an object URL in a browser, and natively, where
 -- nothing serves one, a @data:@ URL with the bytes in it.

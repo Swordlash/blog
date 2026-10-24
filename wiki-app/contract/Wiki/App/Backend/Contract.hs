@@ -5,8 +5,8 @@
 -- The spec is written once and run against each backend, given a 'Fixture'
 -- that starts it with the demo's content and signs in as each user: the
 -- in-memory one (@Test.Backend.Mem@ in @wiki-app-test@), the server's SQLite
--- storage (@Test.Storage.Contract@ in @wiki-server-test@), and the HTTP one
--- in time. It is a library of its own, @wiki-app:contract@, for that.
+-- storage (@Test.Storage.Contract@ in @wiki-server-test@), and the one over
+-- HTTP against the server's API (@Test.Server.Http@ there). It is a library of its own, @wiki-app:contract@, for that.
 module Wiki.App.Backend.Contract
   ( spec
   , Fixture (..)

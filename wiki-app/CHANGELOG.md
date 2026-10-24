@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+The application runs over the wiki's server too. `Wiki.App.Backend.Http` is
+`HttpWiki`, a `MonadWiki` over the server's HTTP API (`wiki-api`): every
+address from `Wiki.Api.Links`, relative to the page's `<base href>`; saves
+with the version they started from in `If-Match`; attachments uploaded as a
+multipart form it writes itself (`Wiki.App.Backend.Http.Request`); a refusal
+read from its `ApiError` body, or its status, as the `WikiError` of the same
+name. It goes through a `Transport`: the browser's `fetch` (one call, which
+waits for the whole answer and gives up after 30 seconds, six minutes for an
+upload), or anything else that answers a request (the server's tests call
+its application in process). What it reads it keeps, per entity
+(`Wiki.App.Backend.Http.Cache`), until the client next writes; a draft's
+writes keep the rest. `wiki-app` now depends on `wiki-api`, which puts
+servant's link types in `app.wasm` (248 KiB more, 57 KiB brotli'd).
+
+`WikiError` has a fifth constructor, `Unreachable`: the backend could not be
+asked, or failed to answer (no network, no answer in time, a 5xx, an answer
+that is not the API's). The three reads that have no `Either` (`session`,
+`listSpaces`, `searchPages`) throw it, and `attempt` catches it. The in-memory
+backend never gives it. `Wiki.App.View.Common.failureView` shows an error with
+a "Try again" button when trying again may help.
+
+A new class, `MonadLoad` (`atOnce`, `attempt`), says how a backend answers.
+The shell and the views that load what they show in their initial state (the
+page, its source, the editor, the search results) do so only when the backend
+can answer at once (`atOnce`): the in-memory backend always, `HttpWiki` from
+what it has kept. Otherwise they render "Loading…" (shown only after 0.4 s, so
+a quick answer does not flicker) and load in their initializer, on a worker,
+so that the tree's loop never waits on the network. The demo's first render,
+and so its prerender and hydration, are unchanged. Components ask for
+`MonadLoad m` where they asked for `MonadWiki m`.
+
+The shell no longer needs `MonadDemoUsers`: the demo's controls come with its
+input (`Shell.Input`'s `demo`, a `Demo` record of `Wiki.App.DemoUsers`,
+`demoControls` of the class), and `Wiki.App.input` gives them while
+`Wiki.App.serverInput` does not. Without them the header shows who is signed
+in rather than the switcher, and the administration's "Wiki data" exports the
+server's wiki (`api/v1/export`) and says that importing comes next. Before
+the session and the spaces have loaded, the shell is the same at every
+address (no breadcrumbs, no spaces, "Loading…").
+
+`Main.hs` picks the backend from the page's `<meta name="wiki-backend">`
+(`Wiki.App.Browser.pageBackend`): `server` runs `HttpWiki`, anything else the
+demo. `wiki-app-prerender --server` writes the server's two pages
+(`index.html`, `404.html`), the application before it has loaded anything
+(`Wiki.App.Static.renderLoading`), with that meta saying `server`; the
+template, `web/index.html`, says `demo`.
+
 The backend's contract, the hspec spec every `MonadWiki` passes, is a public
 library of this package, `wiki-app:contract` (`Wiki.App.Backend.Contract`),
 so that the server's storage runs the same spec as the in-memory backend. Its

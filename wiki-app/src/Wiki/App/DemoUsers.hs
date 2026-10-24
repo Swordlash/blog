@@ -10,6 +10,8 @@
 -- instance, and the shell there offers a sign-in instead.
 module Wiki.App.DemoUsers
   ( MonadDemoUsers (..)
+  , Demo (..)
+  , demoControls
   )
 where
 
@@ -71,3 +73,20 @@ instance (MonadIO m) => MonadDemoUsers (MemWiki m) where
 
 -- | A component's handlers switch through its monad.
 instance (MonadDemoUsers m) => MonadDemoUsers (HalogenM st act slots output m)
+
+-- | The class's methods as values: what the shell is handed when it runs
+-- over a backend that has them, and not handed over one that has none
+-- (the server's, whose people sign in rather than switch), so that the
+-- shell does not ask its monad for an instance it may not have.
+data Demo m = Demo
+  { listUsers :: m [User]
+  , switchTo :: Maybe UserId -> m ()
+  , resetDemo :: m ()
+  , demoKept :: m Bool
+  , exportDemo :: m Archive
+  , importDemo :: Archive -> m (Either Text ())
+  }
+
+-- | The demo's controls, from the monad's instance.
+demoControls :: (MonadDemoUsers m) => Demo m
+demoControls = Demo {listUsers, switchTo, resetDemo, demoKept, exportDemo, importDemo}

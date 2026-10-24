@@ -24,6 +24,22 @@
 -- laid out as a heading per section, the wiki's data the first, so that later
 -- sections (users and groups) go beside it.
 --
+-- Over a backend that answers at once (the demo's), the shell loads all of
+-- that with its initial state, so that its first render is the page the
+-- prerender shows. Over one that would wait (the server's), it starts with
+-- what that backend has kept, if anything, and otherwise with the frame
+-- alone, the same at every address (no breadcrumbs, no spaces, "Loading…"),
+-- which is what the server's pages are prerendered as, and loads the rest
+-- in its initializer ("Loading" in "Wiki.App.Backend"). What could not be
+-- loaded because the server could not be reached says so, with a button
+-- to try again.
+--
+-- The demo's controls (its users to switch between, and its content to
+-- reset, export and import) come with the input ('Demo'), over the
+-- backend that has them; without them the header says who is signed in,
+-- and the administration's section on the wiki's data offers the
+-- server's export.
+--
 -- The route is the router's ('Router.current' at the start, then
 -- 'Router.changes'), so links, the back and forward buttons and a reload all
 -- arrive at the same place.
@@ -55,9 +71,11 @@ import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Web.Event.Event (Event)
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
+import Wiki.Api (ArchiveApi (..), WikiApi (..))
+import Wiki.Api.Links (links)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous)
 import Wiki.App.Browser (download, historyEntry, historyGo, setDocumentTitle, unzipFiles, zipFiles)
-import Wiki.App.DemoUsers (MonadDemoUsers (..))
+import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
@@ -79,11 +97,13 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id, name, pageOrder, public, slug), subspacesOf)
 import Wiki.Core.User (User (..))
 
--- | The router, and a route the home page invites a newcomer to (the
--- demo's tour), if there is one.
-data Input = Input
+-- | The router, a route the home page invites a newcomer to (the demo's
+-- tour), if there is one, and the demo's controls, over a backend that has
+-- them.
+data Input m = Input
   { router :: Router Route
   , welcome :: Maybe Route
+  , demo :: Maybe (Demo m)
   }
 
 -- | Whether the shell has loaded everything the route shows; when it has,
@@ -108,9 +128,19 @@ data Here
   | SpaceFailed [Slug] WikiError
   | InSpace [Slug] Space [Page]
 
-data State = State
+-- | Whether what every route shows (who is signed in, the tree of spaces)
+-- has been loaded.
+data World
+  = WorldLoading
+  | WorldFailed WikiError
+  | WorldReady
+  deriving stock (Eq)
+
+data State m = State
   { router :: Router Route
   , welcome :: Maybe Route
+  , demo :: Maybe (Demo m)
+  , world :: World
   , route :: Route
   , session :: Session
   , users :: [User]
@@ -166,11 +196,13 @@ data Action
   | FromView ViewOutput
   | Leave
   | Stay
+  | RetryWorld
+  | RetryHere
 
 component
   :: forall output m
-   . (MonadWiki m, MonadDemoUsers m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
-  => H.Component Query Input output m
+   . (MonadLoad m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
+  => H.Component Query (Input m) output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -179,15 +211,21 @@ component =
         -- that is the HTML 'Halogen.VDom.Driver.hydrateUI' adopts, and a
         -- first render of the empty state would take it all apart, only for
         -- the initializer to build it again.
-        initialState = \Input {router, welcome} -> do
+        -- Over a backend that would wait, it is loaded in 'Initialize'
+        -- instead, unless the backend has kept it.
+        initialState = \Input {router, welcome, demo} -> do
           route <- Router.current router
-          (signedIn, users, spaces) <- fetchWorld
-          kept <- demoKept
-          here <- maybe (pure NoSpace) fetchHere (spaceOfRoute route)
+          loaded <- atOnce $ do
+            world <- fetchWorld demo
+            here <- maybe (pure NoSpace) fetchHere (spaceOfRoute route)
+            pure (world, here)
+          let ((signedIn, users, spaces, kept), here) = fromMaybe ((anonymous, [], [], False), NoSpace) loaded
           pure
             State
               { router
               , welcome
+              , demo
+              , world = if isJust loaded then WorldReady else WorldLoading
               , route
               , session = signedIn
               , users
@@ -212,7 +250,7 @@ component =
               }
       }
   where
-    render :: State -> H.ComponentHTML Action Slots m
+    render :: State m -> H.ComponentHTML Action Slots m
     render st =
       [hh|
         <div class="wiki">
@@ -230,7 +268,7 @@ component =
         </div>
       |]
 
-    header :: State -> H.ComponentHTML Action Slots m
+    header :: State m -> H.ComponentHTML Action Slots m
     header st =
       [hh|
         <header class="wiki-header">
@@ -238,13 +276,13 @@ component =
           {{ breadcrumbs st }}
           {{ searchBox }}
           {{ adminLink st }}
-          {{ userSwitcher st }}
+          {{ whoIsAsking st }}
         </header>
       |]
       where
         searchBox = HH.slot_ "searchBox" () SearchBox.component SearchBox.Input {context = context st}
 
-    breadcrumbs :: State -> H.ComponentHTML Action Slots m
+    breadcrumbs :: State m -> H.ComponentHTML Action Slots m
     breadcrumbs st =
       [hh|
         <nav class="breadcrumbs" aria-label="Breadcrumbs">
@@ -268,7 +306,7 @@ component =
 
     -- The way to the administration, for someone who may administer the
     -- wiki; nobody else is shown it.
-    adminLink :: State -> Maybe (H.ComponentHTML Action Slots m)
+    adminLink :: State m -> Maybe (H.ComponentHTML Action Slots m)
     adminLink st =
       guard (isAdministrator st)
         $> [hh|
@@ -281,8 +319,17 @@ component =
           </a>
         |]
 
+    -- Who is signed in: the demo's menu to switch between its users, or,
+    -- where people do not switch, their name, once it is known.
+    whoIsAsking :: State m -> Maybe (H.ComponentHTML Action Slots m)
+    whoIsAsking st = case st.demo of
+      Just _ -> Just (userSwitcher st)
+      Nothing
+        | st.world == WorldReady -> Just [hh|<span class="user-name">{{ maybe "Not signed in" (\u -> u.displayName) st.session.user }}</span>|]
+        | otherwise -> Nothing
+
     -- The demo's menu of who one is: nobody, or one of its users.
-    userSwitcher :: State -> H.ComponentHTML Action Slots m
+    userSwitcher :: State m -> H.ComponentHTML Action Slots m
     userSwitcher st =
       [hh|
         <div class="user-switcher">
@@ -311,7 +358,7 @@ component =
 
     -- The administration of the wiki, for someone who may administer it;
     -- anyone else is told whom it is for, and how to become one in the demo.
-    admin :: State -> H.ComponentHTML Action Slots m
+    admin :: State m -> H.ComponentHTML Action Slots m
     admin st
       | isAdministrator st =
           [hh|
@@ -323,7 +370,7 @@ component =
                   The whole wiki as one file: export it to keep a copy or to take it to another
                   browser, or import one to replace everything here.
                 </p>
-                {{ demoControls st }}
+                {{ dataControls st }}
               </section>
             </section>
           |]
@@ -337,13 +384,32 @@ component =
       where
         refusal :: Text
         refusal
+          | isNothing st.demo = "This page is for the wiki's administrators."
           | isNothing st.session.user =
               "This page is for the wiki's administrators, and you are not signed in. To sign in as one, choose who you are at the top right."
           | otherwise = "This page is for the wiki's administrators, which you are not. Switch to one at the top right."
 
+    -- What can be done with the wiki's data: the demo's, or the server's.
+    dataControls :: State m -> H.ComponentHTML Action Slots m
+    dataControls st = maybe serverControls (const (demoControls st)) st.demo
+
+    -- The server's content as a whole: its export, which the browser
+    -- downloads as the file the server names. Importing into the server,
+    -- which merges an archive into what is there, is to come.
+    serverControls :: H.ComponentHTML Action Slots m
+    serverControls =
+      [hh|
+        <div class="demo-controls server-controls">
+          <div class="actions">
+            <a class="button demo-export" href={{ links.archive.export }} download>Export the wiki</a>
+          </div>
+          <p class="admin-note">Importing a wiki into this server is not here yet: it comes with the next version.</p>
+        </div>
+      |]
+
     -- The demo's content as a whole: whether it is kept, exporting it,
     -- importing one, and resetting it, the last two asking first, in place.
-    demoControls :: State -> H.ComponentHTML Action Slots m
+    demoControls :: State m -> H.ComponentHTML Action Slots m
     demoControls st = case st.panel of
       ConfirmingReset ->
         [hh|
@@ -384,7 +450,7 @@ component =
           | st.kept = "Changes to the demo are kept in this browser."
           | otherwise = "This browser keeps nothing for the demo: changes last until the page is closed."
 
-    sidebar :: State -> H.ComponentHTML Action Slots m
+    sidebar :: State m -> H.ComponentHTML Action Slots m
     sidebar st =
       [hh|
         <nav class="wiki-sidebar" aria-label="Spaces">
@@ -395,15 +461,15 @@ component =
       |]
 
     -- A link to a new space at the top level, for someone who may make one.
-    newSpace :: State -> Text -> Maybe (H.ComponentHTML Action Slots m)
+    newSpace :: State m -> Text -> Maybe (H.ComponentHTML Action Slots m)
     newSpace st cls =
       guard (mayCreateSpace (principalOf (context st)) st.session.grants Nothing)
         $> [hh|<a class="{{ cls }}" {{ Router.linkProps st.router Followed (NewSpace Nothing) }}>New space</a>|]
 
-    spaceLevel :: State -> Maybe SpaceId -> H.ComponentHTML Action Slots m
+    spaceLevel :: State m -> Maybe SpaceId -> H.ComponentHTML Action Slots m
     spaceLevel st parent = [hh|<ul class="space-tree">{{ map (spaceNode st) (subspacesOf st.spaces parent) }}</ul>|]
 
-    spaceNode :: State -> Space -> H.ComponentHTML Action Slots m
+    spaceNode :: State m -> Space -> H.ComponentHTML Action Slots m
     spaceNode st s =
       [hh|
         <li class="space-node{% if current %} current{% end %}">
@@ -456,8 +522,14 @@ component =
           InSpace _ here pages | here.id == s.id, not (null pages) -> Just (pageTree st.router Followed path here.pageOrder pages ((\p -> p.id) <$> currentPage st) (\_ _ _ -> []))
           _ -> Nothing
 
-    content :: State -> H.ComponentHTML Action Slots m
-    content st = case st.route of
+    content :: State m -> H.ComponentHTML Action Slots m
+    content st = case (st.world, st.route) of
+      (WorldLoading, _) -> loading
+      (WorldFailed e, _) -> failureView e RetryWorld
+      (WorldReady, route) -> routeContent st route
+
+    routeContent :: State m -> Route -> H.ComponentHTML Action Slots m
+    routeContent st = \case
       Home -> home st
       Unknown -> notFound st
       Admin -> admin st
@@ -466,8 +538,8 @@ component =
         HH.slot "searchResults" () SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
       _ -> case st.here of
         NoSpace -> notFound st
-        LoadingSpace _ -> [hh|<p class="loading">Loading…</p>|]
-        SpaceFailed _ e -> errorView e
+        LoadingSpace _ -> loading
+        SpaceFailed _ e -> failureView e RetryHere
         InSpace _ space pages -> case st.route of
           Page _ path -> HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path} FromView
           PageSource _ path -> HH.slot "source" () SourceView.component SourceView.Input {context = context st, space, path} FromView
@@ -476,6 +548,9 @@ component =
           EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path} FromView
           NewPage _ parent -> HH.slot "newPage" () NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
           _ -> HH.slot "space" () SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
+
+    loading :: H.ComponentHTML Action Slots m
+    loading = [hh|<p class="loading">Loading…</p>|]
 
     -- Asked when a route is followed away from unsaved changes ('leaving').
     leaveConfirm :: H.ComponentHTML Action Slots m
@@ -488,7 +563,7 @@ component =
         </div>
       |]
 
-    home :: State -> H.ComponentHTML Action Slots m
+    home :: State m -> H.ComponentHTML Action Slots m
     home st =
       [hh|
         <section class="home">
@@ -511,7 +586,7 @@ component =
           [] -> [hh|<p class="empty">There are no spaces you can see.</p>|]
           roots -> [hh|<ul class="space-list">{{ map (rootSpace st) roots }}</ul>|]
 
-    rootSpace :: State -> Space -> H.ComponentHTML Action Slots m
+    rootSpace :: State m -> Space -> H.ComponentHTML Action Slots m
     rootSpace st s
       | mayView (context st) s.id =
           [hh|
@@ -523,7 +598,7 @@ component =
       | otherwise =
           [hh|<li><span class="unviewable" title="You can see only a subspace of this space">{{ s.name }}</span></li>|]
 
-    notFound :: State -> H.ComponentHTML Action Slots m
+    notFound :: State m -> H.ComponentHTML Action Slots m
     notFound st =
       [hh|
         <section class="not-found">
@@ -540,15 +615,22 @@ component =
         <footer class="wiki-footer">Built with <a href="https://github.com/Swordlash/haskell-halogen">haskell-halogen</a></footer>
       |]
 
-    handleAction :: Action -> H.HalogenM State Action Slots output m ()
+    handleAction :: Action -> H.HalogenM (State m) Action Slots output m ()
     handleAction = \case
       Initialize -> do
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
         entry <- H.liftEffect historyEntry
         modify (\st -> st {entry})
-        -- What the route shows was loaded with the initial state.
-        announce
+        -- What the route shows was loaded with the initial state, unless
+        -- the backend would have waited for it.
+        gets (\st -> st.world) >>= \case
+          WorldReady -> announce
+          _ -> loadEverything
+      RetryWorld -> do
+        modify (\st -> st {world = WorldLoading})
+        loadEverything
+      RetryHere -> loadHere True
       Arrived r -> do
         now <- H.liftEffect historyEntry
         before <- gets (\st -> st.route)
@@ -583,21 +665,21 @@ component =
       ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen})
       -- What was asked or told about the wiki's data was asked of, or told
       -- to, the user one was.
-      SwitchTo user -> do
+      SwitchTo user -> withDemo $ \demo -> do
         modify (\st -> st {menuOpen = False, panel = Actions Nothing, settled = False})
-        switchTo user
+        lift (demo.switchTo user)
         reload Nothing
       AskReset -> modify (\st -> st {panel = ConfirmingReset})
       CancelPanel -> modify (\st -> st {panel = Actions Nothing})
       -- The route stays, the administration, and says what was done, since
       -- nothing else there shows it.
-      ResetDemo -> do
+      ResetDemo -> withDemo $ \demo -> do
         modify (\st -> st {panel = Actions Nothing, settled = False})
-        resetDemo
+        lift demo.resetDemo
         reload Nothing
         report False "The demo's content is back as it was at the start."
-      Export -> do
-        archive <- exportDemo
+      Export -> withDemo $ \demo -> do
+        archive <- lift demo.exportDemo
         let name = "wiki-" <> toS (formatTime defaultTimeLocale "%Y-%m-%d" archive.createdAt) <> ".zip"
         download name "application/zip" =<< zipFiles (writeArchive archive)
         report False ("Exported the wiki as " <> name <> ".")
@@ -613,8 +695,8 @@ component =
             Right archive -> modify (\st -> st {panel = ConfirmingImport file.name archive})
       ConfirmImport ->
         gets (\st -> st.panel) >>= \case
-          ConfirmingImport name archive ->
-            importDemo archive >>= \case
+          ConfirmingImport name archive -> withDemo $ \demo ->
+            lift (demo.importDemo archive) >>= \case
               Left why -> report True ("Not imported: " <> name <> ". " <> why <> ".")
               Right () -> do
                 modify (\st -> st {settled = False})
@@ -624,11 +706,24 @@ component =
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
 
+    -- Something only the demo does, which nothing offers without it.
+    withDemo :: (Demo m -> H.HalogenM (State m) Action Slots output m ()) -> H.HalogenM (State m) Action Slots output m ()
+    withDemo f = gets (\st -> st.demo) >>= traverse_ f
+
+    -- Everything the route shows, which the initial state could not have
+    -- at once.
+    loadEverything :: H.HalogenM (State m) Action Slots output m ()
+    loadEverything = do
+      loadWorld
+      gets (\st -> st.world) >>= \case
+        WorldReady -> loadHere True
+        _ -> pass
+
     -- Say in the administration what an export, an import or a reset did.
-    report :: Bool -> Text -> H.HalogenM State Action Slots output m ()
+    report :: Bool -> Text -> H.HalogenM (State m) Action Slots output m ()
     report refused message = modify (\st -> st {panel = Actions (Just Told {refused, message})})
 
-    arrive :: Route -> Int -> H.HalogenM State Action Slots output m ()
+    arrive :: Route -> Int -> H.HalogenM (State m) Action Slots output m ()
     arrive r entry = do
       -- What was asked or told about the wiki's data is not shown again on
       -- coming back to the administration.
@@ -636,7 +731,7 @@ component =
       loadHere False
 
     -- After a change: everything again, and every view's own data too.
-    reload :: Maybe Route -> H.HalogenM State Action Slots output m ()
+    reload :: Maybe Route -> H.HalogenM (State m) Action Slots output m ()
     reload next = do
       loadWorld
       modify (\st -> st {generation = st.generation + 1})
@@ -647,15 +742,18 @@ component =
       router <- gets (\st -> st.router)
       for_ next (Router.navigate router)
 
-    loadWorld :: H.HalogenM State Action Slots output m ()
+    -- Who is signed in and the tree of spaces, on a worker. If they cannot
+    -- be loaded, the route's content is why, with a button to try again.
+    loadWorld :: H.HalogenM (State m) Action Slots output m ()
     loadWorld = do
-      (s, us, ss) <- fetchWorld
-      kept <- demoKept
-      modify (\st -> st {session = s, users = us, spaces = ss, kept})
+      demo <- gets (\st -> st.demo)
+      lift (attempt (fetchWorld demo)) >>= \case
+        Right (s, us, ss, kept) -> modify (\st -> st {session = s, users = us, spaces = ss, kept, world = WorldReady})
+        Left e -> modify (\st -> st {world = WorldFailed e})
 
     -- The space the route is in, unless it is the one loaded already
     -- (or even so, if forced).
-    loadHere :: Bool -> H.HalogenM State Action Slots output m ()
+    loadHere :: Bool -> H.HalogenM (State m) Action Slots output m ()
     loadHere again = do
       st <- get
       case spaceOfRoute st.route of
@@ -676,24 +774,30 @@ component =
     -- it. A page's view, or the editor, says when it has loaded the page,
     -- and the results of a search when they have come; everything else is
     -- loaded by now.
-    announce :: H.HalogenM State Action Slots output m ()
+    announce :: H.HalogenM (State m) Action Slots output m ()
     announce = do
       st <- get
       H.liftEffect (setDocumentTitle (documentTitle st))
       unless (waitsForPage st) settle
 
-    settle :: H.HalogenM State Action Slots output m ()
+    settle :: H.HalogenM (State m) Action Slots output m ()
     settle = modify (\st -> st {settled = True})
 
-    handleQuery :: Query a -> H.HalogenM State Action Slots output m (Maybe a)
+    handleQuery :: Query a -> H.HalogenM (State m) Action Slots output m (Maybe a)
     handleQuery (Settled reply) = do
       st <- get
       pure (Just (reply (if st.settled then Just (documentTitle st) else Nothing)))
 
 -- | What every route shows around it: who is signed in, who else one may
--- be in the demo, and the tree of spaces.
-fetchWorld :: (MonadWiki n, MonadDemoUsers n) => n (Session, [User], [Space])
-fetchWorld = (,,) <$> session <*> listUsers <*> listSpaces
+-- be in the demo, the tree of spaces, and whether the demo keeps its
+-- changes.
+fetchWorld :: (MonadWiki n) => Maybe (Demo n) -> n (Session, [User], [Space], Bool)
+fetchWorld demo =
+  (,,,)
+    <$> session
+    <*> maybe (pure []) (\d -> d.listUsers) demo
+    <*> listSpaces
+    <*> maybe (pure False) (\d -> d.demoKept) demo
 
 -- | The space at a path, with its pages, or why it cannot be shown.
 fetchHere :: (MonadWiki n) => [Slug] -> n Here
@@ -708,12 +812,12 @@ fetchHere path =
 
 -- | Whether the user may administer the wiki as a whole: who is shown the
 -- administration.
-isAdministrator :: State -> Bool
+isAdministrator :: State m -> Bool
 isAdministrator st = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer
   where
     ctx = context st
 
-context :: State -> Context
+context :: State m -> Context
 context st = Context {router = st.router, session = st.session, spaces = st.spaces, revision = st.generation}
 
 spaceOfRoute :: Route -> Maybe [Slug]
@@ -737,7 +841,7 @@ hereIs path = \case
   LoadingSpace p -> p == path
   NoSpace -> False
 
-waitsForPage :: State -> Bool
+waitsForPage :: State m -> Bool
 waitsForPage st = case (st.route, st.here) of
   (Page _ _, InSpace {}) -> True
   (EditPage _ _, InSpace {}) -> True
@@ -748,7 +852,7 @@ waitsForPage st = case (st.route, st.here) of
 currentPageOf :: [Page] -> [Slug] -> Maybe Page
 currentPageOf pages path = rightToMaybe (resolvePath (findChild pages) path) >>= lastMay
 
-currentPage :: State -> Maybe Page
+currentPage :: State m -> Maybe Page
 currentPage st = case (st.route, st.here) of
   (Page _ path, InSpace _ _ pages) -> currentPageOf pages path
   (EditPage _ path, InSpace _ _ pages) -> currentPageOf pages path
@@ -756,8 +860,10 @@ currentPage st = case (st.route, st.here) of
   _ -> Nothing
 
 -- | What the route is, as far as it has been loaded: a title for it.
-crumbs :: State -> [(Text, Maybe Route)]
+crumbs :: State m -> [(Text, Maybe Route)]
 crumbs st = case st.route of
+  -- The same at every address until there is something to name.
+  _ | st.world /= WorldReady -> []
   Home -> []
   Space path -> spaceCrumbs path
   Page path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath
@@ -784,7 +890,7 @@ crumbs st = case st.route of
         ]
       _ -> []
 
-documentTitle :: State -> Text
+documentTitle :: State m -> Text
 documentTitle st = case reverse (map fst (crumbs st)) of
   -- A space that cannot be shown has no name to show either: what is in
   -- its place says why.

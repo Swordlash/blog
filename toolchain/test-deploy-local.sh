@@ -163,7 +163,7 @@ case $name in
       *) printf 'uid=1000(tester)\n' ;;
     esac ;;
   npm)
-    printf 'npm %s HALOGEN_BASE_PATH=%s\n' "$*" "${HALOGEN_BASE_PATH:-}" >>"$EVENTS"
+    printf 'npm %s HALOGEN_BASE_PATH=%s WIKI_BACKEND=%s\n' "$*" "${HALOGEN_BASE_PATH:-}" "${WIKI_BACKEND:-}" >>"$EVENTS"
     if [ "$1 $2" = "run build-wasm-opt" ]; then
       [ -z "${FAKE_BUILD_FAIL:-}" ] || { printf 'fake build failure\n' >&2; exit 1; }
       out=dist-newstyle/wasm-opt/public/app
@@ -275,7 +275,7 @@ out=$case_dir/first
 deploy --port "$p1" >"$out" 2>&1 || fail 'first install failed'
 assert_contains "$EVENTS" 'bootstrap toolchain'
 assert_contains "$EVENTS" 'npm ci --no-audit --no-fund'
-assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/'
+assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=demo'
 assert_contains "$out" 'first -O2 build'
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/.wiki-toolchain/node/bin/node\" \"$HOME/wiki-demo/server.mjs\" --root \"$HOME/wiki-demo/app\" --port $p1 --bind 127.0.0.2"
 assert_contains "$HOME/$unit" 'Restart=on-failure'
@@ -486,7 +486,7 @@ a1=$(free_port 127.0.0.1)
 data=$HOME/wiki-demo/data
 out=$case_dir/first
 deploy --server --port "$p1" --admin-port "$a1" >"$out" 2>&1 || fail 'the first server deploy failed'
-assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/'
+assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
 assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
 assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.2:$p1 --admin-listen 127.0.0.1:$a1"
 assert_lacks "$HOME/$unit" 'trust-network'

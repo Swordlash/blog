@@ -147,6 +147,7 @@ test-suite wiki-server-test
     other-modules:
         Test.Server.Api
         Test.Server.Fixture
+        Test.Server.Http
         Test.Server.Import
         Test.Server.Options
         Test.Server.Static
@@ -174,6 +175,8 @@ test-suite wiki-server-test
         temporary,
         text,
         time,
+        wai,
+        wai-extra,
         wiki-api,
         wiki-app,
         wiki-app:contract,

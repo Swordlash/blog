@@ -65,6 +65,9 @@ library
   exposed-modules:
       Wiki.App
       Wiki.App.Backend
+      Wiki.App.Backend.Http
+      Wiki.App.Backend.Http.Cache
+      Wiki.App.Backend.Http.Request
       Wiki.App.Backend.Mem
       Wiki.App.Backend.Mem.Archive
       Wiki.App.Backend.Mem.Persist
@@ -105,6 +108,7 @@ library
       base64-bytestring,
       bytestring,
       containers,
+      http-api-data,
       primitive,
       protolude,
       row-types,
@@ -116,6 +120,7 @@ library
       haskell-halogen-jsbits,
       haskell-halogen-router,
       haskell-halogen-th,
+      wiki-api,
       wiki-core
 
   -- The views are written as HTML through haskell-halogen-th's hh quoter.
@@ -209,6 +214,7 @@ test-suite wiki-app-test
     buildable: False
   else
     other-modules:
+        Test.Backend.Http
         Test.Backend.Mem
         Test.Backend.Persist
         Test.Demo
@@ -248,6 +254,7 @@ test-suite wiki-app-browser-test
   main-is:          BrowserTest.hs
   other-modules:
       Test.Browser.Editor
+      Test.Browser.Http
       Test.Browser.Hydrate
       Test.Browser.Islands
       Test.Browser.Macros
@@ -259,6 +266,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Source
       Test.Browser.Text
   build-depends:
+      aeson,
       base,
       base64-bytestring,
       containers,
@@ -269,6 +277,7 @@ test-suite wiki-app-browser-test
       haskell-halogen-jsbits,
       haskell-halogen-router,
       hspec-halogen,
+      wiki-api,
       wiki-app,
       wiki-core
 

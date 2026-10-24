@@ -28,7 +28,7 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element)
-import Wiki.App.Backend (MonadWiki (..), WikiError)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Browser (copyText)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
@@ -73,16 +73,18 @@ data Action
   | Followed (Follow Route)
   | Copy
   | Forget Int
+  | Retry
 
-component :: forall query m. (MonadWiki m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
       { initialState = \input -> do
           source <- H.newRefLabel "page-source"
           -- Loaded at once rather than in 'Initialize', so that the first
-          -- render is the page the prerender shows (see "Wiki.App.Shell").
-          loaded <- fetch input
+          -- render is the page the prerender shows (see "Wiki.App.Shell"),
+          -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
+          loaded <- fromMaybe Loading <$> atOnce (fetch input)
           pure State {input, loaded, source, copied = NotYet, copies = 0}
       , render
       , eval =
@@ -97,7 +99,7 @@ component =
     render :: State -> H.ComponentHTML Action Empty m
     render st = case st.loaded of
       Loading -> [hh|<p class="loading">Loading…</p>|]
-      Failed e -> errorView e
+      Failed e -> failureView e Retry
       Ready page ->
         [hh|
           <div class="source-view">
@@ -130,8 +132,15 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case
-      -- The page was loaded with the initial state: the shell is told.
-      Initialize -> H.raise Loaded
+      -- The page was loaded with the initial state, and the shell is told;
+      -- or it is loaded now.
+      Initialize ->
+        gets (\st -> st.loaded) >>= \case
+          Loading -> load
+          _ -> H.raise Loaded
+      Retry -> do
+        modify (\st -> st {loaded = Loading})
+        load
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})

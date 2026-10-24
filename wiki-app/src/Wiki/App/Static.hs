@@ -10,6 +10,12 @@
 -- their initializers. So this asks the shell whether it has loaded what the
 -- route shows, and then waits for the HTML to stop changing.
 --
+-- A wiki a server keeps is prerendered once, as the application shows
+-- before it has loaded anything ('renderLoading'): the frame, the same at
+-- every address, which the server serves for every route until it renders
+-- each page itself. Its requests are never answered, so it is taken as
+-- soon as it stops changing.
+--
 -- The program adopts this HTML in the browser
 -- ('Halogen.VDom.Driver.hydrateUI'), so its first render has to be the same
 -- page; 'startRoute' can start the application either way, which is how the
@@ -22,6 +28,8 @@ module Wiki.App.Static
   , prerenderedRoutes
   , Start (..)
   , startRoute
+  , renderLoading
+  , startLoading
   )
 where
 
@@ -35,7 +43,8 @@ import Halogen.VDom.DOM.Monad (MemDOM, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
 import Halogen.VDom.Driver (hydrateUI, renderSpec)
 import Protolude
-import Wiki.App (component, input)
+import Wiki.App (component, input, serverInput)
+import Wiki.App.Backend.Http (HttpWiki, newHttpEnv, runHttpWiki, silentTransport)
 import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Route (Route (..), route)
@@ -104,6 +113,35 @@ startRoute how wiki base at container = do
     title <- settled (run (join <$> send (H.mkRequest Shell.Settled)))
     void (stable snapshot)
     pure (title, run dispose)
+
+-- | The application for a wiki a server keeps, under this base path, as it
+-- shows before anything has been loaded: what the server's build serves at
+-- every address.
+renderLoading :: Text -> IO Rendered
+renderLoading base = do
+  container <- N.newElement Nothing (ElemName "div")
+  dispose <- startLoading Build base Home container
+  html <- (mconcat <$> (traverse N.renderToText =<< N.childNodes container)) `finally` dispose
+  pure Rendered {html, title = "Wiki"}
+
+-- | Start the application for a wiki a server keeps at a route in a
+-- container, under this base path, over a server that never answers, and
+-- wait until its HTML has stopped changing; then how to dispose of it.
+startLoading :: Start -> Text -> Route -> N.NativeNode -> IO (IO ())
+startLoading how base at container = do
+  env <- newHttpEnv silentTransport
+  let run :: HttpWiki MemDOM a -> IO a
+      run = runMemDOM . runHttpWiki env
+  router <- run (Router.newRouter base Unknown route)
+  Router.redirect router at
+  document <- N.newDocument
+  HalogenSocket {dispose} <- run $ case how of
+    Build -> AD.runUI (renderSpec (N.fromNative document) (N.fromNative container)) (component @Void) (serverInput router)
+    Adopt -> hydrateUI (component @Void) (serverInput router) (N.fromNative container)
+  let snapshot = mconcat <$> (traverse N.renderToText =<< N.childNodes container)
+  flip onException (run dispose) $ do
+    void (stable snapshot)
+    pure (run dispose)
 
 -- | Ask until the answer is there; ten seconds is far longer than an
 -- in-memory wiki takes, and longer means something is wrong.

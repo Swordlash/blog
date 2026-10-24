@@ -1,5 +1,8 @@
 // Drive the built demo in headless Chromium, as a static host serves it, the
-// way haskell-halogen's toolchain/test-gallery.mjs drives its gallery.
+// way haskell-halogen's toolchain/test-gallery.mjs drives its gallery. This is
+// the smoke test's first mode; the second, the server's build against a real
+// wiki-server, is toolchain/smoke-test-server.mjs, and npm run smoke-test
+// (toolchain/smoke-test.sh) runs both.
 //
 //   npm run smoke-test                      # after: npm run build-wasm
 //   node toolchain/smoke-test.mjs [dir]     # default dist-newstyle/wasm/public/app

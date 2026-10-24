@@ -6,6 +6,7 @@ import Test.Browser.Islands qualified as Islands
 import Test.Hspec.Halogen (describe, runBrowserTests)
 #if defined(wasm32_HOST_ARCH)
 import Test.Browser.Editor qualified as Editor
+import Test.Browser.Http qualified as Http
 import Test.Browser.Hydrate qualified as Hydrate
 import Test.Browser.Macros qualified as Macros
 import Test.Browser.Order qualified as Order
@@ -38,6 +39,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.View.Source" (Source.spec BrowserDOM)
   describe "Math macros" (Macros.spec BrowserDOM)
   describe "Hydration" (Hydrate.spec BrowserDOM)
+  describe "Wiki.App.Backend.Http" (Http.spec BrowserDOM)
   describe "Wiki.App.Backend.Mem kept in IndexedDB" (Persist.spec BrowserDOM)
   describe "The order of a space's children" (Order.spec BrowserDOM)
 #endif

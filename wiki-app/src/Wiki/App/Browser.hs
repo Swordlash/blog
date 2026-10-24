@@ -19,6 +19,8 @@ module Wiki.App.Browser
   , unzipFiles
   , download
   , localTime
+  , PageBackend (..)
+  , pageBackend
   )
 where
 
@@ -59,6 +61,7 @@ $( browserJS
      , ("js_archive_bytes", "wiki_archive_bytes", Unsafe, [t|JSVal -> Int -> IO JSVal|])
      , ("js_download", "wiki_download", Unsafe, [t|JSText -> JSText -> JSVal -> IO ()|])
      , ("js_local_time", "wiki_local_time", Unsafe, [t|Double -> IO JSText|])
+     , ("js_page_backend", "wiki_page_backend", Unsafe, [t|IO JSText|])
      ]
  )
 
@@ -161,3 +164,15 @@ localTime :: (MonadIO m) => UTCTime -> m Text
 localTime t
   | inBrowser = liftIO (fromJSText <$> js_local_time (realToFrac (utcTimeToPOSIXSeconds t) * 1000))
   | otherwise = pure (toS (formatTime defaultTimeLocale "%-d %B %Y, %H:%M UTC" t))
+
+-- | Where the page says the wiki is kept: in the browser, as the demo keeps
+-- it, or by the server that served the page.
+data PageBackend = DemoBackend | ServerBackend
+  deriving stock (Eq, Show)
+
+-- | What the page's @\<meta name="wiki-backend">@ says: @server@ for the
+-- server's build (@wiki-app-prerender --server@ writes it), and anything
+-- else, or none, for the demo's, which is what a page from before there was
+-- a choice is. Natively, the demo.
+pageBackend :: (MonadIO m) => m PageBackend
+pageBackend = liftIO $ (\b -> if fromJSText b == "server" then ServerBackend else DemoBackend) <$> js_page_backend

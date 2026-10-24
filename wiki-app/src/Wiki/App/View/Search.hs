@@ -44,7 +44,7 @@ import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event (..), EventType (..))
 import Web.UIEvent.FocusEvent (FocusEvent)
 import Web.UIEvent.FocusEvent qualified as FE
-import Wiki.App.Backend (MonadWiki (..), Session)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session, WikiError)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.Core.Id (SpaceId (..))
@@ -71,6 +71,8 @@ newtype Input = Input {context :: Context}
 data Results
   = NotSearched
   | Found SearchQuery [SearchHit]
+  | -- | The search could not be made: the backend could not be reached.
+    Unanswered SearchQuery WikiError
 
 data State = State
   { context :: Context
@@ -117,7 +119,7 @@ pause = 150_000
 shown :: Int
 shown = 8
 
-component :: forall query output m. (MonadWiki m, MonadUUID m, MonadIO m) => H.Component query Input output m
+component :: forall query output m. (MonadLoad m, MonadUUID m, MonadIO m) => H.Component query Input output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -228,6 +230,7 @@ component =
         status = case st.results of
           NotSearched -> [hh|<p class="search-status">Searching…</p>|]
           Found _ [] -> [hh|<p class="search-status search-empty">No results</p>|]
+          Unanswered _ e -> [hh|<p class="search-status search-failed">{{ errorMessage e }}</p>|]
           Found _ hits ->
             [hh|
               <ul class="search-hits" role="listbox">
@@ -268,11 +271,12 @@ component =
         modify (\st -> st {pending = Nothing})
         q <- gets queryOf
         unless (T.null (T.strip q.text)) $ do
-          hits <- searchPages q
+          -- On a worker, where the backend's failure to answer is caught.
+          found <- lift (attempt (searchPages q))
           -- Unless something else has been typed or chosen meanwhile, whose
           -- own search will come.
           current <- gets queryOf
-          when (current == q) $ modify (\st -> st {results = Found q hits, selected = Nothing})
+          when (current == q) $ modify (\st -> st {results = either (Unanswered q) (Found q) found, selected = Nothing})
       Move step -> move step
       Pick -> pick
       Close -> modify (\st -> st {open = False, selected = Nothing})

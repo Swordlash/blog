@@ -77,3 +77,8 @@ async function wiki_copy_text(element, text) {
 function wiki_local_time(ms) {
   return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
+
+// What the page's <meta name="wiki-backend"> says, if it has one.
+function wiki_page_backend() {
+  return document.querySelector('meta[name="wiki-backend"]')?.content ?? "";
+}
