@@ -40,6 +40,10 @@ module Wiki.App.Backend.Mem
     -- * Export and import
   , memArchive
   , importMemWiki
+
+    -- * The demo's wiki, read from elsewhere
+  , memWikiFound
+  , readMemWiki
   )
 where
 
@@ -70,10 +74,11 @@ import Wiki.Core.User (User (..))
 -- call them. And a word on the console, which natively says nothing: there
 -- the tests ask 'openMemWiki' what it found instead.
 $( browserJS
-     ["jsbits/object-url.js", "jsbits/console.js"]
+     ["jsbits/object-url.js", "jsbits/console.js", "jsbits/databases.js"]
      [ ("js_object_url", "wiki_object_url", Unsafe, [t|JSText -> JSText -> IO JSText|])
      , ("js_revoke_object_url", "wiki_revoke_object_url", Unsafe, [t|JSText -> IO ()|])
      , ("js_warn", "wiki_warn", Unsafe, [t|JSText -> IO ()|])
+     , ("js_database_exists", "wiki_database_exists", Safe, [t|JSText -> IO Bool|])
      ]
  )
 
@@ -347,6 +352,37 @@ importMemWiki archive = MemWiki $ do
       old <- atomicModifyIORef' env.wiki (new,)
       traverse_ (js_revoke_object_url . toJSText) (Map.elems old.objectUrls)
     pure written
+
+--------------------------------------------------------------------------------
+-- The demo's wiki, read from elsewhere
+
+-- | Whether this browser keeps a database of this name in this origin,
+-- found without opening it, which would make it (see jsbits/databases.js):
+-- what the server's administration asks before it offers to import the
+-- demo's data, which the demo leaves here when it was served from the same
+-- address. Natively there is no browser, and nothing is found.
+memWikiFound :: (MonadIO n) => Database -> n Bool
+memWikiFound db
+  | inBrowser = liftIO (evaluate =<< js_database_exists (toJSText db.name))
+  | otherwise = pure False
+
+-- | The wiki kept in this database, only read: not seeded when it holds
+-- none, nor deleted and seeded again when it cannot be read, as
+-- 'openMemWiki' does for the demo, since what is read here is someone's
+-- work, to be taken elsewhere; or why it cannot be read. Its drafts are
+-- read too, though an export leaves them out.
+--
+-- It opens the database at this program's version, as the demo would on
+-- its next visit, which adds a store a database written by an older demo
+-- lacks and changes nothing else; a database a newer demo wrote is refused.
+readMemWiki :: (MonadIndexedDB n, MonadUnliftIO n) => Database -> n (Either Text MemState)
+readMemWiki db = withRunInIO $ \run ->
+  tried (Map.fromList <$> for storeNames (\name -> (name,) <$> run (IDB.getAll db name))) <&> \case
+    Left e -> Left (describe e)
+    Right held -> case restore held of
+      Stored st -> Right st
+      Unseeded -> Left "it holds no wiki"
+      Unreadable why -> Left why
 
 -- | Whether the wiki is kept anywhere but in memory.
 memKept :: (Monad m) => MemWiki m Bool
