@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+The server comes as a Docker image. The repository's `Dockerfile` builds
+`wiki-server` at `-O2` and the application in its server mode, on the pinned
+toolchain, into a Debian slim image that runs as an unprivileged user (uid
+10001) and keeps its data in a volume at `/data`; `docker-compose.yml` publishes
+the public listener on port 8080 and keeps the admin listener on the
+container's loopback, reached with `docker compose exec`. The image's
+entrypoint backs the database up before each start of the server, as a deploy
+does. `--trust-network` is not accepted on `0.0.0.0`, so trusted mode runs the
+container on the host's network with the server bound to the private address
+(`docker-compose.trusted.yml`). See the README's "Running in Docker".
+
 The server renders the wiki's pages. With a build that has a `template.html`
 (`wiki-app-prerender --server` writes one), every address a page would be
 served at, a directory's or one with no file, gets the application rendered

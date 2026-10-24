@@ -270,6 +270,99 @@ first, or name one with `WIKI_SERVER`):
 sh toolchain/test-deploy-local.sh
 ```
 
+## Running in Docker
+
+For a machine that should not carry the toolchain (a VPS, say), the server and
+its application come as one image: `Dockerfile` builds both as the deploy script
+does (`wiki-server` natively at `-O2`, the application for the browser at `-O2`
+in its server mode, with the `template.html` the server renders pages into), on
+the pinned toolchain that `toolchain/bootstrap.sh build` installs in the builder,
+and copies them into a Debian slim image with nothing else but `curl`.
+`docker-compose.yml` runs it.
+
+```sh
+docker compose up -d --build        # build the image and start the server on :8080
+docker compose logs -f wiki         # the server's log
+docker compose down                 # stop it; the data stays in its volume
+```
+
+The first build installs the toolchain (give Docker around 15 GB of free disk:
+the builder's toolchain takes about 10, and ghcup unpacks each compiler before it
+installs it) and compiles every dependency, those of the wasm build at `-O2`,
+`ghc-lib-parser` among them: well over an hour. Later builds reuse those layers, and the build directories through a BuildKit cache mount, so a
+change to the sources compiles only what it touches. The image itself is about
+240 MB (60 MB compressed). Only x86_64 Linux is supported, as by the bootstrap.
+On a small VPS, build the image elsewhere and carry it over:
+`docker save wiki-server | ssh you@vps docker load`, then `docker compose up -d`
+there with the compose file beside it.
+
+- **Where the data lives.** In the named volume `wiki_wiki-data`, mounted at
+  `/data`: `wiki.sqlite`, `attachments/`, `backups/`, as in a deployment's
+  `data/`. It outlives the container and every image; only `docker compose down
+  --volumes` (or `docker volume rm`) deletes it. The server runs as uid 10001,
+  which owns the volume; to keep the data in a directory of the host's instead,
+  bind it to `/data` and `chown 10001:10001` it first.
+- **Backups.** Each start of the container copies the database aside into
+  `/data/backups/` before the server opens it, as a deploy does before it starts a
+  new server, and the last ten are kept; if the copy fails, the server is not
+  started. (A restart is a start too, so a container that keeps failing to start
+  makes a backup each time; they are all the same database.) Another, whenever you
+  like:
+
+  ```sh
+  docker compose exec wiki wiki-server backup --data /data   # while it runs
+  docker compose run --rm backup                             # while it is stopped
+  docker compose cp wiki:/data/backups ./backups             # copy them out
+  ```
+
+  To restore one, stop the server, move the database (with its `-wal` and `-shm`
+  files) out of the way in a one-off container on the same volume, copy the backup
+  in its place, and start it again:
+
+  ```sh
+  docker compose stop
+  docker compose run --rm --entrypoint sh wiki -c \
+    'cd /data && mkdir -p replaced && mv wiki.sqlite* replaced/ && cp backups/<time>.sqlite wiki.sqlite'
+  docker compose start
+  ```
+- **Who is asking.** The published port serves an anonymous reader: public spaces
+  only, nothing changed. `WIKI_PORT` changes the host's port and `WIKI_BIND` the
+  host's address it is published on (`WIKI_BIND=127.0.0.1` behind a reverse proxy
+  on the same machine).
+- **The admin listener** listens on the container's own loopback,
+  `127.0.0.1:8081`, which is not published and which nothing outside the container
+  reaches; you reach it through the container:
+
+  ```sh
+  docker compose exec wiki curl -s http://127.0.0.1:8081/admin/api/v1/admin/status
+  ```
+
+  It is the API and the application as the administrator, as on the machine's own
+  admin listener; until Phase 3 brings its panel and accounts, that is the way to
+  change the wiki in the default mode (the API is `docs/api.md`).
+- **Trusted mode.** `--trust-network` makes everyone who reaches the public
+  listener the administrator, and the server refuses it on `0.0.0.0`, the only
+  address a container on its own network can listen on: whether that is safe
+  depends on where the host publishes the port, which the server cannot see. So
+  trusted mode runs the container on the host's network, with the server bound to
+  the private address itself, exactly as `deploy-local.sh --server
+  --trust-network` runs it:
+
+  ```sh
+  WIKI_TRUSTED_ADDRESS=$(tailscale ip -4) \
+    docker compose -f docker-compose.yml -f docker-compose.trusted.yml up -d --build
+  ```
+
+  The public listener is then `WIKI_TRUSTED_ADDRESS:8080` (`WIKI_PORT`), and the
+  admin listener the host's `127.0.0.1:8081` (`WIKI_ADMIN_PORT`), reached on that
+  machine or through an SSH tunnel as above. Give the same two files to every later
+  `docker compose` command, or the next `up` goes back to the default mode.
+- **An image from your own build.** `docker build --build-context
+  release=<dir> -t wiki-server .` packages a `<dir>/bin/wiki-server` and
+  `<dir>/app/` built on the host (the application with `WIKI_BACKEND=server`, the
+  binary on a glibc no newer than Debian 13's 2.41) and skips the builder: seconds
+  rather than an hour, for trying the image out.
+
 ## Working on it
 
 `AGENTS.md` describes how the work is organised: a planning session cuts the plan into
@@ -352,7 +445,9 @@ tools. Commands' output goes to
 `. ~/.wiki-toolchain/env` in your shell profile to load their `PATH`; npm build/serve
 commands load it themselves. The build scripts source
 `~/.ghc-wasm/env` for the wasm tools themselves. `sh toolchain/bootstrap.sh toolchain`
-skips the store.
+skips the store. `sh toolchain/bootstrap.sh build` installs what a build needs and
+leaves out Chromium and fourmolu, which only the tests and the formatter use; the
+Dockerfile's builder runs it.
 
 The discovery and reuse regression tests run with fake tools and isolated temporary
 homes, without downloads or changes to your installations:
@@ -419,6 +514,10 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 | [wiki-server/](wiki-server/) | `wiki-server` | The server, native only. A placeholder until Phase 2. |
 | [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS, and `bundle.sh`, which bundles the islands' libraries from `web/src/`. |
 | [toolchain/](toolchain/) | | Build and test scripts, adapted from haskell-halogen's. |
+
+At the top, `Dockerfile`, `docker-compose.yml` and `docker-compose.trusted.yml`
+run the server in Docker (above); `.dockerignore` keeps everything but the sources
+out of the build.
 
 haskell-halogen's packages come from one `source-repository-package` stanza in
 `cabal.project`, pinned to a commit. `cabal.project` builds every package natively;

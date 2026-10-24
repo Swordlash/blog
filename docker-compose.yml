@@ -1,0 +1,46 @@
+# The wiki's server in Docker, in one command:
+#
+#   docker compose up -d --build
+#
+# The Dockerfile builds the image (the first build takes well over an hour;
+# see its header). The public listener is published on port 8080 of the host
+# (WIKI_BIND and WIKI_PORT change the address and port), and serves an
+# anonymous reader: public spaces only. The admin listener stays on the
+# container's own loopback, never published (decision 11 of docs/PLAN.md),
+# and is reached from inside the container:
+#
+#   docker compose exec wiki curl -s http://127.0.0.1:8081/admin/api/v1/admin/status
+#
+# The data (the database, the attachments, the backups) is in the named volume
+# wiki-data, which outlives the container and every image. Each start backs
+# the database up into it first (/data/backups); for one more:
+#
+#   docker compose exec wiki wiki-server backup --data /data   # while it runs
+#   docker compose run --rm backup                             # or while it is stopped
+#
+# To edit the wiki from a browser before Phase 3 brings accounts, run it on a
+# private network in trusted mode instead: docker-compose.trusted.yml.
+name: wiki
+
+services:
+  wiki:
+    build: .
+    image: ${WIKI_IMAGE:-wiki-server:latest}
+    restart: unless-stopped
+    ports:
+      - "${WIKI_BIND:-0.0.0.0}:${WIKI_PORT:-8080}:8080"
+    volumes:
+      - wiki-data:/data
+    # The server lets requests in flight finish for up to 10 s after SIGTERM.
+    stop_grace_period: 15s
+
+  # A one-off: `docker compose run --rm backup`. Not started by `up`.
+  backup:
+    image: ${WIKI_IMAGE:-wiki-server:latest}
+    profiles: [tools]
+    command: [backup, --data, /data]
+    volumes:
+      - wiki-data:/data
+
+volumes:
+  wiki-data:

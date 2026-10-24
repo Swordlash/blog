@@ -1,0 +1,20 @@
+# Only what the image is built from goes to the builder: the packages, the
+# page, the scripts and the project files. Not the build directories or
+# node_modules (the builder makes its own), and not .git, docs/ or anything
+# else in the working tree, a cabal.project.local included.
+*
+!cabal.project
+!cabal-native-opt.project
+!cabal-wasm.project
+!cabal-wasm-opt.project
+!package.json
+!package-lock.json
+!toolchain/
+!web/
+!wiki-core/
+!wiki-api/
+!wiki-app/
+!wiki-server/
+**/dist-newstyle
+**/node_modules
+**/.ghc.environment.*

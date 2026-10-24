@@ -1,0 +1,31 @@
+# Trusted mode (wiki-server --trust-network, decision 19 of docs/PLAN.md):
+# everyone who reaches the public listener is the administrator, so it must
+# listen on a private network's address only, such as the machine's Tailscale
+# address. Over docker-compose.yml:
+#
+#   WIKI_TRUSTED_ADDRESS=100.64.0.1 \
+#     docker compose -f docker-compose.yml -f docker-compose.trusted.yml up -d --build
+#
+# Inside a container of its own network the server can only listen on
+# 0.0.0.0, which wiki-server refuses with --trust-network, and rightly: who
+# reaches it then depends on where the host publishes the port, which the
+# server cannot see. So in this mode the container shares the host's network
+# and the server binds the private address itself, where the check holds, as
+# toolchain/deploy-local.sh --server --trust-network runs it: the public
+# listener on WIKI_TRUSTED_ADDRESS:WIKI_PORT (an IPv6 address in brackets,
+# [fd7a:115c:a1e0::1]), the admin listener on the host's loopback,
+# 127.0.0.1:WIKI_ADMIN_PORT, reached from the host itself or through an SSH
+# tunnel, as well as with `docker compose exec`.
+services:
+  wiki:
+    network_mode: host
+    ports: !reset []
+    command:
+      - serve
+      - --listen
+      - "${WIKI_TRUSTED_ADDRESS:?set WIKI_TRUSTED_ADDRESS to the private address to listen on, such as the Tailscale one}:${WIKI_PORT:-8080}"
+      - --admin-listen
+      - "127.0.0.1:${WIKI_ADMIN_PORT:-8081}"
+      - --trust-network
+    environment:
+      WIKI_HEALTH_URL: "http://${WIKI_TRUSTED_ADDRESS}:${WIKI_PORT:-8080}/api/v1/info"
