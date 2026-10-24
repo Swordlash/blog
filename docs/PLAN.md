@@ -1545,3 +1545,19 @@ Amended by the planning session after each work package's report.
   the admin page's server branch is `Shell.serverControls`; `Request.multipart` writes one
   file part, `import/apply` needs the archive plus a `choices` text part; the browser's
   IndexedDB demo data is read through `Backend.Mem`'s store separately.
+- **WP2.8 done and merged** ([#51](https://github.com/Swordlash/blog/pull/51), `32638db`).
+  `HttpWiki.previewImport`/`applyImport` over `Request.multipartForm` (`FilePart`/`TextPart`;
+  the `choices` part has no file name, which servant-multipart reads as an input).
+  `Wiki.App.Import` is the pure dialog logic (`planTree`, `Selection`, `choicesOf`,
+  summaries; native tests); `View/Import.hs` the component, a child of the shell in
+  `serverControls`, fed a `Migration m` record (`Shell.Input.migration`; `serverInput` needs
+  `MonadIndexedDB m, MonadUnliftIO m`). The demo source reads the `wiki` database directly
+  (`memWikiFound` without creating it; `readMemWiki` never seeds; it opens at version 2, so a
+  version-1 database gains the empty `drafts` store, as the demo itself would). Unchecking a
+  space disables its pages; conflicts with `sameContent` get no choice; a large zip is held
+  in memory (base64) for both requests; after an apply the shell reloads. 101 browser tests
+  (4 new), 362 app tests, 274 server tests; the server smoke test exports the demo at the
+  server's origin, imports with a skip and a `TakeImported`, then reimports from the
+  browser's demo data with nothing twice. The owner's steps are in the README ("Bringing
+  the demo's pages into the server"). One intermediate commit (`34c8578`) does not build its
+  test suite alone; the head does.
