@@ -38,6 +38,7 @@ module Wiki.Server.Storage
   , closeStorage
   , withStorage
   , withDatabase
+  , storageDataDir
 
     -- * Who is asking
   , Who (..)
@@ -156,6 +157,10 @@ withStorage config dir = bracket (openStorage config dir) closeStorage
 -- look inside, and maintenance. Nothing else runs on it meanwhile.
 withDatabase :: Storage -> (Connection -> IO a) -> IO a
 withDatabase st = withMVar st.connection
+
+-- | The data directory a storage was opened in.
+storageDataDir :: Storage -> FilePath
+storageDataDir st = st.dataDir
 
 -- | Delete the attachments' files that nothing refers to: not the database,
 -- and not one of the backups kept, which a restore would bring back. A

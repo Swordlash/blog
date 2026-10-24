@@ -50,8 +50,9 @@ common shared
       RequiredTypeArguments
       ExplicitNamespaces
 
--- The storage: the wiki in SQLite and its attachments on disk, behind the
--- application's MonadWiki. Native only, as everything of the server is.
+-- The server: the storage (the wiki in SQLite and its attachments on disk,
+-- behind the application's MonadWiki), the API's handlers, the application's
+-- files, and the two listeners. Native only, as everything of the server is.
 library
   import:           shared
   hs-source-dirs:   src
@@ -60,13 +61,27 @@ library
     buildable: False
   else
     exposed-modules:
+        Wiki.Server
+        Wiki.Server.Api
+        Wiki.Server.App
+        Wiki.Server.Import
+        Wiki.Server.Log
+        Wiki.Server.Options
+        Wiki.Server.Static
+        Wiki.Server.Version
         Wiki.Server.Storage
         Wiki.Server.Storage.Backup
         Wiki.Server.Storage.Blobs
         Wiki.Server.Storage.Layout
         Wiki.Server.Storage.Migrate
         Wiki.Server.Storage.Rows
+    other-modules:
+        Paths_wiki_server
+    autogen-modules:
+        Paths_wiki_server
     build-depends:
+        aeson,
+        async,
         base,
         bytestring,
         containers,
@@ -76,12 +91,22 @@ library
         file-embed,
         filepath,
         haskell-halogen-core,
+        http-types,
+        network,
+        optparse-applicative,
         protolude,
+        servant-multipart,
+        servant-server,
         sqlite-simple,
         text,
         time,
+        unix,
         unliftio-core,
         uuid-types,
+        wai,
+        wai-extra,
+        warp,
+        wiki-api,
         wiki-app,
         wiki-core
 
@@ -90,6 +115,9 @@ executable wiki-server
   import:           shared
   main-is:          Main.hs
   hs-source-dirs:   app
+  -- Warp needs the threaded runtime (its timeouts run on the I/O manager's
+  -- timer), and requests are answered on every core.
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
 
   if arch(wasm32)
     buildable: False
@@ -101,17 +129,27 @@ executable wiki-server
 
 -- The storage against the backend's contract (wiki-app:contract), over a
 -- database made afresh in a temporary directory for each example, and what
--- only the storage does: migrations, backups, attachments on disk.
+-- only the storage does: migrations, backups, attachments on disk. Then the
+-- server, started on free ports of 127.0.0.1 and driven over HTTP: the API,
+-- the application's files, the listeners' rules, export and import.
 test-suite wiki-server-test
   import:           shared
   type:             exitcode-stdio-1.0
   hs-source-dirs:   test
   main-is:          Test.hs
+  -- The tests start servers, which need the threaded runtime as the
+  -- executable does.
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
 
   if arch(wasm32)
     buildable: False
   else
     other-modules:
+        Test.Server.Api
+        Test.Server.Fixture
+        Test.Server.Import
+        Test.Server.Options
+        Test.Server.Static
         Test.Storage
         Test.Storage.Backup
         Test.Storage.Contract
@@ -119,16 +157,24 @@ test-suite wiki-server-test
         Test.Storage.Migrate
     build-depends:
         HUnit,
+        aeson,
+        base,
         bytestring,
+        case-insensitive,
         containers,
         directory,
         filepath,
         hspec >= 2,
+        http-client,
+        http-types,
+        network,
         protolude,
+        servant,
         sqlite-simple,
         temporary,
         text,
         time,
+        wiki-api,
         wiki-app,
         wiki-app:contract,
         wiki-core,
