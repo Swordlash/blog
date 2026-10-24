@@ -1,8 +1,8 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 -- | What the editor ("Wiki.App.View.Editor") asks of the browser that
--- Halogen does not say: the files a drop or a file input brings and their
--- bytes, CodeMirror put in place of the textarea, the text and selection,
+-- Halogen does not say: the files a drop, a paste or a file input brings
+-- and their bytes, CodeMirror put in place of the textarea, the text and selection,
 -- read and written as an edit the browser can undo, which of the editor's
 -- keys was pressed, and the browser's warning before a reload or a close
 -- loses unsaved changes. See @jsbits/editor.js@, and @web/src/editor.js@
@@ -15,6 +15,7 @@ module Wiki.App.Editor.Browser
   ( -- * Files
     Files
   , droppedFiles
+  , pastedFiles
   , chosenFiles
   , PickedFile (..)
   , pickedFiles
@@ -50,11 +51,14 @@ import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
 
 -- Reading a file waits for the browser, so that binding is a safe import,
 -- which waits for the promise; the rest return on the spot. The key and a
--- drop's files are read in the event's listener, which is pure (the event
--- does not change while it is being dispatched), so those two are pure.
+-- drop's or a paste's files are read in the event's listener, which is pure
+-- (the event does not change while it is being dispatched), so those are
+-- pure.
 $( browserJS
      ["jsbits/editor.js"]
      [ ("js_drop_files", "wiki_editor_drop_files", Unsafe, [t|Event -> JSVal|])
+     , ("js_paste_files", "wiki_editor_paste_files", Unsafe, [t|Event -> JSVal|])
+     , ("js_paste_file_count", "wiki_editor_paste_file_count", Unsafe, [t|Event -> Int|])
      , ("js_chosen_files", "wiki_editor_chosen_files", Unsafe, [t|Event -> IO JSVal|])
      , ("js_file_count", "wiki_editor_file_count", Unsafe, [t|JSVal -> IO Int|])
      , ("js_file_name", "wiki_editor_file_name", Unsafe, [t|JSVal -> Int -> IO JSText|])
@@ -85,12 +89,21 @@ newtype Files = Files JSVal
 droppedFiles :: Event -> Files
 droppedFiles = Files . js_drop_files
 
+-- | A paste's files, if it brought any: a screenshot or an image copied in
+-- a browser, or files copied in a file manager. To be called in the paste's
+-- listener and forced there, as 'droppedFiles' is. A paste of text alone
+-- brings none, and is the editor's to put in.
+pastedFiles :: Event -> Maybe Files
+pastedFiles ev
+  | js_paste_file_count ev > 0 = Just (Files (js_paste_files ev))
+  | otherwise = Nothing
+
 -- | A file input's files, from its change event; the input is emptied, so
 -- that choosing the same file again is a change too.
 chosenFiles :: (MonadIO m) => Event -> m Files
 chosenFiles = liftIO . fmap Files . js_chosen_files
 
--- | A file a drop or a file input brought, before its bytes are read: what
+-- | A file a drop, a paste or a file input brought, before its bytes are read: what
 -- the browser says of it, and where to read it from.
 data PickedFile = PickedFile
   { name :: Text

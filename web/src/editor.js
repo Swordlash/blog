@@ -201,7 +201,8 @@ export function attach(textarea, host, original, codeTokens) {
         autocorrect: "on",
       }),
       // Files dropped or pasted are the component's to attach (the drop's
-      // listener on the panes); CodeMirror would put a dropped file's text in.
+      // and the paste's listeners on the panes); CodeMirror would put a
+      // dropped file's text in, or a pasted file's name.
       EditorView.domEventHandlers({
         drop: (event) => Boolean(event.dataTransfer?.files?.length),
         paste: (event) => Boolean(event.clipboardData?.files?.length),

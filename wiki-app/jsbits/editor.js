@@ -1,6 +1,6 @@
 // What the editor (Wiki.App.View.Editor) asks of the browser beyond Halogen's
-// DOM, declared in Wiki.App.Editor.Browser: the files a drop or a file input
-// brings, read into bytes; CodeMirror put in place of the textarea, and the
+// DOM, declared in Wiki.App.Editor.Browser: the files a drop, a paste or a
+// file input brings, read into bytes; CodeMirror put in place of the textarea, and the
 // text and selection, read and written as an edit the browser can undo;
 // which of the editor's keys was pressed; and the warning before a reload or
 // a close leaves unsaved changes behind.
@@ -22,6 +22,19 @@ function wikiTextarea(host) {
 // but the File objects taken from it stay readable.
 function wiki_editor_drop_files(event) {
   return Array.from(event.dataTransfer?.files ?? []);
+}
+
+// A paste's files, as an array, and how many there are: a screenshot or an
+// image copied in a browser, or files copied in a file manager, where the
+// browser exposes them. Taken in the paste's listener, as a drop's are, and
+// for the same reason; the count lets the listener leave a paste of text
+// alone.
+function wiki_editor_paste_files(event) {
+  return Array.from(event.clipboardData?.files ?? []);
+}
+
+function wiki_editor_paste_file_count(event) {
+  return event.clipboardData?.files?.length ?? 0;
 }
 
 // A file input's files, as an array. The input is emptied after, so that

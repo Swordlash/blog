@@ -5,7 +5,8 @@
 -- and reading the page back from the backend, a new page made from its
 -- title and given a file before anything is saved, leaving with and without
 -- unsaved changes, Cancel keeping or discarding the draft, a save over
--- someone else's, files attached by a drop or a file input, the toolbar and
+-- someone else's, files attached by a drop, a paste or a file input, text
+-- pasted, the toolbar and
 -- its shortcuts, and the preview shown on its own or beside the Markdown.
 module Test.Browser.Editor (spec) where
 
@@ -35,6 +36,7 @@ import Wiki.Core.Space (Space (id))
 $( browserJS
      ["jsbits/test-files.js", "jsbits/test-keys.js", "jsbits/test-style.js"]
      [ ("js_drop_file", "wiki_test_drop_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
+     , ("js_paste", "wiki_test_paste", Safe, [t|JSText -> JSText -> JSText -> JSText -> JSText -> IO Bool|])
      , ("js_choose_file", "wiki_test_choose_file", Safe, [t|JSText -> JSText -> JSText -> JSText -> IO ()|])
      , ("js_watch_keys", "wiki_test_watch_keys", Unsafe, [t|IO ()|])
      , ("js_last_key_prevented", "wiki_test_last_key_prevented", Unsafe, [t|IO Bool|])
@@ -301,6 +303,47 @@ spec m = do
     saved <- readPage wiki ["blog"] ["hello-world"]
     map (\a -> a.name) saved.attachments `shouldBe` ["dot.png"]
 
+  it "attaches a pasted image at the cursor, and a file pasted into the textarea, putting in nothing else" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
+    sideBySide ui
+    text <- editorText ui
+    clear text
+    typeText text "Look: "
+    -- With the file's name as text beside it, as a file manager copies a
+    -- file: the file is attached, and its name is not put in.
+    prevented <- unsafeIOToPageM (pasteFile ".editor-cm .cm-content" "dot.png" "dot.png" "image/png" dotPng)
+    prevented `shouldBe` True
+    settle
+    eventually $ markdown ui `shouldReturn` "Look: ![dot.png](attachment:dot.png)"
+    image <- find ui ".editor-preview .page-body img[alt='dot.png']"
+    getAttribute image "src" >>= (`shouldSatisfy` maybe False (T.isPrefixOf "blob:"))
+    find ui ".editor-attachments li a" >>= (`shouldHaveText` "dot.png")
+    -- A paste in the textarea (the editor before CodeMirror has come) is
+    -- the panes' too, and the browser is kept from putting the name in.
+    inTextarea <- unsafeIOToPageM (pasteFile ".editor-text" "notes.txt" "notes.txt" "text/plain" "aGVsbG8K")
+    inTextarea `shouldBe` True
+    settle
+    eventually $ markdown ui `shouldReturn` "Look: ![dot.png](attachment:dot.png)[notes.txt](attachment:notes.txt)"
+    findAll ui ".editor-attachments li a" >>= traverse textContent >>= (`shouldBe` ["dot.png", "notes.txt"])
+    find ui ".editor-save-close" >>= click
+    _ <- find ui ".page-view .page-body img[alt='dot.png']"
+    saved <- readPage wiki ["blog"] ["hello-world"]
+    map (\a -> a.name) saved.attachments `shouldBe` ["dot.png", "notes.txt"]
+    saved.body `shouldBe` "Look: ![dot.png](attachment:dot.png)[notes.txt](attachment:notes.txt)"
+
+  it "puts pasted text in unchanged but for its line endings, attaching nothing" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    sideBySide ui
+    text <- editorText ui
+    attached <- length <$> findAll ui ".editor-attachments li"
+    clear text
+    typeText text "Say: "
+    _ <- unsafeIOToPageM (pasteText ".editor-cm .cm-content" "*Hello*, <b>world</b>\r\n\n- [x] one\r\n")
+    settle
+    eventually $ markdown ui `shouldReturn` "Say: *Hello*, <b>world</b>\n\n- [x] one\n"
+    previewHas ui "b" "world"
+    length <$> findAll ui ".editor-attachments li" `shouldReturn` attached
+
   it "attaches a chosen file as a link, its name with spaces in angle brackets" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
@@ -534,6 +577,15 @@ readPage wiki space path =
   unsafeIOToPageM . runMemWiki wiki $ do
     s <- either (panic . show) identity <$> getSpace (slugs space)
     either (panic . show) identity <$> getPage s.id (slugs path)
+
+-- | A paste of a file, with a text beside it, on the element a selector
+-- finds; whether its default was prevented.
+pasteFile :: Text -> Text -> Text -> Text -> Text -> IO Bool
+pasteFile selector text name mediaType base64 = evaluate =<< js_paste (toJSText selector) (toJSText text) (toJSText name) (toJSText mediaType) (toJSText base64)
+
+-- | A paste of text alone; whether its default was prevented.
+pasteText :: Text -> Text -> IO Bool
+pasteText selector text = pasteFile selector text "" "" ""
 
 dropFile, chooseFile :: Text -> Text -> Text -> Text -> IO ()
 dropFile selector name mediaType base64 = evaluate =<< js_drop_file (toJSText selector) (toJSText name) (toJSText mediaType) (toJSText base64)

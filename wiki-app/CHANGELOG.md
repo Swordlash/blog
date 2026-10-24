@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+A file pasted into the editor (a screenshot, an image copied in a browser,
+files copied in a file manager) is attached and referred to at the cursor as
+a dropped one is: an image embedded, anything else linked. The paste is
+decided in its listener on the panes, beside the drop's, so it is taken
+whether CodeMirror or the textarea before it has the focus, and the browser
+is kept from putting in anything of its own (a file manager's copy of the
+file's name, or an image); a paste of both files and text attaches the files
+and drops the text. A paste of text alone is the editor's, as before.
+`Wiki.App.Editor.Browser` gains `pastedFiles`. The HTML menu's `<mark>` is
+now called "Mark", as the palette's row of highlights is "Highlight".
+
 The editor's text is CodeMirror 6, which shows the Markdown as it will look
 while it is typed: emphasis in italics and strong in bold, headings larger by
 level, inline code and fenced blocks in monospace on a background of their

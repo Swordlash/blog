@@ -1,6 +1,7 @@
 // Files for the browser tests (Test.Browser.Editor, Test.Browser.Persist), without a file
 // dialog: the harness has no way to answer one, so these make a File from
-// bytes and hand it to the page as a drop or a file input's choice would.
+// bytes and hand it to the page as a drop, a paste or a file input's choice
+// would.
 // Each waits for a task of its own first, so that the events arrive from
 // the browser's event loop, as a user's do, rather than from inside the
 // Haskell call that asked for them.
@@ -21,6 +22,21 @@ async function wiki_test_drop_file(selector, name, type, base64) {
   for (const kind of ["dragenter", "dragover", "drop"]) {
     target.dispatchEvent(new DragEvent(kind, { bubbles: true, cancelable: true, dataTransfer }));
   }
+}
+
+// A paste, as the browser makes one from the clipboard: of text, of a file
+// (an empty name for none), or of both, as a file manager copies a file's
+// name beside the file. The harness cannot write the clipboard, so the
+// paste is made here; CodeMirror takes text from a paste's clipboardData,
+// whoever made it, as it does from a key's. Whether the paste's default was
+// prevented, which for a file is what keeps the browser from putting in the
+// file's name or an image of its own.
+async function wiki_test_paste(selector, text, name, type, base64) {
+  await new Promise((ready) => setTimeout(ready, 0));
+  const target = document.querySelector(selector);
+  const clipboardData = name === "" ? new DataTransfer() : wikiTestFile(name, type, base64);
+  if (text !== "") clipboardData.setData("text/plain", text);
+  return !target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
 }
 
 async function wiki_test_choose_file(selector, name, type, base64) {

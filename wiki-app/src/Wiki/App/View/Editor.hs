@@ -74,9 +74,15 @@
 -- defaults of their own) while the event is dispatched, whatever the
 -- component is busy with; so are a drag's and a drop's, and a drop's files
 -- are taken there, as the browser empties the drop once it has been
--- dispatched.
+-- dispatched. A paste's files are taken in its listener in the same way, and
+-- the browser kept from putting in anything of its own for them (a file's
+-- name, which a file manager copies beside the file, or an image); a paste
+-- that brings no file makes no action and is the editor's, CodeMirror's or
+-- the textarea's, which puts the text in as it puts in a key's. A paste of
+-- both files and text is the files'.
 --
--- Files dropped onto the editor, or chosen with its file input, are read
+-- Files dropped onto the editor or pasted into it, or chosen with its file
+-- input, are read
 -- into bytes in the browser ("Wiki.App.Editor.Browser"), uploaded to the
 -- page ('uploadAttachment'), and referred to at the text's cursor
 -- ('Wiki.Core.Markdown.attachmentReference').
@@ -153,6 +159,7 @@ import Wiki.App.Editor.Browser
   , focusText
   , guardUnload
   , insertAtCursor
+  , pastedFiles
   , pickedFiles
   , readPickedFile
   , typedText
@@ -305,6 +312,7 @@ data Action
   | DragOver
   | DragLeave
   | Dropped Files
+  | Pasted Files
   | Insert Attachment
   | Run Command
   | AttachOrImage
@@ -456,6 +464,7 @@ component =
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
             {{ HE.handler' (EventType "dragleave") (const (Just DragLeave)) }}
             {{ HE.preventingDefault (HE.handler' (EventType "drop") dropped) }}
+            {{ HE.preventingDefault (HE.handler' (EventType "paste") pasted) }}
           >
             {{ source st work }}
             {{ previewPane st work }}
@@ -513,6 +522,16 @@ component =
     -- browser has dispatched the drop, it has none.
     dropped :: Event -> Maybe Action
     dropped ev = Just $! Dropped (droppedFiles ev)
+
+    -- A paste's files, taken as a drop's are. A paste without files makes
+    -- no action, so its default is left alone: the text goes in as the
+    -- editor puts it in. CodeMirror leaves a paste with files to this
+    -- listener (@web/src/editor.js@), and both it and the textarea are
+    -- among the panes, so the paste comes here whichever has the focus.
+    pasted :: Event -> Maybe Action
+    pasted ev = case pastedFiles ev of
+      Just files -> Just $! Pasted files
+      Nothing -> Nothing
 
     -- The keys the editor answers to, decided in the keydown's listener,
     -- which keeps the browser from acting on them; any other key makes no
@@ -684,7 +703,7 @@ component =
     hint :: State -> Text
     hint st
       | st.uploading > 0 = "Uploading " <> show st.uploading <> (if st.uploading == 1 then " file…" else " files…")
-      | otherwise = "Drop files here to attach them. Ctrl+S saves; Tab indents."
+      | otherwise = "Drop or paste files here to attach them. Ctrl+S saves; Tab indents."
 
     attachmentList :: Work -> H.ComponentHTML Action Slots m
     attachmentList work =
@@ -762,6 +781,9 @@ component =
       Dropped files -> do
         modify (\st -> st {dropping = False})
         H.liftEffect (pickedFiles files) >>= upload
+      -- The listener has kept the browser from putting in a name or an
+      -- image of its own, and taken the files.
+      Pasted files -> H.liftEffect (pickedFiles files) >>= upload
       Insert a -> insert (attachmentReference a.name a.mediaType)
       Run command -> run command
       AttachOrImage -> do
