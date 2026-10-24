@@ -1490,3 +1490,27 @@ Amended by the planning session after each work package's report.
   in the `Context` so servant's own errors are `ApiError`, `MultipartOptions` with the 50 MB
   limit, `<base href>` on every served page. For WP2.4: `wiki-app` does not depend on
   `wiki-api` yet; watch `app.wasm`'s size when it does.
+- **WP2.3 done and merged** ([#48](https://github.com/Swordlash/blog/pull/48), `75f24e0`).
+  `wiki-server serve` (default; `backup`, `--version`): two Warp servers in one process over
+  one storage, sockets bound before either starts; the public listener anonymous, or the
+  administrator with `--trust-network` (loud warning, refused on `0.0.0.0`/`::`); the admin
+  listener on loopback at `/admin/` (the bundle with its `<base href>` rewritten at serve
+  time, a 302 from the public base to `/admin/…` as a workaround WP2.6 should remove);
+  every refusal an `ApiError` (handlers, routing, 413, 405/415); 50 MB attachments and
+  `--max-import-size` (512 MiB) as two servant applications with different
+  `MultipartOptions`; export/import need `Administer`; the merge is server-side in
+  `Wiki.Server.Import` (`matchArchive`/`toPlan` pure; merged space keeps the server's
+  settings, math macros excepted when empty; `TakeImported` sets `updatedAt` so an open
+  editor gets a 409); `GET api/v1/admin/status` (new `AdminApi`); static serving as
+  `deploy-server.mjs` did, its cases now run against the real server; downloads with
+  `Range`, `nosniff`, a sandboxing CSP, inline only for images, video, audio and text.
+  logfmt logging without query strings; SIGTERM/SIGINT close the sockets, 10 s for
+  in-flight requests; search `limit` clamped to [0, 200]. Deploy: `deploy-local.sh
+  --server|--static`, `--admin-port`, `--trust-network`; layout `~/wiki-demo/{bin,app,data}`;
+  backup after stopping the old service, with the new binary, the old service restarted if
+  it fails; no deploy deletes `data/`, `--purge` keeps it, `--purge-data` removes it;
+  `cabal-native-opt.project` (`-O2` for our packages only; the real `-O2` build was not run
+  here, the first is the owner's). 178 server tests, 9 new deploy cases. Until WP2.4 the
+  server serves the `MemWiki` build; the switch is `build_app` in `deploy-local.sh`.
+  Found on the way: `test-bootstrap.sh` has failed since WP1.20 (its fake `node_modules`
+  lacked CodeMirror's packages; CI does not run it), fixed in #49.
