@@ -25,6 +25,7 @@ import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Data.Time (UTCTime, addUTCTime)
 import Halogen.HTML.Core (ElemName (..))
 import Halogen.Router.Duplex (decodeComponent)
 import Halogen.VDom.DOM.Monad (appendChild, runMemDOM)
@@ -36,14 +37,15 @@ import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Links (links, searchQueryOf)
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Http (Transport (..), cacheOf, newHttpEnvWith, newImmediateHttpEnv)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Http.Request (Request (..), Response (..))
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
-import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Backend.Mem.State (MemState (..), savePageIn)
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.Static (Rendered (..), Start (..), prerenderedRoutes, renderLoading, startLoading, startRoute, startServed)
 import Wiki.Core.Id (SpaceId (..), UserId (..))
 import Wiki.Core.Page qualified as P
@@ -102,6 +104,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Page (path "docs") (path "tour")
       , EditPage (path "blog") (path "hello-world")
       , PageSource (path "docs") (path "tour")
+      , PageHistory (path "docs") (path "tour") Nothing AgainstPrevious
       , NewSpace Nothing
       , Search (Just "words") Nothing True
       , Admin
@@ -110,16 +113,18 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
 
 -- | The pages a server renders, adopted by the program that starts from
 -- what they carry: every route the demo's build has a page for, an editor,
--- a search, a space and a page that are not there, and an address that is
--- none, as someone not signed in (to whom the team's space is private) and
--- as the administrator.
+-- a search, a space and a page that are not there, a page's history at an
+-- older version compared both ways and at one it does not have, and an
+-- address that is none, as someone not signed in (to whom the team's space
+-- is private) and as the administrator. The demo's first post has been
+-- saved once, so that it has a history.
 servedPages :: Spec
 servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
   for_ [("someone not signed in", Nothing), ("the administrator", Just (UserId "user-admin"))] $ \(whom, who) ->
     describe ("as " <> whom) $
       for_ routes $ \at ->
         it ("keeps every node at " <> show at <> ", and asks nothing") $ do
-          transport <- apiOver ((demoState demoNow) {current = who})
+          transport <- apiOver (savedOnce {current = who})
           rendering <- newImmediateHttpEnv transport
           container <- detached (fmap snd . startServed Build rendering "/" at)
           original <- nodesOf container
@@ -138,7 +143,10 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
     path = either (panic . show) identity . parsePath
     routes =
       prerenderedRoutes (demoState demoNow)
-        <> [ EditPage (path "blog") (path "hello-world")
+        <> [ PageHistory (path "blog") (path "hello-world") (Just helloMade) AgainstPrevious
+           , PageHistory (path "blog") (path "hello-world") (Just helloMade) AgainstCurrent
+           , PageHistory (path "blog") (path "hello-world") (Just demoNow) AgainstPrevious
+           , EditPage (path "blog") (path "hello-world")
            , Search (Just "haskell") Nothing True
            , Search (Just "tour") (Just (path "docs")) False
            , Space (path "nowhere")
@@ -148,6 +156,20 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , Admin
            , Unknown
            ]
+
+-- | The demo with its first post saved once by the editor.
+savedOnce :: MemState
+savedOnce =
+  case savePageIn hello.id hello.updatedAt "Hello, again" (hello.body <> "\nOne more line.\n") demoNow (demo {current = Just (UserId "user-editor")}) of
+    Right (st, _) -> st {current = demo.current}
+    Left e -> panic ("the demo's first post could not be saved: " <> show e)
+  where
+    demo = demoState demoNow
+    hello = fromMaybe (panic "the demo has no first post") (find (\p -> p.updatedAt == helloMade) (Map.elems demo.pages))
+
+-- | When the demo's first post was made: the time of its first version.
+helloMade :: UTCTime
+helloMade = addUTCTime (negate (30 * 86400)) demoNow
 
 -- | A transport that answers the reads of the backend over HTTP as the API
 -- does, from a wiki in memory as its current user sees it: the API's
@@ -167,7 +189,13 @@ apiOver st = do
       perPage <- for [p | p <- Map.elems st.pages, p.space == s.id] $ \p -> do
         page <- getPage s.id (pagePath p.id)
         draft <- getDraft p.id
-        pure [(links.spaces.pageAt s.id (pagePath p.id), answerOf page), (links.pages.draft p.id, answerOf draft)]
+        versions <- listVersions p.id
+        each <- for (Map.keys (Map.findWithDefault mempty p.id st.versions)) $ \at ->
+          (links.pages.version p.id (VersionTime at),) . answerOf <$> getVersion p.id at
+        pure
+          ( [(links.spaces.pageAt s.id (pagePath p.id), answerOf page), (links.pages.draft p.id, answerOf draft), (links.pages.versions p.id, answerOf versions)]
+              <> each
+          )
       pure ([(links.spaces.atPath (spacePath s.id), answerOf space), (links.spaces.listPages s.id, answerOf pages)] <> concat perPage)
     pure
       ( Map.fromList
@@ -247,4 +275,4 @@ isIsland node = do
   attributes <- N.attributeList node
   properties <- N.propertyList node
   let classes = concatMap T.words ([v | ((_, "class"), v) <- attributes] <> [v | ("className", v) <- properties])
-  pure (any (`elem` ["wiki-math", "wiki-mermaid", "wiki-tikz", "wiki-code"]) classes)
+  pure (any (`elem` ["wiki-math", "wiki-mermaid", "wiki-tikz", "wiki-code", "wiki-time"]) classes)

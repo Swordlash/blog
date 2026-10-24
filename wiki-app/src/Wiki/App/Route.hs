@@ -10,6 +10,9 @@
 -- > /s/docs/p/markdown-guide/      Page [docs] [markdown-guide]
 -- > /s/docs/p/tour/edit/           EditPage [docs] [tour]
 -- > /s/docs/p/tour/source/         PageSource [docs] [tour]
+-- > /s/docs/p/tour/history/        PageHistory [docs] [tour] Nothing AgainstPrevious
+-- > /s/docs/p/tour/history/?version=2026-10-24T09%3A30%3A12.5Z&against=current
+-- >                                PageHistory [docs] [tour] (Just …) AgainstCurrent
 -- > /s/docs/new-page/              NewPage [docs] Nothing
 -- > /s/docs/new-page/tour/         NewPage [docs] (Just [tour])
 -- > /new-space/                    NewSpace Nothing
@@ -26,7 +29,8 @@
 -- works too.
 --
 -- A space's path and a page's path are separated by the segment @p@, an
--- edit route ends in @edit@, a page's source in @source@, and a new page's
+-- edit route ends in @edit@, a page's source in @source@, its history in
+-- @history@, and a new page's
 -- route has @new-page@ after the space's path; a slug may be any of these
 -- words too (a page titled "P"), so
 -- a slug that is one of them is written with a @~@ before it (@\/s\/~p\/@),
@@ -35,6 +39,7 @@
 module Wiki.App.Route
   ( -- * Routes
     Route (..)
+  , Against (..)
   , route
   , routeOfHref
   , spaceRouteOf
@@ -46,6 +51,8 @@ module Wiki.App.Route
 where
 
 import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Halogen.Router (Router)
 import Halogen.Router qualified as Router
 import Halogen.Router.Duplex (RouteDuplex (..), RouteDuplex', as, flag, many1, noArgs, param, prefix, root, segment, suffix)
@@ -88,11 +95,27 @@ data Route
   | -- | The administration of the wiki as a whole, for whoever holds the
     -- global 'Wiki.Core.Permission.Administer'.
     Admin
+  | -- | A page's history, for anyone who may read the page: its space's
+    -- path, its own path there, the version shown (by its time, the
+    -- page's @updatedAt@ then; 'Nothing' for the latest), and what that
+    -- version is compared with. They are parameters (@version@, and
+    -- @against=current@), so that a version's address can be kept and
+    -- shared.
+    PageHistory [Slug] [Slug] (Maybe UTCTime) Against
+  deriving stock (Eq, Show)
+
+-- | What a version in a history is compared with.
+data Against
+  = -- | The version before it: what that save changed.
+    AgainstPrevious
+  | -- | The page as it is now: what has changed since.
+    AgainstCurrent
   deriving stock (Eq, Show)
 
 -- | The routes' codec. Parsing tries the routes in this order and takes the
 -- first that reads the whole path; since a slug is never @p@, @edit@,
--- @source@ or @new-page@ as written, no address reads as two routes.
+-- @source@, @history@ or @new-page@ as written, no address reads as two
+-- routes.
 route :: RouteDuplex' Route
 route =
   root $
@@ -125,6 +148,13 @@ route =
           (\(q, s, subspaces) -> Search q s subspaces)
           (prefix "search" (directory searchParams))
       , alternative (\case Admin -> Just (); _ -> Nothing) (const Admin) (prefix "admin" (directory noArgs))
+      , alternative
+          (\case PageHistory s p v a -> Just ((s, p), (v, a)); _ -> Nothing)
+          (\((s, p), (v, a)) -> PageHistory s p v a)
+          ( prefix
+              "s"
+              (directory ((,) <$> Duplex.lmap fst (spaceAndPage (`suffix` "history")) <*> Duplex.lmap snd historyParams))
+          )
       ]
   where
     spaceAndPage :: (RouteDuplex' [Slug] -> RouteDuplex' [Slug]) -> RouteDuplex' ([Slug], [Slug])
@@ -137,6 +167,19 @@ route =
         <$> Duplex.lmap (\(q, _, _) -> q) (Duplex.optional (param "q"))
         <*> Duplex.lmap (\(_, s, _) -> s) (Duplex.optional (as renderPath readPath (param "space")))
         <*> Duplex.lmap (\(_, _, subspaces) -> subspaces) (not <$> Duplex.lmap not (flag (param "only")))
+    -- A version is named by its time, written with every digit of its
+    -- fraction so that it reads back as the very time; one that is not a
+    -- time reads as left out, the latest. Anything but @current@ compares
+    -- with the version before.
+    historyParams :: RouteDuplex' (Maybe UTCTime, Against)
+    historyParams =
+      (,)
+        <$> Duplex.lmap fst (Duplex.optional (as (toS . iso8601Show) (\t -> maybe (Left ("not a time: " <> t)) Right (iso8601ParseM (toS t))) (param "version")))
+        <*> Duplex.lmap
+          snd
+          ( (\a -> if a == Just "current" then AgainstCurrent else AgainstPrevious)
+              <$> Duplex.lmap (\a -> if a == AgainstCurrent then Just "current" else Nothing) (Duplex.optional (param "against"))
+          )
     -- A parameter that is not a path is read as the empty path, which names
     -- no space, rather than refused: an optional parameter that is refused
     -- reads as left out, which would search every space instead.
@@ -148,7 +191,7 @@ slugs :: RouteDuplex' [Slug]
 slugs = many1 slugSegment
 
 -- | A slug as a segment, with the route's own words (@p@, @edit@, @source@,
--- @new-page@) escaped.
+-- @history@, @new-page@) escaped.
 slugSegment :: RouteDuplex' Slug
 slugSegment = as written readSlug segment
   where
@@ -158,7 +201,7 @@ slugSegment = as written readSlug segment
       _
         | t `elem` reserved -> Left (t <> " separates paths here")
         | otherwise -> first show (mkSlug t)
-    reserved = ["p", "edit", "source", "new-page"] :: [Text]
+    reserved = ["p", "edit", "source", "history", "new-page"] :: [Text]
 
 -- | A route's address ends in a slash ('route' says why), and is read
 -- without one too.

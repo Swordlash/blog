@@ -83,6 +83,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.App.View.Editor qualified as Editor
+import Wiki.App.View.History qualified as HistoryView
 import Wiki.App.View.Import qualified as ImportView
 import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
@@ -119,6 +120,7 @@ type Slots =
   ("space" .== H.Slot (Const Void) ViewOutput ())
     .+ ("page" .== H.Slot (Const Void) ViewOutput ())
     .+ ("source" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("history" .== H.Slot (Const Void) ViewOutput ())
     .+ ("newSpace" .== H.Slot (Const Void) ViewOutput ())
     .+ ("newPage" .== H.Slot (Const Void) ViewOutput ())
     .+ ("editor" .== H.Slot Editor.Query ViewOutput [Slug])
@@ -554,6 +556,8 @@ component =
         InSpace _ space pages -> case st.route of
           Page _ path -> HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path} FromView
           PageSource _ path -> HH.slot "source" () SourceView.component SourceView.Input {context = context st, space, path} FromView
+          PageHistory _ path version against ->
+            HH.slot "history" () HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
           -- One editor per page edited: another page's is a component of
           -- its own, with a draft of its own.
           EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path} FromView
@@ -837,6 +841,7 @@ spaceOfRoute = \case
   Page path _ -> Just path
   EditPage path _ -> Just path
   PageSource path _ -> Just path
+  PageHistory path _ _ _ -> Just path
   NewPage path _ -> Just path
   _ -> Nothing
 
@@ -857,6 +862,7 @@ waitsForPage st = case (st.route, st.here) of
   (Page _ _, InSpace {}) -> True
   (EditPage _ _, InSpace {}) -> True
   (PageSource _ _, InSpace {}) -> True
+  (PageHistory {}, InSpace {}) -> True
   (Search {}, _) -> True
   _ -> False
 
@@ -868,6 +874,7 @@ currentPage st = case (st.route, st.here) of
   (Page _ path, InSpace _ _ pages) -> currentPageOf pages path
   (EditPage _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageSource _ path, InSpace _ _ pages) -> currentPageOf pages path
+  (PageHistory _ path _ _, InSpace _ _ pages) -> currentPageOf pages path
   _ -> Nothing
 
 -- | What the route is, as far as it has been loaded: a title for it.
@@ -884,6 +891,9 @@ crumbs st = case st.route of
   PageSource path pagePath ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("Source", Nothing) | not (null page)]
+  PageHistory path pagePath _ _ ->
+    let page = spaceCrumbs path <> pageCrumbs path pagePath
+     in page <> [("History", Nothing) | not (null page)]
   NewPage path parent -> spaceCrumbs path <> foldMap (pageCrumbs path) parent <> [("New page", Nothing)]
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]

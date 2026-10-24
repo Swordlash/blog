@@ -38,6 +38,11 @@
   --h-blue: #dbefff;
   --h-pink: #ffe2ef;
   --h-purple: #ece4ff;
+  /* A diff: a line taken out and one put in, and the words changed in it. */
+  --diff-removed: #ffebe9;
+  --diff-removed-word: #ffc1bc;
+  --diff-added: #dafbe1;
+  --diff-added-word: #aceebb;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -76,6 +81,10 @@
     --h-blue: #0b2e57;
     --h-pink: #4b1834;
     --h-purple: #30215a;
+    --diff-removed: #3b1219;
+    --diff-removed-word: #6e1d24;
+    --diff-added: #12301c;
+    --diff-added-word: #1e5a2d;
   }
 }
 
@@ -976,6 +985,174 @@ select {
 .source-copied {
   font-size: 0.9rem;
   color: var(--muted);
+}
+
+/* ---- A page's history ------------------------------------------------------ */
+
+/* The versions beside what the chosen one changed, on a wide screen; above
+   it on a narrow one. The diff wants the width, so the page's reading width
+   does not hold here. */
+.wiki-content:has(> .history-view) {
+  max-width: none;
+}
+
+.history {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .history {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.version-list ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.version {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.45rem 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.version:first-child {
+  border-top: none;
+}
+
+.version.chosen {
+  background: var(--surface);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.version.chosen a {
+  font-weight: 600;
+}
+
+.version-meta,
+.diff-summary {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.version-detail h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.2rem;
+}
+
+.version-detail .version-meta {
+  margin: 0 0 0.75rem;
+}
+
+.diff-against {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.diff-against-chosen {
+  font-weight: 600;
+}
+
+.diff-title del,
+.diff-text del {
+  background: var(--diff-removed-word);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+.diff-title ins,
+.diff-text ins {
+  background: var(--diff-added-word);
+  text-decoration: none;
+}
+
+.diff-title del,
+.diff-title ins {
+  padding: 0 0.2rem;
+  border-radius: 3px;
+}
+
+/* A table of lines, numbered on each side, in the source's own type. A
+   narrow screen scrolls the table rather than the page. */
+.diff {
+  display: block;
+  overflow-x: auto;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  border-spacing: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.diff tbody {
+  display: table;
+  width: 100%;
+}
+
+.diff td {
+  padding: 0 0.5rem;
+  vertical-align: top;
+}
+
+.diff-number {
+  width: 1%;
+  min-width: 2.5rem;
+  text-align: right;
+  color: var(--muted);
+  user-select: none;
+  background: var(--surface);
+}
+
+.diff-sign {
+  width: 1%;
+  user-select: none;
+  color: var(--muted);
+}
+
+.diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+
+.diff-removed {
+  background: var(--diff-removed);
+}
+
+.diff-added {
+  background: var(--diff-added);
+}
+
+.diff-removed .diff-number,
+.diff-added .diff-number {
+  background: transparent;
+}
+
+.diff-gap td {
+  padding: 0.2rem 0.75rem;
+  color: var(--muted);
+  background: var(--surface);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 0.8rem;
+}
+
+.restore-confirm {
+  margin-bottom: 0.75rem;
 }
 
 /* ---- The editor ------------------------------------------------------------ */

@@ -20,8 +20,8 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Types
 import Wiki.Core.Id (PageId (..), SpaceId (..))
-import Wiki.Core.Version (VersionInfo (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
+import Wiki.Core.Version (VersionInfo (..))
 
 -- | A golden file: its name, and the value it holds.
 golden :: forall a. (Eq a, Show a, ToJSON a, FromJSON a) => FilePath -> a -> Spec

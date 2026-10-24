@@ -64,7 +64,9 @@ import Wiki.App.Backend.Http.Request (Body (..))
 import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Route (Route (..), route, routeOfHref)
 import Wiki.App.Static (Served (..), renderServed, withTitle)
+import Wiki.Core.Page (Page (id))
 import Wiki.Core.Space (Space (id))
+import Wiki.Core.Version (VersionInfo (updatedAt))
 import Wiki.Server.Api (Env, apiApplication)
 import Wiki.Server.Log (Level (..), Logger, logWith)
 import Wiki.Server.Static (withBaseHref)
@@ -135,6 +137,7 @@ statusOf at c = case at of
   Page s p -> ofSpace s `unlessRefused` ofPage s p
   EditPage s p -> ofSpace s `unlessRefused` ofPage s p
   PageSource s p -> ofSpace s `unlessRefused` ofPage s p
+  PageHistory s p v _ -> ofSpace s `unlessRefused` ofPage s p `unlessRefused` ofVersion s p v
   NewPage s _ -> ofSpace s
   _ -> status200
   where
@@ -143,6 +146,16 @@ statusOf at c = case at of
     ofPage s p = case Map.lookup s c.spaceAt of
       Just (Right space) -> refusal (cachedPage space.id p c)
       _ -> status200
+    -- A version the page's history does not have.
+    ofVersion s p = \case
+      Nothing -> status200
+      Just time -> case Map.lookup s c.spaceAt of
+        Just (Right space)
+          | Just (Right page) <- cachedPage space.id p c
+          , Just (Right versions) <- Map.lookup page.id c.versionLists
+          , not (any (\v -> v.updatedAt == time) versions) ->
+              status404
+        _ -> status200
     refusal = \case
       Just (Left NotFound) -> status404
       Just (Left Forbidden) -> status403

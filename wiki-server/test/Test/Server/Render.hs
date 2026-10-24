@@ -24,7 +24,7 @@ import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Error (errorStatus)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.App.Backend.Http.Preload
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Against (..), Route (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Server.Options (ServeOptions (..))
@@ -90,21 +90,26 @@ anonymous = describe "for someone not signed in" $ do
     (sourceStatus, source) <- page r r.public "/s/docs/p/tour/source/"
     sourceStatus `shouldBe` 200
     appIn source `shouldSatisfy` T.isInfixOf "| nobody (not signed in)   | read the public spaces, **Blog** and **Docs**        |"
+    (historyStatus, history) <- page r r.public "/s/docs/p/tour/history/"
+    historyStatus `shouldBe` 200
+    history `shouldSatisfy` T.isInfixOf "<title>History · Tour · Wiki</title>"
+    appIn history `shouldSatisfy` T.isInfixOf "Version 1 (current)"
+    appIn history `shouldSatisfy` T.isInfixOf "<td class=\"diff-text\"># Tour</td>"
     (searchStatus, search) <- page r r.public "/search/?q=tour"
     searchStatus `shouldBe` 200
     appIn search `shouldSatisfy` T.isInfixOf "class=\"search-hit\""
     appIn search `shouldNotSatisfy` T.isInfixOf "Searching…"
 
   it "renders nothing of a private space but that it is private, with a 403" $ withDemoRunning identity $ \r -> do
-    for_ ["/s/team/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/"] $ \path -> do
+    for_ ["/s/team/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/"] $ \path -> do
       (status, html) <- page r r.public path
       status `shouldBe` 403
       html `shouldNotSatisfy` T.isInfixOf "handbook"
       html `shouldNotSatisfy` T.isInfixOf "Handbook"
       appIn html `shouldSatisfy` T.isInfixOf "error-forbidden"
 
-  it "renders what is not there with a 404: an address, a space, a page" $ withDemoRunning identity $ \r -> do
-    for_ ["/nowhere/at/all", "/s/nowhere/", "/s/docs/p/nowhere/"] $ \path -> do
+  it "renders what is not there with a 404: an address, a space, a page, a version" $ withDemoRunning identity $ \r -> do
+    for_ ["/nowhere/at/all", "/s/nowhere/", "/s/docs/p/nowhere/", "/s/docs/p/nowhere/history/", "/s/docs/p/tour/history/?version=2020-01-01T00%3A00%3A00Z"] $ \path -> do
       (status, html) <- page r r.public path
       (path, status) `shouldBe` (path, 404)
       appIn html `shouldSatisfy` \a -> "Not found" `T.isInfixOf` a || "error-not-found" `T.isInfixOf` a
@@ -190,6 +195,7 @@ addresses = describe "a request's address" $ do
   it "is read as the program's router reads it, below the listener's place" $ do
     routeOf "/" "/s/docs/p/tour/" `shouldReturn` Page (slugs "docs") (slugs "tour")
     routeOf "/admin/" "/admin/s/docs/p/tour/source/" `shouldReturn` PageSource (slugs "docs") (slugs "tour")
+    routeOf "/" "/s/docs/p/tour/history/?against=current" `shouldReturn` PageHistory (slugs "docs") (slugs "tour") Nothing AgainstCurrent
     routeOf "/wiki/" "/wiki/search/?q=a%20b&only" `shouldReturn` Search (Just "a b") Nothing False
     routeOf "/" "/s/docs" `shouldReturn` Space (slugs "docs")
     routeOf "/" "/elsewhere/" `shouldReturn` Unknown

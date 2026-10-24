@@ -27,7 +27,7 @@ import Protolude hiding (State)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.Core.Attachment (Attachment (..))
@@ -130,16 +130,19 @@ component =
       | mayEdit input.context page.space =
           [ Router.link input.context.router Followed (EditPage spacePath input.path) [HP.class_ "button"] [HH.text "Edit"]
           , viewSource
+          , history
           , Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
           , button "Rename" (Open (Renaming page.title))
           , button "Move" StartMove
           , button "Delete" (Open ConfirmingDelete)
           ]
-      | otherwise = [viewSource]
+      | otherwise = [viewSource, history]
       where
         spacePath = spacePathOf input.context.spaces input.space.id
         -- For every reader: the source is theirs to read as the page is.
         viewSource = Router.link input.context.router Followed (PageSource spacePath input.path) [HP.class_ "button"] [HH.text "View source"]
+        -- And so is its history.
+        history = Router.link input.context.router Followed (PageHistory spacePath input.path Nothing AgainstPrevious) [HP.class_ "button"] [HH.text "History"]
 
     form :: Input -> Page -> Mode -> Maybe (H.ComponentHTML Action Slots m)
     form input page = \case

@@ -45,7 +45,8 @@ spec = describe "Wiki.Core.Diff" $ do
        in (mapMaybe (\l -> l.old) d.rows, mapMaybe (\l -> l.new) d.rows) === ([1 .. length (splitLines a)], [1 .. length (splitLines b)])
 
   prop "finds no change between a text and itself" $
-    forAll text $ \a -> let d = diffText a a in (unchanged d, d.gaveUp) === (True, False)
+    forAll text $
+      \a -> let d = diffText a a in (unchanged d, d.gaveUp) === (True, False)
 
   prop "keeps as many lines as the longest sequence the texts have in common" $
     forAll text $ \a -> forAll text $ \b ->

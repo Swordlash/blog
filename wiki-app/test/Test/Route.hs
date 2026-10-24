@@ -2,6 +2,7 @@
 -- written as, and the addresses are the ones the plan names.
 module Test.Route (spec) where
 
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Halogen.Router qualified as Router
 import Halogen.Router.Duplex (parse, print)
 import Halogen.VDom.DOM.Monad (runMemDOM)
@@ -20,7 +21,7 @@ slugs = map slug
 
 -- | Slugs, the route's own words among them, which have to be escaped.
 genSlug :: Gen Slug
-genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "new-page", "new-space", "s", "not-found", "admin", "a-b", "x1"]
+genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "history", "new-page", "new-space", "s", "not-found", "admin", "a-b", "x1"]
 
 genPath :: Gen [Slug]
 genPath = chooseInt (1, 4) >>= (`vectorOf` genSlug)
@@ -41,7 +42,16 @@ genRoute =
         <*> oneof [pure Nothing, pure (Just []), Just <$> genPath]
         <*> elements [False, True]
     , pure Admin
+    , PageHistory
+        <$> genPath
+        <*> genPath
+        <*> oneof [pure Nothing, Just <$> elements [demoTime, addUTCTime 0.000123456789 demoTime, addUTCTime 86399.5 demoTime]]
+        <*> elements [AgainstPrevious, AgainstCurrent]
     ]
+
+-- | A time with no fraction of a second: the others are made from it.
+demoTime :: UTCTime
+demoTime = UTCTime (fromGregorian 2026 10 24) 34212
 
 spec :: Spec
 spec = describe "Wiki.App.Route" $ do
@@ -86,6 +96,18 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/s/a/p/~source/source/" `shouldBe` Right (PageSource (slugs ["a"]) (slugs ["source"]))
       parse route "/s/a/p/b/source/edit/" `shouldSatisfy` isLeft
       parse route "/s/a/p/source/" `shouldSatisfy` isLeft
+
+    it "writes a page's history, with the version and what it is compared with as parameters" $ do
+      print route (PageHistory (slugs ["docs"]) (slugs ["tour"]) Nothing AgainstPrevious) `shouldBe` "/s/docs/p/tour/history/"
+      print route (PageHistory (slugs ["docs"]) (slugs ["tour"]) (Just (addUTCTime 0.5 demoTime)) AgainstCurrent)
+        `shouldBe` "/s/docs/p/tour/history/?version=2026-10-24T09%3A30%3A12.5Z&against=current"
+      print route (Page (slugs ["a"]) (slugs ["history"])) `shouldBe` "/s/a/p/~history/"
+      parse route "/s/a/p/~history/history/" `shouldBe` Right (PageHistory (slugs ["a"]) (slugs ["history"]) Nothing AgainstPrevious)
+      parse route "/s/a/p/history/" `shouldSatisfy` isLeft
+      -- A version that is not a time is the latest, and a comparison that
+      -- is not the current version's is with the version before.
+      parse route "/s/a/p/b/history/?version=yesterday&against=tomorrow" `shouldBe` Right (PageHistory (slugs ["a"]) (slugs ["b"]) Nothing AgainstPrevious)
+      parse route "/s/a/p/b/history" `shouldBe` Right (PageHistory (slugs ["a"]) (slugs ["b"]) Nothing AgainstPrevious)
 
     it "reads an address without its last slash too" $ do
       parse route "/s/docs" `shouldBe` Right (Space (slugs ["docs"]))
