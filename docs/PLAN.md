@@ -546,6 +546,20 @@ point of this phase.
   confirmation, and resets; a reader sees no link and, at `/admin`, the refusal; the
   existing persistence tests move from the menu to the page; the smoke test visits
   `/admin`.
+- **WP1.22 Pasted files, and "Mark".** Two small items from WP1.19's and WP1.20's reports.
+  (1) A file pasted into the editor (an image copied from a screenshot tool or a browser, a
+  file copied in a file manager, where the browser exposes it as `clipboardData.files`) is
+  attached and referenced at the cursor exactly as a dropped one is (WP1.5, WP1.12: an
+  image as `![name](attachment:name)`, anything else as a link), through a listener-side
+  `paste` handler beside the drop's, which leaves a paste of plain text or HTML to the
+  editor (CodeMirror turns pasted line endings to LF; nothing else changes). The paste
+  reaches the component whether CodeMirror or the fallback textarea has the focus (WP1.20
+  already tells CodeMirror to leave paste events with files alone). Browser tests: paste a
+  PNG and the Markdown gets the image reference and the attachment list the file; paste
+  text and it is inserted unchanged. (2) The HTML menu's `<mark>` entry, labelled
+  "Highlight" (`htmlTagLabel Mark` in `Wiki.Core.Markdown.Edit`), is renamed "Mark", since
+  the colour palette's highlight row (WP1.19) also says "Highlight"; its title and
+  `aria-label`, `docs/markdown.md` and any test that finds it by label follow.
 - **WP1.13 HTML in pages.** Render `RawHtml` and `RawHtmlBlock` instead of showing them
   as text: `Wiki.Core.Markdown.Html` parses the HTML (`tagsoup`, pure Haskell, so it
   builds for wasm; `html-parse` if tagsoup's HTML5 handling falls short, reported) and
@@ -1284,3 +1298,6 @@ Amended by the planning session after each work package's report.
   calls.
 - **The owner's requests of 2026-10-23 are all merged**: WP1.17, WP1.18, WP1.19, WP1.20,
   WP1.21.
+- **WP1.22 added** (pasted files attach as dropped ones do; the HTML menu's `<mark>` entry
+  is "Mark"), at the owner's word on WP1.19's and WP1.20's open points. The haskell-halogen
+  ref bug WP1.20 found is raised upstream as an issue.
