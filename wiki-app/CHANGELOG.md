@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The editor's toolbar has a "Colour" button, which opens a palette of
+eight text colours and five highlights, with "No text colour" and "No
+highlight" to take one away. The colours are classes (`c-red`, `h-yellow`,
+listed in `docs/markdown.md`) that `web/style.css` draws in the light and
+the dark theme; a page still cannot have a `style`. The toolbar's menus
+share one state, `menu :: Maybe Menu`, so opening one closes the other.
+
 Export, import and reset have moved from the foot of the user menu, where
 nobody looked for them, to an "Administration" page at `/admin` (the route
 `Admin`), linked from the header for whoever holds the global `Administer`

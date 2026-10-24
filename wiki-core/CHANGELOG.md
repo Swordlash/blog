@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+`Wiki.Core.Markdown.Edit` has colours: `TextColour` and `Highlight`
+commands, each with a `Colour` or `Nothing` for none, which wrap the
+selection in `<span class="c-NAME">` or `<mark class="h-NAME">`
+(`textColourClass`, `highlightClass`; the palette is `textColours` and
+`highlightColours`). The words selected end up in exactly the colour
+chosen: a wrapper of the same kind is replaced, never nested, the part of a
+wrapper outside the selection keeps its colour, other elements on the line
+stay whole and nested, and each line gets its own tags, after a list,
+quote or heading marker. With only a cursor, the wrapper it is in is
+changed; outside one, a placeholder is put in and selected.
+
 A space chooses the order it lists its children in, one for its subspaces
 and one for its pages (the pages under a page follow its space's): the new
 `Wiki.Core.Order` has `ChildOrder` (`ByName`, the default, `NewestFirst`,

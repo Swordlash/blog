@@ -411,3 +411,33 @@ as in Markdown. Any other address, such as `javascript:` or `data:`, is
 left out, and a link that leads nowhere is shown as broken.
 
 An HTML comment is left out. <!-- Like this one. -->
+
+### Colours
+
+The toolbar's "Colour" button writes colours as HTML with a class, never a
+`style`, which a page may not have: text in
+<span class="c-red">red</span>, <span class="c-teal">teal</span> or
+<span class="c-purple">purple</span>, a
+<mark class="h-yellow">yellow</mark> or <mark class="h-blue">blue</mark>
+highlight, or <mark class="h-green"><span class="c-blue">both</span></mark>.
+Each colour has a look of its own in the light theme and the dark one, and
+reads in both. The classes:
+
+| Text colour | Class | Highlight | Class |
+| ----------- | ----- | --------- | ----- |
+| <span class="c-red">Red</span> | `c-red` | <mark class="h-yellow">Yellow</mark> | `h-yellow` |
+| <span class="c-orange">Orange</span> | `c-orange` | <mark class="h-green">Green</mark> | `h-green` |
+| <span class="c-green">Green</span> | `c-green` | <mark class="h-blue">Blue</mark> | `h-blue` |
+| <span class="c-teal">Teal</span> | `c-teal` | <mark class="h-pink">Pink</mark> | `h-pink` |
+| <span class="c-blue">Blue</span> | `c-blue` | <mark class="h-purple">Purple</mark> | `h-purple` |
+| <span class="c-purple">Purple</span> | `c-purple` | | |
+| <span class="c-pink">Pink</span> | `c-pink` | | |
+| <span class="c-grey">Grey</span> | `c-grey` | | |
+
+Choosing a colour for text that has one replaces it, rather than putting
+one inside the other; choosing one for part of a coloured text leaves the
+rest as it was; "No text colour" and "No highlight" take a colour away.
+With nothing selected, the colour of the word the cursor is in changes.
+Each line of a selection gets its own pair of tags, after a list item's
+marker, so colouring several items keeps the list. A text colour and a
+highlight are two tags, and a word may have both.

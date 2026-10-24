@@ -49,6 +49,9 @@ spec = describe "docs/markdown.md" $ do
       , "<kbd>Ctrl</kbd>+<kbd>S</kbd>"
       , "<abbr title=\"HyperText Markup Language\">HTML</abbr>"
       , "<mark>this is <em>emphasised</em></mark>"
+      , "<span class=\"c-red\">red</span>"
+      , "<mark class=\"h-green\"><span class=\"c-blue\">both</span></mark>"
+      , "<td><mark class=\"h-purple\">Purple</mark></td>"
       , "<details>\n<summary>A part of the page that opens on a click</summary>\nWritten in HTML, so <b>this is bold</b> and **this is not**.\n</details>"
       ]
       $ \fragment -> html `shouldSatisfy` T.isInfixOf fragment

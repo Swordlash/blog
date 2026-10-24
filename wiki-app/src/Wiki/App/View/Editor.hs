@@ -52,12 +52,14 @@
 -- a shortcut reads the textarea's text and selection, applies the command,
 -- and writes the change back as an edit the browser's undo takes back, with
 -- the input event typing would make, so the draft and the preview learn of
--- it as of any other keystroke ("Wiki.App.Editor.Browser"). The keys the
--- editor answers to are decided in the keydown's listener, which keeps the
--- browser from acting on them (Ctrl+K and Ctrl+E have defaults of their
--- own) while the event is dispatched, whatever the component is busy with;
--- so are a drag's and a drop's, and a drop's files are taken there, as the
--- browser empties the drop once it has been dispatched.
+-- it as of any other keystroke ("Wiki.App.Editor.Browser"). Its palette
+-- of colours writes classes, never a @style@, which a page may not have.
+-- The keys the editor answers to are decided in the keydown's listener,
+-- which keeps the browser from acting on them (Ctrl+K and Ctrl+E have
+-- defaults of their own) while the event is dispatched, whatever the
+-- component is busy with; so are a drag's and a drop's, and a drop's files
+-- are taken there, as the browser empties the drop once it has been
+-- dispatched.
 --
 -- Files dropped onto the editor, or chosen with its file input, are read
 -- into bytes in the browser ("Wiki.App.Editor.Browser"), uploaded to the
