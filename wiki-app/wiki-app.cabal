@@ -231,6 +231,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Search
       Test.Browser.Shell
       Test.Browser.Source
+      Test.Browser.Text
   build-depends:
       base,
       base64-bytestring,

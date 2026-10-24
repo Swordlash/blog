@@ -1,9 +1,21 @@
 // What the editor (Wiki.App.View.Editor) asks of the browser beyond Halogen's
 // DOM, declared in Wiki.App.Editor.Browser: the files a drop or a file input
-// brings, read into bytes; the textarea's text and selection, read and
-// written as an edit the browser can undo; which of the editor's keys was
-// pressed; and the warning before a reload or a close leaves unsaved changes
-// behind.
+// brings, read into bytes; CodeMirror put in place of the textarea, and the
+// text and selection, read and written as an edit the browser can undo;
+// which of the editor's keys was pressed; and the warning before a reload or
+// a close leaves unsaved changes behind.
+//
+// The editor's text is the textarea the component renders until CodeMirror
+// has taken its place (web/src/editor.js, through the page's islands.js), in
+// the element just before it, the host, which is what the component holds
+// and hands these functions; from then on the host carries `wikiEditor`, and
+// the text, the selection and the writes are CodeMirror's.
+
+// The textarea beside the host, and the host's CodeMirror if it has one.
+function wikiTextarea(host) {
+  const textarea = host.nextElementSibling;
+  return textarea instanceof HTMLTextAreaElement ? textarea : null;
+}
 
 // A drop's files, as an array. Taken in the drop's listener, while the
 // event is being dispatched: its dataTransfer is emptied once it has been,
@@ -53,11 +65,31 @@ async function wiki_editor_read_file(files, i) {
   return btoa(binary);
 }
 
-// The textarea's text, and its selection in characters (code points), which
-// is how Haskell's Text counts: the browser counts UTF-16 code units, two for
-// a character beyond the Basic Multilingual Plane, such as most emoji.
-function wiki_editor_value(textarea) {
-  return textarea.value;
+// Put CodeMirror in the host in place of the textarea, once its module has
+// loaded; `original` is the Markdown the textarea was made with, which the
+// browser has made the textarea's line endings "\n" in. Without the page's
+// islands.js the textarea stays.
+function wiki_editor_attach(host, original) {
+  const textarea = wikiTextarea(host);
+  if (textarea) globalThis.wikiIslands?.attachEditor?.(textarea, host, original);
+}
+
+// Let go of the host's CodeMirror, as the component goes.
+function wiki_editor_detach(host) {
+  host.wikiEditor?.destroy();
+}
+
+// The text CodeMirror's "wiki-input" event says the editor now has.
+function wiki_editor_typed(event) {
+  return String(event.detail ?? "");
+}
+
+// The text, and its selection in characters (code points), which is how
+// Haskell's Text counts: the browser and CodeMirror count UTF-16 code units,
+// two for a character beyond the Basic Multilingual Plane, such as most
+// emoji.
+function wiki_editor_value(host) {
+  return host.wikiEditor ? host.wikiEditor.text() : (wikiTextarea(host)?.value ?? "");
 }
 
 function wikiCharacters(text, units) {
@@ -78,26 +110,37 @@ function wikiUnits(text, characters) {
   return at;
 }
 
-function wiki_editor_selection_start(textarea) {
-  return wikiCharacters(textarea.value, textarea.selectionStart);
+function wiki_editor_selection_start(host) {
+  const editor = host.wikiEditor;
+  const textarea = wikiTextarea(host);
+  if (editor) return wikiCharacters(editor.text(), editor.selectionStart());
+  return textarea ? wikiCharacters(textarea.value, textarea.selectionStart) : 0;
 }
 
-function wiki_editor_selection_end(textarea) {
-  return wikiCharacters(textarea.value, textarea.selectionEnd);
+function wiki_editor_selection_end(host) {
+  const editor = host.wikiEditor;
+  const textarea = wikiTextarea(host);
+  if (editor) return wikiCharacters(editor.text(), editor.selectionEnd());
+  return textarea ? wikiCharacters(textarea.value, textarea.selectionEnd) : 0;
 }
 
-// Make the textarea's text this, and select from start to end (characters
-// in the new text). Only the part that differs is replaced, as one edit the
-// browser's undo takes back, and the input event it dispatches is the one
-// typing would, so the component learns the new text the way it learns any
-// other.
+// Make the text this, and select from start to end (characters in the new
+// text). Only the part that differs is replaced, as one edit the undo takes
+// back: a command may change text outside the selection (a colour replaced
+// around it), so the old text and the new are compared rather than the
+// selection replaced.
 //
-// execCommand is the one way a page's edit goes on the browser's undo stack
-// (setRangeText and setting the value do not), and it edits what has the
-// focus. A textarea that cannot take the focus (one hidden while the preview
-// shows) gets setRangeText instead, and its own input event.
-function wiki_editor_write(textarea, text, start, end) {
-  const old = textarea.value;
+// In CodeMirror that is one transaction, which tells the component of the
+// change before this returns. In the textarea, execCommand is the one way a
+// page's edit goes on the browser's undo stack (setRangeText and setting the
+// value do not), and it edits what has the focus; a textarea that cannot take
+// the focus (one hidden while the preview shows) gets setRangeText instead,
+// and its own input event.
+function wiki_editor_write(host, text, start, end) {
+  const editor = host.wikiEditor;
+  const textarea = wikiTextarea(host);
+  if (!editor && !textarea) return;
+  const old = editor ? editor.text() : textarea.value;
   let prefix = 0;
   const shorter = Math.min(old.length, text.length);
   while (prefix < shorter && old.charCodeAt(prefix) === text.charCodeAt(prefix)) prefix++;
@@ -115,6 +158,10 @@ function wiki_editor_write(textarea, text, start, end) {
   const from = prefix;
   const to = old.length - suffix;
   const middle = text.slice(prefix, text.length - suffix);
+  if (editor) {
+    editor.replace(from, to, middle, wikiUnits(text, start), wikiUnits(text, end));
+    return;
+  }
   if (from !== to || middle !== "") {
     textarea.focus({ preventScroll: true });
     textarea.setSelectionRange(from, to);
@@ -134,7 +181,7 @@ function wiki_editor_write(textarea, text, start, end) {
 
 // Which of the editor's keys a keydown is, or "" for one the browser keeps.
 // Saving, the preview and Escape are the form's, wherever the focus is in
-// it; the rest are the textarea's. Shift+7 and Shift+8 are read by the key's
+// it; the rest are the text's (the textarea's, or CodeMirror's content). Shift+7 and Shift+8 are read by the key's
 // place (its code), since the character they type differs between layouts,
 // as is P with Alt, which types a character of its own on a Mac.
 function wiki_editor_key(event) {
@@ -145,7 +192,9 @@ function wiki_editor_key(event) {
   if (command && event.altKey && !event.shiftKey && event.code === "KeyP") return "preview";
   const plain = !(command || event.altKey || event.shiftKey);
   if (plain && key === "Escape") return "escape";
-  if (!(event.target instanceof HTMLTextAreaElement)) return "";
+  const target = event.target;
+  const inText = target instanceof HTMLTextAreaElement || (target instanceof Element && target.closest(".cm-content") !== null);
+  if (!inText) return "";
   if (plain && key === "Tab") return "indent";
   if (command && !event.altKey && !event.shiftKey) {
     const commands = { b: "bold", i: "italic", k: "link", e: "code" };
@@ -158,10 +207,16 @@ function wiki_editor_key(event) {
   return "";
 }
 
-// Focus an element without scrolling to it: the textarea coming back from
-// the preview, where it was.
+// Focus an element without scrolling to it: the back button.
 function wiki_editor_focus(element) {
   element.focus({ preventScroll: true });
+}
+
+// Focus the text, at its selection, without scrolling to it: coming back
+// from the preview, where it was.
+function wiki_editor_focus_text(host) {
+  if (host.wikiEditor) host.wikiEditor.focus();
+  else wikiTextarea(host)?.focus({ preventScroll: true });
 }
 
 // Click an element: the file input, from the toolbar's image button.

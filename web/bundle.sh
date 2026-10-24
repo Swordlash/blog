@@ -16,7 +16,9 @@
 #   islands/         Mermaid, as ES modules split by diagram type, which
 #                    islands.js imports the first time it draws a diagram,
 #                    and tikz.js (web/src/tikz.js), which it imports the
-#                    first time it draws a TikZ picture;
+#                    first time it draws a TikZ picture, and editor.js
+#                    (web/src/editor.js), CodeMirror for the editor's text,
+#                    which it imports the first time the editor is opened;
 #   tikzjax/         TikZJax's worker and TeX (from npm's @drgrice1/tikzjax,
 #                    as published), which tikz.js runs, with the worker that
 #                    starts it (web/src/tikz-worker.js);
@@ -56,6 +58,12 @@ npx esbuild web/src/mermaid.js \
 npx esbuild web/src/tikz.js \
   --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --outfile="$out_dir/islands/tikz.js"
+
+# The editor's CodeMirror, one file in islands/ too: only the editor loads
+# it, so a reader's page never pays for it.
+npx esbuild web/src/editor.js \
+  --bundle --minify --format=esm --target=es2022 --log-level=warning \
+  --outfile="$out_dir/islands/editor.js"
 
 # TikZJax's files, copied as they are published: run-tex.js is its worker
 # (TeX's WebAssembly runtime and dvi2html), tex.wasm.gz and core.dump.gz are

@@ -3,8 +3,9 @@
 // comment between two texts, which the parser would otherwise merge; a
 // newline that starts a pre or a textarea doubled, since the parser drops the
 // first; and the islands empty, as the program renders them (a prerendered
-// page has their sources in them, which the program takes out). The
-// browser's own serialisation does none of these.
+// page has their sources in them, which the program takes out), and so is
+// the element CodeMirror is put in, which a prerendered editor has empty.
+// The browser's own serialisation does none of these.
 
 const wikiTestVoid = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
@@ -20,7 +21,7 @@ function wikiTestSerialize(node) {
   const attributes = [...node.attributes].map((a) => ` ${a.name}="${wikiTestEscape(a.value, true)}"`).join("");
   if (wikiTestVoid.has(name)) return `<${name}${attributes}>`;
   let inner = "";
-  if (!node.matches(".wiki-math, .wiki-mermaid, .wiki-tikz, .wiki-code")) {
+  if (!node.matches(".wiki-math, .wiki-mermaid, .wiki-tikz, .wiki-code, .editor-cm")) {
     let previousText = false;
     for (const child of node.childNodes) {
       const text = child.nodeType === Node.TEXT_NODE;

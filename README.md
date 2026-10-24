@@ -30,7 +30,9 @@ authorisation.
   [docs/markdown.md](docs/markdown.md): GitHub's extensions, footnotes, alerts,
   wiki links, formulas drawn by KaTeX, diagrams by Mermaid, code highlighted by
   highlight.js, images, video and attachments.
-- An editor with the Markdown beside a live preview, files dropped or chosen into
+- An editor that shows the Markdown as it will look while it is typed
+  (CodeMirror 6: bold, italics, larger headings, code on its own background,
+  their markers dimmed), beside a live preview, files dropped or chosen into
   it as attachments, Save (Ctrl+S) that stays and Save and close, a conflict
   shown in place when someone else saved first, and a guard against losing
   unsaved changes. A new page is made from its title first, so files can be
@@ -298,7 +300,7 @@ haskell-halogen's packages come from one `source-repository-package` stanza in
 ## Commands
 
 ```sh
-npm ci                          # once: Playwright, http-server, esbuild, KaTeX, Mermaid, TikZJax, highlight.js
+npm ci                          # once: Playwright, http-server, esbuild, KaTeX, Mermaid, TikZJax, highlight.js, CodeMirror
 npm run build-native            # every package, host GHC, into dist-newstyle/native
 npm run test-native             # the test suites, natively
 npm run build-wasm              # wiki-app to wasm, a prerendered page per route, the islands bundle, into dist-newstyle/wasm/public/app
@@ -319,7 +321,9 @@ highlight.js (with `web/src/islands.js`) into `islands.js`, which publishes
 imports the first time it draws a diagram; `web/src/tikz.js` into
 `islands/tikz.js`, which it imports the first time it draws a TikZ picture, with
 TikZJax's worker, TeX and fonts copied from npm's `@drgrice1/tikzjax` into
-`tikzjax/`; and KaTeX's stylesheet and fonts into `islands.css` and `fonts/`. `build-wasm` runs it into the page it builds, and
+`tikzjax/`; `web/src/editor.js`, CodeMirror for the editor's text, into
+`islands/editor.js`, which it imports the first time the editor opens, so that a
+reader's page never fetches it; and KaTeX's stylesheet and fonts into `islands.css` and `fonts/`. `build-wasm` runs it into the page it builds, and
 the browser suite's `wiki-app/test/web/bundle.sh` into the test page. npm 11
 runs esbuild's install script only because `package.json`'s `allowScripts`
 approves it (`npm install-scripts approve esbuild`).

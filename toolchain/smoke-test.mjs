@@ -329,6 +329,14 @@ async function footerShown(page, where) {
 // name, "Edit", "Search"; the front page has none.
 const crumb = (page) => page.locator("#app .breadcrumbs [aria-current=page]").textContent();
 
+// The editor's text: CodeMirror (web/src/editor.js), which takes the place
+// of the textarea the editor is rendered with once islands/editor.js has
+// loaded. What one types into is its content; the Markdown is read from
+// CodeMirror, through what its element carries for the application.
+const editorText = "#app .editor-cm .cm-content";
+const markdownIn = (page) =>
+  page.evaluate((selector) => document.querySelector(selector)?.wikiEditor?.text() ?? null, editorText);
+
 // Every index.html under the directory, as the address that serves it.
 async function prerenderedPaths(dir) {
   const paths = [];
@@ -368,6 +376,9 @@ try {
       const tikz = visitor.requested.filter((address) => /\/(islands\/tikz\.js|tikzjax\/)/.test(address));
       assert.deepEqual(tikz, [], `${path}: a page without a TikZ picture fetched TikZJax`);
     }
+    // CodeMirror is the editor's, and no reader's page fetches it.
+    const editor = visitor.requested.filter((address) => /\/islands\/editor\.js/.test(address));
+    assert.deepEqual(editor, [], `${path}: a reader's page fetched the editor's CodeMirror`);
     if (path !== "/") assert.notEqual(before.title, "Wiki", `${path}: no title of its own`);
     // The program shows the same route, on the same nodes.
     assert.deepEqual(await shown(visitor), before, `${path}: the program shows another page`);
@@ -385,6 +396,7 @@ try {
   console.log(`note: ${islandSources} islands' prerendered sources were taken out for their libraries to fill`);
   if (objectUrls.length > 0) console.log(`note: attachments the browser serves from object URLs:\n  ${objectUrls.join("\n  ")}`);
   console.log(`ok: each of the ${paths.length} prerendered pages is adopted by the program, every node kept, footer included`);
+  console.log("ok: no prerendered (reader's) page fetched the editor's CodeMirror");
 
   // A page's islands are prerendered as their sources, and drawn once the
   // program has loaded: KaTeX (with its fonts), Mermaid, highlight.js.
@@ -464,7 +476,7 @@ try {
   await load(hurried, "/s/docs/p/markdown-guide/");
   assert.equal(await hurried.locator("#app .wiki-tikz > svg").count(), 0, "the picture was drawn before the page was left");
   await hurried.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
-  await hurried.locator("#app .editor-text").waitFor({ timeout: 5000 });
+  await hurried.locator(editorText).waitFor({ timeout: 5000 });
   await hurried.goBack();
   await hurried.locator("#app .page-view h1", { hasText: "Markdown guide" }).waitFor({ timeout: 5000 });
   await hurried.locator("#app .wiki-sidebar .page-tree a", { hasText: "Mathematics" }).click();
@@ -555,9 +567,15 @@ try {
   await arrive({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "back from the source");
   console.log("ok: a page's source opens from the page, and its link leads back");
 
+  // CodeMirror is fetched as the editor opens: how much of it.
+  const editorBytes = new Promise((resolve) =>
+    page.context().on("requestfinished", async (request) => {
+      if (/\/islands\/editor\.js$/.test(request.url())) resolve((await request.sizes()).responseBodySize);
+    }),
+  );
   await page.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
   await arrive({ path: "/s/blog/p/hello-world/edit/", view: "editor", crumb: "Edit" }, "the editor");
-  const textarea = page.locator("#app .editor-text");
+  const textarea = page.locator(editorText);
   await textarea.press("Control+End");
   await textarea.pressSequentially("\n\n## Smoke test\n\nWritten by ");
   // A toolbar shortcut, whose placeholder is selected for the typing.
@@ -565,6 +583,11 @@ try {
   await textarea.pressSequentially("Ada");
   await textarea.press("End");
   await textarea.pressSequentially(" with $x^2$.");
+  // CodeMirror shows it as it will look: the new heading larger, Ada bold.
+  await page.locator("#app .editor-cm .cm-md-h2", { hasText: "Smoke test" }).first().waitFor({ timeout });
+  await page.locator("#app .editor-cm .cm-md-strong", { hasText: "Ada" }).first().waitFor({ timeout });
+  assert.ok((await markdownIn(page)).endsWith("\n\n## Smoke test\n\nWritten by **Ada** with $x^2$."), "the Markdown typed");
+  console.log(`note: the editor fetched islands/editor.js, ${Math.round((await editorBytes) / 1024)} KiB`);
   // The Markdown is shown alone until the preview is asked for, which
   // replaces it; Save is still there.
   assert.ok(!(await page.locator("#app .editor-preview").isVisible()), "the preview shows before it is asked for");
@@ -588,8 +611,9 @@ try {
   await page.locator("#app .new-page-title").pressSequentially("Smoke page");
   await page.locator("#app .new-page-view button.primary").click();
   await arrive({ path: "/s/blog/p/smoke-page/edit/", view: "editor", crumb: "Edit" }, "the new page's editor");
-  const fresh = page.locator("#app .editor-text");
-  assert.equal(await fresh.inputValue(), "", "a new page's Markdown is not empty");
+  const fresh = page.locator(editorText);
+  await fresh.waitFor({ timeout });
+  assert.equal(await markdownIn(page), "", "a new page's Markdown is not empty");
   await fresh.pressSequentially("Made through the *new* flow.");
   await fresh.press("Control+s");
   await page.locator("#app .editor-saved-notice", { hasText: "Saved" }).waitFor({ timeout });
@@ -641,14 +665,14 @@ try {
   await check({ path: "/s/docs/p/markdown-guide/diagrams/", view: "page-view", crumb: "Diagrams" }, "Diagrams");
   await page.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
   await check({ path: "/s/docs/p/markdown-guide/diagrams/edit/", view: "editor", crumb: "Edit" }, "editing Diagrams");
-  await page.locator("#app .editor-text").press("Control+End");
-  await page.locator("#app .editor-text").pressSequentially("\nNot to be kept.");
+  await page.locator(editorText).press("Control+End");
+  await page.locator(editorText).pressSequentially("\nNot to be kept.");
   const entries = await page.evaluate(() => history.length);
   await page.goBack();
   await page.locator("#app .leave-confirm").waitFor({ timeout });
   await page.locator("#app .leave-confirm button", { hasText: "Stay" }).click();
   await check({ path: "/s/docs/p/markdown-guide/diagrams/edit/", view: "editor" }, "staying in the editor");
-  assert.ok((await page.locator("#app .editor-text").inputValue()).endsWith("Not to be kept."), "staying lost the draft");
+  assert.ok((await markdownIn(page)).endsWith("Not to be kept."), "staying lost the draft");
   assert.equal(await page.evaluate(() => history.length), entries, "staying added an entry to the history");
   await page.goBack();
   await page.locator("#app .leave-confirm button", { hasText: "Leave" }).click();
@@ -744,7 +768,7 @@ try {
   await stillPrerendered(page, "an editor's address");
   await check({ path: "/s/blog/p/hello-world/edit/", view: "editor", crumb: "Edit" }, "an editor's address");
   // The demo starts as admin, who may edit it.
-  await page.locator("#app .editor .editor-text").waitFor({ timeout });
+  await page.locator(editorText).waitFor({ timeout });
   console.log("ok: 404.html stands in for an address with no file, and the program shows its route");
   await page.context().close();
 
@@ -795,16 +819,16 @@ try {
   await phone.locator("#app .user-menu button[data-login=admin]").tap();
   await phone.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
   await phone.locator("#app .page-view .actions a", { hasText: "Edit" }).tap();
-  await phone.locator("#app .editor-text").waitFor({ timeout });
+  await phone.locator(editorText).waitFor({ timeout });
   assert.ok(await phone.locator("#app .editor-toolbar").isVisible(), "no toolbar on a phone");
   assert.ok(!(await phone.locator("#app .editor-side-by-side").isVisible()), "a side by side preview offered on a phone");
   assert.ok(await fits(), "the editor is wider than a phone");
   await phone.locator("#app .editor-show-preview").tap();
   await phone.locator("#app .editor-preview .page-body h1").waitFor({ timeout });
-  assert.ok(!(await phone.locator("#app .editor-text").isVisible()), "the Markdown beside the preview on a phone");
+  assert.ok(!(await phone.locator(editorText).isVisible()), "the Markdown beside the preview on a phone");
   assert.ok(await fits(), "the editor's preview is wider than a phone");
   await phone.locator("#app .editor-back").tap();
-  await phone.locator("#app .editor-text").waitFor({ timeout });
+  await phone.locator(editorText).waitFor({ timeout });
   assert.ok(!(await phone.locator("#app .editor-preview").isVisible()), "the preview stays after Back to editing");
   // A page's source wraps its long lines rather than widening the page.
   await load(phone, "/s/docs/p/tour/source/");

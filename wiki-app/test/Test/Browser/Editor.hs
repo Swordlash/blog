@@ -16,6 +16,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, startWith)
+import Test.Browser.Text (editorSelection, editorText, markdown)
 import Test.Hspec.Halogen
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Mem (runMemWiki)
@@ -38,6 +39,7 @@ $( browserJS
      , ("js_watch_keys", "wiki_test_watch_keys", Unsafe, [t|IO ()|])
      , ("js_last_key_prevented", "wiki_test_last_key_prevented", Unsafe, [t|IO Bool|])
      , ("js_computed_colour", "wiki_test_computed_colour", Unsafe, [t|JSText -> IO JSText|])
+     , ("js_computed_style", "wiki_test_computed_style", Unsafe, [t|JSText -> JSText -> IO JSText|])
      ]
  )
 
@@ -47,7 +49,7 @@ spec m = do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
     sideBySide ui
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "# Hello again\n\nEuler: $e^{i\\pi} + 1 = 0$"
     find ui ".editor-preview .page-body h1" >>= (`shouldHaveText` "Hello again")
@@ -66,7 +68,7 @@ spec m = do
 
   it "saves with Ctrl+S and stays, saying Saved for a while, and indents with Tab" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
-    text <- find ui ".editor-text"
+    text <- editorText ui
     notice <- find ui ".editor-saved-notice"
     getAttribute notice "role" `shouldReturn` Just "status"
     notice `shouldHaveText` ""
@@ -75,14 +77,14 @@ spec m = do
     press "Enter"
     press "Tab"
     typeText text "- nested"
-    getProperty text "value" `shouldReturn` "- a list\n  - nested"
+    markdown ui `shouldReturn` "- a list\n  - nested"
     press "Control+s"
     notice `shouldHaveText` "Saved"
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
     saved <- readPage wiki ["blog"] ["hello-world"]
     saved.body `shouldBe` "- a list\n  - nested"
-    -- Still the same textarea, with the cursor where it was.
-    find ui ".editor-text" >>= (`shouldBeSameElement` text)
+    -- Still the same text, with the cursor where it was.
+    editorText ui >>= (`shouldBeSameElement` text)
     typeText text "\n- more"
     -- The notice goes by itself.
     eventuallyWithin 6000 (notice `shouldHaveText` "")
@@ -96,7 +98,7 @@ spec m = do
 
   it "saves, saves again, and shows the page after Save and close" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "One."
     find ui ".editor-save" >>= click
@@ -120,7 +122,7 @@ spec m = do
     made <- readPage wiki ["blog"] ["third-post"]
     made.body `shouldBe` ""
     find ui ".editor-title input" >>= \t -> getProperty t "value" `shouldReturn` "Third post"
-    find ui ".editor-text" >>= (`typeText` "Some **news**.")
+    editorText ui >>= (`typeText` "Some **news**.")
     -- Shown on its own, the preview has the draft at once; Save is there.
     find ui ".editor-show-preview" >>= click
     find ui ".editor-preview .page-title" >>= (`shouldHaveText` "Third post")
@@ -149,10 +151,11 @@ spec m = do
     find ui ".new-page-view button.primary" >>= click
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing With a picture")
     length <$> findAll ui ".editor-attach.disabled" `shouldReturn` 0
-    text <- find ui ".editor-text"
+    -- Once CodeMirror has the text, which the reference goes into.
+    _ <- editorText ui
     unsafeIOToPageM (chooseFile ".editor-attach input" "dot.png" "image/png" dotPng)
     settle
-    eventually $ getProperty text "value" `shouldReturn` "![dot.png](attachment:dot.png)"
+    eventually $ markdown ui `shouldReturn` "![dot.png](attachment:dot.png)"
     find ui ".editor-attachments li a" >>= (`shouldHaveText` "dot.png")
     find ui ".editor-hint" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "first"))
     attached <- readPage wiki ["blog"] ["with-a-picture"]
@@ -163,7 +166,7 @@ spec m = do
 
   it "asks on Cancel with changes whether to keep the draft, and keeps it or not as told" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Kept for later."
     find ui ".editor-cancel" >>= click
@@ -181,13 +184,13 @@ spec m = do
     unchanged.body `shouldSatisfy` T.isPrefixOf "# Hello, world"
     find ui ".page-view .actions a[href$='/edit/']" >>= click
     find ui ".editor-draft-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Restored your unsaved draft from")
-    find ui ".editor-text" >>= \t -> getProperty t "value" `shouldReturn` "Kept for later."
+    markdown ui `shouldReturn` "Kept for later."
     -- This time the changes are let go, and the draft with them.
     find ui ".editor-cancel" >>= click
     clickButton ui ".editor-cancel-confirm button" "Discard my changes"
     find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Hello, world")
     find ui ".page-view .actions a[href$='/edit/']" >>= click
-    find ui ".editor-text" >>= \t -> getProperty t "value" >>= (`shouldSatisfy` T.isPrefixOf "# Hello, world")
+    markdown ui >>= (`shouldSatisfy` T.isPrefixOf "# Hello, world")
     length <$> findAll ui ".editor-draft-found" `shouldReturn` 0
 
   it "goes back to the page on Cancel when nothing has changed" $ runPage $ do
@@ -198,14 +201,14 @@ spec m = do
 
   it "asks before leaving unsaved changes, and stays or leaves as told" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Draft"
     find ui ".wiki-sidebar .page-tree a[href='#/s/blog/p/notes-on-haskell/']" >>= click
     _ <- find ui ".leave-confirm"
     clickButton ui ".leave-confirm button" "Stay"
     length <$> findAll ui ".leave-confirm" `shouldReturn` 0
-    find ui ".editor-text" >>= \t -> getProperty t "value" `shouldReturn` "Draft"
+    markdown ui `shouldReturn` "Draft"
     -- Again, and leaving goes there; the work is lost.
     find ui ".wiki-sidebar .page-tree a[href='#/s/blog/p/notes-on-haskell/']" >>= click
     find ui ".leave-confirm button.danger" >>= click
@@ -215,7 +218,7 @@ spec m = do
 
   it "shows a save over someone else's as a conflict, keeping the draft until told to reload" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
-    text <- find ui ".editor-text"
+    text <- editorText ui
     -- Someone else saves the page after the editor has loaded it.
     page <- readPage wiki ["blog"] ["hello-world"]
     unsafeIOToPageM . runMemWiki wiki $
@@ -224,19 +227,28 @@ spec m = do
     typeText text "My words."
     find ui ".editor-save" >>= click
     _ <- find ui ".editor .error-conflict"
-    getProperty text "value" `shouldReturn` "My words."
+    markdown ui `shouldReturn` "My words."
     clickButton ui ".error-conflict button" "Reload and lose my changes"
-    find ui ".editor-text" >>= \t -> eventually (getProperty t "value" `shouldReturn` "Someone else's words.")
+    eventually (markdown ui `shouldReturn` "Someone else's words.")
     find ui ".editor-show-preview" >>= click
     find ui ".editor-preview .page-body p" >>= (`shouldHaveText` "Someone else's words.")
     length <$> findAll ui ".error-conflict" `shouldReturn` 0
+    -- The toolbar works on the text loaded again, whose undo has nothing of
+    -- what was there before.
+    find ui ".editor-back" >>= click
+    find ui ".editor-toolbar button[aria-label='Bold']" >>= click
+    markdown ui `shouldReturn` "**bold text**Someone else's words."
+    press "Control+z"
+    markdown ui `shouldReturn` "Someone else's words."
+    press "Control+z"
+    markdown ui `shouldReturn` "Someone else's words."
 
   it "loses no keystroke while the preview catches up with a long page" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-admin") (EditPage (slugs ["docs"]) (slugs ["markdown-guide"]))
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing Markdown guide")
     sideBySide ui
-    text <- find ui ".editor-text"
-    original <- getProperty text "value"
+    text <- editorText ui
+    original <- markdown ui
     focus text
     press "Control+End"
     -- Words typed with pauses about as long as the preview's delay, so that
@@ -257,9 +269,9 @@ spec m = do
     for_ (chunksOf 5 [" " <> w | w <- T.words long]) $ \run ->
       typeText text (mconcat run)
     let expected = original <> mconcat pieces <> long
-    eventually $ getProperty text "value" `shouldReturn` expected
+    eventually $ markdown ui `shouldReturn` expected
     eventually $ find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "w24 the quick")
-    getProperty text "value" `shouldReturn` expected
+    markdown ui `shouldReturn` expected
     find ui ".editor-save-close" >>= click
     find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Markdown guide")
     saved <- readPage wiki ["docs"] ["markdown-guide"]
@@ -268,12 +280,12 @@ spec m = do
   it "attaches a dropped image and embeds it at the cursor" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Look: "
-    unsafeIOToPageM (dropFile ".editor-panes" "dot.png" "image/png" dotPng)
+    unsafeIOToPageM (dropFile ".editor-cm .cm-content" "dot.png" "image/png" dotPng)
     settle
-    eventually $ getProperty text "value" `shouldReturn` "Look: ![dot.png](attachment:dot.png)"
+    eventually $ markdown ui `shouldReturn` "Look: ![dot.png](attachment:dot.png)"
     image <- find ui ".editor-preview .page-body img[alt='dot.png']"
     getAttribute image "src" >>= (`shouldSatisfy` maybe False (T.isPrefixOf "blob:"))
     find ui ".editor-attachments li a" >>= (`shouldHaveText` "dot.png")
@@ -285,65 +297,65 @@ spec m = do
   it "attaches a chosen file as a link, its name with spaces in angle brackets" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     unsafeIOToPageM (chooseFile ".editor-attach input" "meeting notes.txt" "text/plain" "aGVsbG8K")
     settle
-    eventually $ getProperty text "value" `shouldReturn` "[meeting notes.txt](<attachment:meeting notes.txt>)"
+    eventually $ markdown ui `shouldReturn` "[meeting notes.txt](<attachment:meeting notes.txt>)"
     download <- find ui ".editor-preview .page-body a[download='meeting notes.txt']"
     getAttribute download "href" >>= (`shouldSatisfy` maybe False (T.isPrefixOf "blob:"))
 
   it "makes a selected word bold from the toolbar, in the Markdown and the preview" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Some words"
     press "Control+Shift+ArrowLeft"
-    selection text `shouldReturn` (5, 10)
+    editorSelection ui `shouldReturn` (5, 10)
     find ui ".editor-toolbar button[aria-label='Bold']" >>= click
-    getProperty text "value" `shouldReturn` "Some **words**"
-    selection text `shouldReturn` (7, 12)
+    markdown ui `shouldReturn` "Some **words**"
+    editorSelection ui `shouldReturn` (7, 12)
     previewHas ui "strong" "words"
     -- Again, and the word is plain again.
     find ui ".editor-toolbar button[aria-label='Bold']" >>= click
-    getProperty text "value" `shouldReturn` "Some words"
+    markdown ui `shouldReturn` "Some words"
 
   it "makes every line selected a list item from the toolbar, and another list from a shortcut" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "one\ntwo\nthree"
     press "Control+a"
     find ui ".editor-toolbar button[aria-label='Numbered list']" >>= click
-    getProperty text "value" `shouldReturn` "1. one\n2. two\n3. three"
+    markdown ui `shouldReturn` "1. one\n2. two\n3. three"
     press "Control+Shift+8"
-    getProperty text "value" `shouldReturn` "- one\n- two\n- three"
+    markdown ui `shouldReturn` "- one\n- two\n- three"
     find ui ".editor-toolbar button[aria-label='Bulleted list']" >>= click
-    getProperty text "value" `shouldReturn` "one\ntwo\nthree"
+    markdown ui `shouldReturn` "one\ntwo\nthree"
 
   it "leaves Ctrl+B's placeholder selected, for the typing to replace" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Hi "
     press "Control+b"
-    getProperty text "value" `shouldReturn` "Hi **bold text**"
-    selection text `shouldReturn` (5, 14)
+    markdown ui `shouldReturn` "Hi **bold text**"
+    editorSelection ui `shouldReturn` (5, 14)
     typeText text "there"
-    getProperty text "value" `shouldReturn` "Hi **there**"
+    markdown ui `shouldReturn` "Hi **there**"
 
   it "keeps Ctrl+K from the browser, and puts in a link the browser's undo takes back" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     unsafeIOToPageM js_watch_keys
     press "Control+k"
     unsafeIOToPageM js_last_key_prevented `shouldReturn` True
-    getProperty text "value" `shouldReturn` "[link text](https://)"
-    selection text `shouldReturn` (1, 10)
+    markdown ui `shouldReturn` "[link text](https://)"
+    editorSelection ui `shouldReturn` (1, 10)
     press "Control+z"
-    getProperty text "value" `shouldReturn` ""
+    markdown ui `shouldReturn` ""
     -- A key the editor does not answer to is the browser's.
     press "x"
     unsafeIOToPageM js_last_key_prevented `shouldReturn` False
@@ -351,20 +363,20 @@ spec m = do
   it "wraps the selection in an element from the HTML menu" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Look here"
     press "Control+Shift+ArrowLeft"
     find ui ".editor-toolbar button[aria-label='HTML']" >>= click
     clickButton ui ".toolbar-menu button" "Highlight<mark>"
-    getProperty text "value" `shouldReturn` "Look <mark>here</mark>"
+    markdown ui `shouldReturn` "Look <mark>here</mark>"
     length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
     previewHas ui "mark" "here"
 
   it "colours a word from the palette, changes its colour, highlights it and takes the colour away" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     sideBySide ui
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Look here"
     press "Control+Shift+ArrowLeft"
@@ -372,8 +384,8 @@ spec m = do
           find ui ".editor-toolbar button[aria-label='Colour']" >>= click
           find ui (".colour-menu button[aria-label='" <> swatch <> "']") >>= click
     pick "Red text"
-    getProperty text "value" `shouldReturn` "Look <span class=\"c-red\">here</span>"
-    selection text `shouldReturn` (25, 29)
+    markdown ui `shouldReturn` "Look <span class=\"c-red\">here</span>"
+    editorSelection ui `shouldReturn` (25, 29)
     length <$> findAll ui ".toolbar-menu" `shouldReturn` 0
     previewHas ui "span.c-red" "here"
     -- The style sheet draws the class, in a colour of its own.
@@ -383,20 +395,70 @@ spec m = do
     red `shouldNotBe` ""
     -- Another colour replaces the first, rather than going inside it.
     pick "Blue text"
-    getProperty text "value" `shouldReturn` "Look <span class=\"c-blue\">here</span>"
+    markdown ui `shouldReturn` "Look <span class=\"c-blue\">here</span>"
     previewHas ui "span.c-blue" "here"
     pick "Yellow highlight"
-    getProperty text "value" `shouldReturn` "Look <span class=\"c-blue\"><mark class=\"h-yellow\">here</mark></span>"
+    markdown ui `shouldReturn` "Look <span class=\"c-blue\"><mark class=\"h-yellow\">here</mark></span>"
     pick "No text colour"
-    getProperty text "value" `shouldReturn` "Look <mark class=\"h-yellow\">here</mark>"
+    markdown ui `shouldReturn` "Look <mark class=\"h-yellow\">here</mark>"
     previewHas ui "mark.h-yellow" "here"
     pick "No highlight"
-    getProperty text "value" `shouldReturn` "Look here"
+    markdown ui `shouldReturn` "Look here"
+
+  it "shows the Markdown as it will look while it is typed, its markers dimmed" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
+    text <- editorText ui
+    clear text
+    typeText text "# h\n\nSome **bold** and _it_.\n\n```python\ndef f():\n```"
+    let typed = "# h\n\nSome **bold** and _it_.\n\n```python\ndef f():\n```"
+        -- The text of every element of a class, in order.
+        classed cls = mconcat <$> (findAll ui (".editor-cm ." <> cls) >>= traverse textContent)
+    eventually $ classed "cm-md-h1" `shouldReturn` "# h"
+    classed "cm-md-h1.cm-md-syntax" `shouldReturn` "#"
+    classed "cm-md-strong" `shouldReturn` "**bold**"
+    classed "cm-md-strong.cm-md-syntax" `shouldReturn` "****"
+    classed "cm-md-emphasis" `shouldReturn` "_it_"
+    classed "cm-md-emphasis.cm-md-syntax" `shouldReturn` "__"
+    -- Fenced code on its own background, highlighted as the page will be.
+    length <$> findAll ui ".editor-cm .cm-line.cm-md-codeblock" `shouldReturn` 3
+    classed "hljs-keyword" `shouldReturn` "def"
+    -- And the style sheet draws them so: a heading larger, strong bold,
+    -- emphasis in italics, the markers in a colour of their own.
+    body <- computedStyle ".editor-cm .cm-content" "font-size"
+    heading <- computedStyle ".editor-cm .cm-md-h1" "font-size"
+    (readPx heading > readPx body) `shouldBe` True
+    computedStyle ".editor-cm .cm-md-strong" "font-weight" `shouldReturn` "700"
+    computedStyle ".editor-cm .cm-md-emphasis" "font-style" `shouldReturn` "italic"
+    marker <- computedColour ".editor-cm .cm-md-strong.cm-md-syntax"
+    plain <- computedColour ".editor-cm .cm-content"
+    marker `shouldNotBe` plain
+    -- What is saved is what was typed, byte for byte.
+    markdown ui `shouldReturn` typed
+    find ui ".editor-save" >>= click
+    eventually $ (\p -> p.body) <$> readPage wiki ["blog"] ["hello-world"] >>= (`shouldBe` typed)
+
+  it "takes back a toolbar command as one step of the undo, and the typing after it as another" $ runPage $ do
+    (ui, _) <- startWith m (Just "user-editor") helloEditor
+    text <- editorText ui
+    clear text
+    typeText text "Some words"
+    press "Control+Shift+ArrowLeft"
+    -- A colour rewrites more than the selection, still one step.
+    find ui ".editor-toolbar button[aria-label='Colour']" >>= click
+    find ui ".colour-menu button[aria-label='Red text']" >>= click
+    markdown ui `shouldReturn` "Some <span class=\"c-red\">words</span>"
+    press "ArrowRight"
+    typeText text "!"
+    markdown ui `shouldReturn` "Some <span class=\"c-red\">words!</span>"
+    press "Control+z"
+    markdown ui `shouldReturn` "Some <span class=\"c-red\">words</span>"
+    press "Control+z"
+    markdown ui `shouldReturn` "Some words"
 
   it "shows the preview on its own, and comes back to the Markdown as it was left" $ runPage $ do
     (ui, _) <- startWith m (Just "user-admin") (EditPage (slugs ["docs"]) (slugs ["markdown-guide"]))
-    text <- find ui ".editor-text"
-    original <- getProperty text "value"
+    text <- editorText ui
+    original <- markdown ui
     length <$> findAll ui ".editor-preview" `shouldReturn` 0
     focus text
     press "Control+End"
@@ -404,8 +466,9 @@ spec m = do
     for_ [1 .. 5 :: Int] (const (press "ArrowLeft"))
     let typed = original <> "\n\nTyped last."
         at = T.length typed - 5
-    selection text `shouldReturn` (at, at)
-    scrolled <- getProperty text "scrollTop"
+    editorSelection ui `shouldReturn` (at, at)
+    scroller <- find ui ".editor-cm .cm-scroller"
+    scrolled <- getProperty scroller "scrollTop"
     scrolled `shouldNotBe` "0"
     find ui ".editor-show-preview" >>= click
     shouldBeHidden text
@@ -414,18 +477,18 @@ spec m = do
     find ui ".editor-back" >>= click
     shouldBeVisible text
     shouldBeHidden =<< find ui ".editor-preview"
-    getProperty text "value" `shouldReturn` typed
-    selection text `shouldReturn` (at, at)
-    getProperty text "scrollTop" `shouldReturn` scrolled
+    markdown ui `shouldReturn` typed
+    editorSelection ui `shouldReturn` (at, at)
+    getProperty scroller "scrollTop" `shouldReturn` scrolled
     -- The focus is back at the cursor: the next key goes there.
     press "X"
-    getProperty text "value" `shouldReturn` (T.take at typed <> "X" <> T.drop at typed)
+    markdown ui `shouldReturn` (T.take at typed <> "X" <> T.drop at typed)
 
   it "shows both panes with the side by side preview, and remembers it" $ runPage $ do
     (ui, _) <- startWith m (Just "user-editor") helloEditor
     length <$> findAll ui ".editor-preview" `shouldReturn` 0
     sideBySide ui
-    find ui ".editor-text" >>= shouldBeVisible
+    editorText ui >>= shouldBeVisible
     find ui ".editor-preview" >>= shouldBeVisible
     find ui ".editor-preview .page-body h1" >>= (`shouldHaveText` "Hello, world")
     -- Out of the editor and back into it: the choice is the browser's.
@@ -450,12 +513,9 @@ previewHas :: Mounted s q o m -> Text -> Text -> PageM s ()
 previewHas ui selector expected =
   eventually $ find ui (".editor-preview .page-body " <> selector) >>= textContent >>= (`shouldBe` expected)
 
--- | A textarea's selection, in UTF-16 units, as the browser has it.
-selection :: Element s -> PageM s (Int, Int)
-selection text = do
-  start <- getProperty text "selectionStart"
-  end <- getProperty text "selectionEnd"
-  pure (fromMaybe (-1) (readMaybe (T.unpack start)), fromMaybe (-1) (readMaybe (T.unpack end)))
+-- | A property the style sheet gives the first element a selector finds.
+computedStyle :: Text -> Text -> PageM s Text
+computedStyle selector property = unsafeIOToPageM (fromJSText <$> js_computed_style (toJSText selector) (toJSText property))
 
 -- | The colour the style sheet gives the first element a selector finds.
 computedColour :: Text -> PageM s Text
@@ -475,6 +535,10 @@ chooseFile selector name mediaType base64 = evaluate =<< js_choose_file (toJSTex
 -- | A PNG of one pixel, as base64.
 dotPng :: Text
 dotPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+-- | A length in CSS pixels, as computed styles give it ("14.4px").
+readPx :: Text -> Double
+readPx = fromMaybe 0 . readMaybe . T.unpack . T.dropEnd 2
 
 -- | A list cut into runs of at most @n@.
 chunksOf :: Int -> [a] -> [[a]]

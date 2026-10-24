@@ -18,6 +18,7 @@ import Halogen.HTML qualified as HH
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged)
+import Test.Browser.Text (editorText)
 import Test.Hspec.Halogen
 import Wiki.App.Backend.Mem.State (MemState (..), insertPage, setMathMacros)
 import Wiki.App.Demo (demoNow)
@@ -113,7 +114,7 @@ spec m = do
       find ui ".new-page-title" >>= (`typeText` "Macros")
       find ui ".new-page-view button.primary" >>= click
       find ui ".editor-side-by-side input" >>= click
-      text <- find ui ".editor-text"
+      text <- editorText ui
       typeText text "First $\\vect{v} + \\twice{x}$"
       early <- find ui ".editor-preview .wiki-math .katex"
       hasError early

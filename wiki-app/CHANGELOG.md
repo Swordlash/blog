@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+The editor's text is CodeMirror 6, which shows the Markdown as it will look
+while it is typed: emphasis in italics and strong in bold, headings larger by
+level, inline code and fenced blocks in monospace on a background of their
+own (fenced code coloured by highlight.js, as the page is), links, quotes and
+lists set off, and every marker (`**`, `#`, `>`, a fence) kept but dimmed.
+It looks like the textarea it replaces (the same font, colours, padding and
+dark theme, no line numbers or gutter) and behaves like it: Enter is a line
+break, Tab indents, the toolbar and its shortcuts, drops, the preview, the
+drafts and Ctrl+S are the component's as before, and a toolbar command is
+one step of the undo. CodeMirror is bundled into `islands/editor.js`, which
+`islands.js` imports the first time an editor opens (`wikiIslands.attachEditor`),
+so a reader's page never fetches it (296 KiB, 97 KiB gzipped). The editor is
+still rendered with a textarea holding the Markdown, which a page rendered
+ahead shows and which is typed into until CodeMirror has loaded; CodeMirror
+then takes its place, text, selection, focus and scroll, in the same box. The
+Markdown is never normalised: what is saved is what was typed, byte for byte.
+`Wiki.App.Editor.Browser` gains `attachEditor`, `detachEditor`, `typedText`
+and `focusText`, and its text functions now take the element CodeMirror is
+put in rather than the textarea.
+
+Two things that went wrong in the editor before are fixed with it. A notice
+that came or went above the Markdown (a conflict on save, Cancel's question,
+a draft found) moved the elements after it, and Halogen, which matches
+unkeyed children by their place, made the textarea anew with the text the
+page was loaded with, so that what had been typed was no longer shown (the
+work still held it); the notices now sit in a holder that is always there.
+And after "Reload and lose my changes" the toolbar's commands and the way
+back from the preview found no textarea, because a keyed element that is
+replaced clears the ref the new one has just set; the component now holds
+the element CodeMirror is put in, which is not replaced.
+
 The editor's toolbar has a "Colour" button, which opens a palette of
 eight text colours and five highlights, with "No text colour" and "No
 highlight" to take one away. The colours are classes (`c-red`, `h-yellow`,

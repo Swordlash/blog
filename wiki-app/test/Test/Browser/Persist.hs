@@ -16,6 +16,7 @@ import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, startKept, startKeptWith)
+import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
@@ -38,7 +39,7 @@ spec m = do
   it "finds a page saved in one mounted application in the next one" $ runPage $ do
     db <- fresh m "saved"
     ui <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Kept for the next visit."
     find ui ".editor-save-close" >>= click
@@ -52,8 +53,8 @@ spec m = do
   it "restores a draft saved while typing after a reload, and discards it when told to" $ runPage $ do
     db <- fresh m "draft"
     ui <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
-    text <- find ui ".editor-text"
-    original <- getProperty text "value"
+    text <- editorText ui
+    original <- markdown ui
     clear text
     typeText text "Not saved, but kept."
     -- Quietly, a few seconds after the typing stops.
@@ -61,20 +62,20 @@ spec m = do
     unmount ui
     again <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
     find again ".editor-draft-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Restored your unsaved draft from")
-    find again ".editor-text" >>= \t -> getProperty t "value" `shouldReturn` "Not saved, but kept."
+    markdown again `shouldReturn` "Not saved, but kept."
     -- Discarded, the page is as it was saved.
     find again ".editor-draft-discard" >>= click
     eventually $ length <$> findAll again ".editor-draft-found" `shouldReturn` 0
-    find again ".editor-text" >>= \t -> eventually (getProperty t "value" `shouldReturn` original)
+    eventually (markdown again `shouldReturn` original)
     unmount again
     third <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
-    find third ".editor-text" >>= \t -> getProperty t "value" `shouldReturn` original
+    markdown third `shouldReturn` original
     length <$> findAll third ".editor-draft-found" `shouldReturn` 0
 
   it "puts the demo's content back from the administration, after asking" $ runPage $ do
     db <- fresh m "reset"
     ui <- startKept m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Soon gone."
     find ui ".editor-save-close" >>= click
@@ -103,7 +104,7 @@ spec m = do
   it "exports the wiki as a download, and brings back what it held after a reset, refusing what is not an export" $ runPage $ do
     db <- fresh m "export"
     (ui, opened) <- startKeptWith m db (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
-    text <- find ui ".editor-text"
+    text <- editorText ui
     clear text
     typeText text "Exported, and brought back."
     find ui ".editor-save-close" >>= click

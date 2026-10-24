@@ -13,10 +13,12 @@
 module Test.Browser.Hydrate (spec) where
 
 import Control.Monad.UUID (MonadUUID)
+import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (adopt, slugs, start)
+import Test.Browser.Text (markdown, movedBy)
 import Test.Hspec.Halogen
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
@@ -27,9 +29,10 @@ $( browserJS
  )
 
 -- | Every element of the shell, but what is inside an island, which its
--- library fills after the shell has adopted it.
+-- library fills after the shell has adopted it, and inside the element
+-- CodeMirror takes the editor's textarea's place in.
 adoptable :: Text
-adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-tikz *, .wiki-code *)"
+adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-tikz *, .wiki-code *, .editor-cm *)"
 
 -- | A container holding the shell's HTML at a route, as someone, as a page
 -- rendered ahead of the program holds it.
@@ -77,6 +80,10 @@ spec m = do
     -- The toolbar is memoized: what the shell adopted is the thunk's, and
     -- its buttons answer.
     find ui ".editor-toolbar" >>= (`shouldBeSameElement` toolbar)
+    -- CodeMirror takes the adopted textarea's place, with its Markdown, in
+    -- the same box.
+    markdown ui >>= (`shouldSatisfy` T.isPrefixOf "# Hello, world")
+    movedBy ui `shouldReturn` ""
     find ui ".editor-show-preview" >>= click
     find ui ".editor-preview .page-body h1" >>= (`shouldHaveText` "Hello, world")
     find ui ".editor-toolbar" >>= (`shouldBeSameElement` toolbar)

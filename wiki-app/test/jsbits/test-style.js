@@ -7,3 +7,9 @@ function wiki_test_computed_colour(selector) {
   const element = document.querySelector(selector);
   return element ? getComputedStyle(element).color : "";
 }
+
+// Any computed property of the first element a selector finds, or "".
+function wiki_test_computed_style(selector, property) {
+  const element = document.querySelector(selector);
+  return element ? getComputedStyle(element).getPropertyValue(property) : "";
+}

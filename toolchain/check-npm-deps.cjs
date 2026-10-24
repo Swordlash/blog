@@ -16,6 +16,13 @@ const packages = ["build-native", "test-native"].includes(target) ? [] : [
   ["highlight.js", ["highlight.js/lib/common", "highlight.js/lib/languages/haskell"]],
   ["mermaid", ["mermaid"]],
   ["fflate", ["fflate"]],
+  // The editor's CodeMirror (web/src/editor.js).
+  ["@codemirror/state", ["@codemirror/state"]],
+  ["@codemirror/view", ["@codemirror/view"]],
+  ["@codemirror/commands", ["@codemirror/commands"]],
+  ["@codemirror/language", ["@codemirror/language"]],
+  ["@codemirror/lang-markdown", ["@codemirror/lang-markdown"]],
+  ["@lezer/highlight", ["@lezer/highlight"]],
   // Its package.json names no file it ships as its main; web/bundle.sh copies
   // dist/ as it is.
   ["@drgrice1/tikzjax", ["@drgrice1/tikzjax/dist/run-tex.js", "@drgrice1/tikzjax/dist/core.dump.gz"]],

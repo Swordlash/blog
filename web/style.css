@@ -1307,6 +1307,137 @@ select {
   border-color: var(--accent);
 }
 
+/* CodeMirror (web/src/editor.js), put in the textarea's place once the page
+   has loaded it: the same box, font, colours and padding, so that nothing
+   moves as it takes over, and the textarea hidden from then on. The rules
+   name .editor-cm .cm-editor to outweigh CodeMirror's own theme. */
+.editor-cm:empty {
+  display: none;
+}
+
+.editor-cm:not(:empty) + .editor-text {
+  display: none;
+}
+
+.editor-cm {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.editor-cm .cm-editor {
+  flex: 1 0 auto;
+  height: 65vh;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--background);
+  resize: vertical;
+  overflow: hidden;
+}
+
+.editor-cm .cm-editor.cm-focused {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-color: var(--accent);
+}
+
+.editor-cm .cm-editor .cm-scroller {
+  overflow: auto;
+  font: 0.9rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 2;
+}
+
+.editor-cm .cm-editor .cm-content {
+  padding: 0.75rem 0;
+  caret-color: var(--text);
+}
+
+.editor-cm .cm-editor .cm-line {
+  padding: 0 0.9rem;
+}
+
+/* The Markdown as it will look: its markers kept, but dimmed. */
+.cm-md-syntax,
+.cm-md-label,
+.cm-md-url,
+.cm-md-html,
+.cm-md-comment {
+  color: var(--muted);
+}
+
+.cm-md-strong {
+  font-weight: 700;
+}
+
+.cm-md-emphasis {
+  font-style: italic;
+}
+
+.cm-md-strike {
+  text-decoration: line-through;
+}
+
+.cm-md-heading {
+  font-weight: 700;
+}
+
+.cm-md-h1 {
+  font-size: 1.6em;
+}
+
+.cm-md-h2 {
+  font-size: 1.35em;
+}
+
+.cm-md-h3 {
+  font-size: 1.18em;
+}
+
+.cm-md-h4 {
+  font-size: 1.05em;
+}
+
+.cm-md-link {
+  color: var(--accent);
+}
+
+.cm-md-link.cm-md-syntax,
+.cm-md-link.cm-md-url {
+  color: var(--muted);
+}
+
+/* Code: inline on a background of its own, a fenced block's every line on
+   it, from edge to edge. */
+.cm-md-code {
+  border-radius: 3px;
+  background: var(--code);
+}
+
+.cm-md-codeblock {
+  background: var(--code);
+}
+
+.cm-md-codeblock .cm-md-code {
+  background: none;
+}
+
+/* A quote, and a list's bullets and task boxes, set off. */
+.cm-md-quoteline {
+  box-shadow: inset 3px 0 var(--border);
+  color: var(--muted);
+}
+
+.cm-md-bullet,
+.cm-md-task {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.cm-md-rule {
+  color: var(--muted);
+  letter-spacing: 0.2em;
+}
+
 .editor-hint {
   margin: 0;
   font-size: 0.8rem;

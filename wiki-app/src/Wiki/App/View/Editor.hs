@@ -29,7 +29,7 @@
 -- amended). "Show preview" ('ShowPreview') replaces the editing view with
 -- the draft rendered ("Wiki.App.View.Preview"), with "Back to editing" and
 -- Save and Cancel still there: a change of the editor's state, not a route,
--- since the draft is not in the address. The title and the textarea stay
+-- since the draft is not in the address. The title and the text stay
 -- mounted while hidden, so that their text, the selection, the undo stack
 -- and the scroll are where they were on the way back. A "Side by side
 -- preview" checkbox brings back the two panes on a wide screen; the choice
@@ -48,11 +48,26 @@
 -- preview; its islands keep their slots, keyed by their source, and only one
 -- whose source changed is drawn again.
 --
+-- The Markdown is edited in CodeMirror, which shows it as it will look
+-- while it is typed (emphasis in italics, strong in bold, headings larger,
+-- their markers dimmed, code on its own background; @web/src/editor.js@),
+-- and does nothing else: the toolbar, the keys, the drops, the preview and
+-- the drafts are all this component's. It is rendered as a textarea with the
+-- Markdown, which a page rendered ahead shows and which is typed into until
+-- the page has loaded CodeMirror, and beside it an element this component
+-- never looks into (like an island's), where CodeMirror is put in the
+-- textarea's place, with its text, selection, focus and scroll, in one go;
+-- the style sheet hides the textarea once that element is not empty, so the
+-- page does not move. A reader's page never loads CodeMirror: it is fetched
+-- the first time an editor is opened ('attachEditor'). It tells of each
+-- change by an event of its own on its element, with the whole text, as the
+-- textarea did by its input event.
+--
 -- The toolbar's commands are pure ("Wiki.Core.Markdown.Edit"): a button or
--- a shortcut reads the textarea's text and selection, applies the command,
--- and writes the change back as an edit the browser's undo takes back, with
--- the input event typing would make, so the draft and the preview learn of
--- it as of any other keystroke ("Wiki.App.Editor.Browser"). Its palette
+-- a shortcut reads the text and the selection, applies the command, and
+-- writes the change back as an edit the undo takes back in one step, which
+-- tells the component of the change as typing would, so the draft and the
+-- preview learn of it as of any other keystroke ("Wiki.App.Editor.Browser"). Its palette
 -- of colours writes classes, never a @style@, which a page may not have.
 -- The keys the editor answers to are decided in the keydown's listener,
 -- which keeps the browser from acting on them (Ctrl+K and Ctrl+E have
@@ -63,7 +78,7 @@
 --
 -- Files dropped onto the editor, or chosen with its file input, are read
 -- into bytes in the browser ("Wiki.App.Editor.Browser"), uploaded to the
--- page ('uploadAttachment'), and referred to at the textarea's cursor
+-- page ('uploadAttachment'), and referred to at the text's cursor
 -- ('Wiki.Core.Markdown.attachmentReference').
 --
 -- The title and the textarea are not controlled: the component never sets
@@ -80,7 +95,12 @@
 -- keyed by how many times the page has been loaded ('loads'), so that a
 -- reload makes new elements with the new text. The draft follows the
 -- elements through their input events, and 'insertAtCursor' changes the
--- textarea's text the way typing does.
+-- text the way typing does. CodeMirror's element is not keyed by the load:
+-- a reload puts a new CodeMirror in it, with the new text and no undo of
+-- the old ('attachEditor'). It is the element the component holds by ref,
+-- and the textarea is found beside it, rather than held by a ref of its
+-- own: a keyed element replaced takes its ref with it, after the new one
+-- has set it.
 --
 -- Leaving with unsaved changes is guarded twice: the shell asks this
 -- component ('IsDirty') before it follows a route away, and the browser
@@ -123,15 +143,19 @@ import Wiki.App.Editor.Browser
   , Files
   , PickedFile (..)
   , applyCommand
+  , attachEditor
   , chosenFiles
   , clickElement
+  , detachEditor
   , droppedFiles
   , editorKey
   , focusElement
+  , focusText
   , guardUnload
   , insertAtCursor
   , pickedFiles
   , readPickedFile
+  , typedText
   )
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
@@ -252,7 +276,9 @@ data State = State
   -- ^ Whether the preview has been shown yet: it is mounted then, and kept.
   , menu :: Maybe Menu
   -- ^ Which of the toolbar's menus is open, if one is.
-  , textarea :: H.RefLabel
+  , host :: H.RefLabel
+  -- ^ Where CodeMirror goes, in the textarea's place; the text is reached
+  -- through it ("Wiki.App.Editor.Browser").
   , fileInput :: H.RefLabel
   , backButton :: H.RefLabel
   , loads :: Int
@@ -325,7 +351,7 @@ component =
   H.mkComponent
     H.ComponentSpec
       { initialState = \input -> do
-          textarea <- H.newRefLabel "editor-text"
+          host <- H.newRefLabel "editor-host"
           fileInput <- H.newRefLabel "editor-files"
           backButton <- H.newRefLabel "editor-back"
           -- Loaded at once rather than in 'Initialize', so that the first
@@ -353,7 +379,7 @@ component =
               , sideBySide = False
               , previewMounted = False
               , menu = Nothing
-              , textarea
+              , host
               , fileInput
               , backButton
               , loads = 1
@@ -396,7 +422,7 @@ component =
     -- holder of its own that is always there: an element that came or went
     -- among the form's children would move the ones after it, and Halogen,
     -- which matches unkeyed children by their place, would make the
-    -- textarea anew, with the text the page was loaded with.
+    -- Markdown's anew, with CodeMirror's text and undo gone.
     editing :: State -> Work -> H.ComponentHTML Action Slots m
     editing st work =
       [hh|
@@ -607,21 +633,23 @@ component =
 
     -- The Markdown's textarea, keyed by the load like the title, with the
     -- text it starts with as its content rather than its value (see the
-    -- module's comment). Neither a keyed element nor a textarea with content
-    -- can be written in a quote.
+    -- module's comment), and before it the element CodeMirror takes its
+    -- place in, which has no children here, so that no render touches what
+    -- CodeMirror puts there, and which stays across loads. Neither a keyed
+    -- element nor a textarea with content can be written in a quote.
     source :: State -> Work -> H.ComponentHTML Action Slots m
     source st work =
       HH.keyed
         @I.HTMLdiv
         (HH.ElemName "div")
         [HP.class_ "editor-source"]
-        [
+        [ ("cm", [hh|<div class="editor-cm" ref={{ st.host }} {{ HE.handler' (EventType "wiki-input") typed }}></div>|])
+        ,
           ( loadKey st
           , HH.element
               @I.HTMLtextarea
               (HH.ElemName "textarea")
-              [ HP.ref st.textarea
-              , HP.class_ "editor-text"
+              [ HP.class_ "editor-text"
               , attr "aria-label" "The page's Markdown"
               , HE.onValueInput Typed
               , HP.readOnly st.saving
@@ -634,6 +662,10 @@ component =
 
     loadKey :: State -> Text
     loadKey st = "load-" <> show st.loads
+
+    -- CodeMirror's text after a change, taken in the event's listener.
+    typed :: Event -> Maybe Action
+    typed ev = Just $! Typed (typedText ev)
 
     problemView :: State -> Maybe (H.ComponentHTML Action Slots m)
     problemView st = case st.problem of
@@ -688,10 +720,13 @@ component =
           modify (\st -> st {sideBySide = True, previewMounted = True})
         -- The page was loaded with the initial state.
         syncGuard
+        takeOver
         H.raise Loaded
-      -- The waits are killed with the component; the browser's warning is
-      -- not, so it is let go here.
-      Finalize -> H.liftEffect (guardUnload False)
+      -- The waits are killed with the component; the browser's warning and
+      -- CodeMirror are not, so they are let go here.
+      Finalize -> do
+        H.liftEffect (guardUnload False)
+        gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . detachEditor)
       -- The work is the editor's own: a reload of the wiki around it (after
       -- a change elsewhere, or someone else signing in) leaves it alone.
       Receive input -> modify (\st -> st {input})
@@ -772,6 +807,7 @@ component =
                   }
               _ -> st
             syncGuard
+            takeOver
           _ -> pass
       DiscardOffered -> do
         withPage (void . discardDraft)
@@ -788,14 +824,24 @@ component =
       st <- get
       Router.navigate st.input.context.router (leaving st.input)
 
-    -- A toolbar command on the textarea; its input event, handled before
-    -- this returns, brings the change into the work.
+    -- CodeMirror in place of the textarea rendered last, with the text it
+    -- was made with; it comes once the page has loaded it, so this returns
+    -- at once.
+    takeOver :: H.HalogenM State Action Slots ViewOutput m ()
+    takeOver = do
+      st <- get
+      case st.loaded of
+        Ready w -> H.getRef st.host >>= traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody))
+        Failed _ -> pass
+
+    -- A toolbar command on the text; its input event, handled before this
+    -- returns, brings the change into the work.
     run :: Command -> H.HalogenM State Action Slots ViewOutput m ()
     run command = do
       closeMenu
       st <- get
       when (st.mode == Editing && not st.saving) $
-        H.getRef st.textarea >>= traverse_ (\element -> H.liftEffect (applyCommand element command))
+        H.getRef st.host >>= traverse_ (\host -> H.liftEffect (applyCommand host command))
 
     closeMenu :: H.HalogenM State Action Slots ViewOutput m ()
     closeMenu = whenM (gets (\st -> isJust st.menu)) $ modify (\st -> st {menu = Nothing})
@@ -809,11 +855,12 @@ component =
       gets (\st -> st.backButton) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
 
     -- Back to the Markdown, which kept its text, selection and scroll while
-    -- hidden; the focus goes back to it, at its selection.
+    -- hidden; the focus goes back to it (to CodeMirror, once it is there),
+    -- at its selection.
     backToEditing :: H.HalogenM State Action Slots ViewOutput m ()
     backToEditing = do
       modify (\st -> st {mode = Editing})
-      gets (\st -> st.textarea) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
+      gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . focusText)
 
     -- The preview shows the work as it is now, without waiting for the
     -- typing to stop.
@@ -829,6 +876,7 @@ component =
       loaded <- either Failed (\(page, urls) -> Ready (workOf page urls)) <$> fetchPage input
       modify (\st -> st {loaded, loads = st.loads + 1})
       syncGuard
+      takeOver
       H.raise Loaded
 
     -- A change typed: into the work, counted for the autosave's wait, in
@@ -996,12 +1044,12 @@ component =
                   }
               insert (attachmentReference a.name a.mediaType)
 
-    -- Text in at the textarea's cursor; the input event that puts it in the
+    -- Text in at the text's cursor; the input event that puts it in the
     -- work is handled before this returns, like a keystroke.
     insert :: Text -> H.HalogenM State Action Slots ViewOutput m ()
     insert text = do
-      ref <- gets (\st -> st.textarea)
-      H.getRef ref >>= traverse_ (\element -> H.liftEffect (insertAtCursor element text))
+      ref <- gets (\st -> st.host)
+      H.getRef ref >>= traverse_ (\host -> H.liftEffect (insertAtCursor host text))
 
     -- Something to do with the page's id, once the page is loaded.
     withPage :: (PageId -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()

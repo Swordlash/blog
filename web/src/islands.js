@@ -13,6 +13,7 @@
 //   wikiIslands.renderMermaid(element, source): Promise<void>
 //   wikiIslands.renderTikz(element, source, preamble, picture): Promise<void>
 //   wikiIslands.highlight(element, language, code)
+//   wikiIslands.attachEditor(textarea, host, original)
 //
 // Each writes into the element it is given and nowhere else, replacing what
 // was there. None of them throws: a formula, a diagram or a language a library
@@ -23,6 +24,11 @@
 // KaTeX comes with mhchem (\ce and \pu, its contrib extension) and the
 // wiki's built-in macros (katex-macros.tex, bundled as text), under the
 // macros of a formula's space and page (macros.mjs).
+//
+// attachEditor is not an island's: it puts CodeMirror in the editor
+// (editor.js, bundled into islands/editor.js and fetched the first time the
+// editor is opened, never by a reader's page), with highlight.js for its
+// fenced code, which is why it is here.
 // The demo's export and import, which have nowhere better to be bundled.
 import "./archive.js";
 import katex from "katex";
@@ -113,6 +119,7 @@ const lazily = (path) => {
 };
 const loadMermaid = lazily("islands/mermaid.js");
 const loadTikz = lazily("islands/tikz.js");
+const loadEditor = lazily("islands/editor.js");
 
 // How many times each element has been asked to render. Mermaid renders
 // asynchronously, so a diagram can finish after the element was asked for
@@ -235,4 +242,43 @@ const highlight = (element, language, code) => {
   }
 };
 
-globalThis.wikiIslands = Object.freeze({ renderMath, checkMacros, renderMermaid, renderTikz, highlight });
+// Code as highlight.js colours it, as [from, to, classes] ranges of the code
+// (in UTF-16 units, as CodeMirror counts), for the editor's fenced code: the
+// same languages, names and colours as the page. Read back from the HTML
+// highlight.js writes, which has its spans and the five escapes it makes and
+// nothing else; anything else, or a length that does not add up, gives no
+// ranges rather than wrong ones.
+const escapes = { "&amp;": 1, "&lt;": 1, "&gt;": 1, "&quot;": 1, "&#x27;": 1 };
+const codeTokens = (language, code) => {
+  const known = language && hljs.getLanguage(language) ? language : null;
+  if (!known) return [];
+  const html = hljs.highlight(String(code), { language: known, ignoreIllegals: true }).value;
+  const tokens = [];
+  const open = [];
+  let at = 0;
+  let read = 0;
+  for (const piece of html.matchAll(/<span class="([^"]*)">|<\/span>|&[#\w]+;|[^<&]+/g)) {
+    if (piece.index !== read) return [];
+    read += piece[0].length;
+    if (piece[1] !== undefined) open.push({ from: at, classes: piece[1] });
+    else if (piece[0] === "</span>") {
+      const span = open.pop();
+      if (span === undefined) return [];
+      if (at > span.from) tokens.push([span.from, at, span.classes]);
+    } else if (piece[0].startsWith("&")) {
+      if (!escapes[piece[0]]) return [];
+      at += 1;
+    } else at += piece[0].length;
+  }
+  return read === html.length && at === String(code).length && open.length === 0 ? tokens : [];
+};
+
+// The editor's text, once its module has loaded; until then, and should it
+// not load, the textarea stays, and is typed into.
+const attachEditor = (textarea, host, original) => {
+  loadEditor()
+    .then((editor) => editor.attach(textarea, host, original, codeTokens))
+    .catch((error) => console.error("The editor's formatting could not be loaded:", error));
+};
+
+globalThis.wikiIslands = Object.freeze({ renderMath, checkMacros, renderMermaid, renderTikz, highlight, attachEditor });

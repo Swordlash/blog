@@ -2,13 +2,15 @@
 
 -- | What the editor ("Wiki.App.View.Editor") asks of the browser that
 -- Halogen does not say: the files a drop or a file input brings and their
--- bytes, the textarea's text and selection, read and written as an edit the
--- browser can undo, which of the editor's keys was pressed, and the
--- browser's warning before a reload or a close loses unsaved changes. See
--- @jsbits/editor.js@.
+-- bytes, CodeMirror put in place of the textarea, the text and selection,
+-- read and written as an edit the browser can undo, which of the editor's
+-- keys was pressed, and the browser's warning before a reload or a close
+-- loses unsaved changes. See @jsbits/editor.js@, and @web/src/editor.js@
+-- for CodeMirror.
 --
 -- Natively there is no browser: no event brings a file, no key is one of
--- the editor's, the textarea is empty, and the rest does nothing.
+-- the editor's, the textarea is empty, CodeMirror never comes, and the rest
+-- does nothing.
 module Wiki.App.Editor.Browser
   ( -- * Files
     Files
@@ -18,9 +20,13 @@ module Wiki.App.Editor.Browser
   , pickedFiles
   , readPickedFile
 
-    -- * The textarea
+    -- * The text
+  , attachEditor
+  , detachEditor
+  , typedText
   , applyCommand
   , insertAtCursor
+  , focusText
   , focusElement
   , clickElement
   , EditorKey (..)
@@ -55,12 +61,16 @@ $( browserJS
      , ("js_file_type", "wiki_editor_file_type", Unsafe, [t|JSVal -> Int -> IO JSText|])
      , ("js_file_size", "wiki_editor_file_size", Unsafe, [t|JSVal -> Int -> IO Double|])
      , ("js_read_file", "wiki_editor_read_file", Safe, [t|JSVal -> Int -> IO JSText|])
+     , ("js_attach", "wiki_editor_attach", Unsafe, [t|Element -> JSText -> IO ()|])
+     , ("js_detach", "wiki_editor_detach", Unsafe, [t|Element -> IO ()|])
+     , ("js_typed", "wiki_editor_typed", Unsafe, [t|Event -> JSText|])
      , ("js_value", "wiki_editor_value", Unsafe, [t|Element -> IO JSText|])
      , ("js_selection_start", "wiki_editor_selection_start", Unsafe, [t|Element -> IO Int|])
      , ("js_selection_end", "wiki_editor_selection_end", Unsafe, [t|Element -> IO Int|])
      , ("js_write", "wiki_editor_write", Unsafe, [t|Element -> JSText -> Int -> Int -> IO ()|])
      , ("js_key", "wiki_editor_key", Unsafe, [t|Event -> JSText|])
      , ("js_focus", "wiki_editor_focus", Unsafe, [t|Element -> IO ()|])
+     , ("js_focus_text", "wiki_editor_focus_text", Unsafe, [t|Element -> IO ()|])
      , ("js_click", "wiki_editor_click", Unsafe, [t|Element -> IO ()|])
      , ("js_guard_unload", "wiki_editor_guard_unload", Unsafe, [t|Bool -> IO ()|])
      ]
@@ -111,27 +121,54 @@ readPickedFile file = liftIO $ do
   base64 <- evaluate . fromJSText =<< js_read_file file.files file.index
   either (\e -> throwIO (IOError.userError ("the browser read a file as malformed base64: " <> e))) pure (Base64.decode (encodeUtf8 base64))
 
--- | Apply a toolbar command to the textarea: read its text and selection,
--- make the change ("Wiki.Core.Markdown.Edit"), and write the part that
--- changed back as one edit the browser's undo takes back, with its input
--- event, which the textarea's handler sees before this returns. To be run
--- in 'Halogen.liftEffect'.
-applyCommand :: (MonadIO m) => Element -> Command -> m ()
-applyCommand textarea command = edit textarea (apply command)
+-- | Put CodeMirror in the host element (the element the editor renders, with
+-- no children, just before its textarea) in place of the textarea, with the
+-- Markdown the textarea was made with (or what has been typed into it since,
+-- if anything has), once the page has loaded CodeMirror; it returns at once.
+-- A CodeMirror already there for an earlier textarea (before a reload) is
+-- replaced. The text is then CodeMirror's, which tells of each change by a
+-- @wiki-input@ event on the host ('typedText'); until then, it is the
+-- textarea's.
+--
+-- The functions here that edit the text take the host, and act on
+-- CodeMirror if it is there and on the textarea if not.
+attachEditor :: (MonadIO m) => Element -> Text -> m ()
+attachEditor host original = liftIO (js_attach host (toJSText original))
 
--- | Put text in at a textarea's cursor, in place of the selection, as typing
+-- | Let go of the host's CodeMirror, if it has one.
+detachEditor :: (MonadIO m) => Element -> m ()
+detachEditor = liftIO . js_detach
+
+-- | The whole text a @wiki-input@ event says the editor has now. Pure, as
+-- the event does not change.
+typedText :: Event -> Text
+typedText = fromJSText . js_typed
+
+-- | Apply a toolbar command to the editor's text: read its text and selection,
+-- make the change ("Wiki.Core.Markdown.Edit"), and write the part that
+-- changed back as one edit the undo takes back, with its input event (the
+-- textarea's, or CodeMirror's @wiki-input@), which the component's handler
+-- sees before this returns. To be run in 'Halogen.liftEffect'.
+applyCommand :: (MonadIO m) => Element -> Command -> m ()
+applyCommand host command = edit host (apply command)
+
+-- | Put text in at the editor's cursor, in place of the selection, as typing
 -- it would, and leave the cursor after it. To be run in
 -- 'Halogen.liftEffect'.
 insertAtCursor :: (MonadIO m) => Element -> Text -> m ()
-insertAtCursor textarea text = edit textarea $ \old (Selection s e) ->
+insertAtCursor host text = edit host $ \old (Selection s e) ->
   (T.take s old <> text <> T.drop e old, cursor (s + T.length text))
 
 edit :: (MonadIO m) => Element -> (Text -> Selection -> (Text, Selection)) -> m ()
-edit textarea change = liftIO $ do
-  old <- fromJSText <$> js_value textarea
-  selection <- Selection <$> js_selection_start textarea <*> js_selection_end textarea
+edit host change = liftIO $ do
+  old <- fromJSText <$> js_value host
+  selection <- Selection <$> js_selection_start host <*> js_selection_end host
   let (new, Selection s e) = change old selection
-  js_write textarea (toJSText new) s e
+  js_write host (toJSText new) s e
+
+-- | Give the text the focus, at its selection, without scrolling to it.
+focusText :: (MonadIO m) => Element -> m ()
+focusText = liftIO . js_focus_text
 
 -- | Give an element the focus, without scrolling to it.
 focusElement :: (MonadIO m) => Element -> m ()
@@ -150,9 +187,9 @@ data EditorKey
     PreviewKey
   | -- | Escape, anywhere in the editor, which closes a menu that is open.
     EscapeKey
-  | -- | Tab in the textarea, without a modifier.
+  | -- | Tab in the text, without a modifier.
     IndentKey
-  | -- | A toolbar command's shortcut in the textarea.
+  | -- | A toolbar command's shortcut in the text.
     CommandKey Command
   deriving stock (Eq, Show)
 
