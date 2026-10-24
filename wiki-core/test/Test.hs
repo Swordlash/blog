@@ -2,6 +2,7 @@ module Main (main) where
 
 import Protolude
 import Test.Attachment qualified as Attachment
+import Test.Diff qualified as Diff
 import Test.Hspec (hspec)
 import Test.Json qualified as Json
 import Test.Markdown.Allowlist qualified as Allowlist
@@ -32,4 +33,5 @@ main = hspec $ do
   Writes.spec
   Attachment.spec
   Search.spec
+  Diff.spec
   Json.spec

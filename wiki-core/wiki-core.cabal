@@ -52,6 +52,7 @@ library
   hs-source-dirs:   src
   exposed-modules:
       Wiki.Core.Attachment
+      Wiki.Core.Diff
       Wiki.Core.Draft
       Wiki.Core.Export
       Wiki.Core.Id
@@ -71,8 +72,10 @@ library
       Wiki.Core.Slug
       Wiki.Core.Space
       Wiki.Core.User
+      Wiki.Core.Version
   build-depends:
       aeson,
+      array,
       base,
       bytestring,
       commonmark >= 0.3.1 && < 0.4,
@@ -101,6 +104,7 @@ test-suite wiki-core-test
   main-is:          Test.hs
   other-modules:
       Test.Attachment
+      Test.Diff
       Test.Gen
       Test.Json
       Test.Markdown.Allowlist
