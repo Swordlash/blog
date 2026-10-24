@@ -13,7 +13,7 @@ packages:
 source-repository-package
   type: git
   location: https://github.com/Swordlash/haskell-halogen
-  tag: 00dfe13aeb27dd6b0ba573ad5d6aaeea549fa60e
+  tag: f077e82a25baca9a04491dcef3ea2da84e3d672d
   subdir:
     core
     jsbits
