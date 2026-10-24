@@ -437,7 +437,8 @@ reads in both. The classes:
 Choosing a colour for text that has one replaces it, rather than putting
 one inside the other; choosing one for part of a coloured text leaves the
 rest as it was; "No text colour" and "No highlight" take a colour away.
-With nothing selected, the colour of the word the cursor is in changes.
+With nothing selected and the cursor in coloured text, all of that
+text changes; elsewhere a colour puts in a placeholder to type over.
 Each line of a selection gets its own pair of tags, after a list item's
 marker, so colouring several items keeps the list. A text colour and a
 highlight are two tags, and a word may have both.
