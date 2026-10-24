@@ -52,7 +52,7 @@ import Numeric.Natural (Natural)
 import Protolude
 import Web.Storage.IndexedDB (Database (..), StoreName)
 import Web.Storage.IndexedDB qualified as IDB
-import Wiki.App.Backend.Mem.State (MemState (..), emptyState)
+import Wiki.App.Backend.Mem.State (MemState (..), emptyState, prepareSearch)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export
 import Wiki.Core.Id (BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
@@ -229,7 +229,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
       if all (\g -> g.space.text == key) gs
         then Right gs
         else Left (failure grantsStore key "has grants on another space")
-    pure
+    pure . prepareSearch $
       emptyState
         { users
         , groups = map fst groupsAndMembers

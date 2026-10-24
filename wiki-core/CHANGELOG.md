@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+`Wiki.Core.Search.searchPlain` takes `Candidate`s rather than pages: each
+page's id, space and paths with its title and text already prepared
+(`Searchable`, made by `searchable` from a title and a Markdown body), so
+that a backend prepares a page once per version rather than once per query;
+`candidate` makes one from a page on the spot. The search finds, ranks, marks
+and cuts snippets exactly as before. `Folded`, the folded text a match is
+traced back through, is exported abstractly with `folded`, `foldedText` and
+`foldedOrigin`; it is now made in runs of ASCII rather than a character at a
+time, and keeps the origin of a folded character only where a character
+folds to other than one. Only the hits given back have their snippets cut. A
+benchmark, `wiki-core/bench` (native only), measures the search over a
+thousand pages: a query went from about 5 s to about 4 ms.
+
 `htmlTagLabel Mark` is "Mark" (it was "Highlight", which the palette's
 `Highlight` command is called too).
 

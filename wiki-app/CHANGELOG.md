@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The in-memory backend keeps each page's title and text prepared for the
+search beside the page (`searchText`), made when the page is made or saved,
+or the wiki read back or imported, dropped with the page, and evaluated at
+the first search that needs it; so typing in the search box no longer
+reparses and refolds every page on every keystroke. It is derived data: it
+is neither in an export nor in IndexedDB, and a wiki read from either makes
+it again.
+
 A file pasted into the editor (a screenshot, an image copied in a browser,
 files copied in a file manager) is attached and referred to at the cursor as
 a dropped one is: an image embedded, anything else linked. The paste is

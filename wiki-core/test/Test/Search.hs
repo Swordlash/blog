@@ -5,19 +5,20 @@ import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (Gen, chooseInt, elements, forAll, listOf1, vectorOf, (===))
+import Test.QuickCheck (Gen, arbitrary, chooseInt, elements, forAll, frequency, listOf, listOf1, vectorOf, (===))
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Search
-import Wiki.Core.Slug (Slug, mkSlug)
+import Wiki.Core.Slug (Slug, foldLetter, mkSlug)
 
 slug :: Text -> Slug
 slug = either (panic . show) identity . mkSlug
 
 -- | A page with a title and a body, in a space, at a path given as slugs.
-page :: Text -> Text -> Text -> [Text] -> (Page, [Slug], [Slug])
+page :: Text -> Text -> Text -> [Text] -> Candidate
 page spaceSlug title body path =
-  ( Page
+  candidate
+    Page
       { id = PageId (T.intercalate "/" (spaceSlug : path))
       , space = SpaceId spaceSlug
       , parent = Nothing
@@ -29,13 +30,12 @@ page spaceSlug title body path =
       , updatedAt = epoch
       , position = 0
       }
-  , [slug spaceSlug]
-  , map slug path
-  )
+    [slug spaceSlug]
+    (map slug path)
   where
     epoch = UTCTime (fromGregorian 2026 1 1) 0
 
-search :: Text -> [(Page, [Slug], [Slug])] -> [SearchHit]
+search :: Text -> [Candidate] -> [SearchHit]
 search text = searchPlain (searchQuery text)
 
 titles :: [SearchHit] -> [Text]
@@ -44,7 +44,7 @@ titles = map (\h -> snippetText h.title)
 marks :: Snippet -> [Text]
 marks (Snippet pieces) = [p.text | p <- pieces, p.match]
 
-pages :: [(Page, [Slug], [Slug])]
+pages :: [Candidate]
 pages =
   [ page "docs" "Diagrams" "A `mermaid` fence is drawn by **Mermaid**.\n\n```mermaid\nflowchart TD\n  A --> B\n```" ["diagrams"]
   , page "docs" "Mathematics" "Formulas: $e^{i\\pi} = -1$, drawn by KaTeX." ["mathematics"]
@@ -152,6 +152,44 @@ spec = describe "Wiki.Core.Search" $ do
             | h <- hits
             ]
               === [True | word `T.isInfixOf` foldText (bodyText body)]
+
+  describe "folding" $ do
+    prop "folds as each character's foldLetter, joined" $
+      forAll genFoldable $
+        \t -> foldText t === T.concatMap foldLetter t
+
+    prop "gives each character of the fold the character it came from" $
+      forAll genFoldable $ \t ->
+        let f = folded t
+         in [(c, foldedOrigin f j) | (j, c) <- zip [0 ..] (T.unpack (foldedText f))] === reference t
+
+    it "traces folds to several characters and to none back to theirs" $ do
+      let f = folded "aße\x301x\x130y"
+      foldedText f `shouldBe` "assex" <> "i\x307y"
+      map (foldedOrigin f) [0 .. 7] `shouldBe` [0, 1, 1, 2, 4, 5, 5, 6]
+
+-- | The fold as it was first written, a character at a time, with the index
+-- of the character each of its characters came from: what 'folded' must
+-- agree with.
+reference :: Text -> [(Char, Int)]
+reference t = [(f, i) | (i, c) <- zip [0 ..] (T.unpack t), f <- T.unpack (foldLetter c)]
+
+-- | Text of every kind, with plenty of what does not fold to one character:
+-- letters that fold to two (@ß@, @æ@, @ĳ@), combining marks that fold to
+-- none, a capital whose lowercase is two characters (@İ@), next to ASCII,
+-- capitals and Polish letters, and any character at all.
+genFoldable :: Gen Text
+genFoldable =
+  T.pack
+    <$> listOf
+      ( frequency
+          [ (4, elements "abcXYZ 09-.")
+          , (3, elements "ąćęłńóśźżĄĆĘŁŃÓŚŹŻ")
+          , (3, elements "ßæœĳþÆŒĲÞ\x130")
+          , (3, elements "\x300\x301\x308\x328\x20dd")
+          , (3, arbitrary)
+          ]
+      )
 
 -- | The one hit expected.
 single :: [SearchHit] -> IO SearchHit

@@ -12,7 +12,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Numeric.Natural (Natural)
 import Protolude
-import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Backend.Mem.State (MemState (..), prepareSearch)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Id
@@ -40,7 +40,7 @@ toArchive createdAt app st =
 -- largest of them ('nextCounter').
 fromArchive :: Archive -> MemState
 fromArchive a =
-  st {counter = nextCounter st}
+  prepareSearch st {counter = nextCounter st}
   where
     st =
       MemState
@@ -55,6 +55,7 @@ fromArchive a =
         , -- An archive has no drafts: they are their authors' own, and the
           -- pages they were written for are not these.
           drafts = mempty
+        , searchText = mempty
         , current = Nothing
         , counter = 1
         }

@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DeriveAnyClass #-}
 
 -- | Searching pages by their title and their text: the query, the hits, and
@@ -15,8 +16,14 @@
 -- What a backend does with 'space' and 'includeSubspaces' it does before the
 -- matcher sees the pages, since only it knows which pages are in which space
 -- and which the user may view: 'searchPlain' is handed the pages already
--- chosen. The server of Phase 2 answers the same query from an index; the
--- hits it gives back are the same type, so the application does not change.
+-- chosen, as 'Candidate's. A candidate carries its page's title and text
+-- already folded ('Searchable'), made once per version of the page rather
+-- than once per query: a query is made on every keystroke in the search
+-- box, and reparsing and refolding every page each time was most of what a
+-- search cost. The in-memory backend keeps them beside its pages; the
+-- server of Phase 2 answers the same query from an index, which can hand
+-- 'searchPlain' its candidates the same way, and the hits it gives back are
+-- the same type, so the application does not change.
 module Wiki.Core.Search
   ( -- * Queries
     SearchQuery (..)
@@ -30,16 +37,30 @@ module Wiki.Core.Search
   , snippetText
 
     -- * Matching
+  , Candidate (..)
+  , candidate
   , searchPlain
-  , bodyText
-  , foldText
   , snippetLength
+
+    -- * A page's text, prepared
+  , Searchable (..)
+  , searchable
+  , bodyText
+
+    -- * Folding
+  , foldText
+  , Folded
+  , folded
+  , foldedText
+  , foldedOrigin
   )
 where
 
 import Data.Aeson (FromJSON, ToJSON)
-import Data.Sequence qualified as Seq
+import Data.Char (isAsciiUpper)
+import Data.IntMap.Strict qualified as IntMap
 import Data.Text qualified as T
+import Data.Text.Unsafe qualified as U
 import Protolude
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Markdown.Ast (Block (..), Footnote (..), ListItem (..), parseMarkdown, plainText)
@@ -120,33 +141,68 @@ snippetLength = 160
 contextBefore :: Int
 contextBefore = 50
 
--- | The hits among these pages, each given with the path of its space and
--- its own path: the pages in which every word of the query is found, in the
--- title or the text. The best come first: those with more of the words in
--- their title, and among equals the one whose path (its space's, then its
--- own) comes first. 'limit' of them at most; none for a query with no words.
-searchPlain :: SearchQuery -> [(Page, [Slug], [Slug])] -> [SearchHit]
+-- | A page as the matcher sees it: what a hit links to, and its title and
+-- text, prepared.
+data Candidate = Candidate
+  { page :: PageId
+  , space :: SpaceId
+  , spacePath :: [Slug]
+  -- ^ The path of the page's space, from the top level.
+  , pagePath :: [Slug]
+  -- ^ The page's path among its space's pages.
+  , text :: Searchable
+  }
+
+-- | A page as a candidate, its text prepared on the spot: for a page whose
+-- prepared text nobody kept.
+candidate :: Page -> [Slug] -> [Slug] -> Candidate
+candidate p spacePath pagePath =
+  Candidate {page = p.id, space = p.space, spacePath, pagePath, text = searchable p.title p.body}
+
+-- | The hits among these candidates: the pages in which every word of the
+-- query is found, in the title or the text. The best come first: those with
+-- more of the words in their title, and among equals the one whose path (its
+-- space's, then its own) comes first. 'limit' of them at most; none for a
+-- query with no words.
+--
+-- The candidates are ranked before any hit is made, so that only the hits
+-- given back have their snippets cut: a word typed in the search box often
+-- matches hundreds of pages, of which the box shows a few.
+searchPlain :: SearchQuery -> [Candidate] -> [SearchHit]
 searchPlain q candidates
   | null ws = []
-  | otherwise = map snd (take q.limit (sortOn fst (mapMaybe hit candidates)))
+  | otherwise = map (hitOf . snd) (take q.limit (sortOn fst (mapMaybe rank candidates)))
   where
     ws = queryWords q
-    hit (p, spacePath, pagePath) = do
-      let title = folded p.title
-          body = folded (bodyText p.body)
-          inTitle = filter (`T.isInfixOf` title.text) ws
-      guard (all (\w -> w `T.isInfixOf` title.text || w `T.isInfixOf` body.text) ws)
-      pure
-        ( (Down (length inTitle), spacePath, pagePath)
-        , SearchHit
-            { page = p.id
-            , space = p.space
-            , title = marked ws title 0 title.length
-            , spacePath
-            , pagePath
-            , snippet = snippetOf ws body
-            }
-        )
+    rank c = do
+      let title = c.text.title.text
+          body = c.text.body.text
+          inTitle = filter (`T.isInfixOf` title) ws
+      guard (all (\w -> w `T.isInfixOf` title || w `T.isInfixOf` body) ws)
+      pure ((Down (length inTitle), c.spacePath, c.pagePath), c)
+    hitOf c =
+      SearchHit
+        { page = c.page
+        , space = c.space
+        , title = marked ws c.text.title 0 c.text.title.length
+        , spacePath = c.spacePath
+        , pagePath = c.pagePath
+        , snippet = snippetOf ws c.text.body
+        }
+
+-- | A page's title and the text of its body ('bodyText'), each folded: what
+-- 'searchPlain' compares a query with, and what it cuts snippets from. It
+-- depends on the title and the body only, so it is made once for each
+-- version of a page.
+data Searchable = Searchable
+  { title :: Folded
+  , body :: Folded
+  }
+  deriving stock (Eq, Show)
+
+-- | The 'Searchable' of a page's title and Markdown body.
+searchable :: Text -> Text -> Searchable
+searchable title body = Searchable {title = folded title, body = folded (bodyText body)}
 
 -- | The text of a page's Markdown as a reader sees it, in one line: the
 -- words of its blocks without their syntax, and the sources of its code,
@@ -178,28 +234,83 @@ bodyText source =
 -- | A text as it is compared: each character as 'foldLetter' folds it,
 -- ignoring case and diacritics.
 foldText :: Text -> Text
-foldText = T.concatMap foldLetter
+foldText t = (folded t).text
 
 -- | A text with its fold, and for each character of the fold the index of
--- the character of the text it came from, so that a match found in the
--- fold marks the characters it was found in.
+-- the character of the text it came from ('foldedOrigin'), so that a match
+-- found in the fold marks the characters it was found in.
+--
+-- Almost every character folds to exactly one, so that the fold's characters
+-- are mostly at the indices of the ones they came from, give or take what
+-- came before. What is kept is only where that difference changes
+-- ('shifts'): after a character that folded to none (a combining mark), and
+-- within one that folded to several (@ß@ to @ss@), whose characters all came
+-- from it. A text with neither keeps nothing.
 data Folded = Folded
   { original :: Text
   , length :: Int
+  -- ^ The original's, in characters.
   , text :: Text
-  , origins :: Seq Int
+  -- ^ The fold.
+  , shifts :: IntMap Int
+  -- ^ At an index of the fold where it changes, how far the character
+  -- there and those after it are from the ones they came from: the
+  -- nearest at or before an index ('IntMap.lookupLE') gives that index's;
+  -- none, nothing.
   }
+  deriving stock (Eq, Show)
 
+-- | A text, folded.
+--
+-- The fold is made in runs: a run of ASCII characters, which each fold to
+-- one, is lowercased as one slice of the original (or kept as it is if it
+-- has no capital in it), and only a character beyond ASCII goes through
+-- 'foldLetter' on its own. So nothing is made per character of the common
+-- case, and the runs are joined once at the end.
 folded :: Text -> Folded
-folded original =
-  Folded
-    { original
-    , length = T.length original
-    , text = T.pack (map fst pairs)
-    , origins = Seq.fromList (map snd pairs)
-    }
+folded original = go 0 0 0 0 [] IntMap.empty
   where
-    pairs = [(f, i) | (i, c) <- zip [0 ..] (T.unpack original), f <- T.unpack (foldLetter c)]
+    size = U.lengthWord8 original
+    -- At byte @b@ of the original, which is its character @i@ and the
+    -- fold's character @j@, the current run of ASCII having started at byte
+    -- @run@; the fold's pieces so far, the last first.
+    go :: Int -> Int -> Int -> Int -> [Text] -> IntMap Int -> Folded
+    go !b !i !j !run pieces !shifts
+      | b >= size =
+          Folded {original, length = i, text = T.concat (reverse (ascii run b : pieces)), shifts}
+      | otherwise =
+          let U.Iter c width = U.iter original b
+              after = b + width
+           in if isAscii c
+                then go after (i + 1) (j + 1) run pieces shifts
+                else
+                  let f = foldLetter c
+                      n = T.length f
+                   in go after (i + 1) (j + n) after (f : ascii run b : pieces) (shifted i j n shifts)
+    -- Up to character @i@ of the original, which is character @j@ of the
+    -- fold, a character of the fold comes from the one @i - j@ further on.
+    -- Character @i@ folding to @n@ others changes that: for those of its
+    -- @n@ after the first, which come from it too, and, if it folds to
+    -- none, for the next character of the fold, which comes from the one
+    -- after it.
+    shifted i j n shifts = case n of
+      0 -> IntMap.insert j (i + 1 - j) shifts
+      1 -> shifts
+      _ -> foldl' (\m k -> IntMap.insert (j + k) (i - j - k) m) shifts [1 .. n - 1]
+    ascii start end
+      | T.any isAsciiUpper slice = T.map toLower slice
+      | otherwise = slice
+      where
+        slice = U.takeWord8 (end - start) (U.dropWord8 start original)
+
+-- | A folded text's fold.
+foldedText :: Folded -> Text
+foldedText f = f.text
+
+-- | The index of the original's character a character of the fold, by its
+-- index, came from.
+foldedOrigin :: Folded -> Int -> Int
+foldedOrigin f at = at + maybe 0 snd (IntMap.lookupLE at f.shifts)
 
 -- | Where the words are in the fold, as ranges of the original's
 -- characters, from @start@ inclusive to @end@ exclusive.
@@ -207,10 +318,7 @@ occurrences :: [Text] -> Folded -> [(Int, Int)]
 occurrences ws f = merge (sort (concatMap each ws))
   where
     each w = [toOriginal at (T.length w) | at <- indices w f.text]
-    toOriginal at len =
-      ( Seq.index f.origins at
-      , Seq.index f.origins (at + len - 1) + 1
-      )
+    toOriginal at len = (foldedOrigin f at, foldedOrigin f (at + len - 1) + 1)
     -- Overlapping or touching ranges are one mark.
     merge = \case
       (a, b) : (c, d) : rest | c <= b -> merge ((a, max b d) : rest)

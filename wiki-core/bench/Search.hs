@@ -9,28 +9,56 @@ import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Wiki.Core.Id (PageId (..), SpaceId (..))
 import Wiki.Core.Page (Page (..))
-import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchPlain, searchQuery)
+import Wiki.Core.Search
+  ( Candidate (..)
+  , Piece (..)
+  , SearchHit (..)
+  , SearchQuery (..)
+  , Searchable (..)
+  , Snippet (..)
+  , candidate
+  , foldedText
+  , searchPlain
+  , searchQuery
+  , searchable
+  )
 import Wiki.Core.Slug (Slug, mkSlug)
 
 main :: IO ()
 main = do
-  -- The wiki is made and forced once, before anything is measured.
-  candidates <- evaluate (force' wiki)
-  let searching text = whnf (checksum . searchPlain (inTheBox text)) candidates
+  -- The wiki is made and forced once, before anything is measured: its
+  -- pages, and the candidates with their text prepared.
+  pages <- evaluate (forcePages wiki)
+  candidates <- evaluate (forceCandidates [candidate p spacePath pagePath | (p, spacePath, pagePath) <- pages])
   -- How big the wiki is and how many pages each query matches, for the
   -- README.
-  putText (show (sum [T.length p.body | (p, _, _) <- candidates]) <> " characters of Markdown in " <> show (length candidates) <> " pages")
+  putText (show (sum [T.length p.body | (p, _, _) <- pages]) <> " characters of Markdown in " <> show (length pages) <> " pages")
   for_ [oneWord, threeWords] $ \text ->
     putText (show text <> " matches " <> show (length (searchPlain (searchQuery text) {limit = 1000} candidates)) <> " pages")
+  let searching text = whnf (checksum . searchPlain (inTheBox text)) candidates
+      -- What a search would cost if nothing kept the prepared text: every
+      -- page prepared again for the query, as before it was kept.
+      unprepared text = whnf (\ps -> checksum (searchPlain (inTheBox text) [candidate p spacePath pagePath | (p, spacePath, pagePath) <- ps])) pages
   defaultMain
     [ bgroup
         "search"
         [ bench "one word" (searching oneWord)
         , bench "three words" (searching threeWords)
         ]
+    , bgroup
+        "search, preparing every page"
+        [ bench "one word" (unprepared oneWord)
+        , bench "three words" (unprepared threeWords)
+        ]
+    , -- What a wiki read back pays once, at its first search.
+      bench "prepare 1000 pages" (whnf (\ps -> sum [prepared (searchable p.title p.body) | (p, _, _) <- ps]) pages)
     ]
   where
-    force' ps = sum [T.length p.title + T.length p.body | (p, _, _) <- ps] `seq` ps
+    forcePages ps = sum [T.length p.title + T.length p.body | (p, _, _) <- ps] `seq` ps
+    forceCandidates cs = sum [prepared c.text | c <- cs] `seq` cs
+    -- The folded title and text are strict in all they hold, so the
+    -- length of each fold forces the whole of it.
+    prepared s = T.length (foldedText s.title) + T.length (foldedText s.body)
 
 -- | A query as the search box in the header makes it, on every keystroke:
 -- the eight best hits.

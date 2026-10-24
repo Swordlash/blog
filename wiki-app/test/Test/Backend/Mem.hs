@@ -16,12 +16,15 @@ import Test.Backend.Contract qualified as Contract
 import Test.Hspec
 import Wiki.App.Backend
 import Wiki.App.Backend.Mem
-import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Backend.Mem.Archive (toArchive)
+import Wiki.App.Backend.Mem.Persist (records)
+import Wiki.App.Backend.Mem.State (MemState (..), Prepared (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Attachment (Attachment (..), Source (..), findAttachment)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
+import Wiki.Core.Search (SearchHit (..), searchQuery, searchable)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (User (..))
 
@@ -93,6 +96,36 @@ spec = do
           url `shouldSatisfy` T.isPrefixOf "https://upload.wikimedia.org/"
           runMemWiki ref (attachmentUrl a) `shouldReturn` url
         other -> expectationFailure ("expected earth.jpg by URL, got " <> show other)
+
+    it "keeps each page's text prepared for the search in step with the page, and nowhere else" $ do
+      ref <- newMemWiki (demoState demoNow)
+      let run :: MemWiki IO x -> IO x
+          run program = runMemWiki ref (switchUser (Just (UserId "user-admin")) >> program)
+          ok :: (Show e) => Either e x -> x
+          ok = either (panic . show) identity
+          inStep = do
+            st <- readIORef ref
+            Map.keys st.searchText `shouldBe` Map.keys st.pages
+            for_ (Map.elems st.pages) $ \p ->
+              Map.lookup p.id st.searchText `shouldBe` Just Prepared {version = p.updatedAt, text = searchable p.title p.body}
+            -- Made from the pages, so neither the store nor an export has it.
+            records st `shouldBe` records st {searchText = mempty}
+            toArchive demoNow "test" st `shouldBe` toArchive demoNow "test" st {searchText = mempty}
+          found word = map (\h -> h.page) <$> run (searchPages (searchQuery word))
+      inStep
+      docs <- ok <$> run (getSpace (ok (parsePath "docs")))
+      page <- ok <$> run (createPage docs.id Nothing "Marsupials" "A wombat.")
+      inStep
+      found "wombat" `shouldReturn` [page.id]
+      saved <- ok <$> run (savePage page.id page.updatedAt "Marsupials" "A quokka.")
+      inStep
+      found "quokka" `shouldReturn` [page.id]
+      found "wombat" `shouldReturn` []
+      ok <$> run (deletePage saved.id)
+      inStep
+      found "quokka" `shouldReturn` []
+      ok <$> run (deleteSpace docs.id)
+      inStep
 
     it "runs a Halogen component that asks it for the wiki" $ do
       ref <- newMemWiki (demoState demoNow)

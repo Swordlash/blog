@@ -13,6 +13,8 @@ module Wiki.App.Backend.Mem.State
     MemState (..)
   , emptyState
   , currentPrincipal
+  , Prepared (..)
+  , prepareSearch
 
     -- * Building it without checks
   , insertUser
@@ -93,7 +95,7 @@ import Wiki.Core.Permission
 -- Qualified, since the store has fields of the same names (grants, spaces,
 -- groups) and a record update could not tell them apart.
 import Wiki.Core.Permission qualified as P
-import Wiki.Core.Search (SearchHit, SearchQuery (..), searchPlain)
+import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
 import Wiki.Core.User (Group (..), Membership, User (..))
@@ -114,6 +116,12 @@ data MemState = MemState
   -- and keeps its bytes for as long as it lives, so it is made once.
   , drafts :: Map (PageId, UserId) Draft
   -- ^ Each user's draft of a page, by the page and the user.
+  , searchText :: Map PageId Prepared
+  -- ^ Each page's title and text as the search compares them, made when
+  -- the page is made or saved, or the wiki read back or imported, and
+  -- dropped with the page. It is made from the pages and never kept
+  -- anywhere else: neither the export nor IndexedDB has it, and a wiki read
+  -- from either makes it again ('prepareSearch').
   , current :: Maybe UserId
   -- ^ Who is signed in. A user who is not in 'users' is nobody.
   , counter :: Natural
@@ -135,9 +143,44 @@ emptyState =
     , blobs = mempty
     , objectUrls = mempty
     , drafts = mempty
+    , searchText = mempty
     , current = Nothing
     , counter = 1
     }
+
+-- | A page's title and text prepared for the search, and the version of
+-- the page they were made from.
+--
+-- The text is made when it is first searched, not when the page is saved:
+-- a wiki read back at the start prepares every page, and the first search
+-- is soon enough to pay for that, while a reader who never searches never
+-- does. Once made, it is kept with the page until the page changes.
+data Prepared = Prepared
+  { version :: UTCTime
+  -- ^ The page's 'updatedAt' when it was prepared: a page's title and
+  -- body change only with a new version, so a page whose version is not
+  -- this one is prepared again rather than searched as it was.
+  , text :: ~Searchable
+  }
+  deriving stock (Eq, Show)
+
+-- | A page's prepared text, made when it is first needed.
+prepare :: Page -> Prepared
+prepare p = Prepared {version = p.updatedAt, text = searchable p.title p.body}
+
+-- | Every page's text prepared again: for a wiki whose pages were put in
+-- whole, read back from IndexedDB or imported from an archive.
+prepareSearch :: MemState -> MemState
+prepareSearch st = st {searchText = Map.map prepare st.pages}
+
+-- | A page as the search sees it, from its prepared text if it has one
+-- made from this version, and otherwise prepared on the spot.
+searchCandidate :: MemState -> Page -> [Slug] -> [Slug] -> Candidate
+searchCandidate st p spacePath pagePath = case Map.lookup p.id st.searchText of
+  Just prepared
+    | prepared.version == p.updatedAt ->
+        Candidate {page = p.id, space = p.space, spacePath, pagePath, text = prepared.text}
+  _ -> candidate p spacePath pagePath
 
 -- | A new id, from the counter: @space-1@, @page-2@, ….
 newId :: Text -> MemState -> (Text, MemState)
@@ -261,7 +304,7 @@ insertPage space parent title body now st0 =
           , updatedAt = now
           , position = nextPosition (childrenOf (pagesOf space st) parent)
           }
-   in (st {pages = Map.insert page.id page st.pages}, page)
+   in (st {pages = Map.insert page.id page st.pages, searchText = Map.insert page.id (prepare page) st.searchText}, page)
 
 -- | A slug for a name with nothing a slug can be made of. The text given is
 -- a valid slug, which is what makes the error case impossible.
@@ -444,7 +487,7 @@ searchPagesIn :: SearchQuery -> MemState -> [SearchHit]
 searchPagesIn q st =
   searchPlain
     q
-    [ (p, map (\s -> s.slug) c, pagePath)
+    [ searchCandidate st p (map (\s -> s.slug) c) pagePath
     | (sid, c) <- Map.toList chains
     , wanted c
     , canView (currentPrincipal st) st.grants c
@@ -550,6 +593,7 @@ deleteSpaceIn sid st = do
         { spaces = Map.withoutKeys st.spaces gone
         , pages = alive
         , drafts = Map.filterWithKey (\(pid, _) _ -> Map.member pid alive) st.drafts
+        , searchText = Map.intersection st.searchText alive
         , grants =
             Grants
               { P.global = st.grants.global
@@ -626,7 +670,7 @@ savePageIn pid base title body now st = do
       p' = p {title = t, body, updatedAt}
       -- What was unsaved is saved now.
       drafts = maybe identity (\u -> Map.delete (pid, u)) (currentUserId st) st.drafts
-  pure (st {pages = Map.insert pid p' st.pages, drafts}, p')
+  pure (st {pages = Map.insert pid p' st.pages, drafts, searchText = Map.insert pid (prepare p') st.searchText}, p')
 
 -- | The page and the pages under it, by id.
 subtreeOf :: MemState -> PageId -> Set PageId
@@ -674,6 +718,7 @@ deletePageIn pid st = do
     ( st1
         { pages = Map.withoutKeys st.pages gone
         , drafts = Map.filterWithKey (\(i, _) _ -> not (i `Set.member` gone)) st.drafts
+        , searchText = Map.withoutKeys st.searchText gone
         }
     , ()
     )
