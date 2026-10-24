@@ -2,10 +2,12 @@
 -- Haddock states, checked against the demo's content
 -- ("Wiki.App.Demo") as each of its users sees it.
 --
--- The spec is written once and run against each backend: the in-memory one
--- here (@Test.Backend.Mem@), and the HTTP one in Phase 2, given a 'Fixture'
--- that starts it with the demo's content and signs in as each user.
-module Test.Backend.Contract
+-- The spec is written once and run against each backend, given a 'Fixture'
+-- that starts it with the demo's content and signs in as each user: the
+-- in-memory one (@Test.Backend.Mem@ in @wiki-app-test@), the server's SQLite
+-- storage (@Test.Storage.Contract@ in @wiki-server-test@), and the HTTP one
+-- in time. It is a library of its own, @wiki-app:contract@, for that.
+module Wiki.App.Backend.Contract
   ( spec
   , Fixture (..)
   , As (..)
@@ -50,9 +52,12 @@ admin = As "admin"
 editor = As "editor"
 reader = As "reader"
 
--- | The contract, for a backend made afresh for each example.
-spec :: forall m -> (MonadWiki m) => IO (Fixture m) -> Spec
-spec _ newFixture = before newFixture $ describe "MonadWiki contract" $ do
+-- | The contract, for a backend made afresh for each example: the action
+-- given runs an example with a fixture it makes for it, and lets go of
+-- whatever the fixture holds (a database, a directory) once the example is
+-- done, as hspec's 'around' wants.
+spec :: forall m -> (MonadWiki m) => (ActionWith (Fixture m) -> IO ()) -> Spec
+spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   sessions
   readingSpaces
   readingPages

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The backend's contract, the hspec spec every `MonadWiki` passes, is a public
+library of this package, `wiki-app:contract` (`Wiki.App.Backend.Contract`),
+so that the server's storage runs the same spec as the in-memory backend. Its
+`spec` takes an `around`-style action rather than an `IO` fixture, so that a
+fixture holding a database or a directory lets go of it after each example.
+
 The in-memory backend keeps each page's title and text prepared for the
 search beside the page (`searchText`), made when the page is made or saved,
 or the wiki read back or imported, dropped with the page, and evaluated at

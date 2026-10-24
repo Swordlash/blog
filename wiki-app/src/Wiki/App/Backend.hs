@@ -3,9 +3,9 @@
 -- Components never know which backend they run on: they are polymorphic in
 -- their monad and ask for @'MonadWiki' m@. There are two implementations, the
 -- in-memory one of the serverless demo ("Wiki.App.Backend.Mem") and, from
--- Phase 2, one over HTTP. Both pass the same contract tests
--- (@Test.Backend.Contract@ in @wiki-app-test@), which is what this module's
--- prose promises.
+-- Phase 2, one over HTTP; the server keeps the wiki in its own, over SQLite.
+-- All of them pass the same contract tests ("Wiki.App.Backend.Contract", the
+-- library @wiki-app:contract@), which is what this module's prose promises.
 --
 -- = Errors
 --

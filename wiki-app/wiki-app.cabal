@@ -127,6 +127,32 @@ library
     build-depends: haskell-halogen-th-plugin
     ghc-options:   -fplugin=Halogen.TH.Plugin
 
+-- The backend's contract: what every MonadWiki does, as an hspec spec that a
+-- test suite runs against its backend with a fixture of its own. A library of
+-- its own so that this package's tests (the in-memory backend) and
+-- wiki-server's (the SQLite storage) run the one spec. Natively only, as both
+-- suites are.
+library contract
+  import:           shared
+  visibility:       public
+  hs-source-dirs:   contract
+
+  if arch(wasm32)
+    buildable: False
+  else
+    exposed-modules:
+        Wiki.App.Backend.Contract
+    build-depends:
+        HUnit,
+        bytestring,
+        containers,
+        hspec >= 2,
+        protolude,
+        text,
+        time,
+        wiki-app,
+        wiki-core
+
 -- The application itself: a wasm reactor whose hs_start web/index.js calls.
 executable wiki-app
   import:           shared
@@ -183,7 +209,6 @@ test-suite wiki-app-test
     buildable: False
   else
     other-modules:
-        Test.Backend.Contract
         Test.Backend.Mem
         Test.Backend.Persist
         Test.Demo
@@ -208,6 +233,7 @@ test-suite wiki-app-test
         haskell-halogen-core,
         haskell-halogen-router,
         wiki-app,
+        wiki-app:contract,
         wiki-core
 
 -- The islands in headless Chromium, with the page's islands.js and

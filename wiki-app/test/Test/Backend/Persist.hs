@@ -14,13 +14,13 @@ import Data.Map.Strict qualified as Map
 import Data.Unique (hashUnique, newUnique)
 import Halogen.VDom.DOM.Monad (runBrowserDOM, runMemDOM)
 import Protolude
-import Test.Backend.Contract (As (..), Fixture (..))
-import Test.Backend.Contract qualified as Contract
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Backend
+import Wiki.App.Backend.Contract (As (..), Fixture (..))
+import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Persist
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -285,7 +285,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       st `shouldBe` seed
       shouldReload db opened.wiki
 
-  Contract.spec (type (MemWiki IO)) keptFixture
+  Contract.spec (type (MemWiki IO)) (keptFixture >>=)
   where
     unreadable = \case
       Unreadable _ -> True

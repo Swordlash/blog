@@ -11,10 +11,10 @@ import Halogen.HTML qualified as HH
 import Halogen.Static (renderToHtmlWith)
 import Halogen.VDom.DOM.Monad (MemDOM, runMemDOM)
 import Protolude
-import Test.Backend.Contract (As (..), Fixture (..))
-import Test.Backend.Contract qualified as Contract
 import Test.Hspec
 import Wiki.App.Backend
+import Wiki.App.Backend.Contract (As (..), Fixture (..))
+import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Archive (toArchive)
 import Wiki.App.Backend.Mem.Persist (records)
@@ -42,7 +42,7 @@ memFixture = do
 spec :: Spec
 spec = do
   describe "MemWiki" $ do
-    Contract.spec (type (MemWiki IO)) memFixture
+    Contract.spec (type (MemWiki IO)) (memFixture >>=)
 
     it "offers the demo's users to switch between" $ do
       ref <- newMemWiki (demoState demoNow)
