@@ -74,7 +74,8 @@ sent anywhere, and a reload starts the demo over.
 
 ## Deploying on your own machine
 
-`toolchain/deploy-local.sh` builds the demo and serves it from a Linux machine of
+`toolchain/deploy-local.sh` builds the demo (or, with `--server`, the wiki's
+server; see [The wiki's server](#the-wikis-server)) and serves it from a Linux machine of
 your own (x86_64 Debian or Ubuntu) as a systemd user service, for you and your
 devices on its Tailscale network. Run it from the checkout, as the user the service
 should run as (not root):
@@ -131,13 +132,94 @@ sh toolchain/undeploy-local.sh              # or: npm run undeploy-local
 
 which stops and disables the service, removes its unit and closes the port it
 opened (as above, printing the commands when sudo needs a password), and keeps the
-files; `--purge` deletes them and the deployment's state as well, `--name` picks the
-deployment. It needs no toolchain, and with nothing deployed it says so and
+files; `--purge` deletes them and the deployment's state as well (but for a server's
+`data/`, which `--purge-data` deletes too), `--name` picks the deployment. It needs no toolchain, and with nothing deployed it says so and
 succeeds. `sh toolchain/deploy-local.sh --stop` does the same.
 
+### The wiki's server
+
+With `--server` the same script deploys the wiki's server, `wiki-server`, in
+place of the static demo: the wiki's pages, kept on this machine, served to
+your tailnet.
+
+```sh
+sh toolchain/deploy-local.sh --server --port 8080 --trust-network
+```
+
+It builds the application as above and `wiki-server` natively with this
+repository's packages at `-O2` (`cabal-native-opt.project`, into
+`dist-newstyle/native-opt`; the first time compiles only those four packages, the
+dependencies come from the cabal store), and installs into the deployment's
+directory:
+
+```
+~/wiki-demo/bin/wiki-server   the server
+~/wiki-demo/app/              the application it serves
+~/wiki-demo/data/             the wiki: wiki.sqlite, attachments/, backups/
+```
+
+Until the application's backend over HTTP arrives (WP2.4 of the plan), the
+application the server serves is still the demo's build, which keeps its pages in the
+browser; the server's API (`/api/v1/…`, see `docs/api.md`) is there for it, and
+`deploy-local.sh` switches the build when it does.
+
+The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/app
+--listen <tailscale address>:8080 --admin-listen 127.0.0.1:8081`, and checks that
+both listeners answer. `--server`, the ports and `--trust-network` are remembered
+for the next run, like the other options; `--static` goes back to the demo.
+
+- **Where the data lives.** `data/` is the whole wiki: the SQLite database and the
+  attachments under their content hash. No deploy ever deletes it: a redeploy
+  replaces everything else in the directory, and so does going back to the demo.
+  `sh toolchain/undeploy-local.sh --purge` deletes the deployment but keeps
+  `data/`, for a later deploy into the same directory; only `--purge-data` deletes
+  it. To move a deployment, move `data/` yourself with the service stopped; the
+  script refuses to leave it behind.
+- **Backups.** Before each deploy starts the new server (which migrates the
+  database if its schema is newer), it stops the old one and runs `wiki-server
+  backup`, which copies the database with SQLite's own `VACUUM INTO` into
+  `data/backups/<time>.sqlite` and keeps the last ten. If the backup fails, the old
+  server is started again and nothing changes. Take one at any time with
+  `~/wiki-demo/bin/wiki-server backup --data ~/wiki-demo/data`, even with the
+  server running. To restore one, stop the service
+  (`systemctl --user stop wiki-demo`), move `data/wiki.sqlite` and the
+  `wiki.sqlite-wal` and `wiki.sqlite-shm` beside it out of the way, copy the
+  backup to `data/wiki.sqlite`, and start it again; attachments are never deleted
+  while a kept backup names them.
+- **Who is asking.** Until the wiki has accounts (Phase 3), the public address
+  serves an anonymous reader, who sees the public spaces and changes nothing.
+  `--trust-network` makes everyone who reaches that address the administrator, who
+  may read, change and delete everything: right for a tailnet of your own devices,
+  wrong for anything else. The server logs a warning at every start and refuses it
+  with `--bind 0.0.0.0` or `::`; `--no-trust-network` takes it away.
+- **The admin listener.** `http://127.0.0.1:8081/admin/` (`--admin-port` changes
+  the port) serves the same application to whoever is on the machine, as the
+  administrator, with no login; it listens on loopback only, and no firewall rule
+  is opened for it. From another machine, through an SSH tunnel:
+
+  ```sh
+  ssh -L 8081:127.0.0.1:8081 you@your-machine
+  # then open http://127.0.0.1:8081/admin/ there
+  ```
+
+  `curl http://127.0.0.1:8081/admin/api/v1/admin/status` says which version runs,
+  where its data is, and how many spaces, pages, attachments and backups it has.
+- **Logs.** `journalctl --user -u wiki-demo -f`: one `key=value` line per request
+  (listener, who, method, path, status, milliseconds), and an error line with the
+  exception for anything that fails.
+
+To move the demo's pages into the server, deploy the server with the demo's name and
+port (the defaults), so that it serves the address the browser kept the demo's data
+for; the import that reads them comes with the administration's "Wiki data"
+section.
+
+### Testing the scripts
+
 The regression tests run both scripts against fakes of systemctl, loginctl, ufw,
-sudo and tailscale in a temporary home, start the installed server as the unit
-would, and test the server itself over HTTP:
+sudo, tailscale and cabal (whose `wiki-server` is a script) in a temporary home,
+start the installed server as the unit would, test the static server over HTTP,
+and run the same cases against the real `wiki-server` (`npm run build-native`
+first, or name one with `WIKI_SERVER`):
 
 ```sh
 sh toolchain/test-deploy-local.sh

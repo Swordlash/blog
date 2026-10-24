@@ -2,7 +2,12 @@
 // (toolchain/deploy-server.mjs) for real: started as the service starts it, on
 // a free port, over a small site in a temporary directory.
 //
-//   node toolchain/test-deploy-server.mjs
+//   node toolchain/test-deploy-server.mjs [--wiki-server <path to wiki-server>]
+//
+// With --wiki-server, the same cases run against wiki-server serving the site
+// with --static, as `deploy-local.sh --server` runs it: the server that
+// replaces the static one must serve the application as it did. Only how each
+// says where it listens and what it logs differ.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -13,6 +18,10 @@ import { fileURLToPath } from "node:url";
 import { brotliCompressSync, gunzipSync, brotliDecompressSync, gzipSync } from "node:zlib";
 
 const server = join(dirname(fileURLToPath(import.meta.url)), "deploy-server.mjs");
+const wikiServer = (() => {
+  const at = process.argv.indexOf("--wiki-server");
+  return at < 0 ? null : process.argv[at + 1];
+})();
 const tmp = mkdtempSync(join(tmpdir(), "deploy-server-"));
 const root = join(tmp, "site");
 let child;
@@ -59,9 +68,18 @@ try {
   writeFileSync(join(tmp, "secret.txt"), "secret");
   symlinkSync(join(tmp, "secret.txt"), join(root, "link.txt"));
 
-  child = spawn(process.execPath, [server, "--root", root, "--port", "0", "--bind", "127.0.0.1"], {
-    stdio: ["ignore", "pipe", "inherit"],
-  });
+  child = wikiServer
+    ? spawn(
+        wikiServer,
+        ["serve", "--data", join(tmp, "data"), "--static", root, "--listen", "127.0.0.1:0", "--admin-listen", "127.0.0.1:0"],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      )
+    : spawn(process.execPath, [server, "--root", root, "--port", "0", "--bind", "127.0.0.1"], {
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+  const listening = wikiServer
+    ? /^level=info event=listening listener=public address=http:\/\/127\.0\.0\.1:(\d+)\/ /m
+    : /^serving .* on http:\/\/127\.0\.0\.1:(\d+)\/$/m;
   const log = [];
   port = await new Promise((resolve, reject) => {
     child.on("exit", (code) => reject(new Error(`server exited with ${code}`)));
@@ -70,7 +88,7 @@ try {
       buffer += data;
       for (const line of buffer.split("\n").slice(0, -1)) log.push(line);
       buffer = buffer.slice(buffer.lastIndexOf("\n") + 1);
-      const match = /^serving .* on http:\/\/127\.0\.0\.1:(\d+)\/$/m.exec(log.join("\n"));
+      const match = listening.exec(log.join("\n"));
       if (match) resolve(Number(match[1]));
     });
   });
@@ -95,7 +113,7 @@ try {
   const wasm = await get("/app.wasm", { "accept-encoding": "gzip, deflate, br" });
   assert.equal(wasm.headers["content-encoding"], "br");
   assert.equal(wasm.headers["content-type"], "application/wasm");
-  assert.equal(wasm.headers.vary, "accept-encoding");
+  assert.equal(wasm.headers.vary.toLowerCase(), "accept-encoding");
   assert.deepEqual(brotliDecompressSync(wasm.body), Buffer.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]));
   const js = await get("/index.js", { "accept-encoding": "gzip, br" });
   assert.equal(js.headers["content-encoding"], "gzip");
@@ -145,8 +163,13 @@ try {
   ok("answers HEAD, refuses other methods, and revalidates with an ETag");
 
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.ok(log.some((line) => /^127\.0\.0\.1 GET \/app\.wasm 200 br \d+ms$/.test(line)), log.join("\n"));
-  assert.ok(log.some((line) => /^127\.0\.0\.1 GET \/s\/blog\/p\/no-such-page\/ 404 \d+ms$/.test(line)));
+  const lines = wikiServer
+    ? [
+        /^level=info listener=public principal=anonymous from=127\.0\.0\.1:\d+ method=GET path=\/app\.wasm status=200 ms=[\d.]+$/,
+        /^level=info listener=public principal=anonymous from=127\.0\.0\.1:\d+ method=GET path=\/s\/blog\/p\/no-such-page\/ status=404 ms=[\d.]+$/,
+      ]
+    : [/^127\.0\.0\.1 GET \/app\.wasm 200 br \d+ms$/, /^127\.0\.0\.1 GET \/s\/blog\/p\/no-such-page\/ 404 \d+ms$/];
+  for (const line of lines) assert.ok(log.some((l) => line.test(l)), `${line}\n${log.join("\n")}`);
   ok("logs one line per request");
 
   child.removeAllListeners("exit");
@@ -160,4 +183,4 @@ try {
   child?.kill("SIGKILL");
   rmSync(tmp, { recursive: true, force: true });
 }
-console.log(`Passed ${passed} deploy server cases.`);
+console.log(`Passed ${passed} ${wikiServer ? "wiki-server static" : "deploy server"} cases.`);

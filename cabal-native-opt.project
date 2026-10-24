@@ -1,0 +1,27 @@
+-- The production build of the server, which `toolchain/deploy-local.sh
+-- --server` deploys: the same project as cabal.project, which it imports so
+-- that the haskell-halogen pin, allow-newer and -Werror stay in one place,
+-- with this repository's own packages compiled at -O2.
+--
+-- Unlike cabal-wasm-opt.project, the dependencies keep the optimisation the
+-- everyday native build gives them, so that they come from the cabal store as
+-- they are rather than being compiled again: the server's own code is where
+-- -O2 is worth its build time. Built in its own directory
+-- (dist-newstyle/native-opt), so that switching between this and the everyday
+-- build in dist-newstyle/native never invalidates either; without the test
+-- suites, which a deployment does not run.
+import: cabal.project
+
+tests: False
+
+package wiki-core
+  ghc-options: -O2
+
+package wiki-api
+  ghc-options: -O2
+
+package wiki-app
+  ghc-options: -O2
+
+package wiki-server
+  ghc-options: -O2

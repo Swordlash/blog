@@ -8,12 +8,16 @@
 # side by side. Each has
 #
 #   - a state file, $STATE_DIR/<name>.state, of key=value lines: the target
-#     directory, port and bind address, how the address was chosen, and the
-#     port whose firewall rule this opened (empty when it opened none);
+#     directory, port and bind address, how the address was chosen, the
+#     port whose firewall rule this opened (empty when it opened none), and
+#     what is deployed (mode: static, or server with its admin_port and
+#     whether it trusts its network);
 #   - a target directory holding a marker file, .wiki-demo-deployment, which
 #     names the deployment: only a directory carrying it is ever emptied or
 #     deleted;
-#   - a systemd user unit, $UNIT_DIR/<name>.service.
+#   - a systemd user unit, $UNIT_DIR/<name>.service;
+#   - for the wiki's server, a data directory, <dir>/data, which no deploy
+#     ever deletes and undeploy deletes only when told --purge-data.
 #
 # Two variables exist for the regression tests (toolchain/test-deploy-local.sh)
 # and need not be set otherwise: WIKI_DEPLOY_SBIN, the directories searched for
@@ -68,6 +72,9 @@ state_write() {
     printf 'bind=%s\n' "$bind"
     printf 'bind_choice=%s\n' "$bind_choice"
     printf 'rule_port=%s\n' "$rule_port"
+    printf 'mode=%s\n' "${mode:-static}"
+    printf 'admin_port=%s\n' "${admin_port:-}"
+    printf 'trust=%s\n' "${trust:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -217,7 +224,9 @@ firewall_close() {
 # Take the deployment down: stop and disable the service, remove its unit,
 # and close the firewall rule it opened. With purge set, also delete the
 # target directory (only if it carries this deployment's marker) and the state
-# file. no_firewall leaves the firewall alone. Running it when nothing is
+# file, but for a server's data/ (and the marker beside it, so that the
+# directory is still known as this deployment's); purge_data deletes that
+# too. no_firewall leaves the firewall alone. Running it when nothing is
 # deployed says so and succeeds.
 undeploy() {
   if [ ! -f "$state_file" ] && [ ! -f "$unit_file" ]; then
@@ -239,6 +248,9 @@ undeploy() {
   bind=$(state_get bind)
   bind_choice=$(state_get bind_choice)
   rule_port=$(state_get rule_port)
+  mode=$(state_get mode)
+  admin_port=$(state_get admin_port)
+  trust=$(state_get trust)
   if [ -n "$rule_port" ]; then
     if [ -n "${no_firewall:-}" ]; then
       say "--no-firewall: leaving the firewall rule for port $rule_port as it is"
@@ -254,6 +266,9 @@ undeploy() {
     if [ -n "$dir" ] && [ -d "$dir" ]; then
       if unsafe_dir "$dir" || ! marked_for "$dir" "$name"; then
         warn "not deleting $dir: it does not carry this deployment's marker ($MARKER)"
+      elif [ -d "$dir/data" ] && [ -z "${purge_data:-}" ]; then
+        find "$dir" -mindepth 1 -maxdepth 1 ! -name data ! -name "$MARKER" -exec rm -rf {} +
+        say "deleted the deployed files in $dir, and kept the wiki's data in $dir/data (--purge-data deletes it too)"
       else
         rm -rf "$dir"
         say "deleted $dir"
@@ -263,7 +278,9 @@ undeploy() {
     say "removed the deployment $name"
   elif [ -f "$state_file" ]; then
     state_write
-    if [ -n "$dir" ]; then
+    if [ -n "$dir" ] && [ -d "$dir/data" ]; then
+      say "the files are kept in $dir (--purge deletes them but the wiki's data, --purge-data that too)"
+    elif [ -n "$dir" ]; then
       say "the files are kept in $dir (--purge deletes them)"
     fi
   fi
