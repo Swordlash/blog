@@ -1362,3 +1362,6 @@ Amended by the planning session after each work package's report.
   a text builder: the prerender serialises each page once). A further fix is open upstream,
   haskell-halogen#59 (a patched element's `ref` kept in step with its prop: a changed label
   or a dropped prop updates the driver's map), to be taken at the next bump.
+- **haskell-halogen pinned to `f41907a`** ([#45](https://github.com/Swordlash/blog/pull/45),
+  `1b239db`): haskell-halogen#59, a patched element's `ref` kept in step with its prop. The
+  blog and haskell-halogen's `master` are level again; no pull request is open.
