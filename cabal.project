@@ -24,8 +24,16 @@ source-repository-package
     hspec-halogen
 
 -- As in haskell-halogen's own cabal.project: protolude's upper bounds lag
--- behind the GHC this builds with.
-allow-newer: protolude:*
+-- behind the GHC this builds with. servant's, http-api-data's and
+-- monad-control's (servant-server's) lag behind the QuickCheck, text-iso8601
+-- and transformers-compat everything else here is built with: kept to them,
+-- the solver would take older versions and rebuild aeson, protolude and every
+-- package above them for the API's sake alone.
+allow-newer:
+  protolude:*,
+  servant:QuickCheck,
+  http-api-data:text-iso8601,
+  monad-control:transformers-compat
 
 -- A test suite's dependencies are optional goals unless this says otherwise:
 -- rather than report that it cannot satisfy them, the solver is free to hand

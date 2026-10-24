@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The ids (`Wiki.Core.Id`) and `Slug` have `ToHttpApiData` and `FromHttpApiData`
+instances, so that the server's API (`wiki-api`) takes them in its paths and
+parameters: an id is its bare text, a slug its text read back through
+`mkSlug`. `Draft` has aeson instances, with the record's field names, for the
+API's draft endpoints.
+
 `Wiki.Core.Search.searchPlain` takes `Candidate`s rather than pages: each
 page's id, space and paths with its title and text already prepared
 (`Searchable`, made by `searchable` from a title and a Markdown body), so

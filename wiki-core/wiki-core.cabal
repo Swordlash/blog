@@ -79,6 +79,7 @@ library
       commonmark-extensions >= 0.2.7.3 && < 0.3,
       containers,
       haskell-halogen-core,
+      http-api-data >= 0.6 && < 0.8,
       protolude,
       row-types,
       tagsoup >= 0.14.8 && < 0.15,

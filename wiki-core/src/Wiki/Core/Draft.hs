@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveAnyClass #-}
+
 -- | Drafts: what someone has written in the editor and not yet saved, kept
 -- for them alone.
 --
@@ -14,11 +16,16 @@
 -- up where it was left, from one of a version someone has saved over since,
 -- which it only offers: saving that one would put back what the later save
 -- changed.
+--
+-- In JSON (the server's API) a draft is an object with the record's field
+-- names; it is never part of an archive, so "Wiki.Core.Export" has no
+-- record format for it.
 module Wiki.Core.Draft
   ( Draft (..)
   )
 where
 
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Id
@@ -36,4 +43,5 @@ data Draft = Draft
   , savedAt :: UTCTime
   -- ^ When the draft was last saved.
   }
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)

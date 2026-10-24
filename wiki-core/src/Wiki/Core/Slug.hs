@@ -24,6 +24,7 @@ import Data.Char (GeneralCategory (..), generalCategory, isAsciiLower)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Protolude
+import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 
 -- | A string that keeps the slug rules. Its constructor is not exported.
 newtype Slug = Slug Text
@@ -38,6 +39,14 @@ instance ToJSON Slug where
 instance FromJSON Slug where
   parseJSON = withText "Slug" $ \t ->
     either (\e -> fail ("not a slug: " <> show t <> ", " <> show e)) pure (mkSlug t)
+
+-- | In a URL (a segment of a path, in the server's API), as in JSON: the
+-- bare string, read back through 'mkSlug'.
+instance ToHttpApiData Slug where
+  toUrlPiece = slugText
+
+instance FromHttpApiData Slug where
+  parseUrlPiece t = first (\e -> "not a slug: " <> show t <> ", " <> show e) (mkSlug t)
 
 -- | Why a string is not a slug: the first rule it breaks, in the order they
 -- are listed here.
