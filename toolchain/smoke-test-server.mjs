@@ -15,15 +15,18 @@
 // administrator) on a temporary data directory and free ports of 127.0.0.1,
 // and drives the application end to end against it:
 //
-// 1. The server's page, at the front page and at a page's address (which the
-//    server answers with 404.html), adopted by the program with nothing to
-//    repair, before the server has answered anything; then what it loads.
+// 1. The front page as the server renders it, with its content before
+//    app.wasm runs, adopted by the program with nothing to repair and
+//    without asking the API anything, from what the page carries.
 // 2. A space and a page made through the forms; typing and saving (Ctrl+S,
 //    "Saved"); a draft kept as the typing stops and restored after a reload;
 //    a file attached and served; a conflict (the page saved through the API
 //    meanwhile, then saved in the editor); search; the export downloaded
 //    from the administration; and a fresh browser finding all of it there.
-// 3. The demo's pages brought into the server, as its owner would: the
+// 3. Every route the walk went through, loaded afresh: each served with its
+//    status and its content before app.wasm runs, adopted with nothing to
+//    repair and no request to the API; and a page read with JavaScript off.
+// 4. The demo's pages brought into the server, as its owner would: the
 //    demo's build served at the server's address (so that the demo leaves
 //    its wiki in this origin's IndexedDB, as it does when the server takes
 //    the demo's address and port) and exported; then the server's
@@ -112,8 +115,8 @@ async function newPage() {
   const page = await context.newPage();
   page.on("pageerror", (error) => failures.push(`page error at ${page.url()}: ${error.message}`));
   page.on("console", (message) => {
-    // Every address but the front page is served 404.html with a 404 until
-    // the server renders each page itself (WP2.6); a conflict is a 409.
+    // An address that is not there is served with a 404 (the walk loads
+    // some on purpose); a conflict is a 409.
     if (message.type() === "error" && !/\b(404|409)\b/.test(message.text())) {
       failures.push(`console error at ${page.url()}: ${message.text()}`);
     }
@@ -126,11 +129,13 @@ async function newPage() {
   });
   page.wasmGate = null;
   page.apiGate = null;
+  page.apiAsked = [];
   await page.route("**/app.wasm", async (route) => {
     await page.wasmGate;
     await route.continue();
   });
   await page.route("**/api/v1/**", async (route) => {
+    page.apiAsked.push(route.request().url());
     await page.apiGate;
     await route.continue();
   });
@@ -148,33 +153,41 @@ async function programStarted(page) {
   return listeners.some((listener) => listener.type === "click");
 }
 
+// What the program does not adopt: what is inside an island (a library
+// fills it, or the browser writes a time in the reader's zone) and inside
+// the editor's host, where CodeMirror goes in place of the textarea.
+const unadopted = ".wiki-math, .wiki-mermaid, .wiki-tikz, .wiki-code, .wiki-time, .editor-cm";
+
 // Load an address with app.wasm and the API held back: mark every node of
-// the page as the server sent it, let the program adopt it, and say what
-// adopting it changed before the server has answered anything. Then let the
-// API answer.
+// the page as the server sent it, and what its content says, let the
+// program adopt it, and say what adopting it changed and what it asked the
+// API for before the server has answered anything. Then let the API answer.
 async function loadAdopted(page, path) {
   let releaseWasm;
   let releaseApi;
   page.wasmGate = new Promise((go) => (releaseWasm = go));
   page.apiGate = new Promise((go) => (releaseApi = go));
+  page.apiAsked = [];
   const response = await page.goto(url(path), { waitUntil: "commit" });
   await page.locator("#app .wiki").waitFor({ timeout });
-  await page.evaluate(() => {
+  const shown = await page.locator("#app .wiki-content").textContent();
+  await page.evaluate((unadopted) => {
     const app = document.querySelector("#app");
     app.querySelector(".wiki").dataset.prerendered = "true";
     const marks = new Map();
     const walker = document.createTreeWalker(app, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      if (node.parentElement?.closest(unadopted)) continue;
       marks.set(node, node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].map((a) => `${a.name}=${a.value}`).join(" "));
     }
     window.smokePrerendered = marks;
-  });
+  }, unadopted);
   releaseWasm();
   page.wasmGate = null;
   await eventually(async () => assert.ok(await programStarted(page), "no listener yet"), `${path}: the program starting`);
   // A moment for anything the adoption would change to be changed.
   await page.waitForTimeout(300);
-  const repairs = await page.evaluate(() => {
+  const repairs = await page.evaluate((unadopted) => {
     const app = document.querySelector("#app");
     const found = [];
     for (const [node, was] of window.smokePrerendered) {
@@ -188,13 +201,15 @@ async function loadAdopted(page, path) {
     }
     const walker = document.createTreeWalker(app, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      if (node.parentElement?.closest(unadopted)) continue;
       if (!window.smokePrerendered.has(node) && !(node.nodeType === Node.TEXT_NODE && node.data === "")) found.push(`built: ${node.nodeName}`);
     }
     return found;
-  });
+  }, unadopted);
+  const asked = [...page.apiAsked];
   releaseApi();
   page.apiGate = null;
-  return { status: response.status(), repairs };
+  return { status: response.status(), repairs, shown, asked };
 }
 
 // The demo's build, served at the server's own address in place of the
@@ -332,16 +347,17 @@ try {
   const front = await fetch(url("/"));
   assert.equal(front.status, 200);
   const frontHtml = await front.text();
-  assert.match(frontHtml, /<p class="loading">Loading…<\/p>/, "the front page is not the application loading");
-  assert.ok(!/<ol>.+<\/ol>/.test(frontHtml), "the server's page names a route");
+  assert.match(frontHtml, /<h1>Welcome to the wiki<\/h1>/, "the front page is not rendered");
+  assert.ok(!frontHtml.includes("Loading…"), "the front page is the application loading");
+  assert.match(frontHtml, /<script type="application\/json" id="wiki-preload">/, "the front page carries nothing for the program");
   const page = await newPage();
   const atFront = await loadAdopted(page, "/");
   assert.deepEqual(atFront.repairs, [], "adopting the front page repaired it");
-  await page.locator("#app .home h1", { hasText: "Welcome to the wiki" }).waitFor({ timeout });
+  assert.deepEqual(atFront.asked, [], "the program asked the API for what the front page carries");
+  assert.ok(atFront.shown.includes("There are no spaces you can see."), `the front page before app.wasm: ${atFront.shown}`);
   await page.locator("#app .user-name", { hasText: "Administrator" }).waitFor({ timeout });
-  await page.locator("#app .home .empty", { hasText: "There are no spaces you can see." }).waitFor({ timeout });
   assert.equal(await page.locator("#app .user-switcher").count(), 0, "a server's wiki offers the demo's user switcher");
-  console.log("ok: the server's front page is adopted with nothing to repair, then shows the empty wiki to its administrator");
+  console.log("ok: the server renders the front page, which the program adopts with nothing to repair and nothing asked");
 
   // ---- 2. A walk through the wiki --------------------------------------------
 
@@ -385,8 +401,10 @@ try {
   await editor.pressSequentially(" Not saved yet.");
   await page.locator("#app .editor-draft-status", { hasText: "Draft saved" }).waitFor({ timeout });
   const reloaded = await loadAdopted(page, "/s/smoke-space/p/first-page/edit/");
-  assert.equal(reloaded.status, 404, "the editor's address has a page of its own");
+  assert.equal(reloaded.status, 200, "the editor's address");
   assert.deepEqual(reloaded.repairs, [], "adopting the server's page at the editor's address repaired it");
+  assert.deepEqual(reloaded.asked, [], "the program asked the API for what the editor's page carries");
+  assert.ok(reloaded.shown.includes("Restored your unsaved draft"), `the editor before app.wasm: ${reloaded.shown}`);
   await page.locator("#app .editor-draft-found", { hasText: "Restored your unsaved draft" }).waitFor({ timeout });
   await eventually(async () => assert.ok((await markdownIn(page)).endsWith("Not saved yet."), "not yet"), "the draft restored");
   console.log("ok: a draft is kept as the typing stops, and restored by the editor after a reload, which adopts the page with nothing to repair");
@@ -445,10 +463,44 @@ try {
     assert.ok(text.includes(expected), `the page lacks "${expected}"`);
   }
   await fresh.locator("#app .wiki-sidebar a", { hasText: "Smoke space" }).waitFor({ timeout });
-  await fresh.context().close();
   console.log("ok: a fresh browser finds the space, the page, its edits and its attachment on the server");
 
-  // ---- 3. The demo's pages brought into the server ---------------------------
+  // ---- 3. Every route of the walk, rendered by the server --------------------
+
+  const walked = [
+    ["/", 200, "Smoke space"],
+    ["/s/smoke-space/", 200, "First page"],
+    ["/s/smoke-space/p/first-page/", 200, "Saved by someone else."],
+    ["/s/smoke-space/p/first-page/source/", 200, "(attachment:notes.txt)"],
+    ["/s/smoke-space/p/first-page/edit/", 200, "Editing First page"],
+    ["/s/smoke-space/new-page/", 200, "New page"],
+    ["/new-space/", 200, "New space"],
+    ["/search/?q=smoke", 200, "First page"],
+    ["/admin/", 200, "Export the wiki"],
+    ["/s/smoke-space/p/no-such-page/", 404, "There is nothing here"],
+    ["/no/such/address", 404, "Not found"],
+  ];
+  for (const [path, status, expected] of walked) {
+    const loaded = await loadAdopted(fresh, path);
+    assert.equal(loaded.status, status, `${path}: the status`);
+    assert.ok(loaded.shown.includes(expected), `${path}: "${expected}" is not there before app.wasm: ${loaded.shown}`);
+    assert.deepEqual(loaded.repairs, [], `${path}: adopting it repaired it`);
+    assert.deepEqual(loaded.asked, [], `${path}: the program asked the API for what the page carries`);
+  }
+  await fresh.context().close();
+  console.log(`ok: ${walked.length} addresses of the walk are rendered by the server, with their content before app.wasm, and adopted with nothing to repair or ask`);
+
+  // Without JavaScript, the page is there all the same.
+  const noScript = await browser.newContext({ javaScriptEnabled: false });
+  const reader = await noScript.newPage();
+  const read = await reader.goto(url("/s/smoke-space/p/first-page/"));
+  assert.equal(read.status(), 200);
+  const readable = await reader.locator("#app .page-body").textContent();
+  assert.ok(readable.includes("Hello from the server's smoke test.") && readable.includes("Saved by someone else."), `the page without JavaScript: ${readable}`);
+  await noScript.close();
+  console.log("ok: with JavaScript off, a page reads as the server rendered it");
+
+  // ---- 4. The demo's pages brought into the server ---------------------------
 
   await migrateTheDemo();
 } catch (error) {

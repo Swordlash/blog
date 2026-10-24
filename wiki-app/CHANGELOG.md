@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+The program starts from the page the server rendered. `wiki-server` renders
+each route's page with `Wiki.App.Static.renderServed`: the application over
+`HttpWiki` with a transport that answers at once (`newImmediateHttpEnv`, under
+which `atOnce` asks the transport rather than give up), so every view loads in
+its initial state. What the render read is written into the page
+(`Wiki.App.Backend.Http.Preload`: `encodePreload`, in the API's own JSON, a page
+already in its space's list left out) and read back by `Main.hs`
+(`embeddedCache`) into the backend's cache (`newHttpEnvWith`), so the
+program's first render is that page, which `hydrateUI` adopts with nothing to
+repair, and nothing is fetched again. A payload that cannot be read is said
+on the console (`Wiki.App.Browser.consoleWarn`) and the program loads as
+before.
+
+The cache keeps more, so that everything a rendered page shows is there at
+once: refusals the wiki decided (`NotFound`, `Forbidden`; never `Unreachable`),
+which go stale and are let go as answers are, and searches by their query.
+`Cache`'s maps hold `Either WikiError`; `withDraft` and `cachedPage` follow,
+and `cachedSearch`, `withSearch` and `kept` are new.
+
+`wiki-app-prerender --server` writes `template.html` besides `index.html` and
+`404.html`: the server's page with its mount point empty, which the server
+renders into. `withBase`, `withTitle` and `escapeHtml` moved from the prerender
+to `Wiki.App.Static`, for the server's pages too.
+
+A moment in time is an island (`Wiki.App.Islands.LocalTime`, rendered as an
+empty `<time class="wiki-time" datetime=…>`, `MonadIslands.renderTime`), which
+the browser writes in the reader's zone and natively holds UTC: the editor's
+notices of a draft used one, and a page rendered by a server in another zone
+would differ from the program's first render. `Found` holds `UTCTime`s.
+
 The application runs over the wiki's server too. `Wiki.App.Backend.Http` is
 `HttpWiki`, a `MonadWiki` over the server's HTTP API (`wiki-api`): every
 address from `Wiki.Api.Links`, relative to the page's `<base href>`; saves

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+The server renders the wiki's pages. With a build that has a `template.html`
+(`wiki-app-prerender --server` writes one), every address a page would be
+served at, a directory's or one with no file, gets the application rendered
+at the route it names, per request, as the listener's principal sees it: the
+shell and its views over the backend over HTTP, whose requests the API's
+application answers in the same process (`Wiki.Server.Render.inProcess`, which
+the tests used to have to themselves). A page is complete before any script
+runs. Its status is 200; 404 for an address that is no route and for a space or
+a page that is not there; 403 for a space the reader may not see, whose page
+says only that. The page carries, as JSON in a
+`<script type="application/json" id="wiki-preload">` (every `<` escaped), the
+API's answers the render read, which the program starts from. A rendered page
+goes out with `no-cache` and no `ETag`, since it is for that reader and that
+moment; nothing is cached on the server. Each render is logged
+(`event=render`, its route, status, milliseconds and size).
+
+A render that throws, takes more than ten seconds, or in which the API could
+not answer something, is logged as an error and the address gets what it got
+before: the build's `index.html` or `404.html`. A build without a template is
+served as before.
+
+The admin listener renders its pages below `/admin/`, links included, so it
+no longer redirects addresses below the public base path to the same ones
+below `/admin/`: only its root and `/admin` without the slash are redirected.
+`Listener` has no `redirectFrom` any more.
+
 `toApiError` gives `Maybe ApiError`: the application's `WikiError` has an
 `Unreachable`, which is no refusal and has no `ApiError`. `wikiError` answers
 it with a 503, which a client reads as the server failing; the storage never

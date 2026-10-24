@@ -170,12 +170,19 @@ directory:
 ```
 
 The application it serves is the server's build (`WIKI_BACKEND=server`): the same
-`app.wasm` as the demo's, with one page, the application before it has loaded
-anything, which the server serves at every address, and which reads and writes the
-wiki through the server's API (`/api/v1/…`, see `docs/api.md`). Until the server
-renders each page itself (WP2.6 of the plan), every address but the front page is
-answered with that page and a 404 status, which the application reads as its
-route. The administration's "Wiki data" section exports the server's wiki and
+`app.wasm` as the demo's, which reads and writes the wiki through the server's API
+(`/api/v1/…`, see `docs/api.md`). The server renders every page itself, per
+request, as whoever is asking sees it: the application at the address's route,
+over the server's own API in the same process, written into the build's
+`template.html`. So a page arrives complete, readable without JavaScript and by a
+search engine; a private space's page says only that it is private (a 403), a
+space or a page that is not there is a 404, and so is an address that is no
+route. The page carries the data it was rendered from as JSON
+(`<script type="application/json" id="wiki-preload">`), which the program starts
+from, so it adopts the page as it is and asks the server nothing more until the
+reader goes elsewhere. If a page cannot be rendered (the log says why, in a
+`level=error event=render` line), the build's own page is sent instead: the application
+before it has loaded anything, which then loads the route itself. The administration's "Wiki data" section exports the server's wiki and
 imports another's into it, merging rather than replacing (below).
 
 The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/app
@@ -468,8 +475,11 @@ http-server serve for an address with no file.
 `<meta name="wiki-backend">` saying `server`, which `Main.hs` reads to run the
 application over the server's API (`Wiki.App.Backend.Http`) rather than the demo's
 wiki in the browser (`Wiki.App.Backend.Mem`). The server's content is not known
-at build time, so `wiki-app-prerender --server` writes one page, the application
-as it shows before it has loaded anything, as `index.html` and `404.html`.
+at build time, so `wiki-app-prerender --server` writes `template.html`, the page
+with its mount point empty, which the server renders each route's page into per
+request, and one page besides, the application as it shows before it has loaded
+anything, as `index.html` and `404.html`, which the server sends when it cannot
+render a page.
 `WIKI_PUBLIC_DIR` writes the build somewhere other than
 `dist-newstyle/wasm/public/app`. The smoke test's server mode
 (`toolchain/smoke-test-server.mjs`) makes that build from the demo's in a temporary

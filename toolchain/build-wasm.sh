@@ -21,8 +21,10 @@
 # WIKI_BACKEND says which wiki the pages are for: demo (the default), the
 # serverless demo, whose program keeps the wiki in the browser, with a page
 # per route of the demo's content; or server, for wiki-server, whose program
-# asks it over HTTP, with one page, the application before it has loaded
-# anything, written as index.html and 404.html (wiki-app-prerender --server).
+# asks it over HTTP, with template.html, which the server renders each page
+# into per request, and one page, the application before it has loaded
+# anything, written as index.html and 404.html, which the server sends when it
+# cannot render one (wiki-app-prerender --server).
 # app.wasm is the same either way: the page's <meta name="wiki-backend"> says
 # which backend it runs on. WIKI_PUBLIC_DIR, if set, is the output directory
 # instead of $WASM_BUILDDIR/public/app. Finally the sizes of what is served are
