@@ -46,6 +46,7 @@ spec = describe "golden JSON" $ do
     golden "search-hits" [Sample.hit]
     golden "import-plan" Sample.importPlan
     golden "import-summary" Sample.importSummary
+    golden "server-status" Sample.serverStatus
   describe "errors" $ do
     golden "error-not-found" NotFound
     golden "error-forbidden" Forbidden

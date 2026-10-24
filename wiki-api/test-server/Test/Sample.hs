@@ -13,12 +13,14 @@ module Test.Sample
   , importPlan
   , importChoices
   , importSummary
+  , serverStatus
   )
 where
 
 import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
+import Wiki.Api.Admin (ServerStatus (..))
 import Wiki.Api.Import
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -157,4 +159,19 @@ importSummary =
     , pagesKept = 0
     , pagesSkipped = 0
     , attachments = 1
+    }
+
+-- | A server's status, as its operator reads it.
+serverStatus :: ServerStatus
+serverStatus =
+  ServerStatus
+    { version = "wiki-server 0.1.0.0"
+    , startedAt = time
+    , dataDir = "/home/owner/wiki-demo/data"
+    , trustNetwork = False
+    , spaces = 3
+    , pages = 12
+    , attachments = 4
+    , users = 2
+    , backups = 1
     }

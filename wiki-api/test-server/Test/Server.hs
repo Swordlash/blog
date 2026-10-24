@@ -124,6 +124,7 @@ stubs =
                   , pagesSkipped = length apply.choices.skipPages + length apply.choices.skipSpaces
                   }
           }
+    , admin = AdminApi {status = pure Sample.serverStatus}
     }
 
 app :: Application
@@ -305,6 +306,9 @@ spec = describe "a server of the API's type" $ do
     it "refuses an import without its choices" $ do
       r <- multipart links.archive.importApply [] [("archive", "wiki.zip", "application/zip", "1234")]
       status r `shouldBe` 400
+
+  it "gives the server's status to its operator" $
+    answers (getAt links.admin.status) 200 Sample.serverStatus
 
   it "answers an address the API does not have with 404" $
     (status <$> getAt "api/v1/nothing-here") `shouldReturn` 404

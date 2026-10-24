@@ -190,7 +190,47 @@ import is one transaction, and answers with what it did:
  "pagesKept": 2, "pagesSkipped": 0, "attachments": 3}
 ```
 
+Neither the archive's users, groups and grants nor its ids are imported: a
+space or page made by an import has a new id, a space made by one has no
+grants (the administrator needs none), and an attachment's bytes are kept
+under their content hash, once, however many pages have them.
+
 What a merge keeps of each side (a merged space keeps the server's settings
 unless the server's are empty, attachments follow their pages by content
 hash, positions follow the archive's order after the server's; the archive's
 users, groups and grants are not imported) is the plan's WP2.8.
+
+### Administration
+
+| Method | Path | Body | Response | Errors |
+| ------ | ---- | ---- | -------- | ------ |
+| GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "trustNetwork", "spaces", "pages", "attachments", "users", "backups"}` | 403 |
+
+Only for the global `administer` permission: the operator on the admin
+listener (decision 11 of the plan), and whoever is the administrator on the
+public one (`--trust-network` until Phase 3, then an administrator's
+session). Phase 3 adds the administration panel's users and permissions
+here.
+
+## The two listeners
+
+The server answers on two addresses, with the same API and the same
+application, as two different people:
+
+- the **public listener** (`--listen`, the Tailscale address when deployed
+  by `toolchain/deploy-local.sh --server`) serves the wiki at its base path
+  (`--base-path`, `/` by default) to an anonymous reader, who sees the
+  public spaces and changes nothing; with `--trust-network`, everyone who
+  reaches it is the administrator instead (decision 19);
+- the **admin listener** (`--admin-listen`, `127.0.0.1:8081` by default,
+  loopback only unless `--admin-listen-unsafe`) serves the same application
+  at `/admin/`, and its API at `/admin/api/v1/…`, to the administrator,
+  without a login. From another machine it is reached through an SSH
+  tunnel: `ssh -L 8081:127.0.0.1:8081 <host>`, then
+  `http://127.0.0.1:8081/admin/`.
+
+Every page is served with the `<base href>` of the place it is served at,
+so the application loaded from `/admin/` asks the API at
+`/admin/api/v1/`. A page's prerendered links are written for the public base
+path, so the admin listener redirects an address below that path to the
+same one below `/admin/`.

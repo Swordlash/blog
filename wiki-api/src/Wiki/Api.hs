@@ -10,7 +10,7 @@
 -- side of them (servant-server, servant-multipart) is native.
 --
 -- The API is a record of routes per resource ('SpacesApi', 'PagesApi',
--- 'AttachmentsApi', 'ArchiveApi'), each field one endpoint named for the
+-- 'AttachmentsApi', 'ArchiveApi', 'AdminApi'), each field one endpoint named for the
 -- @MonadWiki@ method it carries, gathered in 'WikiApi'. docs/api.md lists
 -- every endpoint with its method, path, body, response and errors.
 --
@@ -36,6 +36,7 @@ module Wiki.Api
   , PagesApi (..)
   , AttachmentsApi (..)
   , ArchiveApi (..)
+  , AdminApi (..)
 
     -- * Versions
   , Versioned
@@ -52,6 +53,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
 import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
+import Wiki.Api.Admin (ServerStatus)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Types
@@ -96,6 +98,7 @@ data WikiApi mode = WikiApi
   -- address from a query, and 'Wiki.Api.Links.searchQueryOf' the query from
   -- the parameters, so that both sides fill in what is missing alike.
   , archive :: mode :- NamedRoutes ArchiveApi
+  , admin :: mode :- "admin" :> NamedRoutes AdminApi
   }
   deriving stock (Generic)
 
@@ -178,6 +181,16 @@ data ArchiveApi mode = ArchiveApi
   -- ^ What importing an archive would do ("Wiki.Api.Import").
   , importApply :: mode :- "import" :> "apply" :> MultipartForm Mem ImportApply :> Post '[JSON] ImportSummary
   -- ^ Import an archive, as chosen.
+  }
+  deriving stock (Generic)
+
+-- | What only the administrator may ask ("Wiki.Api.Admin"): on the
+-- server's admin listener, where the operator is the administrator, or (from
+-- Phase 3) on the public one as an administrator. Phase 3 adds the panel's
+-- users and permissions here.
+newtype AdminApi mode = AdminApi
+  { status :: mode :- "status" :> Get '[JSON] ServerStatus
+  -- ^ The server's version, data directory and counts.
   }
   deriving stock (Generic)
 

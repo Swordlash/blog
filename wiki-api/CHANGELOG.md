@@ -6,7 +6,7 @@ The whole HTTP API, under `/api/v1`, for the server of Phase 2 and the
 application's backend over HTTP; docs/api.md lists every endpoint.
 
 - `Wiki.Api`: the API as a servant type, a record of routes per resource
-  (`SpacesApi`, `PagesApi`, `AttachmentsApi`, `ArchiveApi`) gathered in
+  (`SpacesApi`, `PagesApi`, `AttachmentsApi`, `ArchiveApi`, `AdminApi`) gathered in
   `WikiApi`, one endpoint per method of `MonadWiki` plus export and the
   two-step import. It builds for the browser's WebAssembly too: servant's
   core and servant-multipart's API types are pure Haskell.
@@ -24,6 +24,10 @@ application's backend over HTTP; docs/api.md lists every endpoint.
   import, read into memory.
 - `Wiki.Api.Import`: the import's plan, choices and summary.
 - `Wiki.Api.Zip`: `application/zip`, for the export.
+- `Wiki.Api.Admin` and `AdminApi` (`api/v1/admin/…`): what only the
+  administrator may ask, so far the server's status (`ServerStatus`: its
+  version, data directory, whether it trusts its network, and how many
+  spaces, pages, attachments, users and backups it has).
 
 Golden files (`test-server/golden/`) pin down the JSON of every body a client
 depends on, and a server of the type with stub handlers is requested at the

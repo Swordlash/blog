@@ -52,6 +52,7 @@ library
   hs-source-dirs:   src
   exposed-modules:
       Wiki.Api
+      Wiki.Api.Admin
       Wiki.Api.Error
       Wiki.Api.Import
       Wiki.Api.Info
