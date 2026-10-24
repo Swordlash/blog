@@ -20,6 +20,13 @@ spec = describe "Wiki.Api.Version" $ do
   prop "reads back every time exactly, to the picosecond" $ forAll genUtcTime $ \time ->
     parseHeader (toHeader (PageVersion time)) === Right (PageVersion time)
 
+  prop "names a version in a path by its time, read back exactly" $ forAll genUtcTime $ \time ->
+    parseUrlPiece (toUrlPiece (VersionTime time)) === Right (VersionTime time)
+
+  it "writes a version's time unquoted, and refuses a piece that is not a time" $ do
+    toUrlPiece (VersionTime t) `shouldBe` "2026-10-24T09:30:12.345678Z"
+    parseUrlPiece "\"2026-10-24T09:30:12.345678Z\"" `shouldSatisfy` (isLeft :: Either Text VersionTime -> Bool)
+
   it "refuses a weak tag, an unquoted one and one that is not a time" $ do
     parseUrlPiece "W/\"2026-10-24T09:30:12.345678Z\"" `shouldSatisfy` (isLeft :: Either Text PageVersion -> Bool)
     parseUrlPiece "2026-10-24T09:30:12.345678Z" `shouldSatisfy` (isLeft :: Either Text PageVersion -> Bool)

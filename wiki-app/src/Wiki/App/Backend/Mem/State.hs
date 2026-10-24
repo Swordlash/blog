@@ -15,6 +15,8 @@ module Wiki.App.Backend.Mem.State
   , currentPrincipal
   , Prepared (..)
   , prepareSearch
+  , Saved (..)
+  , completeVersions
 
     -- * Building it without checks
   , insertUser
@@ -36,6 +38,8 @@ module Wiki.App.Backend.Mem.State
   , getPageIn
   , searchPagesIn
   , getDraftIn
+  , listVersionsIn
+  , getVersionIn
 
     -- * Writes
   , Write
@@ -56,6 +60,7 @@ module Wiki.App.Backend.Mem.State
   , deleteAttachmentIn
   , saveDraftIn
   , discardDraftIn
+  , restoreVersionIn
   )
 where
 
@@ -99,6 +104,8 @@ import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
 import Wiki.Core.User (Group (..), Membership, User (..))
+import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, versionInfo)
+import Wiki.Core.Version qualified as V
 
 -- | Everything the in-memory wiki holds.
 data MemState = MemState
@@ -116,6 +123,10 @@ data MemState = MemState
   -- and keeps its bytes for as long as it lives, so it is made once.
   , drafts :: Map (PageId, UserId) Draft
   -- ^ Each user's draft of a page, by the page and the user.
+  , versions :: Map PageId (Map UTCTime Saved)
+  -- ^ Every version of every page, by the page and its @updatedAt@ then,
+  -- the page as it is included ('completeVersions'): a version for the
+  -- page as it was made, and one for each save.
   , searchText :: Map PageId Prepared
   -- ^ Each page's title and text as the search compares them, made when
   -- the page is made or saved, or the wiki read back or imported, and
@@ -143,10 +154,37 @@ emptyState =
     , blobs = mempty
     , objectUrls = mempty
     , drafts = mempty
+    , versions = mempty
     , searchText = mempty
     , current = Nothing
     , counter = 1
     }
+
+-- | A version of a page as the store keeps it, under the page and its
+-- time: what was saved, and who saved it, by id ('Nothing' for a page that
+-- came in whole).
+data Saved = Saved
+  { title :: Text
+  , body :: Text
+  , author :: Maybe UserId
+  }
+  deriving stock (Eq, Show)
+
+-- | The page as it is now, as one of its versions, saved by someone or by
+-- nobody known.
+recordVersion :: Maybe UserId -> Page -> MemState -> MemState
+recordVersion author p st =
+  st {versions = Map.insertWith (<>) p.id (Map.singleton p.updatedAt Saved {title = p.title, body = p.body, author}) st.versions}
+
+-- | Every page with its current version in its history: a wiki whose pages
+-- came in whole (read back from a database written before there were
+-- versions, or imported from an archive, which has none) starts each
+-- page's history there, saved by nobody known. A version already kept is
+-- left as it is, and so is the history of a page that is gone.
+completeVersions :: MemState -> MemState
+completeVersions st = foldr (\p -> if has p then identity else recordVersion Nothing p) st (Map.elems st.pages)
+  where
+    has p = maybe False (Map.member p.updatedAt) (Map.lookup p.id st.versions)
 
 -- | A page's title and text prepared for the search, and the version of
 -- the page they were made from.
@@ -304,7 +342,7 @@ insertPage space parent title body now st0 =
           , updatedAt = now
           , position = nextPosition (childrenOf (pagesOf space st) parent)
           }
-   in (st {pages = Map.insert page.id page st.pages, searchText = Map.insert page.id (prepare page) st.searchText}, page)
+   in (recordVersion Nothing page st {pages = Map.insert page.id page st.pages, searchText = Map.insert page.id (prepare page) st.searchText}, page)
 
 -- | A slug for a name with nothing a slug can be made of. The text given is
 -- a valid slug, which is what makes the error case impossible.
@@ -593,6 +631,7 @@ deleteSpaceIn sid st = do
         { spaces = Map.withoutKeys st.spaces gone
         , pages = alive
         , drafts = Map.filterWithKey (\(pid, _) _ -> Map.member pid alive) st.drafts
+        , versions = Map.intersection st.versions alive
         , searchText = Map.intersection st.searchText alive
         , grants =
             Grants
@@ -652,7 +691,9 @@ createPageIn sid parent title body now st = do
   when (any (\p -> p.space /= sid) parentPage) $
     Left (Invalid "A page's parent has to be in the same space.")
   t <- nonBlank "A page's title" title
-  pure (insertPage sid parent t body now st)
+  let (st', page) = insertPage sid parent t body now st
+  -- Its first version is its maker's.
+  pure (recordVersion (currentUserId st) page st', page)
 
 -- | Save a page's title and body, if nobody has saved it since the version
 -- given.
@@ -670,7 +711,7 @@ savePageIn pid base title body now st = do
       p' = p {title = t, body, updatedAt}
       -- What was unsaved is saved now.
       drafts = maybe identity (\u -> Map.delete (pid, u)) (currentUserId st) st.drafts
-  pure (st {pages = Map.insert pid p' st.pages, drafts, searchText = Map.insert pid (prepare p') st.searchText}, p')
+  pure (recordVersion (currentUserId st) p' st {pages = Map.insert pid p' st.pages, drafts, searchText = Map.insert pid (prepare p') st.searchText}, p')
 
 -- | The page and the pages under it, by id.
 subtreeOf :: MemState -> PageId -> Set PageId
@@ -718,6 +759,7 @@ deletePageIn pid st = do
     ( st1
         { pages = Map.withoutKeys st.pages gone
         , drafts = Map.filterWithKey (\(i, _) _ -> not (i `Set.member` gone)) st.drafts
+        , versions = Map.withoutKeys st.versions gone
         , searchText = Map.withoutKeys st.searchText gone
         }
     , ()
@@ -785,3 +827,42 @@ discardDraftIn :: PageId -> Write ()
 discardDraftIn pid st = do
   (_, u) <- draftable st pid
   pure (st {drafts = Map.delete (pid, u) st.drafts}, ())
+
+--------------------------------------------------------------------------------
+-- History
+
+-- | Who saved a version, as its history names them.
+authorOf :: MemState -> UserId -> Author
+authorOf st u = Author {id = u, name = maybe u.text (\x -> x.displayName) (Map.lookup u st.users)}
+
+-- | A page's version as the class gives it.
+versionOf :: MemState -> PageId -> UTCTime -> Saved -> Version
+versionOf st pid at v = Version {V.page = pid, V.updatedAt = at, V.title = v.title, V.body = v.body, V.author = authorOf st <$> v.author}
+
+-- | A page's versions, the latest first.
+listVersionsIn :: PageId -> MemState -> Either WikiError [VersionInfo]
+listVersionsIn pid st = do
+  p <- findPage st pid
+  requireView st (chainOf st p.space)
+  pure [versionInfo (versionOf st pid at v) | (at, v) <- Map.toDescList (Map.findWithDefault mempty pid st.versions)]
+
+-- | A version of a page, once the page is found to be one the user may
+-- view (or, for a restore, edit).
+findVersion :: MemState -> PageId -> UTCTime -> Either WikiError Version
+findVersion st pid at =
+  maybe (Left NotFound) (Right . versionOf st pid at) (Map.lookup pid st.versions >>= Map.lookup at)
+
+-- | One version of a page.
+getVersionIn :: PageId -> UTCTime -> MemState -> Either WikiError Version
+getVersionIn pid at st = do
+  p <- findPage st pid
+  requireView st (chainOf st p.space)
+  findVersion st pid at
+
+-- | Save an earlier version's title and body as the page's latest.
+restoreVersionIn :: PageId -> UTCTime -> UTCTime -> UTCTime -> Write Page
+restoreVersionIn pid at base now st = do
+  p <- findPage st pid
+  requireEdit st (chainOf st p.space)
+  v <- findVersion st pid at
+  savePageIn pid base v.title v.body now st

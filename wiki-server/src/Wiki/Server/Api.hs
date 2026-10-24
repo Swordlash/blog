@@ -50,7 +50,7 @@ import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
-import Wiki.Api.Version (PageVersion (..))
+import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (writeArchive)
@@ -199,6 +199,9 @@ handlers env who =
           , draft = wiki . getDraft
           , saveDraft = \p body -> wiki (saveDraft p body.base body.title body.body)
           , discardDraft = \p -> wiki (discardDraft p) $> NoContent
+          , versions = wiki . listVersions
+          , version = \p at -> wiki (getVersion p at.time)
+          , restore = \p at current -> versioned <$> wiki (restoreVersion p at.time current.time)
           }
     , attachments =
         AttachmentsApi

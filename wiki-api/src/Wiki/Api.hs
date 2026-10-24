@@ -58,7 +58,7 @@ import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
-import Wiki.Api.Version (PageVersion, pageVersion)
+import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
 import Wiki.Api.Zip (Zip)
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Draft (Draft)
@@ -67,6 +67,7 @@ import Wiki.Core.Page (Page)
 import Wiki.Core.Search (SearchHit)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
+import Wiki.Core.Version (Version, VersionInfo)
 
 -- | The whole API, at @\/api\/v1@.
 type Api = "api" :> "v1" :> NamedRoutes WikiApi
@@ -133,7 +134,8 @@ data SpacesApi mode = SpacesApi
   }
   deriving stock (Generic)
 
--- | Pages, by id, with their attachments' uploads and their drafts.
+-- | Pages, by id, with their attachments' uploads, their drafts and their
+-- histories.
 data PagesApi mode = PagesApi
   { save :: mode :- Capture "page" PageId :> IfMatch :> ReqBody '[JSON] PageEdit :> Put '[JSON] (Versioned Page)
   -- ^ @savePage@, against the version in @If-Match@.
@@ -152,6 +154,13 @@ data PagesApi mode = PagesApi
   -- ^ @saveDraft@.
   , discardDraft :: mode :- Capture "page" PageId :> "draft" :> DeleteNoContent
   -- ^ @discardDraft@.
+  , versions :: mode :- Capture "page" PageId :> "versions" :> Get '[JSON] [VersionInfo]
+  -- ^ @listVersions@: the page's history, the latest first.
+  , version :: mode :- Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> Get '[JSON] Version
+  -- ^ @getVersion@: one version, by its time.
+  , restore :: mode :- Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> "restore" :> IfMatch :> Post '[JSON] (Versioned Page)
+  -- ^ @restoreVersion@: save that version's title and body as the page's
+  -- latest, against the version in @If-Match@, as a save is.
   }
   deriving stock (Generic)
 

@@ -32,6 +32,8 @@ spec = describe "JSON" $ do
   roundTrips "ShiftBy" genShiftBy
   roundTrips "DraftEdit" genDraftEdit
   roundTrips "Draft" genDraft
+  roundTrips "VersionInfo" genVersionInfo
+  roundTrips "Version" genVersion
   roundTrips "ImportPlan" genImportPlan
   roundTrips "ImportChoices" genImportChoices
   roundTrips "ImportSummary" genImportSummary

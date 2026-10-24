@@ -8,6 +8,8 @@ module Test.Sample
   , page
   , attachment
   , draft
+  , versionInfo
+  , version
   , hit
   , sessionInfo
   , importPlan
@@ -33,6 +35,7 @@ import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (User (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | A time with a fraction of a second, as a page's version has.
 time :: UTCTime
@@ -94,6 +97,27 @@ draft =
     , body = "# Tour, unsaved"
     , base = time
     , savedAt = later
+    }
+
+-- | The version 'page' is, as its history lists it.
+versionInfo :: VersionInfo
+versionInfo =
+  VersionInfo
+    { page = PageId "p1"
+    , updatedAt = time
+    , title = "Tour"
+    , author = Just Author {id = UserId "u1", name = "Ada"}
+    }
+
+-- | The same version, whole.
+version :: Version
+version =
+  Version
+    { page = PageId "p1"
+    , updatedAt = time
+    , title = "Tour"
+    , body = "# Tour\n\n![A diagram](diagram.png)"
+    , author = Just Author {id = UserId "u1", name = "Ada"}
     }
 
 hit :: SearchHit

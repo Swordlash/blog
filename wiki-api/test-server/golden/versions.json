@@ -1,0 +1,17 @@
+[
+  {
+    "author": {
+      "id": "u1",
+      "name": "Ada"
+    },
+    "page": "p1",
+    "title": "Tour",
+    "updatedAt": "2026-10-24T09:30:12.345678Z"
+  },
+  {
+    "author": null,
+    "page": "p1",
+    "title": "A tour",
+    "updatedAt": "2026-10-25T00:00:00Z"
+  }
+]

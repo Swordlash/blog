@@ -34,6 +34,7 @@ import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetT
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (User (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | Who a request is made as: nobody, or the demo's user with this login
 -- (@admin@, @editor@, @reader@).
@@ -74,6 +75,7 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   attachments
   searching
   drafts
+  history
   neverThrown
 
 --------------------------------------------------------------------------------
@@ -982,6 +984,103 @@ drafts = describe "getDraft, saveDraft and discardDraft" $ do
     run Anonymous (saveDraft (PageId "no-such-page") hello.updatedAt "X" "") >>= (`shouldFailWith` NotFound)
 
 --------------------------------------------------------------------------------
+-- History
+
+-- | A page's history as someone sees it, which must be there to see.
+versionsOf :: (HasCallStack, MonadWiki m) => Run m -> As -> PageId -> IO [VersionInfo]
+versionsOf run who p = run who (listVersions p) >>= ok
+
+-- | Who someone is, as a history names them.
+authorAs :: (HasCallStack, MonadWiki m) => Run m -> As -> IO Author
+authorAs run who =
+  run who currentUser >>= \case
+    Just u -> pure Author {id = u.id, name = u.displayName}
+    Nothing -> assertFailure "expected someone signed in"
+
+history :: (MonadWiki m) => SpecWith (Fixture m)
+history = describe "listVersions, getVersion and restoreVersion" $ do
+  it "start a page's history with the page as it is, saved by nobody known" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    versionsOf run Anonymous hello.id
+      `shouldReturn` [VersionInfo {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, author = Nothing}]
+    run Anonymous (getVersion hello.id hello.updatedAt)
+      `shouldReturn` Right Version {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, body = hello.body, author = Nothing}
+
+  it "keep a version for a page made and for every save, the latest first, each with its author" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    made <- run editor (createPage blog.id Nothing "Kept" "First") >>= ok
+    twice <- run editor (savePage made.id made.updatedAt "Kept" "Second") >>= ok
+    third <- run admin (savePage made.id twice.updatedAt "Kept, again" "Third") >>= ok
+    edgar <- authorAs run editor
+    ada <- authorAs run admin
+    vs <- versionsOf run reader made.id
+    map (\v -> (v.updatedAt, v.title, v.author)) vs
+      `shouldBe` [(third.updatedAt, "Kept, again", Just ada), (twice.updatedAt, "Kept", Just edgar), (made.updatedAt, "Kept", Just edgar)]
+    bodies <- for vs $ \v -> (\x -> x.body) <$> (run Anonymous (getVersion made.id v.updatedAt) >>= ok)
+    bodies `shouldBe` ["Third", "Second", "First"]
+
+  it "make no version for a move or an attachment, and go with a page deleted" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    hello <- pageAt run admin "blog" "hello-world"
+    notes <- pageAt run admin "blog" "notes-on-haskell"
+    _ <- run editor (movePage hello.id blog.id (Just notes.id)) >>= ok
+    _ <- run editor (uploadAttachment hello.id "a.txt" "text/plain" "a") >>= ok
+    length <$> versionsOf run editor hello.id `shouldReturn` 1
+    run editor (deletePage notes.id) >>= ok
+    run editor (listVersions hello.id) >>= (`shouldFailWith` NotFound)
+    run editor (getVersion hello.id hello.updatedAt) >>= (`shouldFailWith` NotFound)
+
+  it "restore a version as a new save of its title and body, keeping every version" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    changed <- run editor (savePage hello.id hello.updatedAt "Changed" "Changed body") >>= ok
+    restored <- run editor (restoreVersion hello.id hello.updatedAt changed.updatedAt) >>= ok
+    (restored.title, restored.body, restored.slug) `shouldBe` (hello.title, hello.body, hello.slug)
+    restored.updatedAt `shouldSatisfy` (> changed.updatedAt)
+    pageAt run Anonymous "blog" "hello-world" `shouldReturn` restored
+    edgar <- authorAs run editor
+    map (\v -> (v.updatedAt, v.title, v.author)) <$> versionsOf run editor hello.id
+      `shouldReturn` [(restored.updatedAt, hello.title, Just edgar), (changed.updatedAt, "Changed", Just edgar), (hello.updatedAt, hello.title, Nothing)]
+
+  it "discard the restorer's draft, as a save does, and keep others'" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    changed <- run editor (savePage hello.id hello.updatedAt "Changed" "") >>= ok
+    _ <- run editor (saveDraft hello.id changed.updatedAt "Changed" "Unsaved") >>= ok
+    _ <- run admin (saveDraft hello.id changed.updatedAt "Changed" "The admin's") >>= ok
+    _ <- run editor (restoreVersion hello.id hello.updatedAt changed.updatedAt) >>= ok
+    run editor (getDraft hello.id) `shouldReturn` Right Nothing
+    (fmap (fmap (\d -> d.body)) <$> run admin (getDraft hello.id)) `shouldReturn` Right (Just "The admin's")
+
+  it "refuse a restore against a version saved over since, and change nothing" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    changed <- run editor (savePage hello.id hello.updatedAt "Changed" "") >>= ok
+    run admin (restoreVersion hello.id hello.updatedAt hello.updatedAt) >>= \case
+      Left (Conflict _) -> pass
+      other -> expectationFailure ("expected Conflict, got " <> show other)
+    pageAt run Anonymous "blog" "hello-world" `shouldReturn` changed
+    length <$> versionsOf run admin hello.id `shouldReturn` 2
+
+  it "show a history to whoever may view the page, and restore for whoever may edit it" $ \(Fixture run) -> do
+    handbook <- pageAt run admin "team" "team-handbook"
+    wiki <- pageAt run admin "team/projects" "the-wiki"
+    tour <- pageAt run admin "docs" "tour"
+    hello <- pageAt run admin "blog" "hello-world"
+    -- Whoever may not view the page learns nothing of its history, not
+    -- even whether a time is one of its versions.
+    run Anonymous (listVersions handbook.id) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (getVersion handbook.id handbook.updatedAt) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (getVersion handbook.id hello.updatedAt) >>= (`shouldFailWith` Forbidden)
+    run reader (listVersions wiki.id) >>= void . ok
+    run reader (getVersion wiki.id wiki.updatedAt) >>= void . ok
+    run reader (getVersion wiki.id hello.updatedAt) >>= (`shouldFailWith` NotFound)
+    run reader (restoreVersion wiki.id wiki.updatedAt wiki.updatedAt) >>= (`shouldFailWith` Forbidden)
+    run editor (restoreVersion tour.id tour.updatedAt tour.updatedAt) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (restoreVersion hello.id hello.updatedAt hello.updatedAt) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (restoreVersion hello.id tour.updatedAt hello.updatedAt) >>= (`shouldFailWith` Forbidden)
+    run editor (restoreVersion hello.id tour.updatedAt hello.updatedAt) >>= (`shouldFailWith` NotFound)
+    run editor (listVersions (PageId "no-such-page")) >>= (`shouldFailWith` NotFound)
+    run editor (restoreVersion (PageId "no-such-page") hello.updatedAt hello.updatedAt) >>= (`shouldFailWith` NotFound)
+
+--------------------------------------------------------------------------------
 -- Errors are values
 
 -- | Every method, asked about what is not there or by someone who may not,
@@ -1014,6 +1113,9 @@ neverThrown = describe "errors" $ do
           , void <$> getDraft p
           , void <$> saveDraft p hello.updatedAt "X" ""
           , discardDraft p
+          , void <$> listVersions p
+          , void <$> getVersion p hello.updatedAt
+          , void <$> restoreVersion p hello.updatedAt hello.updatedAt
           ]
     for_ [Anonymous, admin] $ \who -> for_ (zip [0 :: Int ..] calls) $ \(i, call) -> do
       result <- try (run who call >>= evaluate)

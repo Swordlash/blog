@@ -28,6 +28,8 @@ module Test.Gen
   , genShiftBy
   , genDraftEdit
   , genDraft
+  , genVersionInfo
+  , genVersion
   , genImportPlan
   , genImportChoices
   , genImportSummary
@@ -49,6 +51,7 @@ import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.User (User (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | Any text, Unicode included.
 genText :: Gen Text
@@ -148,6 +151,15 @@ genShiftBy = ShiftBy <$> arbitraryBoundedEnum
 
 genDraftEdit :: Gen DraftEdit
 genDraftEdit = DraftEdit <$> genUtcTime <*> genText <*> genText
+
+genAuthor :: Gen Author
+genAuthor = Author <$> genUserId <*> genText
+
+genVersionInfo :: Gen VersionInfo
+genVersionInfo = VersionInfo <$> genPageId <*> genUtcTime <*> genText <*> oneof [pure Nothing, Just <$> genAuthor]
+
+genVersion :: Gen Version
+genVersion = Version <$> genPageId <*> genUtcTime <*> genText <*> genText <*> oneof [pure Nothing, Just <$> genAuthor]
 
 genDraft :: Gen Draft
 genDraft = Draft <$> genPageId <*> genUserId <*> genText <*> genText <*> genUtcTime <*> genUtcTime

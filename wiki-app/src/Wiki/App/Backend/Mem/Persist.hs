@@ -14,7 +14,10 @@
 -- signed in, and the object URLs a tab has made for attachments, last as
 -- long as the tab does. Drafts ("Wiki.Core.Draft") are kept too, in a store
 -- of their own, though the export has none: the demo's author may close the
--- tab and come back to their draft, which is what drafts are for.
+-- tab and come back to their draft, which is what drafts are for. So are the
+-- pages' versions ("Wiki.Core.Version"), every one of them, a record each:
+-- one full title and body per save, so that a page saved a hundred times
+-- takes a hundred times its size.
 --
 -- Everything here is pure: "Wiki.App.Backend.Mem" reads and writes the
 -- store, and works out what to write from two sets of 'records' with
@@ -30,6 +33,7 @@ module Wiki.App.Backend.Mem.Persist
   , grantsStore
   , metaStore
   , draftsStore
+  , versionsStore
   , storeNames
 
     -- * Records
@@ -45,14 +49,16 @@ import Control.Monad.Fail (fail)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
+import Data.Map.Lazy qualified as LazyMap
 import Data.Map.Merge.Strict qualified as Merge
 import Data.Map.Strict qualified as Map
 import Data.Time (Day (ModifiedJulianDay), UTCTime (..))
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Numeric.Natural (Natural)
 import Protolude
 import Web.Storage.IndexedDB (Database (..), StoreName)
 import Web.Storage.IndexedDB qualified as IDB
-import Wiki.App.Backend.Mem.State (MemState (..), emptyState, prepareSearch)
+import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions, emptyState, prepareSearch)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export
 import Wiki.Core.Id (BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
@@ -64,11 +70,11 @@ import Wiki.Core.User (Group (..), User (..))
 -- | The database a wiki is kept in under this name. Its stores are made
 -- when it is first opened; adding one later is a version bump, on which
 -- IndexedDB makes the new store and keeps the others with what they hold.
--- Version 2 added 'draftsStore'.
+-- Version 2 added 'draftsStore', version 3 'versionsStore'.
 memDatabase :: Text -> Database
-memDatabase name = Database {name, version = 2, stores = storeNames}
+memDatabase name = Database {name, version = 3, stores = storeNames}
 
-usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore :: StoreName
+usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore :: StoreName
 
 -- | A user's record, under their id.
 usersStore = "users"
@@ -96,13 +102,22 @@ metaStore = "meta"
 -- | Each user's draft of a page, under 'draftKey'.
 draftsStore = "drafts"
 
+-- | Each version of each page, under 'versionKey'. A database from before
+-- there was this store has none: its pages' histories start with the pages
+-- as they are ('completeVersions').
+versionsStore = "versions"
+
 -- | Every store of 'memDatabase'.
 storeNames :: [StoreName]
-storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore]
+storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore]
 
 -- | A draft's key: its page's id and its author's, which are one draft's.
 draftKey :: Draft -> Text
 draftKey d = d.page.text <> "/" <> d.author.text
+
+-- | A version's key: its page's id and its time, which are one version's.
+versionKey :: PageId -> UTCTime -> Text
+versionKey page at = page.text <> "/" <> toS (iso8601Show at)
 
 -- | What a store holds, by store and key.
 type Records = Map StoreName (Map Text ByteString)
@@ -129,7 +144,30 @@ records st =
           ]
       )
     , (draftsStore, Map.fromList [(draftKey d, encodeJson (encodeDraft d)) | d <- Map.elems st.drafts])
+    , -- Lazily: a version never changes once made, so 'changes' writes one
+      -- only when its key is new, and only then is its record made. Every
+      -- write would otherwise encode the whole history again.
+      (versionsStore, LazyMap.fromList [(versionKey page at, encodeJson (encodeVersion page at v)) | (page, kept) <- Map.toList st.versions, (at, v) <- Map.toList kept])
     ]
+
+-- | A version's record, with named fields, as a draft's.
+encodeVersion :: PageId -> UTCTime -> Saved -> Value
+encodeVersion page at v =
+  object
+    [ "page" .= page
+    , "updatedAt" .= at
+    , "title" .= v.title
+    , "body" .= v.body
+    , "author" .= v.author
+    ]
+
+-- | A version's record: its page, its time and what was saved.
+parseVersion :: Value -> Parser (PageId, UTCTime, Saved)
+parseVersion = withObject "version" $ \o -> do
+  page <- o .: "page"
+  at <- o .: "updatedAt"
+  saved <- Saved <$> o .: "title" <*> o .: "body" <*> o .:? "author"
+  pure (page, at, saved)
 
 -- | A draft's record, with named fields, as the export's records have.
 encodeDraft :: Draft -> Value
@@ -177,6 +215,14 @@ spaceGrants st = Map.fromListWith (flip (<>)) [(g.space, [g]) | g <- st.grants.s
 -- are left alone, so that one change to the wiki writes only what it
 -- changed. From what the stores hold to a whole wiki's records, it writes
 -- that wiki out over whatever was there.
+--
+-- A version is never changed once it is made, so a version's record under
+-- a key both have is taken to be the same without being looked at (or
+-- made: see 'records'). Its key names its page and its time, which no
+-- other version of the page has: a save is always later than the one
+-- before, ids are never made twice, and a whole wiki written over another
+-- (an import) gives one of its pages the time and id of the other's only
+-- if it is that very version, exported and brought back.
 changes :: Records -> Records -> [IDB.Write]
 changes before after =
   concat . Map.elems $
@@ -192,7 +238,7 @@ changes before after =
         Merge.merge
           (Merge.mapMissing (\k _ -> (store, k, Nothing)))
           (Merge.mapMissing (\k v -> (store, k, Just v)))
-          (Merge.zipWithMaybeMatched (\k v w -> if v == w then Nothing else Just (store, k, Just w)))
+          (Merge.zipWithMaybeMatched (\k v w -> if store == versionsStore || v == w then Nothing else Just (store, k, Just w)))
           old
           new
 
@@ -224,12 +270,13 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
     let firstPage = fromMaybe (UTCTime (ModifiedJulianDay 0) 0) (minimumMay [p.createdAt | p <- Map.elems pages])
     spaces <- keyed spacesStore (parseSpace (spaceCreatedDefault firstPage (Map.elems pages))) (\s -> s.id.text) SpaceId
     kept <- keyed draftsStore parseDraft draftKey identity
+    history <- keyed versionsStore parseVersion (\(page, at, _) -> versionKey page at) identity
     grants <- fmap concat . for (Map.toList (holding grantsStore)) $ \(key, bytes) -> do
       gs <- decoding grantsStore key (listOf parseSpaceGrant) bytes
       if all (\g -> g.space.text == key) gs
         then Right gs
         else Left (failure grantsStore key "has grants on another space")
-    pure . prepareSearch $
+    pure . completeVersions . prepareSearch $
       emptyState
         { users
         , groups = map fst groupsAndMembers
@@ -238,6 +285,9 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
         , pages
         , blobs = Map.mapKeys BlobId (holding attachmentsStore)
         , drafts = Map.fromList [((d.page, d.author), d) | d <- Map.elems kept]
+        , -- The versions of pages that are there: a page deleted takes its
+          -- versions with it in one transaction, so there are no others.
+          versions = Map.intersection (Map.fromListWith (<>) [(page, Map.singleton at v) | (page, at, v) <- Map.elems history]) pages
         , grants = Grants {global, spaces = grants}
         , counter
         }

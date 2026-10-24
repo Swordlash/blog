@@ -22,7 +22,7 @@ import Wiki.App.Backend (MonadWiki (..), WikiError)
 import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
 import Wiki.App.Backend.Mem.Persist (memDatabase, spacesStore)
-import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions)
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive, encodeJson, readArchive, writeArchive)
@@ -71,7 +71,7 @@ edited = do
     _ <- ok' =<< savePage page.id page.updatedAt "Exported page" "# Exported, then saved"
     pass
   st <- readIORef ref
-  pure st {current = Nothing, objectUrls = mempty}
+  pure (withoutHistory st {current = Nothing, objectUrls = mempty})
   where
     ok' :: (MonadIO m) => Either WikiError a -> m a
     ok' = either (\e -> liftIO (assertFailure ("expected success, got " <> show e))) pure
@@ -90,7 +90,13 @@ ordered = do
     _ <- either (panic . show) pure =<< setSpaceOrder team.id ChildPages ByHand
     made <- either (panic . show) pure =<< createPage team.id Nothing "Second" ""
     either (panic . show) (const pass) =<< shiftPage made.id ShiftToTop
-  (\x -> x {current = Nothing}) <$> readIORef ref
+  (\x -> withoutHistory x {current = Nothing}) <$> readIORef ref
+
+-- | The wiki with each page's history as an import starts it: the page as
+-- it is, saved by nobody known. An archive has no history, so this is the
+-- wiki an archive of it reads back as.
+withoutHistory :: MemState -> MemState
+withoutHistory st = completeVersions st {versions = mempty}
 
 -- | The files every archive has, besides the attachments'.
 recordFiles :: [Text]
@@ -276,6 +282,22 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       st <- edited
       let files = filesOf (toArchive goldenTime "test" st)
       refused "pages.json" (readArchive (Map.insert "pages.json" "{ not json" files))
+
+  it "leaves the pages' histories out, and starts each again with the page as it is" $ do
+    ref <- newMemWiki (demoState demoNow)
+    saved <- runMemWiki ref $ do
+      switchUser (Just (UserId "user-admin"))
+      docs <- either (panic . show) pure =<< getSpace (path "docs")
+      tour <- either (panic . show) pure =<< getPage docs.id (path "tour")
+      either (panic . show) pure =<< savePage tour.id tour.updatedAt "Tour" "Saved once more"
+    st <- readIORef ref
+    Map.size (Map.findWithDefault mempty saved.id st.versions) `shouldBe` 2
+    let files = filesOf (toArchive goldenTime "test" st)
+    Map.keys files `shouldSatisfy` all (\f -> f `elem` recordFiles || "attachments/" `T.isPrefixOf` f)
+    back <- either (panic . toS) pure (readArchive files)
+    let imported = fromArchive back
+    Map.map Map.keys imported.versions `shouldBe` Map.map (\p -> [p.updatedAt]) imported.pages
+    Map.lookup saved.id imported.versions `shouldBe` Just (Map.singleton saved.updatedAt Saved {title = "Tour", body = "Saved once more", author = Nothing})
 
   describe "importing into a kept wiki" $ do
     it "replaces the wiki in memory and in the database, staying signed in as before" $ do

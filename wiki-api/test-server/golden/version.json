@@ -1,0 +1,10 @@
+{
+  "author": {
+    "id": "u1",
+    "name": "Ada"
+  },
+  "body": "# Tour\n\n![A diagram](diagram.png)",
+  "page": "p1",
+  "title": "Tour",
+  "updatedAt": "2026-10-24T09:30:12.345678Z"
+}

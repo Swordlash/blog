@@ -20,6 +20,7 @@ module Wiki.App.Backend.Http.Request
     Request (..)
   , Body (..)
   , get
+  , post
   , delete
   , withJson
   , ifMatch
@@ -68,6 +69,11 @@ get :: Text -> Request
 get url = Request {method = "GET", url, headers = [], body = NoBody}
 
 -- | A @DELETE@ of an address.
+-- | A @POST@ with nothing in its body: an action whose arguments are all in
+-- its address and headers.
+post :: Text -> Request
+post url = (get url) {method = "POST"}
+
 delete :: Text -> Request
 delete url = (get url) {method = "DELETE"}
 

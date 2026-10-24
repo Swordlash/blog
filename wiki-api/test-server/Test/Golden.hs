@@ -20,6 +20,7 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Types
 import Wiki.Core.Id (PageId (..), SpaceId (..))
+import Wiki.Core.Version (VersionInfo (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 
 -- | A golden file: its name, and the value it holds.
@@ -43,6 +44,8 @@ spec = describe "golden JSON" $ do
     golden "page" Sample.page
     golden "attachment" Sample.attachment
     golden "draft" Sample.draft
+    golden "versions" [Sample.versionInfo, Sample.versionInfo {updatedAt = Sample.later, title = "A tour", author = Nothing}]
+    golden "version" Sample.version
     golden "search-hits" [Sample.hit]
     golden "import-plan" Sample.importPlan
     golden "import-summary" Sample.importSummary

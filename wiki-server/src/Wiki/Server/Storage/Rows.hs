@@ -29,6 +29,9 @@ module Wiki.Server.Storage.Rows
   , loadAllPages
   , loadAttachment
   , loadDraft
+  , VersionRow (..)
+  , loadVersions
+  , loadVersion
   , SearchRow (..)
   , loadSearchRows
 
@@ -353,6 +356,41 @@ loadDraft c page author = head <$> queryWith row c "SELECT title, body, base, sa
       base <- stamp
       savedAt <- stamp
       pure Draft {page, author, title, body, base, savedAt}
+
+-- | A version of a page as its row has it, with the display name of its
+-- author if they are one of the users.
+data VersionRow = VersionRow
+  { updatedAt :: UTCTime
+  , title :: Text
+  , body :: Text
+  , author :: Maybe UserId
+  , authorName :: Maybe Text
+  }
+
+-- | Every version of a page, in no particular order: the times are text,
+-- whose order is not the times' (a time without a fraction sorts after one
+-- with), so the caller orders them. Without their bodies, which a history's
+-- list does not show.
+loadVersions :: Connection -> PageId -> IO [VersionRow]
+loadVersions c page =
+  queryWith
+    versionRow
+    c
+    "SELECT v.updated_at, v.title, '', v.author, u.display_name FROM page_versions v LEFT JOIN users u ON u.id = v.author WHERE v.page_id = ?"
+    (Only page.text)
+
+-- | One version of a page, whole, by its time.
+loadVersion :: Connection -> PageId -> UTCTime -> IO (Maybe VersionRow)
+loadVersion c page at =
+  head
+    <$> queryWith
+      versionRow
+      c
+      "SELECT v.updated_at, v.title, v.body, v.author, u.display_name FROM page_versions v LEFT JOIN users u ON u.id = v.author WHERE v.page_id = ? AND v.updated_at = ?"
+      (page.text, Stamp at)
+
+versionRow :: RowParser VersionRow
+versionRow = VersionRow <$> stamp <*> field <*> field <*> (fmap UserId <$> field) <*> field
 
 -- | A page as the search reads it: its place, its title, and its text
 -- prepared when it was saved.

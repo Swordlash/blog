@@ -96,6 +96,7 @@ import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
 import Wiki.Core.User (User (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
 import Wiki.Server.Storage.Backup (backupFiles)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
@@ -400,6 +401,9 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   getDraft = run Reads . getDraftTx
   saveDraft pid base title = run Writes . saveDraftTx pid base title
   discardDraft = run Writes . discardDraftTx
+  listVersions = run Reads . listVersionsTx
+  getVersion pid = run Reads . getVersionTx pid
+  restoreVersion pid at = run Writes . restoreVersionTx pid at
 
 -- | An attachment someone may view (they may view its page), and the file
 -- its bytes are in when the storage keeps them; 'Nothing' for one that lives
@@ -853,6 +857,47 @@ discardDraftTx :: PageId -> Tx ()
 discardDraftTx pid = do
   u <- draftable pid
   db $ \c -> execute c "DELETE FROM drafts WHERE page_id = ? AND author = ?" (pid.text, u.text)
+
+--------------------------------------------------------------------------------
+-- History
+
+-- | A version as the class gives it, its author named: a user by their
+-- display name, the administrator as 'administratorUser', and anyone else
+-- (no longer a user) by their id.
+versionOf :: PageId -> VersionRow -> Version
+versionOf page r =
+  Version {page, updatedAt = r.updatedAt, title = r.title, body = r.body, author = named <$> r.author}
+  where
+    named u
+      | u == administratorId = Author {id = u, name = administratorUser.displayName}
+      | otherwise = Author {id = u, name = fromMaybe u.text r.authorName}
+
+listVersionsTx :: PageId -> Tx [VersionInfo]
+listVersionsTx pid = do
+  p <- findNode pid
+  requireView =<< chainOfPage p
+  map (versionInfo . versionOf pid) . sortOn (Down . (\r -> r.updatedAt)) <$> db (`loadVersions` pid)
+
+-- | A version of a page someone may view (or, for a restore, edit): the
+-- page's permission checked first, so that whoever may not see the page
+-- learns nothing of its history.
+findVersion :: PageId -> UTCTime -> Tx Version
+findVersion pid at = db (\c -> loadVersion c pid at) >>= maybe (failWith NotFound) (pure . versionOf pid)
+
+getVersionTx :: PageId -> UTCTime -> Tx Version
+getVersionTx pid at = do
+  p <- findNode pid
+  requireView =<< chainOfPage p
+  findVersion pid at
+
+-- | Restore a version: a save of its title and body, as any save, in this
+-- transaction, against the version the restorer saw.
+restoreVersionTx :: PageId -> UTCTime -> UTCTime -> Tx Page
+restoreVersionTx pid at base = do
+  p <- findNode pid
+  requireEdit =<< chainOfPage p
+  v <- findVersion pid at
+  savePageTx pid base v.title v.body
 
 --------------------------------------------------------------------------------
 -- Whole wikis

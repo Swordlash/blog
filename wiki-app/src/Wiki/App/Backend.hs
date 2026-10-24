@@ -59,7 +59,10 @@
 -- * moving a child up or down its list by hand needs 'Edit' on the space
 --   whose list it is: a page's own space, a subspace's parent;
 -- * reading, saving and discarding one's draft of a page need someone signed
---   in, with 'Edit' on the page's space.
+--   in, with 'Edit' on the page's space;
+-- * reading a page's history ('listVersions', 'getVersion') needs what
+--   reading the page does, 'View' on its space, and restoring a version
+--   ('restoreVersion') what saving it does, 'Edit'.
 --
 -- Whoever creates a space is granted 'AdministerSpace' on it, so that a user
 -- with 'CreateSpaces' alone can do something with the space they made.
@@ -141,6 +144,7 @@ import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
 import Wiki.Core.User (User (..))
+import Wiki.Core.Version (Version, VersionInfo)
 
 -- | Why a request was not carried out. See the module's Haddock for which is
 -- returned when.
@@ -422,6 +426,37 @@ class (Monad m) => MonadWiki m where
   discardDraft :: PageId -> m (Either WikiError ())
   default discardDraft :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> m (Either WikiError ())
   discardDraft = lift . discardDraft
+
+  -- * History
+
+  -- | A page's history ("Wiki.Core.Version"): every version of it, the
+  -- latest first, which is the page as it is now. A page has a version for
+  -- each save and one for when it was made; one that came in whole (from an
+  -- import, or kept from before versions were) starts from that. Moving a
+  -- page, and its attachments, make no version: a version is a title and a
+  -- body. The versions go with the page when it is deleted.
+  listVersions :: PageId -> m (Either WikiError [VersionInfo])
+  default listVersions :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> m (Either WikiError [VersionInfo])
+  listVersions = lift . listVersions
+
+  -- | One version of a page, by its @updatedAt@ then. A page that is not
+  -- there is 'NotFound', one the user may not view 'Forbidden', and only
+  -- then a time that is no version of it 'NotFound', so that whoever may
+  -- not see a page learns nothing of its history.
+  getVersion :: PageId -> UTCTime -> m (Either WikiError Version)
+  default getVersion :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> UTCTime -> m (Either WikiError Version)
+  getVersion p = lift . getVersion p
+
+  -- | Make an earlier version of a page its current one again: a save of
+  -- that version's title and body, as 'savePage' saves, which the history
+  -- keeps as a new version (nothing in between is lost). The second time is
+  -- the version to restore, the third the @updatedAt@ of the page as the
+  -- restorer saw it, checked as a save's is: a page saved since is a
+  -- 'Conflict'. Like any save it discards the restorer's draft of the page.
+  -- The errors come as 'getVersion''s, with 'Edit' in place of 'View'.
+  restoreVersion :: PageId -> UTCTime -> UTCTime -> m (Either WikiError Page)
+  default restoreVersion :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> UTCTime -> UTCTime -> m (Either WikiError Page)
+  restoreVersion p v = lift . restoreVersion p v
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadWiki m) => MonadWiki (HalogenM st act slots output m)

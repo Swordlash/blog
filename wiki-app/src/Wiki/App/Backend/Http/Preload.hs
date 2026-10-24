@@ -28,6 +28,8 @@ module Wiki.App.Backend.Http.Preload
   , PageAt (..)
   , DraftOf (..)
   , SearchOf (..)
+  , VersionsOf (..)
+  , VersionOf (..)
   , Answer (..)
   , preloadId
   , toPreload
@@ -44,6 +46,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict', encode, obje
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (Pair, Parser, Value)
 import Data.Map.Strict qualified as Map
+import Data.Time (UTCTime)
 import Halogen.IO.Util (readEmbedded)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude
@@ -59,6 +62,7 @@ import Wiki.Core.Page (Page)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
+import Wiki.Core.Version (Version, VersionInfo)
 
 -- | The id of the page's script that holds the payload.
 preloadId :: Text
@@ -75,6 +79,8 @@ data Preload = Preload
   , pagesAt :: [PageAt]
   , drafts :: [DraftOf]
   , searches :: [SearchOf]
+  , versionLists :: [VersionsOf]
+  , versions :: [VersionOf]
   }
   deriving stock (Eq, Show, Generic)
 
@@ -106,6 +112,14 @@ data SearchOf = SearchOf {query :: SearchQuery, hits :: [SearchHit]}
 instance ToJSON SearchOf
 
 instance FromJSON SearchOf
+
+-- | A page's history ('Wiki.App.Backend.listVersions').
+data VersionsOf = VersionsOf {page :: PageId, versions :: Answer [VersionInfo]}
+  deriving stock (Eq, Show)
+
+-- | One version of a page ('Wiki.App.Backend.getVersion').
+data VersionOf = VersionOf {page :: PageId, updatedAt :: UTCTime, version :: Answer Version}
+  deriving stock (Eq, Show)
 
 -- | What a read gave, or the API's refusal: written as the read's own field
 -- (@space@, @pages@, …) or as @error@, the API's error body.
@@ -147,6 +161,18 @@ instance ToJSON DraftOf where
 instance FromJSON DraftOf where
   parseJSON v = withObject "DraftOf" (\o -> DraftOf <$> o .: "page" <*> parseAnswer "draft" v) v
 
+instance ToJSON VersionsOf where
+  toJSON v = object (("page" .= v.page) : answerFields "versions" v.versions)
+
+instance FromJSON VersionsOf where
+  parseJSON v = withObject "VersionsOf" (\o -> VersionsOf <$> o .: "page" <*> parseAnswer "versions" v) v
+
+instance ToJSON VersionOf where
+  toJSON v = object (["page" .= v.page, "updatedAt" .= v.updatedAt] <> answerFields "version" v.version)
+
+instance FromJSON VersionOf where
+  parseJSON v = withObject "VersionOf" (\o -> VersionOf <$> o .: "page" <*> o .: "updatedAt" <*> parseAnswer "version" v) v
+
 -- | What the backend kept, as the page carries it: every answer it would
 -- give at once, and no page twice.
 toPreload :: Cache -> Preload
@@ -165,6 +191,8 @@ toPreload c =
         ]
     , drafts = [DraftOf {page, draft = toAnswer d} | (page, d) <- Map.toList c.drafts, kept d]
     , searches = [SearchOf {query, hits} | (query, hits) <- c.searches]
+    , versionLists = [VersionsOf {page, versions = toAnswer vs} | (page, vs) <- Map.toList c.versionLists, kept vs]
+    , versions = [VersionOf {page, updatedAt, version = toAnswer v} | ((page, updatedAt), v) <- Map.toList c.versions, kept v]
     }
 
 -- | The backend's cache as the page's payload says.
@@ -178,6 +206,8 @@ fromPreload p =
     , pageAt = Map.fromList [((x.space, x.path), fromAnswer x.page) | x <- p.pagesAt]
     , drafts = Map.fromList [(d.page, fromAnswer d.draft) | d <- p.drafts]
     , searches = [(s.query, s.hits) | s <- p.searches]
+    , versionLists = Map.fromList [(v.page, fromAnswer v.versions) | v <- p.versionLists]
+    , versions = Map.fromList [((v.page, v.updatedAt), fromAnswer v.version) | v <- p.versions]
     }
 
 -- | Only what 'kept' keeps is ever written, which is an answer or a

@@ -38,11 +38,14 @@ module Wiki.App.Backend.Http.Cache
   , withPageAt
   , withDraft
   , withSearch
+  , withVersions
+  , withVersion
   , afterWrite
   )
 where
 
 import Data.Map.Strict qualified as Map
+import Data.Time (UTCTime)
 import Protolude
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.Draft (Draft)
@@ -52,6 +55,7 @@ import Wiki.Core.Path (findChild, resolvePath)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
+import Wiki.Core.Version (Version, VersionInfo)
 
 -- | Each read's answer, as it came back: what it gave, or the refusal it
 -- was (see 'kept').
@@ -71,11 +75,27 @@ data Cache = Cache
   , searches :: [(SearchQuery, [SearchHit])]
   -- ^ 'Wiki.App.Backend.searchPages', by query, the latest first: a few
   -- at most, since a write lets them go.
+  , versionLists :: Map PageId (Either WikiError [VersionInfo])
+  -- ^ 'Wiki.App.Backend.listVersions', by page.
+  , versions :: Map (PageId, UTCTime) (Either WikiError Version)
+  -- ^ 'Wiki.App.Backend.getVersion', by page and time. A version never
+  -- changes, but it goes with its page, so these are let go with the rest.
   }
   deriving stock (Eq, Show)
 
 emptyCache :: Cache
-emptyCache = Cache {session = Nothing, spaces = Nothing, spaceAt = mempty, pages = mempty, pageAt = mempty, drafts = mempty, searches = []}
+emptyCache =
+  Cache
+    { session = Nothing
+    , spaces = Nothing
+    , spaceAt = mempty
+    , pages = mempty
+    , pageAt = mempty
+    , drafts = mempty
+    , searches = []
+    , versionLists = mempty
+    , versions = mempty
+    }
 
 -- | Whether a read's answer is kept: what it gave, and a refusal the
 -- wiki's content or rules decided ('NotFound', 'Forbidden'); not that the
@@ -123,6 +143,12 @@ withDraft pid d c = c {drafts = Map.alter (const d) pid c.drafts}
 -- | The hits of a query, in place of any kept for it before.
 withSearch :: SearchQuery -> [SearchHit] -> Cache -> Cache
 withSearch q hits c = c {searches = (q, hits) : filter ((/= q) . fst) c.searches}
+
+withVersions :: PageId -> Either WikiError [VersionInfo] -> Cache -> Cache
+withVersions pid vs c = c {versionLists = Map.insert pid vs c.versionLists}
+
+withVersion :: PageId -> UTCTime -> Either WikiError Version -> Cache -> Cache
+withVersion pid at v c = c {versions = Map.insert (pid, at) v c.versions}
 
 -- | The cache after a write that changed the wiki: nothing in it can be
 -- trusted any more.

@@ -15,9 +15,14 @@
 -- holds without having kept the header, and read the time back from it.
 -- It is a strong tag: a weak one (@W\/\"…\"@) is refused, since a save
 -- compares versions exactly.
+--
+-- A version of a page in its history ("Wiki.Core.Version") is named by the
+-- same time, in the path of the endpoints that read and restore it
+-- ('VersionTime'): written as in an entity tag, but without the quotes.
 module Wiki.Api.Version
   ( PageVersion (..)
   , pageVersion
+  , VersionTime (..)
   )
 where
 
@@ -52,3 +57,17 @@ instance FromHttpApiData PageVersion where
       (Left ("not a page's version: " <> raw))
       (Right . PageVersion)
       (iso8601ParseM (toS inner))
+
+-- | A version of a page in its history, by its @updatedAt@, as a segment of
+-- a path: ISO 8601 with every digit of the fraction, so that the time read
+-- back is the very time of the version, which is looked up by equality.
+-- (http-api-data's own instance for 'UTCTime' is not used, so that the
+-- address does not depend on how it writes a fraction.)
+newtype VersionTime = VersionTime {time :: UTCTime}
+  deriving stock (Eq, Ord, Show)
+
+instance ToHttpApiData VersionTime where
+  toUrlPiece (VersionTime t) = toS (iso8601Show t)
+
+instance FromHttpApiData VersionTime where
+  parseUrlPiece raw = maybe (Left ("not a version's time: " <> raw)) (Right . VersionTime) (iso8601ParseM (toS raw))

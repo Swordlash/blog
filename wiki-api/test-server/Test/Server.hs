@@ -29,7 +29,7 @@ import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, searchQueryOf, searchUrl)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
-import Wiki.Api.Version (PageVersion (..), pageVersion)
+import Wiki.Api.Version (PageVersion (..), VersionTime (..), pageVersion)
 import Wiki.Core.Attachment qualified as Attachment
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Draft qualified as Draft
@@ -92,6 +92,13 @@ stubs =
           , draft = \p -> pure (if p == Sample.page.id then Just Sample.draft else Nothing)
           , saveDraft = \p body -> pure Sample.draft {Draft.page = p, Draft.base = body.base, Draft.title = body.title, Draft.body = body.body}
           , discardDraft = \_ -> pure NoContent
+          , versions = \p -> if p == Sample.page.id then pure [Sample.versionInfo] else refuse NotFound
+          , version = \p at ->
+              if p == Sample.page.id && at.time == Sample.time then pure Sample.version else refuse NotFound
+          , restore = \p at current ->
+              if current /= pageVersion Sample.page
+                then refuse (Conflict "The page has been saved since.")
+                else pure (versioned Sample.page {Page.id = p, Page.title = "Restored from " <> toUrlPiece at, Page.updatedAt = Sample.later})
           }
     , attachments =
         AttachmentsApi
@@ -263,6 +270,26 @@ spec = describe "a server of the API's type" $ do
     it "saves and discards one" $ do
       answers (sendJson methodPut (links.pages.saveDraft p) DraftEdit {base = Sample.time, title = "T", body = "B"}) 200 Sample.draft {Draft.title = "T", Draft.body = "B"}
       (status <$> request methodDelete (links.pages.discardDraft p) [] "") `shouldReturn` 204
+
+  describe "versions" $ do
+    it "lists a page's history, and gives one version by its time" $ do
+      answers (getAt (links.pages.versions p)) 200 [Sample.versionInfo]
+      answers (getAt (links.pages.version p (VersionTime Sample.time))) 200 Sample.version
+      answers (getAt (links.pages.version p (VersionTime Sample.later))) 404 NotFound
+      answers (getAt (links.pages.versions (PageId "p2"))) 404 NotFound
+
+    it "writes a version's time in its address with every digit of its fraction, colons escaped" $
+      links.pages.version p (VersionTime Sample.time) `shouldBe` "api/v1/pages/p1/versions/2026-10-24T09%3A30%3A12.345678Z"
+
+    it "restores one against the version in If-Match, answering with the new version" $ do
+      r <- request methodPost (links.pages.restore p (VersionTime Sample.time)) [("If-Match", encodeUtf8 etag)] ""
+      status r `shouldBe` 200
+      header "ETag" r `shouldBe` Just (encodeUtf8 (toUrlPiece (PageVersion Sample.later)))
+      (\(x :: Page) -> x.title) <$> jsonBody r `shouldBe` Just "Restored from 2026-10-24T09:30:12.345678Z"
+      stale <- request methodPost (links.pages.restore p (VersionTime Sample.time)) [("If-Match", "\"2020-01-01T00:00:00Z\"")] ""
+      (status stale, jsonBody stale) `shouldBe` (409, Just (Conflict "The page has been saved since."))
+      without <- request methodPost (links.pages.restore p (VersionTime Sample.time)) [] ""
+      status without `shouldBe` 400
 
   describe "attachments" $ do
     it "uploads a file as a multipart form, its name and type from its part" $

@@ -35,6 +35,7 @@ import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (User (..))
+import Wiki.Core.Version (Version (..), VersionInfo (..))
 
 seed :: MemState
 seed = demoState demoNow
@@ -190,6 +191,27 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       tour <- runKept reopened (getPage docs.id (path "tour")) >>= ok
       _ <- runKept reopened (saveDraft tour.id tour.updatedAt "Tour" "A draft") >>= ok
       shouldReload db reopened.wiki
+
+    it "reads a database of version 2, from before versions, starting each page's history with the page as it is" $ do
+      db <- freshDatabase
+      -- What a version-2 demo wrote: every record but the versions, in a
+      -- database without their store.
+      let versionTwo = db {version = 2, stores = filter (/= versionsStore) db.stores}
+      runMemDOM (IDB.writeMany versionTwo (changes mempty (Map.delete versionsStore (records seed))))
+      reopened <- open db
+      reopened.found `shouldBe` Restored
+      let run :: MemWiki IO x -> IO x
+          run = runKept reopened
+      run (switchUser (Just (UserId "user-admin")))
+      docs <- run (getSpace (path "docs")) >>= ok
+      tour <- run (getPage docs.id (path "tour")) >>= ok
+      map (\v -> (v.updatedAt, v.author)) <$> (run (listVersions tour.id) >>= ok) `shouldReturn` [(tour.updatedAt, Nothing)]
+      saved <- run (savePage tour.id tour.updatedAt "Tour" "Saved after the upgrade") >>= ok
+      shouldReload db reopened.wiki
+      again <- open db
+      versions <- runKept again (switchUser (Just (UserId "user-admin")) >> listVersions tour.id) >>= ok
+      map (\v -> v.updatedAt) versions `shouldBe` [saved.updatedAt, tour.updatedAt]
+      runKept again (getVersion tour.id tour.updatedAt) >>= ok >>= \v -> v.body `shouldBe` tour.body
 
     it "keeps nothing where there is no IndexedDB, and says why" $ do
       db <- freshDatabase

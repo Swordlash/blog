@@ -12,7 +12,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Numeric.Natural (Natural)
 import Protolude
-import Wiki.App.Backend.Mem.State (MemState (..), prepareSearch)
+import Wiki.App.Backend.Mem.State (MemState (..), completeVersions, prepareSearch)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Id
@@ -37,10 +37,11 @@ toArchive createdAt app st =
 
 -- | The wiki an archive holds, with nobody signed in. Its ids are the
 -- archive's, and the counter new ids are made from starts after the
--- largest of them ('nextCounter').
+-- largest of them ('nextCounter'). An archive has no history: each page's
+-- starts with the page as it is in it ('completeVersions').
 fromArchive :: Archive -> MemState
 fromArchive a =
-  prepareSearch st {counter = nextCounter st}
+  completeVersions (prepareSearch st {counter = nextCounter st})
   where
     st =
       MemState
@@ -55,6 +56,7 @@ fromArchive a =
         , -- An archive has no drafts: they are their authors' own, and the
           -- pages they were written for are not these.
           drafts = mempty
+        , versions = mempty
         , searchText = mempty
         , current = Nothing
         , counter = 1

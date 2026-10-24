@@ -181,6 +181,9 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   getDraft = query . getDraftIn
   saveDraft pid base title body = writeAt (saveDraftIn pid base title body)
   discardDraft = write . discardDraftIn
+  listVersions = query . listVersionsIn
+  getVersion pid = query . getVersionIn pid
+  restoreVersion pid at base = writeAt (restoreVersionIn pid at base)
   attachmentUrl a = case a.source of
     SourceUrl url -> pure url
     SourceBlob blob ->

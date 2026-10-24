@@ -72,6 +72,7 @@ import Wiki.Api.Links (links, searchUrl)
 import Wiki.Api.Links qualified as Links
 import Wiki.Api.Types
 import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
+import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError)
 import Wiki.App.Backend.Http.Cache
 import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, ifMatch, multipart, multipartForm, withJson)
@@ -298,6 +299,10 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
     result <- answerNothing <$> call (R.delete (links.pages.discardDraft pid))
     modifyCache (withDraft pid (either (const Nothing) (const (Just (Right Nothing))) result))
     pure result
+  listVersions pid = cached (\c -> Map.lookup pid c.versionLists) (R.get (links.pages.versions pid)) (withVersions pid)
+  getVersion pid at =
+    cached (\c -> Map.lookup (pid, at) c.versions) (R.get (links.pages.version pid (VersionTime at))) (withVersion pid at)
+  restoreVersion pid at base = write (ifMatch base (R.post (links.pages.restore pid (VersionTime at))))
 
 -- | What has been read answers at once; anything else would wait, unless
 -- the transport answers at once itself ('newImmediateHttpEnv').

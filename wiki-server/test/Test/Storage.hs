@@ -7,7 +7,7 @@ import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
-import Database.SQLite.Simple (Only (..), query, query_)
+import Database.SQLite.Simple (Only (..), execute, query, query_)
 import Protolude
 import System.Directory (doesFileExist)
 import System.Directory qualified as Directory
@@ -24,6 +24,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), bodyText, searchQuery)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Blobs (blobFile, blobOf, storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir)
@@ -119,6 +120,36 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
       _ <- runSqliteWiki st editor (deletePage made.id) >>= ok
       gone <- withDatabase st $ \c -> query c "SELECT count(*) FROM page_versions WHERE page_id = ?" (Only made.id.text)
       gone `shouldBe` [Only (0 :: Int)]
+
+  it "name each version's author: a user by their name, the administrator, someone gone by their id, nobody for an import" $
+    withDemo $ \st -> do
+      hello <- pageIn st "blog" "hello-world"
+      editor <- whoFor st (As "editor")
+      byEditor <- runSqliteWiki st editor (savePage hello.id hello.updatedAt "Hello" "By the editor") >>= ok
+      byAdministrator <- runSqliteWiki st Administrator (savePage hello.id byEditor.updatedAt "Hello" "By the administrator") >>= ok
+      -- A version whose author is no longer one of the users.
+      withDatabase st $ \c ->
+        execute c "UPDATE page_versions SET author = 'user-gone' WHERE page_id = ? AND updated_at = ?" (hello.id.text, Stamp byEditor.updatedAt)
+      versions <- asAdmin st (listVersions hello.id) >>= ok
+      map (\v -> (v.updatedAt, (\a -> (a.id, a.name)) <$> v.author)) versions
+        `shouldBe` [ (byAdministrator.updatedAt, Just (administratorId, "Administrator"))
+                   , (byEditor.updatedAt, Just (UserId "user-gone", "user-gone"))
+                   , (hello.updatedAt, Nothing)
+                   ]
+      edgar <- runSqliteWiki st editor (savePage hello.id byAdministrator.updatedAt "Hello" "By the editor again") >>= ok
+      v <- asAdmin st (getVersion hello.id edgar.updatedAt) >>= ok
+      ((\a -> a.name) <$> v.author, v.body) `shouldBe` (Just "Edgar Editor", "By the editor again")
+
+  it "list the versions by time, though times written with and without a fraction sort otherwise as text" $
+    withDemo $ \st -> do
+      hello <- pageIn st "blog" "hello-world"
+      let whole = UTCTime (utctDay hello.updatedAt) 50000
+          fraction = UTCTime (utctDay hello.updatedAt) (picosecondsToDiffTime 50000500000000000)
+      withDatabase st $ \c -> for_ [whole, fraction] $ \t ->
+        execute c "INSERT INTO page_versions (page_id, updated_at, title, body, author) VALUES (?, ?, 'Hello', '', NULL)" (hello.id.text, Stamp t)
+      listed <- map (\x -> x.updatedAt) <$> (asAdmin st (listVersions hello.id) >>= ok)
+      listed `shouldBe` sortOn Down listed
+      sort listed `shouldBe` sort [hello.updatedAt, whole, fraction]
 
   it "keep the search text in step with every page's body, through imports, saves and moves" $
     withDemo $ \st -> do
