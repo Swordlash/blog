@@ -6,4 +6,4 @@
 set -eu
 cd "$(dirname "$0")"
 [ "$#" -gt 0 ] || set -- --mode inplace
-fourmolu "$@" wiki-core/src wiki-core/test wiki-core/test-html wiki-api/src wiki-api/test wiki-app/src wiki-app/app wiki-app/test wiki-server/app
+fourmolu "$@" wiki-core/src wiki-core/test wiki-core/test-html wiki-core/bench wiki-api/src wiki-api/test wiki-app/src wiki-app/app wiki-app/test wiki-server/app

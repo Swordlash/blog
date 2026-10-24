@@ -124,6 +124,27 @@ test-suite wiki-core-test
       time,
       wiki-core
 
+-- How long a search takes, and how much it allocates, over a generated wiki
+-- of a thousand pages; bench/README.md has the command and the numbers.
+-- Native only, as haskell-halogen's benchmarks are: it measures the code,
+-- not a backend.
+benchmark search
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   bench
+  main-is:          Search.hs
+  ghc-options:      -rtsopts
+
+  if arch(wasm32)
+    buildable: False
+  else
+    build-depends:
+        criterion >= 1.6,
+        protolude,
+        text,
+        time,
+        wiki-core
+
 -- The markup the renderer makes, through Halogen.Static's in-memory
 -- document, which exists natively only (as wiki-app-test). The tree it is
 -- made from is tested on both backends, in wiki-core-test.
