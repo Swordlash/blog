@@ -13,6 +13,17 @@ does. `--trust-network` is not accepted on `0.0.0.0`, so trusted mode runs the
 container on the host's network with the server bound to the private address
 (`docker-compose.trusted.yml`). See the README's "Running in Docker".
 
+Page history, over the `page_versions` table the schema had from the start
+(no migration): `SqliteWiki` lists a page's versions, the latest first
+(ordered by time in Haskell, since the times' text does not sort as times
+when one has no fraction), gives one by its time and restores one as a save
+of it in the same transaction, conflict check and draft discarded included.
+A version's author is named from the users table, the administrator as
+`Administrator`, someone no longer a user by their id, and an imported page
+as nobody known. The API serves the three endpoints, and the server renders
+a page's history (`…/p/<page>/history/`), with a 404 for a `version` the page
+does not have.
+
 The server renders the wiki's pages. With a build that has a `template.html`
 (`wiki-app-prerender --server` writes one), every address a page would be
 served at, a directory's or one with no file, gets the application rendered

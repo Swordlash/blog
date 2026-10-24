@@ -444,6 +444,36 @@ try {
   await page.locator("#app .search-view .search-hit", { hasText: "First page" }).waitFor({ timeout });
   console.log("ok: search finds the page, in the box and on the page of results");
 
+  // The page's history: every save a version, the latest first; version 2
+  // (the first text typed) restored, which the page then shows, then the
+  // version that was the latest restored in turn, so the page ends as it
+  // was, two versions on.
+  await page.locator("#app .search-view .search-hit", { hasText: "First page" }).click();
+  await page.locator("#app .page-view h1", { hasText: "First page" }).waitFor({ timeout });
+  await page.locator("#app .page-view .actions a", { hasText: "History" }).click();
+  await page.locator("#app .history-view h1", { hasText: "First page" }).waitFor({ timeout });
+  assert.equal(here(page), "/s/smoke-space/p/first-page/history/");
+  const versionNames = () => page.locator("#app .version-list li > a").allTextContents();
+  const versions = await versionNames();
+  assert.ok(versions.length >= 4, `the history lists ${versions.length} versions`);
+  assert.equal(versions[0], `Version ${versions.length} (current)`, "the latest is not first");
+  assert.ok((await content(page)).includes("by Administrator"), "the versions' author");
+  const restore = async (n, shows) => {
+    await page.locator("#app .version-list li > a", { hasText: new RegExp(`^Version ${n}$`) }).click();
+    await page.locator("#app .version-detail h2", { hasText: `Version ${n}` }).waitFor({ timeout });
+    await page.locator("#app button.restore").click();
+    await page.locator("#app .restore-confirm button", { hasText: "Restore" }).click();
+    await page.locator("#app .page-view .page-body", { hasText: shows }).waitFor({ timeout });
+    await page.locator("#app .page-view .actions a", { hasText: "History" }).click();
+    await page.locator("#app .history-view h1").waitFor({ timeout });
+  };
+  await restore(2, "Hello from the server's smoke test.");
+  assert.ok(!(await content(page)).includes("Saved by someone else."), "the restored version has a later save in it");
+  assert.equal((await versionNames()).length, versions.length + 1, "the restore made no new version");
+  await restore(versions.length, "Saved by someone else.");
+  assert.equal((await versionNames())[0], `Version ${versions.length + 2} (current)`);
+  console.log(`ok: the page's ${versions.length} versions are listed, version 2 restored and then the latest again, each a version on top`);
+
   // The export, from the administration.
   await page.locator("#app .wiki-header a.admin-link").click();
   await page.locator("#app .admin-view .import-sources .import-file").waitFor({ timeout });
@@ -472,6 +502,7 @@ try {
     ["/s/smoke-space/", 200, "First page"],
     ["/s/smoke-space/p/first-page/", 200, "Saved by someone else."],
     ["/s/smoke-space/p/first-page/source/", 200, "(attachment:notes.txt)"],
+    ["/s/smoke-space/p/first-page/history/", 200, "Version 1"],
     ["/s/smoke-space/p/first-page/edit/", 200, "Editing First page"],
     ["/s/smoke-space/new-page/", 200, "New page"],
     ["/new-space/", 200, "New space"],

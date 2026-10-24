@@ -6,6 +6,7 @@ import Test.Browser.Islands qualified as Islands
 import Test.Hspec.Halogen (describe, runBrowserTests)
 #if defined(wasm32_HOST_ARCH)
 import Test.Browser.Editor qualified as Editor
+import Test.Browser.History qualified as History
 import Test.Browser.Http qualified as Http
 import Test.Browser.Hydrate qualified as Hydrate
 import Test.Browser.Import qualified as Import
@@ -38,6 +39,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
   describe "Wiki.App.View.Source" (Source.spec BrowserDOM)
+  describe "Wiki.App.View.History" (History.spec BrowserDOM)
   describe "Math macros" (Macros.spec BrowserDOM)
   describe "Hydration" (Hydrate.spec BrowserDOM)
   describe "Wiki.App.Backend.Http" (Http.spec BrowserDOM)

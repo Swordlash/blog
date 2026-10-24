@@ -36,6 +36,15 @@ archive is the wiki's content, which whoever imports it reads. Importing an
 archive discards the drafts there were, since the pages they were written
 for are replaced.
 
+Pages' histories (every saved version of each page, `Wiki.Core.Version`) are
+not in an archive either: a history can be many times the size of the pages
+it is of, and what an archive carries is the wiki as it is. Each page
+imported starts a history of its own, with the page as it is in the archive
+for its first version, saved by nobody known; the demo's import replaces the
+histories there were with these, as it replaces the pages. Nothing in the
+format changes for this, so an archive written before there were histories
+imports as before.
+
 ## Compatibility
 
 - **Additions need no new version.** A reader ignores the fields it does not

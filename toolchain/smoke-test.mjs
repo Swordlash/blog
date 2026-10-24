@@ -37,7 +37,9 @@
 //    keeps its content in IndexedDB), the administration's export, its
 //    reset taking the edit away for good and its import bringing it back, a
 //    reload on a page's source, and 404.html for an address with no file,
-//    the administration's among them.
+//    the administration's among them. On the way, a page saved twice more
+//    has its history opened, a version's diff read and the version
+//    restored.
 // 3. The same page in a dark scheme and at a phone's width, and a page's
 //    source copied to the clipboard.
 //
@@ -179,7 +181,7 @@ async function programStarted(page) {
 // or attributes, so that what the program does to the page when it adopts
 // it can be told afterwards. A MutationObserver notes when the page last
 // changed outside the islands, whose content their libraries write.
-const islands = ".wiki-math, .wiki-mermaid, .wiki-tikz, .wiki-code";
+const islands = ".wiki-math, .wiki-mermaid, .wiki-tikz, .wiki-code, .wiki-time";
 const markPrerendered = (page) =>
   page.evaluate((islands) => {
     const app = document.querySelector("#app");
@@ -683,6 +685,44 @@ try {
   assert.ok(!(await page.locator("#app .page-body").textContent()).includes("Not to be kept."), "leaving kept the draft");
   await samePage("leaving the editor");
   console.log("ok: leaving the editor by the back button asks; Stay returns to its entry, Leave drops the draft");
+
+  // A page's history: the new page saved twice more, its versions listed
+  // the latest first with what the last save changed, an earlier version
+  // chosen and restored, which saves it as a new version on top.
+  await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
+  await page.locator("#app .space-view .page-tree a[href='/s/blog/p/smoke-page/']").click();
+  await check({ path: "/s/blog/p/smoke-page/", view: "page-view", crumb: "Smoke page" }, "the new page again");
+  for (const line of ["A second line.", "A third line."]) {
+    await page.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
+    await check({ path: "/s/blog/p/smoke-page/edit/", view: "editor" }, `editing for "${line}"`);
+    await page.locator(editorText).press("Control+End");
+    await page.locator(editorText).pressSequentially(`\n\n${line}`);
+    await page.locator("#app .editor-save-close").click();
+    await check({ path: "/s/blog/p/smoke-page/", view: "page-view", text: line }, `"${line}" saved`);
+  }
+  await page.locator("#app .page-view .actions a", { hasText: "History" }).click();
+  await check({ path: "/s/blog/p/smoke-page/history/", view: "history-view", crumb: "History" }, "the page's history");
+  const versionNames = () => page.locator("#app .version-list li > a").allTextContents();
+  const before = await versionNames();
+  assert.ok(before.length >= 4, `the history lists ${before.length} versions`);
+  assert.equal(before[0], `Version ${before.length} (current)`, "the latest is not first");
+  assert.equal(await page.locator("#app .diff-added .diff-text").last().textContent(), "A third line.", "the latest diff");
+  await eventually(async () => assert.ok((await page.locator("#app .version-meta time").first().textContent()).length > 0, "no time"), "the time written in");
+  await page.locator("#app .version-list li > a", { hasText: /^Version 2$/ }).click();
+  await check({ path: "/s/blog/p/smoke-page/history/", view: "history-view" }, "version 2");
+  await page.locator("#app .version-detail h2", { hasText: "Version 2" }).waitFor({ timeout });
+  assert.match(new URL(page.url()).search, /^\?version=/, "a version's address");
+  await page.locator("#app button.restore").click();
+  await page.locator("#app .restore-confirm button", { hasText: "Restore" }).click();
+  await check({ path: "/s/blog/p/smoke-page/", view: "page-view", text: "Made through the new flow." }, "the version restored");
+  assert.ok(!(await page.locator("#app .page-body").textContent()).includes("A second line."), "the restore kept a later line");
+  await page.locator("#app .page-view .actions a", { hasText: "History" }).click();
+  await check({ path: "/s/blog/p/smoke-page/history/", view: "history-view" }, "the history after the restore");
+  const after = await versionNames();
+  assert.equal(after.length, before.length + 1, "the restore made no new version");
+  assert.equal(after[0], `Version ${after.length} (current)`);
+  await samePage("the page's history");
+  console.log(`ok: a page saved twice more lists ${before.length} versions with the last diff, and restoring version 2 makes version ${after.length}`);
 
   // A reload arrives at the same page, with the edit kept in the browser
   // (IndexedDB), as admin again: who one was is not kept, and the demo

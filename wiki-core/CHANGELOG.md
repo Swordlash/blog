@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+Pages have histories. `Wiki.Core.Version` holds what every backend and the
+API share of them: `VersionInfo` (a page, its `updatedAt` as that version,
+the title and the `Author`, a user's id and name, or `Nothing` for nobody
+known) and `Version` (the same with the body), with aeson instances with the
+records' field names.
+
+`Wiki.Core.Diff` compares two texts: `diffText` gives every line kept, taken
+out or put in, numbered on each side, the ones taken out before those put in
+their place, and within a line replaced by one with words in common the
+words that changed (`Segment`s). Lines and words are compared with Myers'
+algorithm after the lines both texts start and end with are set aside; past
+`maxLineEdits` lines of difference (or `maxWordEdits` words in a line) it
+gives up and the diff is a whole replace (`gaveUp`), so two unrelated 100 KB
+texts take a tenth of a second rather than a quadratic table. `hunks` leaves
+out unchanged lines away from a change, counting them. The new dependency is
+`array`, a boot package.
+
 The ids (`Wiki.Core.Id`) and `Slug` have `ToHttpApiData` and `FromHttpApiData`
 instances, so that the server's API (`wiki-api`) takes them in its paths and
 parameters: an id is its bare text, a slug its text read back through

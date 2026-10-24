@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+Every page has a history. `MonadWiki` gains `listVersions`, `getVersion` and
+`restoreVersion` (view to read, edit to restore; a restore is a save of the
+version's title and body, through the same conflict check, discarding the
+restorer's draft), in the contract and on every backend. The in-memory
+backend keeps each version, with its author's id, in its state and, for the
+demo, in an IndexedDB store `versions`, one record per version written once
+(the database is now version 3; a version-2 database, and an imported
+archive, start each page's history with the page as it is). `HttpWiki` keeps
+the two reads in its cache, and the server's render carries them in its
+preload (`VersionsOf`, `VersionOf`).
+
+A page's actions gain History, for every reader: the route
+`PageHistory space page version against` (`…/p/<page>/history/`, with
+`?version=<time>` and `&against=current`; `history` is a route word now, so a
+slug that is one is written `~history`) lists the versions, the latest first,
+with their times (the time island) and authors, and shows the chosen one's
+changes as a table of numbered lines, words changed marked with `<del>` and
+`<ins>`, against the version before or the page as it is now. An editor may
+restore any but the latest, after confirming in place. The demo prerenders
+each page's history at its latest version.
+
 The program starts from the page the server rendered. `wiki-server` renders
 each route's page with `Wiki.App.Static.renderServed`: the application over
 `HttpWiki` with a transport that answers at once (`newImmediateHttpEnv`, under

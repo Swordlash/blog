@@ -123,6 +123,32 @@ not the attachment's is 404.
 | PUT | `api/v1/pages/<page>/draft` | `DraftEdit` `{"base": time, "title", "body"}`: `base` is the page's `updatedAt` when the work started | `Draft` | 404, 403 | `saveDraft` |
 | DELETE | `api/v1/pages/<page>/draft` | | 204 | 404, 403 | `discardDraft` |
 
+### History
+
+| Method | Path | Body | Response | Errors | `MonadWiki` |
+| ------ | ---- | ---- | -------- | ------ | ----------- |
+| GET | `api/v1/pages/<page>/versions` | | `[VersionInfo]` `{"page", "updatedAt", "title", "author"}`, the page's every version, the latest (the page as it is) first | 404, 403 | `listVersions` |
+| GET | `api/v1/pages/<page>/versions/<time>` | | `Version` `{"page", "updatedAt", "title", "body", "author"}` | 404, 403 | `getVersion` |
+| POST | `api/v1/pages/<page>/versions/<time>/restore` | none, with `If-Match` | `Page`, with its new `ETag` | 404, 403, 400, 409 | `restoreVersion` |
+
+Every save of a page is a version of it, named by the page's `updatedAt` as
+that version: in a path, the time in ISO 8601 with every digit of its
+fraction, unquoted (`2026-10-24T09:30:12.345678Z`, its colons
+percent-encoded by `Wiki.Api.Links`), which is the version's `ETag` without
+the quotes. A page has a version for when it was made and one for each save;
+a page that came in whole (an import) starts with the page as it was. A
+version's `author` is `{"id", "name"}` (the user's display name; the
+administrator's is `Administrator`; someone who is no longer a user is named
+by their id), or `null` for nobody known (an import).
+
+Reading a history needs what reading the page does, restoring what saving it
+does. The page's permission is checked before the version is looked up, so a
+reader who may not see the page gets 403 for any time, and only one who may
+gets 404 for a time that is no version. A restore saves the version's title
+and body as the page's latest version, against the version in `If-Match` as a
+save is (409 if the page has been saved since), and so discards the
+restorer's draft; the versions in between are kept.
+
 ### Search
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |

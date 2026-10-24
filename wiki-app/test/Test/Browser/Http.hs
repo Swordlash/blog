@@ -31,6 +31,7 @@ import Data.Aeson (FromJSON (..), ToJSON, eitherDecodeStrict', encode, withObjec
 import Data.Map.Strict qualified as Map
 import Data.NT (type (~>) (..))
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import Halogen qualified as H
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.Router (Router)
@@ -40,9 +41,10 @@ import Protolude hiding (find)
 import Test.Browser.Mount (slugs)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
-import Wiki.Api (SpacesApi (..), WikiApi (..))
+import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Api.Version (VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
 import Wiki.App.Backend
 import Wiki.App.Backend.Http (HttpEnv, browserTransport, cacheOf, newHttpEnv, newHttpEnvWith, runHttpWiki)
@@ -52,13 +54,14 @@ import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
-import Wiki.App.Route (Route (..))
+import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.App.View.Common (spacePathOf)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id (AttachmentId (..), PageId (..), UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Space qualified as S
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 #if defined(wasm32_HOST_ARCH)
 import Halogen.VDom.DOM.Monad (runBrowserDOM)
 import Wiki.App.Backend.Http.Preload (embeddedCache)
@@ -336,6 +339,32 @@ views m = describe "the application over it" $ do
     find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
     saves <- filter (\r -> r.method == "PUT" && not ("/draft" `T.isSuffixOf` r.url)) <$> asked
     map (\r -> Map.lookup "If-Match" r.headers) saves `shouldBe` [Just "\"2026-09-01T12:00:00Z\""]
+    unmount ui
+    serverStops
+
+  it "loads a page's history and a version from the server, and restores it against the page's version" $ runPage $ do
+    serverStarts
+    serveDemo
+    hello <- unsafeIOToPageM helloWorld
+    let older = addUTCTime (negate 86400) hello.updatedAt
+        ada = Just Author {id = UserId "user-admin", name = "Ada Admin"}
+        current = VersionInfo {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, author = ada}
+    answerWith "GET" (links.pages.versions hello.id) 200 [current, VersionInfo {page = hello.id, updatedAt = older, title = "Hello", author = Nothing}]
+    answerWith "GET" (links.pages.version hello.id (VersionTime older)) 200 Version {page = hello.id, updatedAt = older, title = "Hello", body = "# Hello\n", author = Nothing}
+    answerWith "POST" (links.pages.restore hello.id (VersionTime older)) 200 hello
+    ui <- startServer m (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) (Just older) AgainstPrevious)
+    find ui ".version-detail h2" >>= (`shouldHaveText` "Version 1")
+    versions <- traverse textContent =<< findAll ui ".version-list li > a"
+    versions `shouldBe` ["Version 2 (current)", "Version 1"]
+    (find ui ".diff-added .diff-text" >>= textContent) `shouldReturn` "# Hello"
+    fetched <- map (\r -> r.url) . filter (\r -> r.method == "GET") <$> asked
+    filter (T.isInfixOf "/versions") fetched `shouldBe` [links.pages.versions hello.id, links.pages.version hello.id (VersionTime older)]
+    find ui "button.restore" >>= click
+    find ui ".restore-confirm button.primary" >>= click
+    eventually $ do
+      restores <- filter (\r -> r.method == "POST") <$> asked
+      map (\r -> (r.url, Map.lookup "If-Match" r.headers)) restores
+        `shouldBe` [(links.pages.restore hello.id (VersionTime older), Just "\"2026-09-01T12:00:00Z\"")]
     unmount ui
     serverStops
 

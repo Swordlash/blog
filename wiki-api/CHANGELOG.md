@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Page history: `PagesApi` gains `versions` (`GET pages/<page>/versions`),
+`version` (`GET pages/<page>/versions/<time>`) and `restore`
+(`POST pages/<page>/versions/<time>/restore`, with `If-Match` as a save, and
+the new version as `ETag`), for `MonadWiki`'s `listVersions`, `getVersion`
+and `restoreVersion`. A version is named in a path by its time,
+`Wiki.Api.Version.VersionTime`, ISO 8601 with every digit of the fraction and
+no quotes, read back exactly. Golden files `versions.json` and
+`version.json`.
+
 The whole HTTP API, under `/api/v1`, for the server of Phase 2 and the
 application's backend over HTTP; docs/api.md lists every endpoint.
 

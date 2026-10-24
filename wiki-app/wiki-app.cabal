@@ -260,6 +260,7 @@ test-suite wiki-app-browser-test
   main-is:          BrowserTest.hs
   other-modules:
       Test.Browser.Editor
+      Test.Browser.History
       Test.Browser.Http
       Test.Browser.Hydrate
       Test.Browser.Import

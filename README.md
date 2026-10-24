@@ -47,6 +47,11 @@ authorisation.
 - Each space's subspaces and pages listed by name (a number in a name read as a
   number), by date, newest or oldest first, or in an order put by hand, as the
   space's administrators choose.
+- A history for every page: each save is a version, listed with its time and
+  author, and a version's changes shown line by line with the words that
+  changed marked, against the version before or the page as it is now. An
+  editor restores a version by saving it again as the latest, so nothing in
+  between is lost.
 - Search by title and text from a box in the header (`/` to focus it), in every
   space or in one, with a page of results at an address of its own.
 - Three demo users and nobody, switched between in the header instead of a
