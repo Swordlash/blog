@@ -71,7 +71,8 @@ serveStatic :: StaticSite -> Text -> [Text] -> Request -> (Response -> IO Respon
 serveStatic site base segments request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
       respond (plain status405 "Method not allowed" [(hAllow, "GET, HEAD")])
-  | any (T.any (\c -> c == '\0' || c == '/' || c == '\\')) segments = respond (plain status400 "Bad request" [])
+  | not (wellEscaped (rawPathInfo request)) || any (T.any (\c -> c == '\0' || c == '/' || c == '\\')) segments =
+      respond (plain status400 "Bad request" [])
   | any (`elem` [".", ".."]) segments = respond (plain status403 "Forbidden" [])
   | otherwise = do
       let directoryAddress = null segments || lastMay segments == Just ""
@@ -89,6 +90,15 @@ serveStatic site base segments request respond
             regularFile site (site.root </> "404.html") >>= \case
               True -> send site base request status404 (site.root </> "404.html") >>= respond
               False -> respond (plain status404 "Not found" [])
+
+-- | Whether every @%@ of a raw path starts an escape, two hex digits: one
+-- that does not is no address at all, rather than an address of no file.
+wellEscaped :: ByteString -> Bool
+wellEscaped raw = case BS.elemIndex 37 raw of
+  Nothing -> True
+  Just at ->
+    let escape = BS.take 2 (BS.drop (at + 1) raw)
+     in BS.length escape == 2 && BS.all (isHexDigit . chr . fromIntegral) escape && wellEscaped (BS.drop (at + 3) raw)
 
 -- | Whether a path is a regular file inside the site, once its symbolic
 -- links are followed.

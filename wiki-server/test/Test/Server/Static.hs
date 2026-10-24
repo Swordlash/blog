@@ -68,6 +68,7 @@ publicListener = describe "on the public listener" $ do
   it "serves nothing outside its directory, by .. or by a link" $ withRunning $ \r -> do
     (.status) <$> getUrl r (r.public <> "/%2e%2e/data/wiki.sqlite") `shouldReturn` 403
     (.status) <$> getUrl r (r.public <> "/s/%2e%2e/%2e%2e/index.html") `shouldReturn` 403
+    (.status) <$> getRawPath r r.public "/%zz" `shouldReturn` 400
     createFileLink (r.dataDir </> "wiki.sqlite") (r.staticDir </> "leak.sqlite")
     leaked <- getUrl r (r.public <> "/leak.sqlite")
     leaked.status `shouldBe` 404

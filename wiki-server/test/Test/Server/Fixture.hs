@@ -13,6 +13,7 @@ module Test.Server.Fixture
   , Reply (..)
   , getUrl
   , getUrlWith
+  , getRawPath
   , send
   , sendJson
   , multipart
@@ -29,7 +30,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.CaseInsensitive qualified as CI
 import Data.IORef (IORef, modifyIORef', newIORef)
 import Data.List (lookup)
-import Network.HTTP.Client (Manager, RequestBody (..), decompress, defaultManagerSettings, httpLbs, managerResponseTimeout, method, newManager, parseRequest, redirectCount, requestBody, requestHeaders, responseBody, responseHeaders, responseStatus, responseTimeoutMicro)
+import Network.HTTP.Client (Manager, RequestBody (..), decompress, defaultManagerSettings, httpLbs, managerResponseTimeout, method, newManager, parseRequest, path, redirectCount, requestBody, requestHeaders, responseBody, responseHeaders, responseStatus, responseTimeoutMicro)
 import Network.HTTP.Types (Header, Method, hContentType, methodGet, statusCode)
 import Network.Socket (SockAddr (..))
 import Protolude
@@ -129,6 +130,14 @@ send r m url hs b = do
 
 getUrl :: Running -> Text -> IO Reply
 getUrl r url = send r methodGet url [] ""
+
+-- | A GET of a path exactly as written, which need not be one a URL may
+-- have: what a client that does not check its addresses sends.
+getRawPath :: Running -> Text -> ByteString -> IO Reply
+getRawPath r root raw = do
+  initial <- parseRequest (toS root)
+  response <- httpLbs initial {path = raw, redirectCount = 0, decompress = const False} r.manager
+  pure Reply {status = statusCode (responseStatus response), headers = responseHeaders response, body = responseBody response}
 
 getUrlWith :: Running -> Text -> [Header] -> IO Reply
 getUrlWith r url hs = send r methodGet url hs ""
