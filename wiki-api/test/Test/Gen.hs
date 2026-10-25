@@ -16,6 +16,11 @@ module Test.Gen
   , genGrants
   , genApiError
   , genSessionInfo
+  , genCredentials
+  , genNewAccount
+  , genNewPassword
+  , genAccountDisabled
+  , genAccount
   , genNewSpace
   , genSpaceName
   , genSpacePublic
@@ -43,6 +48,7 @@ import Data.Text qualified as T
 import Data.Time (Day (ModifiedJulianDay), UTCTime (..), picosecondsToDiffTime)
 import Protolude
 import Test.QuickCheck
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Import
 import Wiki.Api.Types
@@ -50,7 +56,7 @@ import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | Any text, Unicode included.
@@ -110,14 +116,30 @@ genGrants = do
   pure Grants {global, spaces}
 
 genApiError :: Gen ApiError
-genApiError = oneof [pure NotFound, pure Forbidden, Conflict <$> genText, Invalid <$> genText]
+genApiError = oneof [pure NotFound, pure Forbidden, Conflict <$> genText, Invalid <$> genText, pure Unauthenticated, TooManyRequests <$> genText]
 
 genSessionInfo :: Gen SessionInfo
 genSessionInfo = do
   user <- oneof [pure Nothing, Just <$> genUser]
   groups <- Set.fromList <$> resize 3 (listOf genGroupId)
   grants <- genGrants
-  pure SessionInfo {user, groups, grants}
+  standing <- elements [NotSignedIn, SignedIn, Operator]
+  pure SessionInfo {user, groups, grants, standing}
+
+genCredentials :: Gen Credentials
+genCredentials = Credentials <$> genText <*> genText
+
+genNewAccount :: Gen NewAccount
+genNewAccount = NewAccount <$> genText <*> genText <*> genText
+
+genNewPassword :: Gen NewPassword
+genNewPassword = NewPassword <$> genText
+
+genAccountDisabled :: Gen AccountDisabled
+genAccountDisabled = AccountDisabled <$> arbitrary
+
+genAccount :: Gen Account
+genAccount = Account <$> genUser <*> arbitrary <*> arbitrary
 
 genNewSpace :: Gen NewSpace
 genNewSpace = NewSpace <$> genMaybe genSpaceId <*> genText

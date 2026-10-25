@@ -23,6 +23,7 @@
   "groups": [
     "g1"
   ],
+  "standing": "SignedIn",
   "user": {
     "displayName": "Ada",
     "id": "u1",

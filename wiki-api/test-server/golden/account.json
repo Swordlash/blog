@@ -1,0 +1,9 @@
+{
+  "disabled": false,
+  "hasPassword": true,
+  "user": {
+    "displayName": "Ada",
+    "id": "u1",
+    "login": "ada"
+  }
+}

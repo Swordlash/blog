@@ -3,18 +3,22 @@
 -- > wiki-server [serve] --data DIR [--listen HOST:PORT] [--admin-listen HOST:PORT]
 -- >                     [--trust-network] [--base-path PATH] [--static DIR] …
 -- > wiki-server backup --data DIR [--keep N]
+-- > wiki-server users (list | add | password | admin | disable) --data DIR …
 -- > wiki-server --version
 --
 -- @serve@ (also what runs with no command) serves the wiki from the data
 -- directory on its two listeners ("Wiki.Server", "Wiki.Server.Options");
 -- @backup@ copies the database aside into DIR/backups, keeping the last N
 -- copies ("Wiki.Server.Storage.Backup"), which the deploy script runs before
--- it starts a new server.
+-- it starts a new server; @users@ makes and changes the wiki's users and
+-- their passwords ("Wiki.Server.Console"), which is how the first
+-- administrator is made.
 module Main (main) where
 
 import Options.Applicative
 import Protolude
 import Wiki.Server (ServerError (..), serve)
+import Wiki.Server.Console (Users, readPassword, runUsers, usersParser)
 import Wiki.Server.Options (ServeOptions, serveOptions)
 import Wiki.Server.Storage.Backup (backup, defaultKeep)
 import Wiki.Server.Version (serverVersion)
@@ -25,6 +29,8 @@ data Command
     Serve ServeOptions
   | -- | Back the database of a data directory up, keeping this many.
     Backup FilePath Int
+  | -- | Make or change a user.
+    Users Users
 
 commands :: ParserInfo Command
 commands =
@@ -32,6 +38,7 @@ commands =
     ( ( hsubparser
           ( command "serve" (info (Serve <$> serveOptions) (progDesc "Serve the wiki (the default command)"))
               <> command "backup" (info backupCommand (progDesc "Copy the database aside into DIR/backups, keeping the last few copies"))
+              <> command "users" (info (Users <$> usersParser) (progDesc "List, make and change the wiki's users: the first administrator is made here"))
           )
           <|> (Serve <$> serveOptions)
       )
@@ -56,3 +63,9 @@ main =
       backup dataDir keep >>= \case
         Just file -> putText ("Backed up into " <> toS file)
         Nothing -> putText "There is no database to back up yet."
+    Users u ->
+      runUsers readPassword u >>= \case
+        Right lines' -> traverse_ putText lines'
+        Left why -> do
+          putErrText ("wiki-server: " <> why)
+          exitWith (ExitFailure 1)

@@ -17,6 +17,7 @@ module Test.Server.Fixture
   , getUrlWith
   , getRawPath
   , send
+  , sendBare
   , sendJson
   , multipart
   , header
@@ -42,6 +43,7 @@ import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.HUnit (assertFailure)
 import Test.Storage.Fixture (demoArchive)
+import Wiki.Api (requestMarker)
 import Wiki.Server (Server (..), withServer)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions)
@@ -160,9 +162,17 @@ data Reply = Reply
   }
   deriving stock (Show)
 
--- | A request with a method, headers and a body, to a URL.
+-- | A request with a method, headers and a body, to a URL, as the
+-- application makes it: with the header that says so ('requestMarker').
 send :: Running -> Method -> Text -> [Header] -> LByteString -> IO Reply
-send r m url hs b = do
+send r m url hs = sendBare r m url (marker : hs)
+  where
+    marker = (CI.mk (encodeUtf8 (fst requestMarker)), encodeUtf8 (snd requestMarker))
+
+-- | A request with exactly these headers: one a page of another site
+-- could make a browser send.
+sendBare :: Running -> Method -> Text -> [Header] -> LByteString -> IO Reply
+sendBare r m url hs b = do
   initial <- parseRequest (toS url)
   response <- httpLbs initial {method = m, requestHeaders = hs, requestBody = RequestBodyLBS b, redirectCount = 0, decompress = const False} r.manager
   pure Reply {status = statusCode (responseStatus response), headers = responseHeaders response, body = responseBody response}

@@ -43,7 +43,7 @@ import Protolude
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Permission (Grants)
-import Wiki.Core.User (User)
+import Wiki.Core.User (Standing, User)
 
 -- | The answer to @GET \/api\/v1\/session@: who the current user is, with
 -- what the client needs to run the permission rules itself and hide what
@@ -57,6 +57,9 @@ data SessionInfo = SessionInfo
   , grants :: Grants
   -- ^ The grants given to the user or to one of their groups, and no
   -- others.
+  , standing :: Standing
+  -- ^ Whether they signed in (and may sign out), have not (and may sign
+  -- in), or are the server's operator (and need neither).
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

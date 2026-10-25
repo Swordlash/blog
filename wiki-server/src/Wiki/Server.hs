@@ -31,11 +31,13 @@ import Protolude hiding (Handler)
 import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
 import Wiki.Api.Links (attachmentUrl)
 import Wiki.Server.Api (Env (..))
-import Wiki.Server.App (Listener (..), listenerApp)
+import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
+import Wiki.Server.Limiter (defaultLimits, newLimiter)
 import Wiki.Server.Log (Level (..), Logger, logWith, stdoutLogger)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen)
+import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
-import Wiki.Server.Storage (Config (..), Who (..), withStorage)
+import Wiki.Server.Storage (Config (..), withStorage)
 import Wiki.Server.Version (serverVersion)
 
 -- | A configuration the server cannot run with, with every reason.
@@ -77,6 +79,7 @@ withServer logger raw action = do
   options <- either (throwIO . ServerError) pure (checkOptions raw)
   site <- for options.staticDir $ \dir -> openStaticSite dir >>= either (throwIO . ServerError . pure) pure
   startedAt <- getCurrentTime
+  limiter <- newLimiter defaultLimits
   withStorage Config {attachmentAddress = attachmentUrl} options.dataDir $ \storage -> do
     let env =
           Env
@@ -86,18 +89,22 @@ withServer logger raw action = do
             , dataDir = options.dataDir
             , trustNetwork = options.trustNetwork
             , maxImportSize = options.maxImportSize
+            , limiter
             }
         public =
           Listener
             { name = "public"
             , mount = options.basePath
-            , who = if options.trustNetwork then Administrator else Anonymous
+            , finding =
+                if options.trustNetwork
+                  then EveryoneAdministers
+                  else BySession CookieSettings {path = options.basePath, secure = options.secureCookies}
             }
         admin =
           Listener
             { name = "admin"
             , mount = "/admin/"
-            , who = Administrator
+            , finding = EveryoneAdministers
             }
         listeners = (options.listen, public) : [(a, admin) | Just a <- [options.adminListen]]
     logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
@@ -128,7 +135,7 @@ withServer logger raw action = do
               $ defaultSettings
       addresses <- for bound $ \(socket, (_, l)) -> do
         address <- getSocketName socket
-        logWith logger Info [("event", "listening"), ("listener", l.name), ("address", showAddress address <> l.mount), ("principal", if l.who == Administrator then "administrator" else "anonymous")]
+        logWith logger Info [("event", "listening"), ("listener", l.name), ("address", showAddress address <> l.mount), ("principal", case l.finding of EveryoneAdministers -> "administrator"; BySession _ -> "by-session")]
         pure address
       threads <- for bound $ \(socket, (_, l)) -> Async.async (runSettingsSocket (settings l) socket (listenerApp logger env site l))
       -- Warp stops accepting when its listening socket is closed, then

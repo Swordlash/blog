@@ -7,10 +7,10 @@
 -- JSON and multipart bodies), handed to the API's WAI application in the
 -- same process, and the answers the bytes it gives back: everything a
 -- browser's @fetch@ would carry, but the sockets. In process rather than
--- over a listener, because a listener serves one principal (nobody, or the
--- administrator under @--trust-network@) until Phase 3 brings sessions,
--- and the contract signs in as each of the demo's users. The listeners
--- themselves are "Test.Server.Api"'s.
+-- over a listener, because the contract runs as each of the demo's users,
+-- who have no passwords to sign in with, and the principal of a request
+-- in process is given rather than found. Signing in, and the listeners
+-- themselves, are "Test.Server.Accounts"' and "Test.Server.Api"'s.
 module Test.Server.Http (spec, apiEnv) where
 
 import Data.Time (getCurrentTime)
@@ -30,6 +30,7 @@ import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space qualified as S
 import Wiki.Server.Api (Env (..))
+import Wiki.Server.Limiter (defaultLimits, newLimiter)
 import Wiki.Server.Render (inProcess)
 import Wiki.Server.Storage (Storage, Who (..))
 
@@ -94,4 +95,5 @@ importing = describe "importing an archive" $
 apiEnv :: Storage -> IO Env
 apiEnv storage = do
   startedAt <- getCurrentTime
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", trustNetwork = False, maxImportSize = 64 * 1024 * 1024}
+  limiter <- newLimiter defaultLimits
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", trustNetwork = False, maxImportSize = 64 * 1024 * 1024, limiter}

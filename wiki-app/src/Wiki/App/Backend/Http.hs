@@ -33,7 +33,17 @@
 -- imports another wiki into the server's, merging
 -- it with what is there ('previewImport', 'applyImport'): the
 -- administration's, which the demo, whose import replaces everything, has
--- no counterpart of.
+-- no counterpart of. And it signs in and out ("Wiki.App.Account"), which
+-- the demo, switching between its users, has none of either.
+--
+-- = Sessions that end
+--
+-- Who is asking is the server's to say, from the session the browser's
+-- cookie carries, which can end while the page is open. A request refused
+-- (401 or 403) while the backend has someone signed in makes it ask the
+-- server who is asking now; if that is someone else, what it has read was
+-- read as someone it no longer is, so it lets all of it go and tells the
+-- shell ('sessionChanges').
 module Wiki.App.Backend.Http
   ( HttpWiki (..)
   , HttpEnv
@@ -59,29 +69,35 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Monad.Primitive (PrimMonad)
 import Control.Monad.UUID (MonadUUID (..))
-import Data.Aeson (FromJSON, encode, object, (.=))
+import Data.Aeson (FromJSON, eitherDecodeStrict', encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, jsNull, toJSBytes, toJSText)
+import Halogen.Subscription (Subscribe (..))
+import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AdminApi (..), ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Account (Credentials (..))
 import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..))
+import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.Api.Links qualified as Links
 import Wiki.Api.Types
 import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
 import Wiki.Api.Version (VersionTime (..))
+import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Http.Cache
-import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, ifMatch, multipart, multipartForm, withJson)
+import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, fromSessionInfo, ifMatch, multipart, multipartForm, sessionInfo, withJson)
 import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Islands.Monad (MonadIslands)
+import Wiki.Core.User (Standing (..))
 
 -- The browser's half: one fetch, which waits for the whole answer, and what
 -- it gave. See jsbits/fetch.js. Natively these are inert, and
@@ -149,6 +165,8 @@ data HttpEnv = HttpEnv
   -- ^ Whether the transport answers at once, so that 'atOnce' may ask it.
   , cacheOnly :: Bool
   -- ^ Within 'atOnce': a read the cache cannot answer gives up.
+  , changes :: Subscribe IO Session
+  -- ^ Where a session found to have changed by itself is announced.
   }
 
 -- | A backend over this transport, with nothing read yet.
@@ -158,7 +176,10 @@ newHttpEnv transport = newHttpEnvWith transport emptyCache
 -- | A backend over this transport that has read this already: what the
 -- server rendered the page with, which the program starts from.
 newHttpEnvWith :: (MonadIO n) => Transport -> Cache -> n HttpEnv
-newHttpEnvWith transport start = liftIO $ (\cache -> HttpEnv {transport, cache, immediate = False, cacheOnly = False}) <$> newIORef start
+newHttpEnvWith transport start = liftIO $ do
+  cache <- newIORef start
+  changes <- HS.create
+  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, changes}
 
 -- | A backend over a transport that answers at once, a server's
 -- application in the same process: 'atOnce' asks it rather than give up,
@@ -203,13 +224,40 @@ data NotCached = NotCached
 
 instance Exception NotCached
 
--- | Ask the server.
+-- | Ask the server; and if it refuses while someone is signed in, whether
+-- they still are (see "Sessions that end").
 call :: (MonadIO m) => Request -> HttpWiki m (Either Text Response)
 call r = HttpWiki $ do
   env <- ask
   when env.cacheOnly (liftIO (throwIO NotCached))
   let Transport send = env.transport
-  liftIO (send r)
+  answered <- liftIO (send r)
+  case answered of
+    Right response
+      | response.status `elem` [401, 403]
+      , not env.immediate ->
+          liftIO (readIORef env.cache) >>= \c -> case c.session of
+            Just before | before.standing == SignedIn -> liftIO (recheckSession env before)
+            _ -> pass
+    _ -> pass
+  pure answered
+
+-- | Ask the server who is asking, after a refusal made while someone was
+-- signed in; if that has changed, let everything read go and say so.
+recheckSession :: HttpEnv -> Session -> IO ()
+recheckSession env before = do
+  let Transport send = env.transport
+  now <- answer <$> send (R.get links.session)
+  for_ (rightToMaybe now) $ \info -> do
+    let after = fromSessionInfo info
+    when (after.user /= before.user) $ do
+      atomicModifyIORef' env.cache (const (withSession after emptyCache, ()))
+      env.changes.listener.notify after
+
+-- | Who is asking now, as signing in or out made them: everything read
+-- before was read as someone else.
+startOver :: (MonadIO m) => Session -> HttpWiki m ()
+startOver s = modifyCache (const (withSession s emptyCache))
 
 readCache :: (MonadIO m) => HttpWiki m Cache
 readCache = HttpWiki (ask >>= \env -> liftIO (readIORef env.cache))
@@ -259,13 +307,8 @@ write_ request = (answerNothing <$> call request) <* modifyCache afterWrite
 
 instance (MonadIO m) => MonadWiki (HttpWiki m) where
   session =
-    orThrow . fmap (fmap fromInfo) $
-      cachedAlways (fmap toInfo . (\c -> c.session)) (R.get links.session) (withSession . fromInfo)
-    where
-      fromInfo :: SessionInfo -> Session
-      fromInfo s = Session {user = s.user, groups = s.groups, grants = s.grants}
-      toInfo :: Session -> SessionInfo
-      toInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants}
+    orThrow . fmap (fmap fromSessionInfo) $
+      cachedAlways (fmap sessionInfo . (\c -> c.session)) (R.get links.session) (withSession . fromSessionInfo)
   listSpaces = orThrow (cachedAlways (\c -> c.spaces) (R.get links.spaces.list) withSpaces)
   getSpace path = cached (\c -> Map.lookup path c.spaceAt) (R.get (links.spaces.atPath path)) (withSpaceAt path)
   createSpace parent name = write (withJson "POST" links.spaces.create NewSpace {parent, name})
@@ -320,6 +363,31 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   deleteGroup g = write_ (R.delete (links.admin.deleteGroup g))
   addMember g u = write_ (R.put (links.admin.addMember g u))
   removeMember g u = write_ (R.delete (links.admin.removeMember g u))
+
+-- | Signing in and out ("Wiki.App.Account"), each of which starts the
+-- cache over with the session it answered with.
+instance (MonadIO m) => MonadAccount (HttpWiki m) where
+  signIn login password = do
+    answered <- call (withJson "POST" links.signIn Credentials {login, password})
+    case answered of
+      Right r | r.status == 401 -> pure (Left WrongCredentials)
+      Right r | r.status == 429 -> pure . Left . TooManyAttempts $ case eitherDecodeStrict' r.body of
+        Right (ApiError.TooManyRequests why) -> why
+        _ -> "Too many failed attempts: wait a while, then try again."
+      _ -> case answer answered of
+        Left e -> pure (Left (SignInFailed e))
+        Right info -> do
+          let s = fromSessionInfo info
+          startOver s
+          pure (Right s)
+  signOut =
+    answer <$> call (R.delete links.signOut) >>= \case
+      Left e -> pure (Left e)
+      Right info -> do
+        let s = fromSessionInfo info
+        startOver s
+        pure (Right s)
+  sessionChanges = HttpWiki (asks (\env -> env.changes.emitter))
 
 -- | What has been read answers at once; anything else would wait, unless
 -- the transport answers at once itself ('newImmediateHttpEnv').

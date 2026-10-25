@@ -16,6 +16,7 @@ import Protolude
 import System.Environment (lookupEnv)
 import Test.Hspec
 import Test.Sample qualified as Sample
+import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
 import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
@@ -52,11 +53,14 @@ spec = describe "golden JSON" $ do
     golden "import-summary" Sample.importSummary
     golden "server-status" Sample.serverStatus
     golden "directory" Sample.directory
+    golden "account" Sample.account
   describe "errors" $ do
     golden "error-not-found" NotFound
     golden "error-forbidden" Forbidden
     golden "error-conflict" (Conflict "The page has been saved since you began editing it.")
     golden "error-invalid" (Invalid "A page needs a title.")
+    golden "error-unauthenticated" Unauthenticated
+    golden "error-too-many-requests" (TooManyRequests "Too many failed attempts to sign in as ada: try again in 15 minutes.")
   describe "requests" $ do
     golden "new-space" NewSpace {parent = Just (SpaceId "s1"), name = "Guides"}
     golden "space-name" SpaceName {name = "Guides"}
@@ -72,3 +76,7 @@ spec = describe "golden JSON" $ do
     golden "import-choices" Sample.importChoices
     golden "administrator-flag" AdministratorFlag {administrator = True}
     golden "group-name" GroupName {name = "writers"}
+    golden "credentials" Credentials {login = "ada", password = "correct horse battery staple"}
+    golden "new-account" NewAccount {login = "ada", displayName = "Ada", password = "correct horse battery staple"}
+    golden "new-password" NewPassword {password = "correct horse battery staple"}
+    golden "account-disabled" AccountDisabled {disabled = True}

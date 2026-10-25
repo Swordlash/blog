@@ -10,6 +10,7 @@
 module Test.Server (spec) where
 
 import Data.Aeson (FromJSON, ToJSON, decode, encode)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.CaseInsensitive qualified as CI
 import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodGet, methodPost, methodPut)
@@ -23,6 +24,7 @@ import Servant.Server.Generic (AsServer)
 import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
 import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..))
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
@@ -40,7 +42,7 @@ import Wiki.Core.Page (Page)
 import Wiki.Core.Page qualified as Page
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
-import Wiki.Core.User (Group (..))
+import Wiki.Core.User (Group (..), Standing (..), User (..))
 
 -- | Refuse a request as the server's handlers will: the error's status, and
 -- the error as the JSON body.
@@ -60,6 +62,11 @@ stubs =
   WikiApi
     { info = pure ServerInfo {name = "Stub", apiVersion = 1}
     , session = pure Sample.sessionInfo
+    , signIn = \c ->
+        if c.login == "ada" && c.password == "secret"
+          then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
+          else refuse Unauthenticated
+    , signOut = pure (addHeader "wiki-session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict" Sample.sessionInfo {user = Nothing, standing = NotSignedIn})
     , spaces =
         SpacesApi
           { list = pure [Sample.space]
@@ -143,8 +150,15 @@ stubs =
           , deleteGroup = \g -> if g == GroupId "g1" then pure NoContent else refuse NotFound
           , addMember = \g u -> if (g, u) == (GroupId "g1", UserId "u1") then pure NoContent else refuse NotFound
           , removeMember = \g u -> if (g, u) == (GroupId "g1", UserId "u2") then pure NoContent else refuse NotFound
+          , createUser = \new -> pure Account {user = User {id = UserId "new", login = new.login, displayName = new.displayName}, hasPassword = True, disabled = False}
+          , setPassword = \u _ -> pure Account {user = adaAs u, hasPassword = True, disabled = False}
+          , setDisabled = \u body -> pure Account {user = adaAs u, hasPassword = True, disabled = body.disabled}
           }
     }
+
+-- | The sample account's user, with another id.
+adaAs :: UserId -> User
+adaAs u = User {id = u, login = "ada", displayName = "Ada"}
 
 app :: Application
 app = serve api stubs
@@ -346,8 +360,27 @@ spec = describe "a server of the API's type" $ do
       r <- multipart links.archive.importApply [] [("archive", "wiki.zip", "application/zip", "1234")]
       status r `shouldBe` 400
 
-  it "gives the server's status to its operator" $
-    answers (getAt links.admin.status) 200 Sample.serverStatus
+  describe "sessions" $ do
+    it "signs in at the session's address, answering with the session and its cookie" $ do
+      r <- sendJson methodPost links.signIn Credentials {login = "ada", password = "secret"}
+      (status r, jsonBody r) `shouldBe` (200, Just Sample.sessionInfo)
+      header "Set-Cookie" r `shouldBe` Just "wiki-session=token; Path=/; HttpOnly; SameSite=Strict"
+      answers (sendJson methodPost links.signIn Credentials {login = "ada", password = "wrong"}) 401 Unauthenticated
+
+    it "signs out there too, answering with nobody and a cookie that clears the session's" $ do
+      r <- request methodDelete links.signOut [] ""
+      ((\(x :: SessionInfo) -> (x.user, x.standing)) <$> jsonBody r) `shouldBe` Just (Nothing, NotSignedIn)
+      header "Set-Cookie" r `shouldSatisfy` maybe False ("Max-Age=0" `BS.isInfixOf`)
+
+  describe "the administration" $ do
+    it "gives the server's status to its operator" $
+      answers (getAt links.admin.status) 200 Sample.serverStatus
+
+    it "makes a user with a password, sets one, and disables a login" $ do
+      answers (sendJson methodPost links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = "x"}) 201 Account {user = User {id = UserId "new", login = "bea", displayName = "Bea"}, hasPassword = True, disabled = False}
+      answers (sendJson methodPut (links.admin.setPassword (UserId "u7")) NewPassword {password = "y"}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = False}
+      answers (sendJson methodPut (links.admin.setDisabled (UserId "u7")) AccountDisabled {disabled = True}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = True}
+      links.admin.setDisabled (UserId "u7") `shouldBe` "api/v1/admin/users/u7/disabled"
 
   describe "the wiki's people" $ do
     it "lists them in one answer" $

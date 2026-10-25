@@ -143,7 +143,7 @@ import Wiki.Core.Permission (Grants, Principal (..))
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Standing (..), User (..))
 import Wiki.Core.Version (Version, VersionInfo)
 
 -- | Why a request was not carried out. See the module's Haddock for which is
@@ -187,12 +187,15 @@ data Session = Session
   -- and those on spaces. Grants to others are left out, since the rules
   -- would not count them anyway and they are nobody else's business. Nobody
   -- who is not signed in holds a grant: what they see is the public spaces.
+  , standing :: Standing
+  -- ^ How they came to be who they are: whether they may sign in, or sign
+  -- out, over a backend where people do.
   }
   deriving stock (Eq, Show)
 
 -- | The session of someone who is not signed in.
 anonymous :: Session
-anonymous = Session {user = Nothing, groups = mempty, grants = mempty}
+anonymous = Session {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn}
 
 -- | The current user as the rules of "Wiki.Core.Permission" want them.
 sessionPrincipal :: Session -> Maybe Principal

@@ -125,13 +125,17 @@ readTemplate site = do
   ifM (regularFile site file) (Just . decodeUtf8 <$> BS.readFile file) (pure Nothing)
 
 -- | A page rendered for this request: for no one else, so revalidated
--- every time and never by a tag, and never compressed beforehand.
+-- every time and never by a tag, and never compressed beforehand. It shows
+-- what its reader may see and who they are, so it is the browser's alone
+-- (@private@: no cache between it and the server keeps it) and varies with
+-- the session's cookie.
 rendered :: Status -> Text -> Response
 rendered status page =
   responseLBS
     status
     [ (hContentType, "text/html; charset=utf-8")
-    , (hCacheControl, "no-cache")
+    , (hCacheControl, "private, no-cache")
+    , (hVary, "Cookie")
     , ("X-Content-Type-Options", "nosniff")
     ]
     (BSL.fromStrict (encodeUtf8 page))

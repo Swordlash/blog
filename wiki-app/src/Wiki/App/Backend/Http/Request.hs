@@ -35,6 +35,10 @@ module Wiki.App.Backend.Http.Request
   , answerNothing
   , failureOf
   , fromApiError
+
+    -- * Sessions
+  , sessionInfo
+  , fromSessionInfo
   )
 where
 
@@ -45,10 +49,12 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Protolude hiding (get, put)
 import Web.HttpApiData (toUrlPiece)
+import Wiki.Api (requestMarker)
 import Wiki.Api.Error (ApiError, errorForStatus)
 import Wiki.Api.Error qualified as ApiError
+import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (PageVersion (..))
-import Wiki.App.Backend (WikiError (..))
+import Wiki.App.Backend (Session (..), WikiError (..))
 
 -- | A request: its method, its address relative to the page's base, its
 -- headers and its body.
@@ -66,8 +72,13 @@ data Body = NoBody | Body Text ByteString
   deriving stock (Eq, Show)
 
 -- | A @GET@ of an address.
+--
+-- Every request carries 'requestMarker', the header that tells the server
+-- it is the application's own and not one a page of another site made the
+-- browser send: the server refuses a write without it. It is set here
+-- rather than by the browser's half, so that every transport sends it.
 get :: Text -> Request
-get url = Request {method = "GET", url, headers = [], body = NoBody}
+get url = Request {method = "GET", url, headers = [requestMarker], body = NoBody}
 
 -- | A @POST@ with nothing in its body: an action whose arguments are all in
 -- its address and headers.
@@ -84,7 +95,7 @@ delete url = (get url) {method = "DELETE"}
 
 -- | A request of this method to an address, with a value as its JSON body.
 withJson :: (ToJSON a) => Text -> Text -> a -> Request
-withJson method url value = Request {method, url, headers = [], body = Body "application/json" (toS (encode value))}
+withJson method url value = Request {method, url, headers = [requestMarker], body = Body "application/json" (toS (encode value))}
 
 -- | The request, made against a page's version: a save's @If-Match@, the
 -- version written as the page's @ETag@ is ("Wiki.Api.Version").
@@ -122,7 +133,7 @@ multipartForm url parts =
   Request
     { method = "POST"
     , url
-    , headers = []
+    , headers = [requestMarker]
     , body = Body ("multipart/form-data; boundary=" <> decodeUtf8 boundary) (mconcat (map partBytes parts) <> "--" <> boundary <> "--\r\n")
     }
   where
@@ -197,3 +208,14 @@ fromApiError = \case
   ApiError.Forbidden -> Forbidden
   ApiError.Conflict t -> Conflict t
   ApiError.Invalid t -> Invalid t
+  -- Signing in's own, which a @MonadWiki@ request never gets from the
+  -- server; from a proxy in front of it, the nearest.
+  ApiError.Unauthenticated -> Forbidden
+  ApiError.TooManyRequests t -> Invalid t
+
+-- | The session as the API sends it, and back: field for field.
+sessionInfo :: Session -> SessionInfo
+sessionInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing}
+
+fromSessionInfo :: SessionInfo -> Session
+fromSessionInfo s = Session {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing}

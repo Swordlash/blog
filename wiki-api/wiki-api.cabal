@@ -52,6 +52,7 @@ library
   hs-source-dirs:   src
   exposed-modules:
       Wiki.Api
+      Wiki.Api.Account
       Wiki.Api.Admin
       Wiki.Api.Error
       Wiki.Api.Import
@@ -63,6 +64,7 @@ library
       Wiki.Api.Zip
   build-depends:
       aeson,
+      base,
       bytestring,
       http-api-data,
       http-media,

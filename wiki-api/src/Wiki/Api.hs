@@ -11,7 +11,8 @@
 --
 -- The API is a record of routes per resource ('SpacesApi', 'PagesApi',
 -- 'AttachmentsApi', 'ArchiveApi', 'AdminApi'), each field one endpoint named for the
--- @MonadWiki@ method it carries, gathered in 'WikiApi'. docs/api.md lists
+-- @MonadWiki@ method it carries, gathered in 'WikiApi', with signing in
+-- and out beside the session's own read. docs/api.md lists
 -- every endpoint with its method, path, body, response and errors.
 --
 -- = Conventions
@@ -27,6 +28,11 @@
 -- * A page's responses carry its version as their @ETag@, and a save sends
 --   it back as @If-Match@ ("Wiki.Api.Version").
 -- * Making something answers 201 with what was made; deleting answers 204.
+-- * Who is asking is the server's to say, per request: the session the
+--   request's cookie names on the public listener, the operator on the
+--   admin listener. Every request that changes something must carry the
+--   header of 'requestMarker', which a page of another site
+--   cannot make a browser send here, and is refused with a 403 otherwise.
 module Wiki.Api
   ( -- * The API
     Api
@@ -37,6 +43,10 @@ module Wiki.Api
   , AttachmentsApi (..)
   , ArchiveApi (..)
   , AdminApi (..)
+
+    -- * Sessions
+  , WithCookie
+  , requestMarker
 
     -- * Versions
   , Versioned
@@ -53,6 +63,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
 import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
+import Wiki.Api.Account (Account, AccountDisabled, Credentials, NewAccount, NewPassword)
 import Wiki.Api.Admin (AdministratorFlag, Directory, GroupName, ServerStatus)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -82,6 +93,14 @@ data WikiApi mode = WikiApi
   -- ^ What the server says about itself.
   , session :: mode :- "session" :> Get '[JSON] SessionInfo
   -- ^ Who is asking: @session@.
+  , signIn :: mode :- "session" :> ReqBody '[JSON] Credentials :> Post '[JSON] (WithCookie SessionInfo)
+  -- ^ Sign in ("Wiki.Api.Account"): the session the user now has, and the
+  -- cookie that carries it. A login and password that do not match are
+  -- 'Wiki.Api.Error.Unauthenticated', too many failed attempts
+  -- 'Wiki.Api.Error.TooManyRequests'.
+  , signOut :: mode :- "session" :> Delete '[JSON] (WithCookie SessionInfo)
+  -- ^ Sign out: the session ends, its cookie is cleared, and the answer is
+  -- who the asker is now, nobody.
   , spaces :: mode :- "spaces" :> NamedRoutes SpacesApi
   , pages :: mode :- "pages" :> NamedRoutes PagesApi
   , attachments :: mode :- "attachments" :> NamedRoutes AttachmentsApi
@@ -217,8 +236,35 @@ data AdminApi mode = AdminApi
   -- ^ @addMember@.
   , removeMember :: mode :- "groups" :> Capture "group" GroupId :> "members" :> Capture "user" UserId :> DeleteNoContent
   -- ^ @removeMember@.
+  , createUser :: mode :- "users" :> ReqBody '[JSON] NewAccount :> PostCreated '[JSON] Account
+  -- ^ Make a user who signs in with a password ("Wiki.Api.Account"). A
+  -- login another user has is 'Wiki.Api.Error.Conflict'.
+  , setPassword :: mode :- "users" :> Capture "user" UserId :> "password" :> ReqBody '[JSON] NewPassword :> Put '[JSON] Account
+  -- ^ Give a user a new password, which ends their sessions.
+  , setDisabled :: mode :- "users" :> Capture "user" UserId :> "disabled" :> ReqBody '[JSON] AccountDisabled :> Put '[JSON] Account
+  -- ^ Disable a user's login, which ends their sessions, or enable it
+  -- again.
   }
   deriving stock (Generic)
+
+-- | A response that sets or clears the session's cookie: the whole
+-- @Set-Cookie@ header's value, which the server writes and the browser
+-- keeps, unread by the application.
+type WithCookie a = Headers '[Header "Set-Cookie" Text] a
+
+-- | The header the application's own requests carry, as its name and value:
+-- the server refuses a request that changes something without it.
+--
+-- It is how the server tells its application's requests from those a page
+-- of another site makes a browser send with the wiki's cookie (a form
+-- posted at it, a link followed, an image loaded): such a page can
+-- send a form, but not a header of its own choosing, since a browser asks
+-- the server first (CORS) and this server never says yes. Browsers say
+-- where a request comes from themselves (@Sec-Fetch-Site@), but only to an
+-- origin served over HTTPS or on the machine itself, and the wiki is
+-- served over plain HTTP on a private network too (decision 20).
+requestMarker :: (Text, Text)
+requestMarker = ("X-Wiki-Request", "1")
 
 -- | A response that carries a page's version as its @ETag@.
 type Versioned a = Headers '[Header "ETag" PageVersion] a

@@ -1,9 +1,10 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
 -- | Users, groups and who is in which group. Nothing secret lives here:
--- password hashes and sessions are the server's (Phase 3).
+-- password hashes and sessions are the server's (@wiki-server@).
 module Wiki.Core.User
   ( User (..)
+  , Standing (..)
   , Group (..)
   , Membership
   , groupsOf
@@ -24,6 +25,22 @@ data User = User
   , displayName :: Text
   -- ^ What pages show them as.
   }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | How whoever is asking came to be who they are, which decides whether
+-- they may sign in or out: someone nobody has signed in as may sign in,
+-- someone signed in may sign out, and the server's operator (on its
+-- loopback admin listener, or anyone on a network the server trusts) is
+-- the administrator without having signed in, so neither applies.
+data Standing
+  = -- | Nobody has signed in.
+    NotSignedIn
+  | -- | A user who signed in, with a session.
+    SignedIn
+  | -- | The server's operator, who is the administrator by where they ask
+    -- from.
+    Operator
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 

@@ -55,9 +55,9 @@ import Wiki.Api.Admin (Directory)
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Types (SessionInfo (..))
-import Wiki.App.Backend (Session (..), WikiError (..))
+import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, kept)
-import Wiki.App.Backend.Http.Request (fromApiError)
+import Wiki.App.Backend.Http.Request (fromApiError, fromSessionInfo, sessionInfo)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Page (Page)
@@ -195,7 +195,7 @@ instance FromJSON DirectoryOf where
 toPreload :: Cache -> Preload
 toPreload c =
   Preload
-    { session = (\s -> SessionInfo {user = s.user, groups = s.groups, grants = s.grants}) <$> c.session
+    { session = sessionInfo <$> c.session
     , spaces = c.spaces
     , spacesAt = [SpaceAt {path, space = toAnswer s} | (path, s) <- Map.toList c.spaceAt, kept s]
     , pages = [SpacePages {space, pages = toAnswer ps} | (space, ps) <- Map.toList c.pages, kept ps]
@@ -217,7 +217,7 @@ toPreload c =
 fromPreload :: Preload -> Cache
 fromPreload p =
   emptyCache
-    { session = (\s -> Session {user = s.user, groups = s.groups, grants = s.grants}) <$> p.session
+    { session = fromSessionInfo <$> p.session
     , spaces = p.spaces
     , spaceAt = Map.fromList [(s.path, fromAnswer s.space) | s <- p.spacesAt]
     , pages = Map.fromList [(s.space, fromAnswer s.pages) | s <- p.pages]

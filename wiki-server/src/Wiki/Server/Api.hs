@@ -5,14 +5,23 @@
 -- back or with its refusal as an 'ApiError'.
 --
 -- A handler never knows which listener it serves: it is given who is asking
--- ('Who'), which the listener decided ("Wiki.Server.App"), and the storage's
--- rules do the rest. What only an administrator may do (export, import, the
--- server's status) is checked here, by the same grants the application
--- shows: whoever holds the global 'Administer', which the administrator of
--- the admin listener (or of a trusted network) always does.
+-- ('Caller'), whom the listener found for the request ("Wiki.Server.App"),
+-- and the storage's rules do the rest. What only an administrator may do
+-- (export, import, the server's status, users' accounts) is checked here,
+-- by the same grants the application shows: whoever holds the global
+-- 'Administer', which the administrator of the admin listener (or of a
+-- trusted network) always does.
+--
+-- Signing in and out are the one thing that depends on more than who is
+-- asking: they are for a listener that finds people by their sessions, and
+-- need the request's address (for the limit on attempts) and the cookie's
+-- settings, which the caller carries ('Signing').
 module Wiki.Server.Api
   ( -- * The handlers
     Env (..)
+  , Caller (..)
+  , Signing (..)
+  , callerAs
   , apiApplication
   , handlers
 
@@ -34,9 +43,9 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Database.SQLite.Simple (Only (..), query_)
-import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, methodGet, methodHead, status200, status304, status405, status503)
+import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, hVary, methodGet, methodHead, status200, status304, status405, status503)
 import Network.HTTP.Types.URI (urlEncode)
-import Network.Wai (Application, Middleware, Request (..), Response, responseFile, responseHeaders, responseLBS, responseStatus)
+import Network.Wai (Application, Middleware, Request (..), Response, mapResponseHeaders, responseFile, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Parse (defaultParseRequestBodyOptions, setMaxRequestFileSize, setMaxRequestNumFiles, setMaxRequestParmsSize)
 import Protolude hiding (Handler)
 import Servant (Context (..), ErrorFormatters, Handler, NoContent (..), ServerError (..), addHeader, bodyParserErrorFormatter, defaultErrorFormatters, err500, err503, headerParseErrorFormatter, notFoundErrorFormatter, serveWithContext, urlParseErrorFormatter)
@@ -44,6 +53,7 @@ import Servant.Multipart (Mem, MultipartOptions (..))
 import Servant.Server.Generic (AsServer)
 import System.Directory (doesFileExist)
 import Wiki.Api
+import Wiki.Api.Account (Account, AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
 import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
@@ -52,7 +62,7 @@ import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
+import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (writeArchive)
@@ -60,7 +70,13 @@ import Wiki.Core.Export.Zip (zipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Search (SearchQuery (..))
+import Wiki.Core.User (User (..))
+import Wiki.Server.Accounts (endSession)
+import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Import (applyImport, planImport, readUpload)
+import Wiki.Server.Limiter (Limiter, Verdict (..))
+import Wiki.Server.Limiter qualified as Limiter
+import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles)
 import Wiki.Server.Storage.Layout (backupsDir)
@@ -74,7 +90,32 @@ data Env = Env
   , dataDir :: FilePath
   , trustNetwork :: Bool
   , maxImportSize :: Int
+  , limiter :: Limiter
+  -- ^ The failed attempts to sign in ("Wiki.Server.Limiter").
   }
+
+-- | Who is asking, as the listener found them for a request.
+data Caller = Caller
+  { who :: Who
+  , signing :: Maybe Signing
+  -- ^ How they sign in and out, on a listener where people do: the public
+  -- one, unless it takes everyone for the administrator.
+  }
+
+-- | What signing in and out need to know of a request.
+data Signing = Signing
+  { address :: Text
+  -- ^ Where the request came from, which attempts are counted for.
+  , token :: Maybe Text
+  -- ^ The session id its cookie carried, if any: the session that signing
+  -- out (or in again) ends.
+  , cookies :: CookieSettings
+  }
+
+-- | Someone who does not sign in or out: the principal of a page the
+-- server renders, whose requests are its own.
+callerAs :: Who -> Caller
+callerAs who = Caller {who, signing = Nothing}
 
 -- | The API as a WAI application, answering as someone: every refusal, the
 -- routing's own included, as an 'ApiError'.
@@ -84,13 +125,17 @@ data Env = Env
 -- whole wiki, and everything else's, whose one form is an attachment of at
 -- most 'maxAttachmentSize'. A form over its limit is refused while it is
 -- read, with a 413, before any of it is held in memory beyond the limit.
-apiApplication :: Env -> Who -> Application
-apiApplication env who = jsonErrors $ \request ->
+--
+-- Its answers depend on who asks, so they are for that browser alone and
+-- revalidated every time ('private'), and say that they vary with the
+-- cookie.
+apiApplication :: Env -> Caller -> Application
+apiApplication env caller = jsonErrors . privately $ \request ->
   if take 1 (drop 2 (pathInfo request)) == ["import"]
     then imports request
     else others request
   where
-    serveWith limit = serveWithContext api (errorFormatters :. uploadOptions limit :. EmptyContext) (handlers env who)
+    serveWith limit = serveWithContext api (errorFormatters :. uploadOptions limit :. EmptyContext) (handlers env caller)
     imports = serveWith (fromIntegral env.maxImportSize)
     others = serveWith (fromIntegral maxAttachmentSize)
 
@@ -107,6 +152,14 @@ uploadOptions limit =
           $ defaultParseRequestBodyOptions
     , backendOptions = ()
     }
+
+-- | An answer for one browser: @Cache-Control: private, no-cache@ unless
+-- the handler said otherwise (an attachment's), and @Vary: Cookie@.
+privately :: Middleware
+privately app request respond = app request $ \response ->
+  let hs = responseHeaders response
+      cache = [(hCacheControl, "private, no-cache") | isNothing (lookup hCacheControl hs)]
+   in respond (mapResponseHeaders (<> (cache <> [(hVary, "Cookie")])) response)
 
 -- | Servant's own refusals, as the handlers' are: a body, a capture, a
 -- parameter or a header that does not parse is 'ApiError.Invalid' with
@@ -170,11 +223,35 @@ refusal :: ApiError -> Response
 refusal e = responseLBS (toEnum (errorStatus e)) [jsonHeader] (encode e)
 
 -- | The handlers, as someone.
-handlers :: Env -> Who -> WikiApi AsServer
-handlers env who =
+handlers :: Env -> Caller -> WikiApi AsServer
+handlers env caller =
   WikiApi
     { info = pure ServerInfo {name = "Wiki", apiVersion}
-    , session = (\s -> SessionInfo {user = s.user, groups = s.groups, grants = s.grants}) <$> ask' session
+    , session = sessionInfo <$> ask' session
+    , signIn = \credentials -> do
+        s <- signingHere
+        now <- liftIO getCurrentTime
+        liftIO (Limiter.verdict env.limiter now credentials.login s.address) >>= \case
+          Refused seconds ->
+            throwError
+              (apiError (ApiError.TooManyRequests ("Too many failed attempts to sign in as " <> T.strip credentials.login <> ": try again in " <> waitText seconds <> ".")))
+                { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
+                }
+          Allowed ->
+            liftIO (Accounts.signIn env.storage now credentials.login credentials.password) >>= \case
+              Left _ -> do
+                liftIO (Limiter.failed env.limiter now credentials.login s.address)
+                refuse ApiError.Unauthenticated
+              Right (user, token) -> do
+                liftIO (Limiter.succeeded env.limiter credentials.login s.address)
+                -- Signing in again replaces the session the browser had.
+                liftIO (traverse_ (endSession env.storage) s.token)
+                signedIn <- liftIO (runSqliteWiki env.storage (AsUser user.id) session)
+                pure (addHeader (sessionCookie s.cookies token) (sessionInfo signedIn))
+    , signOut = do
+        s <- signingHere
+        liftIO (traverse_ (endSession env.storage) s.token)
+        pure (addHeader (clearCookie s.cookies) (sessionInfo anonymous))
     , spaces =
         SpacesApi
           { list = ask' listSpaces
@@ -208,7 +285,7 @@ handlers env who =
     , attachments =
         AttachmentsApi
           { delete = \a -> wiki (deleteAttachment a) $> NoContent
-          , content = \a name request respond -> liftIO (attachmentContent env who a name request respond)
+          , content = \a name request respond -> liftIO (attachmentContent env caller.who a name request respond)
           }
     , search = \q space only limit ->
         -- At most 200 hits, whatever is asked: the search box asks for a
@@ -243,9 +320,19 @@ handlers env who =
           , deleteGroup = \g -> wiki (deleteGroup g) $> NoContent
           , addMember = \g u -> wiki (addMember g u) $> NoContent
           , removeMember = \g u -> wiki (removeMember g u) $> NoContent
+          , createUser = \new -> administrator >> accounts (Accounts.createAccount env.storage new.login new.displayName (Just new.password))
+          , setPassword = \u body -> administrator >> accounts (Accounts.setPassword env.storage u body.password)
+          , setDisabled = \u body -> administrator >> accounts (Accounts.setDisabled env.storage u body.disabled)
           }
     }
   where
+    who = caller.who
+    -- What signs in and out where nobody does (the admin listener, or a
+    -- trusted network, where everyone is the administrator already) is
+    -- refused, saying so.
+    signingHere = maybe (refuse (ApiError.Invalid "Nobody signs in here: everyone who reaches this address is the administrator.")) pure caller.signing
+    accounts :: IO (Either WikiError Account) -> Handler Account
+    accounts change = liftIO change >>= either (throwError . wikiError) pure
     ask' :: SqliteWiki IO a -> Handler a
     ask' = liftIO . runSqliteWiki env.storage who
     wiki :: SqliteWiki IO (Either WikiError a) -> Handler a
@@ -256,6 +343,16 @@ handlers env who =
       unless (any (\g -> g.permission == Administer) s.grants.global) (refuse ApiError.Forbidden)
     notAnArchive reason = ApiError.Invalid ("This is not an archive this server can read: " <> reason)
     clampLimit q = q {limit = max 0 (min 200 q.limit)}
+
+-- | The session as the API answers it.
+sessionInfo :: Session -> SessionInfo
+sessionInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing}
+
+-- | How long to wait, in words: in minutes, rounded up, or seconds under one.
+waitText :: Int -> Text
+waitText seconds
+  | seconds < 60 = show seconds <> (if seconds == 1 then " second" else " seconds")
+  | otherwise = let m = (seconds + 59) `div` 60 in show m <> (if m == 1 then " minute" else " minutes")
 
 -- | An attachment's bytes, at its address: streamed from its file, with its
 -- media type, a range of it when a range is asked for (Warp answers that

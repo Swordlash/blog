@@ -12,6 +12,7 @@ module Test.Sample
   , version
   , hit
   , sessionInfo
+  , account
   , importPlan
   , importChoices
   , importSummary
@@ -24,6 +25,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
+import Wiki.Api.Account (Account (..))
 import Wiki.Api.Admin (Directory (..), ServerStatus (..))
 import Wiki.Api.Import
 import Wiki.Api.Types (SessionInfo (..))
@@ -36,7 +38,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | A time with a fraction of a second, as a page's version has.
@@ -143,6 +145,16 @@ sessionInfo =
           { global = [GlobalGrant {subject = SubjectUser (UserId "u1"), permission = CreateSpaces}]
           , spaces = [SpaceGrant {space = SpaceId "s1", subject = SubjectGroup (GroupId "g1"), permission = Edit}]
           }
+    , standing = SignedIn
+    }
+
+-- | A user's account, as the administration sees it.
+account :: Account
+account =
+  Account
+    { user = User {id = UserId "u1", login = "ada", displayName = "Ada"}
+    , hasPassword = True
+    , disabled = False
     }
 
 importPlan :: ImportPlan

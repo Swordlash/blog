@@ -37,6 +37,7 @@ module Wiki.Server.Storage
   , openStorage
   , closeStorage
   , withStorage
+  , withStorageAside
   , withDatabase
   , storageDataDir
 
@@ -98,7 +99,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), bodyText, folded, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
 import Wiki.Server.Storage.Backup (backupFiles)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
@@ -135,7 +136,18 @@ defaultConfig = Config {attachmentAddress = \a -> "/api/v1/attachments/" <> a.id
 -- ("Wiki.Server.Storage.Blobs" says why then). A database a newer program
 -- has migrated is refused with an exception, and nothing is changed.
 openStorage :: Config -> FilePath -> IO Storage
-openStorage config dataDir = do
+openStorage = openWith True
+
+-- | Open the storage beside a server that may be running on it (the
+-- console's @wiki-server users …@): migrated as 'openStorage' does, but
+-- deleting no attachment's file, since the server may be writing one that
+-- its database does not name yet. A write waits for the server's (up to
+-- ten seconds) rather than fail at once.
+withStorageAside :: FilePath -> (Storage -> IO a) -> IO a
+withStorageAside dir = bracket (openWith False defaultConfig dir) closeStorage
+
+openWith :: Bool -> Config -> FilePath -> IO Storage
+openWith collect config dataDir = do
   createDirectoryIfMissing True dataDir
   c <- open (databaseFile dataDir)
   flip onException (close c) $ do
@@ -145,7 +157,7 @@ openStorage config dataDir = do
     execute_ c "PRAGMA synchronous = NORMAL"
     execute_ c "PRAGMA foreign_keys = ON"
     _ <- migrate c
-    collectGarbage c dataDir
+    when collect (collectGarbage c dataDir)
   connection <- newMVar c
   pure Storage {connection, dataDir, config}
 
@@ -188,7 +200,7 @@ data Who
   = -- | Nobody who has signed in: they see the public spaces.
     Anonymous
   | -- | One of the wiki's users, with what is granted to them and to their
-    -- groups. An id that is no user's is nobody.
+    -- groups. An id that is no user's, or a disabled user's, is nobody.
     AsUser UserId
   | -- | The server's operator, who passes every check, as a holder of the
     -- global 'Administer' would. They are no user of the wiki, and are shown
@@ -262,7 +274,7 @@ context st c who = do
   case who of
     Anonymous -> pure (ctx stored Nothing Nothing Nothing Nothing)
     AsUser u ->
-      loadUser c u >>= \case
+      loadActiveUser c u >>= \case
         Nothing -> pure (ctx stored Nothing Nothing Nothing Nothing)
         Just found -> do
           groups <- loadGroupsOf c u
@@ -454,6 +466,9 @@ sessionTx = do
               { global = filter (\g -> isFor p g.subject) ctx.grants.global
               , spaces = filter (\g -> isFor p g.subject) ctx.grants.spaces
               }
+        , -- The administrator is the operator; anyone else named is a user
+          -- the server took the request for, which is whoever signed in.
+          standing = if u.id == administratorId then Operator else SignedIn
         }
 
 listSpacesTx :: Tx [Space]

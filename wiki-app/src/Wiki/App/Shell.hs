@@ -38,6 +38,9 @@
 -- The demo's controls (its users to switch between, and its content to
 -- reset, export and import) come with the input ('Demo'), over the
 -- backend that has them; without them the header says who is signed in,
+-- with the way to sign in or out over a backend where people do
+-- ('Accounts', "Wiki.App.View.SignIn"), after which, or after a session
+-- ends by itself, the shell reloads everything as the new reader;
 -- and the administration's section on the wiki's data offers the
 -- server's export and, over a backend that merges an archive into what it
 -- has, the import ("Wiki.App.View.Import"), which brings the demo's pages
@@ -76,6 +79,7 @@ import Protolude hiding (State)
 import Web.Event.Event (Event)
 import Wiki.Api (ArchiveApi (..), WikiApi (..))
 import Wiki.Api.Links (links)
+import Wiki.App.Account (Accounts (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Browser (download, historyEntry, historyGo, setDocumentTitle, unzipFiles, zipFiles)
@@ -93,6 +97,7 @@ import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.Page qualified as PageView
 import Wiki.App.View.Search qualified as SearchBox
 import Wiki.App.View.SearchResults qualified as SearchResultsView
+import Wiki.App.View.SignIn qualified as SignInView
 import Wiki.App.View.Source qualified as SourceView
 import Wiki.App.View.Space qualified as SpaceView
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
@@ -106,12 +111,14 @@ import Wiki.Core.User (User (..))
 
 -- | The router, a route the home page invites a newcomer to (the demo's
 -- tour), if there is one, the demo's controls, over a backend that has
--- them, and the import into a server, over one that has it.
+-- them, the import into a server, over one that has it, and signing in
+-- and out, over one where people do.
 data Input m = Input
   { router :: Router Route
   , welcome :: Maybe Route
   , demo :: Maybe (Demo m)
   , migration :: Maybe (ImportView.Migration m)
+  , accounts :: Maybe (Accounts m)
   }
 
 -- | Whether the shell has loaded everything the route shows; when it has,
@@ -131,6 +138,7 @@ type Slots =
     .+ ("searchResults" .== H.Slot (Const Void) ViewOutput ())
     .+ ("importer" .== H.Slot (Const Void) ViewOutput ())
     .+ ("people" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("signIn" .== H.Slot SignInView.Query SignInView.Output ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -152,6 +160,7 @@ data State m = State
   , welcome :: Maybe Route
   , demo :: Maybe (Demo m)
   , migration :: Maybe (ImportView.Migration m)
+  , accounts :: Maybe (Accounts m)
   , world :: World
   , route :: Route
   , session :: Session
@@ -210,6 +219,8 @@ data Action
   | Stay
   | RetryWorld
   | RetryHere
+  | FromAccount SignInView.Output
+  | SessionChanged Session
 
 component
   :: forall output m
@@ -225,7 +236,7 @@ component =
         -- the initializer to build it again.
         -- Over a backend that would wait, it is loaded in 'Initialize'
         -- instead, unless the backend has kept it.
-        initialState = \Input {router, welcome, demo, migration} -> do
+        initialState = \Input {router, welcome, demo, migration, accounts} -> do
           route <- Router.current router
           loaded <- atOnce $ do
             world <- fetchWorld demo
@@ -238,6 +249,7 @@ component =
               , welcome
               , demo
               , migration
+              , accounts
               , world = if isJust loaded then WorldReady else WorldLoading
               , route
               , session = signedIn
@@ -333,13 +345,16 @@ component =
         |]
 
     -- Who is signed in: the demo's menu to switch between its users, or,
-    -- where people do not switch, their name, once it is known.
+    -- where people do not switch, their name, once it is known, with the
+    -- way to sign in or out where people do.
     whoIsAsking :: State m -> Maybe (H.ComponentHTML Action Slots m)
     whoIsAsking st = case st.demo of
       Just _ -> Just (userSwitcher st)
       Nothing
-        | st.world == WorldReady -> Just [hh|<span class="user-name">{{ maybe "Not signed in" (\u -> u.displayName) st.session.user }}</span>|]
-        | otherwise -> Nothing
+        | st.world /= WorldReady -> Nothing
+        | Just accounts <- st.accounts ->
+            Just (HH.slot "signIn" () SignInView.component SignInView.Input {accounts, session = st.session} FromAccount)
+        | otherwise -> Just [hh|<span class="user-name">{{ maybe "Not signed in" (\u -> u.displayName) st.session.user }}</span>|]
 
     -- The demo's menu of who one is: nobody, or one of its users.
     userSwitcher :: State m -> H.ComponentHTML Action Slots m
@@ -399,10 +414,14 @@ component =
           | otherwise = "The whole wiki as one file: export it to keep a copy, or import the pages of another into this one, choosing what to bring in."
         refusal :: Text
         refusal
-          | isNothing st.demo = "This page is for the wiki's administrators."
-          | isNothing st.session.user =
+          | isJust st.demo
+          , isNothing st.session.user =
               "This page is for the wiki's administrators, and you are not signed in. To sign in as one, choose who you are at the top right."
-          | otherwise = "This page is for the wiki's administrators, which you are not. Switch to one at the top right."
+          | isJust st.demo = "This page is for the wiki's administrators, which you are not. Switch to one at the top right."
+          | isJust st.accounts
+          , isNothing st.session.user =
+              "This page is for the wiki's administrators, and you are not signed in. If you are one, sign in at the top right."
+          | otherwise = "This page is for the wiki's administrators, which you are not."
 
     -- What can be done with the wiki's data: the demo's, or the server's.
     dataControls :: State m -> H.ComponentHTML Action Slots m
@@ -640,6 +659,7 @@ component =
       Initialize -> do
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
+        gets (\st -> st.accounts) >>= traverse_ (\a -> lift a.sessionChanges >>= void . H.subscribe . fmap SessionChanged)
         entry <- H.liftEffect historyEntry
         modify (\st -> st {entry})
         -- What the route shows was loaded with the initial state, unless
@@ -725,6 +745,18 @@ component =
           _ -> pass
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
+      -- Someone signed in or out: everything again, as them.
+      FromAccount (SignInView.AccountChanged s) -> do
+        modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+        reload Nothing
+      -- The session ended by itself (or changed elsewhere): everything
+      -- again, as whoever is asking now, and if that is nobody, the way to
+      -- sign in again, saying why.
+      SessionChanged s -> do
+        modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+        reload Nothing
+        when (isNothing s.user) $
+          H.tell "signIn" () (SignInView.Prompt "Your session has ended. Sign in again to go on.")
 
     -- Something only the demo does, which nothing offers without it.
     withDemo :: (Demo m -> H.HalogenM (State m) Action Slots output m ()) -> H.HalogenM (State m) Action Slots output m ()

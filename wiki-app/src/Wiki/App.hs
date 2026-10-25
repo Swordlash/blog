@@ -20,6 +20,7 @@ import Halogen.Router (Router)
 import Paths_wiki_app qualified as Paths
 import Protolude
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
+import Wiki.App.Account (accounts)
 import Wiki.App.Backend.Http (HttpWiki, applyImport, previewImport)
 import Wiki.App.Backend.Mem (memWikiFound, readMemWiki)
 import Wiki.App.Backend.Mem.Archive (toArchive)
@@ -35,12 +36,13 @@ import Wiki.Core.Export (writeArchive)
 -- | The shell's input for the demo: the router, the demo's tour for a
 -- newcomer, and its controls.
 input :: (MonadDemoUsers m) => Router Route -> Shell.Input m
-input router = Shell.Input {router, welcome = Just (uncurry Page tourPath), demo = Just demoControls, migration = Nothing}
+input router = Shell.Input {router, welcome = Just (uncurry Page tourPath), demo = Just demoControls, migration = Nothing, accounts = Nothing}
 
 -- | The shell's input for a wiki a server keeps: the router, and the
 -- import into the server, which offers the wiki the demo left in this
 -- browser ('demoDatabase') as a source. The server's wiki is its owner's,
--- with no tour in it, and people sign in to it rather than switch.
+-- with no tour in it, and people sign in to it rather than switch
+-- ("Wiki.App.Account").
 serverInput :: (MonadIndexedDB m, MonadUnliftIO m) => Router Route -> Shell.Input (HttpWiki m)
 serverInput = serverInputWith demoDatabase
 
@@ -52,6 +54,7 @@ serverInputWith db router =
     { router
     , welcome = Nothing
     , demo = Nothing
+    , accounts = Just accounts
     , migration =
         Just
           Migration

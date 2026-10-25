@@ -115,7 +115,7 @@ import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
-import Wiki.Core.User (Group (..), Membership, User (..))
+import Wiki.Core.User (Group (..), Membership, Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, versionInfo)
 import Wiki.Core.Version qualified as V
 
@@ -500,6 +500,8 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
             { P.global = filter (\g -> isFor p g.subject) st.grants.global
             , P.spaces = filter (\g -> isFor p g.subject) st.grants.spaces
             }
+      , -- Switched to, which is the demo's signing in.
+        B.standing = SignedIn
       }
 
 -- | The spaces the current user may view, with their ancestors.

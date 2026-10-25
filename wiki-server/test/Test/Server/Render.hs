@@ -74,7 +74,7 @@ anonymous = describe "for someone not signed in" $ do
     html `shouldSatisfy` T.isInfixOf "<title>Wiki</title>"
     appIn html `shouldSatisfy` T.isInfixOf "<h1>Welcome to the wiki</h1>"
     appIn html `shouldSatisfy` T.isInfixOf "Docs"
-    appIn html `shouldSatisfy` T.isInfixOf "Not signed in"
+    appIn html `shouldSatisfy` T.isInfixOf "class=\"sign-in-toggle\""
     appIn html `shouldNotSatisfy` T.isInfixOf "Team"
     appIn html `shouldNotSatisfy` T.isInfixOf "Loading…"
 

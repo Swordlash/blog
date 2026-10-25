@@ -151,6 +151,10 @@ data ServeOptions = ServeOptions
   -- ^ Allow an admin listener on an address that is not loopback.
   , trustNetwork :: Bool
   -- ^ Everyone on the public listener is the administrator.
+  , secureCookies :: Bool
+  -- ^ The session's cookie is @Secure@: the browser reaches the public
+  -- listener over HTTPS (through a proxy in front of it), and sends the
+  -- cookie over nothing else.
   , basePath :: Text
   -- ^ The path the public listener serves the wiki under, @\/@ or
   -- @\/wiki\/@, as the application was built for (@HALOGEN_BASE_PATH@).
@@ -170,6 +174,7 @@ defaultServeOptions dataDir =
     , adminListen = Just (Listen "127.0.0.1" 8081)
     , adminListenUnsafe = False
     , trustNetwork = False
+    , secureCookies = False
     , basePath = "/"
     , staticDir = Nothing
     , maxImportSize = defaultMaxImportSize
@@ -189,6 +194,7 @@ serveOptions = do
   noAdmin <- switch (long "no-admin-listen" <> help "Do not listen for the administrator at all")
   adminListenUnsafe <- switch (long "admin-listen-unsafe" <> help "Allow --admin-listen on an address that is not loopback (inside a container, say)")
   trustNetwork <- switch (long "trust-network" <> help "Take everyone who reaches the public listener for the administrator: for a private network only, until there are accounts")
+  secureCookies <- switch (long "secure-cookies" <> help "Mark the session's cookie Secure, for a wiki reached over HTTPS only (a browser never sends such a cookie over plain HTTP)")
   basePath <- strOption (long "base-path" <> metavar "PATH" <> value "/" <> showDefault <> help "The path the wiki is served under, as the application was built for")
   staticDir <- optional (strOption (long "static" <> metavar "DIR" <> help "The built application to serve (its index.html, 404.html, app.wasm, ...)"))
   maxImportMb <- option auto (long "max-import-size" <> metavar "MB" <> value (defaultMaxImportSize `div` (1024 * 1024)) <> showDefault <> help "The largest archive an import takes, in MiB")
@@ -199,6 +205,7 @@ serveOptions = do
       , adminListen = if noAdmin then Nothing else Just admin
       , adminListenUnsafe
       , trustNetwork
+      , secureCookies
       , basePath
       , staticDir
       , maxImportSize = maxImportMb * 1024 * 1024

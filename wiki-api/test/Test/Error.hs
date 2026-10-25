@@ -11,12 +11,13 @@ import Wiki.Api.Error
 spec :: Spec
 spec = describe "Wiki.Api.Error" $ do
   it "answers each error with its status" $
-    map errorStatus [NotFound, Forbidden, Conflict "c", Invalid "i"] `shouldBe` [404, 403, 409, 400]
+    map errorStatus [NotFound, Forbidden, Conflict "c", Invalid "i", Unauthenticated, TooManyRequests "t"] `shouldBe` [404, 403, 409, 400, 401, 429]
 
   prop "reads an error's own status back as that error, given its text" $ forAll genApiError $ \e ->
     let text = case e of
           Conflict t -> t
           Invalid t -> t
+          TooManyRequests t -> t
           _ -> ""
      in errorForStatus (errorStatus e) text === Just e
 
@@ -24,7 +25,8 @@ spec = describe "Wiki.Api.Error" $ do
     errorForStatus 405 "Method Not Allowed" `shouldBe` Just (Invalid "Method Not Allowed")
     errorForStatus 413 "too large" `shouldBe` Just (Invalid "too large")
     errorForStatus 412 "" `shouldBe` Just (Conflict "")
-    errorForStatus 401 "" `shouldBe` Just Forbidden
+    errorForStatus 401 "" `shouldBe` Just Unauthenticated
+    errorForStatus 429 "slow down" `shouldBe` Just (TooManyRequests "slow down")
 
   it "does not take a failure of the server for a refusal" $ do
     errorForStatus 500 "" `shouldBe` Nothing

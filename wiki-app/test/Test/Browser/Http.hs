@@ -134,7 +134,7 @@ serveDemo = do
       pages <- for spaces $ \s -> (s,) . fromRight [] <$> listPages s.id
       people <- directory
       pure (me, spaces, pages, people)
-  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants}
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing}
   for_ people (answerWith "GET" links.admin.directory 200)
   answerWith "GET" "api/v1/spaces" 200 spaces
   for_ pages $ \(s, ps) -> do

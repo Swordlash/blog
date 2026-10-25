@@ -62,12 +62,17 @@ library
   else
     exposed-modules:
         Wiki.Server
+        Wiki.Server.Accounts
         Wiki.Server.Api
         Wiki.Server.App
+        Wiki.Server.Console
         Wiki.Server.Import
+        Wiki.Server.Limiter
         Wiki.Server.Log
         Wiki.Server.Options
+        Wiki.Server.Password
         Wiki.Server.Render
+        Wiki.Server.Session
         Wiki.Server.Static
         Wiki.Server.Version
         Wiki.Server.Storage
@@ -87,6 +92,7 @@ library
         bytestring,
         case-insensitive,
         containers,
+        crypton,
         cryptohash-sha256,
         direct-sqlite,
         directory,
@@ -98,6 +104,7 @@ library
         network,
         optparse-applicative,
         protolude,
+        ram,
         servant-multipart,
         servant-server,
         sqlite-simple,

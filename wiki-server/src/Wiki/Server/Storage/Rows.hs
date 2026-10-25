@@ -20,6 +20,7 @@ module Wiki.Server.Storage.Rows
   , loadGrants
   , loadUser
   , loadUserByLogin
+  , loadActiveUser
   , loadUsers
   , loadGroupsOf
   , loadGroups
@@ -258,6 +259,10 @@ userRow = do
 -- | A user by id.
 loadUser :: Connection -> UserId -> IO (Maybe User)
 loadUser c u = head <$> queryWith userRow c "SELECT id, login, display_name FROM users WHERE id = ?" (Only u.text)
+
+-- | A user by id who may act: not one whose login is disabled.
+loadActiveUser :: Connection -> UserId -> IO (Maybe User)
+loadActiveUser c u = head <$> queryWith userRow c "SELECT id, login, display_name FROM users WHERE id = ? AND disabled = 0" (Only u.text)
 
 -- | A user by login.
 loadUserByLogin :: Connection -> Text -> IO (Maybe User)

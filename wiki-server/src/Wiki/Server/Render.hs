@@ -67,7 +67,7 @@ import Wiki.App.Static (Served (..), renderServed, withTitle)
 import Wiki.Core.Page (Page (id))
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (VersionInfo (updatedAt))
-import Wiki.Server.Api (Env, apiApplication)
+import Wiki.Server.Api (Env, apiApplication, callerAs)
 import Wiki.Server.Log (Level (..), Logger, logWith)
 import Wiki.Server.Static (withBaseHref)
 import Wiki.Server.Storage (Who)
@@ -187,5 +187,5 @@ inProcess env who = Transport $ \r -> do
       body = case r.body of
         NoBody -> ""
         Body _ bytes -> BSL.fromStrict bytes
-  response <- runSession (srequest (SRequest request body)) (apiApplication env who)
+  response <- runSession (srequest (SRequest request body)) (apiApplication env (callerAs who))
   pure (Right R.Response {status = statusCode (simpleStatus response), body = BSL.toStrict (simpleBody response)})

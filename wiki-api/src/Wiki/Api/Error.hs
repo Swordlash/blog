@@ -28,6 +28,13 @@ import Protolude
 -- > {"error": "Forbidden"}
 -- > {"error": "Conflict", "message": "The page has been saved since."}
 -- > {"error": "Invalid", "message": "A page needs a title."}
+-- > {"error": "Unauthenticated"}
+-- > {"error": "TooManyRequests", "message": "Too many failed attempts: try again in 15 minutes."}
+--
+-- The last two are signing in's ("Wiki.Api.Account"), which @MonadWiki@
+-- has no method for: a login and password that do not match, and a login
+-- tried too often. A client that reads them where a @WikiError@ is wanted
+-- takes them for the nearest one ('Forbidden', 'Invalid').
 --
 -- Which of them a request gets, when more than one would apply, is decided
 -- as @MonadWiki@'s Haddock says (not found first, then forbidden, invalid
@@ -43,6 +50,13 @@ data ApiError
   | -- | The request cannot be carried out as it is, as the text says: status
     -- 400.
     Invalid Text
+  | -- | Signing in failed: no account has that login and password, or it
+    -- cannot sign in (it has no password, or it is disabled), which the
+    -- answer does not tell apart: status 401.
+    Unauthenticated
+  | -- | Asked too often, as the text says: signing in, after too many
+    -- failed attempts: status 429.
+    TooManyRequests Text
   deriving stock (Eq, Show)
 
 instance ToJSON ApiError where
@@ -55,6 +69,8 @@ instance ToJSON ApiError where
         Forbidden -> ("Forbidden", [])
         Conflict t -> ("Conflict", ["message" .= t])
         Invalid t -> ("Invalid", ["message" .= t])
+        Unauthenticated -> ("Unauthenticated", [])
+        TooManyRequests t -> ("TooManyRequests", ["message" .= t])
 
 instance FromJSON ApiError where
   parseJSON = withObject "ApiError" $ \o ->
@@ -63,6 +79,8 @@ instance FromJSON ApiError where
       "Forbidden" -> pure Forbidden
       "Conflict" -> Conflict <$> o .: "message"
       "Invalid" -> Invalid <$> o .: "message"
+      "Unauthenticated" -> pure Unauthenticated
+      "TooManyRequests" -> TooManyRequests <$> o .: "message"
       other -> parseFail ("not an error the API knows: " <> show other)
 
 -- | The status an error is answered with.
@@ -72,6 +90,8 @@ errorStatus = \case
   Forbidden -> 403
   Conflict _ -> 409
   Invalid _ -> 400
+  Unauthenticated -> 401
+  TooManyRequests _ -> 429
 
 -- | The error a response with this status means when its body is not an
 -- 'ApiError': one the server's own routing answered before any handler ran
@@ -83,7 +103,9 @@ errorStatus = \case
 errorForStatus :: Int -> Text -> Maybe ApiError
 errorForStatus status text
   | status == 404 || status == 410 = Just NotFound
-  | status == 401 || status == 403 = Just Forbidden
+  | status == 401 = Just Unauthenticated
+  | status == 403 = Just Forbidden
   | status == 409 || status == 412 = Just (Conflict text)
+  | status == 429 = Just (TooManyRequests text)
   | status >= 400 && status < 500 = Just (Invalid text)
   | otherwise = Nothing
