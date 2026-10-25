@@ -362,6 +362,47 @@ may give a look:
 Three colons, a class, the content, three colons.
 :::
 
+## Presentations
+
+Any page can be shown as slides: "Present", above a page written as a deck,
+opens it full screen, one slide at a time. A deck is an ordinary page; how
+it is cut into slides is written in it:
+
+- A thematic break, `---` on a line of its own after a blank line, starts
+  the next slide. (Under a line of text, with no blank line between, `---`
+  makes that line a heading instead, as anywhere in Markdown.) A break
+  inside a list, a quotation or a box stays a rule on its slide.
+- The first heading on a slide is its title, shown in the slide's title
+  bar. A slide titled with a level-one heading (`#`) is a title slide: the
+  title large in the middle, the rest under it, as for a talk's first slide
+  or a section's.
+- A box with the class `notes` holds the speaker's notes for its slide.
+  They are not on the slide: "Notes" (or the key **n**) shows them under
+  it. On the page they show as a box marked "Speaker notes".
+- A footnote is shown at the foot of the first slide that refers to it.
+- A box with the class `slides` and attributes says how the deck looks,
+  anywhere in the page; it shows nothing. The theme is `beamer` (the
+  default: a title bar, and a footer with the page's title and the slide's
+  number), `light` or `dark`; the aspect `16:9` (the default) or `4:3`:
+
+```markdown
+::: {.slides theme=dark aspect=4:3}
+:::
+```
+
+Everything a page shows a slide shows: formulas set with the macros defined
+on the slides before them, diagrams, pictures, code, tables, images and the
+HTML a page may hold.
+
+Presenting, the arrow keys, Space, PageUp and PageDown move between slides,
+Home and End go to the first and the last, **f** fills the screen (Escape
+leaves it), **n** shows the notes and **o** every slide, to pick one; on a
+touch screen, swipe. The slide shown is in the address (`?slide=3`), so a
+reload or a link comes back to it. "Print" puts one slide on each page, the
+page the slide's shape, so that the browser's "Save as PDF" keeps the deck
+as a file; with "with notes" ticked, each slide is printed on its own A4
+page above its notes.
+
 ## HTML
 
 Where Markdown has no word for something, HTML may say it: press
