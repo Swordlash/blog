@@ -104,6 +104,7 @@ import Wiki.App.Backend.Http.Cache
 import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, fromSessionInfo, ifMatch, multipart, multipartForm, sessionInfo, withJson)
 import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Islands.Monad (MonadIslands)
+import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Id (PageId)
 import Wiki.Core.User (Standing (..))
@@ -227,6 +228,9 @@ data HttpEnv = HttpEnv
   -- ^ Within 'atOnce': a read the cache cannot answer gives up.
   , changes :: Subscribe IO Session
   -- ^ Where a session found to have changed by itself is announced.
+  , feed :: Feed
+  -- ^ The tab's live channel ("Wiki.App.Live"), which keeps the threads
+  -- this has read up to date with what it hears.
   }
 
 -- | A backend over this transport, with nothing read yet.
@@ -239,7 +243,9 @@ newHttpEnvWith :: (MonadIO n) => Transport -> Cache -> n HttpEnv
 newHttpEnvWith transport start = liftIO $ do
   cache <- newIORef start
   changes <- HS.create
-  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, changes}
+  let change f = atomicModifyIORef' cache (\c -> (f c, ()))
+  feed <- newFeed (\page event -> change (afterComment page (Right event))) (change . forgetThreads)
+  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, changes, feed}
 
 -- | A backend over a transport that answers at once, a server's
 -- application in the same process: 'atOnce' asks it rather than give up,
@@ -474,6 +480,11 @@ commentWrite_ pid event request = do
   result <- answerNothing <$> call request
   modifyCache (afterComment pid (event <$ result))
   pure result
+
+-- | The tab's live channel: one per backend, made with it, and opened when
+-- a page is first watched.
+instance (MonadIO m) => MonadLive (HttpWiki m) where
+  liveFeed = HttpWiki (asks (\env -> env.feed))
 
 -- | Signing in and out ("Wiki.App.Account"), each of which starts the
 -- cache over with the session it answered with.

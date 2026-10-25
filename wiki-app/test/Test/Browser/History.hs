@@ -39,7 +39,7 @@ spec m = do
   it "lets someone not signed in open a page's history from the page, and come back" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["tour"]))
     actions <- traverse textContent =<< findAll ui ".page-view .actions > *"
-    actions `shouldBe` ["View source", "History"]
+    actions `shouldBe` ["View source", "History", "Comments (0)"]
     find ui ".page-view .actions a[href$='#/s/docs/p/tour/history/']" >>= click
     find ui ".history-view h1" >>= (`shouldHaveText` "Tour")
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "History")

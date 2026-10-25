@@ -82,6 +82,7 @@ library
       Wiki.App.Import
       Wiki.App.Islands
       Wiki.App.Islands.Monad
+      Wiki.App.Live
       Wiki.App.Route
       Wiki.App.Shell
       Wiki.App.Editor.Browser
@@ -89,6 +90,7 @@ library
       Wiki.App.View.Admin
       Wiki.App.View.Invite
       Wiki.App.View.Body
+      Wiki.App.View.Comments
       Wiki.App.View.Common
       Wiki.App.View.Editor
       Wiki.App.View.Import
@@ -276,6 +278,7 @@ test-suite wiki-app-browser-test
   other-modules:
       Test.Browser.Access
       Test.Browser.Admin
+      Test.Browser.Comments
       Test.Browser.Editor
       Test.Browser.History
       Test.Browser.Http

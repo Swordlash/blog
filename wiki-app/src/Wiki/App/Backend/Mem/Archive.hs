@@ -68,7 +68,8 @@ fromArchive a =
           newAccountsCreateSpaces = False
         , invitations = mempty
         , server = noServerSettings
-        , threads = mempty
+        , -- Nor comments (docs/export.md).
+          threads = mempty
         , current = Nothing
         , counter = 1
         }

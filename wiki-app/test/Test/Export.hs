@@ -93,10 +93,11 @@ ordered = do
   (\x -> withoutHistory x {current = Nothing}) <$> readIORef ref
 
 -- | The wiki with each page's history as an import starts it: the page as
--- it is, saved by nobody known. An archive has no history, so this is the
--- wiki an archive of it reads back as.
+-- it is, saved by nobody known; and with no comments. An archive has no
+-- history and no comments, so this is the wiki an archive of it reads back
+-- as.
 withoutHistory :: MemState -> MemState
-withoutHistory st = completeVersions st {versions = mempty}
+withoutHistory st = completeVersions st {versions = mempty, threads = mempty}
 
 -- | The files every archive has, besides the attachments'.
 recordFiles :: [Text]

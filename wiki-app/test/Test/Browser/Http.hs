@@ -31,7 +31,7 @@ module Test.Browser.Http
 where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.Aeson (FromJSON (..), ToJSON, eitherDecodeStrict', encode, withObject, (.:))
+import Data.Aeson (FromJSON (..), ToJSON, decodeStrict', eitherDecodeStrict', encode, withObject, (.:))
 import Data.Map.Strict qualified as Map
 import Data.NT (type (~>) (..))
 import Data.Text qualified as T
@@ -42,11 +42,13 @@ import Halogen.Router (Router)
 import Halogen.Router qualified as Router
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Mount (slugs, start)
+import Test.Browser.Mount (clickButton, slugs, start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
+import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
+import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded), ServerMessage (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (ServerSettings, noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
@@ -54,6 +56,7 @@ import Wiki.Api.Version (VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http (HttpEnv, browserTransport, cacheOf, fetchTransport, newHttpEnv, newHttpEnvWith, runHttpWiki)
 import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
@@ -65,7 +68,8 @@ import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.App.View.Common (spacePathOf)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
-import Wiki.Core.Id (AttachmentId (..), PageId (..), UserId (..))
+import Wiki.Core.Comment (Comment (..), Thread (..))
+import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Space qualified as S
 import Wiki.Core.User (Standing (..))
@@ -90,6 +94,9 @@ $( browserJS
      , ("js_markup", "wiki_test_markup", Unsafe, [t|IO JSText|])
      , ("js_embed", "wiki_test_embed", Unsafe, [t|JSText -> JSText -> IO ()|])
      , ("js_unembed", "wiki_test_unembed", Unsafe, [t|JSText -> IO ()|])
+     , ("js_server_tell", "wiki_test_server_tell", Unsafe, [t|JSText -> IO ()|])
+     , ("js_server_hang_up", "wiki_test_server_hang_up", Unsafe, [t|IO ()|])
+     , ("js_server_said", "wiki_test_server_said", Unsafe, [t|IO JSText|])
      ]
  )
 
@@ -143,14 +150,16 @@ asked = unsafeIOToPageM js_server_asked >>= either (\e -> panic ("the server's r
 -- administration's people.
 serveDemo :: PageM s ()
 serveDemo = do
-  (me, spaces, pages, people) <- unsafeIOToPageM $ do
+  (me, spaces, pages, people, threads) <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki $ do
       me <- session
       spaces <- listSpaces
       pages <- for spaces $ \s -> (s,) . fromRight [] <$> listPages s.id
       people <- directory
-      pure (me, spaces, pages, people)
+      threads <- for (concatMap snd pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
+      pure (me, spaces, pages, people, threads)
+  for_ threads $ \(p, ts) -> answerWith "GET" (links.comments p).list 200 ts
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = []}
   for_ people (answerWith "GET" links.admin.directory 200)
   answerWith "GET" links.admin.server 200 (noServerSettings :: ServerSettings)
@@ -244,7 +253,7 @@ testRouter = panic "the backend's browser tests run in a browser"
 #endif
 
 -- | A program against the server, through the page's fetch.
-overHttp :: HttpEnv -> (forall n. (MonadLoad n) => n a) -> PageM s a
+overHttp :: HttpEnv -> (forall n. (MonadLoad n, MonadComments n) => n a) -> PageM s a
 overHttp env program = unsafeIOToPageM (runHttpWiki env program)
 
 spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -254,6 +263,7 @@ spec m = do
   views m
   accounts m
   ownPassword m
+  comments m
 
 -- | Who is asking, as the server says: someone of the demo's signed in,
 -- or nobody.
@@ -717,7 +727,10 @@ views m = describe "the application over it" $ do
       _ <- session
       _ <- listSpaces
       docs <- getSpace (slugs ["docs"])
-      for_ docs (\s -> listPages s.id)
+      for_ docs $ \s -> do
+        _ <- listPages s.id
+        -- And the tour's comments, which its page shows.
+        getPage s.id (slugs ["tour"]) >>= traverse_ (\p -> listThreads p.id)
     carried <- unsafeIOToPageM (cacheOf reading)
     serverStops
     -- A server that answers nothing from here on, and the page with what
@@ -746,3 +759,58 @@ views m = describe "the application over it" $ do
     -- Every element but what is inside an island, which its library fills
     -- after the shell has adopted it.
     adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-tikz *, .wiki-code *, .wiki-time *)"
+
+-- | What the page has sent on the live channel, each message read.
+said :: PageM s [ClientMessage]
+said = do
+  messages <- unsafeIOToPageM js_server_said >>= either (\e -> panic ("what was said: " <> toS e)) pure . eitherDecodeStrict' . encodeUtf8 . fromJSText
+  pure (mapMaybe (decodeStrict' . encodeUtf8) (messages :: [Text]))
+
+-- | The server says this on the live channel.
+tell :: ServerMessage -> PageM s ()
+tell = unsafeIOToPageM . js_server_tell . toJSText . decodeUtf8 . toS . encode
+
+-- | A page's comments over the server's backend: read with the page, a new
+-- one sent, what another tab writes heard over the live channel, and, when
+-- the channel's connection is cut, the channel opened again and the
+-- comments read again.
+comments :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+comments m = describe "a page's comments" $ do
+  it "reads them with the page, sends a new one, hears another tab's, and reads them again after a lost connection" $ runPage $ do
+    serverStarts
+    serveDemo
+    hello <- unsafeIOToPageM $ do
+      wiki <- newMemWiki (demoState demoNow)
+      runMemWiki wiki $ do
+        blog <- either (panic . show) identity <$> getSpace (slugs ["blog"])
+        either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
+    ui <- startServer m (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    find ui "mark.comment-mark[data-thread='thread-hello-1']" >>= (`shouldHaveText` "a blog that is also a wiki")
+    eventually $ said `shouldReturn` [Subscribe hello.id]
+    -- A new comment about the page, sent to the server, shown as it answered.
+    let ada = Author {id = UserId "user-admin", name = "Ada Admin"}
+        comment' tid cid body = Comment {id = CommentId cid, thread = CommentThreadId tid, author = ada, body, createdAt = demoNow, editedAt = Nothing}
+        made = Thread {id = CommentThreadId "thread-new", page = hello.id, anchor = Nothing, resolved = False, createdAt = demoNow, comments = [comment' "thread-new" "comment-new" "Sent."]}
+    answerWith "POST" (links.comments hello.id).open 201 made
+    text <- find ui ".page-comments .comment-new textarea"
+    typeText text "Sent."
+    clickButton ui ".page-comments .comment-new button" "Comment"
+    find ui ".page-comments #comment-thread-thread-new .comment-body" >>= (`shouldHaveText` "Sent.")
+    posted <- filter (\r -> r.method == "POST") <$> asked
+    map (\r -> (r.url, eitherDecodeStrict' (encodeUtf8 r.body))) posted `shouldBe` [((links.comments hello.id).open, Right NewThread {anchor = Nothing, body = "Sent."})]
+    -- Another tab replies: heard, and shown.
+    tell (Event hello.id (CommentAdded (comment' "thread-hello-3" "comment-elsewhere" "From another tab.")))
+    eventually $ (traverse textContent =<< findAll ui "#comment-thread-thread-hello-3 .comment-body") `shouldReturn` ["Welcome! Comments here are about the whole post; select some of its text to comment on that.", "Thanks, that works.", "From another tab."]
+    -- The connection is cut: opened again after a pause, subscribed
+    -- again, and the comments read again, as the server has them now.
+    let threadsAt = (links.comments hello.id).list
+        readsSoFar = length . filter (\r -> r.method == "GET" && r.url == threadsAt) <$> asked
+    before <- readsSoFar
+    answerWith "GET" threadsAt 200 [made]
+    unsafeIOToPageM js_server_hang_up
+    eventually $ said `shouldReturn` [Subscribe hello.id, Subscribe hello.id]
+    eventually $ readsSoFar `shouldReturn` (before + 1)
+    eventually $ length <$> findAll ui ".page-comments .comment-thread" `shouldReturn` 1
+    length <$> findAll ui "mark.comment-mark" `shouldReturn` 0
+    unmount ui
+    serverStops

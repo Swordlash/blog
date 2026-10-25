@@ -7,6 +7,24 @@
 -- which anyone who may read the page may, and, for someone who may edit it, edit it, add a page under
 -- it, rename, move or delete it. The URLs of its attachments are asked of the backend
 -- ('attachmentUrl') once per load.
+--
+-- = Comments
+--
+-- The page's comments (WP4.5 of docs/PLAN.md) are loaded with it, by
+-- themselves, so that a page found among what has been read shows at once
+-- while its comments load: its inline threads, whose quotes are marked in
+-- the page ("Wiki.Core.Anchor") and listed in a panel beside it
+-- ("Wiki.App.View.Comments"), opened by "Comments (n)" among the actions
+-- or by a click on a quote, and its threads about the whole page, under
+-- it. Text selected in the page by someone who may comment gets a
+-- "Comment" button beside it, which opens a thread about it in the panel.
+-- The panel starts closed, so a page the server or the prerender renders
+-- is the program's first render, quotes marked and page threads shown.
+--
+-- Over a backend with a live channel ("Wiki.App.Live"), the page is
+-- watched while it is shown, and what happens to its comments elsewhere is
+-- folded into what is shown, as the view's own writes are; when the
+-- channel opens anew they are read afresh.
 module Wiki.App.View.Page
   ( Input (..)
   , Slots
@@ -16,6 +34,7 @@ where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
+import Data.Row (type (.+), type (.==))
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -25,14 +44,27 @@ import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
+import Web.Event.Event (EventType (..))
+import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
-import Wiki.App.Browser (ArticleLink, followArticleLink)
+import Wiki.App.Backend.Comments (MonadComments (..))
+import Wiki.App.Browser (ArticleLink, Selected (..), clickedThread, followArticleLink, readSelection, reveal)
 import Wiki.App.Islands (MonadIslands)
+import Wiki.App.Live (Feed (..), Heard)
+import Wiki.App.Live qualified as Live
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.View.Body qualified as Body
+import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
+import Wiki.Core.Anchor (Anchor, Located (..), Marking (Marking), Range (..), highlight, locate, renderedText)
 import Wiki.Core.Attachment (Attachment (..))
-import Wiki.Core.Id (AttachmentId, PageId, SpaceId)
+import Wiki.Core.Comment (Thread (..), isInline, mayComment)
+import Wiki.Core.Id
+  ( AttachmentId
+  , CommentThreadId (..)
+  , PageId
+  , SpaceId
+  )
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Page (Page (attachments, body, id, parent, slug, space, title, updatedAt))
 import Wiki.Core.Permission (mayMovePage)
@@ -47,9 +79,17 @@ data Input = Input
   , space :: Space
   , pages :: [Page]
   , path :: [Slug]
+  , feed :: Maybe Feed
+  -- ^ The tab's live channel, over a backend that has one.
   }
 
-type Slots = Body.IslandSlots
+type Slots = Body.IslandSlots .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement)
+
+-- | The page's threads, as far as they have been loaded.
+data Threads
+  = ThreadsLoading
+  | ThreadsFailed WikiError
+  | ThreadsReady [Thread]
 
 data Loaded
   = Loading
@@ -71,6 +111,20 @@ data State = State
   , loaded :: Loaded
   , mode :: Mode
   , problem :: Maybe WikiError
+  , threads :: Threads
+  , panelOpen :: Bool
+  -- ^ Whether the panel of inline threads is shown.
+  , focused :: Maybe CommentThreadId
+  -- ^ The thread the reader chose, its quote marked as chosen.
+  , selected :: Maybe Selected
+  -- ^ Text selected in the page, which may be commented on.
+  , quoting :: Maybe Anchor
+  -- ^ A quote being commented on, in a new thread in the panel.
+  , watching :: Maybe PageId
+  -- ^ The page the live channel is listening for.
+  , text :: H.RefLabel
+  -- ^ The element the article is in, with the panel beside it: whose
+  -- selection is read, and where the button to comment on it goes.
   }
 
 data Action
@@ -86,8 +140,15 @@ data Action
   | Submit
   | Delete
   | Retry
+  | Finalize
+  | FromComments CommentsView.Output
+  | Heard Heard
+  | Selecting
+  | CommentOnSelection
+  | ToggleComments
+  | ClickedQuote CommentThreadId
 
-component :: forall query m. (MonadLoad m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadComments m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -96,19 +157,37 @@ component =
         -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
         initialState = \input -> do
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
-          pure State {input, loaded, mode = Viewing, problem = Nothing}
+          threads <- case loaded of
+            Ready page _ _ -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
+            _ -> pure ThreadsLoading
+          text <- H.newRefLabel "page-text"
+          pure
+            State
+              { input
+              , loaded
+              , mode = Viewing
+              , problem = Nothing
+              , threads
+              , panelOpen = False
+              , focused = Nothing
+              , selected = Nothing
+              , quoting = Nothing
+              , watching = Nothing
+              , text
+              }
       , render
       , eval =
           H.mkEval
             H.defaultEval
               { H.handleAction = handleAction
               , H.initialize = Just Initialize
+              , H.finalize = Just Finalize
               , H.receive = Just . Receive
               }
       }
   where
     render :: State -> H.ComponentHTML Action Slots m
-    render State {input, loaded, mode, problem} = case loaded of
+    render st@State {input, loaded, mode, problem} = case loaded of
       Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> failureView e Retry
       Ready page urls deck ->
@@ -122,27 +201,34 @@ component =
           -- Several computed parts in a row are one hole: on lines of their
           -- own, each line break between them would be a space.
           parts =
-            [hh|<div class="actions">{{ actions input page deck }}</div>|]
+            [hh|<div class="actions">{{ actions input page deck (commentsToggle st) }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
                 <> Body.heading page.title page.body
-                <> [body input page urls]
+                <> [textAndPanel st place rendered text page]
                 <> attachments page urls
+                <> [commentsOf st place text page CommentsView.Below]
+          place = placeOf input page urls
+          -- Rendered once: the article shows it, its quotes marked, and
+          -- its text is where they are looked for.
+          rendered = Body.rendered place page.body
+          text = either (const "") renderedText rendered
 
-    actions :: Input -> Page -> Bool -> [H.ComponentHTML Action Slots m]
-    actions input page deck
+    actions :: Input -> Page -> Bool -> H.ComponentHTML Action Slots m -> [H.ComponentHTML Action Slots m]
+    actions input page deck comments
       | mayEdit input.context page.space =
           [ Router.link input.context.router Followed (EditPage spacePath input.path) [HP.class_ "button"] [HH.text "Edit"]
           , viewSource
           , history
           ]
             <> present
+            <> [comments]
             <> [ Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
                , button "Rename" (Open (Renaming page.title))
                , button "Move" StartMove
                , button "Delete" (Open ConfirmingDelete)
                ]
-      | otherwise = [viewSource, history] <> present
+      | otherwise = [viewSource, history] <> present <> [comments]
       where
         spacePath = spacePathOf input.context.spaces input.space.id
         -- For every reader: the source is theirs to read as the page is.
@@ -198,12 +284,78 @@ component =
         </form>
       |]
 
-    body :: Input -> Page -> Map AttachmentId Text -> H.ComponentHTML Action Slots m
-    body input page urls =
-      Body.article
-        FollowLink
-        Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls}
-        page.body
+    -- The page's text, its quotes marked, with what is selected in it and
+    -- the panel of inline threads beside it.
+    textAndPanel
+      :: State
+      -> Body.Place
+      -> Either Md.ParseError [H.ComponentHTML Action Slots m]
+      -> Text
+      -> Page
+      -> H.ComponentHTML Action Slots m
+    textAndPanel st place rendered text page =
+      [hh|
+        <div class="page-main{% if st.panelOpen %} with-comments{% end %}" ref={{ st.text }}>
+          <div class="page-text" onMouseUp={{ const Selecting }} onKeyUp={{ const Selecting }} {{ quoteClicks }}>
+            {{ Body.articleOf FollowLink place page.body marked }}
+          </div>
+          {% for s in maybeToList st.selected %}
+            <button
+              type="button"
+              class="comment-on-selection"
+              style={{ position s }}
+              onClick={{ const CommentOnSelection }}
+            >
+              Comment
+            </button>
+          {% end %}
+          {% if st.panelOpen %}
+            {{ commentsOf st place text page CommentsView.Beside }}
+          {% end %}
+        </div>
+      |]
+      where
+        marked = highlight (markings st text) <$> rendered
+        quoteClicks = HE.handler' (EventType "click") (fmap ClickedQuote . clickedThread)
+        position :: Selected -> Text
+        position s = "top: " <> px s.top <> "; left: " <> px s.left
+        px x = show (round x :: Int) <> "px"
+
+    -- The comments' component in one of its places.
+    commentsOf :: State -> Body.Place -> Text -> Page -> CommentsView.Placement -> H.ComponentHTML Action Slots m
+    commentsOf st place text page placement =
+      HH.slot
+        "comments"
+        placement
+        CommentsView.component
+        CommentsView.Input
+          { context = st.input.context
+          , place
+          , page = page.id
+          , space = page.space
+          , placement
+          , comments = case st.threads of
+              ThreadsLoading -> CommentsView.CommentsLoading
+              ThreadsFailed e -> CommentsView.CommentsFailed e
+              ThreadsReady ts -> CommentsView.CommentsReady (shownIn text placement ts)
+          , focused = st.focused
+          , quoting = st.quoting
+          }
+        FromComments
+
+    -- "Comments (n)": the inline threads not resolved, which opens the
+    -- panel of them.
+    commentsToggle :: State -> H.ComponentHTML Action Slots m
+    commentsToggle st =
+      [hh|
+        <button type="button" class="button comments-toggle" aria-expanded={{ ariaBool st.panelOpen }} onClick={{ const ToggleComments }}>
+          {{ label }}
+        </button>
+      |]
+      where
+        label = case st.threads of
+          ThreadsReady ts -> "Comments (" <> show (length [t | t <- ts, isInline t, not t.resolved]) <> ")" :: Text
+          _ -> "Comments"
 
     attachments :: Page -> Map AttachmentId Text -> [H.ComponentHTML Action Slots m]
     attachments page urls =
@@ -226,11 +378,19 @@ component =
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
       -- The page was loaded with the initial state, and the shell is told;
-      -- or it is loaded now.
-      Initialize ->
+      -- or it is loaded now. Its comments are heard of from now on, and
+      -- loaded if they were not with it.
+      Initialize -> do
+        gets (\st -> st.input.feed) >>= traverse_ (\f -> void (H.subscribe (Heard <$> f.heard)))
         gets (\st -> st.loaded) >>= \case
           Loading -> load
-          _ -> H.raise Loaded
+          _ -> do
+            H.raise Loaded
+            watch
+            gets (\st -> st.threads) >>= \case
+              ThreadsLoading -> loadThreads
+              _ -> pass
+      Finalize -> unwatchAll
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
@@ -238,7 +398,9 @@ component =
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
         let elsewhere = old.space.id /= input.space.id || old.path /= input.path
-        when elsewhere $ modify (\st -> st {loaded = Loading})
+        when elsewhere $ do
+          unwatchAll
+          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
           modify (\st -> st {mode = Viewing, problem = Nothing})
           load
@@ -278,6 +440,44 @@ component =
               movePage page.id target.id parent
                 >>= done (\moved -> Just (Page (spacePathOf ctx.spaces target.id) (maybe [] (pagePathOf ps) parent <> [moved.slug])))
             _ -> pass
+      FromComments out -> case out of
+        CommentsView.Did event -> do
+          modify (\st -> st {threads = applied event st.threads})
+          case event of
+            ThreadOpened t | isInline t -> modify (\st -> st {quoting = Nothing, focused = Just t.id})
+            _ -> pass
+        CommentsView.Focus tid -> do
+          modify (\st -> st {focused = Just tid})
+          reveal ("mark.comment-mark[data-thread=\"" <> tid.text <> "\"]")
+        CommentsView.StopQuoting -> modify (\st -> st {quoting = Nothing})
+        CommentsView.Close -> modify (\st -> st {panelOpen = False, quoting = Nothing})
+        CommentsView.Reload -> loadThreads
+      Heard heard -> do
+        here <- gets (\st -> st.watching)
+        case heard of
+          Live.Heard page event | Just page == here -> modify (\st -> st {threads = applied event st.threads})
+          -- The channel opened anew: what was missed is read, not heard.
+          Live.Connected | isJust here -> loadThreads
+          _ -> pass
+      Selecting -> do
+        st <- get
+        allowed <- gets mayCommentHere
+        found <-
+          if allowed
+            then H.getRef st.text >>= maybe (pure Nothing) (H.liftEffect . readSelection)
+            else pure Nothing
+        when (found /= st.selected) $ modify (\s -> s {selected = found})
+      CommentOnSelection -> do
+        gets (\st -> st.selected)
+          >>= traverse_
+            ( \s -> do
+                modify (\st -> st {quoting = Just s.anchor, selected = Nothing, panelOpen = True, focused = Nothing})
+                reveal ".comments-panel .new-thread"
+            )
+      ToggleComments -> modify (\st -> st {panelOpen = not st.panelOpen, quoting = if st.panelOpen then Nothing else st.quoting})
+      ClickedQuote tid -> do
+        modify (\st -> st {panelOpen = True, focused = Just tid})
+        reveal ("#" <> CommentsView.threadElementId tid)
       Delete -> withPage $ \page -> do
         input <- gets (\st -> st.input)
         let spacePath = spacePathOf input.context.spaces input.space.id
@@ -294,6 +494,34 @@ component =
       when (now.space.id == input.space.id && now.path == input.path) $ do
         modify (\st -> st {loaded})
         H.raise Loaded
+        watch
+        loadThreads
+
+    -- The page's comments, read (again).
+    loadThreads :: H.HalogenM State Action Slots ViewOutput m ()
+    loadThreads = withPage $ \page -> do
+      threads <- threadsOf <$> listThreads page.id
+      -- Only if it is still the page shown.
+      withPage $ \now -> when (now.id == page.id) (modify (\st -> st {threads}))
+
+    -- Listen for what happens to the page shown, and to nothing else.
+    watch :: H.HalogenM State Action Slots ViewOutput m ()
+    watch = do
+      st <- get
+      let shown = case st.loaded of
+            Ready page _ _ -> Just page.id
+            _ -> Nothing
+      when (shown /= st.watching) $ do
+        for_ st.input.feed $ \f -> H.liftEffect . liftIO $ do
+          traverse_ f.unwatch st.watching
+          traverse_ f.watch shown
+        modify (\s -> s {watching = shown})
+
+    unwatchAll :: H.HalogenM State Action Slots ViewOutput m ()
+    unwatchAll = do
+      st <- get
+      for_ st.input.feed $ \f -> H.liftEffect (liftIO (traverse_ f.unwatch st.watching))
+      modify (\s -> s {watching = Nothing})
 
     withPage :: (Page -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
     withPage k =
@@ -345,3 +573,49 @@ spaceName ctx s = mconcat (intersperse " / " (map (\c -> c.name) (chainOf ctx s.
 
 day :: UTCTime -> Text
 day = toS . formatTime defaultTimeLocale "%-d %B %Y"
+
+-- | A load's answer as the threads it shows.
+threadsOf :: Either WikiError [Thread] -> Threads
+threadsOf = either ThreadsFailed ThreadsReady
+
+-- | The threads after an event, if they are loaded.
+applied :: PageEvent -> Threads -> Threads
+applied event = \case
+  ThreadsReady ts -> ThreadsReady (applyEvent event ts)
+  other -> other
+
+-- | Where the page is, for its links and its comments'.
+placeOf :: Input -> Page -> Map AttachmentId Text -> Body.Place
+placeOf input page urls =
+  Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls}
+
+-- | Whether the reader may comment on the page shown.
+mayCommentHere :: State -> Bool
+mayCommentHere st = mayComment (principalOf st.input.context) (grantsOf st.input.context) (chainOf st.input.context st.input.space.id)
+
+-- | Where each inline thread's quote is in the page's text.
+locatedIn :: Text -> [Thread] -> [(Thread, Located)]
+locatedIn text ts = [(t, maybe Orphaned (locate text) t.anchor) | t <- ts, isInline t]
+
+-- | The quotes to mark in the page's text: those of the inline threads not
+-- resolved, found.
+markings :: State -> Text -> [Marking]
+markings st text = case st.threads of
+  ThreadsReady ts ->
+    [ Marking t.id range (st.focused == Just t.id)
+    | (t, Found range) <- locatedIn text ts
+    , not t.resolved
+    ]
+  _ -> []
+
+-- | The threads one place shows: beside the page, the inline ones in the
+-- order of their quotes in it, those it no longer has last; under it,
+-- those about the whole page, in the order they were opened.
+shownIn :: Text -> CommentsView.Placement -> [Thread] -> [CommentsView.Shown]
+shownIn text placement ts = case placement of
+  CommentsView.Beside -> map (uncurry CommentsView.Shown) (sortOn (position . snd) (locatedIn text ts))
+  CommentsView.Below -> [CommentsView.Shown t Orphaned | t <- ts, not (isInline t)]
+  where
+    position = \case
+      Found r -> (0 :: Int, r.start)
+      Orphaned -> (1, 0)

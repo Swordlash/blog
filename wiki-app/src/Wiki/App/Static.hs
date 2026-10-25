@@ -63,6 +63,7 @@ import Protolude
 import Wiki.App (component, input, serverInput)
 import Wiki.App.Backend (MonadLoad)
 import Wiki.App.Backend.Admin (MonadAdmin)
+import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Backend.Http (HttpEnv, Transport, cacheOf, newHttpEnv, newImmediateHttpEnv, runHttpWiki, silentTransport)
 import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
@@ -194,7 +195,7 @@ startServed how env base at container =
 -- the application.
 startApp
   :: forall m
-   . (MonadLoad m, MonadAdmin m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => Bool
   -> Int
   -> Start

@@ -35,12 +35,15 @@ import Protolude
 import Web.Storage.IndexedDB (Database)
 import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Backend.Mem.State
+import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalPermission (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.Version (Author (..))
 
 -- | A fixed time for the demo to be built at, for a program that has no clock
 -- to ask (a prerender that has to come out the same every time) and for
@@ -74,7 +77,8 @@ demoState now = flip execState emptyState $ do
     grantSpace blog (SubjectGroup writers) Edit
       . grantSpace projects (SubjectUser readerId) View
 
-  _ <- page blog Nothing "Hello, world" 30 helloWorld
+  hello <- page blog Nothing "Hello, world" 30 helloWorld
+  modify (helloComments hello)
   _ <- page blog Nothing "Notes on Haskell" 12 notesOnHaskell
 
   handbook <- page team Nothing "Team handbook" 25 teamHandbook
@@ -107,6 +111,60 @@ demoState now = flip execState emptyState $ do
 
     ago :: NominalDiffTime -> UTCTime
     ago days = addUTCTime (negate (days * 86400)) now
+
+    -- The first post's comments: a question about a phrase of it, answered;
+    -- one about text the post no longer has (it once said the preview was
+    -- always beside the editor), whose quote is shown without a highlight;
+    -- and one about the whole post, under it.
+    helloComments pid =
+      insertThread
+        ( thread
+            pid
+            "thread-hello-1"
+            29
+            (Just (Anchor "a blog that is also a wiki" "This is the first post of " ". Every page is\nMarkdown, wri"))
+            [ (readerId, 29, "Is there a list of every post somewhere, newest first?")
+            , (editorId, 28, "The blog's space lists its pages; its administrator can order them *newest first*.")
+            ]
+        )
+        . insertThread
+          ( thread
+              pid
+              "thread-hello-2"
+              27
+              (Just (Anchor "with the preview always beside it" "Markdown, written in a split view " "."))
+              [(readerId, 27, "On a phone the preview takes too much room.")]
+          )
+        . insertThread
+          ( thread
+              pid
+              "thread-hello-3"
+              26
+              Nothing
+              [ (adminId, 26, "Welcome! Comments here are about the whole post; select some of its text to comment on that.")
+              , (readerId, 25, "Thanks, that works.")
+              ]
+          )
+
+    thread pid tid daysAgo anchor written =
+      Thread
+        { id = CommentThreadId tid
+        , page = pid
+        , anchor
+        , resolved = False
+        , createdAt = ago daysAgo
+        , comments =
+            [ Comment
+                { id = CommentId (tid <> "-" <> show n)
+                , thread = CommentThreadId tid
+                , author = Author {id = who, name = who.text}
+                , body
+                , createdAt = ago days
+                , editedAt = Nothing
+                }
+            | (n, (who, days, body)) <- zip [1 :: Int ..] written
+            ]
+        }
 
 -- | The math macros of @Docs@, which its @Mathematics@ page uses: two of
 -- its own, and one that the space defines again over the built-in one.

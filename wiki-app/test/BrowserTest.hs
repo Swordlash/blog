@@ -7,6 +7,7 @@ import Test.Hspec.Halogen (describe, runBrowserTests)
 #if defined(wasm32_HOST_ARCH)
 import Test.Browser.Access qualified as Access
 import Test.Browser.Admin qualified as Admin
+import Test.Browser.Comments qualified as Comments
 import Test.Browser.Editor qualified as Editor
 import Test.Browser.History qualified as History
 import Test.Browser.Http qualified as Http
@@ -58,6 +59,7 @@ main = runBrowserTests $ do
   describe "Whom the wiki lets in" (Access.spec BrowserDOM)
   describe "Wiki.App.View.Server" (Server.spec BrowserDOM)
   describe "Signing in with a provider" (Providers.spec BrowserDOM)
+  describe "Wiki.App.View.Comments" (Comments.spec BrowserDOM)
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

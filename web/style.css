@@ -3057,3 +3057,241 @@ table.invitations td {
 .new-accounts-create-spaces input {
   margin-top: 0.25rem;
 }
+
+/* Comments (WP4.5): quotes marked in the page, the panel of inline threads
+   beside it, the threads about the whole page under it. */
+
+:root {
+  --comment-mark: #fff1c2;
+  --comment-mark-line: #d4a72c;
+  --comment-mark-focused: #ffd970;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --comment-mark: #3a2f0b;
+    --comment-mark-line: #9e7a16;
+    --comment-mark-focused: #6b5512;
+  }
+}
+
+/* The panel makes the page wider, as the history's comparison does. */
+.wiki-content:has(.page-main.with-comments) {
+  max-width: 78rem;
+}
+
+.page-main.with-comments {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.page-main {
+  position: relative;
+}
+
+mark.comment-mark {
+  color: inherit;
+  background: var(--comment-mark);
+  border-bottom: 2px solid var(--comment-mark-line);
+  cursor: pointer;
+}
+
+mark.comment-mark-focused {
+  background: var(--comment-mark-focused);
+}
+
+.comment-on-selection {
+  position: absolute;
+  z-index: 5;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--accent);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 15%);
+  cursor: pointer;
+}
+
+.comments-panel {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.comments-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.comments-panel-head h2,
+.page-comments h2 {
+  margin: 0 0 0.6rem;
+  font-size: 1.1rem;
+}
+
+.comments-close {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.page-comments {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.comment-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.comment-thread {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+}
+
+.comment-thread.focused {
+  border-color: var(--comment-mark-line);
+  box-shadow: 0 0 0 2px var(--comment-mark);
+}
+
+.comment-thread.resolved {
+  opacity: 0.75;
+}
+
+.comment-quote {
+  margin: 0 0 0.4rem;
+  padding: 0.1rem 0.5rem;
+  border-left: 3px solid var(--comment-mark-line);
+  color: var(--muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.comment-thread.orphaned .comment-quote {
+  border-left-style: dashed;
+  text-decoration: line-through;
+  cursor: default;
+}
+
+.comment-orphaned,
+.comment-resolved-note,
+.comments-empty,
+.sign-in-to-comment {
+  margin: 0.2rem 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.comments {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comment + .comment {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.comment-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.comment-author {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.comment-body > :first-child {
+  margin-top: 0.2rem;
+}
+
+.comment-body > :last-child {
+  margin-bottom: 0;
+}
+
+.comment-actions,
+.thread-actions,
+.comment-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.comment-actions button.link,
+.thread-actions button.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.comment-form {
+  margin-top: 0.5rem;
+}
+
+.comment-form textarea {
+  width: 100%;
+  min-height: 3.5rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.comment-confirm {
+  margin: 0.4rem 0 0;
+}
+
+@media (max-width: 760px) {
+  .page-main.with-comments {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .comments-panel {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media print {
+  .comments-panel,
+  .page-comments,
+  .comment-on-selection,
+  .comments-toggle {
+    display: none;
+  }
+
+  mark.comment-mark {
+    background: none;
+    border: none;
+  }
+}

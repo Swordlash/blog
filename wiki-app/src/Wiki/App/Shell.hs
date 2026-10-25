@@ -53,6 +53,12 @@
 -- them. Nothing else is read for them, so that the server, which renders
 -- the same page, is never asked what it would refuse.
 --
+-- Over a backend with a live channel ("Wiki.App.Live", the server's), the
+-- shell asks it for the tab's feed once, and hands it to the page view,
+-- which listens on it for its page's comments; the socket is opened as the
+-- first page is watched, and opened again as whoever is asking now after
+-- signing in or out, or a session's ending by itself.
+--
 -- The route is the router's ('Router.current' at the start, then
 -- 'Router.changes'), so links, the back and forward buttons and a reload all
 -- arrive at the same place.
@@ -98,10 +104,12 @@ import Wiki.Api.Links (links)
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
+import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Browser (download, historyEntry, historyGo, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Islands (MonadIslands)
+import Wiki.App.Live (Feed (..), Live (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Admin qualified as AdminView
@@ -139,6 +147,7 @@ data Input m = Input
   , demo :: Maybe (Demo m)
   , migration :: Maybe (ImportView.Migration m)
   , accounts :: Maybe (Accounts m)
+  , live :: Maybe (Live m)
   }
 
 -- | Whether the shell has loaded everything the route shows; when it has,
@@ -185,6 +194,9 @@ data State m = State
   , demo :: Maybe (Demo m)
   , migration :: Maybe (ImportView.Migration m)
   , accounts :: Maybe (Accounts m)
+  , live :: Maybe (Live m)
+  , feed :: Maybe Feed
+  -- ^ The tab's live channel, once 'Initialize' has asked 'live' for it.
   , world :: World
   , route :: Route
   , session :: Session
@@ -255,7 +267,7 @@ data Action
 
 component
   :: forall output m
-   . (MonadLoad m, MonadAdmin m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => H.Component Query (Input m) output m
 component =
   H.mkComponent
@@ -267,7 +279,7 @@ component =
         -- the initializer to build it again.
         -- Over a backend that would wait, it is loaded in 'Initialize'
         -- instead, unless the backend has kept it.
-        initialState = \Input {router, welcome, demo, migration, accounts} -> do
+        initialState = \Input {router, welcome, demo, migration, accounts, live} -> do
           route <- Router.current router
           loaded <- atOnce $ do
             world@(asking, _, _, _) <- fetchWorld demo
@@ -281,6 +293,8 @@ component =
               , demo
               , migration
               , accounts
+              , live
+              , feed = Nothing
               , world = if isJust loaded then WorldReady else WorldLoading
               , route
               , session = signedIn
@@ -654,7 +668,7 @@ component =
         LoadingSpace _ -> loading
         SpaceFailed _ e -> failureView e RetryHere
         InSpace _ space pages -> case st.route of
-          Page _ path -> HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path} FromView
+          Page _ path -> HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path, feed = st.feed} FromView
           PageSource _ path -> HH.slot "source" () SourceView.component SourceView.Input {context = context st, space, path} FromView
           PageHistory _ path version against ->
             HH.slot "history" () HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
@@ -743,6 +757,7 @@ component =
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
         gets (\st -> st.accounts) >>= traverse_ (\a -> lift a.sessionChanges >>= void . H.subscribe . fmap SessionChanged)
+        gets (\st -> st.live) >>= traverse_ (\l -> lift l.liveFeed >>= \f -> modify (\st -> st {feed = Just f}))
         entry <- H.liftEffect historyEntry
         modify (\st -> st {entry})
         -- What the route shows was loaded with the initial state, unless
@@ -842,12 +857,14 @@ component =
       -- Someone signed in or out: everything again, as them.
       FromAccount (SignInView.AccountChanged s) -> do
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+        restartFeed
         reload Nothing
       -- The session ended by itself (or changed elsewhere): everything
       -- again, as whoever is asking now, and if that is nobody, the way to
       -- sign in again, saying why.
       SessionChanged s -> do
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+        restartFeed
         reload Nothing
         when (isNothing s.user) $
           H.tell "signIn" () (SignInView.Prompt "Your session has ended. Sign in again to go on.")
@@ -856,7 +873,12 @@ component =
       -- as them, from its front page.
       FromInvite (InviteView.Accepted s) -> do
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+        restartFeed
         reload (Just Home)
+
+    -- The live channel, opened again as whoever is asking now.
+    restartFeed :: H.HalogenM (State m) Action Slots output m ()
+    restartFeed = gets (\st -> st.feed) >>= traverse_ (\f -> H.liftEffect (liftIO f.restart))
 
     -- Something only the demo does, which nothing offers without it.
     withDemo :: (Demo m -> H.HalogenM (State m) Action Slots output m ()) -> H.HalogenM (State m) Action Slots output m ()

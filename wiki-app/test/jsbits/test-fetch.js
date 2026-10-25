@@ -13,11 +13,49 @@
 // to read; an aborted request is rejected with an AbortError, as fetch
 // rejects it, held or not.
 
-const wikiTestServer = { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), held: null, release: null, fetch: null };
+const wikiTestServer = { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), held: null, release: null, fetch: null, WebSocket: null, sockets: [], said: [] };
+
+// The server's live channel (Wiki.App.Live), in the place of the page's
+// WebSocket: a socket opens as soon as it is made, keeps what the page
+// sends on it, and is told what the test has the server say
+// (wiki_test_server_tell) or closed by the server (wiki_test_server_hang_up).
+class WikiTestSocket extends EventTarget {
+  constructor(url) {
+    super();
+    this.url = String(url);
+    this.readyState = 0;
+    this.protocol = "";
+    this.binaryType = "blob";
+    wikiTestServer.sockets.push(this);
+    setTimeout(() => {
+      if (this.readyState !== 0) return;
+      this.readyState = 1;
+      this.dispatchEvent(new Event("open"));
+    }, 0);
+  }
+
+  send(data) {
+    if (this.readyState !== 1) throw new DOMException("Still in CONNECTING state.", "InvalidStateError");
+    wikiTestServer.said.push(String(data));
+  }
+
+  close() {
+    this.hangUp(1005);
+  }
+
+  hangUp(code) {
+    if (this.readyState >= 2) return;
+    this.readyState = 3;
+    setTimeout(() => this.dispatchEvent(new CloseEvent("close", { code, reason: "", wasClean: code !== 1006 })), 0);
+  }
+}
 
 function wiki_test_server_start() {
   if (wikiTestServer.fetch === null) wikiTestServer.fetch = globalThis.fetch;
-  Object.assign(wikiTestServer, { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), held: null, release: null });
+  if (wikiTestServer.WebSocket === null) wikiTestServer.WebSocket = globalThis.WebSocket;
+  for (const socket of wikiTestServer.sockets) socket.hangUp(1001);
+  Object.assign(wikiTestServer, { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), held: null, release: null, sockets: [], said: [] });
+  globalThis.WebSocket = WikiTestSocket;
   globalThis.fetch = async (url, init = {}) => {
     const method = init.method ?? "GET";
     // Headers as fetch takes them: pairs (as Halogen.Net.Fetch passes them)
@@ -56,7 +94,31 @@ function wiki_test_server_start() {
 
 function wiki_test_server_stop() {
   if (wikiTestServer.fetch !== null) globalThis.fetch = wikiTestServer.fetch;
+  if (wikiTestServer.WebSocket !== null) globalThis.WebSocket = wikiTestServer.WebSocket;
+  for (const socket of wikiTestServer.sockets) socket.hangUp(1001);
   wikiTestServer.release?.();
+}
+
+// The server says this (JSON) on every open socket.
+function wiki_test_server_tell(message) {
+  for (const socket of wikiTestServer.sockets) {
+    if (socket.readyState === 1) socket.dispatchEvent(new MessageEvent("message", { data: message }));
+  }
+}
+
+// The server's connections cut, as when it goes away.
+function wiki_test_server_hang_up() {
+  for (const socket of wikiTestServer.sockets) socket.hangUp(1006);
+}
+
+// What the page has sent on its sockets, as JSON: a list of the messages.
+function wiki_test_server_said() {
+  return JSON.stringify(wikiTestServer.said);
+}
+
+// How many sockets the page has opened.
+function wiki_test_server_sockets() {
+  return wikiTestServer.sockets.length;
 }
 
 function wiki_test_server_answer(method, url, status, body) {

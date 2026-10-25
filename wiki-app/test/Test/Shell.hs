@@ -236,13 +236,30 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "offers every reader of a page its source, and only an editor the rest" $ do
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["tour"]))
-    html `contains` "<div class=\"actions\"><a class=\"button\" href=\"/s/docs/p/tour/source/\">View source</a><a class=\"button\" href=\"/s/docs/p/tour/history/\">History</a></div>"
+    html `contains` "<div class=\"actions\"><a class=\"button\" href=\"/s/docs/p/tour/source/\">View source</a><a class=\"button\" href=\"/s/docs/p/tour/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button></div>"
     html `lacks` ">Edit</a>"
     Rendered {html = asReader} <- render (as (Just "user-reader")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
     asReader `contains` "href=\"/s/blog/p/hello-world/source/\">View source</a>"
     asReader `lacks` ">Edit</a>"
     Rendered {html = asEditor} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
-    asEditor `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a><a class=\"button\" href=\"/s/blog/p/hello-world/source/\">View source</a><a class=\"button\" href=\"/s/blog/p/hello-world/history/\">History</a>"
+    asEditor `contains` "href=\"/s/blog/p/hello-world/edit/\">Edit</a><a class=\"button\" href=\"/s/blog/p/hello-world/source/\">View source</a><a class=\"button\" href=\"/s/blog/p/hello-world/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (2)</button>"
+
+  it "marks a page's quotes that are found, shows its page threads under it, and keeps the panel closed" $ do
+    Rendered {html} <- render (as Nothing) (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    html `contains` "first post of <mark class=\"comment-mark\" data-thread=\"thread-hello-1\">a blog that is also a wiki</mark>. Every page is"
+    -- The orphaned thread's quote is nowhere to be marked.
+    html `lacks` "data-thread=\"thread-hello-2\""
+    html `lacks` "comments-panel"
+    html `contains` "<section aria-label=\"Comments on the page\" class=\"page-comments\"><h2>Comments</h2>"
+    html `contains` "<span class=\"comment-author\">Ada Admin</span>"
+    html `contains` "<p>Welcome! Comments here are about the whole post; select some of its text to comment on that.</p>"
+    html `contains` "<p class=\"sign-in-to-comment\">Sign in to comment.</p>"
+    html `lacks` "comment-form"
+    Rendered {html = asReader} <- render (as (Just "user-reader")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    asReader `contains` "<span>New comment</span>"
+    asReader `lacks` "sign-in-to-comment"
+    -- A reply, by someone who may reply.
+    asReader `contains` "comment-reply"
 
   it "shows a page's Markdown to someone not signed in, with the way back to the page" $ do
     Rendered {html, title} <- render (as Nothing) (PageSource (slugs ["docs"]) (slugs ["tour"]))

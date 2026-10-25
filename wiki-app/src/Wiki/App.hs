@@ -27,6 +27,7 @@ import Wiki.App.Backend.Mem.Archive (toArchive)
 import Wiki.App.Browser (zipFiles)
 import Wiki.App.Demo (demoDatabase, tourPath)
 import Wiki.App.DemoUsers (MonadDemoUsers, demoControls)
+import Wiki.App.Live (live)
 import Wiki.App.Route
 import Wiki.App.Shell (component)
 import Wiki.App.Shell qualified as Shell
@@ -36,13 +37,13 @@ import Wiki.Core.Export (writeArchive)
 -- | The shell's input for the demo: the router, the demo's tour for a
 -- newcomer, and its controls.
 input :: (MonadDemoUsers m) => Router Route -> Shell.Input m
-input router = Shell.Input {router, welcome = Just (uncurry Page tourPath), demo = Just demoControls, migration = Nothing, accounts = Nothing}
+input router = Shell.Input {router, welcome = Just (uncurry Page tourPath), demo = Just demoControls, migration = Nothing, accounts = Nothing, live = Nothing}
 
 -- | The shell's input for a wiki a server keeps: the router, and the
 -- import into the server, which offers the wiki the demo left in this
 -- browser ('demoDatabase') as a source. The server's wiki is its owner's,
 -- with no tour in it, and people sign in to it rather than switch
--- ("Wiki.App.Account").
+-- ("Wiki.App.Account"), and comments are heard of live ("Wiki.App.Live").
 serverInput :: (MonadIndexedDB m, MonadUnliftIO m) => Router Route -> Shell.Input (HttpWiki m)
 serverInput = serverInputWith demoDatabase
 
@@ -55,6 +56,7 @@ serverInputWith db router =
     , welcome = Nothing
     , demo = Nothing
     , accounts = Just accounts
+    , live = Just live
     , migration =
         Just
           Migration

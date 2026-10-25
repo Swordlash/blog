@@ -25,8 +25,12 @@
 module Wiki.App.View.Body
   ( Place (..)
   , IslandSlots
+  , HasIslands
   , heading
   , article
+  , rendered
+  , articleOf
+  , commentBodies
   , startsWithHeading
   , slides
   , followingLinks
@@ -35,7 +39,7 @@ where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
-import Data.Row (type (.==))
+import Data.Row (HasType, type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -78,6 +82,10 @@ data Place = Place
 -- its component, and what its library drew, untouched.
 type IslandSlots = ("island" .== H.Slot (Const Void) Void Md.IslandKey)
 
+-- | That a component's slots have the islands' among them, for one that
+-- has children of its own besides (the page view's comments).
+type HasIslands slots = HasType "island" (H.Slot (Const Void) Void Md.IslandKey) slots
+
 -- | The page's title as a heading, unless its Markdown starts with its own.
 heading :: Text -> Text -> [HH.HTML w i]
 heading title body = [hhs|{% if not (startsWithHeading body) %}<h1 class="page-title">{{ title }}</h1>{% end %}|]
@@ -93,13 +101,35 @@ startsWithHeading = T.isPrefixOf "# " . T.stripStart
 -- from the browser in the click's listener and handed to @onLink@ (for
 -- 'Wiki.App.Browser.followArticleLink'); any other click is the browser's.
 article
-  :: forall action m
-   . (MonadIslands m, MonadUUID m)
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
   => (ArticleLink -> action)
   -> Place
   -> Text
-  -> H.ComponentHTML action IslandSlots m
-article onLink place source = case Md.renderMarkdown (options place) source of
+  -> H.ComponentHTML action slots m
+article onLink place source = articleOf onLink place source (rendered place source)
+
+-- | A page's Markdown rendered as 'article' renders it, before it is put
+-- in its article: what the page view marks its comments' quotes in
+-- ("Wiki.Core.Anchor"), and reads their text from, rendering it once.
+rendered
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
+  => Place
+  -> Text
+  -> Either Md.ParseError [H.ComponentHTML action slots m]
+rendered place = Md.renderMarkdown (options place)
+
+-- | 'article', of what 'rendered' gave (and the source, shown if it could
+-- not be read).
+articleOf
+  :: forall action slots m
+   . (ArticleLink -> action)
+  -> Place
+  -> Text
+  -> Either Md.ParseError [H.ComponentHTML action slots m]
+  -> H.ComponentHTML action slots m
+articleOf onLink place source = \case
   Right nodes -> [hh|<article class="page-body" {{ followingLinks onLink place }}>{{ nodes }}</article>|]
   Left e ->
     [hh|
@@ -108,6 +138,21 @@ article onLink place source = case Md.renderMarkdown (options place) source of
         <pre class="page-source">{{ source }}</pre>
       </div>
     |]
+
+-- | Comments' Markdown, each rendered as a page's is (its links resolved
+-- against the page's place, its islands drawn), as sections of one
+-- document ('Md.renderSections'), so that no two comments' islands have
+-- the same key in the component that shows them. One that cannot be read
+-- is shown as its text.
+commentBodies
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
+  => Place
+  -> [Text]
+  -> [[H.ComponentHTML action slots m]]
+commentBodies place = Md.renderSections (options place) . map parsed
+  where
+    parsed body = either (const [Md.Para [Md.Str body]]) identity (Md.parseMarkdown body)
 
 -- | The click handler for an element around a page's rendered Markdown: a
 -- click on one of its links that the application follows itself
@@ -127,14 +172,14 @@ followingLinks onLink place = HE.preventingDefault (HE.handler' (EventType "clic
 -- same links and islands, one document cut up. The caller puts them in an
 -- element with 'followingLinks', as 'article' does.
 slides
-  :: forall action m
-   . (MonadIslands m, MonadUUID m)
+  :: forall action slots m
+   . (MonadIslands m, MonadUUID m, HasIslands slots)
   => Place
   -> Slides.Deck
-  -> [Slides.RenderedSlide (H.ComponentSlot IslandSlots m action) action]
+  -> [Slides.RenderedSlide (H.ComponentSlot slots m action) action]
 slides place = Slides.renderDeck (options place)
 
-options :: (MonadIslands m, MonadUUID m) => Place -> Md.Options PageLink (H.ComponentSlot IslandSlots m action) action
+options :: (MonadIslands m, MonadUUID m, HasIslands slots) => Place -> Md.Options PageLink (H.ComponentSlot slots m action) action
 options place =
   Md.defaultOptions
     { Md.codeBlock = \k language code -> island k (Islands.CodeBlock language code)

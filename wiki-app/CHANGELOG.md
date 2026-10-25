@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+Comments (WP4.5). `MonadComments` (`Wiki.App.Backend.Comments`: `listThreads`,
+`openThread`, `reply`, `editComment`, `deleteComment`, `deleteThread`,
+`setResolved`) has instances for `MemWiki` (kept in IndexedDB, in a store
+`threads` of database version 4), `HttpWiki` (a page's threads cached and
+carried in `wiki-preload` as `threads`, a comment's write folded into them
+rather than emptying the cache) and the server's storage, with a shared
+contract (`Wiki.App.Backend.Contract.Comments`). The page view marks the
+quotes of its inline threads in the page (`Wiki.Core.Anchor`), lists them
+in a panel beside it (`Wiki.App.View.Comments`), opened by "Comments (n)"
+after "History" or a click on a quote, and lists threads about the whole
+page under it, with a form for a new one; text selected in the page gets a
+"Comment" button beside it (`jsbits/comments.js` reads the selection as an
+anchor), and someone not signed in reads the threads and is told to sign
+in. `Wiki.App.View.Body` gains `rendered`, `articleOf` and `commentBodies`
+and is polymorphic in a component's slots (`HasIslands`). The live
+channel: `Wiki.App.Live` (`MonadLive`, an `HttpWiki` instance only, handed
+to the shell as `Shell.Input.live`), one WebSocket per tab, opened when a
+page is first watched, subscribed to the page shown, opened again after a
+pause (1 s doubling to 30 s) when it closes, after which the page's
+comments are read again, and opened again as the new user after signing
+in or out. The demo's first post has comments. Exports carry no comments.
+
 The server's settings in the administration (WP4.4). A "Server" section
 beside "Who may come in" (`Wiki.App.View.Server`): the public address, the
 mail server with a test mail, and the providers, each with its redirect URI

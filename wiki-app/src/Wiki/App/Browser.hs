@@ -23,9 +23,16 @@ module Wiki.App.Browser
   , consoleWarn
   , PageBackend (..)
   , pageBackend
+
+    -- * Comments
+  , Selected (..)
+  , readSelection
+  , clickedThread
+  , reveal
   )
 where
 
+import Data.Aeson (FromJSON (..), decodeStrict', withObject, (.:))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -39,6 +46,8 @@ import Protolude
 import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event (..))
 import Wiki.App.Route (Route, routeOfHref)
+import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Id (CommentThreadId (..))
 
 -- Copying waits for the browser's clipboard, so that binding is a safe
 -- import, which waits for the promise; the rest return on the spot. The link
@@ -46,7 +55,7 @@ import Wiki.App.Route (Route, routeOfHref)
 -- dispatches it, and the click does not change meanwhile, so that binding is
 -- pure.
 $( browserJS
-     ["jsbits/browser.js", "jsbits/archive.js"]
+     ["jsbits/browser.js", "jsbits/archive.js", "jsbits/comments.js"]
      [ ("js_clicked_href", "wiki_clicked_href", Unsafe, [t|Event -> JSText|])
      , ("js_scroll_to", "wiki_scroll_to", Unsafe, [t|JSText -> IO ()|])
      , ("js_set_title", "wiki_set_title", Unsafe, [t|JSText -> IO ()|])
@@ -66,6 +75,9 @@ $( browserJS
      , ("js_page_backend", "wiki_page_backend", Unsafe, [t|IO JSText|])
      , ("js_console_warn", "wiki_console_warn", Unsafe, [t|JSText -> IO ()|])
      , ("js_absolute_url", "wiki_absolute_url", Unsafe, [t|JSText -> IO JSText|])
+     , ("js_comment_selection", "wiki_comment_selection", Unsafe, [t|Element -> IO JSText|])
+     , ("js_clicked_thread", "wiki_clicked_thread", Unsafe, [t|Event -> JSText|])
+     , ("js_reveal", "wiki_reveal", Unsafe, [t|JSText -> IO ()|])
      ]
  )
 
@@ -194,3 +206,40 @@ data PageBackend = DemoBackend | ServerBackend
 -- a choice is. Natively, the demo.
 pageBackend :: (MonadIO m) => m PageBackend
 pageBackend = liftIO $ (\b -> if fromJSText b == "server" then ServerBackend else DemoBackend) <$> js_page_backend
+
+--------------------------------------------------------------------------------
+-- Comments
+
+-- | Text the reader has selected in a page, as the anchor of a comment
+-- about it ("Wiki.Core.Anchor"), and where, under the selection, a button
+-- to comment on it can go: in pixels from the top left corner of the
+-- element the page's article is in.
+data Selected = Selected
+  { anchor :: Anchor
+  , top :: Double
+  , left :: Double
+  }
+  deriving stock (Eq, Show)
+
+instance FromJSON Selected where
+  parseJSON = withObject "Selected" $ \o ->
+    Selected <$> (Anchor <$> o .: "exact" <*> o .: "prefix" <*> o .: "suffix") <*> o .: "top" <*> o .: "left"
+
+-- | What the reader has selected of the article inside this element, read
+-- as "Wiki.Core.Anchor" reads the page's text (see jsbits/comments.js), if
+-- anything is; natively, nothing.
+readSelection :: (MonadIO m) => Element -> m (Maybe Selected)
+readSelection element
+  | not inBrowser = pure Nothing
+  | otherwise = liftIO $ decodeStrict' . encodeUtf8 . fromJSText <$> js_comment_selection element
+
+-- | The thread whose highlighted quote a click landed on, if it did: what
+-- the page asks in the click's listener.
+clickedThread :: Event -> Maybe CommentThreadId
+clickedThread event = case fromJSText (js_clicked_thread event) of
+  "" -> Nothing
+  thread -> Just (CommentThreadId thread)
+
+-- | Scroll what a CSS selector picks into view, if it is not in view.
+reveal :: (MonadIO m) => Text -> m ()
+reveal selector = when inBrowser (liftIO (js_reveal (toJSText selector)))

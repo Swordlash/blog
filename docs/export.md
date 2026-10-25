@@ -45,6 +45,12 @@ histories there were with these, as it replaces the pages. Nothing in the
 format changes for this, so an archive written before there were histories
 imports as before.
 
+Nor are pages' comments (`Wiki.Core.Comment`): a conversation about a page
+is its readers', and its authors are the wiki's users by id, which another
+wiki's are not. The demo's import replaces the comments there were with
+none, as it replaces the pages they were on; the server's merge leaves its
+own as they are.
+
 ## Compatibility
 
 - **Additions need no new version.** A reader ignores the fields it does not
