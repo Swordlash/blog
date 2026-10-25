@@ -866,6 +866,21 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
 - A table of contents panel and anchors; page templates; a "blog" view listing a
   space's pages by date with RSS.
 - Skylighting instead of highlight.js if server-side rendering of code is wanted.
+- **WP4.3 Pin bump and the browser's network through haskell-halogen** (the owner asked
+  on 2026-10-25 what of his recent merges would help). Bump the pin to haskell-halogen's
+  `master` (#60 to #65 and after: `Halogen.JSBits.Promise`, the `net` package, the window's
+  emitters, a listener that finishes the loop's preempted work inside the dispatch). Then:
+  `HttpWiki`'s transport over `Halogen.Net.Fetch` instead of `wiki-app/jsbits/fetch.js`
+  and the `js_fetch` bindings (a killed wait aborts the request, so a navigation during a
+  load leaves nothing running; `start`/`response` where a request must begin in an event's
+  dispatch), `net` added to the `source-repository-package` subdirs; the window's emitters
+  where they replace code of ours: `keyDown` for the slides' keys (WP4.2), `online` to say
+  the server is unreachable before a request fails, `interval` for the draft's autosave,
+  `visibility` if anything polls. Watch for the new export lists of
+  `Web.UIEvent.KeyboardEvent` and `MouseEvent` (`key`, `code`, `clientX`, `clientY`)
+  clashing with names of ours. After WP4.2 and WP3.5 are merged, so that neither rebuilds
+  everything mid-flight. `Halogen.Net.EventSource`/`WebSocket` are for a later "someone
+  else is editing this page" feature, not this package.
 - **Presentations from a page** (the owner, 2026-10-25: "Beamer or something like it").
   Not Beamer itself, which needs a TeX installation and renders to PDF; a page becomes a
   slide deck in the browser: `---` (a thematic break) splits the slides, `::: notes` (the
