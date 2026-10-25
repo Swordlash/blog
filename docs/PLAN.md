@@ -807,17 +807,23 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
 - A table of contents panel and anchors; page templates; a "blog" view listing a
   space's pages by date with RSS.
 - Skylighting instead of highlight.js if server-side rendering of code is wanted.
-- A writing assistant in the editor, backed by an LLM (Claude or ChatGPT, asked for by
-  the owner on 2026-10-25: one provider interface on the server, a key per provider in
-  its environment, the provider chosen per space or per request): draft a page from an
-  outline, rewrite or shorten the selection, suggest a title and a summary, fix a formula,
-  a Mermaid or a TikZ block from the error shown, translate. Each suggestion lands as one
-  edit through the toolbar's machinery (`Wiki.Core.Markdown.Edit`, `execCommand`), so the
-  browser's undo takes it back, and streams into the preview first. It needs the server:
-  the API key stays there and the server proxies the requests, with a per-user and
-  per-space budget, enabled per space by its administrators (a private space's text leaves
-  the wiki only where they said so), and a log of what was sent. Not before Phase 3, since
-  it needs users and permissions on the server.
+- A writing assistant in the editor, backed by an LLM (Claude or ChatGPT), **in the
+  browser, with the user's own account** (the owner, 2026-10-25: the user signs in to the
+  provider, not the server): draft a page from an outline, rewrite or shorten the
+  selection, suggest a title and a summary, fix a formula, a Mermaid or a TikZ block from
+  the error shown, translate. Each suggestion lands as one edit through the toolbar's
+  machinery (`Wiki.Core.Markdown.Edit`, `execCommand`), so the browser's undo takes it
+  back, and streams into the preview first. The credential is the user's: first their own
+  API key, pasted once into the assistant's settings and kept in this browser only
+  (IndexedDB, never sent to the wiki server), with the browser calling the provider
+  directly (Anthropic's API allows it with its direct-browser-access header; OpenAI's
+  too); "sign in with Claude / ChatGPT" (OAuth) replaces the key where a provider opens
+  it to third-party applications. One provider interface in the app, a provider chosen in
+  the settings. So the server holds no key, keeps no budget and sees no prompt, and the
+  serverless demo on Pages gets the assistant too; a space's administrators may still
+  switch it off for their space (a private space's text leaves the wiki only where they
+  said so). Needs nothing from Phase 3, so it can be the first package after it, or run
+  beside WP3.4.
 - The wiki as a tool for an assistant, the other way round (also from 2026-10-25): an
   MCP server over the same API, so that Claude or ChatGPT can search, read and, where the
   session's user may, write pages, with the session's permissions and a log of what was
