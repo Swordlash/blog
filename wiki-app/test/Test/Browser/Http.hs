@@ -4,7 +4,7 @@
 -- page's @fetch@ ("Halogen.Net.Fetch"), answered by a server the test puts
 -- in fetch's place (test/jsbits/test-fetch.js), and the application over
 -- it: what it shows while the server has not answered, once it has, and
--- when it cannot be reached; that a request whose
+-- when it cannot be reached or the browser is offline; that a request whose
 -- wait ends early (a navigation away, a time limit) is aborted; and the
 -- server's page, adopted with nothing to repair: the build's, before
 -- anything is read, and one the server rendered, from what the page
@@ -24,6 +24,7 @@ module Test.Browser.Http
   , answerWith
   , asked
   , offline
+  , browserGoes
   , startServer
   , startServerWith
   )
@@ -41,7 +42,7 @@ import Halogen.Router (Router)
 import Halogen.Router qualified as Router
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Mount (slugs)
+import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
@@ -81,6 +82,7 @@ $( browserJS
      , ("js_server_offline", "wiki_test_server_offline", Unsafe, [t|Bool -> IO ()|])
      , ("js_server_hold", "wiki_test_server_hold", Unsafe, [t|IO ()|])
      , ("js_server_hold_at", "wiki_test_server_hold_at", Unsafe, [t|JSText -> JSText -> IO ()|])
+     , ("js_network_event", "wiki_test_network_event", Unsafe, [t|Bool -> IO ()|])
      , ("js_server_release", "wiki_test_server_release", Unsafe, [t|IO ()|])
      , ("js_server_asked", "wiki_test_server_asked", Unsafe, [t|IO JSText|])
      , ("js_markup", "wiki_test_markup", Unsafe, [t|IO JSText|])
@@ -123,6 +125,12 @@ answerRaw method url status body = unsafeIOToPageM (js_server_answer (toJSText m
 -- | Take the network away, or give it back.
 offline :: Bool -> PageM s ()
 offline = unsafeIOToPageM . js_server_offline
+
+-- | The browser saying that it has gone online ('True') or offline: the
+-- window's @online@ or @offline@ event, which a headless page never has
+-- cause to dispatch itself.
+browserGoes :: Bool -> PageM s ()
+browserGoes = unsafeIOToPageM . js_network_event
 
 asked :: PageM s [Asked]
 asked = unsafeIOToPageM js_server_asked >>= either (\e -> panic ("the server's requests: " <> toS e)) pure . eitherDecodeStrict' . encodeUtf8 . fromJSText
@@ -520,6 +528,44 @@ views m = describe "the application over it" $ do
     eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [True])
     unmount ui
     serverStops
+
+  it "says that the wiki cannot be reached while the browser is offline" $ runPage $ do
+    serverStarts
+    serveDemo
+    ui <- startServer m Home
+    find ui ".account .user-name" >>= (`shouldHaveText` "Ada Admin")
+    length <$> findAll ui ".offline-notice" `shouldReturn` 0
+    browserGoes False
+    find ui ".offline-notice" >>= (`shouldHaveText` "You are offline: the wiki cannot be reached until the connection is back.")
+    browserGoes True
+    eventually (length <$> findAll ui ".offline-notice" `shouldReturn` 0)
+    unmount ui
+    serverStops
+
+  it "loads what it could not once the browser is back online" $ runPage $ do
+    serverStarts
+    serveDemo
+    offline True
+    ui <- startServer m (Space (slugs ["docs"]))
+    find ui ".wiki-content .error-unreachable" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "could not be reached")
+    browserGoes False
+    _ <- find ui ".offline-notice"
+    offline False
+    browserGoes True
+    find ui ".space-view h1" >>= (`shouldHaveText` "Docs")
+    length <$> findAll ui ".offline-notice" `shouldReturn` 0
+    unmount ui
+    serverStops
+
+  it "says nothing of the network over the demo, which needs none" $ runPage $ do
+    ui <- start m Nothing Home
+    _ <- find ui ".wiki-sidebar"
+    browserGoes False
+    -- Heard (the shell would have rendered by now), and not shown.
+    _ <- find ui ".wiki-footer"
+    length <$> findAll ui ".offline-notice" `shouldReturn` 0
+    browserGoes True
+    unmount ui
 
   it "says when the server cannot be reached, and tries again when asked" $ runPage $ do
     serverStarts

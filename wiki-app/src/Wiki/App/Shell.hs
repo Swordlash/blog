@@ -57,6 +57,13 @@
 -- 'Router.changes'), so links, the back and forward buttons and a reload all
 -- arrive at the same place.
 --
+-- Over the server's backend, which needs the network, the shell listens for
+-- the browser going offline and online ("Halogen.Query.Event.Window"'s
+-- 'Window.online'): while it is offline a notice says that the wiki cannot
+-- be reached, before any request has failed to say so, and once it is back
+-- what the shell could not load for want of it is loaded again. The demo,
+-- which keeps its wiki in the browser, has nothing to say about it.
+--
 -- The one route the shell does not simply follow is one away from an editor
 -- with unsaved changes: it asks the editor ('Editor.IsDirty') and, if the
 -- draft would be lost, asks the reader in place whether to leave. By then
@@ -71,6 +78,7 @@ module Wiki.App.Shell
   )
 where
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
 import Data.Row (type (.+), type (.==))
 import Data.Set qualified as Set
@@ -78,6 +86,7 @@ import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
+import Halogen.Query.Event.Window qualified as Window
 import Halogen.Router (Follow, Router)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
@@ -196,6 +205,10 @@ data State m = State
   , entry :: Int
   -- ^ The number of the session history's entry for the route shown
   -- ('historyEntry'), which staying in the editor goes back to.
+  , offline :: Bool
+  -- ^ Whether the browser has said it went offline, and not yet that it is
+  -- back. It starts online: the page has just been loaded, over the
+  -- network.
   }
 
 -- | What the administration's section on the wiki's data shows.
@@ -236,10 +249,11 @@ data Action
   | SessionChanged Session
   | OpenSignIn
   | FromInvite InviteView.Output
+  | Online Bool
 
 component
   :: forall output m
-   . (MonadLoad m, MonadAdmin m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
+   . (MonadLoad m, MonadAdmin m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => H.Component Query (Input m) output m
 component =
   H.mkComponent
@@ -279,6 +293,7 @@ component =
               , settled = False
               , leaving = Nothing
               , entry = 0
+              , offline = False
               }
       , render
       , eval =
@@ -307,8 +322,17 @@ component =
             </main>
           </div>
           {{ footer }}
+          {% if st.offline && overNetwork st %}
+            {{ offlineNotice }}
+          {% end %}
         </div>
       |]
+
+    -- Last in the frame, so that its coming and going moves nothing else
+    -- the frame holds; the stylesheet puts it in a corner of the window.
+    offlineNotice :: H.ComponentHTML Action Slots m
+    offlineNotice =
+      [hh|<p class="offline-notice" role="alert">You are offline: the wiki cannot be reached until the connection is back.</p>|]
 
     -- A closed wiki, to someone who has not signed in: its name, the way to
     -- sign in, and why there is nothing else.
@@ -708,6 +732,11 @@ component =
     handleAction :: Action -> H.HalogenM (State m) Action Slots output m ()
     handleAction = \case
       Initialize -> do
+        -- Made in 'H.liftEffect', before anything here waits, so that the
+        -- browser is listened to from the moment the shell has started.
+        whenM (gets overNetwork) $ do
+          connection <- H.liftEffect Window.online
+          void $ H.subscribe (Online <$> connection)
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
         gets (\st -> st.accounts) >>= traverse_ (\a -> lift a.sessionChanges >>= void . H.subscribe . fmap SessionChanged)
@@ -722,6 +751,17 @@ component =
         modify (\st -> st {world = WorldLoading})
         loadEverything
       RetryHere -> loadHere True
+      Online False -> modify (\st -> st {offline = True})
+      -- Back online: what failed to load because the server could not be
+      -- reached is loaded again, as "Try again" would. A view's own load
+      -- that failed keeps its own button.
+      Online True -> do
+        modify (\st -> st {offline = False})
+        st <- get
+        case (st.world, st.here) of
+          (WorldFailed (Unreachable _), _) -> handleAction RetryWorld
+          (WorldReady, SpaceFailed _ (Unreachable _)) -> handleAction RetryHere
+          _ -> pass
       Arrived r -> do
         now <- H.liftEffect historyEntry
         before <- gets (\st -> st.route)
@@ -922,6 +962,12 @@ fetchHere path =
           pages <- ExceptT (listPages space.id)
           pure (InSpace path space pages)
       )
+
+-- | Whether the wiki is reached over the network: over the server's
+-- backend, which is the one people sign in to, and not the demo's, which
+-- keeps its wiki in the browser.
+overNetwork :: State m -> Bool
+overNetwork st = isJust st.accounts
 
 -- | Whether what the shell shows is the closed wiki's frame: the wiki is
 -- closed to whoever is asking, and the route is not an invitation's.

@@ -1700,6 +1700,29 @@ body:has(.slides-view) {
   background: color-mix(in srgb, var(--warning) 8%, transparent);
 }
 
+/* That the browser is offline, over the server's backend, in the corner of
+   the window opposite "Saved", until it is back online. */
+.offline-notice {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 20;
+  max-width: calc(100vw - 2rem);
+  margin: 0;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  color: var(--background);
+  background: var(--warning);
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 20%);
+}
+
+@media print {
+  .offline-notice {
+    display: none;
+  }
+}
+
 /* "Saved", for a few seconds after a save that stays in the editor, in the
    corner of the window. The element is always there, empty and so with no
    size when there is nothing to say, so that a screen reader has its live

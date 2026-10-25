@@ -87,6 +87,12 @@ function wiki_test_server_release() {
   Object.assign(wikiTestServer, { holdAll: false, heldAt: new Set(), held: null, release: null });
 }
 
+// The window's online or offline event, as the browser dispatches it when
+// its network comes or goes.
+function wiki_test_network_event(online) {
+  window.dispatchEvent(new Event(online ? "online" : "offline"));
+}
+
 // Every request so far, as JSON: [{method, url, headers, body, bytes, aborted}].
 function wiki_test_server_asked() {
   return JSON.stringify(wikiTestServer.asked);
