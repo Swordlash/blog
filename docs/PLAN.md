@@ -881,6 +881,17 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   clashing with names of ours. After WP4.2 and WP3.5 are merged, so that neither rebuilds
   everything mid-flight. `Halogen.Net.EventSource`/`WebSocket` are for a later "someone
   else is editing this page" feature, not this package.
+- **WP4.4 Sign-in providers and mail managed from the panel** (the owner asked on
+  2026-10-25 whether a provider can be added to a running server). Today providers and
+  SMTP are options read at start, so adding one means a `deploy-local.sh` run, which
+  restarts the service (seconds; sessions survive, they are in SQLite). The candidate moves
+  them into the `settings` table, managed in the administration ("Who may come in" gains
+  "Sign in with…" and "Mail"): name, kind, client id, issuer, and the secret, kept in the
+  database (the file already holds password hashes and session hashes; the secret is as
+  sensitive as the database file itself, which `data/` protects), read per request from
+  the cached settings like the access mode, discovery re-run on change; the options stay
+  as a bootstrap and override, and `deploy-local.sh` stops remembering them once the panel
+  does. `wiki-server oidc check` reads both.
 - **Presentations from a page** (the owner, 2026-10-25: "Beamer or something like it").
   Not Beamer itself, which needs a TeX installation and renders to PDF; a page becomes a
   slide deck in the browser: `---` (a thematic break) splits the slides, `::: notes` (the
