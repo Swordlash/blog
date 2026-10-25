@@ -1,0 +1,13 @@
+{
+  "destination": {
+    "directory": "/mnt/backup/wiki"
+  },
+  "enabled": true,
+  "keep": {
+    "daily": 14,
+    "weekly": 8
+  },
+  "schedule": {
+    "daily": "03:30"
+  }
+}

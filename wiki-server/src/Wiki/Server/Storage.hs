@@ -54,11 +54,19 @@ module Wiki.Server.Storage
   , withStorageAside
   , withDatabase
   , storageDataDir
+  , DataDirInUse (..)
 
     -- * The wiki's settings
   , readSettings
   , settingsWith
   , readServerSettings
+
+    -- * The backups
+  , readBackups
+  , readBackupSettings
+  , readLastBackup
+  , writeLastBackup
+  , copyDatabase
 
     -- * Who is asking
   , Who (..)
@@ -84,7 +92,6 @@ where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID (..))
-import Data.Aeson (decodeStrict')
 import Data.ByteString qualified as BS
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
@@ -92,13 +99,14 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.UUID.Types qualified as UUID
-import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute, execute_, open, query, query_, withConnection)
+import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, open, query, query_, withConnection)
 import Protolude
 import System.Directory (createDirectoryIfMissing)
 import Wiki.Api.Account (Account, NewAccount (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
+import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, Backups (..), applyBackupChange, checkBackupSettings)
 import Wiki.Api.Events (PageEvent (..))
-import Wiki.Api.ServerSettings (ServerSettingsChange, applyChange, checkServerSettings)
+import Wiki.Api.ServerSettings (ServerSettingsChange, applyChange, checkServerSettings, secretState)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -137,7 +145,7 @@ import Wiki.Core.User (Group (..), Standing (..), User (..), checkLogin, checkPa
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
-import Wiki.Server.Storage.Backup (backupFiles)
+import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupFiles, backupInto, loadBackupSettings, loadLastBackup, lockDataDir, referencedBlobs, storeBackupSettings, storeLastBackup, unlockDataDir)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
 import Wiki.Server.Storage.Comments qualified as Comments
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
@@ -159,6 +167,9 @@ data Storage = Storage
   -- there after it.
   , serverKept :: IORef (Maybe Kept)
   -- ^ The server's own settings, kept the same way.
+  , lock :: Maybe DataLock
+  -- ^ The data directory's lock, held by a storage that may delete what
+  -- is in it ('openStorage'), not by one opened beside it.
   }
 
 -- | What a storage is opened with besides its directory.
@@ -192,6 +203,11 @@ defaultConfig =
 -- files that neither it nor any backup refers to any more are deleted
 -- ("Wiki.Server.Storage.Blobs" says why then). A database a newer program
 -- has migrated is refused with an exception, and nothing is changed.
+--
+-- The storage holds the data directory's lock while it is open
+-- ('Wiki.Server.Storage.Backup.lockDataDir'): a second storage on it (a
+-- second server) is refused with 'DataDirInUse', as is a restore while it
+-- is open, since either would change what this one reads under it.
 openStorage :: Config -> FilePath -> IO Storage
 openStorage = openWith True
 
@@ -206,8 +222,9 @@ withStorageAside dir = bracket (openWith False defaultConfig dir) closeStorage
 openWith :: Bool -> Config -> FilePath -> IO Storage
 openWith collect config dataDir = do
   createDirectoryIfMissing True dataDir
-  c <- open (databaseFile dataDir)
-  flip onException (close c) $ do
+  lock <- if collect then Just <$> (lockDataDir dataDir >>= either (throwIO . DataDirInUse) pure) else pure Nothing
+  c <- open (databaseFile dataDir) `onException` traverse_ unlockDataDir lock
+  flip onException (close c >> traverse_ unlockDataDir lock) $ do
     execute_ c "PRAGMA busy_timeout = 10000"
     -- A pragma that answers with a row, which execute_ would refuse.
     _ <- query_ c "PRAGMA journal_mode = WAL" :: IO [Only Text]
@@ -218,11 +235,19 @@ openWith collect config dataDir = do
   connection <- newMVar c
   settings <- newIORef Nothing
   serverKept <- newIORef Nothing
-  pure Storage {connection, dataDir, config, settings, serverKept}
+  pure Storage {connection, dataDir, config, settings, serverKept, lock}
 
--- | Close the storage's database.
+-- | A data directory another storage has open, or that is being restored
+-- into: why it cannot be opened.
+newtype DataDirInUse = DataDirInUse Text
+  deriving stock (Show)
+
+instance Exception DataDirInUse where
+  displayException (DataDirInUse why) = toS why
+
+-- | Close the storage's database, and let its directory's lock go.
 closeStorage :: Storage -> IO ()
-closeStorage st = withMVar st.connection close
+closeStorage st = withMVar st.connection close `finally` traverse_ unlockDataDir st.lock
 
 -- | Run something with the storage open, and close it afterwards.
 withStorage :: Config -> FilePath -> (Storage -> IO a) -> IO a
@@ -274,18 +299,11 @@ serverSettingsWith st c =
 -- deleted. The images spaces are pictured with are such files too.
 collectGarbage :: Connection -> FilePath -> IO ()
 collectGarbage c dataDir = do
-  live <- blobsIn c
-  kept <- traverse (\b -> try @SomeException (withConnection b blobsIn)) =<< backupFiles (backupsDir dataDir)
+  live <- referencedBlobs c
+  kept <- traverse (\b -> try @SomeException (withConnection b referencedBlobs)) =<< backupFiles (backupsDir dataDir)
   case sequence kept of
     Left _ -> pass
     Right fromBackups -> void (collectBlobs (attachmentsDir dataDir) (Set.unions (live : fromBackups)))
-  where
-    blobsIn d = do
-      attached <- map (BlobId . fromOnly) <$> query_ d "SELECT DISTINCT blob FROM attachments WHERE blob IS NOT NULL"
-      -- A backup taken before spaces had icons has no column for them,
-      -- and refers to no image.
-      icons <- query_ d "SELECT icon FROM spaces WHERE icon IS NOT NULL" `catch` \(_ :: SQLError) -> pure []
-      pure (Set.fromList (attached <> [b | Only t <- icons, Just (IconImage b _) <- [decodeStrict' (encodeUtf8 (t :: Text))]]))
 
 --------------------------------------------------------------------------------
 -- Who is asking
@@ -611,6 +629,49 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   -- keeps ('readServerSettings').
   checkProvider _ _ = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API asks a provider."))
   sendTestMail _ = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API sends mail."))
+
+  -- The backups as the storage keeps them: their settings and the last
+  -- made. Whether one is under way, and when the next is due, are the
+  -- server's ("Wiki.Server.Backups"), and so is making one: its API
+  -- answers with both.
+  backups = SqliteWiki (ask >>= \env -> liftIO (readBackups env.storage env.who))
+  setBackupSettings change = SqliteWiki $ do
+    env <- ask
+    liftIO (transact env.storage env.who Writes (setBackupSettingsTx change)) >>= \case
+      Left e -> pure (Left e)
+      Right _ -> liftIO (readBackups env.storage env.who)
+  backUpNow = run Reads (requireAdministrator >> failWith (Invalid "Only the server makes a backup."))
+
+-- | The backups, as someone may read them (an administrator): their
+-- settings with the configuration as whether it is set, the last made or
+-- tried, and how many the data directory holds; none under way, and no
+-- next one, which only the server knows ('Wiki.Server.Backups').
+readBackups :: Storage -> Who -> IO (Either WikiError Backups)
+readBackups st who =
+  transact st who Reads (requireAdministrator >> db (\c -> (,) <$> loadBackupSettings c <*> loadLastBackup c)) >>= \case
+    Left e -> pure (Left e)
+    Right (settings, lastMade) -> do
+      kept <- length <$> backupFiles (backupsDir st.dataDir)
+      pure (Right Backups {available = True, settings = secretState <$> settings, last = lastMade, running = False, next = Nothing, kept})
+
+-- | The backups' settings, with the configuration, for the server that
+-- makes them.
+readBackupSettings :: Storage -> IO KeptBackups
+readBackupSettings st = withDatabase st loadBackupSettings
+
+-- | The last backup made or tried, for the server that makes them.
+readLastBackup :: Storage -> IO (Maybe BackupRecord)
+readLastBackup st = withDatabase st loadLastBackup
+
+-- | Keep what the last backup came to.
+writeLastBackup :: Storage -> BackupRecord -> IO ()
+writeLastBackup st r = withDatabase st (`storeLastBackup` r)
+
+-- | Write a copy of the database into a new file, holding the storage's
+-- connection for the copy alone, as every operation holds it for its
+-- transaction.
+copyDatabase :: Storage -> FilePath -> IO ()
+copyDatabase st target = withDatabase st (`backupInto` target)
 
 -- | Whether someone may read a page that is there: what the live channel
 -- asks before it tells them of the page ("Wiki.Server.Events").
@@ -1396,6 +1457,16 @@ setServerSettingsTx change = do
   old <- asks (\x -> x.server)
   new <- either invalid pure (checkServerSettings isJust (applyChange Secret old change))
   db (`storeServerSettings` new)
+  pure new
+
+-- | The backups' settings with a change written over them, checked
+-- ('checkBackupSettings') and kept.
+setBackupSettingsTx :: BackupSettingsChange -> Tx KeptBackups
+setBackupSettingsTx change = do
+  requireAdministrator
+  old <- db loadBackupSettings
+  new <- either invalid pure (checkBackupSettings (applyBackupChange Secret old change))
+  db (`storeBackupSettings` new)
   pure new
 
 invitationsTx :: Tx Invitations

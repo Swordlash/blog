@@ -34,7 +34,6 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Standing (..), User (..))
 import Wiki.Server.Mail (Message (..))
-import Wiki.Server.Options qualified as Options
 import Wiki.Server.Storage.Layout (databaseFile)
 
 spec :: Spec
@@ -200,9 +199,8 @@ switching = describe "the switch between them" $ do
     spaceNames r [] `shouldReturn` ["Blog", "Docs"]
     (\x -> x.status) <$> getUrl r (r.public <> "/") `shouldReturn` 200
 
-  it "lasts across a restart of the server" $ withDemoRunning identity $ \r -> do
-    closeWiki r
-    withRunningAs (\o -> o {Options.dataDir = r.dataDir}) $ \again ->
+  it "lasts across a restart of the server" $
+    withDemoRestarted closeWiki $ \() again ->
       (getUrl again (onPublic again links.spaces.list) >>= jsonAs 401) `shouldReturn` Unauthenticated
 
 invitations :: Spec

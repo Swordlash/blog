@@ -85,6 +85,19 @@
 -- provider may be asked how to sign in ('checkProvider') and a test mail
 -- sent ('sendTestMail'), which only a server can do: the demo keeps the
 -- settings for the tab's life and says that it cannot.
+--
+-- = Backups
+--
+-- The backups a server makes by itself (WP4.9 of docs/PLAN.md,
+-- "Wiki.Api.Backups") are off until they are turned on here, and are set
+-- here and nowhere else: when, how many are kept, and where they are
+-- copied off the machine, with the @rclone@ configuration written and
+-- never read back, as the server's other secrets. A change is checked as a
+-- whole ('Wiki.Api.Backups.checkBackupSettings', 'Invalid' otherwise).
+-- 'backUpNow' makes one at once, while they are on ('Invalid' otherwise),
+-- which only the server itself does: the storage under it refuses, as it
+-- refuses to ask a provider. The demo, whose wiki is in the browser, makes
+-- none: its 'backups' say they are not available, and it refuses the rest.
 module Wiki.App.Backend.Admin
   ( MonadAdmin (..)
   )
@@ -96,6 +109,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Account (Account, NewAccount)
 import Wiki.Api.Admin (Directory, Invitations, Invited, WikiSettings)
+import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (GroupId, InvitationId, UserId)
@@ -221,6 +235,24 @@ class (Monad m) => MonadAdmin m where
   sendTestMail :: Text -> m (Either WikiError MailTestResult)
   default sendTestMail :: (MonadTrans t, m ~ t n, MonadAdmin n) => Text -> m (Either WikiError MailTestResult)
   sendTestMail = lift . sendTestMail
+
+  -- | The backups: their settings, the configuration as whether it is set,
+  -- the last made or tried, and whether one is under way.
+  backups :: m (Either WikiError Backups)
+  default backups :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError Backups)
+  backups = lift backups
+
+  -- | Replace their settings, the configuration kept, replaced or cleared:
+  -- the backups as they then are.
+  setBackupSettings :: BackupSettingsChange -> m (Either WikiError Backups)
+  default setBackupSettings :: (MonadTrans t, m ~ t n, MonadAdmin n) => BackupSettingsChange -> m (Either WikiError Backups)
+  setBackupSettings = lift . setBackupSettings
+
+  -- | Make a backup now: the backups once it is made, or, if it takes a
+  -- while, with it still under way.
+  backUpNow :: m (Either WikiError Backups)
+  default backUpNow :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError Backups)
+  backUpNow = lift backUpNow
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadAdmin m) => MonadAdmin (HalogenM st act slots output m)

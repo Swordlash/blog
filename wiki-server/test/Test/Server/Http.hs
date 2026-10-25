@@ -31,9 +31,11 @@ import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space qualified as S
 import Wiki.Server.Api (Env (..))
+import Wiki.Server.Backups (newBackupService)
 import Wiki.Server.Events (newHub)
 import Wiki.Server.Export (newExports)
 import Wiki.Server.Limiter (defaultLimits, newLimiter)
+import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Render (inProcess)
 import Wiki.Server.Storage (Storage, Who (..))
@@ -106,4 +108,6 @@ apiEnv storage = do
   providerCache <- newProviderCache
   events <- newHub
   exports <- newExports
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports}
+  -- Its thread is not run: these backups are made by nobody.
+  backups <- newBackupService (silentLogger (const pass)) "rclone" storage
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups}

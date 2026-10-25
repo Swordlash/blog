@@ -4,6 +4,7 @@
 module Main (main) where
 
 import Protolude
+import Test.Backups qualified as Backups
 import Test.Error qualified as Error
 import Test.Events qualified as Events
 import Test.Hspec (hspec)
@@ -26,3 +27,4 @@ main = hspec $ do
   Links.spec
   ServerSettings.spec
   Events.spec
+  Backups.spec

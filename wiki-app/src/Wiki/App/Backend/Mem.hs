@@ -261,6 +261,11 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   checkProvider name = query . checkProviderIn name
   sendTestMail = query . sendTestMailIn
 
+  -- None: the demo's wiki is in the browser, which the section says.
+  backups = query backupsIn
+  setBackupSettings _ = query refuseBackupsIn
+  backUpNow = query refuseBackupsIn
+
 -- | A page's comments, on the same store, kept as every other write is
 -- (each page's threads a record of "Wiki.App.Backend.Mem.Persist"'s). The
 -- demo has no live channel: what someone else comments is nobody else's

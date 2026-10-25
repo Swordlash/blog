@@ -7,6 +7,7 @@ module Test.Server.Fixture
   , withRunning
   , withRunningAs
   , withDemoRunning
+  , withDemoRestarted
   , site
   , template
 
@@ -123,7 +124,12 @@ template =
 -- | A server whose build is the server's (its files, and 'template'), over
 -- the demo's wiki, with its options changed as given.
 withDemoRunning :: (ServeOptions -> ServeOptions) -> (Running -> IO a) -> IO a
-withDemoRunning change = withRunningPrepared change $ \dataDir staticDir -> do
+withDemoRunning change = withRunningPrepared change demoPrepared
+
+-- | The directories of a server whose build is the server's, over the
+-- demo's wiki.
+demoPrepared :: FilePath -> FilePath -> IO ()
+demoPrepared dataDir staticDir = do
   BS.writeFile (staticDir </> "template.html") template
   withStorage defaultConfig dataDir (\st -> importArchive st demoArchive) >>= either (\e -> assertFailure ("the demo does not import: " <> toS e)) pure
 
@@ -141,33 +147,57 @@ withRunningAs change = withRunningPrepared change (\_ _ -> pass)
 withRunningPrepared :: (ServeOptions -> ServeOptions) -> (FilePath -> FilePath -> IO ()) -> (Running -> IO a) -> IO a
 withRunningPrepared change prepare test =
   withSystemTempDirectory "wiki-server-http" $ \dir -> do
-    let dataDir = dir </> "data"
-        staticDir = dir </> "app"
-    for_ site $ \(path, bytes) -> do
-      createDirectoryIfMissing True (takeDirectory (staticDir </> path))
-      BS.writeFile (staticDir </> path) bytes
-    prepare dataDir staticDir
-    logged <- newIORef []
-    outbox <- newIORef []
-    manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 60000000}
-    let options =
-          change
-            (defaultServeOptions dataDir)
-              { listen = Listen "127.0.0.1" 0
-              , adminListen = Just (Listen "127.0.0.1" 0)
-              , staticDir = Just staticDir
-              }
-    withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options (testMail outbox) $ \server ->
-      test
-        Running
-          { public = root server.publicAddress
-          , admin = maybe "" root server.adminAddress
-          , dataDir
-          , staticDir
-          , logged
-          , manager
-          , outbox
-          }
+    (dataDir, staticDir) <- prepared dir prepare
+    serveIn change dataDir staticDir test
+
+-- | A server over the demo's wiki, stopped once the first action is done,
+-- and started again over the same directories for the second, which is
+-- given what the first gave back: a restart. (Two servers cannot run on
+-- one data directory at once: the second is refused.)
+withDemoRestarted :: (Running -> IO x) -> (x -> Running -> IO a) -> IO a
+withDemoRestarted before after =
+  withSystemTempDirectory "wiki-server-http" $ \dir -> do
+    (dataDir, staticDir) <- prepared dir demoPrepared
+    x <- serveIn identity dataDir staticDir before
+    serveIn identity dataDir staticDir (after x)
+
+-- | The data and static directories of a test's server in a directory,
+-- prepared as given.
+prepared :: FilePath -> (FilePath -> FilePath -> IO ()) -> IO (FilePath, FilePath)
+prepared dir prepare = do
+  let dataDir = dir </> "data"
+      staticDir = dir </> "app"
+  for_ site $ \(path, bytes) -> do
+    createDirectoryIfMissing True (takeDirectory (staticDir </> path))
+    BS.writeFile (staticDir </> path) bytes
+  prepare dataDir staticDir
+  pure (dataDir, staticDir)
+
+-- | A server over these directories, with its options changed as given,
+-- while the test runs.
+serveIn :: (ServeOptions -> ServeOptions) -> FilePath -> FilePath -> (Running -> IO a) -> IO a
+serveIn change dataDir staticDir test = do
+  logged <- newIORef []
+  outbox <- newIORef []
+  manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 60000000}
+  let options =
+        change
+          (defaultServeOptions dataDir)
+            { listen = Listen "127.0.0.1" 0
+            , adminListen = Just (Listen "127.0.0.1" 0)
+            , staticDir = Just staticDir
+            }
+  withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options (testMail outbox) $ \server ->
+    test
+      Running
+        { public = root server.publicAddress
+        , admin = maybe "" root server.adminAddress
+        , dataDir
+        , staticDir
+        , logged
+        , manager
+        , outbox
+        }
   where
     root = \case
       SockAddrInet port _ -> "http://127.0.0.1:" <> show port

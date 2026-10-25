@@ -1,0 +1,14 @@
+{
+  "destination": {
+    "config": null,
+    "rclone": "b2:other"
+  },
+  "enabled": true,
+  "keep": {
+    "daily": 14,
+    "weekly": 8
+  },
+  "schedule": {
+    "daily": "03:30"
+  }
+}

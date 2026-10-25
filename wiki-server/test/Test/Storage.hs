@@ -13,6 +13,7 @@ import Protolude
 import System.Directory (doesFileExist)
 import System.Directory qualified as Directory
 import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Admin (Directory (..))
@@ -251,18 +252,24 @@ attachmentsOnDisk = describe "attachments" $ do
       kept.size `shouldBe` maxAttachmentSize
 
   it "whose files nothing refers to any more are deleted when the storage is next opened, and only then" $
-    withStorageIn $ \dir st -> do
-      importArchive st demoArchive >>= ok
-      hello <- pageIn st "blog" "hello-world"
-      a <- asAdmin st (uploadAttachment hello.id "gone.txt" "text/plain" "soon gone") >>= ok
-      _ <- asAdmin st (uploadAttachment hello.id "kept.txt" "text/plain" "kept") >>= ok
-      _ <- asAdmin st (deleteAttachment a.id) >>= ok
-      file <- maybe (panic "not a hash") pure (blobFile (attachmentsDir dir) (blobOf "soon gone"))
-      doesFileExist file `shouldReturn` True
-      -- A write that never finished leaves a file behind, which goes too.
+    withSystemTempDirectory "wiki-server-test" $ \dir -> do
       let shard = attachmentsDir dir </> "ab"
-      Directory.createDirectoryIfMissing True shard
-      writeFile (shard </> "incoming123") "half"
+      file <- withStorage defaultConfig dir $ \st -> do
+        importArchive st demoArchive >>= ok
+        hello <- pageIn st "blog" "hello-world"
+        a <- asAdmin st (uploadAttachment hello.id "gone.txt" "text/plain" "soon gone") >>= ok
+        _ <- asAdmin st (uploadAttachment hello.id "kept.txt" "text/plain" "kept") >>= ok
+        _ <- asAdmin st (deleteAttachment a.id) >>= ok
+        file <- maybe (panic "not a hash") pure (blobFile (attachmentsDir dir) (blobOf "soon gone"))
+        doesFileExist file `shouldReturn` True
+        -- A write that never finished leaves a file behind, which goes too.
+        Directory.createDirectoryIfMissing True shard
+        writeFile (shard </> "incoming123") "half"
+        -- Nobody else may open the directory meanwhile: a second storage
+        -- would delete what this one may still be writing.
+        (withStorage defaultConfig dir (const pass) >> pure False) `catch` (\(_ :: DataDirInUse) -> pure True) `shouldReturn` True
+        doesFileExist file `shouldReturn` True
+        pure file
       withStorage defaultConfig dir (const pass)
       doesFileExist file `shouldReturn` False
       doesFileExist (shard </> "incoming123") `shouldReturn` False

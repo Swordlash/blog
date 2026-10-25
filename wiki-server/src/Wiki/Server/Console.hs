@@ -26,6 +26,10 @@
 -- input when that is not a terminal (@printf '%s\\n' "$pw" | wiki-server
 -- users add …@).
 --
+-- @wiki-server restore@ is the console's too ('restoreParser',
+-- 'Wiki.Server.Storage.Backup.restore'): it puts a backup back as a data
+-- directory's database, into a directory no server has open.
+--
 -- @wiki-server oidc check@ is the console's too ('runOidcCheck'): it asks
 -- the providers the administration has set (WP3.6, WP4.4) how to sign in,
 -- before anyone tries, and prints the redirect URI to register with each,
@@ -44,6 +48,9 @@ module Wiki.Server.Console
   , OidcCheck (..)
   , oidcCheckParser
   , runOidcCheck
+
+    -- * Restoring a backup
+  , restoreParser
   )
 where
 
@@ -60,6 +67,7 @@ import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdm
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Secret (revealed)
 import Wiki.Server.Storage (Storage, readServerSettings, withStorageAside)
+import Wiki.Server.Storage.Backup (Restore (..))
 
 -- | A command, on a data directory.
 data Users = Users
@@ -262,3 +270,15 @@ runOidcCheck c = do
             , [label, redirect, secretLine] <> lines'
             )
         pure (all fst reports, concatMap snd reports)
+
+--------------------------------------------------------------------------------
+-- Restoring a backup
+
+-- | The options of @wiki-server restore BACKUP --data DIR [--attachments
+-- DIR]@.
+restoreParser :: Parser Restore
+restoreParser =
+  Restore
+    <$> strArgument (metavar "BACKUP" <> help "The backup to restore: a file of DIR/backups, or one copied off the machine")
+    <*> strOption (long "data" <> metavar "DIR" <> help "The data directory to restore it into, which no server may be running on (made if it is not there)")
+    <*> optional (strOption (long "attachments" <> metavar "DIR" <> help "A copy of the attachments' files (an off-site copy's attachments directory), to bring the missing ones from"))

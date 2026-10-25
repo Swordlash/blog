@@ -31,6 +31,10 @@ module Test.Sample
   , serverSettings
   , serverChange
   , providerCheck
+  , backups
+  , backupChange
+  , backupsAfter
+  , backupRcloneChange
   )
 where
 
@@ -40,6 +44,7 @@ import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), ServerStatus (..), WikiSettings (..))
+import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), OffSite (..), Retention (..), Schedule (..), Trigger (..))
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
 import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..))
@@ -327,6 +332,56 @@ serverChange =
         , ProviderSettings {name = "hub", kind = GitHub, clientId = "Iv1.abc", issuer = Nothing, secret = Just ""}
         ]
     }
+
+-- | The backups of a server that makes them every six hours, keeping a
+-- week of days and four weeks, and copies them with rclone, whose
+-- configuration is set; the last one made on schedule and copied.
+backups :: Backups
+backups =
+  Backups
+    { available = True
+    , settings =
+        BackupSettings
+          { enabled = True
+          , schedule = EveryHours 6
+          , keep = Retention {daily = 7, weekly = 4}
+          , destination = Just (ToRclone "b2:wiki-backups/wiki" Set)
+          }
+    , last =
+        Just
+          BackupRecord
+            { startedAt = time
+            , finishedAt = later
+            , trigger = OnSchedule
+            , file = Just "20261024T153000.000Z.sqlite"
+            , size = Just 1253376
+            , failure = Nothing
+            , offSite = Just OffSite {to = "b2:wiki-backups/wiki", problem = Nothing}
+            }
+    , running = False
+    , next = Just later
+    , kept = 9
+    }
+
+-- | The backups as a server answers a change of their settings: the
+-- configuration said to be set if it was given.
+backupsAfter :: BackupSettingsChange -> Backups
+backupsAfter change = Backups {available = True, settings = maybe NotSet (const Set) <$> change, last = backups.last, running = False, next = backups.next, kept = backups.kept}
+
+-- | A change of them: every day at 03:30, to a directory.
+backupChange :: BackupSettingsChange
+backupChange =
+  BackupSettings
+    { enabled = True
+    , schedule = DailyAt 3 30
+    , keep = Retention {daily = 14, weekly = 8}
+    , destination = Just (ToDirectory "/mnt/backup/wiki")
+    }
+
+-- | A change that keeps the rclone configuration (left out) of another
+-- remote.
+backupRcloneChange :: BackupSettingsChange
+backupRcloneChange = backupChange {destination = Just (ToRclone "b2:other" Nothing)}
 
 -- | What checking a provider found.
 providerCheck :: ProviderCheck

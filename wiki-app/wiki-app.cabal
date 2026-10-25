@@ -89,6 +89,7 @@ library
       Wiki.App.Editor.Browser
       Wiki.App.View.Access
       Wiki.App.View.Admin
+      Wiki.App.View.Backups
       Wiki.App.View.Invite
       Wiki.App.View.Body
       Wiki.App.View.Comments

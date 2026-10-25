@@ -19,6 +19,7 @@ import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
+import Wiki.Api.Backups (BackupRecord (..), Backups (..), Trigger (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
@@ -72,6 +73,8 @@ spec = describe "golden JSON" $ do
     golden "provider-check" Sample.providerCheck
     golden "provider-check-failed" ProviderCheck {redirectUri = Nothing, clientSecret = NotSet, discovered = Nothing, problem = Just "Corp could not be reached at https://id.example.org/realms/corp/.well-known/openid-configuration."}
     golden "mail-test-result" MailTestResult {failure = Just "The mail server at mail.example.org:587 did not answer in time."}
+    golden "backups" Sample.backups
+    golden "backups-failed" Sample.backups {last = (\r -> r {file = Nothing, size = Nothing, failure = Just "The disk is full.", offSite = Nothing, trigger = Manual}) <$> Sample.backups.last, running = True}
     golden "threads" [Sample.inlineThread, Sample.pageThread]
     golden "comment" Sample.reply
   describe "the live channel's messages" $ do
@@ -125,4 +128,6 @@ spec = describe "golden JSON" $ do
     golden "new-invitation" NewInvitation {email = "bea@example.org"}
     golden "server-settings-change" Sample.serverChange
     golden "server-settings-clear" (noServerSettings :: ServerSettingsChange)
+    golden "backup-settings-change" Sample.backupChange
+    golden "backup-settings-rclone" Sample.backupRcloneChange
     golden "mail-test" MailTest {to = "ada@example.org"}

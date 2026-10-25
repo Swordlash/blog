@@ -158,6 +158,11 @@ data ServeOptions = ServeOptions
   -- ^ The built application ("Wiki.Server.Static"), if any.
   , maxImportSize :: Int
   -- ^ The largest archive an import takes, in bytes.
+  , rclone :: FilePath
+  -- ^ The @rclone@ program the backups are copied off the machine with,
+  -- when the administration sets an rclone remote ("Wiki.Server.Backups"):
+  -- its name, found on the path, or its path. Whether there are backups
+  -- at all is the administration's to say, not an option's.
   }
   deriving stock (Eq, Show)
 
@@ -173,6 +178,7 @@ defaultServeOptions dataDir =
     , basePath = "/"
     , staticDir = Nothing
     , maxImportSize = defaultMaxImportSize
+    , rclone = "rclone"
     }
 
 -- | 512 MiB: an archive holds every attachment of the wiki, each up to 50
@@ -191,6 +197,7 @@ serveOptions = do
   secureCookies <- switch (long "secure-cookies" <> help "Mark the session's cookie Secure, for a wiki reached over HTTPS only (a browser never sends such a cookie over plain HTTP)")
   basePath <- strOption (long "base-path" <> metavar "PATH" <> value "/" <> showDefault <> help "The path the wiki is served under, as the application was built for")
   staticDir <- optional (strOption (long "static" <> metavar "DIR" <> help "The built application to serve (its index.html, 404.html, app.wasm, ...)"))
+  rclone <- strOption (long "rclone" <> metavar "PATH" <> value "rclone" <> showDefault <> help "The rclone program, for backups the administration copies to an rclone remote")
   maxImportMb <- option auto (long "max-import-size" <> metavar "MB" <> value (defaultMaxImportSize `div` (1024 * 1024)) <> showDefault <> help "The largest archive an import takes, in MiB")
   -- The options of earlier versions that the administration's "Server"
   -- section replaces: refused, with where they went, rather than left to
@@ -207,6 +214,7 @@ serveOptions = do
       , basePath
       , staticDir
       , maxImportSize = maxImportMb * 1024 * 1024
+      , rclone
       }
   where
     address = eitherReader (first toS . parseListen . toS)

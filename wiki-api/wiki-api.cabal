@@ -55,6 +55,7 @@ library
       Wiki.Api.Account
       Wiki.Api.Admin
       Wiki.Api.Auth
+      Wiki.Api.Backups
       Wiki.Api.Comments
       Wiki.Api.Error
       Wiki.Api.Events
@@ -71,6 +72,7 @@ library
       aeson,
       base,
       bytestring,
+      containers,
       http-api-data,
       http-media,
       protolude,
@@ -89,6 +91,7 @@ test-suite wiki-api-test
   hs-source-dirs:   test
   main-is:          Test.hs
   other-modules:
+      Test.Backups
       Test.Error
       Test.Events
       Test.Gen

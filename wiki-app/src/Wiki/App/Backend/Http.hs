@@ -462,6 +462,13 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   checkProvider name given = answer <$> call (withJson "POST" (links.admin.checkProvider name) given)
   sendTestMail address = answer <$> call (withJson "POST" links.admin.testMail MailTest {to = address})
 
+  -- Kept as the server's settings are; a backup made changes what they
+  -- say, and is a write as a change of their settings is. A backup the
+  -- server makes on its schedule is seen when they are read again.
+  backups = cached (\c -> c.backups) (R.get links.admin.backups) withBackups
+  setBackupSettings new = write (withJson "PUT" links.admin.setBackups new)
+  backUpNow = write (R.post links.admin.backUpNow)
+
 -- | A page's comments, over the API's @pages\/\<page>\/threads@. A
 -- page's threads are kept as any read is, so that a page the server
 -- rendered with its comments is the program's first render too; a write

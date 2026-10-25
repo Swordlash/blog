@@ -19,6 +19,7 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), defaultSettings)
+import Wiki.Api.Backups (BackupSettingsOf (..), Backups (..), defaultBackupSettings)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin
@@ -48,6 +49,7 @@ spec _ withFixture = around withFixture $ describe "MonadAdmin contract" $ do
   membership
   letsIn
   serverSide
+  backingUp
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -451,3 +453,18 @@ serverSide = describe "serverSettings and setServerSettings" $ do
     run admin (setServerSettings (serverWith Nothing Nothing (Just "s")) {publicUrl = Just "wiki.example.org"}) >>= shouldBeInvalid
     run admin (setServerSettings (serverWith (Just "wiki") Nothing (Just "s"))) >>= shouldBeInvalid
     run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings)
+
+-- | The backups (WP4.9 of docs/PLAN.md): off until an administrator turns
+-- them on, and nobody else's business. Their settings, kept and checked,
+-- and a backup made are the server's, whose tests say so; the demo makes
+-- none.
+backingUp :: (MonadAdmin m) => SpecWith (Fixture m)
+backingUp = describe "backups, setBackupSettings and backUpNow" $
+  it "are off at first, with none made, and refused to whoever does not administer the wiki" $ \(Fixture run) -> do
+    b <- run admin backups >>= ok
+    (b.settings, b.last, b.running) `shouldBe` (defaultBackupSettings, Nothing, False)
+    b.settings.enabled `shouldBe` False
+    for_ [Anonymous, editor, reader] $ \who -> do
+      run who backups >>= (`shouldFailWith` Forbidden)
+      run who (setBackupSettings defaultBackupSettings {enabled = True}) >>= (`shouldFailWith` Forbidden)
+      run who backUpNow >>= (`shouldFailWith` Forbidden)

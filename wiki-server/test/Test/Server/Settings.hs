@@ -24,7 +24,6 @@ import Wiki.Api.ServerSettings
 import Wiki.Api.Types qualified as Types
 import Wiki.Core.User (SignInProvider (..))
 import Wiki.Server.Mail (Message (..))
-import Wiki.Server.Options qualified as Options
 
 spec :: Spec
 spec = describe "the server's settings, over HTTP" $ do
@@ -143,12 +142,15 @@ checks = describe "a change that cannot be" $
 lasting :: Spec
 lasting = describe "a change" $
   it "is seen by the very next request, and lasts across a restart" $
-    withFakeProvider $ \fake -> withDemoRunning identity $ \r -> do
-      set <- setServer r withAddress {providers = [provider "acme" fake.url (Just clientSecret)]}
-      session :: Types.SessionInfo <- getUrl r (onPublic r links.session) >>= jsonAs 200
-      session.providers `shouldBe` [SignInProvider "acme" "Acme"]
-      withRunningAs (\o -> o {Options.dataDir = r.dataDir}) $ \again ->
-        serverAs again `shouldReturn` set
+    withFakeProvider $ \fake ->
+      withDemoRestarted
+        ( \r -> do
+            set <- setServer r withAddress {providers = [provider "acme" fake.url (Just clientSecret)]}
+            session :: Types.SessionInfo <- getUrl r (onPublic r links.session) >>= jsonAs 200
+            session.providers `shouldBe` [SignInProvider "acme" "Acme"]
+            pure set
+        )
+        (\set again -> serverAs again `shouldReturn` set)
 
 checkingProviders :: Spec
 checkingProviders = describe "checking a provider" $ do

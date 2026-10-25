@@ -34,6 +34,7 @@ import Wiki.Api.Links (attachmentUrl, spaceIconUrl)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, redirectUri, securityName)
 import Wiki.Server.Api (Env (..))
 import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
+import Wiki.Server.Backups (newBackupService, runScheduler)
 import Wiki.Server.Events (closeAll, newHub)
 import Wiki.Server.Events qualified as Events
 import Wiki.Server.Export (newExports)
@@ -44,7 +45,7 @@ import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
-import Wiki.Server.Storage (Config (..), readServerSettings, withStorage)
+import Wiki.Server.Storage (Config (..), DataDirInUse (..), readServerSettings, withStorage)
 import Wiki.Server.Version (serverVersion)
 
 -- | A configuration the server cannot run with, with every reason.
@@ -99,7 +100,10 @@ withServerUsing logger raw sendMail action = do
   registrations <- newLimiter defaultLimits {perLogin = 5, perAddress = 5}
   events <- newHub
   exports <- newExports
-  withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events} options.dataDir $ \storage -> do
+  -- A data directory another server has open is a configuration this one
+  -- cannot run with, said as the others are.
+  handle (\(DataDirInUse why) -> throwIO (ServerError [why])) $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events} options.dataDir $ \storage -> do
+    backups <- newBackupService logger options.rclone storage
     let env =
           Env
             { storage
@@ -114,6 +118,7 @@ withServerUsing logger raw sendMail action = do
             , flows
             , events
             , exports
+            , backups
             }
         public =
           Listener
@@ -138,7 +143,9 @@ withServerUsing logger raw sendMail action = do
     for_ configured.providers $ \p ->
       logWith logger Info ([("event", "oidc"), ("provider", p.name), ("kind", kindName p.kind)] <> [("redirect", redirectUri u p.name) | Just u <- [configured.publicUrl]])
     stopping <- newIORef False
-    bracket (bindAll listeners) (traverse_ (close . fst)) $ \bound -> do
+    -- The thread that backs the server up, which does nothing until the
+    -- administration turns backups on; stopped with the server.
+    Async.withAsync (runScheduler backups) $ \_ -> bracket (bindAll listeners) (traverse_ (close . fst)) $ \bound -> do
       let settings l =
             setGracefulShutdownTimeout (Just 10)
               . setOnException

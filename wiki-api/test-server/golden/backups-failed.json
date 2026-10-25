@@ -1,0 +1,29 @@
+{
+  "available": true,
+  "kept": 9,
+  "last": {
+    "failure": "The disk is full.",
+    "file": null,
+    "finishedAt": "2026-10-25T00:00:00Z",
+    "offSite": null,
+    "size": null,
+    "startedAt": "2026-10-24T09:30:12.345678Z",
+    "trigger": "Manual"
+  },
+  "next": "2026-10-25T00:00:00Z",
+  "running": true,
+  "settings": {
+    "destination": {
+      "config": "set",
+      "rclone": "b2:wiki-backups/wiki"
+    },
+    "enabled": true,
+    "keep": {
+      "daily": 7,
+      "weekly": 4
+    },
+    "schedule": {
+      "everyHours": 6
+    }
+  }
+}

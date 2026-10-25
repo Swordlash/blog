@@ -35,6 +35,7 @@ module Wiki.App.Backend.Http.Preload
   , InvitationsOf (..)
   , InvitationAt (..)
   , ServerOf (..)
+  , BackupsOf (..)
   , ThreadsOf (..)
   , Answer (..)
   , preloadId
@@ -58,6 +59,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken)
 import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
+import Wiki.Api.Backups (Backups)
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.ServerSettings (ServerSettings)
@@ -111,6 +113,9 @@ data Preload = Preload
   , server :: Maybe ServerOf
   -- ^ The server's own settings ('Wiki.App.Backend.Admin.serverSettings'),
   -- as the directory: whether each secret is set, never a secret.
+  , backups :: Maybe BackupsOf
+  -- ^ The backups ('Wiki.App.Backend.Admin.backups'), as the directory;
+  -- a payload written before there were any reads as without them.
   , threads :: Maybe [ThreadsOf]
   -- ^ A page's comments ('Wiki.App.Backend.Comments.listThreads'), for the
   -- page they are on; a payload written before there were any reads as
@@ -170,6 +175,10 @@ newtype InvitationsOf = InvitationsOf {invitations :: Answer Invitations}
 
 -- | The server's own settings ('Wiki.App.Backend.Admin.serverSettings').
 newtype ServerOf = ServerOf {server :: Answer ServerSettings}
+  deriving stock (Eq, Show)
+
+-- | The backups ('Wiki.App.Backend.Admin.backups').
+newtype BackupsOf = BackupsOf {backups :: Answer Backups}
   deriving stock (Eq, Show)
 
 -- | An invitation by its link's secret ('Wiki.App.Account.invitationFor').
@@ -256,6 +265,12 @@ instance ToJSON ServerOf where
 instance FromJSON ServerOf where
   parseJSON v = ServerOf <$> parseAnswer "server" v
 
+instance ToJSON BackupsOf where
+  toJSON b = object (answerFields "backups" b.backups)
+
+instance FromJSON BackupsOf where
+  parseJSON v = BackupsOf <$> parseAnswer "backups" v
+
 instance ToJSON InvitationAt where
   toJSON i = object (("token" .= i.token) : answerFields "invitation" i.invitation)
 
@@ -296,6 +311,7 @@ toPreload c =
         [] -> Nothing
         found -> Just found
     , server = ServerOf . toAnswer <$> mfilter kept c.server
+    , backups = BackupsOf . toAnswer <$> mfilter kept c.backups
     , threads = case [ThreadsOf {page, threads = toAnswer ts} | (page, ts) <- Map.toList c.threads, kept ts] of
         [] -> Nothing
         found -> Just found
@@ -320,6 +336,7 @@ fromPreload p =
     , invitations = (\i -> fromAnswer i.invitations) <$> p.invitations
     , invitationAt = Map.fromList [(i.token, fromAnswer i.invitation) | i <- fold p.invitationsAt]
     , server = (\s -> fromAnswer s.server) <$> p.server
+    , backups = (\b -> fromAnswer b.backups) <$> p.backups
     , threads = Map.fromList [(t.page, fromAnswer t.threads) | t <- fold p.threads]
     }
 

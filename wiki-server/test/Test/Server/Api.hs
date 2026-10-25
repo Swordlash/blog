@@ -36,7 +36,6 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (SearchHit (..), searchQuery)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), User (..))
-import Wiki.Server.Options qualified as Options
 import Wiki.Server.Storage (administratorUser)
 
 spec :: Spec
@@ -437,6 +436,32 @@ profiles :: Spec
 profiles = describe "a space's profile and icon over HTTP" $ do
   let png = BSL.pack [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]
       spaceNamed r hs path = getUrlWith r (onPublic r (links.spaces.atPath (either (panic . show) identity (parsePath path)))) hs >>= jsonAs 200
+      -- Upload icons as the operator, and see them served as images to
+      -- whoever may view their spaces and to nobody else: the blog's icon,
+      -- as uploaded.
+      icons :: Running -> IO Space
+      icons r = do
+        blog :: Space <- spaceNamed r [] "blog"
+        team :: Space <- getUrl r (onAdmin r (links.spaces.atPath (either (panic . show) identity (parsePath "team")))) >>= jsonAs 200
+        uploaded :: Space <- multipart r (onAdmin r (links.spaces.uploadIcon blog.id)) [] [("file", "icon.png", "image/png; charset=binary", png)] >>= jsonAs 200
+        case uploaded.icon of
+          Just (IconImage _ mediaType) -> mediaType `shouldBe` "image/png"
+          other -> expectationFailure ("not an image: " <> show other)
+        served <- getUrl r (onPublic r (spaceIconUrl uploaded))
+        (served.status, served.body) `shouldBe` (200, png)
+        lookup hContentType served.headers `shouldBe` Just "image/png"
+        lookup "X-Content-Type-Options" served.headers `shouldBe` Just "nosniff"
+        lookup "Content-Security-Policy" served.headers `shouldSatisfy` maybe False ("sandbox" `BS.isInfixOf`)
+        -- Another blob is not the space's icon; another space's is its own.
+        (.status) <$> getUrl r (onPublic r (links.spaces.icon blog.id (BlobId (T.replicate 64 "0")))) `shouldReturn` 404
+        teamIcon :: Space <- multipart r (onAdmin r (links.spaces.uploadIcon team.id)) [] [("file", "icon.png", "image/png", png)] >>= jsonAs 200
+        (.status) <$> getUrl r (onPublic r (spaceIconUrl teamIcon)) `shouldReturn` 403
+        (.status) <$> getUrl r (onAdmin r (spaceIconUrl teamIcon)) `shouldReturn` 200
+        -- An SVG, which could run scripts on the wiki's origin, is refused.
+        multipart r (onAdmin r (links.spaces.uploadIcon blog.id)) [] [("file", "icon.svg", "image/svg+xml", "<svg/>")] >>= jsonAs 400 >>= \case
+          Invalid _ -> pass
+          other -> expectationFailure ("not invalid: " <> show other)
+        pure uploaded
       setProfile r hs sid p = send r methodPut (onPublic r (links.spaces.setProfile sid)) ((hContentType, "application/json") : hs) (encode p)
 
   it "is set by whoever administers the space, and by nobody else" $ withAdminSession identity $ \r session -> do
@@ -456,30 +481,10 @@ profiles = describe "a space's profile and icon over HTTP" $ do
       Invalid _ -> pass
       other -> expectationFailure ("not invalid: " <> show other)
 
-  it "serves an uploaded icon to whoever may view the space, as an image and nothing else" $ withDemoRunning identity $ \r -> do
-    blog :: Space <- spaceNamed r [] "blog"
-    team :: Space <- getUrl r (onAdmin r (links.spaces.atPath (either (panic . show) identity (parsePath "team")))) >>= jsonAs 200
-    uploaded :: Space <- multipart r (onAdmin r (links.spaces.uploadIcon blog.id)) [] [("file", "icon.png", "image/png; charset=binary", png)] >>= jsonAs 200
-    case uploaded.icon of
-      Just (IconImage _ mediaType) -> mediaType `shouldBe` "image/png"
-      other -> expectationFailure ("not an image: " <> show other)
-    served <- getUrl r (onPublic r (spaceIconUrl uploaded))
-    (served.status, served.body) `shouldBe` (200, png)
-    lookup hContentType served.headers `shouldBe` Just "image/png"
-    lookup "X-Content-Type-Options" served.headers `shouldBe` Just "nosniff"
-    lookup "Content-Security-Policy" served.headers `shouldSatisfy` maybe False ("sandbox" `BS.isInfixOf`)
-    -- Another blob is not the space's icon; another space's is its own.
-    (.status) <$> getUrl r (onPublic r (links.spaces.icon blog.id (BlobId (T.replicate 64 "0")))) `shouldReturn` 404
-    teamIcon :: Space <- multipart r (onAdmin r (links.spaces.uploadIcon team.id)) [] [("file", "icon.png", "image/png", png)] >>= jsonAs 200
-    (.status) <$> getUrl r (onPublic r (spaceIconUrl teamIcon)) `shouldReturn` 403
-    (.status) <$> getUrl r (onAdmin r (spaceIconUrl teamIcon)) `shouldReturn` 200
-    -- An SVG, which could run scripts on the wiki's origin, is refused.
-    multipart r (onAdmin r (links.spaces.uploadIcon blog.id)) [] [("file", "icon.svg", "image/svg+xml", "<svg/>")] >>= jsonAs 400 >>= \case
-      Invalid _ -> pass
-      other -> expectationFailure ("not invalid: " <> show other)
-    -- The image stays across a restart, which deletes the files that
-    -- nothing refers to.
-    withRunningAs (\o -> o {Options.dataDir = r.dataDir}) $ \again -> do
+  it "serves an uploaded icon to whoever may view the space, as an image and nothing else" $
+    withDemoRestarted icons $ \uploaded again -> do
+      -- The image stays across a restart, which deletes the files that
+      -- nothing refers to.
       kept <- getUrl again (onPublic again (spaceIconUrl uploaded))
       (kept.status, kept.body) `shouldBe` (200, png)
 

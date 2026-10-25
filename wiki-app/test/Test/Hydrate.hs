@@ -218,6 +218,7 @@ apiOver providers st = do
     settings <- wikiSettings
     invited <- invitations
     server <- serverSettings
+    kept <- backups
     spaces <- listSpaces
     counts <- pageCounts
     perSpace <- for (Map.elems st.spaces) $ \s -> do
@@ -243,6 +244,7 @@ apiOver providers st = do
               : (links.admin.settings, answerOf settings)
               : (links.admin.invitations, answerOf invited)
               : (links.admin.server, answerOf server)
+              : (links.admin.backups, answerOf kept)
               : (links.invitations.details (InvitationToken "valid"), answerOf (Right InvitationInfo {email = "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
               : concat perSpace
           )

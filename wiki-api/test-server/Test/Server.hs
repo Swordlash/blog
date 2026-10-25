@@ -28,6 +28,7 @@ import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods (..), withoutIdentity)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), NewInvitation (..), defaultSettings)
 import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
+import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Export (ExportFormat (..), formatMediaType, formatName)
@@ -221,6 +222,10 @@ stubs =
                 then pure Sample.providerCheck {clientSecret = if isJust (given >>= \p -> p.secret) then Set else NotSet}
                 else refuse NotFound
           , testMail = \body -> pure MailTestResult {failure = if body.to == "ada@example.org" then Nothing else Just ("no mail for " <> body.to)}
+          , backups = pure Sample.backups
+          , -- What was sent, the configuration said to be set if it was given.
+            setBackups = \change -> pure (Sample.backupsAfter change)
+          , backUpNow = pure Sample.backups {running = True}
           }
     , comments = \page ->
         let here :: Handler a -> Handler a
@@ -544,6 +549,14 @@ spec = describe "a server of the API's type" $ do
     it "sends a test mail" $ do
       links.admin.testMail `shouldBe` "api/v1/admin/server/mail/test"
       answers (sendJson methodPost links.admin.testMail MailTest {to = "ada@example.org"}) 200 MailTestResult {failure = Nothing}
+
+  describe "the backups" $ do
+    it "reads them, writes a change, and makes one now, at server/backups" $ do
+      links.admin.backups `shouldBe` "api/v1/admin/server/backups"
+      links.admin.backUpNow `shouldBe` "api/v1/admin/server/backups/run"
+      answers (getAt links.admin.backups) 200 Sample.backups
+      answers (sendJson methodPut links.admin.setBackups Sample.backupRcloneChange) 200 (Sample.backupsAfter Sample.backupRcloneChange)
+      answers (request methodPost links.admin.backUpNow [] "") 200 Sample.backups {running = True}
 
   describe "whom the wiki lets in" $ do
     it "makes an account of one's own at accounts, signing its maker in" $ do

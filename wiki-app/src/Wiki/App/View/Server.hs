@@ -36,9 +36,10 @@ module Wiki.App.View.Server
 where
 
 import Data.Map.Strict qualified as Map
-import Data.Row (Empty)
+import Data.Row (type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
+import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
 import Protolude hiding (State)
@@ -46,9 +47,14 @@ import Wiki.Api.Export (ExportFormat, formatLabel, needsTeX)
 import Wiki.Api.ServerSettings
 import Wiki.App.Backend (MonadLoad (..), Session (exports), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.View.Backups qualified as Backups
 import Wiki.App.View.Common
 
 newtype Input = Input {context :: Context}
+
+-- | The part of the section that is a component of its own: the backups
+-- ("Wiki.App.View.Backups").
+type Slots = ("backups" .== H.Slot (Const Void) Void ())
 
 data Loaded
   = Loading
@@ -142,7 +148,7 @@ data Action
   | TypedTestTo Text
   | SendTest
 
-component :: forall query m. (MonadAdmin m, MonadLoad m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadAdmin m, MonadLoad m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -159,7 +165,7 @@ component =
               }
       }
   where
-    render :: State -> H.ComponentHTML Action Empty m
+    render :: State -> H.ComponentHTML Action Slots m
     render st =
       [hh|
         <section class="admin-section admin-server">
@@ -170,6 +176,7 @@ component =
             at once. Passwords and client secrets are typed once and never shown again.
           </p>
           {{ body }}
+          {{ HH.slot_ "backups" () Backups.component Backups.Input {context = st.input.context} }}
         </section>
       |]
       where
@@ -178,7 +185,7 @@ component =
           Failed e -> failureView e Retry
           Ready settings -> settingsView st settings
 
-    settingsView :: State -> ServerSettings -> H.ComponentHTML Action Empty m
+    settingsView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
     settingsView st settings =
       [hh|
         <div class="server-settings">
@@ -194,7 +201,7 @@ component =
     -- all whether the PDFs are among them: they need a TeX engine on the
     -- server's machine, which the server looks for at each request, so
     -- that installing one takes effect without a restart.
-    exportView :: [ExportFormat] -> H.ComponentHTML Action Empty m
+    exportView :: [ExportFormat] -> H.ComponentHTML Action Slots m
     exportView formats =
       [hh|
         <div class="server-part server-export">
@@ -213,7 +220,7 @@ component =
       |]
 
     -- The public address.
-    urlView :: State -> ServerSettings -> H.ComponentHTML Action Empty m
+    urlView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
     urlView st settings =
       [hh|
         <div class="server-part server-url">
@@ -248,7 +255,7 @@ component =
             |]
 
     -- The mail server, and the test mail.
-    mailView :: State -> ServerSettings -> H.ComponentHTML Action Empty m
+    mailView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
     mailView st settings =
       [hh|
         <div class="server-part server-mail">
@@ -294,14 +301,14 @@ component =
               </div>
             |]
 
-    testedView :: Either WikiError MailTestResult -> H.ComponentHTML Action Empty m
+    testedView :: Either WikiError MailTestResult -> H.ComponentHTML Action Slots m
     testedView = \case
       Left e -> errorView e
       Right r -> case r.failure of
         Nothing -> [hh|<p class="server-mail-tested" role="status">Sent: check that it arrived.</p>|]
         Just why -> [hh|<p class="server-mail-tested error" role="alert">Not sent: {{ why }}</p>|]
 
-    mailForm :: State -> MailForm -> H.ComponentHTML Action Empty m
+    mailForm :: State -> MailForm -> H.ComponentHTML Action Slots m
     mailForm st form =
       [hh|
         <form class="server-mail-form" aria-label="The mail server" {{ HE.preventingDefault (HE.onSubmit (const SaveMail)) }}>
@@ -338,7 +345,7 @@ component =
       |]
 
     -- The providers, one row each, and the form of the one edited.
-    providersView :: State -> ServerSettings -> H.ComponentHTML Action Empty m
+    providersView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
     providersView st settings =
       [hh|
         <div class="server-part server-providers">
@@ -376,7 +383,7 @@ component =
               </div>
             |]
 
-    providerRow :: State -> ServerSettings -> ProviderSettings -> H.ComponentHTML Action Empty m
+    providerRow :: State -> ServerSettings -> ProviderSettings -> H.ComponentHTML Action Slots m
     providerRow st settings p =
       [hh|
         <div class="server-provider-row">
@@ -399,7 +406,7 @@ component =
         </div>
       |]
 
-    providerForm :: State -> ServerSettings -> ProviderForm -> H.ComponentHTML Action Empty m
+    providerForm :: State -> ServerSettings -> ProviderForm -> H.ComponentHTML Action Slots m
     providerForm st settings form =
       [hh|
         <form class="server-provider-form" aria-label="A provider" {{ HE.preventingDefault (HE.onSubmit (const SaveProvider)) }}>
@@ -436,7 +443,7 @@ component =
         </form>
       |]
 
-    checkedView :: Checked -> H.ComponentHTML Action Empty m
+    checkedView :: Checked -> H.ComponentHTML Action Slots m
     checkedView = \case
       Checking -> [hh|<p class="server-provider-checked loading" role="status">Asking it how to sign in…</p>|]
       CheckedAs (Left e) -> errorView e
@@ -456,7 +463,7 @@ component =
 
     -- A secret's field: typed once, never shown. Where one is set, the
     -- field is offered only to replace it, and it may be cleared.
-    secretField :: Text -> Text -> Bool -> Bool -> Bool -> Text -> (Text -> Action) -> Action -> Maybe Action -> H.ComponentHTML Action Empty m
+    secretField :: Text -> Text -> Bool -> Bool -> Bool -> Text -> (Text -> Action) -> Action -> Maybe Action -> H.ComponentHTML Action Slots m
     secretField label name isSet replacing clearing typed onTyped onReplace onClear
       | isSet && not replacing =
           [hh|
@@ -477,7 +484,7 @@ component =
             </label>
           |]
 
-    handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
+    handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
       Initialize ->
         gets (\st -> st.loaded) >>= \case
@@ -551,18 +558,18 @@ component =
         result <- lift (sendTestMail (T.strip to'))
         modify (\st -> st {busy = False, tested = Just result})
 
-    withSettings :: (ServerSettings -> H.HalogenM State Action Empty ViewOutput m ()) -> H.HalogenM State Action Empty ViewOutput m ()
+    withSettings :: (ServerSettings -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
     withSettings f =
       gets (\st -> st.loaded) >>= \case
         Ready s -> f s
         _ -> pass
 
-    onMail :: (MailForm -> MailForm) -> H.HalogenM State Action Empty ViewOutput m ()
+    onMail :: (MailForm -> MailForm) -> H.HalogenM State Action Slots ViewOutput m ()
     onMail f = modify $ \st -> case st.editing of
       EditingMail form -> st {editing = EditingMail (f form)}
       _ -> st
 
-    onProvider :: (ProviderForm -> ProviderForm) -> H.HalogenM State Action Empty ViewOutput m ()
+    onProvider :: (ProviderForm -> ProviderForm) -> H.HalogenM State Action Slots ViewOutput m ()
     onProvider f = modify $ \st -> case st.editing of
       EditingProvider was form -> st {editing = EditingProvider was (f form)}
       _ -> st
@@ -571,7 +578,7 @@ component =
     -- shell is told (who may sign in with what has changed) and the
     -- settings are read again; refused, why is said in place, and the form
     -- stays open.
-    save :: (ServerSettings -> ServerSettingsChange) -> H.HalogenM State Action Empty ViewOutput m ()
+    save :: (ServerSettings -> ServerSettingsChange) -> H.HalogenM State Action Slots ViewOutput m ()
     save change = withSettings $ \s -> do
       modify (\st -> st {busy = True, refusal = Nothing})
       lift (setServerSettings (change s)) >>= \case
@@ -580,7 +587,7 @@ component =
           modify (\st -> st {busy = False, loaded = Ready new, editing = NotEditing, checks = mempty, tested = Nothing})
           H.raise (Changed Nothing)
 
-    load :: H.HalogenM State Action Empty ViewOutput m ()
+    load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       result <- lift serverSettings
       modify (\st -> st {loaded = either Failed Ready result, busy = False})

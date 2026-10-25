@@ -73,6 +73,7 @@ import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
+import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
@@ -344,6 +345,17 @@ data AdminApi mode = AdminApi
   , testMail :: mode :- "server" :> "mail" :> "test" :> ReqBody '[JSON] MailTest :> Post '[JSON] MailTestResult
   -- ^ @sendTestMail@: send a mail to an address through the mail server
   -- as it is set.
+  , -- The backups the server makes by itself (WP4.9 of docs/PLAN.md,
+    -- "Wiki.Api.Backups"), off until they are turned on here.
+    backups :: mode :- "server" :> "backups" :> Get '[JSON] Backups
+  -- ^ @backups@: the settings (the rclone configuration as whether it is
+  -- set), the last backup made or tried, and what is under way.
+  , setBackups :: mode :- "server" :> "backups" :> ReqBody '[JSON] BackupSettingsChange :> Put '[JSON] Backups
+  -- ^ @setBackupSettings@: replace the settings, the configuration kept,
+  -- replaced or cleared; they take effect at once.
+  , backUpNow :: mode :- "server" :> "backups" :> "run" :> Post '[JSON] Backups
+  -- ^ @backUpNow@: make a backup now, while they are on; the answer comes
+  -- once it is made, or after a while with it still under way.
   }
   deriving stock (Generic)
 

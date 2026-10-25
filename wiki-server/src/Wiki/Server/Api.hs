@@ -94,6 +94,7 @@ import Wiki.Core.Search (SearchQuery (..))
 import Wiki.Core.User (User (..))
 import Wiki.Server.Accounts (endSession)
 import Wiki.Server.Accounts qualified as Accounts
+import Wiki.Server.Backups (BackupService, currentBackups, requestBackup, settingsChanged)
 import Wiki.Server.Events (Hub)
 import Wiki.Server.Export (Exported (..), Exports, availableFormats, exportPage, exportSpace)
 import Wiki.Server.Import (applyImport, planImport, readUpload)
@@ -134,6 +135,8 @@ data Env = Env
   -- storage tells of every change to a page's comments.
   , exports :: Exports
   -- ^ The exports being made ("Wiki.Server.Export"), one a person.
+  , backups :: BackupService
+  -- ^ The thread that backs the server up ("Wiki.Server.Backups").
   }
 
 -- | Who is asking, as the listener found them for a request.
@@ -398,6 +401,14 @@ handlers env caller =
           , setServer = wiki . setServerSettings
           , checkProvider = \name given -> administrator >> liftIO (checkingProvider env name given) >>= either refuse pure
           , testMail = \body -> administrator >> liftIO (sendingTestMail env body) >>= either refuse pure
+          , -- The storage keeps the settings and checks who may; the
+            -- server's thread makes the backups ("Wiki.Server.Backups").
+            backups = liftIO (currentBackups env.backups who) >>= either (throwError . wikiError) pure
+          , setBackups = \change -> do
+              _ <- wiki (setBackupSettings change)
+              liftIO (settingsChanged env.backups)
+              liftIO (currentBackups env.backups who) >>= either (throwError . wikiError) pure
+          , backUpNow = liftIO (requestBackup env.backups who) >>= either (throwError . wikiError) pure
           }
     , -- The storage checks who may, and tells the live channel
       -- ("Wiki.Server.Events") what changed.
@@ -675,7 +686,7 @@ serverStatus env = do
   counts <- withDatabase env.storage $ \c ->
     for ["spaces", "pages", "attachments", "users"] $ \table ->
       maybe 0 fromOnly . head <$> query_ c ("SELECT count(*) FROM " <> table)
-  backups <- length <$> backupFiles (backupsDir env.dataDir)
+  kept <- length <$> backupFiles (backupsDir env.dataDir)
   case counts of
     [spaces, pages, attachments, users] ->
       pure
@@ -687,6 +698,6 @@ serverStatus env = do
           , pages
           , attachments
           , users
-          , backups
+          , backups = kept
           }
     _ -> panic "four counts were asked for"

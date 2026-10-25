@@ -60,6 +60,7 @@ module Wiki.App.Backend.Http.Cache
   , withInvitations
   , withInvitationAt
   , withServerSettings
+  , withBackups
   , withThreads
   , afterComment
   , forgetThreads
@@ -72,6 +73,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken)
 import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
+import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent, applyEvent)
 import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.App.Backend (Session, WikiError (..))
@@ -120,6 +122,8 @@ data Cache = Cache
   -- ^ 'Wiki.App.Account.invitationFor', by the link's secret.
   , server :: Maybe (Either WikiError ServerSettings)
   -- ^ 'Wiki.App.Backend.Admin.serverSettings'.
+  , backups :: Maybe (Either WikiError Backups)
+  -- ^ 'Wiki.App.Backend.Admin.backups'.
   , threads :: Map PageId (Either WikiError [Thread])
   -- ^ 'Wiki.App.Backend.Comments.listThreads', by page.
   }
@@ -143,6 +147,7 @@ emptyCache =
     , invitations = Nothing
     , invitationAt = mempty
     , server = Nothing
+    , backups = Nothing
     , threads = mempty
     }
 
@@ -216,6 +221,9 @@ withInvitationAt t i c = c {invitationAt = Map.insert t i c.invitationAt}
 
 withServerSettings :: Either WikiError ServerSettings -> Cache -> Cache
 withServerSettings s c = c {server = Just s}
+
+withBackups :: Either WikiError Backups -> Cache -> Cache
+withBackups b c = c {backups = Just b}
 
 withThreads :: PageId -> Either WikiError [Thread] -> Cache -> Cache
 withThreads pid ts c = c {threads = Map.insert pid ts c.threads}

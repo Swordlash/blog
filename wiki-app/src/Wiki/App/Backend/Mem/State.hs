@@ -96,6 +96,10 @@ module Wiki.App.Backend.Mem.State
   , checkProviderIn
   , sendTestMailIn
 
+    -- * Backups
+  , backupsIn
+  , refuseBackupsIn
+
     -- * Comments
   , listThreadsIn
   , openThreadIn
@@ -119,6 +123,7 @@ import Wiki.Api.Account (Account (Account), NewAccount)
 import Wiki.Api.Account qualified as Acc
 import Wiki.Api.Admin (Directory (Directory), Invitation (Invitation), Invitations (Invitations), Invited (Invited), WikiSettings (WikiSettings), checkEmail, invitationLifetime)
 import Wiki.Api.Admin qualified as A
+import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck (ProviderCheck), ServerSettings, ServerSettingsChange, ServerSettingsOf, applyChange, checkServerSettings, named, noServerSettings, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
@@ -1301,6 +1306,23 @@ sendTestMailIn :: Text -> MemState -> Either WikiError MailTestResult
 sendTestMailIn _ st = do
   requireAdministrator st
   Left (Invalid "The demo sends no mail: that takes the wiki's server.")
+
+--------------------------------------------------------------------------------
+-- Backups
+
+-- | The demo's backups: none, and none to be made, since its wiki is in
+-- the browser (exporting it keeps a copy); the section shows the settings
+-- a server starts with, disabled.
+backupsIn :: MemState -> Either WikiError Backups
+backupsIn st = do
+  requireAdministrator st
+  pure Backups {available = False, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
+
+-- | What the demo says to setting backups up, or to making one.
+refuseBackupsIn :: MemState -> Either WikiError Backups
+refuseBackupsIn st = do
+  requireAdministrator st
+  Left (Invalid "The demo makes no backups: its wiki is in this browser. Export it to keep a copy.")
 
 -- Comments
 
