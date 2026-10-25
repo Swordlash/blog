@@ -2244,3 +2244,7 @@ Amended by the planning session after each work package's report.
 - **WP4.6 started** (2026-10-25) on `wp4.6-one-space` from `main` `57530a1`: the space
   directory as the front page, one space's tree in the sidebar, a space's home page, icon and
   description, "Space settings"; migration `0007`.
+- **Added to WP4.6** (the owner, 2026-10-25): the page's action bar (Edit, View source,
+  History, Present, Comments, Delete) sticks under the header while the page scrolls, so a
+  long page can be edited without scrolling back up; the editor's toolbar likewise if it does
+  not already.
