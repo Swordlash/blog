@@ -1983,3 +1983,35 @@ Amended by the planning session after each work package's report.
 - **WP4.3 started** (2026-10-25) on `wp4.3-halogen-net` from `main` `49b7190`: the pin to
   haskell-halogen `5ea6dba`, `Halogen.Net.Fetch` as the HTTP transport, the window's emitters.
   Phase 3 has WP3.6 (OIDC) left; it follows WP4.3 so that it builds on the new pin.
+- **WP4.3 merged** (2026-10-25, PR #60, `main` at `f999016`). The pin moves to haskell-halogen
+  `5ea6dba` with `net` in the subdirs (#60–#65: `Halogen.JSBits.Promise`, the `net` package,
+  the window's emitters, a listener that finishes the loop's preempted work in the
+  dispatch); the toolchain pins did not move. The bump forced only test selectors (a hash
+  router's `href` is now the full address: `a[href$='#/…']`) and `MonadUnliftIO` on
+  `Shell.component` and `SlidesView.component` (emitters lowered to IO). Transport:
+  `browserTransport = fetchTransport timeLimit` over `Halogen.Net.Fetch` (`fetch` then
+  `bytes`, same-origin credentials, the marker header, `Content-Type` from the body); a
+  `Left JSError` is `Unreachable (fetchFailure e)`, the 30 s / 6 min limits stay through
+  `System.Timeout.timeout` and that kill aborts the request as any kill does, so leaving a
+  view mid-load leaves nothing running; `cache: "no-store"` dropped (`Fetch.Request` has no
+  cache field; the server's `Cache-Control: private, no-cache` covers it; worth suggesting
+  upstream); `jsbits/fetch.js` and the `js_fetch*` bindings deleted; `start`/`response`
+  unused (no request of ours must begin in a dispatch). Offline: over the network backend
+  the shell subscribes to `Window.online` in `Initialize` (`H.liftEffect`), shows a fixed
+  corner notice (`.offline-notice`, `role="alert"`) while offline, and on `online` retries a
+  world or space that failed as `Unreachable`; the demo shows nothing. Slides: keys through
+  a wrapped `Window.keyDown` that decides the command and calls `preventDefault` inside
+  the window listener's dispatch, subscribed in `Initialize`, ended with the view; the
+  `preventingDefault` prop is gone; `slides.js` stays as the decoder. Autosave stays a fork
+  (`interval` cannot express "no draft after a save"); `visibility` unused. Tests: native app
+  695 (+4), browser 148 (+7: a killed wait aborts, a time limit aborts, leaving a loading
+  history aborts, the notice comes and goes, a failed space reloads when back online, no
+  notice in the demo, slides' keys heard anywhere and prevented in the dispatch; the fake
+  fetch records `aborted`, holds answers, dispatches online/offline), `test-bootstrap.sh`
+  19. For later: the search box's `/` shortcut is still a hand-made document listener in
+  `jsbits/search.js` (a `Window.keyDown` subscription would do); three `Safe` bindings
+  (`js_database_exists`, `js_read_file`, `js_copy_text`) could return a `Promise`; the real
+  30 s limit is untested. For "someone else is editing": `EventSource`/`WebSocket` are in
+  the pinned `net`; open in `H.liftEffect`, subscribe to the emitters (they keep what arrives
+  before the first subscriber), close in `Finalize`, import qualified; the server needs an
+  SSE endpoint under the closed-wiki 401 rule; test by replacing `globalThis.EventSource`.
