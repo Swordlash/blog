@@ -228,6 +228,16 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   deleteGroup = write . deleteGroupIn
   addMember g = write . addMemberIn g
   removeMember g = write . removeMemberIn g
+  wikiSettings = query wikiSettingsIn
+  setWikiSettings = write . setWikiSettingsIn
+  invitations = liftIO getCurrentTime >>= \now -> query (invitationsIn now)
+
+  -- The secret is as random as a server's, though the demo shows it only
+  -- to whoever made it, and no link of the demo's makes an account.
+  invite email = do
+    token <- liftIO (show <$> generateV4)
+    writeAt (\now -> inviteIn now token email)
+  revokeInvitation = write . revokeInvitationIn
 
 -- | Everything is in memory: every read answers at once, and nothing is
 -- ever out of reach.

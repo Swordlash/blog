@@ -80,9 +80,9 @@ import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import Web.Storage.IndexedDB (MonadIndexedDB)
-import Wiki.Api (AdminApi (..), ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewPassword (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..))
+import Wiki.Api (AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
@@ -372,23 +372,16 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   deleteGroup g = write_ (R.delete (links.admin.deleteGroup g))
   addMember g u = write_ (R.put (links.admin.addMember g u))
   removeMember g u = write_ (R.delete (links.admin.removeMember g u))
+  wikiSettings = cached (\c -> c.settings) (R.get links.admin.settings) withSettings
+  setWikiSettings new = write (withJson "PUT" links.admin.setSettings new)
+  invitations = cached (\c -> c.invitations) (R.get links.admin.invitations) withInvitations
+  invite email = write (withJson "POST" links.admin.invite NewInvitation {email})
+  revokeInvitation i = write_ (R.delete (links.admin.revokeInvitation i))
 
 -- | Signing in and out ("Wiki.App.Account"), each of which starts the
 -- cache over with the session it answered with.
 instance (MonadIO m) => MonadAccount (HttpWiki m) where
-  signIn login password = do
-    answered <- call (withJson "POST" links.signIn Credentials {login, password})
-    case answered of
-      Right r | r.status == 401 -> pure (Left WrongCredentials)
-      Right r | r.status == 429 -> pure . Left . TooManyAttempts $ case eitherDecodeStrict' r.body of
-        Right (ApiError.TooManyRequests why) -> why
-        _ -> "Too many failed attempts: wait a while, then try again."
-      _ -> case answer answered of
-        Left e -> pure (Left (SignInFailed e))
-        Right info -> do
-          let s = fromSessionInfo info
-          startOver s
-          pure (Right s)
+  signIn login password = signingIn (withJson "POST" links.signIn Credentials {login, password})
   signOut =
     answer <$> call (R.delete links.signOut) >>= \case
       Left e -> pure (Left e)
@@ -397,6 +390,30 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
         startOver s
         pure (Right s)
   sessionChanges = HttpWiki (asks (\env -> env.changes.emitter))
+  register new = signingIn (withJson "POST" links.register new)
+
+  -- Kept, so that the page of an invitation's link the server rendered is
+  -- the program's first render too.
+  invitationFor token = cached (\c -> Map.lookup token c.invitationAt) (R.get (links.invitations.details token)) (withInvitationAt token)
+  acceptInvitation token new = signingIn (withJson "POST" (links.invitations.accept token) (new :: NewAccount))
+
+-- | A request that signs someone in, as signing in, making oneself an
+-- account and accepting an invitation do: the session one then has, with
+-- the cache started over as it; or why not.
+signingIn :: (MonadIO m) => Request -> HttpWiki m (Either SignInError Session)
+signingIn request = do
+  answered <- call request
+  case answered of
+    Right r | r.status == 401 -> pure (Left WrongCredentials)
+    Right r | r.status == 429 -> pure . Left . TooManyAttempts $ case eitherDecodeStrict' r.body of
+      Right (ApiError.TooManyRequests why) -> why
+      _ -> "Too many attempts: wait a while, then try again."
+    _ -> case answer answered of
+      Left e -> pure (Left (SignInFailed e))
+      Right info -> do
+        let s = fromSessionInfo info
+        startOver s
+        pure (Right s)
 
 -- | What has been read answers at once; anything else would wait, unless
 -- the transport answers at once itself ('newImmediateHttpEnv').

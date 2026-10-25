@@ -16,6 +16,7 @@ module Wiki.Server
   ( -- * Running a server
     serve
   , withServer
+  , withServerMailer
   , Server (..)
   , ServerError (..)
   )
@@ -28,13 +29,15 @@ import Data.Time (getCurrentTime)
 import Network.Socket (AddrInfo (..), AddrInfoFlag (..), Family (..), SockAddr (..), Socket, SocketOption (..), SocketType (..), bind, close, defaultHints, getAddrInfo, getSocketName, listen, openSocket, setSocketOption)
 import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettingsSocket, setGracefulShutdownTimeout, setOnException)
 import Protolude hiding (Handler)
+import System.Environment (lookupEnv)
 import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
 import Wiki.Api.Links (attachmentUrl)
 import Wiki.Server.Api (Env (..))
 import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
-import Wiki.Server.Limiter (defaultLimits, newLimiter)
+import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
 import Wiki.Server.Log (Level (..), Logger, logWith, stdoutLogger)
-import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen)
+import Wiki.Server.Mail (Mailer, Smtp (..), securityName, smtpMailer)
+import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen, smtpOf, smtpPasswordVariable)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
 import Wiki.Server.Storage (Config (..), withStorage)
@@ -73,13 +76,29 @@ serve options = do
 -- | Run a server while an action runs: its sockets bound, its storage open
 -- (migrated if need be), both closed when the action returns or throws.
 -- A configuration 'checkOptions' refuses throws a 'ServerError', as does a
--- static directory that is not there.
+-- static directory that is not there, and an SMTP user without a password
+-- in the environment.
 withServer :: Logger -> ServeOptions -> (Server -> IO a) -> IO a
 withServer logger raw action = do
+  options <- either (throwIO . ServerError) pure (checkOptions raw)
+  password <- fmap toS <$> lookupEnv (toS smtpPasswordVariable)
+  mailer <- for (smtpOf options) $ \smtp -> do
+    when (isJust smtp.user && isNothing password) $
+      throwIO (ServerError ["--smtp-user " <> fromMaybe "" smtp.user <> " needs its password in the environment variable " <> smtpPasswordVariable])
+    logWith logger Info [("event", "mail"), ("smtp", smtp.host <> ":" <> show smtp.port), ("security", securityName smtp.security), ("from", smtp.from)]
+    pure (smtpMailer smtp password (fromMaybe "" options.publicUrl))
+  withServerMailer logger options mailer action
+
+-- | 'withServer' with the mail sent through this mailer, or none, whatever
+-- the options say of SMTP: what the tests run, with a mailer of their own.
+withServerMailer :: Logger -> ServeOptions -> Maybe Mailer -> (Server -> IO a) -> IO a
+withServerMailer logger raw mailer action = do
   options <- either (throwIO . ServerError) pure (checkOptions raw)
   site <- for options.staticDir $ \dir -> openStaticSite dir >>= either (throwIO . ServerError . pure) pure
   startedAt <- getCurrentTime
   limiter <- newLimiter defaultLimits
+  -- Five accounts made, or tried, from an address in fifteen minutes.
+  registrations <- newLimiter defaultLimits {perLogin = 5, perAddress = 5}
   withStorage Config {attachmentAddress = attachmentUrl} options.dataDir $ \storage -> do
     let env =
           Env
@@ -89,6 +108,8 @@ withServer logger raw action = do
             , dataDir = options.dataDir
             , maxImportSize = options.maxImportSize
             , limiter
+            , registrations
+            , mailer
             }
         public =
           Listener

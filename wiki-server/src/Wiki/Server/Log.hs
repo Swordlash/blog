@@ -10,7 +10,9 @@
 -- took; a request whose handler threw gets an error line with the exception
 -- too, and a 500 if nothing had been sent yet. The query string is left out
 -- of the line: a search's words are what someone looked for, which the log
--- has no need to keep.
+-- has no need to keep. Nor is an invitation's secret, which is part of its
+-- link's path and of the API's addresses for it: whoever reads the log
+-- could make an account with it, so it is written as @…@ ('redactedPath').
 module Wiki.Server.Log
   ( Logger
   , stdoutLogger
@@ -18,6 +20,7 @@ module Wiki.Server.Log
   , logWith
   , Level (..)
   , logRequests
+  , redactedPath
   )
 where
 
@@ -92,7 +95,7 @@ logRequests logger listener principal app request respond = do
         , ("principal", principal)
         , ("from", show (remoteHost request))
         , ("method", decodeUtf8 (requestMethod request))
-        , ("path", decodeUtf8 (rawPathInfo request))
+        , ("path", redactedPath (decodeUtf8With lenientDecode (rawPathInfo request)))
         ]
       done status = do
         finished <- getMonotonicTime
@@ -111,3 +114,15 @@ logRequests logger listener principal app request respond = do
               received <- respond (responseLBS status500 [(hContentType, "text/plain; charset=utf-8")] "Internal server error\n")
               done (500 :: Int)
               pure received
+
+-- | A request's path as the log writes it: with the segment after
+-- @invite@ (an invitation's page) or @invitations@ (the API's addresses of
+-- an invitation by its secret, and the administration's, by its id) as
+-- @…@, since it may be a secret that lets its reader in.
+redactedPath :: Text -> Text
+redactedPath = T.intercalate "/" . go . T.splitOn "/"
+  where
+    go = \case
+      word : _ : rest | word `elem` ["invite", "invitations"] -> word : "…" : go rest
+      segment : rest -> segment : go rest
+      [] -> []

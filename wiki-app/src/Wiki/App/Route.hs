@@ -24,6 +24,7 @@
 -- > /admin/                        Admin
 -- > /search/?q=mermaid&space=docs  Search (Just "mermaid") (Just [docs]) True
 -- > /search/?q=x&space=team&only   Search (Just "x") (Just [team]) False
+-- > /invite/<secret>/              Invite (InvitationToken <secret>)
 --
 -- Every address but the home's ends in a slash, because each is a directory
 -- with an @index.html@ in it on a static host (the prerender writes one per
@@ -61,6 +62,7 @@ import Halogen.Router qualified as Router
 import Halogen.Router.Duplex (RouteDuplex (..), RouteDuplex', as, flag, many1, noArgs, param, prefix, root, segment, suffix)
 import Halogen.Router.Duplex qualified as Duplex
 import Protolude
+import Wiki.Api.Account (InvitationToken (..))
 import Wiki.Core.Id (SpaceId)
 import Wiki.Core.Page (Page)
 import Wiki.Core.Path (findChild, parsePath, renderPath, resolvePath)
@@ -110,6 +112,10 @@ data Route
     -- shown, counted from 1. The slide is a parameter (@slide@, left out
     -- for the first), so that a reload, or a link, comes back to it.
     PageSlides [Slug] [Slug] Int
+  | -- | An invitation's page, by the secret its link carries: the form that
+    -- makes the account it invites to (WP3.5 of docs/PLAN.md). Its 'Show'
+    -- hides the secret, so that a log that names a route does not name it.
+    Invite InvitationToken
   deriving stock (Eq, Show)
 
 -- | What a version in a history is compared with.
@@ -167,6 +173,10 @@ route =
           (\case PageSlides s p n -> Just ((s, p), n); _ -> Nothing)
           (\((s, p), n) -> PageSlides s p n)
           (prefix "s" (directory ((,) <$> Duplex.lmap fst (spaceAndPage (`suffix` "slides")) <*> Duplex.lmap snd slideParam)))
+      , alternative
+          (\case Invite t -> Just t; _ -> Nothing)
+          Invite
+          (prefix "invite" (directory (as (\t -> t.text) (Right . InvitationToken) segment)))
       ]
   where
     spaceAndPage :: (RouteDuplex' [Slug] -> RouteDuplex' [Slug]) -> RouteDuplex' ([Slug], [Slug])

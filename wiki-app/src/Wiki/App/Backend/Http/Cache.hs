@@ -26,7 +26,9 @@
 -- So are searches, by their query: the server renders the page of a
 -- search's results with its hits, which the program then shows at once.
 -- And so is the administration's directory of the wiki's people, which the
--- server renders the administration with.
+-- server renders the administration with, and its settings and invitations;
+-- and an invitation as its link shows it to the person invited, by the
+-- link's secret.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
   , emptyCache
@@ -43,6 +45,9 @@ module Wiki.App.Backend.Http.Cache
   , withVersions
   , withVersion
   , withDirectory
+  , withSettings
+  , withInvitations
+  , withInvitationAt
   , afterWrite
   )
 where
@@ -50,7 +55,8 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Protolude
-import Wiki.Api.Admin (Directory)
+import Wiki.Api.Account (InvitationInfo, InvitationToken)
+import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
@@ -86,6 +92,12 @@ data Cache = Cache
   -- changes, but it goes with its page, so these are let go with the rest.
   , directory :: Maybe (Either WikiError Directory)
   -- ^ 'Wiki.App.Backend.Admin.directory'.
+  , settings :: Maybe (Either WikiError WikiSettings)
+  -- ^ 'Wiki.App.Backend.Admin.wikiSettings'.
+  , invitations :: Maybe (Either WikiError Invitations)
+  -- ^ 'Wiki.App.Backend.Admin.invitations'.
+  , invitationAt :: Map InvitationToken (Either WikiError InvitationInfo)
+  -- ^ 'Wiki.App.Account.invitationFor', by the link's secret.
   }
   deriving stock (Eq, Show)
 
@@ -102,6 +114,9 @@ emptyCache =
     , versionLists = mempty
     , versions = mempty
     , directory = Nothing
+    , settings = Nothing
+    , invitations = Nothing
+    , invitationAt = mempty
     }
 
 -- | Whether a read's answer is kept: what it gave, and a refusal the
@@ -159,6 +174,15 @@ withVersion pid at v c = c {versions = Map.insert (pid, at) v c.versions}
 
 withDirectory :: Either WikiError Directory -> Cache -> Cache
 withDirectory d c = c {directory = Just d}
+
+withSettings :: Either WikiError WikiSettings -> Cache -> Cache
+withSettings s c = c {settings = Just s}
+
+withInvitations :: Either WikiError Invitations -> Cache -> Cache
+withInvitations i c = c {invitations = Just i}
+
+withInvitationAt :: InvitationToken -> Either WikiError InvitationInfo -> Cache -> Cache
+withInvitationAt t i c = c {invitationAt = Map.insert t i c.invitationAt}
 
 -- | The cache after a write that changed the wiki: nothing in it can be
 -- trusted any more.

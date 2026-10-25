@@ -16,7 +16,14 @@
 -- Signing in and out are the one thing that depends on more than who is
 -- asking: they are for a listener that finds people by their sessions, and
 -- need the request's address (for the limit on attempts) and the cookie's
--- settings, which the caller carries ('Signing').
+-- settings, which the caller carries ('Signing'). So do making oneself an
+-- account and accepting an invitation, which sign their maker in.
+--
+-- An invitation is made by the storage, and mailed here, by the server's
+-- 'Mailer' if it has one: then its secret is not given back, since only
+-- the person invited is to have it. Without a mailer, or when the mail
+-- could not be sent, the answer carries it, for the panel to show the
+-- link to pass on.
 module Wiki.Server.Api
   ( -- * The handlers
     Env (..)
@@ -54,8 +61,8 @@ import Servant.Multipart (Mem, MultipartOptions (..))
 import Servant.Server.Generic (AsServer)
 import System.Directory (doesFileExist)
 import Wiki.Api
-import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewPassword (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), ServerStatus (..))
+import Wiki.Api.Account (AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewPassword (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
@@ -63,7 +70,7 @@ import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, maxAttachmentSize)
+import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (writeArchive)
@@ -77,6 +84,7 @@ import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Import (applyImport, planImport, readUpload)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
+import Wiki.Server.Mail (Mailer (..), invitationMessage)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles)
@@ -92,6 +100,12 @@ data Env = Env
   , maxImportSize :: Int
   , limiter :: Limiter
   -- ^ The failed attempts to sign in ("Wiki.Server.Limiter").
+  , registrations :: Limiter
+  -- ^ The attempts to make oneself an account, with an invitation or
+  -- without, every one counted, since even one that succeeds makes the
+  -- server hash a password.
+  , mailer :: Maybe Mailer
+  -- ^ Where invitations are mailed, if the server mails them.
   }
 
 -- | Who is asking, as the listener found them for a request.
@@ -244,14 +258,19 @@ handlers env caller =
                 refuse ApiError.Unauthenticated
               Right (user, token) -> do
                 liftIO (Limiter.succeeded env.limiter credentials.login s.address)
-                -- Signing in again replaces the session the browser had.
-                liftIO (traverse_ (endSession env.storage) s.token)
-                signedIn <- liftIO (runSqliteWiki env.storage (AsUser user.id) session)
-                pure (addHeader (sessionCookie s.cookies token) (sessionInfo signedIn))
+                startedAs s user token
     , signOut = do
         s <- signingHere
         liftIO (traverse_ (endSession env.storage) s.token)
-        pure (addHeader (clearCookie s.cookies) (sessionInfo anonymous))
+        -- Who they are now: nobody, in the wiki as it is open or closed.
+        nobody <- liftIO (runSqliteWiki env.storage Anonymous session)
+        pure (addHeader (clearCookie s.cookies) (sessionInfo nobody))
+    , register = \new -> making (\now -> Accounts.register env.storage now new)
+    , invitations =
+        InvitationsApi
+          { details = invitationDetails
+          , accept = \token new -> making (\now -> Accounts.acceptInvitation env.storage now token new)
+          }
     , spaces =
         SpacesApi
           { list = ask' listSpaces
@@ -326,6 +345,11 @@ handlers env caller =
           , createUser = wiki . createUser
           , setPassword = \u body -> wiki (setPassword u body.password)
           , setDisabled = \u body -> wiki (setDisabled u body.disabled)
+          , settings = wiki wikiSettings
+          , setSettings = wiki . setWikiSettings
+          , invitations = (\listed -> Invitations {mailing = isJust env.mailer, invitations = listed.invitations}) <$> wiki invitations
+          , invite = \body -> wiki (invite body.email) >>= liftIO . mailed
+          , revokeInvitation = \i -> wiki (revokeInvitation i) $> NoContent
           }
     }
   where
@@ -343,6 +367,48 @@ handlers env caller =
       unless (any (\g -> g.permission == Administer) s.grants.global) (refuse ApiError.Forbidden)
     notAnArchive reason = ApiError.Invalid ("This is not an archive this server can read: " <> reason)
     clampLimit q = q {limit = max 0 (min 200 q.limit)}
+    -- Signed in as a user just now, in place of the session the browser
+    -- had, if any.
+    startedAs :: Signing -> User -> Text -> Handler (WithCookie SessionInfo)
+    startedAs s user token = do
+      liftIO (traverse_ (endSession env.storage) s.token)
+      signedIn <- liftIO (runSqliteWiki env.storage (AsUser user.id) session)
+      pure (addHeader (sessionCookie s.cookies token) (sessionInfo signedIn))
+    -- Making oneself an account, by a way that signs one in, at most so
+    -- often from one address: every attempt counts.
+    making :: (UTCTime -> IO (Either WikiError (User, Text))) -> Handler (WithCookie SessionInfo)
+    making attempt = do
+      s <- signingHere
+      now <- liftIO getCurrentTime
+      liftIO (Limiter.verdict env.registrations now registering s.address) >>= \case
+        Refused seconds ->
+          throwError
+            (apiError (ApiError.TooManyRequests ("Too many attempts to make an account from here: try again in " <> waitText seconds <> ".")))
+              { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
+              }
+        Allowed -> do
+          liftIO (Limiter.failed env.registrations now registering s.address)
+          liftIO (attempt now) >>= either (throwError . wikiError) (uncurry (startedAs s))
+    invitationDetails :: InvitationToken -> Handler InvitationInfo
+    invitationDetails token = do
+      now <- liftIO getCurrentTime
+      liftIO (Accounts.invitationFor env.storage now token) >>= maybe (refuse ApiError.NotFound) pure
+    -- An invitation just made, mailed if the server mails them: then its
+    -- secret is no longer given back.
+    mailed :: Invited -> IO Invited
+    mailed made = case (env.mailer, made.token) of
+      (Just m, Just token) -> do
+        let i = made.invitation
+        m.deliver (invitationMessage m.publicUrl i.email token i.expiresAt) <&> \case
+          Right () -> Invited {invitation = i, token = Nothing, mailError = Nothing}
+          Left why -> Invited {invitation = i, token = Just token, mailError = Just why}
+      _ -> pure made
+
+-- | What the limit on making accounts counts attempts as: a login of no
+-- one's (none starts with @~@), so that the address's count is the one
+-- that matters.
+registering :: Text
+registering = "~accounts"
 
 -- | The session as the API answers it.
 sessionInfo :: Session -> SessionInfo

@@ -12,6 +12,11 @@
 -- other, its subspaces are public too. There are no page-level permissions: a
 -- page is as visible and as editable as its space.
 --
+-- Whom a public space is public to is the wiki's to say ("Wiki.Core.Access"),
+-- and the rules take it with the grants ('Grants'): in an open wiki everyone,
+-- in a closed one only those who have signed in, so that there someone who
+-- has not sees nothing at all ('publicTo').
+--
 -- The rules take everything they need as arguments and read no store, so the
 -- server enforces them and the client uses the very same functions to hide
 -- what the current user cannot do.
@@ -33,6 +38,7 @@ module Wiki.Core.Permission
   , Principal (..)
   , principal
   , isFor
+  , publicTo
 
     -- * Rules
   , hasGlobalPermission
@@ -56,6 +62,7 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Set qualified as Set
 import Protolude
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id
 import Wiki.Core.Path (ancestry)
 import Wiki.Core.Space (Space (..))
@@ -122,18 +129,28 @@ data SpaceGrant = SpaceGrant
 -- | The grants the rules look at. The space grants may be all of the wiki's
 -- or only those of the spaces asked about: a rule only counts the grants of
 -- the spaces it is given.
+--
+-- With them, whom the wiki's public spaces are public to ('access'): not a
+-- grant to anyone, but what a space's being public grants, and so where the
+-- rules find it. A backend sets it from the wiki's setting wherever it
+-- reads the grants, and a session carries it to the client, which so knows
+-- before anyone signs in whether the wiki is closed to them.
 data Grants = Grants
   { global :: [GlobalGrant]
   , spaces :: [SpaceGrant]
+  , access :: Access
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
+-- | Both grants, in a wiki that is closed if either says so: adding grants
+-- never opens a wiki that was closed.
 instance Semigroup Grants where
-  a <> b = Grants {global = a.global <> b.global, spaces = a.spaces <> b.spaces}
+  a <> b = Grants {global = a.global <> b.global, spaces = a.spaces <> b.spaces, access = max a.access b.access}
 
+-- | No grant, in an open wiki.
 instance Monoid Grants where
-  mempty = Grants {global = [], spaces = []}
+  mempty = Grants {global = [], spaces = [], access = Open}
 
 -- | Who may do what on a space, as whoever administers it sees it: the
 -- grants on the space itself and on each of its ancestors, which it
@@ -175,6 +192,15 @@ isFor p = \case
   SubjectUser u -> u == p.user
   SubjectGroup g -> g `Set.member` p.groups
 
+-- | Whether a public space is public to someone, in a wiki of this access:
+-- in an open wiki to everyone, in a closed one to those who have signed in
+-- only. This is the rule that decides what a reader nobody has signed in
+-- as may see: the public spaces of an open wiki, and nothing of a closed
+-- one, since nothing else is ever granted to them.
+publicTo :: Access -> Maybe Principal -> Bool
+publicTo Open _ = True
+publicTo Closed who = isJust who
+
 -- | Whether someone holds a global permission. Nobody who is not signed in
 -- does.
 hasGlobalPermission :: Maybe Principal -> Grants -> GlobalPermission -> Bool
@@ -186,7 +212,8 @@ hasGlobalPermission (Just p) grants wanted =
 -- top-level one down to it ('Wiki.Core.Path.ancestry' or
 -- 'Wiki.Core.Path.resolvePath' give it), closed under implication: holding
 -- 'Edit' there means the set has 'View' too. The empty chain is no space,
--- where only 'Administer' gives anything.
+-- where only 'Administer' gives anything. A public space in the chain gives
+-- 'View' to whomever it is public to ('publicTo').
 spacePermissions :: Maybe Principal -> Grants -> [Space] -> Set SpacePermission
 spacePermissions who grants chain
   | hasGlobalPermission who grants Administer = Set.fromList [minBound .. maxBound]
@@ -194,7 +221,7 @@ spacePermissions who grants chain
   where
     implied held = filter (spaceImplies held) [minBound .. maxBound]
     granted = publicView <> fromGrants
-    publicView = [View | any (\s -> s.public) chain]
+    publicView = [View | any (\s -> s.public) chain, publicTo grants.access who]
     inChain = Set.fromList (map (\s -> s.id) chain)
     fromGrants = case who of
       Nothing -> []

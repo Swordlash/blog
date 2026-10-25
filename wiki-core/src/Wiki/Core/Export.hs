@@ -90,6 +90,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Protolude
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
@@ -512,7 +513,9 @@ parseGroup = withObject "group" $ \o -> do
   members <- o .:? "members" .!= []
   pure (Group {id, name}, Set.fromList (map UserId members))
 
--- | @{"global": […], "spaces": […]}@, a missing list empty.
+-- | @{"global": […], "spaces": […]}@, a missing list empty. Whom the wiki
+-- is open to is not in an archive: it is the setting of the server an
+-- archive is imported into, and is read back as 'Open', the default.
 encodeGrants :: Grants -> Value
 encodeGrants g = object ["global" .= map encodeGlobalGrant g.global, "spaces" .= map encodeSpaceGrant g.spaces]
 
@@ -520,7 +523,7 @@ parseGrants :: Value -> Parser Grants
 parseGrants = withObject "grants" $ \o -> do
   global <- traverse parseGlobalGrant =<< o .:? "global" .!= []
   spaces <- traverse parseSpaceGrant =<< o .:? "spaces" .!= []
-  pure Grants {global, spaces}
+  pure Grants {global, spaces, access = Open}
 
 -- | @{"subject", "permission"}@, the permission @"administer"@ or
 -- @"create-spaces"@.

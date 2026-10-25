@@ -50,6 +50,21 @@
 -- keeps only whether a user has one, which it checks as the server does,
 -- so that its administration behaves alike; a disabled user is nobody
 -- there, and is not offered to switch to.
+--
+-- = Whom the wiki lets in
+--
+-- The wiki's settings ('wikiSettings') say whether it is open or closed
+-- ("Wiki.Core.Access") and whether an account someone makes themself may
+-- create spaces from the start; changing them takes effect at the next
+-- request. An invitation ('invite') is for an e-mail address, which is
+-- checked ('Wiki.Api.Admin.checkEmail', 'Invalid' otherwise); inviting an
+-- address that has an invitation already replaces it. Its link carries a
+-- secret that is given back only when the invitation is made, and only
+-- when it was not mailed; it lasts 'Wiki.Api.Admin.invitationLifetime'. A
+-- revoked invitation is gone ('NotFound' if revoked again). The demo keeps
+-- all of it in memory, mails nothing, and makes no account from a link:
+-- that takes a server (the invited person's half is
+-- "Wiki.App.Account"'s).
 module Wiki.App.Backend.Admin
   ( MonadAdmin (..)
   )
@@ -60,9 +75,9 @@ import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Account (Account, NewAccount)
-import Wiki.Api.Admin (Directory)
+import Wiki.Api.Admin (Directory, Invitations, Invited, WikiSettings)
 import Wiki.App.Backend (WikiError (..))
-import Wiki.Core.Id (GroupId, UserId)
+import Wiki.Core.Id (GroupId, InvitationId, UserId)
 import Wiki.Core.User (Group)
 
 -- | The wiki's people, as an administrator sees and changes them.
@@ -126,6 +141,33 @@ class (Monad m) => MonadAdmin m where
   removeMember :: GroupId -> UserId -> m (Either WikiError ())
   default removeMember :: (MonadTrans t, m ~ t n, MonadAdmin n) => GroupId -> UserId -> m (Either WikiError ())
   removeMember g = lift . removeMember g
+
+  -- | Whom the wiki lets in, and what a new account may do.
+  wikiSettings :: m (Either WikiError WikiSettings)
+  default wikiSettings :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError WikiSettings)
+  wikiSettings = lift wikiSettings
+
+  -- | Change them: the settings as they then are.
+  setWikiSettings :: WikiSettings -> m (Either WikiError WikiSettings)
+  default setWikiSettings :: (MonadTrans t, m ~ t n, MonadAdmin n) => WikiSettings -> m (Either WikiError WikiSettings)
+  setWikiSettings = lift . setWikiSettings
+
+  -- | The invitations not yet used, the latest first, and whether they are
+  -- mailed.
+  invitations :: m (Either WikiError Invitations)
+  default invitations :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError Invitations)
+  invitations = lift invitations
+
+  -- | Invite an e-mail address: the invitation, and its link's secret if it
+  -- was not mailed.
+  invite :: Text -> m (Either WikiError Invited)
+  default invite :: (MonadTrans t, m ~ t n, MonadAdmin n) => Text -> m (Either WikiError Invited)
+  invite = lift . invite
+
+  -- | Revoke an invitation: its link makes no account any more.
+  revokeInvitation :: InvitationId -> m (Either WikiError ())
+  default revokeInvitation :: (MonadTrans t, m ~ t n, MonadAdmin n) => InvitationId -> m (Either WikiError ())
+  revokeInvitation = lift . revokeInvitation
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadAdmin m) => MonadAdmin (HalogenM st act slots output m)

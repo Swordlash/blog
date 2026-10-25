@@ -15,6 +15,7 @@ module Wiki.Core.Id
   , BlobId (..)
   , UserId (..)
   , GroupId (..)
+  , InvitationId (..)
   )
 where
 
@@ -50,5 +51,12 @@ newtype UserId = UserId {text :: Text}
 
 -- | A group's identity, which stays when the group is renamed.
 newtype GroupId = GroupId {text :: Text}
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving newtype (FromJSON, ToJSON, FromJSONKey, ToJSONKey, FromHttpApiData, ToHttpApiData)
+
+-- | An invitation's identity, by which the administration lists and
+-- revokes it: not the secret its link carries, which only the person
+-- invited is given.
+newtype InvitationId = InvitationId {text :: Text}
   deriving stock (Eq, Ord, Show, Generic)
   deriving newtype (FromJSON, ToJSON, FromJSONKey, ToJSONKey, FromHttpApiData, ToHttpApiData)

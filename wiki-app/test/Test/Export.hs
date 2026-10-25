@@ -105,7 +105,7 @@ recordFiles = ["manifest.json", "users.json", "groups.json", "grants.json", "spa
 -- | A wiki with its space grants in an order of their own: the store keeps
 -- them by space.
 normal :: MemState -> MemState
-normal st = st {grants = Grants {global = st.grants.global, spaces = sort st.grants.spaces}}
+normal st = st {grants = Grants {global = st.grants.global, spaces = sort st.grants.spaces, access = st.grants.access}}
 
 path :: Text -> [Slug]
 path t = either (panic . show) identity (parsePath t)

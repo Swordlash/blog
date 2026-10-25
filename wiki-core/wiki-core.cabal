@@ -51,6 +51,7 @@ library
   import:           shared
   hs-source-dirs:   src
   exposed-modules:
+      Wiki.Core.Access
       Wiki.Core.Attachment
       Wiki.Core.Diff
       Wiki.Core.Draft

@@ -1,0 +1,19 @@
+{
+  "invitations": [
+    {
+      "createdAt": "2026-10-24T09:30:12.345678Z",
+      "email": "bea@example.org",
+      "expired": false,
+      "expiresAt": "2026-10-25T00:00:00Z",
+      "id": "i1"
+    },
+    {
+      "createdAt": "2026-10-24T09:30:12.345678Z",
+      "email": "cy@example.org",
+      "expired": true,
+      "expiresAt": "2026-10-24T09:30:12.345678Z",
+      "id": "i0"
+    }
+  ],
+  "mailing": false
+}

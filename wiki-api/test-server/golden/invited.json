@@ -1,0 +1,11 @@
+{
+  "invitation": {
+    "createdAt": "2026-10-24T09:30:12.345678Z",
+    "email": "bea@example.org",
+    "expired": false,
+    "expiresAt": "2026-10-25T00:00:00Z",
+    "id": "i1"
+  },
+  "mailError": "the mail server answered RCPT TO with 550 no such mailbox",
+  "token": "c2VjcmV0IG9mIGFuIGludml0YXRpb24gZm9yIGJlYQ"
+}

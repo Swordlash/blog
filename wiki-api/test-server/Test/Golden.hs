@@ -17,7 +17,7 @@ import System.Environment (lookupEnv)
 import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Types
@@ -56,6 +56,10 @@ spec = describe "golden JSON" $ do
     golden "directory" Sample.directory
     golden "account" Sample.account
     golden "space-access" Sample.spaceAccess
+    golden "settings" Sample.settings
+    golden "invitations" Sample.invitations
+    golden "invited" Sample.invited
+    golden "invitation-info" Sample.invitationInfo
   describe "errors" $ do
     golden "error-not-found" NotFound
     golden "error-forbidden" Forbidden
@@ -84,3 +88,4 @@ spec = describe "golden JSON" $ do
     golden "new-account" NewAccount {login = "ada", displayName = "Ada", password = "correct horse battery staple"}
     golden "new-password" NewPassword {password = "correct horse battery staple"}
     golden "account-disabled" AccountDisabled {disabled = True}
+    golden "new-invitation" NewInvitation {email = "bea@example.org"}

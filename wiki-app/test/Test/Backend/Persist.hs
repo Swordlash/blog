@@ -68,7 +68,7 @@ lasting st =
   st
     { current = Nothing
     , objectUrls = mempty
-    , grants = Grants {global = st.grants.global, spaces = sort st.grants.spaces}
+    , grants = Grants {global = st.grants.global, spaces = sort st.grants.spaces, access = st.grants.access}
     }
 
 -- | The wiki a fresh start from the database finds, which must be the one

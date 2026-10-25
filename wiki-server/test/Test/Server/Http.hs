@@ -96,4 +96,5 @@ apiEnv :: Storage -> IO Env
 apiEnv storage = do
   startedAt <- getCurrentTime
   limiter <- newLimiter defaultLimits
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter}
+  registrations <- newLimiter defaultLimits
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, mailer = Nothing}

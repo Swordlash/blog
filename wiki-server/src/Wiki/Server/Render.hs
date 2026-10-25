@@ -25,7 +25,10 @@
 -- A route that is none of the application's is rendered as its "Not found"
 -- page, with a 404; a space or a page that is not there gives a 404 too,
 -- and one the reader may not see a 403, as the API would, each with the
--- page that says so.
+-- page that says so. In a closed wiki, someone who has not signed in is
+-- shown the way to sign in at every route, with a 401, but for an
+-- invitation's page, which is for them; an invitation that cannot be used
+-- is a 404.
 --
 -- A render that fails (the storage failing under it, an exception, a
 -- render that does not finish in 'renderTimeout') is logged and gives no
@@ -50,13 +53,13 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Halogen.Router qualified as Router
 import Halogen.Static (embed, fillMountPoint)
 import Halogen.VDom.DOM.Monad (runMemDOM)
-import Network.HTTP.Types (Status, status200, status403, status404, statusCode)
+import Network.HTTP.Types (Status, status200, status401, status403, status404, statusCode)
 import Network.Wai (Request (..), defaultRequest)
 import Network.Wai.Test (SRequest (..), SResponse (..), runSession, setPath, srequest)
 import Protolude
 import System.Timeout (timeout)
 import Text.Printf (printf)
-import Wiki.App.Backend (WikiError (..))
+import Wiki.App.Backend (WikiError (..), shutOut)
 import Wiki.App.Backend.Http (Transport (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage)
 import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
@@ -68,7 +71,7 @@ import Wiki.Core.Page (Page (id))
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (VersionInfo (updatedAt))
 import Wiki.Server.Api (Env, apiApplication, callerAs)
-import Wiki.Server.Log (Level (..), Logger, logWith)
+import Wiki.Server.Log (Level (..), Logger, logWith, redactedPath)
 import Wiki.Server.Static (withBaseHref)
 import Wiki.Server.Storage (Who)
 
@@ -102,7 +105,7 @@ renderPage logger env who mount template request = do
         Nothing -> Left ("the render did not finish in " <> show (renderTimeout `div` 1_000_000) <> " s")
         Just (Left e) -> Left ("the render failed: " <> show e)
         Just (Right served)
-          | (url, why) : _ <- failures -> Left ("the API could not answer " <> url <> " (" <> why <> ")")
+          | (url, why) : _ <- failures -> Left ("the API could not answer " <> redactedPath url <> " (" <> why <> ")")
           | otherwise -> (statusOf at served.cache,) <$> first ("the template: " <>) (page served)
   case result of
     Right (status, html) ->
@@ -132,6 +135,8 @@ routeOf mount raw = do
 -- there; a 403 for one the reader may not see; otherwise a 200.
 statusOf :: Route -> Cache -> Status
 statusOf at c = case at of
+  Invite token -> refusal (Map.lookup token c.invitationAt)
+  _ | maybe False shutOut c.session -> status401
   Unknown -> status404
   Space s -> ofSpace s
   Page s p -> ofSpace s `unlessRefused` ofPage s p

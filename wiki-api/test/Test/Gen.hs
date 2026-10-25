@@ -113,7 +113,8 @@ genGrants :: Gen Grants
 genGrants = do
   global <- resize 2 (listOf (GlobalGrant <$> genSubject <*> arbitraryBoundedEnum))
   spaces <- resize 4 (listOf (SpaceGrant <$> genSpaceId <*> genSubject <*> arbitraryBoundedEnum))
-  pure Grants {global, spaces}
+  access <- arbitraryBoundedEnum
+  pure Grants {global, spaces, access}
 
 genApiError :: Gen ApiError
 genApiError = oneof [pure NotFound, pure Forbidden, Conflict <$> genText, Invalid <$> genText, pure Unauthenticated, TooManyRequests <$> genText]

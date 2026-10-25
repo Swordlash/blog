@@ -28,12 +28,23 @@ source-repository-package
 -- monad-control's (servant-server's) lag behind the QuickCheck, text-iso8601
 -- and transformers-compat everything else here is built with: kept to them,
 -- the solver would take older versions and rebuild aeson, protolude and every
--- package above them for the API's sake alone.
+-- package above them for the API's sake alone. serialise's and cborg's lag behind the base,
+-- ghc-prim, containers and time of GHC 9.14: tls needs serialise (over cborg),
+-- and the server's mail (smtp-mail, over crypton-connection and tls) needs tls;
+-- without them the solver falls back to a tls of crypton 1, whose memory
+-- package is not the ram the server's crypton 2 speaks.
 allow-newer:
   protolude:*,
   servant:QuickCheck,
   http-api-data:text-iso8601,
-  monad-control:transformers-compat
+  monad-control:transformers-compat,
+  serialise:base,
+  serialise:ghc-prim,
+  serialise:containers,
+  serialise:time,
+  cborg:base,
+  cborg:ghc-prim,
+  cborg:containers
 
 -- A test suite's dependencies are optional goals unless this says otherwise:
 -- rather than report that it cannot satisfy them, the solver is free to hand

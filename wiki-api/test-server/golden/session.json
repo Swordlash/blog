@@ -1,5 +1,6 @@
 {
   "grants": {
+    "access": "Open",
     "global": [
       {
         "permission": "CreateSpaces",

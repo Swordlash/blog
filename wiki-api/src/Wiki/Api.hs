@@ -33,6 +33,10 @@
 --   admin listener. Every request that changes something must carry the
 --   header of 'requestMarker', which a page of another site
 --   cannot make a browser send here, and is refused with a 403 otherwise.
+-- * A closed wiki ("Wiki.Core.Access") answers someone who has not signed
+--   in with 'Wiki.Api.Error.Unauthenticated' (401) everywhere but 'info',
+--   'session' (to read it, sign in and out), 'register' (which refuses
+--   them itself) and 'invitations'.
 module Wiki.Api
   ( -- * The API
     Api
@@ -43,6 +47,7 @@ module Wiki.Api
   , AttachmentsApi (..)
   , ArchiveApi (..)
   , AdminApi (..)
+  , InvitationsApi (..)
 
     -- * Sessions
   , WithCookie
@@ -63,8 +68,8 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
 import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
-import Wiki.Api.Account (Account, AccountDisabled, Credentials, NewAccount, NewPassword)
-import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, ServerStatus)
+import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword)
+import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Types
@@ -102,6 +107,13 @@ data WikiApi mode = WikiApi
   , signOut :: mode :- "session" :> Delete '[JSON] (WithCookie SessionInfo)
   -- ^ Sign out: the session ends, its cookie is cleared, and the answer is
   -- who the asker is now, nobody.
+  , register :: mode :- "accounts" :> ReqBody '[JSON] NewAccount :> Post '[JSON] (WithCookie SessionInfo)
+  -- ^ Make oneself an account, in an open wiki, and be signed in as it, as
+  -- 'signIn' answers. A closed wiki refuses with
+  -- 'Wiki.Api.Error.Forbidden', a login another user has is
+  -- 'Wiki.Api.Error.Conflict', and too many attempts from one address
+  -- 'Wiki.Api.Error.TooManyRequests'.
+  , invitations :: mode :- "invitations" :> NamedRoutes InvitationsApi
   , spaces :: mode :- "spaces" :> NamedRoutes SpacesApi
   , pages :: mode :- "pages" :> NamedRoutes PagesApi
   , attachments :: mode :- "attachments" :> NamedRoutes AttachmentsApi
@@ -256,6 +268,31 @@ data AdminApi mode = AdminApi
   , setDisabled :: mode :- "users" :> Capture "user" UserId :> "disabled" :> ReqBody '[JSON] AccountDisabled :> Put '[JSON] Account
   -- ^ @setDisabled@: disable a user's login, which ends their sessions, or
   -- enable it again.
+  , settings :: mode :- "settings" :> Get '[JSON] WikiSettings
+  -- ^ @wikiSettings@: whom the wiki lets in, and what a new account may do.
+  , setSettings :: mode :- "settings" :> ReqBody '[JSON] WikiSettings :> Put '[JSON] WikiSettings
+  -- ^ @setWikiSettings@: change them; the answer is the settings as they
+  -- then are.
+  , invitations :: mode :- "invitations" :> Get '[JSON] Invitations
+  -- ^ @invitations@: those not yet used, and whether the server mails them.
+  , invite :: mode :- "invitations" :> ReqBody '[JSON] NewInvitation :> PostCreated '[JSON] Invited
+  -- ^ @invite@: invite an e-mail address; the server mails the link if it
+  -- can, and otherwise the answer carries it.
+  , revokeInvitation :: mode :- "invitations" :> Capture "invitation" InvitationId :> DeleteNoContent
+  -- ^ @revokeInvitation@: its link no longer makes an account.
+  }
+  deriving stock (Generic)
+
+-- | An invitation, by the secret its link carries: what the person invited
+-- does with it.
+data InvitationsApi mode = InvitationsApi
+  { details :: mode :- Capture "token" InvitationToken :> Get '[JSON] InvitationInfo
+  -- ^ Whom it is for, if it may still be used: one that has been used,
+  -- revoked or has expired is 'Wiki.Api.Error.NotFound'.
+  , accept :: mode :- Capture "token" InvitationToken :> ReqBody '[JSON] NewAccount :> Post '[JSON] (WithCookie SessionInfo)
+  -- ^ Make the account it invites to, with the login, name and password
+  -- chosen, and be signed in as it: the invitation is used up. As
+  -- 'register', but in a wiki open or closed.
   }
   deriving stock (Generic)
 

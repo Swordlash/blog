@@ -8,6 +8,7 @@ import Test.Gen
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (forAll, (===))
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Permission
@@ -79,6 +80,7 @@ grants =
         , SpaceGrant {space = backend.id, subject = SubjectUser (usr "carol"), permission = AdministerSpace}
         , SpaceGrant {space = drafts.id, subject = SubjectGroup (grp "writers"), permission = Edit}
         ]
+    , access = Open
     }
 
 as :: Text -> Maybe Principal
@@ -139,7 +141,7 @@ spec = describe "Permission" $ do
 
   describe "a subspace" $
     it "has what its parent's grants give, and what its own add" $ do
-      let extra = grants <> Grants {global = [], spaces = [SpaceGrant {space = api.id, subject = SubjectGroup (grp "devs"), permission = Edit}]}
+      let extra = grants <> Grants {global = [], spaces = [SpaceGrant {space = api.id, subject = SubjectGroup (grp "devs"), permission = Edit}], access = Open}
       spacePermissions (as "bob") extra backendC `shouldBe` viewOnly
       spacePermissions (as "bob") extra apiC `shouldBe` viewEdit
 
@@ -153,6 +155,24 @@ spec = describe "Permission" $ do
     it "still gives its grants on top" $
       perms (as "wanda") draftsC `shouldBe` viewEdit
 
+  describe "in a closed wiki" $ do
+    let closed = grants {access = Closed}
+    it "a public space may not be read by anyone not signed in" $ do
+      spacePermissions anonymous closed blogC `shouldBe` none
+      spacePermissions anonymous closed draftsC `shouldBe` none
+    it "a public space may still be read by anyone signed in" $ do
+      spacePermissions (as "mallory") closed blogC `shouldBe` viewOnly
+      spacePermissions (as "wanda") closed draftsC `shouldBe` viewEdit
+    it "grants are what they are in an open wiki" $
+      for_ [engC, backendC, apiC, opsC] $
+        \c -> spacePermissions (as "carol") closed c `shouldBe` perms (as "carol") c
+    it "publicTo says whom a public space is public to" $ do
+      [publicTo a who | a <- [Open, Closed], who <- [anonymous, as "mallory"]] `shouldBe` [True, True, False, True]
+    it "stays closed when grants are added to it, and an open wiki's when closed ones are" $ do
+      (closed <> grants).access `shouldBe` Closed
+      (grants <> closed).access `shouldBe` Closed
+      (grants <> mempty).access `shouldBe` Open
+
   describe "someone not signed in" $ do
     it "may not read a private space" $
       for_ [engC, backendC, apiC, opsC] $
@@ -162,7 +182,7 @@ spec = describe "Permission" $ do
       canCreateSpaces anonymous grants `shouldBe` False
     it "is no user and in no group, so no grant is for them" $ do
       let subjects = map (SubjectUser . usr) ["", "alice", "mallory"] <> map (SubjectGroup . grp) ["", "devs", "admins"]
-          toEveryone = Grants {global = [], spaces = [SpaceGrant {space = ops.id, subject, permission = AdministerSpace} | subject <- subjects]}
+          toEveryone = Grants {global = [], spaces = [SpaceGrant {space = ops.id, subject, permission = AdministerSpace} | subject <- subjects], access = Open}
       spacePermissions anonymous toEveryone opsC `shouldBe` none
 
   describe "global Administer" $ do
@@ -218,13 +238,16 @@ spec = describe "Permission" $ do
       forAll genMaybePrincipal $ \who -> forAll genGrants $ \gs -> forAll genChain $ \chain ->
         let has p = p `Set.member` spacePermissions who gs chain
          in (not (has AdministerSpace) || has Edit) && (not (has Edit) || has View)
-    prop "more grants never take a permission away" $
+    prop "more grants in the same wiki never take a permission away" $
       forAll genMaybePrincipal $ \who -> forAll genGrants $ \gs -> forAll genGrants $ \more -> forAll genChain $ \chain ->
-        spacePermissions who gs chain `Set.isSubsetOf` spacePermissions who (gs <> more) chain
+        spacePermissions who gs chain `Set.isSubsetOf` spacePermissions who (gs <> more {access = gs.access}) chain
+    prop "closing the wiki takes nothing from anyone signed in" $
+      forAll genPrincipal $ \p -> forAll genGrants $ \gs -> forAll genChain $ \chain ->
+        spacePermissions (Just p) gs {access = Closed} chain === spacePermissions (Just p) gs {access = Open} chain
     prop "a subspace has at least what its parent has" $
       forAll genMaybePrincipal $ \who -> forAll genGrants $ \gs -> forAll genChain $ \chain ->
         spacePermissions who gs (initSafe chain) `Set.isSubsetOf` spacePermissions who gs chain
     prop "someone not signed in may at most view, and only a public tree" $
       forAll genGrants $ \gs -> forAll genChain $ \chain ->
         spacePermissions Nothing gs chain
-          === (if any (\s -> s.public) chain then viewOnly else none)
+          === (if any (\s -> s.public) chain && gs.access == Open then viewOnly else none)

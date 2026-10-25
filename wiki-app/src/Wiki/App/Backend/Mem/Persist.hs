@@ -61,6 +61,7 @@ import Protolude
 import Web.Storage.IndexedDB (Database (..), StoreName)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions, emptyState, prepareSearch)
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export
 import Wiki.Core.Id (BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
@@ -300,7 +301,9 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
         , -- The versions of pages that are there: a page deleted takes its
           -- versions with it in one transaction, so there are no others.
           versions = Map.intersection (Map.fromListWith (<>) [(page, Map.singleton at v) | (page, at, v) <- Map.elems history]) pages
-        , grants = Grants {global, spaces = grants}
+        , -- Whom the demo is open to is not kept: it is open whenever
+          -- it starts, as its prerendered pages are.
+          grants = Grants {global, spaces = grants, access = Open}
         , disabled
         , passwords
         , counter

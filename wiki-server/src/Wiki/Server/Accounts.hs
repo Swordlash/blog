@@ -20,6 +20,16 @@
 -- new password, and when it has not been used for 'idleTime'; each use
 -- moves its end on, at most once every 'refreshEvery', so that a session
 -- in use does not cost a write per request.
+--
+-- = Accounts people make themselves
+--
+-- In an open wiki anyone may make themself an account ('register'); in
+-- any wiki, someone invited may, with the invitation's secret
+-- ('acceptInvitation', WP3.5 of docs/PLAN.md), which is then used up. The
+-- account holds no grant, unless the wiki's settings give a new account
+-- the global create-spaces, and its maker is signed in as it at once.
+-- The secret is checked before the password is hashed, so that a link
+-- that lets nobody in costs the server nothing.
 module Wiki.Server.Accounts
   ( -- * Accounts
     accountOf
@@ -30,6 +40,11 @@ module Wiki.Server.Accounts
   , setDisabled
   , setAdministrator
   , checkLogin
+
+    -- * Accounts people make themselves
+  , register
+  , invitationFor
+  , acceptInvitation
 
     -- * Sessions
   , signIn
@@ -48,13 +63,15 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID.Types qualified as UUID
 import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query, query_)
 import Protolude
-import Wiki.Api.Account (Account (..))
+import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), NewAccount (..))
+import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.App.Backend (WikiError (..))
+import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (User (..), checkLogin)
 import Wiki.Server.Password (checkPassword, hashPassword, newToken, tokenHash, verifyPassword)
-import Wiki.Server.Storage (Storage, withDatabase)
-import Wiki.Server.Storage.Rows (AccountRow, Stamp (..), accountFromRow, deleteSessionsOf, insertAccount, loadAccount, selectAccounts, updateDisabled, updatePasswordHash)
+import Wiki.Server.Storage (Storage, readSettings, settingsWith, withDatabase)
+import Wiki.Server.Storage.Rows (AccountRow, Stamp (..), accountFromRow, deleteInvitation, deleteSessionsOf, grantCreateSpaces, insertAccount, loadAccount, pendingInvitation, selectAccounts, updateDisabled, updatePasswordHash)
 
 --------------------------------------------------------------------------------
 -- Accounts
@@ -148,6 +165,74 @@ immediately c body = do
   pure result
 
 --------------------------------------------------------------------------------
+-- Accounts people make themselves
+
+-- | Make oneself an account, in an open wiki: the user made, and the id of
+-- the session they are signed in with. A closed wiki refuses it
+-- ('Forbidden') before anything is checked, then the account is checked as
+-- 'createAccount' checks one ('Invalid', 'Conflict').
+register :: Storage -> UTCTime -> NewAccount -> IO (Either WikiError (User, Text))
+register st now new = runExceptT $ do
+  open <- liftIO (takesNewAccounts . (\s -> s.access) <$> readSettings st)
+  unless open (throwError Forbidden)
+  made <- prepared new
+  ExceptT . withDatabase st $ \c -> immediately c $ do
+    -- Closed meanwhile, while the password was hashed.
+    settings <- settingsWith st c
+    if takesNewAccounts settings.access
+      then makeAccount c now settings made
+      else pure (Left Forbidden)
+
+-- | Whom an invitation is for, if it can be used now.
+invitationFor :: Storage -> UTCTime -> InvitationToken -> IO (Maybe InvitationInfo)
+invitationFor st now token = withDatabase st $ \c -> fmap snd <$> pendingInvitation c now (tokenHash token.text)
+
+-- | Make the account an invitation invites to, open wiki or closed, and use
+-- the invitation up: the user made, and the id of the session they are
+-- signed in with. An invitation that cannot be used (it has been used,
+-- revoked, or has expired) is 'NotFound', before the account is checked;
+-- a login taken leaves the invitation as it was, to try another.
+acceptInvitation :: Storage -> UTCTime -> InvitationToken -> NewAccount -> IO (Either WikiError (User, Text))
+acceptInvitation st now token new = runExceptT $ do
+  let secret = tokenHash token.text
+  pending <- liftIO (withDatabase st (\c -> pendingInvitation c now secret))
+  when (isNothing pending) (throwError NotFound)
+  made <- prepared new
+  ExceptT . withDatabase st $ \c ->
+    immediately c $
+      pendingInvitation c now secret >>= \case
+        -- Used or revoked meanwhile.
+        Nothing -> pure (Left NotFound)
+        Just (i, _) -> do
+          settings <- settingsWith st c
+          made' <- makeAccount c now settings made
+          when (isRight made') (void (deleteInvitation c i))
+          pure made'
+
+-- | An account to make, checked, with its password hashed: its id, login,
+-- display name and the password's hash.
+prepared :: NewAccount -> ExceptT WikiError IO (UserId, Text, Text, Text)
+prepared new = do
+  (login, password) <- either (throwError . Invalid) pure ((,) <$> checkLogin new.login <*> checkPassword new.password)
+  phc <- liftIO (hashPassword password)
+  uid <- liftIO (UUID.toText <$> generateV4)
+  let name = case T.strip new.displayName of
+        "" -> login
+        n -> n
+  pure (UserId uid, login, name, phc)
+
+-- | Make a checked account, in a transaction under way, with the grant the
+-- wiki's settings give a new one, and sign its maker in.
+makeAccount :: Connection -> UTCTime -> WikiSettings -> (UserId, Text, Text, Text) -> IO (Either WikiError (User, Text))
+makeAccount c now settings (uid, login, name, phc) =
+  insertAccount c uid login name (Just phc) >>= \case
+    Left taken -> pure (Left (Conflict ("There is a user with the login " <> taken <> " already.")))
+    Right account -> do
+      when settings.newAccountsCreateSpaces (grantCreateSpaces c uid)
+      token <- startSession c now uid
+      pure (Right (account.user, token))
+
+--------------------------------------------------------------------------------
 -- Sessions
 
 -- | How long a session that is not used lasts: two weeks, so that someone
@@ -187,12 +272,18 @@ signIn st now login password
           matches = verifyPassword (fromMaybe unknownHash (found >>= hashOf)) password
       case found of
         Just row@(uid, _, _, Just _, 0) | matches -> do
-          token <- newToken
-          withDatabase st $ \c -> do
-            execute c "DELETE FROM sessions WHERE expires_at <= ?" (Only (Stamp now))
-            execute c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)" (tokenHash token, uid, Stamp now, Stamp now, Stamp (addUTCTime idleTime now))
+          token <- withDatabase st (\c -> startSession c now (UserId uid))
           pure (Right ((accountFromRow row).user, token))
         _ -> pure (Left NoSuchAccount)
+
+-- | A new session for a user, from now: the id its cookie is to carry.
+-- Sessions that have ended by themselves are deleted on the way.
+startSession :: Connection -> UTCTime -> UserId -> IO Text
+startSession c now u = do
+  token <- newToken
+  execute c "DELETE FROM sessions WHERE expires_at <= ?" (Only (Stamp now))
+  execute c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)" (tokenHash token, u.text, Stamp now, Stamp now, Stamp (addUTCTime idleTime now))
+  pure token
 
 -- | A hash of no one's password, to check a password against when the
 -- login is no user's or has none, so that the answer takes as long.

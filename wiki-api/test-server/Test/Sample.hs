@@ -19,6 +19,11 @@ module Test.Sample
   , serverStatus
   , directory
   , spaceAccess
+  , settings
+  , invitation
+  , invitations
+  , invited
+  , invitationInfo
   )
 where
 
@@ -26,10 +31,11 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
-import Wiki.Api.Account (Account (..))
-import Wiki.Api.Admin (Directory (..), ServerStatus (..))
+import Wiki.Api.Account (Account (..), InvitationInfo (..))
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Import
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
@@ -145,6 +151,7 @@ sessionInfo =
         Grants
           { global = [GlobalGrant {subject = SubjectUser (UserId "u1"), permission = CreateSpaces}]
           , spaces = [SpaceGrant {space = SpaceId "s1", subject = SubjectGroup (GroupId "g1"), permission = Edit}]
+          , access = Open
           }
     , standing = SignedIn
     }
@@ -245,3 +252,27 @@ spaceAccess =
     , users = directory.users
     , groups = directory.groups
     }
+
+-- | The wiki's settings: closed, and new accounts may create spaces.
+settings :: WikiSettings
+settings = WikiSettings {access = Closed, newAccountsCreateSpaces = True}
+
+-- | An invitation, not expired.
+invitation :: Invitation
+invitation = Invitation {id = InvitationId "i1", email = "bea@example.org", createdAt = time, expiresAt = later, expired = False}
+
+-- | The invitations, of a server that mails none.
+invitations :: Invitations
+invitations =
+  Invitations
+    { mailing = False
+    , invitations = [invitation, Invitation {id = InvitationId "i0", email = "cy@example.org", createdAt = time, expiresAt = time, expired = True}]
+    }
+
+-- | An invitation just made and not mailed, with its link's secret.
+invited :: Invited
+invited = Invited {invitation, token = Just "c2VjcmV0IG9mIGFuIGludml0YXRpb24gZm9yIGJlYQ", mailError = Just "the mail server answered RCPT TO with 550 no such mailbox"}
+
+-- | An invitation as its link shows it.
+invitationInfo :: InvitationInfo
+invitationInfo = InvitationInfo {email = "bea@example.org", expiresAt = later}

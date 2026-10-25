@@ -22,6 +22,7 @@ import Wiki.Api.Import
 import Wiki.Api.Links (attachmentUrl, links)
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
@@ -109,7 +110,7 @@ archive spaces pages =
     , users = [User {id = UserId "u1", login = "alice", displayName = "Alice"}]
     , groups = []
     , membership = mempty
-    , grants = Grants {global = [GlobalGrant {subject = SubjectUser (UserId "u1"), permission = Administer}], spaces = []}
+    , grants = Grants {global = [GlobalGrant {subject = SubjectUser (UserId "u1"), permission = Administer}], spaces = [], access = Open}
     , spaces
     , pages
     , blobs = Map.fromList [(BlobId "b1", "PNG")]

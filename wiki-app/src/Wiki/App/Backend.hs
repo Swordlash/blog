@@ -121,6 +121,8 @@ module Wiki.App.Backend
     -- * Who is asking
   , Session (..)
   , anonymous
+  , anonymousIn
+  , shutOut
   , sessionPrincipal
   , currentUser
 
@@ -135,12 +137,13 @@ import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Numeric.Natural (Natural)
 import Protolude
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Page (Page)
-import Wiki.Core.Permission (Grants, Principal (..), SpaceAccess, SpacePermission, Subject)
+import Wiki.Core.Permission (Grants (..), Principal (..), SpaceAccess, SpacePermission, Subject)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
@@ -194,9 +197,21 @@ data Session = Session
   }
   deriving stock (Eq, Show)
 
--- | The session of someone who is not signed in.
+-- | The session of someone who is not signed in, in an open wiki.
 anonymous :: Session
-anonymous = Session {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn}
+anonymous = anonymousIn Open
+
+-- | The session of someone who is not signed in, in a wiki of this access:
+-- they hold no grant, and their grants say whom the wiki is open to
+-- ("Wiki.Core.Access"), so that the application knows before anyone signs
+-- in whether there is anything to show them.
+anonymousIn :: Access -> Session
+anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn}
+
+-- | Whether the wiki is closed to whoever is asking: it is closed, and they
+-- have not signed in. They are shown the way to sign in and nothing else.
+shutOut :: Session -> Bool
+shutOut s = s.grants.access == Closed && isNothing s.user
 
 -- | The current user as the rules of "Wiki.Core.Permission" want them.
 sessionPrincipal :: Session -> Maybe Principal

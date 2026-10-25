@@ -16,12 +16,23 @@
 -- ('AccountDisabled'); each answers with the account as it then is
 -- ('Account'). The password is never part of an answer, nor of anything a
 -- 'Show' writes, so that it cannot end up in a log.
+--
+-- Someone may also make themself an account (WP3.5 of docs/PLAN.md): in an
+-- open wiki with a 'NewAccount' of their own (@POST \/api\/v1\/accounts@),
+-- and in any wiki with an invitation, whose link carries a secret
+-- ('InvitationToken'), and which tells them whom it is for
+-- ('InvitationInfo') before they choose a login and a password. Either
+-- signs them in as the account it made.
 module Wiki.Api.Account
   ( -- * Signing in
     Credentials (..)
 
     -- * Accounts
   , NewAccount (..)
+
+    -- * Invitations
+  , InvitationToken (..)
+  , InvitationInfo (..)
   , NewPassword (..)
   , AccountDisabled (..)
   , Account (..)
@@ -29,8 +40,10 @@ module Wiki.Api.Account
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Data.Time (UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import Wiki.Core.User (User)
 
 -- | What a user signs in with: @POST \/api\/v1\/session@.
@@ -83,6 +96,28 @@ data Account = Account
   -- ^ Whether they can sign in with a password at all: a user brought in
   -- with an imported wiki has none until one is set.
   , disabled :: Bool
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The secret an invitation's link carries (@\/invite\/\<token>\/@):
+-- random, single use, and kept by the server only as a hash, as a session
+-- is. Whoever has it may make an account, so it is never written where a
+-- 'Show' would put it, a log above all.
+newtype InvitationToken = InvitationToken {text :: Text}
+  deriving stock (Eq, Ord, Generic)
+  deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
+
+instance Show InvitationToken where
+  showsPrec _ _ rest = "InvitationToken <hidden>" <> rest
+
+-- | What an invitation's link shows the person invited before they choose
+-- a login and a password: @GET \/api\/v1\/invitations\/\<token>@. An
+-- invitation that has been used, revoked or has expired is not found.
+data InvitationInfo = InvitationInfo
+  { email :: Text
+  -- ^ The address the invitation was sent to.
+  , expiresAt :: UTCTime
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

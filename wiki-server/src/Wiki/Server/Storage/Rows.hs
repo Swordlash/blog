@@ -62,6 +62,15 @@ module Wiki.Server.Storage.Rows
   , insertPage
   , insertVersion
   , insertAttachment
+
+    -- * Whom the wiki lets in
+  , loadSettings
+  , storeSettings
+  , loadInvitations
+  , insertInvitation
+  , deleteInvitation
+  , pendingInvitation
+  , grantCreateSpaces
   )
 where
 
@@ -70,12 +79,14 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
-import Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData, execute, query, queryWith, queryWith_, query_)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData, changes, execute, query, queryWith, queryWith_, query_)
 import Database.SQLite.Simple.FromField (FieldParser, FromField (..), ResultError (..), returnError)
 import Database.SQLite.Simple.FromRow (RowParser, field, fieldWith)
 import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
-import Wiki.Api.Account (Account (..))
+import Wiki.Api.Account (Account (..), InvitationInfo (..))
+import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
+import Wiki.Core.Access (Access (..), accessName, readAccess)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
@@ -260,6 +271,10 @@ loadGrants c = do
           , Just subject <- [subjectFrom kind i]
           , Just permission <- [find (\x -> spaceText x == p) [minBound .. maxBound]]
           ]
+      , -- The wiki's setting, which the storage reads with the grants
+        -- where it is asked about (Wiki.Server.Storage), is not a row of
+        -- theirs.
+        access = Open
       }
 
 userRow :: RowParser User
@@ -611,3 +626,64 @@ updateDisabled c u disabled = execute c "UPDATE users SET disabled = ? WHERE id 
 -- | End every session of a user.
 deleteSessionsOf :: Connection -> UserId -> IO ()
 deleteSessionsOf c u = execute c "DELETE FROM sessions WHERE user_id = ?" (Only u.text)
+
+--------------------------------------------------------------------------------
+-- Whom the wiki lets in
+
+-- | The wiki's settings, each from its row, or its default for one that
+-- has none (migrations/0003-settings.sql), or a value this program does
+-- not know.
+loadSettings :: Connection -> IO WikiSettings
+loadSettings c = do
+  rows :: [(Text, Text)] <- query_ c "SELECT key, value FROM settings"
+  let valueOf key = snd <$> find ((== key) . fst) rows
+  pure
+    WikiSettings
+      { access = fromMaybe defaultSettings.access (valueOf "access" >>= readAccess)
+      , newAccountsCreateSpaces = maybe defaultSettings.newAccountsCreateSpaces (== "1") (valueOf "new-accounts-create-spaces")
+      }
+
+-- | Keep the wiki's settings, each in its row.
+storeSettings :: Connection -> WikiSettings -> IO ()
+storeSettings c s =
+  for_ [("access", accessName s.access), ("new-accounts-create-spaces", if s.newAccountsCreateSpaces then "1" else "0")] $ \(key, value :: Text) ->
+    execute c "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value" (key :: Text, value)
+
+-- | Every invitation, the latest first, as at a time (which decides which
+-- have expired).
+loadInvitations :: Connection -> UTCTime -> IO [Invitation]
+loadInvitations c now = do
+  rows <- query_ c "SELECT id, email, created_at, expires_at FROM invitations"
+  pure
+    ( sortOn
+        (\i -> (Down i.createdAt, i.id))
+        [ Invitation {id = InvitationId i, email, createdAt, expiresAt, expired = expiresAt <= now}
+        | (i, email, Stamp createdAt, Stamp expiresAt) <- rows
+        ]
+    )
+
+-- | Keep an invitation, under the hash of its link's secret, in place of
+-- any its address had.
+insertInvitation :: Connection -> Invitation -> Text -> IO ()
+insertInvitation c i secretHash = do
+  execute c "DELETE FROM invitations WHERE email = ? COLLATE NOCASE" (Only i.email)
+  execute c "INSERT INTO invitations (id, email, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)" (i.id.text, i.email, secretHash, Stamp i.createdAt, Stamp i.expiresAt)
+
+-- | Delete an invitation: whether there was one.
+deleteInvitation :: Connection -> InvitationId -> IO Bool
+deleteInvitation c i = do
+  execute c "DELETE FROM invitations WHERE id = ?" (Only i.text)
+  (> 0) <$> changes c
+
+-- | The invitation whose link's secret has this hash, if it may be used at
+-- this time (it has not expired): its id, and whom it is for.
+pendingInvitation :: Connection -> UTCTime -> Text -> IO (Maybe (InvitationId, InvitationInfo))
+pendingInvitation c now secretHash = do
+  rows <- query c "SELECT id, email, expires_at FROM invitations WHERE token_hash = ?" (Only secretHash)
+  pure $ case rows of
+    [(i, email, Stamp expiresAt)] | expiresAt > now -> Just (InvitationId i, InvitationInfo {email, expiresAt})
+    _ -> Nothing
+
+-- | Grant a user the global create-spaces themself.
+grantCreateSpaces :: Connection -> UserId -> IO ()
+grantCreateSpaces c u = execute c "INSERT OR IGNORE INTO global_grants (subject_kind, subject_id, permission) VALUES ('user', ?, ?)" (u.text, globalText CreateSpaces)

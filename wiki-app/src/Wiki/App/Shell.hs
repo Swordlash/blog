@@ -46,6 +46,13 @@
 -- has, the import ("Wiki.App.View.Import"), which brings the demo's pages
 -- into the server.
 --
+-- A closed wiki ("Wiki.Core.Access") shows someone who has not signed in
+-- the way to sign in and nothing else, at every route ('shutOut'): the
+-- header with the wiki's name and "Sign in" (or the demo's switcher), and
+-- a word on why, but for an invitation's page ('Invite'), which is for
+-- them. Nothing else is read for them, so that the server, which renders
+-- the same page, is never asked what it would refuse.
+--
 -- The route is the router's ('Router.current' at the start, then
 -- 'Router.changes'), so links, the back and forward buttons and a reload all
 -- arrive at the same place.
@@ -80,18 +87,20 @@ import Web.Event.Event (Event)
 import Wiki.Api (ArchiveApi (..), WikiApi (..))
 import Wiki.Api.Links (links)
 import Wiki.App.Account (Accounts (..))
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Browser (download, historyEntry, historyGo, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Admin qualified as AdminView
 import Wiki.App.View.Common
 import Wiki.App.View.Editor qualified as Editor
 import Wiki.App.View.History qualified as HistoryView
 import Wiki.App.View.Import qualified as ImportView
+import Wiki.App.View.Invite qualified as InviteView
 import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.Page qualified as PageView
@@ -141,6 +150,8 @@ type Slots =
     .+ ("people" .== H.Slot (Const Void) ViewOutput ())
     .+ ("signIn" .== H.Slot SignInView.Query SignInView.Output ())
     .+ ("slides" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("access" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("invite" .== H.Slot (Const Void) InviteView.Output ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -223,6 +234,8 @@ data Action
   | RetryHere
   | FromAccount SignInView.Output
   | SessionChanged Session
+  | OpenSignIn
+  | FromInvite InviteView.Output
 
 component
   :: forall output m
@@ -241,8 +254,8 @@ component =
         initialState = \Input {router, welcome, demo, migration, accounts} -> do
           route <- Router.current router
           loaded <- atOnce $ do
-            world <- fetchWorld demo
-            here <- maybe (pure NoSpace) fetchHere (spaceOfRoute route)
+            world@(asking, _, _, _) <- fetchWorld demo
+            here <- if shutOut asking then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
             pure (world, here)
           let ((signedIn, users, spaces, kept), here) = fromMaybe ((anonymous, [], [], False), NoSpace) loaded
           pure
@@ -278,8 +291,10 @@ component =
       }
   where
     render :: State m -> H.ComponentHTML Action Slots m
-    render st =
-      [hh|
+    render st
+      | isShut st = closedFrame st
+      | otherwise =
+          [hh|
         <div class="wiki">
           {{ header st }}
           <div class="wiki-body">
@@ -294,6 +309,36 @@ component =
           {{ footer }}
         </div>
       |]
+
+    -- A closed wiki, to someone who has not signed in: its name, the way to
+    -- sign in, and why there is nothing else.
+    closedFrame :: State m -> H.ComponentHTML Action Slots m
+    closedFrame st =
+      [hh|
+        <div class="wiki wiki-closed">
+          <header class="wiki-header">
+            <a class="wiki-brand" {{ Router.linkProps st.router Followed Home }}>Wiki</a>
+            {{ whoIsAsking st }}
+          </header>
+          <div class="wiki-body">
+            <main class="wiki-content">
+              <section class="closed">
+                <h1>Sign in to read this wiki</h1>
+                <p>This wiki is open to its members only. {{ how }}</p>
+                {% if isJust st.accounts %}
+                  <button type="button" class="primary closed-sign-in" onClick={{ const OpenSignIn }}>Sign in</button>
+                {% end %}
+              </section>
+            </main>
+          </div>
+          {{ footer }}
+        </div>
+      |]
+      where
+        how :: Text
+        how
+          | isJust st.demo = "Choose who you are at the top right."
+          | otherwise = "Sign in to see its spaces and pages; to become a member, ask one of its administrators for an invitation."
 
     header :: State m -> H.ComponentHTML Action Slots m
     header st =
@@ -399,6 +444,7 @@ component =
                 <p class="admin-intro">{{ dataIntro }}</p>
                 {{ dataControls st }}
               </section>
+              {{ HH.slot "access" () AccessView.component AccessView.Input {context = context st} FromView }}
               {{ HH.slot "people" () AdminView.component AdminView.Input {context = context st} FromView }}
             </section>
           |]
@@ -575,6 +621,7 @@ component =
       NewSpace parent -> HH.slot "newSpace" () NewSpaceView.component NewSpaceView.Input {context = context st, parent} FromView
       Search text space subspaces ->
         HH.slot "searchResults" () SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
+      Invite token -> HH.slot "invite" () InviteView.component InviteView.Input {accounts = st.accounts, token, session = st.session} FromInvite
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading
@@ -761,6 +808,12 @@ component =
         reload Nothing
         when (isNothing s.user) $
           H.tell "signIn" () (SignInView.Prompt "Your session has ended. Sign in again to go on.")
+      OpenSignIn -> H.tell "signIn" () (SignInView.Prompt "Sign in with your login and password.")
+      -- An invitation made its account and signed its maker in: the wiki
+      -- as them, from its front page.
+      FromInvite (InviteView.Accepted s) -> do
+        modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
+        reload (Just Home)
 
     -- Something only the demo does, which nothing offers without it.
     withDemo :: (Demo m -> H.HalogenM (State m) Action Slots output m ()) -> H.HalogenM (State m) Action Slots output m ()
@@ -813,6 +866,7 @@ component =
     loadHere again = do
       st <- get
       case spaceOfRoute st.route of
+        _ | shutOut st.session -> modify (\s -> s {here = NoSpace})
         Nothing -> modify (\s -> s {here = NoSpace})
         Just path
           | not again, hereIs path st.here -> pass
@@ -847,12 +901,15 @@ component =
 -- | What every route shows around it: who is signed in, who else one may
 -- be in the demo, the tree of spaces, and whether the demo keeps its
 -- changes.
+--
+-- A closed wiki has no spaces to show someone who has not signed in, and
+-- they are not asked for.
 fetchWorld :: (MonadWiki n) => Maybe (Demo n) -> n (Session, [User], [Space], Bool)
-fetchWorld demo =
-  (,,,)
-    <$> session
-    <*> maybe (pure []) (\d -> d.listUsers) demo
-    <*> listSpaces
+fetchWorld demo = do
+  asking <- session
+  (asking,,,)
+    <$> maybe (pure []) (\d -> d.listUsers) demo
+    <*> (if shutOut asking then pure [] else listSpaces)
     <*> maybe (pure False) (\d -> d.demoKept) demo
 
 -- | The space at a path, with its pages, or why it cannot be shown.
@@ -865,6 +922,16 @@ fetchHere path =
           pages <- ExceptT (listPages space.id)
           pure (InSpace path space pages)
       )
+
+-- | Whether what the shell shows is the closed wiki's frame: the wiki is
+-- closed to whoever is asking, and the route is not an invitation's.
+isShut :: State m -> Bool
+isShut st = st.world == WorldReady && shutOut st.session && not (isInvite st.route)
+
+isInvite :: Route -> Bool
+isInvite = \case
+  Invite _ -> True
+  _ -> False
 
 -- | Whether the user may administer the wiki as a whole: who is shown the
 -- administration.
@@ -926,6 +993,8 @@ crumbs :: State m -> [(Text, Maybe Route)]
 crumbs st = case st.route of
   -- The same at every address until there is something to name.
   _ | st.world /= WorldReady -> []
+  _ | isShut st -> [("Sign in", Nothing)]
+  Invite _ -> [("Invitation", Nothing)]
   Home -> []
   Space path -> spaceCrumbs path
   Page path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath

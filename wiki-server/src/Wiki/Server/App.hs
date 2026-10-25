@@ -19,6 +19,16 @@
 -- and each page is rendered there, as the request's principal, with its
 -- links below that place ("Wiki.Server.Render"), so a link followed before
 -- the program has loaded stays on the listener it was found on.
+--
+-- A closed wiki ("Wiki.Core.Access") is closed here, to whoever has not
+-- signed in, whichever listener finds them so (only the public one does):
+-- the API answers them 401 for everything but what signing in and
+-- accepting an invitation need ('openToAnyone'), and every page they ask
+-- for is rendered as the application shows it to them, the way to sign in
+-- and nothing else, with a 401 too ("Wiki.Server.Render"). The
+-- application's files (its program, its styles) are served to anyone, since
+-- the page that signs one in needs them and they hold nothing of the
+-- wiki's.
 module Wiki.Server.App
   ( Listener (..)
   , Finding (..)
@@ -26,14 +36,17 @@ module Wiki.Server.App
   , findCaller
   , principalName
   , pathSegments
+  , openToAnyone
   )
 where
 
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
-import Network.HTTP.Types (Header, hContentType, hLocation, hSetCookie, methodGet, methodHead, status302, status404)
+import Network.HTTP.Types (Header, hCacheControl, hContentType, hLocation, hSetCookie, hVary, methodGet, methodHead, status302, status401, status404)
 import Network.Wai (Application, Request (..), mapResponseHeaders, responseLBS)
 import Protolude
+import Wiki.Api.Admin (WikiSettings (..))
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Accounts (Resolved (..), resolveSession)
 import Wiki.Server.Api (Caller (..), Env (..), Signing (..), apiApplication)
@@ -41,7 +54,7 @@ import Wiki.Server.Log (Logger, logRequests)
 import Wiki.Server.Render (renderPage)
 import Wiki.Server.Session (CookieSettings, clearCookie, requestToken, sameOrigin, sessionCookie)
 import Wiki.Server.Static (StaticSite, serveStatic)
-import Wiki.Server.Storage (Who (..))
+import Wiki.Server.Storage (Who (..), readSettings)
 
 -- | A listener's part.
 data Listener = Listener
@@ -116,24 +129,38 @@ addressOf request = case T.breakOnEnd ":" (show (remoteHost request)) of
   (hostColon, _) | not (T.null hostColon) -> T.dropEnd 1 hostColon
   (_, whole) -> whole
 
+-- | The endpoints of the API (below @api\/v1\/@) that a closed wiki
+-- answers someone who has not signed in: its description, the session
+-- (to read it, sign in and out), making oneself an account (which a
+-- closed wiki refuses itself, with a 403 that says so) and invitations.
+openToAnyone :: [Text]
+openToAnyone = ["info", "session", "accounts", "invitations"]
+
 -- | The routes of a listener, for whoever is asking.
 listenerRoutes :: Logger -> Env -> Maybe StaticSite -> Listener -> Caller -> Application
-listenerRoutes logger env site l caller request respond =
+listenerRoutes logger env site l caller request respond = do
+  shut <- case caller.who of
+    Anonymous -> (\s -> s.access == Closed) <$> readSettings env.storage
+    _ -> pure False
   let mounted = pathSegments l.mount
       segments = pathInfo request
       query = rawQueryString request
       readOnly = requestMethod request `elem` [methodGet, methodHead]
       notFound = respond (responseLBS status404 [(hContentType, "text/plain; charset=utf-8")] "Not found\n")
       redirect target = respond (responseLBS status302 [(hLocation, target <> query)] "")
-   in if
-        | mounted `isPrefixOf` segments ->
-            case drop (length mounted) segments of
-              -- The place itself without its slash.
-              [] | not (null mounted) -> redirect (encodeUtf8 l.mount)
-              rest@("api" : "v1" : _) -> api request {pathInfo = rest} respond
-              rest -> maybe notFound (\s -> serveStatic s l.mount (Just pages) rest request respond) site
-        | readOnly && null segments -> redirect (encodeUtf8 l.mount)
-        | otherwise -> notFound
+      unauthenticated =
+        respond (responseLBS status401 [(hContentType, "application/json"), (hCacheControl, "private, no-cache"), (hVary, "Cookie")] "{\"error\":\"Unauthenticated\"}")
+  if
+    | mounted `isPrefixOf` segments ->
+        case drop (length mounted) segments of
+          -- The place itself without its slash.
+          [] | not (null mounted) -> redirect (encodeUtf8 l.mount)
+          rest@("api" : "v1" : endpoint)
+            | shut, take 1 endpoint `notElem` map pure openToAnyone -> unauthenticated
+            | otherwise -> api request {pathInfo = rest} respond
+          rest -> maybe notFound (\s -> serveStatic s l.mount (Just pages) rest request respond) site
+    | readOnly && null segments -> redirect (encodeUtf8 l.mount)
+    | otherwise -> notFound
   where
     api = sameOrigin (apiApplication env caller)
     pages template = renderPage logger env caller.who l.mount template

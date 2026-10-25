@@ -172,7 +172,8 @@ genGrants :: Gen Grants
 genGrants = do
   global <- resize 2 (listOf genGlobalGrant)
   spaces <- listOf genSpaceGrant
-  pure Grants {global, spaces}
+  access <- arbitraryBoundedEnum
+  pure Grants {global, spaces, access}
 
 genPrincipal :: Gen Principal
 genPrincipal = do

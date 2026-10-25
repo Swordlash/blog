@@ -87,3 +87,9 @@ function wiki_page_backend() {
 function wiki_console_warn(message) {
   console.warn(message);
 }
+
+// An address of the application's as a whole URL, against the page's base:
+// a link to pass on, outside the page.
+function wiki_absolute_url(path) {
+  return new URL(path, document.baseURI).href;
+}

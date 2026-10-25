@@ -62,6 +62,10 @@ fromArchive a =
           -- nor a password, as the server imports them.
           disabled = mempty
         , passwords = mempty
+        , -- Nor the wiki's settings, which are the demo's own, nor its
+          -- invitations.
+          newAccountsCreateSpaces = False
+        , invitations = mempty
         , current = Nothing
         , counter = 1
         }

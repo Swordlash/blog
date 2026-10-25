@@ -76,6 +76,14 @@ module Wiki.App.Backend.Mem.State
   , deleteGroupIn
   , addMemberIn
   , removeMemberIn
+
+    -- * Whom the wiki lets in
+  , Pending (..)
+  , wikiSettingsIn
+  , setWikiSettingsIn
+  , invitationsIn
+  , inviteIn
+  , revokeInvitationIn
   )
 where
 
@@ -88,10 +96,11 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Api.Account (Account (Account), NewAccount)
 import Wiki.Api.Account qualified as Acc
-import Wiki.Api.Admin (Directory (Directory))
+import Wiki.Api.Admin (Directory (Directory), Invitation (Invitation), Invitations (Invitations), Invited (Invited), WikiSettings (WikiSettings), checkEmail, invitationLifetime)
 import Wiki.Api.Admin qualified as A
-import Wiki.App.Backend (Session (Session), WikiError (..), anonymous, maxAttachmentSize)
+import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Draft (Draft (Draft))
 import Wiki.Core.Draft qualified as D
@@ -160,6 +169,12 @@ data MemState = MemState
   -- ^ The users given a password. The demo has no passwords and keeps
   -- none: only whether a user would have one on a server, which its
   -- administration shows.
+  , newAccountsCreateSpaces :: Bool
+  -- ^ The wiki's second setting ('Wiki.Api.Admin.WikiSettings'); the first,
+  -- whom it is open to, is its grants' ('Wiki.Core.Permission.Grants').
+  , invitations :: Map InvitationId Pending
+  -- ^ The invitations made and not revoked. The demo makes no account from
+  -- one, so none is ever used.
   , current :: Maybe UserId
   -- ^ Who is signed in. A user who is not in 'users', or is disabled, is
   -- nobody.
@@ -186,6 +201,8 @@ emptyState =
     , searchText = mempty
     , disabled = mempty
     , passwords = mempty
+    , newAccountsCreateSpaces = False
+    , invitations = mempty
     , current = Nothing
     , counter = 1
     }
@@ -279,12 +296,12 @@ insertGroup g members st =
 -- | Grant a global permission.
 grantGlobal :: Subject -> GlobalPermission -> MemState -> MemState
 grantGlobal subject permission st =
-  st {grants = st.grants <> Grants {P.global = [GlobalGrant {P.subject = subject, P.permission = permission}], P.spaces = []}}
+  st {grants = st.grants <> Grants {P.global = [GlobalGrant {P.subject = subject, P.permission = permission}], P.spaces = [], P.access = Open}}
 
 -- | Grant a permission on a space.
 grantSpace :: SpaceId -> Subject -> SpacePermission -> MemState -> MemState
 grantSpace space subject permission st =
-  st {grants = st.grants <> Grants {P.global = [], P.spaces = [SpaceGrant {P.space = space, P.subject = subject, P.permission = permission}]}}
+  st {grants = st.grants <> Grants {P.global = [], P.spaces = [SpaceGrant {P.space = space, P.subject = subject, P.permission = permission}], P.access = Open}}
 
 -- | Add a space with a slug made from its name and free among its siblings,
 -- last among them, made at the time given, listing its children by name;
@@ -508,7 +525,7 @@ repage space parent slug position p =
 -- | Who is signed in, with the grants that concern them.
 sessionOf :: MemState -> Session
 sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> currentPrincipal st of
-  Nothing -> anonymous
+  Nothing -> anonymousIn st.grants.access
   Just (u, p) ->
     Session
       { B.user = Just u
@@ -517,6 +534,7 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
           Grants
             { P.global = filter (\g -> isFor p g.subject) st.grants.global
             , P.spaces = filter (\g -> isFor p g.subject) st.grants.spaces
+            , P.access = st.grants.access
             }
       , -- Switched to, which is the demo's signing in.
         B.standing = SignedIn
@@ -669,6 +687,7 @@ deleteSpaceIn sid st = do
             Grants
               { P.global = st.grants.global
               , P.spaces = filter (\g -> not (g.space `Set.member` gone)) st.grants.spaces
+              , P.access = st.grants.access
               }
         }
     , ()
@@ -699,7 +718,7 @@ setSpaceGrantIn sid subject permission granted st = do
         | not granted = filter (/= grant) st.grants.spaces
         | grant `elem` st.grants.spaces = st.grants.spaces
         | otherwise = st.grants.spaces <> [grant]
-  pure (st {grants = Grants {P.global = st.grants.global, P.spaces = spaces}}, ())
+  pure (st {grants = Grants {P.global = st.grants.global, P.spaces = spaces, P.access = st.grants.access}}, ())
 
 -- | Choose the order a space lists one kind of its children in.
 setSpaceOrderIn :: SpaceId -> Children -> ChildOrder -> Write Space
@@ -976,7 +995,7 @@ setGlobalGrant permission u granted st = do
         | not granted = filter (/= grant) st.grants.global
         | grant `elem` st.grants.global = st.grants.global
         | otherwise = st.grants.global <> [grant]
-  pure (st {grants = Grants {P.global = global, P.spaces = st.grants.spaces}}, ())
+  pure (st {grants = Grants {P.global = global, P.spaces = st.grants.spaces, P.access = st.grants.access}}, ())
 
 -- | A user's account, as the administration sees it.
 accountIn :: MemState -> User -> Account
@@ -1050,6 +1069,7 @@ deleteGroupIn gid st = do
         Grants
           { P.global = filter (\x -> not (toGroup x.subject)) st.grants.global
           , P.spaces = filter (\x -> not (toGroup x.subject)) st.grants.spaces
+          , P.access = st.grants.access
           }
   pure (st {groups = Map.delete gid st.groups, membership = Map.delete gid st.membership, grants}, ())
 
@@ -1067,3 +1087,59 @@ setMember member gid u st = do
 addMemberIn, removeMemberIn :: GroupId -> UserId -> Write ()
 addMemberIn = setMember True
 removeMemberIn = setMember False
+
+--------------------------------------------------------------------------------
+-- Whom the wiki lets in
+
+-- | An invitation as the demo keeps it: neither it nor its secret leaves
+-- the browser, so the secret is kept as it is.
+data Pending = Pending
+  { email :: Text
+  , createdAt :: UTCTime
+  , expiresAt :: UTCTime
+  , token :: Text
+  }
+  deriving stock (Eq, Show)
+
+-- | The wiki's settings.
+wikiSettingsIn :: MemState -> Either WikiError WikiSettings
+wikiSettingsIn st = do
+  requireAdministrator st
+  pure WikiSettings {A.access = st.grants.access, A.newAccountsCreateSpaces = st.newAccountsCreateSpaces}
+
+-- | The wiki's settings changed.
+setWikiSettingsIn :: WikiSettings -> Write WikiSettings
+setWikiSettingsIn new st = do
+  requireAdministrator st
+  let grants = Grants {P.global = st.grants.global, P.spaces = st.grants.spaces, P.access = new.access}
+  pure (st {grants, newAccountsCreateSpaces = new.newAccountsCreateSpaces}, new)
+
+-- | The invitations as an administrator lists them at a time: the latest
+-- first, none mailed.
+invitationsIn :: UTCTime -> MemState -> Either WikiError Invitations
+invitationsIn now st = do
+  requireAdministrator st
+  let listed = sortOn (\(i, p) -> (Down p.createdAt, i)) (Map.toList st.invitations)
+  pure Invitations {A.mailing = False, A.invitations = map (uncurry (invitationOf now)) listed}
+
+invitationOf :: UTCTime -> InvitationId -> Pending -> Invitation
+invitationOf now i p = Invitation {A.id = i, A.email = p.email, A.createdAt = p.createdAt, A.expiresAt = p.expiresAt, A.expired = p.expiresAt <= now}
+
+-- | An invitation made at a time, with this secret for its link, in place
+-- of any the address had.
+inviteIn :: UTCTime -> Text -> Text -> Write Invited
+inviteIn now token raw st = do
+  requireAdministrator st
+  email <- first Invalid (checkEmail raw)
+  let (i, st1) = newId "invitation" st
+      pending = Pending {email, createdAt = now, expiresAt = addUTCTime invitationLifetime now, token}
+      others = Map.filter (\p -> T.toCaseFold p.email /= T.toCaseFold email) st1.invitations
+      st2 = st1 {invitations = Map.insert (InvitationId i) pending others}
+  pure (st2, Invited {A.invitation = invitationOf now (InvitationId i) pending, A.token = Just token, A.mailError = Nothing})
+
+-- | An invitation revoked.
+revokeInvitationIn :: InvitationId -> Write ()
+revokeInvitationIn i st = do
+  requireAdministrator st
+  unless (Map.member i st.invitations) (Left NotFound)
+  pure (st {invitations = Map.delete i st.invitations}, ())

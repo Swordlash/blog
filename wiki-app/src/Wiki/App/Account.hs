@@ -18,10 +18,17 @@
 -- in, asks who is asking again. If that has changed, it empties its cache
 -- the same way and says so through 'sessionChanges', which the shell
 -- listens to, reloading and offering to sign in again.
+--
+-- Someone may also make themself an account (WP3.5 of docs/PLAN.md): in an
+-- open wiki ('register'), and in any wiki with an invitation, which they
+-- read first ('invitationFor', to be told whom it is for) and then accept
+-- with the login and password they choose ('acceptInvitation'). Either
+-- signs them in as the new account, as 'signIn' does.
 module Wiki.App.Account
   ( MonadAccount (..)
   , SignInError (..)
   , signInErrorText
+  , accountErrorText
   , Accounts (..)
   , accounts
   )
@@ -32,6 +39,7 @@ import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Halogen.Subscription (Emitter)
 import Protolude
+import Wiki.Api.Account (InvitationInfo, InvitationToken, NewAccount)
 import Wiki.App.Backend (Session, WikiError (..))
 
 -- | Why signing in did not work.
@@ -56,6 +64,14 @@ signInErrorText = \case
   SignInFailed Forbidden -> "The server refused to sign you in from this page. Reload it and try again."
   SignInFailed NotFound -> "This server does not sign anyone in."
 
+-- | Why making oneself an account failed, for a person to read: as signing
+-- in's, but for the refusals that mean something else here.
+accountErrorText :: SignInError -> Text
+accountErrorText = \case
+  SignInFailed Forbidden -> "This wiki does not take new accounts: ask one of its administrators for an invitation."
+  SignInFailed NotFound -> "This invitation cannot be used: it has been used already, revoked, or it has expired. Ask whoever invited you for a new one."
+  e -> signInErrorText e
+
 -- | Signing in and out.
 class (Monad m) => MonadAccount m where
   -- | Sign in with a login and a password: the session one then has.
@@ -74,6 +90,23 @@ class (Monad m) => MonadAccount m where
   default sessionChanges :: (MonadTrans t, m ~ t n, MonadAccount n) => m (Emitter IO Session)
   sessionChanges = lift sessionChanges
 
+  -- | Make oneself an account, in an open wiki: the session one then has,
+  -- signed in as it.
+  register :: NewAccount -> m (Either SignInError Session)
+  default register :: (MonadTrans t, m ~ t n, MonadAccount n) => NewAccount -> m (Either SignInError Session)
+  register = lift . register
+
+  -- | Whom an invitation is for, if it can still be used.
+  invitationFor :: InvitationToken -> m (Either WikiError InvitationInfo)
+  default invitationFor :: (MonadTrans t, m ~ t n, MonadAccount n) => InvitationToken -> m (Either WikiError InvitationInfo)
+  invitationFor = lift . invitationFor
+
+  -- | Make the account an invitation invites to: the session one then has,
+  -- signed in as it.
+  acceptInvitation :: InvitationToken -> NewAccount -> m (Either SignInError Session)
+  default acceptInvitation :: (MonadTrans t, m ~ t n, MonadAccount n) => InvitationToken -> NewAccount -> m (Either SignInError Session)
+  acceptInvitation t = lift . acceptInvitation t
+
 -- | A component's handlers sign in and out through its monad.
 instance (MonadAccount m) => MonadAccount (HalogenM st act slots output m)
 
@@ -83,8 +116,11 @@ data Accounts m = Accounts
   { signIn :: Text -> Text -> m (Either SignInError Session)
   , signOut :: m (Either WikiError Session)
   , sessionChanges :: m (Emitter IO Session)
+  , register :: NewAccount -> m (Either SignInError Session)
+  , invitationFor :: InvitationToken -> m (Either WikiError InvitationInfo)
+  , acceptInvitation :: InvitationToken -> NewAccount -> m (Either SignInError Session)
   }
 
 -- | The methods, from the monad's instance.
 accounts :: (MonadAccount m) => Accounts m
-accounts = Accounts {signIn, signOut, sessionChanges}
+accounts = Accounts {signIn, signOut, sessionChanges, register, invitationFor, acceptInvitation}

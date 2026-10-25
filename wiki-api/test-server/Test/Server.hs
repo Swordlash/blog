@@ -24,8 +24,8 @@ import Servant.Server.Generic (AsServer)
 import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), NewInvitation (..), defaultSettings)
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))
@@ -68,6 +68,18 @@ stubs =
           then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
           else refuse Unauthenticated
     , signOut = pure (addHeader "wiki-session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict" Sample.sessionInfo {user = Nothing, standing = NotSignedIn})
+    , register = \new ->
+        if new.login == "bea"
+          then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
+          else refuse Forbidden
+    , invitations =
+        InvitationsApi
+          { details = \t -> if t == InvitationToken "secret" then pure Sample.invitationInfo else refuse NotFound
+          , accept = \t new ->
+              if t == InvitationToken "secret" && new.password == "long enough"
+                then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
+                else refuse NotFound
+          }
     , spaces =
         SpacesApi
           { list = pure [Sample.space]
@@ -160,7 +172,21 @@ stubs =
           , createUser = \new -> pure Account {user = User {id = UserId "new", login = new.login, displayName = new.displayName}, hasPassword = True, disabled = False}
           , setPassword = \u _ -> pure Account {user = adaAs u, hasPassword = True, disabled = False}
           , setDisabled = \u body -> pure Account {user = adaAs u, hasPassword = True, disabled = body.disabled}
+          , settings = pure Sample.settings
+          , setSettings = pure
+          , invitations = pure Sample.invitations
+          , invite = \body -> pure (invitedAs body.email)
+          , revokeInvitation = \i -> if i == InvitationId "i1" then pure NoContent else refuse NotFound
           }
+    }
+
+-- | The sample invitation, made for another address.
+invitedAs :: Text -> Invited
+invitedAs email =
+  Invited
+    { invitation = Invitation {id = InvitationId "i1", email, createdAt = Sample.time, expiresAt = Sample.later, expired = False}
+    , token = Sample.invited.token
+    , mailError = Sample.invited.mailError
     }
 
 -- | The sample account's user, with another id.
@@ -388,6 +414,30 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (links.admin.setPassword (UserId "u7")) NewPassword {password = "y"}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = False}
       answers (sendJson methodPut (links.admin.setDisabled (UserId "u7")) AccountDisabled {disabled = True}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = True}
       links.admin.setDisabled (UserId "u7") `shouldBe` "api/v1/admin/users/u7/disabled"
+
+  describe "whom the wiki lets in" $ do
+    it "makes an account of one's own at accounts, signing its maker in" $ do
+      r <- sendJson methodPost links.register NewAccount {login = "bea", displayName = "", password = "long enough"}
+      (status r, jsonBody r) `shouldBe` (200, Just Sample.sessionInfo)
+      header "Set-Cookie" r `shouldSatisfy` isJust
+      answers (sendJson methodPost links.register NewAccount {login = "cy", displayName = "", password = "long enough"}) 403 Forbidden
+      links.register `shouldBe` "api/v1/accounts"
+
+    it "tells whom an invitation is for by its secret, and accepts it with an account" $ do
+      links.invitations.details (InvitationToken "secret") `shouldBe` "api/v1/invitations/secret"
+      answers (getAt (links.invitations.details (InvitationToken "secret"))) 200 Sample.invitationInfo
+      answers (getAt (links.invitations.details (InvitationToken "other"))) 404 NotFound
+      r <- sendJson methodPost (links.invitations.accept (InvitationToken "secret")) NewAccount {login = "bea", displayName = "Bea", password = "long enough"}
+      (status r, jsonBody r) `shouldBe` (200, Just Sample.sessionInfo)
+
+    it "reads and changes the wiki's settings, and lists, makes and revokes invitations" $ do
+      answers (getAt links.admin.settings) 200 Sample.settings
+      answers (sendJson methodPut links.admin.setSettings defaultSettings) 200 defaultSettings
+      answers (getAt links.admin.invitations) 200 Sample.invitations
+      answers (sendJson methodPost links.admin.invite NewInvitation {email = "cy@example.org"}) 201 (invitedAs "cy@example.org")
+      (status <$> request methodDelete (links.admin.revokeInvitation (InvitationId "i1")) [] "") `shouldReturn` 204
+      answers (request methodDelete (links.admin.revokeInvitation (InvitationId "i2")) [] "") 404 NotFound
+      links.admin.revokeInvitation (InvitationId "i1") `shouldBe` "api/v1/admin/invitations/i1"
 
   describe "a space's permissions" $ do
     it "lists the grants on a space and its ancestors, with whom a grant may be given to" $ do

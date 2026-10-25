@@ -69,6 +69,7 @@ library
         Wiki.Server.Import
         Wiki.Server.Limiter
         Wiki.Server.Log
+        Wiki.Server.Mail
         Wiki.Server.Options
         Wiki.Server.Password
         Wiki.Server.Render
@@ -107,6 +108,8 @@ library
         ram,
         servant-multipart,
         servant-server,
+        smtp-mail >= 0.5.0.1,
+        mime-mail,
         sqlite-simple,
         text,
         time,

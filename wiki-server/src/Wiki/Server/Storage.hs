@@ -29,6 +29,15 @@
 -- operation that fails writes nothing, and one that throws (a full disk)
 -- rolls back. The database is in WAL mode, so a backup taken by another
 -- process meanwhile reads without waiting ("Wiki.Server.Storage.Backup").
+--
+-- = The wiki's settings
+--
+-- Whom the wiki lets in ("Wiki.Core.Access") is asked on every request
+-- (the listener's gate, and every rule through the grants), so the storage
+-- keeps the settings in memory once read ('readSettings'), and a change
+-- made through it puts the new ones there before anything else can use the
+-- connection. A change made by another process (none does) would be seen
+-- at the next start.
 module Wiki.Server.Storage
   ( -- * The storage
     Storage
@@ -40,6 +49,10 @@ module Wiki.Server.Storage
   , withStorageAside
   , withDatabase
   , storageDataDir
+
+    -- * The wiki's settings
+  , readSettings
+  , settingsWith
 
     -- * Who is asking
   , Who (..)
@@ -61,6 +74,7 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID (..))
 import Data.ByteString qualified as BS
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -70,9 +84,10 @@ import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, 
 import Protolude
 import System.Directory (createDirectoryIfMissing)
 import Wiki.Api.Account (Account, NewAccount (..))
-import Wiki.Api.Admin (Directory (..))
-import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, maxAttachmentSize)
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
+import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..))
@@ -103,7 +118,7 @@ import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
 import Wiki.Core.User (Group (..), Standing (..), User (..), checkLogin, checkPassword)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
-import Wiki.Server.Password (hashPassword)
+import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Storage.Backup (backupFiles)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
@@ -119,6 +134,10 @@ data Storage = Storage
   { connection :: MVar Connection
   , dataDir :: FilePath
   , config :: Config
+  , settings :: IORef (Maybe WikiSettings)
+  -- ^ The wiki's settings, once read: filled and changed only by whoever
+  -- holds the connection, so that one read before a change is never put
+  -- there after it.
   }
 
 -- | What a storage is opened with besides its directory.
@@ -162,7 +181,8 @@ openWith collect config dataDir = do
     _ <- migrate c
     when collect (collectGarbage c dataDir)
   connection <- newMVar c
-  pure Storage {connection, dataDir, config}
+  settings <- newIORef Nothing
+  pure Storage {connection, dataDir, config, settings}
 
 -- | Close the storage's database.
 closeStorage :: Storage -> IO ()
@@ -180,6 +200,22 @@ withDatabase st = withMVar st.connection
 -- | The data directory a storage was opened in.
 storageDataDir :: Storage -> FilePath
 storageDataDir st = st.dataDir
+
+-- | The wiki's settings as they are now: from memory, once they have been
+-- read.
+readSettings :: Storage -> IO WikiSettings
+readSettings st = readIORef st.settings >>= maybe (withMVar st.connection (settingsWith st)) pure
+
+-- | The wiki's settings, for someone who holds the storage's connection
+-- (inside 'withDatabase'): read from it the first time, and kept.
+settingsWith :: Storage -> Connection -> IO WikiSettings
+settingsWith st c =
+  readIORef st.settings >>= \case
+    Just s -> pure s
+    Nothing -> do
+      s <- loadSettings c
+      writeIORef st.settings (Just s)
+      pure s
 
 -- | Delete the attachments' files that nothing refers to: not the database,
 -- and not one of the backups kept, which a restore would bring back. A
@@ -246,6 +282,8 @@ data Ctx = Ctx
   , creator :: Maybe UserId
   -- ^ The user a space they create is granted to: nobody for the
   -- administrator, who needs no grant.
+  , wiki :: WikiSettings
+  -- ^ The wiki's settings as the transaction began.
   }
 
 -- | An operation, in a transaction: what it finds wrong ends it with a
@@ -260,20 +298,30 @@ data Mode = Reads | Writes
 -- | Run an operation as someone, in a transaction of its own: committed if
 -- it succeeds, rolled back if it fails or throws.
 transact :: Storage -> Who -> Mode -> Tx a -> IO (Either WikiError a)
-transact st who mode (Tx body) = withMVar st.connection $ \c -> do
+transact st who mode body = transactThen st who mode body (const pass)
+
+-- | 'transact', and once the transaction has committed, and before anyone
+-- else may use the connection, something done with what it gave.
+transactThen :: Storage -> Who -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
+transactThen st who mode (Tx body) committed = withMVar st.connection $ \c -> do
   execute_ c (case mode of Reads -> "BEGIN"; Writes -> "BEGIN IMMEDIATE")
   result <- (context st c who >>= runExceptT . runReaderT body) `onException` execute_ c "ROLLBACK"
   case result of
     Left _ -> execute_ c "ROLLBACK"
-    Right _ -> execute_ c "COMMIT" `onException` execute_ c "ROLLBACK"
+    Right a -> do
+      execute_ c "COMMIT" `onException` execute_ c "ROLLBACK"
+      committed a
   pure result
 
--- | What an operation starts from.
+-- | What an operation starts from: the grants with whom the wiki is open
+-- to, which the rules take from them.
 context :: Storage -> Connection -> Who -> IO Ctx
 context st c who = do
   spaces <- loadSpaces c
-  stored <- loadGrants c
-  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator}
+  rows <- loadGrants c
+  wiki <- settingsWith st c
+  let stored = Grants {global = rows.global, spaces = rows.spaces, access = wiki.access}
+  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator, wiki}
   case who of
     Anonymous -> pure (ctx stored Nothing Nothing Nothing Nothing)
     AsUser u ->
@@ -285,7 +333,7 @@ context st c who = do
     Administrator ->
       pure
         ( ctx
-            (stored <> Grants {global = [GlobalGrant {subject = SubjectUser administratorId, permission = Administer}], spaces = []})
+            (stored <> Grants {global = [GlobalGrant {subject = SubjectUser administratorId, permission = Administer}], spaces = [], access = Open})
             (Just Principal {user = administratorId, groups = mempty})
             (Just administratorUser)
             (Just administratorId)
@@ -471,6 +519,19 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   deleteGroup = run Writes . deleteGroupTx
   addMember g = run Writes . setMemberTx True g
   removeMember g = run Writes . setMemberTx False g
+  wikiSettings = run Reads (requireAdministrator >> asks (\x -> x.wiki))
+
+  -- The settings kept in memory are the new ones as soon as they are
+  -- committed, before the connection is let go.
+  setWikiSettings new = SqliteWiki $ do
+    env <- ask
+    liftIO (transactThen env.storage env.who Writes (setWikiSettingsTx new) (writeIORef env.storage.settings . Just))
+
+  -- The storage mails nothing: whether the server does, it says itself
+  -- ("Wiki.Server.Api").
+  invitations = run Reads invitationsTx
+  invite email = liftIO newToken >>= run Writes . inviteTx email
+  revokeInvitation = run Writes . revokeInvitationTx
 
 -- | An attachment someone may view (they may view its page), and the file
 -- its bytes are in when the storage keeps them; 'Nothing' for one that lives
@@ -495,7 +556,7 @@ sessionTx :: Tx Session
 sessionTx = do
   ctx <- ask
   pure $ case (,) <$> ctx.user <*> ctx.principal of
-    Nothing -> anonymous
+    Nothing -> anonymousIn ctx.grants.access
     Just (u, p) ->
       Session
         { user = Just u
@@ -504,6 +565,7 @@ sessionTx = do
             Grants
               { global = filter (\g -> isFor p g.subject) ctx.grants.global
               , spaces = filter (\g -> isFor p g.subject) ctx.grants.spaces
+              , access = ctx.grants.access
               }
         , -- The administrator is the operator; anyone else named is a user
           -- the server took the request for, which is whoever signed in.
@@ -597,7 +659,7 @@ createSpaceTx parent name = do
           }
   db (`insertSpace` space)
   for_ ctx.creator $ \u ->
-    db $ \c -> insertGrants c Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}]}
+    db $ \c -> insertGrants c Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open}
   pure space
 
 -- | Change a space, as someone who administers it.
@@ -637,7 +699,7 @@ setSpaceGrantTx sid subject permission granted = do
   let grant = SpaceGrant {space = sid, subject, permission}
   db $ \conn ->
     if granted
-      then insertGrants conn Grants {global = [], spaces = [grant]}
+      then insertGrants conn Grants {global = [], spaces = [grant], access = Open}
       else deleteSpaceGrant conn grant
 
 renameSpaceTx :: SpaceId -> Text -> Tx Space
@@ -1047,7 +1109,7 @@ setGlobalGrantTx permission u granted = do
   let grant = GlobalGrant {subject = SubjectUser u, permission}
   db $ \c ->
     if granted
-      then insertGrants c Grants {global = [grant], spaces = []}
+      then insertGrants c Grants {global = [grant], spaces = [], access = Open}
       else deleteGlobalGrant c grant
 
 -- | Change the account of a user who is there, as an administrator, and
@@ -1097,6 +1159,40 @@ setMemberTx member gid u = do
   _ <- findGroup gid
   _ <- findUser u
   db (\c -> (if member then insertMember else deleteMember) c gid u)
+
+--------------------------------------------------------------------------------
+-- Whom the wiki lets in
+
+setWikiSettingsTx :: WikiSettings -> Tx WikiSettings
+setWikiSettingsTx new = do
+  requireAdministrator
+  db (`storeSettings` new)
+  pure new
+
+invitationsTx :: Tx Invitations
+invitationsTx = do
+  requireAdministrator
+  t <- now
+  listed <- db (`loadInvitations` t)
+  pure Invitations {mailing = False, invitations = listed}
+
+-- | An invitation for an address, with this secret for its link, in place
+-- of any the address had.
+inviteTx :: Text -> Text -> Tx Invited
+inviteTx raw token = do
+  requireAdministrator
+  email <- either invalid pure (checkEmail raw)
+  i <- InvitationId <$> newId
+  t <- now
+  let invitation = Invitation {id = i, email, createdAt = t, expiresAt = addUTCTime invitationLifetime t, expired = False}
+  db (\c -> insertInvitation c invitation (tokenHash token))
+  pure Invited {invitation, token = Just token, mailError = Nothing}
+
+revokeInvitationTx :: InvitationId -> Tx ()
+revokeInvitationTx i = do
+  requireAdministrator
+  gone <- db (`deleteInvitation` i)
+  unless gone (failWith NotFound)
 
 --------------------------------------------------------------------------------
 -- Whole wikis

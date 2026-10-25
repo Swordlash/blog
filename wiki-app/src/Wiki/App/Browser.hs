@@ -15,6 +15,7 @@ module Wiki.App.Browser
   , historyEntry
   , historyGo
   , copyText
+  , absoluteUrl
   , zipFiles
   , unzipFiles
   , download
@@ -64,6 +65,7 @@ $( browserJS
      , ("js_local_time", "wiki_local_time", Unsafe, [t|Double -> IO JSText|])
      , ("js_page_backend", "wiki_page_backend", Unsafe, [t|IO JSText|])
      , ("js_console_warn", "wiki_console_warn", Unsafe, [t|JSText -> IO ()|])
+     , ("js_absolute_url", "wiki_absolute_url", Unsafe, [t|JSText -> IO JSText|])
      ]
  )
 
@@ -130,6 +132,15 @@ copyText element text =
   -- On wasm a safe import's result is a thunk that waits for the promise
   -- only when forced.
   liftIO (evaluate =<< js_copy_text element (toJSText text))
+
+-- | An address of the application's (as 'Router.href' writes it) as a
+-- whole URL, with the scheme and host the page was loaded from: what a
+-- link to pass on in a mail or a message needs. Natively there is no page,
+-- and the address is given back as it is.
+absoluteUrl :: (MonadIO m) => Text -> m Text
+absoluteUrl path
+  | not inBrowser = pure path
+  | otherwise = liftIO (fromJSText <$> js_absolute_url (toJSText path))
 
 -- | A zip file of these files, by path. Natively there is no zip here, and
 -- the file is empty: the native programs zip with @zip-archive@.

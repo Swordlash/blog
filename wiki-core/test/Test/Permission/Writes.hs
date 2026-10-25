@@ -5,6 +5,7 @@ module Test.Permission.Writes (spec) where
 import Data.Time (UTCTime (..), fromGregorian)
 import Protolude
 import Test.Hspec
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Permission
@@ -43,6 +44,7 @@ grants onSpaces global =
   Grants
     { global = [GlobalGrant {subject = SubjectUser (UserId "u"), permission = p} | p <- global]
     , spaces = [SpaceGrant {space = SpaceId s, subject = SubjectUser (UserId "u"), permission = p} | (s, p) <- onSpaces]
+    , access = Open
     }
 
 chain :: Text -> [Space]

@@ -31,6 +31,9 @@ module Wiki.App.Backend.Http.Preload
   , VersionsOf (..)
   , VersionOf (..)
   , DirectoryOf (..)
+  , SettingsOf (..)
+  , InvitationsOf (..)
+  , InvitationAt (..)
   , Answer (..)
   , preloadId
   , toPreload
@@ -51,7 +54,8 @@ import Data.Time (UTCTime)
 import Halogen.IO.Util (readEmbedded)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude
-import Wiki.Api.Admin (Directory)
+import Wiki.Api.Account (InvitationInfo, InvitationToken)
+import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Types (SessionInfo (..))
@@ -87,6 +91,15 @@ data Preload = Preload
   -- ^ The administration's people ('Wiki.App.Backend.Admin.directory'),
   -- for a page of the administration rendered for an administrator; a
   -- payload written before it had this field reads as without it.
+  , settings :: Maybe SettingsOf
+  -- ^ The wiki's settings ('Wiki.App.Backend.Admin.wikiSettings'), as the
+  -- directory.
+  , invitations :: Maybe InvitationsOf
+  -- ^ The invitations ('Wiki.App.Backend.Admin.invitations'), as the
+  -- directory.
+  , invitationsAt :: Maybe [InvitationAt]
+  -- ^ An invitation as its link shows it ('Wiki.App.Account.invitationFor'),
+  -- for the page of that link.
   }
   deriving stock (Eq, Show, Generic)
 
@@ -130,6 +143,18 @@ data VersionOf = VersionOf {page :: PageId, updatedAt :: UTCTime, version :: Ans
 -- | The wiki's people, as the administration reads them
 -- ('Wiki.App.Backend.Admin.directory').
 newtype DirectoryOf = DirectoryOf {directory :: Answer Directory}
+  deriving stock (Eq, Show)
+
+-- | The wiki's settings ('Wiki.App.Backend.Admin.wikiSettings').
+newtype SettingsOf = SettingsOf {settings :: Answer WikiSettings}
+  deriving stock (Eq, Show)
+
+-- | The invitations ('Wiki.App.Backend.Admin.invitations').
+newtype InvitationsOf = InvitationsOf {invitations :: Answer Invitations}
+  deriving stock (Eq, Show)
+
+-- | An invitation by its link's secret ('Wiki.App.Account.invitationFor').
+data InvitationAt = InvitationAt {token :: InvitationToken, invitation :: Answer InvitationInfo}
   deriving stock (Eq, Show)
 
 -- | What a read gave, or the API's refusal: written as the read's own field
@@ -190,6 +215,24 @@ instance ToJSON DirectoryOf where
 instance FromJSON DirectoryOf where
   parseJSON v = DirectoryOf <$> parseAnswer "directory" v
 
+instance ToJSON SettingsOf where
+  toJSON s = object (answerFields "settings" s.settings)
+
+instance FromJSON SettingsOf where
+  parseJSON v = SettingsOf <$> parseAnswer "settings" v
+
+instance ToJSON InvitationsOf where
+  toJSON i = object (answerFields "invitations" i.invitations)
+
+instance FromJSON InvitationsOf where
+  parseJSON v = InvitationsOf <$> parseAnswer "invitations" v
+
+instance ToJSON InvitationAt where
+  toJSON i = object (("token" .= i.token) : answerFields "invitation" i.invitation)
+
+instance FromJSON InvitationAt where
+  parseJSON v = withObject "InvitationAt" (\o -> InvitationAt <$> o .: "token" <*> parseAnswer "invitation" v) v
+
 -- | What the backend kept, as the page carries it: every answer it would
 -- give at once, and no page twice.
 toPreload :: Cache -> Preload
@@ -211,6 +254,11 @@ toPreload c =
     , versionLists = [VersionsOf {page, versions = toAnswer vs} | (page, vs) <- Map.toList c.versionLists, kept vs]
     , versions = [VersionOf {page, updatedAt, version = toAnswer v} | ((page, updatedAt), v) <- Map.toList c.versions, kept v]
     , directory = DirectoryOf . toAnswer <$> mfilter kept c.directory
+    , settings = SettingsOf . toAnswer <$> mfilter kept c.settings
+    , invitations = InvitationsOf . toAnswer <$> mfilter kept c.invitations
+    , invitationsAt = case [InvitationAt {token, invitation = toAnswer i} | (token, i) <- Map.toList c.invitationAt, kept i] of
+        [] -> Nothing
+        found -> Just found
     }
 
 -- | The backend's cache as the page's payload says.
@@ -227,6 +275,9 @@ fromPreload p =
     , versionLists = Map.fromList [(v.page, fromAnswer v.versions) | v <- p.versionLists]
     , versions = Map.fromList [((v.page, v.updatedAt), fromAnswer v.version) | v <- p.versions]
     , directory = (\d -> fromAnswer d.directory) <$> p.directory
+    , settings = (\s -> fromAnswer s.settings) <$> p.settings
+    , invitations = (\i -> fromAnswer i.invitations) <$> p.invitations
+    , invitationAt = Map.fromList [(i.token, fromAnswer i.invitation) | i <- fold p.invitationsAt]
     }
 
 -- | Only what 'kept' keeps is ever written, which is an answer or a
