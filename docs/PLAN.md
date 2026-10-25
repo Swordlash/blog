@@ -854,7 +854,9 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   with no server work. All of it is our Halogen rendering and CSS, no reveal.js (which
   wants to own the DOM the way Halogen does). Later, if ever wanted: pandoc on the server
   turns the same Markdown into Beamer PDF or PPTX (the export item above), which needs TeX
-  on the owner's machine. Independent of Phase 3; a candidate to run beside WP3.4.
+  on the owner's machine. Independent of Phase 3; the owner's decision (2026-10-25): it
+  runs as **WP4.2 Presentations** beside WP3.4, both started once WP3.1 and WP3.3 are
+  merged.
 - A writing assistant in the editor, backed by an LLM (Claude or ChatGPT), **in the
   browser, with the user's own account** (the owner, 2026-10-25: the user signs in to the
   provider, not the server): draft a page from an outline, rewrite or shorten the
