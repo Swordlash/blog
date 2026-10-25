@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Math between LaTeX's delimiters (WP4.7): `parseMarkdown` reads `\(…\)` as
+inline math and `\[…\]` as display math, beside `$…$` and `$$…$$`, through
+`Wiki.Core.Markdown.TexMath.texMathSpec` (pandoc's
+`tex_math_single_backslash`). They make the same `Math` and `MathBlock`
+nodes, so nothing that reads the tree changes. A `\(` or `\[` that a later
+`\)` or `\]` in the same paragraph closes is no longer an escaped
+parenthesis or bracket; one that nothing closes still is. Since `\[1\]` is
+now a formula, `attachmentReference` writes the brackets of a name in its
+label as `&#91;` and `&#93;` rather than escaping them.
+
 One space at a time (WP4.6). `Space` gains `homePage :: Maybe PageId` (the
 page it opens at, one of its own), `icon :: Maybe Icon` and `description ::
 Text`. `Icon` is `IconEmoji`, `IconColour` (one of `iconColours`) or

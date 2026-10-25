@@ -193,6 +193,21 @@ $$
 \int_0^1 x^2 \, dx = \frac{1}{3}
 $$
 
+LaTeX's own delimiters work too, and mean the same: inline math is
+between `\(` and `\)`, as in \(a^2 + b^2 = c^2\), and display math between
+`\[` and `\]`, on its own or in a paragraph:
+
+\[
+\sum_{k=1}^{n} k = \frac{n(n+1)}{2}
+\]
+
+So `\(` and `\[` start math rather than escaping a parenthesis or a
+bracket, as in pandoc. One that no `\)` or `\]` closes later in the same
+paragraph stays the escape it was, and `\\[` (an escaped backslash, then
+a bracket) is not math. A bracket needs no backslash in text, [like
+this]; in a link's text, where brackets have to pair, write a lone one as
+`&#91;` or `&#93;`.
+
 A `math` fence is display math too:
 
 ```math

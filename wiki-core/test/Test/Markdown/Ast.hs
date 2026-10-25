@@ -121,6 +121,45 @@ spec = describe "Markdown.Ast" $ do
     it "leaves a lone dollar alone" $
       "It costs $5." `parses` para [Str "It costs $5."]
 
+  describe "math between LaTeX's delimiters" $ do
+    it "reads \\(x\\) as inline math, beside $x$" $ do
+      "Euler: \\(e^{i\\pi} + 1 = 0\\)." `parses` para [Str "Euler: ", Math InlineMath "e^{i\\pi} + 1 = 0", Str "."]
+      "\\(a\\) and $b$" `parses` para [Math InlineMath "a", Str " and ", Math InlineMath "b"]
+    it "keeps the TeX as written, spaces and all" $
+      "\\( x^2 \\)" `parses` para [Math InlineMath " x^2 "]
+    it "reads a paragraph of \\[x\\] as a block, on one line or several" $ do
+      "\\[ \\int f \\]" `parses` [MathBlock " \\int f "]
+      "\\[\n\\int_0^1 x\\,dx\n\\]" `parses` [MathBlock "\n\\int_0^1 x\\,dx\n"]
+    it "splits a paragraph around \\[x\\], as around $$x$$" $
+      "Before \\[a+b\\] after." `parses` [Para [Str "Before"], MathBlock "a+b", Para [Str "after."]]
+    it "splits a tight list's item around it" $
+      "- \\[x\\]" `parses` [List BulletList [ListItem Nothing [MathBlock "x"]]]
+    it "keeps \\[x\\] inline in a heading" $
+      "# Sum \\[x\\]" `parses` [Heading 1 [("id", "sum-x")] [Str "Sum ", Math DisplayMath "x"]]
+    it "reads inline math across the lines of a paragraph" $
+      "\\(a\nb\\)" `parses` para [Math InlineMath "a\nb"]
+    it "takes a backslash and what follows it together, so TeX's \\\\ closes nothing" $ do
+      "\\[a \\\\ b\\]" `parses` [MathBlock "a \\\\ b"]
+      "\\(a\\\\)b\\)" `parses` para [Math InlineMath "a\\\\)b"]
+    it "ends at the first closer, however the braces stand" $
+      "\\(x}\\) y" `parses` para [Math InlineMath "x}", Str " y"]
+    it "leaves an opener nothing closes as the escape it was" $ do
+      "\\(x and \\[y" `parses` para [Str "(x and [y"]
+      "\\(x\n\ny\\)" `parses` [Para [Str "(x"], Para [Str "y)"]]
+      "\\[x\\)" `parses` para [Str "[x)"]
+    it "is not math with nothing in it" $
+      "\\(\\) \\[ \\]" `parses` para [Str "() [ ]"]
+    it "is not math after an escaped backslash" $ do
+      "\\\\[x\\]" `parses` para [Str "\\[x]"]
+      "\\\\(x\\)" `parses` para [Str "\\(x)"]
+    it "is not math in inline code" $
+      "`\\(x\\)`" `parses` para [Code [] "\\(x\\)"]
+    it "is math in a link's text, and not in its destination" $ do
+      "[see \\(x\\)](u)" `parses` para [Link [] "u" "" [Str "see ", Math InlineMath "x"]]
+      "[a](b\\(c\\))" `parses` para [Link [] "b(c)" "" [Str "a"]]
+    it "leaves a bracket that is not escaped as it is" $
+      "a [b] c ]" `parses` para [Str "a [b] c ]"]
+
   describe "lists" $ do
     it "reads a tight bullet list" $
       "- a\n- b" `parses` [List BulletList [ListItem Nothing [Plain [Str "a"]], ListItem Nothing [Plain [Str "b"]]]]

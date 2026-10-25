@@ -65,6 +65,7 @@ library
       Wiki.Core.Markdown.Html
       Wiki.Core.Markdown.Link
       Wiki.Core.Markdown.Render
+      Wiki.Core.Markdown.TexMath
       Wiki.Core.Markdown.Tikz
       Wiki.Core.Math
       Wiki.Core.Order
@@ -87,6 +88,7 @@ library
       containers,
       haskell-halogen-core,
       http-api-data >= 0.6 && < 0.8,
+      parsec,
       protolude,
       row-types,
       tagsoup >= 0.14.8 && < 0.15,

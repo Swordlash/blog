@@ -81,6 +81,10 @@ spec = describe "Markdown.Render" $ do
       "So $x^2$ holds." `shows'` "<p>So <span class=\"math inline\">x^2</span> holds.</p>"
     it "writes display math in a div, out of the paragraph" $
       "Then $$a+b$$ ends." `shows'` "<p>Then</p><div class=\"math display\">a+b</div><p>ends.</p>"
+    it "writes math between LaTeX's delimiters as it writes math between dollars" $ do
+      "So \\(x^2\\) holds." `shows'` "<p>So <span class=\"math inline\">x^2</span> holds.</p>"
+      "Then \\[a+b\\] ends." `shows'` "<p>Then</p><div class=\"math display\">a+b</div><p>ends.</p>"
+      "\\[\n\\int f\n\\]" `shows'` "<div class=\"math display\">\n\\int f\n</div>"
 
   describe "islands, by callback" $ do
     let keyed = \key -> show key.occurrence :: Text

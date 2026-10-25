@@ -1,8 +1,9 @@
 -- | Math macros in a browser, set by KaTeX: the built-in ones, a space's
 -- inherited by its subspaces and overridden in them, a page's own used in a
 -- later formula (in a page and in the editor's preview), mhchem's @\\ce@,
--- and the space's settings where a block is edited, with KaTeX's error for
--- one it cannot read.
+-- formulas between LaTeX's delimiters in the preview, and the space's
+-- settings where a block is edited, with KaTeX's error for one it cannot
+-- read.
 --
 -- A macro KaTeX does not know it shows in place, as itself in its error
 -- colour, so a formula that uses one and shows none was set with it; what
@@ -128,6 +129,22 @@ spec m = do
       errors <- traverse erroneous formulas
       errors `shouldBe` [True, False, False]
       outerHTML (fromMaybe (panic "no formula") (lastMay formulas)) >>= (`shouldSatisfy` T.isInfixOf "<mi mathvariant=\"bold-italic\">w</mi>")
+
+    it "sets math between LaTeX's delimiters in the editor's preview, inline and display" $ runPage $ do
+      ui <- start m (Just "user-admin") (NewPage (slugs ["docs"]) Nothing)
+      find ui ".new-page-title" >>= (`typeText` "Delimiters")
+      find ui ".new-page-view button.primary" >>= click
+      find ui ".editor-side-by-side input" >>= click
+      text <- editorText ui
+      typeText text "Inline \\(\\abs{x}\\) then \\[\\vect{w}\\] ends."
+      formulas <- eventually $ do
+        set <- findAll ui ".editor-preview .wiki-math .katex"
+        length set `shouldBe` 2
+        pure set
+      traverse_ withoutError formulas
+      count ui ".editor-preview p .wiki-math" `shouldReturn` 1
+      display <- find ui ".editor-preview .wiki-math-display .katex-display"
+      outerHTML display >>= (`shouldSatisfy` T.isInfixOf "<mi mathvariant=\"bold-italic\">w</mi>")
 
   describe "a space's settings" $ do
     it "show KaTeX's error for a block it cannot read, and do not save it" $ runPage $ do

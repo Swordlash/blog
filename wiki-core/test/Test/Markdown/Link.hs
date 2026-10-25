@@ -90,7 +90,7 @@ spec = describe "Markdown.Link" $ do
       attachmentReference "meeting notes.txt" "text/plain" `shouldBe` "[meeting notes.txt](<attachment:meeting notes.txt>)"
     it "escapes what would be read as Markdown or as an escape" $
       attachmentReference "a_b*[1]% & c.txt" "text/plain"
-        `shouldBe` "[a\\_b\\*\\[1\\]% \\& c.txt](<attachment:a_b*[1]%25 %26 c.txt>)"
+        `shouldBe` "[a\\_b\\*&#91;1&#93;% \\& c.txt](<attachment:a_b*[1]%25 %26 c.txt>)"
     prop "is read back as the attachment it names, labelled with its name" $
       forAll ((<>) <$> genName <*> elements ["", ".png", ".pdf"]) $ \name ->
         readBack (attachmentReference name "") === Just (ToAttachment name, name)

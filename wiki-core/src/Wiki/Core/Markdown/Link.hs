@@ -104,8 +104,11 @@ classifyDestination dest
 -- (@\<attachment:meeting notes.txt\>@), and with the characters a
 -- destination would otherwise read as something else (@%@, @&@, @\\@, @\<@,
 -- @\>@) percent-encoded. In the label, the characters that are Markdown
--- (@*@, @_@, @[@, @$@, @:@ and the like) are escaped, so the label reads as
--- the name.
+-- (@*@, @_@, @$@, @:@ and the like) are escaped, so the label reads as the
+-- name. Brackets are written as character references (@&#91;@, @&#93;@)
+-- rather than escaped, because @\\[@ … @\\]@ is display math
+-- ("Wiki.Core.Markdown.TexMath"), and a link's label cannot hold an
+-- unmatched bracket as it is.
 attachmentReference
   :: Text
   -- ^ The attachment's name.
@@ -125,7 +128,9 @@ attachmentReference name mediaType =
       | c `elem` ['%', '&', '\\', '<', '>'] = "%" <> T.justifyRight 2 '0' (T.toUpper (toS (showHex (ord c) "")))
       | otherwise = T.singleton c
     escapeLabel c
-      | c `elem` ("\\[]*_`$<>&~:!|{}#^" :: [Char]) = "\\" <> T.singleton c
+      | c == '[' = "&#91;"
+      | c == ']' = "&#93;"
+      | c `elem` ("\\*_`$<>&~:!|{}#^" :: [Char]) = "\\" <> T.singleton c
       | otherwise = T.singleton c
 
 -- | How an embed shows: as an image, a video, an audio player, or (anything

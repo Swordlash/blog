@@ -14,7 +14,8 @@
 -- * GitHub's: pipe tables, task lists, footnotes, strikethrough, autolinks
 --   (bare @https://…@ and @www.…@), emoji shortcodes (@:tada:@), alerts
 --   (@> [!NOTE]@), and heading identifiers made from the heading's text;
--- * math, @$…$@ inline and @$$…$$@ display, and a @math@ fence;
+-- * math, @$…$@ and @\\(…\\)@ inline, @$$…$$@ and @\\[…\\]@ display
+--   ("Wiki.Core.Markdown.TexMath"), and a @math@ fence;
 -- * attributes in braces after a heading, a fence's info string, a link,
 --   an image or inline code (@# Intro {#start}@, @![](a.png){width=300}@);
 -- * fenced divs (@::: warning@ … @:::@), for boxes styled by class;
@@ -57,6 +58,7 @@ import Commonmark.Extensions qualified as CME
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Protolude
+import Wiki.Core.Markdown.TexMath (texMathSpec)
 
 -- | Attributes from braces, @{#id .class key=value}@, in the order written.
 -- Heading identifiers are among them, as @id@. Which of them reach the HTML
@@ -85,8 +87,8 @@ data Block
   | -- | A @tikz@ fence: the picture's TeX, as written ("Wiki.Core.Markdown.Tikz"
     -- reads it).
     Tikz Text
-  | -- | Display math: a @math@ fence, or @$$…$$@ in a paragraph. The TeX
-    -- source, as written between the delimiters.
+  | -- | Display math: a @math@ fence, or @$$…$$@ or @\\[…\\]@ in a
+    -- paragraph. The TeX source, as written between the delimiters.
     MathBlock Text
   | List ListKind [ListItem]
   | -- | A pipe table: each column's alignment, the header's cells (none
@@ -125,8 +127,9 @@ data Inline
     -- a video, an audio player or a download link is decided when it is
     -- rendered, from the media type of what the destination resolves to.
     Image Attributes Text Text [Inline]
-  | -- | Math: inline (@$…$@), or display (@$$…$$@) where it is not in a
-    -- paragraph (in a heading, a table cell).
+  | -- | Math: inline (@$…$@, @\\(…\\)@), or display (@$$…$$@,
+    -- @\\[…\\]@) where it is not in a paragraph (in a heading, a table
+    -- cell).
     Math MathKind Text
   | -- | A reference to a footnote: its number and its label.
     FootnoteRef Int Text
@@ -195,6 +198,7 @@ syntax =
     <> CME.footnoteSpec
     <> CME.alertSpec
     <> CME.mathSpec
+    <> texMathSpec
     <> CME.wikilinksSpec CME.TitleAfterPipe
     <> CME.fencedDivSpec
     <> CME.attributesSpec
