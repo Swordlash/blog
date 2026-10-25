@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+Comments on pages (WP4.5). `Wiki.Core.Comment` has `Thread {id, page,
+anchor, resolved, createdAt, comments}` and `Comment {id, thread, author,
+body, createdAt, editedAt}`, the rules every backend checks (`mayComment`:
+signed in and may read the page; `mayEditComment`: one's own;
+`mayDeleteComment`: one's own, or as the space's administrator;
+`mayDeleteThread`) and `checkCommentBody`, and the folds that keep a page's
+threads up to date with what happens to them (`withThread`, `withComment`,
+`withoutComment`, `withoutThread`, `resolvedAs`). `Wiki.Core.Anchor` anchors
+an inline thread to a quote of the page's rendered text (`Anchor {exact,
+prefix, suffix}`, a W3C text quote selector), finds it again with `locate`
+(found, or `Orphaned` when it is gone or cannot be told from a copy of it),
+reads a rendered document's text with `renderedText`, and marks the quotes
+in it with `highlight`, which wraps parts of text nodes in `<mark
+class="comment-mark" data-thread="…">`. `Wiki.Core.Id` gains
+`CommentThreadId` (not `ThreadId`, which Protolude has) and `CommentId`.
+
 `Wiki.Core.User.SignInProvider {name, label}`: a provider one may sign in
 with, as the application shows it (WP3.6).
 

@@ -52,7 +52,9 @@ library
   hs-source-dirs:   src
   exposed-modules:
       Wiki.Core.Access
+      Wiki.Core.Anchor
       Wiki.Core.Attachment
+      Wiki.Core.Comment
       Wiki.Core.Diff
       Wiki.Core.Draft
       Wiki.Core.Export
@@ -105,7 +107,9 @@ test-suite wiki-core-test
   hs-source-dirs:   test
   main-is:          Test.hs
   other-modules:
+      Test.Anchor
       Test.Attachment
+      Test.Comment
       Test.Diff
       Test.Gen
       Test.Json
@@ -126,6 +130,7 @@ test-suite wiki-core-test
       QuickCheck,
       aeson,
       containers,
+      haskell-halogen-core,
       hspec >= 2,
       protolude,
       text,
@@ -167,6 +172,7 @@ test-suite wiki-core-html-test
   else
     other-modules:
         Test.Markdown.Document
+        Test.Markdown.Highlight
         Test.Markdown.Html
         Test.Markdown.RawHtml
         Test.Markdown.Render

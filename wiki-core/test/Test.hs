@@ -1,7 +1,9 @@
 module Main (main) where
 
 import Protolude
+import Test.Anchor qualified as Anchor
 import Test.Attachment qualified as Attachment
+import Test.Comment qualified as Comment
 import Test.Diff qualified as Diff
 import Test.Hspec (hspec)
 import Test.Json qualified as Json
@@ -37,3 +39,5 @@ main = hspec $ do
   Search.spec
   Diff.spec
   Json.spec
+  Anchor.spec
+  Comment.spec

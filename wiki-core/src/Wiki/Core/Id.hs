@@ -16,6 +16,8 @@ module Wiki.Core.Id
   , UserId (..)
   , GroupId (..)
   , InvitationId (..)
+  , CommentThreadId (..)
+  , CommentId (..)
   )
 where
 
@@ -58,5 +60,16 @@ newtype GroupId = GroupId {text :: Text}
 -- revokes it: not the secret its link carries, which only the person
 -- invited is given.
 newtype InvitationId = InvitationId {text :: Text}
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving newtype (FromJSON, ToJSON, FromJSONKey, ToJSONKey, FromHttpApiData, ToHttpApiData)
+
+-- | A thread of comments on a page ("Wiki.Core.Comment"), unique within the
+-- wiki.
+newtype CommentThreadId = CommentThreadId {text :: Text}
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving newtype (FromJSON, ToJSON, FromJSONKey, ToJSONKey, FromHttpApiData, ToHttpApiData)
+
+-- | A comment in a thread, unique within the wiki.
+newtype CommentId = CommentId {text :: Text}
   deriving stock (Eq, Ord, Show, Generic)
   deriving newtype (FromJSON, ToJSON, FromJSONKey, ToJSONKey, FromHttpApiData, ToHttpApiData)
