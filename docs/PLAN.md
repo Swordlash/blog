@@ -2254,3 +2254,12 @@ Amended by the planning session after each work package's report.
   bracket needs no escape outside links, and `docs/markdown.md` says so. A commonmark syntax
   spec of our own in `wiki-core` beside `mathSpec`, the same `Math` nodes, so rendering,
   search, slides and the preview need nothing. Started on `wp4.7-tex-delimiters` beside WP4.6.
+- **WP4.8 Pin bump to haskell-halogen `f7ee7e3`** (the owner merged #72 to #76 on
+  2026-10-25): a subscription's action now runs nested in the effect that dispatched its
+  event (so `preventDefault` from a `Window` emitter's action is in time; the slides' wrapped
+  `keyDown` of WP4.3 could lose its own wrapping), `H.component` built from handlers
+  (`H.onAction`, `H.onInitialize`, …; `mkComponent` stays; no module here imports `Halogen`
+  unqualified, so the new `component` export clashes with nothing), hspec-halogen's
+  `isVisible` counts `visibility: hidden` as hidden (the stylesheet uses none). Its own small
+  package after WP4.6 and WP4.7 merge, since a bump rebuilds every package on both backends;
+  adopt the handler form where a component is touched anyway, not wholesale.
