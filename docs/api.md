@@ -390,8 +390,8 @@ application, as two different people:
 - the **public listener** (`--listen`, the Tailscale address when deployed
   by `toolchain/deploy-local.sh --server`) serves the wiki at its base path
   (`--base-path`, `/` by default) to whoever the request's session names,
-  or to an anonymous reader, who sees the public spaces and changes
-  nothing;
+  or to an anonymous reader, who in an open wiki sees the public spaces and
+  changes nothing, and in a closed one sees only the way to sign in;
 - the **admin listener** (`--admin-listen`, `127.0.0.1:8081` by default,
   loopback only unless `--admin-listen-unsafe`) serves the same application
   at `/admin/`, and its API at `/admin/api/v1/…`, to the administrator,
