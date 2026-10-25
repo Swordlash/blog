@@ -2274,16 +2274,21 @@ migration test refuses gaps), and whichever merges second rebases.
 **Wave A** (after WP4.8): WP4.9, WP4.11, WP4.12, WP4.16. **Wave B**: WP4.10, WP4.13, WP4.14.
 **Wave C**: WP4.15, WP4.17.
 
-- **WP4.9 Backups for real.** A systemd timer (`wiki-demo-backup.timer`, daily, installed by
-  `deploy-local.sh --server`) runs `wiki-server backup` (`VACUUM INTO`, as the deploy does)
-  into `data/backups/<timestamp>.sqlite`, keeps the last 7 daily and 4 weekly, and verifies
-  each copy with `PRAGMA integrity_check`; `wiki-server backup --to DIR|rclone:remote:path`
-  copies the newest backup and the attachments' blobs off the machine when an `rclone`
-  remote or a directory is configured in the panel's Server section (write-only secret if
-  any); `wiki-server restore <backup> [--attachments DIR]` restores into a stopped server's
-  data directory, refusing a live one; the panel's status shows the last backup's time, size
-  and result; a test in CI backs up, restores into a fresh directory and compares; the README
-  documents the drill. No migration.
+- **WP4.9 Scheduled backups, off by default** (reshaped by the owner on 2026-10-25: only if
+  configurable from the administration and off unless turned on). No systemd timer: the
+  server itself schedules backups from a "Backups" part of the panel's Server section, off by
+  default; when turned on: how often (daily at a time, or every N hours), how many to keep
+  (daily and weekly), and an optional destination off the machine (a directory path or an
+  `rclone` remote, with its config as a write-only secret) to which the newest copy and the
+  attachments' blobs are copied after each backup. A backup is `VACUUM INTO`
+  `data/backups/<timestamp>.sqlite` as the deploy does, checked with `PRAGMA
+  integrity_check`, run on a thread of the server with the storage's lock held only for the
+  copy; the panel shows the last backup's time, size and result and has "Back up now";
+  `wiki-server backup` stays for the console and the deploy, and `wiki-server restore <backup>
+  [--attachments DIR]` restores into a stopped server's data directory, refusing a live one. A
+  CI test backs up, restores into a fresh directory and compares; the README documents the
+  drill. Settings in the `settings` table (no migration unless a `backups` log table is
+  wanted for the panel's history: your call).
 - **WP4.10 Observability.** `GET /metrics` on the admin listener in the Prometheus text
   format (requests by route and status, latency histogram, open WebSockets, pages, users,
   database and blob sizes, backup age); an *audit log* table (who did what, when, to what:
