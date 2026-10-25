@@ -2339,17 +2339,27 @@ migration test refuses gaps), and whichever merges second rebases.
   from the tree and search by default); "New page" offers "Blank" and the space's templates
   (and a few built in: meeting notes, decision record, how-to); a template's `{{title}}`,
   `{{date}}`, `{{author}}` are filled. Migration for the page's `template` flag.
-- **WP4.16 Export to PDF, DOCX and Beamer.** Decision: the server shells out to `pandoc` (and
-  `xelatex` for PDF and Beamer) when they are installed, rather than linking pandoc (a
-  40-minute build on the owner's machine and tens of megabytes); the panel's status says
-  which are found, and the buttons appear only then. "Export" on a page offers DOCX, PDF and
-  HTML (standalone, with the images embedded); a deck offers Beamer PDF and PPTX, built from
-  `Wiki.Core.Slides.deckOf` (level-1 title → title or section page, level-2 → frame, notes →
-  `\note{}`, theme and aspect mapped); a space exports as one PDF or DOCX in page order.
-  Islands (Mermaid, TikZ) are rendered server-side where pandoc cannot (a note in the output
-  where not). `GET pages/<id>/export/<format>`, streamed, limited to one at a time per user;
-  pandoc is run with a timeout, no network and a temporary directory. The deploy's README
-  says `apt install pandoc texlive-xetex` (optional). No migration.
+- **WP4.16 Export to PDF, DOCX and Beamer.** Decision (the owner, 2026-10-25): **link
+  `pandoc` as a library** in `wiki-server` (native only), not shell out to a binary; so DOCX,
+  PPTX, standalone HTML, EPUB and the Beamer `.tex` need nothing installed, and only PDF (and
+  Beamer PDF) runs a TeX engine, `xelatex`, through pandoc's own PDF path when the binary is
+  found on the machine (the panel's status says whether; the PDF buttons appear only then; the
+  deploy's README says `apt install texlive-xetex` is optional). Costs accepted: pandoc's
+  build (tens of minutes once, cached in the cabal store; `deploy-local.sh`'s first build after
+  this package is long), a larger `wiki-server`, and pandoc's dependency set alongside ours
+  (`commonmark`, `skylighting` come with it; `allow-newer` entries as needed). "Export" on a
+  page offers DOCX, HTML and, where available, PDF; a deck offers Beamer PDF or `.tex` and
+  PPTX, built from `Wiki.Core.Slides.deckOf` (level-1 title → title or section page, level-2 →
+  frame, notes → `\note{}`, theme and aspect mapped); a space exports as one DOCX or PDF in
+  page order with a title page and a table of contents. The input to pandoc is our own
+  Markdown (pandoc's reader with the matching extensions: tables, footnotes, fenced divs,
+  `tex_math_dollars` and `tex_math_single_backslash`, raw HTML through our allowlist first),
+  images and attachments resolved from the blob store, islands (Mermaid, TikZ) rendered to
+  images server-side where feasible and noted in the output where not. `GET
+  pages/<id>/export/<format>` streams the file, one export at a time per user, with a
+  timeout and a temporary directory; a `pandoc` failure is an `ApiError` with its message.
+  Skylighting, which comes with pandoc, may then replace highlight.js in the server render
+  (the Phase 4 candidate above) in a later package. No migration.
 - **WP4.17 Offline and PWA.** A web manifest (name, icons from the wiki's own, theme
   colour) and a service worker that caches the application's files (versioned by the build)
   and the last pages read (HTML and API answers, in the browser's Cache API), serving them
