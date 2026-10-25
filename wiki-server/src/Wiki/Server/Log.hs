@@ -28,7 +28,8 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Types (hContentType, status500, statusCode)
-import Network.Wai (Middleware, Request (..), responseLBS, responseStatus)
+import Network.Wai (Middleware, Request (..), Response, responseLBS, responseStatus)
+import Network.Wai.Internal (Response (ResponseRaw))
 import Protolude
 import System.IO (BufferMode (..), hFlush, hSetBuffering)
 import Text.Printf (printf)
@@ -89,7 +90,7 @@ logRequests :: Logger -> Text -> Text -> Middleware
 logRequests logger listener principal app request respond = do
   started <- getMonotonicTime
   sent <- newIORef Nothing
-  let respond' response = writeIORef sent (Just (statusCode (responseStatus response))) >> respond response
+  let respond' response = writeIORef sent (Just (statusOf response)) >> respond response
       context =
         [ ("listener", listener)
         , ("principal", principal)
@@ -126,3 +127,14 @@ redactedPath = T.intercalate "/" . go . T.splitOn "/"
       word : _ : rest | word `elem` ["invite", "invitations"] -> word : "…" : go rest
       segment : rest -> segment : go rest
       [] -> []
+
+-- | The status a response is logged with. A connection the application
+-- takes over (the live channel's WebSocket, "Wiki.Server.Events") is
+-- answered with its own raw stream, and its status is the 101 of the
+-- upgrade, not that of the response kept for a server that cannot hand
+-- the connection over (500), which would make every live channel look
+-- like a failure in the log.
+statusOf :: Response -> Int
+statusOf = \case
+  ResponseRaw {} -> 101
+  response -> statusCode (responseStatus response)

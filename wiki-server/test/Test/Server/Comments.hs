@@ -14,6 +14,7 @@
 module Test.Server.Comments (spec) where
 
 import Data.Aeson (FromJSON, ToJSON, eitherDecode, encode)
+import Data.IORef (readIORef)
 import Data.Text qualified as T
 import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodPost, methodPut)
 import Network.WebSockets qualified as WS
@@ -253,4 +254,13 @@ live = describe "the live channel" $ do
 
   it "tells a request that is no WebSocket's that it is one's address" $ withDemoRunning identity $ \r -> do
     reply <- getUrl r (onPublic r eventsPath)
-    reply.status `shouldBe` 426
+    reply `refusedWith426` Invalid "This address is a WebSocket's."
+    -- A connection is logged with the 101 of its upgrade, once it ends.
+    channel r [] (\_ -> pass)
+    let logs = filter ("path=/api/v1/events" `T.isInfixOf`) <$> readIORef r.logged
+    eventually' (any ("status=101" `T.isInfixOf`) <$> logs)
+  where
+    refusedWith426 reply e = (reply.status, eitherDecode reply.body) `shouldBe` (426, Right e)
+    eventually' condition = do
+      let go n = condition >>= \done -> unless done (if n <= (0 :: Int) then assertFailure "the connection was not logged as 101" else threadDelay 50_000 >> go (n - 1))
+      go 100

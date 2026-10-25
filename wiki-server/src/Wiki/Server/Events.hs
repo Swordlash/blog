@@ -55,6 +55,7 @@ import Network.Wai.Handler.WebSockets (websocketsApp)
 import Network.WebSockets qualified as WS
 import Numeric.Natural (Natural)
 import Protolude
+import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (ClientMessage (..), PageEvent, ServerMessage (..))
 import Wiki.Core.Id (PageId)
 import Wiki.Server.Storage (Storage, Who, mayReadPage)
@@ -122,11 +123,11 @@ closeAll hub = atomically $ do
 -- a request that is no WebSocket's (426) or is another site's (403).
 eventsApplication :: Storage -> Hub -> Who -> Application
 eventsApplication storage hub who request respond
-  | not sameSite = respond (responseLBS status403 [(hContentType, "application/json")] "{\"error\":\"Forbidden\"}")
+  | not sameSite = respond (responseLBS status403 [(hContentType, "application/json")] (encode ApiError.Forbidden))
   | otherwise = case websocketsApp WS.defaultConnectionOptions (serve storage hub who) request of
       Just upgrade -> respond upgrade
       Nothing ->
-        respond (responseLBS status426 [(hContentType, "application/json"), ("Upgrade", "websocket")] "{\"error\":{\"Invalid\":\"This address is a WebSocket's.\"}}")
+        respond (responseLBS status426 [(hContentType, "application/json"), ("Upgrade", "websocket")] (encode (ApiError.Invalid "This address is a WebSocket's.")))
   where
     headerOf name = lookup (CI.mk name) (requestHeaders request)
     -- The Origin a browser sends, which must be this server's address as
@@ -188,8 +189,6 @@ serve storage hub who pending = do
           allowed <- if subscribed then may page else pure False
           when allowed $ WS.sendTextData socket (encode (Event page event))
           sending socket connection
-        Hangup why -> WS.sendClose socket why >> waitForClose socket
-
-    -- After saying it is closing, a connection reads until the tab closes
-    -- too, which ends it with an exception.
-    waitForClose socket = forever (void (WS.receiveDataMessage socket))
+        -- The tab's close comes to the receiving thread, which ends the
+        -- connection; this one has nothing more to say.
+        Hangup why -> WS.sendClose socket why >> forever (threadDelay maxBound)
