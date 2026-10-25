@@ -43,10 +43,11 @@ data Purpose
 startUrl :: Text -> Purpose -> Text -> Text
 startUrl provider purpose next = startPath provider <> "?" <> decodeUtf8 (toS (urlEncodeParams params))
   where
-    params = ("next", next) : case purpose of
-      SignInWith -> []
-      Connect -> [("link", "1")]
-      AcceptInvitation token -> [("invite", token.text)]
+    params =
+      ("next", next) : case purpose of
+        SignInWith -> []
+        Connect -> [("link", "1")]
+        AcceptInvitation token -> [("invite", token.text)]
 
 -- | The address that starts signing in with a provider.
 startPath :: Text -> Text

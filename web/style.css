@@ -2778,3 +2778,116 @@ table.invitations td {
 .invitation-row.expired td:nth-child(2) {
   color: var(--muted);
 }
+
+/* ---- Signing in with a provider ------------------------------------------ */
+
+/* The providers the server signs in with (Wiki.App.View.SignIn and
+   Wiki.App.View.Invite): links to the server's round trip, under the
+   form's own buttons, one a line, looking like buttons. */
+.sign-in-providers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.sign-in-providers:empty {
+  display: none;
+}
+
+.sign-in-providers p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.provider-link,
+.identity-connect {
+  display: block;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: inherit;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.provider-link:hover,
+.identity-connect:hover {
+  background: var(--surface);
+}
+
+/* The signed-in user's name, which opens how they sign in. */
+.account .account-toggle::after {
+  content: " ▾";
+}
+
+.account-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(22rem, calc(100vw - 2rem));
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+}
+
+.account-panel h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.account-methods,
+.identity-connects {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.account-password {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.identities {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+}
+
+.identity-email {
+  flex: 1;
+  overflow: hidden;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-overflow: ellipsis;
+}
+
+.identity-disconnect {
+  margin-left: auto;
+}
+
+.account-error {
+  margin: 0;
+}
+
+/* The administration's account column: disconnecting a provider's account. */
+.user-account .identity-unlink {
+  margin-left: 0.3rem;
+}

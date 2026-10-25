@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Signing in with a provider (WP3.6): Google, GitHub, Apple, or any OpenID
+Connect provider, each `--oidc NAME=KIND,CLIENT-ID[,ISSUER]` with its client
+secret in `WIKI_OIDC_<NAME>_SECRET` (never the command line) and
+`--public-url`, below which its redirect URI is (`auth/<NAME>/callback`);
+`checkOptions` refuses a provider without `--public-url`, a bad name, an
+`oidc` without its issuer, or one that is not `https` (but on this machine),
+and the server will not start without each secret. `auth/<NAME>/start` and
+`auth/<NAME>/callback` on the public listener, answered in a closed wiki too:
+the authorization code flow with PKCE (but Apple's) and a nonce, the round
+trip kept in memory for ten minutes and bound to the browser by a cookie of
+its own (`wiki_oidc`, `SameSite=Lax`), the ID token's `iss`, `aud`, `exp` and
+`nonce` checked without a signature check (it comes from the token endpoint
+over TLS), GitHub's user and verified e-mail from its API, Apple's
+`form_post` answer taken through a page of the wiki's. A known identity
+signs its user in (not a disabled one); an unknown one is connected to the
+user who asked, makes the account of an invitation it carries, makes an
+account in an open wiki, and is refused in a closed one. The callback
+answers with a page that goes on, not a redirect, so that the
+`SameSite=Strict` session cookie is sent. Migration `0004-identities.sql`
+adds `identities`; `GET`/`DELETE api/v1/account/identities` (not the last
+way in) and `DELETE api/v1/admin/users/<id>/identities/<provider>` (which
+ends the user's sessions); the session lists the providers. `wiki-server
+oidc check` asks each provider how to sign in and prints its redirect URI.
+New dependencies: `http-client`, `http-client-tls`, `http-api-data`.
+
 An open or closed wiki (WP3.5). Migration `0003-settings.sql` adds
 `settings` (an existing wiki stays open) and `invitations`. The settings are
 kept in memory once read, and replaced under the connection's lock when they

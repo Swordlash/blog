@@ -200,6 +200,12 @@ overHttp = describe "over HTTP" $ do
     c <- signedInWith r "acme" "next=%2F" []
     loginOf <$> sessionOf r [c] `shouldReturn` Just "editor-2"
 
+  it "sends the client's secret as the provider takes it: in the form to GitHub, as HTTP's Basic where discovery does not say" $ withOidc $ \fake r -> do
+    _ <- signedInWith r "acme" "next=%2F" []
+    writeIORef fake.user (someone "77" (Just "g@example.org") True (Just "G") (Just "gee") True)
+    _ <- signedInWith r "hub" "next=%2F" []
+    readIORef fake.secretsBy `shouldReturn` ["form", "basic"]
+
   it "takes the user's login, name and verified address from GitHub's API" $ withOidc $ \fake r -> do
     writeIORef fake.user (someone "4242" (Just "octo@example.org") True (Just "Octo Cat") (Just "octo-cat") True)
     c <- signedInWith r "hub" "next=%2F" []
@@ -431,6 +437,8 @@ logins = describe "the logins of accounts made with a provider" $ do
     take 1 (loginCandidates (claimed Nothing (Just "ada.l@example.org") (Just "Ada"))) `shouldBe` ["ada.l"]
     take 1 (loginCandidates (claimed Nothing Nothing (Just "Grace B. Hopper"))) `shouldBe` ["grace-b.-hopper"]
     take 1 (loginCandidates (claimed Nothing Nothing Nothing)) `shouldBe` ["user"]
+    -- Microsoft's preferred_username is an address.
+    take 1 (loginCandidates (claimed (Just "Ann.Lee@contoso.com") Nothing Nothing)) `shouldBe` ["ann.lee"]
   it "are numbered after the first" $
     take 3 (loginCandidates (claimed (Just "ada") Nothing Nothing)) `shouldBe` ["ada", "ada-2", "ada-3"]
   it "are no longer than 40 characters, and never blank" $ do

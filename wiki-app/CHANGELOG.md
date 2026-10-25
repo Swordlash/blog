@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Signing in with a provider (WP3.6). `Session` gains `providers`, which
+the sign-in and "Create account" forms and an invitation's page offer as
+links to the server's round trip ("Sign in with Google"), coming back to the
+page; a signed-in user's name opens how they sign in (password, the
+providers' accounts, "Connect …", "Disconnect", not the last way in), through
+`MonadAccount`'s new `identities` and `unlinkIdentity`. The administration's
+account column says "Signs in with GitHub" where that is so and disconnects
+an account (`MonadAdmin.unlinkUserIdentity`; the demo's users have none).
+
 The browser's network through haskell-halogen (WP4.3, with the pin at
 haskell-halogen 5ea6dba). `HttpWiki`'s requests go through
 haskell-halogen-net's `Halogen.Net.Fetch` instead of a `fetch` of our own

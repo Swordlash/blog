@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`Wiki.Core.User.SignInProvider {name, label}`: a provider one may sign in
+with, as the application shows it (WP3.6).
+
 Whom the wiki lets in: `Wiki.Core.Access` (`Access = Open | Closed`,
 `accessName`, `readAccess`, `takesNewAccounts`). `Grants` gains an `access`
 field, so that every rule obeys it without another argument: a public space

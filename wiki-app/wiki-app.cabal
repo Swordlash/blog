@@ -284,6 +284,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Order
       Test.Browser.Permissions
       Test.Browser.Persist
+      Test.Browser.Providers
       Test.Browser.Search
       Test.Browser.Shell
       Test.Browser.Slides

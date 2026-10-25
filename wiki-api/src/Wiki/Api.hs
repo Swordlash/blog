@@ -284,10 +284,11 @@ data AdminApi mode = AdminApi
   -- ^ @revokeInvitation@: its link no longer makes an account.
   , unlinkIdentity :: mode :- "users" :> Capture "user" UserId :> "identities" :> Capture "provider" Text :> DeleteNoContent
   -- ^ @unlinkUserIdentity@: the user no longer signs in with that
-  -- provider's account (WP3.6 of docs/PLAN.md). Allowed even when it was
-  -- their last way in: an administrator may be taking away an account
-  -- that should never have been connected, and gives them a password
-  -- after. One they do not have is 'Wiki.Api.Error.NotFound'.
+  -- provider's account (WP3.6 of docs/PLAN.md), and their sessions end.
+  -- Allowed even when it was their last way in: an administrator may be
+  -- taking away an account that should never have been connected, and
+  -- gives them a password after. One they do not have is
+  -- 'Wiki.Api.Error.NotFound'.
   }
   deriving stock (Generic)
 

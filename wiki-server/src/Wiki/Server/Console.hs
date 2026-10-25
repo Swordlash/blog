@@ -25,6 +25,10 @@
 -- terminal, twice and not echoed, or read as the first line of standard
 -- input when that is not a terminal (@printf '%s\\n' "$pw" | wiki-server
 -- users add …@).
+--
+-- @wiki-server oidc check@ is the console's too ('runOidcCheck'): it asks
+-- the providers a server would be started with (WP3.6) how to sign in,
+-- before anyone tries, and prints the redirect URI to register with each.
 module Wiki.Server.Console
   ( -- * Commands
     Users (..)

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Signing in with a provider (WP3.6). `SessionInfo` gains `providers`
+(`SignInProvider {name, label}` each), `Directory` gains `identities` (the
+providers each user signs in with), `WikiApi` gains `account`
+(`AccountApi`: `identities`, `GET account/identities` answering
+`SignInMethods {password, identities}` of `LinkedIdentity {provider, email,
+name, linkedAt}`, and `unlinkIdentity`, `DELETE account/identities/<provider>`)
+and `AdminApi` `unlinkIdentity` (`DELETE admin/users/<id>/identities/<provider>`).
+`Wiki.Api.Auth` makes the addresses that sign in with a provider
+(`startUrl`, `callbackPath`), which are the server's, not the API's.
+
 Whom the wiki lets in (WP3.5). `WikiApi` gains `register` (`POST
 accounts`, a `NewAccount`, answering the session with its cookie) and
 `invitations` (`InvitationsApi`: `details`, `GET invitations/<secret>`

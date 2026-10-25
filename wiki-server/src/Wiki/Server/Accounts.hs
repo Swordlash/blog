@@ -91,7 +91,7 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID.Types qualified as UUID
 import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query, query_)
 import Protolude
-import Wiki.Api.Account (Account (..), LinkedIdentity (..), InvitationInfo (..), InvitationToken (..), NewAccount (..), SignInMethods (..), signsInSomehow, withoutIdentity)
+import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), NewAccount (..), SignInMethods (..), signsInSomehow, withoutIdentity)
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Access (takesNewAccounts)
@@ -325,41 +325,42 @@ data Refusal
 -- module's Haddock). What the provider says of the account now is kept
 -- with the identity.
 landWith :: Storage -> UTCTime -> Intent -> Claimed -> IO (Either Refusal Landing)
-landWith st now intent claimed = withDatabase st $ \c -> immediately c $
-  identityOf c claimed.provider claimed.subject >>= \case
-    Just found -> do
-      refreshIdentity c claimed.provider claimed.subject claimed.email claimed.name
-      case intent of
-        LinkTo me
-          | found.user /= me -> pure (Left AnotherUsers)
-          | otherwise -> maybe (Left NoOneToLink) (Right . Linked . (\a -> a.user)) <$> active c me
-        _ ->
-          active c found.user >>= \case
-            Nothing -> pure (Left DisabledAccount)
-            Just a -> Right . (\token -> SignedInAs a.user token False) <$> startSession c now a.user.id
-    Nothing -> case intent of
-      LinkTo me ->
-        active c me >>= \case
-          Nothing -> pure (Left NoOneToLink)
-          Just a -> do
-            theirs <- identitiesOf c me
-            if any (\i -> i.provider == claimed.provider) theirs
-              then pure (Left HasOneThere)
-              else do
-                insertIdentity c now me claimed.provider claimed.subject claimed.email claimed.name
-                pure (Right (Linked a.user))
-      Invited token ->
-        pendingInvitation c now (tokenHash token.text) >>= \case
-          Nothing -> pure (Left UnusableInvitation)
-          Just (i, _) -> do
-            made <- newAccount c
-            void (deleteInvitation c i)
-            pure (Right made)
-      SignInOnly -> do
-        settings <- settingsWith st c
-        if takesNewAccounts settings.access
-          then Right <$> newAccount c
-          else pure (Left ClosedWiki)
+landWith st now intent claimed = withDatabase st $ \c ->
+  immediately c $
+    identityOf c claimed.provider claimed.subject >>= \case
+      Just found -> do
+        refreshIdentity c claimed.provider claimed.subject claimed.email claimed.name
+        case intent of
+          LinkTo me
+            | found.user /= me -> pure (Left AnotherUsers)
+            | otherwise -> maybe (Left NoOneToLink) (Right . Linked . (\a -> a.user)) <$> active c me
+          _ ->
+            active c found.user >>= \case
+              Nothing -> pure (Left DisabledAccount)
+              Just a -> Right . (\token -> SignedInAs a.user token False) <$> startSession c now a.user.id
+      Nothing -> case intent of
+        LinkTo me ->
+          active c me >>= \case
+            Nothing -> pure (Left NoOneToLink)
+            Just a -> do
+              theirs <- identitiesOf c me
+              if any (\i -> i.provider == claimed.provider) theirs
+                then pure (Left HasOneThere)
+                else do
+                  insertIdentity c now me claimed.provider claimed.subject claimed.email claimed.name
+                  pure (Right (Linked a.user))
+        Invited token ->
+          pendingInvitation c now (tokenHash token.text) >>= \case
+            Nothing -> pure (Left UnusableInvitation)
+            Just (i, _) -> do
+              made <- newAccount c
+              void (deleteInvitation c i)
+              pure (Right made)
+        SignInOnly -> do
+          settings <- settingsWith st c
+          if takesNewAccounts settings.access
+            then Right <$> newAccount c
+            else pure (Left ClosedWiki)
   where
     -- A user who may sign in: there, and not disabled.
     active c u = mfilter (\a -> not a.disabled) <$> loadAccount c u
@@ -392,7 +393,8 @@ landWith st now intent claimed = withDatabase st $ \c -> immediately c $
 loginCandidates :: Claimed -> [Text]
 loginCandidates claimed = base : [base <> "-" <> show n | n <- [2 :: Int ..]]
   where
-    base = fromMaybe "user" (find (not . T.null) (map loginOf (catMaybes [claimed.login, localPart <$> claimed.email, claimed.name])))
+    -- A login that is an address (Microsoft's are) gives its local part.
+    base = fromMaybe "user" (find (not . T.null) (map loginOf (catMaybes [localPart <$> claimed.login, localPart <$> claimed.email, claimed.name])))
     localPart = T.takeWhile (/= '@')
     loginOf = T.take 40 . T.intercalate "-" . filter (not . T.null) . T.split (not . allowed) . T.toLower
     allowed ch = isAscii ch && (isAlphaNum ch || ch == '.' || ch == '_')

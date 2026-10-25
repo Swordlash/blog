@@ -56,6 +56,7 @@ import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Space qualified as S
+import Wiki.Core.User (SignInProvider (..))
 
 spec :: Spec
 spec = do
@@ -127,11 +128,11 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
 -- saved once, so that it has a history.
 servedPages :: Spec
 servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
-  for_ principals $ \(whom, wiki) ->
+  for_ principals $ \(whom, wiki, providers) ->
     describe ("as " <> whom) $
       for_ routes $ \at ->
         it ("keeps every node at " <> show at <> ", and asks nothing") $ do
-          transport <- apiOver wiki
+          transport <- apiOver providers wiki
           rendering <- newImmediateHttpEnv transport
           container <- detached (fmap snd . startServed Build rendering "/" at)
           original <- nodesOf container
@@ -152,12 +153,18 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
     -- whom every route is the way to sign in, but for an invitation's), and
     -- the administrator, in the wiki closed (which changes nothing for them
     -- but the administration's section on it).
+    -- And, where the server signs in with providers, which the forms,
+    -- the invitation's page and the signed-in user's name offer, someone
+    -- not signed in in the wiki closed and the administrator in it open.
     principals =
-      [ ("someone not signed in", savedOnce {current = Nothing})
-      , ("someone not signed in, the wiki closed", closed savedOnce {current = Nothing})
-      , ("the administrator", savedOnce {current = Just (UserId "user-admin")})
-      , ("the administrator, the wiki closed", closed savedOnce {current = Just (UserId "user-admin")})
+      [ ("someone not signed in", savedOnce {current = Nothing}, [])
+      , ("someone not signed in, the wiki closed", closed savedOnce {current = Nothing}, [])
+      , ("the administrator", savedOnce {current = Just (UserId "user-admin")}, [])
+      , ("the administrator, the wiki closed", closed savedOnce {current = Just (UserId "user-admin")}, [])
+      , ("someone not signed in, the wiki closed, with providers", closed savedOnce {current = Nothing}, withProviders)
+      , ("the administrator, with providers", savedOnce {current = Just (UserId "user-admin")}, withProviders)
       ]
+    withProviders = [SignInProvider {name = "google", label = "Google"}, SignInProvider {name = "hub", label = "GitHub"}]
     closed st = st {M.grants = Grants {global = st.grants.global, spaces = st.grants.spaces, access = Closed}}
     routes =
       prerenderedRoutes (demoState demoNow)
@@ -197,8 +204,8 @@ helloMade = addUTCTime (negate (30 * 86400)) demoNow
 -- does, from a wiki in memory as its current user sees it: the API's
 -- answers, its refusals with their status, and a 404 for an address it does
 -- not have.
-apiOver :: MemState -> IO Transport
-apiOver st = do
+apiOver :: [SignInProvider] -> MemState -> IO Transport
+apiOver providers st = do
   wiki <- newMemWiki st
   let spacePath s = fromMaybe [] (pathOf (`Map.lookup` st.spaces) s)
       pagePath p = fromMaybe [] (pathOf (`Map.lookup` st.pages) p)
@@ -225,7 +232,7 @@ apiOver st = do
       pure ([(links.spaces.atPath (spacePath s.id), answerOf space), (links.spaces.listPages s.id, answerOf pages)] <> concat perPage)
     pure
       ( Map.fromList
-          ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = []} :: Either WikiError SessionInfo))
+          ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers} :: Either WikiError SessionInfo))
               : (links.spaces.list, answerOf (Right spaces :: Either WikiError [S.Space]))
               : (links.admin.directory, answerOf people)
               : (links.admin.settings, answerOf settings)

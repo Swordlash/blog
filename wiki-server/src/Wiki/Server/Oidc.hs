@@ -251,6 +251,12 @@ data Endpoints = Endpoints
   , userinfo :: Maybe Text
   -- ^ For an OpenID Connect provider, its user info, if it has one; for
   -- GitHub, its API.
+  , secretInForm :: Bool
+  -- ^ Whether the client's secret goes in the token request's form
+  -- (@client_secret_post@), as GitHub, Google and Apple take it, or in its
+  -- @Authorization@ header (@client_secret_basic@), which a provider whose
+  -- discovery document does not say that it takes the form wants (the
+  -- default of OpenID Connect Discovery).
   }
   deriving stock (Eq, Show)
 
@@ -272,7 +278,7 @@ endpointsOf p = case p.option.kind of
   GitHub ->
     let base = baseOf p.option
         api = if base == "https://github.com" then "https://api.github.com" else base <> "/api/v3"
-     in pure (Right Endpoints {issuer = base, authorization = base <> "/login/oauth/authorize", token = base <> "/login/oauth/access_token", userinfo = Just api})
+     in pure (Right Endpoints {issuer = base, authorization = base <> "/login/oauth/authorize", token = base <> "/login/oauth/access_token", userinfo = Just api, secretInForm = True})
   _ ->
     readIORef p.discovered >>= \case
       Just e -> pure (Right e)
@@ -287,8 +293,15 @@ endpointsOf p = case p.option.kind of
                 pure (Left (p.label <> "'s discovery document names another issuer, " <> e.issuer <> ", than " <> base))
             | otherwise -> writeIORef p.discovered (Just e) $> Right e
   where
-    discovery = withObject "discovery" $ \o ->
-      Endpoints <$> o .: "issuer" <*> o .: "authorization_endpoint" <*> o .: "token_endpoint" <*> o .:? "userinfo_endpoint"
+    discovery = withObject "discovery" $ \o -> do
+      methods :: Maybe [Text] <- o .:? "token_endpoint_auth_methods_supported"
+      Endpoints
+        <$> o
+        .: "issuer"
+        <*> o .: "authorization_endpoint"
+        <*> o .: "token_endpoint"
+        <*> o .:? "userinfo_endpoint"
+        <*> pure (maybe False ("client_secret_post" `elem`) methods)
 
 -- | The secrets of one round trip: its state (what the provider sends back
 -- to say which round trip it ends), its nonce (which the ID token must
@@ -423,10 +436,15 @@ exchange p e s code = do
         , ("code", code)
         , ("redirect_uri", redirectUri p.publicUrl o.name)
         , ("client_id", o.clientId)
-        , ("client_secret", p.secret)
         ]
+          <> [("client_secret", p.secret) | e.secretInForm]
           <> [("code_verifier", s.verifier) | withPkce o.kind]
-  answered <- request p "POST" e.token [(hContentType, "application/x-www-form-urlencoded")] (urlEncodeParams form)
+      -- RFC 6749, 2.3.1: the id and the secret form-encoded, then joined.
+      basic = "Basic " <> convertToBase Base64 (encodeUtf8 (formEncoded o.clientId <> ":" <> formEncoded p.secret))
+      formEncoded = T.drop 2 . decodeUtf8 . toS . urlEncodeParams . pure . ("x",)
+      -- GitHub answers in a form's encoding unless asked for JSON.
+      headers = [(hContentType, "application/x-www-form-urlencoded"), (hAccept, "application/json")] <> [(hAuthorization, basic) | not e.secretInForm]
+  answered <- request p "POST" e.token headers (urlEncodeParams form)
   pure $ do
     (status, body) <- answered
     v <- first (const (p.label <> "'s token endpoint answered with something that is not JSON (status " <> show status <> ").")) (eitherDecode body)
@@ -445,9 +463,10 @@ gitHubUser p e access = runExceptT $ do
   let hs = [(hAuthorization, "Bearer " <> encodeUtf8 access), (hAccept, "application/vnd.github+json")]
   v <- ExceptT (first ((p.label <> " would not say who signed in: ") <>) <$> fetchJson p hs (api <> "/user"))
   (uid, login, name) <- either (\why -> throwError (p.label <> " said something unexpected of the user: " <> toS why)) pure $
-    flip parseEither v $ withObject "user" $ \o -> do
-      uid :: Integer <- o .: "id"
-      (uid,,) <$> o .:? "login" <*> o .:? "name"
+    flip parseEither v $
+      withObject "user" $ \o -> do
+        uid :: Integer <- o .: "id"
+        (uid,,) <$> o .:? "login" <*> o .:? "name"
   -- Without the user:email scope there is no list, and no address.
   emails <- liftIO (fetchJson p hs (api <> "/user/emails"))
   let primary = do
@@ -522,20 +541,22 @@ claimsOf :: Object -> Parser IdClaims
 claimsOf o = do
   iss <- fromMaybe "" <$> o .:? "iss"
   sub <- o .: "sub" >>= stringOrNumber
-  aud <- o .:? "aud" >>= \case
-    Nothing -> pure []
-    Just (String a) -> pure [a]
-    Just v -> parseJSON v
+  aud <-
+    o .:? "aud" >>= \case
+      Nothing -> pure []
+      Just (String a) -> pure [a]
+      Just v -> parseJSON v
   azp <- o .:? "azp"
   expires <- fmap (posixSecondsToUTCTime . fromInteger) <$> o .:? "exp"
   nonce <- o .:? "nonce"
   email <- o .:? "email"
   -- Apple writes it as a string.
-  emailVerified <- o .:? "email_verified" >>= \case
-    Just (Bool b) -> pure (Just b)
-    Just (String "true") -> pure (Just True)
-    Just (String _) -> pure (Just False)
-    _ -> pure Nothing
+  emailVerified <-
+    o .:? "email_verified" >>= \case
+      Just (Bool b) -> pure (Just b)
+      Just (String "true") -> pure (Just True)
+      Just (String _) -> pure (Just False)
+      _ -> pure Nothing
   name <- o .:? "name"
   preferredUsername <- o .:? "preferred_username"
   givenName <- o .:? "given_name"

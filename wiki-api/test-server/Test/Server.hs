@@ -25,8 +25,8 @@ import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), withoutIdentity)
-import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), NewInvitation (..), defaultSettings)
+import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))

@@ -23,7 +23,8 @@ where
 
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (Value, encode, object, toJSON, (.=))
-import Data.ByteArray.Encoding (Base (..), convertToBase)
+import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
+import Data.ByteString.Char8 qualified as BC
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -71,6 +72,9 @@ data Fake = Fake
   , issued :: IORef [Text]
   -- ^ Every code, access token and ID token it has given, which must
   -- never be written to the server's log.
+  , secretsBy :: IORef [Text]
+  -- ^ How each code exchanged came with the client's secret, the latest
+  -- first: @form@ or @basic@.
   }
 
 -- | The secret every client of it has.
@@ -91,14 +95,15 @@ withFakeProvider test = do
   user <- newIORef (person "first")
   spoil <- newIORef Unspoiled
   issued <- newIORef []
+  secretsBy <- newIORef []
   grants <- newIORef mempty
   counter <- newIORef (0 :: Int)
-  testWithApplication (pure (app user spoil issued grants counter)) $ \port -> do
+  testWithApplication (pure (app user spoil issued secretsBy grants counter)) $ \port -> do
     let url = "http://127.0.0.1:" <> show port
-    test Fake {url, user, spoil, issued}
+    test Fake {url, user, spoil, issued, secretsBy}
 
-app :: IORef Person -> IORef Spoiled -> IORef [Text] -> IORef (Map Text Grant) -> IORef Int -> Application
-app user spoil issued grants counter request respond = do
+app :: IORef Person -> IORef Spoiled -> IORef [Text] -> IORef [Text] -> IORef (Map Text Grant) -> IORef Int -> Application
+app user spoil issued secretsBy grants counter request respond = do
   let base = "http://" <> maybe "127.0.0.1" decodeUtf8 (requestHeaderHost request)
       query = [(k, v) | (k, Just v) <- parseQueryText (rawQueryString request)]
       json :: Value -> IO _
@@ -139,11 +144,14 @@ app user spoil issued grants counter request respond = do
         case found of
           Nothing -> bad "unknown code"
           Just g
-            | field "client_secret" /= clientSecret -> bad "wrong secret"
+            -- The secret in the form (GitHub's, and a provider whose
+            -- discovery says it takes it there), or else as HTTP's Basic.
+            | field "client_secret" /= clientSecret && basicSecret /= Just (g.clientId, clientSecret) -> bad "wrong secret"
             | field "client_id" /= g.clientId -> bad "wrong client"
             | field "redirect_uri" /= g.redirectUri -> bad "wrong redirect_uri"
             | Just c <- g.challenge, decodeUtf8 (convertToBase Base64URLUnpadded (SHA256.hash (encodeUtf8 (field "code_verifier")))) /= c -> bad "wrong code_verifier"
             | otherwise -> do
+                modifyIORef' secretsBy ((if field "client_secret" == clientSecret then "form" else "basic") :)
                 access <- fresh "access"
                 modifyIORef' grants (Map.insert access g)
                 if github
@@ -171,6 +179,12 @@ app user spoil issued grants counter request respond = do
                     modifyIORef' issued (idToken :)
                     json (object ["access_token" .= access, "token_type" .= ("Bearer" :: Text), "id_token" .= idToken])
       unauthorized = respond (responseLBS status401 [] "")
+      basicSecret = do
+        encoded <- BC.stripPrefix "Basic " =<< lookup hAuthorization (requestHeaders request)
+        pair <- rightToMaybe (convertFromBase Base64 encoded :: Either [Char] ByteString)
+        let (k, v) = T.breakOn ":" (decodeUtf8 pair)
+            decoded t = fromMaybe "" (join (lookup "x" (parseQueryText (encodeUtf8 ("x=" <> t)))))
+        pure (decoded k, decoded (T.drop 1 v))
   case (requestMethod request, pathInfo request) of
     ("GET", [".well-known", "openid-configuration"]) ->
       json (object ["issuer" .= base, "authorization_endpoint" .= (base <> "/authorize"), "token_endpoint" .= (base <> "/token"), "userinfo_endpoint" .= (base <> "/userinfo")])

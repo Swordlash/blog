@@ -93,7 +93,7 @@ import Database.SQLite.Simple.FromField (FieldParser, FromField (..), ResultErro
 import Database.SQLite.Simple.FromRow (RowParser, field, fieldWith)
 import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
-import Wiki.Api.Account (Account (..), LinkedIdentity (..), InvitationInfo (..))
+import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..))
 import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
 import Wiki.Core.Access (Access (..), accessName, readAccess)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
