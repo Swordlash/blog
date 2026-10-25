@@ -1,12 +1,14 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 -- | The backend over HTTP in a browser: its requests made through the
--- page's @fetch@ (jsbits/fetch.js), answered by a server the test puts in
--- fetch's place (test/jsbits/test-fetch.js), and the application over it:
--- what it shows while the server has not answered, once it has, and when
--- it cannot be reached; and the server's page, adopted with nothing to
--- repair: the build's, before anything is read, and one the server
--- rendered, from what the page carries, with nothing asked.
+-- page's @fetch@ ("Halogen.Net.Fetch"), answered by a server the test puts
+-- in fetch's place (test/jsbits/test-fetch.js), and the application over
+-- it: what it shows while the server has not answered, once it has, and
+-- when it cannot be reached; that a request whose
+-- wait ends early (a navigation away, a time limit) is aborted; and the
+-- server's page, adopted with nothing to repair: the build's, before
+-- anything is read, and one the server rendered, from what the page
+-- carries, with nothing asked.
 --
 -- The server answers with the demo's wiki as its administrator sees it,
 -- read from the in-memory backend and written as the API writes it, so the
@@ -49,7 +51,7 @@ import Wiki.Api.Version (VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
-import Wiki.App.Backend.Http (HttpEnv, browserTransport, cacheOf, newHttpEnv, newHttpEnvWith, runHttpWiki)
+import Wiki.App.Backend.Http (HttpEnv, browserTransport, cacheOf, fetchTransport, newHttpEnv, newHttpEnvWith, runHttpWiki)
 import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
@@ -78,6 +80,7 @@ $( browserJS
      , ("js_server_answer", "wiki_test_server_answer", Unsafe, [t|JSText -> JSText -> Int -> JSText -> IO ()|])
      , ("js_server_offline", "wiki_test_server_offline", Unsafe, [t|Bool -> IO ()|])
      , ("js_server_hold", "wiki_test_server_hold", Unsafe, [t|IO ()|])
+     , ("js_server_hold_at", "wiki_test_server_hold_at", Unsafe, [t|JSText -> JSText -> IO ()|])
      , ("js_server_release", "wiki_test_server_release", Unsafe, [t|IO ()|])
      , ("js_server_asked", "wiki_test_server_asked", Unsafe, [t|IO JSText|])
      , ("js_markup", "wiki_test_markup", Unsafe, [t|IO JSText|])
@@ -94,11 +97,13 @@ data Asked = Asked
   , body :: Text
   , bytes :: Text
   -- ^ The body's bytes, in base64.
+  , aborted :: Bool
+  -- ^ Whether the request was aborted.
   }
   deriving stock (Eq, Show)
 
 instance FromJSON Asked where
-  parseJSON = withObject "Asked" $ \o -> Asked <$> o .: "method" <*> o .: "url" <*> o .: "headers" <*> o .: "body" <*> o .: "bytes"
+  parseJSON = withObject "Asked" $ \o -> Asked <$> o .: "method" <*> o .: "url" <*> o .: "headers" <*> o .: "body" <*> o .: "bytes" <*> o .: "aborted"
 
 -- | The server in fetch's place, with nothing to answer yet, for the length
 -- of the test.
@@ -368,6 +373,26 @@ requests = describe "its requests, through fetch" $ do
     map (\r -> (r.method, r.url)) <$> asked `shouldReturn` [("DELETE", "api/v1/pages/page%201/draft")]
     serverStops
 
+  it "aborts a request whose wait is killed" $ runPage $ do
+    serverStarts
+    unsafeIOToPageM js_server_hold
+    env <- unsafeIOToPageM (newHttpEnv browserTransport)
+    waiting <- unsafeIOToPageM (forkIO (void (runHttpWiki env (getSpace (slugs ["team"])))))
+    eventually (map (\r -> (r.url, r.aborted)) <$> asked `shouldReturn` [(team, False)])
+    unsafeIOToPageM (killThread waiting)
+    eventually (map (\r -> (r.url, r.aborted)) <$> asked `shouldReturn` [(team, True)])
+    serverStops
+
+  it "gives up on an answer that does not come in time, and aborts its request" $ runPage $ do
+    serverStarts
+    unsafeIOToPageM js_server_hold
+    env <- unsafeIOToPageM (newHttpEnv (fetchTransport (const 300)))
+    overHttp env (getSpace (slugs ["team"])) `shouldReturn` Left (Unreachable "no answer in 300 milliseconds")
+    eventually (map (\r -> (r.url, r.aborted)) <$> asked `shouldReturn` [(team, True)])
+    serverStops
+  where
+    team = links.spaces.atPath (slugs ["team"])
+
 refusals :: Spec
 refusals = describe "its refusals, through fetch" $ do
   let at = links.spaces.atPath (slugs ["team"])
@@ -478,6 +503,21 @@ views m = describe "the application over it" $ do
       restores <- filter (\r -> r.method == "POST") <$> asked
       map (\r -> (r.url, Map.lookup "If-Match" r.headers)) restores
         `shouldBe` [(links.pages.restore hello.id (VersionTime older), Just "\"2026-09-01T12:00:00Z\"")]
+    unmount ui
+    serverStops
+
+  it "aborts a view's load when the reader goes elsewhere before it has come" $ runPage $ do
+    serverStarts
+    serveDemo
+    hello <- unsafeIOToPageM helloWorld
+    let versions = links.pages.versions hello.id
+    unsafeIOToPageM (js_server_hold_at (toJSText "GET") (toJSText versions))
+    ui <- startServer m (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) Nothing AgainstPrevious)
+    eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [False])
+    find ui ".wiki-sidebar a[href$='#/s/docs/']" >>= click
+    find ui ".space-view h1" >>= (`shouldHaveText` "Docs")
+    -- The history view went with its fiber, and the request with them.
+    eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [True])
     unmount ui
     serverStops
 

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+The browser's network through haskell-halogen (WP4.3, with the pin at
+haskell-halogen 5ea6dba). `HttpWiki`'s requests go through
+haskell-halogen-net's `Halogen.Net.Fetch` instead of a `fetch` of our own
+(`jsbits/fetch.js` is gone): the same requests (same-origin credentials, the
+`X-Wiki-Request` marker, bytes in, status and bytes out), and now a request
+whose wait is killed is aborted, so a view that goes away while it loads (a
+navigation, a sign-out) leaves no request running. The time limits stay
+(30 seconds, 6 minutes for an upload), enforced by the same kill.
+`Wiki.App.Backend.Http` exports `fetchTransport` (the browser's transport
+with limits of one's choosing), `timeLimit`, `fetchFailure` and `noAnswerIn`.
+The browser's own cache is no longer told `no-store`: `Halogen.Net.Fetch` has
+no cache mode, and the server's `Cache-Control: private, no-cache` on every
+API answer already makes the browser ask it each time.
+
 An open or closed wiki (WP3.5). The header offers "Create account" beside
 "Sign in" in an open wiki; a closed one shows someone not signed in its name,
 the way to sign in and a word on why, at every route, and reads nothing else

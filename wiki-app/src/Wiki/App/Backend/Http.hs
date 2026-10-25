@@ -1,5 +1,3 @@
-{-# LANGUAGE TemplateHaskell #-}
-
 -- | The wiki kept by a server: the backend the application runs on when the
 -- page it is served in says so (@Main.hs@), over the server's HTTP API
 -- (@wiki-api@, docs/api.md).
@@ -9,8 +7,9 @@
 -- 'Halogen.VDom.DOM.Monad.BrowserDOM', whose DOM classes it derives so that
 -- Halogen components run in it. Each method is one request
 -- ("Wiki.App.Backend.Http.Request"), made through a 'Transport': the
--- browser's @fetch@ ('browserTransport'), or, in the tests, a server's
--- application called in the same process. A refusal comes back as the
+-- browser's @fetch@ ('browserTransport', over haskell-halogen-net's
+-- "Halogen.Net.Fetch"), or, in the tests, a server's application called in
+-- the same process. A refusal comes back as the
 -- 'WikiError' of its name, and a request that got no answer, or a broken
 -- one, as 'Unreachable'.
 --
@@ -60,25 +59,29 @@ module Wiki.App.Backend.Http
     -- * Transports
   , Transport (..)
   , browserTransport
+  , fetchTransport
   , silentTransport
+  , timeLimit
   , requestTimeout
   , uploadTimeout
+  , fetchFailure
+  , noAnswerIn
   )
 where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Monad.Primitive (PrimMonad)
 import Control.Monad.UUID (MonadUUID (..))
-import Data.Aeson (FromJSON, eitherDecodeStrict', encode, object, (.=))
-import Data.Aeson.Key qualified as Key
+import Data.Aeson (FromJSON, eitherDecodeStrict', encode)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJSText, inBrowser, jsNull, toJSBytes, toJSText)
+import Halogen.Net.Fetch qualified as Fetch
 import Halogen.Subscription (Subscribe (..))
 import Halogen.Subscription qualified as HS
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
+import System.Timeout (timeout)
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
@@ -99,18 +102,6 @@ import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.User (Standing (..))
 
--- The browser's half: one fetch, which waits for the whole answer, and what
--- it gave. See jsbits/fetch.js. Natively these are inert, and
--- 'browserTransport' does not call them.
-$( browserJS
-     ["jsbits/fetch.js"]
-     [ ("js_fetch", "wiki_fetch", Safe, [t|JSText -> JSText -> JSText -> JSVal -> Int -> IO JSVal|])
-     , ("js_fetch_status", "wiki_fetch_status", Unsafe, [t|JSVal -> IO Int|])
-     , ("js_fetch_bytes", "wiki_fetch_bytes", Unsafe, [t|JSVal -> IO JSVal|])
-     , ("js_fetch_error", "wiki_fetch_error", Unsafe, [t|JSVal -> IO JSText|])
-     ]
- )
-
 -- | How a request reaches the server: its answer, or why none came.
 newtype Transport = Transport (Request -> IO (Either Text Response))
 
@@ -126,30 +117,93 @@ requestTimeout = 30_000
 uploadTimeout :: Int
 uploadTimeout = 6 * 60_000
 
--- | The browser's @fetch@, against the page's @\<base href>@, so that a
--- wiki served below a path finds its API below the same path. A failure
--- of the network, a request the browser refused, and no answer within the
--- timeout are all the same to the application: no answer, and why.
--- Natively there is no network.
+-- | How long a request may take, in milliseconds: an upload (a multipart
+-- form) 'uploadTimeout', anything else 'requestTimeout'.
+timeLimit :: Request -> Int
+timeLimit r = case r.body of
+  Body mediaType _ | "multipart/" `T.isPrefixOf` mediaType -> uploadTimeout
+  _ -> requestTimeout
+
+-- | The browser's @fetch@, against the page's @\<base href>@ (an address
+-- relative to the page resolves against it), so that a wiki served below a
+-- path finds its API below the same path, with 'timeLimit's limits.
+-- Natively there is no network, and every request says so.
 browserTransport :: Transport
-browserTransport = Transport $ \r ->
-  if not inBrowser
-    then pure (Left "there is no network natively")
-    else do
-      payload <- case r.body of
-        NoBody -> pure jsNull
-        Body _ bytes -> toJSBytes bytes
-      let headers = r.headers <> [("Content-Type", mediaType) | Body mediaType _ <- [r.body]]
-          headersJson = toJSText (decodeUtf8 (toS (encode (object [Key.fromText k .= v | (k, v) <- headers]))))
-          timeout = case r.body of
-            Body mediaType _ | "multipart/" `T.isPrefixOf` mediaType -> uploadTimeout
-            _ -> requestTimeout
-      -- On wasm a safe import's result is a thunk that waits for the
-      -- promise only when forced.
-      result <- evaluate =<< js_fetch (toJSText r.method) (toJSText r.url) headersJson payload timeout
-      js_fetch_status result >>= \case
-        0 -> Left . fromJSText <$> js_fetch_error result
-        status -> Right . Response status <$> (fromJSBytes =<< js_fetch_bytes result)
+browserTransport = fetchTransport timeLimit
+
+-- | The browser's @fetch@, through "Halogen.Net.Fetch", with a limit, in
+-- milliseconds, on how long each request may take to answer in full.
+--
+-- The request is made as the wiki's own: on its origin, with its cookies
+-- (@credentials: same-origin@), and with the headers 'Request' gives it,
+-- the API's request marker among them. A failure of the network, a request
+-- the browser refused, and no whole answer within the limit are all the
+-- same to the application: no answer, and why ('fetchFailure',
+-- 'noAnswerIn').
+--
+-- The request and the wait for its body belong to the thread that calls
+-- this, which is a component's worker: killing it, as the driver does when
+-- the component goes away (a navigation while a view loads) or its fiber
+-- is killed, aborts the request rather than leaving it to run to the end
+-- unread. The limit is the same mechanism: 'timeout' kills the wait, and
+-- the kill aborts the request.
+--
+-- What @fetch@ answered from the browser's own cache would be no answer
+-- from the server: the API's answers say @Cache-Control: private,
+-- no-cache@ (the server's @privately@), so the browser asks the server
+-- every time, and, with no validator on them, for the whole answer.
+fetchTransport :: (Request -> Int) -> Transport
+fetchTransport limit = Transport $ \r -> do
+  let within = limit r
+  answered <- timeout (within * 1000) $ do
+    Fetch.fetch (fetchRequest r) >>= \case
+      Left e -> pure (Left e)
+      Right response -> fmap (Response response.status) <$> Fetch.bytes response
+  pure $ case answered of
+    Nothing -> Left (noAnswerIn within)
+    Just (Left e) -> Left (fetchFailure e)
+    Just (Right response) -> Right response
+
+-- | The request as @fetch@ is given it: the browser's defaults (CORS mode,
+-- on a same-origin address), but for the wiki's cookies, which go with it,
+-- and its body's media type, which goes as its @Content-Type@.
+fetchRequest :: Request -> Fetch.Request
+fetchRequest r =
+  (Fetch.request method r.url)
+    { Fetch.headers = r.headers <> [("Content-Type", mediaType) | Body mediaType _ <- [r.body]]
+    , Fetch.body = case r.body of
+        NoBody -> Nothing
+        Body _ bytes -> Just (Fetch.BytesBody bytes)
+    , Fetch.credentials = Fetch.SameOriginCredentials
+    }
+  where
+    method = case r.method of
+      "GET" -> Fetch.GET
+      "HEAD" -> Fetch.HEAD
+      "POST" -> Fetch.POST
+      "PUT" -> Fetch.PUT
+      "PATCH" -> Fetch.PATCH
+      "DELETE" -> Fetch.DELETE
+      "OPTIONS" -> Fetch.OPTIONS
+      other -> Fetch.OtherMethod other
+
+-- | Why a request got no answer, as the application says it
+-- ('Wiki.App.Backend.Unreachable'): a @TypeError@ is what @fetch@ rejects
+-- with when the network or the server is down (or the browser refused the
+-- request, which this application's requests never give it cause to).
+fetchFailure :: Fetch.JSError -> Text
+fetchFailure e = case e.name of
+  "TypeError" -> "the network or the server is down"
+  "NotInBrowserError" -> "there is no network natively"
+  "AbortError" -> "the request was cancelled"
+  _ | T.null e.message -> e.name
+  _ -> e.message
+
+-- | That no whole answer came within a limit, in milliseconds.
+noAnswerIn :: Int -> Text
+noAnswerIn ms
+  | ms `mod` 1000 == 0 = "no answer in " <> show (ms `div` 1000) <> " seconds"
+  | otherwise = "no answer in " <> show ms <> " milliseconds"
 
 -- | A transport whose requests are never answered: what a page rendered
 -- ahead of the program shows is the application before anything has been

@@ -14,6 +14,7 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Halogen.Net.Fetch qualified as Fetch
 import Halogen.Subscription qualified as HS
 import Protolude
 import Test.Hspec
@@ -77,9 +78,35 @@ spec :: Spec
 spec = describe "Wiki.App.Backend.Http" $ do
   requests
   answers
+  browserFetch
   caching
   accounts
   preload
+
+-- | What the browser's transport makes of what @fetch@ did, which natively
+-- is only that there is no network.
+browserFetch :: Spec
+browserFetch = describe "the browser's transport" $ do
+  it "says why fetch gave no answer, as the application shows it" $ do
+    fetchFailure (Fetch.JSError "TypeError" "Failed to fetch") `shouldBe` "the network or the server is down"
+    fetchFailure (Fetch.JSError "AbortError" "signal is aborted without reason") `shouldBe` "the request was cancelled"
+    fetchFailure (Fetch.JSError "SecurityError" "Refused.") `shouldBe` "Refused."
+    fetchFailure (Fetch.JSError "Mystery" "") `shouldBe` "Mystery"
+
+  it "says how long it waited for an answer that did not come" $ do
+    noAnswerIn requestTimeout `shouldBe` "no answer in 30 seconds"
+    noAnswerIn uploadTimeout `shouldBe` "no answer in 360 seconds"
+    noAnswerIn 300 `shouldBe` "no answer in 300 milliseconds"
+
+  it "gives an upload longer than any other request" $ do
+    let hello = demoPage "blog" "hello-world"
+    timeLimit (multipart "u" "file" "f" "text/plain" "bytes") `shouldBe` uploadTimeout
+    timeLimit (withJson "PUT" "u" ()) `shouldBe` requestTimeout
+    timeLimit (ifMatch hello.updatedAt (Request {method = "GET", url = "u", headers = [], body = NoBody})) `shouldBe` requestTimeout
+
+  it "has no network natively, which the backend takes for the wiki out of reach" $ do
+    env <- newHttpEnv browserTransport
+    runHttpWiki env (getSpace (slugs "docs")) `shouldReturn` Left (Unreachable "there is no network natively")
 
 requests :: Spec
 requests = describe "its requests" $ do
