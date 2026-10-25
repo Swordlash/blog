@@ -58,6 +58,10 @@ fromArchive a =
           drafts = mempty
         , versions = mempty
         , searchText = mempty
+        , -- Nor accounts: its users come with neither a disabled login
+          -- nor a password, as the server imports them.
+          disabled = mempty
+        , passwords = mempty
         , current = Nothing
         , counter = 1
         }

@@ -1,0 +1,38 @@
+{
+  "grants": [
+    {
+      "permission": "Edit",
+      "space": "s2",
+      "subject": {
+        "contents": "g1",
+        "tag": "SubjectGroup"
+      }
+    },
+    {
+      "permission": "AdministerSpace",
+      "space": "s1",
+      "subject": {
+        "contents": "u1",
+        "tag": "SubjectUser"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "id": "g1",
+      "name": "writers"
+    }
+  ],
+  "users": [
+    {
+      "displayName": "Ada",
+      "id": "u1",
+      "login": "ada"
+    },
+    {
+      "displayName": "Edgar",
+      "id": "u2",
+      "login": "edgar"
+    }
+  ]
+}

@@ -5,7 +5,6 @@
   "pages": 12,
   "spaces": 3,
   "startedAt": "2026-10-24T09:30:12.345678Z",
-  "trustNetwork": false,
   "users": 2,
   "version": "wiki-server 0.1.0.0"
 }

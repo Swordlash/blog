@@ -7,7 +7,6 @@ module Test.Server.Fixture
   , withRunning
   , withRunningAs
   , withDemoRunning
-  , trusted
   , site
   , template
 
@@ -24,6 +23,13 @@ module Test.Server.Fixture
   , json
   , jsonAs
   , ok200
+
+    -- * Sessions
+  , cookie
+  , setCookie
+  , givePassword
+  , signInAs
+  , withAdminSession
   )
 where
 
@@ -43,7 +49,12 @@ import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.HUnit (assertFailure)
 import Test.Storage.Fixture (demoArchive)
-import Wiki.Api (requestMarker)
+import Wiki.Api (AdminApi (..), WikiApi (..), requestMarker)
+import Wiki.Api.Account (Account (..), Credentials (..), NewPassword (..))
+import Wiki.Api.Links (links)
+import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Core.Id (UserId (..))
+import Wiki.Core.User (Standing (..))
 import Wiki.Server (Server (..), withServer)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions)
@@ -150,10 +161,6 @@ withRunningPrepared change prepare test =
       SockAddrInet port _ -> "http://127.0.0.1:" <> show port
       other -> panic ("not an IPv4 address: " <> show other)
 
--- | The options of a server on a trusted network.
-trusted :: ServeOptions -> ServeOptions
-trusted o = o {trustNetwork = True}
-
 -- | A response, as the tests look at it.
 data Reply = Reply
   { status :: Int
@@ -237,3 +244,42 @@ jsonAs code reply = do
 -- | The body of a 200, as JSON.
 ok200 :: (HasCallStack, FromJSON a) => IO Reply -> IO a
 ok200 act = act >>= jsonAs 200
+
+--------------------------------------------------------------------------------
+-- Sessions
+
+-- | A session's cookie, as a browser sends it back.
+cookie :: Text -> Header
+cookie token = ("Cookie", "theme=dark; wiki_session=" <> encodeUtf8 token)
+
+-- | The session id a response's @Set-Cookie@ gives, and the attributes it
+-- gives it with.
+setCookie :: Reply -> Maybe (Text, [Text])
+setCookie reply = case T.splitOn "; " . decodeUtf8 <$> header "Set-Cookie" reply of
+  Just (first' : attributes) | Just value <- T.stripPrefix "wiki_session=" first' -> Just (value, attributes)
+  _ -> Nothing
+
+-- | Give a user a password, as the operator on the admin listener.
+givePassword :: (HasCallStack) => Running -> Text -> Text -> IO ()
+givePassword r uid password = do
+  reply <- sendJson r "PUT" (r.admin <> "/admin/" <> links.admin.setPassword (UserId uid)) NewPassword {password}
+  account :: Account <- jsonAs 200 reply
+  unless account.hasPassword $ assertFailure ("no password for " <> toS uid)
+
+-- | Sign in on the public listener: the session id its cookie carries.
+signInAs :: (HasCallStack) => Running -> Text -> Text -> IO Text
+signInAs r login password = do
+  reply <- sendJson r "POST" (r.public <> "/" <> links.signIn) Credentials {login, password}
+  info :: SessionInfo <- jsonAs 200 reply
+  unless (info.standing == SignedIn) $ assertFailure ("not signed in: " <> show info)
+  maybe (assertFailure ("no session cookie: " <> show reply)) (pure . fst) (setCookie reply)
+
+-- | A server over the demo's wiki with its options changed as given, and
+-- the cookie of a session of the demo's administrator (@admin@, who holds
+-- the global administer) signed in on the public listener: who the
+-- public listener serves the administration to.
+withAdminSession :: (ServeOptions -> ServeOptions) -> (Running -> Header -> IO a) -> IO a
+withAdminSession change test = withDemoRunning change $ \r -> do
+  givePassword r "user-admin" "admin's password"
+  token <- signInAs r "admin" "admin's password"
+  test r (cookie token)

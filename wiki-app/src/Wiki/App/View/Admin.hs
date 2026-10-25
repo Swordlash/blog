@@ -1,9 +1,11 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The administration's sections on the wiki's people (decision 11 of the
--- plan): its users, with a switch for whether each is an administrator,
--- and its groups, with their members, to make, rename and delete, and to
--- put users in and take them out of. One component over the
+-- plan): its users, with switches for whether each is an administrator and
+-- whether they may create spaces, their accounts (whether they have a
+-- password, a new one, their login disabled or enabled) and a form for a
+-- new one; and its groups, with their members, to make, rename and
+-- delete, and to put users in and take them out of. One component over the
 -- administration's backend ("Wiki.App.Backend.Admin"), the same on the
 -- demo's wiki, on the server's admin listener and on its public one: only
 -- who is asking differs, and the shell shows it only to someone who may
@@ -24,7 +26,11 @@
 -- back), but from the panel it would lock its user out of the panel at
 -- once, which is more likely a slip than a wish. The operator on the
 -- admin listener is no user of the wiki and has no row, so they may change
--- every one.
+-- every one. Nor is an administrator offered to disable their own login,
+-- which would sign them out on the spot, for the same reason.
+--
+-- A password is typed into a form of its own, in place, and never shown
+-- back: the field is emptied once it is saved.
 --
 -- Deleting a group asks first, in place, as deleting a space does.
 module Wiki.App.View.Admin
@@ -40,6 +46,7 @@ import Halogen qualified as H
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
 import Protolude hiding (State)
+import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Admin (Directory (..))
 import Wiki.App.Backend (MonadLoad (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -62,9 +69,25 @@ data Editing
   | -- | Asking whether to delete a group.
     ConfirmingDelete GroupId
 
+-- | The form for a new user, as typed so far.
+data NewUser = NewUser
+  { typedLogin :: Text
+  , typedName :: Text
+  , typedPassword :: Text
+  , asAdministrator :: Bool
+  }
+
+noNewUser :: NewUser
+noNewUser = NewUser {typedLogin = "", typedName = "", typedPassword = "", asAdministrator = False}
+
 data State = State
   { input :: Input
   , loaded :: Loaded
+  , newUser :: NewUser
+  , settingPassword :: Maybe (UserId, Text)
+  -- ^ The user whose new password is being typed, and what is typed.
+  , usersTold :: Maybe Text
+  -- ^ What the last change to an account did, said once it is done.
   , editing :: Editing
   , newGroup :: Text
   -- ^ The name typed for a new group.
@@ -82,6 +105,17 @@ data Action
   | Receive Input
   | Retry
   | SetAdministrator UserId Bool
+  | SetCreateSpaces UserId Bool
+  | TypedLogin Text
+  | TypedDisplayName Text
+  | TypedPassword Text
+  | ChoseAdministrator Bool
+  | CreateUser
+  | AskPassword UserId
+  | TypedNewPassword Text
+  | SavePassword
+  | CancelPassword
+  | SetDisabled User Bool
   | TypedNewGroup Text
   | CreateGroup
   | StartRenaming Group
@@ -107,6 +141,9 @@ component =
             State
               { input
               , loaded
+              , newUser = noNewUser
+              , settingPassword = Nothing
+              , usersTold = Nothing
               , editing = Idle
               , newGroup = ""
               , chosen = mempty
@@ -157,6 +194,9 @@ component =
       [hh|
         <div class="admin-users-list">
           {{ errorView <$> st.usersProblem }}
+          {% for t in maybeToList st.usersTold %}
+            <p class="admin-told" role="status">{{ t }}</p>
+          {% end %}
           {% if null d.users %}
             <p class="empty">There are no users yet.</p>
           {% else %}
@@ -166,6 +206,8 @@ component =
                   <th scope="col">Name</th>
                   <th scope="col">Login</th>
                   <th scope="col">Administrator</th>
+                  <th scope="col">Creates spaces</th>
+                  <th scope="col">Account</th>
                 </tr>
               </thead>
               <tbody>
@@ -175,13 +217,14 @@ component =
               </tbody>
             </table>
           {% end %}
+          {{ newUserForm st }}
         </div>
       |]
 
     userRow :: State -> Directory -> User -> H.ComponentHTML Action Empty m
     userRow st d u =
       [hh|
-        <tr class="user-row" data-login={{ u.login }}>
+        <tr class="user-row{% if disabled %} user-disabled{% end %}" data-login={{ u.login }}>
           <td class="user-display-name">{{ u.displayName }}</td>
           <td class="user-login">{{ u.login }}</td>
           <td class="user-administrator">
@@ -194,17 +237,96 @@ component =
               disabled={{ st.busy || yourself }}
               onClick={{ const (SetAdministrator u.id (not administrator)) }}
             >
-              {{ if administrator then "Yes" else "No" :: Text }}
+              {{ yesNo administrator }}
             </button>
             {% if yourself %}
               <span class="admin-note administrator-self">That is you: another administrator can change it.</span>
+            {% end %}
+          </td>
+          <td class="user-creator">
+            <button
+              type="button"
+              role="switch"
+              class="switch creator-switch"
+              aria-checked={{ ariaBool creator }}
+              aria-label={{ u.displayName <> " may create spaces" }}
+              disabled={{ st.busy }}
+              onClick={{ const (SetCreateSpaces u.id (not creator)) }}
+            >
+              {{ yesNo creator }}
+            </button>
+          </td>
+          <td class="user-account">
+            <span class="account-state">{{ accountState }}</span>
+            {% if settingThis %}
+              <form class="inline-form password-form" {{ HE.preventingDefault (HE.onSubmit (const SavePassword)) }}>
+                <label class="field">
+                  <span>{{ "New password for " <> u.displayName }}</span>
+                  <input type="password" class="password-new" autocomplete="new-password" value={{ typedPassword }} onValueInput={{ TypedNewPassword }} required>
+                </label>
+                <button type="submit" class="primary" disabled={{ st.busy }}>Save password</button>
+                {{ button "Cancel" CancelPassword }}
+              </form>
+            {% else %}
+              <button type="button" class="password-ask" disabled={{ st.busy }} onClick={{ const (AskPassword u.id) }}>
+                {{ if hasPassword then "Reset password…" else "Set password…" :: Text }}
+              </button>
+              <button
+                type="button"
+                class="disable-toggle"
+                disabled={{ st.busy || (yourself && not disabled) }}
+                onClick={{ const (SetDisabled u (not disabled)) }}
+              >
+                {{ if disabled then "Enable" else "Disable" :: Text }}
+              </button>
+              {% if yourself %}
+                <span class="admin-note disable-self">You cannot disable your own login here.</span>
+              {% end %}
             {% end %}
           </td>
         </tr>
       |]
       where
         administrator = u.id `Set.member` d.administrators
+        creator = u.id `Set.member` d.creators
+        disabled = u.id `Set.member` d.disabled
+        hasPassword = u.id `Set.member` d.withPassword
         yourself = Just u.id == ((\me -> me.id) <$> st.input.context.session.user)
+        (settingThis, typedPassword) = case st.settingPassword of
+          Just (uid, typed) | uid == u.id -> (True, typed)
+          _ -> (False, "")
+        accountState :: Text
+        accountState
+          | disabled = "Disabled"
+          | hasPassword = "Signs in with a password"
+          | otherwise = "No password yet"
+
+    newUserForm :: State -> H.ComponentHTML Action Empty m
+    newUserForm st =
+      [hh|
+        <form class="user-create" aria-label="New user" {{ HE.preventingDefault (HE.onSubmit (const CreateUser)) }}>
+          <h3>New user</h3>
+          <div class="user-create-fields">
+            <label class="field">
+              <span>Login</span>
+              <input type="text" class="user-create-login" autocomplete="off" autocapitalize="none" spellcheck="false" value={{ st.newUser.typedLogin }} onValueInput={{ TypedLogin }} required>
+            </label>
+            <label class="field">
+              <span>Display name</span>
+              <input type="text" class="user-create-name" autocomplete="off" placeholder="The login, if left blank" value={{ st.newUser.typedName }} onValueInput={{ TypedDisplayName }}>
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input type="password" class="user-create-password" autocomplete="new-password" value={{ st.newUser.typedPassword }} onValueInput={{ TypedPassword }} required>
+            </label>
+            <label class="check user-create-administrator">
+              <input type="checkbox" checked={{ st.newUser.asAdministrator }} onChecked={{ ChoseAdministrator }}>
+              <span>Administrator</span>
+            </label>
+          </div>
+          <button type="submit" class="primary" disabled={{ st.busy }}>Create user</button>
+        </form>
+      |]
 
     groupsView :: State -> Directory -> H.ComponentHTML Action Empty m
     groupsView st d =
@@ -320,7 +442,42 @@ component =
         old <- gets (\st -> st.input.context.revision)
         modify (\st -> st {input})
         when (old /= input.context.revision) load
-      SetAdministrator u granted -> change (\st -> st {usersProblem = Nothing}) (\e st -> st {usersProblem = Just e}) (setAdministrator u granted)
+      SetAdministrator u granted -> change usersDone usersFailed (setAdministrator u granted)
+      SetCreateSpaces u granted -> change usersDone usersFailed (setCreateSpaces u granted)
+      TypedLogin t -> modify (\st -> st {newUser = st.newUser {typedLogin = t}})
+      TypedDisplayName t -> modify (\st -> st {newUser = st.newUser {typedName = t}})
+      TypedPassword t -> modify (\st -> st {newUser = st.newUser {typedPassword = t}})
+      ChoseAdministrator b -> modify (\st -> st {newUser = st.newUser {asAdministrator = b}})
+      CreateUser -> do
+        form <- gets (\st -> st.newUser)
+        modify (\st -> st {busy = True, usersProblem = Nothing, usersTold = Nothing})
+        createUser NewAccount {login = form.typedLogin, displayName = form.typedName, password = form.typedPassword} >>= \case
+          Left e -> modify (\st -> st {busy = False, usersProblem = Just e})
+          Right account -> do
+            -- Made: whatever comes of making them an administrator, the
+            -- form is done with and the directory is read again.
+            made <- if form.asAdministrator then setAdministrator account.user.id True else pure (Right ())
+            modify $ \st ->
+              st
+                { newUser = noNewUser
+                , usersProblem = leftToMaybe made
+                , usersTold = Just (account.user.displayName <> " (" <> account.user.login <> ") can sign in now.")
+                }
+            H.raise (Changed Nothing)
+      AskPassword u -> modify (\st -> st {settingPassword = Just (u, ""), usersProblem = Nothing, usersTold = Nothing})
+      TypedNewPassword t -> modify $ \st -> st {settingPassword = (\(u, _) -> (u, t)) <$> st.settingPassword}
+      CancelPassword -> modify (\st -> st {settingPassword = Nothing})
+      SavePassword ->
+        get >>= \st -> for_ st.settingPassword $ \(u, typed) ->
+          change
+            (\s -> s {settingPassword = Nothing, usersProblem = Nothing, usersTold = Just (nameOf st u <> " has a new password: their sessions have ended.")})
+            usersFailed
+            (void <$> setPassword u typed)
+      SetDisabled u off ->
+        change
+          (\st -> st {usersProblem = Nothing, usersTold = Just (if off then u.displayName <> " can no longer sign in: their sessions have ended." else u.displayName <> " can sign in again.")})
+          usersFailed
+          (void <$> setDisabled u.id off)
       TypedNewGroup t -> modify (\st -> st {newGroup = t})
       CreateGroup -> do
         name <- gets (\st -> st.newGroup)
@@ -348,6 +505,12 @@ component =
       Remove gid u -> change (\st -> st {groupsProblem = Nothing}) groupsFailed (removeMember gid u)
       where
         groupsFailed e st = st {groupsProblem = Just e}
+        usersFailed e st = st {usersProblem = Just e}
+        usersDone st = st {usersProblem = Nothing, usersTold = Nothing}
+        -- A user's name, as the directory last read has it.
+        nameOf st u = case st.loaded of
+          Ready d | Just x <- find (\x -> x.id == u) d.users -> x.displayName
+          _ -> "The user"
 
     -- Ask for a change. Done, the shell is told, and the controls stay
     -- disabled until the directory has been read again ('Receive'); refused,
@@ -375,6 +538,9 @@ component =
           , -- Who is not in a group has changed: the first is chosen again.
             chosen = mempty
           }
+
+yesNo :: Bool -> Text
+yesNo b = if b then "Yes" else "No"
 
 -- | A user as the list of whom to add names them.
 userLabel :: User -> Text

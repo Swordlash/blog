@@ -29,9 +29,10 @@ module Wiki.Server.Password
   , hashWith
 
     -- * Rules
+
+  -- What a password must be is the same for every backend, and so
+  -- "Wiki.Core.User"'s.
   , checkPassword
-  , minimumLength
-  , maximumLength
 
     -- * Session ids
   , newToken
@@ -48,6 +49,7 @@ import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Protolude
+import Wiki.Core.User (checkPassword)
 
 -- | What a hash is made with: memory in KiB, passes, lanes.
 data Parameters = Parameters
@@ -139,24 +141,6 @@ unbase64 :: Text -> Either [Char] ByteString
 unbase64 t = convertFromBase Base64 (encodeUtf8 (padded t))
   where
     padded s = s <> T.replicate ((4 - T.length s `mod` 4) `mod` 4) "="
-
--- | Why a password cannot be one, if it cannot: shorter than
--- 'minimumLength' characters, or longer than 'maximumLength'.
-checkPassword :: Text -> Either Text Text
-checkPassword p
-  | T.length p < minimumLength = Left ("A password needs at least " <> show minimumLength <> " characters.")
-  | T.length p > maximumLength = Left ("A password has at most " <> show maximumLength <> " characters.")
-  | otherwise = Right p
-
--- | The shortest password the server takes: NIST's minimum for a password
--- chosen by its user (SP 800-63B).
-minimumLength :: Int
-minimumLength = 8
-
--- | The longest: long enough for any passphrase, short enough that hashing
--- one is not a way to keep the server busy.
-maximumLength :: Int
-maximumLength = 1024
 
 -- | A new session id: 32 random bytes, as the cookie carries them (base64
 -- for URLs, unpadded, which a cookie's value may hold as it is).

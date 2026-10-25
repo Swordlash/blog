@@ -18,6 +18,7 @@ module Wiki.Api.Admin
     -- * The wiki's people
   , Directory (..)
   , AdministratorFlag (..)
+  , CreateSpacesFlag (..)
   , GroupName (..)
   )
 where
@@ -36,9 +37,6 @@ data ServerStatus = ServerStatus
   -- ^ When this server started.
   , dataDir :: Text
   -- ^ The directory the database and the attachments are kept in.
-  , trustNetwork :: Bool
-  -- ^ Whether everyone who reaches the public listener is taken for the
-  -- administrator (@--trust-network@).
   , spaces :: Int
   , pages :: Int
   , attachments :: Int
@@ -58,14 +56,25 @@ data ServerStatus = ServerStatus
 --
 -- An administrator here is a user granted the global
 -- 'Wiki.Core.Permission.Administer' themself, which is what marking and
--- unmarking one changes. A grant of it to a group makes its members
--- administrators too, by the rules of "Wiki.Core.Permission", but nothing
--- here grants one, and they are not listed as such.
+-- unmarking one changes, and a creator of spaces one granted the global
+-- 'Wiki.Core.Permission.CreateSpaces' themself. A grant of either to a
+-- group gives it to its members too, by the rules of
+-- "Wiki.Core.Permission", but nothing here grants one, and they are not
+-- listed as such.
 data Directory = Directory
   { users :: [User]
-  -- ^ Every user, by login.
+  -- ^ Every user, by login, a disabled one included.
   , administrators :: Set UserId
   -- ^ The users granted the global administer themselves.
+  , creators :: Set UserId
+  -- ^ The users granted the global create-spaces themselves.
+  , disabled :: Set UserId
+  -- ^ The users whose login is disabled: they cannot sign in, and keep
+  -- their pages, versions and grants.
+  , withPassword :: Set UserId
+  -- ^ The users who have a password to sign in with. One brought in with
+  -- an imported wiki, or made without one on the console, has none until
+  -- one is set.
   , groups :: [Group]
   -- ^ Every group, by name.
   , membership :: Membership
@@ -78,6 +87,12 @@ data Directory = Directory
 -- | The body of @PUT \/api\/v1\/admin\/users\/\<id>\/administrator@:
 -- whether the user is to hold the global administer.
 newtype AdministratorFlag = AdministratorFlag {administrator :: Bool}
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The body of @PUT \/api\/v1\/admin\/users\/\<id>\/create-spaces@:
+-- whether the user is to hold the global create-spaces.
+newtype CreateSpacesFlag = CreateSpacesFlag {createSpaces :: Bool}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 

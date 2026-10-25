@@ -1,5 +1,6 @@
--- | What the administration asks of wherever the wiki is kept: its people,
--- who of them administers it, and its groups with their members.
+-- | What the administration asks of wherever the wiki is kept: its people
+-- and their accounts, who of them administers it and who may create
+-- spaces, and its groups with their members.
 --
 -- A class of its own beside 'Wiki.App.Backend.MonadWiki', as
 -- 'Wiki.App.DemoUsers.MonadDemoUsers' is, since it is what the
@@ -30,11 +31,25 @@
 --
 -- Marking and unmarking an administrator changes the user's own grant of
 -- the global administer and nothing else; a grant of it to a group is left
--- alone. Deleting a group deletes its membership and every grant to it,
+-- alone. Letting a user create spaces, or no longer, is the same with the
+-- global create-spaces. Deleting a group deletes its membership and every grant to it,
 -- global and on spaces, so that a group made later is never handed another's
 -- permissions. Adding a member who is in the group already, and removing
 -- one who is not, change nothing and succeed. A group's name is not blank,
 -- and no two groups have names that differ only in case.
+--
+-- = Accounts
+--
+-- A user made here signs in with a password, kept by the server as a hash
+-- (decision 8). Their login follows 'Wiki.Core.User.checkLogin' and is no
+-- other user's in any case ('Conflict' otherwise); a blank display name is
+-- the login; a password follows 'Wiki.Core.User.checkPassword' ('Invalid'
+-- otherwise). A new password, and disabling a login, end the user's
+-- sessions; a disabled user cannot sign in, stays in the 'directory', and
+-- keeps their pages and grants. The demo's backend has no passwords and
+-- keeps only whether a user has one, which it checks as the server does,
+-- so that its administration behaves alike; a disabled user is nobody
+-- there, and is not offered to switch to.
 module Wiki.App.Backend.Admin
   ( MonadAdmin (..)
   )
@@ -44,6 +59,7 @@ import Control.Monad.Trans.Class (MonadTrans)
 import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Protolude
+import Wiki.Api.Account (Account, NewAccount)
 import Wiki.Api.Admin (Directory)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (GroupId, UserId)
@@ -64,6 +80,27 @@ class (Monad m) => MonadAdmin m where
   setAdministrator :: UserId -> Bool -> m (Either WikiError ())
   default setAdministrator :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Bool -> m (Either WikiError ())
   setAdministrator u = lift . setAdministrator u
+
+  -- | Grant a user the global create-spaces, or take it from them.
+  setCreateSpaces :: UserId -> Bool -> m (Either WikiError ())
+  default setCreateSpaces :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Bool -> m (Either WikiError ())
+  setCreateSpaces u = lift . setCreateSpaces u
+
+  -- | A new user, who signs in with the password given: their account.
+  createUser :: NewAccount -> m (Either WikiError Account)
+  default createUser :: (MonadTrans t, m ~ t n, MonadAdmin n) => NewAccount -> m (Either WikiError Account)
+  createUser = lift . createUser
+
+  -- | Give a user a new password, ending their sessions: their account.
+  setPassword :: UserId -> Text -> m (Either WikiError Account)
+  default setPassword :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Text -> m (Either WikiError Account)
+  setPassword u = lift . setPassword u
+
+  -- | Disable a user's login, ending their sessions, or enable it again:
+  -- their account.
+  setDisabled :: UserId -> Bool -> m (Either WikiError Account)
+  default setDisabled :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Bool -> m (Either WikiError Account)
+  setDisabled u = lift . setDisabled u
 
   -- | A new group, with this name and nobody in it.
   createGroup :: Text -> m (Either WikiError Group)

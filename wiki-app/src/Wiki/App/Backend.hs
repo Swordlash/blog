@@ -51,8 +51,9 @@
 --   'CreateSpaces' to make it top-level or 'AdministerSpace' on the new
 --   parent;
 -- * renaming a space, deleting it, making it public or private, giving
---   it math macros and choosing the order of its children need
---   'AdministerSpace' on it;
+--   it math macros, choosing the order of its children, and reading and
+--   changing who is granted what on it ('spaceAccess', 'setSpaceGrant')
+--   need 'AdministerSpace' on it;
 -- * creating, saving, moving and deleting pages, and uploading and deleting
 --   attachments, need 'Edit' on the page's space (on both spaces, for a page
 --   moved from one to another);
@@ -139,7 +140,7 @@ import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Page (Page)
-import Wiki.Core.Permission (Grants, Principal (..))
+import Wiki.Core.Permission (Grants, Principal (..), SpaceAccess, SpacePermission, Subject)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
@@ -285,6 +286,32 @@ class (Monad m) => MonadWiki m where
   deleteSpace :: SpaceId -> m (Either WikiError ())
   default deleteSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError ())
   deleteSpace = lift . deleteSpace
+
+  -- * Permissions on a space
+
+  -- | Who may do what on a space: the grants on it and on its ancestors,
+  -- which it inherits, and the users and groups a grant may be given to
+  -- ("Wiki.Core.Permission"'s 'SpaceAccess'). The space's own grants come
+  -- first, then its parent's, and so on up; each in the order it was
+  -- given.
+  spaceAccess :: SpaceId -> m (Either WikiError SpaceAccess)
+  default spaceAccess :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError SpaceAccess)
+  spaceAccess = lift . spaceAccess
+
+  -- | Give a user or a group a permission on a space, which its subspaces
+  -- inherit, or take it away (a grant on an ancestor is that ancestor's to
+  -- take). A grant given twice, or taken from someone who does not have it,
+  -- changes nothing and succeeds. Giving it to a user or group that is not
+  -- there is 'Invalid' (the address names the space, which is what is
+  -- found or not), checked after the permission, as the arguments are.
+  --
+  -- Whoever administers the space may take the permission from themself:
+  -- the backend allows it, and the space's view does not offer it (see
+  -- 'Wiki.Core.Permission.keepsAdministering'), as the administration does
+  -- not offer the global administer.
+  setSpaceGrant :: SpaceId -> Subject -> SpacePermission -> Bool -> m (Either WikiError ())
+  default setSpaceGrant :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Subject -> SpacePermission -> Bool -> m (Either WikiError ())
+  setSpaceGrant s who p = lift . setSpaceGrant s who p
 
   -- * Order
 

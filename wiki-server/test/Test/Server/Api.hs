@@ -4,7 +4,7 @@
 -- administration's people, and every refusal as an 'ApiError'.
 module Test.Server.Api (spec) where
 
-import Data.Aeson (encode)
+import Data.Aeson (ToJSON, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
@@ -17,7 +17,8 @@ import Servant.API (toUrlPiece)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Admin (AdministratorFlag (..), Directory (..), GroupName (..), ServerStatus (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..), NewAccount (..), NewPassword (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, searchUrl)
@@ -26,10 +27,11 @@ import Wiki.Api.Version (pageVersion)
 import Wiki.App.Backend (maxAttachmentSize)
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Id (AttachmentId (..), UserId (..))
+import Wiki.Core.Id (AttachmentId (..), GroupId (..), UserId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..))
-import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
+import Wiki.Core.Path (parsePath)
+import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), searchQuery)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), User (..))
@@ -45,6 +47,7 @@ spec = describe "the API over HTTP" $ do
   refusals
   status
   people
+  permissions
 
 -- | An address of the API on a listener: the public one's root, or the
 -- admin one's @\/admin\/@.
@@ -67,13 +70,6 @@ whoIsAsking = describe "who is asking" $ do
     operator <- ok200 (getUrl r (onAdmin r links.session))
     (operator :: SessionInfo).user `shouldBe` Just administratorUser
     map (\g -> g.permission) operator.grants.global `shouldBe` [Administer]
-
-  it "is the administrator on the public listener too with --trust-network, which it warns about" $
-    withRunningAs trusted $ \r -> do
-      s <- ok200 (getUrl r (onPublic r links.session))
-      (s :: SessionInfo).user `shouldBe` Just administratorUser
-      logged <- readIORef r.logged
-      filter ("level=warning event=trust-network" `T.isPrefixOf`) logged `shouldSatisfy` (not . null)
 
   it "logs each request with its listener, principal, status and time, but not its query" $ withRunning $ \r -> do
     _ <- getUrl r (onPublic r (searchUrl (searchQuery "secret words")))
@@ -253,17 +249,17 @@ status = describe "the server's status" $ do
   it "is given to the administrator, with the server's counts" $ withRunning $ \r -> do
     (_, _) <- withSpace r False
     s <- ok200 (getUrl r (onAdmin r links.admin.status))
-    ((s :: ServerStatus).spaces, s.pages, s.users, s.trustNetwork, s.dataDir) `shouldBe` (1, 1, 0, False, toS r.dataDir)
+    ((s :: ServerStatus).spaces, s.pages, s.users, s.dataDir) `shouldBe` (1, 1, 0, toS r.dataDir)
     s.version `shouldSatisfy` T.isPrefixOf "wiki-server "
 
   it "is refused to an anonymous reader" $ withRunning $ \r ->
     getUrl r (onPublic r links.admin.status) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
 
--- | The administration's users and groups over HTTP: answered on the admin
--- listener with no session, and on the public one under @--trust-network@,
--- where everyone is the administrator; refused to an anonymous reader, the
--- public listener's without it. (An administrator's session on the public
--- listener comes with accounts.)
+-- | The administration's users, accounts and groups over HTTP: answered on
+-- the admin listener with no session, and on the public one to an
+-- administrator's session; refused to an anonymous reader and to a user
+-- signed in who is not an administrator, before anything they name is
+-- looked for.
 people :: Spec
 people = describe "the wiki's people" $ do
   it "are the operator's on the admin listener, without a session" $ withDemoRunning identity $ \r -> do
@@ -289,13 +285,49 @@ people = describe "the wiki's people" $ do
     (editor `Set.member` (final :: Directory).administrators) `shouldBe` False
     map (\g -> g.name) final.groups `shouldBe` ["writers"]
 
-  it "are the administrator's on the public listener with --trust-network" $ withDemoRunning trusted $ \r -> do
-    d <- ok200 (getUrl r (onPublic r links.admin.directory))
+  it "are an administrator's on the public listener, through their session" $ withAdminSession identity $ \r session -> do
+    let get' address = getUrlWith r (onPublic r address) [session]
+        put' :: (ToJSON b) => Text -> b -> IO Reply
+        put' address body = send r methodPut (onPublic r address) [session, (hContentType, "application/json")] (encode body)
+        post' :: (ToJSON b) => Text -> b -> IO Reply
+        post' address body = send r methodPost (onPublic r address) [session, (hContentType, "application/json")] (encode body)
+    d <- ok200 (get' links.admin.directory)
     map (\u -> u.login) (d :: Directory).users `shouldBe` ["admin", "editor", "reader"]
-    made <- sendJson r methodPost (onPublic r links.admin.createGroup) GroupName {name = "Reviewers"} >>= jsonAs 201
+    (d.administrators, d.withPassword, d.disabled, d.creators) `shouldBe` (Set.singleton (loginId d "admin"), Set.singleton (loginId d "admin"), mempty, Set.singleton (loginId d "editor"))
+    _ :: ServerStatus <- ok200 (get' links.admin.status)
+    made <- post' links.admin.createGroup GroupName {name = "Reviewers"} >>= jsonAs 201
     (made :: Group).name `shouldBe` "Reviewers"
-    renamed <- sendJson r methodPut (onPublic r (links.admin.renameGroup made.id)) GroupName {name = "Editors"} >>= jsonAs 200
+    renamed <- put' (links.admin.renameGroup made.id) GroupName {name = "Editors"} >>= jsonAs 200
     renamed `shouldBe` Group {id = made.id, name = "Editors"}
+    -- The accounts' operations too.
+    bea :: Account <- post' links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = "bea's password"} >>= jsonAs 201
+    (bea.hasPassword, bea.disabled) `shouldBe` (True, False)
+    reset :: Account <- put' (links.admin.setPassword bea.user.id) NewPassword {password = "another password"} >>= jsonAs 200
+    reset.hasPassword `shouldBe` True
+    off :: Account <- put' (links.admin.setDisabled bea.user.id) AccountDisabled {disabled = True} >>= jsonAs 200
+    off.disabled `shouldBe` True
+    (.status) <$> put' (links.admin.setCreateSpaces (loginId d "reader")) CreateSpacesFlag {createSpaces = True} `shouldReturn` 204
+    changed <- ok200 (get' links.admin.directory)
+    ((changed :: Directory).disabled, changed.creators, bea.user.id `Set.member` changed.withPassword)
+      `shouldBe` (Set.singleton bea.user.id, Set.fromList [loginId d "editor", loginId d "reader"], True)
+
+  it "are refused to a user signed in who is not an administrator" $ withAdminSession identity $ \r _ -> do
+    givePassword r "user-editor" "editor's password"
+    editor <- cookie <$> signInAs r "editor" "editor's password"
+    d <- ok200 (getUrl r (onAdmin r links.admin.directory))
+    let rita = loginId d "reader"
+        forbidden reply = jsonAs 403 reply >>= (`shouldBe` Forbidden)
+        put' :: (ToJSON b) => Text -> b -> IO Reply
+        put' address body = send r methodPut (onPublic r address) [editor, (hContentType, "application/json")] (encode body)
+    getUrlWith r (onPublic r links.admin.directory) [editor] >>= forbidden
+    getUrlWith r (onPublic r links.admin.status) [editor] >>= forbidden
+    put' (links.admin.setAdministrator (loginId d "editor")) AdministratorFlag {administrator = True} >>= forbidden
+    put' (links.admin.setCreateSpaces (loginId d "editor")) CreateSpacesFlag {createSpaces = True} >>= forbidden
+    put' (links.admin.setPassword rita) NewPassword {password = "a password of mine"} >>= forbidden
+    put' (links.admin.setDisabled rita) AccountDisabled {disabled = True} >>= forbidden
+    send r methodPost (onPublic r links.admin.createUser) [editor, (hContentType, "application/json")] (encode NewAccount {login = "mine", displayName = "", password = "a password of mine"}) >>= forbidden
+    send r methodPost (onPublic r links.admin.createGroup) [editor, (hContentType, "application/json")] (encode GroupName {name = "Mine"}) >>= forbidden
+    ok200 (getUrl r (onAdmin r links.admin.directory)) `shouldReturn` d
 
   it "are refused to an anonymous reader, who learns nothing of what they name" $ withDemoRunning identity $ \r -> do
     d <- ok200 (getUrl r (onAdmin r links.admin.directory))
@@ -311,8 +343,84 @@ people = describe "the wiki's people" $ do
     send r methodDelete (onPublic r (links.admin.deleteGroup writers)) [] "" >>= forbidden
     send r methodPut (onPublic r (links.admin.addMember writers rita)) [] "" >>= forbidden
     send r methodDelete (onPublic r (links.admin.removeMember writers rita)) [] "" >>= forbidden
+    sendJson r methodPut (onPublic r (links.admin.setCreateSpaces rita)) CreateSpacesFlag {createSpaces = True} >>= forbidden
+    sendJson r methodPost (onPublic r links.admin.createUser) NewAccount {login = "mine", displayName = "", password = "a password of mine"} >>= forbidden
+    sendJson r methodPut (onPublic r (links.admin.setPassword rita)) NewPassword {password = "a password of mine"} >>= forbidden
+    sendJson r methodPut (onPublic r (links.admin.setDisabled nobody)) AccountDisabled {disabled = True} >>= forbidden
     -- Nothing changed.
     ok200 (getUrl r (onAdmin r links.admin.directory)) `shouldReturn` d
   where
     loginId :: Directory -> Text -> UserId
     loginId d login = maybe (panic ("no user " <> login)) (\u -> u.id) (find (\u -> u.login == login) d.users)
+
+-- | Who may do what, given over HTTP by an administrator's session on the
+-- public listener, and kept to by the server for each user's own: the
+-- global create-spaces, and grants on a private space, which its subspace
+-- inherits, until they are revoked. The demo's wiki: the editor may create
+-- spaces; Team is private, its subspace Projects viewable by the reader;
+-- the editor sees neither.
+permissions :: Spec
+permissions = describe "permissions given over HTTP" $ do
+  it "lets whoever holds create-spaces make a top-level space, and nobody else" $ withAdminSession identity $ \r session -> do
+    givePassword r "user-editor" "editor's password"
+    givePassword r "user-reader" "reader's password"
+    editor <- cookie <$> signInAs r "editor" "editor's password"
+    rita <- cookie <$> signInAs r "reader" "reader's password"
+    let create hs name = send r methodPost (onPublic r links.spaces.create) ((hContentType, "application/json") : hs) (encode NewSpace {parent = Nothing, name})
+    (.status) <$> create [rita] "Rita's" `shouldReturn` 403
+    (.status) <$> create [] "Nobody's" `shouldReturn` 403
+    granted <- send r methodPut (onPublic r (links.admin.setCreateSpaces (UserId "user-reader"))) [session, (hContentType, "application/json")] (encode CreateSpacesFlag {createSpaces = True})
+    granted.status `shouldBe` 204
+    made <- create [rita] "Rita's" >>= jsonAs 201
+    (made :: Space).parent `shouldBe` Nothing
+    -- Her session says so, and she administers what she made.
+    me <- ok200 (getUrlWith r (onPublic r links.session) [rita])
+    map (\g -> g.permission) (me :: SessionInfo).grants.global `shouldBe` [CreateSpaces]
+    (.status) <$> getUrlWith r (onPublic r (links.spaces.access made.id)) [rita] `shouldReturn` 200
+    -- The demo's editor holds it already; taken from him, he may not.
+    (.status) <$> create [editor] "Edgar's" `shouldReturn` 201
+    _ <- send r methodPut (onPublic r (links.admin.setCreateSpaces (UserId "user-editor"))) [session, (hContentType, "application/json")] (encode CreateSpacesFlag {createSpaces = False})
+    (.status) <$> create [editor] "Edgar's again" `shouldReturn` 403
+    (.status) <$> create [] "Nobody's" `shouldReturn` 403
+    (.status) <$> create [rita] "Rita's again" `shouldReturn` 201
+
+  it "grants a user a private space, which its subspace inherits, until it is revoked" $ withAdminSession identity $ \r session -> do
+    givePassword r "user-editor" "editor's password"
+    editor <- cookie <$> signInAs r "editor" "editor's password"
+    let at' hs path = getUrlWith r (onPublic r (links.spaces.atPath (either (panic . show) identity (parsePath path)))) hs
+        grant how sid granted =
+          send r methodPut (onPublic r (links.spaces.setGrant sid)) [session, (hContentType, "application/json")] (encode SpaceGrantChange {subject = SubjectUser (UserId "user-editor"), permission = how, granted})
+        newPage' sid = send r methodPost (onPublic r (links.spaces.createPage sid)) [editor, (hContentType, "application/json")] (encode NewPage {parent = Nothing, title = "Granted", body = "Hello."})
+    team :: Space <- at' [session] "team" >>= jsonAs 200
+    projects :: Space <- at' [session] "team/projects" >>= jsonAs 200
+    (.status) <$> at' [editor] "team" `shouldReturn` 403
+    (.status) <$> at' [editor] "team/projects" `shouldReturn` 403
+    -- Who may do what on Projects, as its administrator reads it: its own
+    -- grants and Team's above it.
+    initially <- ok200 (getUrlWith r (onPublic r (links.spaces.access projects.id)) [session])
+    [(g.space == projects.id, g.subject, g.permission) | g <- (initially :: SpaceAccess).grants]
+      `shouldBe` [(True, SubjectUser (UserId "user-reader"), View)]
+    map (\u -> u.login) initially.users `shouldBe` ["admin", "editor", "reader"]
+    -- View on Team: both, read only.
+    (.status) <$> grant View team.id True `shouldReturn` 204
+    (.status) <$> at' [editor] "team" `shouldReturn` 200
+    (.status) <$> at' [editor] "team/projects" `shouldReturn` 200
+    (.status) <$> newPage' projects.id `shouldReturn` 403
+    -- Edit on Team: the subspace's pages too.
+    (.status) <$> grant Edit team.id True `shouldReturn` 204
+    (.status) <$> newPage' projects.id `shouldReturn` 201
+    granted <- ok200 (getUrlWith r (onPublic r (links.spaces.access projects.id)) [session])
+    [(g.space == team.id, g.permission) | g <- (granted :: SpaceAccess).grants, g.subject == SubjectUser (UserId "user-editor")]
+      `shouldBe` [(True, View), (True, Edit)]
+    -- The grants are not the editor's to read or change.
+    (.status) <$> getUrlWith r (onPublic r (links.spaces.access team.id)) [editor] `shouldReturn` 403
+    (.status) <$> send r methodPut (onPublic r (links.spaces.setGrant team.id)) [editor, (hContentType, "application/json")] (encode SpaceGrantChange {subject = SubjectUser (UserId "user-editor"), permission = AdministerSpace, granted = True})
+      `shouldReturn` 403
+    -- Revoked, they are gone, from both.
+    (.status) <$> grant Edit team.id False `shouldReturn` 204
+    (.status) <$> grant View team.id False `shouldReturn` 204
+    (.status) <$> at' [editor] "team" `shouldReturn` 403
+    (.status) <$> at' [editor] "team/projects" `shouldReturn` 403
+    -- Granting to nobody is refused, after the permission.
+    (.status) <$> send r methodPut (onPublic r (links.spaces.setGrant team.id)) [session, (hContentType, "application/json")] (encode SpaceGrantChange {subject = SubjectGroup (GroupId "no-such-group"), permission = View, granted = True})
+      `shouldReturn` 400

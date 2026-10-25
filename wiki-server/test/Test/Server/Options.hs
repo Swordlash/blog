@@ -1,10 +1,10 @@
 -- | The server's configuration: addresses as written on its command line,
--- and the two rules about who a request's sender is taken for, which a
--- server refuses to start without (the admin listener on loopback only;
--- @--trust-network@ never on every interface).
+-- and the rule about who a request's sender is taken for, which a server
+-- refuses to start without (the admin listener on loopback only).
 module Test.Server.Options (spec) where
 
 import Data.Text qualified as T
+import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, info)
 import Protolude
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -38,9 +38,6 @@ addresses = describe "an address to listen on" $ do
     map isLoopback ["127.0.0.1", "127.1.2.3", "::1", "::ffff:127.0.0.1"] `shouldBe` [True, True, True, True]
     map isLoopback ["0.0.0.0", "::", "100.64.0.1", "192.168.1.1", "::2", "fe80::1"] `shouldBe` [False, False, False, False, False, False]
 
-  it "is every interface's for 0.0.0.0 and :: only" $
-    map isWildcard ["0.0.0.0", "::", "0:0::0", "127.0.0.1", "::1"] `shouldBe` [True, True, True, False, False]
-
 rules :: Spec
 rules = describe "a configuration" $ do
   let options = defaultServeOptions "data"
@@ -61,11 +58,14 @@ rules = describe "a configuration" $ do
     checkOptions options {adminListen = Just (Listen "0.0.0.0" 8081), adminListenUnsafe = True} `shouldSatisfy` isRight
     checkOptions options {adminListen = Nothing, listen = Listen "0.0.0.0" 8080} `shouldSatisfy` isRight
 
-  it "refuses --trust-network on every interface, and takes it on one address" $ do
-    for_ ["0.0.0.0", "::"] $ \h ->
-      options {trustNetwork = True, listen = Listen h 8080} `shouldSatisfy` refusedFor ("--trust-network with --listen " <> renderListen (Listen h 8080))
-    checkOptions options {trustNetwork = True, listen = Listen "100.64.0.1" 8080} `shouldSatisfy` isRight
-    checkOptions options {trustNetwork = True} `shouldSatisfy` isRight
+  it "has no --trust-network any more: the public listener serves whoever signs in" $ do
+    let parsed = execParserPure defaultPrefs (info serveOptions mempty)
+    case parsed ["--data", "data", "--trust-network"] of
+      Failure _ -> pass
+      _ -> expectationFailure "--trust-network was taken"
+    case parsed ["--data", "data", "--listen", "0.0.0.0:8080"] of
+      Success o -> checkOptions o `shouldSatisfy` isRight
+      _ -> expectationFailure "--listen 0.0.0.0:8080 was not taken"
 
 refusedAtStart :: Spec
 refusedAtStart = describe "a server" $ do
@@ -75,10 +75,6 @@ refusedAtStart = describe "a server" $ do
   it "does not start with an admin listener that is not loopback" $ do
     starts (\o -> o {adminListen = Just (Listen "0.0.0.0" 0)}) >>= (`shouldSatisfy` maybe False (any ("is not a loopback address" `T.isInfixOf`)))
     starts (\o -> o {adminListen = Just (Listen "0.0.0.0" 0), adminListenUnsafe = True}) `shouldReturn` Nothing
-
-  it "does not start with --trust-network on 0.0.0.0 or ::" $
-    for_ ["0.0.0.0", "::"] $ \h ->
-      starts (\o -> o {trustNetwork = True, listen = Listen h 0}) >>= (`shouldSatisfy` maybe False (any ("--trust-network" `T.isPrefixOf`)))
 
   it "stops when told, and its listeners with it" $
     withSystemTempDirectory "wiki-server-stop" $ \dir -> do

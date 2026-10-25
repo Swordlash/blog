@@ -5,13 +5,12 @@
 -- to whoever is asking.
 --
 -- The two listeners serve the same thing, and differ only in how they find
--- who is asking, which they do for each request (decisions 11, 19 and 20 of
+-- who is asking, which they do for each request (decisions 11 and 20 of
 -- docs/PLAN.md): the public one, at the base path (@--base-path@, @\/@ by
 -- default), finds the user whose session the request's cookie names, or
--- nobody (no cookie, a session that has ended, a disabled user's), and
--- under @--trust-network@ takes everyone for the administrator; the admin
--- one, at @\/admin\/@, takes everyone for the administrator, the local
--- operator, and looks at no cookie. A handler is given whom the listener
+-- nobody (no cookie, a session that has ended, a disabled user's); the
+-- admin one, at @\/admin\/@, takes everyone for the administrator, the
+-- local operator, and looks at no cookie. A handler is given whom the listener
 -- found and never knows which listener it serves.
 --
 -- Each page goes out with the @\<base href>@ of its listener's place
@@ -56,8 +55,7 @@ data Listener = Listener
 
 -- | How a listener finds who is asking.
 data Finding
-  = -- | Everyone is the administrator: the admin listener's local operator,
-    -- or anyone on a trusted network (@--trust-network@).
+  = -- | Everyone is the administrator: the admin listener's local operator.
     EveryoneAdministers
   | -- | Whoever the request's session cookie names, or nobody.
     BySession CookieSettings

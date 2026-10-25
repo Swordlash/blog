@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+`--trust-network` is gone, with its warning and its refusal on `0.0.0.0`:
+the public listener serves whoever signs in, and anyone else as an anonymous
+reader; make the first administrator with `wiki-server users add LOGIN
+--admin`. `ServerStatus` no longer reports it, and `docker-compose.trusted.yml`
+is removed. The administration's account endpoints now go through the
+storage (`SqliteWiki`'s new `MonadAdmin` methods `createUser`, `setPassword`,
+`setDisabled`), which checks for an administrator before it hashes a
+password; `PUT admin/users/<user>/create-spaces` grants or takes the global
+create-spaces; `GET`/`PUT spaces/<space>/grants` read and change a space's
+grants, for whoever administers it. No migration: the tables of 0001 hold it
+all.
+
 Accounts and sessions. Migration 0002 gives users an argon2id password hash
 (nullable: a user without one cannot sign in, as every user made before is)
 and a `disabled` flag, and adds `sessions`, keyed by the SHA-256 of each

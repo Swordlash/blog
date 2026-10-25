@@ -51,42 +51,23 @@ import Protolude
 import Wiki.Api.Account (Account (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (User (..), checkLogin)
 import Wiki.Server.Password (checkPassword, hashPassword, newToken, tokenHash, verifyPassword)
 import Wiki.Server.Storage (Storage, withDatabase)
-import Wiki.Server.Storage.Rows (Stamp (..))
+import Wiki.Server.Storage.Rows (AccountRow, Stamp (..), accountFromRow, deleteSessionsOf, insertAccount, loadAccount, selectAccounts, updateDisabled, updatePasswordHash)
 
 --------------------------------------------------------------------------------
 -- Accounts
-
--- | A user's account, read from its row.
-type AccountRow = (Text, Text, Text, Maybe Text, Int)
-
-account :: AccountRow -> Account
-account (uid, login, displayName, phc, disabled) =
-  Account
-    { user = User {id = UserId uid, login, displayName}
-    , hasPassword = isJust phc
-    , disabled = disabled /= 0
-    }
-
--- | A query of accounts: their columns, from the users, with the rest
--- given.
-selectAccounts :: Text -> Query
-selectAccounts rest = Query ("SELECT id, login, display_name, password_hash, disabled FROM users " <> rest)
 
 -- | A user's account, by id.
 accountOf :: Storage -> UserId -> IO (Maybe Account)
 accountOf st u = withDatabase st (`loadAccount` u)
 
-loadAccount :: Connection -> UserId -> IO (Maybe Account)
-loadAccount c u = fmap account . head <$> query c (selectAccounts "WHERE id = ?") (Only u.text)
-
 -- | A user's account, by login, which is compared as SQLite compares
 -- without case (ASCII letters): what someone types to sign in.
 accountByLogin :: Storage -> Text -> IO (Maybe Account)
 accountByLogin st login = withDatabase st $ \c ->
-  fmap account . head <$> query c (selectAccounts "WHERE login = ? COLLATE NOCASE") (Only (T.strip login))
+  fmap accountFromRow . head <$> query c (selectAccounts "WHERE login = ? COLLATE NOCASE") (Only (T.strip login))
 
 -- | Every user's account, by login, with whether they are an administrator
 -- (hold the global @administer@ themselves).
@@ -101,21 +82,7 @@ listAccounts st = withDatabase st $ \c -> do
           , "FROM users ORDER BY login COLLATE NOCASE"
           ]
       )
-  pure [(account (uid, login, name, phc, disabled), admin /= (0 :: Int)) | (uid, login, name, phc, disabled, admin) <- rows]
-
--- | A login as it is kept, or why it cannot be one: without the blanks
--- around it, at most 64 characters, with no blank or control character
--- inside, and not starting with @~@, which names the server's own
--- principals ("Wiki.Server.Storage.administratorId").
-checkLogin :: Text -> Either Text Text
-checkLogin raw
-  | T.null login = Left "A login cannot be blank."
-  | T.length login > 64 = Left "A login has at most 64 characters."
-  | T.any (\ch -> isSpace ch || isControl ch) login = Left "A login cannot have a blank in it."
-  | "~" `T.isPrefixOf` login = Left "A login cannot start with ~."
-  | otherwise = Right login
-  where
-    login = T.strip raw
+  pure [(accountFromRow (uid, login, name, phc, disabled), admin /= (0 :: Int)) | (uid, login, name, phc, disabled, admin) <- rows]
 
 -- | Make a user, who signs in with this password, or (with none) cannot
 -- sign in until they are given one. Their display name is their login if
@@ -129,13 +96,10 @@ createAccount st rawLogin rawName password = runExceptT $ do
   let name = case T.strip rawName of
         "" -> login
         n -> n
-  ExceptT . withDatabase st $ \c -> immediately c $ do
-    taken <- query c "SELECT count(*) FROM users WHERE login = ? COLLATE NOCASE" (Only login)
-    if taken /= [Only (0 :: Int)]
-      then pure (Left (Conflict ("There is a user with the login " <> login <> " already.")))
-      else do
-        execute c "INSERT INTO users (id, login, display_name, password_hash, disabled) VALUES (?, ?, ?, ?, 0)" (uid, login, name, phc)
-        maybe (Left NotFound) Right <$> loadAccount c (UserId uid)
+  ExceptT . withDatabase st $ \c ->
+    immediately c (first taken <$> insertAccount c (UserId uid) login name phc)
+  where
+    taken login = Conflict ("There is a user with the login " <> login <> " already.")
 
 -- | Give a user a new password, and end their sessions.
 setPassword :: Storage -> UserId -> Text -> IO (Either WikiError Account)
@@ -144,14 +108,14 @@ setPassword st u password = case checkPassword password of
   Right p -> do
     phc <- hashPassword p
     changeAccount st u $ \c -> do
-      execute c "UPDATE users SET password_hash = ? WHERE id = ?" (phc, u.text)
-      endSessionsOf c u
+      updatePasswordHash c u phc
+      deleteSessionsOf c u
 
 -- | Disable a user's login, which ends their sessions, or enable it again.
 setDisabled :: Storage -> UserId -> Bool -> IO (Either WikiError Account)
 setDisabled st u disabled = changeAccount st u $ \c -> do
-  execute c "UPDATE users SET disabled = ? WHERE id = ?" (fromEnum disabled, u.text)
-  when disabled (endSessionsOf c u)
+  updateDisabled c u disabled
+  when disabled (deleteSessionsOf c u)
 
 -- | Make a user an administrator (the global @administer@, granted to
 -- them), or take it away. What their groups are granted is not changed.
@@ -218,7 +182,8 @@ signIn st now login password
   | otherwise = do
       found <- withDatabase st $ \c ->
         head <$> query c (selectAccounts "WHERE login = ? COLLATE NOCASE") (Only (T.strip login))
-      let hashOf (_, _, _, phc, _) = phc
+      let hashOf :: AccountRow -> Maybe Text
+          hashOf (_, _, _, phc, _) = phc
           matches = verifyPassword (fromMaybe unknownHash (found >>= hashOf)) password
       case found of
         Just row@(uid, _, _, Just _, 0) | matches -> do
@@ -226,7 +191,7 @@ signIn st now login password
           withDatabase st $ \c -> do
             execute c "DELETE FROM sessions WHERE expires_at <= ?" (Only (Stamp now))
             execute c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)" (tokenHash token, uid, Stamp now, Stamp now, Stamp (addUTCTime idleTime now))
-          pure (Right ((account row).user, token))
+          pure (Right ((accountFromRow row).user, token))
         _ -> pure (Left NoSuchAccount)
 
 -- | A hash of no one's password, to check a password against when the
@@ -267,6 +232,3 @@ resolveSession st now token = withDatabase st $ \c -> do
 -- | End the session a cookie's id names, if there is one.
 endSession :: Storage -> Text -> IO ()
 endSession st token = withDatabase st $ \c -> execute c "DELETE FROM sessions WHERE id_hash = ?" (Only (tokenHash token))
-
-endSessionsOf :: Connection -> UserId -> IO ()
-endSessionsOf c u = execute c "DELETE FROM sessions WHERE user_id = ?" (Only u.text)

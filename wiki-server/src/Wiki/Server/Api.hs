@@ -7,10 +7,11 @@
 -- A handler never knows which listener it serves: it is given who is asking
 -- ('Caller'), whom the listener found for the request ("Wiki.Server.App"),
 -- and the storage's rules do the rest. What only an administrator may do
--- (export, import, the server's status, users' accounts) is checked here,
--- by the same grants the application shows: whoever holds the global
--- 'Administer', which the administrator of the admin listener (or of a
--- trusted network) always does.
+-- (export, import, the server's status) is checked here, by the same
+-- grants the application shows: whoever holds the global 'Administer',
+-- which the operator of the admin listener always does. The rest of the
+-- administration, users' accounts included, is the storage's to check
+-- ('MonadAdmin').
 --
 -- Signing in and out are the one thing that depends on more than who is
 -- asking: they are for a listener that finds people by their sessions, and
@@ -53,8 +54,8 @@ import Servant.Multipart (Mem, MultipartOptions (..))
 import Servant.Server.Generic (AsServer)
 import System.Directory (doesFileExist)
 import Wiki.Api
-import Wiki.Api.Account (Account, AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
-import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..), ServerStatus (..))
+import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewPassword (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
@@ -88,7 +89,6 @@ data Env = Env
   -- ^ The program and its version ("Wiki.Server.Version").
   , startedAt :: UTCTime
   , dataDir :: FilePath
-  , trustNetwork :: Bool
   , maxImportSize :: Int
   , limiter :: Limiter
   -- ^ The failed attempts to sign in ("Wiki.Server.Limiter").
@@ -99,7 +99,7 @@ data Caller = Caller
   { who :: Who
   , signing :: Maybe Signing
   -- ^ How they sign in and out, on a listener where people do: the public
-  -- one, unless it takes everyone for the administrator.
+  -- one.
   }
 
 -- | What signing in and out need to know of a request.
@@ -264,6 +264,8 @@ handlers env caller =
           , move = \s body -> wiki (moveSpace s body.parent)
           , shift = \s body -> wiki (shiftSpace s body.shift)
           , delete = \s -> wiki (deleteSpace s) $> NoContent
+          , access = wiki . spaceAccess
+          , setGrant = \s body -> wiki (setSpaceGrant s body.subject body.permission body.granted) $> NoContent
           , listPages = wiki . listPages
           , pageAt = \s path -> versioned <$> wiki (getPage s path)
           , createPage = \s new -> versioned <$> wiki (createPage s new.parent new.title new.body)
@@ -315,24 +317,22 @@ handlers env caller =
             -- own operations ("Wiki.App.Backend.Admin").
             directory = wiki directory
           , setAdministrator = \u flag -> wiki (setAdministrator u flag.administrator) $> NoContent
+          , setCreateSpaces = \u flag -> wiki (setCreateSpaces u flag.createSpaces) $> NoContent
           , createGroup = \body -> wiki (createGroup body.name)
           , renameGroup = \g body -> wiki (renameGroup g body.name)
           , deleteGroup = \g -> wiki (deleteGroup g) $> NoContent
           , addMember = \g u -> wiki (addMember g u) $> NoContent
           , removeMember = \g u -> wiki (removeMember g u) $> NoContent
-          , createUser = \new -> administrator >> accounts (Accounts.createAccount env.storage new.login new.displayName (Just new.password))
-          , setPassword = \u body -> administrator >> accounts (Accounts.setPassword env.storage u body.password)
-          , setDisabled = \u body -> administrator >> accounts (Accounts.setDisabled env.storage u body.disabled)
+          , createUser = wiki . createUser
+          , setPassword = \u body -> wiki (setPassword u body.password)
+          , setDisabled = \u body -> wiki (setDisabled u body.disabled)
           }
     }
   where
     who = caller.who
-    -- What signs in and out where nobody does (the admin listener, or a
-    -- trusted network, where everyone is the administrator already) is
-    -- refused, saying so.
+    -- What signs in and out where nobody does (the admin listener, where
+    -- everyone is the administrator already) is refused, saying so.
     signingHere = maybe (refuse (ApiError.Invalid "Nobody signs in here: everyone who reaches this address is the administrator.")) pure caller.signing
-    accounts :: IO (Either WikiError Account) -> Handler Account
-    accounts change = liftIO change >>= either (throwError . wikiError) pure
     ask' :: SqliteWiki IO a -> Handler a
     ask' = liftIO . runSqliteWiki env.storage who
     wiki :: SqliteWiki IO (Either WikiError a) -> Handler a
@@ -425,7 +425,6 @@ serverStatus env = do
           { version = env.version
           , startedAt = env.startedAt
           , dataDir = toS env.dataDir
-          , trustNetwork = env.trustNetwork
           , spaces
           , pages
           , attachments

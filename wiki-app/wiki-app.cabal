@@ -92,6 +92,7 @@ library
       Wiki.App.View.NewPage
       Wiki.App.View.NewSpace
       Wiki.App.View.Page
+      Wiki.App.View.Permissions
       Wiki.App.View.Preview
       Wiki.App.View.Search
       Wiki.App.View.SearchResults
@@ -275,6 +276,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Macros
       Test.Browser.Mount
       Test.Browser.Order
+      Test.Browser.Permissions
       Test.Browser.Persist
       Test.Browser.Search
       Test.Browser.Shell

@@ -13,6 +13,7 @@ import Test.Browser.Hydrate qualified as Hydrate
 import Test.Browser.Import qualified as Import
 import Test.Browser.Macros qualified as Macros
 import Test.Browser.Order qualified as Order
+import Test.Browser.Permissions qualified as Permissions
 import Test.Browser.Persist qualified as Persist
 import Test.Browser.Search qualified as Search
 import Test.Browser.Shell qualified as Shell
@@ -48,6 +49,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.Backend.Mem kept in IndexedDB" (Persist.spec BrowserDOM)
   describe "The order of a space's children" (Order.spec BrowserDOM)
   describe "Wiki.App.View.Admin" (Admin.spec BrowserDOM)
+  describe "Wiki.App.View.Permissions" (Permissions.spec BrowserDOM)
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

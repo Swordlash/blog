@@ -11,6 +11,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IORef (IORef, readIORef)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Unique (hashUnique, newUnique)
 import Halogen.VDom.DOM.Monad (runBrowserDOM, runMemDOM)
 import Protolude
@@ -18,7 +19,9 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
+import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.App.Backend
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Contract (As (..), Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
@@ -32,7 +35,7 @@ import Wiki.Core.Id (PageId (..), UserId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
-import Wiki.Core.Permission (Grants (..))
+import Wiki.Core.Permission (Grants (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (User (..))
@@ -240,6 +243,10 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       _ <- run (deleteAttachment gone.id) >>= ok
       _ <- run (renameSpace space.id "Kept and renamed") >>= ok
       _ <- run (setSpacePublic space.id True) >>= ok
+      bea <- run (createUser NewAccount {login = "bea", displayName = "Bea", password = "bea's password"}) >>= ok
+      _ <- run (setDisabled bea.user.id True) >>= ok
+      _ <- run (setSpaceGrant space.id (SubjectUser bea.user.id) Edit True) >>= ok
+      _ <- run (setCreateSpaces bea.user.id True) >>= ok
       _ <- run (setSpaceOrder docs.id ChildPages ByHand) >>= ok
       _ <- run (setSpaceOrder docs.id ChildSpaces NewestFirst) >>= ok
       _ <- run (shiftPage tour.id ShiftToTop) >>= ok
@@ -249,6 +256,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       map (\s -> s.name) (Map.elems st.spaces) `shouldContain` ["Kept and renamed"]
       map (\p -> p.body) (Map.elems st.pages) `shouldContain` ["# Kept, and changed"]
       upload.size `shouldBe` 4
+      (Set.member bea.user.id st.disabled, Set.member bea.user.id st.passwords) `shouldBe` (True, True)
       -- A space deleted takes its pages, attachments and grants with it.
       _ <- run (deleteSpace space.id) >>= ok
       shouldReload db opened.wiki

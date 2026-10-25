@@ -19,7 +19,10 @@
 -- run with 'runMemWiki' (the prerender, most tests) is kept nowhere else.
 --
 -- There are no passwords: 'switchUser' says who is signed in, which is how
--- the demo shows the same wiki as different people.
+-- the demo shows the same wiki as different people. The administration's
+-- accounts are kept as far as the demo can: whether a user has a password
+-- (not the password), and whether their login is disabled, which makes
+-- them nobody here.
 module Wiki.App.Backend.Mem
   ( MemWiki (..)
   , runMemWiki
@@ -53,6 +56,7 @@ import Control.Monad.UUID (MonadUUID (..))
 import Data.ByteString.Base64 qualified as Base64
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Time (UTCTime, getCurrentTime)
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, inBrowser, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
@@ -130,9 +134,10 @@ switchUser u = MemWiki $ do
   env <- ask
   liftIO (atomicModifyIORef' env.wiki (\st -> (st {current = u}, ())))
 
--- | Everyone who can be signed in, by login: what the demo's switcher offers.
+-- | Everyone who can be signed in, by login: what the demo's switcher
+-- offers. A disabled user cannot be, and is left out.
 memUsers :: (MonadIO m) => MemWiki m [User]
-memUsers = sortOn (\u -> u.login) . Map.elems . (\st -> st.users) <$> readState
+memUsers = (\st -> sortOn (\u -> u.login) [u | u <- Map.elems st.users, not (Set.member u.id st.disabled)]) <$> readState
 
 readState :: (MonadIO m) => MemWiki m MemState
 readState = MemWiki (ask >>= \env -> liftIO (readIORef env.wiki))
@@ -162,6 +167,8 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   renameSpace sid = write . renameSpaceIn sid
   setSpacePublic sid = write . setSpacePublicIn sid
   setSpaceMathMacros sid = write . setSpaceMathMacrosIn sid
+  spaceAccess = query . spaceAccessIn
+  setSpaceGrant sid subject permission = write . setSpaceGrantIn sid subject permission
   moveSpace sid = write . moveSpaceIn sid
   deleteSpace = write . deleteSpaceIn
   setSpaceOrder sid kind = write . setSpaceOrderIn sid kind
@@ -212,6 +219,10 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
 instance (MonadIO m) => MonadAdmin (MemWiki m) where
   directory = query directoryIn
   setAdministrator u = write . setAdministratorIn u
+  setCreateSpaces u = write . setCreateSpacesIn u
+  createUser = write . createUserIn
+  setPassword u = write . setPasswordIn u
+  setDisabled u = write . setDisabledIn u
   createGroup = write . createGroupIn
   renameGroup g = write . renameGroupIn g
   deleteGroup = write . deleteGroupIn

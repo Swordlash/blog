@@ -64,7 +64,7 @@ import Protolude
 import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, NewAccount, NewPassword)
-import Wiki.Api.Admin (AdministratorFlag, Directory, GroupName, ServerStatus)
+import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, ServerStatus)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Types
@@ -75,6 +75,7 @@ import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page)
+import Wiki.Core.Permission (SpaceAccess)
 import Wiki.Core.Search (SearchHit)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
@@ -145,6 +146,12 @@ data SpacesApi mode = SpacesApi
   -- ^ @shiftSpace@.
   , delete :: mode :- Capture "space" SpaceId :> DeleteNoContent
   -- ^ @deleteSpace@.
+  , access :: mode :- Capture "space" SpaceId :> "grants" :> Get '[JSON] SpaceAccess
+  -- ^ @spaceAccess@: the grants on the space and its ancestors, and whom a
+  -- grant may be given to, for whoever administers the space.
+  , setGrant :: mode :- Capture "space" SpaceId :> "grants" :> ReqBody '[JSON] SpaceGrantChange :> PutNoContent
+  -- ^ @setSpaceGrant@: give a user or a group a permission on the space,
+  -- or take it away.
   , listPages :: mode :- Capture "space" SpaceId :> "pages" :> Get '[JSON] [Page]
   -- ^ @listPages@.
   , pageAt :: mode :- Capture "space" SpaceId :> "pages" :> "at" :> CaptureAll "path" Slug :> Get '[JSON] (Versioned Page)
@@ -226,6 +233,9 @@ data AdminApi mode = AdminApi
   , setAdministrator :: mode :- "users" :> Capture "user" UserId :> "administrator" :> ReqBody '[JSON] AdministratorFlag :> PutNoContent
   -- ^ @setAdministrator@: grant a user the global administer, or take it
   -- away, their own included.
+  , setCreateSpaces :: mode :- "users" :> Capture "user" UserId :> "create-spaces" :> ReqBody '[JSON] CreateSpacesFlag :> PutNoContent
+  -- ^ @setCreateSpaces@: grant a user the global create-spaces, or take it
+  -- away.
   , createGroup :: mode :- "groups" :> ReqBody '[JSON] GroupName :> PostCreated '[JSON] Group
   -- ^ @createGroup@.
   , renameGroup :: mode :- "groups" :> Capture "group" GroupId :> "name" :> ReqBody '[JSON] GroupName :> Put '[JSON] Group
@@ -237,13 +247,15 @@ data AdminApi mode = AdminApi
   , removeMember :: mode :- "groups" :> Capture "group" GroupId :> "members" :> Capture "user" UserId :> DeleteNoContent
   -- ^ @removeMember@.
   , createUser :: mode :- "users" :> ReqBody '[JSON] NewAccount :> PostCreated '[JSON] Account
-  -- ^ Make a user who signs in with a password ("Wiki.Api.Account"). A
-  -- login another user has is 'Wiki.Api.Error.Conflict'.
+  -- ^ @createUser@: make a user who signs in with a password
+  -- ("Wiki.Api.Account"). A login another user has is
+  -- 'Wiki.Api.Error.Conflict'.
   , setPassword :: mode :- "users" :> Capture "user" UserId :> "password" :> ReqBody '[JSON] NewPassword :> Put '[JSON] Account
-  -- ^ Give a user a new password, which ends their sessions.
+  -- ^ @setPassword@: give a user a new password, which ends their
+  -- sessions.
   , setDisabled :: mode :- "users" :> Capture "user" UserId :> "disabled" :> ReqBody '[JSON] AccountDisabled :> Put '[JSON] Account
-  -- ^ Disable a user's login, which ends their sessions, or enable it
-  -- again.
+  -- ^ @setDisabled@: disable a user's login, which ends their sessions, or
+  -- enable it again.
   }
   deriving stock (Generic)
 

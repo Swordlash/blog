@@ -10,7 +10,9 @@
 -- field @attachments@, and an attachment's bytes are kept as bytes, under
 -- the id of its blob. Besides the records, the store @meta@ keeps the id
 -- counter (ids are made from it, and a counter that started over would make
--- an id again that a record already has) and the global grants. Who is
+-- an id again that a record already has), the global grants, and the
+-- accounts' flags (which users are disabled, and which have a password),
+-- which the export's user records do not have. Who is
 -- signed in, and the object URLs a tab has made for attachments, last as
 -- long as the tab does. Drafts ("Wiki.Core.Draft") are kept too, in a store
 -- of their own, though the export has none: the demo's author may close the
@@ -96,7 +98,9 @@ attachmentsStore = "attachments"
 grantsStore = "grants"
 
 -- | The id counter, under @counter@ (a wiki that has never been written out
--- has none), and the global grants, under @globalGrants@.
+-- has none), the global grants, under @globalGrants@, and the accounts'
+-- flags, under @accounts@ (a wiki written out before there were any has
+-- none: nobody is disabled, and nobody has a password).
 metaStore = "meta"
 
 -- | Each user's draft of a page, under 'draftKey'.
@@ -122,9 +126,10 @@ versionKey page at = page.text <> "/" <> toS (iso8601Show at)
 -- | What a store holds, by store and key.
 type Records = Map StoreName (Map Text ByteString)
 
-counterKey, globalGrantsKey :: Text
+counterKey, globalGrantsKey, accountsKey :: Text
 counterKey = "counter"
 globalGrantsKey = "globalGrants"
+accountsKey = "accounts"
 
 -- | The state as the stores keep it: every store, even an empty one.
 records :: MemState -> Records
@@ -141,6 +146,7 @@ records st =
       , Map.fromList
           [ (counterKey, encodeJson st.counter)
           , (globalGrantsKey, encodeJson (map encodeGlobalGrant st.grants.global))
+          , (accountsKey, encodeJson (object ["disabled" .= st.disabled, "passwords" .= st.passwords]))
           ]
       )
     , (draftsStore, Map.fromList [(draftKey d, encodeJson (encodeDraft d)) | d <- Map.elems st.drafts])
@@ -168,6 +174,11 @@ parseVersion = withObject "version" $ \o -> do
   at <- o .: "updatedAt"
   saved <- Saved <$> o .: "title" <*> o .: "body" <*> o .:? "author"
   pure (page, at, saved)
+
+-- | The accounts' flags: the users who are disabled, and those who have a
+-- password.
+parseAccounts :: Value -> Parser (Set UserId, Set UserId)
+parseAccounts = withObject "accounts" $ \o -> (,) <$> o .:? "disabled" .!= mempty <*> o .:? "passwords" .!= mempty
 
 -- | A draft's record, with named fields, as the export's records have.
 encodeDraft :: Draft -> Value
@@ -261,6 +272,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
   Just counterBytes -> either Unreadable Stored $ do
     counter <- first (failure metaStore counterKey . toS) (eitherDecodeStrict' counterBytes :: Either [Char] Natural)
     global <- maybe (Right []) (decoding metaStore globalGrantsKey (listOf parseGlobalGrant)) (Map.lookup globalGrantsKey (holding metaStore))
+    (disabled, passwords) <- maybe (Right mempty) (decoding metaStore accountsKey parseAccounts) (Map.lookup accountsKey (holding metaStore))
     users <- keyed usersStore parseUser (\u -> u.id.text) UserId
     groupsAndMembers <- keyed groupsStore parseGroup (\(g, _) -> g.id.text) GroupId
     pages <- keyed pagesStore parseStoredPage (\p -> p.id.text) PageId
@@ -289,6 +301,8 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
           -- versions with it in one transaction, so there are no others.
           versions = Map.intersection (Map.fromListWith (<>) [(page, Map.singleton at v) | (page, at, v) <- Map.elems history]) pages
         , grants = Grants {global, spaces = grants}
+        , disabled
+        , passwords
         , counter
         }
   where

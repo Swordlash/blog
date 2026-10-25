@@ -2,6 +2,12 @@
   "administrators": [
     "u1"
   ],
+  "creators": [
+    "u1"
+  ],
+  "disabled": [
+    "u2"
+  ],
   "groups": [
     {
       "id": "g1",
@@ -24,5 +30,8 @@
       "id": "u2",
       "login": "edgar"
     }
+  ],
+  "withPassword": [
+    "u1"
   ]
 }

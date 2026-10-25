@@ -87,7 +87,6 @@ withServer logger raw action = do
             , version = serverVersion
             , startedAt
             , dataDir = options.dataDir
-            , trustNetwork = options.trustNetwork
             , maxImportSize = options.maxImportSize
             , limiter
             }
@@ -95,10 +94,7 @@ withServer logger raw action = do
           Listener
             { name = "public"
             , mount = options.basePath
-            , finding =
-                if options.trustNetwork
-                  then EveryoneAdministers
-                  else BySession CookieSettings {path = options.basePath, secure = options.secureCookies}
+            , finding = BySession CookieSettings {path = options.basePath, secure = options.secureCookies}
             }
         admin =
           Listener
@@ -108,18 +104,6 @@ withServer logger raw action = do
             }
         listeners = (options.listen, public) : [(a, admin) | Just a <- [options.adminListen]]
     logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
-    when options.trustNetwork $
-      logWith
-        logger
-        Warning
-        [ ("event", "trust-network")
-        ,
-          ( "message"
-          , "--trust-network: EVERY REQUEST ON THE PUBLIC LISTENER "
-              <> renderListen options.listen
-              <> " IS THE ADMINISTRATOR, who may read, change and delete everything. Anyone who can reach that address owns this wiki; keep it on a private network."
-          )
-        ]
     stopping <- newIORef False
     bracket (bindAll listeners) (traverse_ (close . fst)) $ \bound -> do
       let settings l =

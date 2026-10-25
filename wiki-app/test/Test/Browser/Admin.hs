@@ -1,8 +1,10 @@
 -- | The administration's users and groups ("Wiki.App.View.Admin") in a
 -- browser, over the demo's wiki: an administrator marks another user as
 -- one, who then has the administration, and unmarks them; nobody is
--- offered to unmark themself; groups are made, renamed and deleted, users
--- put in them and taken out, and what a group may do follows its members.
+-- offered to unmark themself; a user is let create spaces; users are made
+-- with a password, given one, and disabled and enabled again; groups are
+-- made, renamed and deleted, users put in them and taken out, and what a
+-- group may do follows its members.
 module Test.Browser.Admin (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -46,6 +48,87 @@ spec m = do
     other <- switchOf ui "reader"
     getAttribute other "disabled" `shouldReturn` Nothing
     length <$> findAll ui ".administrator-self" `shouldReturn` 1
+
+  it "lets a user create spaces, who then is offered to, and no longer" $ runPage $ do
+    ui <- start m (Just "user-admin") Admin
+    creatorShouldBe ui "editor" True
+    creatorShouldBe ui "reader" False
+    find ui ".user-row[data-login=reader] .creator-switch" >>= click
+    creatorShouldBe ui "reader" True
+    switchTo ui "reader"
+    _ <- find ui ".wiki-sidebar .new-space-link"
+    switchTo ui "admin"
+    find ui ".wiki-header a.admin-link" >>= click
+    find ui ".user-row[data-login=reader] .creator-switch" >>= click
+    creatorShouldBe ui "reader" False
+    switchTo ui "reader"
+    eventually (length <$> findAll ui ".wiki-sidebar .new-space-link" `shouldReturn` 0)
+
+  it "makes a user with a password, an administrator if asked, and refuses a login that is taken" $ runPage $ do
+    ui <- start m (Just "user-admin") Admin
+    find ui ".user-create-login" >>= (`typeText` "bea")
+    find ui ".user-create-name" >>= (`typeText` "Bea Builder")
+    find ui ".user-create-password" >>= (`typeText` "bea's password")
+    find ui ".user-create-administrator input" >>= click
+    clickButton ui ".user-create button" "Create user"
+    eventually (find ui ".user-row[data-login=bea] .account-state" >>= (`shouldHaveText` "Signs in with a password"))
+    switchShouldBe ui "bea" True
+    find ui ".admin-told" >>= (`shouldContainText` "Bea Builder (bea) can sign in now.")
+    -- The form is emptied once the user is made.
+    find ui ".user-create-login" >>= (`getProperty` "value") >>= (`shouldBe` "")
+    find ui ".user-create-password" >>= (`getProperty` "value") >>= (`shouldBe` "")
+    -- Bea may be switched to, and is an administrator.
+    switchTo ui "bea"
+    _ <- find ui ".wiki-header a.admin-link"
+    -- A login that is taken, in any case, is refused in place, and what was
+    -- typed stays to be changed.
+    find ui ".user-create-login" >>= (`typeText` "EDITOR")
+    find ui ".user-create-password" >>= (`typeText` "a good password")
+    clickButton ui ".user-create button" "Create user"
+    eventually (find ui ".admin-users .error-conflict" >>= (`shouldContainText` "There is a user with the login EDITOR already."))
+    find ui ".user-create-login" >>= (`getProperty` "value") >>= (`shouldBe` "EDITOR")
+    -- So is a password that is too short.
+    login <- find ui ".user-create-login"
+    clear login
+    typeText login "dee"
+    password <- find ui ".user-create-password"
+    clear password
+    typeText password "short"
+    clickButton ui ".user-create button" "Create user"
+    eventually (find ui ".admin-users .error-invalid" >>= (`shouldContainText` "at least 8 characters"))
+    eventually (length <$> findAll ui ".user-row[data-login=dee]" `shouldReturn` 0)
+
+  it "gives a user a password, and disables and enables their login, which the switcher follows" $ runPage $ do
+    ui <- start m (Just "user-admin") Admin
+    find ui ".user-row[data-login=reader] .account-state" >>= (`shouldHaveText` "No password yet")
+    find ui ".user-row[data-login=reader] .password-ask" >>= (`shouldHaveText` "Set password…")
+    find ui ".user-row[data-login=reader] .password-ask" >>= click
+    find ui ".user-row[data-login=reader] .password-new" >>= (`typeText` "short")
+    clickButton ui ".user-row[data-login=reader] .password-form button" "Save password"
+    eventually (find ui ".admin-users .error-invalid" >>= (`shouldContainText` "at least 8 characters"))
+    new <- find ui ".user-row[data-login=reader] .password-new"
+    clear new
+    typeText new "rita's password"
+    clickButton ui ".user-row[data-login=reader] .password-form button" "Save password"
+    eventually (find ui ".user-row[data-login=reader] .account-state" >>= (`shouldHaveText` "Signs in with a password"))
+    find ui ".admin-told" >>= (`shouldContainText` "Rita Reader has a new password")
+    find ui ".user-row[data-login=reader] .password-ask" >>= (`shouldHaveText` "Reset password…")
+    -- Nobody is offered to disable their own login.
+    own <- find ui ".user-row[data-login=admin] .disable-toggle"
+    getAttribute own "disabled" `shouldReturn` Just ""
+    find ui ".user-row[data-login=admin] .disable-self" >>= (`shouldContainText` "You cannot disable your own login")
+    -- Disabled, Rita is not offered to switch to; enabled, she is again.
+    find ui ".user-row[data-login=reader] .disable-toggle" >>= click
+    eventually (find ui ".user-row[data-login=reader] .account-state" >>= (`shouldHaveText` "Disabled"))
+    find ui ".user-row[data-login=reader]" >>= (`shouldHaveClass` "user-disabled")
+    find ui ".user-switcher-toggle" >>= click
+    eventually (length <$> findAll ui ".user-menu button[data-login=reader]" `shouldReturn` 0)
+    find ui ".user-switcher-toggle" >>= click
+    find ui ".user-row[data-login=reader] .disable-toggle" >>= (`shouldHaveText` "Enable")
+    find ui ".user-row[data-login=reader] .disable-toggle" >>= click
+    eventually (find ui ".user-row[data-login=reader] .account-state" >>= (`shouldHaveText` "Signs in with a password"))
+    switchTo ui "reader"
+    find ui ".user-switcher-toggle" >>= (`shouldContainText` "Rita Reader")
 
   it "puts users in a group and takes them out, and the group's permissions follow its members" $ runPage $ do
     ui <- start m (Just "user-admin") Admin
@@ -123,6 +206,9 @@ spec m = do
     unsafeIOToPageM (runTest (IDB.deleteDatabase db.name :: m ()))
   where
     switchOf ui login = find ui (".user-row[data-login=" <> login <> "] .administrator-switch")
+
+    creatorShouldBe ui login checked =
+      eventually (find ui (".user-row[data-login=" <> login <> "] .creator-switch") >>= \element -> getAttribute element "aria-checked" `shouldReturn` Just (if checked then "true" else "false"))
 
     -- Whether a user's switch is on, once what was last asked has been
     -- made and read back.

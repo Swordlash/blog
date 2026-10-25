@@ -1,8 +1,7 @@
 -- | Who is asking, over real HTTP: signing in and out on the public
 -- listener, the session's cookie, the rules each principal is held to, the
 -- administrator of the admin listener, and the checks that keep other
--- sites' pages and guessers out (decisions 8, 11, 19 and 20 of
--- docs/PLAN.md).
+-- sites' pages and guessers out (decisions 8, 11 and 20 of docs/PLAN.md).
 --
 -- The demo's wiki is the server's: Blog and Docs public, Team private; the
 -- editor edits Blog through their group, the reader views Team's Projects,
@@ -20,7 +19,7 @@ import Protolude
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..))
 import Wiki.Api.Admin (Directory (..), ServerStatus)
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
@@ -46,33 +45,6 @@ spec = describe "accounts over HTTP" $ do
 onPublic, onAdmin :: Running -> Text -> Text
 onPublic r address = r.public <> "/" <> address
 onAdmin r address = r.admin <> "/admin/" <> address
-
--- | A session's cookie, as a browser sends it back.
-cookie :: Text -> Header
-cookie token = ("Cookie", "theme=dark; wiki_session=" <> encodeUtf8 token)
-
--- | The session id a response's @Set-Cookie@ gives, and the attributes it
--- gives it with.
-setCookie :: Reply -> Maybe (Text, [Text])
-setCookie reply = case T.splitOn "; " . decodeUtf8 <$> header "Set-Cookie" reply of
-  Just (first' : attributes) | Just value <- T.stripPrefix "wiki_session=" first' -> Just (value, attributes)
-  _ -> Nothing
-
--- | Give a demo user a password, as the administrator on the admin
--- listener.
-givePassword :: Running -> Text -> Text -> IO ()
-givePassword r uid password = do
-  reply <- sendJson r methodPut (onAdmin r (links.admin.setPassword (UserId uid))) NewPassword {password}
-  account :: Account <- jsonAs 200 reply
-  account.hasPassword `shouldBe` True
-
--- | Sign in on the public listener: the session id its cookie carries.
-signInAs :: (HasCallStack) => Running -> Text -> Text -> IO Text
-signInAs r login password = do
-  reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login, password}
-  info :: SessionInfo <- jsonAs 200 reply
-  info.standing `shouldBe` SignedIn
-  maybe (panic ("no session cookie: " <> show reply)) (pure . fst) (setCookie reply)
 
 -- | Who the public listener takes a request with this cookie for.
 sessionWith :: Running -> [Header] -> IO (SessionInfo, Reply)
@@ -167,13 +139,6 @@ rules = describe "each principal" $ do
     token <- signInAs r "admin" "admin's password"
     (.status) <$> spaceAt r [cookie token] "team" `shouldReturn` 200
     (.status) <$> getUrlWith r (onPublic r links.admin.status) [cookie token] `shouldReturn` 200
-
-  it "is the administrator for everyone under --trust-network, which signs nobody in" $ withPasswords trusted $ \r -> do
-    (me, _) <- sessionWith r []
-    ((\u -> u.login) <$> me.user, me.standing) `shouldBe` (Just "administrator", Operator)
-    reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = "editor's password"}
-    reply.status `shouldBe` 400
-    setCookie reply `shouldBe` Nothing
 
 administration :: Spec
 administration = describe "the administrator on the admin listener" $ do

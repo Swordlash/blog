@@ -17,13 +17,14 @@ import Data.Set qualified as Set
 import Protolude hiding (reader)
 import Test.HUnit (assertFailure)
 import Test.Hspec
+import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Admin (Directory (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin
 import Wiki.App.Backend.Contract (As (..), Fixture (..), Run)
 import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
-import Wiki.Core.Slug (mkSlug)
+import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), User (..))
 
@@ -39,6 +40,8 @@ spec _ withFixture = around withFixture $ describe "MonadAdmin contract" $ do
   reading
   refusing
   administrators
+  creators
+  accounts
   groups
   membership
 
@@ -57,6 +60,9 @@ shouldBeInvalid :: (HasCallStack, Show a) => Either WikiError a -> Expectation
 shouldBeInvalid = \case
   Left (Invalid _) -> pass
   other -> expectationFailure ("expected Invalid, got " <> show other)
+
+slug :: Text -> Slug
+slug = either (panic . show) identity . mkSlug
 
 -- | The id of the user with this login, as they see themself.
 idOf :: (HasCallStack, MonadWiki m) => Run m -> As -> IO UserId
@@ -100,6 +106,8 @@ reading = describe "directory" $ do
     d <- directoryNow run
     map (\u -> u.login) d.users `shouldBe` ["admin", "editor", "reader"]
     d.administrators `shouldBe` Set.singleton adminId
+    d.creators `shouldBe` Set.singleton editorId
+    (d.disabled, d.withPassword) `shouldBe` (mempty, mempty)
     map (\g -> g.name) d.groups `shouldBe` ["writers"]
     Map.elems d.membership `shouldBe` [Set.singleton editorId]
     Map.keys d.membership `shouldBe` map (\g -> g.id) d.groups
@@ -125,6 +133,12 @@ refusing = describe "refusals" $
       run who (addMember writers.id readerId) >>= (`shouldFailWith` Forbidden)
       run who (addMember nothing nobody) >>= (`shouldFailWith` Forbidden)
       run who (removeMember writers.id readerId) >>= (`shouldFailWith` Forbidden)
+      run who (setCreateSpaces readerId True) >>= (`shouldFailWith` Forbidden)
+      run who (setCreateSpaces nobody True) >>= (`shouldFailWith` Forbidden)
+      run who (createUser NewAccount {login = "", displayName = "", password = ""}) >>= (`shouldFailWith` Forbidden)
+      run who (setPassword readerId "a good password") >>= (`shouldFailWith` Forbidden)
+      run who (setPassword nobody "") >>= (`shouldFailWith` Forbidden)
+      run who (setDisabled readerId True) >>= (`shouldFailWith` Forbidden)
     -- Nothing was changed.
     d <- directoryNow run
     map (\g -> g.name) d.groups `shouldBe` ["writers"]
@@ -166,6 +180,79 @@ administrators = describe "setAdministrator" $ do
 
   it "finds nobody for an id that is no user's" $ \(Fixture run) ->
     run admin (setAdministrator (UserId "user-nobody") True) >>= (`shouldFailWith` NotFound)
+
+--------------------------------------------------------------------------------
+-- Creating spaces
+
+creators :: (MonadWiki m, MonadAdmin m) => SpecWith (Fixture m)
+creators = describe "setCreateSpaces" $ do
+  it "lets a user create top-level spaces, and no longer" $ \(Fixture run) -> do
+    editorId <- idOf run editor
+    readerId <- idOf run reader
+    run reader (createSpace Nothing "Rita's") >>= (`shouldFailWith` Forbidden)
+    run admin (setCreateSpaces readerId True) >>= ok
+    run admin (setCreateSpaces readerId True) >>= ok
+    void (run reader (createSpace Nothing "Rita's") >>= ok)
+    (\d -> d.creators) <$> directoryNow run `shouldReturn` Set.fromList [editorId, readerId]
+    run admin (setCreateSpaces editorId False) >>= ok
+    run editor (createSpace Nothing "Edgar's") >>= (`shouldFailWith` Forbidden)
+    (\d -> d.creators) <$> directoryNow run `shouldReturn` Set.singleton readerId
+    -- Their other grants stay.
+    isAdministrator run editor `shouldReturn` False
+    onBlog run editor `shouldReturn` [Edit]
+
+  it "finds nobody for an id that is no user's" $ \(Fixture run) ->
+    run admin (setCreateSpaces (UserId "user-nobody") True) >>= (`shouldFailWith` NotFound)
+
+--------------------------------------------------------------------------------
+-- Accounts
+
+accounts :: (MonadWiki m, MonadAdmin m) => SpecWith (Fixture m)
+accounts = describe "createUser, setPassword and setDisabled" $ do
+  it "make a user with a password, listed by login, their login the name if none is given" $ \(Fixture run) -> do
+    made <- run admin (createUser NewAccount {login = " bea ", displayName = "", password = "bea's password"}) >>= ok
+    (made.user.login, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("bea", "bea", True, False)
+    d <- directoryNow run
+    map (\u -> u.login) d.users `shouldBe` ["admin", "bea", "editor", "reader"]
+    d.withPassword `shouldBe` Set.singleton made.user.id
+    named <- run admin (createUser NewAccount {login = "cid", displayName = " Cid ", password = "cid's password"}) >>= ok
+    named.user.displayName `shouldBe` "Cid"
+
+  it "refuse a login that is taken in any case, one that cannot be a login, and a short password" $ \(Fixture run) -> do
+    let new login password = run admin (createUser NewAccount {login, displayName = "", password})
+    new "EDITOR" "a good password" >>= \case
+      Left (Conflict _) -> pass
+      other -> expectationFailure ("expected a conflict, got " <> show other)
+    new "" "a good password" >>= shouldBeInvalid
+    new "two words" "a good password" >>= shouldBeInvalid
+    new "~operator" "a good password" >>= shouldBeInvalid
+    new "dee" "short" >>= shouldBeInvalid
+    map (\u -> u.login) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
+
+  it "give a user a password, and refuse a short one" $ \(Fixture run) -> do
+    readerId <- idOf run reader
+    run admin (setPassword readerId "short") >>= shouldBeInvalid
+    account <- run admin (setPassword readerId "rita's password") >>= ok
+    (account.user.login, account.hasPassword) `shouldBe` ("reader", True)
+    (\d -> d.withPassword) <$> directoryNow run `shouldReturn` Set.singleton readerId
+    run admin (setPassword (UserId "user-nobody") "a good password") >>= (`shouldFailWith` NotFound)
+
+  it "disable a login, whose user is then nobody, and enable it again" $ \(Fixture run) -> do
+    readerId <- idOf run reader
+    projects <- run admin (getSpace [slug "team", slug "projects"]) >>= ok
+    account <- run admin (setDisabled readerId True) >>= ok
+    account.disabled `shouldBe` True
+    (\d -> d.disabled) <$> directoryNow run `shouldReturn` Set.singleton readerId
+    -- Still in the directory, but signed in as nobody, and seeing what
+    -- nobody sees.
+    map (\u -> u.login) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
+    (\s -> s.user) <$> run reader session `shouldReturn` Nothing
+    run reader (listPages projects.id) >>= (`shouldFailWith` Forbidden)
+    enabled <- run admin (setDisabled readerId False) >>= ok
+    enabled.disabled `shouldBe` False
+    (\s -> (\u -> u.login) <$> s.user) <$> run reader session `shouldReturn` Just "reader"
+    void (run reader (listPages projects.id) >>= ok)
+    run admin (setDisabled (UserId "user-nobody") True) >>= (`shouldFailWith` NotFound)
 
 --------------------------------------------------------------------------------
 -- Groups

@@ -25,7 +25,7 @@ import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
-import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..))
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))
@@ -40,6 +40,7 @@ import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page)
 import Wiki.Core.Page qualified as Page
+import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.User (Group (..), Standing (..), User (..))
@@ -81,6 +82,11 @@ stubs =
           , move = \s body -> pure Sample.space {Space.id = s, Space.parent = body.parent}
           , shift = \s body -> pure Sample.space {Space.id = s, Space.position = fromEnum body.shift}
           , delete = \s -> if s == Sample.space.id then pure NoContent else refuse NotFound
+          , access = \s -> if s == SpaceId "s2" then pure Sample.spaceAccess else refuse Forbidden
+          , setGrant = \s body ->
+              if s == SpaceId "s2" && body.subject == SubjectGroup (GroupId "g1") && body.permission == Edit && not body.granted
+                then pure NoContent
+                else refuse NotFound
           , listPages = \s -> pure [Sample.page {Page.space = s}]
           , pageAt = \s path ->
               if path == [Sample.slug "tour"] then pure (versioned Sample.page {Page.space = s}) else refuse NotFound
@@ -145,6 +151,7 @@ stubs =
           { status = pure Sample.serverStatus
           , directory = pure Sample.directory
           , setAdministrator = \u flag -> if u == UserId "u2" && flag.administrator then pure NoContent else refuse NotFound
+          , setCreateSpaces = \u flag -> if u == UserId "u2" && not flag.createSpaces then pure NoContent else refuse NotFound
           , createGroup = \body -> pure Group {id = GroupId "new", name = body.name}
           , renameGroup = \g body -> pure Group {id = g, name = body.name}
           , deleteGroup = \g -> if g == GroupId "g1" then pure NoContent else refuse NotFound
@@ -382,6 +389,17 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (links.admin.setDisabled (UserId "u7")) AccountDisabled {disabled = True}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = True}
       links.admin.setDisabled (UserId "u7") `shouldBe` "api/v1/admin/users/u7/disabled"
 
+  describe "a space's permissions" $ do
+    it "lists the grants on a space and its ancestors, with whom a grant may be given to" $ do
+      links.spaces.access (SpaceId "s2") `shouldBe` "api/v1/spaces/s2/grants"
+      answers (getAt (links.spaces.access (SpaceId "s2"))) 200 Sample.spaceAccess
+      (status <$> getAt (links.spaces.access (SpaceId "s3"))) `shouldReturn` 403
+
+    it "gives a permission on a space and takes it away, at the same address, with a flag" $ do
+      let change granted = SpaceGrantChange {subject = SubjectGroup (GroupId "g1"), permission = Edit, granted}
+      (status <$> sendJson methodPut (links.spaces.setGrant (SpaceId "s2")) (change False)) `shouldReturn` 204
+      (status <$> sendJson methodPut (links.spaces.setGrant (SpaceId "s2")) (change True)) `shouldReturn` 404
+
   describe "the wiki's people" $ do
     it "lists them in one answer" $
       answers (getAt links.admin.directory) 200 Sample.directory
@@ -389,6 +407,11 @@ spec = describe "a server of the API's type" $ do
     it "marks a user as an administrator, by id, with a flag" $ do
       (status <$> sendJson methodPut (links.admin.setAdministrator (UserId "u2")) AdministratorFlag {administrator = True}) `shouldReturn` 204
       (status <$> sendJson methodPut (links.admin.setAdministrator (UserId "u2")) AdministratorFlag {administrator = False}) `shouldReturn` 404
+
+    it "lets a user create spaces, or not, by id, with a flag" $ do
+      links.admin.setCreateSpaces (UserId "u2") `shouldBe` "api/v1/admin/users/u2/create-spaces"
+      (status <$> sendJson methodPut (links.admin.setCreateSpaces (UserId "u2")) CreateSpacesFlag {createSpaces = False}) `shouldReturn` 204
+      (status <$> sendJson methodPut (links.admin.setCreateSpaces (UserId "u2")) CreateSpacesFlag {createSpaces = True}) `shouldReturn` 404
 
     it "makes, renames and deletes a group" $ do
       answers (sendJson methodPost links.admin.createGroup GroupName {name = "readers"}) 201 Group {id = GroupId "new", name = "readers"}

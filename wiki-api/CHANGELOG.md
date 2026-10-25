@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Permissions on a space, and who may create spaces. `SpacesApi` gains
+`access` (`GET spaces/<space>/grants`, answering
+`Wiki.Core.Permission.SpaceAccess`: the grants on the space and its
+ancestors, and the users and groups a grant may be given to) and `setGrant`
+(`PUT spaces/<space>/grants`, `SpaceGrantChange {subject, permission,
+granted}`, 204). `AdminApi` gains `setCreateSpaces` (`PUT
+admin/users/<user>/create-spaces`, `CreateSpacesFlag {createSpaces}`, 204).
+`Directory` gains `creators`, `disabled` and `withPassword`, sets of user
+ids. `ServerStatus` loses `trustNetwork`, as the server loses
+`--trust-network`.
+
 Signing in and out, and accounts. `WikiApi` gains `signIn` (`POST session`,
 `Credentials`, answering the `SessionInfo` with a `Set-Cookie`) and `signOut`
 (`DELETE session`), and `AdminApi` gains `createUser`

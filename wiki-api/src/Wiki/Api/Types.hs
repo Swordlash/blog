@@ -23,6 +23,7 @@ module Wiki.Api.Types
   , SpaceMathMacros (..)
   , SpaceOrder (..)
   , SpaceMove (..)
+  , SpaceGrantChange (..)
 
     -- * Pages
   , NewPage (..)
@@ -42,7 +43,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Children, Shift)
-import Wiki.Core.Permission (Grants)
+import Wiki.Core.Permission (Grants, SpacePermission, Subject)
 import Wiki.Core.User (Standing, User)
 
 -- | The answer to @GET \/api\/v1\/session@: who the current user is, with
@@ -100,6 +101,21 @@ data SpaceOrder = SpaceOrder
 newtype SpaceMove = SpaceMove
   { parent :: Maybe SpaceId
   -- ^ Its new parent, or 'Nothing' for the top level.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | A permission on a space to give someone or take from them:
+-- @setSpaceGrant@. A grant given twice, or taken from someone who does not
+-- have it, changes nothing.
+data SpaceGrantChange = SpaceGrantChange
+  { subject :: Subject
+  -- ^ Whom: @{\"tag\": \"SubjectUser\", \"contents\": \<user id>}@ or
+  -- @{\"tag\": \"SubjectGroup\", \"contents\": \<group id>}@.
+  , permission :: SpacePermission
+  -- ^ @\"View\"@, @\"Edit\"@ or @\"AdministerSpace\"@.
+  , granted :: Bool
+  -- ^ Whether they are to have it.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

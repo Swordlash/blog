@@ -81,8 +81,8 @@ import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AdminApi (..), ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Account (Credentials (..))
-import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..))
+import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewPassword (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
@@ -315,6 +315,11 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   renameSpace sid name = write (withJson "PUT" (links.spaces.rename sid) SpaceName {name})
   setSpacePublic sid public = write (withJson "PUT" (links.spaces.setPublic sid) SpacePublic {public})
   setSpaceMathMacros sid mathMacros = write (withJson "PUT" (links.spaces.setMathMacros sid) SpaceMathMacros {mathMacros})
+
+  -- Not kept: it is read when the space's permissions are opened, which
+  -- the server never renders, and read again after every change there.
+  spaceAccess sid = answer <$> call (R.get (links.spaces.access sid))
+  setSpaceGrant sid subject permission granted = write_ (withJson "PUT" (links.spaces.setGrant sid) SpaceGrantChange {subject, permission, granted})
   moveSpace sid parent = write (withJson "POST" (links.spaces.move sid) SpaceMove {parent})
   deleteSpace sid = write_ (R.delete (links.spaces.delete sid))
   setSpaceOrder sid children order = write (withJson "PUT" (links.spaces.setOrder sid) SpaceOrder {children, order})
@@ -358,6 +363,10 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
 instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   directory = cached (\c -> c.directory) (R.get links.admin.directory) withDirectory
   setAdministrator u administrator = write_ (withJson "PUT" (links.admin.setAdministrator u) AdministratorFlag {administrator})
+  setCreateSpaces u createSpaces = write_ (withJson "PUT" (links.admin.setCreateSpaces u) CreateSpacesFlag {createSpaces})
+  createUser new = write (withJson "POST" links.admin.createUser new)
+  setPassword u password = write (withJson "PUT" (links.admin.setPassword u) NewPassword {password})
+  setDisabled u disabled = write (withJson "PUT" (links.admin.setDisabled u) AccountDisabled {disabled})
   createGroup name = write (withJson "POST" links.admin.createGroup GroupName {name})
   renameGroup g name = write (withJson "PUT" (links.admin.renameGroup g) GroupName {name})
   deleteGroup g = write_ (R.delete (links.admin.deleteGroup g))

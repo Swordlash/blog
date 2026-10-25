@@ -4,16 +4,13 @@
 -- 'ServeOptions', and the rules a configuration must keep before anything
 -- listens.
 --
--- Two of those rules are about who the server takes a request's sender for
--- (decisions 11 and 19 of docs/PLAN.md). The admin listener serves everyone
--- who reaches it as the administrator, without a login, so it listens on
--- the loopback interface only, where reaching it means being on the machine,
--- unless @--admin-listen-unsafe@ says the operator knows better (a container,
--- whose loopback is its own). And @--trust-network@ makes everyone who reaches
--- the public listener the administrator, which is only sound on a private
--- network such as a Tailscale address; listening on every interface with it
--- would hand the wiki to whatever network the machine is on, so that is
--- refused outright.
+-- One of those rules is about who the server takes a request's sender for
+-- (decision 11 of docs/PLAN.md). The admin listener serves everyone who
+-- reaches it as the administrator, without a login, so it listens on the
+-- loopback interface only, where reaching it means being on the machine,
+-- unless @--admin-listen-unsafe@ says the operator knows better (a
+-- container, whose loopback is its own). The public listener serves
+-- whoever has signed in there, and anyone else as an anonymous reader.
 module Wiki.Server.Options
   ( -- * Options
     ServeOptions (..)
@@ -25,7 +22,6 @@ module Wiki.Server.Options
   , parseListen
   , renderListen
   , isLoopback
-  , isWildcard
 
     -- * Checks
   , checkOptions
@@ -132,13 +128,6 @@ isLoopback h = case numericAddress h of
     _ -> False
   _ -> False
 
--- | Whether an address is every interface's: @0.0.0.0@ or @::@.
-isWildcard :: Text -> Bool
-isWildcard h = case numericAddress h of
-  Just (Socket.SockAddrInet _ a) -> a == 0
-  Just (Socket.SockAddrInet6 _ _ a _) -> a == (0, 0, 0, 0)
-  _ -> False
-
 -- | How the server is run.
 data ServeOptions = ServeOptions
   { dataDir :: FilePath
@@ -149,8 +138,6 @@ data ServeOptions = ServeOptions
   -- ^ The admin listener; 'Nothing' for none.
   , adminListenUnsafe :: Bool
   -- ^ Allow an admin listener on an address that is not loopback.
-  , trustNetwork :: Bool
-  -- ^ Everyone on the public listener is the administrator.
   , secureCookies :: Bool
   -- ^ The session's cookie is @Secure@: the browser reaches the public
   -- listener over HTTPS (through a proxy in front of it), and sends the
@@ -173,7 +160,6 @@ defaultServeOptions dataDir =
     , listen = Listen "127.0.0.1" 8080
     , adminListen = Just (Listen "127.0.0.1" 8081)
     , adminListenUnsafe = False
-    , trustNetwork = False
     , secureCookies = False
     , basePath = "/"
     , staticDir = Nothing
@@ -193,7 +179,6 @@ serveOptions = do
   admin <- option address (long "admin-listen" <> metavar "HOST:PORT" <> value (Listen "127.0.0.1" 8081) <> showDefaultWith (toS . renderListen) <> help "The admin listener, where everyone is the administrator: loopback only")
   noAdmin <- switch (long "no-admin-listen" <> help "Do not listen for the administrator at all")
   adminListenUnsafe <- switch (long "admin-listen-unsafe" <> help "Allow --admin-listen on an address that is not loopback (inside a container, say)")
-  trustNetwork <- switch (long "trust-network" <> help "Take everyone who reaches the public listener for the administrator: for a private network only, until there are accounts")
   secureCookies <- switch (long "secure-cookies" <> help "Mark the session's cookie Secure, for a wiki reached over HTTPS only (a browser never sends such a cookie over plain HTTP)")
   basePath <- strOption (long "base-path" <> metavar "PATH" <> value "/" <> showDefault <> help "The path the wiki is served under, as the application was built for")
   staticDir <- optional (strOption (long "static" <> metavar "DIR" <> help "The built application to serve (its index.html, 404.html, app.wasm, ...)"))
@@ -204,7 +189,6 @@ serveOptions = do
       , listen
       , adminListen = if noAdmin then Nothing else Just admin
       , adminListenUnsafe
-      , trustNetwork
       , secureCookies
       , basePath
       , staticDir
@@ -239,12 +223,6 @@ checkOptions o =
       , not o.adminListenUnsafe
       , not (isLoopback a.host)
       ]
-        <> [ "--trust-network with --listen "
-               <> renderListen o.listen
-               <> ": that listens on every interface, and would make whoever reaches any of them the administrator; listen on the private network's address only (the Tailscale address, say)"
-           | o.trustNetwork
-           , isWildcard o.listen.host
-           ]
         <> [ "--admin-listen and --listen are the same address, " <> renderListen o.listen
            | Just a <- [o.adminListen]
            , a == o.listen

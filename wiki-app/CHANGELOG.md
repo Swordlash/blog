@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+Accounts and permissions in the administration and in each space.
+`MonadAdmin` gains `setCreateSpaces`, `createUser`, `setPassword` and
+`setDisabled`, and `MonadWiki` gains `spaceAccess` and `setSpaceGrant`, with
+`MemWiki`, `HttpWiki` (and the server's `SqliteWiki`) instances and contract
+cases. The administration's users table has a "Creates spaces" switch beside
+the administrator's, and an "Account" column: whether the user signs in with
+a password, "Set password…" or "Reset password…" (a form in place) and
+"Disable" or "Enable" (not for one's own login); a "New user" form (login,
+display name, password, administrator) sits under it. A space's view has a
+"Permissions" action for whoever administers it, which opens
+`Wiki.App.View.Permissions`: the space's public switch (moved here from the
+actions' "Make public"/"Make private"), its grants with "Revoke", those it
+inherits with the space they are on, and a form granting a user or a group
+View, Edit or Administer; the grant one administers the space by is not
+offered to revoke. `MemWiki` keeps whether each user has a password and
+whether they are disabled (in IndexedDB's `meta` store, under `accounts`,
+with no new database version); a disabled user is nobody there, and the
+demo's switcher no longer offers them.
+
 Signing in and out of a server's wiki. `Wiki.App.Account` is a capability
 of its own, `MonadAccount` (`signIn`, `signOut`, `sessionChanges`), which
 `HttpWiki` has and `MemWiki` does not, handed to the shell as a record

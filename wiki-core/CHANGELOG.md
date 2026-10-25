@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+`Wiki.Core.Permission.SpaceAccess` (a space's grants and its ancestors',
+with the users and groups a grant may be given to) and
+`keepsAdministering`, whether revoking a grant leaves someone able to
+administer the space, which the space's view asks before offering a
+revocation. `Wiki.Core.User.checkLogin` and `checkPassword` (with
+`minimumPasswordLength` and `maximumPasswordLength`), the rules every backend
+makes users by, moved here from `wiki-server` so that the demo's
+administration refuses what the server's does.
+
 `Wiki.Core.User.Standing`: how whoever is asking came to be who they are,
 `NotSignedIn`, `SignedIn` or `Operator` (the server's administrator by where
 they ask from), which decides whether they may sign in or out.

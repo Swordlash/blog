@@ -27,6 +27,7 @@ module Wiki.Core.Permission
   , GlobalGrant (..)
   , SpaceGrant (..)
   , Grants (..)
+  , SpaceAccess (..)
 
     -- * Who is asking
   , Principal (..)
@@ -48,6 +49,7 @@ module Wiki.Core.Permission
   , mayCreateSpace
   , mayMoveSpace
   , mayMovePage
+  , keepsAdministering
   )
 where
 
@@ -57,7 +59,7 @@ import Protolude
 import Wiki.Core.Id
 import Wiki.Core.Path (ancestry)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Membership, groupsOf)
+import Wiki.Core.User (Group, Membership, User, groupsOf)
 
 -- | What can be granted on the wiki as a whole.
 data GlobalPermission
@@ -132,6 +134,24 @@ instance Semigroup Grants where
 
 instance Monoid Grants where
   mempty = Grants {global = [], spaces = []}
+
+-- | Who may do what on a space, as whoever administers it sees it: the
+-- grants on the space itself and on each of its ancestors, which it
+-- inherits (each grant names the space it is on), and the users and groups
+-- a grant may be given to, so that someone who administers a space but not
+-- the wiki can choose among them. Global grants are not here: they are the
+-- administration's.
+data SpaceAccess = SpaceAccess
+  { grants :: [SpaceGrant]
+  -- ^ The grants on the space and its ancestors, the space's own first,
+  -- then its parent's, and so on up.
+  , users :: [User]
+  -- ^ Every user, by login.
+  , groups :: [Group]
+  -- ^ Every group, by name.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
 
 -- | A signed-in user, as the rules see them: who they are and which groups
 -- they are in. Someone who is not signed in is 'Nothing' where a rule asks
@@ -254,3 +274,15 @@ mayMoveSpace who grants space destination =
 -- within a space): they edit both.
 mayMovePage :: Maybe Principal -> Grants -> [Space] -> [Space] -> Bool
 mayMovePage who grants source target = canEdit who grants source && canEdit who grants target
+
+-- | Whether someone who may administer the space at the end of the chain
+-- still would once this grant is revoked: what an administrator of a space
+-- is not offered to take from themself, as the wiki's administrator is not
+-- offered to give up the global 'Administer', since doing so by mistake
+-- would lock them out of the very form that could undo it. Someone who
+-- does not administer the space now is not kept from anything ('True').
+keepsAdministering :: Maybe Principal -> Grants -> [Space] -> SpaceGrant -> Bool
+keepsAdministering who grants chain revoked =
+  not (canAdministerSpace who grants chain) || canAdministerSpace who without chain
+  where
+    without = grants {spaces = filter (/= revoked) grants.spaces}

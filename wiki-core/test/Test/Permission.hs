@@ -197,6 +197,22 @@ spec = describe "Permission" $ do
       for_ [minBound .. maxBound] $ \p ->
         hasSpacePermission (as "alice") grants apiC p `shouldBe` (p `Set.member` perms (as "alice") apiC)
 
+  describe "keepsAdministering" $ do
+    let carols = SpaceGrant {space = backend.id, subject = SubjectUser (usr "carol"), permission = AdministerSpace}
+        alices = SpaceGrant {space = eng.id, subject = SubjectUser (usr "alice"), permission = Edit}
+    it "is false for the grant by which someone administers the space" $ do
+      keepsAdministering (as "carol") grants backendC carols `shouldBe` False
+      keepsAdministering (as "carol") grants apiC carols `shouldBe` False
+    it "is true for a grant that is not theirs, or that they could do without" $ do
+      keepsAdministering (as "carol") grants backendC alices `shouldBe` True
+      let twice = grants {spaces = grants.spaces <> [SpaceGrant {space = eng.id, subject = SubjectUser (usr "carol"), permission = AdministerSpace}]}
+      keepsAdministering (as "carol") twice backendC carols `shouldBe` True
+    it "is true for whoever does not administer the space, and for the wiki's administrators" $ do
+      keepsAdministering (as "alice") grants engC alices `shouldBe` True
+      keepsAdministering anonymous grants backendC carols `shouldBe` True
+      let daves = SpaceGrant {space = backend.id, subject = SubjectUser (usr "dave"), permission = AdministerSpace}
+      keepsAdministering (as "dave") grants {spaces = daves : grants.spaces} backendC daves `shouldBe` True
+
   describe "for any grants" $ do
     prop "AdministerSpace means Edit, and Edit means View" $
       forAll genMaybePrincipal $ \who -> forAll genGrants $ \gs -> forAll genChain $ \chain ->

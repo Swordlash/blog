@@ -97,7 +97,7 @@ of the server, not a refusal.
 `standing` is `"NotSignedIn"` (nobody: the application offers to sign in),
 `"SignedIn"` (a user with a session: it offers to sign out) or
 `"Operator"` (the administrator by where the request came from: the admin
-listener, or a trusted network; neither applies). A login is compared
+listener; neither applies). A login is compared
 without regard to the case of its letters or the blanks around it. Signing
 in or out where everyone is the operator is refused with 400; signing in
 again replaces the browser's session. `signIn` and `signOut` are methods of
@@ -143,6 +143,18 @@ login's count from that address. Passwords are kept as argon2id hashes
 | POST | `api/v1/spaces/<space>/move` | `SpaceMove` `{"parent": id or null}` | `Space` | 404, 403, 400 | `moveSpace` |
 | POST | `api/v1/spaces/<space>/shift` | `ShiftBy` `{"shift": "ShiftUp", "ShiftDown", "ShiftToTop" or "ShiftToBottom"}` | `Space`, with its new position | 404, 403, 400 | `shiftSpace` |
 | DELETE | `api/v1/spaces/<space>` | | 204 | 404, 403 | `deleteSpace` |
+| GET | `api/v1/spaces/<space>/grants` | | `SpaceAccess` `{"grants", "users", "groups"}`: the grants on the space and then on each of its ancestors, up (each `SpaceGrant` `{"space", "subject", "permission"}` names the space it is on), every `User` by login and every `Group` by name | 404, 403 | `spaceAccess` |
+| PUT | `api/v1/spaces/<space>/grants` | `SpaceGrantChange` `{"subject", "permission", "granted": bool}` | 204 | 404, 403, 400 | `setSpaceGrant` |
+
+A space's grants are read and changed by whoever administers it
+(`AdministerSpace` on it or an ancestor, or the global `administer`). A
+`subject` is `{"tag": "SubjectUser", "contents": <user id>}` or `{"tag":
+"SubjectGroup", "contents": <group id>}`, a `permission` `"View"`, `"Edit"` or
+`"AdministerSpace"`. A grant on the space holds in its subspaces too; one on an
+ancestor is changed there. Giving a grant twice, or taking one from someone who
+does not have it, changes nothing; giving one to a user or group that is not
+there is 400, after the permission is checked. Whoever administers a space may
+take that from themself, which the space's view does not offer.
 
 ### Pages
 
@@ -286,22 +298,22 @@ users, groups and grants are not imported) is the plan's WP2.8.
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
 | ------ | ---- | ---- | -------- | ------ | ------------ |
-| GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "trustNetwork", "spaces", "pages", "attachments", "users", "backups"}` | 403 | |
-| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "groups", "membership"}`: every `User` by login, the ids of the users granted the global `administer` themselves, every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
+| GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "spaces", "pages", "attachments", "users", "backups"}` | 403 | |
+| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
 | PUT | `api/v1/admin/users/<user>/administrator` | `AdministratorFlag` `{"administrator"}` | 204 | 403, 404 | `setAdministrator` |
+| PUT | `api/v1/admin/users/<user>/create-spaces` | `CreateSpacesFlag` `{"createSpaces"}` | 204 | 403, 404 | `setCreateSpaces` |
 | POST | `api/v1/admin/groups` | `GroupName` `{"name"}` | 201 `Group` `{"id", "name"}` | 403, 400 | `createGroup` |
 | PUT | `api/v1/admin/groups/<group>/name` | `GroupName` | `Group` | 403, 404, 400 | `renameGroup` |
 | DELETE | `api/v1/admin/groups/<group>` | | 204 | 403, 404 | `deleteGroup` |
 | PUT | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `addMember` |
 | DELETE | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `removeMember` |
-| POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password"}` | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403, 400, 409 (the login is taken, in any case) | |
-| PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 | |
-| PUT | `api/v1/admin/users/<user>/disabled` | `AccountDisabled` `{"disabled"}` | `Account`; disabling ends the user's sessions | 403, 404 | |
+| POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password"}` | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403, 400, 409 (the login is taken, in any case) | `createUser` |
+| PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 | `setPassword` |
+| PUT | `api/v1/admin/users/<user>/disabled` | `AccountDisabled` `{"disabled"}` | `Account`; disabling ends the user's sessions | 403, 404 | `setDisabled` |
 
 Only for the global `administer` permission: the operator on the admin
-listener (decision 11 of the plan), and whoever is the administrator on the
-public one (a user granted it, by their session; everyone, under
-`--trust-network`). Anyone else is refused with 403 before
+listener (decision 11 of the plan), and on the public one a user granted it,
+by their session. Anyone else is refused with 403 before
 anything the address names is looked for, so that the refusal says nothing
 about which users and groups exist.
 
@@ -310,14 +322,15 @@ backend interface, beside `MonadWiki`. An administrator here is a user
 granted the global `administer` themself: marking one adds that grant,
 unmarking takes it away (theirs too: the server allows an administrator to
 demote themself, which the panel does not offer, since the admin listener can
-always undo it), and a grant to a group is left alone. A group's name is
+always undo it), and a grant to a group is left alone. Letting a user create
+spaces, or no longer, is the same with the global `create-spaces`. A group's name is
 trimmed, not blank, and no other group's in any case (400 otherwise).
 Deleting a group deletes its membership and every grant to it, global and on
 spaces. Adding a member who is in the group already, and removing one who is
 not, succeed and change nothing.
 
-The last three are the accounts' (`Wiki.Api.Account`), which have no
-`MonadAdmin` method yet (the panel's forms for them are WP3.4's). A login is
+The last three are the accounts' (`Wiki.Api.Account`), whose forms are in the
+same panel. A login is
 at most 64 characters, with no blank in it and not starting with `~`, and
 is no other user's in any case (409 otherwise); a blank display name is the
 login. Setting a password, and disabling a login, end the user's sessions;
@@ -334,8 +347,7 @@ application, as two different people:
   by `toolchain/deploy-local.sh --server`) serves the wiki at its base path
   (`--base-path`, `/` by default) to whoever the request's session names,
   or to an anonymous reader, who sees the public spaces and changes
-  nothing; with `--trust-network`, everyone who reaches it is the
-  administrator instead, cookie or not, and nobody signs in (decision 19);
+  nothing;
 - the **admin listener** (`--admin-listen`, `127.0.0.1:8081` by default,
   loopback only unless `--admin-listen-unsafe`) serves the same application
   at `/admin/`, and its API at `/admin/api/v1/…`, to the administrator,

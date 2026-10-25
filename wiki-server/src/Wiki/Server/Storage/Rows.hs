@@ -36,6 +36,17 @@ module Wiki.Server.Storage.Rows
   , SearchRow (..)
   , loadSearchRows
 
+    -- * Accounts
+  , AccountRow
+  , accountFromRow
+  , selectAccounts
+  , loadAccount
+  , loadAccountFlags
+  , insertAccount
+  , updatePasswordHash
+  , updateDisabled
+  , deleteSessionsOf
+
     -- * Writes
   , insertUser
   , insertGroup
@@ -44,6 +55,7 @@ module Wiki.Server.Storage.Rows
   , renameGroupRow
   , deleteGroupRows
   , deleteGlobalGrant
+  , deleteSpaceGrant
   , insertGrants
   , insertSpace
   , updateSpace
@@ -63,6 +75,7 @@ import Database.SQLite.Simple.FromField (FieldParser, FromField (..), ResultErro
 import Database.SQLite.Simple.FromRow (RowParser, field, fieldWith)
 import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
+import Wiki.Api.Account (Account (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
@@ -451,6 +464,11 @@ deleteGlobalGrant c g =
   let (kind, i) = subjectColumns g.subject
    in execute c "DELETE FROM global_grants WHERE subject_kind = ? AND subject_id = ? AND permission = ?" (kind, i, globalText g.permission)
 
+deleteSpaceGrant :: Connection -> SpaceGrant -> IO ()
+deleteSpaceGrant c g =
+  let (kind, i) = subjectColumns g.subject
+   in execute c "DELETE FROM space_grants WHERE space_id = ? AND subject_kind = ? AND subject_id = ? AND permission = ?" (g.space.text, kind, i, spaceText g.permission)
+
 -- | Give these grants, in their order; one already given is left as it is.
 insertGrants :: Connection -> Grants -> IO ()
 insertGrants c grants = do
@@ -537,3 +555,59 @@ insertAttachment c page ordinal a =
     (url, blob) = case a.source of
       SourceUrl u -> (Just u, Nothing)
       SourceBlob b -> (Nothing, Just b.text)
+
+--------------------------------------------------------------------------------
+-- Accounts
+
+-- | A user's account as its row has it: id, login, display name, the hash
+-- of their password if they have one, and whether they are disabled.
+type AccountRow = (Text, Text, Text, Maybe Text, Int)
+
+accountFromRow :: AccountRow -> Account
+accountFromRow (uid, login, displayName, phc, disabled) =
+  Account
+    { user = User {id = UserId uid, login, displayName}
+    , hasPassword = isJust phc
+    , disabled = disabled /= 0
+    }
+
+-- | A query of accounts' rows, from the users, with the rest given.
+selectAccounts :: Text -> Query
+selectAccounts rest = Query ("SELECT id, login, display_name, password_hash, disabled FROM users " <> rest)
+
+-- | A user's account, by id.
+loadAccount :: Connection -> UserId -> IO (Maybe Account)
+loadAccount c u = fmap accountFromRow . head <$> query c (selectAccounts "WHERE id = ?") (Only u.text)
+
+-- | The users who are disabled, and those who have a password.
+loadAccountFlags :: Connection -> IO (Set UserId, Set UserId)
+loadAccountFlags c = do
+  rows <- query_ c "SELECT id, disabled, password_hash IS NOT NULL FROM users"
+  pure
+    ( Set.fromList [UserId u | (u, disabled, _) <- rows, disabled /= (0 :: Int)]
+    , Set.fromList [UserId u | (u, _, hashed) <- rows, hashed /= (0 :: Int)]
+    )
+
+-- | A new user with a login no other user has, whatever its case, or a
+-- 'Left' with the login that is taken; the login and the password's hash
+-- are as they are to be kept.
+insertAccount :: Connection -> UserId -> Text -> Text -> Maybe Text -> IO (Either Text Account)
+insertAccount c u login displayName phc = do
+  taken <- query c "SELECT count(*) FROM users WHERE login = ? COLLATE NOCASE" (Only login)
+  if taken /= [Only (0 :: Int)]
+    then pure (Left login)
+    else do
+      execute c "INSERT INTO users (id, login, display_name, password_hash, disabled) VALUES (?, ?, ?, ?, 0)" (u.text, login, displayName, phc)
+      maybe (Left login) Right <$> loadAccount c u
+
+-- | A user's password, as its hash, in place of the one they had.
+updatePasswordHash :: Connection -> UserId -> Text -> IO ()
+updatePasswordHash c u phc = execute c "UPDATE users SET password_hash = ? WHERE id = ?" (phc, u.text)
+
+-- | Whether a user is disabled.
+updateDisabled :: Connection -> UserId -> Bool -> IO ()
+updateDisabled c u disabled = execute c "UPDATE users SET disabled = ? WHERE id = ?" (fromEnum disabled, u.text)
+
+-- | End every session of a user.
+deleteSessionsOf :: Connection -> UserId -> IO ()
+deleteSessionsOf c u = execute c "DELETE FROM sessions WHERE user_id = ?" (Only u.text)

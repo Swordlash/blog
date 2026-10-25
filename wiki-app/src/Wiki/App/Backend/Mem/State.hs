@@ -32,6 +32,7 @@ module Wiki.App.Backend.Mem.State
 
     -- * Reads
   , sessionOf
+  , spaceAccessIn
   , listSpacesIn
   , getSpaceIn
   , listPagesIn
@@ -61,10 +62,15 @@ module Wiki.App.Backend.Mem.State
   , saveDraftIn
   , discardDraftIn
   , restoreVersionIn
+  , setSpaceGrantIn
 
     -- * Administration
   , directoryIn
   , setAdministratorIn
+  , setCreateSpacesIn
+  , createUserIn
+  , setPasswordIn
+  , setDisabledIn
   , createGroupIn
   , renameGroupIn
   , deleteGroupIn
@@ -80,6 +86,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Numeric.Natural (Natural)
 import Protolude
+import Wiki.Api.Account (Account (Account), NewAccount)
+import Wiki.Api.Account qualified as Acc
 import Wiki.Api.Admin (Directory (Directory))
 import Wiki.Api.Admin qualified as A
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymous, maxAttachmentSize)
@@ -93,9 +101,10 @@ import Wiki.Core.Page (Page (..), childPages, pageTreeOrder, positionPage)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission
   ( GlobalGrant (GlobalGrant)
-  , GlobalPermission (Administer)
+  , GlobalPermission (Administer, CreateSpaces)
   , Grants (Grants)
   , Principal
+  , SpaceAccess (SpaceAccess)
   , SpaceGrant (SpaceGrant)
   , SpacePermission (..)
   , Subject (..)
@@ -115,7 +124,7 @@ import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
-import Wiki.Core.User (Group (..), Membership, Standing (..), User (..))
+import Wiki.Core.User (Group (..), Membership, Standing (..), User (..), checkLogin, checkPassword)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, versionInfo)
 import Wiki.Core.Version qualified as V
 
@@ -145,8 +154,15 @@ data MemState = MemState
   -- dropped with the page. It is made from the pages and never kept
   -- anywhere else: neither the export nor IndexedDB has it, and a wiki read
   -- from either makes it again ('prepareSearch').
+  , disabled :: Set UserId
+  -- ^ The users whose login is disabled: nobody, if switched to.
+  , passwords :: Set UserId
+  -- ^ The users given a password. The demo has no passwords and keeps
+  -- none: only whether a user would have one on a server, which its
+  -- administration shows.
   , current :: Maybe UserId
-  -- ^ Who is signed in. A user who is not in 'users' is nobody.
+  -- ^ Who is signed in. A user who is not in 'users', or is disabled, is
+  -- nobody.
   , counter :: Natural
   -- ^ The number in the next id made, so that ids are the same from one run
   -- to the next.
@@ -168,6 +184,8 @@ emptyState =
     , drafts = mempty
     , versions = mempty
     , searchText = mempty
+    , disabled = mempty
+    , passwords = mempty
     , current = Nothing
     , counter = 1
     }
@@ -240,7 +258,7 @@ newId kind st = (kind <> "-" <> show st.counter, st {counter = st.counter + 1})
 currentPrincipal :: MemState -> Maybe Principal
 currentPrincipal st = do
   u <- st.current
-  guard (Map.member u st.users)
+  guard (Map.member u st.users && not (Set.member u st.disabled))
   pure (principal st.membership u)
 
 --------------------------------------------------------------------------------
@@ -656,6 +674,33 @@ deleteSpaceIn sid st = do
     , ()
     )
 
+-- | Who may do what on a space, for whoever administers it.
+spaceAccessIn :: SpaceId -> MemState -> Either WikiError SpaceAccess
+spaceAccessIn sid st = do
+  (_, c) <- findSpace st sid
+  requireAdminister st c
+  pure
+    SpaceAccess
+      { P.grants = [g | s <- reverse c, g <- st.grants.spaces, g.space == s.id]
+      , P.users = sortOn (\u -> u.login) (Map.elems st.users)
+      , P.groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) (Map.elems st.groups)
+      }
+
+-- | A permission on a space given to someone, or taken from them.
+setSpaceGrantIn :: SpaceId -> Subject -> SpacePermission -> Bool -> Write ()
+setSpaceGrantIn sid subject permission granted st = do
+  (_, c) <- findSpace st sid
+  requireAdminister st c
+  when granted $ case subject of
+    SubjectUser u -> unless (Map.member u st.users) (Left (Invalid "There is no such user."))
+    SubjectGroup g -> unless (Map.member g st.groups) (Left (Invalid "There is no such group."))
+  let grant = SpaceGrant {P.space = sid, P.subject = subject, P.permission = permission}
+      spaces
+        | not granted = filter (/= grant) st.grants.spaces
+        | grant `elem` st.grants.spaces = st.grants.spaces
+        | otherwise = st.grants.spaces <> [grant]
+  pure (st {grants = Grants {P.global = st.grants.global, P.spaces = spaces}}, ())
+
 -- | Choose the order a space lists one kind of its children in.
 setSpaceOrderIn :: SpaceId -> Children -> ChildOrder -> Write Space
 setSpaceOrderIn sid kind order st = do
@@ -897,10 +942,6 @@ findUser st u = maybe (Left NotFound) Right (Map.lookup u st.users)
 findGroup :: MemState -> GroupId -> Either WikiError Group
 findGroup st g = maybe (Left NotFound) Right (Map.lookup g st.groups)
 
--- | The grant of the global administer to this user themself.
-administerGrant :: UserId -> GlobalGrant
-administerGrant u = GlobalGrant {P.subject = SubjectUser u, P.permission = Administer}
-
 -- | Every user and group, as the administration shows them.
 directoryIn :: MemState -> Either WikiError Directory
 directoryIn st = do
@@ -909,18 +950,69 @@ directoryIn st = do
     Directory
       { A.users = sortOn (\u -> u.login) (Map.elems st.users)
       , A.administrators = Set.fromList [u | GlobalGrant (SubjectUser u) Administer <- st.grants.global, Map.member u st.users]
+      , A.creators = Set.fromList [u | GlobalGrant (SubjectUser u) CreateSpaces <- st.grants.global, Map.member u st.users]
+      , A.disabled = Set.intersection st.disabled (Map.keysSet st.users)
+      , A.withPassword = Set.intersection st.passwords (Map.keysSet st.users)
       , A.groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) (Map.elems st.groups)
       , A.membership = Map.filter (not . Set.null) (Map.restrictKeys st.membership (Map.keysSet st.groups))
       }
 
 -- | Grant a user the global administer, or take it from them.
 setAdministratorIn :: UserId -> Bool -> Write ()
-setAdministratorIn u granted st = do
+setAdministratorIn = setGlobalGrant Administer
+
+-- | Grant a user the global create-spaces, or take it from them.
+setCreateSpacesIn :: UserId -> Bool -> Write ()
+setCreateSpacesIn = setGlobalGrant CreateSpaces
+
+-- | Grant a user a global permission themself, or take it from them; a
+-- grant they have already is left where it is.
+setGlobalGrant :: GlobalPermission -> UserId -> Bool -> Write ()
+setGlobalGrant permission u granted st = do
   requireAdministrator st
   _ <- findUser st u
-  let others = filter (/= administerGrant u) st.grants.global
-      global = if granted then others <> [administerGrant u] else others
+  let grant = GlobalGrant {P.subject = SubjectUser u, P.permission = permission}
+      global
+        | not granted = filter (/= grant) st.grants.global
+        | grant `elem` st.grants.global = st.grants.global
+        | otherwise = st.grants.global <> [grant]
   pure (st {grants = Grants {P.global = global, P.spaces = st.grants.spaces}}, ())
+
+-- | A user's account, as the administration sees it.
+accountIn :: MemState -> User -> Account
+accountIn st u = Account {Acc.user = u, Acc.hasPassword = Set.member u.id st.passwords, Acc.disabled = Set.member u.id st.disabled}
+
+-- | A new user, who would sign in with the password given: the demo keeps
+-- that they have one, not the password. Checked as the server checks it.
+createUserIn :: NewAccount -> Write Account
+createUserIn new st = do
+  requireAdministrator st
+  login <- first Invalid (checkLogin new.login)
+  _ <- first Invalid (checkPassword new.password)
+  for_ (find (\u -> T.toCaseFold u.login == T.toCaseFold login) (Map.elems st.users)) $ \_ ->
+    Left (Conflict ("There is a user with the login " <> login <> " already."))
+  let (i, st1) = newId "user" st
+      u = User {id = UserId i, login, displayName = fromMaybe login (mfilter (not . T.null) (Just (T.strip new.displayName)))}
+      st2 = (insertUser u st1) {passwords = Set.insert u.id st1.passwords}
+  pure (st2, accountIn st2 u)
+
+-- | A user given a new password, which the demo does not keep.
+setPasswordIn :: UserId -> Text -> Write Account
+setPasswordIn uid password st = do
+  requireAdministrator st
+  u <- findUser st uid
+  _ <- first Invalid (checkPassword password)
+  let st1 = st {passwords = Set.insert uid st.passwords}
+  pure (st1, accountIn st1 u)
+
+-- | A user's login disabled, which makes them nobody if they are the one
+-- switched to, or enabled again.
+setDisabledIn :: UserId -> Bool -> Write Account
+setDisabledIn uid off st = do
+  requireAdministrator st
+  u <- findUser st uid
+  let st1 = st {disabled = (if off then Set.insert else Set.delete) uid st.disabled}
+  pure (st1, accountIn st1 u)
 
 -- | A group's name, checked: not blank, and no other group's but for case.
 groupName :: MemState -> Maybe GroupId -> Text -> Either WikiError Text

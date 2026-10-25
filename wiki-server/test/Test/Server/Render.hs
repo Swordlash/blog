@@ -15,6 +15,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
 import Data.Text qualified as T
 import Database.SQLite.Simple (execute_, withConnection)
+import Network.HTTP.Types (Header)
 import Protolude
 import System.FilePath ((</>))
 import Test.HUnit (assertFailure)
@@ -46,7 +47,12 @@ bodyText reply = decodeUtf8 (BSL.toStrict reply.body)
 
 -- | A page's status and text.
 page :: Running -> Text -> Text -> IO (Int, Text)
-page r root path = (\reply -> (reply.status, bodyText reply)) <$> getUrl r (root <> path)
+page r = pageAs r []
+
+-- | A page's status and text, asked for with these headers (a session's
+-- cookie).
+pageAs :: Running -> [Header] -> Text -> Text -> IO (Int, Text)
+pageAs r hs root path = (\reply -> (reply.status, bodyText reply)) <$> getUrlWith r (root <> path) hs
 
 -- | What a page carries for the program, as its script holds it.
 preloadIn :: (HasCallStack) => Text -> IO Preload
@@ -122,15 +128,24 @@ anonymous = describe "for someone not signed in" $ do
     appIn html `shouldNotSatisfy` T.isInfixOf "<textarea"
 
 administrator :: Spec
-administrator = describe "for the administrator on a trusted network" $ do
-  it "renders the private spaces with their pages" $ withDemoRunning trusted $ \r -> do
-    (status, html) <- page r r.public "/s/team/p/team-handbook/"
+administrator = describe "for an administrator signed in" $ do
+  it "renders the private spaces with their pages, and the administration" $ withAdminSession identity $ \r session -> do
+    (status, html) <- pageAs r [session] r.public "/s/team/p/team-handbook/"
     status `shouldBe` 200
     html `shouldSatisfy` T.isInfixOf "<title>Team handbook · Team · Wiki</title>"
-    appIn html `shouldSatisfy` T.isInfixOf "Administrator"
+    appIn html `shouldSatisfy` T.isInfixOf "Ada Admin"
+    appIn html `shouldSatisfy` T.isInfixOf "Sign out"
+    (adminStatus, admin) <- pageAs r [session] r.public "/admin/"
+    adminStatus `shouldBe` 200
+    appIn admin `shouldSatisfy` T.isInfixOf "class=\"user-table\""
+    appIn admin `shouldSatisfy` T.isInfixOf "Edgar Editor"
+    -- The same address, to nobody: neither the space nor the administration.
+    (.status) <$> getUrl r (r.public <> "/s/team/p/team-handbook/") `shouldReturn` 403
+    (_, refused) <- page r r.public "/admin/"
+    appIn refused `shouldNotSatisfy` T.isInfixOf "user-table"
 
-  it "renders the editor with the page's Markdown in it" $ withDemoRunning trusted $ \r -> do
-    (status, html) <- page r r.public "/s/blog/p/hello-world/edit/"
+  it "renders the editor with the page's Markdown in it" $ withAdminSession identity $ \r session -> do
+    (status, html) <- pageAs r [session] r.public "/s/blog/p/hello-world/edit/"
     status `shouldBe` 200
     appIn html `shouldSatisfy` T.isInfixOf "<textarea"
     appIn html `shouldSatisfy` T.isInfixOf "Editing Hello, world"
@@ -155,10 +170,10 @@ basePathAndLoad = describe "under a base path, and many at once" $ do
     appIn html `shouldSatisfy` T.isInfixOf "href=\"/wiki/s/docs/p/tour/\""
     appIn html `shouldNotSatisfy` T.isInfixOf "href=\"/s/"
 
-  it "renders pages asked for at once as it renders them one by one" $ withDemoRunning trusted $ \r -> do
+  it "renders pages asked for at once as it renders them one by one" $ withAdminSession identity $ \r session -> do
     let paths = concat (replicate 4 ["/", "/s/docs/", "/s/docs/p/tour/", "/s/team/p/team-handbook/", "/search/?q=haskell", "/s/blog/p/hello-world/edit/", "/nowhere"])
-    alone <- traverse (page r r.public) paths
-    together <- runConcurrently (traverse (Concurrently . page r r.public) paths)
+    alone <- traverse (pageAs r [session] r.public) paths
+    together <- runConcurrently (traverse (Concurrently . pageAs r [session] r.public) paths)
     together `shouldBe` alone
 
 preloads :: Spec

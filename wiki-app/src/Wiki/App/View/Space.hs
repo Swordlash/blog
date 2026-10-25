@@ -2,10 +2,17 @@
 
 -- | A space: its pages as a tree, its subspaces, the math macros its pages
 -- are set with, and what the current user may do to it (a new page, in the
--- editor; a new subspace, renaming it, making it public or private, giving
--- it math macros, choosing the order of its subspaces and of its pages,
--- moving it, deleting it). An action the rules forbid is not offered; the
--- backend checks the rules again, and a refusal is shown in place.
+-- editor; a new subspace, renaming it, its permissions, public or private
+-- among them ("Wiki.App.View.Permissions"), giving it math macros,
+-- choosing the order of its subspaces and of its pages, moving it,
+-- deleting it). An action the rules forbid is not offered; the backend
+-- checks the rules again, and a refusal is shown in place.
+--
+-- __Permissions__ are a section of their own, opened from the actions: it
+-- reads the space's grants, which nothing else shows, so it is read only
+-- when it is asked for; the page a prerender or the server shows has it
+-- closed. It stays open while the shell reloads the wiki after a change
+-- made there, for as long as its user may administer the space.
 --
 -- __Order__ ("Wiki.Core.Order"): the pages and the subspaces are listed in
 -- the orders the space has, which whoever administers it chooses here. An
@@ -27,7 +34,7 @@ module Wiki.App.View.Space
 where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.Row (type (.==))
+import Data.Row (type (.+), type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -37,11 +44,12 @@ import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
-import Wiki.App.Backend (MonadWiki (..), WikiError)
+import Wiki.App.Backend (MonadLoad, MonadWiki (..), WikiError)
 import Wiki.App.Islands (Island (..), MonadIslands (..))
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
+import Wiki.App.View.Permissions qualified as Permissions
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Math (Macros (..), spaceMacros)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, orderName)
@@ -68,6 +76,9 @@ data Mode
     EditingMacros Text (Maybe Text) Text
   | -- | Choosing the orders: of the subspaces, and of the pages.
     Ordering ChildOrder ChildOrder
+  | -- | Who may do what on the space.
+    ManagingPermissions
+  deriving stock (Eq)
 
 data State = State
   { input :: Input
@@ -77,7 +88,7 @@ data State = State
 
 -- | The formula the macros are tried on, set as the space's pages would
 -- set it.
-type Slots = ("island" .== H.Slot (Const Void) Void ())
+type Slots = ("island" .== H.Slot (Const Void) Void ()) .+ ("permissions" .== H.Slot (Const Void) ViewOutput ())
 
 data Action
   = Receive Input
@@ -89,14 +100,15 @@ data Action
   | TypedMacros Text
   | TypedSample Text
   | Submit
-  | TogglePublic
+  | TogglePermissions
+  | FromPermissions ViewOutput
   | Delete
   | EditOrder
   | ChoseOrder Children Int
   | ShiftPage PageId Shift
   | ShiftSpace SpaceId Shift
 
-component :: forall query m. (MonadWiki m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -113,7 +125,7 @@ component =
             <h1>{{ space.name }}</h1>
             <span class="badge {{ if space.public then "badge-public" else "badge-private" :: Text }}">{{ if space.public then "Public" else "Private" :: Text }}</span>
           </header>
-          <div class="actions">{{ actions ctx space }}</div>
+          <div class="actions">{{ actions ctx space mode }}</div>
           {{ form ctx space mode }}{{ errorView <$> problem }}{{ macrosView ctx space }}
           <h2>Pages</h2>
           {{ pageList }}{{ subspaces ctx space }}
@@ -126,14 +138,16 @@ component =
         pageControls p atTop atBottom =
           [moveButtons p.title atTop atBottom (ShiftPage p.id) | space.pageOrder == ByHand, mayEdit ctx space.id]
 
-    actions :: Context -> Space -> [H.ComponentHTML Action Slots m]
-    actions ctx space =
+    actions :: Context -> Space -> Mode -> [H.ComponentHTML Action Slots m]
+    actions ctx space mode =
       [Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button"] [HH.text "New page"] | mayEdit ctx space.id]
         <> [ Router.link ctx.router Followed (NewSpace (Just path)) [HP.class_ "button"] [HH.text "New subspace"]
            | mayCreateSpace (principalOf ctx) (grantsOf ctx) (Just (chainOf ctx space.id))
            ]
         <> [button "Rename" (Open (Renaming space.name)) | admin]
-        <> [button (if space.public then "Make private" else "Make public") TogglePublic | admin]
+        <> [ [hh|<button type="button" class="permissions-toggle" aria-expanded={{ ariaBool managing }} onClick={{ const TogglePermissions }}>Permissions</button>|]
+           | admin
+           ]
         <> [button "Math macros" EditMacros | admin]
         <> [button "Order" EditOrder | admin]
         <> [button "Move" (Open (Moving 0)) | admin, not (null (destinations ctx space))]
@@ -141,10 +155,12 @@ component =
       where
         admin = mayAdminister ctx space.id
         path = spacePathOf ctx.spaces space.id
+        managing = mode == ManagingPermissions
 
     form :: Context -> Space -> Mode -> Maybe (H.ComponentHTML Action Slots m)
     form ctx space = \case
       Viewing -> Nothing
+      ManagingPermissions -> Just (HH.slot "permissions" () Permissions.component Permissions.Input {context = ctx, space} FromPermissions)
       Renaming name -> Just (inForm (textField "New name" name Typed) "Rename")
       Moving chosen ->
         Just $
@@ -267,8 +283,12 @@ component =
         old <- gets (\st -> st.input)
         -- What was open is about the space as it was: after a change, or on
         -- another space, it is closed.
+        -- The permissions stay open after a change made there, for whoever
+        -- still administers the space.
+        mode <- gets (\st -> st.mode)
+        let staying = mode == ManagingPermissions && old.space.id == input.space.id && mayAdminister input.context input.space.id
         if old.space.id /= input.space.id || old.context.revision /= input.context.revision
-          then put State {input, mode = Viewing, problem = Nothing}
+          then put State {input, mode = if staying then ManagingPermissions else Viewing, problem = Nothing}
           else modify (\st -> st {input})
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       Open mode -> modify (\st -> st {mode, problem = Nothing})
@@ -321,9 +341,9 @@ component =
           Moving n -> for_ (atMay (destinations ctx space) n) $ \destination ->
             moveSpace space.id (map (\d -> d.id) destination) >>= done (\moved -> Just (Space (destinationPath ctx destination <> [moved.slug])))
           _ -> pass
-      TogglePublic -> do
-        space <- gets (\st -> st.input.space)
-        setSpacePublic space.id (not space.public) >>= done (const Nothing)
+      TogglePermissions -> modify $ \st ->
+        st {mode = if st.mode == ManagingPermissions then Viewing else ManagingPermissions, problem = Nothing}
+      FromPermissions out -> H.raise out
       Delete -> do
         Input {context = ctx, space} <- gets (\st -> st.input)
         let parentRoute = maybe Home (Space . spacePathOf ctx.spaces) space.parent

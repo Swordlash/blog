@@ -1,0 +1,8 @@
+{
+  "granted": true,
+  "permission": "View",
+  "subject": {
+    "contents": "g1",
+    "tag": "SubjectGroup"
+  }
+}

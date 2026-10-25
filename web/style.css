@@ -2065,3 +2065,132 @@ select {
 .import-selected {
   color: var(--muted);
 }
+
+/* ---- Accounts and permissions -------------------------------------------- */
+
+/* A table can scroll sideways on a narrow screen rather than push the page
+   wider: the users' table has five columns now. */
+.admin-users-list {
+  overflow-x: auto;
+}
+
+.user-disabled .user-display-name,
+.user-disabled .user-login {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.user-account {
+  white-space: nowrap;
+}
+
+.account-state {
+  margin-right: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.user-account .password-form {
+  display: inline-flex;
+  margin: 0;
+  white-space: normal;
+}
+
+.disable-self {
+  margin-left: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.admin-told {
+  margin: 0.5rem 0;
+}
+
+/* The form for a new user, under the table. */
+.user-create {
+  margin: 1rem 0;
+  padding: 0.6rem 1rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.user-create h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.user-create-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.6rem;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-bottom: 0.4rem;
+}
+
+/* A space's permissions, opened from its actions. */
+.space-permissions {
+  margin: 1rem 0;
+  padding: 0.6rem 1rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.space-permissions h2 {
+  margin: 0 0 0.5rem;
+}
+
+.permissions-public {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.permissions-intro {
+  flex: 1;
+  margin: 0.3rem 0;
+  color: var(--muted);
+}
+
+.grant-table {
+  border-collapse: collapse;
+  margin: 0.5rem 0 1rem;
+}
+
+.grant-table th,
+.grant-table td {
+  padding: 0.35rem 1rem 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.grant-table th {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.grant-inherited {
+  color: var(--muted);
+}
+
+.grant-self {
+  font-size: 0.85rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

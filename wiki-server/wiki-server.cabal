@@ -182,6 +182,7 @@ test-suite wiki-server-test
         http-client,
         http-types,
         network,
+        optparse-applicative,
         protolude,
         servant,
         sqlite-simple,

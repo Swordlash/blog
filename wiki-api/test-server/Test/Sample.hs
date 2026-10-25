@@ -18,6 +18,7 @@ module Test.Sample
   , importSummary
   , serverStatus
   , directory
+  , spaceAccess
   )
 where
 
@@ -34,7 +35,7 @@ import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
-import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
+import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
@@ -206,7 +207,6 @@ serverStatus =
     { version = "wiki-server 0.1.0.0"
     , startedAt = time
     , dataDir = "/home/owner/wiki-demo/data"
-    , trustNetwork = False
     , spaces = 3
     , pages = 12
     , attachments = 4
@@ -215,7 +215,8 @@ serverStatus =
     }
 
 -- | The wiki's people, as the administration reads them: two users, one of
--- them an administrator, and a group with the other in it.
+-- them an administrator who may create spaces, the other disabled and
+-- without a password, and a group with the other in it.
 directory :: Directory
 directory =
   Directory
@@ -224,6 +225,23 @@ directory =
         , User {id = UserId "u2", login = "edgar", displayName = "Edgar"}
         ]
     , administrators = Set.fromList [UserId "u1"]
+    , creators = Set.fromList [UserId "u1"]
+    , disabled = Set.fromList [UserId "u2"]
+    , withPassword = Set.fromList [UserId "u1"]
     , groups = [Group {id = GroupId "g1", name = "writers"}]
     , membership = Map.fromList [(GroupId "g1", Set.fromList [UserId "u2"])]
+    }
+
+-- | Who may do what on a space, as its administrator reads it: a grant on
+-- the space itself, to a group, and one inherited from its parent, to a
+-- user; and whom a grant may be given to.
+spaceAccess :: SpaceAccess
+spaceAccess =
+  SpaceAccess
+    { grants =
+        [ SpaceGrant {space = SpaceId "s2", subject = SubjectGroup (GroupId "g1"), permission = Edit}
+        , SpaceGrant {space = SpaceId "s1", subject = SubjectUser (UserId "u1"), permission = AdministerSpace}
+        ]
+    , users = directory.users
+    , groups = directory.groups
     }

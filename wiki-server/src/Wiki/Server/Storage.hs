@@ -16,8 +16,8 @@
 -- A program runs as someone ('Who'), given when it is run rather than kept
 -- anywhere: a reader nobody has signed in ('Anonymous'), one of the wiki's
 -- users ('AsUser'), or 'Administrator', the operator of the server (on its
--- loopback admin listener, or on a trusted network: decisions 11 and 19 of
--- docs/PLAN.md), who passes every check. The server says who for each
+-- loopback admin listener: decision 11 of docs/PLAN.md), who passes every
+-- check. The server says who for each
 -- request; nothing here knows about requests.
 --
 -- = Transactions
@@ -69,6 +69,7 @@ import Data.UUID.Types qualified as UUID
 import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, open, query, query_, withConnection)
 import Protolude
 import System.Directory (createDirectoryIfMissing)
+import Wiki.Api.Account (Account, NewAccount (..))
 import Wiki.Api.Admin (Directory (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -84,6 +85,7 @@ import Wiki.Core.Permission
   , GlobalPermission (..)
   , Grants (..)
   , Principal (..)
+  , SpaceAccess (..)
   , SpaceGrant (..)
   , SpacePermission (..)
   , Subject (..)
@@ -99,8 +101,9 @@ import Wiki.Core.Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), bodyText, folded, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
-import Wiki.Core.User (Group (..), Standing (..), User (..))
+import Wiki.Core.User (Group (..), Standing (..), User (..), checkLogin, checkPassword)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
+import Wiki.Server.Password (hashPassword)
 import Wiki.Server.Storage.Backup (backupFiles)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
@@ -394,6 +397,8 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   renameSpace sid = run Writes . renameSpaceTx sid
   setSpacePublic sid public = run Writes (adjustSpace sid (\s -> pure s {public}))
   setSpaceMathMacros sid macros = run Writes (adjustSpace sid (\s -> pure s {mathMacros = trimLines macros}))
+  spaceAccess = run Reads . spaceAccessTx
+  setSpaceGrant sid subject permission = run Writes . setSpaceGrantTx sid subject permission
   moveSpace sid = run Writes . moveSpaceTx sid
   deleteSpace = run Writes . deleteSpaceTx
   setSpaceOrder sid kind = run Writes . setSpaceOrderTx sid kind
@@ -426,7 +431,41 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
 -- administrator always does and a user does by a grant.
 instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   directory = run Reads directoryTx
-  setAdministrator u = run Writes . setAdministratorTx u
+  setAdministrator u = run Writes . setGlobalGrantTx Administer u
+  setCreateSpaces u = run Writes . setGlobalGrantTx CreateSpaces u
+
+  -- A password is checked and hashed before the transaction that keeps
+  -- it, since hashing takes tens of milliseconds the database should not
+  -- wait for; and only for an administrator, so that nobody else can make
+  -- the server spend them. The transaction checks again.
+  createUser new =
+    run Reads requireAdministrator >>= \case
+      Left e -> pure (Left e)
+      Right () -> case (,) <$> checkLogin new.login <*> checkPassword new.password of
+        Left why -> pure (Left (Invalid why))
+        Right (login, password) -> do
+          phc <- liftIO (hashPassword password)
+          uid <- liftIO (UUID.toText <$> generateV4)
+          let name = case T.strip new.displayName of
+                "" -> login
+                n -> n
+          run Writes $ do
+            requireAdministrator
+            db (\c -> insertAccount c (UserId uid) login name (Just phc)) >>= \case
+              Left taken -> failWith (Conflict ("There is a user with the login " <> taken <> " already."))
+              Right account -> pure account
+  setPassword u password =
+    run Reads (requireAdministrator >> findUser u) >>= \case
+      Left e -> pure (Left e)
+      Right _ -> case checkPassword password of
+        Left why -> pure (Left (Invalid why))
+        Right p -> do
+          phc <- liftIO (hashPassword p)
+          run Writes $ changeAccountTx u $ \c -> updatePasswordHash c u phc >> deleteSessionsOf c u
+  setDisabled u disabled =
+    run Writes $ changeAccountTx u $ \c -> do
+      updateDisabled c u disabled
+      when disabled (deleteSessionsOf c u)
   createGroup = run Writes . createGroupTx
   renameGroup g = run Writes . renameGroupTx g
   deleteGroup = run Writes . deleteGroupTx
@@ -569,6 +608,37 @@ adjustSpace sid f = do
   s' <- f s
   db (`updateSpace` s')
   pure s'
+
+-- | Who may do what on a space, for whoever administers it.
+spaceAccessTx :: SpaceId -> Tx SpaceAccess
+spaceAccessTx sid = do
+  (_, c) <- findSpace sid
+  requireAdminister c
+  -- The wiki's own grants, as they are kept: not the context's, which has
+  -- the operator's grant of everything in it.
+  stored <- db loadGrants
+  users <- db loadUsers
+  groups <- db loadGroups
+  pure
+    SpaceAccess
+      { grants = [g | s <- reverse c, g <- stored.spaces, g.space == s.id]
+      , users = sortOn (\u -> u.login) users
+      , groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) groups
+      }
+
+-- | Give someone a permission on a space, or take it from them.
+setSpaceGrantTx :: SpaceId -> Subject -> SpacePermission -> Bool -> Tx ()
+setSpaceGrantTx sid subject permission granted = do
+  (_, c) <- findSpace sid
+  requireAdminister c
+  when granted $ case subject of
+    SubjectUser u -> db (`loadUser` u) >>= maybe (invalid "There is no such user.") (const pass)
+    SubjectGroup g -> db loadGroups >>= maybe (invalid "There is no such group.") (const pass) . find (\x -> x.id == g)
+  let grant = SpaceGrant {space = sid, subject, permission}
+  db $ \conn ->
+    if granted
+      then insertGrants conn Grants {global = [], spaces = [grant]}
+      else deleteSpaceGrant conn grant
 
 renameSpaceTx :: SpaceId -> Text -> Tx Space
 renameSpaceTx sid name = adjustSpace sid $ \s -> do
@@ -953,26 +1023,41 @@ directoryTx = do
   groups <- db loadGroups
   membership <- db loadMembership
   stored <- db loadGrants
+  (disabled, withPassword) <- db loadAccountFlags
   let ids = Set.fromList (map (\u -> u.id) users)
+      holding p = Set.fromList [u | GlobalGrant (SubjectUser u) p' <- stored.global, p' == p, u `Set.member` ids]
   pure
     Directory
       { users = sortOn (\u -> u.login) users
-      , administrators = Set.fromList [u | GlobalGrant (SubjectUser u) Administer <- stored.global, u `Set.member` ids]
+      , administrators = holding Administer
+      , creators = holding CreateSpaces
+      , disabled
+      , withPassword
       , groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) groups
       , membership = Map.filter (not . Set.null) (Map.restrictKeys membership (Set.fromList (map (\g -> g.id) groups)))
       }
 
--- | Give a user the global administer, or take it from them, themself
--- included: the admin listener can always give it back.
-setAdministratorTx :: UserId -> Bool -> Tx ()
-setAdministratorTx u granted = do
+-- | Give a user a global permission themself, or take it from them: the
+-- global administer, themself included (the admin listener can always give
+-- it back), or create-spaces.
+setGlobalGrantTx :: GlobalPermission -> UserId -> Bool -> Tx ()
+setGlobalGrantTx permission u granted = do
   requireAdministrator
   _ <- findUser u
-  let grant = GlobalGrant {subject = SubjectUser u, permission = Administer}
+  let grant = GlobalGrant {subject = SubjectUser u, permission}
   db $ \c ->
     if granted
       then insertGrants c Grants {global = [grant], spaces = []}
       else deleteGlobalGrant c grant
+
+-- | Change the account of a user who is there, as an administrator, and
+-- give it back as it then is.
+changeAccountTx :: UserId -> (Connection -> IO ()) -> Tx Account
+changeAccountTx u change = do
+  requireAdministrator
+  _ <- findUser u
+  db change
+  db (`loadAccount` u) >>= maybe (failWith NotFound) pure
 
 -- | A group's name, checked: not blank, and no other group's but for case.
 groupNameTx :: Maybe GroupId -> Text -> Tx Text

@@ -29,11 +29,11 @@ import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath, renderPath)
-import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
+import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Standing (..), User (..))
+import Wiki.Core.User (Group (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | Who a request is made as: nobody, or the demo's user with this login
@@ -64,6 +64,7 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   readingPages
   creatingSpaces
   changingSpaces
+  spacePermissions
   mathMacros
   movingSpaces
   deletingSpaces
@@ -126,6 +127,10 @@ shouldBeInvalid :: (HasCallStack, Show a) => Either WikiError a -> Expectation
 shouldBeInvalid = \case
   Left (Invalid _) -> pass
   other -> expectationFailure ("expected Invalid, got " <> show other)
+
+-- | The id of the demo's user with this login, as they see themself.
+userId :: (HasCallStack, MonadWiki m) => Run m -> As -> IO UserId
+userId run who = run who currentUser >>= maybe (assertFailure ("nobody is signed in as " <> show who)) (pure . (\u -> u.id))
 
 slugOf :: Space -> Text
 slugOf s = slugText s.slug
@@ -342,6 +347,77 @@ changingSpaces = describe "renameSpace and setSpacePublic" $ do
     spaceNames run Anonymous `shouldReturn` ["Blog", "Docs", "Team", "Projects"]
     void (run admin (setSpacePublic team.id False) >>= ok)
     getPageAt run Anonymous "team" "team-handbook" `shouldReturn` Left Forbidden
+
+spacePermissions :: (MonadWiki m) => SpecWith (Fixture m)
+spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
+  it "list a space's own grants, then those it inherits, with whom one may be given to" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    projects <- spaceAt run admin "team/projects"
+    readerId <- userId run reader
+    access <- run admin (spaceAccess projects.id) >>= ok
+    [(g.space, g.subject, g.permission) | g <- access.grants] `shouldBe` [(projects.id, SubjectUser readerId, View)]
+    map (\u -> u.login) access.users `shouldBe` ["admin", "editor", "reader"]
+    map (\g -> g.name) access.groups `shouldBe` ["writers"]
+    run admin (setSpaceGrant team.id (SubjectUser readerId) Edit True) >>= ok
+    inherited <- run admin (spaceAccess projects.id) >>= ok
+    [(g.space, g.permission) | g <- inherited.grants] `shouldBe` [(projects.id, View), (team.id, Edit)]
+
+  it "give a user a private space, its subspaces with it, and take it back" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    editorId <- userId run editor
+    getPageAt run editor "team" "team-handbook" `shouldReturn` Left Forbidden
+    run admin (setSpaceGrant team.id (SubjectUser editorId) View True) >>= ok
+    void (pageAt run editor "team" "team-handbook")
+    void (pageAt run editor "team/projects" "the-wiki")
+    projects <- spaceAt run admin "team/projects"
+    run editor (createPage projects.id Nothing "Mine" "") >>= (`shouldFailWith` Forbidden)
+    run admin (setSpaceGrant team.id (SubjectUser editorId) Edit True) >>= ok
+    void (run editor (createPage projects.id Nothing "Mine" "") >>= ok)
+    -- Their session has the grants, which is what the client hides by.
+    held <- run editor session
+    sort [g.permission | g <- held.grants.spaces, g.space == team.id] `shouldBe` [View, Edit]
+    run admin (setSpaceGrant team.id (SubjectUser editorId) Edit False) >>= ok
+    run admin (setSpaceGrant team.id (SubjectUser editorId) View False) >>= ok
+    getPageAt run editor "team" "team-handbook" `shouldReturn` Left Forbidden
+    getPageAt run editor "team/projects" "the-wiki" `shouldReturn` Left Forbidden
+
+  it "grant to a group's members, and change nothing more when asked twice" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    writers <- (\a -> maybe (panic "no writers") (\g -> g.id) (head a.groups)) <$> (run admin (spaceAccess team.id) >>= ok)
+    run admin (setSpaceGrant team.id (SubjectGroup writers) View True) >>= ok
+    run admin (setSpaceGrant team.id (SubjectGroup writers) View True) >>= ok
+    void (pageAt run editor "team" "team-handbook")
+    access <- run admin (spaceAccess team.id) >>= ok
+    length [g | g <- access.grants, g.subject == SubjectGroup writers] `shouldBe` 1
+    run admin (setSpaceGrant team.id (SubjectGroup writers) View False) >>= ok
+    run admin (setSpaceGrant team.id (SubjectGroup writers) View False) >>= ok
+    getPageAt run editor "team" "team-handbook" `shouldReturn` Left Forbidden
+
+  it "let whoever administers the space do it, themself included, and nobody else" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    team <- spaceAt run admin "team"
+    editorId <- userId run editor
+    readerId <- userId run reader
+    for_ [Anonymous, editor, reader] $ \who -> do
+      run who (spaceAccess blog.id) >>= (`shouldFailWith` Forbidden)
+      run who (setSpaceGrant blog.id (SubjectUser editorId) AdministerSpace True) >>= (`shouldFailWith` Forbidden)
+    run reader (spaceAccess team.id) >>= (`shouldFailWith` Forbidden)
+    run admin (spaceAccess (SpaceId "no-such-space")) >>= (`shouldFailWith` NotFound)
+    run admin (setSpaceGrant (SpaceId "no-such-space") (SubjectUser editorId) View True) >>= (`shouldFailWith` NotFound)
+    -- Granted to administer the blog, the editor may grant on it, and take
+    -- that from themself.
+    run admin (setSpaceGrant blog.id (SubjectUser editorId) AdministerSpace True) >>= ok
+    run editor (setSpaceGrant blog.id (SubjectUser readerId) Edit True) >>= ok
+    void (run editor (spaceAccess blog.id) >>= ok)
+    run editor (setSpaceGrant blog.id (SubjectUser editorId) AdministerSpace False) >>= ok
+    run editor (spaceAccess blog.id) >>= (`shouldFailWith` Forbidden)
+
+  it "refuse to grant to a user or a group that is not there" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    run admin (setSpaceGrant blog.id (SubjectUser (UserId "user-nobody")) View True) >>= shouldBeInvalid
+    run admin (setSpaceGrant blog.id (SubjectGroup (GroupId "group-nothing")) View True) >>= shouldBeInvalid
+    -- Taking one away from nobody changes nothing.
+    run admin (setSpaceGrant blog.id (SubjectUser (UserId "user-nobody")) View False) >>= ok
 
 mathMacros :: (MonadWiki m) => SpecWith (Fixture m)
 mathMacros = describe "setSpaceMathMacros" $ do
