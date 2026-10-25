@@ -53,7 +53,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
 import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
-import Wiki.Api.Admin (ServerStatus)
+import Wiki.Api.Admin (AdministratorFlag, Directory, GroupName, ServerStatus)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Types
@@ -67,6 +67,7 @@ import Wiki.Core.Page (Page)
 import Wiki.Core.Search (SearchHit)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
+import Wiki.Core.User (Group)
 import Wiki.Core.Version (Version, VersionInfo)
 
 -- | The whole API, at @\/api\/v1@.
@@ -193,13 +194,29 @@ data ArchiveApi mode = ArchiveApi
   }
   deriving stock (Generic)
 
--- | What only the administrator may ask ("Wiki.Api.Admin"): on the
--- server's admin listener, where the operator is the administrator, or (from
--- Phase 3) on the public one as an administrator. Phase 3 adds the panel's
--- users and permissions here.
-newtype AdminApi mode = AdminApi
+-- | What only an administrator may ask ("Wiki.Api.Admin"): whoever holds
+-- the global administer, which the operator on the server's admin listener
+-- always does. Anyone else is refused ('Wiki.Api.Error.Forbidden') before
+-- anything they named is looked for.
+data AdminApi mode = AdminApi
   { status :: mode :- "status" :> Get '[JSON] ServerStatus
   -- ^ The server's version, data directory and counts.
+  , directory :: mode :- "directory" :> Get '[JSON] Directory
+  -- ^ @directory@: the users, who of them is an administrator, the groups
+  -- and their members.
+  , setAdministrator :: mode :- "users" :> Capture "user" UserId :> "administrator" :> ReqBody '[JSON] AdministratorFlag :> PutNoContent
+  -- ^ @setAdministrator@: grant a user the global administer, or take it
+  -- away, their own included.
+  , createGroup :: mode :- "groups" :> ReqBody '[JSON] GroupName :> PostCreated '[JSON] Group
+  -- ^ @createGroup@.
+  , renameGroup :: mode :- "groups" :> Capture "group" GroupId :> "name" :> ReqBody '[JSON] GroupName :> Put '[JSON] Group
+  -- ^ @renameGroup@.
+  , deleteGroup :: mode :- "groups" :> Capture "group" GroupId :> DeleteNoContent
+  -- ^ @deleteGroup@, with its members' membership and the grants to it.
+  , addMember :: mode :- "groups" :> Capture "group" GroupId :> "members" :> Capture "user" UserId :> PutNoContent
+  -- ^ @addMember@.
+  , removeMember :: mode :- "groups" :> Capture "group" GroupId :> "members" :> Capture "user" UserId :> DeleteNoContent
+  -- ^ @removeMember@.
   }
   deriving stock (Generic)
 

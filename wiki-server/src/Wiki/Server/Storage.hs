@@ -68,7 +68,9 @@ import Data.UUID.Types qualified as UUID
 import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, open, query, query_, withConnection)
 import Protolude
 import System.Directory (createDirectoryIfMissing)
+import Wiki.Api.Admin (Directory (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, maxAttachmentSize)
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..))
@@ -87,6 +89,7 @@ import Wiki.Core.Permission
   , canAdministerSpace
   , canEdit
   , canView
+  , hasGlobalPermission
   , isFor
   , mayCreateSpace
   , mayMovePage
@@ -95,7 +98,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), bodyText, folded, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Group (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
 import Wiki.Server.Storage.Backup (backupFiles)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
@@ -404,6 +407,19 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   listVersions = run Reads . listVersionsTx
   getVersion pid = run Reads . getVersionTx pid
   restoreVersion pid at = run Writes . restoreVersionTx pid at
+
+-- | The administration's, as the class's Haddock says
+-- ("Wiki.App.Backend.Admin"): each operation one transaction that first
+-- checks that whoever is asking holds the global administer, which the
+-- administrator always does and a user does by a grant.
+instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
+  directory = run Reads directoryTx
+  setAdministrator u = run Writes . setAdministratorTx u
+  createGroup = run Writes . createGroupTx
+  renameGroup g = run Writes . renameGroupTx g
+  deleteGroup = run Writes . deleteGroupTx
+  addMember g = run Writes . setMemberTx True g
+  removeMember g = run Writes . setMemberTx False g
 
 -- | An attachment someone may view (they may view its page), and the file
 -- its bytes are in when the storage keeps them; 'Nothing' for one that lives
@@ -898,6 +914,89 @@ restoreVersionTx pid at base = do
   requireEdit =<< chainOfPage p
   v <- findVersion pid at
   savePageTx pid base v.title v.body
+
+--------------------------------------------------------------------------------
+-- Administration
+
+-- | Whoever is asking holds the global administer: checked before anything
+-- an administration's operation is given is looked for.
+requireAdministrator :: Tx ()
+requireAdministrator = ask >>= \x -> require (hasGlobalPermission x.principal x.grants Administer)
+
+-- | A user by id; the administrator, who is no user, is not found.
+findUser :: UserId -> Tx User
+findUser u = db (`loadUser` u) >>= maybe (failWith NotFound) pure
+
+-- | A group by id.
+findGroup :: GroupId -> Tx Group
+findGroup g = db loadGroups >>= maybe (failWith NotFound) pure . find (\x -> x.id == g)
+
+directoryTx :: Tx Directory
+directoryTx = do
+  requireAdministrator
+  users <- db loadUsers
+  groups <- db loadGroups
+  membership <- db loadMembership
+  stored <- db loadGrants
+  let ids = Set.fromList (map (\u -> u.id) users)
+  pure
+    Directory
+      { users = sortOn (\u -> u.login) users
+      , administrators = Set.fromList [u | GlobalGrant (SubjectUser u) Administer <- stored.global, u `Set.member` ids]
+      , groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) groups
+      , membership = Map.filter (not . Set.null) (Map.restrictKeys membership (Set.fromList (map (\g -> g.id) groups)))
+      }
+
+-- | Give a user the global administer, or take it from them, themself
+-- included: the admin listener can always give it back.
+setAdministratorTx :: UserId -> Bool -> Tx ()
+setAdministratorTx u granted = do
+  requireAdministrator
+  _ <- findUser u
+  let grant = GlobalGrant {subject = SubjectUser u, permission = Administer}
+  db $ \c ->
+    if granted
+      then insertGrants c Grants {global = [grant], spaces = []}
+      else deleteGlobalGrant c grant
+
+-- | A group's name, checked: not blank, and no other group's but for case.
+groupNameTx :: Maybe GroupId -> Text -> Tx Text
+groupNameTx self name = do
+  n <- nonBlank "A group's name" name
+  groups <- db loadGroups
+  unless (null [g | g <- groups, Just g.id /= self, T.toCaseFold g.name == T.toCaseFold n]) $
+    invalid ("There is a group called " <> n <> " already.")
+  pure n
+
+createGroupTx :: Text -> Tx Group
+createGroupTx name = do
+  requireAdministrator
+  n <- groupNameTx Nothing name
+  g <- (\i -> Group {id = GroupId i, name = n}) <$> newId
+  db (`insertGroup` g)
+  pure g
+
+renameGroupTx :: GroupId -> Text -> Tx Group
+renameGroupTx gid name = do
+  requireAdministrator
+  _ <- findGroup gid
+  n <- groupNameTx (Just gid) name
+  db (\c -> renameGroupRow c gid n)
+  pure Group {id = gid, name = n}
+
+deleteGroupTx :: GroupId -> Tx ()
+deleteGroupTx gid = do
+  requireAdministrator
+  _ <- findGroup gid
+  db (`deleteGroupRows` gid)
+
+-- | Put a user in a group, or take them out; either is done once.
+setMemberTx :: Bool -> GroupId -> UserId -> Tx ()
+setMemberTx member gid u = do
+  requireAdministrator
+  _ <- findGroup gid
+  _ <- findUser u
+  db (\c -> (if member then insertMember else deleteMember) c gid u)
 
 --------------------------------------------------------------------------------
 -- Whole wikis

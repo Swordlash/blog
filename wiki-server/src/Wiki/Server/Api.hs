@@ -1,7 +1,8 @@
 -- | The API's handlers ("Wiki.Api"), over the storage: each endpoint asks
 -- the storage what the application would ask any backend ('MonadWiki'), as
--- the principal of the request, and answers with what it gets back or with
--- its refusal as an 'ApiError'.
+-- the principal of the request, and the administration's endpoints what the
+-- panel would ask any backend ('MonadAdmin'), and answers with what it gets
+-- back or with its refusal as an 'ApiError'.
 --
 -- A handler never knows which listener it serves: it is given who is asking
 -- ('Who'), which the listener decided ("Wiki.Server.App"), and the storage's
@@ -43,7 +44,7 @@ import Servant.Multipart (Mem, MultipartOptions (..))
 import Servant.Server.Generic (AsServer)
 import System.Directory (doesFileExist)
 import Wiki.Api
-import Wiki.Api.Admin (ServerStatus (..))
+import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
@@ -52,6 +53,7 @@ import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (writeArchive)
 import Wiki.Core.Export.Zip (zipFiles)
@@ -232,6 +234,15 @@ handlers env who =
     , admin =
         AdminApi
           { status = administrator >> liftIO (serverStatus env)
+          , -- The storage checks who may: these are the administration's
+            -- own operations ("Wiki.App.Backend.Admin").
+            directory = wiki directory
+          , setAdministrator = \u flag -> wiki (setAdministrator u flag.administrator) $> NoContent
+          , createGroup = \body -> wiki (createGroup body.name)
+          , renameGroup = \g body -> wiki (renameGroup g body.name)
+          , deleteGroup = \g -> wiki (deleteGroup g) $> NoContent
+          , addMember = \g u -> wiki (addMember g u) $> NoContent
+          , removeMember = \g u -> wiki (removeMember g u) $> NoContent
           }
     }
   where

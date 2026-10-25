@@ -23,6 +23,7 @@ import Servant.Server.Generic (AsServer)
 import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api
+import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..))
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))
@@ -39,6 +40,7 @@ import Wiki.Core.Page (Page)
 import Wiki.Core.Page qualified as Page
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
+import Wiki.Core.User (Group (..))
 
 -- | Refuse a request as the server's handlers will: the error's status, and
 -- the error as the JSON body.
@@ -131,7 +133,17 @@ stubs =
                   , pagesSkipped = length apply.choices.skipPages + length apply.choices.skipSpaces
                   }
           }
-    , admin = AdminApi {status = pure Sample.serverStatus}
+    , admin =
+        AdminApi
+          { status = pure Sample.serverStatus
+          , directory = pure Sample.directory
+          , setAdministrator = \u flag -> if u == UserId "u2" && flag.administrator then pure NoContent else refuse NotFound
+          , createGroup = \body -> pure Group {id = GroupId "new", name = body.name}
+          , renameGroup = \g body -> pure Group {id = g, name = body.name}
+          , deleteGroup = \g -> if g == GroupId "g1" then pure NoContent else refuse NotFound
+          , addMember = \g u -> if (g, u) == (GroupId "g1", UserId "u1") then pure NoContent else refuse NotFound
+          , removeMember = \g u -> if (g, u) == (GroupId "g1", UserId "u2") then pure NoContent else refuse NotFound
+          }
     }
 
 app :: Application
@@ -336,6 +348,24 @@ spec = describe "a server of the API's type" $ do
 
   it "gives the server's status to its operator" $
     answers (getAt links.admin.status) 200 Sample.serverStatus
+
+  describe "the wiki's people" $ do
+    it "lists them in one answer" $
+      answers (getAt links.admin.directory) 200 Sample.directory
+
+    it "marks a user as an administrator, by id, with a flag" $ do
+      (status <$> sendJson methodPut (links.admin.setAdministrator (UserId "u2")) AdministratorFlag {administrator = True}) `shouldReturn` 204
+      (status <$> sendJson methodPut (links.admin.setAdministrator (UserId "u2")) AdministratorFlag {administrator = False}) `shouldReturn` 404
+
+    it "makes, renames and deletes a group" $ do
+      answers (sendJson methodPost links.admin.createGroup GroupName {name = "readers"}) 201 Group {id = GroupId "new", name = "readers"}
+      answers (sendJson methodPut (links.admin.renameGroup (GroupId "g1")) GroupName {name = "authors"}) 200 Group {id = GroupId "g1", name = "authors"}
+      (status <$> request methodDelete (links.admin.deleteGroup (GroupId "g1")) [] "") `shouldReturn` 204
+
+    it "adds a member to a group, and takes one out" $ do
+      (status <$> request methodPut (links.admin.addMember (GroupId "g1") (UserId "u1")) [] "") `shouldReturn` 204
+      (status <$> request methodDelete (links.admin.removeMember (GroupId "g1") (UserId "u2")) [] "") `shouldReturn` 204
+      (status <$> request methodDelete (links.admin.removeMember (GroupId "g1") (UserId "u1")) [] "") `shouldReturn` 404
 
   it "answers an address the API does not have with 404" $
     (status <$> getAt "api/v1/nothing-here") `shouldReturn` 404

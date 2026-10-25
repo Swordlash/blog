@@ -30,6 +30,7 @@ module Wiki.App.Backend.Http.Preload
   , SearchOf (..)
   , VersionsOf (..)
   , VersionOf (..)
+  , DirectoryOf (..)
   , Answer (..)
   , preloadId
   , toPreload
@@ -50,6 +51,7 @@ import Data.Time (UTCTime)
 import Halogen.IO.Util (readEmbedded)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude
+import Wiki.Api.Admin (Directory)
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Types (SessionInfo (..))
@@ -81,6 +83,10 @@ data Preload = Preload
   , searches :: [SearchOf]
   , versionLists :: [VersionsOf]
   , versions :: [VersionOf]
+  , directory :: Maybe DirectoryOf
+  -- ^ The administration's people ('Wiki.App.Backend.Admin.directory'),
+  -- for a page of the administration rendered for an administrator; a
+  -- payload written before it had this field reads as without it.
   }
   deriving stock (Eq, Show, Generic)
 
@@ -119,6 +125,11 @@ data VersionsOf = VersionsOf {page :: PageId, versions :: Answer [VersionInfo]}
 
 -- | One version of a page ('Wiki.App.Backend.getVersion').
 data VersionOf = VersionOf {page :: PageId, updatedAt :: UTCTime, version :: Answer Version}
+  deriving stock (Eq, Show)
+
+-- | The wiki's people, as the administration reads them
+-- ('Wiki.App.Backend.Admin.directory').
+newtype DirectoryOf = DirectoryOf {directory :: Answer Directory}
   deriving stock (Eq, Show)
 
 -- | What a read gave, or the API's refusal: written as the read's own field
@@ -173,6 +184,12 @@ instance ToJSON VersionOf where
 instance FromJSON VersionOf where
   parseJSON v = withObject "VersionOf" (\o -> VersionOf <$> o .: "page" <*> o .: "updatedAt" <*> parseAnswer "version" v) v
 
+instance ToJSON DirectoryOf where
+  toJSON d = object (answerFields "directory" d.directory)
+
+instance FromJSON DirectoryOf where
+  parseJSON v = DirectoryOf <$> parseAnswer "directory" v
+
 -- | What the backend kept, as the page carries it: every answer it would
 -- give at once, and no page twice.
 toPreload :: Cache -> Preload
@@ -193,6 +210,7 @@ toPreload c =
     , searches = [SearchOf {query, hits} | (query, hits) <- c.searches]
     , versionLists = [VersionsOf {page, versions = toAnswer vs} | (page, vs) <- Map.toList c.versionLists, kept vs]
     , versions = [VersionOf {page, updatedAt, version = toAnswer v} | ((page, updatedAt), v) <- Map.toList c.versions, kept v]
+    , directory = DirectoryOf . toAnswer <$> mfilter kept c.directory
     }
 
 -- | The backend's cache as the page's payload says.
@@ -208,6 +226,7 @@ fromPreload p =
     , searches = [(s.query, s.hits) | s <- p.searches]
     , versionLists = Map.fromList [(v.page, fromAnswer v.versions) | v <- p.versionLists]
     , versions = Map.fromList [((v.page, v.updatedAt), fromAnswer v.version) | v <- p.versions]
+    , directory = (\d -> fromAnswer d.directory) <$> p.directory
     }
 
 -- | Only what 'kept' keeps is ever written, which is an answer or a

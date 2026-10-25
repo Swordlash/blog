@@ -16,13 +16,15 @@ module Test.Sample
   , importChoices
   , importSummary
   , serverStatus
+  , directory
   )
 where
 
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
-import Wiki.Api.Admin (ServerStatus (..))
+import Wiki.Api.Admin (Directory (..), ServerStatus (..))
 import Wiki.Api.Import
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -34,7 +36,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Group (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | A time with a fraction of a second, as a page's version has.
@@ -198,4 +200,18 @@ serverStatus =
     , attachments = 4
     , users = 2
     , backups = 1
+    }
+
+-- | The wiki's people, as the administration reads them: two users, one of
+-- them an administrator, and a group with the other in it.
+directory :: Directory
+directory =
+  Directory
+    { users =
+        [ User {id = UserId "u1", login = "ada", displayName = "Ada"}
+        , User {id = UserId "u2", login = "edgar", displayName = "Edgar"}
+        ]
+    , administrators = Set.fromList [UserId "u1"]
+    , groups = [Group {id = GroupId "g1", name = "writers"}]
+    , membership = Map.fromList [(GroupId "g1", Set.fromList [UserId "u2"])]
     }

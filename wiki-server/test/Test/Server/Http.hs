@@ -21,6 +21,7 @@ import Wiki.Api.Import
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Contract (Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
+import Wiki.App.Backend.Contract.Admin qualified as Admin
 import Wiki.App.Backend.Http (HttpWiki, applyImport, newHttpEnv, previewImport, runHttpWiki)
 import Wiki.App.Demo (demoNow)
 import Wiki.Core.Export (Archive (..), writeArchive)
@@ -34,11 +35,14 @@ import Wiki.Server.Storage (Storage, Who (..))
 
 spec :: Spec
 spec = describe "HttpWiki against the server's API" $ do
-  Contract.spec (type (HttpWiki IO)) $ \example ->
-    withDemo $ \st -> do
-      env <- apiEnv st
-      example (Fixture (\as program -> whoFor st as >>= \who -> newHttpEnv (inProcess env who) >>= \http -> runHttpWiki http program))
+  Contract.spec (type (HttpWiki IO)) fixture
+  Admin.spec (type (HttpWiki IO)) fixture
   importing
+  where
+    fixture example =
+      withDemo $ \st -> do
+        env <- apiEnv st
+        example (Fixture (\as program -> whoFor st as >>= \who -> newHttpEnv (inProcess env who) >>= \http -> runHttpWiki http program))
 
 -- | The import's two steps, as the administration's dialog makes them: the
 -- forms 'previewImport' and 'applyImport' write, read by the server as the

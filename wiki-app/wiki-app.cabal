@@ -65,6 +65,7 @@ library
   exposed-modules:
       Wiki.App
       Wiki.App.Backend
+      Wiki.App.Backend.Admin
       Wiki.App.Backend.Http
       Wiki.App.Backend.Http.Cache
       Wiki.App.Backend.Http.Preload
@@ -136,7 +137,7 @@ library
     build-depends: haskell-halogen-th-plugin
     ghc-options:   -fplugin=Halogen.TH.Plugin
 
--- The backend's contract: what every MonadWiki does, as an hspec spec that a
+-- The backend's contract: what every MonadWiki (and MonadAdmin) does, as an hspec spec that a
 -- test suite runs against its backend with a fixture of its own. A library of
 -- its own so that this package's tests (the in-memory backend) and
 -- wiki-server's (the SQLite storage) run the one spec. Natively only, as both
@@ -151,6 +152,7 @@ library contract
   else
     exposed-modules:
         Wiki.App.Backend.Contract
+        Wiki.App.Backend.Contract.Admin
     build-depends:
         HUnit,
         bytestring,
@@ -159,6 +161,7 @@ library contract
         protolude,
         text,
         time,
+        wiki-api,
         wiki-app,
         wiki-core
 

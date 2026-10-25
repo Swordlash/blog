@@ -61,6 +61,15 @@ module Wiki.App.Backend.Mem.State
   , saveDraftIn
   , discardDraftIn
   , restoreVersionIn
+
+    -- * Administration
+  , directoryIn
+  , setAdministratorIn
+  , createGroupIn
+  , renameGroupIn
+  , deleteGroupIn
+  , addMemberIn
+  , removeMemberIn
   )
 where
 
@@ -71,6 +80,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Numeric.Natural (Natural)
 import Protolude
+import Wiki.Api.Admin (Directory (Directory))
+import Wiki.Api.Admin qualified as A
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymous, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -82,7 +93,7 @@ import Wiki.Core.Page (Page (..), childPages, pageTreeOrder, positionPage)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission
   ( GlobalGrant (GlobalGrant)
-  , GlobalPermission
+  , GlobalPermission (Administer)
   , Grants (Grants)
   , Principal
   , SpaceGrant (SpaceGrant)
@@ -91,6 +102,7 @@ import Wiki.Core.Permission
   , canAdministerSpace
   , canEdit
   , canView
+  , hasGlobalPermission
   , isFor
   , mayCreateSpace
   , mayMovePage
@@ -866,3 +878,96 @@ restoreVersionIn pid at base now st = do
   requireEdit st (chainOf st p.space)
   v <- findVersion st pid at
   savePageIn pid base v.title v.body now st
+
+--------------------------------------------------------------------------------
+-- Administration
+
+-- | The current user holds the global administer: what everything the
+-- administration does needs, checked before anything else.
+requireAdministrator :: MemState -> Either WikiError ()
+requireAdministrator st = require (hasGlobalPermission (currentPrincipal st) st.grants Administer)
+
+-- | A user by id.
+findUser :: MemState -> UserId -> Either WikiError User
+findUser st u = maybe (Left NotFound) Right (Map.lookup u st.users)
+
+-- | A group by id.
+findGroup :: MemState -> GroupId -> Either WikiError Group
+findGroup st g = maybe (Left NotFound) Right (Map.lookup g st.groups)
+
+-- | The grant of the global administer to this user themself.
+administerGrant :: UserId -> GlobalGrant
+administerGrant u = GlobalGrant {P.subject = SubjectUser u, P.permission = Administer}
+
+-- | Every user and group, as the administration shows them.
+directoryIn :: MemState -> Either WikiError Directory
+directoryIn st = do
+  requireAdministrator st
+  pure
+    Directory
+      { A.users = sortOn (\u -> u.login) (Map.elems st.users)
+      , A.administrators = Set.fromList [u | GlobalGrant (SubjectUser u) Administer <- st.grants.global, Map.member u st.users]
+      , A.groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) (Map.elems st.groups)
+      , A.membership = Map.filter (not . Set.null) (Map.restrictKeys st.membership (Map.keysSet st.groups))
+      }
+
+-- | Grant a user the global administer, or take it from them.
+setAdministratorIn :: UserId -> Bool -> Write ()
+setAdministratorIn u granted st = do
+  requireAdministrator st
+  _ <- findUser st u
+  let others = filter (/= administerGrant u) st.grants.global
+      global = if granted then others <> [administerGrant u] else others
+  pure (st {grants = Grants {P.global = global, P.spaces = st.grants.spaces}}, ())
+
+-- | A group's name, checked: not blank, and no other group's but for case.
+groupName :: MemState -> Maybe GroupId -> Text -> Either WikiError Text
+groupName st self name = do
+  n <- nonBlank "A group's name" name
+  let taken = [g | g <- Map.elems st.groups, Just g.id /= self, T.toCaseFold g.name == T.toCaseFold n]
+  unless (null taken) (Left (Invalid ("There is a group called " <> n <> " already.")))
+  pure n
+
+-- | A new group, with nobody in it.
+createGroupIn :: Text -> Write Group
+createGroupIn name st = do
+  requireAdministrator st
+  n <- groupName st Nothing name
+  let (i, st1) = newId "group" st
+      g = Group {id = GroupId i, name = n}
+  pure (insertGroup g [] st1, g)
+
+-- | A group with another name.
+renameGroupIn :: GroupId -> Text -> Write Group
+renameGroupIn gid name st = do
+  requireAdministrator st
+  _ <- findGroup st gid
+  n <- groupName st (Just gid) name
+  let renamed = Group {id = gid, name = n}
+  pure (st {groups = Map.insert gid renamed st.groups}, renamed)
+
+-- | A group gone, with its membership and every grant to it.
+deleteGroupIn :: GroupId -> Write ()
+deleteGroupIn gid st = do
+  requireAdministrator st
+  _ <- findGroup st gid
+  let toGroup subject = subject == SubjectGroup gid
+      grants =
+        Grants
+          { P.global = filter (\x -> not (toGroup x.subject)) st.grants.global
+          , P.spaces = filter (\x -> not (toGroup x.subject)) st.grants.spaces
+          }
+  pure (st {groups = Map.delete gid st.groups, membership = Map.delete gid st.membership, grants}, ())
+
+-- | A user put in a group, or taken out of it.
+setMember :: Bool -> GroupId -> UserId -> Write ()
+setMember member gid u st = do
+  requireAdministrator st
+  _ <- findGroup st gid
+  _ <- findUser st u
+  let change = if member then Set.insert u else Set.delete u
+  pure (st {membership = Map.filter (not . Set.null) (Map.alter (Just . change . fold) gid st.membership)}, ())
+
+addMemberIn, removeMemberIn :: GroupId -> UserId -> Write ()
+addMemberIn = setMember True
+removeMemberIn = setMember False

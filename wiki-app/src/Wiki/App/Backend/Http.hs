@@ -28,7 +28,9 @@
 -- application is rendered with everything a route shows, and what it read
 -- is what the page carries for the program.
 --
--- Besides @MonadWiki@, it imports another wiki into the server's, merging
+-- Besides @MonadWiki@, it is the administration's backend
+-- ("Wiki.App.Backend.Admin") over the API's @admin\/…@ endpoints, and it
+-- imports another wiki into the server's, merging
 -- it with what is there ('previewImport', 'applyImport'): the
 -- administration's, which the demo, whose import replaces everything, has
 -- no counterpart of.
@@ -66,7 +68,8 @@ import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSBytes, fromJ
 import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import Web.Storage.IndexedDB (MonadIndexedDB)
-import Wiki.Api (ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..))
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.Api.Links qualified as Links
@@ -74,6 +77,7 @@ import Wiki.Api.Types
 import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError)
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Http.Cache
 import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, ifMatch, multipart, multipartForm, withJson)
 import Wiki.App.Backend.Http.Request qualified as R
@@ -303,6 +307,19 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   getVersion pid at =
     cached (\c -> Map.lookup (pid, at) c.versions) (R.get (links.pages.version pid (VersionTime at))) (withVersion pid at)
   restoreVersion pid at base = write (ifMatch base (R.post (links.pages.restore pid (VersionTime at))))
+
+-- | The administration's, over the API's @admin\/…@ endpoints. The
+-- directory is kept as any read is, so that the administration a server
+-- rendered for an administrator is the program's first render too; the
+-- writes let everything go, as every write does.
+instance (MonadIO m) => MonadAdmin (HttpWiki m) where
+  directory = cached (\c -> c.directory) (R.get links.admin.directory) withDirectory
+  setAdministrator u administrator = write_ (withJson "PUT" (links.admin.setAdministrator u) AdministratorFlag {administrator})
+  createGroup name = write (withJson "POST" links.admin.createGroup GroupName {name})
+  renameGroup g name = write (withJson "PUT" (links.admin.renameGroup g) GroupName {name})
+  deleteGroup g = write_ (R.delete (links.admin.deleteGroup g))
+  addMember g u = write_ (R.put (links.admin.addMember g u))
+  removeMember g u = write_ (R.delete (links.admin.removeMember g u))
 
 -- | What has been read answers at once; anything else would wait, unless
 -- the transport answers at once itself ('newImmediateHttpEnv').

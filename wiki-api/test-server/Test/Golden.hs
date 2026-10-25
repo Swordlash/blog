@@ -16,6 +16,7 @@ import Protolude
 import System.Environment (lookupEnv)
 import Test.Hspec
 import Test.Sample qualified as Sample
+import Wiki.Api.Admin (AdministratorFlag (..), GroupName (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Types
@@ -50,6 +51,7 @@ spec = describe "golden JSON" $ do
     golden "import-plan" Sample.importPlan
     golden "import-summary" Sample.importSummary
     golden "server-status" Sample.serverStatus
+    golden "directory" Sample.directory
   describe "errors" $ do
     golden "error-not-found" NotFound
     golden "error-forbidden" Forbidden
@@ -68,3 +70,5 @@ spec = describe "golden JSON" $ do
     golden "shift" ShiftBy {shift = ShiftToTop}
     golden "draft-edit" DraftEdit {base = Sample.time, title = "Tour", body = "# Tour, unsaved"}
     golden "import-choices" Sample.importChoices
+    golden "administrator-flag" AdministratorFlag {administrator = True}
+    golden "group-name" GroupName {name = "writers"}

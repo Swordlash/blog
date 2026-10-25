@@ -39,6 +39,10 @@ module Wiki.Server.Storage.Rows
   , insertUser
   , insertGroup
   , insertMember
+  , deleteMember
+  , renameGroupRow
+  , deleteGroupRows
+  , deleteGlobalGrant
   , insertGrants
   , insertSpace
   , updateSpace
@@ -419,6 +423,28 @@ insertGroup c g = execute c "INSERT INTO groups (id, name) VALUES (?, ?)" (g.id.
 -- | Put a user in a group.
 insertMember :: Connection -> GroupId -> UserId -> IO ()
 insertMember c g u = execute c "INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)" (g.text, u.text)
+
+-- | Take a user out of a group.
+deleteMember :: Connection -> GroupId -> UserId -> IO ()
+deleteMember c g u = execute c "DELETE FROM group_members WHERE group_id = ? AND user_id = ?" (g.text, u.text)
+
+-- | Give a group another name.
+renameGroupRow :: Connection -> GroupId -> Text -> IO ()
+renameGroupRow c g name = execute c "UPDATE groups SET name = ? WHERE id = ?" (name, g.text)
+
+-- | Delete a group: its members go with it (a foreign key), and so must
+-- the grants to it, which name it in a column that is no foreign key.
+deleteGroupRows :: Connection -> GroupId -> IO ()
+deleteGroupRows c g = do
+  execute c "DELETE FROM global_grants WHERE subject_kind = 'group' AND subject_id = ?" (Only g.text)
+  execute c "DELETE FROM space_grants WHERE subject_kind = 'group' AND subject_id = ?" (Only g.text)
+  execute c "DELETE FROM groups WHERE id = ?" (Only g.text)
+
+-- | Take back a global grant, if it was given.
+deleteGlobalGrant :: Connection -> GlobalGrant -> IO ()
+deleteGlobalGrant c g =
+  let (kind, i) = subjectColumns g.subject
+   in execute c "DELETE FROM global_grants WHERE subject_kind = ? AND subject_id = ? AND permission = ?" (kind, i, globalText g.permission)
 
 -- | Give these grants, in their order; one already given is left as it is.
 insertGrants :: Connection -> Grants -> IO ()

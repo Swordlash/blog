@@ -1,0 +1,28 @@
+{
+  "administrators": [
+    "u1"
+  ],
+  "groups": [
+    {
+      "id": "g1",
+      "name": "writers"
+    }
+  ],
+  "membership": {
+    "g1": [
+      "u2"
+    ]
+  },
+  "users": [
+    {
+      "displayName": "Ada",
+      "id": "u1",
+      "login": "ada"
+    },
+    {
+      "displayName": "Edgar",
+      "id": "u2",
+      "login": "edgar"
+    }
+  ]
+}

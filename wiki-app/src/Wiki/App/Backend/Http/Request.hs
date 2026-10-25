@@ -21,6 +21,7 @@ module Wiki.App.Backend.Http.Request
   , Body (..)
   , get
   , post
+  , put
   , delete
   , withJson
   , ifMatch
@@ -42,7 +43,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Protolude hiding (get)
+import Protolude hiding (get, put)
 import Web.HttpApiData (toUrlPiece)
 import Wiki.Api.Error (ApiError, errorForStatus)
 import Wiki.Api.Error qualified as ApiError
@@ -68,12 +69,16 @@ data Body = NoBody | Body Text ByteString
 get :: Text -> Request
 get url = Request {method = "GET", url, headers = [], body = NoBody}
 
--- | A @DELETE@ of an address.
 -- | A @POST@ with nothing in its body: an action whose arguments are all in
 -- its address and headers.
 post :: Text -> Request
 post url = (get url) {method = "POST"}
 
+-- | A @PUT@ without a body: one whose address says it all.
+put :: Text -> Request
+put url = (get url) {method = "PUT"}
+
+-- | A @DELETE@ of an address.
 delete :: Text -> Request
 delete url = (get url) {method = "DELETE"}
 

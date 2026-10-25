@@ -25,6 +25,8 @@
 --
 -- So are searches, by their query: the server renders the page of a
 -- search's results with its hits, which the program then shows at once.
+-- And so is the administration's directory of the wiki's people, which the
+-- server renders the administration with.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
   , emptyCache
@@ -40,6 +42,7 @@ module Wiki.App.Backend.Http.Cache
   , withSearch
   , withVersions
   , withVersion
+  , withDirectory
   , afterWrite
   )
 where
@@ -47,6 +50,7 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Protolude
+import Wiki.Api.Admin (Directory)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
@@ -80,6 +84,8 @@ data Cache = Cache
   , versions :: Map (PageId, UTCTime) (Either WikiError Version)
   -- ^ 'Wiki.App.Backend.getVersion', by page and time. A version never
   -- changes, but it goes with its page, so these are let go with the rest.
+  , directory :: Maybe (Either WikiError Directory)
+  -- ^ 'Wiki.App.Backend.Admin.directory'.
   }
   deriving stock (Eq, Show)
 
@@ -95,6 +101,7 @@ emptyCache =
     , searches = []
     , versionLists = mempty
     , versions = mempty
+    , directory = Nothing
     }
 
 -- | Whether a read's answer is kept: what it gave, and a refusal the
@@ -149,6 +156,9 @@ withVersions pid vs c = c {versionLists = Map.insert pid vs c.versionLists}
 
 withVersion :: PageId -> UTCTime -> Either WikiError Version -> Cache -> Cache
 withVersion pid at v c = c {versions = Map.insert (pid, at) v c.versions}
+
+withDirectory :: Either WikiError Directory -> Cache -> Cache
+withDirectory d c = c {directory = Just d}
 
 -- | The cache after a write that changed the wiki: nothing in it can be
 -- trusted any more.
