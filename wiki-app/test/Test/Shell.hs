@@ -387,6 +387,19 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     -- In the menu no longer: it only switches users.
     html `lacks` "user-menu"
 
+  it "lists the users and the groups for an administrator, after the wiki's data, but no switch for their own" $ do
+    Rendered {html} <- render (as (Just "user-admin")) Admin
+    html `contains` "</section><div class=\"admin-people\"><section class=\"admin-section admin-users\"><h2>Users</h2>"
+    html `contains` "<section class=\"admin-section admin-groups\"><h2>Groups</h2>"
+    html `lacks` "Loading…"
+    T.count "<tr class=\"user-row\"" html `shouldBe` 3
+    -- Ada may not demote herself from here; she may anyone else.
+    html `contains` "aria-checked=\"true\" aria-label=\"Ada Admin is an administrator\" class=\"switch administrator-switch\" disabled"
+    html `contains` "That is you"
+    html `contains` "aria-checked=\"false\" aria-label=\"Edgar Editor is an administrator\" class=\"switch administrator-switch\" role=\"switch\""
+    html `contains` "<h3 class=\"group-name\">writers</h3><span class=\"group-count\">1 member</span>"
+    html `contains` "<li class=\"group-member\" data-login=\"editor\">"
+
   it "shows nobody else the way to the administration, nor its controls there" $
     for_ [Nothing, Just "user-reader", Just "user-editor"] $ \who -> do
       Rendered {html = home} <- render (as who) Home
@@ -398,3 +411,4 @@ spec = describe "Wiki.App.Shell, rendered" $ do
       html `lacks` "admin-link"
       html `lacks` "Export the wiki"
       html `lacks` "demo-"
+      html `lacks` "admin-users"

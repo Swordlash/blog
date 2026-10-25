@@ -22,7 +22,8 @@
 //    "Saved"); a draft kept as the typing stops and restored after a reload;
 //    a file attached and served; a conflict (the page saved through the API
 //    meanwhile, then saved in the editor); search; the export downloaded
-//    from the administration; and a fresh browser finding all of it there.
+//    from the administration, and a group made there; and a fresh browser
+//    finding all of it there.
 // 3. Every route the walk went through, loaded afresh: each served with its
 //    status and its content before app.wasm runs, adopted with nothing to
 //    repair and no request to the API; and a page read with JavaScript off.
@@ -481,6 +482,16 @@ try {
   assert.match(exported.suggestedFilename(), /^wiki-\d{4}-\d{2}-\d{2}\.zip$/, "the export's name");
   assert.equal((await readFile(await exported.path())).subarray(0, 2).toString(), "PK", "the export is not a zip file");
   console.log(`ok: the administration downloads the server's export, ${exported.suggestedFilename()}`);
+
+  // A group, made in the administration's people, which the server keeps.
+  await page.locator("#app .admin-view .admin-users .empty", { hasText: "There are no users yet." }).waitFor({ timeout });
+  await page.locator("#app .admin-view .group-create-name").fill("Smoke testers");
+  await page.locator("#app .admin-view .group-create button.primary").click();
+  await page.locator("#app .admin-view .group-name", { hasText: "Smoke testers" }).waitFor({ timeout });
+  const people = await api("admin/directory");
+  assert.equal(people.status, 200, "the directory");
+  assert.deepEqual(people.body.groups.map((g) => g.name), ["Smoke testers"], "the server's groups");
+  console.log("ok: the administration makes a group, which the server keeps");
   await page.context().close();
 
   // Everything is there for a browser that has seen nothing.
@@ -507,7 +518,7 @@ try {
     ["/s/smoke-space/new-page/", 200, "New page"],
     ["/new-space/", 200, "New space"],
     ["/search/?q=smoke", 200, "First page"],
-    ["/admin/", 200, "Export the wiki"],
+    ["/admin/", 200, "Smoke testers"],
     ["/s/smoke-space/p/no-such-page/", 404, "There is nothing here"],
     ["/no/such/address", 404, "Not found"],
   ];

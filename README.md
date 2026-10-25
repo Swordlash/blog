@@ -64,7 +64,8 @@ authorisation.
   back to it is instant, and says so in place, with a "Try again", when the server
   cannot be reached. Its administration exports the wiki and imports another into
   it, the demo's pages among them, choosing what to bring in and which page stays
-  where both have one.
+  where both have one; and it lists the wiki's users, marks and unmarks
+  administrators, and keeps groups and their members (the demo's too).
 
 ## Running the demo
 
@@ -231,6 +232,9 @@ for the next run, like the other options; `--static` goes back to the demo.
 
   `curl http://127.0.0.1:8081/admin/api/v1/admin/status` says which version runs,
   where its data is, and how many spaces, pages, attachments and backups it has.
+  Its "Administration" page marks a user as an administrator (or takes it
+  away), who, once they can sign in, has the same page on the public listener;
+  and it keeps groups and their members.
 - **Logs.** `journalctl --user -u wiki-demo -f`: one `key=value` line per request
   (listener, who, method, path, status, milliseconds), and an error line with the
   exception for anything that fails.

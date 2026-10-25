@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+The administration has the wiki's people. A new class beside `MonadWiki`,
+`Wiki.App.Backend.Admin.MonadAdmin` (`directory`, `setAdministrator`,
+`createGroup`, `renameGroup`, `deleteGroup`, `addMember`, `removeMember`),
+with instances for the in-memory backend (its groups and global grants were
+records of the demo's IndexedDB database already, so the database keeps its
+version) and for `HttpWiki` over the API's `admin/…` endpoints, whose
+directory is cached and carried in the server's preload (`DirectoryOf`) like
+every other read. Every method needs the global administer and refuses anyone
+else before it looks for what they named. Its contract is
+`Wiki.App.Backend.Contract.Admin` in `wiki-app:contract`, run by every backend
+and, for the demo, against a reload from IndexedDB after every step.
+
+The administration page gains two sections after the wiki's data
+(`Wiki.App.View.Admin`): Users, a table of every user with a switch for
+whether they are an administrator, disabled on one's own row (the backend
+would allow it; the panel does not, since it would lock its user out at
+once), and Groups, each with its members to remove, a choice of the other
+users to add, and Rename and Delete (asking first, in place), with a form
+for a new group. The shell asks its monad for `MonadAdmin` besides
+`MonadLoad`.
+
 Every page has a history. `MonadWiki` gains `listVersions`, `getVersion` and
 `restoreVersion` (view to read, edit to restore; a restore is a save of the
 version's title and body, through the same conflict check, discarding the

@@ -32,13 +32,14 @@ import Halogen.VDom.DOM.Monad (appendChild, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
 import Protolude
 import Test.Hspec
-import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Links (links, searchQueryOf)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Backend
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Http (Transport (..), cacheOf, newHttpEnvWith, newImmediateHttpEnv)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Http.Request (Request (..), Response (..))
@@ -182,6 +183,7 @@ apiOver st = do
       pagePath p = fromMaybe [] (pathOf (`Map.lookup` st.pages) p)
   table <- runMemWiki wiki $ do
     me <- session
+    people <- directory
     spaces <- listSpaces
     perSpace <- for (Map.elems st.spaces) $ \s -> do
       space <- getSpace (spacePath s.id)
@@ -201,6 +203,7 @@ apiOver st = do
       ( Map.fromList
           ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants} :: Either WikiError SessionInfo))
               : (links.spaces.list, answerOf (Right spaces :: Either WikiError [S.Space]))
+              : (links.admin.directory, answerOf people)
               : concat perSpace
           )
       )

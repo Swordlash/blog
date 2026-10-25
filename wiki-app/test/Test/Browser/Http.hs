@@ -41,12 +41,13 @@ import Protolude hiding (find)
 import Test.Browser.Mount (slugs)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
-import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
 import Wiki.App.Backend
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Http (HttpEnv, browserTransport, cacheOf, newHttpEnv, newHttpEnvWith, runHttpWiki)
 import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
@@ -121,17 +122,20 @@ asked = unsafeIOToPageM js_server_asked >>= either (\e -> panic ("the server's r
 
 -- | The demo's wiki as its administrator sees it, answered at the
 -- addresses the shell and its views read it from: who is asking, the
--- spaces, each space by its path and its pages, and no drafts.
+-- spaces, each space by its path and its pages, no drafts, and the
+-- administration's people.
 serveDemo :: PageM s ()
 serveDemo = do
-  (me, spaces, pages) <- unsafeIOToPageM $ do
+  (me, spaces, pages, people) <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki $ do
       me <- session
       spaces <- listSpaces
       pages <- for spaces $ \s -> (s,) . fromRight [] <$> listPages s.id
-      pure (me, spaces, pages)
+      people <- directory
+      pure (me, spaces, pages, people)
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants}
+  for_ people (answerWith "GET" links.admin.directory 200)
   answerWith "GET" "api/v1/spaces" 200 spaces
   for_ pages $ \(s, ps) -> do
     answerWith "GET" (links.spaces.atPath (spacePathOf spaces s.id)) 200 s
@@ -325,6 +329,25 @@ views m = describe "the application over it" $ do
     find ui ".wiki-sidebar .page-tree a[href='#/s/docs/p/markdown-guide/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
     length <$> asked `shouldReturn` before
+    unmount ui
+    serverStops
+
+  it "loads the administration's people from the server, and marks an administrator with a PUT" $ runPage $ do
+    serverStarts
+    serveDemo
+    unsafeIOToPageM js_server_hold
+    ui <- startServer m Admin
+    find ui ".wiki-content > .loading" >>= (`shouldHaveText` "Loading…")
+    unsafeIOToPageM js_server_release
+    eventually (length <$> findAll ui ".admin-users .user-row" `shouldReturn` 3)
+    find ui ".admin-groups .group-name" >>= (`shouldHaveText` "writers")
+    answerRaw "PUT" "api/v1/admin/users/user-editor/administrator" 204 ""
+    find ui ".user-row[data-login=editor] .administrator-switch" >>= click
+    -- Read again once the change is made, as the shell reloads.
+    eventually (length . filter (\r -> r.url == "api/v1/admin/directory") <$> asked `shouldReturn` 2)
+    _ <- eventually (find ui ".user-row[data-login=editor] .administrator-switch:not([disabled])")
+    marks <- filter (\r -> r.method == "PUT") <$> asked
+    map (\r -> (r.url, r.body)) marks `shouldBe` [("api/v1/admin/users/user-editor/administrator", "{\"administrator\":true}")]
     unmount ui
     serverStops
 

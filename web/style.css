@@ -1740,6 +1740,139 @@ select {
   margin: 0.5rem 0;
 }
 
+/* The wiki's people: its users in a table, each with a switch for whether
+   they administer the wiki, and its groups, each with its members. */
+.user-table {
+  border-collapse: collapse;
+  margin: 0.5rem 0 1rem;
+}
+
+.user-table th,
+.user-table td {
+  padding: 0.35rem 1rem 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.user-table th {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.user-login,
+.group-member-login {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* A switch: a pill with a knob, at the right when on. Its words are for
+   whoever cannot see the colour. */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 4.2rem;
+  padding: 0.15rem 0.6rem 0.15rem 0.2rem;
+  border-radius: 999px;
+}
+
+.switch::before {
+  content: "";
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.switch[aria-checked="true"] {
+  flex-direction: row-reverse;
+  padding: 0.15rem 0.2rem 0.15rem 0.6rem;
+  color: #ffffff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch[aria-checked="true"]::before {
+  background: #ffffff;
+}
+
+.switch:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.administrator-self {
+  margin-left: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.group-list {
+  margin: 0.5rem 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.group {
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.group-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.group-name {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.group-count {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.group-members {
+  margin: 0.5rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group-member {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding: 0.2rem 0;
+}
+
+.group-member .group-remove {
+  margin-left: auto;
+}
+
+.group-empty {
+  margin: 0.5rem 0;
+}
+
+.group-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.group .inline-form,
+.group .confirm {
+  margin: 0;
+}
+
 .demo-refused {
   color: var(--danger);
 }

@@ -18,11 +18,12 @@
 -- what they hold as well, and goes where the change leads.
 --
 -- The administration page ('Admin') is the shell's own rather than a view's:
--- what it does (export, import, reset) acts on the whole wiki and on how the
--- demo keeps it, which the shell holds and reloads after, so its controls and
--- their state stay here and the page is only where they are shown. It is
--- laid out as a heading per section, the wiki's data the first, so that later
--- sections (users and groups) go beside it.
+-- what its first section does (export, import, reset) acts on the whole wiki
+-- and on how the demo keeps it, which the shell holds and reloads after, so
+-- those controls and their state stay here and the page is only where they
+-- are shown. It is laid out as a heading per section, the wiki's data the
+-- first; the sections on the wiki's people (its users and groups) follow,
+-- a view of their own ("Wiki.App.View.Admin").
 --
 -- Over a backend that answers at once (the demo's), the shell loads all of
 -- that with its initial state, so that its first render is the page the
@@ -76,11 +77,13 @@ import Web.Event.Event (Event)
 import Wiki.Api (ArchiveApi (..), WikiApi (..))
 import Wiki.Api.Links (links)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous)
+import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Browser (download, historyEntry, historyGo, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.App.View.Admin qualified as AdminView
 import Wiki.App.View.Common
 import Wiki.App.View.Editor qualified as Editor
 import Wiki.App.View.History qualified as HistoryView
@@ -127,6 +130,7 @@ type Slots =
     .+ ("searchBox" .== H.Slot (Const Void) Void ())
     .+ ("searchResults" .== H.Slot (Const Void) ViewOutput ())
     .+ ("importer" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("people" .== H.Slot (Const Void) ViewOutput ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -209,7 +213,7 @@ data Action
 
 component
   :: forall output m
-   . (MonadLoad m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
+   . (MonadLoad m, MonadAdmin m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
   => H.Component Query (Input m) output m
 component =
   H.mkComponent
@@ -378,6 +382,7 @@ component =
                 <p class="admin-intro">{{ dataIntro }}</p>
                 {{ dataControls st }}
               </section>
+              {{ HH.slot "people" () AdminView.component AdminView.Input {context = context st} FromView }}
             </section>
           |]
       | otherwise =

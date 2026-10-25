@@ -925,7 +925,7 @@ groupName :: MemState -> Maybe GroupId -> Text -> Either WikiError Text
 groupName st self name = do
   n <- nonBlank "A group's name" name
   let taken = [g | g <- Map.elems st.groups, Just g.id /= self, T.toCaseFold g.name == T.toCaseFold n]
-  unless (null taken) (Left (Invalid ("There is a group called " <> n <> " already.")))
+  for_ (head taken) $ \g -> Left (Invalid ("There is a group called " <> g.name <> " already."))
   pure n
 
 -- | A new group, with nobody in it.
@@ -966,7 +966,9 @@ setMember member gid u st = do
   _ <- findGroup st gid
   _ <- findUser st u
   let change = if member then Set.insert u else Set.delete u
-  pure (st {membership = Map.filter (not . Set.null) (Map.alter (Just . change . fold) gid st.membership)}, ())
+  -- Every group keeps its entry, empty or not, as a group read back from
+  -- the browser has one.
+  pure (st {membership = Map.alter (Just . change . fold) gid st.membership}, ())
 
 addMemberIn, removeMemberIn :: GroupId -> UserId -> Write ()
 addMemberIn = setMember True

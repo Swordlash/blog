@@ -83,6 +83,7 @@ library
       Wiki.App.Route
       Wiki.App.Shell
       Wiki.App.Editor.Browser
+      Wiki.App.View.Admin
       Wiki.App.View.Body
       Wiki.App.View.Common
       Wiki.App.View.Editor
@@ -262,6 +263,7 @@ test-suite wiki-app-browser-test
   hs-source-dirs:   test
   main-is:          BrowserTest.hs
   other-modules:
+      Test.Browser.Admin
       Test.Browser.Editor
       Test.Browser.History
       Test.Browser.Http
