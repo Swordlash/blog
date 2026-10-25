@@ -48,6 +48,7 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
+import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded), ServerMessage (..))
 import Wiki.Api.Links (links)
@@ -166,6 +167,7 @@ serveDemo = do
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = []}
   for_ people (answerWith "GET" links.admin.directory 200)
   answerWith "GET" links.admin.server 200 (noServerSettings :: ServerSettings)
+  answerWith "GET" links.admin.backups 200 Backups {available = True, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
   answerWith "GET" "api/v1/spaces" 200 spaces
   answerWith "GET" links.spaces.pageCounts 200 counts
   for_ pages $ \(s, ps) -> do

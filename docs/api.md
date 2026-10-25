@@ -616,6 +616,9 @@ console: `wiki-server users …` (see the README).
 | PUT | `api/v1/admin/server` | `ServerSettingsChange`, each secret `null` (kept), `""` (cleared) or a new one | `ServerSettings` as they now are | 403, 400 | `setServerSettings` |
 | POST | `api/v1/admin/server/providers/<name>/check` | `null` (the provider as set) or a `ProviderSettings` with its secret as in a change (the provider as typed) | `ProviderCheck` `{"redirectUri", "clientSecret", "discovered", "problem"}` | 403, 404 (nothing given and no provider of that name) | `checkProvider` |
 | POST | `api/v1/admin/server/mail/test` | `MailTest` `{"to"}` | `MailTestResult` `{"failure"}`, `null` when sent | 403, 400 (no mail server or public address, or not an address) | `sendTestMail` |
+| GET | `api/v1/admin/server/backups` | | `Backups` `{"available", "settings", "last", "running", "next", "kept"}`: `settings` is `BackupSettings` `{"enabled", "schedule", "keep", "destination"}`, `schedule` `{"daily": "HH:MM"}` (UTC) or `{"everyHours": n}`, `keep` `{"daily", "weekly"}`, `destination` `null`, `{"directory": path}` or `{"rclone": remote, "config"}` with `config` `"set"` or `"not-set"`; `last` a `BackupRecord` `{"startedAt", "finishedAt", "trigger", "file", "size", "failure", "offSite"}` or `null` | 403 | `backups` |
+| PUT | `api/v1/admin/server/backups` | `BackupSettingsChange`, the rclone `config` `null` or left out (kept), `""` (cleared) or a new one | `Backups` as they now are | 403, 400 | `setBackupSettings` |
+| POST | `api/v1/admin/server/backups/run` | | `Backups` once the backup is made, or after 20 s with `running` true | 403, 400 (backups are off) | `backUpNow` |
 
 The wiki's public address, the mail server invitations go through and the
 providers people sign in with (WP4.4 of the plan, `Wiki.Api.ServerSettings`)

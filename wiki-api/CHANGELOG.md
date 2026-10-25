@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Scheduled backups (WP4.9). `Wiki.Api.Backups`: `BackupSettingsOf s` (whether
+the server backs itself up, a `Schedule` of `DailyAt` hour and minute in UTC
+or `EveryHours`, a `Retention` of days and weeks, and a `DestinationOf s`, a
+directory or an rclone remote with its configuration as a write-only secret),
+`applyBackupChange` and `checkBackupSettings`, `Backups` (what
+`GET admin/server/backups` answers: the settings, the last `BackupRecord`,
+whether one is under way, when the next is due, how many are kept),
+`nextBackup` and `retained`. `AdminApi` gains `backups`, `setBackups` and
+`backUpNow` (`GET`/`PUT admin/server/backups`, `POST admin/server/backups/run`).
+
 Export to documents (WP4.16). `Wiki.Api.Export`: `ExportFormat` (`Docx`,
 `Html`, `Epub`, `Pdf`, `Pptx`, `BeamerTex`, `BeamerPdf`) with its name in an
 address, label, extension, media type, whether it needs a TeX engine

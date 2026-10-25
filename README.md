@@ -235,11 +235,51 @@ like the other options; `--static` goes back to the demo.
   `data/backups/<time>.sqlite` and keeps the last ten. If the backup fails, the old
   server is started again and nothing changes. Take one at any time with
   `~/wiki-demo/bin/wiki-server backup --data ~/wiki-demo/data`, even with the
-  server running. To restore one, stop the service
-  (`systemctl --user stop wiki-demo`), move `data/wiki.sqlite` and the
-  `wiki.sqlite-wal` and `wiki.sqlite-shm` beside it out of the way, copy the
-  backup to `data/wiki.sqlite`, and start it again; attachments are never deleted
-  while a kept backup names them.
+  server running; attachments are never deleted while a kept backup names them.
+- **Scheduled backups.** The server backs itself up only once an administrator
+  turns that on, in the administration's Server section, "Backups" (off on a new
+  server, and no option or environment variable turns it on). There you choose
+  how often (every day at a time, in UTC, or every so many hours), how many to
+  keep (the newest of each of the last so many days and weeks; the deploy's
+  backups are in the same directory and count among them), and, if you like,
+  where to copy each off the machine: a directory where another disk is mounted
+  (it must be there, so that an unmounted disk is a failure rather than a copy
+  onto the mount point), or an [rclone](https://rclone.org/) remote such as
+  `b2:my-bucket/wiki`, with the remote's section of `rclone.conf` pasted in once
+  (it is never shown again; left empty, rclone uses the server user's own
+  configuration; the `rclone` program must be installed, or named with
+  `--rclone PATH`). Each backup is checked with SQLite's `PRAGMA
+  integrity_check` (one that fails is deleted), and the destination receives it
+  as `backups/<time>.sqlite` and the attachments' files under `attachments/`,
+  the files it already has skipped; nothing is ever deleted there. The section
+  shows the last backup's time, size and result, when the next is due, and has
+  "Back up now". The deploy's `--keep` counts every file in `data/backups`, so a
+  deploy keeps only the ten newest even when the panel asks for weeks more.
+- **Restoring.** `wiki-server restore BACKUP --data DIR [--attachments DIR]`
+  puts a backup back into a data directory no server is running on: it checks
+  the backup, refuses a directory whose server is running (the server holds
+  `DIR/wiki.lock` while it runs), moves the database it replaces into
+  `DIR/replaced/<time>/`, copies the backup in, and brings from `--attachments`
+  the attachments' files the directory lacks, saying how many it still lacks.
+  The drill, which the server's tests run too (`wiki-server-test`, "restore"):
+
+  ```sh
+  systemctl --user stop wiki-demo
+  ~/wiki-demo/bin/wiki-server restore ~/wiki-demo/data/backups/<time>.sqlite --data ~/wiki-demo/data
+  systemctl --user start wiki-demo
+  ```
+
+  From a copy off the machine, into a fresh directory (to check the copy, or on
+  a new machine):
+
+  ```sh
+  wiki-server restore /mnt/backup/wiki/backups/<time>.sqlite \
+    --data /tmp/wiki-check --attachments /mnt/backup/wiki/attachments
+  wiki-server serve --data /tmp/wiki-check --listen 127.0.0.1:8090 --admin-listen 127.0.0.1:8091
+  ```
+
+  (For an rclone remote, `rclone copy <remote>/backups/<time>.sqlite .` and
+  `rclone copy <remote>/attachments ./attachments` first.)
 - **Who is asking.** The public address serves whoever has signed in ("Sign in"
   at the top right, with a login and a password), and anyone else as an anonymous
   reader, who sees the public spaces and changes nothing. (Before there were
@@ -457,14 +497,13 @@ there with the compose file beside it.
   docker compose cp wiki:/data/backups ./backups             # copy them out
   ```
 
-  To restore one, stop the server, move the database (with its `-wal` and `-shm`
-  files) out of the way in a one-off container on the same volume, copy the backup
-  in its place, and start it again:
+  To restore one, stop the server and run `wiki-server restore` in a one-off
+  container on the same volume, then start it again (scheduled backups, from the
+  administration, are as above):
 
   ```sh
   docker compose stop
-  docker compose run --rm --entrypoint sh wiki -c \
-    'cd /data && mkdir -p replaced && mv wiki.sqlite* replaced/ && cp backups/<time>.sqlite wiki.sqlite'
+  docker compose run --rm wiki restore /data/backups/<time>.sqlite --data /data
   docker compose start
   ```
 - **Who is asking.** The published port serves whoever signs in there, and

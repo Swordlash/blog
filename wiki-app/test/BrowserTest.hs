@@ -20,6 +20,7 @@ import Test.Browser.Permissions qualified as Permissions
 import Test.Browser.Persist qualified as Persist
 import Test.Browser.Providers qualified as Providers
 import Test.Browser.Search qualified as Search
+import Test.Browser.Backups qualified as Backups
 import Test.Browser.Server qualified as Server
 import Test.Browser.Shell qualified as Shell
 import Test.Browser.Slides qualified as Slides
@@ -61,6 +62,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.View.Permissions" (Permissions.spec BrowserDOM)
   describe "Whom the wiki lets in" (Access.spec BrowserDOM)
   describe "Wiki.App.View.Server" (Server.spec BrowserDOM)
+  describe "Wiki.App.View.Backups" (Backups.spec BrowserDOM)
   describe "Signing in with a provider" (Providers.spec BrowserDOM)
   describe "Wiki.App.View.Comments" (Comments.spec BrowserDOM)
   describe "Wiki.App.View.Export" (Export.spec BrowserDOM)

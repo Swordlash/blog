@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Scheduled backups (WP4.9). The administration's Server section has a
+"Backups" part (`Wiki.App.View.Backups`, a component of its own that the
+section mounts): whether the server backs itself up, when, how many it keeps
+and where it copies them off the machine, the last backup's time, size and
+result, when the next is due, and "Back up now", which reads the backups again
+every two seconds while the server says one is under way. The rclone
+configuration is typed once and never shown again ("Replace…", "Clear").
+`MonadAdmin` gains `backups`, `setBackupSettings` and `backUpNow`; the demo's
+backend answers that it makes none (`available = False`), and the part is
+shown disabled with a note. The backend over HTTP keeps the backups as it keeps
+the server's settings, and a page the server renders carries them.
+
 Export to documents (WP4.16). A page's actions and a space's have an
 "Export" menu (`Wiki.App.View.Export`, a `<details>` of links the browser
 downloads) with the formats the backend makes: Word, HTML, EPUB and, where

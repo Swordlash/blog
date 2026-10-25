@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+Scheduled backups, off by default (WP4.9). The server backs itself up once an
+administrator turns that on in the administration (`GET`/`PUT
+api/v1/admin/server/backups`, `POST …/run` for "Back up now"); nothing turns it
+on from the command line. A thread of the server (`Wiki.Server.Backups`) reads
+the settings from the `settings` table (rows `backup-*`, no migration) and
+backs up when one is due: `VACUUM INTO data/backups/<time>.sqlite` with the
+storage's connection held for the copy alone, `PRAGMA integrity_check` (a copy
+that fails is deleted), the old ones pruned to the newest of so many days and
+weeks (the deploy's included), and the new one with the attachments' files
+copied to a directory or an rclone remote (`--rclone PATH`, `rclone` by
+default), never deleting anything there. The rclone configuration is a
+write-only secret, written for each run to a file only the server's user may
+read and deleted after. The last backup's result is kept as the row
+`backup-last`. `wiki-server restore BACKUP --data DIR [--attachments DIR]`
+puts a backup back into a data directory, keeping the database it replaces
+under `replaced/<time>/`. The storage now holds an `flock` on
+`<data>/wiki.lock` while it is open (`DataDirInUse` otherwise), so a restore,
+or a second server, is refused a data directory a server is running on.
+
 Export to documents with pandoc (WP4.16), linked as a library (pandoc 3.12.1,
 with its data files embedded and without its HTTP client, so that a
 document never makes the server fetch anything): `GET

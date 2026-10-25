@@ -86,6 +86,7 @@ import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
+import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (PageEvent (..))
@@ -464,8 +465,10 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
 
   -- Kept as the server's settings are; a backup made changes what they
   -- say, and is a write as a change of their settings is. A backup the
-  -- server makes on its schedule is seen when they are read again.
-  backups = cached (\c -> c.backups) (R.get links.admin.backups) withBackups
+  -- server makes on its schedule is seen when they are read again. An
+  -- answer that says one is under way does not answer again: the part that
+  -- shows them reads them until it is done.
+  backups = cached (\c -> mfilter (either (const True) (\b -> not b.running)) c.backups) (R.get links.admin.backups) withBackups
   setBackupSettings new = write (withJson "PUT" links.admin.setBackups new)
   backUpNow = write (R.post links.admin.backUpNow)
 

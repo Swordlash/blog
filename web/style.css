@@ -3224,6 +3224,72 @@ table.invitations td {
   flex-basis: 100%;
 }
 
+/* The backups (Wiki.App.View.Backups): what they are set to do and what
+   the last one came to, laid out as the mail server's summary; a fieldset
+   that the demo, which makes none, disables as a whole. */
+.backups-body {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.backups-body:disabled {
+  opacity: 0.6;
+}
+
+.backups-state {
+  margin: 0 0 0.3rem;
+}
+
+.backups-summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.8rem;
+  margin: 0.4rem 0;
+}
+
+.backups-summary dt {
+  color: var(--muted);
+}
+
+.backups-summary dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backups-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.6rem;
+  margin: 0.4rem 0 0.8rem;
+}
+
+.backups-form .field {
+  flex: 1 1 14rem;
+}
+
+.backups-form .field-check,
+.backups-form .backups-config,
+.backups-form .admin-note,
+.backups-form .actions {
+  flex-basis: 100%;
+}
+
+.backups-form .field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  color: inherit;
+}
+
+.backups-form textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 /* A secret that is set: its state and the ways to change it, never it. */
 .server-secret {
   display: flex;

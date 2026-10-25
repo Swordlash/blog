@@ -283,6 +283,7 @@ test-suite wiki-app-browser-test
   other-modules:
       Test.Browser.Access
       Test.Browser.Admin
+      Test.Browser.Backups
       Test.Browser.Comments
       Test.Browser.Editor
       Test.Browser.Export

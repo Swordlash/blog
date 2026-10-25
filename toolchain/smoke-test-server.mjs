@@ -48,6 +48,9 @@
 //    server runs (WP4.4), with the wiki's public address, and checked there;
 //    "Sign in with Fake" in the header's form goes there and back, and
 //    lands signed in, as a new account, on the page it left.
+// 6. (Within 2.) Backups turned on in the Server section (WP4.9), one made
+//    by hand, and the console's restore of it: refused the running server's
+//    data directory, done into a fresh one.
 //
 // Needs the native builds of wiki-server and wiki-app-prerender (npm run
 // build-native; WIKI_SERVER and WIKI_PRERENDER name other binaries), the
@@ -673,6 +676,37 @@ try {
   assert.deepEqual(settings.body.providers.map((p) => [p.name, p.secret]), [["fake", "set"]], "the server's providers");
   assert.ok(!JSON.stringify(settings.body).includes(oidcSecret), "the API gives the provider's secret back");
   console.log("ok: the administration sets the public address and adds a provider, which answers its check, its secret never shown");
+
+  // Backups (WP4.9): none until they are turned on in the Server section's
+  // "Backups"; then the first is made at once, and another by hand, each
+  // shown with its size. And the console's restore: refused the data
+  // directory of the running server, and done into a fresh one, with the
+  // attachments' files brought from the data directory's.
+  const backupsPart = `${serverSection} .server-backups`;
+  await page.locator(`${backupsPart} .backups-state`, { hasText: "Off" }).waitFor({ timeout });
+  assert.equal((await api("admin/server/backups")).body.last, null, "a backup before they were turned on");
+  await page.locator(`${backupsPart} .backups-edit`).click();
+  await page.locator(`${backupsPart} .backups-form input[name=enabled]`).check();
+  await page.locator(`${backupsPart} .backups-form select[name=schedule]`).selectOption("hours");
+  await page.locator(`${backupsPart} .backups-form button[type=submit]`).click();
+  await page.locator(`${backupsPart} .backups-state`, { hasText: "On: every 6 hours" }).waitFor({ timeout });
+  await eventually(async () => {
+    const made = await api("admin/server/backups");
+    assert.equal(made.body.last?.failure, null, "the first backup failed");
+    assert.ok(made.body.last?.file, "no backup made yet");
+  }, "the first backup, made when they are turned on");
+  await page.locator(`${backupsPart} .backups-now`).click();
+  await page.locator(`${backupsPart} .backups-last`, { hasText: "by hand: made" }).waitFor({ timeout });
+  const backedUp = await api("admin/server/backups");
+  assert.equal(backedUp.body.last.trigger, "Manual", "the backup by hand");
+  const backupFile = join(data, "backups", backedUp.body.last.file);
+  assert.equal((await stat(backupFile)).size, backedUp.body.last.size, "the backup's size");
+  const restoring = (target) =>
+    execFileSync(wikiServer, ["restore", backupFile, "--data", target, "--attachments", join(data, "attachments")], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  assert.throws(() => restoring(data), (error) => /A server is running on/.test(String(error.stderr)), "a restore into the running server's data directory");
+  const restored = restoring(join(work, "restored"));
+  assert.ok(restored.includes("Restored") && !restored.includes("Warning"), `the restore said: ${restored}`);
+  console.log("ok: backups are made once turned on in the administration, and by hand, and one restores into a fresh data directory, not under the running server");
 
   // A second space, made public in its permissions; the first stays
   // private.
