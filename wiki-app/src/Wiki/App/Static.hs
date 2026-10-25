@@ -95,7 +95,8 @@ renderRoute wiki base at = do
   pure Rendered {html, title}
 
 -- | The routes the build writes a page for: the front page, the page of
--- search results, every space, and every page of the wiki with its source
+-- search results, every space (its home page) and every space's list of
+-- pages, and every page of the wiki with its source
 -- and its history (at its latest version: another version's address is the
 -- history's with a query, which a static host serves the same page for, and
 -- the program then shows the version asked for), and every page written as
@@ -106,7 +107,7 @@ prerenderedRoutes :: MemState -> [Route]
 prerenderedRoutes st =
   Home
     : Search Nothing Nothing True
-    : [Space path | s <- Map.elems st.spaces, Just path <- [spacePath s.id]]
+    : [r | s <- Map.elems st.spaces, Just path <- [spacePath s.id], r <- [Space path, SpacePages path]]
       <> [ r
          | p <- Map.elems st.pages
          , Just sp <- [spacePath p.space]

@@ -3,9 +3,18 @@
 -- | The application's frame, around whatever the route shows: a header with
 -- the site's name, breadcrumbs, the search box ("Wiki.App.View.Search"), a
 -- link to the administration for an administrator, and the demo's user
--- switcher; a sidebar with the tree of spaces, the current space's pages
--- under it; the content of the route; and a footer saying what the wiki is
--- built with.
+-- switcher; a sidebar; the content of the route; and a footer saying what
+-- the wiki is built with.
+--
+-- The front page is the directory of spaces ("Wiki.App.View.Directory").
+-- Inside a space (any route under @\/s\/\<space>@) the sidebar shows that
+-- space alone, as Confluence does: its icon and name, a link back to the
+-- directory and a menu of the other spaces to switch to, the way up to the
+-- space it is a subspace of, its home page and its list of pages, its
+-- pages as a tree, and its subspaces below them. Elsewhere it lists the
+-- spaces. A space's own route shows its home page, if it has one
+-- ('Wiki.Core.Space.homePage'), and otherwise its list of pages; every
+-- space shown is remembered as recently visited ("Wiki.App.Recent").
 --
 -- The shell holds what every view needs and loads it itself: who is signed
 -- in, the tree of spaces, and the space the route is in with its pages
@@ -86,8 +95,8 @@ where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
+import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Halogen qualified as H
@@ -110,10 +119,12 @@ import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Live (..))
+import Wiki.App.Recent (rememberVisit)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Admin qualified as AdminView
 import Wiki.App.View.Common
+import Wiki.App.View.Directory qualified as DirectoryView
 import Wiki.App.View.Editor qualified as Editor
 import Wiki.App.View.History qualified as HistoryView
 import Wiki.App.View.Import qualified as ImportView
@@ -131,10 +142,10 @@ import Wiki.App.View.Space qualified as SpaceView
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Page (Page (attachments, id, title))
-import Wiki.Core.Path (PathError (..), childrenOf, findChild, resolvePath)
+import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id, name, pageOrder, public, slug), subspacesOf)
+import Wiki.Core.Space (Icon (..), Space (icon, id, name, pageOrder, parent), subspacesOf)
 import Wiki.Core.User (User (..))
 
 -- | The router, a route the home page invites a newcomer to (the demo's
@@ -157,6 +168,7 @@ data Query a = Settled (Maybe Text -> a)
 
 type Slots =
   ("space" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("directory" .== H.Slot (Const Void) ViewOutput ())
     .+ ("page" .== H.Slot (Const Void) ViewOutput ())
     .+ ("source" .== H.Slot (Const Void) ViewOutput ())
     .+ ("history" .== H.Slot (Const Void) ViewOutput ())
@@ -202,8 +214,11 @@ data State m = State
   , session :: Session
   , users :: [User]
   , spaces :: [Space]
+  , icons :: Map SpaceId Text
+  -- ^ Where the images of the spaces pictured with one are fetched from.
   , here :: Here
-  , collapsed :: Set SpaceId
+  , switcherOpen :: Bool
+  -- ^ Whether the sidebar's menu of spaces to switch to is open.
   , generation :: Int
   -- ^ The views' 'revision': how many times the wiki has been reloaded
   -- after a change.
@@ -245,7 +260,7 @@ data Action
   = Initialize
   | Arrived Route
   | Followed (Follow Route)
-  | Toggle SpaceId
+  | ToggleSwitcher
   | ToggleMenu
   | SwitchTo (Maybe UserId)
   | AskReset
@@ -286,10 +301,10 @@ component =
           -- which runs before the shell's.
           feed <- traverse (\l -> l.liveFeed) live
           loaded <- atOnce $ do
-            world@(asking, _, _, _) <- fetchWorld demo
-            here <- if shutOut asking then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
+            world <- fetchWorld demo
+            here <- if shutOut world.asking then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
             pure (world, here)
-          let ((signedIn, users, spaces, kept), here) = fromMaybe ((anonymous, [], [], False), NoSpace) loaded
+          let (Around signedIn users spaces icons kept, here) = fromMaybe (Around anonymous [] [] mempty False, NoSpace) loaded
           pure
             State
               { router
@@ -304,8 +319,9 @@ component =
               , session = signedIn
               , users
               , spaces
+              , icons
               , here
-              , collapsed = mempty
+              , switcherOpen = False
               , generation = 0
               , menuOpen = False
               , panel = Actions Nothing
@@ -403,7 +419,7 @@ component =
       [hh|
         <nav class="breadcrumbs" aria-label="Breadcrumbs">
           <ol>
-            {% for (label, target, final) in marked (crumbs st) %}
+            {% for (label, target, final) in marked (trail st) %}
               <li>{{ crumb label target final }}</li>
             {% end %}
           </ol>
@@ -580,77 +596,115 @@ component =
           | st.kept = "Changes to the demo are kept in this browser."
           | otherwise = "This browser keeps nothing for the demo: changes last until the page is closed."
 
+    -- Inside a space, that space alone; elsewhere, the spaces.
     sidebar :: State m -> H.ComponentHTML Action Slots m
-    sidebar st =
+    sidebar st = case st.here of
+      InSpace _ space pages -> spaceSidebar st space pages
+      _ -> spacesSidebar st
+
+    spacesSidebar :: State m -> H.ComponentHTML Action Slots m
+    spacesSidebar st =
       [hh|
         <nav class="wiki-sidebar" aria-label="Spaces">
           <h2>Spaces</h2>
-          {{ spaceLevel st Nothing }}
+          <ul class="sidebar-spaces">
+            {% for x in subspacesOf st.spaces Nothing %}
+              <li>{{ spaceEntry st x }}</li>
+            {% end %}
+          </ul>
           {{ newSpace st "new-space-link" }}
         </nav>
       |]
+
+    -- A space in a list of them, with its icon: a link to it, unless the
+    -- user may not view it.
+    spaceEntry :: State m -> Space -> H.ComponentHTML Action Slots m
+    spaceEntry st x
+      | mayView (context st) x.id =
+          [hh|<a class="space-link" {{ Router.linkProps st.router Followed (Space (spacePathOf st.spaces x.id)) }}>{{ spaceIcon st.icons x }}<span>{{ x.name }}</span></a>|]
+      | otherwise =
+          [hh|<span class="space-link unviewable" title="You can see only a subspace of this space">{{ spaceIcon st.icons x }}<span>{{ x.name }}</span></span>|]
+
+    -- The space the route is in, and nothing else of the wiki but the way
+    -- to the rest of it.
+    spaceSidebar :: State m -> Space -> [Page] -> H.ComponentHTML Action Slots m
+    spaceSidebar st space pages =
+      [hh|
+        <nav class="wiki-sidebar space-sidebar" aria-label="Space">
+          <div class="space-switcher">
+            <a class="all-spaces" {{ Router.linkProps st.router Followed Home }}>All spaces</a>
+            <button
+              type="button"
+              class="space-switcher-toggle"
+              aria-expanded={{ ariaBool st.switcherOpen }}
+              aria-label="Switch to another space"
+              onClick={{ const ToggleSwitcher }}
+            >
+              Switch space
+            </button>
+            {% if st.switcherOpen %}
+              <ul class="space-switcher-menu">
+                {% for x in switchable %}
+                  <li>
+                    <a
+                      class="space-switcher-option"
+                      {{ [attr "aria-current" "true" | Just x.id == ((\t -> t.id) <$> top)] }}
+                      {{ Router.linkProps st.router Followed (Space (spacePathOf st.spaces x.id)) }}
+                    >
+                      {{ spaceIcon st.icons x }}<span>{{ pathName x }}</span>
+                    </a>
+                  </li>
+                {% end %}
+              </ul>
+            {% end %}
+          </div>
+          <a class="sidebar-space" {{ [attr "aria-current" "page" | entering] }} {{ Router.linkProps st.router Followed (Space path) }}>
+            {{ spaceIcon st.icons space }}<span class="sidebar-space-name">{{ space.name }}</span>
+          </a>
+          {% for up in maybeToList above %}
+            <a class="sidebar-up" {{ Router.linkProps st.router Followed (Space (spacePathOf st.spaces up.id)) }}>{{ "Up to " <> up.name }}</a>
+          {% end %}
+          <ul class="sidebar-links">
+            {% for h in maybeToList (homeOf space pages) %}
+              <li><a class="space-home-link" {{ [attr "aria-current" "page" | entering] }} {{ Router.linkProps st.router Followed (Space path) }}>{{ h.title }}</a></li>
+            {% end %}
+            <li><a class="space-pages-link" {{ [attr "aria-current" "page" | st.route == SpacePages path] }} {{ Router.linkProps st.router Followed (SpacePages path) }}>Pages and settings</a></li>
+          </ul>
+          <h2>Pages</h2>
+          {% if null pages %}
+            <p class="empty">No pages yet.</p>
+          {% else %}
+            {{ pageTree st.router Followed path space.pageOrder pages ((\p -> p.id) <$> currentPage st) (\_ _ _ -> []) }}
+          {% end %}
+          {% if not (null subspaces) %}
+            <h2>Subspaces</h2>
+            <ul class="sidebar-subspaces">
+              {% for x in subspaces %}<li>{{ spaceEntry st x }}</li>{% end %}
+            </ul>
+          {% end %}
+        </nav>
+      |]
+      where
+        ctx = context st
+        path = spacePathOf st.spaces space.id
+        entering = st.route == Space path
+        subspaces = subspacesOf st.spaces (Just space.id)
+        -- The space this one is under, if the user may go there.
+        above = space.parent >>= \p -> find (\x -> x.id == p && mayView ctx x.id) st.spaces
+        -- The spaces to switch to: each space the user may view that is
+        -- under none they may, which are the top-level spaces but for
+        -- those they see only a subspace of.
+        switchable = [x | x <- subspacesInTree, mayView ctx x.id, not (any (mayView ctx . (\a -> a.id)) (drop 1 (reverse (chainOf ctx x.id))))]
+        subspacesInTree = concatMap (\r -> r : descendants r) (subspacesOf st.spaces Nothing)
+        descendants x = concatMap (\c -> c : descendants c) (subspacesOf st.spaces (Just x.id))
+        top = find (\x -> descendsFrom st.spaces x.id space.id) switchable
+        pathName x = mconcat (intersperse " / " (map (\c -> c.name) (chainOf ctx x.id)))
 
     -- A link to a new space at the top level, for someone who may make one.
     newSpace :: State m -> Text -> Maybe (H.ComponentHTML Action Slots m)
     newSpace st cls =
       guard (mayCreateSpace (principalOf (context st)) st.session.grants Nothing)
         $> [hh|<a class="{{ cls }}" {{ Router.linkProps st.router Followed (NewSpace Nothing) }}>New space</a>|]
-
-    spaceLevel :: State m -> Maybe SpaceId -> H.ComponentHTML Action Slots m
-    spaceLevel st parent = [hh|<ul class="space-tree">{{ map (spaceNode st) (subspacesOf st.spaces parent) }}</ul>|]
-
-    spaceNode :: State m -> Space -> H.ComponentHTML Action Slots m
-    spaceNode st s =
-      [hh|
-        <li class="space-node{% if current %} current{% end %}">
-          <div class="space-row">
-            {% if hasChildren %}
-              {{ toggle }}
-            {% end %}
-            {{ spaceLabel }}
-          </div>
-          {{ pagesHere }}
-          {% if hasChildren && open %}
-            {{ spaceLevel st (Just s.id) }}
-          {% end %}
-        </li>
-      |]
-      where
-        toggle =
-          [hh|
-            <button
-              type="button"
-              class="tree-toggle"
-              aria-expanded={{ ariaBool open }}
-              aria-label={{ (if open then "Collapse " else "Expand ") <> s.name }}
-              onClick={{ const (Toggle s.id) }}
-            >
-              {{ if open then "▾" else "▸" :: Text }}
-            </button>
-          |]
-        ctx = context st
-        path = spacePathOf st.spaces s.id
-        hasChildren = not (null (childrenOf st.spaces (Just s.id)))
-        open = not (s.id `Set.member` st.collapsed)
-        current = case st.here of
-          InSpace _ here _ -> here.id == s.id
-          _ -> False
-        spaceLabel
-          | mayView ctx s.id =
-              [hh|
-                <a
-                  class="space-link"
-                  {{ [attr "aria-current" "page" | current && isSpaceRoute st.route] }}
-                  {{ Router.linkProps st.router Followed (Space path) }}
-                >
-                  {{ s.name }}
-                </a>
-              |]
-          | otherwise =
-              [hh|<span class="unviewable" title="You do not have permission to see this space">{{ s.name }}</span>|]
-        pagesHere = case st.here of
-          InSpace _ here pages | here.id == s.id, not (null pages) -> Just (pageTree st.router Followed path here.pageOrder pages ((\p -> p.id) <$> currentPage st) (\_ _ _ -> []))
-          _ -> Nothing
 
     content :: State m -> H.ComponentHTML Action Slots m
     content st = case (st.world, st.route) of
@@ -660,7 +714,7 @@ component =
 
     routeContent :: State m -> Route -> H.ComponentHTML Action Slots m
     routeContent st = \case
-      Home -> home st
+      Home -> HH.slot "directory" () DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
       Unknown -> notFound st
       Admin -> admin st
       NewSpace parent -> HH.slot "newSpace" () NewSpaceView.component NewSpaceView.Input {context = context st, parent} FromView
@@ -672,7 +726,9 @@ component =
         LoadingSpace _ -> loading
         SpaceFailed _ e -> failureView e RetryHere
         InSpace _ space pages -> case st.route of
-          Page _ path -> HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path, feed = st.feed} FromView
+          -- Entering a space shows its home page, if it has one.
+          Space _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
+          Page _ path -> pageView space pages path
           PageSource _ path -> HH.slot "source" () SourceView.component SourceView.Input {context = context st, space, path} FromView
           PageHistory _ path version against ->
             HH.slot "history" () HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
@@ -683,6 +739,8 @@ component =
           EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path} FromView
           NewPage _ parent -> HH.slot "newPage" () NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
           _ -> HH.slot "space" () SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
+      where
+        pageView space pages path = HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path, feed = st.feed} FromView
 
     loading :: H.ComponentHTML Action Slots m
     loading = [hh|<p class="loading">Loading…</p>|]
@@ -697,41 +755,6 @@ component =
           <button type="button" onClick={{ const Stay }}>Stay</button>
         </div>
       |]
-
-    home :: State m -> H.ComponentHTML Action Slots m
-    home st =
-      [hh|
-        <section class="home">
-          <h1>Welcome to the wiki</h1>
-          <p>
-            Spaces hold pages written in Markdown, and spaces can hold other spaces. Who may
-            read, edit or administer a space is up to its permissions; a public space is open to
-            everyone.
-          </p>
-          {% for r in maybeToList st.welcome %}
-            <p class="welcome">New here? <a {{ Router.linkProps st.router Followed r }}>Take the tour</a>.</p>
-          {% end %}
-          <h2>Spaces</h2>
-          {{ spaceList }}
-          {{ newSpace st "button" }}
-        </section>
-      |]
-      where
-        spaceList = case subspacesOf st.spaces Nothing of
-          [] -> [hh|<p class="empty">There are no spaces you can see.</p>|]
-          roots -> [hh|<ul class="space-list">{{ map (rootSpace st) roots }}</ul>|]
-
-    rootSpace :: State m -> Space -> H.ComponentHTML Action Slots m
-    rootSpace st s
-      | mayView (context st) s.id =
-          [hh|
-            <li>
-              <a {{ Router.linkProps st.router Followed (Space [s.slug]) }}>{{ s.name }}</a>
-              <span class="badge {{ if s.public then "badge-public" else "badge-private" :: Text }}">{{ if s.public then "Public" else "Private" :: Text }}</span>
-            </li>
-          |]
-      | otherwise =
-          [hh|<li><span class="unviewable" title="You can see only a subspace of this space">{{ s.name }}</span></li>|]
 
     notFound :: State m -> H.ComponentHTML Action Slots m
     notFound st =
@@ -812,8 +835,7 @@ component =
           then H.liftEffect (historyGo (st.entry - now))
           else Router.redirect st.router st.route
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
-      Toggle sid -> modify $ \st ->
-        st {collapsed = if sid `Set.member` st.collapsed then Set.delete sid st.collapsed else Set.insert sid st.collapsed}
+      ToggleSwitcher -> modify (\st -> st {switcherOpen = not st.switcherOpen})
       ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen})
       -- What was asked or told about the wiki's data was asked of, or told
       -- to, the user one was.
@@ -904,7 +926,7 @@ component =
     arrive r entry = do
       -- What was asked or told about the wiki's data is not shown again on
       -- coming back to the administration.
-      modify (\st -> st {route = r, settled = False, menuOpen = False, panel = Actions Nothing, leaving = Nothing, entry})
+      modify (\st -> st {route = r, settled = False, menuOpen = False, switcherOpen = False, panel = Actions Nothing, leaving = Nothing, entry})
       loadHere False
 
     -- After a change: everything again, and every view's own data too.
@@ -925,7 +947,7 @@ component =
     loadWorld = do
       demo <- gets (\st -> st.demo)
       lift (attempt (fetchWorld demo)) >>= \case
-        Right (s, us, ss, kept) -> modify (\st -> st {session = s, users = us, spaces = ss, kept, world = WorldReady})
+        Right w -> modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, icons = w.icons, kept = w.kept, world = WorldReady})
         Left e -> modify (\st -> st {world = WorldFailed e})
 
     -- The space the route is in, unless it is the one loaded already
@@ -956,6 +978,10 @@ component =
     announce = do
       st <- get
       H.liftEffect (setDocumentTitle (documentTitle st))
+      -- A space shown is one visited, for the directory to offer again.
+      case st.here of
+        InSpace _ space _ -> H.liftEffect (rememberVisit space.id)
+        _ -> pass
       unless (waitsForPage st) settle
 
     settle :: H.HalogenM (State m) Action Slots output m ()
@@ -967,18 +993,28 @@ component =
       pure (Just (reply (if st.settled then Just (documentTitle st) else Nothing)))
 
 -- | What every route shows around it: who is signed in, who else one may
--- be in the demo, the tree of spaces, and whether the demo keeps its
--- changes.
+-- be in the demo, the tree of spaces, where the images of those pictured
+-- with one are, and whether the demo keeps its changes.
+data Around = Around
+  { asking :: Session
+  , users :: [User]
+  , spaces :: [Space]
+  , icons :: Map SpaceId Text
+  , kept :: Bool
+  }
+
+-- | 'Around', read.
 --
 -- A closed wiki has no spaces to show someone who has not signed in, and
 -- they are not asked for.
-fetchWorld :: (MonadWiki n) => Maybe (Demo n) -> n (Session, [User], [Space], Bool)
+fetchWorld :: (MonadWiki n) => Maybe (Demo n) -> n Around
 fetchWorld demo = do
   asking <- session
-  (asking,,,)
-    <$> maybe (pure []) (\d -> d.listUsers) demo
-    <*> (if shutOut asking then pure [] else listSpaces)
-    <*> maybe (pure False) (\d -> d.demoKept) demo
+  users <- maybe (pure []) (\d -> d.listUsers) demo
+  spaces <- if shutOut asking then pure [] else listSpaces
+  icons <- Map.fromList <$> sequence [(x.id,) <$> spaceIconUrl x | x <- spaces, Just (IconImage _ _) <- [x.icon]]
+  kept <- maybe (pure False) (\d -> d.demoKept) demo
+  pure Around {asking, users, spaces, icons, kept}
 
 -- | The space at a path, with its pages, or why it cannot be shown.
 fetchHere :: (MonadWiki n) => [Slug] -> n Here
@@ -1015,11 +1051,12 @@ isAdministrator st = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Admini
     ctx = context st
 
 context :: State m -> Context
-context st = Context {router = st.router, session = st.session, spaces = st.spaces, revision = st.generation}
+context st = Context {router = st.router, session = st.session, spaces = st.spaces, icons = st.icons, revision = st.generation}
 
 spaceOfRoute :: Route -> Maybe [Slug]
 spaceOfRoute = \case
   Space path -> Just path
+  SpacePages path -> Just path
   Page path _ -> Just path
   EditPage path _ -> Just path
   PageSource path _ -> Just path
@@ -1027,11 +1064,6 @@ spaceOfRoute = \case
   PageSlides path _ _ -> Just path
   NewPage path _ -> Just path
   _ -> Nothing
-
-isSpaceRoute :: Route -> Bool
-isSpaceRoute = \case
-  Space _ -> True
-  _ -> False
 
 hereIs :: [Slug] -> Here -> Bool
 hereIs path = \case
@@ -1044,6 +1076,10 @@ waitsForPage :: State m -> Bool
 waitsForPage st = case (st.route, st.here) of
   -- The closed frame shows no view that could say it has loaded.
   _ | isShut st -> False
+  -- The directory says when it has counted the spaces' pages.
+  (Home, _) -> st.world == WorldReady
+  -- A space's own route shows its home page, if it has one.
+  (Space _, InSpace _ space pages) -> isJust (homeOf space pages)
   (Page _ _, InSpace {}) -> True
   (EditPage _ _, InSpace {}) -> True
   (PageSource _ _, InSpace {}) -> True
@@ -1057,12 +1093,18 @@ currentPageOf pages path = rightToMaybe (resolvePath (findChild pages) path) >>=
 
 currentPage :: State m -> Maybe Page
 currentPage st = case (st.route, st.here) of
+  (Space _, InSpace _ space pages) -> homeOf space pages
   (Page _ path, InSpace _ _ pages) -> currentPageOf pages path
   (EditPage _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageSource _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageHistory _ path _ _, InSpace _ _ pages) -> currentPageOf pages path
   (PageSlides _ path _, InSpace _ _ pages) -> currentPageOf pages path
   _ -> Nothing
+
+-- | The breadcrumbs: inside a space, the directory of spaces first, then
+-- 'crumbs'.
+trail :: State m -> [(Text, Maybe Route)]
+trail st = [("Spaces", Just Home) | isJust (spaceOfRoute st.route), st.world == WorldReady, not (isShut st)] <> crumbs st
 
 -- | What the route is, as far as it has been loaded: a title for it.
 crumbs :: State m -> [(Text, Maybe Route)]
@@ -1073,6 +1115,7 @@ crumbs st = case st.route of
   Invite _ -> [("Invitation", Nothing)]
   Home -> []
   Space path -> spaceCrumbs path
+  SpacePages path -> spaceCrumbs path <> [("Pages and settings", Nothing)]
   Page path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath
   EditPage path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath <> [("Edit", Nothing)]
   -- The source of a page in a space that cannot be shown is not named

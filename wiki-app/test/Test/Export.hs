@@ -35,7 +35,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (User (..))
 
 -- | The golden archive: the demo as it was when version 1 of the format was
@@ -67,6 +67,9 @@ edited = do
     tour <- ok' =<< getPage docs.id (path "tour")
     _ <- ok' =<< uploadAttachment tour.id "bytes.bin" "application/octet-stream" (BS.pack [0 .. 255])
     space <- ok' =<< createSpace (Just docs.id) "Exported"
+    -- Profiles: a description and an emoji, and an image.
+    _ <- ok' =<< setSpaceProfile docs.id SpaceProfile {description = "How to use it.", icon = Just (IconEmoji "📘"), homePage = docs.homePage}
+    _ <- ok' =<< uploadSpaceIcon space.id "image/png" (BS.pack [0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
     page <- ok' =<< createPage space.id Nothing "Exported page" "# Exported\n\nWith *Markdown*."
     _ <- ok' =<< savePage page.id page.updatedAt "Exported page" "# Exported, then saved"
     pass
@@ -85,7 +88,10 @@ ordered = do
   ref <- newMemWiki st {current = Just (UserId "user-admin")}
   runMemWiki ref $ do
     team <- either (panic . show) pure =<< getSpace (path "team")
-    _ <- either (panic . show) pure =<< createSpace (Just team.id) "Empty"
+    hollow <- either (panic . show) pure =<< createSpace (Just team.id) "Empty"
+    -- A space with no page at all, which a new one is not: its home page
+    -- goes.
+    for_ hollow.homePage $ \h -> either (panic . show) pure =<< deletePage h
     _ <- either (panic . show) pure =<< setSpaceOrder team.id ChildSpaces NewestFirst
     _ <- either (panic . show) pure =<< setSpaceOrder team.id ChildPages ByHand
     made <- either (panic . show) pure =<< createPage team.id Nothing "Second" ""
@@ -149,10 +155,29 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
     st <- edited
     let files = filesOf (toArchive goldenTime "test" st)
     filter (`Map.member` files) recordFiles `shouldBe` recordFiles
-    [p | p <- Map.keys files, "attachments/" `T.isPrefixOf` p] `shouldSatisfy` (\ps -> length ps == Map.size st.blobs)
+    -- The images spaces are pictured with have files of their own.
+    [p | p <- Map.keys files, any (`T.isPrefixOf` p) ["attachments/", "icons/"]] `shouldSatisfy` (\ps -> length ps == Map.size st.blobs)
     (decodeStrict' =<< Map.lookup "manifest.json" files) `shouldSatisfy` \case
       Just (Object o) -> KeyMap.lookup "format" o == Just (String "wiki-export") && KeyMap.lookup "formatVersion" o == Just (toJSON (1 :: Int))
       _ -> False
+
+  it "carries a space's description, icon and home page, an icon's image as a file of its own" $ do
+    st <- edited
+    let files = filesOf (toArchive goldenTime "test" st)
+        exported = [x | x <- Map.elems st.spaces, x.name == "Exported"]
+    for_ exported $ \x -> do
+      Map.lookup (Export.iconFile x) files `shouldBe` Just (BS.pack [0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+      case readArchive files of
+        Left why -> expectationFailure (toS why)
+        Right archive -> do
+          [(y.icon, y.homePage) | y <- archive.spaces, y.id == x.id] `shouldBe` [(x.icon, x.homePage)]
+          [y.description | y <- archive.spaces, y.name == "Docs"] `shouldBe` ["How to use it."]
+    length exported `shouldBe` 1
+    -- An icon whose file is missing is refused, and so is a home page that
+    -- is not one of its space's pages.
+    refused "icons/" (readArchive (Map.filterWithKey (\k _ -> not ("icons/" `T.isPrefixOf` k)) files))
+    let elsewhere = editRecords "spaces.json" (\o -> if KeyMap.lookup "name" o == Just (String "Blog") then KeyMap.insert "homePage" (toJSON ("page-no-such" :: Text)) o else o) files
+    refused "home page" (readArchive elsewhere)
 
   describe "the archive of version 1" $ do
     it "still imports, with everything it held" $ do
@@ -236,12 +261,13 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
             editRecords "pages.json" (KeyMap.delete "position") $
               editRecords
                 "spaces.json"
-                (KeyMap.delete "public" . KeyMap.delete "parent" . KeyMap.delete "mathMacros" . KeyMap.delete "createdAt" . KeyMap.delete "position" . KeyMap.delete "subspaceOrder" . KeyMap.delete "pageOrder")
+                (KeyMap.delete "public" . KeyMap.delete "parent" . KeyMap.delete "mathMacros" . KeyMap.delete "createdAt" . KeyMap.delete "position" . KeyMap.delete "subspaceOrder" . KeyMap.delete "pageOrder" . KeyMap.delete "homePage" . KeyMap.delete "icon" . KeyMap.delete "description")
                 files
       case readArchive thin of
         Left why -> expectationFailure (toS why)
         Right archive -> do
           all (\s -> not s.public && isNothing s.parent && s.mathMacros == "" && s.position == 0 && s.subspaceOrder == ByName && s.pageOrder == ByName) archive.spaces `shouldBe` True
+          all (\s -> isNothing s.homePage && isNothing s.icon && s.description == "") archive.spaces `shouldBe` True
           all (\p -> p.position == 0) archive.pages `shouldBe` True
           -- A space is taken to have been made with its first page, and
           -- one without pages when the archive was.

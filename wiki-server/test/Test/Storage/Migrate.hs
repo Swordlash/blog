@@ -126,6 +126,20 @@ spec = describe "migrations" $ do
       execute_ c "DELETE FROM pages WHERE id = 'page-1'"
       query_ c "SELECT (SELECT count(*) FROM threads) + (SELECT count(*) FROM comments)" `shouldReturn` [Only (0 :: Int)]
 
+  it "bring a database of comments up to spaces' profiles: no home page, the default icon, no description; a home page deleted goes" $
+    withFreshDatabase $ \_ c -> do
+      applyMigrations (take 6 migrations) c `shouldReturn` [1 .. 6]
+      execute_ c "INSERT INTO spaces (id, name, slug, parent, public, created_at, position, subspace_order, page_order, math_macros) VALUES ('space-1', 'S', 's', NULL, 0, 'now', 0, 'name', 'name', '')"
+      execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('page-1', 'space-1', NULL, 'P', 'p', '', 'now', 'now', 0, '')"
+      migrate c `shouldReturn` [7 .. length migrations]
+      query_ c "SELECT home_page, icon, description FROM spaces" `shouldReturn` [(Nothing :: Maybe Text, Nothing :: Maybe Text, "" :: Text)]
+      execute_ c "PRAGMA foreign_keys = ON"
+      execute_ c "UPDATE spaces SET home_page = 'page-1', icon = '{\"emoji\":\"x\"}', description = 'What it is for.'"
+      -- A home page has to be a page.
+      (try (execute_ c "UPDATE spaces SET home_page = 'page-2'") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
+      execute_ c "DELETE FROM pages WHERE id = 'page-1'"
+      query_ c "SELECT home_page, icon, description FROM spaces" `shouldReturn` [(Nothing :: Maybe Text, Just ("{\"emoji\":\"x\"}" :: Text), "What it is for." :: Text)]
+
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do
       _ <- migrate c

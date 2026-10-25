@@ -29,9 +29,9 @@
 -- A backend that keeps the wiki elsewhere (over HTTP) can fail to ask at
 -- all: the network is down, the server does not answer in time, or it
 -- breaks. That is 'Unreachable', which no rule decides and which may well
--- not happen again: a component offers to try again. The three reads that
+-- not happen again: a component offers to try again. The four reads that
 -- cannot be refused, and so have no @Either@ ('session', 'listSpaces',
--- 'searchPages'), throw it instead, and whoever shows what they read
+-- 'pageCounts', 'searchPages'), throw it instead, and whoever shows what they read
 -- catches it with 'attempt' ("Loading" below).
 --
 -- = Permissions
@@ -51,7 +51,8 @@
 --   'CreateSpaces' to make it top-level or 'AdministerSpace' on the new
 --   parent;
 -- * renaming a space, deleting it, making it public or private, giving
---   it math macros, choosing the order of its children, and reading and
+--   it math macros, choosing the order of its children, setting its
+--   profile ('setSpaceProfile', 'uploadSpaceIcon'), and reading and
 --   changing who is granted what on it ('spaceAccess', 'setSpaceGrant')
 --   need 'AdministerSpace' on it;
 -- * creating, saving, moving and deleting pages, and uploading and deleting
@@ -67,6 +68,16 @@
 --
 -- Whoever creates a space is granted 'AdministerSpace' on it, so that a user
 -- with 'CreateSpaces' alone can do something with the space they made.
+--
+-- = Home pages
+--
+-- A space opens at its home page ('Wiki.Core.Space.homePage'), one of its
+-- own pages. 'createSpace' makes the space with one, titled "Home", from a
+-- template ('Wiki.Core.Space.homeBody'), whose first version is its
+-- creator's; its administrator may choose any other of its pages later
+-- ('setSpaceProfile'), or none. A space keeps no home page that is not
+-- one of its own: deleting the page, or moving it to another space, leaves
+-- the space without one.
 --
 -- = Loading
 --
@@ -146,7 +157,7 @@ import Wiki.Core.Page (Page)
 import Wiki.Core.Permission (Grants (..), Principal (..), SpaceAccess, SpacePermission, Subject)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space)
+import Wiki.Core.Space (Space, SpaceProfile)
 import Wiki.Core.User (SignInProvider, Standing (..), User (..))
 import Wiki.Core.Version (Version, VersionInfo)
 
@@ -171,7 +182,8 @@ data WikiError
   deriving stock (Eq, Show)
 
 -- | 'Unreachable', thrown by the reads that have no @Either@ to return it
--- in ('session', 'listSpaces', 'searchPages'), for 'attempt' to catch.
+-- in ('session', 'listSpaces', 'pageCounts', 'searchPages'), for 'attempt'
+-- to catch.
 instance Exception WikiError
 
 -- | Throw that the backend could not be asked, from a read that has no
@@ -269,7 +281,8 @@ class (Monad m) => MonadWiki m where
 
   -- | A new private space, at the top level or as a subspace of another, with
   -- this name and a slug made from it, last among its siblings, listing its
-  -- children by name. Its creator is granted
+  -- children by name, with no description and the default icon, and one
+  -- page, its home page (see "Home pages" above). Its creator is granted
   -- 'Wiki.Core.Permission.AdministerSpace' on it.
   createSpace :: Maybe SpaceId -> Text -> m (Either WikiError Space)
   default createSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => Maybe SpaceId -> Text -> m (Either WikiError Space)
@@ -293,6 +306,40 @@ class (Monad m) => MonadWiki m where
   setSpaceMathMacros :: SpaceId -> Text -> m (Either WikiError Space)
   default setSpaceMathMacros :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Text -> m (Either WikiError Space)
   setSpaceMathMacros s = lift . setSpaceMathMacros s
+
+  -- | Give a space its profile: its description, its icon (an emoji, a
+  -- colour, the image it has, or the default) and its home page (one of
+  -- its pages, or none), checked as 'Wiki.Core.Space.checkProfile' checks
+  -- them; what does not pass is 'Invalid'. An image is uploaded with
+  -- 'uploadSpaceIcon', and one the space had and the profile does not keep
+  -- is let go.
+  setSpaceProfile :: SpaceId -> SpaceProfile -> m (Either WikiError Space)
+  default setSpaceProfile :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> SpaceProfile -> m (Either WikiError Space)
+  setSpaceProfile s = lift . setSpaceProfile s
+
+  -- | Picture a space with an image: its media type and its bytes, checked
+  -- as 'Wiki.Core.Space.checkIconUpload' checks them ('Invalid' if they do
+  -- not pass). The bytes are kept as an attachment's are, and an image the
+  -- space had before is let go.
+  uploadSpaceIcon :: SpaceId -> Text -> ByteString -> m (Either WikiError Space)
+  default uploadSpaceIcon :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Text -> ByteString -> m (Either WikiError Space)
+  uploadSpaceIcon s t = lift . uploadSpaceIcon s t
+
+  -- | Where a browser fetches the image a space is pictured with, as
+  -- 'attachmentUrl' says for an attachment's: an object URL in the demo
+  -- (a @data:@ URL natively), the server's address for it over HTTP. The
+  -- empty text for a space whose icon is no image, or one whose bytes the
+  -- backend does not have.
+  spaceIconUrl :: Space -> m Text
+  default spaceIconUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => Space -> m Text
+  spaceIconUrl = lift . spaceIconUrl
+
+  -- | How many pages each space has that the current user may view, by
+  -- space: what the directory of spaces says of each. A space they may
+  -- not view (an ancestor listed for its name) is left out.
+  pageCounts :: m (Map SpaceId Int)
+  default pageCounts :: (MonadTrans t, m ~ t n, MonadWiki n) => m (Map SpaceId Int)
+  pageCounts = lift pageCounts
 
   -- | Move a space, with its subspaces and pages, under another space or to
   -- the top level, where it goes last among its new siblings. A move under

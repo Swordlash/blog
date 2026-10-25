@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+One space at a time (WP4.6). `SpacesApi` gains `pageCounts` (`GET
+spaces/page-counts`, how many pages each space the asker may view has),
+`setProfile` (`PUT spaces/<space>/profile`, a `SpaceProfile`), `uploadIcon`
+(`POST spaces/<space>/icon`, a multipart form as an attachment's) and `icon`
+(`GET spaces/<space>/icon/<blob>`, the image's bytes);
+`Wiki.Api.Links.spaceIconUrl`. A `Space`'s JSON has `homePage`, `icon` and
+`description`.
+
 The server's settings (WP4.4). `Wiki.Api.ServerSettings`:
 `ServerSettingsOf s {publicUrl, mail, providers}` with `MailSettingsOf s` and
 `ProviderSettingsOf s`, each secret an `s`: `SecretState` (`"set"`,

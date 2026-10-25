@@ -18,7 +18,7 @@ import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.User (Group (..), User (..))
 
 -- | The whole wiki, as written at this time by this program.
@@ -88,6 +88,7 @@ nextCounter st = 1 + foldl' max 0 (mapMaybe numbered ids)
         <> map (\p -> p.text) (Map.keys st.pages)
         <> [x.id.text | p <- Map.elems st.pages, x <- p.attachments]
         <> [b.text | p <- Map.elems st.pages, x <- p.attachments, SourceBlob b <- [x.source]]
+        <> [b.text | s <- Map.elems st.spaces, Just (IconImage b _) <- [s.icon]]
     numbered i = case T.breakOnEnd "-" i of
       (prefix, digits) | not (T.null prefix), not (T.null digits), T.all isDigit digits -> readMaybe (T.unpack digits)
       _ -> Nothing

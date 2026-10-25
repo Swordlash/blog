@@ -78,8 +78,9 @@ spec = describe "Wiki.App.Shell, rendered" $ do
   it "lists the public spaces on the front page for someone not signed in" $ do
     Rendered {html, title} <- render (as Nothing) Home
     title `shouldBe` "Wiki"
-    html `contains` "<a href=\"/s/blog/\">Blog</a>"
-    html `contains` "<a href=\"/s/docs/\">Docs</a>"
+    html `contains` "<h1>Spaces</h1>"
+    html `contains` "<a class=\"space-card-link\" href=\"/s/blog/\"><span aria-hidden=\"true\" class=\"space-icon space-icon-emoji\">✍️</span><span class=\"space-card-name\">Blog</span></a>"
+    html `contains` "<span class=\"space-card-name\">Docs</span>"
     html `lacks` "Team"
     html `contains` "<a href=\"/s/docs/p/tour/\">Take the tour</a>"
     html `contains` "Not signed in"
@@ -111,12 +112,45 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     handbook `lacks` "Ada"
     handbookTitle `shouldBe` "Private · Wiki"
 
-  it "shows a private space to someone it is granted to, with what they may do" $ do
-    Rendered {html} <- render (as (Just "user-admin")) (Space (slugs ["team"]))
+  it "shows a private space's pages to someone it is granted to, with what they may do" $ do
+    Rendered {html, title} <- render (as (Just "user-admin")) (SpacePages (slugs ["team"]))
+    title `shouldBe` "Pages and settings · Team · Wiki"
     html `contains` "<h1>Team</h1>"
+    html `contains` "<p class=\"space-description\">How the team works: its handbook, who is on call, and its projects.</p>"
     html `contains` ">Team handbook</a>"
-    html `contains` ">Rename</button>"
+    html `contains` ">Space settings</button>"
     html `contains` ">Delete</button>"
+    html `lacks` ">Rename</button>"
+
+  it "opens a space at its home page, in the space's sidebar" $ do
+    Rendered {html, title} <- render (as (Just "user-admin")) (Space (slugs ["team"]))
+    title `shouldBe` "Team · Wiki"
+    html `contains` "<h1 id=\"team-handbook\">Team handbook</h1>"
+    html `contains` "<nav aria-label=\"Space\" class=\"wiki-sidebar space-sidebar\">"
+    html `contains` "<a aria-current=\"page\" class=\"sidebar-space\" href=\"/s/team/\"><span aria-hidden=\"true\" class=\"space-icon space-icon-emoji\">🧭</span><span class=\"sidebar-space-name\">Team</span></a>"
+    html `contains` "<a class=\"space-pages-link\" href=\"/s/team/pages/\">Pages and settings</a>"
+    -- The sidebar has this space alone: its subspaces, and no other space.
+    html `contains` "<h2>Subspaces</h2>"
+    html `contains` "<a class=\"space-link\" href=\"/s/team/projects/\">"
+    html `lacks` "href=\"/s/blog/\""
+    -- The breadcrumbs start at the directory.
+    html `contains` "<li><a href=\"/\">Spaces</a></li><li><span aria-current=\"page\">Team</span></li>"
+
+  it "opens a subspace with the way up to the space it is in" $ do
+    Rendered {html} <- render (as (Just "user-admin")) (Space (slugs ["team", "projects"]))
+    html `contains` "<a class=\"sidebar-up\" href=\"/s/team/\">Up to Team</a>"
+    html `contains` "<h1 id=\"the-wiki\">The wiki</h1>"
+    html `contains` "<span aria-hidden=\"true\" class=\"space-icon space-icon-teal\">P</span>"
+    Rendered {html = asReader} <- render (as (Just "user-reader")) (Space (slugs ["team", "projects"]))
+    asReader `lacks` "sidebar-up"
+
+  it "opens a space without a home page at its pages" $ do
+    let st = as (Just "user-admin")
+        withoutHome = st {spaces = Map.map (\x -> if x.name == "Docs" then S.withProfile S.SpaceProfile {S.description = x.description, S.icon = x.icon, S.homePage = Nothing} x else x) st.spaces}
+    Rendered {html} <- render withoutHome (Space (slugs ["docs"]))
+    html `contains` "<h1>Docs</h1>"
+    html `contains` ">Space settings</button>"
+    html `lacks` "space-home-link"
 
   it "offers a new space to an administrator, who holds no create-spaces grant of their own" $ do
     -- The demo's administrator holds the global administer only, which
@@ -126,16 +160,18 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     Rendered {html = asReader} <- render (as (Just "user-reader")) Home
     asReader `lacks` "New space"
 
-  it "greys out a space whose subspace is all a user may see" $ do
+  it "greys out a space whose subspace is all a user may see, and leads to the subspace" $ do
     Rendered {html} <- render (as (Just "user-reader")) Home
-    html `contains` "<span class=\"unviewable\""
-    html `contains` "<a class=\"space-link\" href=\"/s/team/projects/\">Projects</a>"
+    html `contains` "<span class=\"space-card-link unviewable\""
+    html `contains` "You may open <a href=\"/s/team/projects/\">Team / Projects</a>."
 
   it "offers no actions on a space to someone who may only read it" $ do
-    Rendered {html} <- render (as Nothing) (Space (slugs ["docs"]))
+    Rendered {html} <- render (as Nothing) (SpacePages (slugs ["docs"]))
     html `contains` "<h1>Docs</h1>"
-    html `lacks` ">Rename</button>"
-    html `lacks` ">New page</button>"
+    html `lacks` ">Space settings</button>"
+    html `lacks` ">New page</a>"
+    Rendered {html = home} <- render (as Nothing) (Space (slugs ["docs"]))
+    home `lacks` ">Set as home page</button>"
 
   it "shows that an address is nothing" $ do
     Rendered {html, title} <- render (as Nothing) Unknown
@@ -228,7 +264,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     page `lacks` "Unsaved words"
 
   it "offers to write a new page in a space, and under a page" $ do
-    Rendered {html} <- render (as (Just "user-editor")) (Space (slugs ["blog"]))
+    Rendered {html} <- render (as (Just "user-editor")) (SpacePages (slugs ["blog"]))
     html `contains` "href=\"/s/blog/new-page/\">New page</a>"
     Rendered {html = page} <- render (as (Just "user-editor")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
     page `contains` "href=\"/s/blog/new-page/hello-world/\">New subpage</a>"

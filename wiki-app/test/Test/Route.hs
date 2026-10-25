@@ -22,7 +22,7 @@ slugs = map slug
 
 -- | Slugs, the route's own words among them, which have to be escaped.
 genSlug :: Gen Slug
-genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "history", "slides", "new-page", "new-space", "s", "not-found", "admin", "a-b", "x1"]
+genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "history", "slides", "pages", "new-page", "new-space", "s", "not-found", "admin", "a-b", "x1"]
 
 genPath :: Gen [Slug]
 genPath = chooseInt (1, 4) >>= (`vectorOf` genSlug)
@@ -49,6 +49,7 @@ genRoute =
         <*> oneof [pure Nothing, Just <$> elements [demoTime, addUTCTime 0.000123456789 demoTime, addUTCTime 86399.5 demoTime]]
         <*> elements [AgainstPrevious, AgainstCurrent]
     , PageSlides <$> genPath <*> genPath <*> oneof [pure 1, chooseInt (-3, 40)]
+    , SpacePages <$> genPath
     , Invite . InvitationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
     ]
 
@@ -128,6 +129,15 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/invite/c2VjcmV0" `shouldBe` Right (Invite (InvitationToken "c2VjcmV0"))
       -- A space may be called invite: spaces are below /s/.
       print route (Space (slugs ["invite"])) `shouldBe` "/s/invite/"
+
+    it "writes a space's list of pages after the space's path, and escapes a space or a page called pages" $ do
+      print route (SpacePages (slugs ["team", "projects"])) `shouldBe` "/s/team/projects/pages/"
+      parse route "/s/team/projects/pages/" `shouldBe` Right (SpacePages (slugs ["team", "projects"]))
+      parse route "/s/docs/pages" `shouldBe` Right (SpacePages (slugs ["docs"]))
+      print route (Space (slugs ["pages"])) `shouldBe` "/s/~pages/"
+      print route (Space (slugs ["team", "pages"])) `shouldBe` "/s/team/~pages/"
+      parse route "/s/team/~pages/pages/" `shouldBe` Right (SpacePages (slugs ["team", "pages"]))
+      print route (Page (slugs ["a"]) (slugs ["pages"])) `shouldBe` "/s/a/p/~pages/"
 
     it "reads an address without its last slash too" $ do
       parse route "/s/docs" `shouldBe` Right (Space (slugs ["docs"]))

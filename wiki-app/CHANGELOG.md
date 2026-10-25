@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+One space at a time (WP4.6), as Confluence has it. The front page is the
+directory of spaces (`Wiki.App.View.Directory`): a card per top-level space
+with its icon, name, description, number of pages and subspaces, the spaces
+this browser visited last (`Wiki.App.Recent`, kept in local storage, in a
+browser only), and "New space". Inside a space the sidebar shows that space
+alone: "All spaces" and a menu to switch to another, its icon and name, "Up
+to" the space above a subspace, its home page and "Pages and settings", its
+pages, and its subspaces below them; the breadcrumbs start at "Spaces". A
+space's own route shows its home page, or its list of pages if it has none;
+the list moved to a route of its own, `SpacePages` (`/s/<space>/pages/`), so
+a space or page slugged `pages` is written `~pages`. The space's
+"Permissions" grew into "Space settings" (`Wiki.App.View.SpaceSettings`):
+its name, description, icon (its letter, a colour, an emoji, or an uploaded
+image) and home page, above its permissions; "Rename" moved there. A page's
+actions offer "Set as home page" to whoever administers its space.
+`MonadWiki` gains `setSpaceProfile`, `uploadSpaceIcon`, `spaceIconUrl` and
+`pageCounts`, and `createSpace` makes a space with a "Home" page; the
+backends keep a space without a home page that was deleted or moved away.
+`HttpWiki` caches the page counts and the page carries them in
+`wiki-preload` as `pageCounts`. The views' `Context` has `icons`. The demo's
+spaces have emoji (Projects a colour), descriptions and home pages.
+
 The editor no longer loses what is typed just after a save is asked for.
 It made its text read-only while the save was on its way, which refused
 the keystrokes (and toolbar commands) that came meanwhile without a word;

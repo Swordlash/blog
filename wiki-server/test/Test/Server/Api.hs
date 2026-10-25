@@ -8,6 +8,7 @@ import Data.Aeson (ToJSON, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -21,20 +22,21 @@ import Wiki.Api.Account (Account (..), AccountDisabled (..), NewAccount (..), Ne
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
-import Wiki.Api.Links (attachmentUrl, links, searchUrl)
+import Wiki.Api.Links (attachmentUrl, links, searchUrl, spaceIconUrl)
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
 import Wiki.App.Backend (maxAttachmentSize)
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Id (AttachmentId (..), GroupId (..), UserId (..))
+import Wiki.Core.Id (AttachmentId (..), BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), searchQuery)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), User (..))
+import Wiki.Server.Options qualified as Options
 import Wiki.Server.Storage (administratorUser)
 
 spec :: Spec
@@ -48,6 +50,7 @@ spec = describe "the API over HTTP" $ do
   status
   people
   permissions
+  profiles
 
 -- | An address of the API on a listener: the public one's root, or the
 -- admin one's @\/admin\/@.
@@ -100,7 +103,8 @@ spacesAndPages = describe "spaces and pages" $ do
     ordered <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setOrder space.id)) SpaceOrder {children = ChildPages, order = NewestFirst})
     (ordered :: Space).pageOrder `shouldBe` NewestFirst
     pages <- ok200 (getUrl r (onAdmin r (links.spaces.listPages space.id)))
-    map (\(p :: Page) -> p.title) pages `shouldBe` ["Welcome"]
+    -- Newest first: the page made after the space's home page, then it.
+    map (\(p :: Page) -> p.title) pages `shouldBe` ["Welcome", "Home"]
     reply <- getUrl r (onAdmin r (links.spaces.pageAt space.id [page.slug]))
     jsonAs 200 reply `shouldReturn` page
     header "ETag" reply `shouldBe` Just (encodeUtf8 (toUrlPiece (pageVersion page)))
@@ -221,7 +225,7 @@ attachments = describe "attachments" $ do
     json reply >>= \case
       Invalid _ -> pass
       other -> expectationFailure ("not invalid: " <> show other)
-    ok200 (getUrl r (onAdmin r (links.spaces.listPages page.space))) >>= \(pages :: [Page]) -> map (\p -> p.attachments) pages `shouldBe` [[]]
+    ok200 (getUrl r (onAdmin r (links.spaces.listPages page.space))) >>= \(pages :: [Page]) -> map (\p -> p.attachments) pages `shouldBe` [[], []]
 
 refusals :: Spec
 refusals = describe "refusals servant makes itself" $ do
@@ -249,7 +253,8 @@ status = describe "the server's status" $ do
   it "is given to the administrator, with the server's counts" $ withRunning $ \r -> do
     (_, _) <- withSpace r False
     s <- ok200 (getUrl r (onAdmin r links.admin.status))
-    ((s :: ServerStatus).spaces, s.pages, s.users, s.dataDir) `shouldBe` (1, 1, 0, toS r.dataDir)
+    -- The space's home page, and the page made in it.
+    ((s :: ServerStatus).spaces, s.pages, s.users, s.dataDir) `shouldBe` (1, 2, 0, toS r.dataDir)
     s.version `shouldSatisfy` T.isPrefixOf "wiki-server "
 
   it "is refused to an anonymous reader" $ withRunning $ \r ->
@@ -424,3 +429,63 @@ permissions = describe "permissions given over HTTP" $ do
     -- Granting to nobody is refused, after the permission.
     (.status) <$> send r methodPut (onPublic r (links.spaces.setGrant team.id)) [session, (hContentType, "application/json")] (encode SpaceGrantChange {subject = SubjectGroup (GroupId "no-such-group"), permission = View, granted = True})
       `shouldReturn` 400
+
+-- | A space's profile and icon over HTTP: set by whoever administers the
+-- space, its icon served to whoever may view it, and kept across a
+-- restart, which deletes the files nothing refers to.
+profiles :: Spec
+profiles = describe "a space's profile and icon over HTTP" $ do
+  let png = BSL.pack [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]
+      spaceNamed r hs path = getUrlWith r (onPublic r (links.spaces.atPath (either (panic . show) identity (parsePath path)))) hs >>= jsonAs 200
+      setProfile r hs sid p = send r methodPut (onPublic r (links.spaces.setProfile sid)) ((hContentType, "application/json") : hs) (encode p)
+
+  it "is set by whoever administers the space, and by nobody else" $ withAdminSession identity $ \r session -> do
+    givePassword r "user-editor" "editor's password"
+    editor <- cookie <$> signInAs r "editor" "editor's password"
+    blog :: Space <- spaceNamed r [session] "blog"
+    let profile = SpaceProfile {description = "Posts.", icon = Just (IconEmoji "📝"), homePage = blog.homePage}
+    -- The editor edits the blog, and does not administer it.
+    (.status) <$> setProfile r [editor] blog.id profile `shouldReturn` 403
+    (.status) <$> setProfile r [] blog.id profile `shouldReturn` 403
+    (.status) <$> multipart r (onPublic r (links.spaces.uploadIcon blog.id)) [] [("file", "icon.png", "image/png", png)] `shouldReturn` 403
+    set :: Space <- setProfile r [session] blog.id profile >>= jsonAs 200
+    (set.description, set.icon) `shouldBe` ("Posts.", Just (IconEmoji "📝"))
+    seen :: Space <- spaceNamed r [] "blog"
+    (seen.description, seen.icon, seen.homePage) `shouldBe` ("Posts.", Just (IconEmoji "📝"), blog.homePage)
+    setProfile r [session] blog.id SpaceProfile {description = "", icon = Nothing, homePage = Just (PageId "elsewhere")} >>= jsonAs 400 >>= \case
+      Invalid _ -> pass
+      other -> expectationFailure ("not invalid: " <> show other)
+
+  it "serves an uploaded icon to whoever may view the space, as an image and nothing else" $ withDemoRunning identity $ \r -> do
+    blog :: Space <- spaceNamed r [] "blog"
+    team :: Space <- getUrl r (onAdmin r (links.spaces.atPath (either (panic . show) identity (parsePath "team")))) >>= jsonAs 200
+    uploaded :: Space <- multipart r (onAdmin r (links.spaces.uploadIcon blog.id)) [] [("file", "icon.png", "image/png; charset=binary", png)] >>= jsonAs 200
+    case uploaded.icon of
+      Just (IconImage _ mediaType) -> mediaType `shouldBe` "image/png"
+      other -> expectationFailure ("not an image: " <> show other)
+    served <- getUrl r (onPublic r (spaceIconUrl uploaded))
+    (served.status, served.body) `shouldBe` (200, png)
+    lookup hContentType served.headers `shouldBe` Just "image/png"
+    lookup "X-Content-Type-Options" served.headers `shouldBe` Just "nosniff"
+    lookup "Content-Security-Policy" served.headers `shouldSatisfy` maybe False ("sandbox" `BS.isInfixOf`)
+    -- Another blob is not the space's icon; another space's is its own.
+    (.status) <$> getUrl r (onPublic r (links.spaces.icon blog.id (BlobId (T.replicate 64 "0")))) `shouldReturn` 404
+    teamIcon :: Space <- multipart r (onAdmin r (links.spaces.uploadIcon team.id)) [] [("file", "icon.png", "image/png", png)] >>= jsonAs 200
+    (.status) <$> getUrl r (onPublic r (spaceIconUrl teamIcon)) `shouldReturn` 403
+    (.status) <$> getUrl r (onAdmin r (spaceIconUrl teamIcon)) `shouldReturn` 200
+    -- An SVG, which could run scripts on the wiki's origin, is refused.
+    multipart r (onAdmin r (links.spaces.uploadIcon blog.id)) [] [("file", "icon.svg", "image/svg+xml", "<svg/>")] >>= jsonAs 400 >>= \case
+      Invalid _ -> pass
+      other -> expectationFailure ("not invalid: " <> show other)
+    -- The image stays across a restart, which deletes the files that
+    -- nothing refers to.
+    withRunningAs (\o -> o {Options.dataDir = r.dataDir}) $ \again -> do
+      kept <- getUrl again (onPublic again (spaceIconUrl uploaded))
+      (kept.status, kept.body) `shouldBe` (200, png)
+
+  it "counts the pages of the spaces the asker may view" $ withDemoRunning identity $ \r -> do
+    counts <- getUrl r (onPublic r links.spaces.pageCounts) >>= jsonAs 200
+    spaces :: [Space] <- getUrl r (onPublic r links.spaces.list) >>= jsonAs 200
+    sort [(s.name, n) | s <- spaces, Just n <- [Map.lookup s.id (counts :: Map SpaceId Int)]] `shouldBe` [("Blog", 2), ("Docs", 5)]
+    everything :: Map SpaceId Int <- getUrl r (onAdmin r links.spaces.pageCounts) >>= jsonAs 200
+    Map.size everything `shouldBe` 4

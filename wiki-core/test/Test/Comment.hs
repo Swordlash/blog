@@ -33,6 +33,9 @@ blog =
     , position = 0
     , subspaceOrder = ByName
     , pageOrder = ByName
+    , homePage = Nothing
+    , icon = Nothing
+    , description = ""
     }
 
 ada, eve, rita :: Principal

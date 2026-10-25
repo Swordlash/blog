@@ -30,7 +30,7 @@ import Network.Socket (AddrInfo (..), AddrInfoFlag (..), Family (..), SockAddr (
 import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettingsSocket, setGracefulShutdownTimeout, setOnException)
 import Protolude hiding (Handler)
 import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
-import Wiki.Api.Links (attachmentUrl)
+import Wiki.Api.Links (attachmentUrl, spaceIconUrl)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, redirectUri, securityName)
 import Wiki.Server.Api (Env (..))
 import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
@@ -97,7 +97,7 @@ withServerUsing logger raw sendMail action = do
   -- Five accounts made, or tried, from an address in fifteen minutes.
   registrations <- newLimiter defaultLimits {perLogin = 5, perAddress = 5}
   events <- newHub
-  withStorage Config {attachmentAddress = attachmentUrl, publish = Events.publish events} options.dataDir $ \storage -> do
+  withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events} options.dataDir $ \storage -> do
     let env =
           Env
             { storage

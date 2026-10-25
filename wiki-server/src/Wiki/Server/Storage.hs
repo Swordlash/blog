@@ -70,6 +70,7 @@ module Wiki.Server.Storage
   , SqliteWiki
   , runSqliteWiki
   , attachmentFile
+  , spaceIconFile
   , mayReadPage
   , threadsThen
 
@@ -81,6 +82,7 @@ where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID (..))
+import Data.Aeson (decodeStrict')
 import Data.ByteString qualified as BS
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
@@ -88,7 +90,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.UUID.Types qualified as UUID
-import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, open, query, query_, withConnection)
+import Database.SQLite.Simple (Connection, Only (..), SQLError, close, execute, execute_, open, query, query_, withConnection)
 import Protolude
 import System.Directory (createDirectoryIfMissing)
 import Wiki.Api.Account (Account, NewAccount (..))
@@ -128,7 +130,7 @@ import Wiki.Core.Permission
   )
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), bodyText, folded, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
-import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
 import Wiki.Core.User (Group (..), Standing (..), User (..), checkLogin, checkPassword)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
@@ -162,6 +164,10 @@ data Config = Config
   { attachmentAddress :: Attachment -> Text
   -- ^ Where a browser fetches the bytes of an attachment the storage keeps:
   -- the server's route for them, which serves 'attachmentFile'.
+  , iconAddress :: Space -> Text
+  -- ^ Where a browser fetches the image a space is pictured with, for a
+  -- space whose icon is one: the server's route for it, which serves
+  -- 'spaceIconFile'.
   , publish :: PageId -> PageEvent -> IO ()
   -- ^ Who is told what happens to a page's comments: the server's live
   -- channel ("Wiki.Server.Events"). Called once the change is committed,
@@ -171,7 +177,12 @@ data Config = Config
 -- | Attachments at @\/api\/v1\/attachments\/\<id\>@, and nobody told of
 -- anything.
 defaultConfig :: Config
-defaultConfig = Config {attachmentAddress = \a -> "/api/v1/attachments/" <> a.id.text, publish = \_ _ -> pass}
+defaultConfig =
+  Config
+    { attachmentAddress = \a -> "/api/v1/attachments/" <> a.id.text
+    , iconAddress = \s -> "/api/v1/spaces/" <> s.id.text <> "/icon"
+    , publish = \_ _ -> pass
+    }
 
 -- | Open the storage in a data directory ("Wiki.Server.Storage.Layout"),
 -- made if it is not there: the database is created or brought up to this
@@ -258,7 +269,7 @@ serverSettingsWith st c =
 -- | Delete the attachments' files that nothing refers to: not the database,
 -- and not one of the backups kept, which a restore would bring back. A
 -- backup that cannot be read might refer to any of them, so then nothing is
--- deleted.
+-- deleted. The images spaces are pictured with are such files too.
 collectGarbage :: Connection -> FilePath -> IO ()
 collectGarbage c dataDir = do
   live <- blobsIn c
@@ -267,7 +278,12 @@ collectGarbage c dataDir = do
     Left _ -> pass
     Right fromBackups -> void (collectBlobs (attachmentsDir dataDir) (Set.unions (live : fromBackups)))
   where
-    blobsIn d = Set.fromList . map (BlobId . fromOnly) <$> query_ d "SELECT DISTINCT blob FROM attachments WHERE blob IS NOT NULL"
+    blobsIn d = do
+      attached <- map (BlobId . fromOnly) <$> query_ d "SELECT DISTINCT blob FROM attachments WHERE blob IS NOT NULL"
+      -- A backup taken before spaces had icons has no column for them,
+      -- and refers to no image.
+      icons <- query_ d "SELECT icon FROM spaces WHERE icon IS NOT NULL" `catch` \(_ :: SQLError) -> pure []
+      pure (Set.fromList (attached <> [b | Only t <- icons, Just (IconImage b _) <- [decodeStrict' (encodeUtf8 (t :: Text))]]))
 
 --------------------------------------------------------------------------------
 -- Who is asking
@@ -486,6 +502,12 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   renameSpace sid = run Writes . renameSpaceTx sid
   setSpacePublic sid public = run Writes (adjustSpace sid (\s -> pure s {public}))
   setSpaceMathMacros sid macros = run Writes (adjustSpace sid (\s -> pure s {mathMacros = trimLines macros}))
+  setSpaceProfile sid = run Writes . setSpaceProfileTx sid
+  uploadSpaceIcon sid mediaType = run Writes . uploadSpaceIconTx sid mediaType
+  spaceIconUrl s = case s.icon of
+    Just (IconImage _ _) -> SqliteWiki (asks (\env -> env.storage.config.iconAddress s))
+    _ -> pure ""
+  pageCounts = answer mempty pageCountsTx
   spaceAccess = run Reads . spaceAccessTx
   setSpaceGrant sid subject permission = run Writes . setSpaceGrantTx sid subject permission
   moveSpace sid = run Writes . moveSpaceTx sid
@@ -638,6 +660,19 @@ attachmentFile aid = run Reads $ do
         SourceUrl _ -> Nothing
     )
 
+-- | The image a space is pictured with, for someone who may view the
+-- space, by the blob it is (the address names it, so that an image
+-- replaced is at another): its media type and its file. What the server's
+-- route for it serves; a blob that is not the space's image is 'NotFound'.
+spaceIconFile :: (MonadIO m) => SpaceId -> BlobId -> SqliteWiki m (Either WikiError (Text, FilePath))
+spaceIconFile sid blob = run Reads $ do
+  (s, c) <- findSpace sid
+  requireView c
+  dir <- asks (\x -> x.blobs)
+  case s.icon of
+    Just (IconImage b mediaType) | b == blob, Just file <- blobFile dir b -> pure (mediaType, file)
+    _ -> failWith NotFound
+
 --------------------------------------------------------------------------------
 -- Reads
 
@@ -670,6 +705,20 @@ listSpacesTx = do
   let visible = filter (canView ctx.principal ctx.grants) (map (chainOf ctx) (Map.keys ctx.spaces))
       listed = Set.fromList (map (\s -> s.id) (concat visible))
   pure (spaceTreeOrder (Map.elems (Map.restrictKeys ctx.spaces listed)))
+
+-- | How many pages each space the asker may view has.
+pageCountsTx :: Tx (Map SpaceId Int)
+pageCountsTx = do
+  ctx <- ask
+  counted <- db (\c -> query_ c "SELECT space_id, count(*) FROM pages GROUP BY space_id")
+  let byId = Map.fromList [(SpaceId sid, n) | (sid, n) <- counted]
+  pure
+    ( Map.fromList
+        [ (sid, Map.findWithDefault 0 sid byId)
+        | sid <- Map.keys ctx.spaces
+        , canView ctx.principal ctx.grants (chainOf ctx sid)
+        ]
+    )
 
 getSpaceTx :: [Slug] -> Tx Space
 getSpaceTx path = do
@@ -748,11 +797,58 @@ createSpaceTx parent name = do
           , position = nextPosition (childrenOf others parent)
           , subspaceOrder = ByName
           , pageOrder = ByName
+          , homePage = Nothing
+          , icon = Nothing
+          , description = ""
           }
   db (`insertSpace` space)
   for_ ctx.creator $ \u ->
     db $ \c -> insertGrants c Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open}
-  pure space
+  -- Its home page, made as a page its maker made would be, and then named
+  -- as the space's, which it has to exist to be.
+  j <- newId
+  let home =
+        Page
+          { id = PageId j
+          , space = space.id
+          , parent = Nothing
+          , title = homeTitle
+          , slug = fromMaybe (fallbackSlug "page") (slugify homeTitle)
+          , body = homeBody n
+          , attachments = []
+          , createdAt = time
+          , updatedAt = time
+          , position = 0
+          }
+      withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id} space
+  author <- asks (\x -> x.author)
+  db $ \c -> insertPage c home >> insertVersion c home author >> updateSpace c withHome
+  pure withHome
+
+-- | Give a space a profile, checked against its pages.
+setSpaceProfileTx :: SpaceId -> SpaceProfile -> Tx Space
+setSpaceProfileTx sid p = do
+  (s, c) <- findSpace sid
+  requireAdminister c
+  nodes <- db (`pageNodes` sid)
+  checked <- either invalid pure (checkProfile s (map (\n -> n.id) nodes) p)
+  let s' = withProfile checked s
+  db (`updateSpace` s')
+  pure s'
+
+-- | Picture a space with an image, its bytes kept under their hash as an
+-- attachment's are. The image it had before is left to the collection of
+-- files nothing refers to ("Wiki.Server.Storage.Blobs").
+uploadSpaceIconTx :: SpaceId -> Text -> ByteString -> Tx Space
+uploadSpaceIconTx sid mediaType bytes = do
+  (s, c) <- findSpace sid
+  requireAdminister c
+  mt <- either invalid pure (checkIconUpload mediaType (fromIntegral (BS.length bytes)))
+  dir <- asks (\x -> x.blobs)
+  blob <- liftIO (storeBlob dir bytes)
+  let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage} s
+  db (`updateSpace` s')
+  pure s'
 
 -- | Change a space, as someone who administers it.
 adjustSpace :: SpaceId -> (Space -> Tx Space) -> Tx Space
@@ -809,6 +905,9 @@ renameSpaceTx sid name = adjustSpace sid $ \s -> do
       , position = s.position
       , subspaceOrder = s.subspaceOrder
       , pageOrder = s.pageOrder
+      , homePage = s.homePage
+      , icon = s.icon
+      , description = s.description
       }
 
 -- | Math macros as they are kept: as written, but for blank lines at the
@@ -860,6 +959,9 @@ respace parent slug position s =
     , position
     , subspaceOrder = s.subspaceOrder
     , pageOrder = s.pageOrder
+    , homePage = s.homePage
+    , icon = s.icon
+    , description = s.description
     }
 
 --------------------------------------------------------------------------------
@@ -1037,6 +1139,10 @@ movePageTx pid destination parent = do
       "UPDATE pages SET space_id = ?, parent = ?, slug = ?, position = ? WHERE id = ?"
       (destination.text, fmap (\x -> x.text) parent, slugText slug, position, pid.text)
     for_ (Set.delete pid subtree) $ \q -> execute c "UPDATE pages SET space_id = ? WHERE id = ?" (destination.text, q.text)
+    -- A page that leaves its space is no longer its home page.
+    when (destination /= p.space) $
+      for_ subtree $
+        \q -> execute c "UPDATE spaces SET home_page = NULL WHERE home_page = ?" (Only q.text)
   findPage pid
 
 -- | Delete a page: the pages under it, and the versions, attachments and
@@ -1445,10 +1551,12 @@ importArchive st a = withDatabase st $ \c -> do
   flip onException (execute_ c "ROLLBACK") $ do
     counts <- for ["users", "groups", "spaces"] $ \table -> query_ c ("SELECT count(*) FROM " <> table)
     let unkept = [x | p <- a.pages, x <- p.attachments, SourceBlob b <- [x.source], Map.notMember b a.blobs]
-    case (any (/= [Only (0 :: Int)]) counts, unkept) of
-      (True, _) -> execute_ c "ROLLBACK" $> Left "The server has a wiki already: an archive is imported into an empty one only."
-      (_, x : _) -> execute_ c "ROLLBACK" $> Left ("The archive has no bytes for the attachment " <> show x.id.text <> ".")
-      (False, []) -> do
+        iconless = [sp | sp <- a.spaces, Just (IconImage b _) <- [sp.icon], Map.notMember b a.blobs]
+    case (any (/= [Only (0 :: Int)]) counts, unkept, iconless) of
+      (True, _, _) -> execute_ c "ROLLBACK" $> Left "The server has a wiki already: an archive is imported into an empty one only."
+      (_, x : _, _) -> execute_ c "ROLLBACK" $> Left ("The archive has no bytes for the attachment " <> show x.id.text <> ".")
+      (_, _, sp : _) -> execute_ c "ROLLBACK" $> Left ("The archive has no bytes for the icon of the space " <> show sp.id.text <> ".")
+      (False, [], []) -> do
         -- Spaces and pages are given in any order, a child before its
         -- parent too: the foreign keys are checked at the commit.
         execute_ c "PRAGMA defer_foreign_keys = ON"
@@ -1456,8 +1564,11 @@ importArchive st a = withDatabase st $ \c -> do
         traverse_ (insertGroup c) a.groups
         for_ (Map.toList a.membership) $ \(g, members) -> traverse_ (insertMember c g) (Set.toList members)
         insertGrants c a.grants
-        traverse_ (insertSpace c) a.spaces
         hashes <- traverse (storeBlob (attachmentsDir st.dataDir)) a.blobs
+        for_ a.spaces $ \sp ->
+          insertSpace c $ case sp.icon of
+            Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage} sp
+            _ -> sp
         for_ a.pages $ \p -> do
           insertPage c p
           insertVersion c p Nothing
@@ -1492,4 +1603,7 @@ exportArchive st app = do
   blobs <- for [(x, b) | p <- pages, x <- p.attachments, SourceBlob b <- [x.source]] $ \(x, b) ->
     maybe (Left ("The file of the attachment " <> show x.id.text <> " (" <> x.name <> ") is missing.")) (Right . (b,))
       <$> readBlob (attachmentsDir st.dataDir) b
-  pure $ (\kept -> Archive {createdAt, app, users, groups, membership, grants, spaces, pages, blobs = Map.fromList kept}) <$> sequence blobs
+  icons <- for [(sp, b) | sp <- spaces, Just (IconImage b _) <- [sp.icon]] $ \(sp, b) ->
+    maybe (Left ("The image of the icon of the space " <> show sp.id.text <> " (" <> sp.name <> ") is missing.")) (Right . (b,))
+      <$> readBlob (attachmentsDir st.dataDir) b
+  pure $ (\kept -> Archive {createdAt, app, users, groups, membership, grants, spaces, pages, blobs = Map.fromList kept}) <$> sequence (blobs <> icons)

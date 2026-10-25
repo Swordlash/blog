@@ -13,6 +13,7 @@ import Data.Aeson (FromJSON, ToJSON, decode, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.CaseInsensitive qualified as CI
+import Data.Map.Strict qualified as Map
 import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodGet, methodPost, methodPut)
 import Network.Wai (Application, defaultRequest, requestHeaders, requestMethod, responseLBS)
 import Network.Wai.Test (SRequest (..), SResponse (..), runSession, setPath, srequest)
@@ -31,7 +32,7 @@ import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))
-import Wiki.Api.Links (attachmentUrl, links, searchQueryOf, searchUrl)
+import Wiki.Api.Links (attachmentUrl, links, searchQueryOf, searchUrl, spaceIconUrl)
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
@@ -101,6 +102,15 @@ stubs =
     , spaces =
         SpacesApi
           { list = pure [Sample.space]
+          , pageCounts = pure (Map.fromList [(Sample.space.id, 5)])
+          , setProfile = \s body -> pure (Space.withProfile body Sample.space {Space.id = s})
+          , uploadIcon = \s u ->
+              pure (Space.withProfile Space.SpaceProfile {description = "", icon = Just (Space.IconImage (BlobId "b1") u.mediaType), homePage = Nothing} Sample.space {Space.id = s})
+          , icon = \s b req respond ->
+              liftIO . respond $
+                if s == Sample.space.id && b == BlobId "b1" && requestMethod req == methodGet
+                  then responseLBS (toEnum 200) [(hContentType, "image/png")] "PNG icon"
+                  else responseLBS (toEnum 404) [(hContentType, "application/json")] (encode NotFound)
           , atPath = \path -> if path == [Sample.slug "docs"] then pure Sample.space else refuse NotFound
           , create = \new -> pure Sample.space {Space.id = SpaceId "new", Space.parent = new.parent, Space.name = new.name}
           , rename = \s body -> pure Sample.space {Space.id = s, Space.name = body.name}
@@ -318,6 +328,24 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (links.spaces.setPublic s) SpacePublic {public = False}) 200 Sample.space {Space.public = False}
       answers (sendJson methodPut (links.spaces.setMathMacros s) SpaceMathMacros {mathMacros = ""}) 200 Sample.space {Space.mathMacros = ""}
       answers (sendJson methodPut (links.spaces.setOrder s) SpaceOrder {children = ChildSpaces, order = NewestFirst}) 200 Sample.space {Space.subspaceOrder = NewestFirst}
+
+    it "counts their pages, keyed by the space's id" $
+      answers (getAt links.spaces.pageCounts) 200 (Map.fromList [(s, 5 :: Int)])
+
+    it "sets a space's profile" $ do
+      let profile = Space.SpaceProfile {description = "Guides.", icon = Just (Space.IconColour "teal"), homePage = Nothing}
+      answers (sendJson methodPut (links.spaces.setProfile s) profile) 200 (Space.withProfile profile Sample.space)
+
+    it "uploads a space's icon as a multipart form, its type from its part, and serves it at the address its space names" $ do
+      r <- multipart (links.spaces.uploadIcon s) [] [("file", "icon", "image/png", "PNG!")]
+      status r `shouldBe` 200
+      let uploaded = jsonBody r :: Maybe Space.Space
+      ((\x -> x.icon) <$> uploaded) `shouldBe` Just (Just (Space.IconImage (BlobId "b1") "image/png"))
+      for_ uploaded $ \x -> do
+        spaceIconUrl x `shouldBe` "api/v1/spaces/s1/icon/b1"
+        served <- getAt (spaceIconUrl x)
+        (status served, simpleBody served, header "Content-Type" served) `shouldBe` (200, "PNG icon", Just "image/png")
+      spaceIconUrl Sample.space `shouldBe` ""
 
     it "moves one, and moves it among its siblings" $ do
       answers (sendJson methodPost (links.spaces.move s) SpaceMove {parent = Just (SpaceId "s2")}) 200 Sample.space {Space.parent = Just (SpaceId "s2")}

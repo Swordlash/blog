@@ -28,6 +28,9 @@ space i parent mathMacros =
     , position = 0
     , subspaceOrder = ByName
     , pageOrder = ByName
+    , homePage = Nothing
+    , icon = Nothing
+    , description = ""
     }
 
 -- | A tree: @maths@ defines two macros; @algebra@ under it defines one of

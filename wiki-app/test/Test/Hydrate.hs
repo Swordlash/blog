@@ -107,6 +107,8 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
     routes =
       [ Home
       , Space (path "docs")
+      , SpacePages (path "docs")
+      , Space (path "team/projects")
       , Page (path "docs") (path "tour")
       , EditPage (path "blog") (path "hello-world")
       , PageSource (path "docs") (path "tour")
@@ -217,6 +219,7 @@ apiOver providers st = do
     invited <- invitations
     server <- serverSettings
     spaces <- listSpaces
+    counts <- pageCounts
     perSpace <- for (Map.elems st.spaces) $ \s -> do
       space <- getSpace (spacePath s.id)
       pages <- listPages s.id
@@ -235,6 +238,7 @@ apiOver providers st = do
       ( Map.fromList
           ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers} :: Either WikiError SessionInfo))
               : (links.spaces.list, answerOf (Right spaces :: Either WikiError [S.Space]))
+              : (links.spaces.pageCounts, answerOf (Right counts :: Either WikiError (Map SpaceId Int)))
               : (links.admin.directory, answerOf people)
               : (links.admin.settings, answerOf settings)
               : (links.admin.invitations, answerOf invited)

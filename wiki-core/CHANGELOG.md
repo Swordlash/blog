@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+One space at a time (WP4.6). `Space` gains `homePage :: Maybe PageId` (the
+page it opens at, one of its own), `icon :: Maybe Icon` and `description ::
+Text`. `Icon` is `IconEmoji`, `IconColour` (one of `iconColours`) or
+`IconImage blob mediaType`, written as `{"emoji"}`, `{"colour"}` or
+`{"image", "mediaType"}`; `Nothing` is the default, the name's first letter
+(`iconLetter`) on `defaultColour`, picked from the space's id (`colourOf`).
+`SpaceProfile {description, icon, homePage}` with `profileOf`, `withProfile`
+(a record update of those fields cannot tell a space's from a profile's) and
+`checkProfile`; `checkIconUpload` takes PNG, JPEG, GIF, WebP and AVIF up to
+`maxIconSize` (1 MB), never SVG; `homeTitle` and `homeBody` are the home page
+a new space is made with; `topLevelOf`. The export carries the three fields
+as additive fields of a space's record, an icon's image as the file
+`icons/<space id>` (`iconFile`), and `readArchive` refuses an icon whose file
+is missing and a home page that is not one of its space's pages.
+
 Comments on pages (WP4.5). `Wiki.Core.Comment` has `Thread {id, page,
 anchor, resolved, createdAt, comments}` and `Comment {id, thread, author,
 body, createdAt, editedAt}`, the rules every backend checks (`mayComment`:

@@ -5,7 +5,8 @@
 -- the current user may do to it: read its source and its history, and
 -- present it as slides if it is written as a deck ("Wiki.Core.Slides"),
 -- which anyone who may read the page may, and, for someone who may edit it, edit it, add a page under
--- it, rename, move or delete it. The URLs of its attachments are asked of the backend
+-- it, rename, move or delete it; and, for someone who may administer its
+-- space, make it the page the space opens at ("Set as home page"). The URLs of its attachments are asked of the backend
 -- ('attachmentUrl') once per load.
 --
 -- = Comments
@@ -72,7 +73,7 @@ import Wiki.Core.Page (Page (attachments, body, id, parent, slug, space, title, 
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id, name))
+import Wiki.Core.Space (Space (description, homePage, icon, id, name), SpaceProfile (..))
 
 -- | The page at a path in a space the shell has loaded, with the space's
 -- pages (for the links between them).
@@ -149,6 +150,7 @@ data Action
   | CommentOnSelection
   | ToggleComments
   | ClickedQuote CommentThreadId
+  | SetAsHome
 
 component :: forall query m. (MonadLoad m, MonadComments m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -230,7 +232,8 @@ component =
                , button "Move" StartMove
                , button "Delete" (Open ConfirmingDelete)
                ]
-      | otherwise = [viewSource, history] <> present <> [comments]
+            <> setHome
+      | otherwise = [viewSource, history] <> present <> [comments] <> setHome
       where
         spacePath = spacePathOf input.context.spaces input.space.id
         -- For every reader: the source is theirs to read as the page is.
@@ -240,6 +243,13 @@ component =
         -- And to present it, if it is written as slides: any page can be
         -- shown so, by its address, but only a deck is offered.
         present = [Router.link input.context.router Followed (PageSlides spacePath input.path 1) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
+        -- The page the space opens at, for whoever administers the space:
+        -- offered for every page but the one it is.
+        setHome =
+          [ [hh|<button type="button" class="set-home" onClick={{ const SetAsHome }}>Set as home page</button>|]
+          | mayAdminister input.context input.space.id
+          , input.space.homePage /= Just page.id
+          ]
 
     form :: Input -> Page -> Mode -> Maybe (H.ComponentHTML Action Slots m)
     form input page = \case
@@ -488,6 +498,9 @@ component =
       ClickedQuote tid -> do
         modify (\st -> st {panelOpen = True, focused = Just tid})
         reveal ("#" <> CommentsView.threadElementId tid)
+      SetAsHome -> withPage $ \page -> do
+        space <- gets (\st -> st.input.space)
+        setSpaceProfile space.id SpaceProfile {description = space.description, icon = space.icon, homePage = Just page.id} >>= done (const Nothing)
       Delete -> withPage $ \page -> do
         input <- gets (\st -> st.input)
         let spacePath = spacePathOf input.context.spaces input.space.id

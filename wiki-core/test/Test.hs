@@ -20,6 +20,7 @@ import Test.Permission.Writes qualified as Writes
 import Test.Search qualified as Search
 import Test.Slides qualified as Slides
 import Test.Slug qualified as Slug
+import Test.Space qualified as Space
 
 main :: IO ()
 main = hspec $ do
@@ -41,3 +42,4 @@ main = hspec $ do
   Json.spec
   Anchor.spec
   Comment.spec
+  Space.spec

@@ -1,18 +1,21 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | A space: its pages as a tree, its subspaces, the math macros its pages
--- are set with, and what the current user may do to it (a new page, in the
--- editor; a new subspace, renaming it, its permissions, public or private
--- among them ("Wiki.App.View.Permissions"), giving it math macros,
--- choosing the order of its subspaces and of its pages, moving it,
--- deleting it). An action the rules forbid is not offered; the backend
--- checks the rules again, and a refusal is shown in place.
+-- | A space's pages and subspaces (its route 'SpacePages', and the space's
+-- own route for a space without a home page): its icon, name and
+-- description, its pages as a tree, its subspaces, the math macros its
+-- pages are set with, and what the current user may do to it (a new page,
+-- in the editor; a new subspace, its settings ("Wiki.App.View.SpaceSettings":
+-- its name, description, icon and home page, and its permissions, public or
+-- private among them), giving it math macros, choosing the order of its
+-- subspaces and of its pages, moving it, deleting it). An action the rules
+-- forbid is not offered; the backend checks the rules again, and a refusal
+-- is shown in place.
 --
--- __Permissions__ are a section of their own, opened from the actions: it
--- reads the space's grants, which nothing else shows, so it is read only
--- when it is asked for; the page a prerender or the server shows has it
--- closed. It stays open while the shell reloads the wiki after a change
--- made there, for as long as its user may administer the space.
+-- __Settings__ are a section of their own, opened from the actions: their
+-- permissions read the space's grants, which nothing else shows, so they
+-- are read only when asked for; the page a prerender or the server shows
+-- has them closed. They stay open while the shell reloads the wiki after a
+-- change made there, for as long as their user may administer the space.
 --
 -- __Order__ ("Wiki.Core.Order"): the pages and the subspaces are listed in
 -- the orders the space has, which whoever administers it chooses here. An
@@ -49,14 +52,14 @@ import Wiki.App.Islands (Island (..), MonadIslands (..))
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
-import Wiki.App.View.Permissions qualified as Permissions
+import Wiki.App.View.SpaceSettings qualified as SpaceSettings
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Math (Macros (..), spaceMacros)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, orderName)
 import Wiki.Core.Page (Page (id, title))
 import Wiki.Core.Permission (mayCreateSpace, mayMoveSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), subspacesOf)
+import Wiki.Core.Space (Space (description, id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), subspacesOf)
 
 -- | The space, as the shell has loaded it, with its pages.
 data Input = Input
@@ -67,7 +70,6 @@ data Input = Input
 
 data Mode
   = Viewing
-  | Renaming Text
   | -- | Moving to the destination at this index of 'destinations'.
     Moving Int
   | ConfirmingDelete
@@ -76,8 +78,8 @@ data Mode
     EditingMacros Text (Maybe Text) Text
   | -- | Choosing the orders: of the subspaces, and of the pages.
     Ordering ChildOrder ChildOrder
-  | -- | Who may do what on the space.
-    ManagingPermissions
+  | -- | Its settings: its profile, and who may do what on it.
+    ManagingSettings
   deriving stock (Eq)
 
 data State = State
@@ -88,20 +90,19 @@ data State = State
 
 -- | The formula the macros are tried on, set as the space's pages would
 -- set it.
-type Slots = ("island" .== H.Slot (Const Void) Void ()) .+ ("permissions" .== H.Slot (Const Void) ViewOutput ())
+type Slots = ("island" .== H.Slot (Const Void) Void ()) .+ ("settings" .== H.Slot (Const Void) ViewOutput ())
 
 data Action
   = Receive Input
   | Followed (Follow Route)
   | Open Mode
-  | Typed Text
   | Chose Int
   | EditMacros
   | TypedMacros Text
   | TypedSample Text
   | Submit
-  | TogglePermissions
-  | FromPermissions ViewOutput
+  | ToggleSettings
+  | FromSettings ViewOutput
   | Delete
   | EditOrder
   | ChoseOrder Children Int
@@ -121,12 +122,13 @@ component =
     render State {input = Input {context = ctx, space, pages}, mode, problem} =
       [hh|
         <section class="space-view">
-          <header class="view-header">
-            <h1>{{ space.name }}</h1>
+          <header class="view-header space-header">
+            {{ spaceIcon ctx.icons space }}<h1>{{ space.name }}</h1>
             <span class="badge {{ if space.public then "badge-public" else "badge-private" :: Text }}">{{ if space.public then "Public" else "Private" :: Text }}</span>
           </header>
+          {% if not (T.null space.description) %}<p class="space-description">{{ space.description }}</p>{% end %}
           <div class="actions">{{ actions ctx space mode }}</div>
-          {{ form ctx space mode }}{{ errorView <$> problem }}{{ macrosView ctx space }}
+          {{ form ctx space pages mode }}{{ errorView <$> problem }}{{ macrosView ctx space }}
           <h2>Pages</h2>
           {{ pageList }}{{ subspaces ctx space }}
         </section>
@@ -144,8 +146,7 @@ component =
         <> [ Router.link ctx.router Followed (NewSpace (Just path)) [HP.class_ "button"] [HH.text "New subspace"]
            | mayCreateSpace (principalOf ctx) (grantsOf ctx) (Just (chainOf ctx space.id))
            ]
-        <> [button "Rename" (Open (Renaming space.name)) | admin]
-        <> [ [hh|<button type="button" class="permissions-toggle" aria-expanded={{ ariaBool managing }} onClick={{ const TogglePermissions }}>Permissions</button>|]
+        <> [ [hh|<button type="button" class="space-settings-toggle" aria-expanded={{ ariaBool managing }} onClick={{ const ToggleSettings }}>Space settings</button>|]
            | admin
            ]
         <> [button "Math macros" EditMacros | admin]
@@ -155,13 +156,12 @@ component =
       where
         admin = mayAdminister ctx space.id
         path = spacePathOf ctx.spaces space.id
-        managing = mode == ManagingPermissions
+        managing = mode == ManagingSettings
 
-    form :: Context -> Space -> Mode -> Maybe (H.ComponentHTML Action Slots m)
-    form ctx space = \case
+    form :: Context -> Space -> [Page] -> Mode -> Maybe (H.ComponentHTML Action Slots m)
+    form ctx space pages = \case
       Viewing -> Nothing
-      ManagingPermissions -> Just (HH.slot "permissions" () Permissions.component Permissions.Input {context = ctx, space} FromPermissions)
-      Renaming name -> Just (inForm (textField "New name" name Typed) "Rename")
+      ManagingSettings -> Just (HH.slot "settings" () SpaceSettings.component SpaceSettings.Input {context = ctx, space, pages} FromSettings)
       Moving chosen ->
         Just $
           inForm
@@ -286,15 +286,12 @@ component =
         -- The permissions stay open after a change made there, for whoever
         -- still administers the space.
         mode <- gets (\st -> st.mode)
-        let staying = mode == ManagingPermissions && old.space.id == input.space.id && mayAdminister input.context input.space.id
+        let staying = mode == ManagingSettings && old.space.id == input.space.id && mayAdminister input.context input.space.id
         if old.space.id /= input.space.id || old.context.revision /= input.context.revision
-          then put State {input, mode = if staying then ManagingPermissions else Viewing, problem = Nothing}
+          then put State {input, mode = if staying then ManagingSettings else Viewing, problem = Nothing}
           else modify (\st -> st {input})
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       Open mode -> modify (\st -> st {mode, problem = Nothing})
-      Typed t -> modify $ \st -> case st.mode of
-        Renaming _ -> st {mode = Renaming t}
-        other -> st {mode = other}
       Chose n -> modify (\st -> st {mode = Moving n})
       EditOrder -> do
         space <- gets (\st -> st.input.space)
@@ -322,7 +319,6 @@ component =
       Submit -> do
         State {input = Input {context = ctx, space}, mode} <- get
         case mode of
-          Renaming name -> renameSpace space.id name >>= done (const Nothing)
           EditingMacros block _ sample ->
             -- Checked again as it is saved, not taken from the last
             -- keystroke's check: the spaces above may have changed since.
@@ -341,9 +337,9 @@ component =
           Moving n -> for_ (atMay (destinations ctx space) n) $ \destination ->
             moveSpace space.id (map (\d -> d.id) destination) >>= done (\moved -> Just (Space (destinationPath ctx destination <> [moved.slug])))
           _ -> pass
-      TogglePermissions -> modify $ \st ->
-        st {mode = if st.mode == ManagingPermissions then Viewing else ManagingPermissions, problem = Nothing}
-      FromPermissions out -> H.raise out
+      ToggleSettings -> modify $ \st ->
+        st {mode = if st.mode == ManagingSettings then Viewing else ManagingSettings, problem = Nothing}
+      FromSettings out -> H.raise out
       Delete -> do
         Input {context = ctx, space} <- gets (\st -> st.input)
         let parentRoute = maybe Home (Space . spacePathOf ctx.spaces) space.parent

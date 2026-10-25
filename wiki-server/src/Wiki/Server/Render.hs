@@ -139,6 +139,7 @@ statusOf at c = case at of
   _ | maybe False shutOut c.session -> status401
   Unknown -> status404
   Space s -> ofSpace s
+  SpacePages s -> ofSpace s
   Page s p -> ofSpace s `unlessRefused` ofPage s p
   EditPage s p -> ofSpace s `unlessRefused` ofPage s p
   PageSource s p -> ofSpace s `unlessRefused` ofPage s p

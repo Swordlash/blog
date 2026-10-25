@@ -19,7 +19,7 @@ import Wiki.Api (AdminApi (..), ArchiveApi (..), PagesApi (..), SpacesApi (..), 
 import Wiki.Api.Admin (ServerStatus (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Import
-import Wiki.Api.Links (attachmentUrl, links)
+import Wiki.Api.Links (attachmentUrl, links, spaceIconUrl)
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
 import Wiki.Core.Access (Access (..))
@@ -31,7 +31,7 @@ import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), withProfile)
 import Wiki.Core.User (User (..))
 import Wiki.Server.Storage.Blobs (blobOf)
 
@@ -42,6 +42,7 @@ spec = describe "export and import" $ do
   conflicts
   choices
   roundTrip
+  profiles
   refusals
 
 -- | The admin listener's address of an endpoint.
@@ -73,6 +74,9 @@ spaceWith i parent s public mathMacros subspaceOrder pageOrder =
     , position = 0
     , subspaceOrder
     , pageOrder
+    , homePage = Nothing
+    , icon = Nothing
+    , description = ""
     }
 
 -- | A page of an archive: its id, its space's, its parent's, its slug, and
@@ -197,7 +201,8 @@ merging = describe "a space at the same path" $ do
     merged <- spaceAt r ["docs"]
     (merged.id, merged.public, merged.subspaceOrder, merged.mathMacros) `shouldBe` (ours.id, True, ByName, "\\R: \\mathbb{R}")
     pages <- ok200 (getUrl r (admin r (links.spaces.listPages ours.id)))
-    [(p.title, p.position) | (p :: Page) <- pages] `shouldBe` [("Intro", intro.position), ("Title of guide", intro.position + 1), ("Title of tour", intro.position + 2)]
+    -- The space's home page first, made with it.
+    [(p.title, p.position) | (p :: Page) <- pages] `shouldBe` [("Home", 0), ("Intro", intro.position), ("Title of guide", intro.position + 1), ("Title of tour", intro.position + 2)]
 
   it "keeps the server's math macros when it has some" $ withRunning $ \r -> do
     ours <- makeSpace r "docs"
@@ -280,6 +285,46 @@ roundTrip = describe "an export" $ do
               pure (s.name, s.slug, [(p.title, p.slug, p.body, map (\a -> (a.name, a.source)) p.attachments) | (p :: Page) <- pages])
       expected <- shape origin
       shape copy `shouldReturn` expected
+
+-- | The docs of the tests with a profile: a description, an image for its
+-- icon, and the tour for its home page.
+profiled :: Archive
+profiled =
+  docs
+    { spaces = [if s.id == SpaceId "s1" then withProfile SpaceProfile {description = "Guides.", icon = Just (IconImage (BlobId "b2") "image/png"), homePage = Just (PageId "p1")} s else s | s <- docs.spaces]
+    , blobs = docs.blobs <> Map.fromList [(BlobId "b2", "ICON")]
+    }
+
+profiles :: Spec
+profiles = describe "a space's profile" $ do
+  it "comes in with a new space: its description, its icon's image, and its home page as the page it became" $ withRunning $ \r -> do
+    _ <- apply r profiled importEverything
+    made <- spaceAt r ["docs"]
+    tour <- pageAt r ["docs"] ["tour"]
+    (made.description, made.homePage) `shouldBe` ("Guides.", Just tour.id)
+    case made.icon of
+      Just (IconImage b mediaType) -> (b, mediaType) `shouldBe` (blobOf "ICON", "image/png")
+      other -> expectationFailure ("not an image: " <> show other)
+    served <- getUrl r (admin r (spaceIconUrl made))
+    (served.status, served.body) `shouldBe` (200, "ICON")
+    -- And goes out again with an export, the image among the files.
+    exported <- getUrl r (admin r links.archive.export)
+    back <- either (assertFailure . toS) pure (unzipFiles (BSL.toStrict exported.body) >>= readArchive)
+    [(s.description, isJust s.homePage, Map.lookup (blobOf "ICON") back.blobs) | s <- back.spaces, s.name == made.name] `shouldBe` [("Guides.", True, Just "ICON")]
+
+  it "fills in what a merged space has none of, and keeps what it has" $ withRunning $ \r -> do
+    ours <- makeSpace r "docs"
+    _ <- apply r profiled importEverything
+    merged <- spaceAt r ["docs"]
+    -- Its own home page, made with it; the archive's description and icon,
+    -- which it had none of.
+    (merged.homePage, merged.description) `shouldBe` (ours.homePage, "Guides.")
+    (\case Just (IconImage _ _) -> True; _ -> False) merged.icon `shouldBe` True
+    _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setProfile ours.id)) SpaceProfile {description = "Ours.", icon = Just (IconEmoji "🦉"), homePage = Nothing})
+    _ <- apply r profiled importEverything
+    again <- spaceAt r ["docs"]
+    tour <- pageAt r ["docs"] ["tour"]
+    (again.description, again.icon, again.homePage) `shouldBe` ("Ours.", Just (IconEmoji "🦉"), Just tour.id)
 
 refusals :: Spec
 refusals = describe "export and import" $ do

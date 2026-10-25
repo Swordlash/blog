@@ -27,6 +27,8 @@ module Wiki.App.View.Common
   , failureView
   , errorMessage
   , pageTree
+  , spaceIcon
+  , homeOf
   , moveButtons
   , button
   , textField
@@ -36,6 +38,8 @@ module Wiki.App.View.Common
   )
 where
 
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow, Router)
@@ -51,17 +55,19 @@ import Wiki.Core.Page (Page (id, slug, title), childPages)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (Grants, Principal, canAdministerSpace, canEdit, canView, spaceChain)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (id, slug))
+import Wiki.Core.Space (Icon (..), Space (homePage, icon, id, name, slug), colourOf, iconLetter)
 
 -- | What the shell knows that every view needs: the router, who is asking,
--- and the tree of spaces ('Wiki.App.Backend.listSpaces'), with a revision
--- that the shell counts up whenever it has reloaded them because something
--- changed (a write, another user), so that a view knows to reload what it
--- holds too.
+-- and the tree of spaces ('Wiki.App.Backend.listSpaces'), with where the
+-- images of those pictured with one are fetched from
+-- ('Wiki.App.Backend.spaceIconUrl'), and a revision that the shell counts
+-- up whenever it has reloaded them because something changed (a write,
+-- another user), so that a view knows to reload what it holds too.
 data Context = Context
   { router :: Router Route
   , session :: Session
   , spaces :: [Space]
+  , icons :: Map SpaceId Text
   , revision :: Int
   }
 
@@ -169,6 +175,23 @@ pageTree router onFollow spacePath order pages current controls = level Nothing
           |]
     pageLink p here = Router.link router onFollow (Page spacePath (pagePathOf pages p.id)) [attr "aria-current" "page" | here] [HH.text p.title]
     below p = [level (Just p.id) | not (null (childrenOf pages (Just p.id)))]
+
+-- | How a space is pictured beside its name ('Wiki.Core.Space.Icon'): its
+-- emoji, its image (from where the context says it is fetched), or the
+-- first letter of its name on its colour. Decoration only: the name is
+-- always beside it, so a screen reader is not told it twice.
+spaceIcon :: Map SpaceId Text -> Space -> HH.HTML w i
+spaceIcon urls s = case s.icon of
+  Just (IconEmoji e) -> [hh|<span class="space-icon space-icon-emoji" aria-hidden="true">{{ e }}</span>|]
+  Just (IconImage _ _)
+    | Just url <- Map.lookup s.id urls
+    , not (T.null url) ->
+        [hh|<img class="space-icon space-icon-image" src={{ url }} alt="" aria-hidden="true">|]
+  _ -> [hh|<span class="space-icon space-icon-{{ colourOf s }}" aria-hidden="true">{{ iconLetter s.name }}</span>|]
+
+-- | The page a space opens at, if it has one among its pages.
+homeOf :: Space -> [Page] -> Maybe Page
+homeOf s pages = s.homePage >>= \h -> find (\p -> p.id == h) pages
 
 -- | Buttons that move a child of a space by hand: to the top, up, down, to
 -- the bottom, told whether it is the first and the last of its siblings

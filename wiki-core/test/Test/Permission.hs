@@ -29,6 +29,9 @@ space s parent public =
     , position = 0
     , subspaceOrder = ByName
     , pageOrder = ByName
+    , homePage = Nothing
+    , icon = Nothing
+    , description = ""
     }
 
 -- | Two private trees and a public one:

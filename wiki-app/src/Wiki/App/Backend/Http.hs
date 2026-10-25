@@ -381,6 +381,15 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   renameSpace sid name = write (withJson "PUT" (links.spaces.rename sid) SpaceName {name})
   setSpacePublic sid public = write (withJson "PUT" (links.spaces.setPublic sid) SpacePublic {public})
   setSpaceMathMacros sid mathMacros = write (withJson "PUT" (links.spaces.setMathMacros sid) SpaceMathMacros {mathMacros})
+  setSpaceProfile sid profile = write (withJson "PUT" (links.spaces.setProfile sid) profile)
+
+  -- The image's file name is not looked at; the part's media type is the
+  -- image's.
+  uploadSpaceIcon sid mediaType bytes = write (multipart (links.spaces.uploadIcon sid) attachmentPart "icon" mediaType bytes)
+
+  -- At an address of the API's, as an attachment's bytes are.
+  spaceIconUrl = pure . Links.spaceIconUrl
+  pageCounts = orThrow (cachedAlways (\c -> c.pageCounts) (R.get links.spaces.pageCounts) withPageCounts)
 
   -- Not kept: it is read when the space's permissions are opened, which
   -- the server never renders, and read again after every change there.

@@ -136,17 +136,45 @@ one's login, and a right one clears the count as signing in does. Passwords are 
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | GET | `api/v1/spaces` | | `[Space]`, every space the user may view with its ancestors, each before its subspaces | | `listSpaces` |
+| GET | `api/v1/spaces/page-counts` | | `{"<space id>": n, …}`, how many pages each space the user may view has (not the ancestors listed for their names) | | `pageCounts` |
 | GET | `api/v1/spaces/at/<slug>/<slug>…` | | `Space` at that path from the top level | 404, 403 | `getSpace` |
-| POST | `api/v1/spaces` | `NewSpace` `{"parent": id or null, "name"}` | 201 `Space` | 404, 403, 400 | `createSpace` |
+| POST | `api/v1/spaces` | `NewSpace` `{"parent": id or null, "name"}` | 201 `Space`, with its home page made | 404, 403, 400 | `createSpace` |
 | PUT | `api/v1/spaces/<space>/name` | `SpaceName` `{"name"}` | `Space` | 404, 403, 400 | `renameSpace` |
 | PUT | `api/v1/spaces/<space>/public` | `SpacePublic` `{"public": bool}` | `Space` | 404, 403 | `setSpacePublic` |
 | PUT | `api/v1/spaces/<space>/math-macros` | `SpaceMathMacros` `{"mathMacros"}` | `Space` | 404, 403 | `setSpaceMathMacros` |
+| PUT | `api/v1/spaces/<space>/profile` | `SpaceProfile` `{"description", "icon": icon or null, "homePage": page id or null}` | `Space` | 404, 403, 400 | `setSpaceProfile` |
+| POST | `api/v1/spaces/<space>/icon` | multipart form, one file part named `file`: its `Content-Type` the image's media type, its file name not looked at | `Space`, its icon the image | 404, 403, 400 (not a PNG, JPEG, GIF, WebP or AVIF image, empty, or over 1 MB) | `uploadSpaceIcon` |
+| GET, HEAD | `api/v1/spaces/<space>/icon/<blob>` | | the image's bytes, with its media type | 404, 403 | `spaceIconUrl` gives this address |
 | PUT | `api/v1/spaces/<space>/order` | `SpaceOrder` `{"children": "ChildSpaces" or "ChildPages", "order": "ByName", "NewestFirst", "OldestFirst" or "ByHand"}` | `Space` | 404, 403 | `setSpaceOrder` |
 | POST | `api/v1/spaces/<space>/move` | `SpaceMove` `{"parent": id or null}` | `Space` | 404, 403, 400 | `moveSpace` |
 | POST | `api/v1/spaces/<space>/shift` | `ShiftBy` `{"shift": "ShiftUp", "ShiftDown", "ShiftToTop" or "ShiftToBottom"}` | `Space`, with its new position | 404, 403, 400 | `shiftSpace` |
 | DELETE | `api/v1/spaces/<space>` | | 204 | 404, 403 | `deleteSpace` |
 | GET | `api/v1/spaces/<space>/grants` | | `SpaceAccess` `{"grants", "users", "groups"}`: the grants on the space and then on each of its ancestors, up (each `SpaceGrant` `{"space", "subject", "permission"}` names the space it is on), every `User` by login and every `Group` by name | 404, 403 | `spaceAccess` |
 | PUT | `api/v1/spaces/<space>/grants` | `SpaceGrantChange` `{"subject", "permission", "granted": bool}` | 204 | 404, 403, 400 | `setSpaceGrant` |
+
+A `Space` is `{"id", "name", "slug", "parent", "public", "mathMacros",
+"createdAt", "position", "subspaceOrder", "pageOrder", "homePage", "icon",
+"description"}`. Its `homePage` is the id of the page it opens at, one of its
+own, or `null`; a space made through the API comes with one, a page titled
+"Home" whose first version is its creator's, and a page that is deleted, or
+moved to another space, leaves its space without one. Its `icon` is `null`
+for the default (the first letter of its name on a colour picked from its
+id), `{"emoji": "📘"}`, `{"colour": "teal"}` (one of
+`Wiki.Core.Space.iconColours`: blue, teal, green, olive, orange, red, pink,
+purple, indigo, slate) or `{"image": <blob>, "mediaType": "image/png"}`, an
+uploaded image, fetched at the address above (`Wiki.Api.Links.spaceIconUrl`),
+which names the blob so that a new image is at a new address. Its
+`description` is plain text, empty for none, at most 500 characters.
+
+A space's profile and icon are set by whoever administers it, checked as
+`Wiki.Core.Space.checkProfile` checks them, after the permission: a home page
+that is not one of the space's pages, a colour not in the palette, an emoji
+that is blank, longer than 16 characters or has a space in it, and an image
+the space does not have already are 400. An image is uploaded, never named:
+a profile names one only to keep the image the space has, and one that names
+another kind of icon lets the image go. The image is kept under its hash, as
+an attachment's bytes are, and served as they are (`nosniff`, sandboxed),
+to whoever may view the space.
 
 A space's grants are read and changed by whoever administers it
 (`AdministerSpace` on it or an ancestor, or the global `administer`). A

@@ -38,6 +38,18 @@
   --h-blue: #dbefff;
   --h-pink: #ffe2ef;
   --h-purple: #ece4ff;
+  /* The colours a space's icon may be (Wiki.Core.Space.iconColours), each
+     with white text of at least 4.5:1 on it, in both schemes. */
+  --icon-blue: #0b5cad;
+  --icon-teal: #0b6b66;
+  --icon-green: #1d6b34;
+  --icon-olive: #5c6416;
+  --icon-orange: #9a4a0b;
+  --icon-red: #b3262d;
+  --icon-pink: #a3306f;
+  --icon-purple: #6b3fbf;
+  --icon-indigo: #3d4bb0;
+  --icon-slate: #4b5563;
   /* A diff: a line taken out and one put in, and the words changed in it. */
   --diff-removed: #ffebe9;
   --diff-removed-word: #ffc1bc;
@@ -389,48 +401,205 @@ select {
   }
 }
 
-/* ---- Trees of spaces and pages ------------------------------------------ */
+/* ---- Spaces and their pages in the sidebar -------------------------------- */
 
-.space-tree,
 .page-tree {
   margin: 0;
   padding-left: 0.9rem;
   list-style: none;
 }
 
-.wiki-sidebar > .space-tree {
-  padding-left: 0;
-}
-
-.space-row {
-  display: flex;
-  align-items: center;
-  gap: 0.15rem;
-  padding: 0.1rem 0;
-}
-
-.tree-toggle {
-  width: 1.2rem;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-/* A space without subspaces lines up with those that have a toggle. */
-.space-row > :first-child:not(.tree-toggle) {
-  margin-left: 1.35rem;
-}
-
-.space-node.current > .space-row a,
 .page-node.current > a {
   font-weight: 600;
   color: var(--text);
 }
 
-.wiki-sidebar .page-tree {
-  margin: 0.1rem 0 0.3rem 1.35rem;
+/* A space's icon (Wiki.Core.Space.Icon): its emoji, its image, or the first
+   letter of its name on its colour; a square the size of a line of its
+   text, bigger where a heading or a card has it. */
+.space-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 0.3em;
+  font-size: 1em;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1;
+  color: #ffffff;
+  vertical-align: middle;
+  overflow: hidden;
+}
+
+.space-icon-emoji {
+  color: inherit;
+  font-size: 1.15em;
+  font-weight: normal;
+}
+
+.space-icon-image {
+  object-fit: cover;
+  background: var(--surface);
+}
+
+.space-icon-blue {
+  background: var(--icon-blue);
+}
+
+.space-icon-teal {
+  background: var(--icon-teal);
+}
+
+.space-icon-green {
+  background: var(--icon-green);
+}
+
+.space-icon-olive {
+  background: var(--icon-olive);
+}
+
+.space-icon-orange {
+  background: var(--icon-orange);
+}
+
+.space-icon-red {
+  background: var(--icon-red);
+}
+
+.space-icon-pink {
+  background: var(--icon-pink);
+}
+
+.space-icon-purple {
+  background: var(--icon-purple);
+}
+
+.space-icon-indigo {
+  background: var(--icon-indigo);
+}
+
+.space-icon-slate {
+  background: var(--icon-slate);
+}
+
+
+/* A list of spaces, each its icon and name: the sidebar's outside a space,
+   and a space's subspaces in it. */
+.sidebar-spaces,
+.sidebar-subspaces,
+.sidebar-links {
+  margin: 0 0 0.8rem;
+  padding: 0;
+  list-style: none;
+}
+
+.sidebar-spaces li,
+.sidebar-subspaces li,
+.sidebar-links li {
+  padding: 0.12rem 0;
+}
+
+.space-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+/* Inside a space: the way back to every space and to another, the space
+   itself, the way up from a subspace, its home page and its pages. */
+.space-switcher {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.85rem;
+}
+
+.space-switcher-toggle {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.space-switcher-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0.25rem 0 0;
+  padding: 0.3rem;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.15);
+}
+
+.space-switcher-option {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 6px;
+}
+
+.space-switcher-option:hover {
+  text-decoration: none;
+  background: var(--surface);
+}
+
+.space-switcher-option[aria-current="true"] {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sidebar-space {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.3rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sidebar-space .space-icon {
+  font-size: 1.15rem;
+}
+
+.sidebar-up {
+  display: inline-block;
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.sidebar-up::before {
+  content: "↑ ";
+}
+
+.sidebar-links a[aria-current="page"] {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wiki-sidebar h2 + .empty {
+  margin: 0 0 0.8rem;
+  color: var(--muted);
+}
+
+.wiki-sidebar > .page-tree {
+  margin: 0 0 0.8rem;
+  padding-left: 0;
+}
+
+.wiki-sidebar .page-tree .page-tree {
+  margin: 0.1rem 0 0.2rem 0.35rem;
   padding-left: 0.6rem;
   border-left: 1px solid var(--border);
 }
@@ -585,6 +754,202 @@ select {
   padding: 0.75rem 1rem;
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* ---- The directory of spaces ----------------------------------------------- */
+
+.directory-header {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.directory-intro {
+  color: var(--muted);
+}
+
+.directory h2 {
+  margin: 1.5rem 0 0.6rem;
+  font-size: 1.05rem;
+}
+
+.recent-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recent-space {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.7rem 0.3rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.recent-space:hover {
+  text-decoration: none;
+  border-color: var(--accent);
+}
+
+.space-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.9rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.space-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+}
+
+.space-card:has(a.space-card-link:hover) {
+  border-color: var(--accent);
+}
+
+.space-card-link {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.space-card-link .space-icon {
+  font-size: 1.35rem;
+}
+
+.space-card-description {
+  flex: 1;
+  margin: 0;
+  color: var(--text);
+}
+
+.space-card-meta {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.space-card-meta .badge {
+  margin-left: 0;
+}
+
+.space-card-unviewable .space-card-description {
+  color: var(--muted);
+}
+
+/* ---- A space's pages and settings ------------------------------------------ */
+
+.space-header {
+  align-items: center;
+}
+
+.space-header .space-icon {
+  font-size: 1.6rem;
+}
+
+.space-description {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+}
+
+.space-settings {
+  margin: 1rem 0;
+  padding: 0.6rem 1rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.space-settings > h2 {
+  margin: 0 0 0.5rem;
+}
+
+.space-settings .space-permissions {
+  margin: 1rem 0 0;
+  padding: 0.8rem 0 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.space-profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.space-profile-form textarea {
+  width: 100%;
+  font: inherit;
+}
+
+.field-hint {
+  margin: -0.2rem 0 0.4rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.icon-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  margin: 0.2rem 0 0.4rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.icon-field legend {
+  padding: 0 0.3rem;
+  font-weight: 600;
+}
+
+.icon-field .field-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.icon-preview .space-icon {
+  font-size: 2rem;
+}
+
+.icon-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+}
+
+.icon-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.icon-emoji {
+  width: 5rem;
+}
+
+.icon-upload input[type="file"] {
+  display: none;
+}
+
+.settings-saved {
+  margin-left: 0.6rem;
+  color: var(--tip);
 }
 
 /* ---- Search --------------------------------------------------------------- */

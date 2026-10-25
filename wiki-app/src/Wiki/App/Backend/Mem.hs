@@ -72,7 +72,8 @@ import Wiki.App.Backend.Mem.State
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive)
-import Wiki.Core.Id (UserId)
+import Wiki.Core.Id (BlobId, UserId)
+import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.User (User (..))
 
 -- The browser's half of the attachments uploaded into the demo; see
@@ -168,6 +169,12 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   renameSpace sid = write . renameSpaceIn sid
   setSpacePublic sid = write . setSpacePublicIn sid
   setSpaceMathMacros sid = write . setSpaceMathMacrosIn sid
+  setSpaceProfile sid = write . setSpaceProfileIn sid
+  uploadSpaceIcon sid mediaType = write . uploadSpaceIconIn sid mediaType
+  spaceIconUrl s = case s.icon of
+    Just (IconImage blob mediaType) -> blobUrl mediaType blob
+    _ -> pure ""
+  pageCounts = query pageCountsIn
   spaceAccess = query . spaceAccessIn
   setSpaceGrant sid subject permission = write . setSpaceGrantIn sid subject permission
   moveSpace sid = write . moveSpaceIn sid
@@ -195,24 +202,30 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   restoreVersion pid at base = writeAt (restoreVersionIn pid at base)
   attachmentUrl a = case a.source of
     SourceUrl url -> pure url
-    SourceBlob blob ->
-      readState >>= \st -> case (Map.lookup blob st.objectUrls, Map.lookup blob st.blobs) of
-        (Just url, _) -> pure url
-        (Nothing, Nothing) -> pure ""
-        (Nothing, Just bytes) -> do
-          made <- liftIO (objectUrl a.mediaType (Base64.encode bytes))
-          -- Two calls at once can each make a URL; the one stored first
-          -- wins, and the other is let go so that its bytes are not kept.
-          MemWiki $ do
-            env <- ask
-            liftIO $ do
-              kept <- atomicModifyIORef' env.wiki $ \s -> case Map.lookup blob s.objectUrls of
-                Just url -> (s, url)
-                Nothing
-                  | Map.member blob s.blobs -> (s {objectUrls = Map.insert blob made s.objectUrls}, made)
-                  | otherwise -> (s, made)
-              when (kept /= made) (js_revoke_object_url (toJSText made))
-              pure kept
+    SourceBlob blob -> blobUrl a.mediaType blob
+
+-- | The address of bytes the store keeps, of a media type: an object URL,
+-- made the first time it is asked for and kept; the empty text for bytes
+-- the store does not have.
+blobUrl :: (MonadIO m) => Text -> BlobId -> MemWiki m Text
+blobUrl mediaType blob =
+  readState >>= \st -> case (Map.lookup blob st.objectUrls, Map.lookup blob st.blobs) of
+    (Just url, _) -> pure url
+    (Nothing, Nothing) -> pure ""
+    (Nothing, Just bytes) -> do
+      made <- liftIO (objectUrl mediaType (Base64.encode bytes))
+      -- Two calls at once can each make a URL; the one stored first
+      -- wins, and the other is let go so that its bytes are not kept.
+      MemWiki $ do
+        env <- ask
+        liftIO $ do
+          kept <- atomicModifyIORef' env.wiki $ \s -> case Map.lookup blob s.objectUrls of
+            Just url -> (s, url)
+            Nothing
+              | Map.member blob s.blobs -> (s {objectUrls = Map.insert blob made s.objectUrls}, made)
+              | otherwise -> (s, made)
+          when (kept /= made) (js_revoke_object_url (toJSText made))
+          pure kept
 
 -- | The administration's, on the same store: its writes are kept as every
 -- other write is, the groups and the global grants being records of the

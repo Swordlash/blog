@@ -7,6 +7,7 @@
 --
 -- > /                              Home
 -- > /s/team/projects/              Space [team, projects]
+-- > /s/team/projects/pages/        SpacePages [team, projects]
 -- > /s/docs/p/markdown-guide/      Page [docs] [markdown-guide]
 -- > /s/docs/p/tour/edit/           EditPage [docs] [tour]
 -- > /s/docs/p/tour/source/         PageSource [docs] [tour]
@@ -34,8 +35,8 @@
 --
 -- A space's path and a page's path are separated by the segment @p@, an
 -- edit route ends in @edit@, a page's source in @source@, its history in
--- @history@, its slides in @slides@, and a new page's
--- route has @new-page@ after the space's path; a slug may be any of these
+-- @history@, its slides in @slides@, a space's list of pages in @pages@,
+-- and a new page's route has @new-page@ after the space's path; a slug may be any of these
 -- words too (a page titled "P"), so
 -- a slug that is one of them is written with a @~@ before it (@\/s\/~p\/@),
 -- which no slug can start with. That keeps every route's
@@ -74,8 +75,13 @@ import Wiki.Core.Space (Space (slug))
 data Route
   = -- | The front page: the top-level spaces.
     Home
-  | -- | A space, by its path from the top level: its pages and subspaces.
+  | -- | A space, by its path from the top level: entering it, which shows
+    -- its home page ('Wiki.Core.Space.homePage'), or, for a space without
+    -- one, its list of pages ('SpacePages').
     Space [Slug]
+  | -- | A space's pages and subspaces, with what may be done to it (its
+    -- settings among them), by its path.
+    SpacePages [Slug]
   | -- | A page: its space's path, and its own path among the space's pages.
     Page [Slug] [Slug]
   | -- | The editor for a page: its space's path, and its own path there.
@@ -128,14 +134,15 @@ data Against
 
 -- | The routes' codec. Parsing tries the routes in this order and takes the
 -- first that reads the whole path; since a slug is never @p@, @edit@,
--- @source@, @history@, @slides@ or @new-page@ as written, no address reads
--- as two routes.
+-- @source@, @history@, @slides@, @pages@ or @new-page@ as written, no
+-- address reads as two routes.
 route :: RouteDuplex' Route
 route =
   root $
     alternatives
       [ alternative (\case Home -> Just (); _ -> Nothing) (const Home) noArgs
       , alternative (\case Space s -> Just s; _ -> Nothing) Space (prefix "s" (directory slugs))
+      , alternative (\case SpacePages s -> Just s; _ -> Nothing) SpacePages (prefix "s" (directory (suffix slugs "pages")))
       , alternative
           (\case Page s p -> Just (s, p); _ -> Nothing)
           (uncurry Page)
@@ -222,7 +229,7 @@ slugs :: RouteDuplex' [Slug]
 slugs = many1 slugSegment
 
 -- | A slug as a segment, with the route's own words (@p@, @edit@, @source@,
--- @history@, @slides@, @new-page@) escaped.
+-- @history@, @slides@, @pages@, @new-page@) escaped.
 slugSegment :: RouteDuplex' Slug
 slugSegment = as written readSlug segment
   where
@@ -232,7 +239,7 @@ slugSegment = as written readSlug segment
       _
         | t `elem` reserved -> Left (t <> " separates paths here")
         | otherwise -> first show (mkSlug t)
-    reserved = ["p", "edit", "source", "history", "slides", "new-page"] :: [Text]
+    reserved = ["p", "edit", "source", "history", "slides", "pages", "new-page"] :: [Text]
 
 -- | A route's address ends in a slash ('route' says why), and is read
 -- without one too.

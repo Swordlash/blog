@@ -26,6 +26,7 @@ module Wiki.App.Backend.Mem.State
   , insertSpace
   , setMathMacros
   , setOrder
+  , setProfile
   , insertPage
   , attachBytes
   , attachUrl
@@ -35,6 +36,7 @@ module Wiki.App.Backend.Mem.State
   , spaceAccessIn
   , listSpacesIn
   , getSpaceIn
+  , pageCountsIn
   , listPagesIn
   , getPageIn
   , searchPagesIn
@@ -48,6 +50,8 @@ module Wiki.App.Backend.Mem.State
   , renameSpaceIn
   , setSpacePublicIn
   , setSpaceMathMacrosIn
+  , setSpaceProfileIn
+  , uploadSpaceIconIn
   , moveSpaceIn
   , deleteSpaceIn
   , setSpaceOrderIn
@@ -154,7 +158,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
-import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
 import Wiki.Core.User (Group (..), Membership, Standing (..), User (..), checkLogin, checkPassword)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, versionInfo)
 import Wiki.Core.Version qualified as V
@@ -356,12 +360,19 @@ insertSpace parent name public now st0 =
           , position = nextPosition (childrenOf (Map.elems st.spaces) parent)
           , subspaceOrder = ByName
           , pageOrder = ByName
+          , homePage = Nothing
+          , icon = Nothing
+          , description = ""
           }
    in (st {spaces = Map.insert space.id space st.spaces}, space)
 
 -- | Give a space math macros, checking nothing.
 setMathMacros :: SpaceId -> Text -> MemState -> MemState
 setMathMacros sid macros st = st {spaces = Map.adjust (\s -> s {mathMacros = macros}) sid st.spaces}
+
+-- | Give a space a profile, checking nothing: for the demo's content.
+setProfile :: SpaceId -> SpaceProfile -> MemState -> MemState
+setProfile sid p st = st {spaces = Map.adjust (withProfile p) sid st.spaces}
 
 -- | Choose the order a space lists one kind of its children in, checking
 -- nothing. Switched to 'ByHand' from another order, the children are first
@@ -464,6 +475,21 @@ dropSource = \case
   SourceBlob b -> \st -> st {blobs = Map.delete b st.blobs, objectUrls = Map.delete b st.objectUrls}
   SourceUrl _ -> identity
 
+-- | Forget the bytes of the image a space is pictured with, if it is one.
+dropIcon :: Space -> MemState -> MemState
+dropIcon s = case s.icon of
+  Just (IconImage b _) -> dropSource (SourceBlob b)
+  _ -> identity
+
+-- | The spaces whose home page is one of these pages, without one: what is
+-- left when the pages are deleted, or moved to another space.
+clearHomes :: Set PageId -> MemState -> MemState
+clearHomes gone st = st {spaces = Map.map clear st.spaces}
+  where
+    clear s
+      | maybe False (`Set.member` gone) s.homePage = withProfile SpaceProfile {description = s.description, icon = s.icon, homePage = Nothing} s
+      | otherwise = s
+
 -- | Forget the bytes behind every attachment of these pages.
 dropAttachments :: [Page] -> MemState -> MemState
 dropAttachments ps st = foldr dropSource st [a.source | p <- ps, a <- p.attachments]
@@ -533,6 +559,9 @@ respace parent slug position s =
     , position
     , subspaceOrder = s.subspaceOrder
     , pageOrder = s.pageOrder
+    , homePage = s.homePage
+    , icon = s.icon
+    , description = s.description
     }
 
 -- | A page in another place, perhaps in another space, at a position
@@ -588,6 +617,15 @@ getSpaceIn path st = case resolvePath (findChild (Map.elems st.spaces)) path of
   Right c | Just s <- lastMay c -> requireView st c >> pure s
   _ -> Left NotFound
 
+-- | How many pages each space the current user may view has.
+pageCountsIn :: MemState -> Map SpaceId Int
+pageCountsIn st =
+  Map.fromList
+    [ (sid, length (pagesOf sid st))
+    | sid <- Map.keys st.spaces
+    , canView (currentPrincipal st) st.grants (chainOf st sid)
+    ]
+
 -- | The pages of a space.
 listPagesIn :: SpaceId -> MemState -> Either WikiError [Page]
 listPagesIn sid st = do
@@ -638,11 +676,15 @@ createSpaceIn parent name now st = do
   parentChain <- traverse (fmap snd . findSpace st) parent
   require (mayCreateSpace who st.grants parentChain)
   n <- nonBlank "A space's name" name
-  let (st1, space) = insertSpace parent n False now st
+  let (st1, made) = insertSpace parent n False now st
       st2 = case who of
-        Just p -> grantSpace space.id (SubjectUser p.user) AdministerSpace st1
+        Just p -> grantSpace made.id (SubjectUser p.user) AdministerSpace st1
         Nothing -> st1
-  pure (st2, space)
+      -- Its home page, whose first version is its maker's, as a page they
+      -- made would be.
+      (st3, home) = insertPage made.id Nothing homeTitle (homeBody n) now st2
+      space = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id} made
+  pure (recordVersion (currentUserId st) home st3 {spaces = Map.insert space.id space st3.spaces}, space)
   where
     who = currentPrincipal st
 
@@ -670,6 +712,9 @@ renameSpaceIn sid name = adjustSpace sid $ \s -> do
       , position = s.position
       , subspaceOrder = s.subspaceOrder
       , pageOrder = s.pageOrder
+      , homePage = s.homePage
+      , icon = s.icon
+      , description = s.description
       }
 
 -- | Make a space public or private.
@@ -686,6 +731,29 @@ setSpaceMathMacrosIn sid macros = adjustSpace sid (\s -> pure s {mathMacros = tr
   where
     trimLines = T.intercalate "\n" . reverse . dropWhile blank . reverse . dropWhile blank . T.lines
     blank = T.null . T.strip
+
+-- | Give a space a profile, checked; an image it had and no longer keeps
+-- is let go.
+setSpaceProfileIn :: SpaceId -> SpaceProfile -> Write Space
+setSpaceProfileIn sid p st = do
+  (s, c) <- findSpace st sid
+  requireAdminister st c
+  checked <- first Invalid (checkProfile s (map (\x -> x.id) (pagesOf sid st)) p)
+  let s' = withProfile checked s
+      st1 = if s'.icon == s.icon then st else dropIcon s st
+  pure (st1 {spaces = Map.insert sid s' st1.spaces}, s')
+
+-- | Picture a space with an image, kept as an uploaded attachment's bytes
+-- are; the image it had before is let go.
+uploadSpaceIconIn :: SpaceId -> Text -> ByteString -> Write Space
+uploadSpaceIconIn sid mediaType bytes st = do
+  (s, c) <- findSpace st sid
+  requireAdminister st c
+  mt <- first Invalid (checkIconUpload mediaType (fromIntegral (BS.length bytes)))
+  let (b, st1) = newId "blob" (dropIcon s st)
+      blob = BlobId b
+      s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage} s
+  pure (st1 {blobs = Map.insert blob bytes st1.blobs, spaces = Map.insert sid s' st1.spaces}, s')
 
 -- | Move a space under another or to the top level.
 moveSpaceIn :: SpaceId -> Maybe SpaceId -> Write Space
@@ -710,7 +778,7 @@ deleteSpaceIn sid st = do
   requireAdminister st c
   let gone = Set.fromList [i | i <- Map.keys st.spaces, within sid (chainOf st i)]
       (dead, alive) = Map.partition (\p -> p.space `Set.member` gone) st.pages
-      st1 = dropAttachments (Map.elems dead) st
+      st1 = foldr dropIcon (dropAttachments (Map.elems dead) st) (Map.elems (Map.restrictKeys st.spaces gone))
   pure
     ( st1
         { spaces = Map.withoutKeys st.spaces gone
@@ -860,7 +928,9 @@ movePageIn pid destination parent st = do
         | q.id == pid = p'
         | q.id `Set.member` subtree = repage destination q.parent q.slug q.position q
         | otherwise = q
-  pure (st {pages = Map.map relocate st.pages}, p')
+      -- A page that leaves its space is no longer its home page.
+      homes = if destination == p.space then identity else clearHomes subtree
+  pure (homes st {pages = Map.map relocate st.pages}, p')
 
 -- | Delete a page with the pages under it.
 deletePageIn :: PageId -> Write ()
@@ -868,7 +938,7 @@ deletePageIn pid st = do
   p <- findPage st pid
   requireEdit st (chainOf st p.space)
   let gone = subtreeOf st pid
-      st1 = dropAttachments (Map.elems (Map.restrictKeys st.pages gone)) st
+      st1 = clearHomes gone (dropAttachments (Map.elems (Map.restrictKeys st.pages gone)) st)
   pure
     ( st1
         { pages = Map.withoutKeys st.pages gone

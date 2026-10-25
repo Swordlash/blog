@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+One space at a time (WP4.6). Migration `0007-space-profile.sql`: a space's
+`home_page` (a page, `ON DELETE SET NULL`), `icon` (its JSON) and
+`description`. A space made through the API comes with a "Home" page; a page
+moved to another space stops being its old space's home page. The space's
+profile is set with `PUT api/v1/spaces/<space>/profile`, an image for its
+icon uploaded with `POST api/v1/spaces/<space>/icon` and served at
+`GET api/v1/spaces/<space>/icon/<blob>` as an attachment is; the image is
+kept in the blob store, and the files nothing refers to are collected with
+the icons counted (a backup from before the migration refers to none).
+`GET api/v1/spaces/page-counts`. The export and the whole import carry the
+profiles and the icons' images; the merging import fills in a merged space's
+description, icon and home page where it has none. `Config` gains
+`iconAddress`. The server renders the directory of spaces at `/` and a
+space's list of pages at `/s/<space>/pages/`, with a space's 403 and 404.
+
 The server's settings from the administration (WP4.4). The wiki's public
 address, its mail server and the providers people sign in with are no longer
 options: `--smtp-host`, `--smtp-port`, `--smtp-security`, `--smtp-user`,

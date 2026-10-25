@@ -12,6 +12,7 @@ module Test.Golden (spec) where
 import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeFileStrict', toJSON)
 import Data.Aeson.Encode.Pretty (Config (..), Indent (..), defConfig, encodePretty')
 import Data.ByteString.Lazy qualified as BSL
+import Data.Map.Strict qualified as Map
 import Protolude
 import System.Environment (lookupEnv)
 import Test.Hspec
@@ -25,9 +26,10 @@ import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Id (CommentId (..), CommentThreadId (..), GroupId (..), PageId (..), SpaceId (..))
+import Wiki.Core.Id (BlobId (..), CommentId (..), CommentThreadId (..), GroupId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
+import Wiki.Core.Space (Icon (..), SpaceProfile (..))
 import Wiki.Core.Version (VersionInfo (..))
 
 -- | A golden file: its name, and the value it holds.
@@ -48,6 +50,7 @@ spec = describe "golden JSON" $ do
     golden "server-info" ServerInfo {name = "Wiki", apiVersion = 1}
     golden "session" Sample.sessionInfo
     golden "space" Sample.space
+    golden "page-counts" (Map.fromList [(SpaceId "s1", 5 :: Int), (SpaceId "s2", 0)])
     golden "page" Sample.page
     golden "attachment" Sample.attachment
     golden "draft" Sample.draft
@@ -96,6 +99,8 @@ spec = describe "golden JSON" $ do
     golden "space-name" SpaceName {name = "Guides"}
     golden "space-public" SpacePublic {public = True}
     golden "space-math-macros" SpaceMathMacros {mathMacros = "\\R: \\mathbb{R}"}
+    golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") "image/png"), homePage = Just (PageId "p1")}
+    golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), homePage = Nothing}
     golden "space-order" SpaceOrder {children = ChildPages, order = NewestFirst}
     golden "space-move" SpaceMove {parent = Nothing}
     golden "new-page" NewPage {parent = Nothing, title = "Tour", body = "# Tour"}

@@ -84,6 +84,10 @@ data Preload = Preload
   -- ^ Who is asking ('Wiki.App.Backend.session').
   , spaces :: Maybe [Space]
   -- ^ The tree of spaces ('Wiki.App.Backend.listSpaces').
+  , pageCounts :: Maybe (Map SpaceId Int)
+  -- ^ How many pages each space has ('Wiki.App.Backend.pageCounts'), for
+  -- the directory of spaces; a payload written before it had this field
+  -- reads as without it.
   , spacesAt :: [SpaceAt]
   , pages :: [SpacePages]
   , pagesAt :: [PageAt]
@@ -271,6 +275,7 @@ toPreload c =
   Preload
     { session = sessionInfo <$> c.session
     , spaces = c.spaces
+    , pageCounts = c.pageCounts
     , spacesAt = [SpaceAt {path, space = toAnswer s} | (path, s) <- Map.toList c.spaceAt, kept s]
     , pages = [SpacePages {space, pages = toAnswer ps} | (space, ps) <- Map.toList c.pages, kept ps]
     , pagesAt =
@@ -302,6 +307,7 @@ fromPreload p =
   emptyCache
     { session = fromSessionInfo <$> p.session
     , spaces = p.spaces
+    , pageCounts = p.pageCounts
     , spaceAt = Map.fromList [(s.path, fromAnswer s.space) | s <- p.spacesAt]
     , pages = Map.fromList [(s.space, fromAnswer s.pages) | s <- p.pages]
     , pageAt = Map.fromList [((x.space, x.path), fromAnswer x.page) | x <- p.pagesAt]

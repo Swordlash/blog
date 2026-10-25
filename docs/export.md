@@ -14,10 +14,11 @@ Haddock says the same as this page.
 | `users.json`                     | `[{"id", "login", "displayName"}]` |
 | `groups.json`                    | `[{"id", "name", "members": [user id]}]` |
 | `grants.json`                    | `{"global": [{"subject", "permission"}], "spaces": [{"space", "subject", "permission"}]}` |
-| `spaces.json`                    | `[{"id", "name", "slug", "parent", "public", "createdAt", "mathMacros", "position", "subspaceOrder", "pageOrder"}]`, the last four only when they are not the default |
+| `spaces.json`                    | `[{"id", "name", "slug", "parent", "public", "createdAt", "mathMacros", "position", "subspaceOrder", "pageOrder", "homePage", "icon", "description"}]`, from `mathMacros` on only when they are not the default |
 | `pages.json`                     | `[{"id", "space", "parent", "title", "slug", "body", "createdAt", "updatedAt", "position"}]`, `position` only when it is not 0 |
 | `attachments.json`               | `[{"id", "page", "name", "mediaType", "size", "url"}]` for a file on the web, `[{…, "blob", "file"}]` for one whose bytes the wiki keeps |
 | `attachments/<id>/<name>`        | an attachment's bytes, as `file` names them |
+| `icons/<space id>`               | the image a space is pictured with, as its `icon`'s `file` names it |
 
 A subject is `{"user": id}` or `{"group": id}`. A global permission is
 `"administer"` or `"create-spaces"`, a permission on a space `"view"`,
@@ -74,6 +75,16 @@ own as they are.
   is not its default. A space's `createdAt` came with them: missing, the
   space is taken to have been made when its first page was, or, without
   pages, when the archive was written.
+  A space's profile came after that (WP4.6): `homePage`, the id of the page
+  the space opens at, which has to be one of its own pages (missing: none,
+  and the space opens at its list of pages); `icon`, how it is pictured,
+  `{"emoji": "📘"}`, `{"colour": "teal"}` (one of the colours
+  `Wiki.Core.Space.iconColours` names) or `{"image": blob, "mediaType":
+  "image/png", "file": "icons/<space id>"}` with the image's bytes in that
+  file (missing, or of a kind the reader does not know: the default, a
+  colour picked from the space's id); and `description`, a sentence or two
+  of plain text (missing: empty). Each is written only when it is not the
+  default, so the record of a space without them is what it was before.
 - **Anything else bumps `formatVersion`**: a field removed or renamed, or one
   whose meaning changes. The reader migrates an archive of every older
   version to the current one, a version at a time (`migrations` in
@@ -96,5 +107,6 @@ id, or two users a login; when a record refers to something the archive
 does not have (a page's space, a grant's subject, a group's member); when
 the spaces or the pages under one another make a cycle; when two spaces or
 two pages side by side share a slug; when two attachments of a page share
-a name; or when an attachment's file is missing or has another number of
-bytes than its record says.
+a name; when an attachment's file is missing or has another number of
+bytes than its record says; when a space's icon is an image whose file is
+missing; or when a space's home page is not one of its pages.

@@ -78,7 +78,8 @@ anonymous = describe "for someone not signed in" $ do
     (status, html) <- page r r.public "/"
     status `shouldBe` 200
     html `shouldSatisfy` T.isInfixOf "<title>Wiki</title>"
-    appIn html `shouldSatisfy` T.isInfixOf "<h1>Welcome to the wiki</h1>"
+    appIn html `shouldSatisfy` T.isInfixOf "<h1>Spaces</h1>"
+    appIn html `shouldSatisfy` T.isInfixOf "<p class=\"space-card-meta\">5 pages <span class=\"badge badge-public\">Public</span></p>"
     appIn html `shouldSatisfy` T.isInfixOf "Docs"
     appIn html `shouldSatisfy` T.isInfixOf "class=\"sign-in-toggle\""
     appIn html `shouldNotSatisfy` T.isInfixOf "Team"
@@ -89,6 +90,16 @@ anonymous = describe "for someone not signed in" $ do
     spaceStatus `shouldBe` 200
     appIn space `shouldSatisfy` T.isInfixOf "Markdown guide"
     space `shouldSatisfy` T.isInfixOf "<title>Docs · Wiki</title>"
+    -- A space opens at its home page, the tour, in a sidebar of its own.
+    appIn space `shouldSatisfy` T.isInfixOf "<h1 id=\"tour\">Tour</h1>"
+    appIn space `shouldSatisfy` T.isInfixOf "class=\"wiki-sidebar space-sidebar\""
+    -- No other space in the sidebar (the tour links to the blog itself).
+    appIn space `shouldNotSatisfy` T.isInfixOf "class=\"space-link\" href=\"/s/blog/\""
+    (pagesStatus, pages) <- page r r.public "/s/docs/pages/"
+    pagesStatus `shouldBe` 200
+    pages `shouldSatisfy` T.isInfixOf "<title>Pages and settings · Docs · Wiki</title>"
+    appIn pages `shouldSatisfy` T.isInfixOf "<h1>Docs</h1>"
+    appIn pages `shouldSatisfy` T.isInfixOf "<p class=\"space-description\">How to use this wiki: a guided tour, and everything its Markdown can do.</p>"
     (tourStatus, tour) <- page r r.public "/s/docs/p/tour/"
     tourStatus `shouldBe` 200
     tour `shouldSatisfy` T.isInfixOf "<title>Tour · Docs · Wiki</title>"
@@ -112,7 +123,7 @@ anonymous = describe "for someone not signed in" $ do
     appIn search `shouldNotSatisfy` T.isInfixOf "Searching…"
 
   it "renders nothing of a private space but that it is private, with a 403" $ withDemoRunning identity $ \r -> do
-    for_ ["/s/team/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/", "/s/team/p/team-handbook/slides/"] $ \path -> do
+    for_ ["/s/team/", "/s/team/pages/", "/s/team/projects/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/", "/s/team/p/team-handbook/slides/"] $ \path -> do
       (status, html) <- page r r.public path
       status `shouldBe` 403
       html `shouldNotSatisfy` T.isInfixOf "handbook"
@@ -120,7 +131,7 @@ anonymous = describe "for someone not signed in" $ do
       appIn html `shouldSatisfy` T.isInfixOf "error-forbidden"
 
   it "renders what is not there with a 404: an address, a space, a page, a version" $ withDemoRunning identity $ \r -> do
-    for_ ["/nowhere/at/all", "/s/nowhere/", "/s/docs/p/nowhere/", "/s/docs/p/nowhere/history/", "/s/docs/p/nowhere/slides/", "/s/docs/p/tour/history/?version=2020-01-01T00%3A00%3A00Z"] $ \path -> do
+    for_ ["/nowhere/at/all", "/s/nowhere/", "/s/nowhere/pages/", "/s/docs/p/nowhere/", "/s/docs/p/nowhere/history/", "/s/docs/p/nowhere/slides/", "/s/docs/p/tour/history/?version=2020-01-01T00%3A00%3A00Z"] $ \path -> do
       (status, html) <- page r r.public path
       (path, status) `shouldBe` (path, 404)
       appIn html `shouldSatisfy` \a -> "Not found" `T.isInfixOf` a || "error-not-found" `T.isInfixOf` a

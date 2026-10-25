@@ -5,8 +5,10 @@
 --   wiki-app-prerender [--server] TEMPLATE OUTPUT-DIR
 --
 -- The template, @web/index.html@, has an empty @\<div id=\"app\">\<\/div>@.
--- The front page goes to @OUTPUT-DIR\/index.html@, each space's to
--- @OUTPUT-DIR\/s\/\<space path>\/index.html@ and each page's to
+-- The front page, the directory of spaces, goes to
+-- @OUTPUT-DIR\/index.html@, each space's (its home page) to
+-- @OUTPUT-DIR\/s\/\<space path>\/index.html@, its list of pages to
+-- @…\/pages\/index.html@ and each page's to
 -- @OUTPUT-DIR\/s\/\<space path>\/p\/\<page path>\/index.html@, each
 -- page's source to @…\/p\/\<page path>\/source\/index.html@ (anyone who
 -- may read a page may read its source, and may well arrive there by its

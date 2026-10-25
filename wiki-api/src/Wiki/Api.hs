@@ -88,7 +88,7 @@ import Wiki.Core.Page (Page)
 import Wiki.Core.Permission (SpaceAccess)
 import Wiki.Core.Search (SearchHit)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space)
+import Wiki.Core.Space (Space, SpaceProfile)
 import Wiki.Core.User (Group)
 import Wiki.Core.Version (Version, VersionInfo)
 
@@ -151,6 +151,9 @@ data WikiApi mode = WikiApi
 data SpacesApi mode = SpacesApi
   { list :: mode :- Get '[JSON] [Space]
   -- ^ @listSpaces@.
+  , pageCounts :: mode :- "page-counts" :> Get '[JSON] (Map SpaceId Int)
+  -- ^ @pageCounts@: how many pages each space the asker may view has, as
+  -- an object keyed by the space's id.
   , atPath :: mode :- "at" :> CaptureAll "path" Slug :> Get '[JSON] Space
   -- ^ @getSpace@: the space at a path of slugs from the top level.
   , create :: mode :- ReqBody '[JSON] NewSpace :> PostCreated '[JSON] Space
@@ -161,6 +164,18 @@ data SpacesApi mode = SpacesApi
   -- ^ @setSpacePublic@.
   , setMathMacros :: mode :- Capture "space" SpaceId :> "math-macros" :> ReqBody '[JSON] SpaceMathMacros :> Put '[JSON] Space
   -- ^ @setSpaceMathMacros@.
+  , setProfile :: mode :- Capture "space" SpaceId :> "profile" :> ReqBody '[JSON] SpaceProfile :> Put '[JSON] Space
+  -- ^ @setSpaceProfile@: its description, icon and home page.
+  , uploadIcon :: mode :- Capture "space" SpaceId :> "icon" :> MultipartForm Mem AttachmentUpload :> Post '[JSON] Space
+  -- ^ @uploadSpaceIcon@: an image for its icon, as a form's file part as
+  -- an attachment's is ("Wiki.Api.Upload"); the part's file name is not
+  -- looked at.
+  , icon :: mode :- Capture "space" SpaceId :> "icon" :> Capture "blob" BlobId :> RawM
+  -- ^ The image a space is pictured with, at the address @spaceIconUrl@
+  -- gives ("Wiki.Api.Links.spaceIconUrl"): the blob is the image's, so
+  -- that a new image is at a new address, and one that is not the space's
+  -- is 'Wiki.Api.Error.NotFound'. Served as an attachment is (see
+  -- 'AttachmentsApi'), to whoever may view the space.
   , setOrder :: mode :- Capture "space" SpaceId :> "order" :> ReqBody '[JSON] SpaceOrder :> Put '[JSON] Space
   -- ^ @setSpaceOrder@.
   , move :: mode :- Capture "space" SpaceId :> "move" :> ReqBody '[JSON] SpaceMove :> Post '[JSON] Space

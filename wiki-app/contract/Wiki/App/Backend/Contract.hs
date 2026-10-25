@@ -16,6 +16,7 @@ module Wiki.App.Backend.Contract
 where
 
 import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -32,7 +33,7 @@ import Wiki.Core.Path (parsePath, renderPath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), maxIconSize)
 import Wiki.Core.User (Group (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
@@ -66,6 +67,7 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   changingSpaces
   spacePermissions
   mathMacros
+  profiles
   movingSpaces
   deletingSpaces
   ordering
@@ -1163,6 +1165,207 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
     run editor (restoreVersion (PageId "no-such-page") hello.updatedAt hello.updatedAt) >>= (`shouldFailWith` NotFound)
 
 --------------------------------------------------------------------------------
+-- Profiles
+
+-- | A profile with these fields.
+profile :: Text -> Maybe Icon -> Maybe PageId -> SpaceProfile
+profile description icon homePage = SpaceProfile {description, icon, homePage}
+
+-- | A 1×1 PNG, as an icon's bytes.
+png :: ByteString
+png =
+  BS.pack
+    [ 0x89
+    , 0x50
+    , 0x4e
+    , 0x47
+    , 0x0d
+    , 0x0a
+    , 0x1a
+    , 0x0a
+    , 0x00
+    , 0x00
+    , 0x00
+    , 0x0d
+    , 0x49
+    , 0x48
+    , 0x44
+    , 0x52
+    , 0x00
+    , 0x00
+    , 0x00
+    , 0x01
+    , 0x00
+    , 0x00
+    , 0x00
+    , 0x01
+    , 0x08
+    , 0x06
+    , 0x00
+    , 0x00
+    , 0x00
+    , 0x1f
+    , 0x15
+    , 0xc4
+    , 0x89
+    , 0x00
+    , 0x00
+    , 0x00
+    , 0x0d
+    , 0x49
+    , 0x44
+    , 0x41
+    , 0x54
+    , 0x78
+    , 0x9c
+    , 0x63
+    , 0xf8
+    , 0xcf
+    , 0xc0
+    , 0xf0
+    , 0x1f
+    , 0x00
+    , 0x05
+    , 0x00
+    , 0x01
+    , 0xff
+    , 0x89
+    , 0x99
+    , 0x3d
+    , 0x1d
+    , 0x00
+    , 0x00
+    , 0x00
+    , 0x00
+    , 0x49
+    , 0x45
+    , 0x4e
+    , 0x44
+    , 0xae
+    , 0x42
+    , 0x60
+    , 0x82
+    ]
+
+profiles :: (MonadWiki m) => SpecWith (Fixture m)
+profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts" $ do
+  it "gives the demo's spaces the home pages it chose" $ \(Fixture run) -> do
+    docs <- spaceAt run Anonymous "docs"
+    tour <- pageAt run Anonymous "docs" "tour"
+    docs.homePage `shouldBe` Just tour.id
+
+  it "makes a new space with a home page, made by its creator" $ \(Fixture run) -> do
+    s <- run editor (createSpace Nothing "Team notes") >>= ok
+    pages <- run editor (listPages s.id) >>= ok
+    map (\p -> (p.title, slugText p.slug)) pages `shouldBe` [("Home", "home")]
+    s.homePage `shouldBe` (\p -> p.id) <$> head pages
+    for_ (head pages) $ \home -> do
+      home.body `shouldSatisfy` T.isInfixOf "Team notes"
+      versions <- versionsOf run editor home.id
+      me <- authorAs run editor
+      map (\v -> v.author) versions `shouldBe` [Just me]
+    (s.description, s.icon) `shouldBe` ("", Nothing)
+    found <- spaceAt run editor "team-notes"
+    found `shouldBe` s
+
+  it "sets a space's description, icon and home page, which every reader sees" $ \(Fixture run) -> do
+    docs <- spaceAt run admin "docs"
+    guide <- pageAt run admin "docs" "markdown-guide"
+    s <- run admin (setSpaceProfile docs.id (profile "  How to write here.  " (Just (IconEmoji " 📘")) (Just guide.id))) >>= ok
+    (s.description, s.icon, s.homePage) `shouldBe` ("How to write here.", Just (IconEmoji "📘"), Just guide.id)
+    (s.name, slugOf s, s.public, s.mathMacros) `shouldBe` (docs.name, slugOf docs, docs.public, docs.mathMacros)
+    found <- spaceAt run Anonymous "docs"
+    found `shouldBe` s
+    listed <- run Anonymous listSpaces
+    [x | x <- listed, x.id == docs.id] `shouldBe` [s]
+    coloured <- run admin (setSpaceProfile docs.id (profile "" (Just (IconColour "teal")) Nothing)) >>= ok
+    (coloured.description, coloured.icon, coloured.homePage) `shouldBe` ("", Just (IconColour "teal"), Nothing)
+
+  it "refuses a home page of another space, a colour not in the palette, a blank emoji and an image not uploaded" $ \(Fixture run) -> do
+    docs <- spaceAt run admin "docs"
+    hello <- pageAt run admin "blog" "hello-world"
+    run admin (setSpaceProfile docs.id (profile "" Nothing (Just hello.id))) >>= shouldBeInvalid
+    run admin (setSpaceProfile docs.id (profile "" Nothing (Just (PageId "no-such-page")))) >>= shouldBeInvalid
+    run admin (setSpaceProfile docs.id (profile "" (Just (IconColour "#123456")) Nothing)) >>= shouldBeInvalid
+    run admin (setSpaceProfile docs.id (profile "" (Just (IconEmoji " ")) Nothing)) >>= shouldBeInvalid
+    run admin (setSpaceProfile docs.id (profile "" (Just (IconImage (BlobId "elsewhere") "image/png")) Nothing)) >>= shouldBeInvalid
+    run admin (setSpaceProfile docs.id (profile (T.replicate 501 "x") Nothing Nothing)) >>= shouldBeInvalid
+    unchanged <- spaceAt run admin "docs"
+    unchanged `shouldBe` docs
+
+  it "takes AdministerSpace, checked before the profile" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    team <- spaceAt run admin "team"
+    let bad = profile "" (Just (IconColour "nope")) Nothing
+    run editor (setSpaceProfile blog.id bad) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (setSpaceProfile blog.id bad) >>= (`shouldFailWith` Forbidden)
+    run reader (setSpaceProfile team.id bad) >>= (`shouldFailWith` Forbidden)
+    run editor (uploadSpaceIcon blog.id "image/png" png) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (uploadSpaceIcon blog.id "text/html" "<p>") >>= (`shouldFailWith` Forbidden)
+    run admin (setSpaceProfile (SpaceId "no-such-space") bad) >>= (`shouldFailWith` NotFound)
+    run admin (uploadSpaceIcon (SpaceId "no-such-space") "image/png" png) >>= (`shouldFailWith` NotFound)
+    mine <- run editor (createSpace Nothing "Mine") >>= ok
+    void (run editor (setSpaceProfile mine.id (profile "Mine alone." Nothing mine.homePage)) >>= ok)
+
+  it "pictures a space with an uploaded image, at an address of the backend's, until the profile drops it" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    run admin (spaceIconUrl blog) `shouldReturn` ""
+    s <- run admin (uploadSpaceIcon blog.id "image/png" png) >>= ok
+    case s.icon of
+      Just (IconImage _ mediaType) -> mediaType `shouldBe` "image/png"
+      other -> expectationFailure ("expected an image, got " <> show other)
+    (s.description, s.homePage) `shouldBe` (blog.description, blog.homePage)
+    seen <- spaceAt run Anonymous "blog"
+    seen.icon `shouldBe` s.icon
+    run Anonymous (spaceIconUrl seen) >>= (`shouldSatisfy` (not . T.null))
+    -- Kept as it is when the profile names it, let go when it does not.
+    kept <- run admin (setSpaceProfile blog.id (profile "Posts." s.icon s.homePage)) >>= ok
+    kept.icon `shouldBe` s.icon
+    dropped <- run admin (setSpaceProfile blog.id (profile "Posts." (Just (IconEmoji "✍️")) s.homePage)) >>= ok
+    dropped.icon `shouldBe` Just (IconEmoji "✍️")
+    run admin (spaceIconUrl dropped) `shouldReturn` ""
+
+  it "refuses an icon that is not an image a browser shows, an empty one and one too large" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    run admin (uploadSpaceIcon blog.id "image/svg+xml" "<svg/>") >>= shouldBeInvalid
+    run admin (uploadSpaceIcon blog.id "text/html" "<p>") >>= shouldBeInvalid
+    run admin (uploadSpaceIcon blog.id "image/png" "") >>= shouldBeInvalid
+    run admin (uploadSpaceIcon blog.id "image/png" (BS.replicate (fromIntegral maxIconSize + 1) 0)) >>= shouldBeInvalid
+    unchanged <- spaceAt run admin "blog"
+    unchanged.icon `shouldBe` blog.icon
+
+  it "leaves a space without a home page when the page is deleted or moved to another space" $ \(Fixture run) -> do
+    docs <- spaceAt run admin "docs"
+    blog <- spaceAt run admin "blog"
+    tour <- pageAt run admin "docs" "tour"
+    guide <- pageAt run admin "docs" "markdown-guide"
+    -- Moved within the space, it stays the home page.
+    _ <- run admin (movePage tour.id docs.id (Just guide.id)) >>= ok
+    (\x -> x.homePage) <$> spaceAt run admin "docs" `shouldReturn` Just tour.id
+    _ <- run admin (movePage tour.id blog.id Nothing) >>= ok
+    (\x -> x.homePage) <$> spaceAt run admin "docs" `shouldReturn` Nothing
+    _ <- run admin (setSpaceProfile docs.id (profile "" Nothing (Just guide.id))) >>= ok
+    -- A page under the home page moved away takes nothing with it.
+    diagrams <- pageAt run admin "docs" "markdown-guide/diagrams"
+    _ <- run admin (movePage diagrams.id blog.id Nothing) >>= ok
+    (\x -> x.homePage) <$> spaceAt run admin "docs" `shouldReturn` Just guide.id
+    run admin (deletePage guide.id) >>= ok
+    (\x -> x.homePage) <$> spaceAt run admin "docs" `shouldReturn` Nothing
+
+  it "count the pages of each space someone may view" $ \(Fixture run) -> do
+    let countsOf who = do
+          counts <- run who pageCounts
+          spaces <- run who listSpaces
+          pure (sort [(x.name, n) | x <- spaces, Just n <- [Map.lookup x.id counts]])
+    countsOf Anonymous `shouldReturn` [("Blog", 2), ("Docs", 5)]
+    countsOf admin `shouldReturn` [("Blog", 2), ("Docs", 5), ("Projects", 1), ("Team", 2)]
+    -- Team is listed to the reader for its name only.
+    countsOf reader `shouldReturn` [("Blog", 2), ("Docs", 5), ("Projects", 1)]
+    s <- run editor (createSpace Nothing "Mine") >>= ok
+    counts <- run editor pageCounts
+    Map.lookup s.id counts `shouldBe` Just 1
+
+--------------------------------------------------------------------------------
 -- Errors are values
 
 -- | Every method, asked about what is not there or by someone who may not,
@@ -1179,6 +1382,8 @@ neverThrown = describe "errors" $ do
           , void <$> renameSpace s "X"
           , void <$> setSpacePublic s True
           , void <$> setSpaceMathMacros s "\\newcommand{\\x}{1}"
+          , void <$> setSpaceProfile s SpaceProfile {description = "", icon = Nothing, homePage = Nothing}
+          , void <$> uploadSpaceIcon s "image/png" png
           , void <$> moveSpace s Nothing
           , deleteSpace s
           , void <$> setSpaceOrder s ChildPages ByHand

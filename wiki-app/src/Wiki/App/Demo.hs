@@ -16,7 +16,8 @@
 --
 -- The spaces are a public @Blog@, a private @Team@ with a subspace
 -- @Team / Projects@, and a public @Docs@ whose @Tour@ page explains all of
--- this to whoever opens the demo. The image and the video on the pages are
+-- this to whoever opens the demo; each has a description, an icon and a
+-- home page, the page it opens at. The image and the video on the pages are
 -- public-domain NASA media on Wikimedia Commons, linked by URL; the image
 -- attached to two of the pages is a 32×32 PNG kept in the store as bytes, as
 -- a file uploaded into the demo is.
@@ -41,7 +42,7 @@ import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalPermission (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), User (..))
 import Wiki.Core.Version (Author (..))
 
@@ -87,13 +88,22 @@ demoState now = flip execState emptyState $ do
   wiki <- page projects Nothing "The wiki" 8 theWiki
   attach wiki "tree.png" "image/png" treePng
 
-  _ <- page docs Nothing "Tour" 1 tour
+  tourPage <- page docs Nothing "Tour" 1 tour
   guide <- page docs Nothing "Markdown guide" 2 markdownGuide
   attach guide "tree.png" "image/png" treePng
   modify (fst . attachUrl guide "earth.jpg" "image/jpeg" 267290 earthUrl)
   _ <- page docs (Just guide) "Diagrams" 3 diagrams
   _ <- page docs (Just guide) "Mathematics" 3 mathematics
   _ <- page docs (Just guide) "Presentations" 2 presentations
+
+  -- Each space's profile: what the directory of spaces shows of it, and the
+  -- page it opens at. Projects keeps a colour, as a space whose
+  -- administrator chose no emoji does.
+  modify $
+    setProfile blog SpaceProfile {description = "Posts about this wiki and about writing it in Haskell.", icon = Just (IconEmoji "✍️"), homePage = Just hello}
+      . setProfile team SpaceProfile {description = "How the team works: its handbook, who is on call, and its projects.", icon = Just (IconEmoji "🧭"), homePage = Just handbook}
+      . setProfile projects SpaceProfile {description = "What the team is building, this wiki first.", icon = Just (IconColour "teal"), homePage = Just wiki}
+      . setProfile docs SpaceProfile {description = "How to use this wiki: a guided tour, and everything its Markdown can do.", icon = Just (IconEmoji "📘"), homePage = Just tourPage}
   modify (\st -> st {current = Just adminId})
   where
     adminId = UserId "user-admin"
@@ -336,13 +346,20 @@ tour =
   , ""
   , "## Public and private spaces"
   , ""
-  , "A space holds pages, and other spaces. [Blog](/blog) and [Docs](/docs),"
-  , "where this page is, are public: anyone may read them, signed in or not."
-  , "**Team** is private, and so is its subspace **Team / Projects**, which"
-  , "`reader` has been let into: `reader` sees Team in the tree only as the way"
-  , "there. Look at the tree of spaces as `admin`, then as nobody, then as"
-  , "`reader`. (A link to a space you may not see shows as broken, since for"
-  , "you there is nothing there.)"
+  , "A space holds pages, and other spaces. The front page lists the spaces"
+  , "you may read, and those you visited last; inside a space, the sidebar"
+  , "shows that space alone: its pages, its subspaces, and a menu to switch"
+  , "to another. [Blog](/blog) and [Docs](/docs), where this page is, are"
+  , "public: anyone may read them, signed in or not. **Team** is private, and"
+  , "so is its subspace **Team / Projects**, which `reader` has been let into:"
+  , "`reader` sees Team only as the way there. Look at the front page as"
+  , "`admin`, then as nobody, then as `reader`. (A link to a space you may"
+  , "not see shows as broken, since for you there is nothing there.)"
+  , ""
+  , "A space opens at its home page, which is this one for Docs. **Pages and"
+  , "settings**, in the sidebar, lists all of a space's pages, and there"
+  , "whoever administers the space gives it a description, an icon (an"
+  , "emoji, a colour, or an image) and another home page."
   , ""
   , "## What a page can be"
   , ""

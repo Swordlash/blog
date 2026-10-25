@@ -126,6 +126,7 @@ test-suite wiki-core-test
       Test.Search
       Test.Slides
       Test.Slug
+      Test.Space
   build-depends:
       QuickCheck,
       aeson,

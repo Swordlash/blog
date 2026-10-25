@@ -32,7 +32,8 @@
 -- threads go when it hears of them, and when it stops listening for them
 -- ('forgetThreads').
 --
--- So are searches, by their query: the server renders the page of a
+-- So is how many pages each space has, which the directory of spaces
+-- shows. So are searches, by their query: the server renders the page of a
 -- search's results with its hits, which the program then shows at once.
 -- And so is the administration's directory of the wiki's people, which the
 -- server renders the administration with, and its settings and invitations;
@@ -46,6 +47,7 @@ module Wiki.App.Backend.Http.Cache
   , cachedSearch
   , withSession
   , withSpaces
+  , withPageCounts
   , withSpaceAt
   , withPages
   , withPageAt
@@ -89,6 +91,8 @@ data Cache = Cache
   { session :: Maybe Session
   , spaces :: Maybe [Space]
   -- ^ 'Wiki.App.Backend.listSpaces'.
+  , pageCounts :: Maybe (Map SpaceId Int)
+  -- ^ 'Wiki.App.Backend.pageCounts'.
   , spaceAt :: Map [Slug] (Either WikiError Space)
   -- ^ 'Wiki.App.Backend.getSpace', by path.
   , pages :: Map SpaceId (Either WikiError [Page])
@@ -126,6 +130,7 @@ emptyCache =
   Cache
     { session = Nothing
     , spaces = Nothing
+    , pageCounts = Nothing
     , spaceAt = mempty
     , pages = mempty
     , pageAt = mempty
@@ -169,6 +174,9 @@ withSession s c = c {session = Just s}
 
 withSpaces :: [Space] -> Cache -> Cache
 withSpaces ss c = c {spaces = Just ss}
+
+withPageCounts :: Map SpaceId Int -> Cache -> Cache
+withPageCounts n c = c {pageCounts = Just n}
 
 withSpaceAt :: [Slug] -> Either WikiError Space -> Cache -> Cache
 withSpaceAt path s c = c {spaceAt = Map.insert path s c.spaceAt}

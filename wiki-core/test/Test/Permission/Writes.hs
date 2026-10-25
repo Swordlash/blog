@@ -25,6 +25,9 @@ space s parent =
     , position = 0
     , subspaceOrder = ByName
     , pageOrder = ByName
+    , homePage = Nothing
+    , icon = Nothing
+    , description = ""
     }
 
 -- | @eng ── backend@ and @ops@.

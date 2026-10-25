@@ -304,11 +304,15 @@ handlers env caller =
     , spaces =
         SpacesApi
           { list = ask' listSpaces
+          , pageCounts = ask' pageCounts
           , atPath = wiki . getSpace
           , create = \new -> wiki (createSpace new.parent new.name)
           , rename = \s body -> wiki (renameSpace s body.name)
           , setPublic = \s body -> wiki (setSpacePublic s body.public)
           , setMathMacros = \s body -> wiki (setSpaceMathMacros s body.mathMacros)
+          , setProfile = \s body -> wiki (setSpaceProfile s body)
+          , uploadIcon = \s u -> wiki (uploadSpaceIcon s u.mediaType (BSL.toStrict u.bytes))
+          , icon = \s b request respond -> liftIO (iconContent env caller.who s b request respond)
           , setOrder = \s body -> wiki (setSpaceOrder s body.children body.order)
           , move = \s body -> wiki (moveSpace s body.parent)
           , shift = \s body -> wiki (shiftSpace s body.shift)
@@ -584,6 +588,35 @@ attachmentContent env who aid name request respond
                 then respond (responseLBS status304 headers "")
                 else respond (responseFile status200 headers file Nothing)
         Right _ -> respond (refusal ApiError.NotFound)
+
+-- | The image a space is pictured with, at its address: from its file, with
+-- its media type, revalidated by its content hash, and served as an
+-- attachment's bytes are (see 'attachmentContent'): only images a browser
+-- shows by themselves are ever icons ('Wiki.Core.Space.iconMediaTypes').
+iconContent :: Env -> Who -> SpaceId -> BlobId -> Request -> (Response -> IO a) -> IO a
+iconContent env who sid blob request respond
+  | requestMethod request `notElem` [methodGet, methodHead] =
+      respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An icon is fetched with GET or HEAD.")))
+  | otherwise =
+      runSqliteWiki env.storage who (spaceIconFile sid blob) >>= \case
+        Left e -> respond (maybe (responseLBS status503 [] "The wiki could not be reached.") refusal (toApiError e))
+        Right (mediaType, file) -> do
+          present <- doesFileExist file
+          if not present
+            then respond (refusal ApiError.NotFound)
+            else do
+              let tag = "\"" <> encodeUtf8 blob.text <> "\""
+                  headers =
+                    [ (hContentType, encodeUtf8 (safeMediaType mediaType))
+                    , ("X-Content-Type-Options", "nosniff")
+                    , ("Content-Disposition", "inline")
+                    , ("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
+                    , (hCacheControl, "private, no-cache")
+                    , (hETag, tag)
+                    ]
+              if lookup hIfNoneMatch (requestHeaders request) == Just tag
+                then respond (responseLBS status304 headers "")
+                else respond (responseFile status200 headers file Nothing)
 
 -- | A media type that can go in a header as it is, or bytes of no type.
 safeMediaType :: Text -> Text

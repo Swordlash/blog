@@ -87,6 +87,8 @@ module Wiki.Server.Storage.Rows
   )
 where
 
+import Data.Aeson (decodeStrict', encode)
+import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -245,7 +247,7 @@ sql :: Text -> Query
 sql = Query
 
 spaceColumns :: Text
-spaceColumns = "id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order"
+spaceColumns = "id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order, home_page, icon, description"
 
 spaceRow :: RowParser Space
 spaceRow = do
@@ -259,7 +261,12 @@ spaceRow = do
   position <- field
   subspaceOrder <- orderField
   pageOrder <- orderField
-  pure Space {id, parent, name, slug, public, mathMacros, createdAt, position, subspaceOrder, pageOrder}
+  homePage <- fmap PageId <$> field
+  -- An icon that does not read (one a later program wrote) is the
+  -- default, as the export reads it.
+  icon <- (>>= decodeStrict' . encodeUtf8) <$> (field :: RowParser (Maybe Text))
+  description <- field
+  pure Space {id, parent, name, slug, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description}
 
 -- | Every space, by id: a wiki has tens of them, and every permission is a
 -- question about a space's chain of ancestors, so each operation reads them
@@ -524,18 +531,21 @@ spaceValues s =
   , toField s.position
   , toField (orderText s.subspaceOrder)
   , toField (orderText s.pageOrder)
+  , toField (fmap (\p -> p.text) s.homePage)
+  , toField (fmap (decodeUtf8 . BSL.toStrict . encode) s.icon :: Maybe Text)
+  , toField s.description
   ]
 
 -- | Add a space.
 insertSpace :: Connection -> Space -> IO ()
-insertSpace c s = execute c (sql ("INSERT INTO spaces (" <> spaceColumns <> ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) (spaceValues s)
+insertSpace c s = execute c (sql ("INSERT INTO spaces (" <> spaceColumns <> ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) (spaceValues s)
 
 -- | Write a space over the one with its id: every column of it.
 updateSpace :: Connection -> Space -> IO ()
 updateSpace c s =
   execute
     c
-    "UPDATE spaces SET parent = ?, name = ?, slug = ?, public = ?, math_macros = ?, created_at = ?, position = ?, subspace_order = ?, page_order = ? WHERE id = ?"
+    "UPDATE spaces SET parent = ?, name = ?, slug = ?, public = ?, math_macros = ?, created_at = ?, position = ?, subspace_order = ?, page_order = ?, home_page = ?, icon = ?, description = ? WHERE id = ?"
     (drop 1 (spaceValues s) <> [toField s.id.text])
 
 -- | Add a page, without its attachments, with the text the search compares

@@ -9,11 +9,12 @@
 -- * A space of the archive at a path where the server has none is made,
 --   with a new id, the archive's name, slug and settings, and its pages.
 -- * A space at a path where the server has one is merged into it: the
---   server's keeps its id, name and settings, but for its math macros, which
---   it takes from the archive when it has none of its own (the plan's
---   "settings stay the server's unless the server's is empty": of a space's
---   settings, only the macros can be empty; being private and listing
---   children by name are choices, not the absence of one).
+--   server's keeps its id, name and settings, but for its math macros, its
+--   description, its icon and its home page, each of which it takes from
+--   the archive when it has none of its own (the plan's "settings stay the
+--   server's unless the server's is empty": being private and listing
+--   children by name are choices, not the absence of one). The home page is
+--   the page the archive's became, if it was brought in or kept.
 -- * A page at a path where the server's space has none is made under the
 --   page its archive parent became, with the archive's title, body, times
 --   and attachments.
@@ -66,7 +67,7 @@ import Wiki.Core.Page (Page (..), pageTreeOrder)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Search (bodyText)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (..), spaceTreeOrder)
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
 import Wiki.Server.Storage (Storage, storageDataDir, withDatabase)
 import Wiki.Server.Storage.Blobs (blobOf, storeBlob)
 import Wiki.Server.Storage.Layout (attachmentsDir)
@@ -247,13 +248,42 @@ importSpace c blobs a choices progress m
               , position = nextPosition (childrenOf spaces parent)
               , subspaceOrder = m.archived.subspaceOrder
               , pageOrder = m.archived.pageOrder
+              , -- Filled in from the archive's once its pages are in
+                -- ('fillProfile').
+                homePage = Nothing
+              , icon = Nothing
+              , description = ""
               }
           pure i
       let placed =
             count
               progress {spaceIds = Map.insert m.archived.id target progress.spaceIds}
               (\s -> if isJust m.server then s {spacesMerged = s.spacesMerged + 1} else s {spacesCreated = s.spacesCreated + 1})
-      foldlM (importPage c blobs a choices m.path target) placed m.pages
+      done <- foldlM (importPage c blobs a choices m.path target) placed m.pages
+      fillProfile c blobs a m target done
+      pure done
+
+-- | A space's description, icon and home page from the archive's, where
+-- the server's space has none of its own (one the import made has none
+-- yet): the home page is the page the archive's became, and an image is
+-- kept under its hash, as an attachment's bytes are.
+fillProfile :: Connection -> FilePath -> Archive -> SpaceMatch -> SpaceId -> Progress -> IO ()
+fillProfile c blobs a m target progress =
+  Map.lookup target
+    <$> loadSpaces c
+    >>= traverse_
+      ( \theirs -> do
+          icon <- case (theirs.icon, m.archived.icon) of
+            (Nothing, Just (IconImage b mediaType)) ->
+              -- 'readArchive' has checked that the image's file is there.
+              traverse (fmap (`IconImage` mediaType) . storeBlob blobs) (Map.lookup b a.blobs)
+            (Nothing, archived) -> pure archived
+            (own, _) -> pure own
+          let description = if T.null theirs.description then m.archived.description else theirs.description
+              homePage = theirs.homePage <|> (m.archived.homePage >>= (`Map.lookup` progress.pageIds))
+              filled = withProfile SpaceProfile {description, icon, homePage} theirs
+          when (filled /= theirs) (updateSpace c filled)
+      )
 
 importPage :: Connection -> FilePath -> Archive -> ImportChoices -> [Slug] -> SpaceId -> Progress -> PageMatch -> IO Progress
 importPage c blobs a choices spacePath target progress pm

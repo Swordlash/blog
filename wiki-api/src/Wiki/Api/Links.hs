@@ -10,6 +10,7 @@ module Wiki.Api.Links
   ( links
   , linkText
   , attachmentUrl
+  , spaceIconUrl
   , searchUrl
   , searchQueryOf
   )
@@ -18,10 +19,11 @@ where
 import Protolude
 import Servant.API (Link, toUrlPiece)
 import Servant.Links (AsLink, allLinks')
-import Wiki.Api (AttachmentsApi (..), WikiApi (..), api)
+import Wiki.Api (AttachmentsApi (..), SpacesApi (..), WikiApi (..), api)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id (SpaceId)
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
+import Wiki.Core.Space (Icon (..), Space (..))
 
 -- | Every endpoint's address, as a function of its captures and parameters:
 -- @links.spaces.rename spaceId@ is @api\/v1\/spaces\/\<id>\/name@. An
@@ -40,6 +42,14 @@ attachmentUrl :: Attachment -> Text
 attachmentUrl a = case a.source of
   SourceUrl url -> url
   SourceBlob _ -> links.attachments.content a.id a.name
+
+-- | Where a browser fetches the image a space is pictured with:
+-- @spaceIconUrl@ over HTTP. The empty text for a space whose icon is no
+-- image.
+spaceIconUrl :: Space -> Text
+spaceIconUrl s = case s.icon of
+  Just (IconImage blob _) -> links.spaces.icon s.id blob
+  _ -> ""
 
 -- | The address of a search: every field of the query is in it, so the
 -- server reads back the query that was asked.

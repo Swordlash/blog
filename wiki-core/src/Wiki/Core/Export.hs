@@ -16,6 +16,8 @@
 -- * @attachments.json@: every attachment's record, with the page it is
 --   attached to, in each page's order; one whose bytes the wiki keeps names
 --   its file, @attachments/\<attachment id>/\<name>@, which holds the bytes.
+-- * @icons/\<space id>@: the image a space is pictured with, for a space
+--   whose icon is one (its record names the file, 'iconFile').
 --
 -- Every record is a JSON object with named fields, written and read by the
 -- functions here rather than derived from the Haskell types, so that
@@ -55,6 +57,7 @@ module Wiki.Core.Export
   , writeArchive
   , readArchive
   , attachmentFile
+  , iconFile
 
     -- * Records
   , encodeSpace
@@ -81,8 +84,9 @@ module Wiki.Core.Export
 where
 
 import Control.Monad.Fail (fail)
-import Data.Aeson (ToJSON, Value (..), eitherDecodeStrict', encode, object, withObject, (.!=), (.:), (.:?), (.=))
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson (ToJSON, Value (..), eitherDecodeStrict', encode, object, parseJSON, toJSON, withObject, (.!=), (.:), (.:?), (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
@@ -97,7 +101,7 @@ import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Space (..))
+import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.User (Group (..), Membership, User (..))
 
 -- | A whole wiki: its people, its grants, its spaces and pages (each page
@@ -146,6 +150,11 @@ writeArchive a =
        , SourceBlob blob <- [x.source]
        , Just bytes <- [Map.lookup blob a.blobs]
        ]
+    <> [ (iconFile s, bytes)
+       | s <- a.spaces
+       , Just (IconImage blob _) <- [s.icon]
+       , Just bytes <- [Map.lookup blob a.blobs]
+       ]
   where
     manifest =
       object
@@ -158,6 +167,10 @@ writeArchive a =
 -- | Where an attachment's bytes are in an archive.
 attachmentFile :: Attachment -> Text
 attachmentFile x = "attachments/" <> x.id.text <> "/" <> x.name
+
+-- | Where the image a space is pictured with is in an archive.
+iconFile :: Space -> Text
+iconFile s = "icons/" <> s.id.text
 
 -- | JSON, compact.
 encodeJson :: (ToJSON a) => a -> ByteString
@@ -220,6 +233,12 @@ readArchive entries = do
     unless (fromIntegral (BS.length bytes) == x.size) $
       Left ("The file " <> show file <> " has " <> show (BS.length bytes) <> " bytes, where attachments.json says " <> show x.size <> ".")
     pure (blob, bytes)
+  icons <- for [(s, blob) | s <- spaces, Just (IconImage blob _) <- [s.icon]] $ \(s, blob) -> do
+    bytes <-
+      note
+        ("The file " <> show (iconFile s) <> ", which spaces.json names for the icon of the space " <> show s.id.text <> ", is not in the archive.")
+        (Map.lookup (iconFile s) entries)
+    pure (blob, bytes)
   let attachedTo pid = [x | AttachmentRecord {page, attachment = x} <- attachments, page == pid]
       archive =
         Archive
@@ -231,7 +250,7 @@ readArchive entries = do
           , grants
           , spaces
           , pages = [p {attachments = attachedTo p.id} | p <- pages]
-          , blobs
+          , blobs = blobs <> Map.fromList icons
           }
   checkArchive archive attachments
   pure archive
@@ -297,6 +316,9 @@ checkArchive a attachments = do
       Nothing -> Left ("pages.json: the page " <> show p.id.text <> " is under " <> show parent.text <> ", which is not in pages.json.")
       Just q -> unless (q.space == p.space) $ Left ("pages.json: the page " <> show p.id.text <> " is under a page of another space.")
   acyclic "pages.json" "page" (\p -> p.parent) (\k -> k.text) pagesById
+  for_ a.spaces $ \s -> for_ s.homePage $ \home ->
+    unless (fmap (\p -> p.space) (Map.lookup home pagesById) == Just s.id) $
+      Left ("spaces.json: the space " <> show s.id.text <> " has the home page " <> show home.text <> ", which is not one of its pages in pages.json.")
   siblings "pages.json" "pages" [((p.space, p.parent), p.slug) | p <- a.pages]
   for_ attachments $ \r -> do
     unless (Map.member r.page pagesById) $
@@ -353,7 +375,12 @@ checkArchive a attachments = do
 -- @"oldest-first"@ or @"by-hand"@) are by name if missing, or if they name
 -- an order this program does not know. Those that have a default are
 -- written only when they are not it, so that the record of a space that
--- does not use them is what it was before they were added.
+-- does not use them is what it was before they were added. So are
+-- @homePage@ (the id of the page it opens at, one of its own; none if
+-- missing), @icon@ (@{"emoji": …}@, @{"colour": …}@, or @{"image": blob,
+-- "mediaType": …, "file": …}@ with the image's bytes in the archive's file
+-- 'iconFile'; the default if missing, or of a kind this program does not
+-- know) and @description@ (empty if missing).
 encodeSpace :: Space -> Value
 encodeSpace s =
   object $
@@ -368,6 +395,16 @@ encodeSpace s =
       <> ["position" .= s.position | s.position /= 0]
       <> ["subspaceOrder" .= orderText s.subspaceOrder | s.subspaceOrder /= ByName]
       <> ["pageOrder" .= orderText s.pageOrder | s.pageOrder /= ByName]
+      <> ["homePage" .= home.text | Just home <- [s.homePage]]
+      <> ["icon" .= encodeIcon s icon | Just icon <- [s.icon]]
+      <> ["description" .= s.description | not (T.null s.description)]
+
+-- | A space's icon as its record has it: an image names the file of the
+-- archive its bytes are in.
+encodeIcon :: Space -> Icon -> Value
+encodeIcon s icon = case (icon, toJSON icon) of
+  (IconImage _ _, Object o) -> Object (KeyMap.insert "file" (toJSON (iconFile s)) o)
+  (_, v) -> v
 
 -- | A space read back. A record without a @createdAt@ (one written before
 -- spaces had one) is given the time the function says for its id.
@@ -383,7 +420,10 @@ parseSpace createdBefore = withObject "space" $ \o -> do
   position <- o .:? "position" .!= 0
   subspaceOrder <- maybe ByName readOrder <$> o .:? "subspaceOrder"
   pageOrder <- maybe ByName readOrder <$> o .:? "pageOrder"
-  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder}
+  homePage <- fmap PageId <$> o .:? "homePage"
+  icon <- (>>= parseMaybe parseJSON) <$> (o .:? "icon" :: Parser (Maybe Value))
+  description <- o .:? "description" .!= ""
+  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description}
 
 -- | An order as the archive writes it.
 orderText :: ChildOrder -> Text

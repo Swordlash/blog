@@ -15,6 +15,7 @@ module Test.Gen
   , genSource
   , genAttachment
   , genSpace
+  , genIcon
   , genPage
   , genUser
   , genGroup
@@ -118,7 +119,18 @@ genSpace = do
   position <- arbitrary
   subspaceOrder <- arbitraryBoundedEnum
   pageOrder <- arbitraryBoundedEnum
-  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder}
+  homePage <- oneof [pure Nothing, Just <$> genPageId]
+  icon <- oneof [pure Nothing, Just <$> genIcon]
+  description <- oneof [pure "", genText]
+  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description}
+
+genIcon :: Gen Icon
+genIcon =
+  oneof
+    [ IconEmoji <$> genText
+    , IconColour <$> elements iconColours
+    , IconImage <$> genBlobId <*> elements iconMediaTypes
+    ]
 
 genPage :: Gen Page
 genPage = do
@@ -195,7 +207,7 @@ genChain = do
   for (zip chainIds (Nothing : map Just chainIds)) $ \(id, parent) -> do
     slug <- genSlug
     public <- frequency [(1, pure True), (3, pure False)]
-    pure Space {id, name = "", slug, parent, public, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName}
+    pure Space {id, name = "", slug, parent, public, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = ""}
 
 genSearchQuery :: Gen SearchQuery
 genSearchQuery = do

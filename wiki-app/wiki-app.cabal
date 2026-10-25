@@ -83,6 +83,7 @@ library
       Wiki.App.Islands
       Wiki.App.Islands.Monad
       Wiki.App.Live
+      Wiki.App.Recent
       Wiki.App.Route
       Wiki.App.Shell
       Wiki.App.Editor.Browser
@@ -92,6 +93,7 @@ library
       Wiki.App.View.Body
       Wiki.App.View.Comments
       Wiki.App.View.Common
+      Wiki.App.View.Directory
       Wiki.App.View.Editor
       Wiki.App.View.Import
       Wiki.App.View.NewPage
@@ -107,6 +109,7 @@ library
       Wiki.App.View.History
       Wiki.App.View.Source
       Wiki.App.View.Space
+      Wiki.App.View.SpaceSettings
 
   -- The version "Export the wiki" writes into an archive's manifest.
   other-modules:    Paths_wiki_app
