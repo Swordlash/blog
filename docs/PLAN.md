@@ -1778,3 +1778,42 @@ Amended by the planning session after each work package's report.
   and `create-spaces` need a section of their own or the space view. Noted by the agent:
   `build-wasm`'s native prerender step recompiles `wiki-core` in `dist-newstyle/native`
   after `build-native`, so the two builds may invalidate each other.
+- **WP3.1 merged** (2026-10-25, PR #56, `main` at `e078ded`; WP3.2 folded in). Migration
+  `0002-accounts.sql`: `users.password_hash` (nullable: existing and imported users cannot
+  sign in until given one), `users.disabled`, `sessions` (SHA-256 of the id, user, created,
+  last seen, expiry). Passwords are argon2id from `crypton` (compiled in, no system library),
+  `m=19456,t=2,p=1`, 16-byte salt, 32-byte hash, PHC strings, checked against OpenSSL's
+  argon2 in a test; an unknown login is checked against a dummy hash. The principal is found
+  per request (`Wiki.Server.App.findCaller`, `Finding`): admin listener → administrator,
+  cookies ignored; public listener under `--trust-network` → administrator (unchanged until
+  WP3.4); otherwise the `wiki_session` cookie's user, or anonymous for none, an ended
+  session or a disabled user, the stale cookie cleared. Handlers take a `Caller` and never
+  see the listener; pages are rendered and preloaded as the request's principal, API answers
+  and pages carry `Cache-Control: private, no-cache` and `Vary: Cookie`. `POST`/`DELETE
+  api/v1/session` sign in (401 `Unauthenticated`, 429 `TooManyRequests` with `Retry-After`,
+  400 where everyone is the operator) and out; cookie `HttpOnly; SameSite=Strict;
+  Path=<base path>; Max-Age=14d`, `Secure` only with `--secure-cookies` (decision 20);
+  sessions end on sign-out, on disabling or a new password, and after 14 idle days, use
+  recorded at most hourly. CSRF: every API write needs `X-Wiki-Request` (`requestMarker`),
+  and `Sec-Fetch-Site`, when sent, must be `same-origin` or `none`; the check is on the API
+  only (a bare POST to a page stays 405). Rate limit in memory: 5 failures per login and
+  address, 30 per address, in 15 minutes. Admin API: `createUser` (`POST admin/users`),
+  `setPassword`, `setDisabled` (`PUT admin/users/<id>/password|disabled`), each answering
+  `Account {user, hasPassword, disabled}`; no `MonadAdmin` method for them yet. Console
+  `wiki-server users list | add LOGIN [--display-name] [--admin] [--no-password] | password
+  LOGIN | admin LOGIN --on|--off | disable LOGIN --on|--off --data DIR` (`Wiki.Server.Console`,
+  `withStorageAside` beside a live server, password from the terminal or stdin, never argv):
+  how the first administrator is made; `deploy-local.sh` prints the line. App: `MonadAccount`
+  (`Wiki.App.Account`: `signIn`, `signOut`, `sessionChanges`) for `HttpWiki` only, reaching the
+  shell as `Accounts` in `Shell.Input`; `View/SignIn.hs` popover form, "Sign out", the operator
+  sees only the name; `Session.standing :: Standing` (`NotSignedIn | SignedIn | Operator`);
+  sign-in and sign-out empty the whole client cache; a 401/403 while signed in re-reads the
+  session and reopens the form when it ended; the server's admin refusal text fixed. Tests:
+  server 386, app 528, api 56+75, browser 117 (4 sign-in cases), smoke test checks a write
+  without the header gets 403 and no sign-in under trust, `test-deploy-local.sh` 44 cases.
+  Known: a 401/403 to a signed-in client costs one extra `GET session`; crypton's argon2 is an
+  `unsafe` FFI call of tens of milliseconds; the expiry sweep compares ISO text, harmless as
+  `resolveSession` compares parsed times. For WP3.4: `Directory` lacks `disabled` and
+  `hasPassword`; the account forms need `MonadAdmin` methods over the three endpoints; the
+  admin API answering an administrator's session is tested; the smoke test needs to sign in
+  once `--trust-network` goes.
