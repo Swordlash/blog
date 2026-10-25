@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+Accounts and sessions. Migration 0002 gives users an argon2id password hash
+(nullable: a user without one cannot sign in, as every user made before is)
+and a `disabled` flag, and adds `sessions`, keyed by the SHA-256 of each
+session's random id. The public listener now finds who is asking per
+request: the user whose session the `wiki_session` cookie names, or nobody
+(no cookie, an ended session, a disabled user, and the cookie is then
+cleared); `--trust-network` still makes everyone the administrator, and the
+admin listener is still the operator, looking at no cookie. Handlers are
+given the caller (`Wiki.Server.Api.Caller`) instead of the listener's `Who`.
+`POST api/v1/session` signs in (401 for a wrong login or password, 429 after
+too many failures per login and address or per address, in memory), `DELETE`
+signs out; the cookie is `HttpOnly`, `SameSite=Strict`, at the base path, and
+`Secure` only with the new `--secure-cookies`; a session ends after two weeks
+unused, on sign-out, and when its user is disabled or given a new password.
+Every request that changes something, on both listeners, must carry
+`X-Wiki-Request` (403 otherwise). The administration API makes a user with a
+password, sets a password and disables a login. Answers and rendered pages
+are `Cache-Control: private, no-cache` with `Vary: Cookie`, and a page is
+rendered as the request's principal, signed-in users included.
+
+`wiki-server users list|add|password|admin|disable --data DIR` makes and
+changes users from the console, beside a running server, reading a password
+from the terminal (asked twice, not echoed) or the first line of standard
+input: the first administrator is made there. New dependencies: `crypton`
+(argon2, its C compiled in) and `ram`.
+
 The administration's people, over the tables the schema had from the start
 (no migration): `SqliteWiki` is a `MonadAdmin` (`Wiki.App.Backend.Admin`),
 each operation one transaction that first checks for the global administer

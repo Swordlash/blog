@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+`Wiki.Core.User.Standing`: how whoever is asking came to be who they are,
+`NotSignedIn`, `SignedIn` or `Operator` (the server's administrator by where
+they ask from), which decides whether they may sign in or out.
+
 Pages have histories. `Wiki.Core.Version` holds what every backend and the
 API share of them: `VersionInfo` (a page, its `updatedAt` as that version,
 the title and the `Author`, a user's id and name, or `Nothing` for nobody

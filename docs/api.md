@@ -36,9 +36,22 @@ as this page.
   page it holds without having kept the header. A save against an older
   version is a conflict (409); one without `If-Match`, or with a tag that is
   weak (`W/"…"`), `*` or not a time, is refused with 400.
-- **Who is asking** is the server's to decide, from the listener the request
-  came in on and, from Phase 3, its session; no endpoint takes it as an
-  argument.
+- **Who is asking** is the server's to decide, for each request: on the
+  public listener, the user whose session the request's cookie names, or
+  nobody; on the admin listener, the administrator (see "The two
+  listeners" below). No endpoint takes it as an argument, and the client
+  never reads the cookie (it is `HttpOnly`).
+- **A request that changes something** (any method but GET, HEAD and
+  OPTIONS) must carry the header `X-Wiki-Request` (any value; the
+  application sends `1`), on both listeners, and is refused with 403
+  otherwise. A page of another site can make a browser post a form here,
+  with the wiki's cookie, but not send a header of its choosing without the
+  server's consent (CORS), which this server never gives. Where the browser
+  says where a request came from (`Sec-Fetch-Site`, sent to HTTPS origins
+  and to the machine itself) it must say `same-origin` (or `none`).
+- **Answers are private**: they depend on who asks, so they go out with
+  `Cache-Control: private, no-cache` (unless an endpoint says otherwise)
+  and `Vary: Cookie`, and so do the pages the server renders.
 
 ## Errors
 
@@ -51,6 +64,11 @@ of the backend's `WikiError`, with its text where it has one:
 | 403 | `{"error": "Forbidden"}` | it names something the user may not see, or may not do this to |
 | 400 | `{"error": "Invalid", "message": "…"}` | the request cannot be carried out as it is |
 | 409 | `{"error": "Conflict", "message": "…"}` | the wiki has changed since the request was made |
+| 401 | `{"error": "Unauthenticated"}` | signing in failed: no account has that login and password, or it cannot sign in |
+| 429 | `{"error": "TooManyRequests", "message": "…"}` | signing in was tried too often; `Retry-After` says how many seconds to wait |
+
+The last two are signing in's alone, and have no `WikiError` of their own:
+a client that meets them elsewhere takes them for forbidden and invalid.
 
 When more than one applies, the first in the order of `MonadWiki`'s Haddock
 is given: not found, forbidden, invalid, conflict. So a user who may not act
@@ -58,8 +76,9 @@ learns nothing about whether their request was otherwise well formed. Any
 endpoint may answer any of these; the table below names the ones each is
 expected to give. A response with a 4xx status and no such body (one the
 routing answered before a handler ran, or a proxy) means the error of its
-status: 404 and 410 not found, 401 and 403 forbidden, 409 and 412 conflict,
-any other 4xx invalid (`Wiki.Api.Error.errorForStatus`). A 5xx is a failure
+status: 404 and 410 not found, 401 unauthenticated, 403 forbidden, 409 and
+412 conflict, 429 too many requests, any other 4xx invalid
+(`Wiki.Api.Error.errorForStatus`). A 5xx is a failure
 of the server, not a refusal.
 
 ## Endpoints
@@ -71,7 +90,44 @@ of the server, not a refusal.
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | GET | `api/v1/info` | | `ServerInfo` `{"name", "apiVersion"}` | | |
-| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants"}`: the user (`null` for nobody signed in), their groups, and the grants given to them or their groups | | `session` |
+| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups, and how they came to be who they are | | `session` |
+| POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
+| DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
+
+`standing` is `"NotSignedIn"` (nobody: the application offers to sign in),
+`"SignedIn"` (a user with a session: it offers to sign out) or
+`"Operator"` (the administrator by where the request came from: the admin
+listener, or a trusted network; neither applies). A login is compared
+without regard to the case of its letters or the blanks around it. Signing
+in or out where everyone is the operator is refused with 400; signing in
+again replaces the browser's session. `signIn` and `signOut` are methods of
+`MonadAccount` (`Wiki.App.Account`), which only the backend over HTTP has.
+
+### Sessions and the cookie
+
+Signing in sets one cookie, `wiki_session`, whose value is the session's
+random id (32 bytes, base64 for URLs); the server keeps only its SHA-256,
+with the user and when it was last used:
+
+```
+Set-Cookie: wiki_session=<id>; Path=<base path>; Max-Age=1209600; HttpOnly; SameSite=Strict
+```
+
+`Secure` is added only when the server runs with `--secure-cookies`
+(behind HTTPS): a browser never sends a secure cookie over plain HTTP,
+which is how the wiki is served on a private network (decision 20). A
+session ends when its user signs out, is disabled or is given a new
+password, and after two weeks without being used; each use moves its end
+on (recorded at most hourly, when the cookie is sent again with a fresh
+`Max-Age`). A request whose cookie names a session that has ended, or no
+session, is nobody's, and its answer clears the cookie (`Max-Age=0`).
+
+Failed sign-ins are counted per login and address (5) and per address (30)
+over 15 minutes, in the server's memory; beyond either, signing in answers
+429 until the oldest failure is 15 minutes old. Signing in clears that
+login's count from that address. Passwords are kept as argon2id hashes
+(19 MiB, 2 passes, 1 lane), in the PHC string format, and must have 8 to
+1024 characters.
 
 ### Spaces
 
@@ -238,11 +294,14 @@ users, groups and grants are not imported) is the plan's WP2.8.
 | DELETE | `api/v1/admin/groups/<group>` | | 204 | 403, 404 | `deleteGroup` |
 | PUT | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `addMember` |
 | DELETE | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `removeMember` |
+| POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password"}` | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403, 400, 409 (the login is taken, in any case) | |
+| PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 | |
+| PUT | `api/v1/admin/users/<user>/disabled` | `AccountDisabled` `{"disabled"}` | `Account`; disabling ends the user's sessions | 403, 404 | |
 
 Only for the global `administer` permission: the operator on the admin
 listener (decision 11 of the plan), and whoever is the administrator on the
-public one (`--trust-network` until accounts and sessions, then a user
-granted it, by their session). Anyone else is refused with 403 before
+public one (a user granted it, by their session; everyone, under
+`--trust-network`). Anyone else is refused with 403 before
 anything the address names is looked for, so that the refusal says nothing
 about which users and groups exist.
 
@@ -255,8 +314,16 @@ always undo it), and a grant to a group is left alone. A group's name is
 trimmed, not blank, and no other group's in any case (400 otherwise).
 Deleting a group deletes its membership and every grant to it, global and on
 spaces. Adding a member who is in the group already, and removing one who is
-not, succeed and change nothing. Users are not made here: an account comes
-with a password, which is the accounts' work.
+not, succeed and change nothing.
+
+The last three are the accounts' (`Wiki.Api.Account`), which have no
+`MonadAdmin` method yet (the panel's forms for them are WP3.4's). A login is
+at most 64 characters, with no blank in it and not starting with `~`, and
+is no other user's in any case (409 otherwise); a blank display name is the
+login. Setting a password, and disabling a login, end the user's sessions;
+a disabled user stays in the directory. A password is never part of an
+answer. The same operations, and making a user an administrator, are on the
+console: `wiki-server users …` (see the README).
 
 ## The two listeners
 
@@ -265,13 +332,14 @@ application, as two different people:
 
 - the **public listener** (`--listen`, the Tailscale address when deployed
   by `toolchain/deploy-local.sh --server`) serves the wiki at its base path
-  (`--base-path`, `/` by default) to an anonymous reader, who sees the
-  public spaces and changes nothing; with `--trust-network`, everyone who
-  reaches it is the administrator instead (decision 19);
+  (`--base-path`, `/` by default) to whoever the request's session names,
+  or to an anonymous reader, who sees the public spaces and changes
+  nothing; with `--trust-network`, everyone who reaches it is the
+  administrator instead, cookie or not, and nobody signs in (decision 19);
 - the **admin listener** (`--admin-listen`, `127.0.0.1:8081` by default,
   loopback only unless `--admin-listen-unsafe`) serves the same application
   at `/admin/`, and its API at `/admin/api/v1/…`, to the administrator,
-  without a login. From another machine it is reached through an SSH
+  without a login, and looks at no cookie. From another machine it is reached through an SSH
   tunnel: `ssh -L 8081:127.0.0.1:8081 <host>`, then
   `http://127.0.0.1:8081/admin/`.
 

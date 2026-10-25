@@ -504,7 +504,8 @@ assert_contains "$EVENTS" "wiki-server backup --data $data"
 assert_contains "$out" "its admin listener answers on http://127.0.0.1:$a1/admin/"
 assert_contains "$out" "Administration, on this machine only: http://127.0.0.1:$a1/admin/"
 assert_contains "$out" "ssh -L $a1:127.0.0.1:$a1"
-assert_contains "$out" 'serves an anonymous reader'
+assert_contains "$out" 'serves whoever signs in there'
+assert_contains "$out" "users add --data $HOME/wiki-demo/data LOGIN --admin"
 assert_contains "$EVENTS" "ufw allow in on tailscale0 to any port $p1 proto tcp comment wiki-demo"
 assert_lacks "$EVENTS" "port $a1"
 pass '--server builds wiki-server at -O2, installs it with the page, and runs it with its data and admin listener'

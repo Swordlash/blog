@@ -233,8 +233,13 @@ async function serveTheDemo(route) {
 }
 
 // What the API says, as the administrator the server takes everyone for.
+// A write carries the header the application's own requests carry, without
+// which the server refuses it (another site's page cannot send it).
 const api = async (path, init = {}) => {
-  const response = await fetch(url(`/api/v1/${path}`), { ...init, headers: { "Content-Type": "application/json", ...init.headers } });
+  const response = await fetch(url(`/api/v1/${path}`), {
+    ...init,
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", ...init.headers },
+  });
   return { status: response.status, body: response.status === 204 ? null : await response.json() };
 };
 const pagesOf = async (spacePath) => {
@@ -262,6 +267,15 @@ async function migrateTheDemo() {
   await page.unroute(demoAddress, serveTheDemo);
   console.log(`ok: the demo, served at the server's address, keeps its wiki in this browser and exports it as ${exported.suggestedFilename()}`);
 
+  // A write without the application's header is another site's, and
+  // refused even here, where everyone is the administrator.
+  const forged = await fetch(url("/api/v1/spaces"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parent: null, name: "Forged" }),
+  });
+  assert.equal(forged.status, 403, "a write without the application's header");
+
   // A page the server has at a path the demo's export has too: a conflict.
   const blog = await api("spaces", { method: "POST", body: JSON.stringify({ parent: null, name: "Blog" }) });
   assert.equal(blog.status, 201, "the server's Blog");
@@ -276,6 +290,8 @@ async function migrateTheDemo() {
   // demo's data, since the demo left it in this origin.
   await page.goto(url("/"));
   await page.locator("#app .user-name", { hasText: "Administrator" }).waitFor({ timeout });
+  // Everyone is the administrator here, so nobody is offered to sign in.
+  assert.equal(await page.locator("#app .sign-in-toggle, #app .sign-out").count(), 0, "sign-in offered on a trusted network");
   await page.locator("#app .wiki-header a.admin-link").click();
   await page.locator("#app .admin-view .import-sources .import-demo").waitFor({ timeout });
 
@@ -417,13 +433,13 @@ try {
   const current = await atPath.json();
   const saved = await fetch(url(`/api/v1/pages/${encodeURIComponent(current.id)}`), {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "If-Match": atPath.headers.get("etag") },
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", "If-Match": atPath.headers.get("etag") },
     body: JSON.stringify({ title: "First page", body: `${current.body}\n\nSaved by someone else.` }),
   });
   assert.equal(saved.status, 200, "the API's save");
   const stale = await fetch(url(`/api/v1/pages/${encodeURIComponent(current.id)}`), {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "If-Match": atPath.headers.get("etag") },
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", "If-Match": atPath.headers.get("etag") },
     body: JSON.stringify({ title: "First page", body: "stale" }),
   });
   assert.equal(stale.status, 409, "a save with a stale version through the API");

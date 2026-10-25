@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Signing in and out of a server's wiki. `Wiki.App.Account` is a capability
+of its own, `MonadAccount` (`signIn`, `signOut`, `sessionChanges`), which
+`HttpWiki` has and `MemWiki` does not, handed to the shell as a record
+(`Accounts`, `Shell.Input.accounts`) as the demo's controls are. The header
+over a server shows "Sign in" (a small form: login, password, why it failed)
+or the user's name and "Sign out" (`Wiki.App.View.SignIn`, in `hh`); the
+operator, who is the administrator without signing in, gets neither. Both
+empty the backend's cache, keeping only the new session, and the shell
+reloads everything. A refusal while someone is signed in makes `HttpWiki` ask
+who is asking; if the session has ended, the cache goes and the shell opens
+the sign-in form, saying so. `Session` gains `standing`. Every request
+carries `X-Wiki-Request`, set by the request builders so that every
+transport sends it. The administration's refusal no longer tells a reader of
+a server's wiki to switch users at the top right.
+
 The administration has the wiki's people. A new class beside `MonadWiki`,
 `Wiki.App.Backend.Admin.MonadAdmin` (`directory`, `setAdministrator`,
 `createGroup`, `renameGroup`, `deleteGroup`, `addMember`, `removeMember`),

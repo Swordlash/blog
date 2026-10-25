@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Signing in and out, and accounts. `WikiApi` gains `signIn` (`POST session`,
+`Credentials`, answering the `SessionInfo` with a `Set-Cookie`) and `signOut`
+(`DELETE session`), and `AdminApi` gains `createUser`
+(`POST admin/users`, `NewAccount`), `setPassword` (`PUT
+admin/users/<user>/password`, `NewPassword`) and `setDisabled` (`PUT
+admin/users/<user>/disabled`, `AccountDisabled`), each answering an
+`Account`; the types are in `Wiki.Api.Account`, whose `Show` instances never
+show a password. `SessionInfo` gains `standing` (`NotSignedIn`, `SignedIn`,
+`Operator`). `ApiError` gains `Unauthenticated` (401) and `TooManyRequests`
+(429), signing in's alone. `requestMarker` names the header every request
+that changes something must carry. Golden files for each.
+
 The wiki's people, for the administration panel: `AdminApi` (now a record
 of several routes) gains `directory` (`GET admin/directory`, a
 `Wiki.Api.Admin.Directory` of the users, the ids of those granted the global

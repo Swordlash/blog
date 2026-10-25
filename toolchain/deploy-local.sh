@@ -197,6 +197,7 @@ if [ "$action" = status ]; then
     backups=$(ls "$prev_dir/data/backups" 2>/dev/null | grep -c '[.]sqlite$' || true)
     latest=$(ls "$prev_dir/data/backups" 2>/dev/null | grep '[.]sqlite$' | tail -n 1 || true)
     say "backups: ${backups:-0} in $prev_dir/data/backups${latest:+, the latest $latest}"
+    say "users: $prev_dir/bin/wiki-server users list --data $prev_dir/data (the first administrator: users add --data $prev_dir/data LOGIN --admin)"
   else
     say "the serverless demo, as static files"
     [ ! -d "$prev_dir/data" ] || say "a server's data is kept in $prev_dir/data"
@@ -554,6 +555,8 @@ if [ "$mode" = server ]; then
 Administration, on this machine only: http://127.0.0.1:$admin_port/admin/
   from another: ssh -L $admin_port:127.0.0.1:$admin_port $user@<this machine>, then the same address
 Backups: $dir/data/backups (one before every deploy; another: $dir/bin/wiki-server backup --data $dir/data)
+Users:   $dir/bin/wiki-server users list --data $dir/data
+  the first administrator: $dir/bin/wiki-server users add --data $dir/data LOGIN --admin (asks for the password)
 Logs:    journalctl --user -u $name -f
 Status:  sh toolchain/deploy-local.sh --status --name $name
 Stop:    sh toolchain/undeploy-local.sh --name $name   (--purge deletes the files but data/, --purge-data that too)
@@ -562,8 +565,8 @@ EOF
     printf '\n%s: WARNING: --trust-network: everyone who can reach %s is the administrator of\n' "$PROG" "$listen"
     printf '%s: this wiki, and may read, change and delete all of it. Keep that address private.\n' "$PROG"
   else
-    printf '\nThe public address serves an anonymous reader, who sees the public spaces only;\n'
-    printf 'the administrator is on the admin listener (or redeploy with --trust-network).\n'
+    printf '\nThe public address serves whoever signs in there, and anyone else as an anonymous\n'
+    printf 'reader, who sees the public spaces only; the administrator is on the admin listener.\n'
   fi
 else
   printf '\nThe demo is served from %s. Open:\n' "$dir"

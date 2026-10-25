@@ -214,12 +214,31 @@ for the next run, like the other options; `--static` goes back to the demo.
   `wiki.sqlite-wal` and `wiki.sqlite-shm` beside it out of the way, copy the
   backup to `data/wiki.sqlite`, and start it again; attachments are never deleted
   while a kept backup names them.
-- **Who is asking.** Until the wiki has accounts (Phase 3), the public address
-  serves an anonymous reader, who sees the public spaces and changes nothing.
-  `--trust-network` makes everyone who reaches that address the administrator, who
-  may read, change and delete everything: right for a tailnet of your own devices,
-  wrong for anything else. The server logs a warning at every start and refuses it
-  with `--bind 0.0.0.0` or `::`; `--no-trust-network` takes it away.
+- **Who is asking.** The public address serves whoever has signed in ("Sign in"
+  at the top right, with a login and a password), and anyone else as an anonymous
+  reader, who sees the public spaces and changes nothing. `--trust-network` makes
+  everyone who reaches that address the administrator instead, and nobody signs
+  in: right for a tailnet of your own devices, wrong for anything else. The server
+  logs a warning at every start and refuses it with `--bind 0.0.0.0` or `::`;
+  `--no-trust-network` takes it away.
+- **The first administrator.** There is no administrator account in the
+  configuration: make one on the machine itself, with the server running or not.
+  The password is asked for (twice, not shown), or read as the first line of
+  standard input:
+
+  ```sh
+  ~/wiki-demo/bin/wiki-server users add --data ~/wiki-demo/data you --display-name "Your Name" --admin
+  ~/wiki-demo/bin/wiki-server users list --data ~/wiki-demo/data
+  ```
+
+  The same command gives a user a new password (`users password LOGIN`, which
+  signs them out), makes or unmakes an administrator (`users admin LOGIN --on`,
+  `--off`) and disables a login (`users disable LOGIN --on`, which signs them out;
+  `--off` enables it). It is also how an installation whose administrators are all
+  locked out is recovered. Sign in on the public address with that login; until
+  `--trust-network` is taken away, that address takes everyone for the
+  administrator and offers no sign-in. Sessions last two weeks without use. Behind
+  HTTPS, run the server with `--secure-cookies`.
 - **The admin listener.** `http://127.0.0.1:8081/admin/` (`--admin-port` changes
   the port) serves the same application to whoever is on the machine, as the
   administrator, with no login; it listens on loopback only, and no firewall rule
@@ -347,8 +366,9 @@ there with the compose file beside it.
   ```
 
   It is the API and the application as the administrator, as on the machine's own
-  admin listener; until Phase 3 brings its panel and accounts, that is the way to
-  change the wiki in the default mode (the API is `docs/api.md`).
+  admin listener (the API is `docs/api.md`). Make the first administrator there
+  too: `docker compose exec wiki wiki-server users add --data /data you --admin`
+  (add `-T` and pipe the password in to give it on standard input).
 - **Trusted mode.** `--trust-network` makes everyone who reaches the public
   listener the administrator, and the server refuses it on `0.0.0.0`, the only
   address a container on its own network can listen on: whether that is safe
