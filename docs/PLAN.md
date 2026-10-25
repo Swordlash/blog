@@ -2248,6 +2248,39 @@ Amended by the planning session after each work package's report.
   History, Present, Comments, Delete) sticks under the header while the page scrolls, so a
   long page can be edited without scrolling back up; the editor's toolbar likewise if it does
   not already.
+- **WP4.6 merged** (2026-10-25, PR #65, `main` at `14e429d`). One space at a time, as the
+  owner asked after Confluence. The front page is a directory of spaces (`View/Directory.hs`:
+  a card per top-level space with icon, name, description, page and subspace counts, a
+  public/private badge; a space seen only through a subspace gets a card without a link that
+  names the subspaces one may open; "Recently visited", the last six in `localStorage`,
+  `Wiki.App.Recent`). Inside a space the sidebar shows its icon and name, a switcher back to
+  the directory or to another space, "Up to <parent>", the home page, "Pages and settings",
+  the page tree and a "Subspaces" section; the breadcrumb reads Spaces › space › subspace ›
+  page. A new space is made with a "Home" page from a template; `/s/<space>/` shows the home
+  page when there is one, the list of pages otherwise, and that list is always at
+  `/s/<space>/pages/` (`pages` is a reserved slug; existing spaces have no home page until an
+  administrator sets one with "Set as home page" or in the settings). Icons: an emoji, one of
+  ten colours, or an uploaded PNG/JPEG/GIF/WebP/AVIF up to 1 MB, SVG refused, stored as a blob
+  and served from `spaces/<id>/icon/<blob>` with `nosniff`, a sandbox CSP and an ETag; without
+  one, the first letter on a colour picked from the id. `View/SpaceSettings.hs` takes the place
+  of "Rename" and "Permissions": one form for name, description, icon and home page, the
+  permissions below. Backend: `setSpaceProfile`, `uploadSpaceIcon`, `spaceIconUrl`,
+  `pageCounts` on `MonadWiki`, checked with `canAdministerSpace`, over Mem, Http and SQLite;
+  API `PUT spaces/<id>/profile`, `POST spaces/<id>/icon`, `GET spaces/<id>/icon/<blob>`, `GET
+  spaces/page-counts`; migration `0007-space-profile.sql` (`home_page` referencing `pages` `ON
+  DELETE SET NULL`, `icon`, `description`); moving or deleting a page clears a home that
+  pointed at it; blob garbage collection counts icon blobs; export and import carry the three
+  fields and icons under `icons/<space id>`, an import into an existing space fills only what
+  is still empty. The owner's addition: `.actions.page-actions` and the editor's toolbar stick
+  under the header (`jsbits/layout.js` sets `--header-height` and `--page-actions-height` from
+  the real sizes and `data-stuck` while stuck; nothing changes in print). The smoke tests
+  leave `data-stuck` and `.recent-spaces` out of their count of hydration repairs, since the
+  script and `localStorage` set them, not Halogen. Tests: core model tests, the contract's
+  `profiles` section on four backends, HTTP per permission rule, server render 200/403/404,
+  migration from 6, import of the new fields, `Test.Hydrate` on the new routes at zero
+  repairs, `Test.Browser.Spaces` (directory, switcher, settings, icon upload, home page, sticky
+  bar), both smoke tests through the directory, a home page, `pages/` and an uploaded icon;
+  core 651 + 99, api 122 + 71, app 908, server 604, browser 182.
 - **WP4.7 LaTeX delimiters** (the owner, 2026-10-25): `\(…\)` for inline and `\[…\]` for
   display math, beside `$…$` and `$$…$$` (pandoc's `tex_math_single_backslash`). Decided with
   it: a `\[` or `\(` then starts math rather than escaping a bracket, as in pandoc; a literal
@@ -2256,13 +2289,17 @@ Amended by the planning session after each work package's report.
   search, slides and the preview need nothing. Started on `wp4.7-tex-delimiters` beside WP4.6.
 - **WP4.8 Pin bump to haskell-halogen `f7ee7e3`** (the owner merged #72 to #76 on
   2026-10-25): a subscription's action now runs nested in the effect that dispatched its
-  event (so `preventDefault` from a `Window` emitter's action is in time; the slides' wrapped
-  `keyDown` of WP4.3 could lose its own wrapping), `H.component` built from handlers
+  event (`preventDefault` from a `Window` emitter's action is in time when the page itself
+  dispatched the event from an effect; a key the user presses while the loop is busy is still
+  queued, so the slides' wrapped `keyDown` of WP4.3, which prevents the default in the
+  listener, stays), `H.component` built from handlers
   (`H.onAction`, `H.onInitialize`, …; `mkComponent` stays; no module here imports `Halogen`
   unqualified, so the new `component` export clashes with nothing), hspec-halogen's
   `isVisible` counts `visibility: hidden` as hidden (the stylesheet uses none). Its own small
   package after WP4.6 and WP4.7 merge, since a bump rebuilds every package on both backends;
-  adopt the handler form where a component is touched anyway, not wholesale.
+  adopt the handler form where a component is touched anyway, not wholesale. Started
+  on `wp4.8-pin-bump` from `main` `57e2cac` on 2026-10-25 while WP4.6's CI ran, since the
+  agent's build takes as long either way; it rebases before its pull request.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
