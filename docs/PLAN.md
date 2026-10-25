@@ -2113,3 +2113,10 @@ Amended by the planning session after each work package's report.
   `wp4.4-server-settings` (public URL, mail and sign-in providers from the panel, migration
   `0005`) and `wp4.5-comments` (inline and page threads, live over a WebSocket, migration
   `0006`); whichever merges second rebases.
+- **WP3.7 Account fixes started** (2026-10-25) on `wp3.7-account-fixes` from `main`
+  `723a898`, from the owner's test of the deployed Phase 3: the "Creates spaces" switch shows
+  on and disabled for an administrator (the rule already implies it); a user may change or
+  set their own password (`PUT api/v1/account/password`, the current one required where it
+  exists, other sessions ended, the account panel always reachable); the setting "A new
+  account may create spaces" reworded with a help sentence (it grants `create-spaces` to
+  every account made by self-registration, invitation or a provider sign-in).
