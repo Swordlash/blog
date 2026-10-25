@@ -2309,6 +2309,21 @@ Amended by the planning session after each work package's report.
   adopt the handler form where a component is touched anyway, not wholesale. Started
   on `wp4.8-pin-bump` from `main` `57e2cac` on 2026-10-25 while WP4.6's CI ran, since the
   agent's build takes as long either way; it rebases before its pull request.
+- **WP4.8 merged** (2026-10-25, PR #67, `main` at `29931c3`). One line: the pin is
+  `f7ee7e3`. Nothing else had to change: no module imports `Halogen` unqualified, nothing is
+  styled with `visibility`, no test relied on a queued subscription action, and the slides'
+  `keyDown` wrapping stays, as decided above. The handler form (`H.component`) is adopted
+  nowhere yet; use it in components written or touched from now on. Found on the way:
+  `Wiki.Server.Storage.Migrate` embeds `migrations/` with `embedDir`, and GHC does not
+  recompile it when a file is added to the directory, so a worktree with an older build runs
+  the old migrations and `wiki-server-test` fails with "no column named …" until
+  `dist-newstyle/native/build/*/*/wiki-server-0.1.0.0` is deleted; CI builds from scratch.
+  The Wave A agents were told; a package that adds a migration may make the module depend
+  on the directory's files.
+- **Wave A started** (2026-10-25) from `29931c3`, four worktrees in parallel: WP4.9 on
+  `wp4.9-backups`, WP4.11 on `wp4.11-account-hygiene`, WP4.12 on `wp4.12-presence`, WP4.16
+  on `wp4.16-export`. Each brief names what the others touch (the page's action bar, the
+  panel's Server section, migrations numbered at rebase).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
