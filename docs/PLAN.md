@@ -2019,3 +2019,75 @@ Amended by the planning session after each work package's report.
   authorization code flow with PKCE (Google, GitHub, generic OIDC, Apple if it fits),
   identities linked to accounts, the open/closed rule of WP3.5 obeyed. The last package of
   Phase 3.
+- **WP3.6 merged** (2026-10-25, PR #61, `main` at `2599290`). Sign-in with Google, GitHub,
+  Apple or any OpenID Connect provider, beside passwords. Configuration `--oidc
+  NAME=KIND,CLIENT-ID[,ISSUER]` (kinds `google`, `apple`, `github`, `oidc` with its issuer; a
+  fourth field overrides the provider's address, e.g. GitHub Enterprise), the secret only
+  from `WIKI_OIDC_<NAME>_SECRET`, `--public-url` required, redirect URI
+  `<public-url>auth/<NAME>/callback`; `checkOptions` rejects bad or duplicate names, `oidc`
+  without an issuer, a non-https issuer off loopback, `--oidc` without `--public-url`; a
+  missing secret fails start-up; `wiki-server oidc check [NAME]` runs discovery and prints
+  the redirect URI. Flow (`Wiki.Server.Oidc`, `Wiki.Server.Auth`): authorization code with
+  PKCE (not for Apple) and a nonce, driven by the server through `auth/<name>/start?next=…
+  [&link=1|&invite=…]` and `GET`/`POST auth/<name>/callback` on the public listener only,
+  dispatched before the closed-wiki check and outside `sameOrigin`; pending round trips in
+  memory (10 min, at most 10 000, lost on restart), each bound to the browser by a `wiki_oidc`
+  cookie (`HttpOnly; SameSite=Lax; Path=<base>auth/`; two flows at once in two tabs fail the
+  first); discovery lazy and cached; ID token claims `iss`, `aud`/`azp`, `exp` (60 s skew),
+  `nonce` checked without a signature check (the token comes straight from the token
+  endpoint over TLS); GitHub's numeric `id` is the subject, `user`/`user/emails` give the
+  verified address; the secret goes `client_secret_post` where discovery lists it and for
+  GitHub, else HTTP Basic; the callback answers a page with a `meta refresh`, not a 302,
+  because a `SameSite=Strict` session cookie is not sent on a redirect ending a cross-site
+  navigation (Apple's `form_post` is turned into a same-site GET the same way); `safeNext`
+  accepts only paths under the wiki. Rules (`Accounts.landWith`, one transaction): a known
+  identity signs in (disabled → 403 page); `link=1` links to the signed-in user who started
+  (refused if the identity is another's or a second at that provider); an invitation makes
+  that account and uses it up; otherwise an account in an open wiki (no password,
+  `newAccountsCreateSpaces` honoured) and a refusal in a closed one; logins from the
+  provider's login, the verified e-mail's local part or the name, `[a-z0-9._-]`, ≤ 40,
+  `-2`, `-3`… then random; an unverified e-mail is not stored; accounts made and failed
+  exchanges count against `env.registrations`, known sign-ins do not. Migration
+  `0004-identities.sql`: `identities (provider, subject, user_id, email, display_name,
+  linked_at)`, PK `(provider, subject)`, unique `(user_id, provider)`, cascade. API: `Session`
+  and `SessionInfo` gain `providers :: [SignInProvider {name, label}]` (in the session, so
+  server render and first client render match); `Directory` gains `identities`; `GET`/
+  `DELETE api/v1/account/identities[/<p>]` (409 when it would leave no way to sign in);
+  `DELETE admin/users/<id>/identities/<p>` (may remove the last way in, ends the sessions);
+  `Wiki.Api.Auth` builds the addresses. App: provider links under the sign-in, "Create
+  account" and invitation forms; a signed-in user's name opens an account panel (password
+  state, identities, Disconnect disabled on the last way in, "Connect X"); the admin column
+  says "Signs in with GitHub" / "with a password and GitHub" with a Disconnect per identity;
+  `MonadAccount` gains `identities`, `unlinkIdentity`; `MonadAdmin` gains
+  `unlinkUserIdentity`; `MemWiki` stateless. Deploy: `deploy-local.sh --oidc …` (repeatable,
+  `--no-oidc`), secrets in the mode-600 env file, prints the redirect URIs and an `oidc
+  check` line; compose, Dockerfile, README (per-provider registration steps), `docs/api.md`.
+  Tests: a fake provider (Warp, OIDC and GitHub shapes) over real HTTP with a cookie-keeping
+  test browser (open, closed, invited; link, unlink, last way in; disabled; wrong `aud`,
+  nonce, `iss`, expired; unknown state, state without the cookie; provider declining; the
+  limit; Apple `form_post`; Basic vs post secret; nothing secret in the log), options,
+  migration from 3, claims, login candidates, `safeNext`, `oidc check`, admin contract on
+  all backends, 8 browser cases, hydration with providers at zero repairs, the server smoke
+  test signs in through a fake provider on `localhost` against the wiki on `127.0.0.1` in
+  real Chromium (different sites), `test-deploy-local.sh` 28+10+10; server 495, app 803,
+  browser 156; `app.wasm` 8.92 MB. Apple implemented but tested only against the fake
+  provider; it needs an https redirect URI and an ES256 JWT as the secret (≤ 6 months).
+  Not done: no self-service password for an identity-only account (an administrator sets
+  one); the last-way-in check counts identities at providers no longer configured; group
+  grants still not shown in the panel (from WP3.4). Lessons: a new `migrations/*.sql` does
+  not recompile `Storage/Migrate.hs` incrementally (`embedDir` tracks only files it saw;
+  delete its `.o`); `build-wasm`'s prerender step and `build-native` share
+  `dist-newstyle/native`, never run both at once; record updates on fields shared by
+  several records are ambiguous under `DuplicateRecordFields`; browser tests `find` before
+  `findAll` where a view loads asynchronously.
+- **Phase 3 complete** (2026-10-25). `main` at `2599290` has accounts and sessions (WP3.1,
+  with WP3.2's authorisation folded in), the administration panel (WP3.3), account forms,
+  per-space permissions, `create-spaces` and the end of `--trust-network` (WP3.4), the open
+  or closed wiki with invitations by e-mail (WP3.5) and OIDC sign-in (WP3.6); beside it,
+  presentations (WP4.2) and the halogen pin at `5ea6dba` with `Net.Fetch` (WP4.3). Tag point
+  for `v0.3.0-accounts`, which the owner pushes. Carried into Phase 4: group grants of the
+  global permissions in the panel; the slides' theme from a space's settings and notes in a
+  second window; a self-service password for identity-only accounts; disabled users out of
+  `spaceAccess`'s candidates (decision 22); `/` shortcut and the three `Safe` bindings over
+  the window emitters and `Promise`; the assistant stays shelved (decision 21). Next: the
+  owner's pick among the Phase 4 candidates.
