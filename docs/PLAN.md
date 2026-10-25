@@ -939,6 +939,22 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   rules per operation over HTTP, the WebSocket end to end (two clients, one comments, the
   other hears), the closed-wiki refusal of the upgrade, browser tests for selecting text and
   commenting, the side panel, the page threads, hydration at zero repairs with threads.
+- **WP4.6 One space at a time** (the owner, 2026-10-25: as Confluence, the sidebar shows one
+  space, each space has a home page and an image). Who may create a space stays as it is
+  (the global `create-spaces`, administrators by default, as Confluence Data Center has it).
+  The home route becomes a *space directory*: cards with each space's icon, name and
+  description, and the recently visited ones. Inside a space the sidebar shows that space
+  only: its home page, its page tree, and its subspaces as a section below (Confluence has no
+  subspaces; ours stay), with the space's name and icon above and a switcher back to the
+  directory or to another space; the breadcrumb reads space › subspace › page. A space gains
+  a home page (the page opened on entering it; a "Home" page is made with the space, from a
+  template, and any page can be chosen later), an icon (an uploaded image stored like an
+  attachment, or an emoji or a colour by default) and a description, set by a space
+  administrator in the space's settings (the "Permissions" section grows into "Space
+  settings"). Migration for `home_page`, `icon`, `description`; the directory and the space
+  view prerendered and server-rendered as today; the demo gets icons and descriptions. After
+  WP4.4, WP4.5 and WP3.7, since it reshapes the shell's sidebar that the comments' side
+  panel touches.
 
 ## Delegation protocol
 
