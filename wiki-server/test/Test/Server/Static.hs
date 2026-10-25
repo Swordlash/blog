@@ -64,6 +64,8 @@ publicListener = describe "on the public listener" $ do
     headed <- send r methodHead (r.public <> "/style.css") [] ""
     (headed.status, headed.body, header "Content-Type" headed) `shouldBe` (200, "", Just "text/css; charset=utf-8")
     (.status) <$> send r methodPost (r.public <> "/style.css") [] "" `shouldReturn` 405
+    -- The API's check on writes is the API's: a file refuses the method.
+    (.status) <$> sendBare r methodPost (r.public <> "/") [] "" `shouldReturn` 405
 
   it "serves nothing outside its directory, by .. or by a link" $ withRunning $ \r -> do
     (.status) <$> getUrl r (r.public <> "/%2e%2e/data/wiki.sqlite") `shouldReturn` 403

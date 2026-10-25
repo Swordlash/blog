@@ -41,8 +41,8 @@ as this page.
   nobody; on the admin listener, the administrator (see "The two
   listeners" below). No endpoint takes it as an argument, and the client
   never reads the cookie (it is `HttpOnly`).
-- **A request that changes something** (any method but GET, HEAD and
-  OPTIONS) must carry the header `X-Wiki-Request` (any value; the
+- **A request to the API that changes something** (any method but GET,
+  HEAD and OPTIONS) must carry the header `X-Wiki-Request` (any value; the
   application sends `1`), on both listeners, and is refused with 403
   otherwise. A page of another site can make a browser post a form here,
   with the wiki's cookie, but not send a header of its choosing without the

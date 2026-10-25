@@ -77,12 +77,13 @@ pathSegments = filter (not . T.null) . T.splitOn "/"
 -- | A listener's application: who is asking is found first, then the
 -- request is logged as theirs and answered, with the session's cookie
 -- cleared if it named a session that has ended, or sent again if the
--- session's end moved on. A request that changes something must come from
--- the application ("Wiki.Server.Session"'s 'sameOrigin').
+-- session's end moved on. A request to the API that changes something must
+-- come from the application ("Wiki.Server.Session"'s 'sameOrigin'); the
+-- application's files and pages take nothing but GET and HEAD anyway.
 listenerApp :: Logger -> Env -> Maybe StaticSite -> Listener -> Application
 listenerApp logger env site l request respond = do
   (caller, cookie) <- findCaller env l request
-  logRequests logger l.name (principalName caller.who) (sameOrigin (routes caller)) request (respond . mapResponseHeaders (withCookie cookie))
+  logRequests logger l.name (principalName caller.who) (routes caller) request (respond . mapResponseHeaders (withCookie cookie))
   where
     routes caller = listenerRoutes logger env site l caller
     -- The handler's own cookie (signing in or out) wins over the one found.
@@ -136,5 +137,5 @@ listenerRoutes logger env site l caller request respond =
         | readOnly && null segments -> redirect (encodeUtf8 l.mount)
         | otherwise -> notFound
   where
-    api = apiApplication env caller
+    api = sameOrigin (apiApplication env caller)
     pages template = renderPage logger env caller.who l.mount template

@@ -295,8 +295,9 @@ select {
   gap: 0.5rem;
 }
 
-.sign-in-told:empty {
-  display: none;
+/* Always there, so that the inputs keep their places; no box of its own. */
+.sign-in-told {
+  display: contents;
 }
 
 .sign-in-notice {
