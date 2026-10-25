@@ -33,7 +33,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | Who a request is made as: nobody, or the demo's user with this login
@@ -144,6 +144,12 @@ sessions = describe "session" $ do
     for_ ["admin", "editor", "reader"] $ \login -> do
       u <- run (As login) currentUser
       (\x -> x.login) <$> u `shouldBe` Just login
+
+  it "says that the user is signed in, and nobody is not" $ \(Fixture run) -> do
+    e <- run editor session
+    e.standing `shouldBe` SignedIn
+    n <- run Anonymous session
+    n.standing `shouldBe` NotSignedIn
 
   it "has the user's global grants" $ \(Fixture run) -> do
     a <- run admin session

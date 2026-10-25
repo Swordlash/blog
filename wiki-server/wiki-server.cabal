@@ -155,6 +155,7 @@ test-suite wiki-server-test
     buildable: False
   else
     other-modules:
+        Test.Server.Accounts
         Test.Server.Api
         Test.Server.Fixture
         Test.Server.Http
@@ -163,6 +164,7 @@ test-suite wiki-server-test
         Test.Server.Render
         Test.Server.Static
         Test.Storage
+        Test.Storage.Accounts
         Test.Storage.Backup
         Test.Storage.Contract
         Test.Storage.Fixture

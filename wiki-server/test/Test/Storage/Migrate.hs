@@ -37,10 +37,25 @@ spec = describe "migrations" $ do
       migrate c `shouldReturn` [1 .. length migrations]
       schemaVersion c `shouldReturn` length migrations
       tables <- tableNames c
-      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "schema_version"] $ \t ->
+      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "schema_version"] $ \t ->
         tables `shouldContain` [t]
       rows <- query_ c "SELECT version FROM schema_version ORDER BY version"
       map fromOnly rows `shouldBe` [1 .. length migrations]
+
+  it "bring a database of the first schema up to accounts: its users kept, with no password and not disabled" $
+    withFreshDatabase $ \_ c -> do
+      applyMigrations (take 1 migrations) c `shouldReturn` [1]
+      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
+      execute_ c "INSERT INTO global_grants (subject_kind, subject_id, permission) VALUES ('user', 'user-1', 'administer')"
+      migrate c `shouldReturn` [2 .. length migrations]
+      rows <- query_ c "SELECT id, login, display_name, password_hash, disabled FROM users"
+      rows `shouldBe` [("user-1" :: Text, "ada" :: Text, "Ada" :: Text, Nothing :: Maybe Text, 0 :: Int)]
+      tableNames c >>= (`shouldContain` ["sessions"])
+      -- A session goes with its user.
+      execute_ c "PRAGMA foreign_keys = ON"
+      execute_ c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ('h', 'user-1', 'a', 'b', 'c')"
+      execute_ c "DELETE FROM users WHERE id = 'user-1'"
+      query_ c "SELECT count(*) FROM sessions" `shouldReturn` [Only (0 :: Int)]
 
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do

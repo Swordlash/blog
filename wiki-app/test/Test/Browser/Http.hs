@@ -62,6 +62,7 @@ import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id (AttachmentId (..), PageId (..), UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Space qualified as S
+import Wiki.Core.User (Standing (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 #if defined(wasm32_HOST_ARCH)
 import Halogen.VDom.DOM.Monad (runBrowserDOM)
@@ -234,6 +235,94 @@ spec m = do
   requests
   refusals
   views m
+  accounts m
+
+-- | Who is asking, as the server says: someone of the demo's signed in,
+-- or nobody.
+signedInAs :: Text -> IO SessionInfo
+signedInAs uid = do
+  wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
+  me <- runMemWiki wiki session
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn}
+
+nobody :: SessionInfo
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn}
+
+-- | Signing in and out from the header, over the server's backend.
+accounts :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+accounts m = describe "signing in and out" $ do
+  it "signs in from the header, and loads everything again as the user signed in" $ runPage $ do
+    serverStarts
+    serveDemo
+    ada <- unsafeIOToPageM (signedInAs "user-admin")
+    answerWith "GET" "api/v1/session" 200 nobody
+    answerWith "POST" "api/v1/session" 200 ada
+    ui <- startServer m Home
+    find ui ".sign-in-toggle" >>= click
+    find ui ".sign-in-form input[name=login]" >>= (`typeText` "ada")
+    find ui ".sign-in-form input[name=password]" >>= (`typeText` "correct horse")
+    spacesBefore <- length . filter (\r -> r.url == "api/v1/spaces") <$> asked
+    find ui ".sign-in-form button[type=submit]" >>= click
+    find ui ".account .user-name" >>= (`shouldHaveText` "Ada Admin")
+    _ <- find ui ".account .sign-out"
+    length <$> findAll ui ".sign-in-form" `shouldReturn` 0
+    [signIn] <- filter (\r -> r.method == "POST") <$> asked
+    (signIn.url, signIn.body) `shouldBe` ("api/v1/session", "{\"login\":\"ada\",\"password\":\"correct horse\"}")
+    Map.lookup "X-Wiki-Request" signIn.headers `shouldBe` Just "1"
+    -- Everything read as nobody is read again as Ada: the spaces were.
+    eventually $ (length . filter (\r -> r.url == "api/v1/spaces") <$> asked) >>= (`shouldSatisfy` (> spacesBefore))
+    find ui ".admin-link" >>= (`shouldHaveText` "Administration")
+    unmount ui
+    serverStops
+
+  it "says why signing in failed, and keeps the form open" $ runPage $ do
+    serverStarts
+    serveDemo
+    answerWith "GET" "api/v1/session" 200 nobody
+    answerRaw "POST" "api/v1/session" 401 "{\"error\":\"Unauthenticated\"}"
+    ui <- startServer m Home
+    find ui ".sign-in-toggle" >>= click
+    find ui ".sign-in-form input[name=login]" >>= (`typeText` "ada")
+    find ui ".sign-in-form input[name=password]" >>= (`typeText` "wrong password")
+    find ui ".sign-in-form button[type=submit]" >>= click
+    find ui ".sign-in-error" >>= (`shouldHaveText` "The login or the password is not right.")
+    answerRaw "POST" "api/v1/session" 429 "{\"error\":\"TooManyRequests\",\"message\":\"Too many failed attempts to sign in as ada: try again in 15 minutes.\"}"
+    find ui ".sign-in-form button[type=submit]" >>= click
+    find ui ".sign-in-error" >>= (`shouldHaveText` "Too many failed attempts to sign in as ada: try again in 15 minutes.")
+    _ <- find ui ".sign-in-toggle"
+    unmount ui
+    serverStops
+
+  it "signs out, and loads everything again as nobody" $ runPage $ do
+    serverStarts
+    serveDemo
+    answerWith "DELETE" "api/v1/session" 200 nobody
+    ui <- startServer m Home
+    find ui ".account .user-name" >>= (`shouldHaveText` "Ada Admin")
+    answerWith "GET" "api/v1/spaces" 200 ([] :: [S.Space])
+    find ui ".account .sign-out" >>= click
+    _ <- find ui ".sign-in-toggle"
+    find ui ".home .empty" >>= (`shouldHaveText` "There are no spaces you can see.")
+    length <$> findAll ui ".admin-link" `shouldReturn` 0
+    map (\r -> r.url) . filter (\r -> r.method == "DELETE") <$> asked `shouldReturn` ["api/v1/session"]
+    unmount ui
+    serverStops
+
+  it "offers to sign in again when the session has ended by itself" $ runPage $ do
+    serverStarts
+    serveDemo
+    ui <- startServer m Home
+    find ui ".account .user-name" >>= (`shouldHaveText` "Ada Admin")
+    -- The session ends on the server: what Ada could read is refused, and
+    -- the server says nobody is asking.
+    answerWith "GET" "api/v1/session" 200 nobody
+    answerRaw "GET" (links.spaces.atPath (slugs ["team"])) 403 "{\"error\":\"Forbidden\"}"
+    find ui ".wiki-sidebar a[href='#/s/team/']" >>= click
+    find ui ".sign-in-notice" >>= (`shouldHaveText` "Your session has ended. Sign in again to go on.")
+    _ <- find ui ".sign-in-form input[name=login]"
+    length <$> findAll ui ".account .sign-out" `shouldReturn` 0
+    unmount ui
+    serverStops
 
 -- | Hello, world, from the demo.
 helloWorld :: IO P.Page
@@ -254,7 +343,7 @@ requests = describe "its requests, through fetch" $ do
     overHttp env (savePage hello.id hello.updatedAt "Title" "Body") `shouldReturn` Right hello
     [r] <- asked
     (r.method, r.url) `shouldBe` ("PUT", "api/v1/pages/" <> hello.id.text)
-    r.headers `shouldBe` Map.fromList [("If-Match", "\"2026-09-01T12:00:00Z\""), ("Content-Type", "application/json")]
+    r.headers `shouldBe` Map.fromList [("If-Match", "\"2026-09-01T12:00:00Z\""), ("Content-Type", "application/json"), ("X-Wiki-Request", "1")]
     r.body `shouldBe` "{\"body\":\"Body\",\"title\":\"Title\"}"
     serverStops
 

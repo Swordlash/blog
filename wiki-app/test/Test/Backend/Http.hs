@@ -1,3 +1,5 @@
+{-# LANGUAGE MultiWayIf #-}
+
 -- | The backend over HTTP, natively, over a transport the test answers: the
 -- requests it makes (addresses, methods, headers, bodies), how it reads
 -- answers and refusals, and what it keeps of what it read. That the
@@ -8,15 +10,19 @@ module Test.Backend.Http (spec) where
 
 import Data.Aeson (ToJSON, encode)
 import Data.ByteString qualified as BS
-import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Halogen.Subscription qualified as HS
 import Protolude
 import Test.Hspec
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
+import Wiki.Api.Types (SessionInfo (..))
+import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Http
-import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSpaceAt, withSpaces)
+import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Http.Request
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -28,6 +34,7 @@ import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Search (SearchHit, searchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.User (Standing (..), User (..))
 
 -- | A transport that answers as the function says, and keeps every request
 -- it was given, the latest first.
@@ -71,6 +78,7 @@ spec = describe "Wiki.App.Backend.Http" $ do
   requests
   answers
   caching
+  accounts
   preload
 
 requests :: Spec
@@ -94,7 +102,7 @@ requests = describe "its requests" $ do
     [r] <- readIORef asked
     r.method `shouldBe` "PUT"
     r.url `shouldBe` "api/v1/pages/" <> hello.id.text
-    r.headers `shouldBe` [("If-Match", "\"2026-09-01T12:00:00Z\"")]
+    r.headers `shouldBe` [("If-Match", "\"2026-09-01T12:00:00Z\""), ("X-Wiki-Request", "1")]
     r.body `shouldBe` Body "application/json" "{\"body\":\"New body\",\"title\":\"New title\"}"
 
   it "keeps a draft with the version it started from in the body" $ do
@@ -290,6 +298,71 @@ caching = describe "what it keeps" $ do
     runHttpWiki env (atOnce (listPages hello.space)) `shouldReturn` Just (Right blogPages)
     runHttpWiki env (atOnce (getPage hello.space (slugs "hello-world"))) `shouldReturn` Just (Right hello)
     length <$> readIORef asked `shouldReturn` 1
+
+-- | Who is asking: the demo's admin, signed in, or nobody, as the server
+-- sends them.
+signedIn, nobody :: SessionInfo
+signedIn =
+  SessionInfo
+    { user = Just User {id = UserId "user-admin", login = "admin", displayName = "Ada Admin"}
+    , groups = mempty
+    , grants = mempty
+    , standing = SignedIn
+    }
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn}
+
+accounts :: Spec
+accounts = describe "signing in and out" $ do
+  it "marks every request as the application's own" $ do
+    (env, asked) <- backend (const (status 204 ""))
+    _ <- runHttpWiki env (deletePage (PageId "x"))
+    _ <- runHttpWiki env (attempt listSpaces)
+    rs <- readIORef asked
+    map (\r -> lookup "X-Wiki-Request" r.headers) rs `shouldBe` [Just "1", Just "1"]
+
+  it "signs in with the credentials as JSON, and starts over with the session it answers" $ do
+    (env, asked) <- backend $ \r ->
+      if
+        | r.method == "POST" -> ok signedIn
+        | otherwise -> ok (Map.elems demo.spaces)
+    _ <- runHttpWiki env listSpaces
+    s <- runHttpWiki env (signIn "admin" "correct horse")
+    (\x -> (x.user, x.standing)) <$> s `shouldBe` Right (signedIn.user, SignedIn)
+    [r, _] <- readIORef asked
+    (r.method, r.url, r.body) `shouldBe` ("POST", "api/v1/session", Body "application/json" "{\"login\":\"admin\",\"password\":\"correct horse\"}")
+    -- What was read as nobody is gone; who is asking is known.
+    runHttpWiki env (atOnce listSpaces) `shouldReturn` Nothing
+    runHttpWiki env (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
+
+  it "says why signing in failed" $ do
+    let failing n body = backend (const (status n body)) >>= \(env, _) -> runHttpWiki env (signIn "admin" "nope")
+    failing 401 "{\"error\":\"Unauthenticated\"}" `shouldReturn` Left WrongCredentials
+    failing 429 "{\"error\":\"TooManyRequests\",\"message\":\"Wait 15 minutes.\"}" `shouldReturn` Left (TooManyAttempts "Wait 15 minutes.")
+    failing 403 "{\"error\":\"Forbidden\"}" `shouldReturn` Left (SignInFailed Forbidden)
+    failing 503 "" `shouldReturn` Left (SignInFailed (Unreachable "the server failed, with status 503"))
+
+  it "signs out with DELETE, and starts over as nobody" $ do
+    (env, asked) <- backend (const (ok nobody))
+    runHttpWiki env signOut `shouldReturn` Right (fromSessionInfo nobody)
+    map (\r -> (r.method, r.url)) <$> readIORef asked `shouldReturn` [("DELETE", "api/v1/session")]
+    runHttpWiki env (atOnce session) `shouldReturn` Just anonymous
+
+  it "asks who is asking after a refusal while someone is signed in, and says when that has changed" $ do
+    ended <- newIORef False
+    (transport, asked) <- scripted $ \r ->
+      if
+        | r.url == "api/v1/session" -> ok nobody
+        | otherwise -> status 403 "{\"error\":\"Forbidden\"}"
+    env' <- newHttpEnvWith transport (withSession (fromSessionInfo signedIn) emptyCache)
+    changes <- runHttpWiki env' sessionChanges
+    _ <- HS.subscribe changes (\s -> when (isNothing s.user) (writeIORef ended True))
+    runHttpWiki env' (getSpace (slugs "team")) `shouldReturn` Left Forbidden
+    readIORef ended `shouldReturn` True
+    runHttpWiki env' (atOnce session) `shouldReturn` Just anonymous
+    map (\r -> r.url) <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/spaces/at/team"]
+    -- Nobody is signed in now: another refusal asks nothing more.
+    _ <- runHttpWiki env' (getSpace (slugs "docs"))
+    length <$> readIORef asked `shouldReturn` 3
 
 preload :: Spec
 preload = describe "what a page it is rendered into carries" $ do
