@@ -2324,6 +2324,69 @@ body:has(.slides-view) {
   }
 }
 
+/* A conflict: their version beside the author's text on a wide screen,
+   under it on a narrow one, in the preview's place (the preview is shown
+   again with "Show preview", alone). */
+@media (min-width: 961px) {
+  .editor-form.conflicting .editor-panes {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.editor-form.conflicting .editor-panes .editor-preview {
+  display: none;
+}
+
+.editor-form.previewing .editor-conflict-pane {
+  display: none;
+}
+
+.editor-conflict-pane {
+  min-width: 0;
+  max-height: 75vh;
+  overflow: auto;
+}
+
+.editor-conflict-pane h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+}
+
+.editor-conflict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--warning);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.editor-conflict p,
+.editor-conflict ul {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.editor-conflict ul {
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+}
+
+/* Who else edits the page, and a save of it meanwhile: quiet lines. */
+.editor-others,
+.editor-changed {
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.editor-changed {
+  color: var(--warning);
+}
+
 /* A button's display would otherwise win over the hidden attribute's. */
 .editor-back[hidden] {
   display: none;
@@ -3757,6 +3820,17 @@ mark.comment-mark-focused {
   margin-right: -0.5rem;
   padding: 0.4rem 0.5rem;
   background: var(--background);
+}
+
+/* What the live channel says of the page, at the end of its actions: who
+   is editing it, and that it changed while the reader was busy with it. */
+.page-live {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--muted);
 }
 
 .page-actions[data-stuck],

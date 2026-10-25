@@ -94,6 +94,7 @@ library
       Wiki.App.View.Body
       Wiki.App.View.Comments
       Wiki.App.View.Common
+      Wiki.App.View.Diff
       Wiki.App.View.Directory
       Wiki.App.View.Editor
       Wiki.App.View.Export

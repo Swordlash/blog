@@ -8,7 +8,7 @@
 -- files can be attached to it from the start. The editor holds what is
 -- written until it is saved: 'savePage' against the version the edit
 -- started from, so that a save over someone else's newer one is refused as
--- a 'Conflict' and shown in place, with the work kept. "Save" (and Ctrl+S,
+-- a 'Conflict' and shown in place (see below), with the work kept. "Save" (and Ctrl+S,
 -- and Enter in the title) saves and stays: the version saved is then the
 -- one the next save is made against, and a "Saved" notice shows in a
 -- corner for a few seconds ('savedNoticeTime'), announced to screen
@@ -114,6 +114,33 @@
 -- saved ('guardUnload'). Leaving by Cancel, having said what becomes of the
 -- draft, is not asked about again.
 --
+-- = Others editing, and saves meanwhile
+--
+-- Over a backend with a live channel ("Wiki.App.Live"; WP4.12 of
+-- docs/PLAN.md), the editor watches its page and says that this tab edits
+-- it, once it knows who else does: if nobody, at once; if someone, it
+-- first asks above the work ("Edgar Editor is editing this page. Open the
+-- editor anyway?"), and says so once the author goes on (or simply starts
+-- typing). From then on it names whoever else edits the page, and it says
+-- it no longer edits it when it goes away; the server forgets it anyway
+-- when the tab closes, with its connection. A save of the page by someone
+-- else meanwhile is said above the work, and changes nothing in it.
+--
+-- A save refused because the page was saved since the edit began (a
+-- 'Conflict') opens the conflict view: the page as now saved is read, and
+-- beside the author's text (two columns on a wide screen, one under the
+-- other on a narrow one) is that version compared with the author's text
+-- ("Wiki.App.View.Diff"), with three ways out. "Keep mine" saves the
+-- author's text over it. "Take theirs" puts it in the editor in place of
+-- the author's text, which goes with its draft. "Merge by hand" leaves the
+-- author's text in the editor, shows beside it what the other save changed
+-- in the version the edit began from, and makes the next save one over
+-- the version now saved. Until the author chooses, the text is in the
+-- editor and kept as their draft, so nothing is lost without a choice. The
+-- demo, whose wiki lives in one tab, has no channel and so no presence,
+-- but the same conflict view, which a save over a change made in the same
+-- tab (a version restored, a rename) meets.
+--
 -- (The editor's own record of what is being written is 'Work'; a draft is
 -- the backend's copy of it, kept for the author.)
 module Wiki.App.View.Editor
@@ -143,6 +170,8 @@ import Protolude hiding (State)
 import Web.Event.Event (Event, EventType (..))
 import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
+import Wiki.Api.Events (PageEvent (PageChanged))
+import Wiki.Api.Events qualified as Event
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
@@ -166,13 +195,17 @@ import Wiki.App.Editor.Browser
   )
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
+import Wiki.App.Live (Feed (..))
+import Wiki.App.Live qualified as Live
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
+import Wiki.App.View.Diff (diffView, titleChange)
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Diff (Diff (..), diffText)
 import Wiki.Core.Draft qualified as D
-import Wiki.Core.Id (AttachmentId, PageId)
+import Wiki.Core.Id (AttachmentId, PageId, UserId)
 import Wiki.Core.Markdown (attachmentReference)
 import Wiki.Core.Markdown.Edit
   ( Command (..)
@@ -191,6 +224,8 @@ import Wiki.Core.Page (Page)
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
+import Wiki.Core.User (User (id))
+import Wiki.Core.Version (Author (..), Version (author))
 
 -- | The space the shell has loaded, with its pages, and the path of the
 -- page to edit there.
@@ -199,6 +234,8 @@ data Input = Input
   , space :: Space
   , pages :: [Page]
   , path :: [Slug]
+  , feed :: Maybe Feed
+  -- ^ The tab's live channel, over a backend that has one.
   }
 
 -- | Whether the work has changes that are not saved: what the shell asks
@@ -252,6 +289,38 @@ data Found
 data DraftNews = NoNews | DraftSaved | DraftFailed Text
   deriving stock (Eq)
 
+-- | Whether the server has been told that this tab edits the page.
+data Presence
+  = -- | Not yet: who else edits it has not been heard (or there is no
+    -- channel, and nothing to tell).
+    Unsaid
+  | -- | Others edit it: the author is asked first.
+    Asking
+  | -- | Told.
+    Said
+  deriving stock (Eq)
+
+-- | A save refused because someone saved the page since the edit began.
+data Clash = Clash
+  { theirs :: Page
+  -- ^ The page as now saved.
+  , theirUrls :: Map AttachmentId Text
+  , by :: Maybe Author
+  -- ^ Who saved it, as its history says.
+  , after :: After
+  -- ^ Where the save that was refused was to leave the editor.
+  , way :: Way
+  }
+
+-- | Where the author is with a conflict.
+data Way
+  = -- | Choosing among the three ways out: their version compared with the
+    -- author's text as it was then (its title, and the diff).
+    Choosing Text Diff
+  | -- | Merging by hand: what their save changed in the version the edit
+    -- began from (that version's title, and the diff).
+    Merging Text Diff
+
 data State = State
   { input :: Input
   , loaded :: Loaded
@@ -294,6 +363,14 @@ data State = State
   , loads :: Int
   -- ^ How many times the page has been loaded: the key of the title and the
   -- textarea, which a reload replaces.
+  , watching :: Maybe PageId
+  -- ^ The page the live channel listens for.
+  , presence :: Presence
+  , others :: [Author]
+  -- ^ Who else edits the page, as last heard.
+  , changedSince :: Maybe UTCTime
+  -- ^ When someone else saved the page since the edit began, if they did.
+  , conflict :: Maybe Clash
   }
 
 -- | Where a save leaves the editor.
@@ -332,6 +409,13 @@ data Action
   | TakeUpOffered
   | DiscardOffered
   | Retry
+  | FromLive Live.Heard
+  | EditAnyway
+  | BackToPage
+  | KeepMine
+  | TakeTheirs
+  | MergeByHand
+  | HideTheirs
 
 -- | Where the browser keeps whether the preview goes beside the Markdown.
 sideBySideKey :: Text
@@ -396,6 +480,11 @@ component =
               , fileInput
               , backButton
               , loads = 1
+              , watching = Nothing
+              , presence = Unsaid
+              , others = []
+              , changedSince = Nothing
+              , conflict = Nothing
               }
       , render
       , eval =
@@ -441,7 +530,7 @@ component =
     editing st work =
       [hh|
         <form
-          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}"
+          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}"
           {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}
           {{ HE.preventingDefault (HE.handler' (EventType "keydown") (keyAction st)) }}
         >
@@ -460,6 +549,9 @@ component =
             </div>
           </div>
           <div class="editor-notices">
+            {{ presenceView st }}
+            {{ changedView st }}
+            {{ conflictView st }}
             {{ foundView st }}
             {{ cancelQuestion st }}
             {{ problemView st }}
@@ -474,6 +566,7 @@ component =
           >
             {{ source st work }}
             {{ previewPane st work }}
+            {{ conflictPane st }}
           </div>
           {{ attachmentList work }}
           <div class="editor-saved-notice" role="status">{% if isJust st.notice %}Saved{% end %}</div>
@@ -505,6 +598,81 @@ component =
     -- page this is rendered into ahead of the program does not know it.
     time :: Int -> UTCTime -> H.ComponentHTML Action Slots m
     time key at = HH.slot_ "time" key Islands.component (Islands.LocalTime at)
+
+    -- Who else edits the page: asked about before the author starts, and
+    -- named afterwards.
+    presenceView :: State -> Maybe (H.ComponentHTML Action Slots m)
+    presenceView st = case st.presence of
+      Asking ->
+        Just
+          [hh|
+            <div class="confirm editor-presence-warning" role="alertdialog">
+              <p>{{ whoIs (me st) st.others }} editing this page. Open the editor anyway?</p>
+              <button type="button" class="primary editor-edit-anyway" onClick={{ const EditAnyway }}>Edit anyway</button>
+              <button type="button" class="editor-back-to-page" onClick={{ const BackToPage }}>Back to the page</button>
+            </div>
+          |]
+      _
+        | null st.others -> Nothing
+        | otherwise -> Just [hh|<p class="editor-others" role="status">{{ whoIs (me st) st.others }} also editing this page.</p>|]
+
+    -- A save of the page by someone else since the edit began.
+    changedView :: State -> Maybe (H.ComponentHTML Action Slots m)
+    changedView st
+      | isJust st.changedSince && isNothing st.conflict =
+          Just
+            [hh|
+              <p class="editor-changed" role="status">
+                Someone else has saved this page since you began editing it. When you save, you will see their version beside yours, and choose.
+              </p>
+            |]
+      | otherwise = Nothing
+
+    -- The ways out of a conflict, above the work.
+    conflictView :: State -> Maybe (H.ComponentHTML Action Slots m)
+    conflictView st =
+      st.conflict <&> \c -> case c.way of
+        Choosing _ _ ->
+          [hh|
+            <div class="editor-conflict" role="alert">
+              <p>
+                {{ maybe "Someone else" (\a -> a.name) c.by :: Text }} saved this page on {{ time 2 c.theirs.updatedAt }}, while you were editing it.
+                Their version is beside your text, compared with it. Your text stays here, and in your draft, until you choose:
+              </p>
+              <ul>
+                <li><strong>Keep mine</strong> saves your text over their version.</li>
+                <li><strong>Merge by hand</strong> keeps your text here, with their changes beside it, to bring in what you want before you save.</li>
+                <li><strong>Take theirs</strong> puts their version here instead, and your changes are gone.</li>
+              </ul>
+              <button type="button" class="primary editor-keep-mine" onClick={{ const KeepMine }}>Keep mine</button>
+              <button type="button" class="editor-merge" onClick={{ const MergeByHand }}>Merge by hand</button>
+              <button type="button" class="danger editor-take-theirs" onClick={{ const TakeTheirs }}>Take theirs</button>
+            </div>
+          |]
+        Merging _ _ ->
+          [hh|
+            <div class="editor-conflict editor-merging" role="status">
+              <p>Merging by hand: bring what you want of their changes, beside your text, into it. Saving now saves over their version.</p>
+              <button type="button" class="editor-hide-theirs" onClick={{ const HideTheirs }}>Hide their changes</button>
+            </div>
+          |]
+
+    -- Their version beside the author's text: compared with it while the
+    -- author chooses, and what it changed while they merge by hand.
+    conflictPane :: State -> Maybe (H.ComponentHTML Action Slots m)
+    conflictPane st =
+      st.conflict <&> \c ->
+        let (heading, summary, oldTitle, d) = case c.way of
+              Choosing title changes -> ("Their version, compared with yours" :: Text, "Lines marked − are only in your text, lines marked + only in theirs." :: Text, title, changes)
+              Merging title changes -> ("Their changes since you began", "What their save changed in the version you began editing.", title, changes)
+         in [hh|
+              <section class="editor-conflict-pane" aria-label="Their version">
+                <h2>{{ heading }}</h2>
+                <p class="diff-summary">{{ summary }}{% if d.gaveUp %} The two differ in too many lines to compare them line by line, so the whole text is shown as replaced.{% end %}</p>
+                {{ titleChange oldTitle c.theirs.title }}
+                {{ diffView d }}
+              </section>
+            |]
 
     -- What was found of a draft when the page was opened.
     foundView :: State -> Maybe (H.ComponentHTML Action Slots m)
@@ -752,6 +920,8 @@ component =
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})
+        -- Who else edits the page, and its saves, are heard of from now on.
+        gets (\st -> st.input.feed) >>= traverse_ (\f -> void (H.subscribe (FromLive <$> f.heard)))
         -- The page was loaded with the initial state, or is loaded now.
         gets (\st -> st.loaded) >>= \case
           Loading -> loadWork
@@ -759,6 +929,7 @@ component =
             syncGuard
             takeOver
             H.raise Loaded
+            watchPage
       Retry -> do
         modify (\st -> st {loaded = Loading})
         loadWork
@@ -767,6 +938,11 @@ component =
       Finalize -> do
         H.liftEffect (guardUnload False)
         gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . detachEditor)
+        -- Nobody edits the page here any more.
+        st <- get
+        for_ ((,) <$> st.input.feed <*> st.watching) $ \(f, page) -> H.liftEffect . liftIO $ do
+          when (st.presence == Said) (f.stopEditing page)
+          f.unwatch page
       -- The work is the editor's own: a reload of the wiki around it (after
       -- a change elsewhere, or someone else signing in) leaves it alone.
       Receive input -> modify (\st -> st {input})
@@ -852,11 +1028,105 @@ component =
             syncGuard
             takeOver
           _ -> pass
+      FromLive heard -> do
+        here <- gets (\st -> st.watching)
+        case heard of
+          Live.Heard page (Event.Editing editors) | Just page == here -> heardEditors editors
+          -- Someone else's save: said, until the next save (the tab's own
+          -- is told too, while it is on its way or once it is the version
+          -- edited, and is not newer than that).
+          Live.Heard page (PageChanged at) | Just page == here -> do
+            st <- get
+            case st.loaded of
+              Ready w | not st.saving, at > w.page.updatedAt -> modify (\s -> s {changedSince = Just at})
+              _ -> pass
+          _ -> pass
+      EditAnyway -> announce
+      BackToPage -> do
+        st <- get
+        Router.navigate st.input.context.router (leaving st.input)
+      -- Saved over theirs: the save is made against their version.
+      KeepMine ->
+        gets (\st -> st.conflict) >>= \case
+          Nothing -> pass
+          Just c -> do
+            modify (\st -> st {conflict = Nothing})
+            modifyWork (rebase c)
+            save c.after
+      -- Their version in place of the author's text, which goes, draft and
+      -- all, as Reload's does.
+      TakeTheirs ->
+        gets (\st -> st.conflict) >>= \case
+          Nothing -> pass
+          Just c -> do
+            cancelPreview
+            stopAutosave
+            withPage (void . discardDraft)
+            modify $ \st ->
+              st
+                { loaded = Ready (workOf c.theirs c.theirUrls)
+                , loads = st.loads + 1
+                , conflict = Nothing
+                , changedSince = Nothing
+                , problem = Nothing
+                , hasDraft = False
+                , found = Nothing
+                , draftNews = NoNews
+                }
+            syncGuard
+            takeOver
+      -- The author's text stays, now an edit of their version, with what
+      -- that changed beside it; the draft follows, against it.
+      MergeByHand ->
+        gets (\st -> (st.conflict, st.loaded)) >>= \case
+          (Just c, Ready w) -> do
+            modify (\st -> st {conflict = Just c {way = Merging w.savedTitle (diffText w.savedBody c.theirs.body)}})
+            modifyWork (rebase c)
+            syncGuard
+            whenM (gets isDirty) scheduleAutosave
+          _ -> pass
+      HideTheirs -> modify (\st -> st {conflict = Nothing})
       DiscardOffered -> do
         withPage (void . discardDraft)
         modify (\st -> st {hasDraft = False, found = Nothing})
         -- What was typed meanwhile can be kept now.
         whenM (gets isDirty) scheduleAutosave
+
+    -- Listen for who else edits the page, once it is loaded, and say that
+    -- this tab does as soon as that is known: at once if the channel has
+    -- heard it already (another view of this tab watches the page too),
+    -- otherwise when it hears.
+    watchPage :: H.HalogenM State Action Slots ViewOutput m ()
+    watchPage = do
+      st <- get
+      case (st.input.feed, st.loaded) of
+        (Just f, Ready w) | st.watching /= Just w.page.id -> do
+          known <- H.liftEffect . liftIO $ do
+            f.watch w.page.id
+            f.editorsOf w.page.id
+          modify (\s -> s {watching = Just w.page.id})
+          traverse_ heardEditors known
+        _ -> pass
+
+    -- Who else edits the page, as heard: before this tab has said that it
+    -- does, nobody means say so, and somebody means ask the author first,
+    -- unless they have begun typing already.
+    heardEditors :: [Author] -> H.HalogenM State Action Slots ViewOutput m ()
+    heardEditors editors = do
+      modify (\st -> st {others = editors})
+      st <- get
+      when (st.presence == Unsaid) $
+        if null editors || st.edits > 0
+          then announce
+          else modify (\s -> s {presence = Asking})
+
+    -- Tell the server that this tab edits the page.
+    announce :: H.HalogenM State Action Slots ViewOutput m ()
+    announce = do
+      st <- get
+      for_ ((,) <$> st.input.feed <*> st.watching) $ \(f, page) -> do
+        H.liftEffect (liftIO (f.startEditing page))
+        modify (\s -> s {presence = Said})
 
     -- Leave for the page, as Cancel does, without the shell asking about
     -- the work again: what becomes of it has been said.
@@ -919,20 +1189,22 @@ component =
     loadWork = do
       input <- gets (\st -> st.input)
       Fetched loaded found hasDraft <- fetchWork input
-      modify (\st -> st {loaded, found, hasDraft, loads = st.loads + 1})
+      modify (\st -> st {loaded, found, hasDraft, loads = st.loads + 1, conflict = Nothing, changedSince = Nothing})
       syncGuard
       takeOver
       H.raise Loaded
+      watchPage
 
     -- The page as it is now.
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
       loaded <- either Failed (\(page, urls) -> Ready (workOf page urls)) <$> fetchPage input
-      modify (\st -> st {loaded, loads = st.loads + 1})
+      modify (\st -> st {loaded, loads = st.loads + 1, conflict = Nothing, changedSince = Nothing})
       syncGuard
       takeOver
       H.raise Loaded
+      watchPage
 
     -- A change typed: into the work, counted for the autosave's wait, in
     -- one change of the state, since each is a render and this is every
@@ -943,6 +1215,8 @@ component =
         Ready w -> st {loaded = Ready (f w), edits = st.edits + 1, draftNews = NoNews}
         _ -> st
       syncGuard
+      -- Typing is going on, past the question about the others editing.
+      whenM (gets (\st -> st.presence == Asking)) announce
       scheduleAutosave
       -- Only a preview that can be seen beside the Markdown follows the
       -- typing; one shown on its own catches up when it is shown.
@@ -1035,6 +1309,7 @@ component =
           result <- savePage w.page.id w.page.updatedAt w.title w.body
           modify (\s -> s {saving = False})
           case result of
+            Left (Conflict why) -> conflicted why after
             Left e -> do
               modify (\s -> s {problem = Just e})
               -- Still unsaved: still worth a draft.
@@ -1050,6 +1325,8 @@ component =
                   , hasDraft = False
                   , found = Nothing
                   , draftNews = NoNews
+                  , conflict = Nothing
+                  , changedSince = Nothing
                   }
               syncGuard
               case after of
@@ -1061,6 +1338,28 @@ component =
                   -- breadcrumbs show.
                   H.raise (Changed Nothing)
         _ -> pass
+
+    -- A save refused for someone else's: their version, read now, beside
+    -- the author's text, which is kept as a draft at once. If their
+    -- version cannot be read, the refusal is said as it is, with the text
+    -- still there.
+    conflicted :: Text -> After -> H.HalogenM State Action Slots ViewOutput m ()
+    conflicted why after = do
+      input <- gets (\st -> st.input)
+      fetchPage input >>= \case
+        Left _ -> modify (\st -> st {problem = Just (Conflict why)})
+        Right (theirs, theirUrls) -> do
+          by <- either (const Nothing) (\v -> v.author) <$> getVersion theirs.id theirs.updatedAt
+          gets (\st -> st.loaded) >>= \case
+            Ready w ->
+              modify $ \st ->
+                st
+                  { conflict = Just Clash {theirs, theirUrls, by, after, way = Choosing w.title (diffText w.body theirs.body)}
+                  , changedSince = Nothing
+                  }
+            _ -> pass
+      void (storeDraft False)
+      whenM (gets isDirty) scheduleAutosave
 
     -- The "Saved" notice, for 'savedNoticeTime' from now.
     showSaved :: H.HalogenM State Action Slots ViewOutput m ()
@@ -1182,6 +1481,24 @@ takeUp draft w =
     , shownTitle = draft.title
     , shownBody = draft.body
     }
+
+-- | The work as an edit of the version a conflict found saved: the next
+-- save is made against it, and is compared with it, its attachments taken
+-- (the author's uploads are among them, made to the page as they were).
+rebase :: Clash -> Work -> Work
+rebase c w =
+  w
+    { page = c.theirs
+    , savedTitle = c.theirs.title
+    , savedBody = c.theirs.body
+    , attachments = c.theirs.attachments
+    , urls = c.theirUrls
+    }
+
+-- | Who is reading, by id: whom the live channel's names are compared
+-- with.
+me :: State -> Maybe UserId
+me st = (\u -> u.id) <$> st.input.context.session.user
 
 -- | Whether an older draft is being offered.
 offering :: State -> Bool

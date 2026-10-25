@@ -50,7 +50,7 @@ import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
-import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded), ServerMessage (..))
+import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (ServerSettings, noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
@@ -270,6 +270,7 @@ spec m = do
   accounts m
   ownPassword m
   comments m
+  presence m
 
 -- | Who is asking, as the server says: someone of the demo's signed in,
 -- or nobody.
@@ -907,4 +908,115 @@ comments m = describe "a page's comments" $ do
     asked `shouldReturn` []
     unmount ui
     unsafeIOToPageM (js_unembed (toJSText preloadId))
+    serverStops
+
+-- | Who is editing a page, and its saves, over the live channel (WP4.12 of
+-- docs/PLAN.md): the page view names whoever edits the page and shows a
+-- save at once, or offers it while the reader is busy with the page; the editor asks before it starts when someone else edits
+-- the page, says it edits it once the author goes on, names the others,
+-- says it stopped when it goes away, says it again on a new connection,
+-- and says when someone else has saved the page meanwhile.
+presence :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+presence m = describe "who is editing" $ do
+  let edgar = Author {id = UserId "user-editor", name = "Edgar Editor"}
+      rita = Author {id = UserId "user-reader", name = "Rita Reader"}
+      blog = slugs ["blog"]
+      helloAt = slugs ["hello-world"]
+      demoHello = unsafeIOToPageM $ do
+        wiki <- newMemWiki (demoState demoNow)
+        runMemWiki wiki $ do
+          s <- either (panic . show) identity <$> getSpace blog
+          p <- either (panic . show) identity <$> getPage s.id helloAt
+          ps <- either (panic . show) identity <$> listPages s.id
+          pure (p, ps)
+  it "names who edits the page shown, and shows a save of it at once" $ runPage $ do
+    serverStarts
+    serveDemo
+    (hello, blogPages) <- demoHello
+    ui <- startServer m (Page blog helloAt)
+    _ <- find ui ".page-view .page-body"
+    eventually $ said `shouldReturn` [Subscribe hello.id]
+    length <$> findAll ui ".page-live" `shouldReturn` 0
+    tell (Event hello.id (Editing [edgar]))
+    find ui ".page-actions .page-editors" >>= (`shouldHaveText` "Edgar Editor is editing this page.")
+    tell (Event hello.id (Editing [edgar, rita]))
+    find ui ".page-actions .page-editors" >>= (`shouldHaveText` "Edgar Editor and Rita Reader are editing this page.")
+    tell (Event hello.id (Editing []))
+    eventually $ length <$> findAll ui ".page-live" `shouldReturn` 0
+    -- Saved elsewhere: read again and shown, with no button to ask for it.
+    let later = addUTCTime 60 hello.updatedAt
+        saved = hello {P.body = "Saved in another tab.", P.updatedAt = later}
+    answerWith "GET" (links.spaces.listPages hello.space) 200 [if p.id == hello.id then saved else p | p <- blogPages]
+    answerWith "GET" (links.spaces.pageAt hello.space helloAt) 200 saved
+    tell (Event hello.id (PageChanged later))
+    eventuallyWithin 5000 $ (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved in another tab.")
+    length <$> findAll ui ".page-changed" `shouldReturn` 0
+    -- The tab's own version, told again, is not read again.
+    before <- length <$> asked
+    tell (Event hello.id (PageChanged later))
+    (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved in another tab.")
+    length <$> asked `shouldReturn` before
+    -- Saved again while the reader renames the page: offered, not shown,
+    -- until asked for.
+    clickButton ui ".page-actions button" "Rename"
+    _ <- find ui ".page-view .inline-form"
+    let again = addUTCTime 120 hello.updatedAt
+        savedAgain = saved {P.body = "Saved once more.", P.updatedAt = again}
+    answerWith "GET" (links.spaces.listPages hello.space) 200 [if p.id == hello.id then savedAgain else p | p <- blogPages]
+    answerWith "GET" (links.spaces.pageAt hello.space helloAt) 200 savedAgain
+    tell (Event hello.id (PageChanged again))
+    _ <- find ui ".page-actions .page-live .page-changed"
+    (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved in another tab.")
+    _ <- find ui ".page-view .inline-form"
+    clickButton ui ".page-actions .page-live button" "Changed since: show the new version"
+    eventuallyWithin 5000 $ (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved once more.")
+    eventually $ length <$> findAll ui ".page-live" `shouldReturn` 0
+    unmount ui
+    serverStops
+
+  it "asks before editing a page someone else edits, says it edits it once told to go on, and stops when it goes" $ runPage $ do
+    serverStarts
+    serveDemo
+    (hello, _) <- demoHello
+    ui <- startServer m (EditPage blog helloAt)
+    find ui ".editor-heading" >>= (`shouldHaveText` "Editing Hello, world")
+    eventually $ said `shouldReturn` [Subscribe hello.id]
+    tell (Subscribed hello.id [] [edgar])
+    find ui ".editor-presence-warning p" >>= (`shouldHaveText` "Edgar Editor is editing this page. Open the editor anyway?")
+    -- Not said until the author goes on.
+    said `shouldReturn` [Subscribe hello.id]
+    clickButton ui ".editor-presence-warning button" "Edit anyway"
+    eventually $ said `shouldReturn` [Subscribe hello.id, StartEditing hello.id]
+    length <$> findAll ui ".editor-presence-warning" `shouldReturn` 0
+    find ui ".editor-others" >>= (`shouldHaveText` "Edgar Editor is also editing this page.")
+    tell (Event hello.id (Editing []))
+    eventually $ length <$> findAll ui ".editor-others" `shouldReturn` 0
+    -- A new connection is told again, after the subscription.
+    unsafeIOToPageM js_server_hang_up
+    eventually $ said `shouldReturn` [Subscribe hello.id, StartEditing hello.id, Subscribe hello.id, StartEditing hello.id]
+    -- Saved by someone else meanwhile: said, and the work is left alone.
+    text <- editorText ui
+    typeText text "Mine."
+    tell (Event hello.id (PageChanged (addUTCTime 60 hello.updatedAt)))
+    _ <- find ui ".editor-changed"
+    markdown ui >>= (`shouldSatisfy` T.isInfixOf "Mine.")
+    -- Leaving the editor: it stops editing, and stops listening.
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/notes-on-haskell/']" >>= click
+    find ui ".leave-confirm button.danger" >>= click
+    eventually $ (\ms -> [msg | msg <- ms, msg `elem` [StopEditing hello.id, Unsubscribe hello.id]]) <$> said `shouldReturn` [StopEditing hello.id, Unsubscribe hello.id]
+    unmount ui
+    serverStops
+
+  it "says at once that it edits a page nobody else edits" $ runPage $ do
+    serverStarts
+    serveDemo
+    (hello, _) <- demoHello
+    ui <- startServer m (EditPage blog helloAt)
+    eventually $ said `shouldReturn` [Subscribe hello.id]
+    tell (Subscribed hello.id [] [])
+    eventually $ said `shouldReturn` [Subscribe hello.id, StartEditing hello.id]
+    length <$> findAll ui ".editor-presence-warning" `shouldReturn` 0
+    length <$> findAll ui ".editor-others" `shouldReturn` 0
+    unmount ui
+    eventually $ (StopEditing hello.id `elem`) <$> said `shouldReturn` True
     serverStops

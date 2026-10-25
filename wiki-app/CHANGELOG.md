@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+Presence and edit conflicts (WP4.12). Over the server's backend the page
+view says who has its editor open ("Edgar Editor is editing this page.", at
+the end of the action bar) and shows a save of the page made elsewhere at
+once, or, while the reader has text selected, a comment's quote, a rename or
+a move under way, offers it ("Changed since: show the new version"). The
+editor watches its page too: when someone else edits it, it asks before
+starting ("… Open the editor anyway?"), says it edits it once the author goes
+on (or starts typing), names the others while it is open, says it stopped
+when it goes away, and says when someone else has saved the page meanwhile.
+A save refused as a `Conflict` opens the conflict view instead of the bare
+refusal: their version, compared with the author's text, beside it (two
+columns on a wide screen), with "Keep mine" (save over theirs), "Take
+theirs" (their version in the editor, the author's text and draft gone) and
+"Merge by hand" (the author's text stays, what their save changed beside it,
+the next save over their version); the text is kept as a draft at once. The
+demo has no channel, so no presence, but the same conflict view.
+`Wiki.App.Live.Feed` gains `startEditing`, `stopEditing` and `editorsOf`
+(said again on every new connection); `Editor.Input` has the `feed`; the
+cache lets the pages read go when a save is heard (`afterEvent`).
+`Wiki.App.View.Diff` renders a diff for the history and the editor alike;
+`Wiki.App.View.Common.whoIs` names who is editing.
+
 Scheduled backups (WP4.9). The administration's Server section has a
 "Backups" part (`Wiki.App.View.Backups`, a component of its own that the
 section mounts): whether the server backs itself up, when, how many it keeps

@@ -29,6 +29,16 @@
 -- answer to each subscription (the first, and one after the channel
 -- opened anew) carries the page's threads, which replace what is shown:
 -- whatever changed since they were read is caught up with.
+--
+-- = Who edits it, and its saves
+--
+-- Over the same channel (WP4.12 of docs/PLAN.md) the view hears who has
+-- the page's editor open, and says so in the action bar ("Edgar Editor is
+-- editing this page."), and hears of each save of the page, after which
+-- it shows the page as saved: at once, unless the reader is in the middle
+-- of something the new version would take away (text selected, a quote
+-- being commented on, a rename or a move half typed), in which case the
+-- bar says the page has changed, with a button to show it.
 module Wiki.App.View.Page
   ( Input (..)
   , Slots
@@ -52,7 +62,7 @@ import Web.Event.Event (EventType (..))
 import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.Api.Export (pageFormats)
 import Wiki.Api.Links (pageExportUrl)
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (exports), WikiError)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError)
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Browser (ArticleLink, Selected (..), clickedThread, followArticleLink, readSelection, reveal)
 import Wiki.App.Islands (MonadIslands)
@@ -78,6 +88,8 @@ import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (description, homePage, icon, id, name), SpaceProfile (..))
+import Wiki.Core.User (User (id))
+import Wiki.Core.Version (Author)
 
 -- | The page at a path in a space the shell has loaded, with the space's
 -- pages (for the links between them).
@@ -129,6 +141,11 @@ data State = State
   -- ^ A quote being commented on, in a new thread in the panel.
   , watching :: Maybe PageId
   -- ^ The page the live channel is listening for.
+  , editors :: [Author]
+  -- ^ Who has the page's editor open, as the live channel last said.
+  , changed :: Bool
+  -- ^ Whether the page has been saved since it was loaded, while the
+  -- reader was busy with it: the bar offers the new version.
   , text :: H.RefLabel
   -- ^ The element the article is in, with the panel beside it: whose
   -- selection is read, and where the button to comment on it goes.
@@ -155,6 +172,7 @@ data Action
   | ToggleComments
   | ClickedQuote CommentThreadId
   | SetAsHome
+  | ShowChanged
 
 component :: forall query m. (MonadLoad m, MonadComments m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -181,6 +199,8 @@ component =
               , selected = Nothing
               , quoting = Nothing
               , watching = Nothing
+              , editors = []
+              , changed = False
               , text
               }
       , render
@@ -212,7 +232,7 @@ component =
             -- Its own class too: the bar stays under the header while the
             -- page scrolls (web/style.css), so that a long page is edited
             -- without scrolling back up to it.
-            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}</div>|]
+            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ liveNote st }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
                 <> Body.heading page.title page.body
@@ -366,6 +386,23 @@ component =
           }
         FromComments
 
+    -- What the live channel says of the page, at the end of the action
+    -- bar, when there is something to say: who is editing it, and that it
+    -- has been saved since it was shown, if it was not shown again at once.
+    liveNote :: State -> Maybe (H.ComponentHTML Action Slots m)
+    liveNote st
+      | null st.editors && not st.changed = Nothing
+      | otherwise =
+          Just
+            [hh|
+              <span class="page-live" role="status">
+                {% if not (null st.editors) %}<span class="page-editors">{{ whoIs me st.editors <> " editing this page." }}</span>{% end %}
+                {% if st.changed %}<button type="button" class="page-changed" onClick={{ const ShowChanged }}>Changed since: show the new version</button>{% end %}
+              </span>
+            |]
+      where
+        me = (\u -> u.id) <$> st.input.context.session.user
+
     -- "Comments (n)": the inline threads not resolved, which opens the
     -- panel of them.
     commentsToggle :: State -> H.ComponentHTML Action Slots m
@@ -423,9 +460,9 @@ component =
         let elsewhere = old.space.id /= input.space.id || old.path /= input.path
         when elsewhere $ do
           unwatchAll
-          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing})
+          modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = []})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
-          modify (\st -> st {mode = Viewing, problem = Nothing})
+          modify (\st -> st {mode = Viewing, problem = Nothing, changed = False})
           load
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       FollowLink target -> do
@@ -478,6 +515,15 @@ component =
       Heard heard -> do
         here <- gets (\st -> st.watching)
         case heard of
+          Live.Heard page (Editing editors) | Just page == here -> modify (\st -> st {editors})
+          -- Saved, by anyone (this tab's own save is told too, and is the
+          -- version shown already): shown at once if the reader is not
+          -- busy with the page, otherwise offered.
+          Live.Heard page (PageChanged at) | Just page == here -> withPage $ \shown ->
+            when (at > shown.updatedAt) $
+              gets busy >>= \case
+                True -> modify (\st -> st {changed = True})
+                False -> H.raise (Changed Nothing)
           Live.Heard page event | Just page == here -> modify (\st -> st {threads = applied event st.threads})
           -- The server's answer to the subscription: the threads as they
           -- are now, whatever was shown, and what changed since the page
@@ -509,6 +555,8 @@ component =
       ClickedQuote tid -> do
         modify (\st -> st {panelOpen = True, focused = Just tid})
         reveal ("#" <> CommentsView.threadElementId tid)
+      -- The shell reloads what it shows, the page and its tree among it.
+      ShowChanged -> H.raise (Changed Nothing)
       SetAsHome -> withPage $ \page -> do
         space <- gets (\st -> st.input.space)
         setSpaceProfile space.id SpaceProfile {description = space.description, icon = space.icon, homePage = Just page.id} >>= done (const Nothing)
@@ -622,6 +670,16 @@ applied event = \case
 placeOf :: Input -> Page -> Map AttachmentId Text -> Body.Place
 placeOf input page urls =
   Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls}
+
+-- | Whether the reader is busy with the page as it is shown: something
+-- selected in it, a quote being commented on, a rename or a move begun.
+-- A new version of the page would take that away.
+busy :: State -> Bool
+busy st = isJust st.selected || isJust st.quoting || not viewing
+  where
+    viewing = case st.mode of
+      Viewing -> True
+      _ -> False
 
 -- | Whether the reader may comment on the page shown.
 mayCommentHere :: State -> Bool

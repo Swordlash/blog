@@ -64,7 +64,8 @@
 --
 -- Over a backend with a live channel ("Wiki.App.Live", the server's), the
 -- shell asks it for the tab's feed once, and hands it to the page view,
--- which listens on it for its page's comments; the socket is opened as the
+-- which listens on it for its page's comments, who edits it and its saves,
+-- and to the editor, which says on it that it edits its page; the socket is opened as the
 -- first page is watched, and opened again as whoever is asking now after
 -- signing in or out, or a session's ending by itself.
 --
@@ -736,7 +737,7 @@ component =
             HH.slot "slides" () SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide} FromView
           -- One editor per page edited: another page's is a component of
           -- its own, with a draft of its own.
-          EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path} FromView
+          EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path, feed = st.feed} FromView
           NewPage _ parent -> HH.slot "newPage" () NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
           _ -> HH.slot "space" () SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
       where

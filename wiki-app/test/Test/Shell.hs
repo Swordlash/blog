@@ -1,6 +1,7 @@
 -- | The application as it is rendered natively for a route
 -- ("Wiki.App.Static"), which is also the HTML each prerendered page arrives
--- with: the shell around the route, with what the route shows loaded.
+-- with: the shell around the route, with what the route shows loaded; and
+-- the words its views say who is editing a page in ("Wiki.App.View.Common").
 module Test.Shell (spec) where
 
 import Data.IORef (readIORef)
@@ -15,11 +16,13 @@ import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.Static (Rendered (..), renderRoute)
+import Wiki.App.View.Common (whoIs)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space qualified as S
+import Wiki.Core.Version (Author (..))
 
 slugs :: [Text] -> [Slug]
 slugs = map (either (panic . show) identity . mkSlug)
@@ -473,3 +476,17 @@ spec = describe "Wiki.App.Shell, rendered" $ do
       html `lacks` "Export the wiki"
       html `lacks` "demo-"
       html `lacks` "admin-users"
+
+  describe "who is editing, in words" $ do
+    let ada = Author {id = UserId "user-admin", name = "Ada Admin"}
+        edgar = Author {id = UserId "user-editor", name = "Edgar Editor"}
+        rita = Author {id = UserId "user-reader", name = "Rita Reader"}
+    it "names one person, several, and nobody" $ do
+      whoIs Nothing [edgar] `shouldBe` "Edgar Editor is"
+      whoIs Nothing [edgar, ada] `shouldBe` "Edgar Editor and Ada Admin are"
+      whoIs Nothing [edgar, ada, rita] `shouldBe` "Edgar Editor, Ada Admin and Rita Reader are"
+      whoIs Nothing [] `shouldBe` "Nobody is"
+    it "names the reader, editing in another tab, as you" $ do
+      whoIs (Just ada.id) [ada] `shouldBe` "You (in another tab) are"
+      whoIs (Just ada.id) [ada, edgar] `shouldBe` "You (in another tab) and Edgar Editor are"
+      whoIs (Just ada.id) [edgar, ada] `shouldBe` "Edgar Editor and you (in another tab) are"

@@ -5,13 +5,14 @@
 -- and reading the page back from the backend, a new page made from its
 -- title and given a file before anything is saved, leaving with and without
 -- unsaved changes, Cancel keeping or discarding the draft, a save over
--- someone else's, files attached by a drop, a paste or a file input, text
+-- someone else's and the conflict view's three ways out of it (keep mine,
+-- take theirs, merge by hand), files attached by a drop, a paste or a file input, text
 -- pasted, the toolbar and
 -- its shortcuts, and the preview shown on its own or beside the Markdown.
 module Test.Browser.Editor (spec) where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.IORef (IORef)
+import Data.IORef (IORef, modifyIORef', readIORef)
 import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
@@ -21,10 +22,12 @@ import Test.Browser.Text (editorSelection, editorText, markdown)
 import Test.Hspec.Halogen
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Mem (runMemWiki)
-import Wiki.App.Backend.Mem.State (MemState)
+import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Attachment (Attachment (name))
+import Wiki.Core.Draft (Draft (..))
+import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page (Page (attachments, body, id, title, updatedAt))
 import Wiki.Core.Space (Space (id))
 
@@ -224,23 +227,43 @@ spec m = do
     unchanged <- readPage wiki ["blog"] ["hello-world"]
     unchanged.body `shouldSatisfy` T.isPrefixOf "# Hello, world"
 
-  it "shows a save over someone else's as a conflict, keeping the draft until told to reload" $ runPage $ do
+  it "opens the conflict view on a save over someone else's, keeping the text as a draft, and keeps mine" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
     text <- editorText ui
-    -- Someone else saves the page after the editor has loaded it.
-    page <- readPage wiki ["blog"] ["hello-world"]
-    unsafeIOToPageM . runMemWiki wiki $
-      savePage page.id page.updatedAt page.title "Someone else's words." >>= either (panic . show) (const pass)
+    page <- someoneElseSaves wiki
     clear text
     typeText text "My words."
     find ui ".editor-save" >>= click
-    _ <- find ui ".editor .error-conflict"
+    -- Their version, compared with the author's text, beside it.
+    find ui ".editor-conflict" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Ada Admin saved this page")
+    find ui ".editor-form" >>= (`shouldHaveClass` "conflicting")
+    find ui ".editor-conflict-pane h2" >>= (`shouldHaveText` "Their version, compared with yours")
+    find ui ".editor-conflict-pane .diff-removed .diff-text" >>= (`shouldHaveText` "My words.")
+    find ui ".editor-conflict-pane .diff-added .diff-text" >>= (`shouldHaveText` "Someone else's words.")
+    length <$> findAll ui ".error-conflict" `shouldReturn` 0
+    -- Nothing is lost meanwhile: the text is in the editor and in the draft.
     markdown ui `shouldReturn` "My words."
-    clickButton ui ".error-conflict button" "Reload and lose my changes"
+    eventually $ (fmap (\d -> d.body) <$> draftOf wiki page) `shouldReturn` Just "My words."
+    clickButton ui ".editor-conflict button" "Keep mine"
+    find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
+    length <$> findAll ui ".editor-conflict" `shouldReturn` 0
+    length <$> findAll ui ".editor-conflict-pane" `shouldReturn` 0
+    saved <- readPage wiki ["blog"] ["hello-world"]
+    saved.body `shouldBe` "My words."
+    draftOf wiki page `shouldReturn` Nothing
+
+  it "takes theirs in place of the author's text when told to" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
+    text <- editorText ui
+    _ <- someoneElseSaves wiki
+    clear text
+    typeText text "My words."
+    find ui ".editor-save" >>= click
+    clickButton ui ".editor-conflict button" "Take theirs"
     eventually (markdown ui `shouldReturn` "Someone else's words.")
+    length <$> findAll ui ".editor-conflict-pane" `shouldReturn` 0
     find ui ".editor-show-preview" >>= click
     find ui ".editor-preview .page-body p" >>= (`shouldHaveText` "Someone else's words.")
-    length <$> findAll ui ".error-conflict" `shouldReturn` 0
     -- The toolbar works on the text loaded again, whose undo has nothing of
     -- what was there before.
     find ui ".editor-back" >>= click
@@ -248,8 +271,34 @@ spec m = do
     markdown ui `shouldReturn` "**bold text**Someone else's words."
     press "Control+z"
     markdown ui `shouldReturn` "Someone else's words."
-    press "Control+z"
-    markdown ui `shouldReturn` "Someone else's words."
+    -- And the next save is made over theirs.
+    find ui ".editor-save" >>= click
+    find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
+    length <$> findAll ui ".editor-conflict" `shouldReturn` 0
+
+  it "merges by hand: the author's text stays, their changes beside it, and the save is over theirs" $ runPage $ do
+    (ui, wiki) <- startWith m (Just "user-editor") helloEditor
+    text <- editorText ui
+    page <- someoneElseSaves wiki
+    clear text
+    typeText text "My words."
+    find ui ".editor-save" >>= click
+    clickButton ui ".editor-conflict button" "Merge by hand"
+    find ui ".editor-conflict-pane h2" >>= (`shouldHaveText` "Their changes since you began")
+    -- What their save changed in the version the edit began from.
+    find ui ".editor-conflict-pane .diff-added .diff-text" >>= (`shouldHaveText` "Someone else's words.")
+    find ui ".editor-conflict-pane .diff-removed .diff-text" >>= (`shouldHaveText` "# Hello, world")
+    markdown ui `shouldReturn` "My words."
+    focus text
+    press "Control+End"
+    typeText text " And theirs: someone else's words."
+    -- The draft follows, as an edit of their version.
+    eventuallyWithin 8000 $ (fmap (\d -> d.body) <$> draftOf wiki page) `shouldReturn` Just "My words. And theirs: someone else's words."
+    find ui ".editor-save" >>= click
+    find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
+    length <$> findAll ui ".editor-conflict-pane" `shouldReturn` 0
+    saved <- readPage wiki ["blog"] ["hello-world"]
+    saved.body `shouldBe` "My words. And theirs: someone else's words."
 
   it "loses no keystroke while the preview catches up with a long page" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-admin") (EditPage (slugs ["docs"]) (slugs ["markdown-guide"]))
@@ -572,6 +621,22 @@ computedColour :: Text -> PageM s Text
 computedColour selector = unsafeIOToPageM (fromJSText <$> js_computed_colour (toJSText selector))
 
 -- | The page at a path of the demo, as the backend has it now.
+-- | Someone else (the demo's administrator) saves the post after the
+-- editor has loaded it: the page as it was.
+someoneElseSaves :: IORef MemState -> PageM s Page
+someoneElseSaves wiki = do
+  page <- readPage wiki ["blog"] ["hello-world"]
+  unsafeIOToPageM $ do
+    editing <- (\st -> st.current) <$> readIORef wiki
+    modifyIORef' wiki (\st -> st {current = Just (UserId "user-admin")})
+    runMemWiki wiki (savePage page.id page.updatedAt page.title "Someone else's words.") >>= either (panic . show) (const pass)
+    modifyIORef' wiki (\st -> st {current = editing})
+  pure page
+
+-- | The editor's draft of a page, if there is one.
+draftOf :: IORef MemState -> Page -> PageM s (Maybe Draft)
+draftOf wiki page = unsafeIOToPageM (runMemWiki wiki (either (panic . show) identity <$> getDraft page.id))
+
 readPage :: IORef MemState -> [Text] -> [Text] -> PageM s Page
 readPage wiki space path =
   unsafeIOToPageM . runMemWiki wiki $ do

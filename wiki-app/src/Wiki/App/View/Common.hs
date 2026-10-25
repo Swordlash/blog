@@ -35,6 +35,9 @@ module Wiki.App.View.Common
   , attr
   , ariaBool
   , fileSize
+
+    -- * Words
+  , whoIs
   )
 where
 
@@ -49,13 +52,14 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.App.Backend (Session (grants), WikiError (..), sessionPrincipal)
 import Wiki.App.Route (Route (..))
-import Wiki.Core.Id (PageId, SpaceId)
+import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Order (ChildOrder, Shift (..))
 import Wiki.Core.Page (Page (id, slug, title), childPages)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (Grants, Principal, canAdministerSpace, canEdit, canView, spaceChain)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (homePage, icon, id, name, slug), colourOf, iconLetter)
+import Wiki.Core.Version (Author (..))
 
 -- | What the shell knows that every view needs: the router, who is asking,
 -- and the tree of spaces ('Wiki.App.Backend.listSpaces'), with where the
@@ -234,3 +238,22 @@ fileSize n
   | n < 1024 = show n <> " bytes"
   | n < 1024 * 1024 = show (n `div` 1024) <> " KB"
   | otherwise = show (n `div` (1024 * 1024)) <> " MB"
+
+-- | Some people named as the subject of a sentence, with its verb: "Ada
+-- is", "Ada and Grace are", "Ada, Grace and Rita are". Whoever is the
+-- reader (by their id) is "you (in another tab)", since the live channel
+-- never names a tab to itself ("Wiki.Api.Events"): it is the reader
+-- editing elsewhere. Nobody is "Nobody is".
+whoIs :: Maybe UserId -> [Author] -> Text
+whoIs me = \case
+  [] -> "Nobody is"
+  [a] | isMe a -> "You (in another tab) are"
+  [a] -> a.name <> " is"
+  people -> capitalised (listed (map nameOf people)) <> " are"
+  where
+    isMe a = Just a.id == me
+    nameOf a = if isMe a then "you (in another tab)" else a.name
+    listed names = case reverse names of
+      final : others@(_ : _) -> T.intercalate ", " (reverse others) <> " and " <> final
+      _ -> T.concat names
+    capitalised t = T.toUpper (T.take 1 t) <> T.drop 1 t

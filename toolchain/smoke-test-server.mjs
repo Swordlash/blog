@@ -24,12 +24,15 @@
 // 2. A space and a page made through the forms; typing and saving (Ctrl+S,
 //    "Saved"); a draft kept as the typing stops and restored after a reload;
 //    a file attached and served; a conflict (the page saved through the API
-//    meanwhile, then saved in the editor); search; the export downloaded
+//    meanwhile, then saved in the editor), shown in the conflict view and
+//    ended with "Take theirs"; search; the export downloaded
 //    from the administration, a user and a group made there; a page
 //    exported as a Word document from its "Export" menu; a space made
 //    public in its permissions, which a visitor who is not signed in sees,
 //    and only that, with no way to the administration; and a fresh browser,
-//    signed in, finding all of it there.
+//    signed in, finding all of it there; a comment and who is editing,
+//    across two tabs of two users over the WebSocket, and a save shown in
+//    the other tab.
 // 3. Every route the walk went through, loaded afresh: each served with its
 //    status and its content before app.wasm runs, adopted with nothing to
 //    repair and no request to the API; and a page read with JavaScript off.
@@ -555,7 +558,8 @@ try {
   console.log("ok: a draft is kept as the typing stops, and restored by the editor after a reload, which adopts the page with nothing to repair");
 
   // Someone else saves the page meanwhile, through the API; the editor's
-  // save is then a conflict, said in place, with the work kept.
+  // save is then a conflict, shown in the conflict view with their version
+  // beside the work, which is kept until "Take theirs" is chosen.
   const space = await (await fetch(url("/api/v1/spaces/at/smoke-space"), { headers: { Cookie: sessionCookie } })).json();
   const atPath = await fetch(url(`/api/v1/spaces/${encodeURIComponent(space.id)}/pages/at/first-page`), { headers: { Cookie: sessionCookie } });
   const current = await atPath.json();
@@ -572,11 +576,13 @@ try {
   });
   assert.equal(stale.status, 409, "a save with a stale version through the API");
   await editor.press("Control+s");
-  await page.locator("#app .editor .error-conflict").waitFor({ timeout });
+  await page.locator("#app .editor .editor-conflict", { hasText: `${adminName} saved this page` }).waitFor({ timeout });
+  await page.locator("#app .editor-conflict-pane .diff-added", { hasText: "Saved by someone else." }).waitFor({ timeout });
   assert.ok((await markdownIn(page)).endsWith("Not saved yet."), "the conflict lost the work");
-  await page.locator("#app .error-conflict button", { hasText: "Reload" }).click();
-  await eventually(async () => assert.ok((await markdownIn(page)).endsWith("Saved by someone else."), "not yet"), "the page reloaded after the conflict");
-  console.log("ok: a save over someone else's newer one is a conflict, said in the editor, which reloads the page on request");
+  await page.locator("#app .editor-conflict button", { hasText: "Take theirs" }).click();
+  await eventually(async () => assert.ok((await markdownIn(page)).endsWith("Saved by someone else."), "not yet"), "their version taken after the conflict");
+  assert.equal(await page.locator("#app .editor-conflict-pane").count(), 0, "the conflict view, after Take theirs");
+  console.log("ok: a save over someone else's newer one opens the conflict view, their version diffed beside the work, which takes theirs on request");
 
   // Search, from the keyboard.
   await page.locator("#app .editor-save-close").click();
@@ -882,6 +888,65 @@ try {
   assert.equal((await fetch(url("/api/v1/events"))).status, 426, "the channel's address, asked for without a WebSocket");
   await watcher.context().close();
   console.log("ok: a comment made in one tab is shown in another on the same page, over the WebSocket");
+
+  // Who is editing, over the same WebSocket, between two users: Sam, given
+  // Edit on the space, shows the page while Ada opens its editor in another
+  // tab. Sam's page says that she is editing, and Sam's editor names her and
+  // asks before starting; her closing the editor ends it, and so does her
+  // tab going away. A save of hers shows in Sam's tab without a reload.
+  const smokeSpace = await api("spaces/at/smoke-space");
+  const samUser = (await api("admin/directory")).body.users.find((u) => u.login === "sam");
+  const grantedSam = await api(`spaces/${encodeURIComponent(smokeSpace.body.id)}/grants`, {
+    method: "PUT",
+    body: JSON.stringify({ subject: { tag: "SubjectUser", contents: samUser.id }, permission: "Edit", granted: true }),
+  });
+  assert.equal(grantedSam.status, 204, "Sam's grant to edit the smoke space");
+  const samSession = await fetch(url("/api/v1/session"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
+    body: JSON.stringify({ login: "sam", password: "sam's password" }),
+  });
+  const samToken = /wiki_session=([^;]+)/.exec(samSession.headers.get("set-cookie") ?? "")?.[1];
+  assert.ok(samToken, "no session cookie for Sam");
+  const samTab = await newPage({ anonymous: true });
+  await samTab.context().addCookies([{ name: "wiki_session", value: samToken, url: origin }]);
+  await samTab.goto(url("/s/smoke-space/p/first-page/"));
+  await eventually(async () => assert.ok(await programStarted(samTab), "no listener yet"), "Sam's tab's program starting");
+  await samTab.locator("#app .user-name", { hasText: "Sam Smoke" }).waitFor({ timeout });
+  await samTab.locator("#app .page-view .page-body").waitFor({ timeout });
+  const adaTab = await newPage();
+  await adaTab.goto(url("/s/smoke-space/p/first-page/edit/"));
+  await eventually(async () => assert.ok(await programStarted(adaTab), "no listener yet"), "Ada's tab's program starting");
+  await adaTab.locator(editorText).waitFor({ timeout });
+  await samTab.locator("#app .page-actions .page-editors", { hasText: `${adminName} is editing this page.` }).waitFor({ timeout });
+  // Sam's editor, opened, names Ada and asks before starting.
+  await samTab.locator("#app .page-actions a[href$='/first-page/edit/']").click();
+  await samTab.locator("#app .editor-presence-warning", { hasText: `${adminName} is editing this page. Open the editor anyway?` }).waitFor({ timeout });
+  await samTab.locator("#app .editor-presence-warning button", { hasText: "Back to the page" }).click();
+  await samTab.locator("#app .page-actions .page-editors", { hasText: `${adminName} is editing this page.` }).waitFor({ timeout });
+  // Ada closes her editor: the presence ends.
+  await adaTab.locator("#app .editor-cancel").click();
+  await adaTab.locator("#app .page-view .page-body").waitFor({ timeout });
+  await samTab.locator("#app .page-live").waitFor({ state: "detached", timeout });
+  // She opens it again, and her tab goes away without a word: so does the
+  // presence, with the connection.
+  await adaTab.locator("#app .page-actions a[href$='/first-page/edit/']").click();
+  await adaTab.locator(editorText).waitFor({ timeout });
+  await samTab.locator("#app .page-actions .page-editors", { hasText: `${adminName} is editing this page.` }).waitFor({ timeout });
+  await adaTab.context().close();
+  await samTab.locator("#app .page-live").waitFor({ state: "detached", timeout });
+  // A save of hers, made elsewhere, shows in Sam's tab without a reload.
+  const firstPage = await fetch(url(`/api/v1/spaces/${encodeURIComponent(smokeSpace.body.id)}/pages/at/first-page`), { headers: { Cookie: sessionCookie } });
+  const shownPage = await firstPage.json();
+  const savedLive = await fetch(url(`/api/v1/pages/${encodeURIComponent(shownPage.id)}`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", Cookie: sessionCookie, "If-Match": firstPage.headers.get("etag") },
+    body: JSON.stringify({ title: "First page", body: `${shownPage.body}\n\nSaved while Sam reads.` }),
+  });
+  assert.equal(savedLive.status, 200, "the save Sam's tab shows");
+  await samTab.locator("#app .page-view .page-body", { hasText: "Saved while Sam reads." }).waitFor({ timeout });
+  await samTab.context().close();
+  console.log("ok: two users' tabs on a page: one's editor is named in the other's page and editor, until it closes or its tab goes; a save shows in the other tab live");
 
   // ---- 3. Every route of the walk, rendered by the server --------------------
 
