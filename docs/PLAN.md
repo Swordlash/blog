@@ -2263,3 +2263,93 @@ Amended by the planning session after each work package's report.
   `isVisible` counts `visibility: hidden` as hidden (the stylesheet uses none). Its own small
   package after WP4.6 and WP4.7 merge, since a bump rebuilds every package on both backends;
   adopt the handler form where a component is touched anyway, not wholesale.
+
+The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
+productionisation items backups, observability and account hygiene (not HTTPS yet); of the
+features everything but the Polish interface. Cut into packages that touch different parts,
+run in waves of three or four after WP4.8, since each worktree builds both backends and the
+runner is one machine. Migrations are numbered at rebase time (the next free number; the
+migration test refuses gaps), and whichever merges second rebases.
+
+**Wave A** (after WP4.8): WP4.9, WP4.11, WP4.12, WP4.16. **Wave B**: WP4.10, WP4.13, WP4.14.
+**Wave C**: WP4.15, WP4.17.
+
+- **WP4.9 Backups for real.** A systemd timer (`wiki-demo-backup.timer`, daily, installed by
+  `deploy-local.sh --server`) runs `wiki-server backup` (`VACUUM INTO`, as the deploy does)
+  into `data/backups/<timestamp>.sqlite`, keeps the last 7 daily and 4 weekly, and verifies
+  each copy with `PRAGMA integrity_check`; `wiki-server backup --to DIR|rclone:remote:path`
+  copies the newest backup and the attachments' blobs off the machine when an `rclone`
+  remote or a directory is configured in the panel's Server section (write-only secret if
+  any); `wiki-server restore <backup> [--attachments DIR]` restores into a stopped server's
+  data directory, refusing a live one; the panel's status shows the last backup's time, size
+  and result; a test in CI backs up, restores into a fresh directory and compares; the README
+  documents the drill. No migration.
+- **WP4.10 Observability.** `GET /metrics` on the admin listener in the Prometheus text
+  format (requests by route and status, latency histogram, open WebSockets, pages, users,
+  database and blob sizes, backup age); an *audit log* table (who did what, when, to what:
+  grants, settings, accounts, deletions of spaces and pages, imports) written by the storage
+  for administration operations, shown in the panel ("Activity", newest first, filter by
+  user) and exported with the wiki; `/healthz` extended with the migration version and the
+  backup age; the status section shows the last 20 server errors (an in-memory ring).
+  Migration for `audit_log`.
+- **WP4.11 Account hygiene.** The account panel lists the user's sessions (created, last seen,
+  address, the current one marked) with "Sign out" per session and "Sign out everywhere";
+  TOTP second factor (RFC 6238, `crypton`'s HMAC, a QR code drawn by us as an SVG `<svg>` of
+  rects, recovery codes shown once and stored hashed; required at sign-in when enabled; an
+  administrator may remove it from the panel for a locked-out user); password reset by mail
+  ("Forgot your password?" under the sign-in form, a single-use token mailed, 30 minutes,
+  limited per address, silent when the login or e-mail is unknown; needs an e-mail on the
+  account: the account panel and the admin's "New user" gain an e-mail field, verified by a
+  mailed link). Migration for `email`, `totp`, `recovery_codes`, `reset_tokens`.
+- **WP4.12 Presence and edit conflicts.** Over WP4.5's channel: `ClientMessage` gains
+  `editing page`/`stopped`, the hub keeps who edits which page per connection (dropped with
+  the connection), `PageEvent` gains `Editing [User]`; the page view shows "X is editing" and
+  the editor shows the other editors by name and warns before starting when someone else
+  already edits. On save, a 409 (`If-Match` mismatch) opens a conflict view: the other
+  version's diff (`Wiki.Core.Diff`) beside the author's text, with "Keep mine", "Take theirs"
+  and a manual merge (the author's text in the editor with the diff visible), instead of the
+  bare refusal of today; `PageChanged` events refresh a page shown in another tab. No
+  migration.
+- **WP4.13 Mentions, watching and notifications.** `@login` in Markdown (pages and comments)
+  becomes a link to the user with a mention event; a user may watch a page or a space
+  (bell button; watching one's own pages and threads by default, a setting); a
+  `notifications` table (mention, comment on a watched page or in a thread of mine, change
+  of a watched page) shown in the header (badge, list, "mark read") and mailed, at once or
+  as a daily digest per the user's setting, through the Server mail settings, with an
+  unsubscribe link; nothing mailed about pages the recipient may not view. Migration for
+  `watches`, `notifications`, notification settings on the user.
+- **WP4.14 Blog view and RSS.** A space setting "shows as a blog" (in Space settings): its
+  home shows the pages as dated posts, newest first, with an excerpt (the first paragraph),
+  the author and the comment count, paged; a post's page shows its date and "previous /
+  next"; `GET /s/<space>/feed.xml` (Atom) and `.rss` for public spaces, with the full
+  rendered HTML of each post (through the allowlist) and a `<link rel="alternate">` on the
+  space's pages; OpenGraph and `<meta name="description">` on public pages for link
+  previews; a `sitemap.xml` of public pages. Reuses WP4.6's directory cards. Migration for
+  the space's `blog` flag.
+- **WP4.15 Table of contents and templates.** Headings get stable ids (slugified, uniquified)
+  and anchor links on hover; a "Contents" panel in the page view (sticky under the action
+  bar, on wide screens beside the comments panel, collapsible, current section marked on
+  scroll) built from the parsed document, server-rendered; `[[toc]]` in a page places it
+  inline. Templates: a space has a "Templates" folder of pages (a flag on the page, excluded
+  from the tree and search by default); "New page" offers "Blank" and the space's templates
+  (and a few built in: meeting notes, decision record, how-to); a template's `{{title}}`,
+  `{{date}}`, `{{author}}` are filled. Migration for the page's `template` flag.
+- **WP4.16 Export to PDF, DOCX and Beamer.** Decision: the server shells out to `pandoc` (and
+  `xelatex` for PDF and Beamer) when they are installed, rather than linking pandoc (a
+  40-minute build on the owner's machine and tens of megabytes); the panel's status says
+  which are found, and the buttons appear only then. "Export" on a page offers DOCX, PDF and
+  HTML (standalone, with the images embedded); a deck offers Beamer PDF and PPTX, built from
+  `Wiki.Core.Slides.deckOf` (level-1 title → title or section page, level-2 → frame, notes →
+  `\note{}`, theme and aspect mapped); a space exports as one PDF or DOCX in page order.
+  Islands (Mermaid, TikZ) are rendered server-side where pandoc cannot (a note in the output
+  where not). `GET pages/<id>/export/<format>`, streamed, limited to one at a time per user;
+  pandoc is run with a timeout, no network and a temporary directory. The deploy's README
+  says `apt install pandoc texlive-xetex` (optional). No migration.
+- **WP4.17 Offline and PWA.** A web manifest (name, icons from the wiki's own, theme
+  colour) and a service worker that caches the application's files (versioned by the build)
+  and the last pages read (HTML and API answers, in the browser's Cache API), serving them
+  when offline with the offline notice of WP4.3 and a "You are reading an offline copy from
+  <time>" line; the editor keeps drafts locally as it does and sends them when back online;
+  "Install" offered where the browser allows. The demo on Pages becomes installable too.
+  The service worker is JavaScript of ours under `web/`, registered from `index.js`, tested
+  by a Playwright case that goes offline and reloads. No migration.
