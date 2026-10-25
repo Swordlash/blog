@@ -21,7 +21,7 @@ slugs = map slug
 
 -- | Slugs, the route's own words among them, which have to be escaped.
 genSlug :: Gen Slug
-genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "history", "new-page", "new-space", "s", "not-found", "admin", "a-b", "x1"]
+genSlug = slug <$> elements ["docs", "team", "p", "edit", "source", "history", "slides", "new-page", "new-space", "s", "not-found", "admin", "a-b", "x1"]
 
 genPath :: Gen [Slug]
 genPath = chooseInt (1, 4) >>= (`vectorOf` genSlug)
@@ -47,6 +47,7 @@ genRoute =
         <*> genPath
         <*> oneof [pure Nothing, Just <$> elements [demoTime, addUTCTime 0.000123456789 demoTime, addUTCTime 86399.5 demoTime]]
         <*> elements [AgainstPrevious, AgainstCurrent]
+    , PageSlides <$> genPath <*> genPath <*> oneof [pure 1, chooseInt (-3, 40)]
     ]
 
 -- | A time with no fraction of a second: the others are made from it.
@@ -108,6 +109,19 @@ spec = describe "Wiki.App.Route" $ do
       -- is not the current version's is with the version before.
       parse route "/s/a/p/b/history/?version=yesterday&against=tomorrow" `shouldBe` Right (PageHistory (slugs ["a"]) (slugs ["b"]) Nothing AgainstPrevious)
       parse route "/s/a/p/b/history" `shouldBe` Right (PageHistory (slugs ["a"]) (slugs ["b"]) Nothing AgainstPrevious)
+
+    it "writes a page's slides, with the slide shown as a parameter unless it is the first" $ do
+      print route (PageSlides (slugs ["docs"]) (slugs ["presentations"]) 1) `shouldBe` "/s/docs/p/presentations/slides/"
+      print route (PageSlides (slugs ["docs"]) (slugs ["presentations"]) 3) `shouldBe` "/s/docs/p/presentations/slides/?slide=3"
+      parse route "/s/docs/p/presentations/slides" `shouldBe` Right (PageSlides (slugs ["docs"]) (slugs ["presentations"]) 1)
+      parse route "/s/docs/p/presentations/slides/?slide=12" `shouldBe` Right (PageSlides (slugs ["docs"]) (slugs ["presentations"]) 12)
+      print route (Page (slugs ["a"]) (slugs ["slides"])) `shouldBe` "/s/a/p/~slides/"
+      parse route "/s/a/p/~slides/slides/" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["slides"]) 1)
+      parse route "/s/a/p/slides/" `shouldSatisfy` isLeft
+      -- A slide that is not a number is the first; one beyond the deck is
+      -- the view's to bring back into it.
+      parse route "/s/a/p/b/slides/?slide=last" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 1)
+      parse route "/s/a/p/b/slides/?slide=99" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 99)
 
     it "reads an address without its last slash too" $ do
       parse route "/s/docs" `shouldBe` Right (Space (slugs ["docs"]))

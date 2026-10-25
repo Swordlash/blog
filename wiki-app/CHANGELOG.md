@@ -503,6 +503,23 @@ plugin reports an error inside a quote at its line and column. Building it
 compiles `ghc-lib-parser` once per compiler; the wasm build needs native
 `alex` and `happy` below 2.2 on `PATH`, which `toolchain/bootstrap.sh` installs.
 
+Presentations. A page written as slides (`Wiki.Core.Slides`) has "Present"
+among its actions, for every reader, which opens it at
+`…/p/<page>/slides/` (`Route.PageSlides`, the slide shown as `?slide=N`;
+`slides` is a reserved word in addresses now, so a page or a space slugged
+`slides` is written `~slides`). `Wiki.App.View.Slides` covers the window
+with one slide at a time, scaled to it, a progress line and controls: the
+arrow keys, Space, PageUp, PageDown, Home and End move, `f` toggles the
+browser's full screen, `n` (or `s`) the speaker's notes under the slide,
+`o` an overview of every slide to pick from, and a swipe moves on a touch
+screen; moving replaces the address, so a reload or a link keeps the
+slide. Every slide is rendered, its islands drawn, and hidden by the style
+sheet; printing (or "Save as PDF") lays one slide to a page of the slide's
+shape, or with "with notes" each slide on an A4 page above its notes.
+`Body.slides` and `Body.followingLinks` render a deck as `Body.article`
+renders a page. The demo's Docs has a "Presentations" page that is a deck,
+prerendered as slides too, as is every page written as one.
+
 ## 0.1.0 - 2026-10-22
 
 The interface the application talks to the wiki through, and the in-memory

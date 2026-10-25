@@ -8,7 +8,8 @@
 -- The page view ("Wiki.App.View.Page") and the editor's preview
 -- ("Wiki.App.View.Preview") render through this one module, so that the
 -- preview shows a page exactly as it will be read: the same links resolved
--- the same way, the same islands in the same slots.
+-- the same way, the same islands in the same slots. So does the page shown
+-- as slides ("Wiki.App.View.Slides"), which is the same page cut up.
 --
 -- A formula is set with the macros of the space's chain and of the
 -- formulas before it on the page ("Wiki.Core.Math"), so the page and its
@@ -27,6 +28,8 @@ module Wiki.App.View.Body
   , heading
   , article
   , startsWithHeading
+  , slides
+  , followingLinks
   )
 where
 
@@ -51,6 +54,7 @@ import Wiki.Core.Id (AttachmentId)
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Math (spaceMacros)
 import Wiki.Core.Page (Page)
+import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 
@@ -96,7 +100,7 @@ article
   -> Text
   -> H.ComponentHTML action IslandSlots m
 article onLink place source = case Md.renderMarkdown (options place) source of
-  Right nodes -> [hh|<article class="page-body" {{ HE.preventingDefault (HE.handler' (EventType "click") clicked) }}>{{ nodes }}</article>|]
+  Right nodes -> [hh|<article class="page-body" {{ followingLinks onLink place }}>{{ nodes }}</article>|]
   Left e ->
     [hh|
       <div>
@@ -104,12 +108,31 @@ article onLink place source = case Md.renderMarkdown (options place) source of
         <pre class="page-source">{{ source }}</pre>
       </div>
     |]
+
+-- | The click handler for an element around a page's rendered Markdown: a
+-- click on one of its links that the application follows itself
+-- ('articleLink') is kept from the browser in the click's listener and
+-- handed to @onLink@; any other click is the browser's.
+followingLinks :: (ArticleLink -> action) -> Place -> HH.IProp r action
+followingLinks onLink place = HE.preventingDefault (HE.handler' (EventType "click") clicked)
   where
     -- Decided in the listener: the link's 'Just' is what prevents the
     -- browser from following it.
     clicked event = case articleLink place.context.router event of
       Nothing -> Nothing
       Just target -> Just $! onLink target
+
+-- | A page's Markdown, parsed, as slides ("Wiki.Core.Slides"): each slide's
+-- title, body and notes rendered as 'article' renders a page, with the
+-- same links and islands, one document cut up. The caller puts them in an
+-- element with 'followingLinks', as 'article' does.
+slides
+  :: forall action m
+   . (MonadIslands m, MonadUUID m)
+  => Place
+  -> Slides.Deck
+  -> [Slides.RenderedSlide (H.ComponentSlot IslandSlots m action) action]
+slides place = Slides.renderDeck (options place)
 
 options :: (MonadIslands m, MonadUUID m) => Place -> Md.Options PageLink (H.ComponentSlot IslandSlots m action) action
 options place =

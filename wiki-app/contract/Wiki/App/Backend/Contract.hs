@@ -230,7 +230,7 @@ readingSpaces = describe "listSpaces and getSpace" $ do
 readingPages :: (MonadWiki m) => SpecWith (Fixture m)
 readingPages = describe "listPages and getPage" $ do
   it "list a space's pages, by title, each followed by the pages under it" $ \(Fixture run) -> do
-    pageTitles run Anonymous "docs" `shouldReturn` ["Markdown guide", "Diagrams", "Mathematics", "Tour"]
+    pageTitles run Anonymous "docs" `shouldReturn` ["Markdown guide", "Diagrams", "Mathematics", "Presentations", "Tour"]
     docs <- spaceAt run admin "docs"
     pages <- run Anonymous (listPages docs.id) >>= ok
     map (\p -> p.space) pages `shouldSatisfy` all (== docs.id)
@@ -590,7 +590,7 @@ ordering = describe "setSpaceOrder, shiftSpace and shiftPage" $ do
     void (run admin (setSpaceOrder docs.id ChildPages ByHand) >>= ok)
     maths <- pageAt run admin "docs" "markdown-guide/mathematics"
     void (run admin (shiftPage maths.id ShiftUp) >>= ok)
-    pageTitles run Anonymous "docs" `shouldReturn` ["Markdown guide", "Mathematics", "Diagrams", "Tour"]
+    pageTitles run Anonymous "docs" `shouldReturn` ["Markdown guide", "Mathematics", "Diagrams", "Presentations", "Tour"]
 
   it "keep the order a space showed when it is switched to by hand, and put a new child last" $ \(Fixture run) -> do
     blog <- spaceAt run admin "blog"
@@ -650,7 +650,7 @@ ordering = describe "setSpaceOrder, shiftSpace and shiftPage" $ do
     void (run admin (createPage docs.id (Just aardvarks.id) "Zebras" "") >>= ok)
     void (run admin (createPage docs.id (Just aardvarks.id) "Antelopes" "") >>= ok)
     void (run admin (movePage aardvarks.id docs.id (Just guide.id)) >>= ok)
-    pageTitles run admin "docs" `shouldReturn` ["Markdown guide", "Diagrams", "Mathematics", "Aardvarks", "Zebras", "Antelopes", "Tour"]
+    pageTitles run admin "docs" `shouldReturn` ["Markdown guide", "Diagrams", "Mathematics", "Presentations", "Aardvarks", "Zebras", "Antelopes", "Tour"]
 
   it "put a space moved under another parent last there" $ \(Fixture run) -> do
     team <- spaceAt run admin "team"
@@ -802,7 +802,7 @@ movingPages = describe "movePage" $ do
     diagrams <- pageAt run admin "blog" "markdown-guide/diagrams"
     diagrams.space `shouldBe` blog.id
     pageTitles run admin "docs" `shouldReturn` ["Tour"]
-    pageTitles run admin "blog" `shouldReturn` ["Hello, world", "Markdown guide", "Diagrams", "Mathematics", "Notes on Haskell"]
+    pageTitles run admin "blog" `shouldReturn` ["Hello, world", "Markdown guide", "Diagrams", "Mathematics", "Presentations", "Notes on Haskell"]
 
   it "refuses to put a page under itself or a page under it" $ \(Fixture run) -> do
     docs <- spaceAt run admin "docs"

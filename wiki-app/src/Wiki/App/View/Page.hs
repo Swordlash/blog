@@ -2,8 +2,9 @@
 
 -- | A page, read: its Markdown rendered as "Wiki.App.View.Body" renders it
 -- (with its links resolved and its islands drawn), its attachments, and what
--- the current user may do to it: read its source, which anyone who may read
--- the page may, and, for someone who may edit it, edit it, add a page under
+-- the current user may do to it: read its source and its history, and
+-- present it as slides if it is written as a deck ("Wiki.Core.Slides"),
+-- which anyone who may read the page may, and, for someone who may edit it, edit it, add a page under
 -- it, rename, move or delete it. The URLs of its attachments are asked of the backend
 -- ('attachmentUrl') once per load.
 module Wiki.App.View.Page
@@ -32,8 +33,10 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Id (AttachmentId, PageId, SpaceId)
+import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Page (Page (attachments, body, id, parent, slug, space, title, updatedAt))
 import Wiki.Core.Permission (mayMovePage)
+import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id, name))
 
@@ -51,8 +54,9 @@ type Slots = Body.IslandSlots
 data Loaded
   = Loading
   | Failed WikiError
-  | -- | The page, and where each of its attachments is fetched from.
-    Ready Page (Map AttachmentId Text)
+  | -- | The page, where each of its attachments is fetched from, and
+    -- whether it is written as slides.
+    Ready Page (Map AttachmentId Text) Bool
 
 data Mode
   = Viewing
@@ -107,7 +111,7 @@ component =
     render State {input, loaded, mode, problem} = case loaded of
       Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> failureView e Retry
-      Ready page urls ->
+      Ready page urls deck ->
         [hh|
           <div class="page-view">
             {{ parts }}
@@ -118,31 +122,36 @@ component =
           -- Several computed parts in a row are one hole: on lines of their
           -- own, each line break between them would be a space.
           parts =
-            [hh|<div class="actions">{{ actions input page }}</div>|]
+            [hh|<div class="actions">{{ actions input page deck }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
                 <> Body.heading page.title page.body
                 <> [body input page urls]
                 <> attachments page urls
 
-    actions :: Input -> Page -> [H.ComponentHTML Action Slots m]
-    actions input page
+    actions :: Input -> Page -> Bool -> [H.ComponentHTML Action Slots m]
+    actions input page deck
       | mayEdit input.context page.space =
           [ Router.link input.context.router Followed (EditPage spacePath input.path) [HP.class_ "button"] [HH.text "Edit"]
           , viewSource
           , history
-          , Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
-          , button "Rename" (Open (Renaming page.title))
-          , button "Move" StartMove
-          , button "Delete" (Open ConfirmingDelete)
           ]
-      | otherwise = [viewSource, history]
+            <> present
+            <> [ Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
+               , button "Rename" (Open (Renaming page.title))
+               , button "Move" StartMove
+               , button "Delete" (Open ConfirmingDelete)
+               ]
+      | otherwise = [viewSource, history] <> present
       where
         spacePath = spacePathOf input.context.spaces input.space.id
         -- For every reader: the source is theirs to read as the page is.
         viewSource = Router.link input.context.router Followed (PageSource spacePath input.path) [HP.class_ "button"] [HH.text "View source"]
         -- And so is its history.
         history = Router.link input.context.router Followed (PageHistory spacePath input.path Nothing AgainstPrevious) [HP.class_ "button"] [HH.text "History"]
+        -- And to present it, if it is written as slides: any page can be
+        -- shown so, by its address, but only a deck is offered.
+        present = [Router.link input.context.router Followed (PageSlides spacePath input.path 1) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
 
     form :: Input -> Page -> Mode -> Maybe (H.ComponentHTML Action Slots m)
     form input page = \case
@@ -289,7 +298,7 @@ component =
     withPage :: (Page -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
     withPage k =
       gets (\st -> st.loaded) >>= \case
-        Ready page _ -> k page
+        Ready page _ _ -> k page
         _ -> pass
 
     done :: (a -> Maybe Route) -> Either WikiError a -> H.HalogenM State Action Slots ViewOutput m ()
@@ -305,7 +314,9 @@ fetch :: (MonadWiki n) => Input -> n Loaded
 fetch input =
   getPage input.space.id input.path >>= \case
     Left e -> pure (Failed e)
-    Right page -> Ready page . Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
+    Right page -> do
+      urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
+      pure (Ready page urls (either (const False) isDeck (Md.parseMarkdown page.body)))
 
 -- | The spaces a page may be moved to: those where the rules allow it.
 targetSpaces :: Context -> Page -> [Space]

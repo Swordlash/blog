@@ -11,8 +11,8 @@
 -- in, the tree of spaces, and the space the route is in with its pages
 -- (through 'getSpace' and 'listPages', so that a space the user may not see
 -- is refused in place). The views are child components ("Wiki.App.View.*"):
--- a space, a page, a page's source, the forms for a new space and a new page,
--- the editor. They are handed that context,
+-- a space, a page, a page's source, its history and its slides, the forms
+-- for a new space and a new page, the editor. They are handed that context,
 -- and they tell the shell when they have changed the wiki ('Changed'), which
 -- it then reloads, counting up the context's revision so that they reload
 -- what they hold as well, and goes where the change leads.
@@ -98,6 +98,7 @@ import Wiki.App.View.Page qualified as PageView
 import Wiki.App.View.Search qualified as SearchBox
 import Wiki.App.View.SearchResults qualified as SearchResultsView
 import Wiki.App.View.SignIn qualified as SignInView
+import Wiki.App.View.Slides qualified as SlidesView
 import Wiki.App.View.Source qualified as SourceView
 import Wiki.App.View.Space qualified as SpaceView
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
@@ -139,6 +140,7 @@ type Slots =
     .+ ("importer" .== H.Slot (Const Void) ViewOutput ())
     .+ ("people" .== H.Slot (Const Void) ViewOutput ())
     .+ ("signIn" .== H.Slot SignInView.Query SignInView.Output ())
+    .+ ("slides" .== H.Slot (Const Void) ViewOutput ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -582,6 +584,8 @@ component =
           PageSource _ path -> HH.slot "source" () SourceView.component SourceView.Input {context = context st, space, path} FromView
           PageHistory _ path version against ->
             HH.slot "history" () HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
+          PageSlides _ path slide ->
+            HH.slot "slides" () SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide} FromView
           -- One editor per page edited: another page's is a component of
           -- its own, with a draft of its own.
           EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path} FromView
@@ -879,6 +883,7 @@ spaceOfRoute = \case
   EditPage path _ -> Just path
   PageSource path _ -> Just path
   PageHistory path _ _ _ -> Just path
+  PageSlides path _ _ -> Just path
   NewPage path _ -> Just path
   _ -> Nothing
 
@@ -900,6 +905,7 @@ waitsForPage st = case (st.route, st.here) of
   (EditPage _ _, InSpace {}) -> True
   (PageSource _ _, InSpace {}) -> True
   (PageHistory {}, InSpace {}) -> True
+  (PageSlides {}, InSpace {}) -> True
   (Search {}, _) -> True
   _ -> False
 
@@ -912,6 +918,7 @@ currentPage st = case (st.route, st.here) of
   (EditPage _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageSource _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageHistory _ path _ _, InSpace _ _ pages) -> currentPageOf pages path
+  (PageSlides _ path _, InSpace _ _ pages) -> currentPageOf pages path
   _ -> Nothing
 
 -- | What the route is, as far as it has been loaded: a title for it.
@@ -931,6 +938,9 @@ crumbs st = case st.route of
   PageHistory path pagePath _ _ ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("History", Nothing) | not (null page)]
+  PageSlides path pagePath _ ->
+    let page = spaceCrumbs path <> pageCrumbs path pagePath
+     in page <> [("Slides", Nothing) | not (null page)]
   NewPage path parent -> spaceCrumbs path <> foldMap (pageCrumbs path) parent <> [("New page", Nothing)]
   NewSpace parent -> foldMap spaceCrumbs parent <> [("New space", Nothing)]
   Unknown -> [("Not found", Nothing)]

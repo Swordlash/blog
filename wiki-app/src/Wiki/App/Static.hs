@@ -70,8 +70,10 @@ import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..), route)
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Page (Page (id, space))
+import Wiki.Core.Markdown (parseMarkdown)
+import Wiki.Core.Page (Page (body, id, space))
 import Wiki.Core.Path (pathOf)
+import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Space (Space (id))
 
 -- | A route's page: the application's HTML, for the mount point, and the
@@ -95,7 +97,9 @@ renderRoute wiki base at = do
 -- search results, every space, and every page of the wiki with its source
 -- and its history (at its latest version: another version's address is the
 -- history's with a query, which a static host serves the same page for, and
--- the program then shows the version asked for).
+-- the program then shows the version asked for), and every page written as
+-- slides ("Wiki.Core.Slides") as slides, at the first (another slide's
+-- address is the same with a query, likewise).
 -- (Every other address gets the page for 'Unknown'.)
 prerenderedRoutes :: MemState -> [Route]
 prerenderedRoutes st =
@@ -106,10 +110,11 @@ prerenderedRoutes st =
          | p <- Map.elems st.pages
          , Just sp <- [spacePath p.space]
          , Just pp <- [pathOf (`Map.lookup` st.pages) p.id]
-         , r <- [Page sp pp, PageSource sp pp, PageHistory sp pp Nothing AgainstPrevious]
+         , r <- [Page sp pp, PageSource sp pp, PageHistory sp pp Nothing AgainstPrevious] <> [PageSlides sp pp 1 | deck p.body]
          ]
   where
     spacePath = pathOf (`Map.lookup` st.spaces)
+    deck = either (const False) isDeck . parseMarkdown
 
 -- | How the application starts in its container: building its HTML there,
 -- as the prerender does, or adopting the HTML already there, as the

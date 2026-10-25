@@ -17,6 +17,7 @@ import Test.Browser.Permissions qualified as Permissions
 import Test.Browser.Persist qualified as Persist
 import Test.Browser.Search qualified as Search
 import Test.Browser.Shell qualified as Shell
+import Test.Browser.Slides qualified as Slides
 import Test.Browser.Source qualified as Source
 #endif
 
@@ -42,6 +43,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
   describe "Wiki.App.View.Source" (Source.spec BrowserDOM)
   describe "Wiki.App.View.History" (History.spec BrowserDOM)
+  describe "Wiki.App.View.Slides" (Slides.spec BrowserDOM)
   describe "Math macros" (Macros.spec BrowserDOM)
   describe "Hydration" (Hydrate.spec BrowserDOM)
   describe "Wiki.App.Backend.Http" (Http.spec BrowserDOM)

@@ -13,6 +13,9 @@
 -- > /s/docs/p/tour/history/        PageHistory [docs] [tour] Nothing AgainstPrevious
 -- > /s/docs/p/tour/history/?version=2026-10-24T09%3A30%3A12.5Z&against=current
 -- >                                PageHistory [docs] [tour] (Just …) AgainstCurrent
+-- > /s/docs/p/presentations/slides/ PageSlides [docs] [presentations] 1
+-- > /s/docs/p/presentations/slides/?slide=3
+-- >                                PageSlides [docs] [presentations] 3
 -- > /s/docs/new-page/              NewPage [docs] Nothing
 -- > /s/docs/new-page/tour/         NewPage [docs] (Just [tour])
 -- > /new-space/                    NewSpace Nothing
@@ -30,7 +33,7 @@
 --
 -- A space's path and a page's path are separated by the segment @p@, an
 -- edit route ends in @edit@, a page's source in @source@, its history in
--- @history@, and a new page's
+-- @history@, its slides in @slides@, and a new page's
 -- route has @new-page@ after the space's path; a slug may be any of these
 -- words too (a page titled "P"), so
 -- a slug that is one of them is written with a @~@ before it (@\/s\/~p\/@),
@@ -102,6 +105,11 @@ data Route
     -- @against=current@), so that a version's address can be kept and
     -- shared.
     PageHistory [Slug] [Slug] (Maybe UTCTime) Against
+  | -- | A page presented as slides ("Wiki.Core.Slides"), for anyone who may
+    -- read the page: its space's path, its own path there, and the slide
+    -- shown, counted from 1. The slide is a parameter (@slide@, left out
+    -- for the first), so that a reload, or a link, comes back to it.
+    PageSlides [Slug] [Slug] Int
   deriving stock (Eq, Show)
 
 -- | What a version in a history is compared with.
@@ -114,8 +122,8 @@ data Against
 
 -- | The routes' codec. Parsing tries the routes in this order and takes the
 -- first that reads the whole path; since a slug is never @p@, @edit@,
--- @source@, @history@ or @new-page@ as written, no address reads as two
--- routes.
+-- @source@, @history@, @slides@ or @new-page@ as written, no address reads
+-- as two routes.
 route :: RouteDuplex' Route
 route =
   root $
@@ -155,6 +163,10 @@ route =
               "s"
               (directory ((,) <$> Duplex.lmap fst (spaceAndPage (`suffix` "history")) <*> Duplex.lmap snd historyParams))
           )
+      , alternative
+          (\case PageSlides s p n -> Just ((s, p), n); _ -> Nothing)
+          (\((s, p), n) -> PageSlides s p n)
+          (prefix "s" (directory ((,) <$> Duplex.lmap fst (spaceAndPage (`suffix` "slides")) <*> Duplex.lmap snd slideParam)))
       ]
   where
     spaceAndPage :: (RouteDuplex' [Slug] -> RouteDuplex' [Slug]) -> RouteDuplex' ([Slug], [Slug])
@@ -180,6 +192,15 @@ route =
           ( (\a -> if a == Just "current" then AgainstCurrent else AgainstPrevious)
               <$> Duplex.lmap (\a -> if a == AgainstCurrent then Just "current" else Nothing) (Duplex.optional (param "against"))
           )
+    -- The slide shown, counted from 1: the first is left out, and a
+    -- number that is not one reads as the first. One past the deck's end is
+    -- the view's to bring back into it.
+    slideParam :: RouteDuplex' Int
+    slideParam =
+      fromMaybe 1
+        <$> Duplex.lmap
+          (\n -> if n == 1 then Nothing else Just n)
+          (Duplex.optional (as show (\t -> maybe (Left ("not a number: " <> t)) Right (readMaybe t)) (param "slide")))
     -- A parameter that is not a path is read as the empty path, which names
     -- no space, rather than refused: an optional parameter that is refused
     -- reads as left out, which would search every space instead.
@@ -191,7 +212,7 @@ slugs :: RouteDuplex' [Slug]
 slugs = many1 slugSegment
 
 -- | A slug as a segment, with the route's own words (@p@, @edit@, @source@,
--- @history@, @new-page@) escaped.
+-- @history@, @slides@, @new-page@) escaped.
 slugSegment :: RouteDuplex' Slug
 slugSegment = as written readSlug segment
   where
@@ -201,7 +222,7 @@ slugSegment = as written readSlug segment
       _
         | t `elem` reserved -> Left (t <> " separates paths here")
         | otherwise -> first show (mkSlug t)
-    reserved = ["p", "edit", "source", "history", "new-page"] :: [Text]
+    reserved = ["p", "edit", "source", "history", "slides", "new-page"] :: [Text]
 
 -- | A route's address ends in a slash ('route' says why), and is read
 -- without one too.

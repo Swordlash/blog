@@ -10,7 +10,8 @@
 -- @OUTPUT-DIR\/s\/\<space path>\/p\/\<page path>\/index.html@, each
 -- page's source to @…\/p\/\<page path>\/source\/index.html@ (anyone who
 -- may read a page may read its source, and may well arrive there by its
--- address, so it is served as the page is), and the page of search results
+-- address, so it is served as the page is), as are its history and, for a
+-- page written as slides, the slides, and the page of search results
 -- to @OUTPUT-DIR\/search\/index.html@ with nothing searched for (a search's
 -- words are in its query, which a static host ignores; the program searches
 -- once it has loaded). So a static host has a file at every

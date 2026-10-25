@@ -97,6 +97,7 @@ library
       Wiki.App.View.Search
       Wiki.App.View.SearchResults
       Wiki.App.View.SignIn
+      Wiki.App.View.Slides
       Wiki.App.View.History
       Wiki.App.View.Source
       Wiki.App.View.Space
@@ -280,6 +281,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Persist
       Test.Browser.Search
       Test.Browser.Shell
+      Test.Browser.Slides
       Test.Browser.Source
       Test.Browser.Text
   build-depends:

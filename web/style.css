@@ -1209,6 +1209,405 @@ select {
   margin-bottom: 0.75rem;
 }
 
+/* ---- Slides ------------------------------------------------------------ */
+
+/* A page presented as slides (Wiki.App.View.Slides) covers the whole window,
+   over the frame, which stays where it was beneath. Each theme sets the
+   slide's own colours; the dark frame around a slide, the notes and the
+   controls are the page's. */
+.slides-view {
+  --slide-ratio: 16 / 9;
+  --slide-background: #ffffff;
+  --slide-text: #1f2328;
+  --slide-accent: #23376e;
+  --slide-bar: #23376e;
+  --slide-bar-text: #ffffff;
+  --slide-muted: #59636e;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  background: #15181d;
+  outline: none;
+}
+
+body:has(.slides-view) {
+  overflow: hidden;
+}
+
+.slides-view.slides-standard {
+  --slide-ratio: 4 / 3;
+}
+
+.slides-theme-light {
+  --slide-accent: #0969da;
+  --slide-bar: transparent;
+  --slide-bar-text: #1f2328;
+}
+
+.slides-theme-dark {
+  --slide-background: #161b22;
+  --slide-text: #e6edf3;
+  --slide-accent: #79c0ff;
+  --slide-bar: transparent;
+  --slide-bar-text: #e6edf3;
+  --slide-muted: #9198a1;
+}
+
+.slides-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 1rem;
+}
+
+/* The slide shown, and under it its notes when they are open. The others
+   are in the page, drawn, and hidden. */
+.slide-frame {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.slide-frame.current {
+  display: flex;
+}
+
+/* The room a slide has, which it fills as far as its shape lets it. */
+.slide-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  container-type: size;
+}
+
+/* A slide's text is sized in hundredths of the slide's width (cqi), so a
+   slide looks the same in a window, on a projector and on paper. */
+.slide {
+  display: flex;
+  flex-direction: column;
+  width: min(100cqw, calc(100cqh * var(--slide-ratio)));
+  aspect-ratio: var(--slide-ratio);
+  overflow: hidden;
+  container-type: inline-size;
+  color: var(--slide-text);
+  background: var(--slide-background);
+  box-shadow: 0 0.5rem 2rem rgb(0 0 0 / 40%);
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+
+.slide-title {
+  padding: 0.45em 1.1em;
+  font-size: 3.6cqi;
+  line-height: 1.2;
+  color: var(--slide-bar-text);
+  background: var(--slide-bar);
+}
+
+.slide-title > * {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.slides-theme-light .slide-title,
+.slides-theme-dark .slide-title {
+  margin: 0 1.1em;
+  padding: 0.6em 0 0.25em;
+  border-bottom: 2px solid var(--slide-accent);
+}
+
+.slide-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0.8em 1.7em;
+  overflow: hidden;
+  font-size: 2.4cqi;
+  line-height: 1.4;
+}
+
+.slide-body > :first-child {
+  margin-top: 0;
+}
+
+.slide .page-body h1,
+.slide .page-body h2,
+.slide .page-body h3 {
+  margin: 0.6em 0 0.3em;
+  padding: 0;
+  border: 0;
+  color: var(--slide-accent);
+}
+
+.slide .page-body pre code,
+.slide .page-body code {
+  font-size: 0.85em;
+}
+
+.slide .page-body th,
+.slide .page-body td {
+  border-color: color-mix(in srgb, var(--slide-text) 25%, transparent);
+}
+
+.slide .page-body th {
+  background: color-mix(in srgb, var(--slide-text) 8%, transparent);
+}
+
+.slide .wiki-mermaid svg,
+.slide .page-body img,
+.slide .page-body video {
+  max-width: 100%;
+  max-height: 60cqi;
+}
+
+.slide-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+  padding: 0.35em 1.4em;
+  font-size: 1.4cqi;
+  color: var(--slide-bar-text);
+  background: var(--slide-bar);
+}
+
+.slides-theme-light .slide-footer,
+.slides-theme-dark .slide-footer {
+  color: var(--slide-muted);
+}
+
+/* A slide titled with a level-one heading is a title slide, as Beamer's
+   title page: the title large, in the middle, the text under it. */
+.slide-title-page .slide-title {
+  margin-top: auto;
+  padding: 0 1em;
+  border: 0;
+  text-align: center;
+  font-size: 6cqi;
+  color: var(--slide-accent);
+  background: none;
+}
+
+.slide-title-page .slide-body {
+  flex: 0 1 auto;
+  margin-bottom: auto;
+  text-align: center;
+}
+
+.slide-notes {
+  display: none;
+  max-height: 30%;
+  overflow-y: auto;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.notes-open .slide-frame.current .slide-notes {
+  display: block;
+}
+
+.slides-progress {
+  height: 4px;
+  background: rgb(255 255 255 / 15%);
+}
+
+.slides-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease-out;
+}
+
+.slides-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  color: var(--text);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.slides-position {
+  min-width: 4.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.slides-controls [aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* In full screen the controls keep out of the way until they are wanted. */
+.slides-view:fullscreen .slides-controls {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.slides-view:fullscreen .slides-controls:hover,
+.slides-view:fullscreen .slides-controls:focus-within {
+  opacity: 1;
+}
+
+/* Every slide, small, to pick one; the one shown is marked. */
+.slides-view.overview .slides-stage {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  align-content: start;
+  gap: 1rem;
+  overflow-y: auto;
+}
+
+.overview .slide-frame {
+  display: block;
+  cursor: pointer;
+}
+
+.overview .slide-slot {
+  aspect-ratio: var(--slide-ratio);
+}
+
+.overview .slide {
+  pointer-events: none;
+}
+
+.overview .slide-frame.current .slide {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.overview .slide-frame .slide-notes {
+  display: none;
+}
+
+/* A page's speaker notes, read on the page itself rather than presented. */
+.page-body .notes {
+  margin: 1rem 0;
+  padding: 0.25rem 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: 0.92rem;
+  color: var(--muted);
+}
+
+.page-body .notes::before {
+  content: "Speaker notes";
+  display: block;
+  margin-top: 0.25rem;
+  font-weight: 600;
+}
+
+/* Printed, or saved as a PDF: a slide to a page of the slide's own shape,
+   and nothing else of the window; or, with the notes, each slide on an A4
+   page with its notes under it. */
+@page slides-wide {
+  size: 254mm 142.875mm;
+  margin: 0;
+}
+
+@page slides-standard {
+  size: 254mm 190.5mm;
+  margin: 0;
+}
+
+@page slides-notes {
+  size: A4 portrait;
+  margin: 15mm;
+}
+
+@media print {
+  .wiki:has(.slides-view) .wiki-header,
+  .wiki:has(.slides-view) .wiki-sidebar,
+  .wiki:has(.slides-view) .wiki-footer,
+  .wiki:has(.slides-view) .leave-confirm,
+  .slides-progress,
+  .slides-controls {
+    display: none;
+  }
+
+  .wiki:has(.slides-view) .wiki-content {
+    margin: 0;
+    padding: 0;
+  }
+
+  .slides-view {
+    position: static;
+    display: block;
+    background: none;
+  }
+
+  .slides-stage,
+  .slides-view.overview .slides-stage {
+    display: block;
+    padding: 0;
+    overflow: visible;
+  }
+
+  .slide-frame,
+  .overview .slide-frame {
+    display: block;
+    break-after: page;
+    page: slides-wide;
+  }
+
+  .slides-standard .slide-frame {
+    page: slides-standard;
+  }
+
+  .slide-slot,
+  .overview .slide-slot {
+    width: 100vw;
+    height: 100vh;
+    aspect-ratio: auto;
+  }
+
+  .slide,
+  .overview .slide-frame.current .slide {
+    box-shadow: none;
+    outline: none;
+  }
+
+  .slide-frame .slide-notes,
+  .notes-open .slide-frame.current .slide-notes {
+    display: none;
+  }
+
+  .print-notes .slide-frame {
+    page: slides-notes;
+  }
+
+  .print-notes .slide-slot {
+    width: 100%;
+    height: auto;
+    aspect-ratio: var(--slide-ratio);
+  }
+
+  .print-notes .slide {
+    border: 1px solid #d1d9e0;
+  }
+
+  .print-notes .slide-frame .slide-notes {
+    display: block;
+    max-height: none;
+    margin-top: 6mm;
+    padding: 0;
+    color: #1f2328;
+    background: none;
+  }
+}
+
 /* ---- The editor ------------------------------------------------------------ */
 
 /* The editor takes the whole width the sidebar leaves: two panes side by side

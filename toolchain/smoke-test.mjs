@@ -40,8 +40,9 @@
 //    the administration's among them. On the way, a page saved twice more
 //    has its history opened, a version's diff read and the version
 //    restored.
-// 3. The same page in a dark scheme and at a phone's width, and a page's
-//    source copied to the clipboard.
+// 3. The same page in a dark scheme and at a phone's width, a page shown
+//    as slides (moved through, reloaded, printed), and a page's source
+//    copied to the clipboard.
 //
 // Needs the Chromium that Playwright's version in package-lock.json launches
 // (toolchain/bootstrap.sh installs it), and no network: index.js loads
@@ -878,6 +879,30 @@ try {
   assert.ok(await fits(), "a page's source is wider than a phone");
   await phone.context().close();
   console.log("ok: a page, the editor and a page's source fit a phone's width");
+
+  // A page presented as slides: moved through by the keys with the slide in
+  // the address, which a reload comes back to; printed, one slide to a page.
+  const deck = await newPage();
+  await load(deck, "/s/docs/p/markdown-guide/presentations/slides/");
+  await deck.locator("#app .slides-view .slide-frame.current .slide-title", { hasText: "Presentations" }).waitFor({ timeout });
+  await deck.keyboard.press("ArrowRight");
+  await deck.locator("#app .slides-position", { hasText: "2 / 7" }).waitFor({ timeout });
+  assert.equal(new URL(deck.url()).search, "?slide=2", "the slide shown is not in the address");
+  await deck.keyboard.press("ArrowRight");
+  await deck.locator("#app .slide-frame.current .wiki-math-display .katex-display").waitFor({ timeout });
+  await reload(deck);
+  await deck.locator("#app .slides-position", { hasText: "3 / 7" }).waitFor({ timeout });
+  await deck.locator("#app .slide-frame.current .wiki-math-display .katex-display").waitFor({ timeout });
+  await deck.emulateMedia({ media: "print" });
+  const printed = await deck.evaluate(() => ({
+    slides: [...document.querySelectorAll("#app .slide-frame")].filter((f) => f.checkVisibility()).length,
+    chrome: [".wiki-header", ".wiki-sidebar", ".slides-controls"].filter((s) => document.querySelector(`#app ${s}`)?.checkVisibility()),
+  }));
+  assert.deepEqual(printed, { slides: 7, chrome: [] }, "printing shows something else than every slide");
+  const pdf = (await deck.pdf({ preferCSSPageSize: true })).toString("latin1");
+  assert.equal(pdf.match(/\/Type\s*\/Page[^s]/g)?.length, 7, "the deck does not print as one page per slide");
+  await deck.context().close();
+  console.log("ok: a deck moves by its keys, keeps its slide in the address across a reload, and prints a slide to a page");
 
   // Copy puts the Markdown on the clipboard, as written. Headless Chromium
   // lets a page at it only with the permissions granted.
