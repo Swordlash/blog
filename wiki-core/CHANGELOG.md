@@ -177,6 +177,22 @@ leads nowhere gets the class `link-unresolved`. `renderRawHtml` renders one
 block of HTML on its own. Nothing renders raw HTML as text any more, so the
 `raw-html` class is no longer written.
 
+A page can be read as slides. `Wiki.Core.Slides.deckOf` cuts a parsed page
+at its top-level thematic breaks (`---`) into `Slide`s, each with its first
+heading as its `title` (a `SlideTitle`: level, attributes, text), its `notes`
+(the contents of its `::: notes` divs) and its `body`, with the footnotes it
+refers to put at its end; empty slides are dropped and an empty page is one
+empty slide. A `::: {.slides theme=… aspect=…}` div anywhere in the page
+gives the `DeckOptions` (themes `beamer`, the default, `light` and `dark`;
+aspects `16:9`, the default, and `4:3`) and shows nothing. `isDeck` says
+whether a page is written as slides (a break, or that div). `renderDeck`
+renders every slide's title, body and notes through the page's renderer as
+one document, with `Wiki.Core.Markdown.Render.renderSections`, which renders
+several lists of blocks with island keys, macros and footnote ids carried
+from one to the next. A list of footnotes that does not start at the first
+now says where it starts (`<ol start>`); a page's, which always does, is
+unchanged.
+
 ## 0.1.0 - 2026-10-22
 
 The wiki's domain model, as plain data with JSON instances that the client and

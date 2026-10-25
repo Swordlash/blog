@@ -69,6 +69,7 @@ library
       Wiki.Core.Path
       Wiki.Core.Permission
       Wiki.Core.Search
+      Wiki.Core.Slides
       Wiki.Core.Slug
       Wiki.Core.Space
       Wiki.Core.User
@@ -118,6 +119,7 @@ test-suite wiki-core-test
       Test.Permission
       Test.Permission.Writes
       Test.Search
+      Test.Slides
       Test.Slug
   build-depends:
       QuickCheck,
@@ -167,6 +169,7 @@ test-suite wiki-core-html-test
         Test.Markdown.Html
         Test.Markdown.RawHtml
         Test.Markdown.Render
+        Test.Markdown.Slides
     build-depends:
         QuickCheck,
         hspec >= 2,

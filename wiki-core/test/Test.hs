@@ -16,12 +16,14 @@ import Test.Path qualified as Path
 import Test.Permission qualified as Permission
 import Test.Permission.Writes qualified as Writes
 import Test.Search qualified as Search
+import Test.Slides qualified as Slides
 import Test.Slug qualified as Slug
 
 main :: IO ()
 main = hspec $ do
   Slug.spec
   Ast.spec
+  Slides.spec
   Edit.spec
   Tikz.spec
   Math.spec

@@ -47,6 +47,7 @@ module Wiki.Core.Markdown.Render
   , defaultOptions
   , defaultResolveLink
   , renderBlocks
+  , renderSections
   , renderRawHtml
   )
 where
@@ -130,8 +131,19 @@ defaultResolveLink dest = case classifyDestination dest of
   _ -> External dest
 
 -- | The document's blocks as HTML, in order.
-renderBlocks :: forall page w i. Options page w i -> [Block] -> [HH.HTML w i]
-renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts M.empty M.empty [])
+renderBlocks :: Options page w i -> [Block] -> [HH.HTML w i]
+renderBlocks opts doc = concat (renderSections opts [doc])
+
+-- | A document cut into sections, each section's blocks as HTML of its own,
+-- in order: what a page shown as slides ("Wiki.Core.Slides") is rendered
+-- with, each slide's title, body and notes a section, so that each can be
+-- put where its slide shows it. The sections are one document all the same:
+-- an island's key is unique among all of them, a formula is set with the
+-- macros defined in the sections before it, and a footnote's references
+-- are numbered across them, as they would be if the sections were one
+-- page.
+renderSections :: forall page w i. Options page w i -> [[Block]] -> [[HH.HTML w i]]
+renderSections opts sections = evalState (traverse renderBlocks' sections) (Counts M.empty M.empty [])
   where
     renderBlock :: Block -> R [HH.HTML w i]
     renderBlock = \case
@@ -151,7 +163,10 @@ renderBlocks opts doc = evalState (concat <$> traverse renderBlock doc) (Counts 
         inner <- renderBlocks' bs
         let (cls, title) = alertName kind
         pure [HH.div [classesProp ["alert", "alert-" <> cls]] (HH.p [classesProp ["alert-title"]] [HH.text title] : inner)]
-      Footnotes notes -> single . HH.section [classesProp ["footnotes"]] . single . HH.ol_ <$> traverse renderNote notes
+      -- A slide shows the notes it refers to, which need not start at the
+      -- first ("Wiki.Core.Slides").
+      Footnotes notes ->
+        single . HH.section [classesProp ["footnotes"]] . single . listOf (OrderedList (firstNote notes)) False <$> traverse renderNote notes
       RawHtmlBlock raw -> pure (renderRawHtml opts raw)
 
     renderBlocks' :: [Block] -> R [HH.HTML w i]
@@ -347,6 +362,11 @@ single = pure
 
 nonEmptyOr :: Text -> Text -> Text
 nonEmptyOr fallback t = if T.null t then fallback else t
+
+firstNote :: [Footnote] -> Int
+firstNote = \case
+  Footnote n _ _ : _ -> n
+  [] -> 1
 
 isTask :: ListItem -> Bool
 isTask (ListItem task _) = isJust task
