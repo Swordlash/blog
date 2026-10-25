@@ -2105,3 +2105,7 @@ Amended by the planning session after each work package's report.
   `spaceAccess`'s candidates (decision 22); `/` shortcut and the three `Safe` bindings over
   the window emitters and `Promise`; the assistant stays shelved (decision 21). Next: the
   owner's pick among the Phase 4 candidates.
+- **WP4.4 and WP4.5 started** (2026-10-25) in parallel from `main` `a32bb9f`, on
+  `wp4.4-server-settings` (public URL, mail and sign-in providers from the panel, migration
+  `0005`) and `wp4.5-comments` (inline and page threads, live over a WebSocket, migration
+  `0006`); whichever merges second rebases.
