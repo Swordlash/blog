@@ -141,8 +141,8 @@ spec m = do
     eventually (membersOf ui "writers" `shouldReturn` ["editor", "reader"])
     -- Rita may edit the blog now, as the writers may.
     switchTo ui "reader"
-    find ui ".space-tree a[href='#/s/blog/']" >>= click
-    _ <- find ui ".space-view .actions a[href='#/s/blog/new-page/']"
+    find ui ".space-tree a[href$='#/s/blog/']" >>= click
+    _ <- find ui ".space-view .actions a[href$='#/s/blog/new-page/']"
     -- And no longer once she is taken out.
     eventually (length <$> findAll ui ".admin-link" `shouldReturn` 0)
     switchTo ui "admin"
@@ -150,9 +150,9 @@ spec m = do
     find ui "[data-group=writers] .group-member[data-login=reader] .group-remove" >>= click
     eventually (membersOf ui "writers" `shouldReturn` ["editor"])
     switchTo ui "reader"
-    find ui ".space-tree a[href='#/s/blog/']" >>= click
+    find ui ".space-tree a[href$='#/s/blog/']" >>= click
     find ui ".space-view h1" >>= (`shouldHaveText` "Blog")
-    eventually (length <$> findAll ui ".space-view .actions a[href='#/s/blog/new-page/']" `shouldReturn` 0)
+    eventually (length <$> findAll ui ".space-view .actions a[href$='#/s/blog/new-page/']" `shouldReturn` 0)
 
   it "makes, renames and deletes a group, asking first, and says why a name will not do" $ runPage $ do
     ui <- start m (Just "user-admin") Admin

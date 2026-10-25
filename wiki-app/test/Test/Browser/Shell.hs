@@ -23,11 +23,11 @@ spec m = do
 
   it "goes to a page by clicking, and draws its formulas" $ runPage $ do
     ui <- start m Nothing Home
-    find ui ".space-tree a[href='#/s/docs/']" >>= click
+    find ui ".space-tree a[href$='#/s/docs/']" >>= click
     find ui ".space-view h1" >>= (`shouldHaveText` "Docs")
-    find ui ".space-view .page-tree a[href='#/s/docs/p/markdown-guide/']" >>= click
+    find ui ".space-view .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
-    find ui ".wiki-sidebar .page-tree a[href='#/s/docs/p/markdown-guide/mathematics/']" >>= click
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/mathematics/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
     _ <- find ui ".page-body .wiki-math-display .katex-display"
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Mathematics")
@@ -35,7 +35,7 @@ spec m = do
   it "follows a link in a page's Markdown without loading another page" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["tour"]))
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
-    find ui ".page-body a[href='#/s/docs/p/markdown-guide/diagrams/']" >>= click
+    find ui ".page-body a[href$='#/s/docs/p/markdown-guide/diagrams/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Diagrams")
     _ <- eventuallyWithin 15000 (find ui ".page-body .wiki-mermaid > svg")
     pure ()
@@ -49,13 +49,13 @@ spec m = do
     find ui ".new-space-view input" >>= (`typeText` "Research notes")
     find ui ".new-space-view button.primary" >>= click
     find ui ".space-view h1" >>= (`shouldHaveText` "Research notes")
-    find ui ".space-tree a[href='#/s/research-notes/']" >>= (`shouldHaveText` "Research notes")
+    find ui ".space-tree a[href$='#/s/research-notes/']" >>= (`shouldHaveText` "Research notes")
 
   it "shows reader the private Team only as the way to Projects" $ runPage $ do
     ui <- start m (Just "user-reader") Home
     find ui ".space-tree .unviewable" >>= (`shouldHaveText` "Team")
-    length <$> findAll ui ".space-tree a[href='#/s/team/']" `shouldReturn` 0
-    find ui ".space-tree a[href='#/s/team/projects/']" >>= click
+    length <$> findAll ui ".space-tree a[href$='#/s/team/']" `shouldReturn` 0
+    find ui ".space-tree a[href$='#/s/team/projects/']" >>= click
     find ui ".space-view h1" >>= (`shouldHaveText` "Projects")
 
   it "says in place that reader may not see Team" $ runPage $ do
@@ -73,8 +73,8 @@ spec m = do
 
   it "lets an editor add a page, rename it and delete it" $ runPage $ do
     ui <- start m (Just "user-editor") (Space (slugs ["blog"]))
-    find ui ".space-view .actions a[href='#/s/blog/new-page/']" >>= (`shouldHaveText` "New page")
-    find ui ".space-view .actions a[href='#/s/blog/new-page/']" >>= click
+    find ui ".space-view .actions a[href$='#/s/blog/new-page/']" >>= (`shouldHaveText` "New page")
+    find ui ".space-view .actions a[href$='#/s/blog/new-page/']" >>= click
     find ui ".new-page-title" >>= (`typeText` "Third post")
     find ui ".new-page-view button.primary" >>= click
     find ui ".editor-heading" >>= (`shouldHaveText` "Editing Third post")
@@ -99,7 +99,7 @@ spec m = do
     find ui ".space-view form select" >>= (`shouldHaveText'` "The top level")
     find ui ".space-view form button.primary" >>= click
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Projects")
-    _ <- find ui ".wiki-sidebar > .space-tree > li > .space-row a[href='#/s/projects/']"
+    _ <- find ui ".wiki-sidebar > .space-tree > li > .space-row a[href$='#/s/projects/']"
     pure ()
 
   it "takes an administrator to the administration from the header" $ runPage $ do

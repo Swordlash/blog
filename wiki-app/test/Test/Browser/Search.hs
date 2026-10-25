@@ -66,7 +66,7 @@ spec m = do
     ui <- start m Nothing (Space (slugs ["blog"]))
     find ui ".wiki-search .search-input" >>= (`typeText` "mathematics")
     hit <- eventually $ do
-      hits <- findAll ui ".search-results a.search-hit[href='#/s/docs/p/markdown-guide/mathematics/']"
+      hits <- findAll ui ".search-results a.search-hit[href$='#/s/docs/p/markdown-guide/mathematics/']"
       maybe (expectationFailure "no hit for Mathematics yet") pure (head hits)
     click hit
     find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
@@ -80,7 +80,7 @@ spec m = do
     find ui ".search-view h1" >>= (`shouldHaveText` "Search")
     find ui ".search-view .search-summary" >>= \summary ->
       textContent summary >>= (`shouldSatisfy` T.isSuffixOf "for “mermaid” in every space.")
-    _ <- find ui ".search-view a.search-hit[href='#/s/docs/p/markdown-guide/diagrams/']"
+    _ <- find ui ".search-view a.search-hit[href$='#/s/docs/p/markdown-guide/diagrams/']"
     pure ()
 
   it "is focused by /, and closed by Escape" $ runPage $ do

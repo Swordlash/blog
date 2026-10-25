@@ -318,7 +318,7 @@ accounts m = describe "signing in and out" $ do
     -- the server says nobody is asking.
     answerWith "GET" "api/v1/session" 200 nobody
     answerRaw "GET" (links.spaces.atPath (slugs ["team"])) 403 "{\"error\":\"Forbidden\"}"
-    find ui ".wiki-sidebar a[href='#/s/team/']" >>= click
+    find ui ".wiki-sidebar a[href$='#/s/team/']" >>= click
     find ui ".sign-in-notice" >>= (`shouldHaveText` "Your session has ended. Sign in again to go on.")
     _ <- find ui ".sign-in-form input[name=login]"
     length <$> findAll ui ".account .sign-out" `shouldReturn` 0
@@ -416,7 +416,7 @@ views m = describe "the application over it" $ do
     filter (T.isInfixOf "/pages/at/") urls `shouldBe` []
     -- A page of the same space opens at once, from what was read.
     before <- length <$> asked
-    find ui ".wiki-sidebar .page-tree a[href='#/s/docs/p/markdown-guide/']" >>= click
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
     length <$> asked `shouldReturn` before
     unmount ui

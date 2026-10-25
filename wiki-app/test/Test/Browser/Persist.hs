@@ -160,8 +160,8 @@ administration ui = do
 -- | Go to Hello, world from the tree of spaces.
 helloWorld :: Mounted s q o n -> PageM s ()
 helloWorld ui = do
-  find ui ".space-tree a[href='#/s/blog/']" >>= click
-  find ui ".space-view .page-tree a[href='#/s/blog/p/hello-world/']" >>= click
+  find ui ".space-tree a[href$='#/s/blog/']" >>= click
+  find ui ".space-view .page-tree a[href$='#/s/blog/p/hello-world/']" >>= click
   find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Hello, world")
 
 -- | Hand the administration's import a file, as choosing it would.

@@ -119,7 +119,7 @@ spec m = do
 
   it "writes a new page from the space's New page, made from its title first" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") (Space (slugs ["blog"]))
-    find ui ".space-view .actions a[href='#/s/blog/new-page/']" >>= click
+    find ui ".space-view .actions a[href$='#/s/blog/new-page/']" >>= click
     find ui ".new-page-view h1" >>= (`shouldHaveText` "New page in Blog")
     find ui ".new-page-title" >>= (`typeText` "Third post")
     find ui ".new-page-view button.primary" >>= click
@@ -141,7 +141,7 @@ spec m = do
 
   it "writes a new page under another from its New subpage" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") (Page (slugs ["blog"]) (slugs ["hello-world"]))
-    find ui ".page-view .actions a[href='#/s/blog/new-page/hello-world/']" >>= click
+    find ui ".page-view .actions a[href$='#/s/blog/new-page/hello-world/']" >>= click
     find ui ".new-page-view h1" >>= (`shouldHaveText` "New page under Hello, world")
     find ui ".new-page-title" >>= (`typeText` "Follow-up")
     find ui ".new-page-view button.primary" >>= click
@@ -212,13 +212,13 @@ spec m = do
     text <- editorText ui
     clear text
     typeText text "Draft"
-    find ui ".wiki-sidebar .page-tree a[href='#/s/blog/p/notes-on-haskell/']" >>= click
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/notes-on-haskell/']" >>= click
     _ <- find ui ".leave-confirm"
     clickButton ui ".leave-confirm button" "Stay"
     length <$> findAll ui ".leave-confirm" `shouldReturn` 0
     markdown ui `shouldReturn` "Draft"
     -- Again, and leaving goes there; the work is lost.
-    find ui ".wiki-sidebar .page-tree a[href='#/s/blog/p/notes-on-haskell/']" >>= click
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/notes-on-haskell/']" >>= click
     find ui ".leave-confirm button.danger" >>= click
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Notes on Haskell")
     unchanged <- readPage wiki ["blog"] ["hello-world"]

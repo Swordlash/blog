@@ -40,7 +40,7 @@ spec m = do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["tour"]))
     actions <- traverse textContent =<< findAll ui ".page-view .actions > *"
     actions `shouldBe` ["View source", "History"]
-    find ui ".page-view .actions a[href='#/s/docs/p/tour/history/']" >>= click
+    find ui ".page-view .actions a[href$='#/s/docs/p/tour/history/']" >>= click
     find ui ".history-view h1" >>= (`shouldHaveText` "Tour")
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "History")
     versions <- traverse textContent =<< findAll ui ".version-list li > a"

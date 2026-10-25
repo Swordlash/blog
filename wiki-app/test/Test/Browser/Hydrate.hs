@@ -62,9 +62,9 @@ spec m = do
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
     -- Listeners on what was adopted: a link of the shell's, then one in the
     -- page's Markdown.
-    find ui ".wiki-sidebar a[href='#/s/blog/']" >>= click
+    find ui ".wiki-sidebar a[href$='#/s/blog/']" >>= click
     find ui ".space-view h1" >>= (`shouldHaveText` "Blog")
-    find ui ".space-view .page-tree a[href='#/s/blog/p/hello-world/']" >>= click
+    find ui ".space-view .page-tree a[href$='#/s/blog/p/hello-world/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Hello, world")
     find ui ".wiki" >>= (`shouldBeSameElement` shell)
 
