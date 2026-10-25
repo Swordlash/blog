@@ -2015,3 +2015,7 @@ Amended by the planning session after each work package's report.
   the pinned `net`; open in `H.liftEffect`, subscribe to the emitters (they keep what arrives
   before the first subscriber), close in `Finalize`, import qualified; the server needs an
   SSE endpoint under the closed-wiki 401 rule; test by replacing `globalThis.EventSource`.
+- **WP3.6 started** (2026-10-25) on `wp3.6-oidc` from `main` `4d87967`: server-driven
+  authorization code flow with PKCE (Google, GitHub, generic OIDC, Apple if it fits),
+  identities linked to accounts, the open/closed rule of WP3.5 obeyed. The last package of
+  Phase 3.
