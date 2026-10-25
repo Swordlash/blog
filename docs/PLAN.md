@@ -2156,3 +2156,41 @@ Amended by the planning session after each work package's report.
   password and sign in with it. Known: a wrong current password costs one extra
   `GET session` (the 401 recheck of WP3.1). Still open: group grants of the global
   permissions in the panel.
+- **WP4.4 merged** (2026-10-25, PR #63, `main` at `24847ab`). The administration's new
+  "Server" section (`View/Server.hs`, beside "Who may come in") is the only place the public
+  address, the mail server and the sign-in providers are set (the owner's decision: no
+  command-line bootstrap or override). `--smtp-*`, `--public-url`, `--oidc`,
+  `WIKI_SMTP_PASSWORD` and `WIKI_OIDC_<NAME>_SECRET` are gone from `wiki-server` and
+  `deploy-local.sh` (each refused with a pointer at the panel; the next deploy deletes the
+  old `~/.config/wiki-demo/<name>.env`, says so and lists what to set again; no
+  `EnvironmentFile=`; `--status` no longer lists providers). API (`Wiki.Api.ServerSettings`):
+  `ServerSettingsOf s {publicUrl, mail, providers}`, a secret read as `set | not-set`,
+  written as `Maybe Text` (`null` or missing keeps, `""` clears, text replaces; a provider
+  left out is removed with its secret, `mail: null` drops the password); `GET`/`PUT
+  admin/server`, `POST admin/server/providers/<name>/check` (as stored, or as typed), `POST
+  admin/server/mail/test`; `checkServerSettings` shared by server and demo. Storage:
+  migration `0005-server-settings.sql`, address and mail as rows of `settings`, providers in
+  `sign_in_providers` (name, position, kind, client id, issuer, secret), secrets in clear
+  (the file holds password and session hashes already; `data/` is mode 700; backups carry
+  them too); kept in a second `IORef` replaced under the lock; the mailer built per mail,
+  providers cached by (settings, secret, public URL) and replaced per request so any change
+  re-runs discovery; `wiki-server oidc check --data DIR [NAME]`. Panel: one thing edited at a
+  time, saving writes the whole; secrets in password fields, shown as "Set"/"not set" with
+  "Replace…" and (mail) "Clear"; each provider shows its redirect URI with "Check", "Change",
+  "Remove"; "Add a provider"; "Send a test mail". `MonadAdmin` gains `serverSettings`,
+  `setServerSettings`, `checkProvider`, `sendTestMail`; `MemWiki` keeps them for the tab.
+  Validation: a provider needs a secret, mail and providers need a public address, a mail
+  account needs a password, a change is refused whole. Tests: HTTP (administrator only,
+  secrets never in an answer or the log, keep/clear/drop, survive a restart, a provider added
+  at run time signs in with no restart, a removed one 404, a changed issuer re-runs discovery,
+  a replaced secret used at once, mail through the SMTP sink with run-time settings, "Check"
+  against the fake provider), migration from 4, `oidc check --data`, removed flags refused,
+  admin contract, 4 browser cases, hydration, the server smoke test adds the fake provider
+  through the panel in Chromium and signs in with it, `test-deploy-local.sh` 26+10+10; server
+  524, app 814, api 67+105, browser 165; `app.wasm` 9.20 MB. Known: a secret travels once in
+  the `PUT` body over the listener the panel is on (plain http on the private network,
+  decision 20); an upgraded deployment starts with nothing set; settings changes are not
+  logged. CI note: the `wasm` job failed once on the server smoke test's draft step ("Draft
+  saved" not seen in 30 s, no `PUT …/draft` logged), untouched by this PR and green on the
+  previous PR; the one re-run passed, so a timing flake of the autosave on the runner; if it
+  recurs, make the step robust (wait for the draft request, or type then wait past the 2 s).
