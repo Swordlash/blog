@@ -24,6 +24,14 @@ backends keep a space without a home page that was deleted or moved away.
 `wiki-preload` as `pageCounts`. The views' `Context` has `icons`. The demo's
 spaces have emoji (Projects a colour), descriptions and home pages.
 
+A page's bar of actions (`.page-actions`) and the editor's toolbar stay
+under the header while the page scrolls, so that a long page is edited
+without scrolling back up (the owner's request). The shell measures the
+header's and the bar's heights into `--header-height` and
+`--page-actions-height` (`jsbits/layout.js`, `Wiki.App.Browser.keepHeights`),
+which the comments' panel is stacked under too, and marks a bar stuck there
+with `data-stuck`, which gives it a hairline.
+
 The editor no longer loses what is typed just after a save is asked for.
 It made its text read-only while the save was on its way, which refused
 the keystrokes (and toolbar commands) that came meanwhile without a word;
