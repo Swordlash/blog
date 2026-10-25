@@ -2248,3 +2248,9 @@ Amended by the planning session after each work package's report.
   History, Present, Comments, Delete) sticks under the header while the page scrolls, so a
   long page can be edited without scrolling back up; the editor's toolbar likewise if it does
   not already.
+- **WP4.7 LaTeX delimiters** (the owner, 2026-10-25): `\(…\)` for inline and `\[…\]` for
+  display math, beside `$…$` and `$$…$$` (pandoc's `tex_math_single_backslash`). Decided with
+  it: a `\[` or `\(` then starts math rather than escaping a bracket, as in pandoc; a literal
+  bracket needs no escape outside links, and `docs/markdown.md` says so. A commonmark syntax
+  spec of our own in `wiki-core` beside `mathSpec`, the same `Math` nodes, so rendering,
+  search, slides and the preview need nothing. Started on `wp4.7-tex-delimiters` beside WP4.6.
