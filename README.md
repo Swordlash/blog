@@ -256,6 +256,53 @@ like the other options; `--static` goes back to the demo.
   in `~/.config/wiki-demo/<name>.env`, mode 600, for the unit, and never on a
   command line; the options are remembered, and `--no-smtp` forgets them. Without
   SMTP the panel shows each invitation's link once, as it is made, to pass on.
+- **Signing in with Google, GitHub, Apple or another provider.** Beside passwords,
+  people may sign in with an account they have at a provider (OpenID Connect; GitHub
+  through its OAuth apps). Each provider is one `--oidc NAME=KIND,CLIENT-ID[,ISSUER]`
+  (`KIND` is `google`, `apple`, `github`, or `oidc` for any other provider, with the
+  `ISSUER` its discovery document is under, e.g. a Keycloak realm), its client secret
+  in `WIKI_OIDC_<NAME>_SECRET` (the name in capitals, dashes as underscores), and
+  `--public-url`, the wiki's address as people reach it:
+
+  ```sh
+  WIKI_OIDC_GOOGLE_SECRET='…' WIKI_OIDC_GITHUB_SECRET='…' sh toolchain/deploy-local.sh --server \
+    --oidc google=google,1234-abc.apps.googleusercontent.com \
+    --oidc github=github,Ov23liAbCdEf \
+    --public-url https://wiki.example.org/
+  ```
+
+  The secrets are kept with the SMTP password in `~/.config/wiki-demo/<name>.env`;
+  the providers are remembered (a new `--oidc` replaces them all, `--no-oidc` forgets
+  them). Register the wiki with each provider first, with the redirect URI
+  `<public-url>auth/<NAME>/callback` (the deploy prints them, and
+  `wiki-server oidc check --public-url URL --oidc … [NAME]` asks each provider how to
+  sign in, says whether its secret is set, and prints its redirect URI):
+
+  - *Google*: Google Cloud console, APIs & Services, Credentials, "Create credentials",
+    OAuth client ID of type "Web application"; add the redirect URI under "Authorized
+    redirect URIs". The client ID and secret are shown there (configure the OAuth
+    consent screen first, with the scopes `openid`, `email` and `profile`).
+  - *GitHub*: Settings, Developer settings, OAuth Apps, "New OAuth App"; the
+    "Authorization callback URL" is the redirect URI. The client ID is on the app's
+    page, and "Generate a new client secret" makes the secret. (A GitHub Enterprise
+    server: give its address as the fourth field.)
+  - *Apple*: Apple Developer, Certificates, Identifiers & Profiles: a Services ID with
+    "Sign in with Apple" enabled, whose return URL is the redirect URI (Apple takes
+    only `https` addresses, so the wiki must be reached over HTTPS); the Services ID
+    is the client ID. The client secret is a JWT you sign with a "Sign in with Apple"
+    key (ES256, `iss` your team ID, `sub` the Services ID, `aud`
+    `https://appleid.apple.com`, at most six months long); give that JWT as the secret,
+    and make a new one before it expires.
+  - *Any other provider* (Keycloak, Authentik, Microsoft Entra, GitLab…): register a
+    confidential client with the redirect URI and the scopes `openid email profile`;
+    its issuer is the address whose `/.well-known/openid-configuration` it serves.
+
+  In an open wiki someone signing in with a provider for the first time gets an
+  account (its login from their name there, which they may not choose); in a closed
+  one they need an invitation, whose page offers the providers too. A user signed in
+  connects a provider's account, or disconnects one, from the menu under their name
+  (never the last way they have in); the administration shows who signs in with what
+  and may disconnect an account.
 - **The admin listener.** `http://127.0.0.1:8081/admin/` (`--admin-port` changes
   the port) serves the same application to whoever is on the machine, as the
   administrator, with no login; it listens on loopback only, and no firewall rule
@@ -380,7 +427,9 @@ there with the compose file beside it.
   invitations, give the server `--smtp-host` and the rest (the commented
   `command` in `docker-compose.yml`) and the SMTP account's password in
   `WIKI_SMTP_PASSWORD`, which the compose file passes on as an environment
-  variable.
+  variable. Providers to sign in with are `--oidc` and `--public-url` in the same
+  `command`, each secret in `WIKI_OIDC_<NAME>_SECRET` added to `environment`
+  (see above for registering the wiki with them).
   `WIKI_PORT` changes the host's port and `WIKI_BIND` the
   host's address it is published on (`WIKI_BIND=127.0.0.1` behind a reverse proxy
   on the same machine).

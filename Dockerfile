@@ -114,7 +114,8 @@ FROM ${DEBIAN} AS runtime
 # from inside the container (`docker compose exec wiki curl ...`); the CA
 # certificates are what the server checks an SMTP server's TLS certificate
 # against, when it mails invitations (--smtp-host, with its account's
-# password in WIKI_SMTP_PASSWORD; see docker-compose.yml).
+# password in WIKI_SMTP_PASSWORD; see docker-compose.yml), and a provider's
+# that people sign in with (--oidc, with WIKI_OIDC_<NAME>_SECRET).
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 \

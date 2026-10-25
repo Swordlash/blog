@@ -90,7 +90,7 @@ of the server, not a refusal.
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | GET | `api/v1/info` | | `ServerInfo` `{"name", "apiVersion"}` | | |
-| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), and how they came to be who they are | | `session` |
+| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, and the providers one may sign in with, `{"name", "label"}` each (none where the server names none) | | `session` |
 | POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
 | DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
 
@@ -338,12 +338,62 @@ the application's header like any write. No secret is ever written in
 the log: the path segment after `invite` or `invitations` is logged as
 `…`.
 
+### Signing in with a provider
+
+| Method | Path | Body | Response | Errors | |
+| ------ | ---- | ---- | -------- | ------ | - |
+| GET | `auth/<provider>/start?next=<path>` (`&link=1`, `&invite=<secret>`) | | 302 to the provider, and `Set-Cookie: wiki_oidc=…` | 404 (no such provider), 403 (`link` without a session), 502 (the provider cannot be reached) | |
+| GET | `auth/<provider>/callback?code=…&state=…` | | 200, a page that goes on to `next`, and `Set-Cookie` with the session (but when connecting) | 400 (a state not given, or not this browser's), 403, 404, 429, 502 | |
+| POST | `auth/<provider>/callback` | a form `code`, `state`, `user` (Apple's) | 200, a page that goes on to the GET above | | |
+| GET | `api/v1/account/identities` | | `SignInMethods` `{"password", "identities"}`: whether the user has a password, and each `LinkedIdentity` `{"provider", "email", "name", "linkedAt"}` | 401 (nobody signed in), 400 (the operator) | (`identities`) |
+| DELETE | `api/v1/account/identities/<provider>` | | `SignInMethods` as they are then | 401, 404 (none there), 409 (the last way to sign in) | (`unlinkIdentity`) |
+| DELETE | `api/v1/admin/users/<user>/identities/<provider>` | | 204; the user's sessions end | 403, 404 | `unlinkUserIdentity` |
+
+People may sign in with an account at a provider the server's
+configuration names (WP3.6 of the plan; `--oidc NAME=KIND,CLIENT-ID[,ISSUER]`,
+the secret in `WIKI_OIDC_<NAME>_SECRET`, and `--public-url`), beside a
+password or instead of one. The `auth/…` addresses are below the place the
+public listener serves the wiki at, not the API's: the browser goes to
+them, it does not fetch them, they answer with pages, and they are answered
+in a closed wiki too, since they are the way in. The admin listener has none.
+
+`start` remembers the round trip (in memory, for ten minutes: its state, its
+nonce, its PKCE verifier, what it is for and `next`, a path of the wiki's own,
+or the wiki's root) and sends the browser to the provider's authorization
+endpoint, giving it a cookie of the round trip's own (`wiki_oidc`, `HttpOnly`,
+`SameSite=Lax`, `Path=<base path>auth/`). The provider sends it back to the
+callback, the redirect URI `<public url>auth/<provider>/callback` registered
+with it; Apple posts a form there, which is answered with a page that goes on
+to the GET, from the wiki's own site, so that the browser sends the cookie.
+The callback takes a state only with that cookie and once, exchanges the code
+at the token endpoint with the client's secret and the verifier, and checks
+the ID token's `iss`, `aud` (and `azp`), `exp` and `nonce` (GitHub, which has
+no ID token, is asked its `user` and `user/emails` instead); an e-mail address
+is kept only if the provider says it is verified. Then:
+
+- an identity that is a user's signs that user in, unless they are disabled
+  (403); connecting it to another user is refused (403);
+- an unknown one is connected to the user who asked (`link=1`), or, with an
+  invitation (`invite=…`), makes the invitation's account and uses the
+  invitation up; otherwise it makes an account in an open wiki and is
+  refused in a closed one (403);
+- an account so made has no password, a login made from the provider's
+  login, the e-mail's local part or the name (lower case, a number after it
+  if taken), and the display name the provider gives.
+
+The callback then answers with a page that sets the session's cookie and goes
+on to `next` itself, rather than a redirect, since the browser sends no
+`SameSite=Strict` cookie on a redirect that ends another site's navigation.
+Accounts made, and failed exchanges, count against the limit on making
+accounts (five an address in fifteen minutes; 429). Codes, tokens, states
+and secrets are never written in the log (the log has no query strings).
+
 ### Administration
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
 | ------ | ---- | ---- | -------- | ------ | ------------ |
 | GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "spaces", "pages", "attachments", "users", "backups"}` | 403 | |
-| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
+| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "identities", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, the providers each user signs in with by their id (a user with none may be left out), every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
 | PUT | `api/v1/admin/users/<user>/administrator` | `AdministratorFlag` `{"administrator"}` | 204 | 403, 404 | `setAdministrator` |
 | PUT | `api/v1/admin/users/<user>/create-spaces` | `CreateSpacesFlag` `{"createSpaces"}` | 204 | 403, 404 | `setCreateSpaces` |
 | POST | `api/v1/admin/groups` | `GroupName` `{"name"}` | 201 `Group` `{"id", "name"}` | 403, 400 | `createGroup` |

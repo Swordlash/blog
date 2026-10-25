@@ -8,6 +8,7 @@
 #                                [--smtp-host HOST --smtp-from ADDRESS --public-url URL
 #                                 [--smtp-port N] [--smtp-security tls|starttls|plain]
 #                                 [--smtp-user USER] | --no-smtp]
+#                                [--oidc NAME=KIND,CLIENT-ID[,ISSUER] ... --public-url URL | --no-oidc]
 #                                [--no-build] [--no-firewall] [--enable-linger] [--force]
 #   sh toolchain/deploy-local.sh --stop [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--name NAME]
@@ -71,6 +72,17 @@
 #                    All remembered for the next run; without SMTP the administration
 #                    shows an invitation's link to pass on instead
 #   --no-smtp        forget the SMTP server, and its password
+#   --oidc NAME=KIND,CLIENT-ID[,ISSUER]
+#                    --server: let people sign in with this provider (WP3.6): KIND google,
+#                    apple, github, or oidc with the ISSUER its discovery is under; once per
+#                    provider, in the order their buttons show. Each needs --public-url (the
+#                    redirect URI to register is <public-url>auth/NAME/callback, which this
+#                    prints) and its client secret in the environment variable
+#                    WIKI_OIDC_<NAME>_SECRET (the name in capitals, dashes as underscores)
+#                    when this runs, kept in ~/.config/wiki-demo/<name>.env (mode 600) with
+#                    the SMTP password. The providers given replace the remembered ones; a
+#                    run without --oidc keeps them, and their secrets
+#   --no-oidc        forget the providers, and their secrets
 #   --dir DIR        where to install (default the previous one, or ~/<name>)
 #   --name NAME      the deployment, and its unit NAME.service (default wiki-demo);
 #                    deployments with different names live side by side
@@ -105,6 +117,7 @@ usage() {
 name=wiki-demo
 opt_port='' opt_bind='' opt_dir='' opt_mode='' opt_admin_port=''
 opt_smtp_host='' opt_smtp_port='' opt_smtp_security='' opt_smtp_user='' opt_smtp_from='' opt_public_url='' no_smtp=''
+opt_oidc='' no_oidc=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
@@ -131,6 +144,11 @@ while [ $# -gt 0 ]; do
     --public-url) need_value $# "$1"; opt_public_url=$2; shift ;;
     --public-url=*) opt_public_url=${1#*=} ;;
     --no-smtp) no_smtp=1 ;;
+    --oidc) need_value $# "$1"; opt_oidc="$opt_oidc $2"; shift ;;
+    --oidc=*) opt_oidc="$opt_oidc ${1#*=}" ;;
+    --no-oidc) no_oidc=1 ;;
+    --oidc-secret | --oidc-secret=*)
+      die "a provider's secret is not an option: give it in the environment variable WIKI_OIDC_<NAME>_SECRET when deploying, which keeps it out of every command line" ;;
     --smtp-password | --smtp-password=*)
       die "the SMTP password is not an option: give it in the environment variable WIKI_SMTP_PASSWORD when deploying, which keeps it out of every command line" ;;
     --trust-network | --no-trust-network)
@@ -171,9 +189,27 @@ prev_smtp_security=$(state_get smtp_security)
 prev_smtp_user=$(state_get smtp_user)
 prev_smtp_from=$(state_get smtp_from)
 prev_public_url=$(state_get public_url)
+prev_oidc=$(state_get oidc)
 # The SMTP account's password, kept for the unit apart from the state, which
 # anyone may read: mode 600.
 env_file=$STATE_DIR/$name.env
+
+# A secret as the last run kept it in that file, if it did.
+env_previous() {
+  [ -f "$env_file" ] || return 0
+  sed -n "s/^$1=\"\(.*\)\"\$/\1/p" "$env_file" | head -n 1 | sed 's/\\\(.\)/\1/g'
+}
+# A secret from this run's environment, or else as the last run kept it.
+secret_of() {
+  value=$(printenv "$1" 2>/dev/null || true)
+  [ -n "$value" ] || value=$(env_previous "$1")
+  printf '%s' "$value"
+}
+# The environment variable a provider's client secret is read from, as
+# wiki-server names it.
+oidc_variable() {
+  printf 'WIKI_OIDC_%s_SECRET' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
+}
 
 user=$(id -un)
 
@@ -251,6 +287,13 @@ if [ "$action" = status ]; then
     else
       say "no SMTP: the administration shows an invitation's link to pass on"
     fi
+    if [ -n "$prev_oidc" ]; then
+      for provider in $prev_oidc; do
+        say "people sign in with ${provider%%=*} (${provider#*=}), whose redirect URI is ${prev_public_url}auth/${provider%%=*}/callback"
+      done
+    else
+      say "no provider to sign in with: passwords only"
+    fi
   else
     say "the serverless demo, as static files"
     [ ! -d "$prev_dir/data" ] || say "a server's data is kept in $prev_dir/data"
@@ -304,9 +347,10 @@ fi
 # --no-smtp forgets it. Checked here, before the build, as the server would
 # check it at its start.
 if [ -n "$no_smtp" ]; then
-  [ -z "$opt_smtp_host$opt_smtp_port$opt_smtp_security$opt_smtp_user$opt_smtp_from$opt_public_url" ] ||
+  [ -z "$opt_smtp_host$opt_smtp_port$opt_smtp_security$opt_smtp_user$opt_smtp_from" ] ||
     die "--no-smtp and an SMTP option: choose one"
-  smtp_host='' smtp_port='' smtp_security='' smtp_user='' smtp_from='' public_url=''
+  smtp_host='' smtp_port='' smtp_security='' smtp_user='' smtp_from=''
+  public_url=${opt_public_url:-$prev_public_url}
 else
   smtp_host=${opt_smtp_host:-$prev_smtp_host}
   smtp_port=${opt_smtp_port:-$prev_smtp_port}
@@ -315,16 +359,47 @@ else
   smtp_from=${opt_smtp_from:-$prev_smtp_from}
   public_url=${opt_public_url:-$prev_public_url}
 fi
+# The providers people sign in with, as given (in place of the remembered
+# ones) or as before; --no-oidc forgets them. Checked here as wiki-server
+# checks them at its start, before the build.
+if [ -n "$no_oidc" ]; then
+  [ -z "$opt_oidc" ] || die "--no-oidc and --oidc: choose one"
+  oidc=''
+else
+  oidc=${opt_oidc:-$prev_oidc}
+fi
+oidc=$(printf '%s' "$oidc" | sed 's/^ *//')
+if [ "$mode" != server ]; then
+  [ -z "$opt_oidc" ] || die "--oidc is for the wiki's server: add --server"
+elif [ -n "$oidc" ]; then
+  oidc_names=
+  for provider in $oidc; do
+    printf '%s\n' "$provider" | grep -Eq '^[a-z][a-z0-9-]{0,31}=(google|apple|github|oidc),[^,]+(,[^,]+)?$' ||
+      die "invalid --oidc '$provider': NAME=KIND,CLIENT-ID[,ISSUER], the name lower-case letters, digits and dashes, the kind google, apple, github or oidc"
+    provider_name=${provider%%=*}
+    case " $oidc_names " in *" $provider_name "*) die "--oidc names $provider_name more than once" ;; esac
+    oidc_names="$oidc_names $provider_name"
+    case $provider in
+      *=oidc,*,*) ;;
+      *=oidc,*) die "--oidc $provider: a provider of kind oidc needs its issuer, NAME=oidc,CLIENT-ID,https://issuer.example.org" ;;
+    esac
+    [ -n "$(secret_of "$(oidc_variable "$provider_name")")" ] ||
+      die "--oidc $provider_name needs its client secret: run this again with it in the environment variable $(oidc_variable "$provider_name")"
+  done
+  [ -n "$public_url" ] || die "--oidc needs --public-url, the wiki's address the providers send people back below (https://wiki.example.org/)"
+fi
+if [ -n "$public_url" ]; then
+  case $public_url in
+    http://?* | https://?*) ;;
+    *) die "invalid --public-url '$public_url': it starts with http:// or https://" ;;
+  esac
+fi
 if [ "$mode" != server ]; then
   [ -z "$opt_smtp_host$opt_smtp_port$opt_smtp_security$opt_smtp_user$opt_smtp_from$opt_public_url" ] ||
     die "the SMTP options are for the wiki's server: add --server"
 elif [ -n "$smtp_host" ]; then
   [ -n "$smtp_from" ] || die "--smtp-host needs --smtp-from, the address the mail is sent from"
   [ -n "$public_url" ] || die "--smtp-host needs --public-url, the wiki's address its links start with (https://wiki.example.org/)"
-  case $public_url in
-    http://?* | https://?*) ;;
-    *) die "invalid --public-url '$public_url': it starts with http:// or https://" ;;
-  esac
   case ${smtp_port:-587} in
     '' | 0* | *[!0-9]*) die "invalid --smtp-port '$smtp_port': a number from 1 to 65535" ;;
   esac
@@ -332,12 +407,15 @@ elif [ -n "$smtp_host" ]; then
     '' | tls | starttls | plain) ;;
     *) die "invalid --smtp-security '$smtp_security': tls, starttls or plain" ;;
   esac
-  if [ -n "$smtp_user" ] && [ -z "${WIKI_SMTP_PASSWORD:-}" ] && [ ! -s "$env_file" ]; then
+  if [ -n "$smtp_user" ] && [ -z "$(secret_of WIKI_SMTP_PASSWORD)" ]; then
     die "--smtp-user $smtp_user needs its password: run this again with it in the environment variable WIKI_SMTP_PASSWORD"
   fi
 else
-  [ -z "$opt_smtp_port$opt_smtp_security$opt_smtp_user$opt_smtp_from$opt_public_url" ] ||
-    die "--smtp-port, --smtp-security, --smtp-user, --smtp-from and --public-url go with --smtp-host"
+  [ -z "$opt_smtp_port$opt_smtp_security$opt_smtp_user$opt_smtp_from" ] ||
+    die "--smtp-port, --smtp-security, --smtp-user and --smtp-from go with --smtp-host"
+  [ -z "$opt_public_url" ] || [ -n "$oidc" ] ||
+    die "--public-url goes with --smtp-host or --oidc"
+  [ -n "$oidc" ] || public_url=''
 fi
 
 # The directory, absolute and with symbolic links resolved, so that the
@@ -559,20 +637,30 @@ TimeoutStopSec=30"
     exec_start="$exec_start --smtp-host $(unit_word "$smtp_host") --smtp-port ${smtp_port:-587}"
     [ -z "$smtp_security" ] || exec_start="$exec_start --smtp-security $smtp_security"
     [ -z "$smtp_user" ] || exec_start="$exec_start --smtp-user $(unit_word "$smtp_user")"
-    exec_start="$exec_start --smtp-from $(unit_word "$smtp_from") --public-url $(unit_word "$public_url")"
+    exec_start="$exec_start --smtp-from $(unit_word "$smtp_from")"
   fi
-  # The password, from this run's environment or the last; never in the
-  # unit, which anyone may read.
-  if [ -n "$smtp_host" ] && [ -n "$smtp_user" ]; then
-    if [ -n "${WIKI_SMTP_PASSWORD:-}" ]; then
-      mkdir -p "$STATE_DIR"
-      (
-        umask 077
-        printf 'WIKI_SMTP_PASSWORD="%s"\n' "$(printf '%s' "$WIKI_SMTP_PASSWORD" | sed 's/[\\"]/\\&/g')" >"$env_file.tmp"
-      )
-      mv "$env_file.tmp" "$env_file"
-      say "kept the SMTP password in $env_file"
-    fi
+  [ -z "$public_url" ] || exec_start="$exec_start --public-url $(unit_word "$public_url")"
+  for provider in $oidc; do
+    exec_start="$exec_start --oidc $(unit_word "$provider")"
+  done
+  # The secrets (the SMTP password, the providers' client secrets), from
+  # this run's environment or the last run's file; never in the unit, which
+  # anyone may read.
+  secrets=
+  if [ -n "$smtp_host" ] && [ -n "$smtp_user" ]; then secrets=WIKI_SMTP_PASSWORD; fi
+  for provider in $oidc; do
+    secrets="$secrets $(oidc_variable "${provider%%=*}")"
+  done
+  if [ -n "$secrets" ]; then
+    mkdir -p "$STATE_DIR"
+    (
+      umask 077
+      for variable in $secrets; do
+        printf '%s="%s"\n' "$variable" "$(secret_of "$variable" | sed 's/[\\"]/\\&/g')"
+      done >"$env_file.tmp"
+    )
+    mv "$env_file.tmp" "$env_file"
+    say "kept the secrets ($(printf '%s' "$secrets" | sed 's/^ *//')) in $env_file"
     service_extra="$service_extra
 EnvironmentFile=$env_file"
   else
@@ -673,6 +761,15 @@ EOF
     printf 'Invitations are mailed through %s:%s, with links below %s.\n' "$smtp_host" "${smtp_port:-587}" "$public_url"
   else
     printf 'Invitations are not mailed (no --smtp-host): the administration shows their links.\n'
+  fi
+  if [ -n "$oidc" ]; then
+    printf 'People may sign in with these providers; register each redirect URI with its provider:\n'
+    for provider in $oidc; do
+      printf '  %s: %sauth/%s/callback\n' "${provider%%=*}" "$public_url" "${provider%%=*}"
+    done
+    printf 'Check them: %s/bin/wiki-server oidc check --public-url %s' "$dir" "$public_url"
+    for provider in $oidc; do printf ' --oidc %s' "$provider"; done
+    printf '\n'
   fi
   if [ "$prev_trust" = yes ]; then
     printf '%s: the previous deployment took everyone at %s for the administrator\n' "$PROG" "$listen"

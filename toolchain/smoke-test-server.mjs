@@ -40,6 +40,11 @@
 //    page left out and a conflict (a page the server made first) resolved
 //    "take the imported"; then imports again, from the demo's data in this
 //    browser, and finds everything merged, nothing twice.
+// 5. (Within 2.) Signing in with a provider (WP3.6): a fake OpenID Connect
+//    provider on localhost, another site than the wiki's 127.0.0.1, so that
+//    the browser applies its rules for cookies across sites as it does with
+//    a real one; "Sign in with Fake" in the header's form goes there and
+//    back, and lands signed in, as a new account, on the page it left.
 //
 // Needs the native builds of wiki-server and wiki-app-prerender (npm run
 // build-native; WIKI_SERVER and WIKI_PRERENDER name other binaries), the
@@ -47,6 +52,8 @@
 // from jsDelivr is served from node_modules).
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, normalize, resolve } from "node:path";
@@ -89,11 +96,67 @@ execFileSync(wikiServer, ["users", "add", "--data", data, adminLogin, "--display
   stdio: ["pipe", "inherit", "inherit"],
 });
 
+// A provider to sign in with: OpenID Connect's discovery, an authorization
+// endpoint that signs Olive in at once and sends the browser straight back,
+// and a token endpoint that checks the client's secret and the PKCE verifier
+// and issues an ID token for the round trip (unsigned: the server reads it
+// from the token endpoint and checks its claims, not a signature).
+const listenOn = (server, host) => new Promise((ready) => server.listen(0, host, () => ready(server.address().port)));
+const oidcSecret = "the smoke test's client secret";
+const oidcGrants = new Map();
+const oidcIssued = [];
+const provider = createServer(async (request, response) => {
+  const at = new URL(request.url, providerOrigin);
+  const json = (status, body) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+  if (at.pathname === "/.well-known/openid-configuration") {
+    json(200, { issuer: providerOrigin, authorization_endpoint: `${providerOrigin}/authorize`, token_endpoint: `${providerOrigin}/token` });
+  } else if (at.pathname === "/authorize") {
+    const code = `code-${oidcIssued.length}-${Math.random().toString(36).slice(2)}`;
+    oidcIssued.push(code);
+    oidcGrants.set(code, { nonce: at.searchParams.get("nonce"), challenge: at.searchParams.get("code_challenge") });
+    const back = new URL(at.searchParams.get("redirect_uri"));
+    back.searchParams.set("code", code);
+    back.searchParams.set("state", at.searchParams.get("state"));
+    response.writeHead(302, { location: back.toString() }).end();
+  } else if (at.pathname === "/token" && request.method === "POST") {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    const form = new URLSearchParams(body);
+    const grant = oidcGrants.get(form.get("code"));
+    oidcGrants.delete(form.get("code"));
+    const verified = createHash("sha256").update(form.get("code_verifier") ?? "").digest("base64url");
+    // The secret as HTTP's Basic, since the discovery document does not say
+    // that the form may carry it.
+    const basic = Buffer.from((request.headers.authorization ?? "").replace(/^Basic /, ""), "base64").toString();
+    const [id, secret] = basic.split(":").map((part) => decodeURIComponent(part.replace(/\+/g, " ")));
+    if (!grant || id !== "smoke-client" || secret !== oidcSecret || verified !== grant.challenge) {
+      json(400, { error: "invalid_grant" });
+      return;
+    }
+    const part = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const now = Math.floor(Date.now() / 1000);
+    const idToken = `${part({ alg: "none" })}.${part({ iss: providerOrigin, sub: "olive-1", aud: "smoke-client", exp: now + 300, iat: now, nonce: grant.nonce, email: "olive@example.org", email_verified: true, name: "Olive Oidc", preferred_username: "olive" })}.`;
+    oidcIssued.push(idToken);
+    json(200, { access_token: "not used", token_type: "Bearer", id_token: idToken });
+  } else {
+    response.writeHead(404).end();
+  }
+});
+// localhost, not 127.0.0.1: another site than the wiki's.
+const providerOrigin = `http://localhost:${await listenOn(provider, undefined)}`;
+// The wiki's port, chosen first, since its address is the redirect URI's.
+const probe = createServer();
+const wikiPort = await listenOn(probe, "127.0.0.1");
+await new Promise((done) => probe.close(done));
+
 // The server, on free ports, its log read for the addresses it took.
 const server = spawn(
   wikiServer,
-  ["serve", "--data", data, "--static", app, "--listen", "127.0.0.1:0", "--admin-listen", "127.0.0.1:0"],
-  { stdio: ["ignore", "pipe", "pipe"] },
+  [
+    "serve", "--data", data, "--static", app, "--listen", `127.0.0.1:${wikiPort}`, "--admin-listen", "127.0.0.1:0",
+    "--public-url", `http://127.0.0.1:${wikiPort}/`, "--oidc", `fake=oidc,smoke-client,${providerOrigin}`,
+  ],
+  { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, WIKI_OIDC_FAKE_SECRET: oidcSecret } },
 );
 let log = "";
 const listening = new Promise((ready, fail) => {
@@ -623,6 +686,23 @@ try {
   assert.equal((await fetch(url("/api/v1/spaces"))).status, 200, "the spaces of an open wiki, to a visitor");
   console.log("ok: a closed wiki shows a visitor only the way to sign in, an invitation makes them an account, and it opens again");
 
+  // Signing in with a provider, from a page, lands back on it signed in.
+  const olive = await newPage({ anonymous: true });
+  await olive.goto(url("/s/smoke-public/"));
+  await olive.locator("#app .sign-in-toggle").click();
+  await olive.locator("#app .sign-in-form .provider-link", { hasText: "Sign in with Fake" }).click();
+  await olive.locator("#app .account .account-toggle", { hasText: "Olive Oidc" }).waitFor({ timeout });
+  assert.equal(here(olive), "/s/smoke-public/", "signing in with a provider came back elsewhere");
+  // The server rendered that page for her session: the cookie came with it.
+  const landed = await olive.evaluate(async () => (await fetch("api/v1/session")).json());
+  assert.equal(landed.user?.login, "olive", "signed in as someone else");
+  await olive.locator("#app .account-toggle").click();
+  await olive.locator("#app .identity .identity-provider", { hasText: "Fake" }).waitFor({ timeout });
+  assert.equal(await olive.locator("#app .identity-disconnect").getAttribute("disabled"), "", "her only way in may be disconnected");
+  await olive.context().close();
+  for (const secret of [oidcSecret, ...oidcIssued]) assert.ok(!log.includes(secret), "a provider's code, token or secret is in the server's log");
+  console.log("ok: signing in with a provider goes there and back, and lands signed in, as a new account, on the page it left");
+
   // Everything is there for a browser that has seen nothing.
   const fresh = await newPage();
   const pageLoad = await loadAdopted(fresh, "/s/smoke-space/p/first-page/");
@@ -688,6 +768,7 @@ try {
   }
 } finally {
   await browser.close();
+  provider.close();
   server.kill("SIGTERM");
   await new Promise((done) => (server.exitCode !== null ? done() : server.on("exit", done)));
   await rm(work, { recursive: true, force: true });

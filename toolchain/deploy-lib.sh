@@ -79,6 +79,7 @@ state_write() {
     printf 'smtp_user=%s\n' "${smtp_user:-}"
     printf 'smtp_from=%s\n' "${smtp_from:-}"
     printf 'public_url=%s\n' "${public_url:-}"
+    printf 'oidc=%s\n' "${oidc:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }

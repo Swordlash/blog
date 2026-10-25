@@ -637,6 +637,73 @@ assert_contains "$out" 'Invitations are not mailed'
 undeploy --purge-data >/dev/null 2>&1
 pass 'the SMTP server is remembered with its password, and forgotten with --no-smtp'
 
+# Providers to sign in with (WP3.6): checked before anything is built (a
+# name, a kind, an issuer for oidc, --public-url, the client secret in the
+# environment), passed to the server, their secrets kept in the file of
+# mode 600 the unit reads and never in the unit, the redirect URIs to
+# register printed, remembered, replaced by another --oidc, and forgotten
+# with --no-oidc.
+fixture oidc
+p=$(free_port 127.0.0.2)
+a=$(free_port 127.0.0.1)
+out=$case_dir/refused
+if deploy --server --port "$p" --admin-port "$a" --oidc google=google,id.example --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed a provider without its secret'; fi
+assert_contains "$out" 'WIKI_OIDC_GOOGLE_SECRET'
+if WIKI_OIDC_GOOGLE_SECRET=s deploy --server --port "$p" --admin-port "$a" --oidc google=google,id.example >"$out" 2>&1; then fail 'deployed a provider without --public-url'; fi
+assert_contains "$out" '--oidc needs --public-url'
+if WIKI_OIDC_CORP_SECRET=s deploy --server --port "$p" --admin-port "$a" --oidc corp=oidc,wiki --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed an oidc provider without its issuer'; fi
+assert_contains "$out" 'needs its issuer'
+if deploy --server --port "$p" --admin-port "$a" --oidc Bad_Name=google,x --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed a provider with a bad name'; fi
+assert_contains "$out" "invalid --oidc 'Bad_Name=google,x'"
+if WIKI_OIDC_G_SECRET=s deploy --server --port "$p" --admin-port "$a" --oidc g=google,x --oidc g=github,y --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed a provider twice'; fi
+assert_contains "$out" '--oidc names g more than once'
+if deploy --port "$p" --oidc google=google,x --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'took a provider for the demo'; fi
+assert_contains "$out" "--oidc is for the wiki's server"
+if deploy --server --port "$p" --admin-port "$a" --oidc-secret x >"$out" 2>&1; then fail 'took a secret on the command line'; fi
+assert_contains "$out" 'WIKI_OIDC_<NAME>_SECRET'
+assert_lacks "$EVENTS" 'npm'
+out=$case_dir/providers
+WIKI_OIDC_GOOGLE_SECRET='go"og%le' WIKI_OIDC_MY_CORP_SECRET=corp-secret deploy --server --port "$p" --admin-port "$a" \
+  --oidc google=google,id.example --oidc my-corp=oidc,wiki,https://id.example.org/realms/x --public-url https://wiki.example.org/ >"$out" 2>&1 ||
+  fail 'the deploy with providers failed'
+assert_contains "$HOME/$unit" '--public-url "https://wiki.example.org/" --oidc "google=google,id.example" --oidc "my-corp=oidc,wiki,https://id.example.org/realms/x"'
+env_file=$HOME/.config/wiki-demo/wiki-demo.env
+assert_contains "$HOME/$unit" "EnvironmentFile=$env_file"
+assert_lacks "$HOME/$unit" 'og%le'
+[ "$(stat -c %a "$env_file")" = 600 ] || fail "the secrets' file is mode $(stat -c %a "$env_file")"
+assert_contains "$env_file" 'WIKI_OIDC_GOOGLE_SECRET="go\"og%le"'
+assert_contains "$env_file" 'WIKI_OIDC_MY_CORP_SECRET="corp-secret"'
+assert_lacks "$HOME/.config/wiki-demo/wiki-demo.state" 'corp-secret'
+assert_contains "$out" 'google: https://wiki.example.org/auth/google/callback'
+assert_contains "$out" 'my-corp: https://wiki.example.org/auth/my-corp/callback'
+assert_contains "$out" 'oidc check --public-url https://wiki.example.org/ --oidc google=google,id.example'
+[ "$(http_get "http://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the server with providers does not answer'
+deploy --status >"$case_dir/status" 2>&1
+assert_contains "$case_dir/status" 'people sign in with google (google,id.example), whose redirect URI is https://wiki.example.org/auth/google/callback'
+pass 'the providers are checked before the build, passed to the server, and their secrets kept in a file of mode 600'
+
+out=$case_dir/again
+deploy --no-build >"$out" 2>&1 || fail 'a redeploy with providers remembered failed'
+assert_contains "$HOME/$unit" '--oidc "google=google,id.example"'
+assert_contains "$env_file" 'og%le'
+if deploy --no-build --oidc gh=github,Iv1.abc >"$out" 2>&1; then fail 'took a new provider without its secret'; fi
+assert_contains "$out" 'WIKI_OIDC_GH_SECRET'
+out=$case_dir/replaced
+WIKI_OIDC_GH_SECRET=gh-secret deploy --no-build --oidc gh=github,Iv1.abc >"$out" 2>&1 || fail 'a redeploy with another provider failed'
+assert_contains "$HOME/$unit" '--oidc "gh=github,Iv1.abc"'
+assert_lacks "$HOME/$unit" 'google'
+assert_contains "$env_file" 'WIKI_OIDC_GH_SECRET="gh-secret"'
+assert_lacks "$env_file" 'GOOGLE'
+out=$case_dir/forgotten
+deploy --no-build --no-oidc >"$out" 2>&1 || fail 'a redeploy with --no-oidc failed'
+assert_lacks "$HOME/$unit" '--oidc'
+assert_lacks "$HOME/$unit" 'public-url'
+assert_lacks "$HOME/$unit" 'EnvironmentFile'
+[ ! -e "$env_file" ] || fail '--no-oidc kept the secrets'
+[ -z "$(state oidc)" ] || fail '--no-oidc kept the providers'
+undeploy --purge-data >/dev/null 2>&1
+pass 'the providers are remembered with their secrets, replaced by another --oidc, and forgotten with --no-oidc'
+
 fixture not-a-server
 out=$case_dir/out
 if deploy --admin-port 9001 >"$out" 2>&1; then fail '--admin-port deployed the demo'; fi
