@@ -807,7 +807,9 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
 - A table of contents panel and anchors; page templates; a "blog" view listing a
   space's pages by date with RSS.
 - Skylighting instead of highlight.js if server-side rendering of code is wanted.
-- A writing assistant in the editor, backed by an LLM (Claude): draft a page from an
+- A writing assistant in the editor, backed by an LLM (Claude or ChatGPT, asked for by
+  the owner on 2026-10-25: one provider interface on the server, a key per provider in
+  its environment, the provider chosen per space or per request): draft a page from an
   outline, rewrite or shorten the selection, suggest a title and a summary, fix a formula,
   a Mermaid or a TikZ block from the error shown, translate. Each suggestion lands as one
   edit through the toolbar's machinery (`Wiki.Core.Markdown.Edit`, `execCommand`), so the
@@ -816,6 +818,10 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   per-space budget, enabled per space by its administrators (a private space's text leaves
   the wiki only where they said so), and a log of what was sent. Not before Phase 3, since
   it needs users and permissions on the server.
+- The wiki as a tool for an assistant, the other way round (also from 2026-10-25): an
+  MCP server over the same API, so that Claude or ChatGPT can search, read and, where the
+  session's user may, write pages, with the session's permissions and a log of what was
+  done; sign-in through the Phase 3 accounts, so it comes after them too.
 
 ## Delegation protocol
 
