@@ -52,6 +52,12 @@ authorisation.
   changed marked, against the version before or the page as it is now. An
   editor restores a version by saving it again as the latest, so nothing in
   between is lost.
+- Comments, as Confluence has them: text selected in a page is commented on
+  from a button beside it, its quote marked in the page and its thread in a
+  panel beside it (a thread whose text the page no longer has kept, and said
+  so), with replies, edits, deletion, and resolving; and threads about the
+  whole page under it. Over `wiki-server` a comment made in one tab shows in
+  every other tab on the page as it is made, over a WebSocket.
 - Search by title and text from a box in the header (`/` to focus it), in every
   space or in one, with a page of results at an address of its own.
 - Three demo users and nobody, switched between in the header instead of a
@@ -446,7 +452,11 @@ there with the compose file beside it.
   use the "Server" section there.
   `WIKI_PORT` changes the host's port and `WIKI_BIND` the
   host's address it is published on (`WIKI_BIND=127.0.0.1` behind a reverse proxy
-  on the same machine).
+  on the same machine). A proxy has to pass WebSocket upgrades on to
+  `api/v1/events` (comments arrive live there: `Upgrade` and `Connection`
+  forwarded) and keep the `Host` the browser asked for, or set
+  `X-Forwarded-Host` to it, since the server refuses an upgrade whose `Origin`
+  is not its own address.
 - **The admin listener** listens on the container's own loopback,
   `127.0.0.1:8081`, which is not published and which nothing outside the container
   reaches; you reach it through the container:

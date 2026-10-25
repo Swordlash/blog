@@ -196,7 +196,7 @@ data State m = State
   , accounts :: Maybe (Accounts m)
   , live :: Maybe (Live m)
   , feed :: Maybe Feed
-  -- ^ The tab's live channel, once 'Initialize' has asked 'live' for it.
+  -- ^ The tab's live channel, which 'live' gave.
   , world :: World
   , route :: Route
   , session :: Session
@@ -281,6 +281,10 @@ component =
         -- instead, unless the backend has kept it.
         initialState = \Input {router, welcome, demo, migration, accounts, live} -> do
           route <- Router.current router
+          -- The tab's channel, before any view is made: a page shown from
+          -- the first render watches its page from its own initializer,
+          -- which runs before the shell's.
+          feed <- traverse (\l -> l.liveFeed) live
           loaded <- atOnce $ do
             world@(asking, _, _, _) <- fetchWorld demo
             here <- if shutOut asking then pure NoSpace else maybe (pure NoSpace) fetchHere (spaceOfRoute route)
@@ -294,7 +298,7 @@ component =
               , migration
               , accounts
               , live
-              , feed = Nothing
+              , feed
               , world = if isJust loaded then WorldReady else WorldLoading
               , route
               , session = signedIn
@@ -757,7 +761,6 @@ component =
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
         gets (\st -> st.accounts) >>= traverse_ (\a -> lift a.sessionChanges >>= void . H.subscribe . fmap SessionChanged)
-        gets (\st -> st.live) >>= traverse_ (\l -> lift l.liveFeed >>= \f -> modify (\st -> st {feed = Just f}))
         entry <- H.liftEffect historyEntry
         modify (\st -> st {entry})
         -- What the route shows was loaded with the initial state, unless

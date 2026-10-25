@@ -915,6 +915,41 @@ try {
   assert.equal(await copier.evaluate(() => navigator.clipboard.readText()), source, "the clipboard has something else");
   await copier.context().close();
   console.log("ok: Copy puts a page's source on the clipboard");
+
+  // Comments: the first post's quote marked as it was prerendered, text
+  // selected in it commented on from the button beside it, and the comment
+  // and its mark there after a reload, kept in IndexedDB.
+  const commenter = await newPage();
+  await load(commenter, "/s/blog/p/hello-world/");
+  assert.equal(
+    await commenter.locator('#app mark.comment-mark[data-thread="thread-hello-1"]').textContent(),
+    "a blog that is also a wiki",
+    "the first post's quote is not marked",
+  );
+  await commenter.evaluate(() => {
+    const walker = document.createTreeWalker(document.querySelector("#app .page-body"), NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      const at = node.data.indexOf("in other spaces");
+      if (at < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + "in other spaces".length);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      node.parentElement.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      return;
+    }
+  });
+  await commenter.locator("#app .comment-on-selection").click();
+  await commenter.locator("#app .comments-panel .new-thread textarea").fill("Spaces all the way down?");
+  await commenter.locator("#app .comments-panel .new-thread button", { hasText: "Comment" }).click();
+  const marked = commenter.locator("#app mark.comment-mark", { hasText: "in other spaces" });
+  await marked.waitFor({ timeout });
+  await reload(commenter);
+  await marked.waitFor({ timeout });
+  await commenter.locator("#app .comments-toggle", { hasText: "Comments (3)" }).waitFor({ timeout });
+  await commenter.context().close();
+  console.log("ok: a quote is marked, text selected is commented on, and the comment is kept across a reload");
 } catch (error) {
   // What the page reported is usually why it did not get there.
   failures.push(String(error.stack ?? error));

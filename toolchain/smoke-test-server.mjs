@@ -759,6 +759,36 @@ try {
   await fresh.locator("#app .wiki-sidebar a", { hasText: "Smoke space" }).waitFor({ timeout });
   console.log("ok: a fresh browser finds the space, the page, its edits and its attachment on the server");
 
+  // Comments, live over the server's WebSocket: a second tab on the page
+  // subscribes to it, the first comments on the page, and the second shows
+  // the comment without being reloaded.
+  const watcher = await newPage();
+  const sockets = [];
+  const subscribed = new Promise((done) =>
+    watcher.on("websocket", (socket) => {
+      sockets.push(socket.url());
+      socket.on("framesent", (frame) => {
+        sockets.push(`sent ${frame.payload}`);
+        if (String(frame.payload).includes('"subscribe"')) done();
+      });
+      socket.on("framereceived", (frame) => sockets.push(`received ${frame.payload}`));
+      socket.on("socketerror", (error) => sockets.push(`error ${error}`));
+      socket.on("close", () => sockets.push("closed"));
+    }),
+  );
+  await watcher.goto(url("/s/smoke-space/p/first-page/"));
+  await eventually(async () => assert.ok(await programStarted(watcher), "no listener yet"), "the second tab's program starting");
+  await watcher.locator("#app .page-comments").waitFor({ timeout });
+  await Promise.race([subscribed, new Promise((_, fail) => setTimeout(() => fail(new Error(`no subscription on the WebSocket: ${JSON.stringify(sockets)}`)), timeout))]);
+  assert.ok(sockets[0].endsWith("/api/v1/events"), `a WebSocket at ${sockets[0]}`);
+  await fresh.locator("#app .page-comments .comment-new textarea").fill("Live from the *smoke* test.");
+  await fresh.locator("#app .page-comments .comment-new button", { hasText: "Comment" }).click();
+  await fresh.locator("#app .page-comments .comment-body em", { hasText: "smoke" }).waitFor({ timeout });
+  await watcher.locator("#app .page-comments .comment-body em", { hasText: "smoke" }).waitFor({ timeout });
+  assert.equal((await fetch(url("/api/v1/events"))).status, 426, "the channel's address, asked for without a WebSocket");
+  await watcher.context().close();
+  console.log("ok: a comment made in one tab is shown in another on the same page, over the WebSocket");
+
   // ---- 3. Every route of the walk, rendered by the server --------------------
 
   const walked = [

@@ -562,11 +562,13 @@ views m = describe "the application over it" $ do
     -- The page came with its space's pages: it was not asked for again.
     urls <- map (\r -> r.url) <$> asked
     filter (T.isInfixOf "/pages/at/") urls `shouldBe` []
-    -- A page of the same space opens at once, from what was read.
-    before <- length <$> asked
+    -- A page of the same space opens at once, from what was read; only
+    -- its comments, which nothing has read yet, are asked for.
+    let notComments = filter (\r -> not ("/threads" `T.isSuffixOf` r.url))
+    before <- length . notComments <$> asked
     find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
-    length <$> asked `shouldReturn` before
+    map (\r -> r.url) . notComments <$> asked >>= \after -> drop before after `shouldBe` []
     unmount ui
     serverStops
 
@@ -723,14 +725,16 @@ views m = describe "the application over it" $ do
     serverStarts
     serveDemo
     reading <- unsafeIOToPageM (newHttpEnv browserTransport)
-    overHttp reading $ do
+    tourId <- overHttp reading $ do
       _ <- session
       _ <- listSpaces
       docs <- getSpace (slugs ["docs"])
-      for_ docs $ \s -> do
+      fmap join . for (rightToMaybe docs) $ \s -> do
         _ <- listPages s.id
         -- And the tour's comments, which its page shows.
-        getPage s.id (slugs ["tour"]) >>= traverse_ (\p -> listThreads p.id)
+        page <- getPage s.id (slugs ["tour"])
+        for_ page (\p -> listThreads p.id)
+        pure ((\p -> p.id) <$> rightToMaybe page)
     carried <- unsafeIOToPageM (cacheOf reading)
     serverStops
     -- A server that answers nothing from here on, and the page with what
@@ -752,6 +756,9 @@ views m = describe "the application over it" $ do
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Tour")
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     asked `shouldReturn` []
+    -- The page shown from the first render listens for its comments (the
+    -- first program, unmounted, stopped listening before).
+    eventually $ lastMay <$> said `shouldReturn` (Subscribe <$> tourId)
     unmount ui
     unsafeIOToPageM (js_unembed (toJSText preloadId))
     serverStops
