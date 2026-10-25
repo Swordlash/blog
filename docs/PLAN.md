@@ -831,10 +831,30 @@ disable a login) and per-space permissions follow in WP3.4, on both.
   granted to an administrator's session, tested over HTTP. Once the owner has an
   administrator account, `--trust-network` is retired: the flag goes, the deploy script
   stops passing it, and the smoke test signs in instead.
-- **WP3.5 OIDC login** (GitHub, Google, Apple, and any other OpenID Connect provider the
-  configuration names) as an alternative to passwords; account linking. Confirmed by the
-  owner on 2026-10-25, apart from the shelved assistant: this is how the wiki's users sign
-  in, and has nothing to do with the providers' subscriptions.
+- **WP3.5 Open or closed wiki** (the owner, 2026-10-25). A wiki-wide setting in the
+  administration, kept on the server (a `settings` table, migration `0003`), with two
+  values. *Open*: anyone may read the public spaces and create an account themself (a
+  "Create account" form beside "Sign in": login, display name, password; rate-limited like
+  the login; the new user holds no grant until given one, and may be given `create-spaces`
+  by default through a second setting). *Closed*: accounts come only by invitation; an
+  administrator makes an invitation for an e-mail address in the panel, the server mails a
+  link with a single-use token that expires (SMTP from the configuration: host, port, user,
+  password, sender; without SMTP the panel shows the link to copy), and the invited person
+  chooses their login and password on that link; a visitor who is not signed in sees the
+  sign-in prompt and nothing else (no spaces, no search, no pages, the server answers 401 or
+  the sign-in page for every route, the API 401 for everything but the session), and public
+  spaces are public only to signed-in users. The prerendered demo stays open. The setting
+  is read per request from the storage (cached, invalidated on write), the pure rule that
+  decides what an anonymous reader may see takes it as an argument and lives in
+  `wiki-core`, and the UI hides the account form or the invitation list accordingly. Tests
+  over HTTP for both modes and the switch between them, the invitation's whole flow, the
+  expiry; browser tests for the forms. Comes before OIDC, which must obey the same rule (an
+  OIDC sign-in by someone unknown creates an account in an open wiki and needs an
+  invitation in a closed one).
+- **WP3.6 OIDC login** (GitHub, Google, Apple, and any other OpenID Connect provider the
+  configuration names) as an alternative to passwords; account linking; obeys WP3.5's
+  setting. Confirmed by the owner on 2026-10-25, apart from the shelved assistant: this is
+  how the wiki's users sign in, and has nothing to do with the providers' subscriptions.
 
 ### Phase 4: beyond the MVP
 
