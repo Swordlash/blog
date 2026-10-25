@@ -909,13 +909,17 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   session hashes and is as sensitive as its file; `data/` protects it) and never come back
   through the API: the panel shows "set" or "not set". The server reads them per request
   from the cached settings as it reads the access mode, so a change takes effect at once,
-  discovery re-run on change, mail sent with the current settings. The command-line options
-  stay as a bootstrap and an override: an option given wins over the table and the panel
-  shows that field read-only, "set on the command line"; `deploy-local.sh` keeps accepting
-  them for compatibility and its README section points at the panel. `wiki-server oidc
-  check` reads both. Tests: HTTP for the settings' endpoints (administrator only, secrets
-  never returned), a provider added at run time signs someone in without a restart, mail
-  with settings changed at run time, the override, migration; browser tests for the forms.
+  discovery re-run on change, mail sent with the current settings. **No command-line
+  bootstrap or override** (the owner, 2026-10-25): the panel on the admin listener is the
+  only place these are set (decision 11 makes that listener the bootstrap, so nothing is
+  needed before it); the `--smtp-*`, `--public-url` and `--oidc` options and their
+  environment variables go, `deploy-local.sh` refuses them with a pointer at the panel and
+  removes the env file it kept for their secrets, `wiki-server oidc check` reads the
+  database. A secret is typed once into a password field, stored, and never shown again:
+  "set" or "not set", with "Replace…" and "Clear". Tests: HTTP for the settings' endpoints
+  (administrator only, secrets never returned), a provider added at run time signs someone
+  in without a restart, mail with settings changed at run time, migration; browser tests
+  for the forms.
 - **WP4.5 Comments** (the owner, 2026-10-25: inline comments from a selection with a thread
   at the side, and comments under the page, as Confluence has them, live over WebSockets).
   Decision 23 below fixes the shape. In short: threads anchored to a quote of the page's
