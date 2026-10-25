@@ -21,7 +21,7 @@ import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
-import Wiki.Api.Admin (ServerStatus)
+import Wiki.Api.Admin (Directory (..), ServerStatus)
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Types (NewPage (..), SessionInfo (..))
@@ -223,6 +223,9 @@ endings = describe "a session" $ do
     (me.user, me.standing) `shouldBe` (Nothing, NotSignedIn)
     setCookie reply `shouldBe` Just ("", ["Path=/", "Max-Age=0", "HttpOnly", "SameSite=Strict"])
     (.status) <$> newPage r [cookie token] blog `shouldReturn` 403
+    -- Still one of the wiki's people, in the administration's directory.
+    people :: Directory <- getUrl r (onAdmin r links.admin.directory) >>= jsonAs 200
+    map (\u -> u.login) people.users `shouldContain` ["editor"]
     -- Enabled again, they sign in again; the old session stays ended.
     _ :: Account <- sendJson r methodPut (onAdmin r (links.admin.setDisabled (UserId "user-editor"))) AccountDisabled {disabled = False} >>= jsonAs 200
     (stale, _) <- sessionWith r [cookie token]
