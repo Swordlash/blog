@@ -1817,3 +1817,7 @@ Amended by the planning session after each work package's report.
   `hasPassword`; the account forms need `MonadAdmin` methods over the three endpoints; the
   admin API answering an administrator's session is tested; the smoke test needs to sign in
   once `--trust-network` goes.
+- **WP3.4 and WP4.2 started** (2026-10-25) in parallel from `main` `2fc3329`, on
+  `wp3.4-permissions` (account forms, `create-spaces`, per-space permissions, the admin API
+  to an administrator's session, `--trust-network` retired) and `wp4.2-slides`
+  (presentations from a page); whichever merges second rebases.
