@@ -43,6 +43,7 @@ import Halogen.Router qualified as Router
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start)
+import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
@@ -69,6 +70,7 @@ import Wiki.App.Shell qualified as Shell
 import Wiki.App.View.Common (spacePathOf)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
+import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Space qualified as S
@@ -602,6 +604,39 @@ views m = describe "the application over it" $ do
     find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
     saves <- filter (\r -> r.method == "PUT" && not ("/draft" `T.isSuffixOf` r.url)) <$> asked
     map (\r -> Map.lookup "If-Match" r.headers) saves `shouldBe` [Just "\"2026-09-01T12:00:00Z\""]
+    unmount ui
+    serverStops
+
+  -- The race the server's smoke test met on a slow machine: what is typed
+  -- just after Ctrl+S, while the save is on its way, is the author's like
+  -- any other keystroke, and was refused while the editor was read-only.
+  it "keeps what is typed while a save is on its way, unsaved, and keeps it as a draft" $ runPage $ do
+    serverStarts
+    serveDemo
+    hello <- unsafeIOToPageM helloWorld
+    let saveAt = "api/v1/pages/" <> hello.id.text
+        draftAt = links.pages.saveDraft hello.id
+        requestsTo url = filter (\r -> r.method == "PUT" && r.url == url) <$> asked
+    answerWith "PUT" saveAt 200 hello
+    answerWith "PUT" draftAt 200 Draft {page = hello.id, author = UserId "user-admin", title = hello.title, body = "", base = hello.updatedAt, savedAt = hello.updatedAt}
+    ui <- startServer m (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    text <- editorText ui
+    typeText text "One."
+    unsafeIOToPageM (js_server_hold_at (toJSText "PUT") (toJSText saveAt))
+    press "Control+s"
+    eventually $ length <$> requestsTo saveAt `shouldReturn` 1
+    typeText text " Two."
+    unsafeIOToPageM js_server_release
+    find ui ".editor-saved-notice" >>= (`shouldHaveText` "Saved")
+    saved <- requestsTo saveAt
+    map (\r -> "One. Two." `T.isInfixOf` r.body) saved `shouldBe` [False]
+    markdown ui >>= (`shouldSatisfy` T.isInfixOf "One. Two.")
+    -- Not saved: Cancel asks about it, and it is kept as a draft once the
+    -- typing has stopped.
+    _ <- find ui "button.editor-cancel"
+    eventuallyWithin 6000 $ do
+      drafts <- requestsTo draftAt
+      map (\r -> "One. Two." `T.isInfixOf` r.body) drafts `shouldBe` [True]
     unmount ui
     serverStops
 

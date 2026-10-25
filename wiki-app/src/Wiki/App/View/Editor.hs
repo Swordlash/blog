@@ -667,6 +667,11 @@ component =
     -- place in, which has no children here, so that no render touches what
     -- CodeMirror puts there, and which stays across loads. Neither a keyed
     -- element nor a textarea with content can be written in a quote.
+    --
+    -- The text is not made read-only while a save is on its way: what is
+    -- typed meanwhile is the author's, unsaved after the save and kept as
+    -- a draft ('save'), where a read-only editor refused it without a word
+    -- (a Ctrl+S followed at once by more typing lost that typing).
     source :: State -> Work -> H.ComponentHTML Action Slots m
     source st work =
       HH.keyed
@@ -682,7 +687,6 @@ component =
               [ HP.class_ "editor-text"
               , attr "aria-label" "The page's Markdown"
               , HE.onValueInput Typed
-              , HP.readOnly st.saving
               , HP.autofocus True
               ]
               [HH.text work.loadedBody]
@@ -874,12 +878,13 @@ component =
         _ -> pass
 
     -- A toolbar command on the text; its input event, handled before this
-    -- returns, brings the change into the work.
+    -- returns, brings the change into the work. A save on its way does not
+    -- stop it, as it does not stop typing.
     run :: Command -> H.HalogenM State Action Slots ViewOutput m ()
     run command = do
       closeMenu
       st <- get
-      when (st.mode == Editing && not st.saving) $
+      when (st.mode == Editing) $
         H.getRef st.host >>= traverse_ (\host -> H.liftEffect (applyCommand host command))
 
     closeMenu :: H.HalogenM State Action Slots ViewOutput m ()

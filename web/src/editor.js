@@ -25,13 +25,12 @@
 //   the textarea's input event was;
 // - the host carries an object, wikiEditor, that the application's
 //   jsbits/editor.js reads the text and the selection from and writes
-//   through, rather than the textarea's own;
-// - the textarea's readonly (set while a save is being made) is followed.
+//   through, rather than the textarea's own.
 //
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
 // is the text given, byte for byte, as Markdown is the source of truth.
-import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, keymap } from "@codemirror/view";
 import { history, historyKeymap, insertNewline, isolateHistory, standardKeymap } from "@codemirror/commands";
 import { LanguageSupport, syntaxHighlighting, syntaxTree } from "@codemirror/language";
@@ -172,11 +171,6 @@ export function attach(textarea, host, original, codeTokens) {
   const untouched = typed === String(original).replace(/\r\n?/g, "\n");
   const doc = untouched ? String(original) : typed;
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
-  const readOnly = new Compartment();
-  // Read-only refuses typing and commands but leaves the content editable
-  // as far as the browser knows: making it not editable would take the
-  // focus from it, which coming back would not give back.
-  const readOnlyOf = (yes) => EditorState.readOnly.of(yes);
 
   const state = EditorState.create({
     doc,
@@ -193,7 +187,6 @@ export function attach(textarea, host, original, codeTokens) {
       new LanguageSupport(markdownLanguage),
       syntaxHighlighting(highlighter),
       decorations(codeTokens),
-      readOnly.of(readOnlyOf(textarea.readOnly)),
       EditorView.contentAttributes.of({
         "aria-label": textarea.getAttribute("aria-label") ?? "",
         spellcheck: "true",
@@ -222,11 +215,6 @@ export function attach(textarea, host, original, codeTokens) {
   view.scrollDOM.scrollTop = scrolled;
   if (focused) view.focus();
 
-  const watch = new MutationObserver(() => {
-    view.dispatch({ effects: readOnly.reconfigure(readOnlyOf(textarea.readOnly)) });
-  });
-  watch.observe(textarea, { attributes: true, attributeFilter: ["readonly"] });
-
   const editor = {
     textarea,
     host,
@@ -250,7 +238,6 @@ export function attach(textarea, host, original, codeTokens) {
     focus: () => view.focus(),
     destroy: () => {
       editors.delete(editor);
-      watch.disconnect();
       view.destroy();
       if (host.wikiEditor === editor) delete host.wikiEditor;
       delete view.contentDOM.wikiEditor;

@@ -515,7 +515,11 @@ try {
   assert.equal(served.status, 200);
   assert.equal(await served.text(), "attached by the smoke test\n", "the attachment's bytes");
   await eventually(async () => assert.ok((await markdownIn(page)).includes("(attachment:notes.txt)"), "no reference yet"), "the attachment's reference");
+  // The first save's "Saved" may still be showing: this save is waited for
+  // by its answer, so that what is typed next is typed after it.
+  const savedAgain = page.waitForResponse((r) => r.request().method() === "PUT" && /\/api\/v1\/pages\/[^/]+$/.test(new URL(r.url()).pathname), { timeout });
   await editor.press("Control+s");
+  assert.equal((await savedAgain).status(), 200, "the save with the attachment's reference");
   await page.locator("#app .editor-saved-notice", { hasText: "Saved" }).waitFor({ timeout });
   console.log("ok: a file attached in the editor is uploaded, served at its address and referred to in the page");
 

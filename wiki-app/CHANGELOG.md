@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The editor no longer loses what is typed just after a save is asked for.
+It made its text read-only while the save was on its way, which refused
+the keystrokes (and toolbar commands) that came meanwhile without a word;
+a Ctrl+S followed at once by more typing lost that typing on a slow
+connection or machine. The text stays writable now, and what is typed
+during a save is unsaved after it and kept as a draft, as the save already
+allowed for.
+
 Comments (WP4.5). `MonadComments` (`Wiki.App.Backend.Comments`: `listThreads`,
 `openThread`, `reply`, `editComment`, `deleteComment`, `deleteThread`,
 `setResolved`) has instances for `MemWiki` (kept in IndexedDB, in a store
