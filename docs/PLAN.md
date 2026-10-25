@@ -954,7 +954,8 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   settings"). Migration for `home_page`, `icon`, `description`; the directory and the space
   view prerendered and server-rendered as today; the demo gets icons and descriptions. After
   WP4.4, WP4.5 and WP3.7, since it reshapes the shell's sidebar that the comments' side
-  panel touches.
+  panel touches. Confirmed by the owner on 2026-10-25; it starts as soon as those three are
+  merged.
 
 ## Delegation protocol
 
