@@ -1,0 +1,27 @@
+{
+  "mail": {
+    "from": "Wiki <wiki@example.org>",
+    "host": "mail.example.org",
+    "password": "set",
+    "port": 587,
+    "security": "starttls",
+    "user": "wiki"
+  },
+  "providers": [
+    {
+      "clientId": "id.apps.example",
+      "issuer": null,
+      "kind": "google",
+      "name": "google",
+      "secret": "set"
+    },
+    {
+      "clientId": "wiki",
+      "issuer": "https://id.example.org/realms/corp",
+      "kind": "oidc",
+      "name": "corp",
+      "secret": "not-set"
+    }
+  ],
+  "publicUrl": "https://wiki.example.org/"
+}

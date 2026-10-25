@@ -240,6 +240,13 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   revokeInvitation = write . revokeInvitationIn
   unlinkUserIdentity u = query . unlinkUserIdentityIn u
 
+  -- Kept for the tab's life, as the wiki's settings are; a provider is not
+  -- asked and no mail is sent, which take a server.
+  serverSettings = query serverSettingsIn
+  setServerSettings = write . setServerSettingsIn
+  checkProvider name = query . checkProviderIn name
+  sendTestMail = query . sendTestMailIn
+
 -- | Everything is in memory: every read answers at once, and nothing is
 -- ever out of reach.
 instance (MonadIO m) => MonadLoad (MemWiki m) where

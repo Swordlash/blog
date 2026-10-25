@@ -12,6 +12,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Numeric.Natural (Natural)
 import Protolude
+import Wiki.Api.ServerSettings (noServerSettings)
 import Wiki.App.Backend.Mem.State (MemState (..), completeVersions, prepareSearch)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive (..))
@@ -66,6 +67,7 @@ fromArchive a =
           -- invitations.
           newAccountsCreateSpaces = False
         , invitations = mempty
+        , server = noServerSettings
         , current = Nothing
         , counter = 1
         }

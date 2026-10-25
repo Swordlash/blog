@@ -11,6 +11,7 @@ import Test.Server.Mail qualified as Mail
 import Test.Server.Oidc qualified as Oidc
 import Test.Server.Options qualified as Options
 import Test.Server.Render qualified as Render
+import Test.Server.Settings qualified as Settings
 import Test.Server.Static qualified as Static
 import Test.Storage qualified as Storage
 import Test.Storage.Accounts qualified as StorageAccounts
@@ -34,4 +35,5 @@ main = hspec $ do
   Accounts.spec
   Access.spec
   Mail.spec
+  Settings.spec
   Oidc.spec

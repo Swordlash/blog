@@ -75,6 +75,7 @@ library
         Wiki.Server.Options
         Wiki.Server.Password
         Wiki.Server.Render
+        Wiki.Server.Secret
         Wiki.Server.Session
         Wiki.Server.Static
         Wiki.Server.Version
@@ -174,6 +175,7 @@ test-suite wiki-server-test
         Test.Server.Oidc
         Test.Server.Options
         Test.Server.Render
+        Test.Server.Settings
         Test.Server.Static
         Test.Storage
         Test.Storage.Accounts

@@ -30,6 +30,10 @@ module Test.Server.Fixture
   , givePassword
   , signInAs
   , withAdminSession
+
+    -- * The server's settings
+  , setServer
+  , serverAs
   )
 where
 
@@ -48,19 +52,18 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.HUnit (assertFailure)
-import Test.Server.FakeProvider (clientSecret)
 import Test.Storage.Fixture (demoArchive)
 import Wiki.Api (AdminApi (..), WikiApi (..), requestMarker)
 import Wiki.Api.Account (Account (..), Credentials (..), NewPassword (..))
 import Wiki.Api.Links (links)
+import Wiki.Api.ServerSettings (ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Standing (..))
 import Wiki.Server (Server (..), withServerUsing)
 import Wiki.Server.Log (silentLogger)
-import Wiki.Server.Mail (Mailer (..), Message, Smtp (..))
-import Wiki.Server.Oidc (newProviders)
-import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions, smtpOf)
+import Wiki.Server.Mail (Message, SendMail, Smtp (..), smtpSend)
+import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions)
 import Wiki.Server.Storage (defaultConfig, importArchive, withStorage)
 
 -- | A server being driven by a test.
@@ -75,9 +78,9 @@ data Running = Running
   -- ^ What it logged, the latest first.
   , manager :: Manager
   , outbox :: IORef [Message]
-  -- ^ What it mailed, the latest first: a server whose options name an
-  -- SMTP host mails here instead ('withRunningPrepared'), and one whose
-  -- host is @unreachable.test@ fails to.
+  -- ^ What it mailed, the latest first: a server whose settings name a
+  -- mail server mails here instead ('testMail'), and one whose host is
+  -- @unreachable.test@ fails to.
   }
 
 -- | The files of a small built application, by path: what the tests of
@@ -154,20 +157,7 @@ withRunningPrepared change prepare test =
               , adminListen = Just (Listen "127.0.0.1" 0)
               , staticDir = Just staticDir
               }
-        -- Mail goes into the outbox, as a mail server would take it, or
-        -- not at all.
-        mailer =
-          smtpOf options <&> \smtp ->
-            Mailer
-              { publicUrl = fromMaybe "" options.publicUrl
-              , deliver = \m ->
-                  if smtp.host == "unreachable.test"
-                    then pure (Left "The mail server at unreachable.test:587 did not answer in time.")
-                    else Right <$> modifyIORef' outbox (m :)
-              }
-    -- Each provider the options name has the fake provider's secret.
-    providers <- newProviders (fromMaybe "" options.publicUrl) [(o, clientSecret) | o <- options.oidc]
-    withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options mailer providers $ \server ->
+    withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options (testMail outbox) $ \server ->
       test
         Running
           { public = root server.publicAddress
@@ -182,6 +172,16 @@ withRunningPrepared change prepare test =
     root = \case
       SockAddrInet port _ -> "http://127.0.0.1:" <> show port
       other -> panic ("not an IPv4 address: " <> show other)
+
+-- | How the test servers send mail: into the outbox, as a mail server
+-- would take it; not at all to @unreachable.test@; and for real, over
+-- SMTP, to a mail server on 127.0.0.1, which is a test's own
+-- ("Test.Server.Mail").
+testMail :: IORef [Message] -> SendMail
+testMail outbox smtp password m
+  | smtp.host == "unreachable.test" = pure (Left "The mail server at unreachable.test:587 did not answer in time.")
+  | smtp.host == "127.0.0.1" = smtpSend smtp password m
+  | otherwise = Right <$> modifyIORef' outbox (m :)
 
 -- | A response, as the tests look at it.
 data Reply = Reply
@@ -305,3 +305,15 @@ withAdminSession change test = withDemoRunning change $ \r -> do
   givePassword r "user-admin" "admin's password"
   token <- signInAs r "admin" "admin's password"
   test r (cookie token)
+
+--------------------------------------------------------------------------------
+-- The server's settings
+
+-- | Set the server's settings, as the operator on the admin listener:
+-- what they then are.
+setServer :: (HasCallStack) => Running -> ServerSettingsChange -> IO ServerSettings
+setServer r change = sendJson r "PUT" (r.admin <> "/admin/" <> links.admin.setServer) change >>= jsonAs 200
+
+-- | The server's settings, as the operator reads them.
+serverAs :: (HasCallStack) => Running -> IO ServerSettings
+serverAs r = getUrl r (r.admin <> "/admin/" <> links.admin.server) >>= jsonAs 200

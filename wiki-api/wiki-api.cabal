@@ -59,6 +59,7 @@ library
       Wiki.Api.Import
       Wiki.Api.Info
       Wiki.Api.Links
+      Wiki.Api.ServerSettings
       Wiki.Api.Types
       Wiki.Api.Upload
       Wiki.Api.Version
@@ -90,6 +91,7 @@ test-suite wiki-api-test
       Test.Info
       Test.Json
       Test.Links
+      Test.ServerSettings
       Test.Upload
       Test.Url
       Test.Version

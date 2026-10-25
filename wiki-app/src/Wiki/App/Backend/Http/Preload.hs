@@ -34,6 +34,7 @@ module Wiki.App.Backend.Http.Preload
   , SettingsOf (..)
   , InvitationsOf (..)
   , InvitationAt (..)
+  , ServerOf (..)
   , Answer (..)
   , preloadId
   , toPreload
@@ -58,6 +59,7 @@ import Wiki.Api.Account (InvitationInfo, InvitationToken)
 import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
+import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, kept)
@@ -100,6 +102,9 @@ data Preload = Preload
   , invitationsAt :: Maybe [InvitationAt]
   -- ^ An invitation as its link shows it ('Wiki.App.Account.invitationFor'),
   -- for the page of that link.
+  , server :: Maybe ServerOf
+  -- ^ The server's own settings ('Wiki.App.Backend.Admin.serverSettings'),
+  -- as the directory: whether each secret is set, never a secret.
   }
   deriving stock (Eq, Show, Generic)
 
@@ -151,6 +156,10 @@ newtype SettingsOf = SettingsOf {settings :: Answer WikiSettings}
 
 -- | The invitations ('Wiki.App.Backend.Admin.invitations').
 newtype InvitationsOf = InvitationsOf {invitations :: Answer Invitations}
+  deriving stock (Eq, Show)
+
+-- | The server's own settings ('Wiki.App.Backend.Admin.serverSettings').
+newtype ServerOf = ServerOf {server :: Answer ServerSettings}
   deriving stock (Eq, Show)
 
 -- | An invitation by its link's secret ('Wiki.App.Account.invitationFor').
@@ -227,6 +236,12 @@ instance ToJSON InvitationsOf where
 instance FromJSON InvitationsOf where
   parseJSON v = InvitationsOf <$> parseAnswer "invitations" v
 
+instance ToJSON ServerOf where
+  toJSON s = object (answerFields "server" s.server)
+
+instance FromJSON ServerOf where
+  parseJSON v = ServerOf <$> parseAnswer "server" v
+
 instance ToJSON InvitationAt where
   toJSON i = object (("token" .= i.token) : answerFields "invitation" i.invitation)
 
@@ -259,6 +274,7 @@ toPreload c =
     , invitationsAt = case [InvitationAt {token, invitation = toAnswer i} | (token, i) <- Map.toList c.invitationAt, kept i] of
         [] -> Nothing
         found -> Just found
+    , server = ServerOf . toAnswer <$> mfilter kept c.server
     }
 
 -- | The backend's cache as the page's payload says.
@@ -278,6 +294,7 @@ fromPreload p =
     , settings = (\s -> fromAnswer s.settings) <$> p.settings
     , invitations = (\i -> fromAnswer i.invitations) <$> p.invitations
     , invitationAt = Map.fromList [(i.token, fromAnswer i.invitation) | i <- fold p.invitationsAt]
+    , server = (\s -> fromAnswer s.server) <$> p.server
     }
 
 -- | Only what 'kept' keeps is ever written, which is an answer or a

@@ -76,7 +76,7 @@ import Wiki.Api.Auth (callbackPath)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (User (..))
 import Wiki.Server.Accounts (Intent (..), Landing (..), Refusal (..), endSession, landWith)
-import Wiki.Server.Api (Caller (..), Env (..), Signing (..), registering)
+import Wiki.Server.Api (Caller (..), Env (..), Signing (..), currentProviders, registering)
 import Wiki.Server.Limiter (Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
 import Wiki.Server.Log (Level (..), Logger, logWith)
@@ -91,8 +91,11 @@ flowCookieName = "wiki_oidc"
 -- | The addresses below @auth\/@ of a listener that serves the wiki at this
 -- place, as someone: the provider's name, and what follows it.
 authApplication :: Logger -> Env -> Caller -> Text -> Text -> [Text] -> Application
-authApplication logger env caller mount name rest request respond =
-  case (find (\p -> p.option.name == name) env.providers, caller.signing, rest) of
+authApplication logger env caller mount name rest request respond = do
+  -- The providers as the administration has them now: one added a moment
+  -- ago signs people in, one removed no longer does.
+  providers <- currentProviders env
+  case (find (\p -> p.option.name == name) providers, caller.signing, rest) of
     (Just p, Just signing, ["start"])
       | readOnly -> start logger env caller signing mount p request respond
     (Just p, Just signing, ["callback"])

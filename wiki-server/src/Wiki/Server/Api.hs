@@ -24,6 +24,12 @@
 -- the person invited is to have it. Without a mailer, or when the mail
 -- could not be sent, the answer carries it, for the panel to show the
 -- link to pass on.
+--
+-- The mailer and the providers people sign in with are made from the
+-- server's settings as they are at each request ('currentMailer',
+-- 'currentProviders'), which the administration changes (WP4.4 of
+-- docs/PLAN.md): the storage keeps the settings, and here a provider is
+-- asked how to sign in and a test mail sent, which take the network.
 module Wiki.Server.Api
   ( -- * The handlers
     Env (..)
@@ -33,6 +39,8 @@ module Wiki.Server.Api
   , apiApplication
   , registering
   , handlers
+  , currentMailer
+  , currentProviders
 
     -- * Errors
   , toApiError
@@ -63,11 +71,12 @@ import Servant.Server.Generic (AsServer)
 import System.Directory (doesFileExist)
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewPassword (..), PasswordChange (..), SignInMethods)
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), checkEmail)
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
+import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), named, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
@@ -85,8 +94,9 @@ import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Import (applyImport, planImport, readUpload)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
-import Wiki.Server.Mail (Mailer (..), invitationMessage)
-import Wiki.Server.Oidc (Flows, Provider, signInProvider)
+import Wiki.Server.Mail (Mailer (..), SendMail, invitationMessage, mailerFrom, testMessage)
+import Wiki.Server.Oidc (Endpoints (..), Flows, Provider, ProviderCache, endpointsOf, freshProvider, optionOf, providersFor, signInProvider)
+import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles)
@@ -106,10 +116,12 @@ data Env = Env
   -- ^ The attempts to make oneself an account, with an invitation or
   -- without, every one counted, since even one that succeeds makes the
   -- server hash a password.
-  , mailer :: Maybe Mailer
-  -- ^ Where invitations are mailed, if the server mails them.
-  , providers :: [Provider]
-  -- ^ The providers people may sign in with ("Wiki.Server.Oidc").
+  , sendMail :: SendMail
+  -- ^ How mail goes out through the mail server set ('smtpSend', but in
+  -- the tests).
+  , providerCache :: ProviderCache
+  -- ^ The providers people sign in with, as the settings make them, and
+  -- what asking each how to sign in found ("Wiki.Server.Oidc").
   , flows :: Flows
   -- ^ The round trips through their pages under way.
   }
@@ -247,7 +259,7 @@ handlers :: Env -> Caller -> WikiApi AsServer
 handlers env caller =
   WikiApi
     { info = pure ServerInfo {name = "Wiki", apiVersion}
-    , session = sessionInfo <$> ask' session
+    , session = ask' session >>= sessionInfo
     , signIn = \credentials -> do
         s <- signingHere
         now <- liftIO getCurrentTime
@@ -270,7 +282,7 @@ handlers env caller =
         liftIO (traverse_ (endSession env.storage) s.token)
         -- Who they are now: nobody, in the wiki as it is open or closed.
         nobody <- liftIO (runSqliteWiki env.storage Anonymous session)
-        pure (addHeader (clearCookie s.cookies) (sessionInfo nobody))
+        addHeader (clearCookie s.cookies) <$> sessionInfo nobody
     , register = \new -> making (\now -> Accounts.register env.storage now new)
     , invitations =
         InvitationsApi
@@ -359,18 +371,27 @@ handlers env caller =
           , setDisabled = \u body -> wiki (setDisabled u body.disabled)
           , settings = wiki wikiSettings
           , setSettings = wiki . setWikiSettings
-          , invitations = (\listed -> Invitations {mailing = isJust env.mailer, invitations = listed.invitations}) <$> wiki invitations
+          , invitations = do
+              listed <- wiki invitations
+              mailing <- isJust <$> liftIO (currentMailer env)
+              pure Invitations {mailing, invitations = listed.invitations}
           , invite = \body -> wiki (invite body.email) >>= liftIO . mailed
           , revokeInvitation = \i -> wiki (revokeInvitation i) $> NoContent
           , unlinkIdentity = \u provider -> wiki (unlinkUserIdentity u provider) $> NoContent
+          , server = wiki serverSettings
+          , setServer = wiki . setServerSettings
+          , checkProvider = \name given -> administrator >> liftIO (checkingProvider env name given) >>= either refuse pure
+          , testMail = \body -> administrator >> liftIO (sendingTestMail env body) >>= either refuse pure
           }
     }
   where
     who = caller.who
     -- The session as the API answers it: with the providers the server
     -- signs in with, which the storage does not know.
-    sessionInfo :: Session -> SessionInfo
-    sessionInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider env.providers}
+    sessionInfo :: Session -> Handler SessionInfo
+    sessionInfo s = do
+      providers <- liftIO (currentProviders env)
+      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers}
     -- The user signed in, for what only a user signed in has: refused to
     -- someone who is not, and to the operator, who signs in with nothing.
     signedInUser = case who of
@@ -396,7 +417,7 @@ handlers env caller =
     startedAs s user token = do
       liftIO (traverse_ (endSession env.storage) s.token)
       signedIn <- liftIO (runSqliteWiki env.storage (AsUser user.id) session)
-      pure (addHeader (sessionCookie s.cookies token) (sessionInfo signedIn))
+      addHeader (sessionCookie s.cookies token) <$> sessionInfo signedIn
     -- Making oneself an account, by a way that signs one in, at most so
     -- often from one address: every attempt counts.
     making :: (UTCTime -> IO (Either WikiError (User, Text))) -> Handler (WithCookie SessionInfo)
@@ -445,13 +466,54 @@ handlers env caller =
     -- An invitation just made, mailed if the server mails them: then its
     -- secret is no longer given back.
     mailed :: Invited -> IO Invited
-    mailed made = case (env.mailer, made.token) of
-      (Just m, Just token) -> do
-        let i = made.invitation
-        m.deliver (invitationMessage m.publicUrl i.email token i.expiresAt) <&> \case
-          Right () -> Invited {invitation = i, token = Nothing, mailError = Nothing}
-          Left why -> Invited {invitation = i, token = Just token, mailError = Just why}
-      _ -> pure made
+    mailed made =
+      currentMailer env >>= \mailer -> case (mailer, made.token) of
+        (Just m, Just token) -> do
+          let i = made.invitation
+          m.deliver (invitationMessage m.publicUrl i.email token i.expiresAt) <&> \case
+            Right () -> Invited {invitation = i, token = Nothing, mailError = Nothing}
+            Left why -> Invited {invitation = i, token = Just token, mailError = Just why}
+        _ -> pure made
+
+-- | The mailer of the server's settings as they are now, if they set a
+-- mail server.
+currentMailer :: Env -> IO (Maybe Mailer)
+currentMailer env = mailerFrom env.sendMail <$> readServerSettings env.storage
+
+-- | The providers people may sign in with, as the settings are now.
+currentProviders :: Env -> IO [Provider]
+currentProviders env = readServerSettings env.storage >>= providersFor env.providerCache
+
+-- | Ask a provider how to sign in: the one of that name as set, or as
+-- given (with the secret set for that name, if none is given), afresh.
+-- A provider that cannot be set up so is not asked, and says why.
+checkingProvider :: Env -> Text -> Maybe ProviderChange -> IO (Either ApiError ProviderCheck)
+checkingProvider env name given = do
+  kept <- readServerSettings env.storage
+  let stored = find (\p -> p.name == name) kept.providers
+      candidate = case given of
+        Just p -> Just (providerWith Secret kept (named name p))
+        Nothing -> stored
+  case candidate of
+    Nothing -> pure (Left ApiError.NotFound)
+    Just p -> do
+      let report found problem = ProviderCheck {redirectUri = (`redirectUri` name) <$> kept.publicUrl, clientSecret = secretState p.secret, discovered = found, problem}
+      Right <$> case providerProblems p of
+        why : _ -> pure (report Nothing (Just why))
+        [] -> do
+          provider <- freshProvider env.providerCache (fromMaybe "" kept.publicUrl) (optionOf p) (maybe "" revealed p.secret)
+          endpointsOf provider <&> \case
+            Left why -> report Nothing (Just why)
+            Right e -> report (Just Discovered {issuer = e.issuer, authorization = e.authorization, token = e.token, userinfo = e.userinfo}) Nothing
+
+-- | Send a test mail through the mail server as set.
+sendingTestMail :: Env -> MailTest -> IO (Either ApiError MailTestResult)
+sendingTestMail env body = case checkEmail body.to of
+  Left why -> pure (Left (ApiError.Invalid why))
+  Right recipient ->
+    currentMailer env >>= \case
+      Nothing -> pure (Left (ApiError.Invalid "This wiki has no mail server yet, or no public address: set them first."))
+      Just m -> Right . MailTestResult . leftToMaybe <$> m.deliver (testMessage m.publicUrl recipient)
 
 -- | What the limit on making accounts counts attempts as: a login of no
 -- one's (none starts with @~@), so that the address's count is the one

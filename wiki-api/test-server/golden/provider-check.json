@@ -1,0 +1,11 @@
+{
+  "clientSecret": "set",
+  "discovered": {
+    "authorization": "https://id.example.org/realms/corp/auth",
+    "issuer": "https://id.example.org/realms/corp",
+    "token": "https://id.example.org/realms/corp/token",
+    "userinfo": "https://id.example.org/realms/corp/userinfo"
+  },
+  "problem": null,
+  "redirectUri": "https://wiki.example.org/auth/corp/callback"
+}

@@ -1,0 +1,6 @@
+{
+  "clientSecret": "not-set",
+  "discovered": null,
+  "problem": "Corp could not be reached at https://id.example.org/realms/corp/.well-known/openid-configuration.",
+  "redirectUri": null
+}

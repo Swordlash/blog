@@ -20,6 +20,7 @@ import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.Api.Account (Account (..), NewAccount (..))
+import Wiki.Api.ServerSettings (noServerSettings)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Contract (As (..), Fixture (..))
@@ -74,6 +75,7 @@ lasting st =
     , grants = Grants {global = st.grants.global, spaces = sort st.grants.spaces, access = Open}
     , newAccountsCreateSpaces = False
     , invitations = mempty
+    , server = noServerSettings
     }
 
 -- | The wiki a fresh start from the database finds, which must be the one

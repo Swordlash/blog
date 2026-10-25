@@ -12,17 +12,14 @@
 -- container, whose loopback is its own). The public listener serves
 -- whoever has signed in there, and anyone else as an anonymous reader.
 --
--- The server mails invitations (WP3.5) through the SMTP server
--- @--smtp-host@ names, if one does, with links that start at
--- @--public-url@, the wiki's address as its readers reach it, which the
--- server cannot know by itself behind a proxy. The SMTP password is not an
--- option: it is read from the environment (@WIKI_SMTP_PASSWORD@), so that
--- it is in no process list and no shell history.
---
--- People may sign in with the providers @--oidc@ names (WP3.6,
--- "Wiki.Server.Oidc"), each registered there with the redirect URI below
--- @--public-url@, which they need for it; each client's secret comes from
--- the environment too ('Wiki.Server.Oidc.secretVariable').
+-- The wiki's public address, the mail server and the providers people
+-- sign in with are not options: they are set in the administration's
+-- "Server" section (WP4.4 of docs/PLAN.md, "Wiki.Api.ServerSettings"),
+-- which the admin listener serves before anyone can sign in, and kept in
+-- the database with their secrets, so that changing them takes no restart
+-- and no secret is in a process list, a shell's history or a unit file.
+-- The options of earlier versions that named them (@--smtp-host@ and the
+-- rest, @--public-url@, @--oidc@) are refused, saying where they went.
 module Wiki.Server.Options
   ( -- * Options
     ServeOptions (..)
@@ -35,17 +32,9 @@ module Wiki.Server.Options
   , renderListen
   , isLoopback
 
-    -- * Mail
-  , smtpOf
-  , smtpPasswordVariable
-
-    -- * Providers
-  , oidcSecrets
-
     -- * Checks
   , checkOptions
   , normaliseBasePath
-  , normalisePublicUrl
   , defaultMaxImportSize
   )
 where
@@ -55,8 +44,6 @@ import Network.Socket (HostAddress6, hostAddressToTuple)
 import Network.Socket qualified as Socket
 import Options.Applicative
 import Protolude
-import Wiki.Server.Mail (Security (..), Smtp (..), securityFor, securityName)
-import Wiki.Server.Oidc (OidcOption (..), checkOidcOption, parseOidcOption, secretVariable)
 
 -- | An address to listen on: a numeric IPv4 or IPv6 address and a port
 -- (port 0 for any free one, which the tests use).
@@ -171,23 +158,6 @@ data ServeOptions = ServeOptions
   -- ^ The built application ("Wiki.Server.Static"), if any.
   , maxImportSize :: Int
   -- ^ The largest archive an import takes, in bytes.
-  , smtpHost :: Maybe Text
-  -- ^ The SMTP server invitations are mailed through; none for a server
-  -- that mails nothing, whose administration shows the links instead.
-  , smtpPort :: Word16
-  , smtpSecurity :: Maybe Security
-  -- ^ How the connection is protected; by default what the port implies
-  -- ('securityFor').
-  , smtpUser :: Maybe Text
-  -- ^ The account to sign in to the SMTP server as, if it wants one.
-  , smtpFrom :: Maybe Text
-  -- ^ The sender of the mail.
-  , publicUrl :: Maybe Text
-  -- ^ The wiki's address as its readers reach it, which a mail's links
-  -- start with, and the redirect URIs of the providers.
-  , oidc :: [OidcOption]
-  -- ^ The providers people may sign in with, in the order their buttons
-  -- show.
   }
   deriving stock (Eq, Show)
 
@@ -203,25 +173,7 @@ defaultServeOptions dataDir =
     , basePath = "/"
     , staticDir = Nothing
     , maxImportSize = defaultMaxImportSize
-    , smtpHost = Nothing
-    , smtpPort = 587
-    , smtpSecurity = Nothing
-    , smtpUser = Nothing
-    , smtpFrom = Nothing
-    , publicUrl = Nothing
-    , oidc = []
     }
-
--- | The environment variable the SMTP account's password is read from.
-smtpPasswordVariable :: Text
-smtpPasswordVariable = "WIKI_SMTP_PASSWORD"
-
--- | The SMTP server the options name, once 'checkOptions' has passed them.
-smtpOf :: ServeOptions -> Maybe Smtp
-smtpOf o = do
-  host <- o.smtpHost
-  sender <- o.smtpFrom
-  pure Smtp {host, port = o.smtpPort, security = fromMaybe (securityFor o.smtpPort) o.smtpSecurity, user = o.smtpUser, from = sender}
 
 -- | 512 MiB: an archive holds every attachment of the wiki, each up to 50
 -- MB, and is read into memory twice over (the upload and its files).
@@ -240,13 +192,11 @@ serveOptions = do
   basePath <- strOption (long "base-path" <> metavar "PATH" <> value "/" <> showDefault <> help "The path the wiki is served under, as the application was built for")
   staticDir <- optional (strOption (long "static" <> metavar "DIR" <> help "The built application to serve (its index.html, 404.html, app.wasm, ...)"))
   maxImportMb <- option auto (long "max-import-size" <> metavar "MB" <> value (defaultMaxImportSize `div` (1024 * 1024)) <> showDefault <> help "The largest archive an import takes, in MiB")
-  smtpHost <- optional (strOption (long "smtp-host" <> metavar "HOST" <> help "The SMTP server to mail invitations through (without one, the administration shows their links to pass on)"))
-  smtpPort <- option auto (long "smtp-port" <> metavar "PORT" <> value 587 <> showDefault <> help "The SMTP server's port: implicit TLS on 465, STARTTLS on any other")
-  smtpSecurity <- optional (option security (long "smtp-security" <> metavar "tls|starttls|plain" <> help "How to protect the connection, if not as the port implies (plain only for a mail server on this machine or network)"))
-  smtpUser <- optional (strOption (long "smtp-user" <> metavar "USER" <> help ("The account to sign in to the SMTP server as; its password is read from " <> toS smtpPasswordVariable)))
-  smtpFrom <- optional (strOption (long "smtp-from" <> metavar "ADDRESS" <> help "The sender of the mail: wiki@example.org, or \"Wiki <wiki@example.org>\""))
-  publicUrl <- optional (strOption (long "public-url" <> metavar "URL" <> help "The wiki's address as its readers reach it (https://wiki.example.org/), which mailed links and the providers' redirect URIs start with"))
-  oidc <- many (option (eitherReader (first toS . parseOidcOption . toS)) (long "oidc" <> metavar "NAME=KIND,CLIENT-ID[,ISSUER]" <> help "A provider to sign in with (KIND google, apple, github or oidc, which needs its ISSUER); its client secret is read from WIKI_OIDC_<NAME>_SECRET. Repeatable"))
+  -- The options of earlier versions that the administration's "Server"
+  -- section replaces: refused, with where they went, rather than left to
+  -- optparse's "Invalid option", so that an old unit file says why it no
+  -- longer starts.
+  _ <- many (option gone (mconcat (map long removedOptions) <> internal))
   pure
     ServeOptions
       { dataDir
@@ -257,28 +207,20 @@ serveOptions = do
       , basePath
       , staticDir
       , maxImportSize = maxImportMb * 1024 * 1024
-      , smtpHost
-      , smtpPort
-      , smtpSecurity
-      , smtpUser
-      , smtpFrom
-      , publicUrl
-      , oidc
       }
   where
     address = eitherReader (first toS . parseListen . toS)
-    security = eitherReader $ \s -> case find (\x -> securityName x == toS s) [minBound .. maxBound] of
-      Just x -> Right x
-      Nothing -> Left "not tls, starttls or plain"
+    gone :: ReadM ()
+    gone = eitherReader (const (Left (toS removedMessage)))
 
--- | The wiki's address as the server uses it: @http@ or @https@, with a
--- host, and a slash at its end; or why it is not one.
-normalisePublicUrl :: Text -> Either Text Text
-normalisePublicUrl u
-  | not (any (`T.isPrefixOf` u) ["http://", "https://"]) = Left ("--public-url must start with http:// or https://: " <> u)
-  | T.null (T.takeWhile (/= '/') (T.drop 2 (T.dropWhile (/= '/') u))) = Left ("--public-url has no host: " <> u)
-  | T.any (\c -> isControl c || isSpace c || c `elem` ("\"<>\\?#" :: [Char])) u = Left ("--public-url has a character an address cannot: " <> u)
-  | otherwise = Right (if "/" `T.isSuffixOf` u then u else u <> "/")
+-- | The options the administration's "Server" section replaced (WP4.4).
+removedOptions :: [[Char]]
+removedOptions = ["smtp-host", "smtp-port", "smtp-security", "smtp-user", "smtp-from", "public-url", "oidc"]
+
+-- | What an option of 'removedOptions' is told.
+removedMessage :: Text
+removedMessage =
+  "the wiki's public address, its mail server and its sign-in providers are no longer options: set them in the administration's Server section, on the admin listener (its Administration page, below http://127.0.0.1:8081/admin/ by default), where they take effect at once"
 
 -- | A base path as the server uses it: with a slash at each end, @\/@ for
 -- the root; or why it is not one.
@@ -294,9 +236,9 @@ normaliseBasePath p
 -- | The options as the server runs them, or every reason they cannot be.
 checkOptions :: ServeOptions -> Either [Text] ServeOptions
 checkOptions o =
-  case (errors, normaliseBasePath o.basePath, traverse normalisePublicUrl o.publicUrl) of
-    ([], Right base, Right url) -> Right o {basePath = base, publicUrl = url}
-    (es, b, u) -> Left (es <> either pure (const []) b <> either pure (const []) u)
+  case (errors, normaliseBasePath o.basePath) of
+    ([], Right base) -> Right o {basePath = base}
+    (es, b) -> Left (es <> either pure (const []) b)
   where
     errors =
       [ "--admin-listen "
@@ -312,25 +254,3 @@ checkOptions o =
            , a.port /= 0
            ]
         <> ["--max-import-size must be at least 1 MiB" | o.maxImportSize < 1024 * 1024]
-        <> ["--smtp-from is needed with --smtp-host: the address the mail is sent from" | isJust o.smtpHost, isNothing o.smtpFrom]
-        <> ["--public-url is needed with --smtp-host: the address the mailed links start with" | isJust o.smtpHost, isNothing o.publicUrl]
-        <> [ "--smtp-port, --smtp-security, --smtp-user and --smtp-from go with --smtp-host, which is not given"
-           | isNothing o.smtpHost
-           , o.smtpPort /= 587 || isJust o.smtpSecurity || isJust o.smtpUser || isJust o.smtpFrom
-           ]
-        <> concatMap checkOidcOption o.oidc
-        <> ["--oidc names " <> n <> " more than once" | n <- ordNub names, length (filter (== n) names) > 1]
-        <> ["--public-url is needed with --oidc: the providers send people back below it (<public-url>auth/<name>/callback)" | not (null o.oidc), isNothing o.publicUrl]
-    names = map (\p -> p.name) o.oidc
-
--- | Each provider with its client's secret, read from the environment by
--- this lookup ('Wiki.Server.Oidc.secretVariable'), or every provider whose
--- secret is missing.
-oidcSecrets :: ServeOptions -> (Text -> Maybe Text) -> Either [Text] [(OidcOption, Text)]
-oidcSecrets o lookupSecret = case partitionEithers (map withSecret o.oidc) of
-  ([], found) -> Right found
-  (missing, _) -> Left missing
-  where
-    withSecret p = case mfilter (not . T.null) (lookupSecret (secretVariable p.name)) of
-      Just s -> Right (p, s)
-      Nothing -> Left ("--oidc " <> p.name <> " needs its client secret in the environment variable " <> secretVariable p.name)

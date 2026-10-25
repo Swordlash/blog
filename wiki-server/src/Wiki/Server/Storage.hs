@@ -38,6 +38,11 @@
 -- made through it puts the new ones there before anything else can use the
 -- connection. A change made by another process (none does) would be seen
 -- at the next start.
+--
+-- So are the server's own settings ("Wiki.Server.Secret"): its public
+-- address, its mail server and its providers, which the server reads on
+-- every request that signs in or mails ('readServerSettings'), so that a
+-- change in the administration takes effect with the next one.
 module Wiki.Server.Storage
   ( -- * The storage
     Storage
@@ -53,6 +58,7 @@ module Wiki.Server.Storage
     -- * The wiki's settings
   , readSettings
   , settingsWith
+  , readServerSettings
 
     -- * Who is asking
   , Who (..)
@@ -85,6 +91,7 @@ import Protolude
 import System.Directory (createDirectoryIfMissing)
 import Wiki.Api.Account (Account, NewAccount (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
+import Wiki.Api.ServerSettings (ServerSettingsChange, applyChange, checkServerSettings)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Access (Access (..))
@@ -119,6 +126,7 @@ import Wiki.Core.Space (Space (..), positionSpace, spaceTreeOrder)
 import Wiki.Core.User (Group (..), Standing (..), User (..), checkLogin, checkPassword)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
+import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
 import Wiki.Server.Storage.Backup (backupFiles)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
@@ -138,6 +146,8 @@ data Storage = Storage
   -- ^ The wiki's settings, once read: filled and changed only by whoever
   -- holds the connection, so that one read before a change is never put
   -- there after it.
+  , serverKept :: IORef (Maybe Kept)
+  -- ^ The server's own settings, kept the same way.
   }
 
 -- | What a storage is opened with besides its directory.
@@ -182,7 +192,8 @@ openWith collect config dataDir = do
     when collect (collectGarbage c dataDir)
   connection <- newMVar c
   settings <- newIORef Nothing
-  pure Storage {connection, dataDir, config, settings}
+  serverKept <- newIORef Nothing
+  pure Storage {connection, dataDir, config, settings, serverKept}
 
 -- | Close the storage's database.
 closeStorage :: Storage -> IO ()
@@ -215,6 +226,21 @@ settingsWith st c =
     Nothing -> do
       s <- loadSettings c
       writeIORef st.settings (Just s)
+      pure s
+
+-- | The server's own settings as they are now, with their secrets: from
+-- memory, once they have been read.
+readServerSettings :: Storage -> IO Kept
+readServerSettings st = readIORef st.serverKept >>= maybe (withMVar st.connection (serverSettingsWith st)) pure
+
+-- | The server's own settings, for someone who holds the connection.
+serverSettingsWith :: Storage -> Connection -> IO Kept
+serverSettingsWith st c =
+  readIORef st.serverKept >>= \case
+    Just s -> pure s
+    Nothing -> do
+      s <- loadServerSettings c
+      writeIORef st.serverKept (Just s)
       pure s
 
 -- | Delete the attachments' files that nothing refers to: not the database,
@@ -284,6 +310,8 @@ data Ctx = Ctx
   -- administrator, who needs no grant.
   , wiki :: WikiSettings
   -- ^ The wiki's settings as the transaction began.
+  , server :: Kept
+  -- ^ The server's own settings as the transaction began.
   }
 
 -- | An operation, in a transaction: what it finds wrong ends it with a
@@ -320,8 +348,9 @@ context st c who = do
   spaces <- loadSpaces c
   rows <- loadGrants c
   wiki <- settingsWith st c
+  server <- serverSettingsWith st c
   let stored = Grants {global = rows.global, spaces = rows.spaces, access = wiki.access}
-  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator, wiki}
+  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator, wiki, server}
   case who of
     Anonymous -> pure (ctx stored Nothing Nothing Nothing Nothing)
     AsUser u ->
@@ -533,6 +562,19 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   invite email = liftIO newToken >>= run Writes . inviteTx email
   revokeInvitation = run Writes . revokeInvitationTx
   unlinkUserIdentity u = run Writes . unlinkUserIdentityTx u
+
+  -- The server's own settings: kept in memory as soon as they are
+  -- committed, as the wiki's are, and never given back with a secret.
+  serverSettings = run Reads (requireAdministrator >> asks (\x -> hideSecrets x.server))
+  setServerSettings change = SqliteWiki $ do
+    env <- ask
+    fmap hideSecrets <$> liftIO (transactThen env.storage env.who Writes (setServerSettingsTx change) (writeIORef env.storage.serverKept . Just))
+
+  -- Asking a provider and sending mail take the server, which the storage
+  -- is not: its API does both ("Wiki.Server.Api"), with what the storage
+  -- keeps ('readServerSettings').
+  checkProvider _ _ = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API asks a provider."))
+  sendTestMail _ = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API sends mail."))
 
 -- | An attachment someone may view (they may view its page), and the file
 -- its bytes are in when the storage keeps them; 'Nothing' for one that lives
@@ -1173,6 +1215,16 @@ setWikiSettingsTx :: WikiSettings -> Tx WikiSettings
 setWikiSettingsTx new = do
   requireAdministrator
   db (`storeSettings` new)
+  pure new
+
+-- | The server's settings with a change written over them, checked
+-- ('checkServerSettings') and kept.
+setServerSettingsTx :: ServerSettingsChange -> Tx Kept
+setServerSettingsTx change = do
+  requireAdministrator
+  old <- asks (\x -> x.server)
+  new <- either invalid pure (checkServerSettings isJust (applyChange Secret old change))
+  db (`storeServerSettings` new)
   pure new
 
 invitationsTx :: Tx Invitations

@@ -80,6 +80,10 @@ module Wiki.Server.Storage.Rows
   , deleteInvitation
   , pendingInvitation
   , grantCreateSpaces
+
+    -- * The server's own settings
+  , loadServerSettings
+  , storeServerSettings
   )
 where
 
@@ -95,6 +99,7 @@ import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..))
 import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
+import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
 import Wiki.Core.Access (Access (..), accessName, readAccess)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
@@ -107,6 +112,7 @@ import Wiki.Core.Search (bodyText)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), Membership, User (..))
+import Wiki.Server.Secret (Kept, Secret (..), revealed)
 
 --------------------------------------------------------------------------------
 -- Columns
@@ -751,3 +757,61 @@ pendingInvitation c now secretHash = do
 -- | Grant a user the global create-spaces themself.
 grantCreateSpaces :: Connection -> UserId -> IO ()
 grantCreateSpaces c u = execute c "INSERT OR IGNORE INTO global_grants (subject_kind, subject_id, permission) VALUES ('user', ?, ?)" (u.text, globalText CreateSpaces)
+
+--------------------------------------------------------------------------------
+-- The server's own settings
+
+-- | The server's settings (migrations/0005-server-settings.sql): none
+-- where nothing is set. A provider of a kind this program does not know
+-- is left out, and a mail server without its host is none.
+loadServerSettings :: Connection -> IO Kept
+loadServerSettings c = do
+  rows :: [(Text, Text)] <- query_ c "SELECT key, value FROM settings WHERE key = 'public-url' OR key LIKE 'mail-%'"
+  providerRows :: [(Text, Text, Text, Maybe Text, Maybe Text)] <- query_ c "SELECT name, kind, client_id, issuer, secret FROM sign_in_providers ORDER BY position, name"
+  let valueOf key = mfilter (not . T.null) (snd <$> find ((== key) . fst) rows)
+      port = fromMaybe defaultMailPort (valueOf "mail-port" >>= readMaybe)
+  pure
+    ServerSettings
+      { publicUrl = valueOf "public-url"
+      , mail =
+          valueOf "mail-host" <&> \host ->
+            MailSettings
+              { host
+              , port
+              , security = fromMaybe (securityFor port) (valueOf "mail-security" >>= readSecurity)
+              , user = valueOf "mail-user"
+              , password = Secret <$> valueOf "mail-password"
+              , from = fromMaybe "" (valueOf "mail-from")
+              }
+      , providers =
+          [ ProviderSettings {name, kind, clientId, issuer, secret = Secret <$> mfilter (not . T.null) secret}
+          | (name, k, clientId, issuer, secret) <- providerRows
+          , Just kind <- [readKind k]
+          ]
+      }
+
+-- | Keep the server's settings, in place of those kept before.
+storeServerSettings :: Connection -> Kept -> IO ()
+storeServerSettings c s = do
+  execute_' "DELETE FROM settings WHERE key = 'public-url' OR key LIKE 'mail-%'"
+  let rows =
+        [("public-url", u) | Just u <- [s.publicUrl]]
+          <> case s.mail of
+            Nothing -> []
+            Just m ->
+              [ ("mail-host", m.host)
+              , ("mail-port", show m.port)
+              , ("mail-security", securityName m.security)
+              , ("mail-from", m.from)
+              ]
+                <> [("mail-user", u) | Just u <- [m.user]]
+                <> [("mail-password", revealed p) | Just p <- [m.password]]
+  for_ rows $ \(key :: Text, value :: Text) -> execute c "INSERT INTO settings (key, value) VALUES (?, ?)" (key, value)
+  execute_' "DELETE FROM sign_in_providers"
+  for_ (zip [0 :: Int ..] s.providers) $ \(position, p) ->
+    execute
+      c
+      "INSERT INTO sign_in_providers (name, position, kind, client_id, issuer, secret) VALUES (?, ?, ?, ?, ?, ?)"
+      (p.name, position, kindName p.kind, p.clientId, p.issuer, revealed <$> p.secret)
+  where
+    execute_' q = execute c q ()

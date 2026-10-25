@@ -90,6 +90,7 @@ import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.Api.Links qualified as Links
+import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
 import Wiki.Api.Version (VersionTime (..))
@@ -432,6 +433,14 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   invite email = write (withJson "POST" links.admin.invite NewInvitation {email})
   revokeInvitation i = write_ (R.delete (links.admin.revokeInvitation i))
   unlinkUserIdentity u provider = write_ (R.delete (links.admin.unlinkIdentity u provider))
+
+  -- Kept as the wiki's settings are, so that the administration a server
+  -- rendered is the program's first render. Asking a provider and sending
+  -- a test mail change nothing, so the cache stays.
+  serverSettings = cached (\c -> c.server) (R.get links.admin.server) withServerSettings
+  setServerSettings new = write (withJson "PUT" links.admin.setServer new)
+  checkProvider name given = answer <$> call (withJson "POST" (links.admin.checkProvider name) given)
+  sendTestMail address = answer <$> call (withJson "POST" links.admin.testMail MailTest {to = address})
 
 -- | Signing in and out ("Wiki.App.Account"), each of which starts the
 -- cache over with the session it answered with.

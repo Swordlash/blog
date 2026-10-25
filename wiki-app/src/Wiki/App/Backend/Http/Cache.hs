@@ -28,7 +28,7 @@
 -- And so is the administration's directory of the wiki's people, which the
 -- server renders the administration with, and its settings and invitations;
 -- and an invitation as its link shows it to the person invited, by the
--- link's secret.
+-- link's secret; and the server's own settings, without their secrets.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
   , emptyCache
@@ -48,6 +48,7 @@ module Wiki.App.Backend.Http.Cache
   , withSettings
   , withInvitations
   , withInvitationAt
+  , withServerSettings
   , afterWrite
   )
 where
@@ -57,6 +58,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken)
 import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
+import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
@@ -98,6 +100,8 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.Admin.invitations'.
   , invitationAt :: Map InvitationToken (Either WikiError InvitationInfo)
   -- ^ 'Wiki.App.Account.invitationFor', by the link's secret.
+  , server :: Maybe (Either WikiError ServerSettings)
+  -- ^ 'Wiki.App.Backend.Admin.serverSettings'.
   }
   deriving stock (Eq, Show)
 
@@ -117,6 +121,7 @@ emptyCache =
     , settings = Nothing
     , invitations = Nothing
     , invitationAt = mempty
+    , server = Nothing
     }
 
 -- | Whether a read's answer is kept: what it gave, and a refusal the
@@ -183,6 +188,9 @@ withInvitations i c = c {invitations = Just i}
 
 withInvitationAt :: InvitationToken -> Either WikiError InvitationInfo -> Cache -> Cache
 withInvitationAt t i c = c {invitationAt = Map.insert t i c.invitationAt}
+
+withServerSettings :: Either WikiError ServerSettings -> Cache -> Cache
+withServerSettings s c = c {server = Just s}
 
 -- | The cache after a write that changed the wiki: nothing in it can be
 -- trusted any more.

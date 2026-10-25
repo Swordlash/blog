@@ -25,6 +25,9 @@ module Test.Sample
   , invited
   , invitationInfo
   , signInMethods
+  , serverSettings
+  , serverChange
+  , providerCheck
   )
 where
 
@@ -35,6 +38,7 @@ import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Import
+import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -286,4 +290,47 @@ signInMethods =
   SignInMethods
     { password = True
     , identities = [LinkedIdentity {provider = "github", email = Just "ada@example.org", name = Just "Ada Lovelace", linkedAt = time}]
+    }
+
+-- | The server's settings as they are read: an address, a mail server whose
+-- password is set, and two providers, one of them without its secret.
+serverSettings :: ServerSettings
+serverSettings =
+  ServerSettings
+    { publicUrl = Just "https://wiki.example.org/"
+    , mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user = Just "wiki", password = Set, from = "Wiki <wiki@example.org>"}
+    , providers =
+        [ ProviderSettings {name = "google", kind = Google, clientId = "id.apps.example", issuer = Nothing, secret = Set}
+        , ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just "https://id.example.org/realms/corp", secret = NotSet}
+        ]
+    }
+
+-- | A change of them: the mail's password kept (left out), one provider's
+-- secret replaced, another's cleared.
+serverChange :: ServerSettingsChange
+serverChange =
+  ServerSettings
+    { publicUrl = Just "https://wiki.example.org/"
+    , mail = Just MailSettings {host = "mail.example.org", port = 465, security = ImplicitTls, user = Just "wiki", password = Nothing, from = "wiki@example.org"}
+    , providers =
+        [ ProviderSettings {name = "google", kind = Google, clientId = "id.apps.example", issuer = Nothing, secret = Just "a new secret"}
+        , ProviderSettings {name = "hub", kind = GitHub, clientId = "Iv1.abc", issuer = Nothing, secret = Just ""}
+        ]
+    }
+
+-- | What checking a provider found.
+providerCheck :: ProviderCheck
+providerCheck =
+  ProviderCheck
+    { redirectUri = Just "https://wiki.example.org/auth/corp/callback"
+    , clientSecret = Set
+    , discovered =
+        Just
+          Discovered
+            { issuer = "https://id.example.org/realms/corp"
+            , authorization = "https://id.example.org/realms/corp/auth"
+            , token = "https://id.example.org/realms/corp/token"
+            , userinfo = Just "https://id.example.org/realms/corp/userinfo"
+            }
+    , problem = Nothing
     }

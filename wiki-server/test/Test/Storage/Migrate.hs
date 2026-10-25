@@ -9,11 +9,13 @@ import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
 import Wiki.Api.Admin (WikiSettings (..), defaultSettings)
+import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
 import Wiki.Core.Access (Access (..))
+import Wiki.Server.Secret (Secret (..))
 import Wiki.Server.Storage (closeStorage, defaultConfig, openStorage, withStorage)
 import Wiki.Server.Storage.Layout (databaseFile)
 import Wiki.Server.Storage.Migrate
-import Wiki.Server.Storage.Rows (loadSettings)
+import Wiki.Server.Storage.Rows (loadServerSettings, loadSettings, storeServerSettings)
 
 -- | A database in a temporary file of its own.
 withFreshDatabase :: (FilePath -> Connection -> IO a) -> IO a
@@ -40,7 +42,7 @@ spec = describe "migrations" $ do
       migrate c `shouldReturn` [1 .. length migrations]
       schemaVersion c `shouldReturn` length migrations
       tables <- tableNames c
-      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "schema_version"] $ \t ->
+      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "sign_in_providers", "schema_version"] $ \t ->
         tables `shouldContain` [t]
       rows <- query_ c "SELECT version FROM schema_version ORDER BY version"
       map fromOnly rows `shouldBe` [1 .. length migrations]
@@ -85,6 +87,26 @@ spec = describe "migrations" $ do
       (try (execute_ c "INSERT INTO identities (provider, subject, user_id, linked_at) VALUES ('github', '42', 'user-1', 'later')") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
       execute_ c "DELETE FROM users WHERE id = 'user-1'"
       query_ c "SELECT count(*) FROM identities" `shouldReturn` [Only (0 :: Int)]
+
+  it "bring a database of identities up to the server's settings: nothing set, the wiki's settings and identities kept" $
+    withFreshDatabase $ \_ c -> do
+      applyMigrations (take 4 migrations) c `shouldReturn` [1, 2, 3, 4]
+      execute_ c "INSERT INTO settings (key, value) VALUES ('access', 'closed')"
+      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
+      execute_ c "INSERT INTO identities (provider, subject, user_id, linked_at) VALUES ('github', '42', 'user-1', 'now')"
+      migrate c `shouldReturn` [5 .. length migrations]
+      tableNames c >>= (`shouldContain` ["sign_in_providers"])
+      loadServerSettings c `shouldReturn` noServerSettings
+      (\s -> s.access) <$> loadSettings c `shouldReturn` Closed
+      query_ c "SELECT count(*) FROM identities" `shouldReturn` [Only (1 :: Int)]
+      -- What the administration sets is read back, the secrets with it.
+      let set = noServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just MailSettings {host = "mail.example.org", port = 465, security = ImplicitTls, user = Just "wiki", password = Just (Secret "pw"), from = "w@example.org"}, providers = [ProviderSettings {name = "github", kind = GitHub, clientId = "Iv1", issuer = Nothing, secret = Just (Secret "s")}]}
+      storeServerSettings c set
+      loadServerSettings c `shouldReturn` set
+      (\s -> s.access) <$> loadSettings c `shouldReturn` Closed
+      storeServerSettings c noServerSettings
+      loadServerSettings c `shouldReturn` noServerSettings
+      query_ c "SELECT count(*) FROM settings" `shouldReturn` [Only (1 :: Int)]
 
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do

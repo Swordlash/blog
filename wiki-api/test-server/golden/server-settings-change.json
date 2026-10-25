@@ -1,0 +1,27 @@
+{
+  "mail": {
+    "from": "wiki@example.org",
+    "host": "mail.example.org",
+    "password": null,
+    "port": 465,
+    "security": "tls",
+    "user": "wiki"
+  },
+  "providers": [
+    {
+      "clientId": "id.apps.example",
+      "issuer": null,
+      "kind": "google",
+      "name": "google",
+      "secret": "a new secret"
+    },
+    {
+      "clientId": "Iv1.abc",
+      "issuer": null,
+      "kind": "github",
+      "name": "hub",
+      "secret": ""
+    }
+  ],
+  "publicUrl": "https://wiki.example.org/"
+}

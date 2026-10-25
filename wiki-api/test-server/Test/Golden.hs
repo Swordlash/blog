@@ -20,6 +20,7 @@ import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
+import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
 import Wiki.Core.Id (GroupId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
@@ -61,6 +62,10 @@ spec = describe "golden JSON" $ do
     golden "invited" Sample.invited
     golden "invitation-info" Sample.invitationInfo
     golden "sign-in-methods" Sample.signInMethods
+    golden "server-settings" Sample.serverSettings
+    golden "provider-check" Sample.providerCheck
+    golden "provider-check-failed" ProviderCheck {redirectUri = Nothing, clientSecret = NotSet, discovered = Nothing, problem = Just "Corp could not be reached at https://id.example.org/realms/corp/.well-known/openid-configuration."}
+    golden "mail-test-result" MailTestResult {failure = Just "The mail server at mail.example.org:587 did not answer in time."}
   describe "errors" $ do
     golden "error-not-found" NotFound
     golden "error-forbidden" Forbidden
@@ -91,3 +96,6 @@ spec = describe "golden JSON" $ do
     golden "password-change" PasswordChange {current = Just "correct horse battery staple", new = "a longer passphrase than that"}
     golden "account-disabled" AccountDisabled {disabled = True}
     golden "new-invitation" NewInvitation {email = "bea@example.org"}
+    golden "server-settings-change" Sample.serverChange
+    golden "server-settings-clear" (noServerSettings :: ServerSettingsChange)
+    golden "mail-test" MailTest {to = "ada@example.org"}

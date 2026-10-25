@@ -9,6 +9,7 @@ import Test.Hspec (hspec)
 import Test.Info qualified as Info
 import Test.Json qualified as Json
 import Test.Links qualified as Links
+import Test.ServerSettings qualified as ServerSettings
 import Test.Upload qualified as Upload
 import Test.Url qualified as Url
 import Test.Version qualified as Version
@@ -22,3 +23,4 @@ main = hspec $ do
   Url.spec
   Upload.spec
   Links.spec
+  ServerSettings.spec

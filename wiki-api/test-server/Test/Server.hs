@@ -31,6 +31,7 @@ import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, searchQueryOf, searchUrl)
+import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..), pageVersion)
@@ -191,6 +192,14 @@ stubs =
           , invite = \body -> pure (invitedAs body.email)
           , revokeInvitation = \i -> if i == InvitationId "i1" then pure NoContent else refuse NotFound
           , unlinkIdentity = \u provider -> if u == UserId "u2" && provider == "github" then pure NoContent else refuse NotFound
+          , server = pure Sample.serverSettings
+          , -- What was sent, each secret said to be set if it was given.
+            setServer = \change -> pure (maybe NotSet (const Set) <$> change)
+          , checkProvider = \name given ->
+              if name == "corp"
+                then pure Sample.providerCheck {clientSecret = if isJust (given >>= \p -> p.secret) then Set else NotSet}
+                else refuse NotFound
+          , testMail = \body -> pure MailTestResult {failure = if body.to == "ada@example.org" then Nothing else Just ("no mail for " <> body.to)}
           }
     }
 
@@ -428,6 +437,22 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (links.admin.setPassword (UserId "u7")) NewPassword {password = "y"}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = False}
       answers (sendJson methodPut (links.admin.setDisabled (UserId "u7")) AccountDisabled {disabled = True}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = True}
       links.admin.setDisabled (UserId "u7") `shouldBe` "api/v1/admin/users/u7/disabled"
+
+  describe "the server's settings" $ do
+    it "reads them, and writes a change, at server" $ do
+      links.admin.server `shouldBe` "api/v1/admin/server"
+      answers (getAt links.admin.server) 200 Sample.serverSettings
+      answers (sendJson methodPut links.admin.setServer Sample.serverChange) 200 ((\secret -> if isJust secret then Set else NotSet) <$> Sample.serverChange)
+
+    it "checks a provider by its name, as set or as given" $ do
+      links.admin.checkProvider "corp" `shouldBe` "api/v1/admin/server/providers/corp/check"
+      answers (sendJson methodPost (links.admin.checkProvider "corp") (Nothing :: Maybe ProviderChange)) 200 Sample.providerCheck {clientSecret = NotSet}
+      answers (sendJson methodPost (links.admin.checkProvider "corp") (head Sample.serverChange.providers)) 200 Sample.providerCheck
+      answers (sendJson methodPost (links.admin.checkProvider "nobody") (Nothing :: Maybe ProviderChange)) 404 NotFound
+
+    it "sends a test mail" $ do
+      links.admin.testMail `shouldBe` "api/v1/admin/server/mail/test"
+      answers (sendJson methodPost links.admin.testMail MailTest {to = "ada@example.org"}) 200 MailTestResult {failure = Nothing}
 
   describe "whom the wiki lets in" $ do
     it "makes an account of one's own at accounts, signing its maker in" $ do

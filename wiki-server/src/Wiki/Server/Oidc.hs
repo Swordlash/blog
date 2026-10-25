@@ -6,10 +6,12 @@
 --
 -- = Providers
 --
--- A provider is configured as @--oidc NAME=KIND,CLIENT-ID[,ISSUER]@
--- ("Wiki.Server.Options"), its client's secret read from the environment
--- ('secretVariable'), never the command line. Its kind says how the server
--- talks to it:
+-- A provider is set up in the administration's "Server" section (WP4.4,
+-- "Wiki.Api.ServerSettings"): a name, a kind, the client's id, an issuer,
+-- and the client's secret, which the storage keeps and the API never gives
+-- back. The server reads them per request ('providersFor'), so a provider
+-- added, changed or removed signs people in, or no longer does, from the
+-- next request on. Its kind says how the server talks to it:
 --
 -- * @google@: OpenID Connect at @https:\/\/accounts.google.com@, found by
 --   discovery.
@@ -46,19 +48,21 @@
 -- quote the request.
 module Wiki.Server.Oidc
   ( -- * Providers
-    Kind (..)
+    ProviderKind (..)
   , kindName
   , readKind
   , OidcOption (..)
-  , renderOidcOption
-  , parseOidcOption
-  , checkOidcOption
-  , secretVariable
+  , optionOf
   , Provider (..)
   , newProvider
-  , newProviders
   , signInProvider
   , redirectUri
+
+    -- * The providers as set
+  , ProviderCache
+  , newProviderCache
+  , providersFor
+  , freshProvider
 
     -- * The round trip
   , Endpoints (..)
@@ -90,7 +94,6 @@ import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (FromJSON (..), Object, Value (..), eitherDecode, eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.Aeson.Types (Parser, parseEither, parseMaybe, typeMismatch)
 import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
-import Data.Char (isAsciiLower)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -102,93 +105,38 @@ import Network.HTTP.Types (HeaderName, hAccept, hAuthorization, hContentType, hU
 import Protolude
 import Text.Show (Show (showsPrec))
 import Web.FormUrlEncoded (urlEncodeParams)
-import Wiki.Api.Auth (callbackPath)
+import Wiki.Api.ServerSettings (ProviderKind (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, readKind, redirectUri)
 import Wiki.Core.User (SignInProvider (..))
 import Wiki.Server.Accounts (Claimed (..), Intent)
 import Wiki.Server.Password (newToken, tokenHash)
+import Wiki.Server.Secret (Kept, Secret, revealed)
 
 --------------------------------------------------------------------------------
 -- Providers
 
--- | How the server talks to a provider (see the module's Haddock).
-data Kind = Google | Apple | GitHub | Generic
-  deriving stock (Eq, Show, Enum, Bounded)
-
--- | As @--oidc@ names it.
-kindName :: Kind -> Text
-kindName = \case
-  Google -> "google"
-  Apple -> "apple"
-  GitHub -> "github"
-  Generic -> "oidc"
-
-readKind :: Text -> Maybe Kind
-readKind t = find (\k -> kindName k == t) [minBound .. maxBound]
-
--- | A provider as the command line names it: @NAME=KIND,CLIENT-ID[,ISSUER]@.
+-- | A provider as the server talks to it, but for its secret: as the
+-- administration set it.
 data OidcOption = OidcOption
   { name :: Text
-  -- ^ Its name in the wiki's addresses (@auth\/\<name>\/…@) and its
-  -- configuration: lower-case letters, digits and dashes.
-  , kind :: Kind
+  -- ^ Its name in the wiki's addresses (@auth\/\<name>\/…@).
+  , kind :: ProviderKind
   , clientId :: Text
   -- ^ The client's id the provider gave when it was registered there.
   , issuer :: Maybe Text
   -- ^ For @oidc@, the issuer; for another kind, an address in place of
   -- its own (a GitHub Enterprise server's, say).
   }
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Ord, Show)
 
-renderOidcOption :: OidcOption -> Text
-renderOidcOption o = o.name <> "=" <> kindName o.kind <> "," <> o.clientId <> maybe "" ("," <>) o.issuer
-
--- | The option as written, or why it cannot be one.
-parseOidcOption :: Text -> Either Text OidcOption
-parseOidcOption t = case T.breakOn "=" t of
-  (name, rest) | Just fields <- T.stripPrefix "=" rest -> case T.splitOn "," fields of
-    k : clientId : more | length more <= 1 -> do
-      kind <- maybe (Left ("--oidc " <> t <> ": not a kind of provider: " <> k <> " (google, apple, github or oidc)")) Right (readKind (T.strip k))
-      pure OidcOption {name = T.strip name, kind, clientId = T.strip clientId, issuer = mfilter (not . T.null) (T.strip <$> head more)}
-    _ -> Left ("--oidc " <> t <> ": write it as NAME=KIND,CLIENT-ID or NAME=KIND,CLIENT-ID,ISSUER")
-  _ -> Left ("--oidc " <> t <> ": write it as NAME=KIND,CLIENT-ID or NAME=KIND,CLIENT-ID,ISSUER")
-
--- | Why a provider cannot be configured so, if it cannot.
-checkOidcOption :: OidcOption -> [Text]
-checkOidcOption o =
-  [ "--oidc " <> o.name <> ": a provider's name is lower-case letters, digits and dashes, starting with a letter, at most 32 characters"
-  | not (validName o.name)
-  ]
-    <> ["--oidc " <> o.name <> ": the client id is missing" | T.null o.clientId]
-    <> ["--oidc " <> o.name <> ": a provider of kind oidc needs its issuer: NAME=oidc,CLIENT-ID,https://issuer.example.org" | o.kind == Generic, isNothing o.issuer]
-    <> [ "--oidc " <> o.name <> ": the address " <> i <> " must start with https:// (or http:// on this machine, for a test)"
-       | Just i <- [o.issuer]
-       , not (secureAddress i)
-       ]
-  where
-    validName n =
-      not (T.null n)
-        && T.length n <= 32
-        && maybe False (isAsciiLower . fst) (T.uncons n)
-        && T.all (\c -> isAsciiLower c || isDigit c || c == '-') n
-
--- | Whether an address may be talked to with secrets: over TLS, or on
--- this machine.
-secureAddress :: Text -> Bool
-secureAddress a =
-  "https://" `T.isPrefixOf` a
-    || any (\here -> ("http://" <> here) `T.isPrefixOf` a) ["127.0.0.1:", "127.0.0.1/", "localhost:", "localhost/", "[::1]:"]
-
--- | The environment variable a provider's client secret is read from:
--- @WIKI_OIDC_\<NAME>_SECRET@, the name in upper case with its dashes as
--- underscores.
-secretVariable :: Text -> Text
-secretVariable name = "WIKI_OIDC_" <> T.map (\c -> if c == '-' then '_' else toUpper c) name <> "_SECRET"
+-- | A provider's settings, but for its secret.
+optionOf :: ProviderSettingsOf s -> OidcOption
+optionOf p = OidcOption {name = p.name, kind = p.kind, clientId = p.clientId, issuer = p.issuer}
 
 -- | A provider, as the server talks to it.
 data Provider = Provider
   { option :: OidcOption
   , secret :: Text
-  -- ^ The client's secret ('secretVariable').
+  -- ^ The client's secret.
   , label :: Text
   -- ^ How the wiki's pages name it: "Sign in with Google".
   , publicUrl :: Text
@@ -208,35 +156,58 @@ instance Show Provider where
 newProvider :: Manager -> Text -> OidcOption -> Text -> IO Provider
 newProvider manager publicUrl option secret = do
   discovered <- newIORef Nothing
-  pure Provider {option, secret, label = labelOf option, publicUrl, manager, discovered}
-
--- | The providers, sharing one manager of TLS connections, made only if
--- there is a provider to talk to.
-newProviders :: Text -> [(OidcOption, Text)] -> IO [Provider]
-newProviders _ [] = pure []
-newProviders publicUrl configured = do
-  manager <- newTlsManager
-  for configured (uncurry (newProvider manager publicUrl))
-
--- | A kind's own name for the provider, or, for @oidc@, its name with a
--- capital.
-labelOf :: OidcOption -> Text
-labelOf o = case o.kind of
-  Google -> "Google"
-  Apple -> "Apple"
-  GitHub -> "GitHub"
-  Generic -> case T.uncons o.name of
-    Just (c, rest) -> T.cons (toUpper c) rest
-    Nothing -> o.name
+  pure Provider {option, secret, label = providerLabel option.kind option.name, publicUrl, manager, discovered}
 
 -- | The provider as the application shows it.
 signInProvider :: Provider -> SignInProvider
 signInProvider p = SignInProvider {name = p.option.name, label = p.label}
 
--- | Where the provider sends the browser back to, which is registered with
--- it: @\<public-url>auth\/\<name>\/callback@.
-redirectUri :: Text -> Text -> Text
-redirectUri publicUrl name = publicUrl <> callbackPath name
+--------------------------------------------------------------------------------
+-- The providers as set
+
+-- | The providers the server has talked to, by everything that makes one
+-- (its settings, its secret, the wiki's address), each with what its
+-- discovery found: so that a provider is asked how to sign in once, and
+-- asked again as soon as any of its settings changes, which makes it
+-- another. They share one manager of TLS connections, made when the first
+-- is.
+data ProviderCache = ProviderCache
+  { manager :: MVar (Maybe Manager)
+  , made :: MVar (Map (OidcOption, Secret, Text) Provider)
+  }
+
+newProviderCache :: IO ProviderCache
+newProviderCache = ProviderCache <$> newMVar Nothing <*> newMVar mempty
+
+-- | The manager, made the first time it is wanted.
+managerOf :: ProviderCache -> IO Manager
+managerOf cache = modifyMVar cache.manager $ \case
+  Just m -> pure (Just m, m)
+  Nothing -> newTlsManager <&> \m -> (Just m, m)
+
+-- | The providers people may sign in with, as the settings are now: those
+-- with a secret, once the wiki has an address to send them back to. Those
+-- the settings no longer have are forgotten.
+providersFor :: ProviderCache -> Kept -> IO [Provider]
+providersFor cache s = case s.publicUrl of
+  Nothing -> pure []
+  Just url -> do
+    let wanted = [(optionOf p, secret, url) | p <- s.providers, Just secret <- [p.secret]]
+    if null wanted
+      then modifyMVar_ cache.made (const (pure mempty)) $> []
+      else do
+        manager <- managerOf cache
+        modifyMVar cache.made $ \known -> do
+          providers <- for wanted $ \key@(option, secret, _) ->
+            maybe (newProvider manager url option (revealed secret)) pure (Map.lookup key known)
+          pure (Map.fromList (zip wanted providers), providers)
+
+-- | A provider as given, that has asked nothing yet: what checking one
+-- asks afresh.
+freshProvider :: ProviderCache -> Text -> OidcOption -> Text -> IO Provider
+freshProvider cache url option secret = do
+  manager <- managerOf cache
+  newProvider manager url option secret
 
 --------------------------------------------------------------------------------
 -- The round trip
@@ -327,7 +298,7 @@ challengeOf verifier = decodeUtf8 (convertToBase Base64URLUnpadded (SHA256.hash 
 -- | Whether the kind takes PKCE. Apple does not say it does, and might
 -- refuse a token request with a verifier it does not know; the state and
 -- the nonce protect its round trip.
-withPkce :: Kind -> Bool
+withPkce :: ProviderKind -> Bool
 withPkce = (/= Apple)
 
 -- | Where the browser is sent to sign in at the provider.
@@ -408,7 +379,7 @@ claimsFor p s answer = runExceptT $ do
 
 -- | The issuers whose ID tokens are taken: the discovered one, and for
 -- Google its name without the scheme, which its tokens may carry too.
-acceptedIssuers :: Kind -> Endpoints -> [Text]
+acceptedIssuers :: ProviderKind -> Endpoints -> [Text]
 acceptedIssuers kind e = e.issuer : ["accounts.google.com" | kind == Google]
 
 -- | Apple's @user@ field's name: @{"name": {"firstName": …, "lastName": …}}@.

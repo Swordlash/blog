@@ -27,8 +27,9 @@
 -- users add …@).
 --
 -- @wiki-server oidc check@ is the console's too ('runOidcCheck'): it asks
--- the providers a server would be started with (WP3.6) how to sign in,
--- before anyone tries, and prints the redirect URI to register with each.
+-- the providers the administration has set (WP3.6, WP4.4) how to sign in,
+-- before anyone tries, and prints the redirect URI to register with each,
+-- reading them from the data directory as the server does.
 module Wiki.Server.Console
   ( -- * Commands
     Users (..)
@@ -43,7 +44,6 @@ module Wiki.Server.Console
   , OidcCheck (..)
   , oidcCheckParser
   , runOidcCheck
-  , environmentSecret
   )
 where
 
@@ -51,15 +51,15 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Options.Applicative
 import Protolude
-import System.Environment (lookupEnv)
 import System.IO (hFlush, hGetEcho, hIsTerminalDevice, hSetEcho)
 import Wiki.Api.Account (Account (..))
+import Wiki.Api.ServerSettings (ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, providerProblems, redirectUri)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.User (User (..))
 import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdministrator, setDisabled, setPassword)
-import Wiki.Server.Oidc (Endpoints (..), OidcOption (..), Provider (..), checkOidcOption, endpointsOf, kindName, newProviders, parseOidcOption, redirectUri, secretVariable)
-import Wiki.Server.Options (normalisePublicUrl)
-import Wiki.Server.Storage (Storage, withStorageAside)
+import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
+import Wiki.Server.Secret (revealed)
+import Wiki.Server.Storage (Storage, readServerSettings, withStorageAside)
 
 -- | A command, on a data directory.
 data Users = Users
@@ -204,14 +204,12 @@ readPassword login = do
 --------------------------------------------------------------------------------
 -- Providers
 
--- | @wiki-server oidc check --oidc NAME=KIND,CLIENT-ID[,ISSUER] … --public-url
--- URL [NAME]@: the providers as the server would be started with them,
--- asked how to sign in (discovery), with the redirect URI each must have
--- registered, and whether its secret is in the environment. Nothing is
--- signed in, and no secret is shown.
+-- | @wiki-server oidc check --data DIR [NAME]@: the providers as the
+-- administration has set them, asked how to sign in (discovery), with the
+-- redirect URI each must have registered, and whether its secret is set.
+-- Nothing is signed in, and no secret is shown.
 data OidcCheck = OidcCheck
-  { providers :: [OidcOption]
-  , publicUrl :: Text
+  { dataDir :: FilePath
   , only :: Maybe Text
   -- ^ The one provider to check, if not all.
   }
@@ -224,46 +222,43 @@ oidcCheckParser =
         "check"
         ( info
             ( OidcCheck
-                <$> many (option (eitherReader (first toS . parseOidcOption . toS)) (long "oidc" <> metavar "NAME=KIND,CLIENT-ID[,ISSUER]" <> help "A provider, as wiki-server serve takes it"))
-                <*> strOption (long "public-url" <> metavar "URL" <> help "The wiki's address as its readers reach it")
+                <$> strOption (long "data" <> metavar "DIR" <> help "The server's data directory, whose database holds the providers")
                 <*> optional (strArgument (metavar "NAME" <> help "Check only this provider"))
             )
-            (progDesc "Ask each provider how to sign in, and print the redirect URI to register with it")
+            (progDesc "Ask each provider set in the administration how to sign in, and print the redirect URI to register with it")
         )
     )
 
--- | Check the providers, with their secrets looked up so: the lines to
--- show, and whether every provider checked can be signed in with.
-runOidcCheck :: (Text -> IO (Maybe Text)) -> OidcCheck -> IO (Bool, [Text])
-runOidcCheck lookupSecret c = case (normalisePublicUrl c.publicUrl, concatMap checkOidcOption chosen) of
-  (Left why, _) -> pure (False, [why])
-  (_, problems@(_ : _)) -> pure (False, problems)
-  (Right url, [])
-    | null chosen -> pure (False, [maybe "No provider is given: name each with --oidc." (\n -> "No provider is named " <> n <> ".") c.only])
+-- | Check the providers: the lines to show, and whether every provider
+-- checked can be signed in with.
+runOidcCheck :: OidcCheck -> IO (Bool, [Text])
+runOidcCheck c = do
+  kept <- withStorageAside c.dataDir readServerSettings
+  let chosen = maybe kept.providers (\n -> filter (\p -> p.name == n) kept.providers) c.only
+  cache <- newProviderCache
+  if
+    | null chosen ->
+        pure (False, [maybe "No provider is set: add one in the administration's Server section." (\n -> "No provider is named " <> n <> ".") c.only])
     | otherwise -> do
-        secrets <- for chosen (\o -> lookupSecret (secretVariable o.name))
-        -- Discovery needs no secret: a placeholder stands in for one that
-        -- is missing, which is reported.
-        providers <- newProviders url [(o, fromMaybe "" s) | (o, s) <- zip chosen secrets]
-        reports <- for (zip providers secrets) $ \(p, secret) -> do
-          asked <- endpointsOf p
-          let o = p.option
-              secretLine = case secret of
-                Just s | not (T.null s) -> "  client secret: set in " <> secretVariable o.name
-                _ -> "  client secret: MISSING, set " <> secretVariable o.name <> " in the server's environment"
+        reports <- for chosen $ \p -> do
+          let problems = providerProblems p
+              secretLine = case p.secret of
+                Just _ -> "  client secret: set"
+                Nothing -> "  client secret: NOT SET, set it in the administration's Server section"
+          asked <- case problems of
+            why : _ -> pure (Left why)
+            [] -> freshProvider cache (fromMaybe "" kept.publicUrl) (optionOf p) (maybe "" revealed p.secret) >>= endpointsOf
+          let label = p.name <> " (" <> providerLabel p.kind p.name <> ", kind " <> kindName p.kind <> ", client " <> p.clientId <> ")"
               lines' = case asked of
                 Left why -> ["  cannot be asked how to sign in: " <> why]
                 Right e ->
                   ["  issuer: " <> e.issuer, "  authorization: " <> e.authorization, "  token: " <> e.token]
                     <> ["  user info: " <> u | Just u <- [e.userinfo]]
+              redirect = case kept.publicUrl of
+                Just u -> "  redirect URI to register: " <> redirectUri u p.name
+                Nothing -> "  redirect URI: none until the wiki's public address is set in the administration's Server section"
           pure
-            ( isRight asked && maybe False (not . T.null) secret
-            , [o.name <> " (" <> p.label <> ", kind " <> kindName o.kind <> ", client " <> o.clientId <> ")", "  redirect URI to register: " <> redirectUri url o.name, secretLine] <> lines'
+            ( isRight asked && isJust p.secret && isJust kept.publicUrl
+            , [label, redirect, secretLine] <> lines'
             )
         pure (all fst reports, concatMap snd reports)
-  where
-    chosen = maybe c.providers (\n -> filter (\o -> o.name == n) c.providers) c.only
-
--- | A secret as the server reads it: from its environment variable.
-environmentSecret :: Text -> IO (Maybe Text)
-environmentSecret = fmap (fmap toS) . lookupEnv . toS

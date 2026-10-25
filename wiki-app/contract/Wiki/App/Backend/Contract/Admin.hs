@@ -19,6 +19,7 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), defaultSettings)
+import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin
 import Wiki.App.Backend.Contract (As (..), Fixture (..), Run)
@@ -46,6 +47,7 @@ spec _ withFixture = around withFixture $ describe "MonadAdmin contract" $ do
   groups
   membership
   letsIn
+  serverSide
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -407,3 +409,45 @@ letsIn = describe "wikiSettings, invitations and the rest" $ do
 
 closedWiki :: WikiSettings
 closedWiki = WikiSettings {access = Closed, newAccountsCreateSpaces = False}
+
+--------------------------------------------------------------------------------
+-- The server's own settings
+
+-- | Settings with an address, a mail server with these password and user,
+-- and a provider with this secret.
+serverWith :: Maybe Text -> Maybe Text -> Maybe Text -> ServerSettingsChange
+serverWith user password secret =
+  ServerSettings
+    { publicUrl = Just "https://wiki.example.org/"
+    , mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user, password, from = "wiki@example.org"}
+    , providers = [ProviderSettings {name = "google", kind = Google, clientId = "id.example", issuer = Nothing, secret}]
+    }
+
+serverSide :: (MonadAdmin m) => SpecWith (Fixture m)
+serverSide = describe "serverSettings and setServerSettings" $ do
+  it "have nothing set at first, and are refused to whoever does not administer the wiki" $ \(Fixture run) -> do
+    run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings)
+    for_ [Anonymous, editor, reader] $ \who -> do
+      run who serverSettings >>= (`shouldFailWith` Forbidden)
+      run who (setServerSettings (serverWith Nothing Nothing (Just "s"))) >>= (`shouldFailWith` Forbidden)
+    run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings)
+
+  it "keep what is written, and say of each secret only whether it is set" $ \(Fixture run) -> do
+    set <- run admin (setServerSettings (serverWith (Just "wiki") (Just "pw") (Just "s"))) >>= ok
+    run admin serverSettings >>= ok >>= (`shouldBe` set)
+    set `shouldBe` (maybe NotSet (const Set) <$> serverWith (Just "wiki") (Just "pw") (Just "s"))
+
+  it "keep a secret left out, clear an empty one, and drop one with what it was for" $ \(Fixture run) -> do
+    _ <- run admin (setServerSettings (serverWith (Just "wiki") (Just "pw") (Just "s"))) >>= ok
+    kept <- run admin (setServerSettings (serverWith (Just "wiki") Nothing Nothing)) >>= ok
+    ((\m -> m.password) <$> kept.mail, map (\p -> p.secret) kept.providers) `shouldBe` (Just Set, [Set])
+    cleared <- run admin (setServerSettings (serverWith Nothing (Just "") Nothing)) >>= ok
+    (\m -> m.password) <$> cleared.mail `shouldBe` Just NotSet
+    _ <- run admin (setServerSettings noServerSettings) >>= ok
+    run admin (setServerSettings (serverWith Nothing Nothing Nothing)) >>= shouldBeInvalid
+
+  it "refuse settings that cannot be, and keep none of them" $ \(Fixture run) -> do
+    run admin (setServerSettings (serverWith Nothing Nothing (Just "s")) {publicUrl = Nothing}) >>= shouldBeInvalid
+    run admin (setServerSettings (serverWith Nothing Nothing (Just "s")) {publicUrl = Just "wiki.example.org"}) >>= shouldBeInvalid
+    run admin (setServerSettings (serverWith (Just "wiki") Nothing (Just "s"))) >>= shouldBeInvalid
+    run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings)

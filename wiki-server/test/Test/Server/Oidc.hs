@@ -5,8 +5,13 @@
 -- send (the session's, @SameSite=Strict@, not on the provider's redirect
 -- back; the round trip's own, @SameSite=Lax@, on it).
 --
+-- The providers are set as the administration sets them (WP4.4), on the
+-- admin listener of a server already running, and signing in with one
+-- added, changed or removed is seen at once.
+--
 -- Then the parts that need no server: the ID token's claims, the logins
--- made for a new account, and @wiki-server oidc check@.
+-- made for a new account, and @wiki-server oidc check@ on a data
+-- directory.
 module Test.Server.Oidc (spec) where
 
 import Data.Aeson (ToJSON, Value, decode, encode, withObject, (.:))
@@ -20,6 +25,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodPost, methodPut)
 import Protolude
+import System.IO.Temp (withSystemTempDirectory)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.FakeProvider
@@ -28,14 +34,16 @@ import Wiki.Api (AccountApi (..), AdminApi (..), InvitationsApi (..), WikiApi (.
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), LinkedIdentity (..), PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invited (..), NewInvitation (..), WikiSettings (..))
 import Wiki.Api.Links (links)
+import Wiki.Api.ServerSettings (ProviderChange, ProviderKind (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.User (SignInProvider (..), Standing (..), User (..))
 import Wiki.Server.Accounts (Claimed (..), loginCandidates)
 import Wiki.Server.Auth (safeNext)
 import Wiki.Server.Console (OidcCheck (..), runOidcCheck)
-import Wiki.Server.Oidc (IdClaims (..), Kind (..), OidcOption (..), checkClaims, decodeIdToken)
-import Wiki.Server.Options (ServeOptions (..))
+import Wiki.Server.Oidc (IdClaims (..), checkClaims, decodeIdToken)
+import Wiki.Server.Storage (Who (..), defaultConfig, runSqliteWiki, withStorage)
 
 spec :: Spec
 spec = describe "signing in with a provider" $ do
@@ -56,21 +64,25 @@ publicUrl :: Text
 publicUrl = "http://wiki.test/"
 
 -- | The providers, all played by the fake: OpenID Connect at its root,
--- GitHub below @\/gh@, and Apple, whose answer is a form.
-withProviders :: Fake -> ServeOptions -> ServeOptions
-withProviders fake o =
-  o
-    { publicUrl = Just publicUrl
-    , oidc =
-        [ OidcOption {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just fake.url}
-        , OidcOption {name = "hub", kind = GitHub, clientId = "hub-client", issuer = Just (fake.url <> "/gh")}
-        , OidcOption {name = "fruit", kind = Apple, clientId = "fruit-client", issuer = Just fake.url}
-        ]
-    }
+-- GitHub below @\/gh@, and Apple, whose answer is a form; each with the
+-- fake's secret.
+fakeProviders :: Fake -> [ProviderChange]
+fakeProviders fake =
+  [ ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just fake.url, secret = Just clientSecret}
+  , ProviderSettings {name = "hub", kind = GitHub, clientId = "hub-client", issuer = Just (fake.url <> "/gh"), secret = Just clientSecret}
+  , ProviderSettings {name = "fruit", kind = Apple, clientId = "fruit-client", issuer = Just fake.url, secret = Just clientSecret}
+  ]
 
--- | A server over the demo's wiki with the fake's providers.
+-- | The server's settings with these providers.
+signingInWith :: [ProviderChange] -> ServerSettingsChange
+signingInWith providers = ServerSettings {publicUrl = Just publicUrl, mail = Nothing, providers}
+
+-- | A server over the demo's wiki, with the fake's providers set by its
+-- operator once it runs.
 withOidc :: (Fake -> Running -> IO a) -> IO a
-withOidc test = withFakeProvider $ \fake -> withDemoRunning (withProviders fake) (test fake)
+withOidc test = withFakeProvider $ \fake -> withDemoRunning identity $ \r -> do
+  _ <- setServer r (signingInWith (fakeProviders fake))
+  test fake r
 
 onPublic, onAdmin :: Running -> Text -> Text
 onPublic r address = r.public <> "/" <> address
@@ -168,6 +180,38 @@ says reply words' = decodeUtf8 (BSL.toStrict reply.body) `shouldSatisfy` T.isInf
 
 overHttp :: Spec
 overHttp = describe "over HTTP" $ do
+  describe "set at run time" $ do
+    it "signs in with no provider until one is set, and with one as soon as it is" $ withFakeProvider $ \fake -> withDemoRunning identity $ \r -> do
+      (\me -> me.providers) <$> sessionOf r [] `shouldReturn` []
+      (\x -> x.status) <$> getUrl r (onPublic r "auth/acme/start?next=%2F") `shouldReturn` 404
+      _ <- setServer r (signingInWith (take 1 (fakeProviders fake)))
+      (\me -> me.providers) <$> sessionOf r [] `shouldReturn` [SignInProvider "acme" "Acme"]
+      writeIORef fake.user (person "early")
+      c <- signedInWith r "acme" "next=%2F" []
+      loginOf <$> sessionOf r [c] `shouldReturn` Just "early"
+
+    it "forgets a provider removed, and asks one changed how to sign in again" $ withOidc $ \fake r -> do
+      _ <- setServer r (signingInWith (drop 1 (fakeProviders fake)))
+      (\x -> x.status) <$> getUrl r (onPublic r "auth/acme/start?next=%2F") `shouldReturn` 404
+      -- Its discovery is not the one found before: nothing listens there.
+      _ <- setServer r (signingInWith [ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just "http://127.0.0.1:9", secret = Just clientSecret}])
+      gone <- getUrl r (onPublic r "auth/acme/start?next=%2F")
+      gone.status `shouldBe` 502
+      gone `says` "could not be asked how to sign in"
+      -- Back where it was, kept secret and all (none given keeps it).
+      _ <- setServer r (signingInWith [ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just fake.url, secret = Nothing}])
+      writeIORef fake.user (person "again")
+      c <- signedInWith r "acme" "next=%2F" []
+      loginOf <$> sessionOf r [c] `shouldReturn` Just "again"
+
+    it "signs in with the secret as it is now" $ withOidc $ \fake r -> do
+      _ <- setServer r (signingInWith [ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just fake.url, secret = Just "not the secret"}])
+      writeIORef fake.user (person "wrong")
+      (\x -> x.status) <$> roundTrip r "acme" "next=%2F" [] `shouldReturn` 502
+      _ <- setServer r (signingInWith [ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just fake.url, secret = Just clientSecret}])
+      writeIORef fake.user (person "right")
+      void (signedInWith r "acme" "next=%2F" [])
+
   it "offers the providers in every session, by name and label" $ withOidc $ \_ r -> do
     me <- sessionOf r []
     me.providers `shouldBe` [SignInProvider "acme" "Acme", SignInProvider "hub" "GitHub", SignInProvider "fruit" "Apple"]
@@ -468,18 +512,32 @@ logins = describe "the logins of accounts made with a provider" $ do
 
 checking :: Spec
 checking = describe "wiki-server oidc check" $ do
-  it "asks each provider how to sign in, and prints the redirect URI to register" $ withFakeProvider $ \fake -> do
-    let o = OidcOption {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just fake.url}
-    (fine, lines') <- runOidcCheck (\_ -> pure (Just "x")) OidcCheck {providers = [o], publicUrl = "https://wiki.example.org", only = Nothing}
-    fine `shouldBe` True
-    lines' `shouldContain` ["  redirect URI to register: https://wiki.example.org/auth/acme/callback"]
-    lines' `shouldContain` ["  token: " <> fake.url <> "/token"]
-  it "says which secret is missing, and fails" $ withFakeProvider $ \fake -> do
-    let o = OidcOption {name = "my-idp", kind = Generic, clientId = "c", issuer = Just fake.url}
-    (fine, lines') <- runOidcCheck (\_ -> pure Nothing) OidcCheck {providers = [o], publicUrl = "https://wiki.example.org/", only = Nothing}
-    fine `shouldBe` False
-    T.unlines lines' `shouldSatisfy` T.isInfixOf "WIKI_OIDC_MY_IDP_SECRET"
+  let inData change test = withSystemTempDirectory "wiki-oidc-check" $ \dir -> do
+        withStorage defaultConfig dir (\st -> runSqliteWiki st Administrator (setServerSettings change)) >>= either (\e -> assertFailure (show e)) (const pass)
+        test dir
+  it "asks each provider set how to sign in, and prints the redirect URI to register" $ withFakeProvider $ \fake -> do
+    let acme = ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just fake.url, secret = Just "x"}
+    inData ServerSettings {publicUrl = Just "https://wiki.example.org", mail = Nothing, providers = [acme]} $ \dir -> do
+      (fine, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Nothing}
+      fine `shouldBe` True
+      lines' `shouldContain` ["  redirect URI to register: https://wiki.example.org/auth/acme/callback"]
+      lines' `shouldContain` ["  client secret: set"]
+      lines' `shouldContain` ["  token: " <> fake.url <> "/token"]
+      T.unlines lines' `shouldSatisfy` (not . T.isInfixOf "\"x\"")
+  it "checks only the one named, and says when none is set" $ withFakeProvider $ \fake -> do
+    let named n = ProviderSettings {name = n, kind = Generic, clientId = "c", issuer = Just fake.url, secret = Just "x"}
+    inData ServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Nothing, providers = [named n | n <- ["a", "b"]]} $ \dir -> do
+      (_, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Just "b"}
+      filter ("auth/" `T.isInfixOf`) lines' `shouldBe` ["  redirect URI to register: https://wiki.example.org/auth/b/callback"]
+      (fine, nobody) <- runOidcCheck OidcCheck {dataDir = dir, only = Just "c"}
+      (fine, nobody) `shouldBe` (False, ["No provider is named c."])
+    inData noServerSettings $ \dir -> do
+      (fine, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Nothing}
+      fine `shouldBe` False
+      T.unlines lines' `shouldSatisfy` T.isInfixOf "Server section"
   it "fails for a provider that cannot be reached" $ do
-    let o = OidcOption {name = "gone", kind = Generic, clientId = "c", issuer = Just "http://127.0.0.1:9"}
-    (fine, _) <- runOidcCheck (\_ -> pure (Just "x")) OidcCheck {providers = [o], publicUrl = "https://wiki.example.org/", only = Nothing}
-    fine `shouldBe` False
+    let gone = ProviderSettings {name = "gone", kind = Generic, clientId = "c", issuer = Just "http://127.0.0.1:9", secret = Just "x"}
+    inData ServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Nothing, providers = [gone]} $ \dir -> do
+      (fine, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Nothing}
+      fine `shouldBe` False
+      T.unlines lines' `shouldSatisfy` T.isInfixOf "cannot be asked how to sign in"

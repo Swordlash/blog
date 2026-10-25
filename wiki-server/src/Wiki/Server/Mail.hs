@@ -1,13 +1,13 @@
 -- | The mail the server sends: an invitation's link, to the address it was
--- made for (WP3.5 of docs/PLAN.md), through the SMTP server the
--- configuration names (@--smtp-host@ and the rest, "Wiki.Server.Options").
+-- made for (WP3.5 of docs/PLAN.md), and a test mail, through the SMTP
+-- server the administration has set (WP4.4, "Wiki.Api.ServerSettings").
 --
 -- Whoever reads an invitation's mail can make an account with it, so its
 -- text never goes anywhere but to the mail server: a 'Message' shows no
 -- body, and a failure is told in words of this module's own, never in the
 -- mail library's, some of which quote the command that failed (the whole
--- mail, for the one that sends it). The password of the SMTP account comes
--- from the environment, never the command line, and is never shown either.
+-- mail, for the one that sends it). The password of the SMTP account is
+-- the administration's, kept by the storage, and is never shown either.
 --
 -- A server without SMTP mails nothing: the administration is given the
 -- link to pass on itself ("Wiki.Server.Api").
@@ -16,6 +16,7 @@ module Wiki.Server.Mail
     Mailer (..)
   , Message (..)
   , invitationMessage
+  , testMessage
   , inviteLink
 
     -- * Over SMTP
@@ -24,6 +25,10 @@ module Wiki.Server.Mail
   , securityFor
   , securityName
   , smtpMailer
+  , SendMail
+  , smtpSend
+  , smtpOf
+  , mailerFrom
   , mailTimeout
   )
 where
@@ -39,6 +44,8 @@ import Network.Mail.SMTP.Types (AuthType (..), Command (..))
 import Protolude
 import System.Timeout (timeout)
 import Text.Show (Show (showsPrec))
+import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), securityFor, securityName)
+import Wiki.Server.Secret (Kept, revealed)
 
 -- | Where mail goes, and the wiki's address its links start with.
 data Mailer = Mailer
@@ -72,7 +79,7 @@ invitationMessage :: Text -> Text -> Text -> UTCTime -> Message
 invitationMessage publicUrl email token expiresAt =
   Message
     { to = email
-    , subject = "You are invited to the wiki at " <> host
+    , subject = "You are invited to the wiki at " <> hostOf publicUrl
     , body =
         T.unlines
           [ "Hello,"
@@ -86,46 +93,22 @@ invitationMessage publicUrl email token expiresAt =
           , "If you did not expect this invitation, ignore this mail: nothing is made without you."
           ]
     }
-  where
-    host = T.takeWhile (/= '/') (T.drop 1 (T.dropWhile (/= '/') (T.drop 1 (T.dropWhile (/= '/') publicUrl))))
+
+-- | The host of the wiki's address.
+hostOf :: Text -> Text
+hostOf publicUrl = T.takeWhile (/= '/') (T.drop 1 (T.dropWhile (/= '/') (T.drop 1 (T.dropWhile (/= '/') publicUrl))))
 
 --------------------------------------------------------------------------------
 -- Over SMTP
 
--- | How the connection to the SMTP server is protected.
-data Security
-  = -- | TLS from the start (SMTPS, port 465).
-    ImplicitTls
-  | -- | A plain connection that the client upgrades with @STARTTLS@ before
-    -- it says anything else (submission, port 587).
-    StartTls
-  | -- | No TLS at all: only for a mail server on the same machine or the
-    -- same private network, never across the internet, since the password
-    -- and the mail would cross it in the clear.
-    Plain
-  deriving stock (Eq, Show, Enum, Bounded)
-
--- | What a port implies: implicit TLS on 465, @STARTTLS@ on any other.
-securityFor :: Word16 -> Security
-securityFor = \case
-  465 -> ImplicitTls
-  _ -> StartTls
-
--- | As @--smtp-security@ takes it.
-securityName :: Security -> Text
-securityName = \case
-  ImplicitTls -> "tls"
-  StartTls -> "starttls"
-  Plain -> "plain"
-
--- | An SMTP server, as the configuration names it.
+-- | An SMTP server, as the administration has set it.
 data Smtp = Smtp
   { host :: Text
   , port :: Word16
   , security :: Security
   , user :: Maybe Text
   -- ^ The account to sign in to the server as (@AUTH LOGIN@), if it asks
-  -- for one; its password is the environment's.
+  -- for one; its password is kept apart.
   , from :: Text
   -- ^ The sender, @wiki\@example.org@ or @Wiki \<wiki\@example.org>@.
   }
@@ -139,10 +122,45 @@ mailTimeout = 30_000_000
 -- | A mailer over an SMTP server, signing in with this password if the
 -- server is given a user.
 smtpMailer :: Smtp -> Maybe Text -> Text -> Mailer
-smtpMailer smtp password publicUrl = Mailer {publicUrl, deliver = sendOver smtp password}
+smtpMailer smtp password publicUrl = Mailer {publicUrl, deliver = smtpSend smtp password}
 
-sendOver :: Smtp -> Maybe Text -> Message -> IO (Either Text ())
-sendOver smtp password m = do
+-- | How a message is sent through an SMTP server, with a password: over
+-- the network ('smtpSend'), or, for the tests, wherever they keep it.
+type SendMail = Smtp -> Maybe Text -> Message -> IO (Either Text ())
+
+-- | The SMTP server of the mail settings kept, and its password.
+smtpOf :: MailSettingsOf (Maybe k) -> (k -> Text) -> (Smtp, Maybe Text)
+smtpOf m reveal = (Smtp {host = m.host, port = m.port, security = m.security, user = m.user, from = m.from}, reveal <$> m.password)
+
+-- | The mailer of the server's settings as they are now, sending through
+-- this: none without a mail server, or without the wiki's address its
+-- links start with.
+mailerFrom :: SendMail -> Kept -> Maybe Mailer
+mailerFrom send s = do
+  publicUrl <- s.publicUrl
+  m <- s.mail
+  let (smtp, password) = smtpOf m revealed
+  pure Mailer {publicUrl, deliver = send smtp password}
+
+-- | The mail that says the mail server works.
+testMessage :: Text -> Text -> Message
+testMessage publicUrl recipient =
+  Message
+    { to = recipient
+    , subject = "A test mail from the wiki at " <> hostOf publicUrl
+    , body =
+        T.unlines
+          [ "Hello,"
+          , ""
+          , "This mail was sent from the administration of the wiki at " <> publicUrl <> ","
+          , "to check that it can send mail. Invitations go out the same way."
+          ]
+    }
+
+-- | Send a message over SMTP: over the network, with a time limit, and a
+-- failure said in this module's own words.
+smtpSend :: SendMail
+smtpSend smtp password m = do
   outcome <- timeout mailTimeout (try (bracket connect closeQuietly converse))
   pure $ case outcome of
     Nothing -> Left ("The mail server at " <> where' <> " did not answer in time.")

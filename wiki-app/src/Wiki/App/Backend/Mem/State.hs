@@ -85,6 +85,12 @@ module Wiki.App.Backend.Mem.State
   , inviteIn
   , revokeInvitationIn
   , unlinkUserIdentityIn
+
+    -- * The server's own settings
+  , serverSettingsIn
+  , setServerSettingsIn
+  , checkProviderIn
+  , sendTestMailIn
   )
 where
 
@@ -99,6 +105,8 @@ import Wiki.Api.Account (Account (Account), NewAccount)
 import Wiki.Api.Account qualified as Acc
 import Wiki.Api.Admin (Directory (Directory), Invitation (Invitation), Invitations (Invitations), Invited (Invited), WikiSettings (WikiSettings), checkEmail, invitationLifetime)
 import Wiki.Api.Admin qualified as A
+import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck (ProviderCheck), ServerSettings, ServerSettingsChange, ServerSettingsOf, applyChange, checkServerSettings, named, noServerSettings, providerProblems, providerWith, redirectUri, secretState)
+import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.Core.Access (Access (..))
@@ -176,6 +184,11 @@ data MemState = MemState
   , invitations :: Map InvitationId Pending
   -- ^ The invitations made and not revoked. The demo makes no account from
   -- one, so none is ever used.
+  , server :: ServerSettingsOf (Maybe Text)
+  -- ^ The server's settings ("Wiki.Api.ServerSettings"), as the
+  -- administration's "Server" section sets them, with their secrets, which
+  -- never leave the tab: the demo keeps them for the tab's life, as it
+  -- keeps the wiki's settings, and uses none of them.
   , current :: Maybe UserId
   -- ^ Who is signed in. A user who is not in 'users', or is disabled, is
   -- nobody.
@@ -204,6 +217,7 @@ emptyState =
     , passwords = mempty
     , newAccountsCreateSpaces = False
     , invitations = mempty
+    , server = noServerSettings
     , current = Nothing
     , counter = 1
     }
@@ -1156,3 +1170,42 @@ unlinkUserIdentityIn u _ st = do
   requireAdministrator st
   _ <- findUser st u
   Left NotFound
+
+--------------------------------------------------------------------------------
+-- The server's own settings
+
+-- | The server's settings, each secret as whether it is set.
+serverSettingsIn :: MemState -> Either WikiError ServerSettings
+serverSettingsIn st = do
+  requireAdministrator st
+  pure (secretState <$> st.server)
+
+-- | The server's settings with a change written over them, checked as a
+-- server checks them.
+setServerSettingsIn :: ServerSettingsChange -> Write ServerSettings
+setServerSettingsIn change st = do
+  requireAdministrator st
+  new <- first Invalid (checkServerSettings isJust (applyChange identity st.server change))
+  pure (st {server = new}, secretState <$> new)
+
+-- | What checking a provider says in the demo: what a server would say
+-- without asking it, and that the demo cannot ask.
+checkProviderIn :: Text -> Maybe ProviderChange -> MemState -> Either WikiError ProviderCheck
+checkProviderIn name given st = do
+  requireAdministrator st
+  p <- case given of
+    Just change -> pure (providerWith identity st.server (named name change))
+    Nothing -> maybe (Left NotFound) pure (find (\x -> x.name == name) st.server.providers)
+  pure
+    ProviderCheck
+      { SS.redirectUri = (`redirectUri` name) <$> st.server.publicUrl
+      , SS.clientSecret = secretState p.secret
+      , SS.discovered = Nothing
+      , SS.problem = Just (fromMaybe "The demo asks no provider how to sign in: that takes the wiki's server." (head (providerProblems p)))
+      }
+
+-- | The demo sends no mail.
+sendTestMailIn :: Text -> MemState -> Either WikiError MailTestResult
+sendTestMailIn _ st = do
+  requireAdministrator st
+  Left (Invalid "The demo sends no mail: that takes the wiki's server.")

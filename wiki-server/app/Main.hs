@@ -4,7 +4,7 @@
 -- >                     [--base-path PATH] [--static DIR] [--secure-cookies] …
 -- > wiki-server backup --data DIR [--keep N]
 -- > wiki-server users (list | add | password | admin | disable) --data DIR …
--- > wiki-server oidc check --oidc NAME=KIND,CLIENT-ID[,ISSUER] … --public-url URL [NAME]
+-- > wiki-server oidc check --data DIR [NAME]
 -- > wiki-server --version
 --
 -- @serve@ (also what runs with no command) serves the wiki from the data
@@ -13,14 +13,15 @@
 -- copies ("Wiki.Server.Storage.Backup"), which the deploy script runs before
 -- it starts a new server; @users@ makes and changes the wiki's users and
 -- their passwords ("Wiki.Server.Console"), which is how the first
--- administrator is made; @oidc check@ asks the providers a server would
--- sign in with how to, and prints the redirect URI to register with each.
+-- administrator is made; @oidc check@ asks the providers the
+-- administration has set how to sign in, and prints the redirect URI to
+-- register with each.
 module Main (main) where
 
 import Options.Applicative
 import Protolude
 import Wiki.Server (ServerError (..), serve)
-import Wiki.Server.Console (OidcCheck, Users, environmentSecret, oidcCheckParser, readPassword, runOidcCheck, runUsers, usersParser)
+import Wiki.Server.Console (OidcCheck, Users, oidcCheckParser, readPassword, runOidcCheck, runUsers, usersParser)
 import Wiki.Server.Options (ServeOptions, serveOptions)
 import Wiki.Server.Storage.Backup (backup, defaultKeep)
 import Wiki.Server.Version (serverVersion)
@@ -75,6 +76,6 @@ main =
           putErrText ("wiki-server: " <> why)
           exitWith (ExitFailure 1)
     Oidc c -> do
-      (fine, lines') <- runOidcCheck environmentSecret c
+      (fine, lines') <- runOidcCheck c
       traverse_ putText lines'
       unless fine (exitWith (ExitFailure 1))

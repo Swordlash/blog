@@ -26,6 +26,7 @@ import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..), NewAccount (
 import Wiki.Api.Admin (Invitation (..), Invitations (..), Invited (..), NewInvitation (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
+import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (InvitationId (..))
@@ -33,7 +34,6 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Standing (..), User (..))
 import Wiki.Server.Mail (Message (..))
-import Wiki.Server.Options (ServeOptions (..))
 import Wiki.Server.Options qualified as Options
 import Wiki.Server.Storage.Layout (databaseFile)
 
@@ -288,8 +288,9 @@ invitations = describe "an invitation, where the server mails nothing" $ do
 
 mailed :: Spec
 mailed = describe "an invitation, where the server mails them" $ do
-  let smtp o = o {smtpHost = Just "mail.test", smtpFrom = Just "Wiki <wiki@example.org>", publicUrl = Just "https://wiki.example.org/"}
-  it "is mailed with its link, which the panel is not given" $ withDemoRunning smtp $ \r -> do
+  let mailingThrough host r = setServer r noServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just MailSettings {host, port = 587, security = StartTls, user = Nothing, password = Nothing, from = "Wiki <wiki@example.org>"}}
+  it "is mailed with its link, which the panel is not given" $ withDemoRunning identity $ \r -> do
+    _ <- mailingThrough "mail.test" r
     made <- inviteAs r "bea@example.org"
     (made.token, made.mailError) `shouldBe` (Nothing, Nothing)
     listed :: Invitations <- getUrl r (onAdmin r links.admin.invitations) >>= jsonAs 200
@@ -305,7 +306,8 @@ mailed = describe "an invitation, where the server mails them" $ do
     show sent `shouldSatisfy` (not . T.isInfixOf token)
 
   it "gives the panel the link when the mail cannot be sent, and says why" $
-    withDemoRunning (\o -> (smtp o) {smtpHost = Just "unreachable.test"}) $ \r -> do
+    withDemoRunning identity $ \r -> do
+      _ <- mailingThrough "unreachable.test" r
       made <- inviteAs r "bea@example.org"
       made.mailError `shouldSatisfy` maybe False (T.isInfixOf "did not answer")
       token <- maybe (panic "no secret") pure made.token

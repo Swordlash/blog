@@ -73,6 +73,7 @@ import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, 
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
+import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
 import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
@@ -289,6 +290,22 @@ data AdminApi mode = AdminApi
   -- taking away an account that should never have been connected, and
   -- gives them a password after. One they do not have is
   -- 'Wiki.Api.Error.NotFound'.
+  , -- The server's own settings (WP4.4 of docs/PLAN.md,
+    -- "Wiki.Api.ServerSettings"): its public address, its mail server and
+    -- the providers people sign in with, whose secrets are written and
+    -- never read back.
+    server :: mode :- "server" :> Get '[JSON] ServerSettings
+  -- ^ @serverSettings@: the settings, each secret as whether it is set.
+  , setServer :: mode :- "server" :> ReqBody '[JSON] ServerSettingsChange :> Put '[JSON] ServerSettings
+  -- ^ @setServerSettings@: replace them, each secret kept, replaced or
+  -- cleared; the answer is the settings as they then are. They take effect
+  -- with the next request.
+  , checkProvider :: mode :- "server" :> "providers" :> Capture "provider" Text :> "check" :> ReqBody '[JSON] (Maybe ProviderChange) :> Post '[JSON] ProviderCheck
+  -- ^ @checkProvider@: ask a provider how to sign in (discovery), as it is
+  -- set, or, given in the body, as it would be.
+  , testMail :: mode :- "server" :> "mail" :> "test" :> ReqBody '[JSON] MailTest :> Post '[JSON] MailTestResult
+  -- ^ @sendTestMail@: send a mail to an address through the mail server
+  -- as it is set.
   }
   deriving stock (Generic)
 

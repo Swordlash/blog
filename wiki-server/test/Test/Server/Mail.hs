@@ -2,7 +2,8 @@
 -- conversation that delivers it, against a mail server of the test's own on
 -- a free port of 127.0.0.1 (plain, as one on the same machine would be):
 -- what it was told, and that a refusal is said in words that carry nothing
--- of the mail.
+-- of the mail. And a server whose mail server is set while it runs (WP4.4),
+-- which mails through it at once, as set at the time of each mail.
 module Test.Server.Mail (spec) where
 
 import Data.ByteString qualified as BS
@@ -13,6 +14,11 @@ import Network.Socket (AddrInfo (..), AddrInfoFlag (..), SockAddr (..), Socket, 
 import Network.Socket.ByteString (recv, sendAll)
 import Protolude
 import Test.Hspec
+import Test.Server.Fixture (Running (..), jsonAs, sendJson, setServer, withDemoRunning)
+import Wiki.Api (AdminApi (..), WikiApi (..))
+import Wiki.Api.Admin (Invited (..), NewInvitation (..))
+import Wiki.Api.Links (links)
+import Wiki.Api.ServerSettings (MailSettingsOf (..), MailTest (..), MailTestResult (..), ServerSettingsOf (..), noServerSettings)
 import Wiki.Server.Log (redactedPath)
 import Wiki.Server.Mail
 
@@ -20,6 +26,7 @@ spec :: Spec
 spec = describe "mail" $ do
   messages
   overSmtp
+  atRunTime
   logs
 
 expiry :: UTCTime
@@ -71,6 +78,36 @@ overSmtp = describe "over SMTP" $ do
 
   it "takes implicit TLS on 465, and STARTTLS on any other port" $
     map securityFor [465, 587, 25] `shouldBe` [ImplicitTls, StartTls, StartTls]
+
+atRunTime :: Spec
+atRunTime = describe "through the mail server set while the server runs" $
+  it "mails an invitation with the settings as they are when it is sent, the password included" $
+    withDemoRunning identity $ \r -> do
+      let through port password = MailSettings {host = "127.0.0.1", port, security = Plain, user = Just "wiki", password, from = "Wiki <wiki@example.org>"}
+          settings port password = noServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just (through port password)}
+          invite email = sendJson r "POST" (r.admin <> "/admin/" <> links.admin.invite) NewInvitation {email} >>= jsonAs @Invited 201
+      -- Nothing set: nothing mailed, the link given.
+      (\i -> isJust i.token) <$> invite "first@example.org" `shouldReturn` True
+      (told, port) <- sink (const True)
+      _ <- setServer r (settings port (Just "first password"))
+      made <- invite "bea@example.org"
+      (made.token, made.mailError) `shouldBe` (Nothing, Nothing)
+      said <- readIORef told
+      said `shouldContain` ["RCPT TO:<bea@example.org>"]
+      -- Base64 of the password, as AUTH LOGIN sends it.
+      said `shouldContain` ["Zmlyc3QgcGFzc3dvcmQ="]
+      -- Another server and another password, at once.
+      (told', port') <- sink (const True)
+      _ <- setServer r (settings port' (Just "second password"))
+      _ <- invite "cy@example.org"
+      said' <- readIORef told'
+      said' `shouldContain` ["RCPT TO:<cy@example.org>"]
+      said' `shouldContain` ["c2Vjb25kIHBhc3N3b3Jk"]
+      -- And the test mail goes the same way.
+      (told'', port'') <- sink (const True)
+      _ <- setServer r (settings port'' Nothing)
+      (sendJson r "POST" (r.admin <> "/admin/" <> links.admin.testMail) MailTest {to = "ada@example.org"} >>= jsonAs 200) `shouldReturn` MailTestResult {failure = Nothing}
+      readIORef told'' >>= (`shouldContain` ["RCPT TO:<ada@example.org>"])
 
 logs :: Spec
 logs = describe "the log" $

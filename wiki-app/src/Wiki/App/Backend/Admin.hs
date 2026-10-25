@@ -72,6 +72,19 @@
 -- docs/PLAN.md), which the 'directory' lists by the provider's name
 -- ('Wiki.Api.Admin.Directory.identities'), and which an administrator may
 -- disconnect. The demo signs in with no provider: its users have none.
+--
+-- = The server's own settings
+--
+-- The wiki's public address, its mail server and the providers people
+-- sign in with (WP4.4 of docs/PLAN.md, "Wiki.Api.ServerSettings") are set
+-- here and nowhere else, and take effect at the next request. Their
+-- secrets (the mail account's password, each provider's client secret)
+-- are written and never read back: 'serverSettings' says only whether
+-- each is set. A change is checked as a whole
+-- ('Wiki.Api.ServerSettings.checkServerSettings', 'Invalid' otherwise). A
+-- provider may be asked how to sign in ('checkProvider') and a test mail
+-- sent ('sendTestMail'), which only a server can do: the demo keeps the
+-- settings for the tab's life and says that it cannot.
 module Wiki.App.Backend.Admin
   ( MonadAdmin (..)
   )
@@ -83,6 +96,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Account (Account, NewAccount)
 import Wiki.Api.Admin (Directory, Invitations, Invited, WikiSettings)
+import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (GroupId, InvitationId, UserId)
 import Wiki.Core.User (Group)
@@ -184,6 +198,29 @@ class (Monad m) => MonadAdmin m where
   unlinkUserIdentity :: UserId -> Text -> m (Either WikiError ())
   default unlinkUserIdentity :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Text -> m (Either WikiError ())
   unlinkUserIdentity u = lift . unlinkUserIdentity u
+
+  -- | The server's own settings, each secret as whether it is set.
+  serverSettings :: m (Either WikiError ServerSettings)
+  default serverSettings :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError ServerSettings)
+  serverSettings = lift serverSettings
+
+  -- | Replace them, each secret kept, replaced or cleared: the settings as
+  -- they then are.
+  setServerSettings :: ServerSettingsChange -> m (Either WikiError ServerSettings)
+  default setServerSettings :: (MonadTrans t, m ~ t n, MonadAdmin n) => ServerSettingsChange -> m (Either WikiError ServerSettings)
+  setServerSettings = lift . setServerSettings
+
+  -- | Ask a provider how to sign in: the one of that name as it is set, or
+  -- as given. 'NotFound' for a name no provider has when none is given.
+  checkProvider :: Text -> Maybe ProviderChange -> m (Either WikiError ProviderCheck)
+  default checkProvider :: (MonadTrans t, m ~ t n, MonadAdmin n) => Text -> Maybe ProviderChange -> m (Either WikiError ProviderCheck)
+  checkProvider name = lift . checkProvider name
+
+  -- | Send a test mail to an address, through the mail server as set.
+  -- 'Invalid' when there is none.
+  sendTestMail :: Text -> m (Either WikiError MailTestResult)
+  default sendTestMail :: (MonadTrans t, m ~ t n, MonadAdmin n) => Text -> m (Either WikiError MailTestResult)
+  sendTestMail = lift . sendTestMail
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadAdmin m) => MonadAdmin (HalogenM st act slots output m)

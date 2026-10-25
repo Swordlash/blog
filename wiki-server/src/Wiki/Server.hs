@@ -24,25 +24,24 @@ where
 
 import Control.Concurrent.Async qualified as Async
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Network.Socket (AddrInfo (..), AddrInfoFlag (..), Family (..), SockAddr (..), Socket, SocketOption (..), SocketType (..), bind, close, defaultHints, getAddrInfo, getSocketName, listen, openSocket, setSocketOption)
 import Network.Wai.Handler.Warp (defaultSettings, defaultShouldDisplayException, runSettingsSocket, setGracefulShutdownTimeout, setOnException)
 import Protolude hiding (Handler)
-import System.Environment (lookupEnv)
 import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
 import Wiki.Api.Links (attachmentUrl)
+import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, redirectUri, securityName)
 import Wiki.Server.Api (Env (..))
 import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
 import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
 import Wiki.Server.Log (Level (..), Logger, logWith, stdoutLogger)
-import Wiki.Server.Mail (Mailer, Smtp (..), securityName, smtpMailer)
-import Wiki.Server.Oidc (OidcOption (..), Provider (..), kindName, newFlows, newProviders, redirectUri, secretVariable)
-import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, oidcSecrets, renderListen, smtpOf, smtpPasswordVariable)
+import Wiki.Server.Mail (SendMail, smtpSend)
+import Wiki.Server.Oidc (newFlows, newProviderCache)
+import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
-import Wiki.Server.Storage (Config (..), withStorage)
+import Wiki.Server.Storage (Config (..), readServerSettings, withStorage)
 import Wiki.Server.Version (serverVersion)
 
 -- | A configuration the server cannot run with, with every reason.
@@ -78,32 +77,18 @@ serve options = do
 -- | Run a server while an action runs: its sockets bound, its storage open
 -- (migrated if need be), both closed when the action returns or throws.
 -- A configuration 'checkOptions' refuses throws a 'ServerError', as does a
--- static directory that is not there, an SMTP user without a password in
--- the environment, and a provider without its client's secret there.
+-- static directory that is not there. Mail goes out over SMTP, through
+-- the mail server the administration has set ('smtpSend').
 withServer :: Logger -> ServeOptions -> (Server -> IO a) -> IO a
-withServer logger raw action = do
-  options <- either (throwIO . ServerError) pure (checkOptions raw)
-  password <- mfilter (not . T.null) . fmap toS <$> lookupEnv (toS smtpPasswordVariable)
-  mailer <- for (smtpOf options) $ \smtp -> do
-    when (isJust smtp.user && isNothing password) $
-      throwIO (ServerError ["--smtp-user " <> fromMaybe "" smtp.user <> " needs its password in the environment variable " <> smtpPasswordVariable])
-    logWith logger Info [("event", "mail"), ("smtp", smtp.host <> ":" <> show smtp.port), ("security", securityName smtp.security), ("from", smtp.from)]
-    pure (smtpMailer smtp password (fromMaybe "" options.publicUrl))
-  secrets <- for options.oidc $ \o -> (secretVariable o.name,) . fmap toS <$> lookupEnv (toS (secretVariable o.name))
-  configured <- either (throwIO . ServerError) pure (oidcSecrets options (\v -> join (lookup v secrets)))
-  providers <- newProviders (fromMaybe "" options.publicUrl) configured
-  for_ providers $ \p ->
-    logWith logger Info [("event", "oidc"), ("provider", p.option.name), ("kind", kindName p.option.kind), ("redirect", redirectUri p.publicUrl p.option.name)]
-  withServerUsing logger options mailer providers action
+withServer logger options = withServerUsing logger options smtpSend
 
--- | 'withServer' with the mail sent through this mailer, or none, whatever
--- the options say of SMTP, and these providers to sign in with, whatever
--- the environment says of their secrets: what the tests run, with a mailer
--- and secrets of their own.
-withServerUsing :: Logger -> ServeOptions -> Maybe Mailer -> [Provider] -> (Server -> IO a) -> IO a
-withServerUsing logger raw mailer providers action = do
+-- | 'withServer' with mail sent this way, whatever mail server the
+-- administration has set: what the tests run, with an outbox of their own.
+withServerUsing :: Logger -> ServeOptions -> SendMail -> (Server -> IO a) -> IO a
+withServerUsing logger raw sendMail action = do
   options <- either (throwIO . ServerError) pure (checkOptions raw)
   flows <- newFlows
+  providerCache <- newProviderCache
   site <- for options.staticDir $ \dir -> openStaticSite dir >>= either (throwIO . ServerError . pure) pure
   startedAt <- getCurrentTime
   limiter <- newLimiter defaultLimits
@@ -119,8 +104,8 @@ withServerUsing logger raw mailer providers action = do
             , maxImportSize = options.maxImportSize
             , limiter
             , registrations
-            , mailer
-            , providers
+            , sendMail
+            , providerCache
             , flows
             }
         public =
@@ -137,6 +122,14 @@ withServerUsing logger raw mailer providers action = do
             }
         listeners = (options.listen, public) : [(a, admin) | Just a <- [options.adminListen]]
     logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
+    -- What the administration has set, as the server starts with it (the
+    -- secrets left out); a change is seen by the next request, unlogged.
+    configured <- readServerSettings storage
+    logWith logger Info [("event", "server-settings"), ("public-url", fromMaybe "none" configured.publicUrl)]
+    for_ configured.mail $ \m ->
+      logWith logger Info [("event", "mail"), ("smtp", m.host <> ":" <> show m.port), ("security", securityName m.security), ("from", m.from)]
+    for_ configured.providers $ \p ->
+      logWith logger Info ([("event", "oidc"), ("provider", p.name), ("kind", kindName p.kind)] <> [("redirect", redirectUri u p.name) | Just u <- [configured.publicUrl]])
     stopping <- newIORef False
     bracket (bindAll listeners) (traverse_ (close . fst)) $ \bound -> do
       let settings l =
