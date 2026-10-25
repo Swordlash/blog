@@ -825,7 +825,10 @@ disable a login) and per-space permissions follow in WP3.4, on both.
   granted to an administrator's session, tested over HTTP. Once the owner has an
   administrator account, `--trust-network` is retired: the flag goes, the deploy script
   stops passing it, and the smoke test signs in instead.
-- **WP3.5 OIDC login** (GitHub, Google) as an alternative to passwords; account linking.
+- **WP3.5 OIDC login** (GitHub, Google, Apple, and any other OpenID Connect provider the
+  configuration names) as an alternative to passwords; account linking. Confirmed by the
+  owner on 2026-10-25, apart from the shelved assistant: this is how the wiki's users sign
+  in, and has nothing to do with the providers' subscriptions.
 
 ### Phase 4: beyond the MVP
 
