@@ -14,7 +14,10 @@
 --
 -- The inputs are not controlled (the component never writes their value),
 -- so that a render arriving while someone types never loses a key; what
--- was typed is kept as it is typed.
+-- was typed is kept as it is typed. What the form says (the shell's word,
+-- why an attempt failed) comes and goes inside containers that are always
+-- there, so that the inputs keep their places among the form's children
+-- and are never rebuilt with what was typed in them lost.
 module Wiki.App.View.SignIn
   ( Input (..)
   , Query (..)
@@ -107,9 +110,11 @@ component =
             <button type="button" class="sign-in-toggle" aria-expanded={{ ariaBool st.open }} onClick={{ const Toggle }}>Sign in</button>
             {% if st.open %}
               <form class="sign-in-form" aria-label="Sign in" {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}>
-                {% for n in maybeToList st.notice %}
-                  <p class="sign-in-notice" role="status">{{ n }}</p>
-                {% end %}
+                <div class="sign-in-told">
+                  {% for n in maybeToList st.notice %}
+                    <p class="sign-in-notice" role="status">{{ n }}</p>
+                  {% end %}
+                </div>
                 <label class="field">
                   <span>Login</span>
                   <input type="text" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required onValueInput={{ TypedLogin }} {{ HP.ref st.loginField }}>
@@ -118,9 +123,11 @@ component =
                   <span>Password</span>
                   <input type="password" name="password" autocomplete="current-password" required onValueInput={{ TypedPassword }}>
                 </label>
-                {% for p in maybeToList st.problem %}
-                  <p class="error sign-in-error" role="alert">{{ p }}</p>
-                {% end %}
+                <div class="sign-in-told">
+                  {% for p in maybeToList st.problem %}
+                    <p class="error sign-in-error" role="alert">{{ p }}</p>
+                  {% end %}
+                </div>
                 <div class="actions">
                   <button type="submit" class="primary" disabled={{ st.busy }}>Sign in</button>
                   <button type="button" onClick={{ const Close }}>Cancel</button>

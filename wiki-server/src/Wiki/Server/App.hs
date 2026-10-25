@@ -12,12 +12,14 @@
 -- under @--trust-network@ takes everyone for the administrator; the admin
 -- one, at @\/admin\/@, takes everyone for the administrator, the local
 -- operator, and looks at no cookie. A handler is given whom the listener
--- found and never knows which listener it serves. Each page goes out with the @\<base href>@ of its
--- listener's place ("Wiki.Server.Static"), so the application loaded from
--- @\/admin\/@ asks the API at @\/admin\/api\/v1\/@, which answers it as the
--- administrator; and each page is rendered there, as that principal, with
--- its links below that place ("Wiki.Server.Render"), so a link followed
--- before the program has loaded stays on the listener it was found on.
+-- found and never knows which listener it serves.
+--
+-- Each page goes out with the @\<base href>@ of its listener's place
+-- ("Wiki.Server.Static"), so the application loaded from @\/admin\/@ asks
+-- the API at @\/admin\/api\/v1\/@, which answers it as the administrator;
+-- and each page is rendered there, as the request's principal, with its
+-- links below that place ("Wiki.Server.Render"), so a link followed before
+-- the program has loaded stays on the listener it was found on.
 module Wiki.Server.App
   ( Listener (..)
   , Finding (..)

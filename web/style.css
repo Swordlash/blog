@@ -255,6 +255,59 @@ select {
   font-weight: 600;
 }
 
+/* Signing in and out of the server's wiki (Wiki.App.View.SignIn): the
+   name and "Sign out", or "Sign in", whose small form hangs under it as the
+   switcher's menu does. */
+.account {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.account .sign-out,
+.account .sign-in-toggle {
+  white-space: nowrap;
+}
+
+.sign-in-form {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(18rem, calc(100vw - 2rem));
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+}
+
+.sign-in-form .field {
+  flex: none;
+}
+
+.sign-in-form .actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.sign-in-told:empty {
+  display: none;
+}
+
+.sign-in-notice {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.sign-in-error {
+  margin: 0;
+}
+
 /* The way to the administration, for an administrator, beside the menu. */
 .admin-link {
   white-space: nowrap;
