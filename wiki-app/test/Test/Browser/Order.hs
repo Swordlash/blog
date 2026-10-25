@@ -58,7 +58,7 @@ spec m = do
     labels <- traverse textContent buttons
     labels `shouldSatisfy` notElem "Order"
   where
-    blog = Space (slugs ["blog"])
+    blog = SpacePages (slugs ["blog"])
     spacePages = ".space-view .page-tree a"
     sidebarPages = ".wiki-sidebar .page-tree a"
 

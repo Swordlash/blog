@@ -23,6 +23,7 @@ import Test.Browser.Server qualified as Server
 import Test.Browser.Shell qualified as Shell
 import Test.Browser.Slides qualified as Slides
 import Test.Browser.Source qualified as Source
+import Test.Browser.Spaces qualified as Spaces
 #endif
 
 -- | Built as a reactor exporting @hs_start@, which the browser test runner
@@ -43,6 +44,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.Islands" (Islands.spec BrowserDOM)
 #if defined(wasm32_HOST_ARCH)
   describe "Wiki.App.Shell" (Shell.spec BrowserDOM)
+  describe "One space at a time" (Spaces.spec BrowserDOM)
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
   describe "Wiki.App.View.Editor" (Editor.spec BrowserDOM)
   describe "Wiki.App.View.Source" (Source.spec BrowserDOM)

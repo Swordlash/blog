@@ -291,7 +291,7 @@ async function loadAdopted(page, path) {
       if (!app.contains(node)) {
         if (node.nodeType !== Node.TEXT_NODE || was.trim() !== "") found.push(`gone: ${was}`);
       } else {
-        const now = node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].filter((a) => a.name !== "data-prerendered").map((a) => `${a.name}=${a.value}`).join(" ");
+        const now = node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].filter((a) => a.name !== "data-prerendered" && a.name !== "data-stuck").map((a) => `${a.name}=${a.value}`).join(" ");
         const before = node.nodeType === Node.TEXT_NODE ? was : was.replace(/ ?data-prerendered=true/, "");
         if (now !== before) found.push(`changed: ${before} -> ${now}`);
       }
@@ -414,7 +414,8 @@ async function migrateTheDemo() {
   await page.locator("#app .wiki-sidebar a", { hasText: "Docs" }).waitFor({ timeout });
   const hello = (await pagesOf("blog")).find((p) => p.slug === "hello-world");
   assert.ok(hello && !hello.body.includes("Written on the server."), "the server's Hello, world was not replaced");
-  assert.deepEqual((await pagesOf("blog")).map((p) => p.slug), ["hello-world"], "Notes on Haskell was imported though left out");
+  // The server's Blog was made with its home page.
+  assert.deepEqual((await pagesOf("blog")).map((p) => p.slug), ["hello-world", "home"], "Notes on Haskell was imported though left out");
   await page.goto(url("/s/docs/p/tour/"));
   await page.locator("#app .page-view h1", { hasText: "Tour" }).waitFor({ timeout });
   console.log("ok: the demo's export is imported through the dialog, a page left out and a conflict taking the imported page, and its summary shown");
@@ -437,14 +438,14 @@ async function migrateTheDemo() {
   const spaces = (await api("spaces")).body;
   const paths = spaces.map((s) => s.slug).sort();
   assert.deepEqual(paths, [...new Set(paths)], "a space is there twice");
-  assert.deepEqual((await pagesOf("blog")).map((p) => p.slug).sort(), ["hello-world", "notes-on-haskell"]);
+  assert.deepEqual((await pagesOf("blog")).map((p) => p.slug).sort(), ["hello-world", "home", "notes-on-haskell"]);
   let total = 0;
   for (const space of ["blog", "docs", "team", "team/projects"]) {
     const slugs = (await pagesOf(space)).map((p) => `${p.parent ?? ""}/${p.slug}`);
     assert.deepEqual(slugs, [...new Set(slugs)], `a page of ${space} is there twice`);
     total += slugs.length;
   }
-  assert.equal(total, 10, "the demo's ten pages, once each");
+  assert.equal(total, 11, "the demo's ten pages, once each, and the server's Blog's home page");
   await page.context().close();
   console.log("ok: imported again from the demo's data in this browser, everything is merged and nothing is there twice");
 }
@@ -488,9 +489,13 @@ try {
   await page.locator("#app .wiki-sidebar .new-space-link").click();
   await page.locator("#app .new-space-view input").fill("Smoke space");
   await page.locator("#app .new-space-view button.primary").click();
-  await page.locator("#app .space-view h1", { hasText: "Smoke space" }).waitFor({ timeout });
+  // It opens at its home page, made with it, in a sidebar of its own.
+  await page.locator("#app .sidebar-space-name", { hasText: "Smoke space" }).waitFor({ timeout });
+  await page.locator("#app .page-view .page-title", { hasText: "Home" }).waitFor({ timeout });
   assert.equal(here(page), "/s/smoke-space/");
-  // A page, from its title.
+  // A page, from its title, from the space's list of pages.
+  await page.locator("#app .space-pages-link").click();
+  await page.locator("#app .space-view h1", { hasText: "Smoke space" }).waitFor({ timeout });
   await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
   await page.locator("#app .new-page-title").pressSequentially("First page");
   await page.locator("#app .new-page-view button.primary").click();
@@ -663,12 +668,31 @@ try {
   // private.
   const publicSpace = await api("spaces", { method: "POST", body: JSON.stringify({ parent: null, name: "Smoke public" }) });
   assert.equal(publicSpace.status, 201, "the public space");
-  await page.goto(url("/s/smoke-public/"));
+  await page.goto(url("/s/smoke-public/pages/"));
   await page.locator("#app .space-view h1", { hasText: "Smoke public" }).waitFor({ timeout });
-  await page.locator("#app .space-view .permissions-toggle").click();
+  await page.locator("#app .space-view .space-settings-toggle").click();
   await page.locator("#app .space-permissions .public-switch[aria-checked=false]").click();
   await page.locator("#app .space-view .badge", { hasText: "Public" }).waitFor({ timeout });
-  console.log("ok: a space is made public in its permissions");
+  console.log("ok: a space is made public in its settings' permissions");
+  // Its profile: a description and an emoji, and an image uploaded for its
+  // icon, which the server serves.
+  await page.locator("#app .space-settings .space-description-field").fill("Where the smoke test writes in public.");
+  await page.locator("#app .icon-kind-emoji input").check();
+  await page.locator("#app .icon-emoji").fill("🔥");
+  await page.locator("#app .space-profile-form button.primary").click();
+  await page.locator("#app .settings-saved", { hasText: "Saved" }).waitFor({ timeout });
+  await page.locator("#app .sidebar-space .space-icon-emoji", { hasText: "🔥" }).waitFor({ timeout });
+  const pixel = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+  await page.locator("#app .space-settings .icon-upload input[type=file]").setInputFiles({ name: "smoke.png", mimeType: "image/png", buffer: pixel });
+  const icon = page.locator("#app .sidebar-space img.space-icon-image");
+  await icon.waitFor({ timeout });
+  const iconSrc = await icon.getAttribute("src");
+  assert.match(iconSrc, /^api\/v1\/spaces\/[^/]+\/icon\/[0-9a-f]{64}$/, "the icon's address");
+  const served = await fetch(new URL(iconSrc, page.url()), { headers: { Cookie: sessionCookie } });
+  assert.equal(served.status, 200, "the icon, served");
+  assert.ok(Buffer.from(await served.arrayBuffer()).equals(pixel), "the icon's bytes");
+  await eventually(async () => assert.equal(await icon.evaluate((img) => img.complete && img.naturalWidth), 1, "not yet"), "the icon drawn");
+  console.log("ok: a space's settings give it a description, an emoji, and an uploaded image the server serves");
   await page.context().close();
 
   // Someone who is not signed in sees the public space only, and no way to
@@ -677,7 +701,12 @@ try {
   await visitor.goto(url("/"));
   await eventually(async () => assert.ok(await programStarted(visitor), "no listener yet"), "the visitor's program starting");
   await visitor.locator("#app .wiki-sidebar a", { hasText: "Smoke public" }).waitFor({ timeout });
-  assert.deepEqual(await visitor.locator("#app .wiki-sidebar .space-tree a").allTextContents(), ["Smoke public"], "the spaces a visitor sees");
+  assert.deepEqual(await visitor.locator("#app .directory .space-card-name").allTextContents(), ["Smoke public"], "the spaces a visitor sees");
+  assert.equal(
+    await visitor.locator("#app .directory .space-card-description").textContent(),
+    "Where the smoke test writes in public.",
+    "the public space's description, to a visitor",
+  );
   assert.equal(await visitor.locator("#app .admin-link").count(), 0, "the way to the administration, to a visitor");
   await visitor.locator("#app .sign-in-toggle").waitFor({ timeout });
   assert.equal((await fetch(url("/s/smoke-space/"))).status, 403, "the private space, to a visitor");
@@ -800,7 +829,9 @@ try {
   const walked = [
     ["/", 200, "Smoke space"],
     ["/s/smoke-public/", 200, "Smoke public"],
+    ["/s/smoke-public/pages/", 200, "Where the smoke test writes in public."],
     ["/s/smoke-space/", 200, "First page"],
+    ["/s/smoke-space/pages/", 200, "Pages and settings"],
     ["/s/smoke-space/p/first-page/", 200, "Saved by someone else."],
     ["/s/smoke-space/p/first-page/source/", 200, "(attachment:notes.txt)"],
     ["/s/smoke-space/p/first-page/history/", 200, "Version 1"],

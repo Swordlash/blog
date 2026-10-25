@@ -175,6 +175,15 @@ select {
   min-height: 100vh;
 }
 
+/* What sticks under the header (the page's bar of actions, the editor's
+   toolbar, the comments' panel) is stacked with these heights, which the
+   program measures as they change (wiki-app/jsbits/layout.js); these are
+   the header's on a wide window, and a page without its bar, until then. */
+:root {
+  --header-height: 3.35rem;
+  --page-actions-height: 0px;
+}
+
 .wiki-header {
   position: sticky;
   top: 0;
@@ -2125,7 +2134,12 @@ body:has(.slides-view) {
 
 /* The toolbar: groups of icon buttons that wrap onto more lines on a narrow
    screen, then the preview's controls at the end. */
+/* Under the header while the text scrolls, as the page's bar of actions;
+   its menus open over the text below it. */
 .editor-toolbar {
+  position: sticky;
+  top: var(--header-height);
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -3479,10 +3493,11 @@ mark.comment-mark-focused {
   cursor: pointer;
 }
 
+/* Under the header and the page's bar of actions, which stick too. */
 .comments-panel {
   position: sticky;
-  top: 1rem;
-  max-height: calc(100vh - 2rem);
+  top: calc(var(--header-height) + var(--page-actions-height) + 0.75rem);
+  max-height: calc(100vh - var(--header-height) - var(--page-actions-height) - 1.5rem);
   overflow-y: auto;
   padding: 0.8rem;
   border: 1px solid var(--border);
@@ -3658,5 +3673,37 @@ mark.comment-mark-focused {
   mark.comment-mark {
     background: none;
     border: none;
+  }
+}
+
+/* ---- Bars that stay under the header ----------------------------------------
+   A page's actions (Edit, History, Comments, …) stay at the top of the window
+   under the header while a long page scrolls, so that it can be edited
+   without scrolling back up: on the page's background, below the header and
+   the popovers (the menus, the "Comment" button) and above the article,
+   with a hairline under it once it is stuck there. The editor's toolbar
+   does the same. */
+.page-actions {
+  position: sticky;
+  top: var(--header-height);
+  z-index: 4;
+  margin-left: -0.5rem;
+  margin-right: -0.5rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--background);
+}
+
+.page-actions[data-stuck],
+.editor-toolbar[data-stuck] {
+  box-shadow:
+    0 1px 0 var(--border),
+    0 6px 8px -8px rgb(0 0 0 / 0.35);
+}
+
+@media print {
+  .page-actions,
+  .editor-toolbar {
+    position: static;
+    box-shadow: none;
   }
 }

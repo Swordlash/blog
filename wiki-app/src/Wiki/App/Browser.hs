@@ -21,6 +21,7 @@ module Wiki.App.Browser
   , download
   , localTime
   , consoleWarn
+  , keepHeights
   , PageBackend (..)
   , pageBackend
 
@@ -55,7 +56,7 @@ import Wiki.Core.Id (CommentThreadId (..))
 -- dispatches it, and the click does not change meanwhile, so that binding is
 -- pure.
 $( browserJS
-     ["jsbits/browser.js", "jsbits/archive.js", "jsbits/comments.js"]
+     ["jsbits/browser.js", "jsbits/archive.js", "jsbits/comments.js", "jsbits/layout.js"]
      [ ("js_clicked_href", "wiki_clicked_href", Unsafe, [t|Event -> JSText|])
      , ("js_scroll_to", "wiki_scroll_to", Unsafe, [t|JSText -> IO ()|])
      , ("js_set_title", "wiki_set_title", Unsafe, [t|JSText -> IO ()|])
@@ -78,6 +79,7 @@ $( browserJS
      , ("js_comment_selection", "wiki_comment_selection", Unsafe, [t|Element -> IO JSText|])
      , ("js_clicked_thread", "wiki_clicked_thread", Unsafe, [t|Event -> JSText|])
      , ("js_reveal", "wiki_reveal", Unsafe, [t|JSText -> IO ()|])
+     , ("js_keep_heights", "wiki_keep_heights", Unsafe, [t|IO ()|])
      ]
  )
 
@@ -243,3 +245,11 @@ clickedThread event = case fromJSText (js_clicked_thread event) of
 -- | Scroll what a CSS selector picks into view, if it is not in view.
 reveal :: (MonadIO m) => Text -> m ()
 reveal selector = when inBrowser (liftIO (js_reveal (toJSText selector)))
+
+-- | Keep the heights of the sticky header and of the page's bar of actions
+-- as CSS variables, which the stylesheet stacks the bar, the editor's
+-- toolbar and the comments' panel under, and mark a bar stuck under the
+-- header as it is (see @jsbits/layout.js@). Once is enough: it follows the
+-- document from then on. Natively there is no layout, and it does nothing.
+keepHeights :: (MonadIO m) => m ()
+keepHeights = liftIO js_keep_heights

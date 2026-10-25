@@ -16,16 +16,19 @@ spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, Mona
 spec m = do
   it "lists the public spaces on the front page for someone not signed in" $ runPage $ do
     ui <- start m Nothing Home
-    names <- traverse textContent =<< findAll ui ".home .space-list li a"
+    _ <- find ui ".directory .space-card"
+    names <- traverse textContent =<< findAll ui ".directory .space-card-name"
     names `shouldBe` ["Blog", "Docs"]
     textContent (root ui) >>= (`shouldSatisfy` (not . T.isInfixOf "Team"))
     find ui ".user-switcher-toggle" >>= (`shouldHaveText` "Not signed in")
 
   it "goes to a page by clicking, and draws its formulas" $ runPage $ do
     ui <- start m Nothing Home
-    find ui ".space-tree a[href$='#/s/docs/']" >>= click
-    find ui ".space-view h1" >>= (`shouldHaveText` "Docs")
-    find ui ".space-view .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
+    find ui ".space-card-link[href$='#/s/docs/']" >>= click
+    -- The space opens at its home page, the tour, with a sidebar of its own.
+    find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
+    find ui ".sidebar-space-name" >>= (`shouldHaveText` "Docs")
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
     find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/mathematics/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Mathematics")
@@ -40,7 +43,7 @@ spec m = do
     _ <- eventuallyWithin 15000 (find ui ".page-body .wiki-mermaid > svg")
     pure ()
 
-  it "lets admin create a space, which the tree then shows" $ runPage $ do
+  it "lets admin create a space, which opens at its home page" $ runPage $ do
     ui <- start m Nothing Home
     find ui ".user-switcher-toggle" >>= click
     find ui ".user-menu button[data-login=admin]" >>= click
@@ -48,15 +51,22 @@ spec m = do
     find ui ".wiki-sidebar a.new-space-link" >>= click
     find ui ".new-space-view input" >>= (`typeText` "Research notes")
     find ui ".new-space-view button.primary" >>= click
-    find ui ".space-view h1" >>= (`shouldHaveText` "Research notes")
-    find ui ".space-tree a[href$='#/s/research-notes/']" >>= (`shouldHaveText` "Research notes")
+    find ui ".sidebar-space-name" >>= (`shouldHaveText` "Research notes")
+    find ui ".page-view .page-title" >>= (`shouldHaveText` "Home")
+    find ui ".page-body" >>= (`shouldSatisfy'` "Welcome to Research notes.")
+    -- And the directory has a card for it.
+    find ui ".all-spaces" >>= click
+    find ui ".space-card-link[href$='#/s/research-notes/'] .space-card-name" >>= (`shouldHaveText` "Research notes")
 
   it "shows reader the private Team only as the way to Projects" $ runPage $ do
     ui <- start m (Just "user-reader") Home
-    find ui ".space-tree .unviewable" >>= (`shouldHaveText` "Team")
-    length <$> findAll ui ".space-tree a[href$='#/s/team/']" `shouldReturn` 0
-    find ui ".space-tree a[href$='#/s/team/projects/']" >>= click
-    find ui ".space-view h1" >>= (`shouldHaveText` "Projects")
+    find ui ".space-card-unviewable .space-card-name" >>= (`shouldHaveText` "Team")
+    length <$> findAll ui ".space-cards a[href$='#/s/team/']" `shouldReturn` 0
+    find ui ".space-card-unviewable a[href$='#/s/team/projects/']" >>= click
+    find ui ".sidebar-space-name" >>= (`shouldHaveText` "Projects")
+    find ui ".page-body h1" >>= (`shouldHaveText` "The wiki")
+    -- Team is no way up for her.
+    length <$> findAll ui ".sidebar-up" `shouldReturn` 0
 
   it "says in place that reader may not see Team" $ runPage $ do
     ui <- start m (Just "user-reader") (Space (slugs ["team"]))
@@ -64,15 +74,16 @@ spec m = do
     -- Switching to someone who may see it shows it where the refusal was.
     find ui ".user-switcher-toggle" >>= click
     find ui ".user-menu button[data-login=admin]" >>= click
-    find ui ".space-view h1" >>= (`shouldHaveText` "Team")
+    find ui ".sidebar-space-name" >>= (`shouldHaveText` "Team")
+    find ui ".page-body h1" >>= (`shouldHaveText` "Team handbook")
 
   it "offers nobody an action on a space they may only read" $ runPage $ do
-    ui <- start m Nothing (Space (slugs ["blog"]))
+    ui <- start m Nothing (SpacePages (slugs ["blog"]))
     find ui ".space-view h1" >>= (`shouldHaveText` "Blog")
     length <$> findAll ui ".space-view .actions button" `shouldReturn` 0
 
   it "lets an editor add a page, rename it and delete it" $ runPage $ do
-    ui <- start m (Just "user-editor") (Space (slugs ["blog"]))
+    ui <- start m (Just "user-editor") (SpacePages (slugs ["blog"]))
     find ui ".space-view .actions a[href$='#/s/blog/new-page/']" >>= (`shouldHaveText` "New page")
     find ui ".space-view .actions a[href$='#/s/blog/new-page/']" >>= click
     find ui ".new-page-title" >>= (`typeText` "Third post")
@@ -89,17 +100,22 @@ spec m = do
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "The third post")
     clickButton ui ".page-view .actions button" "Delete"
     find ui ".page-view .confirm button.danger" >>= click
-    find ui ".space-view h1" >>= (`shouldHaveText` "Blog")
-    links <- traverse textContent =<< findAll ui ".space-view .page-tree a"
-    links `shouldBe` ["Hello, world", "Notes on Haskell"]
+    -- Back to the space, which opens at its home page.
+    find ui ".page-body h1" >>= (`shouldHaveText` "Hello, world")
+    eventually $ do
+      links <- traverse textContent =<< findAll ui ".wiki-sidebar .page-tree a"
+      links `shouldBe` ["Hello, world", "Notes on Haskell"]
 
   it "lets admin move a subspace to the top level" $ runPage $ do
-    ui <- start m (Just "user-admin") (Space (slugs ["team", "projects"]))
+    ui <- start m (Just "user-admin") (SpacePages (slugs ["team", "projects"]))
     clickButton ui ".space-view .actions button" "Move"
     find ui ".space-view form select" >>= (`shouldHaveText'` "The top level")
     find ui ".space-view form button.primary" >>= click
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Projects")
-    _ <- find ui ".wiki-sidebar > .space-tree > li > .space-row a[href$='#/s/projects/']"
+    _ <- find ui ".wiki-sidebar a.sidebar-space[href$='#/s/projects/']"
+    length <$> findAll ui ".sidebar-up" `shouldReturn` 0
+    find ui ".all-spaces" >>= click
+    _ <- find ui ".space-card-link[href$='#/s/projects/']"
     pure ()
 
   it "takes an administrator to the administration from the header" $ runPage $ do
@@ -114,7 +130,7 @@ spec m = do
 
   it "shows a reader no way to the administration, and at its address only whom it is for" $ runPage $ do
     ui <- start m (Just "user-reader") Home
-    _ <- find ui ".home h1"
+    _ <- find ui ".directory h1"
     length <$> findAll ui ".admin-link" `shouldReturn` 0
     unmount ui
     there <- start m (Just "user-reader") Admin

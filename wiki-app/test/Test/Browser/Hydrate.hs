@@ -60,12 +60,12 @@ spec m = do
     length after `shouldBe` length before
     zipWithM_ shouldBeSameElement after before
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
-    -- Listeners on what was adopted: a link of the shell's, then one in the
-    -- page's Markdown.
-    find ui ".wiki-sidebar a[href$='#/s/blog/']" >>= click
-    find ui ".space-view h1" >>= (`shouldHaveText` "Blog")
-    find ui ".space-view .page-tree a[href$='#/s/blog/p/hello-world/']" >>= click
-    find ui ".page-body h1" >>= (`shouldHaveText` "Hello, world")
+    -- Listeners on what was adopted: a link in the page's Markdown, then
+    -- one of the shell's.
+    find ui ".page-body a[href$='#/s/docs/p/markdown-guide/diagrams/']" >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "Diagrams")
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
     find ui ".wiki" >>= (`shouldBeSameElement` shell)
 
   it "adopts the editor, its toolbar too, which then works" $ runPage $ do

@@ -114,7 +114,7 @@ import Wiki.App.Account (Accounts (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
-import Wiki.App.Browser (download, historyEntry, historyGo, setDocumentTitle, unzipFiles, zipFiles)
+import Wiki.App.Browser (download, historyEntry, historyGo, keepHeights, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Islands (MonadIslands)
@@ -786,6 +786,8 @@ component =
         gets (\st -> st.accounts) >>= traverse_ (\a -> lift a.sessionChanges >>= void . H.subscribe . fmap SessionChanged)
         entry <- H.liftEffect historyEntry
         modify (\st -> st {entry})
+        -- The bars that stick under the header need its height.
+        H.liftEffect keepHeights
         -- What the route shows was loaded with the initial state, unless
         -- the backend would have waited for it.
         gets (\st -> st.world) >>= \case

@@ -254,7 +254,9 @@ async function repairsOf(page) {
       } else {
         const now = Object.fromEntries([...node.attributes].map((a) => [a.name, a.value]));
         for (const name of new Set([...Object.keys(mark.attributes), ...Object.keys(now)])) {
-          if (name === "data-prerendered" || mark.attributes[name] === now[name]) continue;
+          // data-stuck is the layout's, set on a bar that sticks under the
+          // header once the window scrolls (wiki-app/jsbits/layout.js).
+          if (name === "data-prerendered" || name === "data-stuck" || mark.attributes[name] === now[name]) continue;
           const change = `${describe(node)} ${name}: ${JSON.stringify(mark.attributes[name]?.slice(0, 40))} -> ${JSON.stringify(now[name]?.slice(0, 40))}`;
           (mark.attributes[name]?.startsWith("data:") && now[name]?.startsWith("blob:") ? objectUrls : attributes).push(change);
         }
@@ -361,7 +363,7 @@ try {
   const paths = await prerenderedPaths(root);
   let guideAndDiagrams = 0;
   assert.ok(paths.length >= 10, `only ${paths.length} pages were prerendered`);
-  for (const path of ["/", "/search/", "/s/docs/", "/s/docs/p/tour/", "/s/docs/p/tour/source/", "/s/team/p/team-handbook/"]) {
+  for (const path of ["/", "/search/", "/s/docs/", "/s/docs/pages/", "/s/team/projects/", "/s/docs/p/tour/", "/s/docs/p/tour/source/", "/s/team/p/team-handbook/"]) {
     assert.ok(paths.includes(path), `${path} was not prerendered`);
   }
   const visitor = await newPage();
@@ -520,10 +522,25 @@ try {
     await samePage(step);
     visits.push({ ...visit, step });
   };
-  await arrive({ path: "/", view: "home" }, "the front page");
+  await arrive({ path: "/", view: "directory" }, "the front page");
+  // A space from anywhere: the directory, by the site's name, and the
+  // space's card there; the space opens at its home page.
+  const toSpace = async (href) => {
+    await page.locator("#app .wiki-brand").click();
+    await page.locator(`#app .space-card-link[href='${href}']`).click();
+    await page.locator(`#app .sidebar-space[href='${href}']`).waitFor({ timeout });
+  };
+  // The spaces the sidebar's menu offers to switch to.
+  const switchable = async () => {
+    await page.locator("#app .space-switcher-toggle").click();
+    await page.locator("#app .space-switcher-option").first().waitFor({ timeout });
+    const hrefs = await page.locator("#app .space-switcher-option").evaluateAll((links) => links.map((a) => a.getAttribute("href")));
+    await page.locator("#app .space-switcher-toggle").click();
+    return hrefs;
+  };
 
   // The tour, from the front page's invitation.
-  await page.locator("#app .home a", { hasText: "Take the tour" }).click();
+  await page.locator("#app .directory a", { hasText: "Take the tour" }).click();
   await arrive({ path: "/s/docs/p/tour/", view: "page-view", crumb: "Tour" }, "the tour");
 
   // Who one is, from the menu at the top right. The demo starts as admin;
@@ -531,36 +548,48 @@ try {
   await page.locator("#app .user-switcher-toggle").click();
   await page.locator("#app .user-menu button[data-login='']").click();
   await page.locator("#app .user-switcher-toggle", { hasText: "Not signed in" }).waitFor({ timeout });
-  assert.equal(await page.locator("#app .wiki-sidebar a[href='/s/team/']").count(), 0, "nobody sees Team");
+  await eventually(async () => assert.deepEqual(await switchable(), ["/s/blog/", "/s/docs/"]), "nobody's spaces to switch to");
   await page.locator("#app .user-switcher-toggle").click();
   await page.locator("#app .user-menu button[data-login=admin]").click();
   await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
-  await page.locator("#app .wiki-sidebar a[href='/s/team/']").waitFor({ timeout });
+  await eventually(async () => assert.deepEqual(await switchable(), ["/s/blog/", "/s/docs/", "/s/team/"]), "admin's spaces to switch to");
   // The spaces are clicked at once, while the shell may still be busy with
   // the switch. A link's handler then runs only once the shell is done, after
   // the browser would have followed the link; the browser is kept from it in
   // the click's listener instead, so no click here may load a page.
 
-  // Every root space, and a page in each, from the tree of spaces.
-  const roots = await page.locator("#app .wiki-sidebar > .space-tree > li > .space-row a").evaluateAll((links) =>
-    links.map((a) => ({ href: a.getAttribute("href"), name: a.textContent })),
+  // Every root space, from its card in the directory, which opens it at its
+  // home page with a sidebar of its own; and a page of each from there.
+  await page.locator("#app .all-spaces").click();
+  await arrive({ path: "/", view: "directory" }, "the directory");
+  const roots = await page.locator("#app .space-card-link").evaluateAll((links) =>
+    links.map((a) => ({ href: a.getAttribute("href"), name: a.querySelector(".space-card-name").textContent })),
   );
   assert.deepEqual(roots.map((r) => r.name), ["Blog", "Docs", "Team"]);
   for (const space of roots) {
-    await page.locator(`#app .wiki-sidebar a[href='${space.href}']`).click();
-    await arrive({ path: space.href, view: "space-view", crumb: space.name }, `the space ${space.name}`);
-    const first = page.locator("#app .space-view .page-tree a").first();
+    if (here(page) !== "/") {
+      await page.locator("#app .all-spaces").click();
+      await arrive({ path: "/", view: "directory" }, `the directory, for ${space.name}`);
+    }
+    await page.locator(`#app .space-card-link[href='${space.href}']`).click();
+    await arrive({ path: space.href, view: "page-view", crumb: space.name }, `the space ${space.name}`);
+    assert.equal(await page.locator("#app .sidebar-space-name").textContent(), space.name, "the sidebar's space");
+    const first = page.locator("#app .wiki-sidebar .page-tree a").first();
     const target = { href: await first.getAttribute("href"), title: await first.textContent() };
     await first.click();
     await arrive({ path: target.href, view: "page-view", crumb: target.title }, `the page ${target.title}`);
   }
+  await page.locator("#app .wiki-brand").click();
+  await arrive({ path: "/", view: "directory" }, "the directory again");
+  const recent = await page.locator("#app .recent-space-name").allTextContents();
+  assert.deepEqual(recent, ["Team", "Docs", "Blog"], "the spaces visited last, the latest first");
   await samePage("going through the spaces");
-  console.log("ok: every root space, and a page in each, by clicking");
+  console.log("ok: every root space, and a page in each, by clicking, and the directory remembers them");
 
   // The editor, as admin, with a save: Hello, world.
-  await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
-  await arrive({ path: "/s/blog/", view: "space-view", crumb: "Blog" }, "Blog again");
-  await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
+  await page.locator("#app .space-card-link[href='/s/blog/']").click();
+  await arrive({ path: "/s/blog/", view: "page-view", crumb: "Blog" }, "Blog again");
+  await page.locator("#app .wiki-sidebar .page-tree a[href='/s/blog/p/hello-world/']").click();
   await arrive({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "Hello, world");
 
   // Its source, and back to it by the link.
@@ -610,8 +639,8 @@ try {
   // A new page: its title first, in a small form, which makes the page and
   // opens the editor on it; Ctrl+S saves and stays there, saying so, and
   // Save and close shows the page.
-  await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
-  await arrive({ path: "/s/blog/", view: "space-view", crumb: "Blog" }, "Blog, for a new page");
+  await page.locator("#app .space-pages-link").click();
+  await arrive({ path: "/s/blog/pages/", view: "space-view", crumb: "Pages and settings" }, "Blog's pages, for a new page");
   await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
   await arrive({ path: "/s/blog/new-page/", view: "new-page-view", crumb: "New page" }, "the new page's form");
   await page.locator("#app .new-page-title").pressSequentially("Smoke page");
@@ -690,8 +719,8 @@ try {
   // A page's history: the new page saved twice more, its versions listed
   // the latest first with what the last save changed, an earlier version
   // chosen and restored, which saves it as a new version on top.
-  await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
-  await page.locator("#app .space-view .page-tree a[href='/s/blog/p/smoke-page/']").click();
+  await toSpace("/s/blog/");
+  await page.locator("#app .wiki-sidebar .page-tree a[href='/s/blog/p/smoke-page/']").click();
   await check({ path: "/s/blog/p/smoke-page/", view: "page-view", crumb: "Smoke page" }, "the new page again");
   for (const line of ["A second line.", "A third line."]) {
     await page.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
@@ -727,8 +756,8 @@ try {
   // A reload arrives at the same page, with the edit kept in the browser
   // (IndexedDB), as admin again: who one was is not kept, and the demo
   // starts as admin.
-  await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
-  await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
+  await toSpace("/s/blog/");
+  await page.locator("#app .wiki-sidebar .page-tree a[href='/s/blog/p/hello-world/']").click();
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", text: "Smoke test" }, "the edited page");
   // The prerendered page shows the demo's own content, so adopting it
   // repairs the edited page into what the browser keeps.
@@ -757,8 +786,8 @@ try {
   await page.locator("#app .demo-reset-confirm button", { hasText: "Reset" }).click();
   await page.locator("#app .admin-view .demo-told", { hasText: "back as it was at the start" }).waitFor({ timeout });
   const toHelloWorld = async (step, text) => {
-    await page.locator("#app .wiki-sidebar a[href='/s/blog/']").click();
-    await page.locator("#app .space-view .page-tree a[href='/s/blog/p/hello-world/']").click();
+    await toSpace("/s/blog/");
+    await page.locator("#app .wiki-sidebar .page-tree a[href='/s/blog/p/hello-world/']").click();
     await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text }, step);
   };
   await toHelloWorld("the page after the reset");

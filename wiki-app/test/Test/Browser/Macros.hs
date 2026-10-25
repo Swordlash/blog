@@ -131,7 +131,7 @@ spec m = do
 
   describe "a space's settings" $ do
     it "show KaTeX's error for a block it cannot read, and do not save it" $ runPage $ do
-      ui <- start m (Just "user-admin") (Space (slugs ["blog"]))
+      ui <- start m (Just "user-admin") (SpacePages (slugs ["blog"]))
       clickButton ui ".space-view .actions button" "Math macros"
       source <- find ui ".macros-form textarea.macros-source"
       typeText source "\\newcommand{\\half}{\\frac{1}{2}"
@@ -143,7 +143,7 @@ spec m = do
       eventually (count ui ".macros-form .macros-error" `shouldReturn` 0)
 
     it "try a block on a formula, and save it for the space's pages" $ runPage $ do
-      ui <- startChanged m (withPage "Blog" "Halves" "$\\half$") (Just "user-admin") (Space (slugs ["blog"]))
+      ui <- startChanged m (withPage "Blog" "Halves" "$\\half$") (Just "user-admin") (SpacePages (slugs ["blog"]))
       clickButton ui ".space-view .actions button" "Math macros"
       find ui ".macros-form textarea.macros-source" >>= (`typeText` "\\newcommand{\\half}{\\mathsf{H}}")
       find ui ".macros-form .macros-sample input" >>= (`typeText` "\\half + \\abs{x}")

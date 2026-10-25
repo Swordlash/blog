@@ -31,6 +31,13 @@ authorisation.
 
 - Spaces in a tree, public or private, each holding a tree of pages; creating,
   renaming, moving and deleting spaces and pages as the permissions allow.
+- One space at a time, as Confluence shows them: the front page is a directory
+  of spaces (each a card with its icon, description and number of pages, and the
+  ones this browser visited last), and inside a space the sidebar shows that
+  space alone, its pages and its subspaces, with a menu to switch to another. A
+  space opens at its home page; its administrator gives it a description, an
+  icon (an emoji, a colour or an uploaded image) and another home page in its
+  "Space settings".
 - Pages written in Markdown, whose syntax is described for authors in
   [docs/markdown.md](docs/markdown.md): GitHub's extensions, footnotes, alerts,
   wiki links, formulas drawn by KaTeX, diagrams by Mermaid, code highlighted by
@@ -342,8 +349,8 @@ like the other options; `--static` goes back to the demo.
   disables and enables their logins, lets them create spaces, and marks them as
   administrators (or takes it away), who then have the same page on the public
   listener, signed in; and it keeps groups and their members. Who may read,
-  edit and administer a space is in the space's own "Permissions", for whoever
-  administers it.
+  edit and administer a space is in the space's own "Space settings", for
+  whoever administers it.
 - **Logs.** `journalctl --user -u wiki-demo -f`: one `key=value` line per request
   (listener, who, method, path, status, milliseconds), and an error line with the
   exception for anything that fails.

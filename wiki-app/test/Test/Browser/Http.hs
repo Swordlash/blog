@@ -152,7 +152,7 @@ asked = unsafeIOToPageM js_server_asked >>= either (\e -> panic ("the server's r
 -- administration's people.
 serveDemo :: PageM s ()
 serveDemo = do
-  (me, spaces, pages, people, threads) <- unsafeIOToPageM $ do
+  (me, spaces, pages, people, threads, counts) <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki $ do
       me <- session
@@ -160,12 +160,14 @@ serveDemo = do
       pages <- for spaces $ \s -> (s,) . fromRight [] <$> listPages s.id
       people <- directory
       threads <- for (concatMap snd pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
-      pure (me, spaces, pages, people, threads)
+      counts <- pageCounts
+      pure (me, spaces, pages, people, threads, counts)
   for_ threads $ \(p, ts) -> answerWith "GET" (links.comments p).list 200 ts
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = []}
   for_ people (answerWith "GET" links.admin.directory 200)
   answerWith "GET" links.admin.server 200 (noServerSettings :: ServerSettings)
   answerWith "GET" "api/v1/spaces" 200 spaces
+  answerWith "GET" links.spaces.pageCounts 200 counts
   for_ pages $ \(s, ps) -> do
     answerWith "GET" (links.spaces.atPath (spacePathOf spaces s.id)) 200 s
     answerWith "GET" (links.spaces.listPages s.id) 200 ps
@@ -332,7 +334,7 @@ accounts m = describe "signing in and out" $ do
     answerWith "GET" "api/v1/spaces" 200 ([] :: [S.Space])
     find ui ".account .sign-out" >>= click
     _ <- find ui ".sign-in-toggle"
-    find ui ".home .empty" >>= (`shouldHaveText` "There are no spaces you can see.")
+    find ui ".directory .empty" >>= (`shouldHaveText` "There are no spaces you can see.")
     length <$> findAll ui ".admin-link" `shouldReturn` 0
     map (\r -> r.url) . filter (\r -> r.method == "DELETE") <$> asked `shouldReturn` ["api/v1/session"]
     unmount ui
@@ -674,8 +676,8 @@ views m = describe "the application over it" $ do
     unsafeIOToPageM (js_server_hold_at (toJSText "GET") (toJSText versions))
     ui <- startServer m (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) Nothing AgainstPrevious)
     eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [False])
-    find ui ".wiki-sidebar a[href$='#/s/docs/']" >>= click
-    find ui ".space-view h1" >>= (`shouldHaveText` "Docs")
+    find ui ".all-spaces" >>= click
+    find ui ".directory h1" >>= (`shouldHaveText` "Spaces")
     -- The history view went with its fiber, and the request with them.
     eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [True])
     unmount ui
@@ -698,7 +700,7 @@ views m = describe "the application over it" $ do
     serverStarts
     serveDemo
     offline True
-    ui <- startServer m (Space (slugs ["docs"]))
+    ui <- startServer m (SpacePages (slugs ["docs"]))
     find ui ".wiki-content .error-unreachable" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "could not be reached")
     browserGoes False
     _ <- find ui ".offline-notice"
@@ -723,7 +725,7 @@ views m = describe "the application over it" $ do
     serverStarts
     serveDemo
     unsafeIOToPageM (js_server_offline True)
-    ui <- startServer m (Space (slugs ["docs"]))
+    ui <- startServer m (SpacePages (slugs ["docs"]))
     find ui ".wiki-content .error-unreachable" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "could not be reached")
     unsafeIOToPageM (js_server_offline False)
     find ui ".wiki-content .error-unreachable button.retry" >>= click

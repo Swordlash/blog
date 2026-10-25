@@ -118,7 +118,7 @@ spec m = do
     length <$> findAll ui ".error-conflict" `shouldReturn` 0
 
   it "writes a new page from the space's New page, made from its title first" $ runPage $ do
-    (ui, wiki) <- startWith m (Just "user-editor") (Space (slugs ["blog"]))
+    (ui, wiki) <- startWith m (Just "user-editor") (SpacePages (slugs ["blog"]))
     find ui ".space-view .actions a[href$='#/s/blog/new-page/']" >>= click
     find ui ".new-page-view h1" >>= (`shouldHaveText` "New page in Blog")
     find ui ".new-page-title" >>= (`typeText` "Third post")

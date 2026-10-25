@@ -167,7 +167,8 @@ spec m = do
     eventually (membersOf ui "writers" `shouldReturn` ["editor", "reader"])
     -- Rita may edit the blog now, as the writers may.
     switchTo ui "reader"
-    find ui ".space-tree a[href$='#/s/blog/']" >>= click
+    find ui ".wiki-sidebar a[href$='#/s/blog/']" >>= click
+    find ui ".space-pages-link" >>= click
     _ <- find ui ".space-view .actions a[href$='#/s/blog/new-page/']"
     -- And no longer once she is taken out.
     eventually (length <$> findAll ui ".admin-link" `shouldReturn` 0)
@@ -176,7 +177,8 @@ spec m = do
     find ui "[data-group=writers] .group-member[data-login=reader] .group-remove" >>= click
     eventually (membersOf ui "writers" `shouldReturn` ["editor"])
     switchTo ui "reader"
-    find ui ".space-tree a[href$='#/s/blog/']" >>= click
+    find ui ".wiki-sidebar a[href$='#/s/blog/']" >>= click
+    find ui ".space-pages-link" >>= click
     find ui ".space-view h1" >>= (`shouldHaveText` "Blog")
     eventually (length <$> findAll ui ".space-view .actions a[href$='#/s/blog/new-page/']" `shouldReturn` 0)
 

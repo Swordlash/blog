@@ -24,14 +24,14 @@ import Wiki.Core.Space qualified as S
 spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
 spec m = do
   it "is offered to whoever administers the space, and to nobody else" $ runPage $ do
-    rita <- start m (Just "user-reader") (Space (slugs ["team", "projects"]))
+    rita <- start m (Just "user-reader") (SpacePages (slugs ["team", "projects"]))
     _ <- find rita ".space-view h1"
-    length <$> findAll rita ".permissions-toggle" `shouldReturn` 0
+    length <$> findAll rita ".space-settings-toggle" `shouldReturn` 0
     unmount rita
-    ui <- start m (Just "user-admin") (Space (slugs ["team", "projects"]))
+    ui <- start m (Just "user-admin") (SpacePages (slugs ["team", "projects"]))
     -- Closed until asked for.
     length <$> findAll ui ".space-permissions" `shouldReturn` 0
-    toggle <- find ui ".permissions-toggle"
+    toggle <- find ui ".space-settings-toggle"
     getAttribute toggle "aria-expanded" `shouldReturn` Just "false"
     click toggle
     _ <- find ui ".space-permissions"
@@ -39,8 +39,8 @@ spec m = do
     eventually (grants ui `shouldReturn` [("reader", "view", False)])
 
   it "grants a user a permission, who then sees the space, and revokes it" $ runPage $ do
-    ui <- start m (Just "user-admin") (Space (slugs ["team"]))
-    find ui ".permissions-toggle" >>= click
+    ui <- start m (Just "user-admin") (SpacePages (slugs ["team"]))
+    find ui ".space-settings-toggle" >>= click
     eventually (find ui ".space-permissions .empty" >>= (`shouldContainText` "Nobody is granted anything"))
     -- Edgar, the second user, may view.
     choose ui ".grant-who-choice" 1
@@ -50,7 +50,7 @@ spec m = do
     switchTo ui "editor"
     eventually (find ui ".space-view h1" >>= (`shouldHaveText` "Team"))
     switchTo ui "admin"
-    find ui ".permissions-toggle" >>= click
+    find ui ".space-settings-toggle" >>= click
     eventually (grants ui `shouldReturn` [("editor", "view", False)])
     find ui ".grant-row[data-subject=editor] .grant-revoke" >>= click
     eventually (grants ui `shouldReturn` [])
@@ -58,15 +58,15 @@ spec m = do
     eventually (find ui ".wiki-content .error-forbidden" >>= (`shouldContainText` "You do not have permission"))
 
   it "shows what a subspace inherits, with the space it is granted on" $ runPage $ do
-    ui <- startChanged m (grantOn "team" (SubjectUser (UserId "user-editor")) Edit) (Just "user-admin") (Space (slugs ["team", "projects"]))
-    find ui ".permissions-toggle" >>= click
+    ui <- startChanged m (grantOn "team" (SubjectUser (UserId "user-editor")) Edit) (Just "user-admin") (SpacePages (slugs ["team", "projects"]))
+    find ui ".space-settings-toggle" >>= click
     eventually (grants ui `shouldReturn` [("reader", "view", False), ("editor", "edit", True)])
     find ui ".grant-row[data-subject=editor] .grant-where a" >>= (`shouldHaveText` "Team")
     length <$> findAll ui ".grant-row[data-subject=editor] .grant-revoke" `shouldReturn` 0
 
   it "makes the space public there, and private again" $ runPage $ do
-    ui <- start m (Just "user-admin") (Space (slugs ["team"]))
-    find ui ".permissions-toggle" >>= click
+    ui <- start m (Just "user-admin") (SpacePages (slugs ["team"]))
+    find ui ".space-settings-toggle" >>= click
     public <- find ui ".public-switch"
     getAttribute public "aria-checked" `shouldReturn` Just "false"
     click public
@@ -76,8 +76,8 @@ spec m = do
     eventually (find ui ".space-view .badge" >>= (`shouldHaveText` "Private"))
 
   it "does not offer a space's administrator to revoke what they administer it by" $ runPage $ do
-    ui <- startChanged m (grantOn "blog" (SubjectUser (UserId "user-editor")) AdministerSpace) (Just "user-editor") (Space (slugs ["blog"]))
-    find ui ".permissions-toggle" >>= click
+    ui <- startChanged m (grantOn "blog" (SubjectUser (UserId "user-editor")) AdministerSpace) (Just "user-editor") (SpacePages (slugs ["blog"]))
+    find ui ".space-settings-toggle" >>= click
     eventually (grants ui `shouldReturn` [("writers", "edit", False), ("editor", "administer", False)])
     find ui ".grant-row[data-subject=editor] .grant-self" >>= (`shouldContainText` "That is how you administer this space")
     length <$> findAll ui ".grant-row[data-subject=editor] .grant-revoke" `shouldReturn` 0

@@ -272,7 +272,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "offers every reader of a page its source, and only an editor the rest" $ do
     Rendered {html} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["tour"]))
-    html `contains` "<div class=\"actions\"><a class=\"button\" href=\"/s/docs/p/tour/source/\">View source</a><a class=\"button\" href=\"/s/docs/p/tour/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button></div>"
+    html `contains` "<div class=\"actions page-actions\"><a class=\"button\" href=\"/s/docs/p/tour/source/\">View source</a><a class=\"button\" href=\"/s/docs/p/tour/history/\">History</a><button aria-expanded=\"false\" class=\"button comments-toggle\" type=\"button\">Comments (0)</button></div>"
     html `lacks` ">Edit</a>"
     Rendered {html = asReader} <- render (as (Just "user-reader")) (Page (slugs ["blog"]) (slugs ["hello-world"]))
     asReader `contains` "href=\"/s/blog/p/hello-world/source/\">View source</a>"

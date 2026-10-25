@@ -157,11 +157,13 @@ administration ui = do
   find ui ".admin-view h1" >>= (`shouldHaveText` "Administration")
   find ui ".admin-view .admin-data h2" >>= (`shouldHaveText` "Wiki data")
 
--- | Go to Hello, world from the tree of spaces.
+-- | Go to Hello, world from the spaces: the blog's card, then its page
+-- tree.
 helloWorld :: Mounted s q o n -> PageM s ()
 helloWorld ui = do
-  find ui ".space-tree a[href$='#/s/blog/']" >>= click
-  find ui ".space-view .page-tree a[href$='#/s/blog/p/hello-world/']" >>= click
+  find ui ".wiki-brand" >>= click
+  find ui ".space-card-link[href$='#/s/blog/']" >>= click
+  find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/hello-world/']" >>= click
   find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Hello, world")
 
 -- | Hand the administration's import a file, as choosing it would.

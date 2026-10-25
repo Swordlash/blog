@@ -205,7 +205,10 @@ component =
           -- Several computed parts in a row are one hole: on lines of their
           -- own, each line break between them would be a space.
           parts =
-            [hh|<div class="actions">{{ actions input page deck (commentsToggle st) }}</div>|]
+            -- Its own class too: the bar stays under the header while the
+            -- page scrolls (web/style.css), so that a long page is edited
+            -- without scrolling back up to it.
+            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
                 <> Body.heading page.title page.body

@@ -124,7 +124,7 @@ invited m = describe "an invitation's page" $ do
     answerWith "GET" "api/v1/session" 200 rita
     find ui ".invitation-form button[type=submit]" >>= click
     find ui ".account .user-name" >>= (`shouldHaveText` "Rita Reader")
-    _ <- find ui ".home"
+    _ <- find ui ".directory"
     accepted <- filter (\r -> r.method == "POST") <$> asked
     map (\r -> r.url) accepted `shouldBe` ["api/v1/invitations/s3cr3t"]
     unmount ui

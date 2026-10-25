@@ -299,6 +299,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Shell
       Test.Browser.Slides
       Test.Browser.Source
+      Test.Browser.Spaces
       Test.Browser.Text
   build-depends:
       aeson,
