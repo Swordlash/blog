@@ -151,7 +151,16 @@ locate text a
   where
     n = T.length a.exact
     found s = Found Range {start = s, end = s + n}
-    occurrences = [T.length before | (before, _) <- T.breakOnAll a.exact text]
+    -- Every occurrence, those that overlap another included ("oteno" is
+    -- twice in "otenoteno"): 'T.breakOnAll' finds only those that do
+    -- not, and would take the second of two such for no occurrence at all.
+    occurrences = startingAt 0 text
+    startingAt offset rest = case T.breakOn a.exact rest of
+      (before, match)
+        | T.null match -> []
+        | otherwise ->
+            let s = offset + T.length before
+             in s : startingAt (s + 1) (T.drop (T.length before + 1) rest)
     score s =
       let before = T.take s text
           after = T.drop (s + n) text

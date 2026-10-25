@@ -85,6 +85,11 @@ spec = describe "Anchor" $ do
       let copies = "A note. A note. A note."
       locate copies (Anchor {exact = "A note.", prefix = "xx", suffix = "yy"}) `shouldBe` Orphaned
 
+    it "tells apart occurrences of a quote that overlap" $ do
+      let text = " NoteNotenotenotex"
+      locate text (anchorAt text Range {start = 10, end = 15}) `shouldBe` Found Range {start = 10, end = 15}
+      locate text (anchorAt text Range {start = 6, end = 11}) `shouldBe` Found Range {start = 6, end = 11}
+
     it "orphans an empty quote" $
       locate page (Anchor "" "" "") `shouldBe` Orphaned
 
