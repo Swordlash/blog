@@ -160,7 +160,7 @@ place of the static demo: the wiki's pages, kept on this machine, served to
 your tailnet.
 
 ```sh
-sh toolchain/deploy-local.sh --server --port 8080 --trust-network
+sh toolchain/deploy-local.sh --server --port 8080
 ```
 
 It builds the application as above and `wiki-server` natively with this
@@ -193,8 +193,8 @@ imports another's into it, merging rather than replacing (below).
 
 The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/app
 --listen <tailscale address>:8080 --admin-listen 127.0.0.1:8081`, and checks that
-both listeners answer. `--server`, the ports and `--trust-network` are remembered
-for the next run, like the other options; `--static` goes back to the demo.
+both listeners answer. `--server` and the ports are remembered for the next run,
+like the other options; `--static` goes back to the demo.
 
 - **Where the data lives.** `data/` is the whole wiki: the SQLite database and the
   attachments under their content hash. No deploy ever deletes it: a redeploy
@@ -216,11 +216,10 @@ for the next run, like the other options; `--static` goes back to the demo.
   while a kept backup names them.
 - **Who is asking.** The public address serves whoever has signed in ("Sign in"
   at the top right, with a login and a password), and anyone else as an anonymous
-  reader, who sees the public spaces and changes nothing. `--trust-network` makes
-  everyone who reaches that address the administrator instead, and nobody signs
-  in: right for a tailnet of your own devices, wrong for anything else. The server
-  logs a warning at every start and refuses it with `--bind 0.0.0.0` or `::`;
-  `--no-trust-network` takes it away.
+  reader, who sees the public spaces and changes nothing. (Before there were
+  accounts, `--trust-network` took everyone at that address for the
+  administrator. It is gone: a deployment that had it loses it on its next run,
+  and the script refuses it, pointing at the console below.)
 - **The first administrator.** There is no administrator account in the
   configuration: make one on the machine itself, with the server running or not.
   The password is asked for (twice, not shown), or read as the first line of
@@ -235,10 +234,9 @@ for the next run, like the other options; `--static` goes back to the demo.
   signs them out), makes or unmakes an administrator (`users admin LOGIN --on`,
   `--off`) and disables a login (`users disable LOGIN --on`, which signs them out;
   `--off` enables it). It is also how an installation whose administrators are all
-  locked out is recovered. Sign in on the public address with that login; until
-  `--trust-network` is taken away, that address takes everyone for the
-  administrator and offers no sign-in. Sessions last two weeks without use. Behind
-  HTTPS, run the server with `--secure-cookies`.
+  locked out is recovered. Sign in on the public address with that login.
+  Sessions last two weeks without use. Behind HTTPS, run the server with
+  `--secure-cookies`.
 - **The admin listener.** `http://127.0.0.1:8081/admin/` (`--admin-port` changes
   the port) serves the same application to whoever is on the machine, as the
   administrator, with no login; it listens on loopback only, and no firewall rule
@@ -251,9 +249,12 @@ for the next run, like the other options; `--static` goes back to the demo.
 
   `curl http://127.0.0.1:8081/admin/api/v1/admin/status` says which version runs,
   where its data is, and how many spaces, pages, attachments and backups it has.
-  Its "Administration" page marks a user as an administrator (or takes it
-  away), who, once they can sign in, has the same page on the public listener;
-  and it keeps groups and their members.
+  Its "Administration" page makes users with a password, gives them a new one,
+  disables and enables their logins, lets them create spaces, and marks them as
+  administrators (or takes it away), who then have the same page on the public
+  listener, signed in; and it keeps groups and their members. Who may read,
+  edit and administer a space is in the space's own "Permissions", for whoever
+  administers it.
 - **Logs.** `journalctl --user -u wiki-demo -f`: one `key=value` line per request
   (listener, who, method, path, status, milliseconds), and an error line with the
   exception for anything that fails.
@@ -265,9 +266,10 @@ the server's administration imports it from there, or from the demo's export:
 
 1. Deploy the server with the demo's name and port (the defaults, as the demo was
    deployed), so that it serves the address the browser kept the demo's data for:
-   `sh toolchain/deploy-local.sh --server --trust-network`.
-2. In the browser you wrote the demo in, open the wiki at that address, then
-   "Administration" in the header. Under "Wiki data", "Import this browser's demo
+   `sh toolchain/deploy-local.sh --server`, and make yourself an administrator
+   with the console (above).
+2. In the browser you wrote the demo in, open the wiki at that address, sign in,
+   then "Administration" in the header. Under "Wiki data", "Import this browser's demo
    data…" is offered when the demo left its wiki in this browser at this address.
    Anywhere else (another browser, another address), export the demo first: in the
    demo's own administration, "Export the wiki" downloads a zip file, which the
@@ -353,8 +355,9 @@ there with the compose file beside it.
     'cd /data && mkdir -p replaced && mv wiki.sqlite* replaced/ && cp backups/<time>.sqlite wiki.sqlite'
   docker compose start
   ```
-- **Who is asking.** The published port serves an anonymous reader: public spaces
-  only, nothing changed. `WIKI_PORT` changes the host's port and `WIKI_BIND` the
+- **Who is asking.** The published port serves whoever signs in there, and
+  anyone else as an anonymous reader: public spaces only, nothing changed.
+  `WIKI_PORT` changes the host's port and `WIKI_BIND` the
   host's address it is published on (`WIKI_BIND=127.0.0.1` behind a reverse proxy
   on the same machine).
 - **The admin listener** listens on the container's own loopback,
@@ -369,23 +372,6 @@ there with the compose file beside it.
   admin listener (the API is `docs/api.md`). Make the first administrator there
   too: `docker compose exec wiki wiki-server users add --data /data you --admin`
   (add `-T` and pipe the password in to give it on standard input).
-- **Trusted mode.** `--trust-network` makes everyone who reaches the public
-  listener the administrator, and the server refuses it on `0.0.0.0`, the only
-  address a container on its own network can listen on: whether that is safe
-  depends on where the host publishes the port, which the server cannot see. So
-  trusted mode runs the container on the host's network, with the server bound to
-  the private address itself, exactly as `deploy-local.sh --server
-  --trust-network` runs it:
-
-  ```sh
-  WIKI_TRUSTED_ADDRESS=$(tailscale ip -4) \
-    docker compose -f docker-compose.yml -f docker-compose.trusted.yml up -d --build
-  ```
-
-  The public listener is then `WIKI_TRUSTED_ADDRESS:8080` (`WIKI_PORT`), and the
-  admin listener the host's `127.0.0.1:8081` (`WIKI_ADMIN_PORT`), reached on that
-  machine or through an SSH tunnel as above. Give the same two files to every later
-  `docker compose` command, or the next `up` goes back to the default mode.
 - **An image from your own build.** `docker build --build-context
   release=<dir> -t wiki-server .` packages a `<dir>/bin/wiki-server` and
   `<dir>/app/` built on the host (the application with `WIKI_BACKEND=server`, the
@@ -544,8 +530,8 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 | [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS, and `bundle.sh`, which bundles the islands' libraries from `web/src/`. |
 | [toolchain/](toolchain/) | | Build and test scripts, adapted from haskell-halogen's. |
 
-At the top, `Dockerfile`, `docker-compose.yml` and `docker-compose.trusted.yml`
-run the server in Docker (above); `.dockerignore` keeps everything but the sources
+At the top, `Dockerfile` and `docker-compose.yml` run the server in Docker
+(above); `.dockerignore` keeps everything but the sources
 out of the build.
 
 haskell-halogen's packages come from one `source-repository-package` stanza in

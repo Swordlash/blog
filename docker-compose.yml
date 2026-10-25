@@ -18,8 +18,10 @@
 #   docker compose exec wiki wiki-server backup --data /data   # while it runs
 #   docker compose run --rm backup                             # or while it is stopped
 #
-# To edit the wiki from a browser before Phase 3 brings accounts, run it on a
-# private network in trusted mode instead: docker-compose.trusted.yml.
+# The published port serves whoever signs in there. Make the first
+# administrator with the console, then sign in as them:
+#
+#   docker compose exec wiki wiki-server users add --data /data LOGIN --admin
 name: wiki
 
 services:

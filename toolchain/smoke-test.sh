@@ -6,8 +6,9 @@
 # 1. toolchain/smoke-test.mjs: the serverless demo, as a static host serves
 #    it (the build's own pages).
 # 2. toolchain/smoke-test-server.mjs: the same app.wasm with the server's
-#    page (wiki-app-prerender --server), served by a real wiki-server
-#    --trust-network on a temporary data directory, driven end to end.
+#    page (wiki-app-prerender --server), served by a real wiki-server on a
+#    temporary data directory, with an administrator made on its console who
+#    signs in, driven end to end.
 #
 # The second needs wiki-server and wiki-app-prerender built natively, which
 # this builds first (quickly, when npm run build-native has).

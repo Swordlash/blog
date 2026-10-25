@@ -10,20 +10,25 @@
 // the backend is chosen by the page (<meta name="wiki-backend">). So this
 // copies it into a temporary directory, without the demo's pages, and writes
 // the server's there with wiki-app-prerender --server, as
-// WIKI_BACKEND=server toolchain/build-wasm.sh would. It then starts
-// wiki-server --trust-network (everyone on the public listener is the
-// administrator) on a temporary data directory and free ports of 127.0.0.1,
-// and drives the application end to end against it:
+// WIKI_BACKEND=server toolchain/build-wasm.sh would. It makes an
+// administrator with the console, as an owner makes the first one
+// (`wiki-server users add LOGIN --admin`, the password on standard input),
+// starts wiki-server on a temporary data directory and free ports of
+// 127.0.0.1, and drives the application end to end against it:
 //
-// 1. The front page as the server renders it, with its content before
-//    app.wasm runs, adopted by the program with nothing to repair and
-//    without asking the API anything, from what the page carries.
+// 1. The front page as the server renders it to someone not signed in, with
+//    its content before app.wasm runs, adopted by the program with nothing
+//    to repair and without asking the API anything, from what the page
+//    carries; then signing in through the header's form, as the
+//    administrator.
 // 2. A space and a page made through the forms; typing and saving (Ctrl+S,
 //    "Saved"); a draft kept as the typing stops and restored after a reload;
 //    a file attached and served; a conflict (the page saved through the API
 //    meanwhile, then saved in the editor); search; the export downloaded
-//    from the administration, and a group made there; and a fresh browser
-//    finding all of it there.
+//    from the administration, a user and a group made there; a space made
+//    public in its permissions, which a visitor who is not signed in sees,
+//    and only that, with no way to the administration; and a fresh browser,
+//    signed in, finding all of it there.
 // 3. Every route the walk went through, loaded afresh: each served with its
 //    status and its content before app.wasm runs, adopted with nothing to
 //    repair and no request to the API; and a page read with JavaScript off.
@@ -73,10 +78,21 @@ execFileSync(binary("WIKI_PRERENDER", "wiki-app:exe:wiki-app-prerender"), ["--se
 const page404 = await readFile(join(app, "404.html"), "utf8");
 assert.match(page404, /<meta name="wiki-backend" content="server">/, "the server's page does not say so");
 
+// The first administrator, made with the console before the server starts,
+// the password read from standard input.
+const wikiServer = binary("WIKI_SERVER", "wiki-server:exe:wiki-server");
+const adminLogin = "ada";
+const adminName = "Ada Admin";
+const adminPassword = "the smoke test's password";
+execFileSync(wikiServer, ["users", "add", "--data", data, adminLogin, "--display-name", adminName, "--admin"], {
+  input: `${adminPassword}\n`,
+  stdio: ["pipe", "inherit", "inherit"],
+});
+
 // The server, on free ports, its log read for the addresses it took.
 const server = spawn(
-  binary("WIKI_SERVER", "wiki-server:exe:wiki-server"),
-  ["serve", "--data", data, "--static", app, "--listen", "127.0.0.1:0", "--admin-listen", "127.0.0.1:0", "--trust-network"],
+  wikiServer,
+  ["serve", "--data", data, "--static", app, "--listen", "127.0.0.1:0", "--admin-listen", "127.0.0.1:0"],
   { stdio: ["ignore", "pipe", "pipe"] },
 );
 let log = "";
@@ -93,7 +109,20 @@ const listening = new Promise((ready, fail) => {
 const origin = await Promise.race([listening, new Promise((_, fail) => setTimeout(() => fail(new Error(`wiki-server did not start:\n${log}`)), timeout))]);
 const url = (path) => `${origin}${path}`;
 const here = (page) => new URL(page.url()).pathname;
-console.log(`note: wiki-server --trust-network at ${origin}, data in ${data}`);
+console.log(`note: wiki-server at ${origin}, data in ${data}, administrator ${adminLogin}`);
+
+// The administrator's session, for what the walk asks the API itself and for
+// the browsers that start signed in: signed in as the application does,
+// with the header its requests carry.
+const signedIn = await fetch(url("/api/v1/session"), {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
+  body: JSON.stringify({ login: adminLogin, password: adminPassword }),
+});
+assert.equal(signedIn.status, 200, "signing in through the API");
+const sessionToken = /wiki_session=([^;]+)/.exec(signedIn.headers.get("set-cookie") ?? "")?.[1];
+assert.ok(sessionToken, "no session cookie");
+const sessionCookie = `wiki_session=${sessionToken}`;
 
 const browser = await chromium.launch();
 
@@ -111,8 +140,10 @@ async function eventually(check, what) {
 
 // A page that reports what goes wrong in it, with the shim answered
 // locally; app.wasm and the API wait for their gates when they are set.
-async function newPage() {
+// Signed in as the administrator, unless told it is someone who is not.
+async function newPage({ anonymous = false } = {}) {
   const context = await browser.newContext({ acceptDownloads: true });
+  if (!anonymous) await context.addCookies([{ name: "wiki_session", value: sessionToken, url: origin }]);
   const page = await context.newPage();
   page.on("pageerror", (error) => failures.push(`page error at ${page.url()}: ${error.message}`));
   page.on("console", (message) => {
@@ -232,13 +263,13 @@ async function serveTheDemo(route) {
   await route.fulfill({ status: 404, headers, contentType: "text/html", body: await readFile(join(built, "404.html")) });
 }
 
-// What the API says, as the administrator the server takes everyone for.
-// A write carries the header the application's own requests carry, without
-// which the server refuses it (another site's page cannot send it).
+// What the API says, to the administrator's session. A write carries the
+// header the application's own requests carry, without which the server
+// refuses it (another site's page cannot send it).
 const api = async (path, init = {}) => {
   const response = await fetch(url(`/api/v1/${path}`), {
     ...init,
-    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", ...init.headers },
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", Cookie: sessionCookie, ...init.headers },
   });
   return { status: response.status, body: response.status === 204 ? null : await response.json() };
 };
@@ -268,10 +299,10 @@ async function migrateTheDemo() {
   console.log(`ok: the demo, served at the server's address, keeps its wiki in this browser and exports it as ${exported.suggestedFilename()}`);
 
   // A write without the application's header is another site's, and
-  // refused even here, where everyone is the administrator.
+  // refused even with the administrator's cookie.
   const forged = await fetch(url("/api/v1/spaces"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Cookie: sessionCookie },
     body: JSON.stringify({ parent: null, name: "Forged" }),
   });
   assert.equal(forged.status, 403, "a write without the application's header");
@@ -289,9 +320,8 @@ async function migrateTheDemo() {
   // The server's administration offers both sources: a zip file, and the
   // demo's data, since the demo left it in this origin.
   await page.goto(url("/"));
-  await page.locator("#app .user-name", { hasText: "Administrator" }).waitFor({ timeout });
-  // Everyone is the administrator here, so nobody is offered to sign in.
-  assert.equal(await page.locator("#app .sign-in-toggle, #app .sign-out").count(), 0, "sign-in offered on a trusted network");
+  await page.locator("#app .user-name", { hasText: adminName }).waitFor({ timeout });
+  await page.locator("#app .sign-out").waitFor({ timeout });
   await page.locator("#app .wiki-header a.admin-link").click();
   await page.locator("#app .admin-view .import-sources .import-demo").waitFor({ timeout });
 
@@ -367,14 +397,25 @@ try {
   assert.match(frontHtml, /<h1>Welcome to the wiki<\/h1>/, "the front page is not rendered");
   assert.ok(!frontHtml.includes("Loading…"), "the front page is the application loading");
   assert.match(frontHtml, /<script type="application\/json" id="wiki-preload">/, "the front page carries nothing for the program");
-  const page = await newPage();
+  const page = await newPage({ anonymous: true });
   const atFront = await loadAdopted(page, "/");
   assert.deepEqual(atFront.repairs, [], "adopting the front page repaired it");
   assert.deepEqual(atFront.asked, [], "the program asked the API for what the front page carries");
   assert.ok(atFront.shown.includes("There are no spaces you can see."), `the front page before app.wasm: ${atFront.shown}`);
-  await page.locator("#app .user-name", { hasText: "Administrator" }).waitFor({ timeout });
   assert.equal(await page.locator("#app .user-switcher").count(), 0, "a server's wiki offers the demo's user switcher");
+  assert.equal(await page.locator("#app .admin-link").count(), 0, "the way to the administration, to nobody");
   console.log("ok: the server renders the front page, which the program adopts with nothing to repair and nothing asked");
+
+  // Signing in, through the header's form, as the administrator the console
+  // made: the shell reloads as them, with the way to the administration.
+  await page.locator("#app .sign-in-toggle").click();
+  await page.locator("#app .sign-in-form input[name=login]").fill(adminLogin);
+  await page.locator("#app .sign-in-form input[name=password]").fill(adminPassword);
+  await page.locator("#app .sign-in-form button[type=submit]").click();
+  await page.locator("#app .user-name", { hasText: adminName }).waitFor({ timeout });
+  await page.locator("#app .sign-out").waitFor({ timeout });
+  await page.locator("#app .wiki-header a.admin-link").waitFor({ timeout });
+  console.log(`ok: signs in through the header as ${adminLogin}, the administrator made on the console`);
 
   // ---- 2. A walk through the wiki --------------------------------------------
 
@@ -405,7 +446,7 @@ try {
   });
   const attachment = page.locator("#app .editor-attachments a", { hasText: "notes.txt" });
   await attachment.waitFor({ timeout });
-  const served = await fetch(new URL(await attachment.getAttribute("href"), url("/")));
+  const served = await fetch(new URL(await attachment.getAttribute("href"), url("/")), { headers: { Cookie: sessionCookie } });
   assert.equal(served.status, 200);
   assert.equal(await served.text(), "attached by the smoke test\n", "the attachment's bytes");
   await eventually(async () => assert.ok((await markdownIn(page)).includes("(attachment:notes.txt)"), "no reference yet"), "the attachment's reference");
@@ -428,18 +469,18 @@ try {
 
   // Someone else saves the page meanwhile, through the API; the editor's
   // save is then a conflict, said in place, with the work kept.
-  const space = await (await fetch(url("/api/v1/spaces/at/smoke-space"))).json();
-  const atPath = await fetch(url(`/api/v1/spaces/${encodeURIComponent(space.id)}/pages/at/first-page`));
+  const space = await (await fetch(url("/api/v1/spaces/at/smoke-space"), { headers: { Cookie: sessionCookie } })).json();
+  const atPath = await fetch(url(`/api/v1/spaces/${encodeURIComponent(space.id)}/pages/at/first-page`), { headers: { Cookie: sessionCookie } });
   const current = await atPath.json();
   const saved = await fetch(url(`/api/v1/pages/${encodeURIComponent(current.id)}`), {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", "If-Match": atPath.headers.get("etag") },
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", Cookie: sessionCookie, "If-Match": atPath.headers.get("etag") },
     body: JSON.stringify({ title: "First page", body: `${current.body}\n\nSaved by someone else.` }),
   });
   assert.equal(saved.status, 200, "the API's save");
   const stale = await fetch(url(`/api/v1/pages/${encodeURIComponent(current.id)}`), {
     method: "PUT",
-    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", "If-Match": atPath.headers.get("etag") },
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", Cookie: sessionCookie, "If-Match": atPath.headers.get("etag") },
     body: JSON.stringify({ title: "First page", body: "stale" }),
   });
   assert.equal(stale.status, 409, "a save with a stale version through the API");
@@ -474,7 +515,7 @@ try {
   const versions = await versionNames();
   assert.ok(versions.length >= 4, `the history lists ${versions.length} versions`);
   assert.equal(versions[0], `Version ${versions.length} (current)`, "the latest is not first");
-  assert.ok((await content(page)).includes("by Administrator"), "the versions' author");
+  assert.ok((await content(page)).includes(`by ${adminName}`), "the versions' author");
   const restore = async (n, shows, lacks) => {
     await page.locator("#app .version-list li > a", { hasText: new RegExp(`^Version ${n}$`) }).click();
     await page.locator("#app .version-detail h2", { hasText: `Version ${n}` }).waitFor({ timeout });
@@ -499,16 +540,54 @@ try {
   assert.equal((await readFile(await exported.path())).subarray(0, 2).toString(), "PK", "the export is not a zip file");
   console.log(`ok: the administration downloads the server's export, ${exported.suggestedFilename()}`);
 
-  // A group, made in the administration's people, which the server keeps.
-  await page.locator("#app .admin-view .admin-users .empty", { hasText: "There are no users yet." }).waitFor({ timeout });
+  // A user, made in the administration's people with a password, who signs
+  // in; and a group, which the server keeps.
+  await page.locator(`#app .admin-view .user-row[data-login=${adminLogin}] .administrator-self`).waitFor({ timeout });
+  await page.locator("#app .admin-view .user-create-login").fill("sam");
+  await page.locator("#app .admin-view .user-create-name").fill("Sam Smoke");
+  await page.locator("#app .admin-view .user-create-password").fill("sam's password");
+  await page.locator("#app .admin-view .user-create button.primary").click();
+  await page.locator("#app .admin-view .user-row[data-login=sam] .account-state", { hasText: "Signs in with a password" }).waitFor({ timeout });
+  const sam = await fetch(url("/api/v1/session"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
+    body: JSON.stringify({ login: "sam", password: "sam's password" }),
+  });
+  assert.equal(sam.status, 200, "the user made in the administration signing in");
+  assert.equal((await sam.json()).user.displayName, "Sam Smoke");
   await page.locator("#app .admin-view .group-create-name").fill("Smoke testers");
   await page.locator("#app .admin-view .group-create button.primary").click();
   await page.locator("#app .admin-view .group-name", { hasText: "Smoke testers" }).waitFor({ timeout });
   const people = await api("admin/directory");
   assert.equal(people.status, 200, "the directory");
   assert.deepEqual(people.body.groups.map((g) => g.name), ["Smoke testers"], "the server's groups");
-  console.log("ok: the administration makes a group, which the server keeps");
+  console.log("ok: the administration makes a user with a password, who signs in, and a group, which the server keeps");
+
+  // A second space, made public in its permissions; the first stays
+  // private.
+  const publicSpace = await api("spaces", { method: "POST", body: JSON.stringify({ parent: null, name: "Smoke public" }) });
+  assert.equal(publicSpace.status, 201, "the public space");
+  await page.goto(url("/s/smoke-public/"));
+  await page.locator("#app .space-view h1", { hasText: "Smoke public" }).waitFor({ timeout });
+  await page.locator("#app .space-view .permissions-toggle").click();
+  await page.locator("#app .space-permissions .public-switch[aria-checked=false]").click();
+  await page.locator("#app .space-view .badge", { hasText: "Public" }).waitFor({ timeout });
+  console.log("ok: a space is made public in its permissions");
   await page.context().close();
+
+  // Someone who is not signed in sees the public space only, and no way to
+  // the administration, which the server refuses them too.
+  const visitor = await newPage({ anonymous: true });
+  await visitor.goto(url("/"));
+  await eventually(async () => assert.ok(await programStarted(visitor), "no listener yet"), "the visitor's program starting");
+  await visitor.locator("#app .wiki-sidebar a", { hasText: "Smoke public" }).waitFor({ timeout });
+  assert.deepEqual(await visitor.locator("#app .wiki-sidebar .space-tree a").allTextContents(), ["Smoke public"], "the spaces a visitor sees");
+  assert.equal(await visitor.locator("#app .admin-link").count(), 0, "the way to the administration, to a visitor");
+  await visitor.locator("#app .sign-in-toggle").waitFor({ timeout });
+  assert.equal((await fetch(url("/s/smoke-space/"))).status, 403, "the private space, to a visitor");
+  assert.equal((await fetch(url("/api/v1/admin/directory"))).status, 403, "the administration's API, to a visitor");
+  await visitor.context().close();
+  console.log("ok: a visitor who is not signed in sees the public space and nothing else, and no administration");
 
   // Everything is there for a browser that has seen nothing.
   const fresh = await newPage();
@@ -526,6 +605,7 @@ try {
 
   const walked = [
     ["/", 200, "Smoke space"],
+    ["/s/smoke-public/", 200, "Smoke public"],
     ["/s/smoke-space/", 200, "First page"],
     ["/s/smoke-space/p/first-page/", 200, "Saved by someone else."],
     ["/s/smoke-space/p/first-page/source/", 200, "(attachment:notes.txt)"],
@@ -550,6 +630,7 @@ try {
 
   // Without JavaScript, the page is there all the same.
   const noScript = await browser.newContext({ javaScriptEnabled: false });
+  await noScript.addCookies([{ name: "wiki_session", value: sessionToken, url: origin }]);
   const reader = await noScript.newPage();
   const read = await reader.goto(url("/s/smoke-space/p/first-page/"));
   assert.equal(read.status(), 200);

@@ -10,8 +10,7 @@
 #   - a state file, $STATE_DIR/<name>.state, of key=value lines: the target
 #     directory, port and bind address, how the address was chosen, the
 #     port whose firewall rule this opened (empty when it opened none), and
-#     what is deployed (mode: static, or server with its admin_port and
-#     whether it trusts its network);
+#     what is deployed (mode: static, or server with its admin_port);
 #   - a target directory holding a marker file, .wiki-demo-deployment, which
 #     names the deployment: only a directory carrying it is ever emptied or
 #     deleted;
@@ -74,7 +73,6 @@ state_write() {
     printf 'rule_port=%s\n' "$rule_port"
     printf 'mode=%s\n' "${mode:-static}"
     printf 'admin_port=%s\n' "${admin_port:-}"
-    printf 'trust=%s\n' "${trust:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -250,7 +248,6 @@ undeploy() {
   rule_port=$(state_get rule_port)
   mode=$(state_get mode)
   admin_port=$(state_get admin_port)
-  trust=$(state_get trust)
   if [ -n "$rule_port" ]; then
     if [ -n "${no_firewall:-}" ]; then
       say "--no-firewall: leaving the firewall rule for port $rule_port as it is"

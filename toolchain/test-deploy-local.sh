@@ -513,7 +513,7 @@ pass '--server builds wiki-server at -O2, installs it with the page, and runs it
 : >"$EVENTS"
 printf 'precious\n' >>"$data/wiki.sqlite"
 out=$case_dir/again
-deploy --no-build --trust-network >"$out" 2>&1 || fail 'a server redeploy failed'
+deploy --no-build >"$out" 2>&1 || fail 'a server redeploy failed'
 stopped=$(line_of "$EVENTS" 'systemctl stop wiki-demo.service')
 backed=$(line_of "$EVENTS" 'wiki-server backup')
 restarted=$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')
@@ -521,36 +521,45 @@ restarted=$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')
 { [ "$stopped" -lt "$backed" ] && [ "$backed" -lt "$restarted" ]; } || fail 'the backup was not taken between the old server and the new'
 assert_contains "$data/wiki.sqlite" 'precious'
 assert_contains "$data/backups/0.sqlite" 'precious'
-assert_contains "$HOME/$unit" "--admin-listen 127.0.0.1:$a1 --trust-network"
-assert_contains "$out" 'WARNING: --trust-network'
-[ "$(state trust)" = yes ] || fail '--trust-network was not recorded'
 [ "$(http_get "http://127.0.0.2:$p1/api/v1/info")" = '200 application/json' ] || fail 'the redeployed server does not answer'
-pass 'a redeploy keeps data/, backs it up after stopping the old server and before the new; --trust-network reaches the unit'
+pass 'a redeploy keeps data/, backs it up after stopping the old server and before the new'
 
 : >"$EVENTS"
 out=$case_dir/status
 deploy --status >"$out" 2>&1
 assert_contains "$out" "the wiki's server, its data in $data"
 assert_contains "$out" 'backups: 1 in'
-assert_contains "$out" 'everyone who reaches'
+assert_contains "$out" "users add --data $data LOGIN --admin"
 pass '--status reports the server, its data and its backups'
 
+# A deployment of a version that trusted its network: the flag is refused,
+# saying how to make an administrator instead, before anything changes; the
+# next deploy drops it, and says so.
 : >"$EVENTS"
-out=$case_dir/wildcard
-if deploy --no-build --bind 0.0.0.0 >"$out" 2>&1; then fail '--trust-network was deployed on 0.0.0.0'; fi
-assert_contains "$out" '--trust-network with --bind 0.0.0.0'
+printf 'trust=yes\n' >>"$HOME/.config/wiki-demo/wiki-demo.state"
+for flag in --trust-network --no-trust-network; do
+  out=$case_dir/trusted$flag
+  if deploy --no-build "$flag" >"$out" 2>&1; then fail "$flag was taken"; fi
+  assert_contains "$out" "$flag is gone"
+  assert_contains "$out" 'wiki-server users add --data <dir>/data LOGIN --admin'
+done
 assert_lacks "$EVENTS" 'systemctl stop'
-deploy --no-build --no-trust-network >"$case_dir/untrusted" 2>&1 || fail '--no-trust-network failed'
+deploy --status >"$case_dir/trusted-status" 2>&1
+assert_contains "$case_dir/trusted-status" 'it was deployed with --trust-network, which is gone'
+out=$case_dir/untrusted
+deploy --no-build >"$out" 2>&1 || fail 'the redeploy of a trusting deployment failed'
 assert_lacks "$HOME/$unit" 'trust-network'
-pass '--trust-network is refused on 0.0.0.0 before anything changes, and --no-trust-network drops it'
+assert_contains "$out" "that is gone. Sign in as an administrator there, made with"
+assert_contains "$out" "$HOME/wiki-demo/bin/wiki-server users add --data $HOME/wiki-demo/data LOGIN --admin"
+[ -z "$(state trust)" ] || fail 'the state still says the network is trusted'
+pass '--trust-network is refused before anything changes, pointing at the console, and a deployment that had it loses it'
 
 : >"$EVENTS"
 out=$case_dir/backup-fails
-if FAKE_BACKUP_FAIL=1 deploy --no-build --trust-network >"$out" 2>&1; then fail 'deployed after a failed backup'; fi
+if FAKE_BACKUP_FAIL=1 deploy --no-build >"$out" 2>&1; then fail 'deployed after a failed backup'; fi
 assert_contains "$out" 'the backup of'
 assert_contains "$EVENTS" 'systemctl start wiki-demo.service'
 assert_lacks "$EVENTS" 'systemctl restart'
-assert_lacks "$HOME/$unit" 'trust-network'
 [ "$(http_get "http://127.0.0.2:$p1/api/v1/info")" = '200 application/json' ] || fail 'a failed backup left the old server down'
 pass 'a failed backup starts the old server again and changes nothing'
 
@@ -578,7 +587,7 @@ pass 'undeploy --purge keeps data/ for the next deploy, and --purge-data deletes
 
 fixture not-a-server
 out=$case_dir/out
-if deploy --trust-network >"$out" 2>&1; then fail '--trust-network deployed the demo'; fi
+if deploy --admin-port 9001 >"$out" 2>&1; then fail '--admin-port deployed the demo'; fi
 assert_contains "$out" 'is for the wiki'"'"'s server'
 if deploy --server --port 9000 --admin-port 9000 >"$out" 2>&1; then fail 'one port for both listeners was deployed'; fi
 assert_contains "$out" 'both 9000'

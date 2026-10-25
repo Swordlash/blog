@@ -69,7 +69,7 @@ application's backend over HTTP; docs/api.md lists every endpoint.
 - `Wiki.Api.Zip`: `application/zip`, for the export.
 - `Wiki.Api.Admin` and `AdminApi` (`api/v1/admin/…`): what only the
   administrator may ask, so far the server's status (`ServerStatus`: its
-  version, data directory, whether it trusts its network, and how many
+  version, data directory, and how many
   spaces, pages, attachments, users and backups it has).
 
 Golden files (`test-server/golden/`) pin down the JSON of every body a client

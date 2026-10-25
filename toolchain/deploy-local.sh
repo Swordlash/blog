@@ -4,8 +4,7 @@
 # wiki-server, with its data on this machine.
 #
 #   sh toolchain/deploy-local.sh [--server | --static] [--port N] [--bind ADDRESS]
-#                                [--admin-port N] [--trust-network | --no-trust-network]
-#                                [--dir DIR] [--name NAME]
+#                                [--admin-port N] [--dir DIR] [--name NAME]
 #                                [--no-build] [--no-firewall] [--enable-linger] [--force]
 #   sh toolchain/deploy-local.sh --stop [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--name NAME]
@@ -59,10 +58,6 @@
 #                    the administration to whoever is on this machine (default the
 #                    previous one, or 8081); from elsewhere, through
 #                    ssh -L 8081:127.0.0.1:8081 <this machine>
-#   --trust-network  --server: take everyone who reaches --bind's address for the
-#                    administrator, until the wiki has accounts (Phase 3); for a
-#                    private network such as Tailscale only, and refused with
-#                    --bind 0.0.0.0 or ::. Remembered until --no-trust-network
 #   --dir DIR        where to install (default the previous one, or ~/<name>)
 #   --name NAME      the deployment, and its unit NAME.service (default wiki-demo);
 #                    deployments with different names live side by side
@@ -75,6 +70,14 @@
 #                    disable the service, remove its unit, close its port; files and
 #                    data kept)
 #   --status         show the deployment and its service, change nothing
+#
+# The public address serves whoever signs in there, and anyone else as an
+# anonymous reader. The first administrator is made on this machine, with the
+# console: <dir>/bin/wiki-server users add --data <dir>/data LOGIN --admin
+# (it asks for the password); they then sign in at the public address. The
+# --trust-network of earlier versions, which took everyone there for the
+# administrator, is gone, and a deployment that had it loses it on its next
+# run.
 set -eu
 
 PROG=deploy-local
@@ -87,7 +90,7 @@ usage() {
 }
 
 name=wiki-demo
-opt_port='' opt_bind='' opt_dir='' opt_mode='' opt_admin_port='' opt_trust=''
+opt_port='' opt_bind='' opt_dir='' opt_mode='' opt_admin_port=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
@@ -101,8 +104,8 @@ while [ $# -gt 0 ]; do
     --static) opt_mode=static ;;
     --admin-port) need_value $# "$1"; opt_admin_port=$2; shift ;;
     --admin-port=*) opt_admin_port=${1#*=} ;;
-    --trust-network) opt_trust=yes ;;
-    --no-trust-network) opt_trust=no ;;
+    --trust-network | --no-trust-network)
+      die "$1 is gone: the public address serves whoever signs in. Make an administrator with the console (<dir>/bin/wiki-server users add --data <dir>/data LOGIN --admin, which asks for the password) and sign in as them" ;;
     --dir) need_value $# "$1"; opt_dir=$2; shift ;;
     --dir=*) opt_dir=${1#*=} ;;
     --name) need_value $# "$1"; name=$2; shift ;;
@@ -193,7 +196,7 @@ if [ "$action" = status ]; then
   say "deployment $name: $prev_dir, on $prev_bind:$prev_port"
   if [ "$prev_mode" = server ]; then
     say "the wiki's server, its data in $prev_dir/data; its admin listener on 127.0.0.1:$prev_admin_port"
-    [ "$prev_trust" != yes ] || say "--trust-network: everyone who reaches $prev_bind:$prev_port is the administrator"
+    [ "$prev_trust" != yes ] || say "it was deployed with --trust-network, which is gone: the next deploy serves the public address to whoever signs in there"
     backups=$(ls "$prev_dir/data/backups" 2>/dev/null | grep -c '[.]sqlite$' || true)
     latest=$(ls "$prev_dir/data/backups" 2>/dev/null | grep '[.]sqlite$' | tail -n 1 || true)
     say "backups: ${backups:-0} in $prev_dir/data/backups${latest:+, the latest $latest}"
@@ -241,17 +244,10 @@ case $admin_port in
   '' | 0* | *[!0-9]*) die "invalid --admin-port '$admin_port': a number from 1024 to 65535" ;;
 esac
 { [ "$admin_port" -ge 1024 ] && [ "$admin_port" -le 65535 ]; } || die "invalid --admin-port $admin_port: a number from 1024 to 65535"
-case $opt_trust in
-  yes) trust=yes ;;
-  no) trust= ;;
-  *) if [ "$prev_trust" = yes ]; then trust=yes; else trust=; fi ;;
-esac
 if [ "$mode" = server ]; then
   [ "$admin_port" != "$port" ] || die "--admin-port and --port are both $port: choose two ports"
 else
-  [ "$opt_trust" != yes ] || die "--trust-network is for the wiki's server: add --server"
   [ -z "$opt_admin_port" ] || die "--admin-port is for the wiki's server: add --server"
-  trust=
 fi
 
 # The directory, absolute and with symbolic links resolved, so that the
@@ -307,11 +303,6 @@ fi
 case $bind in
   '' | *[!0-9A-Fa-f.:]*) die "invalid --bind '$bind': an IPv4 or IPv6 address" ;;
 esac
-if [ -n "$trust" ]; then
-  case $bind in
-    0.0.0.0 | :: | 0:0:0:0:0:0:0:0) die "--trust-network with --bind $bind would make whoever reaches any of this machine's addresses the administrator: bind to the Tailscale address (the default) instead" ;;
-  esac
-fi
 
 out=$ROOT/dist-newstyle/wasm-opt/public/app
 
@@ -469,7 +460,7 @@ case $bind in
 esac
 if [ "$mode" = server ]; then
   description="Wiki server ($name) from $dir on $bind:$port"
-  exec_start="\"$dir/bin/wiki-server\" serve --data \"$dir/data\" --static \"$dir/app\" --listen $listen --admin-listen 127.0.0.1:$admin_port${trust:+ --trust-network}"
+  exec_start="\"$dir/bin/wiki-server\" serve --data \"$dir/data\" --static \"$dir/app\" --listen $listen --admin-listen 127.0.0.1:$admin_port"
   # The data is the owner's alone, and a stop lets the requests under way
   # finish (the server gives them ten seconds).
   service_extra="UMask=0077
@@ -561,12 +552,12 @@ Logs:    journalctl --user -u $name -f
 Status:  sh toolchain/deploy-local.sh --status --name $name
 Stop:    sh toolchain/undeploy-local.sh --name $name   (--purge deletes the files but data/, --purge-data that too)
 EOF
-  if [ -n "$trust" ]; then
-    printf '\n%s: WARNING: --trust-network: everyone who can reach %s is the administrator of\n' "$PROG" "$listen"
-    printf '%s: this wiki, and may read, change and delete all of it. Keep that address private.\n' "$PROG"
-  else
-    printf '\nThe public address serves whoever signs in there, and anyone else as an anonymous\n'
-    printf 'reader, who sees the public spaces only; the administrator is on the admin listener.\n'
+  printf '\nThe public address serves whoever signs in there, and anyone else as an anonymous\n'
+  printf 'reader, who sees the public spaces only; the operator is on the admin listener.\n'
+  if [ "$prev_trust" = yes ]; then
+    printf '%s: the previous deployment took everyone at %s for the administrator\n' "$PROG" "$listen"
+    printf '%s: (--trust-network); that is gone. Sign in as an administrator there, made with\n' "$PROG"
+    printf '%s:   %s/bin/wiki-server users add --data %s/data LOGIN --admin\n' "$PROG" "$dir" "$dir"
   fi
 else
   printf '\nThe demo is served from %s. Open:\n' "$dir"

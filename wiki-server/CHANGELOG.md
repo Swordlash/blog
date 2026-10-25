@@ -20,8 +20,8 @@ and a `disabled` flag, and adds `sessions`, keyed by the SHA-256 of each
 session's random id. The public listener now finds who is asking per
 request: the user whose session the `wiki_session` cookie names, or nobody
 (no cookie, an ended session, a disabled user, and the cookie is then
-cleared); `--trust-network` still makes everyone the administrator, and the
-admin listener is still the operator, looking at no cookie. Handlers are
+cleared); the admin listener is still the operator, looking at no
+cookie. Handlers are
 given the caller (`Wiki.Server.Api.Caller`) instead of the listener's `Who`.
 `POST api/v1/session` signs in (401 for a wrong login or password, 429 after
 too many failures per login and address or per address, in memory), `DELETE`
@@ -47,7 +47,7 @@ each operation one transaction that first checks for the global administer
 it as well, which name it in a column that is no foreign key. The API's
 `admin/directory`, `admin/users/<user>/administrator`, `admin/groups…`
 endpoints are answered on the admin listener without a session, on the
-public one under `--trust-network`, and refused (403) to an anonymous reader.
+public one to an administrator's session, and refused (403) to anyone else.
 
 The server comes as a Docker image. The repository's `Dockerfile` builds
 `wiki-server` at `-O2` and the application in its server mode, on the pinned
@@ -56,9 +56,7 @@ toolchain, into a Debian slim image that runs as an unprivileged user (uid
 the public listener on port 8080 and keeps the admin listener on the
 container's loopback, reached with `docker compose exec`. The image's
 entrypoint backs the database up before each start of the server, as a deploy
-does. `--trust-network` is not accepted on `0.0.0.0`, so trusted mode runs the
-container on the host's network with the server bound to the private address
-(`docker-compose.trusted.yml`). See the README's "Running in Docker".
+does. See the README's "Running in Docker".
 
 Page history, over the `page_versions` table the schema had from the start
 (no migration): `SqliteWiki` lists a page's versions, the latest first
@@ -107,9 +105,8 @@ storage in `--data DIR` and serves the wiki on two listeners, each a Warp
 server, in one process over one storage:
 
 - the public listener, `--listen HOST:PORT` (default `127.0.0.1:8080`),
-  serves the wiki at `--base-path` (default `/`) to an anonymous reader; with
-  `--trust-network` everyone who reaches it is the administrator, which the
-  server warns about as it starts and refuses on `0.0.0.0` or `::`;
+  serves the wiki at `--base-path` (default `/`) to whoever signs in there,
+  and to anyone else as an anonymous reader;
 - the admin listener, `--admin-listen HOST:PORT` (default `127.0.0.1:8081`,
   `--no-admin-listen` for none), serves the same at `/admin/` to the
   administrator without a login, and is refused on any address that is not
