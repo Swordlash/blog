@@ -1897,3 +1897,38 @@ Amended by the planning session after each work package's report.
   way" needs a notion beside `withPassword`.
 - **WP3.5 started** (2026-10-25) on `wp3.5-open-closed` from `main` `fa083d1`, beside the
   running WP4.2; whichever merges second rebases.
+- **WP4.2 merged** (2026-10-25, PR #58, `main` at `7b8fb10`). A page is a slide deck:
+  `Wiki.Core.Slides.deckOf` cuts the parsed page at its top-level thematic breaks (a `---`
+  inside a list, quotation or box stays a rule), the first top-level heading is the slide's
+  title (a level-1 heading makes a title slide), `::: notes` divs are the speaker's notes,
+  each footnote goes to the first slide that refers to it, empty slides are dropped;
+  `isDeck` holds for a page with a top-level break or a `::: {.slides theme=beamer|light|dark
+  aspect=16:9|4:3}` div (shown nowhere, case-insensitive, unknown values default).
+  `renderDeck` renders the deck as one document through the new `Render.renderSections`
+  (island keys unique across slides, macros carry over, footnote ids unique; a footnote
+  list now writes `<ol start>` when it does not start at 1). Route `PageSlides` at
+  `…/p/<page>/slides/?slide=N` (1-based, left out for 1, replaced in the history so Back
+  leaves the deck); `slides` is a reserved word, so a page or space slugged `slides` is
+  written `~slides` and old links to `…/p/slides/` no longer resolve, as `history` did.
+  `View/Slides.hs` (`hh`): the window covered, one slide shown scaled with container units,
+  progress bar, controls (Back to page, ‹ n / N ›, Notes, Overview, Full screen, Print,
+  "with notes"); keys ← → Space PageUp PageDown Home End Enter, `f` fullscreen (controls
+  fade until hovered), `n`/`s` notes below, `o` overview (click or Enter picks, Escape
+  closes), swipe; the search box's `/` ignores keys inside the view. All slides are
+  rendered and their islands drawn once, the stylesheet hides all but the current, which
+  is what makes print work: `@media print` puts each slide on a page of its shape, or with
+  "with notes" on an A4 page above its notes. "Present" after "History" for every reader,
+  only where `isDeck`. Shell crumb "Slides"; the demo prerenders the slides route of every
+  deck; the server renders it with the page's 403/404. Demo page Docs › Markdown guide ›
+  Presentations (7 slides: math, Mermaid, code, a table, notes); `docs/markdown.md` has a
+  "Presentations" section. Tests: 20 splitting and options cases, 4 deck-rendering cases,
+  route round-trip, hydration at zero repairs (prerendered and server-rendered, `?slide=4`
+  and a non-deck page), server render 200/403/404, 9 browser cases, both smoke tests (the
+  demo prints a 7-page PDF under print emulation). Counts: core 591+92, app 568, server
+  407, browser 134. Not done, carried: the theme from the space's settings (needs a space
+  field and a migration), notes in a second window; not browser-testable: swipe,
+  fullscreen, the print layout beyond page count. A static host serves the slide-1
+  prerender for `?slide=N`, repaired on adoption, as `history/?version=` is. For a later
+  pandoc/Beamer export: build on `deckOf` (level-1 title → title page or `\section`,
+  level-2 → frame title, notes → `\note{}`, theme/aspect → `\usetheme`/`aspectratio`),
+  pre-split since pandoc cuts at headings; islands would need server-side rendering.
