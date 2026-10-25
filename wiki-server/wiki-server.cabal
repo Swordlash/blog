@@ -68,6 +68,8 @@ library
         Wiki.Server.Auth
         Wiki.Server.Console
         Wiki.Server.Events
+        Wiki.Server.Export
+        Wiki.Server.Export.Document
         Wiki.Server.Import
         Wiki.Server.Limiter
         Wiki.Server.Log
@@ -112,12 +114,15 @@ library
         http-types,
         network,
         optparse-applicative,
+        pandoc,
+        pandoc-types,
         protolude,
         ram,
         servant-multipart,
         servant-server,
         smtp-mail >= 0.5.0.1,
         stm,
+        texmath,
         wai-websockets >= 3.0.1 && < 3.1,
         websockets >= 0.13 && < 0.14,
         mime-mail,
@@ -173,6 +178,7 @@ test-suite wiki-server-test
         Test.Server.Accounts
         Test.Server.Api
         Test.Server.Comments
+        Test.Server.Export
         Test.Server.FakeProvider
         Test.Server.Fixture
         Test.Server.Http
@@ -205,6 +211,7 @@ test-suite wiki-server-test
         http-types,
         network,
         optparse-applicative,
+        pandoc-types,
         protolude,
         ram,
         servant,

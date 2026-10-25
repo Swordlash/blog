@@ -65,6 +65,11 @@ authorisation.
   so), with replies, edits, deletion, and resolving; and threads about the
   whole page under it. Over `wiki-server` a comment made in one tab shows in
   every other tab on the page as it is made, over a WebSocket.
+- Export over `wiki-server`: a page as Word, a standalone web page, an e-book or
+  a PDF, a deck also as PowerPoint and as a Beamer presentation (its LaTeX, or
+  its PDF), and a space as one document of its pages with a title page and a
+  table of contents, from an "Export" menu. The server makes them with pandoc,
+  linked into it; only the PDFs need something installed (below).
 - Search by title and text from a box in the header (`/` to focus it), in every
   space or in one, with a page of results at an address of its own.
 - Three demo users and nobody, switched between in the header instead of a
@@ -180,7 +185,9 @@ It builds the application as above and `wiki-server` natively with this
 repository's packages at `-O2` (`cabal-native-opt.project`, into
 `dist-newstyle/native-opt`; the first time compiles only those four packages, the
 dependencies come from the cabal store), and installs into the deployment's
-directory:
+directory. The server links pandoc, for exporting pages as documents: the
+first build that needs it compiles pandoc and its dependencies into the cabal
+store, which takes a while (twenty minutes or more), once.
 
 ```
 ~/wiki-demo/bin/wiki-server   the server
@@ -209,6 +216,12 @@ The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/ap
 both listeners answer. `--server` and the ports are remembered for the next run,
 like the other options; `--static` goes back to the demo.
 
+- **PDFs, optionally.** Pages export as Word, HTML, EPUB, PowerPoint and Beamer
+  LaTeX with nothing installed. The PDFs are typeset by `xelatex`, which the
+  server looks for on its `PATH` each time: install it and they are offered at
+  once, with no restart (`sudo apt install texlive-xetex`, and
+  `texlive-pictures` for TikZ pictures, `texlive-science` for `\ce`
+  chemistry). The administration's "Server" section says whether it was found.
 - **Where the data lives.** `data/` is the whole wiki: the SQLite database and the
   attachments under their content hash. No deploy ever deletes it: a redeploy
   replaces everything else in the directory, and so does going back to the demo.
@@ -418,6 +431,9 @@ installs it) and compiles every dependency, those of the wasm build at `-O2`,
 `ghc-lib-parser` among them: well over an hour. Later builds reuse those layers, and the build directories through a BuildKit cache mount, so a
 change to the sources compiles only what it touches. The image itself is about
 240 MB (60 MB compressed). Only x86_64 Linux is supported, as by the bootstrap.
+The server exports pages as documents with the pandoc linked into it, but the
+image has no TeX, so it offers no PDFs; `docker compose build --build-arg
+WIKI_TEX=1` adds `xelatex` (with TikZ and mhchem), several hundred megabytes more.
 On a small VPS, build the image elsewhere and carry it over:
 `docker save wiki-server | ssh you@vps docker load`, then `docker compose up -d`
 there with the compose file beside it.

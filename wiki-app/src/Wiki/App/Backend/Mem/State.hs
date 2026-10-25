@@ -602,6 +602,8 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
         B.standing = SignedIn
       , -- The demo signs in with no provider.
         B.providers = []
+      , -- Nor does it export: pandoc is the server's.
+        B.exports = []
       }
 
 -- | The spaces the current user may view, with their ancestors.

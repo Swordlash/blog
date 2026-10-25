@@ -25,7 +25,8 @@
 //    "Saved"); a draft kept as the typing stops and restored after a reload;
 //    a file attached and served; a conflict (the page saved through the API
 //    meanwhile, then saved in the editor); search; the export downloaded
-//    from the administration, a user and a group made there; a space made
+//    from the administration, a user and a group made there; a page
+//    exported as a Word document from its "Export" menu; a space made
 //    public in its permissions, which a visitor who is not signed in sees,
 //    and only that, with no way to the administration; and a fresh browser,
 //    signed in, finding all of it there.
@@ -802,6 +803,16 @@ try {
   }
   await fresh.locator("#app .wiki-sidebar a", { hasText: "Smoke space" }).waitFor({ timeout });
   console.log("ok: a fresh browser finds the space, the page, its edits and its attachment on the server");
+
+  // The page as a Word document, from its "Export" menu: made by the pandoc
+  // linked into the server, and downloaded under the page's title.
+  await fresh.locator("#app .page-view .export-menu summary").click();
+  const [docxDownload] = await Promise.all([fresh.waitForEvent("download"), fresh.locator("#app .export-formats a.export-docx").click()]);
+  assert.equal(docxDownload.suggestedFilename(), "first-page.docx");
+  const docx = await readFile(await docxDownload.path());
+  assert.equal(docx.subarray(0, 2).toString("latin1"), "PK", "the exported document is not a zip");
+  assert.ok(docx.includes("word/document.xml"), "the exported document has no word/document.xml");
+  console.log("ok: the page exports as a Word document from its Export menu");
 
   // Comments, live over the server's WebSocket: a second tab on the page
   // subscribes to it, the first comments on the page, and the second shows

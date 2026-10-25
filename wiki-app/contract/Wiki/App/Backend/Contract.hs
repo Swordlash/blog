@@ -144,7 +144,9 @@ sessions :: (MonadWiki m) => SpecWith (Fixture m)
 sessions = describe "session" $ do
   it "is nobody's when nobody is signed in" $ \(Fixture run) -> do
     s <- run Anonymous session
-    s `shouldBe` anonymous
+    -- What the backend exports in is its own, not the asker's: a server
+    -- makes documents for nobody signed in as for anyone else.
+    s {exports = []} `shouldBe` anonymous
     run Anonymous currentUser `shouldReturn` Nothing
 
   it "names the user who is signed in" $ \(Fixture run) -> do

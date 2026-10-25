@@ -3,7 +3,8 @@
 -- | The administration's section on the server itself (WP4.4 of
 -- docs/PLAN.md, "Wiki.Api.ServerSettings"): the wiki's public address,
 -- the mail server invitations go through, and the providers people sign
--- in with. This is the only place they are set (the owner's decision of
+-- in with; and, not a setting but what the server's machine has, whether
+-- it exports PDFs. This is the only place they are set (the owner's decision of
 -- 2026-10-25): the server's admin listener serves it before anyone can
 -- sign in, and a change takes effect with the next request, with no
 -- restart. One component over the administration's backend
@@ -41,8 +42,9 @@ import Halogen qualified as H
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
 import Protolude hiding (State)
+import Wiki.Api.Export (ExportFormat, formatLabel, needsTeX)
 import Wiki.Api.ServerSettings
-import Wiki.App.Backend (MonadLoad (..), WikiError (..))
+import Wiki.App.Backend (MonadLoad (..), Session (exports), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Common
 
@@ -184,6 +186,29 @@ component =
           {{ urlView st settings }}
           {{ mailView st settings }}
           {{ providersView st settings }}
+          {{ exportView st.input.context.session.exports }}
+        </div>
+      |]
+
+    -- What pages and spaces export as (WP4.16 of docs/PLAN.md), and above
+    -- all whether the PDFs are among them: they need a TeX engine on the
+    -- server's machine, which the server looks for at each request, so
+    -- that installing one takes effect without a restart.
+    exportView :: [ExportFormat] -> H.ComponentHTML Action Empty m
+    exportView formats =
+      [hh|
+        <div class="server-part server-export">
+          <h3>Export</h3>
+          {% if null formats %}
+            <p class="server-export-none">This wiki exports nothing: documents are made by the server, with pandoc.</p>
+          {% else %}
+            <p class="server-export-formats">Pages and spaces export as {{ T.intercalate ", " (map formatLabel formats) }}.</p>
+            {% if any needsTeX formats %}
+              <p class="server-export-tex">xelatex was found: PDFs are made with it.</p>
+            {% else %}
+              <p class="server-export-tex server-export-no-tex">xelatex was not found, so nothing exports as PDF. Install it on the server's machine (<code>apt install texlive-xetex</code>) and the PDFs are offered at once.</p>
+            {% end %}
+          {% end %}
         </div>
       |]
 

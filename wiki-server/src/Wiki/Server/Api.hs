@@ -75,6 +75,7 @@ import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName 
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
+import Wiki.Api.Export (formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), named, providerProblems, providerWith, redirectUri, secretState)
@@ -94,6 +95,7 @@ import Wiki.Core.User (User (..))
 import Wiki.Server.Accounts (endSession)
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Events (Hub)
+import Wiki.Server.Export (Exported (..), Exports, availableFormats, exportPage, exportSpace)
 import Wiki.Server.Import (applyImport, planImport, readUpload)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
@@ -130,6 +132,8 @@ data Env = Env
   , events :: Hub
   -- ^ The live channel's connections ("Wiki.Server.Events"), which the
   -- storage tells of every change to a page's comments.
+  , exports :: Exports
+  -- ^ The exports being made ("Wiki.Server.Export"), one a person.
   }
 
 -- | Who is asking, as the listener found them for a request.
@@ -322,6 +326,7 @@ handlers env caller =
           , listPages = wiki . listPages
           , pageAt = \s path -> versioned <$> wiki (getPage s path)
           , createPage = \s new -> versioned <$> wiki (createPage s new.parent new.title new.body)
+          , export = \s format request respond -> liftIO (exporting request respond (\key -> exportSpace env.exports key env.storage who s format))
           }
     , pages =
         PagesApi
@@ -336,6 +341,7 @@ handlers env caller =
           , versions = wiki . listVersions
           , version = \p at -> wiki (getVersion p at.time)
           , restore = \p at current -> versioned <$> wiki (restoreVersion p at.time current.time)
+          , export = \p format request respond -> liftIO (exporting request respond (\key -> exportPage env.exports key env.storage who p format))
           }
     , attachments =
         AttachmentsApi
@@ -413,7 +419,8 @@ handlers env caller =
     sessionInfo :: Session -> Handler SessionInfo
     sessionInfo s = do
       providers <- liftIO (currentProviders env)
-      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers}
+      exports <- liftIO availableFormats
+      pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports}
     -- The user signed in, for what only a user signed in has: refused to
     -- someone who is not, and to the operator, who signs in with nothing.
     signedInUser = case who of
@@ -427,6 +434,18 @@ handlers env caller =
     ask' = liftIO . runSqliteWiki env.storage who
     wiki :: SqliteWiki IO (Either WikiError a) -> Handler a
     wiki program = ask' program >>= either (throwError . wikiError) pure
+    -- An export, as a file to download, made for whoever is asking with
+    -- one at a time each: a user by their id, the operator as one, and
+    -- someone not signed in by the address they ask from.
+    exporting :: Request -> (Response -> IO b) -> (Text -> IO (Either ApiError Exported)) -> IO b
+    exporting request respond make
+      | requestMethod request `notElem` [methodGet, methodHead] =
+          respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An export is fetched with GET.")))
+      | otherwise = make exportKey >>= respond . either refusal exportedResponse
+    exportKey = case who of
+      AsUser u -> "user:" <> u.text
+      Administrator -> "operator"
+      Anonymous -> "address:" <> maybe "" (\s -> s.address) caller.signing
     -- Whoever holds the global administer, as the rules see them.
     administrator = do
       s <- ask' session
@@ -548,6 +567,21 @@ waitText :: Int -> Text
 waitText seconds
   | seconds < 60 = show seconds <> (if seconds == 1 then " second" else " seconds")
   | otherwise = let m = (seconds + 59) `div` 60 in show m <> (if m == 1 then " minute" else " minutes")
+
+-- | A document exported, to download: under its name, as the attachment
+-- it is, with its media type, never guessed at, and, since it is what a
+-- page's author wrote served from the wiki's own origin, sandboxed should a
+-- browser show it rather than save it (an HTML export above all).
+exportedResponse :: Exported -> Response
+exportedResponse e =
+  responseLBS
+    status200
+    [ (hContentType, encodeUtf8 (formatMediaType e.format))
+    , ("X-Content-Type-Options", "nosniff")
+    , ("Content-Disposition", "attachment; filename=\"" <> encodeUtf8 e.fileName <> "\"")
+    , ("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; media-src 'self' data:; style-src 'unsafe-inline'; font-src data:; sandbox")
+    ]
+    (BSL.fromStrict e.bytes)
 
 -- | An attachment's bytes, at its address: streamed from its file, with its
 -- media type, a range of it when a range is asked for (Warp answers that

@@ -148,6 +148,7 @@ import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Numeric.Natural (Natural)
 import Protolude
+import Wiki.Api.Export (ExportFormat)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Draft (Draft)
@@ -211,6 +212,11 @@ data Session = Session
   -- backend that has any (a server whose configuration names them, WP3.6
   -- of docs/PLAN.md): part of the session so that the page a server
   -- renders and the program's first render offer the same.
+  , exports :: [ExportFormat]
+  -- ^ The documents the backend exports pages and spaces as
+  -- ("Wiki.Api.Export"), which the page and the space offer: none in the
+  -- demo, which has no pandoc; on a server, the PDFs only where it found a
+  -- TeX engine. Part of the session for the same reason as 'providers'.
   }
   deriving stock (Eq, Show)
 
@@ -223,7 +229,7 @@ anonymous = anonymousIn Open
 -- ("Wiki.Core.Access"), so that the application knows before anyone signs
 -- in whether there is anything to show them.
 anonymousIn :: Access -> Session
-anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = []}
+anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = []}
 
 -- | Whether the wiki is closed to whoever is asking: it is closed, and they
 -- have not signed in. They are shown the way to sign in and nothing else.

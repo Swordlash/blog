@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+Export to documents with pandoc (WP4.16), linked as a library (pandoc 3.12.1,
+with its data files embedded and without its HTTP client, so that a
+document never makes the server fetch anything): `GET
+api/v1/pages/<page>/export/<format>` and `GET
+api/v1/spaces/<space>/export/<format>` (`Wiki.Server.Export`), for whoever
+may read the page or view the space, one export at a time each and at most
+60 seconds. DOCX, standalone HTML, EPUB, and for a deck PowerPoint and
+Beamer's LaTeX need nothing installed; the PDFs (a page's, a space's and a
+deck's Beamer PDF) are typeset by `xelatex` through pandoc's PDF path when
+the machine has it (`apt install texlive-xetex`), looked for at each
+request, so installing it needs no restart. A page is read by pandoc's
+Markdown reader with the extensions the wiki reads
+(`Wiki.Server.Export.Document`): raw HTML through the wiki's allowlist, the
+page's images from the blob store, the math macros of the wiki, the space
+and the page expanded into each formula, Mermaid diagrams as notes with
+their source, TikZ pictures drawn in the PDFs and Beamer and noted
+elsewhere; a deck cut into slides as the wiki cuts it, its theme and aspect
+mapped to Beamer's. The session's `exports` says which formats the server
+makes. No migration. The first build after this is long: pandoc and its
+dependencies are compiled once into the cabal store.
+
 One space at a time (WP4.6). Migration `0007-space-profile.sql`: a space's
 `home_page` (a page, `ON DELETE SET NULL`), `icon` (its JSON) and
 `description`. A space made through the API comes with a "Home" page; a page

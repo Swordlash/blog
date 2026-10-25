@@ -41,6 +41,7 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
+import Wiki.Api.Export (ExportFormat)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Permission (Grants, SpacePermission, Subject)
@@ -66,6 +67,9 @@ data SessionInfo = SessionInfo
   -- docs/PLAN.md), in the order the server's configuration names them:
   -- what the forms that sign in and make accounts offer. A wiki that
   -- names none has none.
+  , exports :: [ExportFormat]
+  -- ^ The documents the server exports pages and spaces as
+  -- ("Wiki.Api.Export"): the PDFs only where it has a TeX engine.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

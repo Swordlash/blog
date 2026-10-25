@@ -49,14 +49,14 @@ named = [SignInProvider {name = "google", label = "Google"}, SignInProvider {nam
 
 -- | Nobody, in a wiki of this access, offered these providers.
 nobodyWith :: [SignInProvider] -> Access -> SessionInfo
-nobodyWith providers access = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers}
+nobodyWith providers access = SessionInfo {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers, exports = []}
 
 -- | One of the demo's users, signed in, offered the providers.
 signedInAs :: Text -> PageM s SessionInfo
 signedInAs uid = unsafeIOToPageM $ do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
 
 hrefOf :: Element s -> PageM s Text
 hrefOf e = fromMaybe "" <$> getAttribute e "href"
@@ -174,7 +174,7 @@ ownPanel m = describe "the panel of how a user signs in" $ do
     serverStarts
     serveDemo
     rita <- signedInAs "user-reader"
-    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = rita.standing, providers = []}
+    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = rita.standing, providers = [], exports = []}
     answerWith "GET" "api/v1/account/identities" 200 SignInMethods {password = True, identities = []}
     ui <- startServer m Home
     find ui ".account .user-name" >>= (`shouldHaveText` "Rita Reader")
@@ -195,7 +195,7 @@ administration m = describe "the administration's accounts" $
       (me, people) <- unsafeIOToPageM $ do
         wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
         runMemWiki wiki ((,) <$> session <*> directory)
-      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named}
+      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
       for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (withIdentities d)
       answerWith "DELETE" "api/v1/admin/users/user-editor/identities/hub" 204 ()
       ui <- startServer m Admin

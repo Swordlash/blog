@@ -163,7 +163,7 @@ serveDemo = do
       counts <- pageCounts
       pure (me, spaces, pages, people, threads, counts)
   for_ threads $ \(p, ts) -> answerWith "GET" (links.comments p).list 200 ts
-  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = []}
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = []}
   for_ people (answerWith "GET" links.admin.directory 200)
   answerWith "GET" links.admin.server 200 (noServerSettings :: ServerSettings)
   answerWith "GET" "api/v1/spaces" 200 spaces
@@ -275,10 +275,10 @@ signedInAs :: Text -> IO SessionInfo
 signedInAs uid = do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = []}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = []}
 
 nobody :: SessionInfo
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = []}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = []}
 
 -- | Signing in and out from the header, over the server's backend.
 accounts :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -446,7 +446,7 @@ ownPassword m = describe "one's own password" $ do
     serverStarts
     serveDemo
     rita <- unsafeIOToPageM (signedInAs "user-admin")
-    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = []}
+    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = [], exports = []}
     ui <- startServer m Home
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     length <$> findAll ui ".account-toggle" `shouldReturn` 0

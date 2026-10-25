@@ -1,4 +1,9 @@
 {
+  "exports": [
+    "Docx",
+    "Html",
+    "Pdf"
+  ],
   "grants": {
     "access": "Open",
     "global": [

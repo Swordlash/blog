@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Export to documents (WP4.16). A page's actions and a space's have an
+"Export" menu (`Wiki.App.View.Export`, a `<details>` of links the browser
+downloads) with the formats the backend makes: Word, HTML, EPUB and, where
+the server has `xelatex`, PDF; a deck also PowerPoint and Beamer (its LaTeX,
+and its PDF). `Session` gains `exports`, the formats the backend makes: none
+over `MemWiki` (the demo has no pandoc, so it shows no menu), what the
+server says over HTTP. The administration's "Server" section says what
+pages export as and whether the server found `xelatex`.
+
 One space at a time (WP4.6), as Confluence has it. The front page is the
 directory of spaces (`Wiki.App.View.Directory`): a card per top-level space
 with its icon, name, description, number of pages and subspaces, the spaces

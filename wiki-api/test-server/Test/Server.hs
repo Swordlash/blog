@@ -30,9 +30,10 @@ import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName 
 import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..), errorStatus)
+import Wiki.Api.Export (ExportFormat (..), formatMediaType, formatName)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))
-import Wiki.Api.Links (attachmentUrl, links, searchQueryOf, searchUrl, spaceIconUrl)
+import Wiki.Api.Links (attachmentUrl, links, pageExportUrl, searchQueryOf, searchUrl, spaceExportUrl, spaceIconUrl)
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
@@ -132,6 +133,9 @@ stubs =
               if path == [Sample.slug "tour"] then pure (versioned Sample.page {Page.space = s}) else refuse NotFound
           , createPage = \s new ->
               pure (versioned Sample.page {Page.id = PageId "new", Page.space = s, Page.parent = new.parent, Page.title = new.title, Page.body = new.body})
+          , export = \s format _ respond ->
+              liftIO . respond $
+                responseLBS (toEnum 200) [(hContentType, encodeUtf8 (formatMediaType format))] (BSL.fromStrict (encodeUtf8 ("space " <> s.text <> " as " <> formatName format)))
           }
     , pages =
         PagesApi
@@ -154,6 +158,9 @@ stubs =
               if current /= pageVersion Sample.page
                 then refuse (Conflict "The page has been saved since.")
                 else pure (versioned Sample.page {Page.id = p, Page.title = "Restored from " <> toUrlPiece at, Page.updatedAt = Sample.later})
+          , export = \p format _ respond ->
+              liftIO . respond $
+                responseLBS (toEnum 200) [(hContentType, encodeUtf8 (formatMediaType format))] (BSL.fromStrict (encodeUtf8 ("page " <> p.text <> " as " <> formatName format)))
           }
     , attachments =
         AttachmentsApi
@@ -455,6 +462,18 @@ spec = describe "a server of the API's type" $ do
 
     it "deletes one" $
       (status <$> request methodDelete (links.attachments.delete Sample.attachment.id) [] "") `shouldReturn` 204
+
+  describe "export" $ do
+    it "names a page's document and a space's by the format's name, and serves each with its media type" $ do
+      pageExportUrl Sample.page.id BeamerPdf `shouldBe` "api/v1/pages/p1/export/beamer-pdf"
+      r <- getAt (pageExportUrl Sample.page.id BeamerPdf)
+      (status r, simpleBody r, header "Content-Type" r) `shouldBe` (200, "page p1 as beamer-pdf", Just "application/pdf")
+      spaceExportUrl s Docx `shouldBe` "api/v1/spaces/" <> s.text <> "/export/docx"
+      r' <- getAt (spaceExportUrl s Docx)
+      (status r', simpleBody r') `shouldBe` (200, BSL.fromStrict (encodeUtf8 ("space " <> s.text <> " as docx")))
+
+    it "refuses a format it does not know, as servant refuses a capture" $
+      (status <$> getAt "api/v1/pages/p1/export/odt") `shouldReturn` 400
 
   describe "search" $ do
     it "reads back the query its address was made from" $ do

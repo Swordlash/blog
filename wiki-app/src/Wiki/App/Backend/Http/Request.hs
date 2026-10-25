@@ -215,7 +215,7 @@ fromApiError = \case
 
 -- | The session as the API sends it, and back: field for field.
 sessionInfo :: Session -> SessionInfo
-sessionInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers}
+sessionInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers, exports = s.exports}
 
 fromSessionInfo :: SessionInfo -> Session
-fromSessionInfo s = Session {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers}
+fromSessionInfo s = Session {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers, exports = s.exports}

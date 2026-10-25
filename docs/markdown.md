@@ -418,6 +418,24 @@ page the slide's shape, so that the browser's "Save as PDF" keeps the deck
 as a file; with "with notes" ticked, each slide is printed on its own A4
 page above its notes.
 
+### Exported as documents
+
+On a wiki served by its server, "Export" above a page downloads it as a Word
+document, a web page, an e-book or (where the server has a TeX engine) a
+PDF; a deck also as PowerPoint and as a Beamer presentation, its LaTeX or
+its PDF; and a space's "Export" makes one document of all its pages. A
+document holds what the page shows as far as its format can: the images
+attached, the formulas (as Word's equations in a Word document, with the
+macros expanded into them), tables, code, footnotes, and the HTML a page may
+hold. A Mermaid diagram needs a browser to be drawn, so a document says so
+and gives its source; a TikZ picture is drawn in the PDFs and the Beamer
+source, and given the same way elsewhere. Links to other pages lead to them
+on the wiki. A deck's slides are cut as "Present" cuts them; its first
+slide, when it is a title slide, is the presentation's title page; its theme
+and aspect carry over to Beamer (`beamer` is Beamer's Madrid, `light` its
+plain look, `dark` light on dark), while PowerPoint gets 16:9 and its own
+plain look.
+
 ## HTML
 
 Where Markdown has no word for something, HTML may say it: press

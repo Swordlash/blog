@@ -119,6 +119,20 @@ FROM ${DEBIAN} AS runtime
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 \
  && rm -rf /var/lib/apt/lists/*
+# The PDF exports, optionally: the server makes every other document with the
+# pandoc linked into it, and a PDF with xelatex where it finds one, which
+# adds several hundred megabytes to the image, so it is left out unless
+# `--build-arg WIKI_TEX=1` (or `WIKI_TEX: "1"` under the compose file's build
+# args) asks for it, with TikZ (pictures) and mhchem (science). TeX keeps its
+# caches in /tmp rather than in the data volume, the server's home.
+ARG WIKI_TEX=
+# hadolint ignore=DL3008
+RUN if [ -n "$WIKI_TEX" ]; then \
+      apt-get update \
+      && apt-get install --yes --no-install-recommends texlive-xetex texlive-pictures texlive-science \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+ENV TEXMFVAR=/tmp/texmf-var
 # The server runs as an unprivileged user that owns /data. A named volume
 # takes the ownership and mode of the image's /data the first time it is
 # mounted; a directory of the host's bound there must be given to uid 10001

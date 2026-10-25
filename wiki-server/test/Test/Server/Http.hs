@@ -32,6 +32,7 @@ import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space qualified as S
 import Wiki.Server.Api (Env (..))
 import Wiki.Server.Events (newHub)
+import Wiki.Server.Export (newExports)
 import Wiki.Server.Limiter (defaultLimits, newLimiter)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Render (inProcess)
@@ -104,4 +105,5 @@ apiEnv storage = do
   flows <- newFlows
   providerCache <- newProviderCache
   events <- newHub
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events}
+  exports <- newExports
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports}

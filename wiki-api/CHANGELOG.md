@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Export to documents (WP4.16). `Wiki.Api.Export`: `ExportFormat` (`Docx`,
+`Html`, `Epub`, `Pdf`, `Pptx`, `BeamerTex`, `BeamerPdf`) with its name in an
+address, label, extension, media type, whether it needs a TeX engine
+(`needsTeX`) and whether it is a presentation (`forDecks`), `pageFormats`,
+`spaceFormats` and `exportFileName`. `PagesApi` and `SpacesApi` gain `export`
+(`GET pages/<page>/export/<format>`, `GET spaces/<space>/export/<format>`,
+raw); `Wiki.Api.Links.pageExportUrl` and `spaceExportUrl`. `SessionInfo`
+gains `exports`, the formats the server makes.
+
 One space at a time (WP4.6). `SpacesApi` gains `pageCounts` (`GET
 spaces/page-counts`, how many pages each space the asker may view has),
 `setProfile` (`PUT spaces/<space>/profile`, a `SpaceProfile`), `uploadIcon`

@@ -3707,3 +3707,55 @@ mark.comment-mark-focused {
     box-shadow: none;
   }
 }
+
+/* ---- Export ------------------------------------------------------------
+   A page's and a space's "Export" (Wiki.App.View.Export): a <details> whose
+   summary is a button and whose list of formats drops down under it, over
+   what follows, so that opening it does not push the page down. */
+.export-menu {
+  position: relative;
+}
+
+.export-menu > summary {
+  list-style: none;
+}
+
+.export-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.export-menu > summary::after {
+  content: " ▾";
+}
+
+.export-formats {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  min-width: 13rem;
+  margin: 0;
+  padding: 0.3rem 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.15);
+}
+
+.export-formats a {
+  display: block;
+  padding: 0.3rem 0.8rem;
+  color: var(--text);
+}
+
+.export-formats a:hover {
+  background: var(--surface);
+  text-decoration: none;
+}
+
+@media print {
+  .export-menu {
+    display: none;
+  }
+}

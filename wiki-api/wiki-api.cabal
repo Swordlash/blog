@@ -58,6 +58,7 @@ library
       Wiki.Api.Comments
       Wiki.Api.Error
       Wiki.Api.Events
+      Wiki.Api.Export
       Wiki.Api.Import
       Wiki.Api.Info
       Wiki.Api.Links

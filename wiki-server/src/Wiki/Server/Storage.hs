@@ -70,6 +70,8 @@ module Wiki.Server.Storage
   , SqliteWiki
   , runSqliteWiki
   , attachmentFile
+  , exportedPage
+  , blobPath
   , spaceIconFile
   , mayReadPage
   , threadsThen
@@ -660,6 +662,20 @@ attachmentFile aid = run Reads $ do
         SourceUrl _ -> Nothing
     )
 
+-- | A page someone may read, by its id: what an export of it reads
+-- ("Wiki.Server.Export"), the rest (its space's pages, the spaces) being
+-- what the application reads ('MonadWiki').
+exportedPage :: (MonadIO m) => PageId -> SqliteWiki m (Either WikiError Page)
+exportedPage pid = run Reads $ do
+  requireView =<< chainOfPage =<< findNode pid
+  findPage pid
+
+-- | The file a blob's bytes are in, if it names one: where an export reads
+-- an image from. Whether the reader may see it is for the caller to have
+-- checked, by the page that has it.
+blobPath :: Storage -> BlobId -> Maybe FilePath
+blobPath st = blobFile (attachmentsDir st.dataDir)
+
 -- | The image a space is pictured with, for someone who may view the
 -- space, by the blob it is (the address names it, so that an image
 -- replaced is at another): its media type and its file. What the server's
@@ -697,6 +713,9 @@ sessionTx = do
         , -- The server's configuration names them, not the storage: the
           -- API adds them ("Wiki.Server.Api").
           providers = []
+        , -- Nor what the server exports in: that is pandoc's and the
+          -- machine's, which the API adds too.
+          exports = []
         }
 
 listSpacesTx :: Tx [Space]

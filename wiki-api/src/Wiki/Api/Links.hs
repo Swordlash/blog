@@ -11,6 +11,8 @@ module Wiki.Api.Links
   , linkText
   , attachmentUrl
   , spaceIconUrl
+  , pageExportUrl
+  , spaceExportUrl
   , searchUrl
   , searchQueryOf
   )
@@ -19,9 +21,10 @@ where
 import Protolude
 import Servant.API (Link, toUrlPiece)
 import Servant.Links (AsLink, allLinks')
-import Wiki.Api (AttachmentsApi (..), SpacesApi (..), WikiApi (..), api)
+import Wiki.Api (AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..), api)
+import Wiki.Api.Export (ExportFormat)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
-import Wiki.Core.Id (SpaceId)
+import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Space (Icon (..), Space (..))
 
@@ -50,6 +53,15 @@ spaceIconUrl :: Space -> Text
 spaceIconUrl s = case s.icon of
   Just (IconImage blob _) -> links.spaces.icon s.id blob
   _ -> ""
+
+-- | Where a browser downloads a page exported as a document: a link the
+-- application writes for the browser to follow, never fetches itself.
+pageExportUrl :: PageId -> ExportFormat -> Text
+pageExportUrl = links.pages.export
+
+-- | Where a browser downloads a space's pages exported as one document.
+spaceExportUrl :: SpaceId -> ExportFormat -> Text
+spaceExportUrl = links.spaces.export
 
 -- | The address of a search: every field of the query is in it, so the
 -- server reads back the query that was asked.

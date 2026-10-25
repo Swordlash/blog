@@ -33,7 +33,13 @@ source-repository-package
 -- ghc-prim, containers and time of GHC 9.14: tls needs serialise (over cborg),
 -- and the server's mail (smtp-mail, over crypton-connection and tls) needs tls;
 -- without them the solver falls back to a tls of crypton 1, whose memory
--- package is not the ram the server's crypton 2 speaks.
+-- package is not the ram the server's crypton 2 speaks. pandoc's crypton
+-- (< 2.1) and pandoc-types' QuickCheck (< 2.19) lag behind those the rest is
+-- built with: kept to them, linking pandoc into the server (its export)
+-- would take an older crypton and tls and rebuild aeson, servant, warp and
+-- everything above them a second time, for pandoc's sake alone. pandoc uses
+-- crypton for its hashes (MD5, SHA-1), and pandoc-types QuickCheck for its
+-- Arbitrary instances.
 allow-newer:
   protolude:*,
   servant:QuickCheck,
@@ -45,7 +51,9 @@ allow-newer:
   serialise:time,
   cborg:base,
   cborg:ghc-prim,
-  cborg:containers
+  cborg:containers,
+  pandoc:crypton,
+  pandoc-types:QuickCheck
 
 -- A test suite's dependencies are optional goals unless this says otherwise:
 -- rather than report that it cannot satisfy them, the solver is free to hand
@@ -61,3 +69,13 @@ tests: True
 -- does not stop a package from building for someone else.
 program-options
   ghc-options: -Werror
+
+-- The server's export (Wiki.Server.Export) links pandoc as a library. Its
+-- data files (templates, the reference DOCX and PPTX) are embedded in the
+-- binary, pandoc's default, so the server needs nothing installed beside it.
+-- Without http, pandoc cannot fetch a resource from the network while it
+-- writes a document: an export reads images and attachments from the wiki's
+-- own blob store, and a page's link to some other host must not make the
+-- server fetch it.
+package pandoc
+  flags: +embed_data_files -http

@@ -74,6 +74,7 @@ import Servant.Multipart.API (Mem, MultipartForm)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
 import Wiki.Api.Comments (CommentsApi (..))
+import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
@@ -196,6 +197,10 @@ data SpacesApi mode = SpacesApi
   -- ^ @getPage@: the page at a path of slugs from the space's top level.
   , createPage :: mode :- Capture "space" SpaceId :> "pages" :> ReqBody '[JSON] NewPage :> PostCreated '[JSON] (Versioned Page)
   -- ^ @createPage@.
+  , export :: mode :- Capture "space" SpaceId :> "export" :> Capture "format" ExportFormat :> RawM
+  -- ^ The space's pages as one document ("Wiki.Api.Export"), in the
+  -- space's order, after a title page and a table of contents, to whoever
+  -- may view the space. Raw, as a page's export is (see 'PagesApi').
   }
   deriving stock (Generic)
 
@@ -226,6 +231,16 @@ data PagesApi mode = PagesApi
   , restore :: mode :- Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> "restore" :> IfMatch :> Post '[JSON] (Versioned Page)
   -- ^ @restoreVersion@: save that version's title and body as the page's
   -- latest, against the version in @If-Match@, as a save is.
+  , export :: mode :- Capture "page" PageId :> "export" :> Capture "format" ExportFormat :> RawM
+  -- ^ The page as a document ("Wiki.Api.Export"), to whoever may read it,
+  -- downloaded (@Content-Disposition: attachment@) under its title.
+  -- Raw, because the response's media type is the format's, which
+  -- servant's types cannot make depend on a capture. A format the server
+  -- cannot make (a PDF without a TeX engine, a presentation of a page that
+  -- is no deck) is 'Wiki.Api.Error.Invalid', and so is a document pandoc
+  -- or TeX could not make, with their reason; an export asked for while
+  -- the same person's last is still being made is
+  -- 'Wiki.Api.Error.TooManyRequests'.
   }
   deriving stock (Generic)
 

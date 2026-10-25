@@ -90,7 +90,7 @@ of the server, not a refusal.
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | GET | `api/v1/info` | | `ServerInfo` `{"name", "apiVersion"}` | | |
-| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, and the providers one may sign in with, `{"name", "label"}` each (none where the server names none) | | `session` |
+| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers", "exports"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, the providers one may sign in with, `{"name", "label"}` each (none where the server names none), and the formats pages and spaces export as (see [Documents](#documents)) | | `session` |
 | POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
 | DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
 
@@ -353,6 +353,37 @@ that is not there and one the user may not view all give `[]`.
 `Wiki.Api.Links.searchUrl` writes the address of a query, and
 `searchQueryOf` reads the query back, so both sides fill in the defaults
 alike.
+
+### Documents
+
+| Method | Path | Body | Response | Errors |
+| ------ | ---- | ---- | -------- | ------ |
+| GET, HEAD | `api/v1/pages/<page>/export/<format>` | | the page as a document of that format, with its media type and `Content-Disposition: attachment; filename="<title>.<extension>"` | 404, 403, 400, 429 |
+| GET, HEAD | `api/v1/spaces/<space>/export/<format>` | | the space's pages as one document, in the space's order, after a title page and a table of contents | 404, 403, 400, 429 |
+
+The formats (`Wiki.Api.Export`) are `docx` (Word, its formulas as Word's
+equations), `html` (one standalone page, its images inside it and its
+formulas as MathML), `epub`, `pdf` (typeset by `xelatex`), and for a page
+written as a deck only, `pptx`, `beamer-tex` (the LaTeX source of a Beamer
+presentation) and `beamer-pdf`. The server makes them with pandoc, linked
+into it; only the PDFs need a program, `xelatex`, which the server looks for
+on its `PATH` at each request: `exports` in the session lists what it
+offers, and a PDF asked for without it is 400. So is a presentation of a
+page that is not a deck, or of a space, and a document pandoc or TeX could
+not make, with their reason. Whoever may read the page (view the space)
+may export it. Each person makes one export at a time (a user by their id,
+someone not signed in by their address): another asked for meanwhile is
+429. One that takes longer than 60 seconds is stopped and refused with 400.
+
+What a document holds is the page as the wiki shows it, as far as the format
+can: the page's images (its attachments' that the server keeps) inside it;
+links to other pages and to attachments that are not images under the
+wiki's public address (as text when it has none); the space's math macros,
+and those the page's formulas define, expanded into each formula; raw HTML
+through the page's allowlist. A Mermaid diagram, which needs a browser, is
+a note with its source; a TikZ picture is drawn in the PDFs and the Beamer
+source, and a note elsewhere. Nothing is fetched from the web: an image
+there is a link to it.
 
 ### Export and import
 

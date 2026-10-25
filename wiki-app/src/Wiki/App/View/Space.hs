@@ -3,7 +3,8 @@
 -- | A space's pages and subspaces (its route 'SpacePages', and the space's
 -- own route for a space without a home page): its icon, name and
 -- description, its pages as a tree, its subspaces, the math macros its
--- pages are set with, and what the current user may do to it (a new page,
+-- pages are set with, its export as one document ("Wiki.App.View.Export"),
+-- and what the current user may do to it (a new page,
 -- in the editor; a new subspace, its settings ("Wiki.App.View.SpaceSettings":
 -- its name, description, icon and home page, and its permissions, public or
 -- private among them), giving it math macros, choosing the order of its
@@ -47,11 +48,14 @@ import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
-import Wiki.App.Backend (MonadLoad, MonadWiki (..), WikiError)
+import Wiki.Api.Export (spaceFormats)
+import Wiki.Api.Links (spaceExportUrl)
+import Wiki.App.Backend (MonadLoad, MonadWiki (..), Session (exports), WikiError)
 import Wiki.App.Islands (Island (..), MonadIslands (..))
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
+import Wiki.App.View.Export (exportMenu)
 import Wiki.App.View.SpaceSettings qualified as SpaceSettings
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Math (Macros (..), spaceMacros)
@@ -153,6 +157,8 @@ component =
         <> [button "Order" EditOrder | admin]
         <> [button "Move" (Open (Moving 0)) | admin, not (null (destinations ctx space))]
         <> [button "Delete" (Open ConfirmingDelete) | admin]
+        -- Its pages as one document, for whoever may view it, as a page's.
+        <> exportMenu (spaceFormats ctx.session.exports) (spaceExportUrl space.id) space.name
       where
         admin = mayAdminister ctx space.id
         path = spacePathOf ctx.spaces space.id

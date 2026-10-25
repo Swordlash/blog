@@ -4,7 +4,8 @@
 -- (with its links resolved and its islands drawn), its attachments, and what
 -- the current user may do to it: read its source and its history, and
 -- present it as slides if it is written as a deck ("Wiki.Core.Slides"),
--- which anyone who may read the page may, and, for someone who may edit it, edit it, add a page under
+-- and export it as a document ("Wiki.App.View.Export"), which anyone who
+-- may read the page may, and, for someone who may edit it, edit it, add a page under
 -- it, rename, move or delete it; and, for someone who may administer its
 -- space, make it the page the space opens at ("Set as home page"). The URLs of its attachments are asked of the backend
 -- ('attachmentUrl') once per load.
@@ -49,7 +50,9 @@ import Halogen.TH (hh, hhs)
 import Protolude hiding (State)
 import Web.Event.Event (EventType (..))
 import Wiki.Api.Events (PageEvent (..), applyEvent)
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
+import Wiki.Api.Export (pageFormats)
+import Wiki.Api.Links (pageExportUrl)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (exports), WikiError)
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Browser (ArticleLink, Selected (..), clickedThread, followArticleLink, readSelection, reveal)
 import Wiki.App.Islands (MonadIslands)
@@ -59,6 +62,7 @@ import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
+import Wiki.App.View.Export (exportMenu)
 import Wiki.Core.Anchor (Anchor, Located (..), Marking (Marking), Range (..), highlight, locate, renderedText)
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Comment (Thread (..), isInline, mayComment)
@@ -229,6 +233,7 @@ component =
           , history
           ]
             <> present
+            <> export
             <> [comments]
             <> [ Router.link input.context.router Followed (NewPage spacePath (Just input.path)) [HP.class_ "button"] [HH.text "New subpage"]
                , button "Rename" (Open (Renaming page.title))
@@ -236,7 +241,7 @@ component =
                , button "Delete" (Open ConfirmingDelete)
                ]
             <> setHome
-      | otherwise = [viewSource, history] <> present <> [comments] <> setHome
+      | otherwise = [viewSource, history] <> present <> export <> [comments] <> setHome
       where
         spacePath = spacePathOf input.context.spaces input.space.id
         -- For every reader: the source is theirs to read as the page is.
@@ -246,6 +251,9 @@ component =
         -- And to present it, if it is written as slides: any page can be
         -- shown so, by its address, but only a deck is offered.
         present = [Router.link input.context.router Followed (PageSlides spacePath input.path 1) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
+        -- And to take it away as a document, over a backend that makes
+        -- them: a deck as a presentation too.
+        export = exportMenu (pageFormats deck input.context.session.exports) (pageExportUrl page.id) page.title
         -- The page the space opens at, for whoever administers the space:
         -- offered for every page but the one it is.
         setHome =

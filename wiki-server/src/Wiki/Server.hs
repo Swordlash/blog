@@ -36,6 +36,7 @@ import Wiki.Server.Api (Env (..))
 import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
 import Wiki.Server.Events (closeAll, newHub)
 import Wiki.Server.Events qualified as Events
+import Wiki.Server.Export (newExports)
 import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
 import Wiki.Server.Log (Level (..), Logger, logWith, stdoutLogger)
 import Wiki.Server.Mail (SendMail, smtpSend)
@@ -97,6 +98,7 @@ withServerUsing logger raw sendMail action = do
   -- Five accounts made, or tried, from an address in fifteen minutes.
   registrations <- newLimiter defaultLimits {perLogin = 5, perAddress = 5}
   events <- newHub
+  exports <- newExports
   withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events} options.dataDir $ \storage -> do
     let env =
           Env
@@ -111,6 +113,7 @@ withServerUsing logger raw sendMail action = do
             , providerCache
             , flows
             , events
+            , exports
             }
         public =
           Listener

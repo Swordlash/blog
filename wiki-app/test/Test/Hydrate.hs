@@ -236,7 +236,7 @@ apiOver providers st = do
       pure ([(links.spaces.atPath (spacePath s.id), answerOf space), (links.spaces.listPages s.id, answerOf pages)] <> concat perPage)
     pure
       ( Map.fromList
-          ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers} :: Either WikiError SessionInfo))
+          ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports} :: Either WikiError SessionInfo))
               : (links.spaces.list, answerOf (Right spaces :: Either WikiError [S.Space]))
               : (links.spaces.pageCounts, answerOf (Right counts :: Either WikiError (Map SpaceId Int)))
               : (links.admin.directory, answerOf people)

@@ -40,6 +40,7 @@ import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), ServerStatus (..), WikiSettings (..))
+import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
 import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..))
 import Wiki.Api.Types (SessionInfo (..))
@@ -168,6 +169,7 @@ sessionInfo =
           }
     , standing = SignedIn
     , providers = [SignInProvider {name = "github", label = "GitHub"}]
+    , exports = [Docx, Html, Pdf]
     }
 
 -- | A user's account, as the administration sees it.

@@ -127,7 +127,8 @@ genSessionInfo = do
   grants <- genGrants
   standing <- elements [NotSignedIn, SignedIn, Operator]
   providers <- resize 3 (listOf (SignInProvider <$> genText <*> genText))
-  pure SessionInfo {user, groups, grants, standing, providers}
+  exports <- sublistOf [minBound .. maxBound]
+  pure SessionInfo {user, groups, grants, standing, providers, exports}
 
 genCredentials :: Gen Credentials
 genCredentials = Credentials <$> genText <*> genText

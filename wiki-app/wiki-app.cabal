@@ -95,6 +95,7 @@ library
       Wiki.App.View.Common
       Wiki.App.View.Directory
       Wiki.App.View.Editor
+      Wiki.App.View.Export
       Wiki.App.View.Import
       Wiki.App.View.NewPage
       Wiki.App.View.NewSpace
@@ -283,6 +284,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Admin
       Test.Browser.Comments
       Test.Browser.Editor
+      Test.Browser.Export
       Test.Browser.History
       Test.Browser.Http
       Test.Browser.Hydrate
