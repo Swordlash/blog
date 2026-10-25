@@ -1980,3 +1980,6 @@ Amended by the planning session after each work package's report.
   `acceptInvitation`'s in a closed one (the invite page offering "sign in with …", the
   secret in the OIDC `state`); the callback endpoints join `App.openToAnyone`; rate-limit
   with `env.registrations`.
+- **WP4.3 started** (2026-10-25) on `wp4.3-halogen-net` from `main` `49b7190`: the pin to
+  haskell-halogen `5ea6dba`, `Halogen.Net.Fetch` as the HTTP transport, the window's emitters.
+  Phase 3 has WP3.6 (OIDC) left; it follows WP4.3 so that it builds on the new pin.
