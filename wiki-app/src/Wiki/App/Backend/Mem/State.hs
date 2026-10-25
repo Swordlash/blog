@@ -91,6 +91,16 @@ module Wiki.App.Backend.Mem.State
   , setServerSettingsIn
   , checkProviderIn
   , sendTestMailIn
+
+    -- * Comments
+  , listThreadsIn
+  , openThreadIn
+  , replyIn
+  , editCommentIn
+  , deleteCommentIn
+  , deleteThreadIn
+  , setResolvedIn
+  , insertThread
   )
 where
 
@@ -110,7 +120,10 @@ import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend qualified as B
 import Wiki.Core.Access (Access (..))
+import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Comment (Comment (Comment), Thread (Thread), checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
+import Wiki.Core.Comment qualified as C
 import Wiki.Core.Draft (Draft (Draft))
 import Wiki.Core.Draft qualified as D
 import Wiki.Core.Id
@@ -189,6 +202,10 @@ data MemState = MemState
   -- administration's "Server" section sets them, with their secrets, which
   -- never leave the tab: the demo keeps them for the tab's life, as it
   -- keeps the wiki's settings, and uses none of them.
+  , threads :: Map PageId [Thread]
+  -- ^ Each page's comments ("Wiki.Core.Comment"), its threads in the order
+  -- they were opened. The authors' names are those they had when they
+  -- wrote, and are given as they are now when read ('listThreadsIn').
   , current :: Maybe UserId
   -- ^ Who is signed in. A user who is not in 'users', or is disabled, is
   -- nobody.
@@ -218,6 +235,7 @@ emptyState =
     , newAccountsCreateSpaces = False
     , invitations = mempty
     , server = noServerSettings
+    , threads = mempty
     , current = Nothing
     , counter = 1
     }
@@ -700,6 +718,7 @@ deleteSpaceIn sid st = do
         , drafts = Map.filterWithKey (\(pid, _) _ -> Map.member pid alive) st.drafts
         , versions = Map.intersection st.versions alive
         , searchText = Map.intersection st.searchText alive
+        , threads = Map.intersection st.threads alive
         , grants =
             Grants
               { P.global = st.grants.global
@@ -856,6 +875,7 @@ deletePageIn pid st = do
         , drafts = Map.filterWithKey (\(i, _) _ -> not (i `Set.member` gone)) st.drafts
         , versions = Map.withoutKeys st.versions gone
         , searchText = Map.withoutKeys st.searchText gone
+        , threads = Map.withoutKeys st.threads gone
         }
     , ()
     )
@@ -1209,3 +1229,119 @@ sendTestMailIn :: Text -> MemState -> Either WikiError MailTestResult
 sendTestMailIn _ st = do
   requireAdministrator st
   Left (Invalid "The demo sends no mail: that takes the wiki's server.")
+
+-- Comments
+
+-- | A page's threads as the class gives them: their authors named as they
+-- are now.
+withNames :: MemState -> Thread -> Thread
+withNames st t = t {C.comments = map (\c -> c {C.author = authorOf st c.author.id}) t.comments}
+
+-- | A page the current user may read, with its space's chain and its
+-- threads: what every operation on comments starts from, in the class's
+-- order.
+readable :: MemState -> PageId -> Either WikiError ([Space], [Thread])
+readable st pid = do
+  p <- findPage st pid
+  let c = chainOf st p.space
+  requireView st c
+  pure (c, Map.findWithDefault [] pid st.threads)
+
+-- | A thread of a page, which must be on it.
+threadOf :: [Thread] -> CommentThreadId -> Either WikiError Thread
+threadOf ts tid = maybe (Left NotFound) Right (find (\t -> t.id == tid) ts)
+
+-- | A comment of a thread, which must be in it.
+commentOf :: Thread -> CommentId -> Either WikiError Comment
+commentOf t cid = maybe (Left NotFound) Right (find (\c -> c.id == cid) t.comments)
+
+-- | Someone signed in who may comment on the page of this chain: who.
+commenter :: MemState -> [Space] -> Either WikiError UserId
+commenter st c = do
+  require (mayComment (currentPrincipal st) st.grants c)
+  maybe (Left Forbidden) Right (currentUserId st)
+
+-- | A comment's Markdown, checked.
+commentBody :: Text -> Either WikiError Text
+commentBody = first Invalid . checkCommentBody
+
+-- | The page's threads changed, kept.
+withThreads :: PageId -> ([Thread] -> [Thread]) -> MemState -> MemState
+withThreads pid f st = st {threads = Map.filter (not . null) (Map.alter (Just . f . fromMaybe []) pid st.threads)}
+
+-- | Every thread of a page.
+listThreadsIn :: PageId -> MemState -> Either WikiError [Thread]
+listThreadsIn pid st = map (withNames st) . snd <$> readable st pid
+
+-- | Open a thread on a page.
+openThreadIn :: PageId -> Maybe Anchor -> Text -> UTCTime -> Write Thread
+openThreadIn pid anchor body now st0 = do
+  (c, _) <- readable st0 pid
+  u <- commenter st0 c
+  checked <- traverse (first Invalid . checkAnchor) anchor
+  text <- commentBody body
+  let (t, st1) = newId "thread" st0
+      (i, st2) = newId "comment" st1
+      tid = CommentThreadId t
+      first' = Comment {C.id = CommentId i, C.thread = tid, C.author = authorOf st2 u, C.body = text, C.createdAt = now, C.editedAt = Nothing}
+      thread = Thread {C.id = tid, C.page = pid, C.anchor = checked, C.resolved = False, C.createdAt = now, C.comments = [first']}
+  pure (withThreads pid (<> [thread]) st2, thread)
+
+-- | Reply to a thread of a page.
+replyIn :: PageId -> CommentThreadId -> Text -> UTCTime -> Write Comment
+replyIn pid tid body now st0 = do
+  (c, ts) <- readable st0 pid
+  _ <- threadOf ts tid
+  u <- commenter st0 c
+  text <- commentBody body
+  let (i, st1) = newId "comment" st0
+      made = Comment {C.id = CommentId i, C.thread = tid, C.author = authorOf st1 u, C.body = text, C.createdAt = now, C.editedAt = Nothing}
+  pure (withThreads pid (map (\t -> if t.id == tid then t {C.comments = t.comments <> [made]} else t)) st1, made)
+
+-- | Edit one's own comment.
+editCommentIn :: PageId -> CommentThreadId -> CommentId -> Text -> UTCTime -> Write Comment
+editCommentIn pid tid cid body now st = do
+  (_, ts) <- readable st pid
+  t <- threadOf ts tid
+  old <- commentOf t cid
+  require (mayEditComment (currentPrincipal st) old)
+  text <- commentBody body
+  let edited = old {C.body = text, C.editedAt = Just now, C.author = authorOf st old.author.id}
+      updated x = if x.id == cid then edited else x
+  pure (withThreads pid (map (\x -> if x.id == tid then x {C.comments = map updated x.comments} else x)) st, edited)
+
+-- | Delete a comment; the first of a thread takes the thread, if it has no
+-- replies.
+deleteCommentIn :: PageId -> CommentThreadId -> CommentId -> Write ()
+deleteCommentIn pid tid cid st = do
+  (c, ts) <- readable st pid
+  t <- threadOf ts tid
+  old <- commentOf t cid
+  require (mayDeleteComment (currentPrincipal st) st.grants c old)
+  case t.comments of
+    opening : _ : _ | opening.id == cid -> Left (Invalid "The first comment of a thread with replies cannot be deleted: delete the thread instead.")
+    [_] -> pure (withThreads pid (filter (\x -> x.id /= tid)) st, ())
+    _ -> pure (withThreads pid (map (\x -> if x.id == tid then x {C.comments = filter (\y -> y.id /= cid) x.comments} else x)) st, ())
+
+-- | Delete a thread with its comments.
+deleteThreadIn :: PageId -> CommentThreadId -> Write ()
+deleteThreadIn pid tid st = do
+  (c, ts) <- readable st pid
+  t <- threadOf ts tid
+  require (mayDeleteThread (currentPrincipal st) st.grants c t)
+  pure (withThreads pid (filter (\x -> x.id /= tid)) st, ())
+
+-- | Resolve an inline thread, or reopen it.
+setResolvedIn :: PageId -> CommentThreadId -> Bool -> Write Thread
+setResolvedIn pid tid resolved st = do
+  (c, ts) <- readable st pid
+  t <- threadOf ts tid
+  _ <- commenter st c
+  when (isNothing t.anchor) $ Left (Invalid "A thread about the whole page is not resolved: only one about a quote of it is.")
+  let t' = t {C.resolved = resolved}
+  pure (withThreads pid (map (\x -> if x.id == tid then t' else x)) st, withNames st t')
+
+-- | Add a thread as it is, unchecked, last among its page's: for the
+-- demo's content.
+insertThread :: Thread -> MemState -> MemState
+insertThread t = withThreads t.page (<> [t])

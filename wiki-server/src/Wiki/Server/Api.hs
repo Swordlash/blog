@@ -72,6 +72,7 @@ import System.Directory (doesFileExist)
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewPassword (..), PasswordChange (..), SignInMethods)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), checkEmail)
+import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
@@ -82,6 +83,7 @@ import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (writeArchive)
 import Wiki.Core.Export.Zip (zipFiles)
@@ -91,6 +93,7 @@ import Wiki.Core.Search (SearchQuery (..))
 import Wiki.Core.User (User (..))
 import Wiki.Server.Accounts (endSession)
 import Wiki.Server.Accounts qualified as Accounts
+import Wiki.Server.Events (Hub)
 import Wiki.Server.Import (applyImport, planImport, readUpload)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
@@ -124,6 +127,9 @@ data Env = Env
   -- what asking each how to sign in found ("Wiki.Server.Oidc").
   , flows :: Flows
   -- ^ The round trips through their pages under way.
+  , events :: Hub
+  -- ^ The live channel's connections ("Wiki.Server.Events"), which the
+  -- storage tells of every change to a page's comments.
   }
 
 -- | Who is asking, as the listener found them for a request.
@@ -382,6 +388,18 @@ handlers env caller =
           , setServer = wiki . setServerSettings
           , checkProvider = \name given -> administrator >> liftIO (checkingProvider env name given) >>= either refuse pure
           , testMail = \body -> administrator >> liftIO (sendingTestMail env body) >>= either refuse pure
+          }
+    , -- The storage checks who may, and tells the live channel
+      -- ("Wiki.Server.Events") what changed.
+      comments = \p ->
+        CommentsApi
+          { list = wiki (listThreads p)
+          , open = \new -> wiki (openThread p new.anchor new.body)
+          , reply = \t body -> wiki (reply p t body.body)
+          , edit = \t c body -> wiki (editComment p t c body.body)
+          , deleteComment = \t c -> wiki (deleteComment p t c) $> NoContent
+          , delete = \t -> wiki (deleteThread p t) $> NoContent
+          , resolve = \t r -> wiki (setResolved p t r.resolved)
           }
     }
   where

@@ -10,6 +10,19 @@ The server's settings (WP4.4). `Wiki.Api.ServerSettings`:
 from the server), `ProviderCheck`, `MailTest`, `MailTestResult`. `AdminApi`
 gains `server`, `setServer`, `checkProvider` and `testMail`.
 
+Comments (WP4.5). `WikiApi` gains `comments`, a page's threads at
+`pages/<page>/threads` (`CommentsApi`: `list`, `open` with `NewThread
+{anchor, body}`, `reply` and `edit` with `CommentText {body}`,
+`deleteComment`, `delete`, `resolve` with `ThreadResolution {resolved}`),
+answering `wiki-core`'s `Thread` and `Comment`. `Wiki.Api.Events` has the
+live channel's messages, at `eventsPath` (`api/v1/events`, a WebSocket the
+server upgrades itself): the tab's `ClientMessage` (`Subscribe`,
+`Unsubscribe`), the server's `ServerMessage` (`Subscribed`, `Refused`,
+`Event page PageEvent`), and `PageEvent` (`ThreadOpened`, `CommentAdded`,
+`CommentEdited`, `CommentDeleted`, `ThreadResolved`, `ThreadDeleted`, and
+`Unknown` for a type a newer server sends), with `applyEvent`, which folds
+an event into a page's threads and counts one applied twice once.
+
 One's own password (WP3.7). `AccountApi` gains `changePassword`, `PUT
 account/password` with `PasswordChange {current, new}` (`current` null or left
 out for a user without a password), answering `SignInMethods`; a wrong

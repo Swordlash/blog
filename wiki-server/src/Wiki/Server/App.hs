@@ -32,6 +32,11 @@
 -- "Wiki.Server.Auth"), which are the way in to a closed wiki as much as
 -- 'openToAnyone' is: they are answered before the closed wiki's rule, and
 -- only on the public listener, where people sign in.
+--
+-- The live channel, @api\/v1\/events@, is upgraded to a WebSocket
+-- ("Wiki.Server.Events") after the closed wiki's rule, for whoever the
+-- listener found: on the admin listener the operator, on the public one
+-- the session's user or nobody.
 module Wiki.Server.App
   ( Listener (..)
   , Finding (..)
@@ -54,6 +59,7 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Accounts (Resolved (..), resolveSession)
 import Wiki.Server.Api (Caller (..), Env (..), Signing (..), apiApplication)
 import Wiki.Server.Auth (authApplication)
+import Wiki.Server.Events (eventsApplication)
 import Wiki.Server.Log (Logger, logRequests)
 import Wiki.Server.Render (renderPage)
 import Wiki.Server.Session (CookieSettings, clearCookie, requestToken, sameOrigin, sessionCookie)
@@ -161,6 +167,10 @@ listenerRoutes logger env site l caller request respond = do
           [] | not (null mounted) -> redirect (encodeUtf8 l.mount)
           rest@("api" : "v1" : endpoint)
             | shut, take 1 endpoint `notElem` map pure openToAnyone -> unauthenticated
+            -- The live channel, upgraded to a WebSocket by itself, outside
+            -- the API's middlewares, which read and rewrite a response's
+            -- status and headers ("Wiki.Server.Events").
+            | endpoint == ["events"] -> eventsApplication env.storage env.events caller.who request respond
             | otherwise -> api request {pathInfo = rest} respond
           "auth" : provider : more -> authApplication logger env caller l.mount provider more request respond
           rest -> maybe notFound (\s -> serveStatic s l.mount (Just pages) rest request respond) site

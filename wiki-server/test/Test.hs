@@ -5,6 +5,7 @@ import Test.Hspec (hspec)
 import Test.Server.Access qualified as Access
 import Test.Server.Accounts qualified as Accounts
 import Test.Server.Api qualified as Api
+import Test.Server.Comments qualified as Comments
 import Test.Server.Http qualified as Http
 import Test.Server.Import qualified as Import
 import Test.Server.Mail qualified as Mail
@@ -34,6 +35,7 @@ main = hspec $ do
   Import.spec
   Accounts.spec
   Access.spec
+  Comments.spec
   Mail.spec
   Settings.spec
   Oidc.spec

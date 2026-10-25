@@ -65,6 +65,7 @@ import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailu
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
 import Wiki.App.Backend.Mem.Persist (Records, Stored (..), changes, records, restore, storeNames)
 import Wiki.App.Backend.Mem.State
@@ -246,6 +247,19 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   setServerSettings = write . setServerSettingsIn
   checkProvider name = query . checkProviderIn name
   sendTestMail = query . sendTestMailIn
+
+-- | A page's comments, on the same store, kept as every other write is
+-- (each page's threads a record of "Wiki.App.Backend.Mem.Persist"'s). The
+-- demo has no live channel: what someone else comments is nobody else's
+-- in a demo, which has one reader at a time.
+instance (MonadIO m) => MonadComments (MemWiki m) where
+  listThreads = query . listThreadsIn
+  openThread pid anchor = writeAt . openThreadIn pid anchor
+  reply pid tid = writeAt . replyIn pid tid
+  editComment pid tid cid = writeAt . editCommentIn pid tid cid
+  deleteComment pid tid = write . deleteCommentIn pid tid
+  deleteThread pid = write . deleteThreadIn pid
+  setResolved pid tid = write . setResolvedIn pid tid
 
 -- | Everything is in memory: every read answers at once, and nothing is
 -- ever out of reach.

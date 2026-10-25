@@ -20,6 +20,21 @@ there. `withServerUsing` takes how mail is sent instead of a mailer and the
 providers. An upgraded server starts with nothing set: set the address, mail
 and providers again in the panel.
 
+Comments (WP4.5). Migration `0006-comments.sql`: `threads` (on a page,
+with an anchor's quote, prefix and suffix or none, resolved, their order)
+and `comments` (author by id, Markdown body, created and edited times, their
+order), deleted with their page. `SqliteWiki` is a `MonadComments`, each
+operation one transaction under the rules of `Wiki.Core.Comment`, served at
+`api/v1/pages/<page>/threads…`. The live channel, `api/v1/events`, is a
+WebSocket (`websockets` and `wai-websockets`, `Wiki.Server.Events`): the
+upgrade is authenticated by the session cookie as any request, refused 401
+in a closed wiki to someone not signed in and 403 to another site's page
+(its `Origin`); a tab subscribes to the pages it shows, each checked, and
+hears of every change to their comments once it is committed (the
+storage's `Config.publish`), checked again before it is sent. The hub keeps
+subscriptions in memory, pings every 20 seconds, closes a connection 256
+messages behind and every connection when the server stops.
+
 One's own password (WP3.7). `PUT api/v1/account/password` lets a user signed
 in change their password, giving the current one, or set one if they sign in
 only with a provider; the new one is checked first, then the current one,

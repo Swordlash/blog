@@ -10,7 +10,8 @@
 -- side of them (servant-server, servant-multipart) is native.
 --
 -- The API is a record of routes per resource ('SpacesApi', 'PagesApi',
--- 'AttachmentsApi', 'ArchiveApi', 'AdminApi'), each field one endpoint named for the
+-- 'AttachmentsApi', 'ArchiveApi', 'AdminApi', and a page's comments'
+-- 'CommentsApi'), each field one endpoint named for the
 -- @MonadWiki@ method it carries, gathered in 'WikiApi', with signing in
 -- and out beside the session's own read. docs/api.md lists
 -- every endpoint with its method, path, body, response and errors.
@@ -49,6 +50,7 @@ module Wiki.Api
   , AdminApi (..)
   , InvitationsApi (..)
   , AccountApi (..)
+  , CommentsApi (..)
 
     -- * Sessions
   , WithCookie
@@ -71,6 +73,7 @@ import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
+import Wiki.Api.Comments (CommentsApi (..))
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
@@ -136,6 +139,11 @@ data WikiApi mode = WikiApi
   -- the parameters, so that both sides fill in what is missing alike.
   , archive :: mode :- NamedRoutes ArchiveApi
   , admin :: mode :- "admin" :> NamedRoutes AdminApi
+  , comments :: mode :- "pages" :> Capture "page" PageId :> "threads" :> NamedRoutes CommentsApi
+  -- ^ A page's comments ("Wiki.Api.Comments"), whose operations are
+  -- @MonadComments@'s. The live channel that tells a tab of them as they
+  -- happen is no servant route: the server upgrades @events@ to a
+  -- WebSocket itself ("Wiki.Api.Events").
   }
   deriving stock (Generic)
 

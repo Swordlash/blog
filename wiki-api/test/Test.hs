@@ -5,6 +5,7 @@ module Main (main) where
 
 import Protolude
 import Test.Error qualified as Error
+import Test.Events qualified as Events
 import Test.Hspec (hspec)
 import Test.Info qualified as Info
 import Test.Json qualified as Json
@@ -24,3 +25,4 @@ main = hspec $ do
   Upload.spec
   Links.spec
   ServerSettings.spec
+  Events.spec

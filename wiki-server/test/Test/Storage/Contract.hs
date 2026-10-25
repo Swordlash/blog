@@ -10,6 +10,7 @@ import Test.Storage.Fixture (whoFor, withDemo)
 import Wiki.App.Backend.Contract (Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
+import Wiki.App.Backend.Contract.Comments qualified as Comments
 import Wiki.Server.Storage (SqliteWiki, runSqliteWiki)
 
 spec :: Spec
@@ -17,6 +18,7 @@ spec =
   describe "SqliteWiki" $ do
     Contract.spec (type (SqliteWiki IO)) fixture
     Admin.spec (type (SqliteWiki IO)) fixture
+    Comments.spec (type (SqliteWiki IO)) fixture
   where
     fixture example =
       withDemo $ \st ->

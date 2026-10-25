@@ -70,6 +70,7 @@ module Wiki.Server.Storage
   , SqliteWiki
   , runSqliteWiki
   , attachmentFile
+  , mayReadPage
 
     -- * Whole wikis
   , importArchive
@@ -91,11 +92,15 @@ import Protolude
 import System.Directory (createDirectoryIfMissing)
 import Wiki.Api.Account (Account, NewAccount (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
+import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.ServerSettings (ServerSettingsChange, applyChange, checkServerSettings)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.Core.Access (Access (..))
+import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Id
@@ -129,6 +134,7 @@ import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
 import Wiki.Server.Storage.Backup (backupFiles)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
+import Wiki.Server.Storage.Comments qualified as Comments
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
 import Wiki.Server.Storage.Migrate (migrate)
 import Wiki.Server.Storage.Rows
@@ -151,15 +157,20 @@ data Storage = Storage
   }
 
 -- | What a storage is opened with besides its directory.
-newtype Config = Config
+data Config = Config
   { attachmentAddress :: Attachment -> Text
   -- ^ Where a browser fetches the bytes of an attachment the storage keeps:
   -- the server's route for them, which serves 'attachmentFile'.
+  , publish :: PageId -> PageEvent -> IO ()
+  -- ^ Who is told what happens to a page's comments: the server's live
+  -- channel ("Wiki.Server.Events"). Called once the change is committed,
+  -- before anyone else may use the connection, so it must not wait.
   }
 
--- | Attachments at @\/api\/v1\/attachments\/\<id\>@.
+-- | Attachments at @\/api\/v1\/attachments\/\<id\>@, and nobody told of
+-- anything.
 defaultConfig :: Config
-defaultConfig = Config {attachmentAddress = \a -> "/api/v1/attachments/" <> a.id.text}
+defaultConfig = Config {attachmentAddress = \a -> "/api/v1/attachments/" <> a.id.text, publish = \_ _ -> pass}
 
 -- | Open the storage in a data directory ("Wiki.Server.Storage.Layout"),
 -- made if it is not there: the database is created or brought up to this
@@ -575,6 +586,32 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   -- keeps ('readServerSettings').
   checkProvider _ _ = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API asks a provider."))
   sendTestMail _ = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API sends mail."))
+
+-- | Whether someone may read a page that is there: what the live channel
+-- asks before it tells them of the page ("Wiki.Server.Events").
+mayReadPage :: Storage -> Who -> PageId -> IO Bool
+mayReadPage st who pid = isRight <$> transact st who Reads (findNode pid >>= chainOfPage >>= requireView)
+
+-- | A page's comments, as the class's Haddock says
+-- ("Wiki.App.Backend.Comments"): each operation one transaction, and each
+-- write, once committed, told to whoever listens ('publish').
+instance (MonadIO m) => MonadComments (SqliteWiki m) where
+  listThreads = run Reads . listThreadsTx
+  openThread pid anchor = commenting . openThreadTx pid anchor
+  reply pid tid = commenting . replyTx pid tid
+  editComment pid tid cid = commenting . editCommentTx pid tid cid
+  deleteComment pid tid = commenting . deleteCommentTx pid tid
+  deleteThread pid = commenting . deleteThreadTx pid
+  setResolved pid tid = commenting . setResolvedTx pid tid
+
+-- | A write to a page's comments, which says what happened to the page:
+-- told once it is committed.
+commenting :: (MonadIO m) => Tx (a, PageId, PageEvent) -> SqliteWiki m (Either WikiError a)
+commenting tx = SqliteWiki $ do
+  env <- ask
+  liftIO $
+    fmap (\(a, _, _) -> a)
+      <$> transactThen env.storage env.who Writes tx (\(_, page, event) -> env.storage.config.publish page event)
 
 -- | An attachment someone may view (they may view its page), and the file
 -- its bytes are in when the storage keeps them; 'Nothing' for one that lives
@@ -1262,6 +1299,126 @@ unlinkUserIdentityTx u provider = do
   gone <- db (\c -> deleteIdentity c u provider)
   unless gone (failWith NotFound)
   db (`deleteSessionsOf` u)
+
+--------------------------------------------------------------------------------
+-- Comments
+
+-- | Who wrote a comment, as a reader sees them: as a version's author is
+-- named ('versionOf').
+commentAuthor :: UserId -> Maybe Text -> Author
+commentAuthor u name
+  | u == administratorId = Author {id = u, name = administratorUser.displayName}
+  | otherwise = Author {id = u, name = fromMaybe u.text name}
+
+-- | A page the current user may read: its space's chain, and its threads.
+-- What every operation on comments starts from, in the class's order.
+discussion :: PageId -> Tx ([Space], [Thread])
+discussion pid = do
+  p <- findNode pid
+  c <- chainOfPage p
+  requireView c
+  ts <- db (\x -> Comments.loadThreads commentAuthor x pid)
+  pure (c, ts)
+
+-- | A thread of the page's, which must be on it.
+threadIn :: [Thread] -> CommentThreadId -> Tx Thread
+threadIn ts tid = maybe (failWith NotFound) pure (find (\t -> t.id == tid) ts)
+
+-- | A comment of the thread's, which must be in it.
+commentIn :: Thread -> CommentId -> Tx Comment
+commentIn t cid = maybe (failWith NotFound) pure (find (\x -> x.id == cid) t.comments)
+
+-- | Whoever is asking, if they may comment on a page of the space at the
+-- end of the chain: their id.
+commenter :: [Space] -> Tx UserId
+commenter c = do
+  ctx <- ask
+  require (mayComment ctx.principal ctx.grants c)
+  maybe (failWith Forbidden) pure ctx.author
+
+-- | A comment's Markdown, checked.
+commentText :: Text -> Tx Text
+commentText = either invalid pure . checkCommentBody
+
+-- | The page's threads, read again within the transaction: what a write
+-- gives back.
+threadNow :: PageId -> CommentThreadId -> Tx Thread
+threadNow pid tid = db (\x -> Comments.loadThreads commentAuthor x pid) >>= (`threadIn` tid)
+
+listThreadsTx :: PageId -> Tx [Thread]
+listThreadsTx pid = snd <$> discussion pid
+
+openThreadTx :: PageId -> Maybe Anchor -> Text -> Tx (Thread, PageId, PageEvent)
+openThreadTx pid anchor body = do
+  (c, _) <- discussion pid
+  u <- commenter c
+  checked <- traverse (either invalid pure . checkAnchor) anchor
+  text <- commentText body
+  tid <- CommentThreadId <$> newId
+  cid <- CommentId <$> newId
+  time <- now
+  db $ \x -> do
+    Comments.insertThread x tid pid checked time
+    Comments.insertComment x cid tid u text time
+  t <- threadNow pid tid
+  pure (t, pid, ThreadOpened t)
+
+replyTx :: PageId -> CommentThreadId -> Text -> Tx (Comment, PageId, PageEvent)
+replyTx pid tid body = do
+  (c, ts) <- discussion pid
+  _ <- threadIn ts tid
+  u <- commenter c
+  text <- commentText body
+  cid <- CommentId <$> newId
+  time <- now
+  db (\x -> Comments.insertComment x cid tid u text time)
+  made <- threadNow pid tid >>= (`commentIn` cid)
+  pure (made, pid, CommentAdded made)
+
+editCommentTx :: PageId -> CommentThreadId -> CommentId -> Text -> Tx (Comment, PageId, PageEvent)
+editCommentTx pid tid cid body = do
+  (_, ts) <- discussion pid
+  old <- threadIn ts tid >>= (`commentIn` cid)
+  ctx <- ask
+  require (mayEditComment ctx.principal old)
+  text <- commentText body
+  time <- now
+  db (\x -> Comments.updateCommentBody x cid text time)
+  edited <- threadNow pid tid >>= (`commentIn` cid)
+  pure (edited, pid, CommentEdited edited)
+
+-- | The first comment of a thread is the thread: it goes with it, if
+-- nobody has replied.
+deleteCommentTx :: PageId -> CommentThreadId -> CommentId -> Tx ((), PageId, PageEvent)
+deleteCommentTx pid tid cid = do
+  (c, ts) <- discussion pid
+  t <- threadIn ts tid
+  old <- commentIn t cid
+  ctx <- ask
+  require (mayDeleteComment ctx.principal ctx.grants c old)
+  case t.comments of
+    opening : _ : _ | opening.id == cid -> invalid "The first comment of a thread with replies cannot be deleted: delete the thread instead."
+    [_] -> db (`Comments.deleteThreadRow` tid) $> ((), pid, ThreadDeleted tid)
+    _ -> db (`Comments.deleteCommentRow` cid) $> ((), pid, CommentDeleted tid cid)
+
+deleteThreadTx :: PageId -> CommentThreadId -> Tx ((), PageId, PageEvent)
+deleteThreadTx pid tid = do
+  (c, ts) <- discussion pid
+  t <- threadIn ts tid
+  ctx <- ask
+  require (mayDeleteThread ctx.principal ctx.grants c t)
+  db (`Comments.deleteThreadRow` tid)
+  pure ((), pid, ThreadDeleted tid)
+
+setResolvedTx :: PageId -> CommentThreadId -> Bool -> Tx (Thread, PageId, PageEvent)
+setResolvedTx pid tid resolved = do
+  (c, ts) <- discussion pid
+  t <- threadIn ts tid
+  _ <- commenter c
+  when (isNothing t.anchor) $
+    invalid "A thread about the whole page is not resolved: only one about a quote of it is."
+  db (\x -> Comments.updateResolved x tid resolved)
+  pure (t {resolved}, pid, ThreadResolved tid resolved)
 
 --------------------------------------------------------------------------------
 -- Whole wikis

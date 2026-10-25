@@ -14,6 +14,9 @@ module Test.Sample
   , sessionInfo
   , account
   , importPlan
+  , inlineThread
+  , pageThread
+  , reply
   , importChoices
   , importSummary
   , serverStatus
@@ -41,7 +44,9 @@ import Wiki.Api.Import
 import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Access (Access (..))
+import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
@@ -333,4 +338,43 @@ providerCheck =
             , userinfo = Just "https://id.example.org/realms/corp/userinfo"
             }
     , problem = Nothing
+    }
+
+-- | A reply to 'inlineThread', edited since.
+reply :: Comment
+reply =
+  Comment
+    { id = CommentId "c2"
+    , thread = CommentThreadId "t1"
+    , author = Author {id = UserId "u2", name = "Bea"}
+    , body = "Agreed, *and* the next one."
+    , createdAt = later
+    , editedAt = Just later
+    }
+
+-- | A thread about a quote of 'page', with its first comment and a reply.
+inlineThread :: Thread
+inlineThread =
+  Thread
+    { id = CommentThreadId "t1"
+    , page = PageId "p1"
+    , anchor = Just Anchor {exact = "a diagram", prefix = "Here is ", suffix = " of the wiki."}
+    , resolved = False
+    , createdAt = time
+    , comments =
+        [ Comment {id = CommentId "c1", thread = CommentThreadId "t1", author = Author {id = UserId "u1", name = "Ada"}, body = "Which **diagram**?", createdAt = time, editedAt = Nothing}
+        , reply
+        ]
+    }
+
+-- | A thread about the whole of 'page', resolved never.
+pageThread :: Thread
+pageThread =
+  Thread
+    { id = CommentThreadId "t2"
+    , page = PageId "p1"
+    , anchor = Nothing
+    , resolved = False
+    , createdAt = later
+    , comments = [Comment {id = CommentId "c3", thread = CommentThreadId "t2", author = Author {id = UserId "u1", name = "Ada"}, body = "A good tour.", createdAt = later, editedAt = Nothing}]
     }

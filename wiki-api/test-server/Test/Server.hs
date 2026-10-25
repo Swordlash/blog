@@ -27,6 +27,7 @@ import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods (..), withoutIdentity)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), NewInvitation (..), defaultSettings)
 import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
+import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))
@@ -35,7 +36,10 @@ import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChan
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..), pageVersion)
+import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment qualified as Attachment
+import Wiki.Core.Comment (Comment, Thread)
+import Wiki.Core.Comment qualified as Comment
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Draft qualified as Draft
 import Wiki.Core.Id
@@ -201,6 +205,19 @@ stubs =
                 else refuse NotFound
           , testMail = \body -> pure MailTestResult {failure = if body.to == "ada@example.org" then Nothing else Just ("no mail for " <> body.to)}
           }
+    , comments = \page ->
+        let here :: Handler a -> Handler a
+            here answer = if page == Sample.page.id then answer else refuse NotFound
+            t1 = Sample.inlineThread.id
+         in CommentsApi
+              { list = here (pure [Sample.inlineThread, Sample.pageThread])
+              , open = \new -> here (pure Sample.inlineThread {Comment.anchor = new.anchor, Comment.comments = [Sample.reply {Comment.body = new.body}]})
+              , reply = \t body -> here (if t == t1 then pure Sample.reply {Comment.body = body.body} else refuse NotFound)
+              , edit = \t c body -> here (if (t, c) == (t1, Sample.reply.id) then pure Sample.reply {Comment.body = body.body} else refuse NotFound)
+              , deleteComment = \t c -> here (if (t, c) == (t1, Sample.reply.id) then pure NoContent else refuse NotFound)
+              , delete = \t -> here (if t == t1 then pure NoContent else refuse Forbidden)
+              , resolve = \t r -> here (if t == t1 then pure Sample.inlineThread {Comment.resolved = r.resolved} else refuse (Invalid "A page thread is not resolved."))
+              }
     }
 
 -- | The sample invitation, made for another address.
@@ -309,6 +326,33 @@ spec = describe "a server of the API's type" $ do
     it "deletes one, answering 204" $ do
       r <- request methodDelete (links.spaces.delete s) [] ""
       (status r, simpleBody r) `shouldBe` (204, "")
+
+  describe "a page's comments" $ do
+    let threads = links.comments p
+        t1 = Sample.inlineThread.id
+        c2 = Sample.reply.id
+    it "lists a page's threads, and refuses a page that is not there" $ do
+      answers (getAt threads.list) 200 [Sample.inlineThread, Sample.pageThread]
+      answers (getAt (links.comments (PageId "nowhere")).list) 404 NotFound
+
+    it "opens a thread, inline or about the page, answering 201" $ do
+      let quote = Anchor {exact = "a diagram", prefix = "", suffix = ""}
+      r <- sendJson methodPost threads.open NewThread {anchor = Just quote, body = "Hm?"}
+      status r `shouldBe` 201
+      (\(t :: Thread) -> (t.anchor, map (\c -> c.body) t.comments)) <$> jsonBody r `shouldBe` Just (Just quote, ["Hm?"])
+      answering <- sendJson methodPost threads.open NewThread {anchor = Nothing, body = "On the page."}
+      (\(t :: Thread) -> t.anchor) <$> jsonBody answering `shouldBe` Just Nothing
+
+    it "replies, edits, deletes a comment, deletes a thread and resolves one, at their addresses" $ do
+      r <- sendJson methodPost (threads.reply t1) CommentText {body = "Yes."}
+      (status r, (\(c :: Comment) -> c.body) <$> jsonBody r) `shouldBe` (201, Just "Yes.")
+      answers (sendJson methodPut (threads.edit t1 c2) CommentText {body = "No."}) 200 Sample.reply {Comment.body = "No."}
+      deleted <- request methodDelete (threads.deleteComment t1 c2) [] ""
+      status deleted `shouldBe` 204
+      gone <- request methodDelete (threads.delete t1) [] ""
+      status gone `shouldBe` 204
+      answers (sendJson methodPut (threads.resolve t1) ThreadResolution {resolved = True}) 200 Sample.inlineThread {Comment.resolved = True}
+      answers (sendJson methodPut (threads.resolve (CommentThreadId "t2")) ThreadResolution {resolved = True}) 400 (Invalid "A page thread is not resolved.")
 
   describe "pages" $ do
     it "lists a space's, and finds one by its path, with its version as the ETag" $ do

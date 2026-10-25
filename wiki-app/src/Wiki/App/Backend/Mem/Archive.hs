@@ -68,6 +68,7 @@ fromArchive a =
           newAccountsCreateSpaces = False
         , invitations = mempty
         , server = noServerSettings
+        , threads = mempty
         , current = Nothing
         , counter = 1
         }

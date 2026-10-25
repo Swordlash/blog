@@ -42,7 +42,7 @@ spec = describe "migrations" $ do
       migrate c `shouldReturn` [1 .. length migrations]
       schemaVersion c `shouldReturn` length migrations
       tables <- tableNames c
-      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "sign_in_providers", "schema_version"] $ \t ->
+      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "sign_in_providers", "threads", "comments", "schema_version"] $ \t ->
         tables `shouldContain` [t]
       rows <- query_ c "SELECT version FROM schema_version ORDER BY version"
       map fromOnly rows `shouldBe` [1 .. length migrations]
@@ -107,6 +107,24 @@ spec = describe "migrations" $ do
       storeServerSettings c noServerSettings
       loadServerSettings c `shouldReturn` noServerSettings
       query_ c "SELECT count(*) FROM settings" `shouldReturn` [Only (1 :: Int)]
+  it "bring a database of the server's settings up to comments: none, each thread on a page, gone with it with its comments" $
+    withFreshDatabase $ \_ c -> do
+      applyMigrations (take 5 migrations) c `shouldReturn` [1, 2, 3, 4, 5]
+      migrate c `shouldReturn` [6 .. length migrations]
+      tables <- tableNames c
+      for_ ["threads", "comments"] $ \t -> tables `shouldContain` [t]
+      execute_ c "PRAGMA foreign_keys = ON"
+      execute_ c "INSERT INTO spaces (id, name, slug, parent, public, created_at, position, subspace_order, page_order, math_macros) VALUES ('space-1', 'S', 's', NULL, 0, 'now', 0, 'name', 'name', '')"
+      execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('page-1', 'space-1', NULL, 'P', 'p', '', 'now', 'now', 0, '')"
+      execute_ c "INSERT INTO threads (id, page_id, quote, prefix, suffix, created_at, seq) VALUES ('t1', 'page-1', 'q', '', '', 'now', 0)"
+      execute_ c "INSERT INTO threads (id, page_id, created_at, seq) VALUES ('t2', 'page-1', 'now', 1)"
+      execute_ c "INSERT INTO comments (id, thread_id, author, body, created_at, seq) VALUES ('c1', 't1', 'user-1', 'Hm.', 'now', 0)"
+      -- A thread about the whole page is never resolved, and an anchor is
+      -- all there or not at all.
+      (try (execute_ c "UPDATE threads SET resolved = 1 WHERE id = 't2'") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
+      (try (execute_ c "INSERT INTO threads (id, page_id, quote, created_at, seq) VALUES ('t3', 'page-1', 'q', 'now', 2)") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
+      execute_ c "DELETE FROM pages WHERE id = 'page-1'"
+      query_ c "SELECT (SELECT count(*) FROM threads) + (SELECT count(*) FROM comments)" `shouldReturn` [Only (0 :: Int)]
 
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do

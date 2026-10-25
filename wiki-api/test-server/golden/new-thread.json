@@ -1,0 +1,8 @@
+{
+  "anchor": {
+    "exact": "a diagram",
+    "prefix": "Here is ",
+    "suffix": " of the wiki."
+  },
+  "body": "Which **diagram**?"
+}

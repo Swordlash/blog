@@ -35,6 +35,7 @@ module Wiki.App.Backend.Http.Preload
   , InvitationsOf (..)
   , InvitationAt (..)
   , ServerOf (..)
+  , ThreadsOf (..)
   , Answer (..)
   , preloadId
   , toPreload
@@ -64,6 +65,7 @@ import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, kept)
 import Wiki.App.Backend.Http.Request (fromApiError, fromSessionInfo, sessionInfo)
+import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Page (Page)
@@ -105,6 +107,10 @@ data Preload = Preload
   , server :: Maybe ServerOf
   -- ^ The server's own settings ('Wiki.App.Backend.Admin.serverSettings'),
   -- as the directory: whether each secret is set, never a secret.
+  , threads :: Maybe [ThreadsOf]
+  -- ^ A page's comments ('Wiki.App.Backend.Comments.listThreads'), for the
+  -- page they are on; a payload written before there were any reads as
+  -- without them.
   }
   deriving stock (Eq, Show, Generic)
 
@@ -164,6 +170,10 @@ newtype ServerOf = ServerOf {server :: Answer ServerSettings}
 
 -- | An invitation by its link's secret ('Wiki.App.Account.invitationFor').
 data InvitationAt = InvitationAt {token :: InvitationToken, invitation :: Answer InvitationInfo}
+  deriving stock (Eq, Show)
+
+-- | A page's threads ('Wiki.App.Backend.Comments.listThreads').
+data ThreadsOf = ThreadsOf {page :: PageId, threads :: Answer [Thread]}
   deriving stock (Eq, Show)
 
 -- | What a read gave, or the API's refusal: written as the read's own field
@@ -248,6 +258,12 @@ instance ToJSON InvitationAt where
 instance FromJSON InvitationAt where
   parseJSON v = withObject "InvitationAt" (\o -> InvitationAt <$> o .: "token" <*> parseAnswer "invitation" v) v
 
+instance ToJSON ThreadsOf where
+  toJSON t = object (("page" .= t.page) : answerFields "threads" t.threads)
+
+instance FromJSON ThreadsOf where
+  parseJSON v = withObject "ThreadsOf" (\o -> ThreadsOf <$> o .: "page" <*> parseAnswer "threads" v) v
+
 -- | What the backend kept, as the page carries it: every answer it would
 -- give at once, and no page twice.
 toPreload :: Cache -> Preload
@@ -275,6 +291,9 @@ toPreload c =
         [] -> Nothing
         found -> Just found
     , server = ServerOf . toAnswer <$> mfilter kept c.server
+    , threads = case [ThreadsOf {page, threads = toAnswer ts} | (page, ts) <- Map.toList c.threads, kept ts] of
+        [] -> Nothing
+        found -> Just found
     }
 
 -- | The backend's cache as the page's payload says.
@@ -295,6 +314,7 @@ fromPreload p =
     , invitations = (\i -> fromAnswer i.invitations) <$> p.invitations
     , invitationAt = Map.fromList [(i.token, fromAnswer i.invitation) | i <- fold p.invitationsAt]
     , server = (\s -> fromAnswer s.server) <$> p.server
+    , threads = Map.fromList [(t.page, fromAnswer t.threads) | t <- fold p.threads]
     }
 
 -- | Only what 'kept' keeps is ever written, which is an answer or a

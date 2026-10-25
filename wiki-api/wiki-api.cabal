@@ -55,7 +55,9 @@ library
       Wiki.Api.Account
       Wiki.Api.Admin
       Wiki.Api.Auth
+      Wiki.Api.Comments
       Wiki.Api.Error
+      Wiki.Api.Events
       Wiki.Api.Import
       Wiki.Api.Info
       Wiki.Api.Links
@@ -87,6 +89,7 @@ test-suite wiki-api-test
   main-is:          Test.hs
   other-modules:
       Test.Error
+      Test.Events
       Test.Gen
       Test.Info
       Test.Json

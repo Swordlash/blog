@@ -34,6 +34,8 @@ import Wiki.Api.Links (attachmentUrl)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, redirectUri, securityName)
 import Wiki.Server.Api (Env (..))
 import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
+import Wiki.Server.Events (closeAll, newHub)
+import Wiki.Server.Events qualified as Events
 import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
 import Wiki.Server.Log (Level (..), Logger, logWith, stdoutLogger)
 import Wiki.Server.Mail (SendMail, smtpSend)
@@ -94,7 +96,8 @@ withServerUsing logger raw sendMail action = do
   limiter <- newLimiter defaultLimits
   -- Five accounts made, or tried, from an address in fifteen minutes.
   registrations <- newLimiter defaultLimits {perLogin = 5, perAddress = 5}
-  withStorage Config {attachmentAddress = attachmentUrl} options.dataDir $ \storage -> do
+  events <- newHub
+  withStorage Config {attachmentAddress = attachmentUrl, publish = Events.publish events} options.dataDir $ \storage -> do
     let env =
           Env
             { storage
@@ -107,6 +110,7 @@ withServerUsing logger raw sendMail action = do
             , sendMail
             , providerCache
             , flows
+            , events
             }
         public =
           Listener
@@ -153,7 +157,7 @@ withServerUsing logger raw sendMail action = do
       -- The sockets are this function's own, so they are closed here rather
       -- than through Warp's shutdown handler, which a listener installs only
       -- once its thread has started.
-      let stopAll = writeIORef stopping True >> traverse_ (close . fst) bound
+      let stopAll = writeIORef stopping True >> closeAll events >> traverse_ (close . fst) bound
           waitAll = case threads of
             [only] -> Async.wait only
             [x, y] -> void (Async.waitBoth x y)

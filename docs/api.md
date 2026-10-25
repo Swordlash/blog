@@ -219,6 +219,83 @@ and body as the page's latest version, against the version in `If-Match` as a
 save is (409 if the page has been saved since), and so discards the
 restorer's draft; the versions in between are kept.
 
+### Comments
+
+| Method | Path | Body | Response | Errors | `MonadComments` |
+| ------ | ---- | ---- | -------- | ------ | --------------- |
+| GET | `api/v1/pages/<page>/threads` | | `[Thread]`, in the order they were opened | 404, 403 | `listThreads` |
+| POST | `api/v1/pages/<page>/threads` | `NewThread` `{"anchor": Anchor or null, "body"}` | 201 `Thread` | 404, 403, 400 | `openThread` |
+| POST | `api/v1/pages/<page>/threads/<thread>/comments` | `CommentText` `{"body"}` | 201 `Comment`, last in the thread | 404, 403, 400 | `reply` |
+| PUT | `api/v1/pages/<page>/threads/<thread>/comments/<comment>` | `CommentText` `{"body"}` | `Comment`, with its `editedAt` | 404, 403, 400 | `editComment` |
+| DELETE | `api/v1/pages/<page>/threads/<thread>/comments/<comment>` | | 204 | 404, 403, 400 | `deleteComment` |
+| DELETE | `api/v1/pages/<page>/threads/<thread>` | | 204 | 404, 403 | `deleteThread` |
+| PUT | `api/v1/pages/<page>/threads/<thread>/resolved` | `ThreadResolution` `{"resolved": bool}` | `Thread` | 404, 403, 400 | `setResolved` |
+
+A page's comments (WP4.5 of the plan) come in threads. A `Thread` is `{"id",
+"page", "anchor", "resolved", "createdAt", "comments"}`: its `anchor` is the
+quote of the page's rendered text it is about, `{"exact", "prefix",
+"suffix"}` (the quote and up to 32 characters of the text before and after
+it: a W3C text quote selector), or `null` for a thread about the whole page;
+its `comments` are `[Comment]` `{"id", "thread", "author", "body",
+"createdAt", "editedAt"}`, the first the one that opened it, the rest
+replies, one level deep. A comment's `body` is Markdown, rendered as a page
+is, and its `author` is `{"id", "name"}`, named as a version's author is.
+Where a quote is on the page, or that the page no longer has it, is the
+client's to find (`Wiki.Core.Anchor.locate`): the server keeps the quote as
+it was given, its context cut to 32 characters.
+
+Reading a page's threads takes what reading the page does; commenting,
+replying and resolving or reopening a thread take that and being signed in
+(the operator on the admin listener comments as the administrator); a
+comment is edited by its author alone, and deleted by its author or by
+whoever administers the page's space; a whole thread is deleted by whoever
+administers the space, or by the one who opened it while every comment in it
+is theirs. Only an inline thread is resolved (400 for a thread about the
+page). The first comment of a thread is the thread: deleting it deletes the
+thread, which is refused (400) while it has replies. A thread or a comment
+is addressed under its page; one that is not on the page named is 404,
+after the page's own 404 and 403. A comment is not blank and at most 20 000
+characters long, a quote not blank and at most 2000 (400).
+
+### The live channel
+
+`api/v1/events` is a WebSocket, not a servant route: one per browser tab, on
+which the tab says which pages it shows and the server tells it what happens
+to their comments as it happens (decision 23 of the plan,
+`Wiki.Api.Events`). The upgrade is a request like any other: who is asking is
+found from its session cookie, a closed wiki answers someone who has not
+signed in 401 before upgrading, an upgrade whose `Origin` is not the
+server's own address (its `Host`, or the `X-Forwarded-Host` a proxy in
+front sets) is 403, and a request to the address that is no upgrade is 426.
+A connection stays who it was opened as: a tab that signs in or out opens
+another.
+
+Every message is a JSON text frame. The tab sends `{"subscribe": "<page>"}`
+and `{"unsubscribe": "<page>"}`; the server answers a subscription with
+`{"subscribed": "<page>"}`, or `{"refused": "<page>"}` for a page that is not
+there or that the connection's user may not read, and then sends `{"page":
+"<page>", "event": PageEvent}` for each change to the page's comments, once it
+is committed, to every connection subscribed to it (the tab that made the
+change included), checking again that the user may read the page. A
+`PageEvent` is an object with a `type`:
+
+| `type` | Fields | What happened |
+| ------ | ------ | ------------- |
+| `thread-opened` | `thread`: `Thread` | a thread was opened, with its first comment |
+| `comment-added` | `comment`: `Comment` | a reply |
+| `comment-edited` | `comment`: `Comment` | a comment was edited |
+| `comment-deleted` | `thread`, `comment`: ids | a reply was deleted |
+| `thread-resolved` | `thread`: id, `resolved`: bool | a thread was resolved or reopened |
+| `thread-deleted` | `thread`: id | a thread was deleted, or its first comment with it |
+
+The type is open: a client ignores an event of a type it does not know, so
+that later ones ("someone is editing this page", "this page changed") ride
+the same channel. Nothing is replayed: a tab that loses its connection
+connects again, subscribes again, and reads what it shows afresh. The server
+pings every 20 seconds, keeps subscriptions in memory, closes a connection
+that does not keep up with its messages (256 waiting), and closes every
+connection when it stops.
+
 ### Search
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |

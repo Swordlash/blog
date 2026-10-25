@@ -22,6 +22,7 @@ import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Contract (Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
+import Wiki.App.Backend.Contract.Comments qualified as Comments
 import Wiki.App.Backend.Http (HttpWiki, applyImport, newHttpEnv, previewImport, runHttpWiki)
 import Wiki.App.Demo (demoNow)
 import Wiki.Core.Export (Archive (..), writeArchive)
@@ -30,6 +31,7 @@ import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space qualified as S
 import Wiki.Server.Api (Env (..))
+import Wiki.Server.Events (newHub)
 import Wiki.Server.Limiter (defaultLimits, newLimiter)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Render (inProcess)
@@ -39,6 +41,7 @@ spec :: Spec
 spec = describe "HttpWiki against the server's API" $ do
   Contract.spec (type (HttpWiki IO)) fixture
   Admin.spec (type (HttpWiki IO)) fixture
+  Comments.spec (type (HttpWiki IO)) fixture
   importing
   where
     fixture example =
@@ -100,4 +103,5 @@ apiEnv storage = do
   registrations <- newLimiter defaultLimits
   flows <- newFlows
   providerCache <- newProviderCache
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows}
+  events <- newHub
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events}

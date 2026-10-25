@@ -19,7 +19,9 @@
 -- tab and come back to their draft, which is what drafts are for. So are the
 -- pages' versions ("Wiki.Core.Version"), every one of them, a record each:
 -- one full title and body per save, so that a page saved a hundred times
--- takes a hundred times its size.
+-- takes a hundred times its size. And so are pages' comments
+-- ("Wiki.Core.Comment"), which the export has none of either: a page's
+-- threads, with their comments, are one record, under the page's id.
 --
 -- Everything here is pure: "Wiki.App.Backend.Mem" reads and writes the
 -- store, and works out what to write from two sets of 'records' with
@@ -36,6 +38,7 @@ module Wiki.App.Backend.Mem.Persist
   , metaStore
   , draftsStore
   , versionsStore
+  , threadsStore
   , storeNames
 
     -- * Records
@@ -48,7 +51,7 @@ module Wiki.App.Backend.Mem.Persist
 where
 
 import Control.Monad.Fail (fail)
-import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, withObject, (.!=), (.:), (.:?), (.=))
+import Data.Aeson (Value (..), eitherDecodeStrict', object, parseJSON, toJSON, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
 import Data.Map.Lazy qualified as LazyMap
@@ -62,6 +65,7 @@ import Web.Storage.IndexedDB (Database (..), StoreName)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions, emptyState, prepareSearch)
 import Wiki.Core.Access (Access (..))
+import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export
 import Wiki.Core.Id (BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
@@ -73,11 +77,12 @@ import Wiki.Core.User (Group (..), User (..))
 -- | The database a wiki is kept in under this name. Its stores are made
 -- when it is first opened; adding one later is a version bump, on which
 -- IndexedDB makes the new store and keeps the others with what they hold.
--- Version 2 added 'draftsStore', version 3 'versionsStore'.
+-- Version 2 added 'draftsStore', version 3 'versionsStore', version 4
+-- 'threadsStore'.
 memDatabase :: Text -> Database
-memDatabase name = Database {name, version = 3, stores = storeNames}
+memDatabase name = Database {name, version = 4, stores = storeNames}
 
-usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore :: StoreName
+usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore, threadsStore :: StoreName
 
 -- | A user's record, under their id.
 usersStore = "users"
@@ -112,9 +117,14 @@ draftsStore = "drafts"
 -- as they are ('completeVersions').
 versionsStore = "versions"
 
+-- | A page's threads, with their comments, as a list, under the page's
+-- id. A database from before there was this store has none: no page has
+-- comments.
+threadsStore = "threads"
+
 -- | Every store of 'memDatabase'.
 storeNames :: [StoreName]
-storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore]
+storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore, threadsStore]
 
 -- | A draft's key: its page's id and its author's, which are one draft's.
 draftKey :: Draft -> Text
@@ -155,6 +165,7 @@ records st =
       -- only when its key is new, and only then is its record made. Every
       -- write would otherwise encode the whole history again.
       (versionsStore, LazyMap.fromList [(versionKey page at, encodeJson (encodeVersion page at v)) | (page, kept) <- Map.toList st.versions, (at, v) <- Map.toList kept])
+    , (threadsStore, Map.fromList [(page.text, encodeJson (toJSON ts)) | (page, ts) <- Map.toList st.threads])
     ]
 
 -- | A version's record, with named fields, as a draft's.
@@ -284,6 +295,11 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
     spaces <- keyed spacesStore (parseSpace (spaceCreatedDefault firstPage (Map.elems pages))) (\s -> s.id.text) SpaceId
     kept <- keyed draftsStore parseDraft draftKey identity
     history <- keyed versionsStore parseVersion (\(page, at, _) -> versionKey page at) identity
+    discussed <- fmap Map.fromList . for (Map.toList (holding threadsStore)) $ \(key, bytes) -> do
+      ts <- decoding threadsStore key (parseJSON :: Value -> Parser [Thread]) bytes
+      if all (\t -> t.page.text == key) ts
+        then Right (PageId key, ts)
+        else Left (failure threadsStore key "has threads of another page")
     grants <- fmap concat . for (Map.toList (holding grantsStore)) $ \(key, bytes) -> do
       gs <- decoding grantsStore key (listOf parseSpaceGrant) bytes
       if all (\g -> g.space.text == key) gs
@@ -301,6 +317,8 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
         , -- The versions of pages that are there: a page deleted takes its
           -- versions with it in one transaction, so there are no others.
           versions = Map.intersection (Map.fromListWith (<>) [(page, Map.singleton at v) | (page, at, v) <- Map.elems history]) pages
+        , -- As versions: a page deleted takes its threads with it.
+          threads = Map.intersection discussed pages
         , -- Whom the demo is open to is not kept: it is open whenever
           -- it starts, as its prerendered pages are.
           grants = Grants {global, spaces = grants, access = Open}

@@ -86,7 +86,9 @@ import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
+import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error qualified as ApiError
+import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.Api.Links qualified as Links
@@ -97,10 +99,13 @@ import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http.Cache
 import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, fromSessionInfo, ifMatch, multipart, multipartForm, sessionInfo, withJson)
 import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Islands.Monad (MonadIslands)
+import Wiki.Core.Comment (Thread (..))
+import Wiki.Core.Id (PageId)
 import Wiki.Core.User (Standing (..))
 
 -- | How a request reaches the server: its answer, or why none came.
@@ -441,6 +446,34 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   setServerSettings new = write (withJson "PUT" links.admin.setServer new)
   checkProvider name given = answer <$> call (withJson "POST" (links.admin.checkProvider name) given)
   sendTestMail address = answer <$> call (withJson "POST" links.admin.testMail MailTest {to = address})
+
+-- | A page's comments, over the API's @pages\/\<page>\/threads@. A
+-- page's threads are kept as any read is, so that a page the server
+-- rendered with its comments is the program's first render too; a write
+-- folds what it did into them rather than letting everything go (see
+-- "Wiki.App.Backend.Http.Cache").
+instance (MonadIO m) => MonadComments (HttpWiki m) where
+  listThreads pid = cached (\c -> Map.lookup pid c.threads) (R.get (links.comments pid).list) (withThreads pid)
+  openThread pid anchor body = commentWrite pid ThreadOpened (withJson "POST" (links.comments pid).open NewThread {anchor, body})
+  reply pid tid body = commentWrite pid CommentAdded (withJson "POST" ((links.comments pid).reply tid) CommentText {body})
+  editComment pid tid cid body = commentWrite pid CommentEdited (withJson "PUT" ((links.comments pid).edit tid cid) CommentText {body})
+  deleteComment pid tid cid = commentWrite_ pid (CommentDeleted tid cid) (R.delete ((links.comments pid).deleteComment tid cid))
+  deleteThread pid tid = commentWrite_ pid (ThreadDeleted tid) (R.delete ((links.comments pid).delete tid))
+  setResolved pid tid resolved = commentWrite pid (\t -> ThreadResolved t.id t.resolved) (withJson "PUT" ((links.comments pid).resolve tid) ThreadResolution {resolved})
+
+-- | A write to a page's comments, folded into the page's threads kept.
+commentWrite :: (MonadIO m, FromJSON a) => PageId -> (a -> PageEvent) -> Request -> HttpWiki m (Either WikiError a)
+commentWrite pid event request = do
+  result <- answer <$> call request
+  modifyCache (afterComment pid (event <$> result))
+  pure result
+
+-- | One that answers with nothing.
+commentWrite_ :: (MonadIO m) => PageId -> PageEvent -> Request -> HttpWiki m (Either WikiError ())
+commentWrite_ pid event request = do
+  result <- answerNothing <$> call request
+  modifyCache (afterComment pid (event <$ result))
+  pure result
 
 -- | Signing in and out ("Wiki.App.Account"), each of which starts the
 -- cache over with the session it answered with.

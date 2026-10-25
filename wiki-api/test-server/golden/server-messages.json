@@ -1,0 +1,91 @@
+[
+  {
+    "subscribed": "p1"
+  },
+  {
+    "refused": "p2"
+  },
+  {
+    "event": {
+      "thread": {
+        "anchor": null,
+        "comments": [
+          {
+            "author": {
+              "id": "u1",
+              "name": "Ada"
+            },
+            "body": "A good tour.",
+            "createdAt": "2026-10-25T00:00:00Z",
+            "editedAt": null,
+            "id": "c3",
+            "thread": "t2"
+          }
+        ],
+        "createdAt": "2026-10-25T00:00:00Z",
+        "id": "t2",
+        "page": "p1",
+        "resolved": false
+      },
+      "type": "thread-opened"
+    },
+    "page": "p1"
+  },
+  {
+    "event": {
+      "comment": {
+        "author": {
+          "id": "u2",
+          "name": "Bea"
+        },
+        "body": "Agreed, *and* the next one.",
+        "createdAt": "2026-10-25T00:00:00Z",
+        "editedAt": "2026-10-25T00:00:00Z",
+        "id": "c2",
+        "thread": "t1"
+      },
+      "type": "comment-added"
+    },
+    "page": "p1"
+  },
+  {
+    "event": {
+      "comment": {
+        "author": {
+          "id": "u2",
+          "name": "Bea"
+        },
+        "body": "Agreed, *and* the next one.",
+        "createdAt": "2026-10-25T00:00:00Z",
+        "editedAt": "2026-10-25T00:00:00Z",
+        "id": "c2",
+        "thread": "t1"
+      },
+      "type": "comment-edited"
+    },
+    "page": "p1"
+  },
+  {
+    "event": {
+      "comment": "c2",
+      "thread": "t1",
+      "type": "comment-deleted"
+    },
+    "page": "p1"
+  },
+  {
+    "event": {
+      "resolved": true,
+      "thread": "t1",
+      "type": "thread-resolved"
+    },
+    "page": "p1"
+  },
+  {
+    "event": {
+      "thread": "t2",
+      "type": "thread-deleted"
+    },
+    "page": "p1"
+  }
+]

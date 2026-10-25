@@ -18,11 +18,14 @@ import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
+import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..))
+import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
-import Wiki.Core.Id (GroupId (..), PageId (..), SpaceId (..))
+import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Id (CommentId (..), CommentThreadId (..), GroupId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Version (VersionInfo (..))
@@ -66,6 +69,21 @@ spec = describe "golden JSON" $ do
     golden "provider-check" Sample.providerCheck
     golden "provider-check-failed" ProviderCheck {redirectUri = Nothing, clientSecret = NotSet, discovered = Nothing, problem = Just "Corp could not be reached at https://id.example.org/realms/corp/.well-known/openid-configuration."}
     golden "mail-test-result" MailTestResult {failure = Just "The mail server at mail.example.org:587 did not answer in time."}
+    golden "threads" [Sample.inlineThread, Sample.pageThread]
+    golden "comment" Sample.reply
+  describe "the live channel's messages" $ do
+    golden "client-messages" [Subscribe (PageId "p1"), Unsubscribe (PageId "p1")]
+    golden
+      "server-messages"
+      [ Subscribed (PageId "p1")
+      , Refused (PageId "p2")
+      , Event (PageId "p1") (ThreadOpened Sample.pageThread)
+      , Event (PageId "p1") (CommentAdded Sample.reply)
+      , Event (PageId "p1") (CommentEdited Sample.reply)
+      , Event (PageId "p1") (CommentDeleted (CommentThreadId "t1") (CommentId "c2"))
+      , Event (PageId "p1") (ThreadResolved (CommentThreadId "t1") True)
+      , Event (PageId "p1") (ThreadDeleted (CommentThreadId "t2"))
+      ]
   describe "errors" $ do
     golden "error-not-found" NotFound
     golden "error-forbidden" Forbidden
@@ -83,6 +101,10 @@ spec = describe "golden JSON" $ do
     golden "new-page" NewPage {parent = Nothing, title = "Tour", body = "# Tour"}
     golden "page-edit" PageEdit {title = "Tour", body = "# Tour, again"}
     golden "page-move" PageMove {space = SpaceId "s2", parent = Just (PageId "p9")}
+    golden "new-thread" NewThread {anchor = Just Anchor {exact = "a diagram", prefix = "Here is ", suffix = " of the wiki."}, body = "Which **diagram**?"}
+    golden "new-page-thread" NewThread {anchor = Nothing, body = "A good tour."}
+    golden "comment-text" CommentText {body = "Agreed."}
+    golden "thread-resolution" ThreadResolution {resolved = True}
     golden "shift" ShiftBy {shift = ShiftToTop}
     golden "draft-edit" DraftEdit {base = Sample.time, title = "Tour", body = "# Tour, unsaved"}
     golden "import-choices" Sample.importChoices

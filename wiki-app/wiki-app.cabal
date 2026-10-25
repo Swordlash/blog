@@ -67,6 +67,7 @@ library
       Wiki.App.Account
       Wiki.App.Backend
       Wiki.App.Backend.Admin
+      Wiki.App.Backend.Comments
       Wiki.App.Backend.Http
       Wiki.App.Backend.Http.Cache
       Wiki.App.Backend.Http.Preload
@@ -162,6 +163,7 @@ library contract
     exposed-modules:
         Wiki.App.Backend.Contract
         Wiki.App.Backend.Contract.Admin
+        Wiki.App.Backend.Contract.Comments
     build-depends:
         HUnit,
         bytestring,

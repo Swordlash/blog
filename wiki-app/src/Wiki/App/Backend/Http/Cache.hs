@@ -23,6 +23,15 @@
 -- are let go with the rest. 'Unreachable' is not an answer and is never
 -- kept: trying again may well work.
 --
+-- A page's comments ("Wiki.Core.Comment") are kept by page, and their own
+-- writes are the other exception: a comment changes its page's threads
+-- and nothing else, so its result is folded into them
+-- ('Wiki.Api.Events.applyEvent') rather than everything let go, which
+-- would make the page itself load again. What happens to them elsewhere
+-- comes over the live channel ("Wiki.App.Live"), which lets a page's
+-- threads go when it hears of them, and when it stops listening for them
+-- ('forgetThreads').
+--
 -- So are searches, by their query: the server renders the page of a
 -- search's results with its hits, which the program then shows at once.
 -- And so is the administration's directory of the wiki's people, which the
@@ -49,6 +58,9 @@ module Wiki.App.Backend.Http.Cache
   , withInvitations
   , withInvitationAt
   , withServerSettings
+  , withThreads
+  , afterComment
+  , forgetThreads
   , afterWrite
   )
 where
@@ -58,8 +70,10 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken)
 import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
+import Wiki.Api.Events (PageEvent, applyEvent)
 import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.App.Backend (Session, WikiError (..))
+import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Page (Page)
@@ -102,6 +116,8 @@ data Cache = Cache
   -- ^ 'Wiki.App.Account.invitationFor', by the link's secret.
   , server :: Maybe (Either WikiError ServerSettings)
   -- ^ 'Wiki.App.Backend.Admin.serverSettings'.
+  , threads :: Map PageId (Either WikiError [Thread])
+  -- ^ 'Wiki.App.Backend.Comments.listThreads', by page.
   }
   deriving stock (Eq, Show)
 
@@ -122,6 +138,7 @@ emptyCache =
     , invitations = Nothing
     , invitationAt = mempty
     , server = Nothing
+    , threads = mempty
     }
 
 -- | Whether a read's answer is kept: what it gave, and a refusal the
@@ -191,6 +208,21 @@ withInvitationAt t i c = c {invitationAt = Map.insert t i c.invitationAt}
 
 withServerSettings :: Either WikiError ServerSettings -> Cache -> Cache
 withServerSettings s c = c {server = Just s}
+
+withThreads :: PageId -> Either WikiError [Thread] -> Cache -> Cache
+withThreads pid ts c = c {threads = Map.insert pid ts c.threads}
+
+-- | The cache after a write to a page's comments: what it did folded into
+-- the page's threads, if they are kept; or, for a write whose outcome is
+-- not known (it failed, or was refused), the page's threads let go.
+afterComment :: PageId -> Either WikiError PageEvent -> Cache -> Cache
+afterComment pid outcome c = case outcome of
+  Right event -> c {threads = Map.adjust (fmap (applyEvent event)) pid c.threads}
+  Left _ -> forgetThreads pid c
+
+-- | The cache without a page's threads: they have changed, or may have.
+forgetThreads :: PageId -> Cache -> Cache
+forgetThreads pid c = c {threads = Map.delete pid c.threads}
 
 -- | The cache after a write that changed the wiki: nothing in it can be
 -- trusted any more.

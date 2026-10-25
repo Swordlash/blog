@@ -16,6 +16,7 @@ import Wiki.App.Backend
 import Wiki.App.Backend.Contract (As (..), Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
+import Wiki.App.Backend.Contract.Comments qualified as Comments
 import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Archive (toArchive)
 import Wiki.App.Backend.Mem.Persist (records)
@@ -45,6 +46,7 @@ spec = do
   describe "MemWiki" $ do
     Contract.spec (type (MemWiki IO)) (memFixture >>=)
     Admin.spec (type (MemWiki IO)) (memFixture >>=)
+    Comments.spec (type (MemWiki IO)) (memFixture >>=)
 
     it "offers the demo's users to switch between" $ do
       ref <- newMemWiki (demoState demoNow)
