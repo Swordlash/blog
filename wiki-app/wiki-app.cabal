@@ -98,6 +98,7 @@ library
       Wiki.App.View.Preview
       Wiki.App.View.Search
       Wiki.App.View.SearchResults
+      Wiki.App.View.Server
       Wiki.App.View.SignIn
       Wiki.App.View.Slides
       Wiki.App.View.History
@@ -286,6 +287,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Persist
       Test.Browser.Providers
       Test.Browser.Search
+      Test.Browser.Server
       Test.Browser.Shell
       Test.Browser.Slides
       Test.Browser.Source

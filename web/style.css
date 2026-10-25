@@ -2779,6 +2779,129 @@ table.invitations td {
   color: var(--muted);
 }
 
+/* The administration's section on the server itself (Wiki.App.View.Server):
+   the public address, the mail server and the providers, each a part with
+   its own heading; one form at a time replaces what it edits. */
+.server-part {
+  margin-top: 1.2rem;
+}
+
+.server-part h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1.05rem;
+}
+
+.server-url-value {
+  margin: 0 0 0.3rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.server-mail-summary,
+.server-provider-row dl,
+.server-provider-checked dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.8rem;
+  margin: 0.4rem 0;
+}
+
+.server-mail-summary dt,
+.server-provider-row dt,
+.server-provider-checked dt {
+  color: var(--muted);
+}
+
+.server-mail-summary dd,
+.server-provider-row dd,
+.server-provider-checked dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.server-mail-form,
+.server-url-form,
+.server-provider-form,
+.server-mail-test {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.6rem;
+  margin: 0.4rem 0 0.8rem;
+}
+
+.server-mail-form .field,
+.server-url-form .field,
+.server-provider-form .field,
+.server-mail-test .field {
+  flex: 1 1 14rem;
+}
+
+.server-mail-form .actions,
+.server-url-form .actions,
+.server-provider-form .actions,
+.server-mail-test .actions,
+.server-provider-form .server-provider-redirect {
+  flex-basis: 100%;
+}
+
+/* A secret that is set: its state and the ways to change it, never it. */
+.server-secret {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.server-secret > span:first-child {
+  flex-basis: 100%;
+}
+
+.server-secret-state {
+  color: var(--muted);
+}
+
+.server-provider-list {
+  margin: 0.4rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.server-provider {
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.server-provider-kind {
+  margin-left: 0.5rem;
+  color: var(--muted);
+}
+
+.server-provider-redirect {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.server-provider-checked,
+.server-mail-tested {
+  flex-basis: 100%;
+  margin: 0.4rem 0 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.server-provider-checked p {
+  margin: 0;
+}
+
+.server-provider-checked.error,
+.server-mail-tested.error {
+  color: var(--danger);
+}
+
 /* ---- Signing in with a provider ------------------------------------------ */
 
 /* The providers the server signs in with (Wiki.App.View.SignIn and

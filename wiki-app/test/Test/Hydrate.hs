@@ -215,6 +215,7 @@ apiOver providers st = do
     people <- directory
     settings <- wikiSettings
     invited <- invitations
+    server <- serverSettings
     spaces <- listSpaces
     perSpace <- for (Map.elems st.spaces) $ \s -> do
       space <- getSpace (spacePath s.id)
@@ -237,6 +238,7 @@ apiOver providers st = do
               : (links.admin.directory, answerOf people)
               : (links.admin.settings, answerOf settings)
               : (links.admin.invitations, answerOf invited)
+              : (links.admin.server, answerOf server)
               : (links.invitations.details (InvitationToken "valid"), answerOf (Right InvitationInfo {email = "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
               : concat perSpace
           )

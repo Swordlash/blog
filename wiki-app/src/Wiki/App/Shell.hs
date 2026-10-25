@@ -115,6 +115,7 @@ import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.Page qualified as PageView
 import Wiki.App.View.Search qualified as SearchBox
 import Wiki.App.View.SearchResults qualified as SearchResultsView
+import Wiki.App.View.Server qualified as ServerView
 import Wiki.App.View.SignIn qualified as SignInView
 import Wiki.App.View.Slides qualified as SlidesView
 import Wiki.App.View.Source qualified as SourceView
@@ -160,6 +161,7 @@ type Slots =
     .+ ("signIn" .== H.Slot SignInView.Query SignInView.Output ())
     .+ ("slides" .== H.Slot (Const Void) ViewOutput ())
     .+ ("access" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("server" .== H.Slot (Const Void) ViewOutput ())
     .+ ("invite" .== H.Slot (Const Void) InviteView.Output ())
 
 -- | The space the route is in, as far as it has been loaded.
@@ -469,6 +471,7 @@ component =
                 {{ dataControls st }}
               </section>
               {{ HH.slot "access" () AccessView.component AccessView.Input {context = context st} FromView }}
+              {{ HH.slot "server" () ServerView.component ServerView.Input {context = context st} FromView }}
               {{ HH.slot "people" () AdminView.component AdminView.Input {context = context st} FromView }}
             </section>
           |]

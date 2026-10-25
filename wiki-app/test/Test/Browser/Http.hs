@@ -48,6 +48,7 @@ import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
 import Wiki.Api.Links (links)
+import Wiki.Api.ServerSettings (ServerSettings, noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
@@ -152,6 +153,7 @@ serveDemo = do
       pure (me, spaces, pages, people)
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = []}
   for_ people (answerWith "GET" links.admin.directory 200)
+  answerWith "GET" links.admin.server 200 (noServerSettings :: ServerSettings)
   answerWith "GET" "api/v1/spaces" 200 spaces
   for_ pages $ \(s, ps) -> do
     answerWith "GET" (links.spaces.atPath (spacePathOf spaces s.id)) 200 s
