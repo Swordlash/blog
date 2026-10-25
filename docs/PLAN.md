@@ -1880,3 +1880,5 @@ Amended by the planning session after each work package's report.
   login name Nothing` makes a user without a password; factor `startSession` out of
   `Accounts.signIn` and set the cookie with `Session.sessionCookie`; "signs in another
   way" needs a notion beside `withPassword`.
+- **WP3.5 started** (2026-10-25) on `wp3.5-open-closed` from `main` `fa083d1`, beside the
+  running WP4.2; whichever merges second rebases.
