@@ -43,8 +43,10 @@
 // 5. (Within 2.) Signing in with a provider (WP3.6): a fake OpenID Connect
 //    provider on localhost, another site than the wiki's 127.0.0.1, so that
 //    the browser applies its rules for cookies across sites as it does with
-//    a real one; "Sign in with Fake" in the header's form goes there and
-//    back, and lands signed in, as a new account, on the page it left.
+//    a real one, added in the administration's "Server" section while the
+//    server runs (WP4.4), with the wiki's public address, and checked there;
+//    "Sign in with Fake" in the header's form goes there and back, and
+//    lands signed in, as a new account, on the page it left.
 //
 // Needs the native builds of wiki-server and wiki-app-prerender (npm run
 // build-native; WIKI_SERVER and WIKI_PRERENDER name other binaries), the
@@ -154,9 +156,8 @@ const server = spawn(
   wikiServer,
   [
     "serve", "--data", data, "--static", app, "--listen", `127.0.0.1:${wikiPort}`, "--admin-listen", "127.0.0.1:0",
-    "--public-url", `http://127.0.0.1:${wikiPort}/`, "--oidc", `fake=oidc,smoke-client,${providerOrigin}`,
   ],
-  { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, WIKI_OIDC_FAKE_SECRET: oidcSecret } },
+  { stdio: ["ignore", "pipe", "pipe"] },
 );
 let log = "";
 const listening = new Promise((ready, fail) => {
@@ -626,6 +627,33 @@ try {
   assert.equal(people.status, 200, "the directory");
   assert.deepEqual(people.body.groups.map((g) => g.name), ["Smoke testers"], "the server's groups");
   console.log("ok: the administration makes a user with a password, who signs in, and a group, which the server keeps");
+
+  // The server's settings, from the administration while the server runs:
+  // the wiki's public address, and the fake provider with its secret, typed
+  // once, never shown again, and checked against the provider.
+  const serverSection = "#app .admin-view .admin-server";
+  await page.locator(`${serverSection} .server-url-edit`).click();
+  await page.locator(`${serverSection} .server-url-form input[name=url]`).fill(`http://127.0.0.1:${wikiPort}/`);
+  await page.locator(`${serverSection} .server-url-form button[type=submit]`).click();
+  await page.locator(`${serverSection} .server-url-value`, { hasText: `http://127.0.0.1:${wikiPort}/` }).waitFor({ timeout });
+  await page.locator(`${serverSection} .server-provider-add`).click();
+  await page.locator(`${serverSection} .server-provider-form input[name=name]`).fill("fake");
+  await page.locator(`${serverSection} .server-provider-form select[name=kind]`).selectOption("oidc");
+  await page.locator(`${serverSection} .server-provider-form input[name=client-id]`).fill("smoke-client");
+  await page.locator(`${serverSection} .server-provider-form input[name=issuer]`).fill(providerOrigin);
+  await page.locator(`${serverSection} .server-provider-form input[name=secret]`).fill(oidcSecret);
+  await page.locator(`${serverSection} .server-provider-form button[type=submit]`).click();
+  const fakeRow = `${serverSection} .server-provider[data-name=fake]`;
+  await page.locator(`${fakeRow} .server-provider-secret`, { hasText: "set" }).waitFor({ timeout });
+  assert.equal(await page.locator(`${fakeRow} .server-provider-redirect`).textContent(), `http://127.0.0.1:${wikiPort}/auth/fake/callback`, "the redirect URI to register");
+  await page.locator(`${fakeRow} .server-provider-check`).click();
+  await page.locator(`${fakeRow} .server-provider-checked`, { hasText: "It answered" }).waitFor({ timeout });
+  assert.ok(!(await page.locator(serverSection).textContent()).includes(oidcSecret), "the provider's secret is shown");
+  const settings = await api("admin/server");
+  assert.equal(settings.status, 200, "the server's settings");
+  assert.deepEqual(settings.body.providers.map((p) => [p.name, p.secret]), [["fake", "set"]], "the server's providers");
+  assert.ok(!JSON.stringify(settings.body).includes(oidcSecret), "the API gives the provider's secret back");
+  console.log("ok: the administration sets the public address and adds a provider, which answers its check, its secret never shown");
 
   // A second space, made public in its permissions; the first stays
   // private.

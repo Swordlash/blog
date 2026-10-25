@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The server's settings (WP4.4). `Wiki.Api.ServerSettings`:
+`ServerSettingsOf s {publicUrl, mail, providers}` with `MailSettingsOf s` and
+`ProviderSettingsOf s`, each secret an `s`: `SecretState` (`"set"`,
+`"not-set"`) as read, `Maybe Text` as written (`null` keeps, `""` clears);
+`applyChange`, `checkServerSettings`, `ProviderKind` and `Security` (moved
+from the server), `ProviderCheck`, `MailTest`, `MailTestResult`. `AdminApi`
+gains `server`, `setServer`, `checkProvider` and `testMail`.
+
 One's own password (WP3.7). `AccountApi` gains `changePassword`, `PUT
 account/password` with `PasswordChange {current, new}` (`current` null or left
 out for a user without a password), answering `SignInMethods`; a wrong

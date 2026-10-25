@@ -248,40 +248,44 @@ like the other options; `--static` goes back to the demo.
   person it is for: by themself, by invitation, or by signing in with a provider
   for the first time (an administrator may also grant it per user, under
   "Users"; an administrator creates spaces anyway). The server mails invitations
-  when it has an SMTP server:
+  when it has a mail server (below); otherwise the panel shows each invitation's
+  link once, as it is made, to pass on.
+- **The server's settings: the public address, mail and providers.** These are
+  set in the administration's "Server" section and nowhere else: on the admin
+  listener (`http://127.0.0.1:8081/admin/admin/`, below), which serves it before
+  anyone can sign in, or by an administrator signed in on the public address. A
+  change takes effect at once, with no deploy and no restart. The section has:
 
-  ```sh
-  WIKI_SMTP_PASSWORD='…' sh toolchain/deploy-local.sh --server \
-    --smtp-host smtp.example.org --smtp-user wiki --smtp-from 'Wiki <wiki@example.org>' \
-    --public-url http://your-machine.tailnet.ts.net:8080/
-  ```
+  - *the public address*, the wiki's address as people reach it
+    (`http://your-machine.tailnet.ts.net:8080/`, `https://wiki.example.org/`), which
+    mailed links and the providers' redirect URIs start with; mail and providers need
+    it;
+  - *mail*: the SMTP server's host and port (587 is STARTTLS, 465 implicit TLS; "none"
+    only for a relay on the same machine or network), the sender
+    (`Wiki <wiki@example.org>`), the account and its password if it wants one; "Send a
+    test mail" checks it;
+  - *sign-in providers*, added, changed and removed one at a time (below), each with
+    the redirect URI to register with it and a "Check" that asks the provider how to
+    sign in.
 
-  (`--smtp-port` 587 by default, STARTTLS; 465 is implicit TLS;
-  `--smtp-security plain` for a relay on the same machine.) The password is kept
-  in `~/.config/wiki-demo/<name>.env`, mode 600, for the unit, and never on a
-  command line; the options are remembered, and `--no-smtp` forgets them. Without
-  SMTP the panel shows each invitation's link once, as it is made, to pass on.
+  The mail password and the providers' client secrets are typed once, kept in the
+  wiki's database (beside the password and session hashes it holds already, so as
+  sensitive as `data/`, which is the operator's alone) and never shown or sent back
+  again: the section says "set" or "not set", with "Replace…" to type a new one.
+  `wiki-server oidc check --data <dir>/data [NAME]` asks the providers set there how
+  to sign in, from the machine, and prints their redirect URIs. Earlier versions took
+  these as options (`--smtp-*`, `--public-url`, `--oidc`, with `WIKI_SMTP_PASSWORD`
+  and `WIKI_OIDC_<NAME>_SECRET`); both the server and `deploy-local.sh` now refuse
+  them, and the first deploy over such a deployment deletes the file of their secrets
+  (`~/.config/wiki-demo/<name>.env`) and lists what to set again in the panel.
 - **Signing in with Google, GitHub, Apple or another provider.** Beside passwords,
   people may sign in with an account they have at a provider (OpenID Connect; GitHub
-  through its OAuth apps). Each provider is one `--oidc NAME=KIND,CLIENT-ID[,ISSUER]`
-  (`KIND` is `google`, `apple`, `github`, or `oidc` for any other provider, with the
-  `ISSUER` its discovery document is under, e.g. a Keycloak realm), its client secret
-  in `WIKI_OIDC_<NAME>_SECRET` (the name in capitals, dashes as underscores), and
-  `--public-url`, the wiki's address as people reach it:
-
-  ```sh
-  WIKI_OIDC_GOOGLE_SECRET='…' WIKI_OIDC_GITHUB_SECRET='…' sh toolchain/deploy-local.sh --server \
-    --oidc google=google,1234-abc.apps.googleusercontent.com \
-    --oidc github=github,Ov23liAbCdEf \
-    --public-url https://wiki.example.org/
-  ```
-
-  The secrets are kept with the SMTP password in `~/.config/wiki-demo/<name>.env`;
-  the providers are remembered (a new `--oidc` replaces them all, `--no-oidc` forgets
-  them). Register the wiki with each provider first, with the redirect URI
-  `<public-url>auth/<NAME>/callback` (the deploy prints them, and
-  `wiki-server oidc check --public-url URL --oidc … [NAME]` asks each provider how to
-  sign in, says whether its secret is set, and prints its redirect URI):
+  through its OAuth apps). In the "Server" section, "Add a provider" asks for its
+  name (lower-case letters, digits and dashes: it is in the redirect URI,
+  `<public address>auth/<name>/callback`), its kind (Google, Apple, GitHub, or any
+  OpenID Connect provider, with the issuer its discovery document is under, e.g. a
+  Keycloak realm), the client ID and the client secret. Register the wiki with the
+  provider first, with that redirect URI:
 
   - *Google*: Google Cloud console, APIs & Services, Credentials, "Create credentials",
     OAuth client ID of type "Web application"; add the redirect URI under "Authorized
@@ -301,6 +305,9 @@ like the other options; `--static` goes back to the demo.
   - *Any other provider* (Keycloak, Authentik, Microsoft Entra, GitLab…): register a
     confidential client with the redirect URI and the scopes `openid email profile`;
     its issuer is the address whose `/.well-known/openid-configuration` it serves.
+
+  Then "Check" beside the provider asks it how to sign in and says what it found, and
+  "Sign in with …" appears under the sign-in form at once.
 
   In an open wiki someone signing in with a provider for the first time gets an
   account (its login from their name there, which they may not choose); in a closed
@@ -433,13 +440,10 @@ there with the compose file beside it.
   ```
 - **Who is asking.** The published port serves whoever signs in there, and
   anyone else as an anonymous reader: public spaces only, nothing changed.
-  Whether the wiki is open or closed is the administration's to say; to mail
-  invitations, give the server `--smtp-host` and the rest (the commented
-  `command` in `docker-compose.yml`) and the SMTP account's password in
-  `WIKI_SMTP_PASSWORD`, which the compose file passes on as an environment
-  variable. Providers to sign in with are `--oidc` and `--public-url` in the same
-  `command`, each secret in `WIKI_OIDC_<NAME>_SECRET` added to `environment`
-  (see above for registering the wiki with them).
+  Whether the wiki is open or closed, its public address, its mail server and
+  the providers people sign in with are the administration's to set (see above):
+  sign in on the published port as an administrator made with the console, and
+  use the "Server" section there.
   `WIKI_PORT` changes the host's port and `WIKI_BIND` the
   host's address it is published on (`WIKI_BIND=127.0.0.1` behind a reverse proxy
   on the same machine).

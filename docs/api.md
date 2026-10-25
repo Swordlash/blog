@@ -336,7 +336,8 @@ makes one account, once, within seven days; it is gone when used, revoked
 or replaced (inviting an address again gives it a new link), and an
 expired one stays listed until then. The secret is 32 random bytes, kept
 as its SHA-256 only, so it is given back once: in the mail, when the
-server has SMTP (`--smtp-host` and the rest, and `mailing` is true), and
+server has a mail server and a public address (the server's settings,
+below, and `mailing` is true), and
 otherwise in the answer that made it (`token`), for the panel to show the
 link to pass on; when the mail could not be sent, `mailError` says why and
 `token` is given too. Making an account either way is limited to five
@@ -356,10 +357,11 @@ the log: the path segment after `invite` or `invitations` is logged as
 | DELETE | `api/v1/account/identities/<provider>` | | `SignInMethods` as they are then | 401, 404 (none there), 409 (the last way to sign in) | (`unlinkIdentity`) |
 | DELETE | `api/v1/admin/users/<user>/identities/<provider>` | | 204; the user's sessions end | 403, 404 | `unlinkUserIdentity` |
 
-People may sign in with an account at a provider the server's
-configuration names (WP3.6 of the plan; `--oidc NAME=KIND,CLIENT-ID[,ISSUER]`,
-the secret in `WIKI_OIDC_<NAME>_SECRET`, and `--public-url`), beside a
-password or instead of one. The `auth/…` addresses are below the place the
+People may sign in with an account at a provider the server's settings
+name (WP3.6 of the plan; set in the administration since WP4.4, see "The
+server's settings" below), beside a password or instead of one. A provider
+added there signs people in from the next request on, one removed no longer
+does, and one changed is asked how to sign in again. The `auth/…` addresses are below the place the
 public listener serves the wiki at, not the API's: the browser goes to
 them, it does not fetch them, they answer with pages, and they are answered
 in a closed wiki too, since they are the way in. The admin listener has none.
@@ -456,6 +458,70 @@ login. Setting a password, and disabling a login, end the user's sessions;
 a disabled user stays in the directory. A password is never part of an
 answer. The same operations, and making a user an administrator, are on the
 console: `wiki-server users …` (see the README).
+
+### The server's settings
+
+| Method | Path | Body | Response | Errors | `MonadAdmin` |
+| ------ | ---- | ---- | -------- | ------ | ------------ |
+| GET | `api/v1/admin/server` | | `ServerSettings` `{"publicUrl", "mail", "providers"}`, each secret as `"set"` or `"not-set"` | 403 | `serverSettings` |
+| PUT | `api/v1/admin/server` | `ServerSettingsChange`, each secret `null` (kept), `""` (cleared) or a new one | `ServerSettings` as they now are | 403, 400 | `setServerSettings` |
+| POST | `api/v1/admin/server/providers/<name>/check` | `null` (the provider as set) or a `ProviderSettings` with its secret as in a change (the provider as typed) | `ProviderCheck` `{"redirectUri", "clientSecret", "discovered", "problem"}` | 403, 404 (nothing given and no provider of that name) | `checkProvider` |
+| POST | `api/v1/admin/server/mail/test` | `MailTest` `{"to"}` | `MailTestResult` `{"failure"}`, `null` when sent | 403, 400 (no mail server or public address, or not an address) | `sendTestMail` |
+
+The wiki's public address, the mail server invitations go through and the
+providers people sign in with (WP4.4 of the plan, `Wiki.Api.ServerSettings`)
+are set here and nowhere else: the server has no option for them (the
+owner's decision of 2026-10-25). They are kept in the database (migration
+`0005-server-settings.sql`), read by the server per request from memory, and
+take effect at the next request; nothing is set until an administrator sets
+it, and a wiki made before them goes on with no mail and passwords only.
+
+```json
+{
+  "publicUrl": "https://wiki.example.org/",
+  "mail": {"host": "mail.example.org", "port": 587, "security": "starttls",
+           "user": "wiki", "password": "set", "from": "Wiki <wiki@example.org>"},
+  "providers": [{"name": "google", "kind": "google", "clientId": "1234-abc.apps.googleusercontent.com",
+                 "issuer": null, "secret": "set"}]
+}
+```
+
+`security` is `tls` (implicit, port 465), `starttls` or `plain`; `kind` is
+`google`, `apple`, `github` or `oidc` (any OpenID Connect provider, at its
+`issuer`; for another kind `issuer` is an address in place of its own, a
+GitHub Enterprise server's, say). A provider's `name` is lower-case letters,
+digits and dashes, starting with a letter, at most 32 characters, and is in
+its redirect URI, `<publicUrl>auth/<name>/callback`.
+
+**Secrets are written and never read back.** A `GET` (and the answer to a
+`PUT`) says of the mail account's `password` and each provider's `secret`
+only `"set"` or `"not-set"`. A `PUT` replaces the settings whole, and for
+each secret sends `null` or leaves the field out to keep it (the mail
+server's, or the provider's of the same name), `""` to clear it, or the new
+one. A provider left out is removed with its secret, as is the mail server
+when `mail` is `null`. A change is checked whole, and refused with 400 and
+the first reason: the address `http` or `https` with a host (a slash is
+added at its end); mail and providers need the address; the mail server
+needs its host, a port from 1 to 65535 and its sender, and a password when it
+has a user; each provider a valid name no other has, its client id and its
+secret, an issuer for `oidc`, and any address over `https` (or `http` on
+this machine, for tests). The secrets are kept in clear in the database,
+which holds password and session hashes already and is as sensitive as its
+file; no secret is ever written in the log.
+
+`check` asks a provider for its discovery document (GitHub's endpoints are
+fixed) afresh, as set or as typed in the panel before it is saved (a typed
+provider without a secret takes the one set for its name), and answers with
+its endpoints, or the `problem` in words (it cannot be reached, its document
+names another issuer, or the settings are not ones it could have); the
+redirect URI once there is a public address. The test mail goes through the
+mail server as set, to the address given, and says why it was not sent if it
+was not. The demo's backend keeps the settings for the tab's life, answers
+`check` with that it cannot ask, and sends no mail.
+
+`wiki-server oidc check --data DIR [NAME]` does what `check` does, from the
+machine, for the providers set in that data directory, and prints each
+redirect URI.
 
 ## The two listeners
 

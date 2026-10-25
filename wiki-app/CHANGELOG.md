@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+The server's settings in the administration (WP4.4). A "Server" section
+beside "Who may come in" (`Wiki.App.View.Server`): the public address, the
+mail server with a test mail, and the providers, each with its redirect URI
+and "Check"; secrets are typed once and shown only as set or not.
+`MonadAdmin` gains `serverSettings`, `setServerSettings`, `checkProvider`
+and `sendTestMail`; the demo keeps the settings for the tab's life, asks no
+provider and sends no mail; over HTTP they are cached and preloaded with the
+administration.
+
 Account fixes (WP3.7). A signed-in user's name is always a button that opens
 their account panel, not only where the server names providers; the panel has
 "Change password…" (current, new, new again) or, for a user without a

@@ -585,124 +585,53 @@ undeploy --purge-data >"$case_dir/purge-data" 2>&1 || fail 'undeploy --purge-dat
 [ ! -e "$HOME/wiki-demo" ] || fail '--purge-data kept the data'
 pass 'undeploy --purge keeps data/ for the next deploy, and --purge-data deletes it'
 
-# Mail for invitations: the SMTP server's options, refused without what
-# they need before anything is built, passed to the server, its password
-# kept in a file of mode 600 the unit reads and never in the unit, all
-# remembered, and forgotten with --no-smtp.
-fixture mail
+# The wiki's public address, mail server and providers (WP4.4): set in the
+# administration's Server section, not here. The options of earlier
+# versions are refused before anything is built, pointing at the panel; a
+# deployment that had them loses them, and the file of their secrets, on
+# its next run, and is told what to set again.
+fixture server-settings
 p=$(free_port 127.0.0.2)
 a=$(free_port 127.0.0.1)
-smtp='--smtp-host mail.example.org --smtp-user wiki --public-url https://wiki.example.org/'
-out=$case_dir/refused
-# shellcheck disable=SC2086
-if deploy --server --port "$p" --admin-port "$a" $smtp --smtp-from 'Wiki <wiki@example.org>' >"$out" 2>&1; then fail 'deployed an SMTP user without its password'; fi
-assert_contains "$out" 'needs its password'
-if deploy --server --port "$p" --admin-port "$a" --smtp-host mail.example.org --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed SMTP without a sender'; fi
-assert_contains "$out" 'needs --smtp-from'
-if deploy --server --port "$p" --admin-port "$a" --smtp-password secret >"$out" 2>&1; then fail 'took a password on the command line'; fi
-assert_contains "$out" 'WIKI_SMTP_PASSWORD'
-if deploy --port "$p" --smtp-host mail.example.org >"$out" 2>&1; then fail 'took SMTP for the demo'; fi
-assert_contains "$out" "are for the wiki's server"
+for args in '--smtp-host mail.example.org' '--smtp-from wiki@example.org' '--smtp-user=wiki' '--public-url https://wiki.example.org/' \
+  '--oidc google=google,id.example' '--no-oidc' '--no-smtp' '--smtp-password secret' '--oidc-secret=x'; do
+  out=$case_dir/refused
+  # shellcheck disable=SC2086
+  if deploy --server --port "$p" --admin-port "$a" $args >"$out" 2>&1; then fail "$args was taken"; fi
+  assert_contains "$out" "${args%%[ =]*} is gone"
+  assert_contains "$out" "the administration's Server section"
+done
 assert_lacks "$EVENTS" 'npm'
-out=$case_dir/mailing
-# shellcheck disable=SC2086
-WIKI_SMTP_PASSWORD='pa"ss%word' deploy --server --port "$p" --admin-port "$a" $smtp --smtp-from 'Wiki <wiki@example.org>' >"$out" 2>&1 ||
-  fail 'the deploy with SMTP failed'
-assert_contains "$HOME/$unit" '--smtp-host "mail.example.org" --smtp-port 587 --smtp-user "wiki" --smtp-from "Wiki <wiki@example.org>" --public-url "https://wiki.example.org/"'
-assert_contains "$HOME/$unit" "EnvironmentFile=$HOME/.config/wiki-demo/wiki-demo.env"
-assert_lacks "$HOME/$unit" 'ss%word'
-env_file=$HOME/.config/wiki-demo/wiki-demo.env
-[ "$(stat -c %a "$env_file")" = 600 ] || fail "the password's file is mode $(stat -c %a "$env_file")"
-assert_contains "$env_file" 'WIKI_SMTP_PASSWORD="pa\"ss%word"'
-assert_lacks "$HOME/.config/wiki-demo/wiki-demo.state" 'ss%word'
-[ "$(state smtp_from)" = 'Wiki <wiki@example.org>' ] || fail 'the state does not record the sender'
-assert_contains "$out" 'Invitations are mailed through mail.example.org:587, with links below https://wiki.example.org/.'
-[ "$(http_get "http://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the server with SMTP does not answer'
-deploy --status >"$case_dir/status" 2>&1
-assert_contains "$case_dir/status" 'invitations are mailed through mail.example.org:587'
-pass 'the SMTP options are checked before the build, passed to the server, and its password kept in a file of mode 600'
+out=$case_dir/first
+deploy --server --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the server deploy failed'
+assert_contains "$out" "http://127.0.0.1:$a/admin/admin/"
+assert_contains "$out" 'oidc check --data'
+assert_lacks "$HOME/$unit" 'EnvironmentFile'
+pass 'the options for mail, the public address and providers are refused, pointing at the Server section'
 
-out=$case_dir/again
-deploy --no-build >"$out" 2>&1 || fail 'a redeploy with SMTP remembered failed'
-assert_contains "$HOME/$unit" '--smtp-host "mail.example.org"'
-assert_contains "$HOME/$unit" 'EnvironmentFile='
-assert_contains "$env_file" 'ss%word'
-out=$case_dir/forgotten
-deploy --no-build --no-smtp >"$out" 2>&1 || fail 'a redeploy with --no-smtp failed'
+# As an earlier version left a deployment with SMTP and a provider.
+env_file=$HOME/.config/wiki-demo/wiki-demo.env
+printf 'smtp_host=mail.example.org\nsmtp_port=465\nsmtp_from=Wiki <wiki@example.org>\npublic_url=https://wiki.example.org/\noidc=google=google,id.example\n' >>"$HOME/.config/wiki-demo/wiki-demo.state"
+(umask 077 && printf 'WIKI_SMTP_PASSWORD="pw"\nWIKI_OIDC_GOOGLE_SECRET="s"\n' >"$env_file")
+deploy --status >"$case_dir/old-status" 2>&1
+assert_contains "$case_dir/old-status" 'which are gone: the next deploy drops them (mail through mail.example.org) (providers: google=google,id.example)'
+out=$case_dir/upgraded
+deploy --no-build >"$out" 2>&1 || fail 'the redeploy of an earlier deployment with SMTP and providers failed'
+[ ! -e "$env_file" ] || fail 'the secrets of the old options were kept'
+assert_contains "$out" "deleted $env_file"
+assert_contains "$out" 'the public address https://wiki.example.org/'
+assert_contains "$out" 'mail through mail.example.org:465, from Wiki <wiki@example.org> (and its password)'
+assert_contains "$out" 'the provider google=google,id.example (and its client secret)'
 assert_lacks "$HOME/$unit" 'smtp'
+assert_lacks "$HOME/$unit" 'oidc'
 assert_lacks "$HOME/$unit" 'EnvironmentFile'
-[ ! -e "$env_file" ] || fail '--no-smtp kept the password'
-[ -z "$(state smtp_host)" ] || fail '--no-smtp kept the SMTP server'
-assert_contains "$out" 'Invitations are not mailed'
-undeploy --purge-data >/dev/null 2>&1
-pass 'the SMTP server is remembered with its password, and forgotten with --no-smtp'
-
-# Providers to sign in with (WP3.6): checked before anything is built (a
-# name, a kind, an issuer for oidc, --public-url, the client secret in the
-# environment), passed to the server, their secrets kept in the file of
-# mode 600 the unit reads and never in the unit, the redirect URIs to
-# register printed, remembered, replaced by another --oidc, and forgotten
-# with --no-oidc.
-fixture oidc
-p=$(free_port 127.0.0.2)
-a=$(free_port 127.0.0.1)
-out=$case_dir/refused
-if deploy --server --port "$p" --admin-port "$a" --oidc google=google,id.example --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed a provider without its secret'; fi
-assert_contains "$out" 'WIKI_OIDC_GOOGLE_SECRET'
-if WIKI_OIDC_GOOGLE_SECRET=s deploy --server --port "$p" --admin-port "$a" --oidc google=google,id.example >"$out" 2>&1; then fail 'deployed a provider without --public-url'; fi
-assert_contains "$out" '--oidc needs --public-url'
-if WIKI_OIDC_CORP_SECRET=s deploy --server --port "$p" --admin-port "$a" --oidc corp=oidc,wiki --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed an oidc provider without its issuer'; fi
-assert_contains "$out" 'needs its issuer'
-if deploy --server --port "$p" --admin-port "$a" --oidc Bad_Name=google,x --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed a provider with a bad name'; fi
-assert_contains "$out" "invalid --oidc 'Bad_Name=google,x'"
-if WIKI_OIDC_G_SECRET=s deploy --server --port "$p" --admin-port "$a" --oidc g=google,x --oidc g=github,y --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed a provider twice'; fi
-assert_contains "$out" '--oidc names g more than once'
-if deploy --port "$p" --oidc google=google,x --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'took a provider for the demo'; fi
-assert_contains "$out" "--oidc is for the wiki's server"
-if deploy --server --port "$p" --admin-port "$a" --oidc-secret x >"$out" 2>&1; then fail 'took a secret on the command line'; fi
-assert_contains "$out" 'WIKI_OIDC_<NAME>_SECRET'
-assert_lacks "$EVENTS" 'npm'
-out=$case_dir/providers
-WIKI_OIDC_GOOGLE_SECRET='go"og%le' WIKI_OIDC_MY_CORP_SECRET=corp-secret deploy --server --port "$p" --admin-port "$a" \
-  --oidc google=google,id.example --oidc my-corp=oidc,wiki,https://id.example.org/realms/x --public-url https://wiki.example.org/ >"$out" 2>&1 ||
-  fail 'the deploy with providers failed'
-assert_contains "$HOME/$unit" '--public-url "https://wiki.example.org/" --oidc "google=google,id.example" --oidc "my-corp=oidc,wiki,https://id.example.org/realms/x"'
-env_file=$HOME/.config/wiki-demo/wiki-demo.env
-assert_contains "$HOME/$unit" "EnvironmentFile=$env_file"
-assert_lacks "$HOME/$unit" 'og%le'
-[ "$(stat -c %a "$env_file")" = 600 ] || fail "the secrets' file is mode $(stat -c %a "$env_file")"
-assert_contains "$env_file" 'WIKI_OIDC_GOOGLE_SECRET="go\"og%le"'
-assert_contains "$env_file" 'WIKI_OIDC_MY_CORP_SECRET="corp-secret"'
-assert_lacks "$HOME/.config/wiki-demo/wiki-demo.state" 'corp-secret'
-assert_contains "$out" 'google: https://wiki.example.org/auth/google/callback'
-assert_contains "$out" 'my-corp: https://wiki.example.org/auth/my-corp/callback'
-assert_contains "$out" 'oidc check --public-url https://wiki.example.org/ --oidc google=google,id.example'
-[ "$(http_get "http://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the server with providers does not answer'
+[ -z "$(state smtp_host)$(state oidc)$(state public_url)" ] || fail 'the state still has the old options'
+[ "$(http_get "http://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the upgraded server does not answer'
 deploy --status >"$case_dir/status" 2>&1
-assert_contains "$case_dir/status" 'people sign in with google (google,id.example), whose redirect URI is https://wiki.example.org/auth/google/callback'
-pass 'the providers are checked before the build, passed to the server, and their secrets kept in a file of mode 600'
-
-out=$case_dir/again
-deploy --no-build >"$out" 2>&1 || fail 'a redeploy with providers remembered failed'
-assert_contains "$HOME/$unit" '--oidc "google=google,id.example"'
-assert_contains "$env_file" 'og%le'
-if deploy --no-build --oidc gh=github,Iv1.abc >"$out" 2>&1; then fail 'took a new provider without its secret'; fi
-assert_contains "$out" 'WIKI_OIDC_GH_SECRET'
-out=$case_dir/replaced
-WIKI_OIDC_GH_SECRET=gh-secret deploy --no-build --oidc gh=github,Iv1.abc >"$out" 2>&1 || fail 'a redeploy with another provider failed'
-assert_contains "$HOME/$unit" '--oidc "gh=github,Iv1.abc"'
-assert_lacks "$HOME/$unit" 'google'
-assert_contains "$env_file" 'WIKI_OIDC_GH_SECRET="gh-secret"'
-assert_lacks "$env_file" 'GOOGLE'
-out=$case_dir/forgotten
-deploy --no-build --no-oidc >"$out" 2>&1 || fail 'a redeploy with --no-oidc failed'
-assert_lacks "$HOME/$unit" '--oidc'
-assert_lacks "$HOME/$unit" 'public-url'
-assert_lacks "$HOME/$unit" 'EnvironmentFile'
-[ ! -e "$env_file" ] || fail '--no-oidc kept the secrets'
-[ -z "$(state oidc)" ] || fail '--no-oidc kept the providers'
+assert_lacks "$case_dir/status" 'which are gone'
+assert_contains "$case_dir/status" "the administration's Server section, http://127.0.0.1:$a/admin/admin/"
 undeploy --purge-data >/dev/null 2>&1
-pass 'the providers are remembered with their secrets, replaced by another --oidc, and forgotten with --no-oidc'
+pass 'a deployment with the old options loses them and their secrets, and is told what to set in the panel'
 
 fixture not-a-server
 out=$case_dir/out

@@ -220,7 +220,7 @@ removedOptions = ["smtp-host", "smtp-port", "smtp-security", "smtp-user", "smtp-
 -- | What an option of 'removedOptions' is told.
 removedMessage :: Text
 removedMessage =
-  "the wiki's public address, its mail server and its sign-in providers are no longer options: set them in the administration's Server section, on the admin listener (its Administration page, below http://127.0.0.1:8081/admin/ by default), where they take effect at once"
+  "the wiki's public address, its mail server and its sign-in providers are no longer options: set them in the administration's Server section, on the admin listener (http://127.0.0.1:8081/admin/admin/ by default), where they take effect at once"
 
 -- | A base path as the server uses it: with a slash at each end, @\/@ for
 -- the root; or why it is not one.

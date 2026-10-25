@@ -23,19 +23,13 @@
 #
 #   docker compose exec wiki wiki-server users add --data /data LOGIN --admin
 #
-# Whether the wiki is open or closed is the administration's to say. To mail
-# invitations, name the SMTP server in the command (see `command` below) and
-# give the password of its account, if it has one, in WIKI_SMTP_PASSWORD in
-# the environment `docker compose` runs in (or in an .env file beside this
-# one); it reaches the server as an environment variable, never on a command
-# line. Without SMTP the administration shows an invitation's link instead.
-#
-# To let people sign in with Google, GitHub, Apple or another OpenID Connect
-# provider, add each as --oidc NAME=KIND,CLIENT-ID[,ISSUER] to the command,
-# with --public-url (its redirect URI is <public-url>auth/NAME/callback, to
-# register with the provider), and its client secret as WIKI_OIDC_<NAME>_SECRET
-# in `environment` below, from the environment `docker compose` runs in. To
-# check them: docker compose exec wiki wiki-server oidc check --public-url URL --oidc ...
+# Whether the wiki is open or closed, its public address, the mail server
+# invitations go through and the providers people sign in with (Google,
+# GitHub, Apple or another OpenID Connect provider) are the administration's
+# to set, in its "Server" section, as that administrator signed in on the
+# published port; they take effect at once, and their secrets are kept in
+# the wiki's database in the volume, never in this file or the environment.
+# To check the providers set: docker compose exec wiki wiki-server oidc check --data /data
 name: wiki
 
 services:
@@ -47,18 +41,6 @@ services:
       - "${WIKI_BIND:-0.0.0.0}:${WIKI_PORT:-8080}:8080"
     volumes:
       - wiki-data:/data
-    environment:
-      # The SMTP account's password, for --smtp-user; empty when there is none.
-      WIKI_SMTP_PASSWORD: ${WIKI_SMTP_PASSWORD:-}
-      # A provider's client secret, one per --oidc NAME (here for google):
-      # WIKI_OIDC_GOOGLE_SECRET: ${WIKI_OIDC_GOOGLE_SECRET:?the Google client's secret}
-    # To mail invitations, the image's command with the SMTP server added:
-    # command: [serve, --listen, "0.0.0.0:8080", --admin-listen, "127.0.0.1:8081",
-    #           --smtp-host, smtp.example.org, --smtp-user, wiki,
-    #           --smtp-from, "Wiki <wiki@example.org>", --public-url, "https://wiki.example.org/"]
-    # and to sign in with providers, besides:
-    #           --oidc, "google=google,1234-abc.apps.googleusercontent.com",
-    #           --oidc, "github=github,Ov23liAbCdEf"
     # The server lets requests in flight finish for up to 10 s after SIGTERM.
     stop_grace_period: 15s
 

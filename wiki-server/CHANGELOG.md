@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+The server's settings from the administration (WP4.4). The wiki's public
+address, its mail server and the providers people sign in with are no longer
+options: `--smtp-host`, `--smtp-port`, `--smtp-security`, `--smtp-user`,
+`--smtp-from`, `--public-url` and `--oidc` are refused with a pointer to the
+administration's "Server" section, and `WIKI_SMTP_PASSWORD` and
+`WIKI_OIDC_<NAME>_SECRET` are not read. They are kept in the database
+(migration `0005-server-settings.sql`: rows of `settings` and a
+`sign_in_providers` table), secrets included, set through `GET`/`PUT
+api/v1/admin/server` (secrets never answered), and read per request, so a
+change takes effect at once: the mailer is made per mail, and a provider's
+discovery is asked again whenever its settings change. `POST
+api/v1/admin/server/providers/<name>/check` runs discovery on a provider as
+set or as typed; `POST api/v1/admin/server/mail/test` sends a test mail.
+`wiki-server oidc check` takes `--data DIR` and checks the providers set
+there. `withServerUsing` takes how mail is sent instead of a mailer and the
+providers. An upgraded server starts with nothing set: set the address, mail
+and providers again in the panel.
+
 One's own password (WP3.7). `PUT api/v1/account/password` lets a user signed
 in change their password, giving the current one, or set one if they sign in
 only with a provider; the new one is checked first, then the current one,
