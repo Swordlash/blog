@@ -2137,3 +2137,22 @@ Amended by the planning session after each work package's report.
   exists, other sessions ended, the account panel always reachable); the setting "A new
   account may create spaces" reworded with a help sentence (it grants `create-spaces` to
   every account made by self-registration, invitation or a provider sign-in).
+- **WP3.7 merged** (2026-10-25, PR #62, `main` at `a903a49`). `PUT api/v1/account/password`
+  (`PasswordChange {current, new}` → `SignInMethods`): the current password required and
+  checked where one exists (401, counted by the sign-in limiter under the user's login and
+  address, 429 after 5; a right one clears the count), an identity-only account sets its
+  first with `current = null`, `checkPassword` first (400, never counted), every other
+  session ended and the caller's kept (matched by token hash), 409 if the hash changed
+  meanwhile, the operator 400. `MonadAccount.changePassword` (`HttpWiki`); the signed-in
+  user's name is always a button opening the account panel, which gains "Change password…" /
+  "Set a password…" (current, new, repeat; mismatch caught in the browser). The "Creates
+  spaces" switch shows what `canCreateSpaces` makes of the grants: on and disabled for an
+  administrator with "An administrator creates spaces anyway", the stored grant untouched;
+  tests confirm "New space" is offered to an administrator without a grant of their own.
+  The setting reads "Let every new account create spaces" with the help line "Applies to
+  accounts people make themselves, by invitation or by signing in with a provider. You can
+  also grant it per user in Users." (README and `docs/api.md` alike). Tests: server 502,
+  app 806, api 58 + 95, browser 161; the server smoke test has an identity-only user set a
+  password and sign in with it. Known: a wrong current password costs one extra
+  `GET session` (the 401 recheck of WP3.1). Still open: group grants of the global
+  permissions in the panel.
