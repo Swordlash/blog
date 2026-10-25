@@ -97,13 +97,13 @@ overHttp m = describe "over HTTP" $
       answerWith "GET" links.admin.backups 200 turnedOn {running = True}
       eventually (find ui ".backups-now") >>= click
       eventually (find ui ".backups-running") >>= (`shouldContainText` "Making a backup")
-      -- Still under way when read again; then done.
-      eventually $ do
+      -- Still under way when read again (every two seconds); then done.
+      eventuallyWithin 10_000 $ do
         looked <- filter (\r -> r.method == "GET" && r.url == links.admin.backups) <$> asked
         length looked `shouldSatisfy` (>= 3)
       find ui ".backups-running" >>= (`shouldContainText` "Making a backup")
       answerWith "GET" links.admin.backups 200 turnedOn {last = Just made, kept = 3}
-      eventually (find ui ".backups-last" >>= (`shouldHaveText` "2026-10-25 09:00 UTC, by hand: made, 1.2 MB, and copied to b2:wiki."))
+      eventuallyWithin 10_000 (find ui ".backups-last" >>= (`shouldHaveText` "2026-10-25 09:00 UTC, by hand: made, 1.2 MB, and copied to b2:wiki."))
       length <$> findAll ui ".backups-running" `shouldReturn` 0
       find ui ".backups-kept" >>= (`shouldHaveText` "3 backups in the data directory.")
       unmount ui
