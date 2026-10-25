@@ -380,7 +380,7 @@ component =
         <form class="server-provider-form" aria-label="A provider" {{ HE.preventingDefault (HE.onSubmit (const SaveProvider)) }}>
           <label class="field">
             <span>Name, in its addresses</span>
-            <input type="text" name="name" autocomplete="off" required pattern="[a-z][a-z0-9-]*" placeholder="google" readonly={{ isJust (editedName st) }} value={{ form.typedName }} onValueInput={{ TypedName }}>
+            <input type="text" name="name" autocomplete="off" required pattern={{ "[a-z][a-z0-9\\-]*" :: Text }} placeholder="google" readonly={{ isJust (editedName st) }} value={{ form.typedName }} onValueInput={{ TypedName }}>
           </label>
           <label class="field">
             <span>Kind</span>
