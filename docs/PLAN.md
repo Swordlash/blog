@@ -179,6 +179,24 @@ confirms it against reality and the plan is amended if it does not hold.
     request, login included, and login is rate-limited per login and address in memory.
     Session ids are random, kept hashed in the database, and end on sign-out, on the
     account being disabled, and after an idle time of the server's choosing.
+21. **The writing assistant brings its own key; no widget, the providers' SDKs**
+    (2026-10-25, checked against the providers' pages). Neither provider offers an
+    embeddable assistant for a page like this: OpenAI's ChatKit is a chat UI for an agent
+    one hosts on one's own server, and Anthropic has none. Neither lets a web application
+    sign its users in with their subscription: Anthropic directs third-party tools to API
+    keys and forbids routing them through a Claude subscription; OpenAI's "Sign in with
+    ChatGPT" grants plan usage only to open-source, locally run tools through a loopback
+    redirect, and identity sign-in only to selected partners. So the assistant is
+    bring-your-own-key: the user pastes an API key per provider into the assistant's
+    settings, kept in this browser's IndexedDB and sent only to that provider, and the
+    browser calls the provider directly (Anthropic's API requires the
+    `anthropic-dangerous-direct-browser-access: true` header for that, which its SDK sets
+    with `dangerouslyAllowBrowser`; OpenAI's SDK has the same option). The providers'
+    official JavaScript SDKs (`@anthropic-ai/sdk`, `openai`) are bundled by `web/bundle.sh`
+    and called through globals, as the material package calls its libraries, which gives
+    streaming, retries and typed errors without code of ours; the Haskell side sees one
+    `MonadAssistant` with a provider, a model and a streaming completion. "Sign in with
+    ChatGPT" is revisited when it opens to web applications.
 
 ## Repository layout
 
@@ -822,8 +840,8 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   the settings. So the server holds no key, keeps no budget and sees no prompt, and the
   serverless demo on Pages gets the assistant too; a space's administrators may still
   switch it off for their space (a private space's text leaves the wiki only where they
-  said so). Needs nothing from Phase 3, so it can be the first package after it, or run
-  beside WP3.4.
+  said so). Needs nothing from Phase 3, so it runs as **WP4.1** beside WP3.4 (the owner,
+  2026-10-25), under decision 21.
 - The wiki as a tool for an assistant, the other way round (also from 2026-10-25): an
   MCP server over the same API, so that Claude or ChatGPT can search, read and, where the
   session's user may, write pages, with the session's permissions and a log of what was
