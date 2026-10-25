@@ -209,6 +209,12 @@ confirms it against reality and the plan is amended if it does not hold.
     applications; a wiki hosted on a server would apply there. The assistant returns to the
     plan when a provider lets a web application use its user's subscription, or the owner
     accepts API billing.
+22. **Whoever administers a space sees the wiki's users and groups** (2026-10-25, from
+    WP3.4). `spaceAccess` gives a space's administrator the grants on the space and its
+    ancestors and every user and group, so that they can choose whom to grant to, as
+    Confluence does; a user who merely created a space is such an administrator. Accepted
+    for a wiki of this size; disabled users may later be left out of the candidates, and
+    a wiki with many users would want a search instead of the list.
 
 ## Repository layout
 
@@ -1821,3 +1827,36 @@ Amended by the planning session after each work package's report.
   `wp3.4-permissions` (account forms, `create-spaces`, per-space permissions, the admin API
   to an administrator's session, `--trust-network` retired) and `wp4.2-slides`
   (presentations from a page); whichever merges second rebases.
+- **WP3.4 merged** (2026-10-25, PR #57, `main` at `71306e6`). `--trust-network` is gone:
+  the public listener serves whoever signs in and everyone else as an anonymous reader; the
+  first administrator is made with `wiki-server users add --data DIR LOGIN --admin`;
+  `deploy-local.sh` refuses the old flags with that hint, a deployment that had the flag
+  loses it on its next run and says so; `docker-compose.trusted.yml` deleted. Panel: the
+  users table gains "Creates spaces" (global `create-spaces`, `PUT
+  admin/users/<id>/create-spaces`) and an "Account" column (password state, "Set/Reset
+  password…" inline, Disable/Enable, never one's own), and a "New user" form (login, display
+  name, password, administrator). `MonadAdmin` gains `setCreateSpaces`, `createUser`,
+  `setPassword`, `setDisabled`; `Directory` gains `creators`, `disabled`, `withPassword`.
+  Space permissions: `View/Permissions.hs`, a child of the space view behind a "Permissions"
+  action for whoever `canAdministerSpace`, closed by default (prerender unchanged, zero
+  repairs): the public switch (moved here from the actions), the space's own grants with
+  Revoke, inherited grants read-only with their origin, a grant form (user or group; View,
+  Edit, Administer). `MonadWiki` gains `spaceAccess` and `setSpaceGrant` (`GET`/`PUT
+  spaces/<id>/grants`, `SpaceGrantChange {subject, permission, granted}`), needing
+  `AdministerSpace`, so on `MonadWiki` not `MonadAdmin`. `Wiki.Core.Permission` gains
+  `SpaceAccess` and `keepsAdministering` (the grant one administers by is not offered to
+  revoke); `Wiki.Core.User` gains `checkLogin`, `checkPassword` and the password length
+  bounds, shared by the demo. Mem: `disabled` and `passwords` sets in the `meta` store, a
+  disabled user is nobody and leaves the switcher. Server: `createUser`/`setPassword` check
+  for an administrator before hashing; account handlers go through the storage; no
+  migration. Tests: server 407 (admin API to an administrator's session on the public
+  listener, 403 to anonymous and to a non-administrator; create-spaces; grants inherited
+  by a subspace and ended by revocation; `--trust-network` a parse failure), app 550,
+  core 570, browser 125 (13 new), the server smoke test makes "Ada Admin" on the console,
+  signs in through the header, makes a user and a public space, checks an anonymous
+  visitor sees only the public space, no admin link, 403 elsewhere; `test-deploy-local.sh`
+  44. `app.wasm` 8278 KiB (1924 brotli). Not done: group grants of the global permissions
+  are not shown or toggled (they still count by the rules). For WP3.5: `createAccount st
+  login name Nothing` makes a user without a password; factor `startSession` out of
+  `Accounts.signIn` and set the cookie with `Session.sessionCookie`; "signs in another
+  way" needs a notion beside `withPassword`.
