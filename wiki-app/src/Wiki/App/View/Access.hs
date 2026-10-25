@@ -2,7 +2,8 @@
 
 -- | The administration's section on whom the wiki lets in (WP3.5 of
 -- docs/PLAN.md): whether it is open or closed ("Wiki.Core.Access"),
--- whether an account someone makes themself may create spaces, and, in a
+-- whether every new account (made by its owner, by invitation or by
+-- signing in with a provider) is let create spaces, and, in a
 -- closed wiki, the invitations, with a form to invite an e-mail address.
 -- One component over the administration's backend
 -- ("Wiki.App.Backend.Admin"), the same on the demo's wiki and the
@@ -136,7 +137,10 @@ component =
           </fieldset>
           <label class="check new-accounts-create-spaces">
             <input type="checkbox" checked={{ settings.newAccountsCreateSpaces }} disabled={{ st.busy }} onChange={{ const (SetCreateSpaces (not settings.newAccountsCreateSpaces)) }}>
-            <span>A new account may create spaces</span>
+            <span>
+              Let every new account create spaces
+              <small class="check-help">Applies to accounts people make themselves, by invitation or by signing in with a provider. You can also grant it per user in Users.</small>
+            </span>
           </label>
           {% if settings.access == Closed %}
             {{ invitationsView st listed }}

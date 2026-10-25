@@ -9,7 +9,7 @@
 -- made for a new account, and @wiki-server oidc check@.
 module Test.Server.Oidc (spec) where
 
-import Data.Aeson (Value, decode, withObject, (.:))
+import Data.Aeson (ToJSON, Value, decode, encode, withObject, (.:))
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteArray.Encoding (Base (..), convertToBase)
 import Data.ByteString.Lazy qualified as BSL
@@ -18,14 +18,14 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
-import Network.HTTP.Types (Header, hContentType, methodDelete, methodPost, methodPut)
+import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodPost, methodPut)
 import Protolude
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.FakeProvider
 import Test.Server.Fixture
 import Wiki.Api (AccountApi (..), AdminApi (..), InvitationsApi (..), WikiApi (..))
-import Wiki.Api.Account (Account (..), AccountDisabled (..), InvitationToken (..), LinkedIdentity (..), SignInMethods (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), LinkedIdentity (..), PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invited (..), NewInvitation (..), WikiSettings (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Types (SessionInfo (..))
@@ -158,6 +158,10 @@ settleAccess :: (HasCallStack) => Running -> Access -> IO ()
 settleAccess r access = do
   _ :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) WikiSettings {access, newAccountsCreateSpaces = False} >>= jsonAs 200
   pass
+
+-- | A request with a JSON body and these headers besides.
+sendJson' :: (ToJSON a) => Running -> Method -> Text -> [Header] -> a -> IO Reply
+sendJson' r m url hs value = send r m url ((hContentType, "application/json") : hs) (encode value)
 
 says :: Reply -> Text -> Expectation
 says reply words' = decodeUtf8 (BSL.toStrict reply.body) `shouldSatisfy` T.isInfixOf words'
@@ -298,6 +302,21 @@ overHttp = describe "over HTTP" $ do
       linked.status `shouldBe` 200
       remaining :: SignInMethods <- send r methodDelete (onPublic r (links.account.unlinkIdentity "acme")) [c] "" >>= jsonAs 200
       map (\i -> i.provider) remaining.identities `shouldBe` ["hub"]
+
+    it "lets a user who signs in only with a provider set a password, without a current one, and then sign in with it" $ withOidc $ \fake r -> do
+      writeIORef fake.user (person "solo")
+      c <- signedInWith r "acme" "next=%2F" []
+      set :: SignInMethods <-
+        sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Nothing, new = "solo's own password"} >>= jsonAs 200
+      (set.password, map (\i -> i.provider) set.identities) `shouldBe` (True, ["acme"])
+      -- Still signed in, and now with a password too.
+      loginOf <$> sessionOf r [c] `shouldReturn` Just "solo"
+      signedIn <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "solo", password = "solo's own password"}
+      signedIn.status `shouldBe` 200
+      -- Which may be their only way in now.
+      (.status) <$> send r methodDelete (onPublic r (links.account.unlinkIdentity "acme")) [c] "" `shouldReturn` 200
+      -- From now on, changing it asks for it.
+      (.status) <$> sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Nothing, new = "another password"} `shouldReturn` 401
       missing <- send r methodDelete (onPublic r (links.account.unlinkIdentity "acme")) [c] ""
       missing.status `shouldBe` 404
 

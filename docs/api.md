@@ -125,7 +125,9 @@ session, is nobody's, and its answer clears the cookie (`Max-Age=0`).
 Failed sign-ins are counted per login and address (5) and per address (30)
 over 15 minutes, in the server's memory; beyond either, signing in answers
 429 until the oldest failure is 15 minutes old. Signing in clears that
-login's count from that address. Passwords are kept as argon2id hashes
+login's count from that address. A wrong current password given to change
+one's own (`PUT account/password`, below) counts as a failed sign-in of
+one's login, and a right one clears the count as signing in does. Passwords are kept as argon2id hashes
 (19 MiB, 2 passes, 1 lane), in the PHC string format, and must have 8 to
 1024 characters.
 
@@ -315,6 +317,11 @@ signs in which it is.
 - Open: anyone reads the public spaces, and may make themself an account
   (`POST accounts`), which holds no grant unless `newAccountsCreateSpaces`
   gives it the global `create-spaces`, and is signed in at once.
+  `newAccountsCreateSpaces` (in the panel, "Let every new account create
+  spaces") applies to every account made by the person it is for: by
+  themself, by invitation, or by signing in with a provider for the first
+  time, in an open wiki or a closed one; an administrator may also grant
+  `create-spaces` to each user (`PUT admin/users/<user>/create-spaces`).
 - Closed: someone who has not signed in is answered 401 `Unauthenticated`
   for every endpoint but `info`, `session` (all three methods), `accounts`
   (which answers 403) and `invitations/…`, and every page of the
@@ -387,6 +394,24 @@ on to `next` itself, rather than a redirect, since the browser sends no
 Accounts made, and failed exchanges, count against the limit on making
 accounts (five an address in fifteen minutes; 429). Codes, tokens, states
 and secrets are never written in the log (the log has no query strings).
+
+### One's own password
+
+| Method | Path | Body | Response | Errors | |
+| ------ | ---- | ---- | -------- | ------ | - |
+| PUT | `api/v1/account/password` | `PasswordChange` `{"current", "new"}` | `SignInMethods` as they are then; the user's other sessions end | 401 (nobody signed in, or `current` missing or wrong), 429, 400 (the operator, or a `new` that cannot be a password) | (`changePassword`) |
+
+A user signed in changes their password, or sets one if they have none
+(one who signs in only with a provider's account, WP3.7 of the plan). Where
+they have one, `current` must be it: a session alone is not enough, so that
+whoever finds a browser left signed in cannot lock its owner out. Where they
+have none, `current` is `null` or left out. `new` must have 8 to 1024
+characters, and is checked before anything else. Every other session of the
+user ends, as when an administrator sets a password; the one the request
+came with stays, and with it the cookie. Wrong current passwords count
+against the sign-in limit of the user's login from that address (above),
+and once it is reached the answer is 429 with `Retry-After`, the right
+password included.
 
 ### Administration
 

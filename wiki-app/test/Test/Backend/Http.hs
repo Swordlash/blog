@@ -18,6 +18,7 @@ import Halogen.Net.Fetch qualified as Fetch
 import Halogen.Subscription qualified as HS
 import Protolude
 import Test.Hspec
+import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
@@ -368,6 +369,36 @@ accounts = describe "signing in and out" $ do
     failing 429 "{\"error\":\"TooManyRequests\",\"message\":\"Wait 15 minutes.\"}" `shouldReturn` Left (TooManyAttempts "Wait 15 minutes.")
     failing 403 "{\"error\":\"Forbidden\"}" `shouldReturn` Left (SignInFailed Forbidden)
     failing 503 "" `shouldReturn` Left (SignInFailed (Unreachable "the server failed, with status 503"))
+
+  it "changes the password with PUT, keeps what it has read, and says why it could not" $ do
+    (env, asked) <- backend $ \r ->
+      if
+        | r.method == "PUT" -> ok SignInMethods {password = True, identities = []}
+        | otherwise -> ok (Map.elems demo.spaces)
+    _ <- runHttpWiki env listSpaces
+    runHttpWiki env (changePassword PasswordChange {current = Just "old one", new = "a new one"}) `shouldReturn` Right SignInMethods {password = True, identities = []}
+    (r : _) <- readIORef asked
+    (r.method, r.url, r.body) `shouldBe` ("PUT", "api/v1/account/password", Body "application/json" "{\"current\":\"old one\",\"new\":\"a new one\"}")
+    -- Who is asking is the same: what was read stays.
+    isJust <$> runHttpWiki env (atOnce listSpaces) `shouldReturn` True
+    let failing n body = backend (const (status n body)) >>= \(e, _) -> runHttpWiki e (changePassword PasswordChange {current = Just "wrong", new = "a new one"})
+    failing 401 "{\"error\":\"Unauthenticated\"}" `shouldReturn` Left WrongCredentials
+    failing 429 "{\"error\":\"TooManyRequests\",\"message\":\"Wait 15 minutes.\"}" `shouldReturn` Left (TooManyAttempts "Wait 15 minutes.")
+    failing 400 "{\"error\":\"Invalid\",\"message\":\"Too short.\"}" `shouldReturn` Left (SignInFailed (Invalid "Too short."))
+
+  it "keeps the session after a wrong current password, which is no session's end" $ do
+    changed <- newIORef False
+    (transport, asked) <- scripted $ \r ->
+      if
+        | r.url == "api/v1/session" -> ok signedIn
+        | otherwise -> status 401 "{\"error\":\"Unauthenticated\"}"
+    env' <- newHttpEnvWith transport (withSession (fromSessionInfo signedIn) emptyCache)
+    changes <- runHttpWiki env' sessionChanges
+    _ <- HS.subscribe changes (const (writeIORef changed True))
+    runHttpWiki env' (changePassword PasswordChange {current = Just "wrong", new = "a new one"}) `shouldReturn` Left WrongCredentials
+    readIORef changed `shouldReturn` False
+    runHttpWiki env' (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
+    map (\r -> r.url) <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/account/password"]
 
   it "signs out with DELETE, and starts over as nobody" $ do
     (env, asked) <- backend (const (ok nobody))

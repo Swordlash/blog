@@ -174,6 +174,8 @@ panel m = describe "the administration's section on it" $ do
     ui <- start m (Just "user-admin") Admin
     box <- find ui ".new-accounts-create-spaces input"
     getProperty box "checked" `shouldReturn` "false"
+    find ui ".new-accounts-create-spaces" >>= (`shouldContainText` "Let every new account create spaces")
+    find ui ".new-accounts-create-spaces .check-help" >>= (`shouldContainText` "by invitation or by signing in with a provider")
     click box
     eventually (find ui ".new-accounts-create-spaces input" >>= (`getProperty` "checked") >>= (`shouldBe` "true"))
     unmount ui

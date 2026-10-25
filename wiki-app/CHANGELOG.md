@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+Account fixes (WP3.7). A signed-in user's name is always a button that opens
+their account panel, not only where the server names providers; the panel has
+"Change password…" (current, new, new again) or, for a user without a
+password, "Set a password…", through `MonadAccount`'s new `changePassword`
+(`passwordErrorText` says why it failed); their other sessions end, this one
+stays and keeps its cache. The administration's "Creates spaces" switch shows
+on and disabled, with "An administrator creates spaces anyway.", for an
+administrator, as the rules in `Wiki.Core.Permission` decide; a stored grant
+is kept and shown again when they stop being one. The setting "A new account
+may create spaces" reads "Let every new account create spaces", with a line
+saying it applies to accounts people make themselves, by invitation or by
+signing in with a provider.
+
 Signing in with a provider (WP3.6). `Session` gains `providers`, which
 the sign-in and "Create account" forms and an invitation's page offer as
 links to the server's round trip ("Sign in with Google"), coming back to the

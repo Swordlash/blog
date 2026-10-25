@@ -118,6 +118,14 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     html `contains` ">Rename</button>"
     html `contains` ">Delete</button>"
 
+  it "offers a new space to an administrator, who holds no create-spaces grant of their own" $ do
+    -- The demo's administrator holds the global administer only, which
+    -- implies it.
+    Rendered {html} <- render (as (Just "user-admin")) Home
+    html `contains` "New space"
+    Rendered {html = asReader} <- render (as (Just "user-reader")) Home
+    asReader `lacks` "New space"
+
   it "greys out a space whose subspace is all a user may see" $ do
     Rendered {html} <- render (as (Just "user-reader")) Home
     html `contains` "<span class=\"unviewable\""

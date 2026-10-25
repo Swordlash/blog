@@ -69,7 +69,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
 import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
-import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, SignInMethods)
+import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -306,7 +306,8 @@ data InvitationsApi mode = InvitationsApi
   deriving stock (Generic)
 
 -- | The account of whoever is asking, signed in (WP3.6 of docs/PLAN.md):
--- the providers' accounts they sign in with. Signing in with one, and
+-- the providers' accounts they sign in with, and their password (WP3.7).
+-- Signing in with one, and
 -- connecting one, are not here but at the server's own addresses
 -- (@auth\/\<provider>\/start@, "Wiki.Api.Auth"), which the browser goes to
 -- rather than fetches. Someone not signed in is refused with
@@ -320,6 +321,14 @@ data AccountApi mode = AccountApi
   -- that would leave them no way to sign in (no password, no other
   -- identity) is 'Wiki.Api.Error.Conflict', one they do not have
   -- 'Wiki.Api.Error.NotFound'.
+  , changePassword :: mode :- "password" :> ReqBody '[JSON] PasswordChange :> Put '[JSON] SignInMethods
+  -- ^ Change their password, or set one if they have none: how they sign
+  -- in then. The current one, where they have one, must be given and
+  -- right, or it is 'Wiki.Api.Error.Unauthenticated', and wrong ones are
+  -- counted as failed sign-ins of their login from that address
+  -- ('Wiki.Api.Error.TooManyRequests' when there have been too many). A
+  -- new one that cannot be a password is 'Wiki.Api.Error.Invalid'. Their
+  -- other sessions end; the one asking stays.
   }
   deriving stock (Generic)
 

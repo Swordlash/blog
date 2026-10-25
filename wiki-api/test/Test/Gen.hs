@@ -19,6 +19,7 @@ module Test.Gen
   , genCredentials
   , genNewAccount
   , genNewPassword
+  , genPasswordChange
   , genAccountDisabled
   , genAccount
   , genNewSpace
@@ -48,7 +49,7 @@ import Data.Text qualified as T
 import Data.Time (Day (ModifiedJulianDay), UTCTime (..), picosecondsToDiffTime)
 import Protolude
 import Test.QuickCheck
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Import
 import Wiki.Api.Types
@@ -136,6 +137,9 @@ genNewAccount = NewAccount <$> genText <*> genText <*> genText
 
 genNewPassword :: Gen NewPassword
 genNewPassword = NewPassword <$> genText
+
+genPasswordChange :: Gen PasswordChange
+genPasswordChange = PasswordChange <$> genMaybe genText <*> genText
 
 genAccountDisabled :: Gen AccountDisabled
 genAccountDisabled = AccountDisabled <$> arbitrary

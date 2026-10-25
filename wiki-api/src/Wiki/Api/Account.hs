@@ -23,6 +23,10 @@
 -- ('InvitationToken'), and which tells them whom it is for
 -- ('InvitationInfo') before they choose a login and a password. Either
 -- signs them in as the account it made.
+--
+-- A user signed in changes their own password ('PasswordChange', WP3.7 of
+-- docs/PLAN.md), saying the one they have, if they have one: a user who
+-- signs in only with a provider's account sets one without.
 module Wiki.Api.Account
   ( -- * Signing in
     Credentials (..)
@@ -36,6 +40,9 @@ module Wiki.Api.Account
   , NewPassword (..)
   , AccountDisabled (..)
   , Account (..)
+
+    -- * One's own password
+  , PasswordChange (..)
 
     -- * Signing in with a provider
   , LinkedIdentity (..)
@@ -88,6 +95,22 @@ newtype NewPassword = NewPassword {password :: Text}
 
 instance Show NewPassword where
   showsPrec _ _ rest = "NewPassword {password = <hidden>}" <> rest
+
+-- | A user's own new password: @PUT \/api\/v1\/account\/password@. The
+-- one they have now is asked for, so that someone who finds a browser
+-- signed in cannot lock its owner out; their other sessions end with it,
+-- the one they change it from stays.
+data PasswordChange = PasswordChange
+  { current :: Maybe Text
+  -- ^ The password they have, if they have one; a user who has none (who
+  -- signs in with a provider's account) leaves it out.
+  , new :: Text
+  }
+  deriving stock (Eq, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+instance Show PasswordChange where
+  showsPrec _ c rest = "PasswordChange {current = " <> maybe "Nothing" (const "Just <hidden>") c.current <> ", new = <hidden>}" <> rest
 
 -- | Whether a user's login is disabled: @PUT
 -- \/api\/v1\/admin\/users\/\<id>\/disabled@. A disabled user cannot sign in,

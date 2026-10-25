@@ -62,7 +62,7 @@ import Servant.Multipart (Mem, MultipartOptions (..))
 import Servant.Server.Generic (AsServer)
 import System.Directory (doesFileExist)
 import Wiki.Api
-import Wiki.Api.Account (AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewPassword (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewPassword (..), PasswordChange (..), SignInMethods)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
@@ -281,6 +281,7 @@ handlers env caller =
         AccountApi
           { identities = signedInUser >>= \u -> liftIO (Accounts.signInMethods env.storage u) >>= either (throwError . wikiError) pure
           , unlinkIdentity = \provider -> signedInUser >>= \u -> liftIO (Accounts.unlinkIdentity env.storage u provider) >>= either (throwError . wikiError) pure
+          , changePassword = ownPassword
           }
     , spaces =
         SpacesApi
@@ -411,6 +412,32 @@ handlers env caller =
         Allowed -> do
           liftIO (Limiter.failed env.registrations now registering s.address)
           liftIO (attempt now) >>= either (throwError . wikiError) (uncurry (startedAs s))
+    -- A user changes their own password. A wrong current one counts as a
+    -- failed sign-in of their login from the request's address, so that a
+    -- session found in a browser left signed in gives no more guesses at
+    -- the password than the sign-in form does; a right one forgets them,
+    -- as signing in does.
+    ownPassword :: PasswordChange -> Handler SignInMethods
+    ownPassword change = do
+      u <- signedInUser
+      s <- signingHere
+      login <- liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) (\(a :: Account) -> pure a.user.login)
+      now <- liftIO getCurrentTime
+      liftIO (Limiter.verdict env.limiter now login s.address) >>= \case
+        Refused seconds ->
+          throwError
+            (apiError (ApiError.TooManyRequests ("Too many wrong passwords: try again in " <> waitText seconds <> ".")))
+              { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
+              }
+        Allowed ->
+          liftIO (Accounts.changePassword env.storage u s.token change.current change.new) >>= \case
+            Left Accounts.WrongCurrent -> do
+              liftIO (Limiter.failed env.limiter now login s.address)
+              refuse ApiError.Unauthenticated
+            Left (Accounts.PasswordRefused e) -> throwError (wikiError e)
+            Right methods -> do
+              liftIO (Limiter.succeeded env.limiter login s.address)
+              pure methods
     invitationDetails :: InvitationToken -> Handler InvitationInfo
     invitationDetails token = do
       now <- liftIO getCurrentTime

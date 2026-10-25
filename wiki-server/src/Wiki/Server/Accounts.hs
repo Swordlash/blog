@@ -48,6 +48,16 @@
 -- last way they have in: an identity they cannot do without, having no
 -- password and no other. The administration may (its own operation,
 -- "Wiki.Server.Storage").
+--
+-- = One's own password
+--
+-- A user signed in changes their password, or sets one if they sign in
+-- only with a provider's account ('changePassword', WP3.7 of
+-- docs/PLAN.md). The one they have must be given and right: a session is
+-- not enough, so that whoever finds a browser left signed in cannot take
+-- the account from its owner. Their other sessions end, as when an
+-- administrator sets a password, but not the one they change it from,
+-- which the caller names by the id its cookie carries.
 module Wiki.Server.Accounts
   ( -- * Accounts
     accountOf
@@ -73,6 +83,10 @@ module Wiki.Server.Accounts
   , loginCandidates
   , signInMethods
   , unlinkIdentity
+
+    -- * One's own password
+  , PasswordRefusal (..)
+  , changePassword
 
     -- * Sessions
   , signIn
@@ -423,6 +437,48 @@ unlinkIdentity st u provider = withDatabase st $ \c -> immediately c $ runExcept
     throwError (Conflict "This is the only way you have to sign in: connect another account first, or ask an administrator for a password.")
   _ <- liftIO (deleteIdentity c u provider)
   pure after
+
+--------------------------------------------------------------------------------
+-- One's own password
+
+-- | Why a user's change of their own password was refused.
+data PasswordRefusal
+  = -- | They have a password, and the one they gave as it is not it (or
+    -- they gave none).
+    WrongCurrent
+  | -- | Anything else: the new one cannot be a password ('Invalid'), the
+    -- user is gone ('NotFound'), or the password was changed meanwhile by
+    -- someone else ('Conflict').
+    PasswordRefused WikiError
+  deriving stock (Eq, Show)
+
+-- | A user changes their own password, giving the one they have, if they
+-- have one ('WrongCurrent' if it is not right): how they sign in then.
+-- Every session of theirs ends but the one whose id this is (the cookie's
+-- of the request), if any. The new password is checked before anything is
+-- hashed, and hashed before the connection is taken.
+changePassword :: Storage -> UserId -> Maybe Text -> Maybe Text -> Text -> IO (Either PasswordRefusal SignInMethods)
+changePassword st u keep current new = runExceptT $ do
+  password <- either (throwError . PasswordRefused . Invalid) pure (checkPassword new)
+  before <- liftIO (withDatabase st (`passwordHashOf` u)) >>= maybe (throwError (PasswordRefused NotFound)) pure
+  for_ before $ \phc ->
+    unless (maybe False (verifyPassword phc) current) (throwError WrongCurrent)
+  phc <- liftIO (hashPassword password)
+  ExceptT . withDatabase st $ \c -> immediately c $ do
+    now <- passwordHashOf c u
+    if now /= Just before
+      then pure (Left (PasswordRefused (Conflict "Your password was changed meanwhile: sign in again with the new one.")))
+      else do
+        updatePasswordHash c u phc
+        case keep of
+          Just token -> execute c "DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?" (u.text, tokenHash token)
+          Nothing -> deleteSessionsOf c u
+        first PasswordRefused <$> methodsOf c u
+
+-- | A user's password's hash, if they are there: 'Nothing' for a user who
+-- is not, @Just Nothing@ for one without a password.
+passwordHashOf :: Connection -> UserId -> IO (Maybe (Maybe Text))
+passwordHashOf c u = head . map fromOnly <$> query c "SELECT password_hash FROM users WHERE id = ?" (Only u.text)
 
 --------------------------------------------------------------------------------
 -- Sessions

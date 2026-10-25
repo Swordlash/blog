@@ -24,7 +24,7 @@ import Servant.Server.Generic (AsServer)
 import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), withoutIdentity)
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods (..), withoutIdentity)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), NewInvitation (..), defaultSettings)
 import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
 import Wiki.Api.Error (ApiError (..), errorStatus)
@@ -88,6 +88,10 @@ stubs =
               if provider == "github"
                 then pure (withoutIdentity "github" Sample.signInMethods)
                 else refuse (Conflict "This is the only way you have to sign in.")
+          , changePassword = \change ->
+              if change.current == Just "the current one"
+                then pure SignInMethods {password = True, identities = Sample.signInMethods.identities}
+                else refuse Unauthenticated
           }
     , spaces =
         SpacesApi
@@ -455,6 +459,11 @@ spec = describe "a server of the API's type" $ do
       answers (getAt links.account.identities) 200 Sample.signInMethods
       answers (request methodDelete (links.account.unlinkIdentity "github") [] "") 200 (withoutIdentity "github" Sample.signInMethods)
       answers (request methodDelete (links.account.unlinkIdentity "google") [] "") 409 (Conflict "This is the only way you have to sign in.")
+
+    it "changes the user's own password, with the current one" $ do
+      links.account.changePassword `shouldBe` "api/v1/account/password"
+      answers (sendJson methodPut links.account.changePassword PasswordChange {current = Just "the current one", new = "a new one"}) 200 SignInMethods {password = True, identities = Sample.signInMethods.identities}
+      answers (sendJson methodPut links.account.changePassword PasswordChange {current = Nothing, new = "a new one"}) 401 Unauthenticated
 
     it "lets the administration disconnect a user's account at a provider" $ do
       links.admin.unlinkIdentity (UserId "u2") "github" `shouldBe` "api/v1/admin/users/u2/identities/github"

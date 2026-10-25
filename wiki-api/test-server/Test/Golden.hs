@@ -16,7 +16,7 @@ import Protolude
 import System.Environment (lookupEnv)
 import Test.Hspec
 import Test.Sample qualified as Sample
-import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..))
+import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
@@ -88,5 +88,6 @@ spec = describe "golden JSON" $ do
     golden "credentials" Credentials {login = "ada", password = "correct horse battery staple"}
     golden "new-account" NewAccount {login = "ada", displayName = "Ada", password = "correct horse battery staple"}
     golden "new-password" NewPassword {password = "correct horse battery staple"}
+    golden "password-change" PasswordChange {current = Just "correct horse battery staple", new = "a longer passphrase than that"}
     golden "account-disabled" AccountDisabled {disabled = True}
     golden "new-invitation" NewInvitation {email = "bea@example.org"}

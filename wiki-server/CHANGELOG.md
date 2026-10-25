@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+One's own password (WP3.7). `PUT api/v1/account/password` lets a user signed
+in change their password, giving the current one, or set one if they sign in
+only with a provider; the new one is checked first, then the current one,
+whose wrong guesses count against the sign-in limit of the user's login from
+that address (a right one clears it). Every other session of the user ends,
+the one the request came with stays. The operator of the admin listener is
+refused with 400, as for the rest of `account/…`. `Accounts.changePassword`
+does it in one transaction after hashing, refusing with a 409 if the password
+changed meanwhile.
+
 Signing in with a provider (WP3.6): Google, GitHub, Apple, or any OpenID
 Connect provider, each `--oidc NAME=KIND,CLIENT-ID[,ISSUER]` with its client
 secret in `WIKI_OIDC_<NAME>_SECRET` (never the command line) and

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+One's own password (WP3.7). `AccountApi` gains `changePassword`, `PUT
+account/password` with `PasswordChange {current, new}` (`current` null or left
+out for a user without a password), answering `SignInMethods`; a wrong
+`current` is 401 `Unauthenticated`, counted with failed sign-ins (429). Its
+`Show` hides both passwords.
+
 Signing in with a provider (WP3.6). `SessionInfo` gains `providers`
 (`SignInProvider {name, label}` each), `Directory` gains `identities` (the
 providers each user signs in with), `WikiApi` gains `account`

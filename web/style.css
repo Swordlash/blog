@@ -2891,3 +2891,46 @@ table.invitations td {
 .user-account .identity-unlink {
   margin-left: 0.3rem;
 }
+
+/* ---- One's own password ---------------------------------------------------- */
+
+/* The form under "Change password…" in the account panel
+   (Wiki.App.View.SignIn), as the sign-in form's fields are. */
+.password-change {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.password-change .field {
+  flex: none;
+}
+
+.password-change .actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.password-change-toggle {
+  align-self: flex-start;
+}
+
+.account-told {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* The help under a checkbox's label, on its own line. */
+.check-help {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.new-accounts-create-spaces {
+  align-items: flex-start;
+}
+
+.new-accounts-create-spaces input {
+  margin-top: 0.25rem;
+}

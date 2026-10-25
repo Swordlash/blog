@@ -8,7 +8,7 @@ import Test.Gen
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
-import Wiki.Api.Account (Credentials (..), NewAccount (..), NewPassword (..))
+import Wiki.Api.Account (Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Types (SpaceName (..))
 
@@ -25,6 +25,7 @@ spec = describe "JSON" $ do
   roundTrips "Credentials" genCredentials
   roundTrips "NewAccount" genNewAccount
   roundTrips "NewPassword" genNewPassword
+  roundTrips "PasswordChange" genPasswordChange
   roundTrips "AccountDisabled" genAccountDisabled
   roundTrips "Account" genAccount
   roundTrips "NewSpace" genNewSpace
@@ -58,6 +59,7 @@ spec = describe "JSON" $ do
           show (Credentials "ada" "hunter2")
             <> show (NewAccount "ada" "Ada" "hunter2")
             <> show (NewPassword "hunter2")
+            <> show (PasswordChange (Just "hunter2") "hunter2")
     shown `shouldSatisfy` (not . T.isInfixOf "hunter2")
     shown `shouldSatisfy` T.isInfixOf "\"ada\""
 
@@ -65,3 +67,6 @@ spec = describe "JSON" $ do
     decode "{\"error\":\"Teapot\"}" `shouldBe` (Nothing :: Maybe ApiError)
     decode "{\"error\":\"Invalid\"}" `shouldBe` (Nothing :: Maybe ApiError)
     (decode "{\"error\":\"Forbidden\",\"message\":\"ignored\"}" :: Maybe ApiError) `shouldBe` Just Forbidden
+
+  it "reads a change of password without a current one, for a user who has none" $
+    decode "{\"new\":\"a new password\"}" `shouldBe` Just PasswordChange {current = Nothing, new = "a new password"}

@@ -457,23 +457,34 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
   identities = answer <$> call (R.get links.account.identities)
   unlinkIdentity provider = write (R.delete (links.account.unlinkIdentity provider))
 
+  -- Who is asking stays who they were, and what they may read with it:
+  -- nothing kept is let go.
+  changePassword change = withPassword (withJson "PUT" links.account.changePassword change)
+
 -- | A request that signs someone in, as signing in, making oneself an
 -- account and accepting an invitation do: the session one then has, with
 -- the cache started over as it; or why not.
 signingIn :: (MonadIO m) => Request -> HttpWiki m (Either SignInError Session)
-signingIn request = do
+signingIn request =
+  withPassword request >>= \case
+    Left e -> pure (Left e)
+    Right info -> do
+      let s = fromSessionInfo info
+      startOver s
+      pure (Right s)
+
+-- | A request that carries a password the server checks: its answer, or
+-- why not, a password that is not right and too many attempts told apart
+-- from the rest.
+withPassword :: (MonadIO m, FromJSON a) => Request -> HttpWiki m (Either SignInError a)
+withPassword request = do
   answered <- call request
-  case answered of
-    Right r | r.status == 401 -> pure (Left WrongCredentials)
-    Right r | r.status == 429 -> pure . Left . TooManyAttempts $ case eitherDecodeStrict' r.body of
+  pure $ case answered of
+    Right r | r.status == 401 -> Left WrongCredentials
+    Right r | r.status == 429 -> Left . TooManyAttempts $ case eitherDecodeStrict' r.body of
       Right (ApiError.TooManyRequests why) -> why
       _ -> "Too many attempts: wait a while, then try again."
-    _ -> case answer answered of
-      Left e -> pure (Left (SignInFailed e))
-      Right info -> do
-        let s = fromSessionInfo info
-        startOver s
-        pure (Right s)
+    _ -> first SignInFailed (answer answered)
 
 -- | What has been read answers at once; anything else would wait, unless
 -- the transport answers at once itself ('newImmediateHttpEnv').

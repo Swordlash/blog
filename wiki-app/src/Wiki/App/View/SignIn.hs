@@ -16,11 +16,16 @@
 -- docs/PLAN.md: Google, GitHub and the rest the session names), both forms
 -- offer them too, as links: signing in with one is a round trip through
 -- the provider's pages that the server drives ("Wiki.Api.Auth"), and that
--- ends back at this page's address, signed in. A user signed in there has
--- their name as a button that opens how they sign in: their password, if
--- any, the providers' accounts they sign in with, each of which they may
--- disconnect unless it is their last way in, and a link to connect each
--- provider they have no account of yet.
+-- ends back at this page's address, signed in.
+--
+-- A user signed in has their name as a button, whatever the server signs
+-- in with, that opens how they sign in: their password, if any, with a
+-- form to change it (or to set one, for a user who signs in only with a
+-- provider's account: WP3.7 of docs/PLAN.md), which asks for the one they
+-- have, the new one and the new one again; the providers' accounts they
+-- sign in with, each of which they may disconnect unless it is their last
+-- way in; and a link to connect each provider they have no account of
+-- yet. The server's operator has no account, and no such button.
 --
 -- Signing in or out tells the shell the new session ('AccountChanged'),
 -- which reloads everything as that reader. The shell can also open the
@@ -48,9 +53,9 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Account (LinkedIdentity (..), NewAccount (..), SignInMethods (..), mayDisconnect)
+import Wiki.Api.Account (LinkedIdentity (..), NewAccount (..), PasswordChange (..), SignInMethods (..), mayDisconnect)
 import Wiki.Api.Auth (Purpose (..), startUrl)
-import Wiki.App.Account (Accounts (..), accountErrorText, signInErrorText)
+import Wiki.App.Account (Accounts (..), accountErrorText, passwordErrorText, signInErrorText)
 import Wiki.App.Backend (Session (..), WikiError (..))
 import Wiki.App.Editor.Browser (focusElement)
 import Wiki.App.View.Common (ariaBool, errorMessage)
@@ -92,6 +97,17 @@ data State m = State
   -- ^ Whether the panel of how the user signs in is open.
   , methods :: Maybe (Either WikiError SignInMethods)
   -- ^ How they sign in, once read ('Nothing' while it is).
+  , changingPassword :: Bool
+  -- ^ Whether the form to change their password is open.
+  , typedCurrent :: Text
+  , typedNew :: Text
+  , typedRepeat :: Text
+  , passwordProblem :: Maybe Text
+  -- ^ Why the last change of password failed.
+  , passwordTold :: Maybe Text
+  -- ^ That the last one was made.
+  , currentField :: H.RefLabel
+  , newField :: H.RefLabel
   }
 
 data Action
@@ -107,6 +123,12 @@ data Action
   | Register
   | ToggleAccount
   | Disconnect Text
+  | AskPassword
+  | CancelPassword
+  | TypedCurrent Text
+  | TypedNew Text
+  | TypedRepeat Text
+  | SavePassword
 
 component :: forall m. (MonadUUID m, MonadIO m) => H.Component Query (Input m) Output m
 component =
@@ -115,6 +137,8 @@ component =
       { initialState = \input -> do
           loginField <- H.newRefLabel "sign-in-login"
           registerField <- H.newRefLabel "register-login"
+          currentField <- H.newRefLabel "password-current"
+          newField <- H.newRefLabel "password-new"
           pure
             State
               { input
@@ -130,6 +154,14 @@ component =
               , registerField
               , accountOpen = False
               , methods = Nothing
+              , changingPassword = False
+              , typedCurrent = ""
+              , typedNew = ""
+              , typedRepeat = ""
+              , passwordProblem = Nothing
+              , passwordTold = Nothing
+              , currentField
+              , newField
               }
       , render
       , eval =
@@ -148,24 +180,16 @@ component =
 
     render :: State m -> H.ComponentHTML Action Empty m
     render st = case st.input.session of
-      Session {user = Just u, standing = SignedIn}
-        | null st.input.session.providers ->
-            [hh|
-              <div class="account">
-                <span class="user-name">{{ u.displayName }}</span>
-                <button type="button" class="sign-out" disabled={{ st.busy }} onClick={{ const SignOut }}>Sign out</button>
-              </div>
-            |]
-        | otherwise ->
-            [hh|
-              <div class="account">
-                <button type="button" class="user-name account-toggle" aria-expanded={{ ariaBool st.accountOpen }} onClick={{ const ToggleAccount }}>{{ u.displayName }}</button>
-                <button type="button" class="sign-out" disabled={{ st.busy }} onClick={{ const SignOut }}>Sign out</button>
-                {% if st.accountOpen %}
-                  {{ accountPanel st }}
-                {% end %}
-              </div>
-            |]
+      Session {user = Just u, standing = SignedIn} ->
+        [hh|
+          <div class="account">
+            <button type="button" class="user-name account-toggle" aria-expanded={{ ariaBool st.accountOpen }} onClick={{ const ToggleAccount }}>{{ u.displayName }}</button>
+            <button type="button" class="sign-out" disabled={{ st.busy }} onClick={{ const SignOut }}>Sign out</button>
+            {% if st.accountOpen %}
+              {{ accountPanel st }}
+            {% end %}
+          </div>
+        |]
       Session {user = Just u} -> [hh|<span class="user-name">{{ u.displayName }}</span>|]
       Session {user = Nothing} ->
         [hh|
@@ -269,6 +293,18 @@ component =
             [hh|
               <div class="account-methods">
                 <p class="account-password">{{ if m.password then "With your password" else "No password: you sign in with the accounts below." :: Text }}</p>
+                {% if st.changingPassword %}
+                  {{ passwordForm st m }}
+                {% else %}
+                  <button type="button" class="password-change-toggle" disabled={{ st.busy }} onClick={{ const AskPassword }}>
+                    {{ if m.password then "Change password…" else "Set a password…" :: Text }}
+                  </button>
+                {% end %}
+                <div class="sign-in-told">
+                  {% for t in maybeToList st.passwordTold %}
+                    <p class="account-told" role="status">{{ t }}</p>
+                  {% end %}
+                </div>
                 <ul class="identities">
                   {% for i in m.identities %}
                     <li class="identity">
@@ -300,6 +336,42 @@ component =
                 </div>
               </div>
             |]
+
+    -- A new password, typed twice, and the current one where there is
+    -- one. The inputs go with the form when it closes, and what was typed
+    -- in them with them.
+    passwordForm :: State m -> SignInMethods -> H.ComponentHTML Action Empty m
+    passwordForm st m =
+      [hh|
+        <form class="password-change" aria-label={{ verb }} {{ HE.preventingDefault (HE.onSubmit (const SavePassword)) }}>
+          {% if m.password %}
+            <label class="field">
+              <span>Current password</span>
+              <input type="password" name="current" autocomplete="current-password" required onValueInput={{ TypedCurrent }} {{ HP.ref st.currentField }}>
+            </label>
+          {% end %}
+          <label class="field">
+            <span>New password</span>
+            <input type="password" name="new" autocomplete="new-password" required minlength={{ minimumPasswordLength }} onValueInput={{ TypedNew }} {{ HP.ref st.newField }}>
+          </label>
+          <label class="field">
+            <span>New password again</span>
+            <input type="password" name="repeat" autocomplete="new-password" required onValueInput={{ TypedRepeat }}>
+          </label>
+          <div class="sign-in-told">
+            {% for p in maybeToList st.passwordProblem %}
+              <p class="error password-error" role="alert">{{ p }}</p>
+            {% end %}
+          </div>
+          <div class="actions">
+            <button type="submit" class="primary" disabled={{ st.busy }}>{{ verb }}</button>
+            <button type="button" onClick={{ const CancelPassword }}>Cancel</button>
+          </div>
+        </form>
+      |]
+      where
+        verb :: Text
+        verb = if m.password then "Change password" else "Set password"
 
     handleAction :: Action -> H.HalogenM (State m) Action Empty Output m ()
     handleAction = \case
@@ -342,9 +414,9 @@ component =
               H.raise (AccountChanged s)
       ToggleAccount ->
         gets (\st -> st.accountOpen) >>= \case
-          True -> modify (\st -> st {accountOpen = False, problem = Nothing})
+          True -> modify (\st -> (forgetPassword st) {accountOpen = False, problem = Nothing, passwordTold = Nothing})
           False -> do
-            modify (\st -> st {accountOpen = True, methods = Nothing, problem = Nothing})
+            modify (\st -> (forgetPassword st) {accountOpen = True, methods = Nothing, problem = Nothing, passwordTold = Nothing})
             st <- get
             result <- lift st.input.accounts.identities
             modify (\x -> x {methods = Just result})
@@ -355,6 +427,43 @@ component =
           lift (st.input.accounts.unlinkIdentity provider) >>= \case
             Left e -> modify (\s -> s {busy = False, problem = Just (errorMessage e)})
             Right m -> modify (\s -> s {busy = False, methods = Just (Right m)})
+      AskPassword -> do
+        modify (\st -> (forgetPassword st) {changingPassword = True, passwordTold = Nothing})
+        st <- get
+        -- The current password's field, or the new one's where there is no
+        -- current one.
+        current <- H.getRef st.currentField
+        new <- H.getRef st.newField
+        traverse_ (H.liftEffect . focusElement) (current <|> new)
+      CancelPassword -> modify forgetPassword
+      TypedCurrent typedCurrent -> modify (\st -> st {typedCurrent})
+      TypedNew typedNew -> modify (\st -> st {typedNew})
+      TypedRepeat typedRepeat -> modify (\st -> st {typedRepeat})
+      SavePassword -> do
+        st <- get
+        case st.methods of
+          Just (Right m)
+            | st.busy -> pass
+            | st.typedNew /= st.typedRepeat ->
+                modify (\s -> s {passwordProblem = Just "The new password and its repetition are not the same."})
+            | otherwise -> do
+                modify (\s -> s {busy = True, passwordProblem = Nothing})
+                let change = PasswordChange {current = if m.password then Just st.typedCurrent else Nothing, new = st.typedNew}
+                lift (st.input.accounts.changePassword change) >>= \case
+                  Left e -> modify (\s -> s {busy = False, passwordProblem = Just (passwordErrorText e)})
+                  Right after ->
+                    modify $ \s ->
+                      (forgetPassword s)
+                        { busy = False
+                        , methods = Just (Right after)
+                        , passwordTold =
+                            Just
+                              ( if m.password
+                                  then "Your password is changed. You stay signed in here, and anywhere else you were signed in is signed out."
+                                  else "Your password is set: you may sign in with your login and it too."
+                              )
+                        }
+          _ -> pass
       SignOut -> do
         st <- get
         unless st.busy $ do
@@ -375,6 +484,11 @@ component =
           then st {notice, problem = Nothing}
           else st {open = True, registering = False, notice, problem = Nothing, typedLogin = "", typedPassword = ""}
       gets (\st -> st.loginField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
+
+    -- The form to change the password closed, and what was typed in it
+    -- forgotten.
+    forgetPassword :: State m -> State m
+    forgetPassword st = st {changingPassword = False, typedCurrent = "", typedNew = "", typedRepeat = "", passwordProblem = Nothing}
 
     close :: H.HalogenM (State m) Action Empty Output m ()
     close = modify (\st -> st {open = False, registering = False, notice = Nothing, problem = Nothing, typedPassword = ""})

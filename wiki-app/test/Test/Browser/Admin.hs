@@ -1,7 +1,8 @@
 -- | The administration's users and groups ("Wiki.App.View.Admin") in a
 -- browser, over the demo's wiki: an administrator marks another user as
 -- one, who then has the administration, and unmarks them; nobody is
--- offered to unmark themself; a user is let create spaces; users are made
+-- offered to unmark themself; a user is let create spaces, and an
+-- administrator is shown to whatever their own grant; users are made
 -- with a password, given one, and disabled and enabled again; groups are
 -- made, renamed and deleted, users put in them and taken out, and what a
 -- group may do follows its members.
@@ -48,6 +49,31 @@ spec m = do
     other <- switchOf ui "reader"
     getAttribute other "disabled" `shouldReturn` Nothing
     length <$> findAll ui ".administrator-self" `shouldReturn` 1
+
+  it "shows that an administrator creates spaces, by the rules, without a switch to turn off" $ runPage $ do
+    -- The demo's administrator holds the global administer and no
+    -- create-spaces grant of her own.
+    ui <- start m (Just "user-admin") Admin
+    creatorShouldBe ui "admin" True
+    own <- find ui ".user-row[data-login=admin] .creator-switch"
+    getAttribute own "disabled" `shouldReturn` Just ""
+    find ui ".user-row[data-login=admin] .creator-administrator" >>= (`shouldHaveText` "An administrator creates spaces anyway.")
+    length <$> findAll ui ".creator-administrator" `shouldReturn` 1
+    -- Whoever is made an administrator is shown so too, and is not when no
+    -- longer one.
+    creatorShouldBe ui "reader" False
+    switchOf ui "reader" >>= click
+    switchShouldBe ui "reader" True
+    creatorShouldBe ui "reader" True
+    eventually (length <$> findAll ui ".creator-administrator" `shouldReturn` 2)
+    switchOf ui "reader" >>= click
+    switchShouldBe ui "reader" False
+    creatorShouldBe ui "reader" False
+    eventually (find ui ".user-row[data-login=reader] .creator-switch" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing))
+    -- She is offered a new space all the same.
+    find ui ".wiki-header .wiki-brand" >>= click
+    _ <- find ui ".wiki-sidebar .new-space-link"
+    unmount ui
 
   it "lets a user create spaces, who then is offered to, and no longer" $ runPage $ do
     ui <- start m (Just "user-admin") Admin

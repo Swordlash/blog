@@ -170,14 +170,19 @@ ownPanel m = describe "the panel of how a user signs in" $ do
     unmount ui
     serverStops
 
-  it "is not offered where the server names no provider" $ runPage $ do
+  it "is offered where the server names no provider too, with nothing to connect" $ runPage $ do
     serverStarts
     serveDemo
     rita <- signedInAs "user-reader"
     answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = rita.standing, providers = []}
+    answerWith "GET" "api/v1/account/identities" 200 SignInMethods {password = True, identities = []}
     ui <- startServer m Home
     find ui ".account .user-name" >>= (`shouldHaveText` "Rita Reader")
-    length <$> findAll ui ".account-toggle" `shouldReturn` 0
+    find ui ".account-toggle" >>= click
+    find ui ".account-password" >>= (`shouldHaveText` "With your password")
+    _ <- find ui ".password-change-toggle"
+    length <$> findAll ui ".identity" `shouldReturn` 0
+    length <$> findAll ui ".identity-connect" `shouldReturn` 0
     unmount ui
     serverStops
 

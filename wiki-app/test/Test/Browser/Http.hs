@@ -46,6 +46,7 @@ import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Account (SignInMethods (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
@@ -250,6 +251,7 @@ spec m = do
   refusals
   views m
   accounts m
+  ownPassword m
 
 -- | Who is asking, as the server says: someone of the demo's signed in,
 -- or nobody.
@@ -337,6 +339,107 @@ accounts m = describe "signing in and out" $ do
     length <$> findAll ui ".account .sign-out" `shouldReturn` 0
     unmount ui
     serverStops
+
+-- | A signed-in user's own password, from the panel under their name
+-- (WP3.7 of docs/PLAN.md), where the server names no provider to sign in
+-- with: the name is a button all the same.
+ownPassword :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+ownPassword m = describe "one's own password" $ do
+  let typeIn ui field text = find ui (".password-change input[name=" <> field <> "]") >>= (`typeText` text)
+      puts = filter (\r -> r.method == "PUT") <$> asked
+
+  it "is changed from the panel under the name, with the current one" $ runPage $ do
+    serverStarts
+    serveDemo
+    rita <- unsafeIOToPageM (signedInAs "user-reader")
+    answerWith "GET" "api/v1/session" 200 rita
+    answerWith "GET" "api/v1/account/identities" 200 SignInMethods {password = True, identities = []}
+    answerWith "PUT" "api/v1/account/password" 200 SignInMethods {password = True, identities = []}
+    ui <- startServer m Home
+    find ui ".account-toggle" >>= (`shouldHaveText` "Rita Reader")
+    find ui ".account-toggle" >>= click
+    find ui ".account-password" >>= (`shouldHaveText` "With your password")
+    find ui ".password-change-toggle" >>= (`shouldHaveText` "Change password…")
+    find ui ".password-change-toggle" >>= click
+    typeIn ui "current" "rita's password"
+    typeIn ui "new" "a longer new password"
+    typeIn ui "repeat" "a longer new password"
+    find ui ".password-change button[type=submit]" >>= (`shouldHaveText` "Change password")
+    find ui ".password-change button[type=submit]" >>= click
+    find ui ".account-told" >>= (`shouldContainText` "Your password is changed.")
+    map (\r -> (r.url, r.body)) <$> puts `shouldReturn` [("api/v1/account/password", "{\"current\":\"rita's password\",\"new\":\"a longer new password\"}")]
+    -- The form is gone, with what was typed in it; Rita is still signed in.
+    length <$> findAll ui ".password-change" `shouldReturn` 0
+    _ <- find ui ".password-change-toggle"
+    find ui ".account-toggle" >>= (`shouldHaveText` "Rita Reader")
+    unmount ui
+    serverStops
+
+  it "says why it was not changed: a repetition that differs, asked nothing, and a wrong current one" $ runPage $ do
+    serverStarts
+    serveDemo
+    rita <- unsafeIOToPageM (signedInAs "user-reader")
+    answerWith "GET" "api/v1/session" 200 rita
+    answerWith "GET" "api/v1/account/identities" 200 SignInMethods {password = True, identities = []}
+    answerRaw "PUT" "api/v1/account/password" 401 "{\"error\":\"Unauthenticated\"}"
+    ui <- startServer m Home
+    find ui ".account-toggle" >>= click
+    find ui ".password-change-toggle" >>= click
+    typeIn ui "current" "not rita's password"
+    typeIn ui "new" "a longer new password"
+    typeIn ui "repeat" "a longer new passwort"
+    find ui ".password-change button[type=submit]" >>= click
+    find ui ".password-error" >>= (`shouldHaveText` "The new password and its repetition are not the same.")
+    puts `shouldReturn` []
+    find ui ".password-change input[name=repeat]" >>= clear
+    typeIn ui "repeat" "a longer new password"
+    find ui ".password-change button[type=submit]" >>= click
+    find ui ".password-error" >>= (`shouldHaveText` "Your current password is not right.")
+    length <$> puts `shouldReturn` 1
+    -- Still signed in, the form still open.
+    _ <- find ui ".password-change input[name=current]"
+    find ui ".account-toggle" >>= (`shouldHaveText` "Rita Reader")
+    unmount ui
+    serverStops
+
+  it "is set by a user who has none, without a current one" $ runPage $ do
+    serverStarts
+    serveDemo
+    rita <- unsafeIOToPageM (signedInAs "user-reader")
+    answerWith "GET" "api/v1/session" 200 rita
+    answerWith "GET" "api/v1/account/identities" 200 SignInMethods {password = False, identities = []}
+    answerWith "PUT" "api/v1/account/password" 200 SignInMethods {password = True, identities = []}
+    ui <- startServer m Home
+    find ui ".account-toggle" >>= click
+    find ui ".password-change-toggle" >>= (`shouldHaveText` "Set a password…")
+    find ui ".password-change-toggle" >>= click
+    _ <- find ui ".password-change input[name=new]"
+    length <$> findAll ui ".password-change input[name=current]" `shouldReturn` 0
+    typeIn ui "new" "a longer new password"
+    typeIn ui "repeat" "a longer new password"
+    find ui ".password-change button[type=submit]" >>= (`shouldHaveText` "Set password")
+    find ui ".password-change button[type=submit]" >>= click
+    find ui ".account-told" >>= (`shouldContainText` "Your password is set")
+    map (\r -> r.body) <$> puts `shouldReturn` ["{\"current\":null,\"new\":\"a longer new password\"}"]
+    find ui ".account-password" >>= (`shouldHaveText` "With your password")
+    find ui ".password-change-toggle" >>= (`shouldHaveText` "Change password…")
+    unmount ui
+    serverStops
+
+  it "is not offered to the operator of the admin listener, who has no account" $ runPage $ do
+    serverStarts
+    serveDemo
+    rita <- unsafeIOToPageM (signedInAs "user-admin")
+    answerWith "GET" "api/v1/session" 200 SessionInfo {user = rita.user, groups = rita.groups, grants = rita.grants, standing = Operator, providers = []}
+    ui <- startServer m Home
+    find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
+    length <$> findAll ui ".account-toggle" `shouldReturn` 0
+    length <$> findAll ui ".sign-out" `shouldReturn` 0
+    unmount ui
+    serverStops
+
+shouldContainText :: Element s -> Text -> PageM s ()
+shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
 
 -- | Hello, world, from the demo.
 helloWorld :: IO P.Page

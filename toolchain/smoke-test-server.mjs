@@ -699,9 +699,25 @@ try {
   await olive.locator("#app .account-toggle").click();
   await olive.locator("#app .identity .identity-provider", { hasText: "Fake" }).waitFor({ timeout });
   assert.equal(await olive.locator("#app .identity-disconnect").getAttribute("disabled"), "", "her only way in may be disconnected");
+  // She sets a password of her own in the same panel, without a current
+  // one, and may sign in with it; the provider's account may go then.
+  await olive.locator("#app .password-change-toggle", { hasText: "Set a password" }).click();
+  await olive.locator("#app .password-change input[name=new]").fill("olive's own password");
+  await olive.locator("#app .password-change input[name=repeat]").fill("olive's own password");
+  await olive.locator("#app .password-change button[type=submit]").click();
+  await olive.locator("#app .account-told", { hasText: "Your password is set" }).waitFor({ timeout });
+  await olive.locator("#app .account-password", { hasText: "With your password" }).waitFor({ timeout });
+  assert.equal(await olive.locator("#app .identity-disconnect").getAttribute("disabled"), null, "the provider's account, once she has a password");
+  const withPassword = await fetch(url("/api/v1/session"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
+    body: JSON.stringify({ login: "olive", password: "olive's own password" }),
+  });
+  assert.equal(withPassword.status, 200, "signing in with the password she set");
   await olive.context().close();
   for (const secret of [oidcSecret, ...oidcIssued]) assert.ok(!log.includes(secret), "a provider's code, token or secret is in the server's log");
   console.log("ok: signing in with a provider goes there and back, and lands signed in, as a new account, on the page it left");
+  console.log("ok: a user who signs in with a provider sets a password from the panel under her name, and signs in with it");
 
   // Everything is there for a browser that has seen nothing.
   const fresh = await newPage();

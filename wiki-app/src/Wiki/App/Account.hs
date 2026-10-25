@@ -33,11 +33,18 @@
 -- signed in, a user sees the providers' accounts they sign in with
 -- ('identities') and may disconnect one ('unlinkIdentity'), unless it is
 -- their last way in.
+--
+-- A user signed in changes their own password, or sets one if they have
+-- none ('changePassword', WP3.7 of docs/PLAN.md), giving the one they have:
+-- a wrong one is refused as a wrong sign-in is ('WrongCredentials'), and
+-- counted with them. Their other sessions end; this one stays, so nothing
+-- here starts over.
 module Wiki.App.Account
   ( MonadAccount (..)
   , SignInError (..)
   , signInErrorText
   , accountErrorText
+  , passwordErrorText
   , Accounts (..)
   , accounts
   )
@@ -48,7 +55,7 @@ import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Halogen.Subscription (Emitter)
 import Protolude
-import Wiki.Api.Account (InvitationInfo, InvitationToken, NewAccount, SignInMethods)
+import Wiki.Api.Account (InvitationInfo, InvitationToken, NewAccount, PasswordChange, SignInMethods)
 import Wiki.App.Backend (Session, WikiError (..))
 
 -- | Why signing in did not work.
@@ -79,6 +86,15 @@ accountErrorText :: SignInError -> Text
 accountErrorText = \case
   SignInFailed Forbidden -> "This wiki does not take new accounts: ask one of its administrators for an invitation."
   SignInFailed NotFound -> "This invitation cannot be used: it has been used already, revoked, or it has expired. Ask whoever invited you for a new one."
+  e -> signInErrorText e
+
+-- | Why changing one's own password failed, for a person to read: as
+-- signing in's, but a wrong password is the current one.
+passwordErrorText :: SignInError -> Text
+passwordErrorText = \case
+  WrongCredentials -> "Your current password is not right."
+  SignInFailed Forbidden -> "The server refused to change your password from this page. Reload it and try again."
+  SignInFailed NotFound -> "This server does not keep passwords."
   e -> signInErrorText e
 
 -- | Signing in and out.
@@ -128,6 +144,13 @@ class (Monad m) => MonadAccount m where
   default unlinkIdentity :: (MonadTrans t, m ~ t n, MonadAccount n) => Text -> m (Either WikiError SignInMethods)
   unlinkIdentity = lift . unlinkIdentity
 
+  -- | Change the password of the user signed in, or set one if they have
+  -- none: how they sign in then. 'WrongCredentials' if the current one
+  -- given is not theirs.
+  changePassword :: PasswordChange -> m (Either SignInError SignInMethods)
+  default changePassword :: (MonadTrans t, m ~ t n, MonadAccount n) => PasswordChange -> m (Either SignInError SignInMethods)
+  changePassword = lift . changePassword
+
 -- | A component's handlers sign in and out through its monad.
 instance (MonadAccount m) => MonadAccount (HalogenM st act slots output m)
 
@@ -142,8 +165,9 @@ data Accounts m = Accounts
   , acceptInvitation :: InvitationToken -> NewAccount -> m (Either SignInError Session)
   , identities :: m (Either WikiError SignInMethods)
   , unlinkIdentity :: Text -> m (Either WikiError SignInMethods)
+  , changePassword :: PasswordChange -> m (Either SignInError SignInMethods)
   }
 
 -- | The methods, from the monad's instance.
 accounts :: (MonadAccount m) => Accounts m
-accounts = Accounts {signIn, signOut, sessionChanges, register, invitationFor, acceptInvitation, identities, unlinkIdentity}
+accounts = Accounts {signIn, signOut, sessionChanges, register, invitationFor, acceptInvitation, identities, unlinkIdentity, changePassword}

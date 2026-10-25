@@ -240,10 +240,15 @@ like the other options; `--static` goes back to the demo.
 - **Open or closed.** The administration's "Who may come in" says whether the
   wiki is open (the default: anyone reads the public spaces, and "Create account"
   beside "Sign in" lets anyone make an account, which holds no grant until given
-  one, or `create-spaces` if the same section says so) or closed (anyone not
+  one) or closed (anyone not
   signed in sees the way to sign in and nothing else, and accounts come by
   invitation). An invitation is for an e-mail address; its link makes one
-  account, once, within a week. The server mails it when it has an SMTP server:
+  account, once, within a week. "Let every new account create spaces", in the
+  same section, gives `create-spaces` to every account made from then on by the
+  person it is for: by themself, by invitation, or by signing in with a provider
+  for the first time (an administrator may also grant it per user, under
+  "Users"; an administrator creates spaces anyway). The server mails invitations
+  when it has an SMTP server:
 
   ```sh
   WIKI_SMTP_PASSWORD='…' sh toolchain/deploy-local.sh --server \
@@ -303,6 +308,11 @@ like the other options; `--static` goes back to the demo.
   connects a provider's account, or disconnects one, from the menu under their name
   (never the last way they have in); the administration shows who signs in with what
   and may disconnect an account.
+- **One's own password.** A user signed in changes their password from the menu
+  under their name ("Change password…", giving the current one), or sets one
+  there if they sign in only with a provider ("Set a password…"); their other
+  sessions end, this one stays. Wrong current passwords count against the
+  sign-in limit.
 - **The admin listener.** `http://127.0.0.1:8081/admin/` (`--admin-port` changes
   the port) serves the same application to whoever is on the machine, as the
   administrator, with no login; it listens on loopback only, and no firewall rule

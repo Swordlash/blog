@@ -29,6 +29,13 @@
 -- every one. Nor is an administrator offered to disable their own login,
 -- which would sign them out on the spot, for the same reason.
 --
+-- An administrator may create spaces whatever their own create-spaces
+-- grant says, since administering the wiki implies it
+-- ("Wiki.Core.Permission"): their switch shows what the rules make of
+-- their grants, on, and is disabled, with a note why, rather than showing
+-- a grant they do not need as missing. A grant they hold all the same is
+-- kept, and shown and toggled again if they stop being an administrator.
+--
 -- A password is typed into a form of its own, in place, and never shown
 -- back: the field is emptied once it is saved.
 --
@@ -58,7 +65,9 @@ import Wiki.Api.Admin (Directory (..))
 import Wiki.App.Backend (MonadLoad (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Common
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (GroupId, UserId)
+import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..), canCreateSpaces, principal)
 import Wiki.Core.User (Group (..), SignInProvider (..), User (..))
 
 newtype Input = Input {context :: Context}
@@ -256,13 +265,16 @@ component =
               type="button"
               role="switch"
               class="switch creator-switch"
-              aria-checked={{ ariaBool creator }}
+              aria-checked={{ ariaBool (creator || createsAnyway) }}
               aria-label={{ u.displayName <> " may create spaces" }}
-              disabled={{ st.busy }}
+              disabled={{ st.busy || createsAnyway }}
               onClick={{ const (SetCreateSpaces u.id (not creator)) }}
             >
-              {{ yesNo creator }}
+              {{ yesNo (creator || createsAnyway) }}
             </button>
+            {% if createsAnyway %}
+              <span class="admin-note creator-administrator">An administrator creates spaces anyway.</span>
+            {% end %}
           </td>
           <td class="user-account">
             <span class="account-state">{{ accountState }}</span>
@@ -304,6 +316,13 @@ component =
       where
         administrator = u.id `Set.member` d.administrators
         creator = u.id `Set.member` d.creators
+        -- Whether the rules let them create spaces without their own
+        -- create-spaces grant: by what else they hold, as an administrator.
+        createsAnyway =
+          administrator
+            && canCreateSpaces
+              (Just (principal d.membership u.id))
+              Grants {global = [GlobalGrant {subject = SubjectUser u.id, permission = Administer}], spaces = [], access = Open}
         disabled = u.id `Set.member` d.disabled
         hasPassword = u.id `Set.member` d.withPassword
         yourself = Just u.id == ((\me -> me.id) <$> st.input.context.session.user)
