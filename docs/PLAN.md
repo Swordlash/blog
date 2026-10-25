@@ -195,8 +195,20 @@ confirms it against reality and the plan is amended if it does not hold.
     official JavaScript SDKs (`@anthropic-ai/sdk`, `openai`) are bundled by `web/bundle.sh`
     and called through globals, as the material package calls its libraries, which gives
     streaming, retries and typed errors without code of ours; the Haskell side sees one
-    `MonadAssistant` with a provider, a model and a streaming completion. "Sign in with
-    ChatGPT" is revisited when it opens to web applications.
+    `MonadAssistant` with a provider, a model and a streaming completion. **Shelved by the
+    owner the same day: not implemented while the only way is an API key the user pays
+    for.** What was found, for when it is picked up again: the "log in with Claude" that
+    third-party tools offered was Claude Code's own OAuth client reused (its client id and
+    `claude-code-20250219` header); Anthropic rejected those tokens server-side from January
+    2026 and wrote into its terms in February 2026 that OAuth tokens of Free, Pro and Max
+    accounts may not be used in any other product, so the tools (OpenCode among them)
+    removed it, and only the real Claude Code CLI may draw on a subscription. OpenAI's
+    "Sign in with ChatGPT" does what the owner wants (browser login, no key, the user's Plus
+    or Pro plan, per-application caps set in ChatGPT), but at launch only for open-source
+    tools run locally, through a loopback redirect, with a waitlist for remotely hosted
+    applications; a wiki hosted on a server would apply there. The assistant returns to the
+    plan when a provider lets a web application use its user's subscription, or the owner
+    accepts API billing.
 
 ## Repository layout
 
@@ -840,8 +852,10 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   the settings. So the server holds no key, keeps no budget and sees no prompt, and the
   serverless demo on Pages gets the assistant too; a space's administrators may still
   switch it off for their space (a private space's text leaves the wiki only where they
-  said so). Needs nothing from Phase 3, so it runs as **WP4.1** beside WP3.4 (the owner,
-  2026-10-25), under decision 21.
+  said so). Needs nothing from Phase 3. **Shelved** (the owner, 2026-10-25, after the
+  findings under decision 21): not worth building while the user has to pay API rates for
+  it; revisited when "Sign in with ChatGPT" opens to web applications or Anthropic offers
+  an equivalent.
 - The wiki as a tool for an assistant, the other way round (also from 2026-10-25): an
   MCP server over the same API, so that Claude or ChatGPT can search, read and, where the
   session's user may, write pages, with the session's permissions and a log of what was
