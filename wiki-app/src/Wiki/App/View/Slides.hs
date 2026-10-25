@@ -313,8 +313,12 @@ component =
             -- one this view put there itself, which it is at already or
             -- has moved on from; one from elsewhere (a link) is gone to.
             | input.slide /= old.slide -> do
-                unless (input.slide `elem` st.asked) $
-                  modify (\s -> s {current = within s.loaded input.slide, asked = []})
+                -- Asked for here: the oldest asking for it is answered,
+                -- and what was asked before that has been already.
+                if input.slide `elem` st.asked
+                  then
+                    modify (\s -> s {asked = reverse (drop 1 (dropWhile (/= input.slide) (reverse s.asked)))})
+                  else modify (\s -> s {current = within s.loaded input.slide, asked = []})
                 H.raise Loaded
             | otherwise -> pass
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)

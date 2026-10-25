@@ -1353,6 +1353,11 @@ body:has(.slides-view) {
   font-size: 0.85em;
 }
 
+.slide .page-body .footnotes {
+  margin-top: 1em;
+  font-size: 0.7em;
+}
+
 .slide .page-body th,
 .slide .page-body td {
   border-color: color-mix(in srgb, var(--slide-text) 25%, transparent);
@@ -1528,6 +1533,9 @@ body:has(.slides-view) {
 }
 
 @media print {
+  /* What the libraries put in the page beside the application (Mermaid
+     measures its text in elements of its own) is not printed either. */
+  body:has(.slides-view) > :not(#app),
   .wiki:has(.slides-view) .wiki-header,
   .wiki:has(.slides-view) .wiki-sidebar,
   .wiki:has(.slides-view) .wiki-footer,
@@ -1555,11 +1563,16 @@ body:has(.slides-view) {
     overflow: visible;
   }
 
+  /* A break between slides rather than after each, so that the last one
+     leaves no empty page behind it. */
   .slide-frame,
   .overview .slide-frame {
     display: block;
-    break-after: page;
     page: slides-wide;
+  }
+
+  .slide-frame + .slide-frame {
+    break-before: page;
   }
 
   .slides-standard .slide-frame {

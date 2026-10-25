@@ -30,6 +30,8 @@ function wiki_search_bind_shortcut(input) {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const target = event.target;
     if (target instanceof Element && target.closest("input, textarea, select, [contenteditable]")) return;
+    // A page shown as slides covers the box, and takes its keys itself.
+    if (target instanceof Element && target.closest(".slides-view")) return;
     if (!input.isConnected) return;
     event.preventDefault();
     input.focus();
