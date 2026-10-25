@@ -94,7 +94,11 @@ confirms it against reality and the plan is amended if it does not hold.
     Halogen component serves both listeners; only the server's idea of who is asking
     differs (the local operator on the admin listener, the session's user on the
     public one). The admin listener is not restricted beyond loopback: a remote
-    operator reaches it through an SSH tunnel.
+    operator reaches it through an SSH tunnel. Addition (2026-10-25, Phase 3): the
+    console also has `wiki-server users …` (list, add with a password read from a
+    prompt or stdin, set a password, make or unmake an administrator, disable), run on
+    the data directory like `backup`, so that the first administrator can be made before
+    the panel exists and a locked-out installation recovered without a browser.
 12. **The serverless demo persists in IndexedDB, through an API added to
     haskell-halogen.** haskell-halogen has Web Storage (`Web.Storage.Storage` over
     `MonadBrowserDOM`: synchronous, text, a few megabytes) and nothing for IndexedDB,
@@ -165,6 +169,16 @@ confirms it against reality and the plan is amended if it does not hold.
     flag the public listener serves an anonymous reader (public spaces only) and the admin
     listener the administrator, as decision 11 says. Phase 3 replaces the flag with
     accounts and sessions.
+20. **Sessions are cookies that work over plain HTTP** (2026-10-25). The owner serves the
+    wiki over http on a private network, so the session cookie is `HttpOnly` and
+    `SameSite=Strict` always, `Secure` only when `wiki-server --secure-cookies` says the
+    server is behind TLS (off by default: a `Secure` cookie is never sent over http and
+    would make signing in silently impossible), with `Path` the base path. Writes are
+    further guarded against cross-site requests by a same-origin check (`Sec-Fetch-Site`,
+    or a header the browser's own `fetch` of this application sets) on every mutating
+    request, login included, and login is rate-limited per login and address in memory.
+    Session ids are random, kept hashed in the database, and end on sign-out, on the
+    account being disabled, and after an idle time of the server's choosing.
 
 ## Repository layout
 
@@ -730,31 +744,57 @@ Goal: the same app, with pages that survive a reload, served by one binary.
 
 Goal: who you are decides what you see and may do, on both sides.
 
+Recut on 2026-10-25, when the owner confirmed decisions 8, 9 and 11. Phase 2's server
+already enforces the rules of `wiki-core` in every storage operation and serves public
+spaces to an anonymous reader, so the WP3.2 of the first cut is mostly done; what is left
+of it (the principal of a request from a session, tests per rule over HTTP) goes into
+WP3.1. The administration panel is split by what needs a password: WP3.3 is the panel
+with users, administrators, groups and membership, and needs nothing from WP3.1, so the
+two run in parallel; the account forms (create a user with a password, reset one,
+disable a login) and per-space permissions follow in WP3.4, on both.
+
 - **WP3.1 Accounts and sessions.** Users with argon2id password hashes, login/logout,
-  HttpOnly cookie sessions, CSRF protection, rate-limited login. No admin account from
-  the configuration: administrators are made in WP3.3.
-- **WP3.2 Authorisation.** The permission rules of `wiki-core` enforced in every handler
-  (space view/edit/admin, global create-spaces/administer, public spaces for
-  anonymous), with tests per rule. Anonymous read of public spaces so the site works
-  as a blog. The principal of a request is either the session's user or, on the admin
-  listener only, the *local operator*, who passes every check; a handler never knows
-  which listener it serves, the principal does.
-- **WP3.3 Administration panel on the admin listener.** The panel of decision 11, at
-  `/admin/` on the loopback listener: the list of users with whether each is an
-  administrator; mark and unmark a user as administrator (the global `administer`
-  permission); create a user, reset a password, disable a login; the status page of
-  WP2.3. A Halogen component over an `MonadAdmin`-style interface, implemented over
-  the admin API (`/api/v1/admin/…`, served only to the local operator or an
-  administrator) and in memory for the demo and the browser tests. Tests: the server's,
-  that the admin API answers on the admin listener without a session and on the public
-  listener only to an administrator's session, and refuses the loopback bind check;
-  hspec-halogen for the component.
-- **WP3.4 Administration UI for administrators, remotely.** The same panel served on
-  the public listener to users with global `administer`, extended with what needs an
-  authenticated user: groups and membership; per-space permissions (grant/revoke to
-  user or group, toggle public); `create-spaces`. The UI hides what the current user
-  cannot do, using the same pure rules. An administrator who demotes themself is
-  refused in the UI and allowed by the server (the admin listener can always undo it).
+  HttpOnly cookie sessions, CSRF protection, rate-limited login. The principal of a
+  request is resolved per request, not per listener: on the public listener the
+  session's user (nobody for no session, a stale one or a disabled user), or the
+  administrator under `--trust-network`, which stays until the owner has made an
+  administrator and signed in; on the admin listener the *local operator*, who passes
+  every check; a handler never knows which listener it serves, the principal does. The
+  server renders each page and embeds the session as that principal, with
+  `Cache-Control: private` where the answer depends on the cookie. No admin account from
+  the configuration: a user is made and made an administrator from the console
+  (decision 11's addition: `wiki-server users …`) or, from WP3.3 on, the panel. The
+  account operations of the admin API (create a user with a password, set a password,
+  disable a login) and the sign-in and sign-out of the application over HTTP, through a
+  capability class the demo has no instance of (as `MonadDemoUsers` is the demo's), the
+  client cache cleared on both. Tests per rule over real HTTP: anonymous reads a public
+  space and nothing else, a user writes where granted and gets 403 elsewhere, the
+  administrator on the admin listener needs no cookie, a disabled user's session ends,
+  the preloaded page of a signed-in user says so.
+- **WP3.2 Authorisation.** Folded into WP3.1 (see above): the rules are enforced by
+  `SqliteWiki` since WP2.1, with the contract tests of `wiki-app` running against it.
+- **WP3.3 Administration panel.** The panel of decision 11, at `/admin/` on the
+  loopback listener and on the public one to users holding the global `administer`:
+  the list of users with whether each is an administrator; mark and unmark a user as
+  administrator (the global `administer` permission); groups and their members (brought
+  forward from WP3.4); the status page of WP2.3 and the data section of WP2.8 as they
+  are. A Halogen component over an `MonadAdmin`-style interface, implemented over the
+  admin API (`/api/v1/admin/…`, served only to the local operator or an administrator)
+  and in memory for the demo and the browser tests. The UI hides what the current user
+  cannot do, using the same pure rules; an administrator who demotes themself is refused
+  in the UI and allowed by the server (the admin listener can always undo it). No
+  migration, no passwords, no change to how a request's principal is found: those are
+  WP3.1's. Tests: the server's, that the admin API answers on the admin listener without
+  a session, on the public listener to the administrator (`--trust-network` until WP3.1
+  lands; the session case is carried to WP3.4) and not to an anonymous reader; hspec-halogen
+  for the component.
+- **WP3.4 Accounts and permissions in the panel.** After WP3.1 and WP3.3: the account
+  forms (create a user with a password, reset a password, disable and enable a login) over
+  WP3.1's endpoints; per-space permissions (grant and revoke to a user or a group, toggle
+  public) and the global `create-spaces`; the admin API refused to an anonymous reader and
+  granted to an administrator's session, tested over HTTP. Once the owner has an
+  administrator account, `--trust-network` is retired: the flag goes, the deploy script
+  stops passing it, and the smoke test signs in instead.
 - **WP3.5 OIDC login** (GitHub, Google) as an alternative to passwords; account linking.
 
 ### Phase 4: beyond the MVP
@@ -1642,3 +1682,9 @@ Amended by the planning session after each work package's report.
   the owner pushes. Next: Phase 3, pending the owner's word on its decisions (8, 9, 11:
   argon2id passwords and cookie sessions, the Confluence-like model, the administrator
   made from the admin listener; `--trust-network` retires once sessions exist).
+- **Phase 3 started** (2026-10-25). The owner confirmed decisions 8, 9 and 11. The phase is
+  recut (WP3.2 folded into WP3.1, the panel split into WP3.3 without passwords and WP3.4
+  with them), decision 20 fixes the cookies for plain http, decision 11 gains the console
+  `wiki-server users …`. WP3.1 (accounts and sessions) and WP3.3 (administration panel)
+  run in parallel on `wp3.1-accounts` and `wp3.3-admin-panel`; whichever merges second
+  rebases. `--trust-network` stays until WP3.4.
