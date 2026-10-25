@@ -23,8 +23,10 @@
 --
 -- Over a backend with a live channel ("Wiki.App.Live"), the page is
 -- watched while it is shown, and what happens to its comments elsewhere is
--- folded into what is shown, as the view's own writes are; when the
--- channel opens anew they are read afresh.
+-- folded into what is shown, as the view's own writes are. The server's
+-- answer to each subscription (the first, and one after the channel
+-- opened anew) carries the page's threads, which replace what is shown:
+-- whatever changed since they were read is caught up with.
 module Wiki.App.View.Page
   ( Input (..)
   , Slots
@@ -456,8 +458,16 @@ component =
         here <- gets (\st -> st.watching)
         case heard of
           Live.Heard page event | Just page == here -> modify (\st -> st {threads = applied event st.threads})
-          -- The channel opened anew: what was missed is read, not heard.
-          Live.Connected | isJust here -> loadThreads
+          -- The server's answer to the subscription: the threads as they
+          -- are now, whatever was shown, and what changed since the page
+          -- was read (or the channel was lost) with them. A thread focused
+          -- that is gone is not focused any more.
+          Live.Replaced page threads | Just page == here ->
+            modify $ \st ->
+              st
+                { threads = ThreadsReady threads
+                , focused = st.focused >>= \f -> f <$ find (\t -> t.id == f) threads
+                }
           _ -> pass
       Selecting -> do
         st <- get

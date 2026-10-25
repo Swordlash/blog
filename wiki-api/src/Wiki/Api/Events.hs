@@ -9,10 +9,11 @@
 --
 -- * the tab: @{"subscribe": "\<page>"}@ to hear about a page,
 --   @{"unsubscribe": "\<page>"}@ to stop ('ClientMessage');
--- * the server: @{"subscribed": "\<page>"}@ or @{"refused": "\<page>"}@
---   in answer (a page that is not there, or that the connection's user may
---   not read, is refused), and @{"page": "\<page>", "event": …}@ for each
---   thing that happens to a page subscribed to ('ServerMessage').
+-- * the server: @{"subscribed": "\<page>", "threads": […]}@ or
+--   @{"refused": "\<page>"}@ in answer (a page that is not there, or that
+--   the connection's user may not read, is refused), and
+--   @{"page": "\<page>", "event": …}@ for each thing that happens to a page
+--   subscribed to ('ServerMessage').
 --
 -- An event is a 'PageEvent', an object with a @type@ and what it carries.
 -- The type is open: comments' events are all there is now, and "someone
@@ -20,8 +21,14 @@
 -- on the same channel, which a client that does not know them ignores
 -- ('Unknown').
 --
--- Nothing is replayed: a tab that loses its connection connects again and
--- reads what it shows afresh, so an event it missed costs nothing.
+-- The answer to a subscription carries the page's threads as they are when
+-- it is made, read as the connection's user may read them (what
+-- @GET pages\/\<page>\/threads@ gives them), and every event told after it
+-- happened after that read: a tab that takes the answer's threads for the
+-- page's, and folds in what it is told afterwards, misses nothing between
+-- the page's first read and its subscription. Nothing else is replayed: a
+-- tab that loses its connection connects again and subscribes again, and
+-- the answers are what it missed.
 module Wiki.Api.Events
   ( -- * Events
     PageEvent (..)
@@ -117,8 +124,8 @@ instance FromJSON ClientMessage where
 
 -- | What the server says.
 data ServerMessage
-  = -- | The tab now hears about this page.
-    Subscribed PageId
+  = -- | The tab now hears about this page, whose threads are these.
+    Subscribed PageId [Thread]
   | -- | The tab may not hear about this page: it is not there, or the
     -- connection's user may not read it.
     Refused PageId
@@ -128,7 +135,7 @@ data ServerMessage
 
 instance ToJSON ServerMessage where
   toJSON = \case
-    Subscribed p -> object ["subscribed" .= p]
+    Subscribed p ts -> object ["subscribed" .= p, "threads" .= ts]
     Refused p -> object ["refused" .= p]
     Event p e -> object ["page" .= p, "event" .= e]
 
@@ -140,7 +147,7 @@ instance FromJSON ServerMessage where
         refused <- o .:? "refused"
         page <- o .:? "page"
         case (subscribed, refused, page) of
-          (Just p, _, _) -> pure (Subscribed p)
+          (Just p, _, _) -> Subscribed p <$> o .: "threads"
           (_, Just p, _) -> pure (Refused p)
           (_, _, Just p) -> Event p <$> (o .: "event" :: Parser PageEvent)
           _ -> parseFail ("not a message of the server's: " <> toS (show (v :: Value) :: Text))

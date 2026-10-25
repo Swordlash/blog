@@ -19,10 +19,12 @@ in. `Wiki.App.View.Body` gains `rendered`, `articleOf` and `commentBodies`
 and is polymorphic in a component's slots (`HasIslands`). The live
 channel: `Wiki.App.Live` (`MonadLive`, an `HttpWiki` instance only, handed
 to the shell as `Shell.Input.live`), one WebSocket per tab, opened when a
-page is first watched, subscribed to the page shown, opened again after a
-pause (1 s doubling to 30 s) when it closes, after which the page's
-comments are read again, and opened again as the new user after signing
-in or out. The demo's first post has comments. Exports carry no comments.
+page is first watched, subscribed to the page shown, whose comments are
+then replaced with the ones the server's answer carries (`Heard`'s
+`Replaced`), which catches up with whatever changed since the page was
+read without a request; opened again after a pause (1 s doubling to 30 s)
+when it closes, and subscribed again, with the same catching up; and
+opened again as the new user after signing in or out. The demo's first post has comments. Exports carry no comments.
 
 The server's settings in the administration (WP4.4). A "Server" section
 beside "Who may come in" (`Wiki.App.View.Server`): the public address, the

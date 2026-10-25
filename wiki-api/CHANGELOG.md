@@ -17,7 +17,8 @@ Comments (WP4.5). `WikiApi` gains `comments`, a page's threads at
 answering `wiki-core`'s `Thread` and `Comment`. `Wiki.Api.Events` has the
 live channel's messages, at `eventsPath` (`api/v1/events`, a WebSocket the
 server upgrades itself): the tab's `ClientMessage` (`Subscribe`,
-`Unsubscribe`), the server's `ServerMessage` (`Subscribed`, `Refused`,
+`Unsubscribe`), the server's `ServerMessage` (`Subscribed page threads`,
+whose threads are the page's when the subscription was made, `Refused`,
 `Event page PageEvent`), and `PageEvent` (`ThreadOpened`, `CommentAdded`,
 `CommentEdited`, `CommentDeleted`, `ThreadResolved`, `ThreadDeleted`, and
 `Unknown` for a type a newer server sends), with `applyEvent`, which folds

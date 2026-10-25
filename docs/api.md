@@ -272,12 +272,25 @@ another.
 
 Every message is a JSON text frame. The tab sends `{"subscribe": "<page>"}`
 and `{"unsubscribe": "<page>"}`; the server answers a subscription with
-`{"subscribed": "<page>"}`, or `{"refused": "<page>"}` for a page that is not
-there or that the connection's user may not read, and then sends `{"page":
+`{"subscribed": "<page>", "threads": [Thread]}`, or `{"refused": "<page>"}`
+for a page that is not there or that the connection's user may not read,
+and then sends `{"page":
 "<page>", "event": PageEvent}` for each change to the page's comments, once it
 is committed, to every connection subscribed to it (the tab that made the
 change included), checking again that the user may read the page. A
-`PageEvent` is an object with a `type`:
+`PageEvent` is an object with a `type`, below.
+
+The answer's `threads` are the page's threads as `GET
+api/v1/pages/<page>/threads` would give the connection's user at that
+moment, and the server subscribes the connection in the same hold of its
+storage as it reads them: every change committed after that read is sent
+after the answer, and none committed before it is sent as an event. So a
+tab that replaces what it shows of the page's comments with the answer, and
+folds in the events that follow, misses nothing between its first read of
+the page (with the page, or from the HTML the server rendered it into) and
+its subscription, and asks for nothing more to catch up.
+
+
 
 | `type` | Fields | What happened |
 | ------ | ------ | ------------- |
@@ -291,10 +304,10 @@ change included), checking again that the user may read the page. A
 The type is open: a client ignores an event of a type it does not know, so
 that later ones ("someone is editing this page", "this page changed") ride
 the same channel. Nothing is replayed: a tab that loses its connection
-connects again, subscribes again, and reads what it shows afresh. The server
-pings every 20 seconds, keeps subscriptions in memory, closes a connection
-that does not keep up with its messages (256 waiting), and closes every
-connection when it stops.
+connects again and subscribes again, and the answers are what it missed.
+The server pings every 20 seconds, keeps subscriptions in memory, closes a
+connection that does not keep up with its messages (256 waiting), and
+closes every connection when it stops.
 
 ### Search
 

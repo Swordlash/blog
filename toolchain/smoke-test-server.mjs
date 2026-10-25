@@ -767,11 +767,13 @@ try {
   const subscribed = new Promise((done) =>
     watcher.on("websocket", (socket) => {
       sockets.push(socket.url());
-      socket.on("framesent", (frame) => {
-        sockets.push(`sent ${frame.payload}`);
-        if (String(frame.payload).includes('"subscribe"')) done();
+      socket.on("framesent", (frame) => sockets.push(`sent ${frame.payload}`));
+      // The server's answer, with the page's threads: from here on every
+      // comment on the page is told to this tab.
+      socket.on("framereceived", (frame) => {
+        sockets.push(`received ${frame.payload}`);
+        if (String(frame.payload).includes('"subscribed"')) done();
       });
-      socket.on("framereceived", (frame) => sockets.push(`received ${frame.payload}`));
       socket.on("socketerror", (error) => sockets.push(`error ${error}`));
       socket.on("close", () => sockets.push("closed"));
     }),

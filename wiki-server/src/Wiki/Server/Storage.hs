@@ -71,6 +71,7 @@ module Wiki.Server.Storage
   , runSqliteWiki
   , attachmentFile
   , mayReadPage
+  , threadsThen
 
     -- * Whole wikis
   , importArchive
@@ -591,6 +592,14 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
 -- asks before it tells them of the page ("Wiki.Server.Events").
 mayReadPage :: Storage -> Who -> PageId -> IO Bool
 mayReadPage st who pid = isRight <$> transact st who Reads (findNode pid >>= chainOfPage >>= requireView)
+
+-- | A page's threads as someone may read them ('Left' if they may not, or
+-- the page is not there), and something done with them before any write
+-- can commit: what the live channel subscribes with ("Wiki.Server.Events"),
+-- so that every change after the threads read is told after them, and
+-- none between the two goes untold.
+threadsThen :: Storage -> Who -> PageId -> ([Thread] -> IO ()) -> IO (Either WikiError [Thread])
+threadsThen st who pid = transactThen st who Reads (listThreadsTx pid)
 
 -- | A page's comments, as the class's Haddock says
 -- ("Wiki.App.Backend.Comments"): each operation one transaction, and each

@@ -75,7 +75,7 @@ spec = describe "golden JSON" $ do
     golden "client-messages" [Subscribe (PageId "p1"), Unsubscribe (PageId "p1")]
     golden
       "server-messages"
-      [ Subscribed (PageId "p1")
+      [ Subscribed (PageId "p1") [Sample.inlineThread, Sample.pageThread]
       , Refused (PageId "p2")
       , Event (PageId "p1") (ThreadOpened Sample.pageThread)
       , Event (PageId "p1") (CommentAdded Sample.reply)

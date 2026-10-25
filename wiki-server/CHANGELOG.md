@@ -29,8 +29,10 @@ operation one transaction under the rules of `Wiki.Core.Comment`, served at
 WebSocket (`websockets` and `wai-websockets`, `Wiki.Server.Events`): the
 upgrade is authenticated by the session cookie as any request, refused 401
 in a closed wiki to someone not signed in and 403 to another site's page
-(its `Origin`); a tab subscribes to the pages it shows, each checked, and
-hears of every change to their comments once it is committed (the
+(its `Origin`); a tab subscribes to the pages it shows, each checked and
+answered with the page's threads (read in the same hold of the storage as
+the subscription is made, `Wiki.Server.Storage.threadsThen`, so that no
+change falls between the two), and hears of every change to their comments once it is committed (the
 storage's `Config.publish`), checked again before it is sent. The hub keeps
 subscriptions in memory, pings every 20 seconds, closes a connection 256
 messages behind and every connection when the server stops.

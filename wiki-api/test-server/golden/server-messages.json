@@ -1,6 +1,63 @@
 [
   {
-    "subscribed": "p1"
+    "subscribed": "p1",
+    "threads": [
+      {
+        "anchor": {
+          "exact": "a diagram",
+          "prefix": "Here is ",
+          "suffix": " of the wiki."
+        },
+        "comments": [
+          {
+            "author": {
+              "id": "u1",
+              "name": "Ada"
+            },
+            "body": "Which **diagram**?",
+            "createdAt": "2026-10-24T09:30:12.345678Z",
+            "editedAt": null,
+            "id": "c1",
+            "thread": "t1"
+          },
+          {
+            "author": {
+              "id": "u2",
+              "name": "Bea"
+            },
+            "body": "Agreed, *and* the next one.",
+            "createdAt": "2026-10-25T00:00:00Z",
+            "editedAt": "2026-10-25T00:00:00Z",
+            "id": "c2",
+            "thread": "t1"
+          }
+        ],
+        "createdAt": "2026-10-24T09:30:12.345678Z",
+        "id": "t1",
+        "page": "p1",
+        "resolved": false
+      },
+      {
+        "anchor": null,
+        "comments": [
+          {
+            "author": {
+              "id": "u1",
+              "name": "Ada"
+            },
+            "body": "A good tour.",
+            "createdAt": "2026-10-25T00:00:00Z",
+            "editedAt": null,
+            "id": "c3",
+            "thread": "t2"
+          }
+        ],
+        "createdAt": "2026-10-25T00:00:00Z",
+        "id": "t2",
+        "page": "p1",
+        "resolved": false
+      }
+    ]
   },
   {
     "refused": "p2"

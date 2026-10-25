@@ -14,6 +14,13 @@
 -- is checked when they subscribe ('Refused' otherwise) and again before
 -- each event is sent, since a grant may have been taken away since.
 --
+-- The answer to a subscription carries the page's threads, read as that
+-- someone may read them, and the subscription is made in the same hold of
+-- the storage's connection as that read: writes publish while they hold it
+-- too, so every change committed after the read is told after the answer,
+-- and none committed before it is told as new. A tab that shows the
+-- answer's threads and folds in what it is told then misses nothing.
+--
 -- An upgrade that a page of another site asked for is refused: the
 -- session cookie is @SameSite=Strict@, so a browser does not send it with
 -- such a request anyway, but a WebSocket is not bound by the same-origin
@@ -26,9 +33,9 @@
 -- and the hub hands it to every connection subscribed to the page, without
 -- waiting: each connection has a queue, and a thread of its own that sends
 -- what is in it. A connection whose queue fills up (a tab that does not
--- read) is closed rather than waited for: the tab connects again and reads
--- what it shows afresh, which is what a tab does after any lost
--- connection, so a lost event costs nothing.
+-- read) is closed rather than waited for: the tab connects again and
+-- subscribes again, and the answers carry what it shows afresh, as after
+-- any lost connection, so a lost event costs nothing.
 --
 -- The subscriptions are kept in memory, for the one process the server
 -- is. Pings every 20 seconds keep a quiet connection from being taken for
@@ -58,7 +65,7 @@ import Protolude
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (ClientMessage (..), PageEvent, ServerMessage (..))
 import Wiki.Core.Id (PageId)
-import Wiki.Server.Storage (Storage, Who, mayReadPage)
+import Wiki.Server.Storage (Storage, Who, mayReadPage, threadsThen)
 
 -- | Every connection open, and what each is subscribed to.
 data Hub = Hub
@@ -167,11 +174,16 @@ serve storage hub who pending = do
     receiving socket connection = forever $ do
       message <- WS.receiveData socket
       case decode message of
+        -- Answered with the page's threads, read as the connection's user
+        -- may, and subscribed before the storage lets anything else write:
+        -- every change committed after that read is told after the answer.
         Just (Subscribe page) -> do
-          allowed <- may page
-          atomically $ do
-            when allowed $ modifyTVar' connection.pages (Set.insert page)
-            enqueue connection (Say (if allowed then Subscribed page else Refused page))
+          read' <- threadsThen storage who page $ \threads -> atomically $ do
+            modifyTVar' connection.pages (Set.insert page)
+            enqueue connection (Say (Subscribed page threads))
+          when (isLeft read') $ atomically $ do
+            modifyTVar' connection.pages (Set.delete page)
+            enqueue connection (Say (Refused page))
         Just (Unsubscribe page) -> atomically (modifyTVar' connection.pages (Set.delete page))
         -- Something else, from a newer tab or none: nothing to do.
         Nothing -> pass

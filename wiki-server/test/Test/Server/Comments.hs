@@ -3,8 +3,9 @@
 -- may not comment; someone who may only read it comments; an author edits
 -- only their own; the space's administrator deletes anyone's; anyone who
 -- may comment resolves an inline thread. Then the live channel, over a
--- real WebSocket: two tabs on a page, one comments and both hear of it; a
--- page one may not read is refused, and nothing of it is heard; a closed
+-- real WebSocket: a subscription is answered with the page's threads as
+-- the tab's user reads them; two tabs on a page, one comments and both
+-- hear of it; a page one may not read is refused, and nothing of it is heard; a closed
 -- wiki refuses someone not signed in before the upgrade; another site's
 -- page is refused; a request that is no WebSocket's is told so.
 --
@@ -16,7 +17,7 @@ module Test.Server.Comments (spec) where
 import Data.Aeson (FromJSON, ToJSON, eitherDecode, encode)
 import Data.IORef (readIORef)
 import Data.Text qualified as T
-import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodPost, methodPut)
+import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodGet, methodPost, methodPut)
 import Network.WebSockets qualified as WS
 import Protolude
 import System.Timeout (timeout)
@@ -178,10 +179,16 @@ hear c =
     Nothing -> assertFailure "nothing heard in five seconds"
     Just bytes -> either (\e -> assertFailure ("not a message of the server's: " <> e)) pure (eitherDecode bytes)
 
-subscribe :: (HasCallStack) => WS.Connection -> PageId -> IO ()
-subscribe c p = do
+-- | Subscribe to a page: the threads the answer carries.
+answer :: (HasCallStack) => WS.Connection -> PageId -> IO [Thread]
+answer c p = do
   say c (Subscribe p)
-  hear c `shouldReturn` Subscribed p
+  hear c >>= \case
+    Subscribed q threads | q == p -> pure threads
+    other -> assertFailure ("not the answer to the subscription: " <> show other)
+
+subscribe :: (HasCallStack) => WS.Connection -> PageId -> IO ()
+subscribe c p = void (answer c p)
 
 -- | How a handshake the server refused ended: its status.
 refusedUpgrade :: Running -> [Header] -> IO (Either Int ())
@@ -215,6 +222,25 @@ live = describe "the live channel" $ do
       -- And the tab that comments hears of its own, too.
       replicateM_ 2 (void (hear reading))
       hear reading `shouldReturn` Event p (ThreadDeleted t.id)
+
+  it "answers a subscription with the page's threads as the tab's user reads them, and tells only what follows" $ withDemoRunning identity $ \r -> do
+    people <- signedIn r
+    p <- notesOf r
+    -- A thread opened before the tab subscribes, as when it is opened
+    -- between the tab's first read of the page and its subscription.
+    earlier :: Thread <- created (asWith r (Just people.reader) methodPost (links.comments p).open NewThread {anchor = Just quote, body = "Before."})
+    let threadsAs who = asWithout r who methodGet (links.comments p).list >>= jsonAs 200
+    channel r [people.reader] $ \reading -> channel r [] $ \watching -> do
+      readerThreads :: [Thread] <- threadsAs (Just people.reader)
+      answer reading p `shouldReturn` readerThreads
+      nobodysThreads :: [Thread] <- threadsAs Nothing
+      answer watching p `shouldReturn` nobodysThreads
+      map (\t -> t.id) readerThreads `shouldBe` [earlier.id]
+      -- What happened before the answer is in it, and is not told again:
+      -- the next thing heard is what follows.
+      later :: Thread <- created (asWith r (Just people.editor) methodPost (links.comments p).open NewThread {anchor = Nothing, body = "After."})
+      hear reading `shouldReturn` Event p (ThreadOpened later)
+      hear watching `shouldReturn` Event p (ThreadOpened later)
 
   it "refuses a page one may not read, and tells nothing of it" $ withDemoRunning identity $ \r -> do
     people <- signedIn r

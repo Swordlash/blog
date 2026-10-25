@@ -780,10 +780,12 @@ tell = unsafeIOToPageM . js_server_tell . toJSText . decodeUtf8 . toS . encode
 -- | A page's comments over the server's backend: read with the page, a new
 -- one sent, what another tab writes heard over the live channel, and, when
 -- the channel's connection is cut, the channel opened again and the
--- comments read again.
+-- comments taken from the answer to the subscription; and a comment made
+-- between the page's preload and its subscription caught up with, without
+-- a request.
 comments :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
 comments m = describe "a page's comments" $ do
-  it "reads them with the page, sends a new one, hears another tab's, and reads them again after a lost connection" $ runPage $ do
+  it "reads them with the page, sends a new one, hears another tab's, and catches up after a lost connection" $ runPage $ do
     serverStarts
     serveDemo
     hello <- unsafeIOToPageM $ do
@@ -808,16 +810,62 @@ comments m = describe "a page's comments" $ do
     -- Another tab replies: heard, and shown.
     tell (Event hello.id (CommentAdded (comment' "thread-hello-3" "comment-elsewhere" "From another tab.")))
     eventually $ (traverse textContent =<< findAll ui "#comment-thread-thread-hello-3 .comment-body") `shouldReturn` ["Welcome! Comments here are about the whole post; select some of its text to comment on that.", "Thanks, that works.", "From another tab."]
-    -- The connection is cut: opened again after a pause, subscribed
-    -- again, and the comments read again, as the server has them now.
+    -- The connection is cut: opened again after a pause, and subscribed
+    -- again; the server's answer has the comments as they are now, which
+    -- the page shows without reading them itself (were they read, the
+    -- demo's three threads would come back).
     let threadsAt = (links.comments hello.id).list
         readsSoFar = length . filter (\r -> r.method == "GET" && r.url == threadsAt) <$> asked
     before <- readsSoFar
-    answerWith "GET" threadsAt 200 [made]
     unsafeIOToPageM js_server_hang_up
     eventually $ said `shouldReturn` [Subscribe hello.id, Subscribe hello.id]
-    eventually $ readsSoFar `shouldReturn` (before + 1)
+    tell (Subscribed hello.id [made])
     eventually $ length <$> findAll ui ".page-comments .comment-thread" `shouldReturn` 1
+    readsSoFar `shouldReturn` before
     length <$> findAll ui "mark.comment-mark" `shouldReturn` 0
     unmount ui
+    serverStops
+
+  it "catches up with a comment made between the page's preload and its subscription, asking nothing" $ runPage $ do
+    -- What the server's render reads at the post: who is asking, the
+    -- spaces, the blog and its pages, the post and its comments.
+    serverStarts
+    serveDemo
+    reading <- unsafeIOToPageM (newHttpEnv browserTransport)
+    (hello, preloaded) <- overHttp reading $ do
+      _ <- session
+      _ <- listSpaces
+      blog <- either (panic . show) identity <$> getSpace (slugs ["blog"])
+      _ <- listPages blog.id
+      page <- either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
+      threads <- either (panic . show) identity <$> listThreads page.id
+      pure (page, threads)
+    carried <- unsafeIOToPageM (cacheOf reading)
+    serverStops
+    -- A server that answers nothing from here on, and the page with what
+    -- it carries.
+    serverStarts
+    unsafeIOToPageM (js_embed (toJSText preloadId) (toJSText (encodePreload carried)))
+    env <- fromPage
+    ui <- startServerOver m env (Page (slugs ["blog"]) (slugs ["hello-world"]))
+    find ui "mark.comment-mark[data-thread='thread-hello-1']" >>= (`shouldHaveText` "a blog that is also a wiki")
+    eventually $ said `shouldReturn` [Subscribe hello.id]
+    -- Someone commented after the page was read and before the tab
+    -- subscribed: the answer has it, and the page shows it.
+    let grace = Author {id = UserId "user-editor", name = "Grace Editor"}
+        meanwhile =
+          Thread
+            { id = CommentThreadId "thread-meanwhile"
+            , page = hello.id
+            , anchor = Nothing
+            , resolved = False
+            , createdAt = demoNow
+            , comments = [Comment {id = CommentId "comment-meanwhile", thread = CommentThreadId "thread-meanwhile", author = grace, body = "Made meanwhile.", createdAt = demoNow, editedAt = Nothing}]
+            }
+    tell (Subscribed hello.id (preloaded <> [meanwhile]))
+    find ui ".page-comments #comment-thread-thread-meanwhile .comment-body" >>= (`shouldHaveText` "Made meanwhile.")
+    find ui "mark.comment-mark[data-thread='thread-hello-1']" >>= (`shouldHaveText` "a blog that is also a wiki")
+    asked `shouldReturn` []
+    unmount ui
+    unsafeIOToPageM (js_unembed (toJSText preloadId))
     serverStops

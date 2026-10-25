@@ -27,7 +27,7 @@ spec :: Spec
 spec = describe "Events" $ do
   it "reads back every message it writes" $ do
     let messages =
-          [ Subscribed (PageId "p")
+          [ Subscribed (PageId "p") [thread]
           , Refused (PageId "p")
           , Event (PageId "p") (ThreadOpened thread)
           , Event (PageId "p") (CommentAdded (comment "c2" "Reply."))
