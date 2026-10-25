@@ -1,13 +1,15 @@
 -- | The API over HTTP, against a running server and its storage: what each
 -- listener answers and as whom, the round trips of every kind of record,
--- versions and conflicts, uploads and their limit, attachments' bytes, and
--- every refusal as an 'ApiError'.
+-- versions and conflicts, uploads and their limit, attachments' bytes, the
+-- administration's people, and every refusal as an 'ApiError'.
 module Test.Server.Api (spec) where
 
 import Data.Aeson (encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Network.HTTP.Types (hContentType, methodDelete, methodPost, methodPut)
 import Protolude
@@ -15,7 +17,7 @@ import Servant.API (toUrlPiece)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Admin (ServerStatus (..))
+import Wiki.Api.Admin (AdministratorFlag (..), Directory (..), GroupName (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, searchUrl)
@@ -24,12 +26,13 @@ import Wiki.Api.Version (pageVersion)
 import Wiki.App.Backend (maxAttachmentSize)
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Id (AttachmentId (..))
+import Wiki.Core.Id (AttachmentId (..), UserId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Search (SearchHit (..), searchQuery)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.User (Group (..), User (..))
 import Wiki.Server.Storage (administratorUser)
 
 spec :: Spec
@@ -41,6 +44,7 @@ spec = describe "the API over HTTP" $ do
   attachments
   refusals
   status
+  people
 
 -- | An address of the API on a listener: the public one's root, or the
 -- admin one's @\/admin\/@.
@@ -254,3 +258,61 @@ status = describe "the server's status" $ do
 
   it "is refused to an anonymous reader" $ withRunning $ \r ->
     getUrl r (onPublic r links.admin.status) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+
+-- | The administration's users and groups over HTTP: answered on the admin
+-- listener with no session, and on the public one under @--trust-network@,
+-- where everyone is the administrator; refused to an anonymous reader, the
+-- public listener's without it. (An administrator's session on the public
+-- listener comes with accounts.)
+people :: Spec
+people = describe "the wiki's people" $ do
+  it "are the operator's on the admin listener, without a session" $ withDemoRunning identity $ \r -> do
+    d <- ok200 (getUrl r (onAdmin r links.admin.directory))
+    map (\u -> u.login) (d :: Directory).users `shouldBe` ["admin", "editor", "reader"]
+    map (\g -> g.name) d.groups `shouldBe` ["writers"]
+    let editor = loginId d "editor"
+    marked <- sendJson r methodPut (onAdmin r (links.admin.setAdministrator editor)) AdministratorFlag {administrator = True}
+    marked.status `shouldBe` 204
+    made <- sendJson r methodPost (onAdmin r links.admin.createGroup) GroupName {name = "Reviewers"} >>= jsonAs 201
+    added <- send r methodPut (onAdmin r (links.admin.addMember (made :: Group).id editor)) [] ""
+    added.status `shouldBe` 204
+    changed <- ok200 (getUrl r (onAdmin r links.admin.directory))
+    (editor `Set.member` (changed :: Directory).administrators) `shouldBe` True
+    map (\g -> g.name) changed.groups `shouldBe` ["Reviewers", "writers"]
+    Map.lookup made.id changed.membership `shouldBe` Just (Set.singleton editor)
+    -- Taken back, and the group gone.
+    unmarked <- sendJson r methodPut (onAdmin r (links.admin.setAdministrator editor)) AdministratorFlag {administrator = False}
+    unmarked.status `shouldBe` 204
+    gone <- send r methodDelete (onAdmin r (links.admin.deleteGroup made.id)) [] ""
+    gone.status `shouldBe` 204
+    final <- ok200 (getUrl r (onAdmin r links.admin.directory))
+    (editor `Set.member` (final :: Directory).administrators) `shouldBe` False
+    map (\g -> g.name) final.groups `shouldBe` ["writers"]
+
+  it "are the administrator's on the public listener with --trust-network" $ withDemoRunning trusted $ \r -> do
+    d <- ok200 (getUrl r (onPublic r links.admin.directory))
+    map (\u -> u.login) (d :: Directory).users `shouldBe` ["admin", "editor", "reader"]
+    made <- sendJson r methodPost (onPublic r links.admin.createGroup) GroupName {name = "Reviewers"} >>= jsonAs 201
+    (made :: Group).name `shouldBe` "Reviewers"
+    renamed <- sendJson r methodPut (onPublic r (links.admin.renameGroup made.id)) GroupName {name = "Editors"} >>= jsonAs 200
+    renamed `shouldBe` Group {id = made.id, name = "Editors"}
+
+  it "are refused to an anonymous reader, who learns nothing of what they name" $ withDemoRunning identity $ \r -> do
+    d <- ok200 (getUrl r (onAdmin r links.admin.directory))
+    let rita = loginId d "reader"
+        writers = maybe (panic "no writers") (\g -> g.id) (head (d :: Directory).groups)
+        nobody = UserId "user-nobody"
+        forbidden reply = jsonAs 403 reply >>= (`shouldBe` Forbidden)
+    getUrl r (onPublic r links.admin.directory) >>= forbidden
+    sendJson r methodPut (onPublic r (links.admin.setAdministrator rita)) AdministratorFlag {administrator = True} >>= forbidden
+    sendJson r methodPut (onPublic r (links.admin.setAdministrator nobody)) AdministratorFlag {administrator = True} >>= forbidden
+    sendJson r methodPost (onPublic r links.admin.createGroup) GroupName {name = "Mine"} >>= forbidden
+    sendJson r methodPut (onPublic r (links.admin.renameGroup writers)) GroupName {name = "Mine"} >>= forbidden
+    send r methodDelete (onPublic r (links.admin.deleteGroup writers)) [] "" >>= forbidden
+    send r methodPut (onPublic r (links.admin.addMember writers rita)) [] "" >>= forbidden
+    send r methodDelete (onPublic r (links.admin.removeMember writers rita)) [] "" >>= forbidden
+    -- Nothing changed.
+    ok200 (getUrl r (onAdmin r links.admin.directory)) `shouldReturn` d
+  where
+    loginId :: Directory -> Text -> UserId
+    loginId d login = maybe (panic ("no user " <> login)) (\u -> u.id) (find (\u -> u.login == login) d.users)

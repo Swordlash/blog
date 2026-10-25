@@ -964,8 +964,8 @@ groupNameTx :: Maybe GroupId -> Text -> Tx Text
 groupNameTx self name = do
   n <- nonBlank "A group's name" name
   groups <- db loadGroups
-  unless (null [g | g <- groups, Just g.id /= self, T.toCaseFold g.name == T.toCaseFold n]) $
-    invalid ("There is a group called " <> n <> " already.")
+  for_ (head [g | g <- groups, Just g.id /= self, T.toCaseFold g.name == T.toCaseFold n]) $ \g ->
+    invalid ("There is a group called " <> g.name <> " already.")
   pure n
 
 createGroupTx :: Text -> Tx Group

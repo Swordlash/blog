@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+The administration's people, over the tables the schema had from the start
+(no migration): `SqliteWiki` is a `MonadAdmin` (`Wiki.App.Backend.Admin`),
+each operation one transaction that first checks for the global administer
+(the operator, or a user granted it). Deleting a group deletes the grants to
+it as well, which name it in a column that is no foreign key. The API's
+`admin/directory`, `admin/users/<user>/administrator`, `admin/groups…`
+endpoints are answered on the admin listener without a session, on the
+public one under `--trust-network`, and refused (403) to an anonymous reader.
+
 The server comes as a Docker image. The repository's `Dockerfile` builds
 `wiki-server` at `-O2` and the application in its server mode, on the pinned
 toolchain, into a Debian slim image that runs as an unprivileged user (uid

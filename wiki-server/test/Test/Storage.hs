@@ -1,4 +1,5 @@
--- | What only the storage does, besides the contract: who is asking, the
+-- | What only the storage does, besides the contracts: who is asking (the
+-- administrator, the wiki's people included), the
 -- versions and the search text it keeps beside each page, attachments on
 -- disk, and whole wikis in and out.
 module Test.Storage (spec) where
@@ -14,7 +15,9 @@ import System.Directory qualified as Directory
 import System.FilePath ((</>))
 import Test.Hspec
 import Test.Storage.Fixture
+import Wiki.Api.Admin (Directory (..))
 import Wiki.App.Backend
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Contract (As (As))
 import Wiki.Core.Attachment (Attachment (..), Source (..), findAttachment)
 import Wiki.Core.Draft (Draft (..))
@@ -24,6 +27,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), bodyText, searchQuery)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.User (Group (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Blobs (blobFile, blobOf, storedBlobs)
@@ -92,6 +96,33 @@ administrator = describe "the administrator" $ do
       runSqliteWiki st Administrator (getDraft hello.id) `shouldReturn` Right Nothing
       authors <- withDatabase st $ \c -> query c "SELECT author FROM page_versions WHERE page_id = ? AND updated_at = ?" (hello.id.text, Stamp saved.updatedAt)
       authors `shouldBe` [Only (Just administratorId.text)]
+
+  it "administers the wiki's people, of whom they are not one" $
+    withDemo $ \st -> do
+      d <- runSqliteWiki st Administrator directory >>= ok
+      map (\u -> u.login) d.users `shouldBe` ["admin", "editor", "reader"]
+      runSqliteWiki st Administrator (setAdministrator administratorId False) `shouldReturn` Left NotFound
+      -- Every user's administer may go, the last one's included: the
+      -- operator gives it back.
+      admin <- maybe (panic "no admin") (\u -> u.id) <$> userByLogin st "admin"
+      runSqliteWiki st Administrator (setAdministrator admin False) >>= ok
+      none <- runSqliteWiki st Administrator directory >>= ok
+      none.administrators `shouldBe` mempty
+      runSqliteWiki st Administrator (setAdministrator admin True) >>= ok
+      rows <- withDatabase st $ \c -> query c "SELECT count(*) FROM global_grants WHERE subject_kind = 'user' AND subject_id = ?" (Only admin.text)
+      rows `shouldBe` [Only (1 :: Int)]
+
+  it "deletes a group with the rows that grant it anything" $
+    withDemo $ \st -> do
+      d <- runSqliteWiki st Administrator directory >>= ok
+      let writers = maybe (panic "no writers") (\g -> g.id) (head d.groups)
+      let grantsTo = withDatabase st $ \c ->
+            (,)
+              <$> query c "SELECT count(*) FROM space_grants WHERE subject_kind = 'group' AND subject_id = ?" (Only writers.text)
+              <*> query c "SELECT count(*) FROM group_members WHERE group_id = ?" (Only writers.text)
+      grantsTo `shouldReturn` ([Only (1 :: Int)], [Only (1 :: Int)])
+      runSqliteWiki st Administrator (deleteGroup writers) >>= ok
+      grantsTo `shouldReturn` ([Only 0], [Only 0])
 
   it "is told apart from a user who is not there, who is nobody" $
     withDemo $ \st -> do

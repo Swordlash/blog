@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+The wiki's people, for the administration panel: `AdminApi` (now a record
+of several routes) gains `directory` (`GET admin/directory`, a
+`Wiki.Api.Admin.Directory` of the users, the ids of those granted the global
+administer, the groups and each group's members), `setAdministrator`
+(`PUT admin/users/<user>/administrator` with `AdministratorFlag`),
+`createGroup` (`POST admin/groups` with `GroupName`, 201 and the `Group`),
+`renameGroup` (`PUT admin/groups/<group>/name`), `deleteGroup`
+(`DELETE admin/groups/<group>`), `addMember` and `removeMember`
+(`PUT` and `DELETE admin/groups/<group>/members/<user>`). Golden files
+`directory.json`, `administrator-flag.json` and `group-name.json`.
+
 Page history: `PagesApi` gains `versions` (`GET pages/<page>/versions`),
 `version` (`GET pages/<page>/versions/<time>`) and `restore`
 (`POST pages/<page>/versions/<time>/restore`, with `If-Match` as a save, and

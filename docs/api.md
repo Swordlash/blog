@@ -228,15 +228,35 @@ users, groups and grants are not imported) is the plan's WP2.8.
 
 ### Administration
 
-| Method | Path | Body | Response | Errors |
-| ------ | ---- | ---- | -------- | ------ |
-| GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "trustNetwork", "spaces", "pages", "attachments", "users", "backups"}` | 403 |
+| Method | Path | Body | Response | Errors | `MonadAdmin` |
+| ------ | ---- | ---- | -------- | ------ | ------------ |
+| GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "trustNetwork", "spaces", "pages", "attachments", "users", "backups"}` | 403 | |
+| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "groups", "membership"}`: every `User` by login, the ids of the users granted the global `administer` themselves, every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
+| PUT | `api/v1/admin/users/<user>/administrator` | `AdministratorFlag` `{"administrator"}` | 204 | 403, 404 | `setAdministrator` |
+| POST | `api/v1/admin/groups` | `GroupName` `{"name"}` | 201 `Group` `{"id", "name"}` | 403, 400 | `createGroup` |
+| PUT | `api/v1/admin/groups/<group>/name` | `GroupName` | `Group` | 403, 404, 400 | `renameGroup` |
+| DELETE | `api/v1/admin/groups/<group>` | | 204 | 403, 404 | `deleteGroup` |
+| PUT | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `addMember` |
+| DELETE | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `removeMember` |
 
 Only for the global `administer` permission: the operator on the admin
 listener (decision 11 of the plan), and whoever is the administrator on the
-public one (`--trust-network` until Phase 3, then an administrator's
-session). Phase 3 adds the administration panel's users and permissions
-here.
+public one (`--trust-network` until accounts and sessions, then a user
+granted it, by their session). Anyone else is refused with 403 before
+anything the address names is looked for, so that the refusal says nothing
+about which users and groups exist.
+
+`MonadAdmin` (`Wiki.App.Backend.Admin`) is the administration panel's
+backend interface, beside `MonadWiki`. An administrator here is a user
+granted the global `administer` themself: marking one adds that grant,
+unmarking takes it away (theirs too: the server allows an administrator to
+demote themself, which the panel does not offer, since the admin listener can
+always undo it), and a grant to a group is left alone. A group's name is
+trimmed, not blank, and no other group's in any case (400 otherwise).
+Deleting a group deletes its membership and every grant to it, global and on
+spaces. Adding a member who is in the group already, and removing one who is
+not, succeed and change nothing. Users are not made here: an account comes
+with a password, which is the accounts' work.
 
 ## The two listeners
 
