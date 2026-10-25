@@ -2241,3 +2241,6 @@ Amended by the planning session after each work package's report.
   `ClientMessage` needs a constructor, `Env.events` holds the hub, nothing is replayed so
   re-announce on `Replaced`. Known flake: `Test.Server.Api` "logs each request…" races the log
   line written after the response under full-suite load.
+- **WP4.6 started** (2026-10-25) on `wp4.6-one-space` from `main` `57530a1`: the space
+  directory as the front page, one space's tree in the sidebar, a space's home page, icon and
+  description, "Space settings"; migration `0007`.
