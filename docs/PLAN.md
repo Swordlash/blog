@@ -215,6 +215,22 @@ confirms it against reality and the plan is amended if it does not hold.
     Confluence does; a user who merely created a space is such an administrator. Accepted
     for a wiki of this size; disabled users may later be left out of the candidates, and
     a wiki with many users would want a search instead of the list.
+23. **Comments are anchored to quotes, and live over one WebSocket** (2026-10-25). An
+    inline thread does not point into the Markdown source (a selection happens in the
+    rendered page, and mapping it back to source offsets is fragile); it carries a
+    *text quote selector* over the page's rendered plain text, as the W3C annotation model
+    has it: the exact quote plus a short prefix and suffix. Highlighting is a pure pass in
+    `wiki-core` over the rendered document that wraps the quote's text in `<mark>`s,
+    splitting text nodes and never crossing block boundaries, so the rule that a page is
+    always Halogen elements holds and no JavaScript touches the DOM; a quote the page no
+    longer contains (or contains more than once without its context matching) makes the
+    thread *orphaned*: still listed in the panel, without a highlight, with the quote shown.
+    Page threads need no anchor. The live channel is one WebSocket per browser tab,
+    authenticated by the session cookie on the upgrade, carrying typed `PageEvent`s for the
+    pages the tab subscribes to; the server keeps the subscriptions in memory (one process)
+    and a client that reconnects re-reads what it shows, so a lost event costs nothing. SSE
+    would reconnect by itself, but the owner asked for WebSockets and the same channel is
+    meant to carry what a client sends later (presence, "editing now").
 
 ## Repository layout
 
@@ -881,57 +897,44 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   clashing with names of ours. After WP4.2 and WP3.5 are merged, so that neither rebuilds
   everything mid-flight. `Halogen.Net.EventSource`/`WebSocket` are for a later "someone
   else is editing this page" feature, not this package.
-- **WP4.4 Sign-in providers and mail managed from the panel** (the owner asked on
-  2026-10-25 whether a provider can be added to a running server). Today providers and
-  SMTP are options read at start, so adding one means a `deploy-local.sh` run, which
-  restarts the service (seconds; sessions survive, they are in SQLite). The candidate moves
-  them into the `settings` table, managed in the administration ("Who may come in" gains
-  "Sign in with…" and "Mail"): name, kind, client id, issuer, and the secret, kept in the
-  database (the file already holds password hashes and session hashes; the secret is as
-  sensitive as the database file itself, which `data/` protects), read per request from
-  the cached settings like the access mode, discovery re-run on change; the options stay
-  as a bootstrap and override, and `deploy-local.sh` stops remembering them once the panel
-  does. `wiki-server oidc check` reads both.
-- **Presentations from a page** (the owner, 2026-10-25: "Beamer or something like it").
-  Not Beamer itself, which needs a TeX installation and renders to PDF; a page becomes a
-  slide deck in the browser: `---` (a thematic break) splits the slides, `::: notes` (the
-  fenced divs the Markdown already has) holds speaker notes, the first heading of a slide is
-  its title, and everything a page renders today renders on a slide (math, Mermaid, code,
-  images, raw HTML through the allowlist). A "Present" view on the page's own route
-  (`…/p/<page>/slides`) shows one slide at a time full-screen, with keyboard, touch and
-  the browser's fullscreen API, a progress line and the notes in a second window or below;
-  themes are CSS classes chosen in the page's front matter or the space's settings, with a
-  Beamer-like default (title bar, footer with the page's title and the slide number). A
-  print stylesheet lays one slide per page, so "Print to PDF" gives the deck as a file
-  with no server work. All of it is our Halogen rendering and CSS, no reveal.js (which
-  wants to own the DOM the way Halogen does). Later, if ever wanted: pandoc on the server
-  turns the same Markdown into Beamer PDF or PPTX (the export item above), which needs TeX
-  on the owner's machine. Independent of Phase 3; the owner's decision (2026-10-25): it
-  runs as **WP4.2 Presentations** beside WP3.4, both started once WP3.1 and WP3.3 are
-  merged.
-- A writing assistant in the editor, backed by an LLM (Claude or ChatGPT), **in the
-  browser, with the user's own account** (the owner, 2026-10-25: the user signs in to the
-  provider, not the server): draft a page from an outline, rewrite or shorten the
-  selection, suggest a title and a summary, fix a formula, a Mermaid or a TikZ block from
-  the error shown, translate. Each suggestion lands as one edit through the toolbar's
-  machinery (`Wiki.Core.Markdown.Edit`, `execCommand`), so the browser's undo takes it
-  back, and streams into the preview first. The credential is the user's: first their own
-  API key, pasted once into the assistant's settings and kept in this browser only
-  (IndexedDB, never sent to the wiki server), with the browser calling the provider
-  directly (Anthropic's API allows it with its direct-browser-access header; OpenAI's
-  too); "sign in with Claude / ChatGPT" (OAuth) replaces the key where a provider opens
-  it to third-party applications. One provider interface in the app, a provider chosen in
-  the settings. So the server holds no key, keeps no budget and sees no prompt, and the
-  serverless demo on Pages gets the assistant too; a space's administrators may still
-  switch it off for their space (a private space's text leaves the wiki only where they
-  said so). Needs nothing from Phase 3. **Shelved** (the owner, 2026-10-25, after the
-  findings under decision 21): not worth building while the user has to pay API rates for
-  it; revisited when "Sign in with ChatGPT" opens to web applications or Anthropic offers
-  an equivalent.
-- The wiki as a tool for an assistant, the other way round (also from 2026-10-25): an
-  MCP server over the same API, so that Claude or ChatGPT can search, read and, where the
-  session's user may, write pages, with the session's permissions and a log of what was
-  done; sign-in through the Phase 3 accounts, so it comes after them too.
+- **WP4.4 Server settings from the panel** (the owner, 2026-10-25: providers "and other
+  things" set up from the administration). Today the sign-in providers, SMTP and the public
+  URL are options read at start, so adding a provider means a `deploy-local.sh` run and a
+  restart. They move into the `settings` table (migration `0005-server-settings.sql`, or
+  rows of the existing table) and into the administration, a "Server" section beside "Who
+  may come in": the public URL; mail (host, port, security, user, sender, the password
+  write-only); the sign-in providers (name, kind, client id, issuer, the secret write-only),
+  added, changed and removed one by one, each with "Check" running discovery and showing the
+  redirect URI to register. Secrets live in the database (which already holds password and
+  session hashes and is as sensitive as its file; `data/` protects it) and never come back
+  through the API: the panel shows "set" or "not set". The server reads them per request
+  from the cached settings as it reads the access mode, so a change takes effect at once,
+  discovery re-run on change, mail sent with the current settings. The command-line options
+  stay as a bootstrap and an override: an option given wins over the table and the panel
+  shows that field read-only, "set on the command line"; `deploy-local.sh` keeps accepting
+  them for compatibility and its README section points at the panel. `wiki-server oidc
+  check` reads both. Tests: HTTP for the settings' endpoints (administrator only, secrets
+  never returned), a provider added at run time signs someone in without a restart, mail
+  with settings changed at run time, the override, migration; browser tests for the forms.
+- **WP4.5 Comments** (the owner, 2026-10-25: inline comments from a selection with a thread
+  at the side, and comments under the page, as Confluence has them, live over WebSockets).
+  Decision 23 below fixes the shape. In short: threads anchored to a quote of the page's
+  text (a selection in the rendered page opens a new thread in a side panel; the quote is
+  highlighted; a thread whose quote the page no longer has is kept as orphaned), and
+  page threads under the article; a comment is Markdown rendered by the page's renderer
+  (allowlist included), with one level of replies, edit and delete of one's own, resolve and
+  reopen for inline threads; whoever may view the page and is signed in may comment, space
+  administrators may delete anything. Live: the browser keeps one WebSocket to the server
+  (`Halogen.Net.WebSocket` from the pinned `net`), subscribed to the page it shows; the
+  server (`wai-websockets`) authenticates the upgrade by the session cookie, obeys the
+  closed-wiki rule, and pushes comment events to the page's subscribers; the client
+  reconnects on close and re-reads the threads then. The message type is general
+  (`PageEvent`), so "someone else is editing" and "this page changed" ride the same channel
+  later. Migration `0006-comments.sql`. The demo keeps comments in memory and IndexedDB, with
+  no live channel. Tests: the anchoring (pure, native: found, moved, orphaned), permission
+  rules per operation over HTTP, the WebSocket end to end (two clients, one comments, the
+  other hears), the closed-wiki refusal of the upgrade, browser tests for selecting text and
+  commenting, the side panel, the page threads, hydration at zero repairs with threads.
 
 ## Delegation protocol
 
