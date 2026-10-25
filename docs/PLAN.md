@@ -1752,3 +1752,29 @@ Amended by the planning session after each work package's report.
   `wiki-server users …`. WP3.1 (accounts and sessions) and WP3.3 (administration panel)
   run in parallel on `wp3.1-accounts` and `wp3.3-admin-panel`; whichever merges second
   rebases. `--trust-network` stays until WP3.4.
+- **WP3.3 merged** (2026-10-25, PR #55, `main` at `cd61ad2`). The administration route gains
+  the panel of decision 11, shown only to an administrator: "Users" (login, display name, an
+  administrator switch per user, one's own disabled with a note) and "Groups" (members with
+  Remove, a choice of other users to add, Rename, Delete confirmed in place, "New group").
+  `MonadAdmin` (`Wiki.App.Backend.Admin`: `directory`, `setAdministrator`, `createGroup`,
+  `renameGroup`, `deleteGroup`, `addMember`, `removeMember`) has instances for `MemWiki`
+  (the existing IndexedDB stores, no version bump), `HttpWiki` (the directory cached and
+  preloaded, `DirectoryOf`) and `SqliteWiki` (one transaction each, the global administer
+  checked before any id is looked up: `Forbidden` before `NotFound`, deliberately, so a
+  reader learns no ids). API: `GET admin/directory` (`Directory {users, administrators,
+  groups, membership}`), `PUT admin/users/<id>/administrator`, `POST admin/groups`,
+  `PUT admin/groups/<id>/name`, `DELETE admin/groups/<id>`, `PUT`/`DELETE
+  admin/groups/<id>/members/<user>`; `AdminApi` is now `data`. Rules: an administrator may
+  remove their own administer (the server allows, the UI refuses); deleting a group deletes
+  the grants naming it; group names trimmed, non-blank, unique ignoring case; adding or
+  removing a member twice changes nothing; "administrator" in the panel means a direct
+  grant, not one through a group. Tests: a shared contract of 15 cases on all four
+  backends, HTTP tests on both listeners (anonymous 403 everywhere), storage, a shell
+  render, zero-repair hydration of `/admin/`, 5 browser cases over `MemWiki` and one over
+  a fake fetch, the server smoke test makes a group. `app.wasm` 8071 KiB (1888 brotli), up
+  120. Carried to WP3.4: the admin API answering an administrator's session on the public
+  listener; account forms go in `View/Admin.hs` (a "New user" form under the Users table,
+  reset and disable per `.user-row`, a `disabled` set in `Directory`); per-space permissions
+  and `create-spaces` need a section of their own or the space view. Noted by the agent:
+  `build-wasm`'s native prerender step recompiles `wiki-core` in `dist-newstyle/native`
+  after `build-native`, so the two builds may invalidate each other.
