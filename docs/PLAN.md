@@ -840,6 +840,21 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
 - A table of contents panel and anchors; page templates; a "blog" view listing a
   space's pages by date with RSS.
 - Skylighting instead of highlight.js if server-side rendering of code is wanted.
+- **Presentations from a page** (the owner, 2026-10-25: "Beamer or something like it").
+  Not Beamer itself, which needs a TeX installation and renders to PDF; a page becomes a
+  slide deck in the browser: `---` (a thematic break) splits the slides, `::: notes` (the
+  fenced divs the Markdown already has) holds speaker notes, the first heading of a slide is
+  its title, and everything a page renders today renders on a slide (math, Mermaid, code,
+  images, raw HTML through the allowlist). A "Present" view on the page's own route
+  (`…/p/<page>/slides`) shows one slide at a time full-screen, with keyboard, touch and
+  the browser's fullscreen API, a progress line and the notes in a second window or below;
+  themes are CSS classes chosen in the page's front matter or the space's settings, with a
+  Beamer-like default (title bar, footer with the page's title and the slide number). A
+  print stylesheet lays one slide per page, so "Print to PDF" gives the deck as a file
+  with no server work. All of it is our Halogen rendering and CSS, no reveal.js (which
+  wants to own the DOM the way Halogen does). Later, if ever wanted: pandoc on the server
+  turns the same Markdown into Beamer PDF or PPTX (the export item above), which needs TeX
+  on the owner's machine. Independent of Phase 3; a candidate to run beside WP3.4.
 - A writing assistant in the editor, backed by an LLM (Claude or ChatGPT), **in the
   browser, with the user's own account** (the owner, 2026-10-25: the user signs in to the
   provider, not the server): draft a page from an outline, rewrite or shorten the
