@@ -19,7 +19,15 @@
 -- A session ends when its user signs out, when they are disabled or given a
 -- new password, and when it has not been used for 'idleTime'; each use
 -- moves its end on, at most once every 'refreshEvery', so that a session
--- in use does not cost a write per request.
+-- in use does not cost a write per request. When and from where it was last
+-- used is written at most once every 'seenEvery', for the account panel,
+-- which lists a user's sessions and ends any of them (WP4.11 of
+-- docs/PLAN.md): by an id of the session's own, never the secret its
+-- cookie carries.
+--
+-- A user who has a second factor ("Wiki.Server.SecondFactor") is not given
+-- a session by the right password alone: 'signIn' says that a code is
+-- wanted, and the session is begun once it is given.
 --
 -- = Accounts people make themselves
 --
@@ -94,8 +102,18 @@ module Wiki.Server.Accounts
   , Resolved (..)
   , resolveSession
   , endSession
+  , startSession
   , idleTime
   , refreshEvery
+  , seenEvery
+
+    -- * One's own sessions
+  , listSessions
+  , endSessionOf
+  , endOtherSessions
+
+    -- * Transactions
+  , immediately
   )
 where
 
@@ -107,13 +125,14 @@ import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execu
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), NewAccount (..), SignInMethods (..), signsInSomehow, withoutIdentity)
 import Wiki.Api.Admin (WikiSettings (..))
+import Wiki.Api.Security (SessionRef (..), SessionSummary (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (User (..), checkLogin)
-import Wiki.Server.Password (checkPassword, hashPassword, newToken, tokenHash, verifyPassword)
+import Wiki.Server.Password (checkPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
 import Wiki.Server.Storage (Storage, readSettings, settingsWith, withDatabase)
-import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accountFromRow, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, pendingInvitation, refreshIdentity, selectAccounts, updateDisabled, updatePasswordHash)
+import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accountFromRow, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, pendingInvitation, refreshIdentity, selectAccounts, totpEnabled, updateDisabled, updatePasswordHash)
 
 --------------------------------------------------------------------------------
 -- Accounts
@@ -209,12 +228,12 @@ immediately c body = do
 --------------------------------------------------------------------------------
 -- Accounts people make themselves
 
--- | Make oneself an account, in an open wiki: the user made, and the id of
--- the session they are signed in with. A closed wiki refuses it
--- ('Forbidden') before anything is checked, then the account is checked as
--- 'createAccount' checks one ('Invalid', 'Conflict').
-register :: Storage -> UTCTime -> NewAccount -> IO (Either WikiError (User, Text))
-register st now new = runExceptT $ do
+-- | Make oneself an account, in an open wiki, from a network address: the
+-- user made, and the id of the session they are signed in with. A closed
+-- wiki refuses it ('Forbidden') before anything is checked, then the
+-- account is checked as 'createAccount' checks one ('Invalid', 'Conflict').
+register :: Storage -> UTCTime -> Text -> NewAccount -> IO (Either WikiError (User, Text))
+register st now address new = runExceptT $ do
   open <- liftIO (takesNewAccounts . (\s -> s.access) <$> readSettings st)
   unless open (throwError Forbidden)
   made <- prepared new
@@ -222,7 +241,7 @@ register st now new = runExceptT $ do
     -- Closed meanwhile, while the password was hashed.
     settings <- settingsWith st c
     if takesNewAccounts settings.access
-      then makeAccount c now settings made
+      then makeAccount c now address settings made
       else pure (Left Forbidden)
 
 -- | Whom an invitation is for, if it can be used now.
@@ -234,8 +253,8 @@ invitationFor st now token = withDatabase st $ \c -> fmap snd <$> pendingInvitat
 -- signed in with. An invitation that cannot be used (it has been used,
 -- revoked, or has expired) is 'NotFound', before the account is checked;
 -- a login taken leaves the invitation as it was, to try another.
-acceptInvitation :: Storage -> UTCTime -> InvitationToken -> NewAccount -> IO (Either WikiError (User, Text))
-acceptInvitation st now token new = runExceptT $ do
+acceptInvitation :: Storage -> UTCTime -> Text -> InvitationToken -> NewAccount -> IO (Either WikiError (User, Text))
+acceptInvitation st now address token new = runExceptT $ do
   let secret = tokenHash token.text
   pending <- liftIO (withDatabase st (\c -> pendingInvitation c now secret))
   when (isNothing pending) (throwError NotFound)
@@ -247,7 +266,7 @@ acceptInvitation st now token new = runExceptT $ do
         Nothing -> pure (Left NotFound)
         Just (i, _) -> do
           settings <- settingsWith st c
-          made' <- makeAccount c now settings made
+          made' <- makeAccount c now address settings made
           when (isRight made') (void (deleteInvitation c i))
           pure made'
 
@@ -264,15 +283,16 @@ prepared new = do
   pure (UserId uid, login, name, Just phc)
 
 -- | Make a checked account, in a transaction under way, with the grant the
--- wiki's settings give a new one, and sign its maker in. One without a
--- password signs in another way: with a provider's account.
-makeAccount :: Connection -> UTCTime -> WikiSettings -> (UserId, Text, Text, Maybe Text) -> IO (Either WikiError (User, Text))
-makeAccount c now settings (uid, login, name, phc) =
+-- wiki's settings give a new one, and sign its maker in, at their network
+-- address. One without a password signs in another way: with a provider's
+-- account.
+makeAccount :: Connection -> UTCTime -> Text -> WikiSettings -> (UserId, Text, Text, Maybe Text) -> IO (Either WikiError (User, Text))
+makeAccount c now address settings (uid, login, name, phc) =
   insertAccount c uid login name phc >>= \case
     Left taken -> pure (Left (Conflict ("There is a user with the login " <> taken <> " already.")))
     Right account -> do
       when settings.newAccountsCreateSpaces (grantCreateSpaces c uid)
-      token <- startSession c now uid
+      token <- startSession c now uid address
       pure (Right (account.user, token))
 
 --------------------------------------------------------------------------------
@@ -313,6 +333,9 @@ data Landing
     SignedInAs User Text Bool
   | -- | The identity is this user's now (or already was).
     Linked User
+  | -- | The identity is this user's, who has a second factor: they are
+    -- signed in once they give a code ("Wiki.Server.SecondFactor").
+    SecondFactorFor User
   deriving stock (Eq, Show)
 
 -- | Why it came to nothing.
@@ -336,10 +359,12 @@ data Refusal
 
 -- | Sign in with a provider's account, connect it, or make an account with
 -- it, as asked and as the wiki's rules allow, in one transaction (see the
--- module's Haddock). What the provider says of the account now is kept
--- with the identity.
-landWith :: Storage -> UTCTime -> Intent -> Claimed -> IO (Either Refusal Landing)
-landWith st now intent claimed = withDatabase st $ \c ->
+-- module's Haddock), from a network address. What the provider says of the
+-- account now is kept with the identity. A user who has a second factor is
+-- not signed in by their identity alone, as they are not by their password
+-- alone: the answer says that a code is wanted.
+landWith :: Storage -> UTCTime -> Text -> Intent -> Claimed -> IO (Either Refusal Landing)
+landWith st now address intent claimed = withDatabase st $ \c ->
   immediately c $
     identityOf c claimed.provider claimed.subject >>= \case
       Just found -> do
@@ -351,7 +376,10 @@ landWith st now intent claimed = withDatabase st $ \c ->
           _ ->
             active c found.user >>= \case
               Nothing -> pure (Left DisabledAccount)
-              Just a -> Right . (\token -> SignedInAs a.user token False) <$> startSession c now a.user.id
+              Just a ->
+                totpEnabled c a.user.id >>= \case
+                  True -> pure (Right (SecondFactorFor a.user))
+                  False -> Right . (\token -> SignedInAs a.user token False) <$> startSession c now a.user.id address
       Nothing -> case intent of
         LinkTo me ->
           active c me >>= \case
@@ -385,7 +413,7 @@ landWith st now intent claimed = withDatabase st $ \c ->
       uid <- UserId . UUID.toText <$> generateV4
       let tries = take 100 (loginCandidates claimed)
           made login =
-            makeAccount c now settings (uid, login, fromMaybe login (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
+            makeAccount c now address settings (uid, login, fromMaybe login (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
           go = \case
             [] -> do
               -- A hundred taken: one with a random end, which nobody has.
@@ -489,10 +517,16 @@ passwordHashOf c u = head . map fromOnly <$> query c "SELECT password_hash FROM 
 idleTime :: NominalDiffTime
 idleTime = 14 * 24 * 60 * 60
 
--- | How long after its last recorded use a session's use is recorded again
--- (and its end moved on): an hour.
+-- | How long after its end was last moved on a use moves it on again (and
+-- the cookie is sent again to last as long): an hour.
 refreshEvery :: NominalDiffTime
 refreshEvery = 60 * 60
+
+-- | How long after its last recorded use a session's use is recorded again,
+-- with the address it came from, for the account panel's "last seen": a
+-- minute, so that a session in use costs at most a write a minute.
+seenEvery :: NominalDiffTime
+seenEvery = 60
 
 -- | Why signing in failed.
 data SignInFailure
@@ -502,15 +536,18 @@ data SignInFailure
     NoSuchAccount
   | -- | The password is not one the server takes (too long).
     BadPassword
+  | -- | The login and password are right, and the user has a second
+    -- factor: no session until they give a code.
+    SecondFactorWanted User
   deriving stock (Eq, Show)
 
--- | Sign in with a login and a password: the user, and the id of their new
--- session for the cookie. An unknown login costs the same hashing as a
--- known one, so that how long the answer takes does not tell whether a
--- login exists. Sessions that have ended by themselves are deleted on the
--- way.
-signIn :: Storage -> UTCTime -> Text -> Text -> IO (Either SignInFailure (User, Text))
-signIn st now login password
+-- | Sign in with a login and a password, from a network address: the user,
+-- and the id of their new session for the cookie. An unknown login costs
+-- the same hashing as a known one, so that how long the answer takes does
+-- not tell whether a login exists. Sessions that have ended by themselves
+-- are deleted on the way.
+signIn :: Storage -> UTCTime -> Text -> Text -> Text -> IO (Either SignInFailure (User, Text))
+signIn st now address login password
   | T.length password > 1024 = pure (Left BadPassword)
   | otherwise = do
       found <- withDatabase st $ \c ->
@@ -519,18 +556,26 @@ signIn st now login password
           hashOf (_, _, _, phc, _) = phc
           matches = verifyPassword (fromMaybe unknownHash (found >>= hashOf)) password
       case found of
-        Just row@(uid, _, _, Just _, 0) | matches -> do
-          token <- withDatabase st (\c -> startSession c now (UserId uid))
-          pure (Right ((accountFromRow row).user, token))
+        Just row@(_, _, _, Just _, 0) | matches -> do
+          let user = (accountFromRow row).user
+          withDatabase st $ \c ->
+            totpEnabled c user.id >>= \case
+              True -> pure (Left (SecondFactorWanted user))
+              False -> Right . (user,) <$> startSession c now user.id address
         _ -> pure (Left NoSuchAccount)
 
--- | A new session for a user, from now: the id its cookie is to carry.
--- Sessions that have ended by themselves are deleted on the way.
-startSession :: Connection -> UTCTime -> UserId -> IO Text
-startSession c now u = do
+-- | A new session for a user, from now and from a network address: the id
+-- its cookie is to carry. Sessions that have ended by themselves are
+-- deleted on the way.
+startSession :: Connection -> UTCTime -> UserId -> Text -> IO Text
+startSession c now u address = do
   token <- newToken
+  publicId <- newPublicId
   execute c "DELETE FROM sessions WHERE expires_at <= ?" (Only (Stamp now))
-  execute c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?)" (tokenHash token, u.text, Stamp now, Stamp now, Stamp (addUTCTime idleTime now))
+  execute
+    c
+    "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at, public_id, address) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    (tokenHash token, u.text, Stamp now, Stamp now, Stamp (addUTCTime idleTime now), publicId, address)
   pure token
 
 -- | A hash of no one's password, to check a password against when the
@@ -547,10 +592,13 @@ data Resolved = Resolved
   }
   deriving stock (Eq, Show)
 
--- | The session a cookie's id names, if it has not ended: one that has
--- (idle too long, its user disabled) is deleted, and is no one's.
-resolveSession :: Storage -> UTCTime -> Text -> IO (Maybe Resolved)
-resolveSession st now token = withDatabase st $ \c -> do
+-- | The session a cookie's id names, if it has not ended, as used now from
+-- a network address: one that has (idle too long, its user disabled) is
+-- deleted, and is no one's. Its use is recorded at most every 'seenEvery',
+-- and its end moved on at most every 'refreshEvery' (when it was last
+-- moved on is its end less 'idleTime').
+resolveSession :: Storage -> UTCTime -> Text -> Text -> IO (Maybe Resolved)
+resolveSession st now address token = withDatabase st $ \c -> do
   let key = tokenHash token
   rows <-
     query
@@ -562,12 +610,60 @@ resolveSession st now token = withDatabase st $ \c -> do
       | expires <= now || disabled /= (0 :: Int) -> do
           execute c "DELETE FROM sessions WHERE id_hash = ?" (Only key)
           pure Nothing
-      | diffUTCTime now seen >= refreshEvery -> do
-          execute c "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id_hash = ?" (Stamp now, Stamp (addUTCTime idleTime now), key)
+      | diffUTCTime now (addUTCTime (negate idleTime) expires) >= refreshEvery -> do
+          execute c "UPDATE sessions SET last_seen_at = ?, address = ?, expires_at = ? WHERE id_hash = ?" (Stamp now, address, Stamp (addUTCTime idleTime now), key)
           pure (Just Resolved {user = UserId uid, refreshed = True})
-      | otherwise -> pure (Just Resolved {user = UserId uid, refreshed = False})
+      | otherwise -> do
+          when (diffUTCTime now seen >= seenEvery) $
+            execute c "UPDATE sessions SET last_seen_at = ?, address = ? WHERE id_hash = ?" (Stamp now, address, key)
+          pure (Just Resolved {user = UserId uid, refreshed = False})
     _ -> pure Nothing
 
 -- | End the session a cookie's id names, if there is one.
 endSession :: Storage -> Text -> IO ()
 endSession st token = withDatabase st $ \c -> execute c "DELETE FROM sessions WHERE id_hash = ?" (Only (tokenHash token))
+
+--------------------------------------------------------------------------------
+-- One's own sessions
+
+-- | A user's sessions that have not ended, the most recently used first,
+-- the one whose id this is (the cookie's of the request, if any) marked as
+-- the current one.
+listSessions :: Storage -> UTCTime -> UserId -> Maybe Text -> IO [SessionSummary]
+listSessions st now u token = withDatabase st (\c -> sessionsOf c now u token)
+
+sessionsOf :: Connection -> UTCTime -> UserId -> Maybe Text -> IO [SessionSummary]
+sessionsOf c now u token = do
+  rows <-
+    query
+      c
+      "SELECT public_id, created_at, last_seen_at, expires_at, address, id_hash FROM sessions WHERE user_id = ? AND public_id IS NOT NULL ORDER BY last_seen_at DESC, created_at DESC"
+      (Only u.text)
+  pure
+    [ SessionSummary {id = SessionRef ref, createdAt, lastSeenAt, address, current = Just key == (tokenHash <$> token)}
+    | (ref, Stamp createdAt, Stamp lastSeenAt, Stamp expires, address, key) <- rows
+    , expires > now
+    ]
+
+-- | End one of a user's sessions, by its id: their sessions then.
+-- 'NotFound' for a session that is not theirs (or has ended), 'Invalid'
+-- for the one asking, which signs out instead.
+endSessionOf :: Storage -> UTCTime -> UserId -> Maybe Text -> SessionRef -> IO (Either WikiError [SessionSummary])
+endSessionOf st now u token ref = withDatabase st $ \c -> immediately c $ do
+  theirs <- sessionsOf c now u token
+  case find (\s -> s.id == ref) theirs of
+    Nothing -> pure (Left NotFound)
+    Just s
+      | s.current -> pure (Left (Invalid "This is the session you are using: sign out instead."))
+      | otherwise -> do
+          execute c "DELETE FROM sessions WHERE user_id = ? AND public_id = ?" (u.text, ref.text)
+          Right <$> sessionsOf c now u token
+
+-- | End every session of a user's but the one whose id this is (the one
+-- asking): their sessions then.
+endOtherSessions :: Storage -> UTCTime -> UserId -> Maybe Text -> IO [SessionSummary]
+endOtherSessions st now u token = withDatabase st $ \c -> do
+  case token of
+    Just t -> execute c "DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?" (u.text, tokenHash t)
+    Nothing -> deleteSessionsOf c u
+  sessionsOf c now u token

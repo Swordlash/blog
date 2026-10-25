@@ -40,6 +40,8 @@ source-repository-package
 -- everything above them a second time, for pandoc's sake alone. pandoc uses
 -- crypton for its hashes (MD5, SHA-1), and pandoc-types QuickCheck for its
 -- Arbitrary instances.
+-- qrcode-core's containers bound lags behind GHC 9.14's (the server draws a
+-- second factor's QR code with it, Wiki.Server.Totp).
 allow-newer:
   protolude:*,
   servant:QuickCheck,
@@ -53,7 +55,8 @@ allow-newer:
   cborg:ghc-prim,
   cborg:containers,
   pandoc:crypton,
-  pandoc-types:QuickCheck
+  pandoc-types:QuickCheck,
+  qrcode-core:containers
 
 -- A test suite's dependencies are optional goals unless this says otherwise:
 -- rather than report that it cannot satisfy them, the solver is free to hand

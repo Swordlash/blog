@@ -134,7 +134,7 @@ genCredentials :: Gen Credentials
 genCredentials = Credentials <$> genText <*> genText
 
 genNewAccount :: Gen NewAccount
-genNewAccount = NewAccount <$> genText <*> genText <*> genText
+genNewAccount = NewAccount <$> genText <*> genText <*> genText <*> oneof [pure Nothing, Just <$> genText]
 
 genNewPassword :: Gen NewPassword
 genNewPassword = NewPassword <$> genText

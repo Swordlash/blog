@@ -46,6 +46,10 @@ module Wiki.Server.Storage.Rows
   , updatePasswordHash
   , updateDisabled
   , deleteSessionsOf
+  , totpEnabled
+  , deleteSecondFactor
+  , loadSecondFactorUsers
+  , loadEmails
 
     -- * Identities
   , IdentityRow (..)
@@ -101,6 +105,7 @@ import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..))
 import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
+import Wiki.Api.Security (AccountEmail (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
 import Wiki.Core.Access (Access (..), accessName, readAccess)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -651,6 +656,30 @@ updateDisabled c u disabled = execute c "UPDATE users SET disabled = ? WHERE id 
 -- | End every session of a user.
 deleteSessionsOf :: Connection -> UserId -> IO ()
 deleteSessionsOf c u = execute c "DELETE FROM sessions WHERE user_id = ?" (Only u.text)
+
+-- | Whether a user has a second factor that signing in asks for: one that
+-- they have confirmed (migrations/0008-account-hygiene.sql).
+totpEnabled :: Connection -> UserId -> IO Bool
+totpEnabled c u = not . null <$> (query c "SELECT 1 FROM totp WHERE user_id = ? AND enabled_at IS NOT NULL" (Only u.text) :: IO [Only Int])
+
+-- | Take a user's second factor away, begun or on, with its recovery
+-- codes: whether they had one on.
+deleteSecondFactor :: Connection -> UserId -> IO Bool
+deleteSecondFactor c u = do
+  had <- totpEnabled c u
+  execute c "DELETE FROM totp WHERE user_id = ?" (Only u.text)
+  execute c "DELETE FROM recovery_codes WHERE user_id = ?" (Only u.text)
+  pure had
+
+-- | The users who have a second factor.
+loadSecondFactorUsers :: Connection -> IO (Set UserId)
+loadSecondFactorUsers c = Set.fromList . map (UserId . fromOnly) <$> query_ c "SELECT user_id FROM totp WHERE enabled_at IS NOT NULL"
+
+-- | The e-mail addresses users have given, and whether each is verified.
+loadEmails :: Connection -> IO (Map UserId AccountEmail)
+loadEmails c = do
+  rows <- query_ c "SELECT id, email, email_verified_at IS NOT NULL FROM users WHERE email IS NOT NULL"
+  pure (Map.fromList [(UserId u, AccountEmail {email, verified = verified /= (0 :: Int)}) | (u, email, verified) <- rows])
 
 --------------------------------------------------------------------------------
 -- Identities

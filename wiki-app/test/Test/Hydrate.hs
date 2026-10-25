@@ -37,6 +37,7 @@ import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Links (links, searchQueryOf)
+import Wiki.Api.Security (MailToken (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Backend
@@ -119,6 +120,8 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Admin
       , Unknown
       , Invite (InvitationToken "valid")
+      , ResetPassword (MailToken "secret")
+      , VerifyEmail (MailToken "secret")
       ]
 
 -- | The pages a server renders, adopted by the program that starts from
@@ -152,7 +155,7 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
   where
     path = either (panic . show) identity . parsePath
     -- Someone not signed in, in the open wiki and in the wiki closed (to
-    -- whom every route is the way to sign in, but for an invitation's), and
+    -- whom every route is the way to sign in, but for a mailed link's), and
     -- the administrator, in the wiki closed (which changes nothing for them
     -- but the administration's section on it).
     -- And, where the server signs in with providers, which the forms,
@@ -186,6 +189,8 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , Unknown
            , Invite (InvitationToken "valid")
            , Invite (InvitationToken "used")
+           , ResetPassword (MailToken "secret")
+           , VerifyEmail (MailToken "secret")
            ]
 
 -- | The demo with its first post saved once by the editor.

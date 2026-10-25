@@ -1,0 +1,9 @@
+{
+  "qr": [
+    "1110111",
+    "1000001",
+    "1011101"
+  ],
+  "secret": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+  "uri": "otpauth://totp/Wiki:ada?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Wiki&algorithm=SHA1&digits=6&period=30"
+}

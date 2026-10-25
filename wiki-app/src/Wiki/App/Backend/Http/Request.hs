@@ -211,6 +211,7 @@ fromApiError = \case
   -- Signing in's own, which a @MonadWiki@ request never gets from the
   -- server; from a proxy in front of it, the nearest.
   ApiError.Unauthenticated -> Forbidden
+  ApiError.SecondFactorRequired -> Forbidden
   ApiError.TooManyRequests t -> Invalid t
 
 -- | The session as the API sends it, and back: field for field.

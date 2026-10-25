@@ -10,6 +10,7 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
 import Wiki.Api.Account (Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Error (ApiError (..))
+import Wiki.Api.Security (MailToken (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), TotpEnrolment (..))
 import Wiki.Api.Types (SpaceName (..))
 
 -- | A property that values of a type, as the generator makes them, come
@@ -57,9 +58,14 @@ spec = describe "JSON" $ do
     let shown :: Text
         shown =
           show (Credentials "ada" "hunter2")
-            <> show (NewAccount "ada" "Ada" "hunter2")
+            <> show (NewAccount "ada" "Ada" "hunter2" Nothing)
             <> show (NewPassword "hunter2")
             <> show (PasswordChange (Just "hunter2") "hunter2")
+            <> show (NewPasswordByMail "hunter2")
+            <> show (OneTimeCode "hunter2")
+            <> show (RecoveryCodes ["hunter2"])
+            <> show (MailToken "hunter2")
+            <> show TotpEnrolment {secret = "hunter2", uri = "otpauth://totp/x?secret=hunter2", qr = []}
     shown `shouldSatisfy` (not . T.isInfixOf "hunter2")
     shown `shouldSatisfy` T.isInfixOf "\"ada\""
 

@@ -50,6 +50,7 @@ module Wiki.Api
   , AdminApi (..)
   , InvitationsApi (..)
   , AccountApi (..)
+  , PasswordResetApi (..)
   , CommentsApi (..)
 
     -- * Sessions
@@ -78,6 +79,7 @@ import Wiki.Api.Comments (CommentsApi (..))
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
+import Wiki.Api.Security (EmailChange, EmailState, MailToken, NewPasswordByMail, OneTimeCode, RecoveryCodes, ResetRequest, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment)
 import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
@@ -114,6 +116,21 @@ data WikiApi mode = WikiApi
   , signOut :: mode :- "session" :> Delete '[JSON] (WithCookie SessionInfo)
   -- ^ Sign out: the session ends, its cookie is cleared, and the answer is
   -- who the asker is now, nobody.
+  , secondFactor :: mode :- "session" :> "second-factor" :> ReqBody '[JSON] OneTimeCode :> Post '[JSON] (WithCookie SessionInfo)
+  -- ^ End a sign-in that 'signIn' answered with
+  -- 'Wiki.Api.Error.SecondFactorRequired' ("Wiki.Api.Security"): with a
+  -- code of the user's authenticator application or one of their recovery
+  -- codes, and the cookie that answer set, the session the user now has,
+  -- as 'signIn' answers. A wrong code is
+  -- 'Wiki.Api.Error.Unauthenticated', counted as a failed sign-in; a
+  -- sign-in that has expired or was never begun in this browser
+  -- 'Wiki.Api.Error.Invalid'.
+  , passwordReset :: mode :- "password-reset" :> NamedRoutes PasswordResetApi
+  , emailVerification :: mode :- "email-verification" :> Capture "token" MailToken :> PostNoContent
+  -- ^ Follow a link that verifies an e-mail address: the address it was
+  -- mailed to is the user's verified address from now on, if it is still
+  -- theirs. One that has been used, has expired, or whose address is no
+  -- longer the user's is 'Wiki.Api.Error.NotFound'.
   , register :: mode :- "accounts" :> ReqBody '[JSON] NewAccount :> Post '[JSON] (WithCookie SessionInfo)
   -- ^ Make oneself an account, in an open wiki, and be signed in as it, as
   -- 'signIn' answers. A closed wiki refuses with
@@ -322,6 +339,11 @@ data AdminApi mode = AdminApi
   -- can, and otherwise the answer carries it.
   , revokeInvitation :: mode :- "invitations" :> Capture "invitation" InvitationId :> DeleteNoContent
   -- ^ @revokeInvitation@: its link no longer makes an account.
+  , removeSecondFactor :: mode :- "users" :> Capture "user" UserId :> "second-factor" :> DeleteNoContent
+  -- ^ @removeSecondFactor@: the user signs in with their password alone
+  -- again (WP4.11 of docs/PLAN.md), for one who has lost their
+  -- authenticator and their recovery codes. One without a second factor is
+  -- 'Wiki.Api.Error.NotFound'.
   , unlinkIdentity :: mode :- "users" :> Capture "user" UserId :> "identities" :> Capture "provider" Text :> DeleteNoContent
   -- ^ @unlinkUserIdentity@: the user no longer signs in with that
   -- provider's account (WP3.6 of docs/PLAN.md), and their sessions end.
@@ -396,6 +418,55 @@ data AccountApi mode = AccountApi
   -- ('Wiki.Api.Error.TooManyRequests' when there have been too many). A
   -- new one that cannot be a password is 'Wiki.Api.Error.Invalid'. Their
   -- other sessions end; the one asking stays.
+  , sessions :: mode :- "sessions" :> Get '[JSON] [SessionSummary]
+  -- ^ Their sessions, the one asking marked, most recently used first
+  -- (WP4.11 of docs/PLAN.md, "Wiki.Api.Security").
+  , endSession :: mode :- "sessions" :> Capture "session" SessionRef :> Delete '[JSON] [SessionSummary]
+  -- ^ End one of their sessions other than the one asking (which signs out
+  -- with 'signOut'): their sessions then. One they do not have is
+  -- 'Wiki.Api.Error.NotFound', the one asking 'Wiki.Api.Error.Invalid'.
+  , endOtherSessions :: mode :- "sessions" :> Delete '[JSON] [SessionSummary]
+  -- ^ End every one of their sessions but the one asking: "Sign out
+  -- everywhere". Their sessions then, that one alone.
+  , secondFactorState :: mode :- "second-factor" :> Get '[JSON] SecondFactorState
+  -- ^ Whether they have a second factor.
+  , enrolTotp :: mode :- "second-factor" :> "totp" :> Post '[JSON] TotpEnrolment
+  -- ^ Begin a second factor: a new secret for an authenticator
+  -- application, not asked for at sign-in until it is confirmed. One who
+  -- has a second factor already is 'Wiki.Api.Error.Conflict'.
+  , confirmTotp :: mode :- "second-factor" :> "totp" :> ReqBody '[JSON] OneTimeCode :> Put '[JSON] RecoveryCodes
+  -- ^ Confirm it with a code the application shows: it is asked for at
+  -- every sign-in from now on, and the answer is the recovery codes, shown
+  -- this once. A wrong code is 'Wiki.Api.Error.Unauthenticated', counted as
+  -- a failed sign-in.
+  , removeSecondFactor :: mode :- "second-factor" :> "remove" :> ReqBody '[JSON] OneTimeCode :> Post '[JSON] SecondFactorState
+  -- ^ Take the second factor away, with a code or a recovery code (a wrong
+  -- one is 'Wiki.Api.Error.Unauthenticated', counted): they sign in with
+  -- their password alone again.
+  , email :: mode :- "email" :> Get '[JSON] EmailState
+  -- ^ Their e-mail address, whether it is verified, and whether the server
+  -- sends mail.
+  , setEmail :: mode :- "email" :> ReqBody '[JSON] EmailChange :> Put '[JSON] EmailState
+  -- ^ Give an e-mail address, or none: a new one is not verified until the
+  -- link mailed to it is followed. Without a mail server it is
+  -- 'Wiki.Api.Error.Invalid'.
+  }
+  deriving stock (Generic)
+
+-- | A password reset by mail ("Wiki.Api.Security"), for someone who is not
+-- signed in.
+data PasswordResetApi mode = PasswordResetApi
+  { request :: mode :- ReqBody '[JSON] ResetRequest :> PostNoContent
+  -- ^ Ask for a reset's link, by login or e-mail address: answered alike
+  -- whether or not it names anyone, and mailed only to a user's verified
+  -- address. Too many from one address are
+  -- 'Wiki.Api.Error.TooManyRequests'; a server that sends no mail
+  -- 'Wiki.Api.Error.Invalid', for every login alike.
+  , reset :: mode :- Capture "token" MailToken :> ReqBody '[JSON] NewPasswordByMail :> PostNoContent
+  -- ^ Set a new password with a reset's link, which ends every session the
+  -- user had: they sign in with it after. A link that has been used or has
+  -- expired is 'Wiki.Api.Error.NotFound'; a password that cannot be one
+  -- 'Wiki.Api.Error.Invalid'.
   }
   deriving stock (Generic)
 

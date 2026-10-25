@@ -22,7 +22,7 @@ import Data.IORef (readIORef, writeIORef)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
 import Network.HTTP.Types (Header, Method, hContentType, methodDelete, methodPost, methodPut)
 import Protolude
 import System.IO.Temp (withSystemTempDirectory)
@@ -34,6 +34,7 @@ import Wiki.Api (AccountApi (..), AdminApi (..), InvitationsApi (..), WikiApi (.
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), LinkedIdentity (..), PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invited (..), NewInvitation (..), WikiSettings (..))
 import Wiki.Api.Links (links)
+import Wiki.Api.Security (OneTimeCode (..), RecoveryCodes, TotpEnrolment (..))
 import Wiki.Api.ServerSettings (ProviderChange, ProviderKind (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -44,6 +45,7 @@ import Wiki.Server.Auth (safeNext)
 import Wiki.Server.Console (OidcCheck (..), runOidcCheck)
 import Wiki.Server.Oidc (IdClaims (..), checkClaims, decodeIdToken)
 import Wiki.Server.Storage (Who (..), defaultConfig, runSqliteWiki, withStorage)
+import Wiki.Server.Totp (codeAt, secretFromText)
 
 spec :: Spec
 spec = describe "signing in with a provider" $ do
@@ -379,6 +381,35 @@ overHttp = describe "over HTTP" $ do
     it "answers someone not signed in 401 for their identities" $ withOidc $ \_ r -> do
       reply <- getUrl r (onPublic r links.account.identities)
       reply.status `shouldBe` 401
+
+  describe "with a second factor" $
+    it "asks for its code on a page of its own, takes the right one only, and goes on where the user was" $
+      withOidc $ \fake r -> do
+        writeIORef fake.user (person "careful")
+        c <- signedInWith r "acme" "next=%2F" []
+        enrolment :: TotpEnrolment <- send r methodPost (onPublic r links.account.enrolTotp) [c] "" >>= jsonAs 200
+        secret <- maybe (assertFailure "not base32") pure (secretFromText enrolment.secret)
+        now <- getCurrentTime
+        _ :: RecoveryCodes <- sendJson' r methodPut (onPublic r links.account.confirmTotp) [c] OneTimeCode {code = codeAt secret now} >>= jsonAs 200
+        reply <- roundTrip r "acme" "next=%2Fs%2Fblog%2F" []
+        reply.status `shouldBe` 200
+        reply `says` "second factor"
+        lookup "wiki_session" (cookiesSet reply) `shouldBe` Nothing
+        held <- maybe (assertFailure ("no pending cookie: " <> show reply)) pure (lookup "wiki_pending" (cookiesSet reply))
+        let codeForm code = sendBare r methodPost (onPublic r "auth/acme/second-factor") [(hContentType, "application/x-www-form-urlencoded"), ("Cookie", "wiki_pending=" <> encodeUtf8 held)] ("code=" <> BSL.fromStrict (encodeUtf8 code))
+        wrong <- codeForm "abcdef"
+        wrong.status `shouldBe` 401
+        wrong `says` "not right"
+        lookup "wiki_session" (cookiesSet wrong) `shouldBe` Nothing
+        right <- codeForm (codeAt secret (addUTCTime 30 now))
+        right.status `shouldBe` 200
+        onwardsOf right `shouldBe` Just "/s/blog/"
+        lookup "wiki_pending" (cookiesSet right) `shouldBe` Just ""
+        c' <- sessionGiven right
+        loginOf <$> sessionOf r [c'] `shouldReturn` Just "careful"
+        -- Over: the same cookie ends nothing more.
+        again <- codeForm (codeAt secret (addUTCTime 30 now))
+        again.status `shouldBe` 400
 
   describe "refusing" $ do
     it "refuses a disabled user" $ withOidc $ \fake r -> do

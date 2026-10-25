@@ -18,6 +18,10 @@ module Wiki.Server.Mail
   , invitationMessage
   , testMessage
   , inviteLink
+  , resetMessage
+  , resetLink
+  , verificationMessage
+  , verificationLink
 
     -- * Over SMTP
   , Smtp (..)
@@ -91,6 +95,55 @@ invitationMessage publicUrl email token expiresAt =
           , ""
           , "The link works once, until " <> toS (formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC" expiresAt) <> "."
           , "If you did not expect this invitation, ignore this mail: nothing is made without you."
+          ]
+    }
+
+-- | The link of a password reset: its page in the application.
+resetLink :: Text -> Text -> Text
+resetLink publicUrl token = publicUrl <> "reset-password/" <> token <> "/"
+
+-- | The link that verifies an e-mail address: its page in the application.
+verificationLink :: Text -> Text -> Text
+verificationLink publicUrl token = publicUrl <> "verify-email/" <> token <> "/"
+
+-- | The mail with a password reset's link (WP4.11 of docs/PLAN.md), to a
+-- user's verified address, for their login.
+resetMessage :: Text -> Text -> Text -> Text -> UTCTime -> Message
+resetMessage publicUrl email login token expiresAt =
+  Message
+    { to = email
+    , subject = "Reset your password on the wiki at " <> hostOf publicUrl
+    , body =
+        T.unlines
+          [ "Hello,"
+          , ""
+          , "Someone asked to reset the password of the account " <> login <> " on the wiki at " <> publicUrl <> "."
+          , "Follow this link to choose a new password:"
+          , ""
+          , resetLink publicUrl token
+          , ""
+          , "The link works once, until " <> toS (formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC" expiresAt) <> "."
+          , "Setting a new password signs you out everywhere you are signed in."
+          , "If you did not ask for this, ignore this mail: your password stays as it is."
+          ]
+    }
+
+-- | The mail that verifies an address given for a user's account.
+verificationMessage :: Text -> Text -> Text -> Text -> Message
+verificationMessage publicUrl email login token =
+  Message
+    { to = email
+    , subject = "Confirm your e-mail address on the wiki at " <> hostOf publicUrl
+    , body =
+        T.unlines
+          [ "Hello,"
+          , ""
+          , "This address was given for the account " <> login <> " on the wiki at " <> publicUrl <> "."
+          , "Follow this link to confirm that it is yours, so that you can reset your password with it:"
+          , ""
+          , verificationLink publicUrl token
+          , ""
+          , "The link works once, for a day. If the account is not yours, ignore this mail."
           ]
     }
 

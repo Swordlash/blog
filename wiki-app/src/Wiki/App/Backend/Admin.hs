@@ -213,6 +213,13 @@ class (Monad m) => MonadAdmin m where
   default unlinkUserIdentity :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Text -> m (Either WikiError ())
   unlinkUserIdentity u = lift . unlinkUserIdentity u
 
+  -- | Take a user's second factor away (WP4.11 of docs/PLAN.md), for one
+  -- who has lost their authenticator and their recovery codes: they sign
+  -- in with their password alone again. 'NotFound' if they have none.
+  removeSecondFactor :: UserId -> m (Either WikiError ())
+  default removeSecondFactor :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> m (Either WikiError ())
+  removeSecondFactor = lift . removeSecondFactor
+
   -- | The server's own settings, each secret as whether it is set.
   serverSettings :: m (Either WikiError ServerSettings)
   default serverSettings :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError ServerSettings)

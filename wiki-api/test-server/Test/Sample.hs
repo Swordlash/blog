@@ -29,6 +29,10 @@ module Test.Sample
   , invited
   , invitationInfo
   , signInMethods
+  , sessions
+  , secondFactor
+  , enrolment
+  , emailState
   , serverSettings
   , serverChange
   , providerCheck
@@ -48,6 +52,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), OffSite (..), Retention (..), Schedule (..), Trigger (..))
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
+import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState (..), SessionRef (..), SessionSummary (..), TotpEnrolment (..))
 import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Access (Access (..))
@@ -258,6 +263,9 @@ directory =
     , disabled = Set.fromList [UserId "u2"]
     , withPassword = Set.fromList [UserId "u1"]
     , identities = Map.fromList [(UserId "u2", ["github", "google"])]
+    , secondFactor = Set.fromList [UserId "u1"]
+    , emails = Map.fromList [(UserId "u1", AccountEmail {email = "ada@example.org", verified = True}), (UserId "u2", AccountEmail {email = "edgar@example.org", verified = False})]
+    , mailing = True
     , groups = [Group {id = GroupId "g1", name = "writers"}]
     , membership = Map.fromList [(GroupId "g1", Set.fromList [UserId "u2"])]
     }
@@ -307,6 +315,30 @@ signInMethods =
     { password = True
     , identities = [LinkedIdentity {provider = "github", email = Just "ada@example.org", name = Just "Ada Lovelace", linkedAt = time}]
     }
+
+-- | A user's sessions: this one, and one elsewhere.
+sessions :: [SessionSummary]
+sessions =
+  [ SessionSummary {id = SessionRef "0a1b2c3d", createdAt = time, lastSeenAt = later, address = "100.64.0.7", current = True}
+  , SessionSummary {id = SessionRef "4e5f6a7b", createdAt = time, lastSeenAt = time, address = "", current = False}
+  ]
+
+-- | A second factor that is on, with most recovery codes left.
+secondFactor :: SecondFactorState
+secondFactor = SecondFactorState {enabled = True, recoveryCodesLeft = 9}
+
+-- | A second factor being set up: RFC 6238's own test secret.
+enrolment :: TotpEnrolment
+enrolment =
+  TotpEnrolment
+    { secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+    , uri = "otpauth://totp/Wiki:ada?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=Wiki&algorithm=SHA1&digits=6&period=30"
+    , qr = ["1110111", "1000001", "1011101"]
+    }
+
+-- | An address given and not yet verified, where mail is sent.
+emailState :: EmailState
+emailState = EmailState {email = Just "ada@example.org", verified = False, mailing = True, mailError = Nothing}
 
 -- | The server's settings as they are read: an address, a mail server whose
 -- password is set, and two providers, one of them without its secret.

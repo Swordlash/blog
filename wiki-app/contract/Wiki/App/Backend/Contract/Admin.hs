@@ -143,7 +143,7 @@ refusing = describe "refusals" $
       run who (removeMember writers.id readerId) >>= (`shouldFailWith` Forbidden)
       run who (setCreateSpaces readerId True) >>= (`shouldFailWith` Forbidden)
       run who (setCreateSpaces nobody True) >>= (`shouldFailWith` Forbidden)
-      run who (createUser NewAccount {login = "", displayName = "", password = ""}) >>= (`shouldFailWith` Forbidden)
+      run who (createUser NewAccount {login = "", displayName = "", password = "", email = Nothing}) >>= (`shouldFailWith` Forbidden)
       run who (setPassword readerId "a good password") >>= (`shouldFailWith` Forbidden)
       run who (setPassword nobody "") >>= (`shouldFailWith` Forbidden)
       run who (setDisabled readerId True) >>= (`shouldFailWith` Forbidden)
@@ -225,16 +225,16 @@ creators = describe "setCreateSpaces" $ do
 accounts :: (MonadWiki m, MonadAdmin m) => SpecWith (Fixture m)
 accounts = describe "createUser, setPassword and setDisabled" $ do
   it "make a user with a password, listed by login, their login the name if none is given" $ \(Fixture run) -> do
-    made <- run admin (createUser NewAccount {login = " bea ", displayName = "", password = "bea's password"}) >>= ok
+    made <- run admin (createUser NewAccount {login = " bea ", displayName = "", password = "bea's password", email = Nothing}) >>= ok
     (made.user.login, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("bea", "bea", True, False)
     d <- directoryNow run
     map (\u -> u.login) d.users `shouldBe` ["admin", "bea", "editor", "reader"]
     d.withPassword `shouldBe` Set.singleton made.user.id
-    named <- run admin (createUser NewAccount {login = "cid", displayName = " Cid ", password = "cid's password"}) >>= ok
+    named <- run admin (createUser NewAccount {login = "cid", displayName = " Cid ", password = "cid's password", email = Nothing}) >>= ok
     named.user.displayName `shouldBe` "Cid"
 
   it "refuse a login that is taken in any case, one that cannot be a login, and a short password" $ \(Fixture run) -> do
-    let new login password = run admin (createUser NewAccount {login, displayName = "", password})
+    let new login password = run admin (createUser NewAccount {login, displayName = "", password, email = Nothing})
     new "EDITOR" "a good password" >>= \case
       Left (Conflict _) -> pass
       other -> expectationFailure ("expected a conflict, got " <> show other)

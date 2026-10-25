@@ -80,6 +80,8 @@ library
         Wiki.Server.Password
         Wiki.Server.Presence
         Wiki.Server.Render
+        Wiki.Server.Reset
+        Wiki.Server.SecondFactor
         Wiki.Server.Secret
         Wiki.Server.Session
         Wiki.Server.Static
@@ -91,6 +93,7 @@ library
         Wiki.Server.Storage.Layout
         Wiki.Server.Storage.Migrate
         Wiki.Server.Storage.Rows
+        Wiki.Server.Totp
     other-modules:
         Paths_wiki_server
     autogen-modules:
@@ -120,6 +123,7 @@ library
         pandoc-types,
         process,
         protolude,
+        qrcode-core >= 0.9.11 && < 0.10,
         ram,
         servant-multipart,
         servant-server,
@@ -135,6 +139,7 @@ library
         unix,
         unliftio-core,
         uuid-types,
+        vector,
         wai,
         wai-extra,
         warp,
@@ -186,6 +191,7 @@ test-suite wiki-server-test
         Test.Server.FakeProvider
         Test.Server.Fixture
         Test.Server.Http
+        Test.Server.Hygiene
         Test.Server.Import
         Test.Server.Mail
         Test.Server.Oidc
@@ -194,6 +200,7 @@ test-suite wiki-server-test
         Test.Server.Render
         Test.Server.Settings
         Test.Server.Static
+        Test.Server.Totp
         Test.Storage
         Test.Storage.Accounts
         Test.Storage.Backup

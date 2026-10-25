@@ -89,6 +89,7 @@ module Wiki.App.Backend.Mem.State
   , inviteIn
   , revokeInvitationIn
   , unlinkUserIdentityIn
+  , removeSecondFactorIn
 
     -- * The server's own settings
   , serverSettingsIn
@@ -1088,6 +1089,10 @@ directoryIn st = do
       , A.withPassword = Set.intersection st.passwords (Map.keysSet st.users)
       , -- The demo signs in with no provider.
         A.identities = mempty
+      , -- Nor with a second factor, nor any mail: the demo sends none.
+        A.secondFactor = mempty
+      , A.emails = mempty
+      , A.mailing = False
       , A.groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) (Map.elems st.groups)
       , A.membership = Map.filter (not . Set.null) (Map.restrictKeys st.membership (Map.keysSet st.groups))
       }
@@ -1264,6 +1269,14 @@ revokeInvitationIn i st = do
 -- so there is never one to disconnect, once the user is found.
 unlinkUserIdentityIn :: UserId -> Text -> MemState -> Either WikiError ()
 unlinkUserIdentityIn u _ st = do
+  requireAdministrator st
+  _ <- findUser st u
+  Left NotFound
+
+-- | Take a user's second factor away: the demo's users have none (it is a
+-- server's), so there is never one to take, once the user is found.
+removeSecondFactorIn :: UserId -> MemState -> Either WikiError ()
+removeSecondFactorIn u st = do
   requireAdministrator st
   _ <- findUser st u
   Left NotFound

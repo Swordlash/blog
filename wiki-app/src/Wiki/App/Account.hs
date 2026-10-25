@@ -39,12 +39,23 @@
 -- a wrong one is refused as a wrong sign-in is ('WrongCredentials'), and
 -- counted with them. Their other sessions end; this one stays, so nothing
 -- here starts over.
+--
+-- A user who has a second factor (WP4.11 of docs/PLAN.md,
+-- "Wiki.Api.Security") is not signed in by their password alone: 'signIn'
+-- answers 'SecondFactorNeeded', and 'confirmSecondFactor' with a code ends
+-- the sign-in the server keeps waiting, as 'signIn' would have. Someone who
+-- has forgotten their password asks for a reset by mail
+-- ('requestPasswordReset'), which is answered alike whether or not it names
+-- anyone, and sets a new one with the link's secret ('resetPassword'); a
+-- link mailed to verify an e-mail address is followed with
+-- 'verifyEmail'.
 module Wiki.App.Account
   ( MonadAccount (..)
   , SignInError (..)
   , signInErrorText
   , accountErrorText
   , passwordErrorText
+  , codeErrorText
   , Accounts (..)
   , accounts
   )
@@ -56,6 +67,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Halogen.Subscription (Emitter)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken, NewAccount, PasswordChange, SignInMethods)
+import Wiki.Api.Security (MailToken)
 import Wiki.App.Backend (Session, WikiError (..))
 
 -- | Why signing in did not work.
@@ -65,6 +77,8 @@ data SignInError
     WrongCredentials
   | -- | Too many failed attempts: the server says how long to wait.
     TooManyAttempts Text
+  | -- | The password is right, and a second factor's code is wanted too.
+    SecondFactorNeeded
   | -- | Anything else: the server could not be reached, or refused.
     SignInFailed WikiError
   deriving stock (Eq, Show)
@@ -74,6 +88,7 @@ signInErrorText :: SignInError -> Text
 signInErrorText = \case
   WrongCredentials -> "The login or the password is not right."
   TooManyAttempts why -> why
+  SecondFactorNeeded -> "Type the code your authenticator application shows."
   SignInFailed (Unreachable why) -> "The wiki could not be reached: " <> why
   SignInFailed (Invalid why) -> why
   SignInFailed (Conflict why) -> why
@@ -86,6 +101,14 @@ accountErrorText :: SignInError -> Text
 accountErrorText = \case
   SignInFailed Forbidden -> "This wiki does not take new accounts: ask one of its administrators for an invitation."
   SignInFailed NotFound -> "This invitation cannot be used: it has been used already, revoked, or it has expired. Ask whoever invited you for a new one."
+  e -> signInErrorText e
+
+-- | Why a code was not taken, for a person to read: as signing in's, but a
+-- wrong one is the code.
+codeErrorText :: SignInError -> Text
+codeErrorText = \case
+  WrongCredentials -> "That code is not right: type the one your application shows now, or a recovery code."
+  SignInFailed Forbidden -> "The server refused the code from this page. Reload it and try again."
   e -> signInErrorText e
 
 -- | Why changing one's own password failed, for a person to read: as
@@ -151,6 +174,35 @@ class (Monad m) => MonadAccount m where
   default changePassword :: (MonadTrans t, m ~ t n, MonadAccount n) => PasswordChange -> m (Either SignInError SignInMethods)
   changePassword = lift . changePassword
 
+  -- | End a sign-in that wants a second factor, with a code of the user's
+  -- authenticator application or a recovery code: the session one then
+  -- has. 'WrongCredentials' for a wrong code; 'SignInFailed' with
+  -- 'Invalid' when the sign-in has expired.
+  confirmSecondFactor :: Text -> m (Either SignInError Session)
+  default confirmSecondFactor :: (MonadTrans t, m ~ t n, MonadAccount n) => Text -> m (Either SignInError Session)
+  confirmSecondFactor = lift . confirmSecondFactor
+
+  -- | Ask for a password reset's link, by login or e-mail address: mailed
+  -- only to a verified address, and answered alike either way.
+  -- 'TooManyAttempts' when asked too often; 'SignInFailed' with 'Invalid'
+  -- where the server sends no mail.
+  requestPasswordReset :: Text -> m (Either SignInError ())
+  default requestPasswordReset :: (MonadTrans t, m ~ t n, MonadAccount n) => Text -> m (Either SignInError ())
+  requestPasswordReset = lift . requestPasswordReset
+
+  -- | Set a new password with a reset's link: every session of the user's
+  -- ends, and nobody is signed in. 'NotFound' for a link that no longer
+  -- works.
+  resetPassword :: MailToken -> Text -> m (Either WikiError ())
+  default resetPassword :: (MonadTrans t, m ~ t n, MonadAccount n) => MailToken -> Text -> m (Either WikiError ())
+  resetPassword t = lift . resetPassword t
+
+  -- | Follow a link that verifies an e-mail address. 'NotFound' for one
+  -- that no longer works.
+  verifyEmail :: MailToken -> m (Either WikiError ())
+  default verifyEmail :: (MonadTrans t, m ~ t n, MonadAccount n) => MailToken -> m (Either WikiError ())
+  verifyEmail = lift . verifyEmail
+
 -- | A component's handlers sign in and out through its monad.
 instance (MonadAccount m) => MonadAccount (HalogenM st act slots output m)
 
@@ -166,8 +218,12 @@ data Accounts m = Accounts
   , identities :: m (Either WikiError SignInMethods)
   , unlinkIdentity :: Text -> m (Either WikiError SignInMethods)
   , changePassword :: PasswordChange -> m (Either SignInError SignInMethods)
+  , confirmSecondFactor :: Text -> m (Either SignInError Session)
+  , requestPasswordReset :: Text -> m (Either SignInError ())
+  , resetPassword :: MailToken -> Text -> m (Either WikiError ())
+  , verifyEmail :: MailToken -> m (Either WikiError ())
   }
 
 -- | The methods, from the monad's instance.
 accounts :: (MonadAccount m) => Accounts m
-accounts = Accounts {signIn, signOut, sessionChanges, register, invitationFor, acceptInvitation, identities, unlinkIdentity, changePassword}
+accounts = Accounts {signIn, signOut, sessionChanges, register, invitationFor, acceptInvitation, identities, unlinkIdentity, changePassword, confirmSecondFactor, requestPasswordReset, resetPassword, verifyEmail}

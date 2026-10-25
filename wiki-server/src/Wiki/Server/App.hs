@@ -62,6 +62,7 @@ import Wiki.Server.Auth (authApplication)
 import Wiki.Server.Events (eventsApplication)
 import Wiki.Server.Log (Logger, logRequests)
 import Wiki.Server.Render (renderPage)
+import Wiki.Server.SecondFactor (requestPending)
 import Wiki.Server.Session (CookieSettings, clearCookie, requestToken, sameOrigin, sessionCookie)
 import Wiki.Server.Static (StaticSite, serveStatic)
 import Wiki.Server.Storage (Who (..), readSettings)
@@ -119,12 +120,12 @@ findCaller env l request = case l.finding of
   EveryoneAdministers -> pure (Caller {who = Administrator, signing = Nothing}, [])
   BySession cookies -> do
     let token = requestToken request
-        signing = Signing {address = addressOf request, token, cookies}
+        signing = Signing {address = addressOf request, token, pending = requestPending request, cookies}
     case token of
       Nothing -> pure (Caller {who = Anonymous, signing = Just signing}, [])
       Just t -> do
         now <- getCurrentTime
-        resolveSession env.storage now t >>= \case
+        resolveSession env.storage now signing.address t >>= \case
           Nothing -> pure (Caller {who = Anonymous, signing = Just signing {token = Nothing}}, [(hSetCookie, encodeUtf8 (clearCookie cookies))])
           Just found ->
             pure
@@ -141,10 +142,12 @@ addressOf request = case T.breakOnEnd ":" (show (remoteHost request)) of
 
 -- | The endpoints of the API (below @api\/v1\/@) that a closed wiki
 -- answers someone who has not signed in: its description, the session
--- (to read it, sign in and out), making oneself an account (which a
--- closed wiki refuses itself, with a 403 that says so) and invitations.
+-- (to read it, sign in, with a second factor too, and out), making oneself
+-- an account (which a closed wiki refuses itself, with a 403 that says
+-- so), invitations, and the links mailed to someone who cannot sign in
+-- yet: a password reset's and an address's verification.
 openToAnyone :: [Text]
-openToAnyone = ["info", "session", "accounts", "invitations"]
+openToAnyone = ["info", "session", "accounts", "invitations", "password-reset", "email-verification"]
 
 -- | The routes of a listener, for whoever is asking.
 listenerRoutes :: Logger -> Env -> Maybe StaticSite -> Listener -> Caller -> Application

@@ -42,6 +42,7 @@ import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
+import Wiki.Api.Security (AccountEmail)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (InvitationId, UserId)
 import Wiki.Core.User (Group, Membership, User)
@@ -96,6 +97,15 @@ data Directory = Directory
   -- ^ The providers each user may sign in with instead of a password
   -- (WP3.6 of docs/PLAN.md), by the names the server's configuration gives
   -- them; a user with none may be left out.
+  , secondFactor :: Set UserId
+  -- ^ The users who have a second factor (WP4.11 of docs/PLAN.md), which
+  -- an administrator may take away from one who has lost it.
+  , emails :: Map UserId AccountEmail
+  -- ^ The e-mail addresses users have given, and whether each is
+  -- verified; a user with none is left out.
+  , mailing :: Bool
+  -- ^ Whether the server sends mail: a new user's address can be verified
+  -- only then.
   , groups :: [Group]
   -- ^ Every group, by name.
   , membership :: Membership

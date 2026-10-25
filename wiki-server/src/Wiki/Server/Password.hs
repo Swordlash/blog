@@ -36,6 +36,7 @@ module Wiki.Server.Password
 
     -- * Session ids
   , newToken
+  , newPublicId
   , tokenHash
   )
 where
@@ -146,6 +147,12 @@ unbase64 t = convertFromBase Base64 (encodeUtf8 (padded t))
 -- for URLs, unpadded, which a cookie's value may hold as it is).
 newToken :: IO Text
 newToken = decodeUtf8 . convertToBase Base64URLUnpadded <$> (getRandomBytes 32 :: IO ByteString)
+
+-- | A new id for something its owner names but that grants nothing (a
+-- session as its user ends it from the account panel): 16 random bytes in
+-- hex, unrelated to any secret.
+newPublicId :: IO Text
+newPublicId = decodeUtf8 . convertToBase @ByteString Base16 <$> (getRandomBytes 16 :: IO ByteString)
 
 -- | What the database keeps of a session id: its SHA-256, in hex. A
 -- database that leaks signs nobody in, and the id is random and long

@@ -120,23 +120,23 @@ accounts = describe "the storage's accounts" $ do
     made <- ok (createAccount st "ada" "Ada" (Just "correct horse"))
     (made.user.login, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("ada", "Ada", True, False)
     now <- getCurrentTime
-    Right (user, token) <- signIn st now "ada" "correct horse"
+    Right (user, token) <- signIn st now "127.0.0.1" "ada" "correct horse"
     user `shouldBe` made.user
     T.length token `shouldBe` 43
     -- As people type a login: without regard to case or blanks around it.
-    signIn st now " ADA " "correct horse" >>= (`shouldSatisfy` isRight)
+    signIn st now "127.0.0.1" " ADA " "correct horse" >>= (`shouldSatisfy` isRight)
 
   it "refuse a wrong password, an unknown login, a login without a password and a disabled one alike" $ withEmpty $ \st -> do
     ada <- ok (createAccount st "ada" "" (Just "correct horse"))
     _ <- ok (createAccount st "bea" "" Nothing)
     now <- getCurrentTime
-    signIn st now "ada" "wrong horse" `shouldReturn` Left NoSuchAccount
-    signIn st now "nobody" "correct horse" `shouldReturn` Left NoSuchAccount
-    signIn st now "bea" "" `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "ada" "wrong horse" `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "nobody" "correct horse" `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "bea" "" `shouldReturn` Left NoSuchAccount
     _ <- ok (setDisabled st ada.user.id True)
-    signIn st now "ada" "correct horse" `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "ada" "correct horse" `shouldReturn` Left NoSuchAccount
     _ <- ok (setDisabled st ada.user.id False)
-    signIn st now "ada" "correct horse" >>= (`shouldSatisfy` isRight)
+    signIn st now "127.0.0.1" "ada" "correct horse" >>= (`shouldSatisfy` isRight)
 
   it "refuse a login taken in another case, a blank or spaced one, and a short password" $ withEmpty $ \st -> do
     _ <- ok (createAccount st "ada" "" (Just "correct horse"))
@@ -173,44 +173,44 @@ sessions = describe "sessions" $ do
   let signedIn st = do
         ada <- ok (createAccount st "ada" "Ada" (Just "correct horse"))
         now <- getCurrentTime
-        Right (_, token) <- signIn st now "ada" "correct horse"
+        Right (_, token) <- signIn st now "127.0.0.1" "ada" "correct horse"
         pure (ada, now, token)
 
   it "are found by the id their cookie carries, and by nothing else" $ withEmpty $ \st -> do
     (ada, now, token) <- signedIn st
-    resolveSession st now token `shouldReturn` Just Resolved {user = ada.user.id, refreshed = False}
-    resolveSession st now (tokenHash token) `shouldReturn` Nothing
+    resolveSession st now "127.0.0.1" token `shouldReturn` Just Resolved {user = ada.user.id, refreshed = False}
+    resolveSession st now "127.0.0.1" (tokenHash token) `shouldReturn` Nothing
     other <- newToken
-    resolveSession st now other `shouldReturn` Nothing
+    resolveSession st now "127.0.0.1" other `shouldReturn` Nothing
 
   it "end when signed out" $ withEmpty $ \st -> do
     (_, now, token) <- signedIn st
     endSession st token
-    resolveSession st now token `shouldReturn` Nothing
+    resolveSession st now "127.0.0.1" token `shouldReturn` Nothing
 
   it "end when their user is disabled or given a new password" $ withEmpty $ \st -> do
     (ada, now, token) <- signedIn st
     _ <- ok (setDisabled st ada.user.id True)
     _ <- ok (setDisabled st ada.user.id False)
-    resolveSession st now token `shouldReturn` Nothing
+    resolveSession st now "127.0.0.1" token `shouldReturn` Nothing
     signedInAgain <- getCurrentTime
-    Right (_, again) <- signIn st signedInAgain "ada" "correct horse"
+    Right (_, again) <- signIn st signedInAgain "127.0.0.1" "ada" "correct horse"
     _ <- ok (setPassword st ada.user.id "battery staple")
-    resolveSession st now again `shouldReturn` Nothing
-    signIn st now "ada" "correct horse" `shouldReturn` Left NoSuchAccount
-    signIn st now "ada" "battery staple" >>= (`shouldSatisfy` isRight)
+    resolveSession st now "127.0.0.1" again `shouldReturn` Nothing
+    signIn st now "127.0.0.1" "ada" "correct horse" `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "ada" "battery staple" >>= (`shouldSatisfy` isRight)
 
   it "end after being idle for the idle time, and each use moves their end on (at most hourly)" $ withEmpty $ \st -> do
     (ada, now, token) <- signedIn st
     let later = addUTCTime (refreshEvery + 1) now
-    resolveSession st later token `shouldReturn` Just Resolved {user = ada.user.id, refreshed = True}
-    resolveSession st (addUTCTime 1 later) token `shouldReturn` Just Resolved {user = ada.user.id, refreshed = False}
+    resolveSession st later "127.0.0.1" token `shouldReturn` Just Resolved {user = ada.user.id, refreshed = True}
+    resolveSession st (addUTCTime 1 later) "127.0.0.1" token `shouldReturn` Just Resolved {user = ada.user.id, refreshed = False}
     -- Idle from the last recorded use, not from signing in.
-    resolveSession st (addUTCTime (idleTime - 1) later) token >>= (`shouldSatisfy` isJust)
+    resolveSession st (addUTCTime (idleTime - 1) later) "127.0.0.1" token >>= (`shouldSatisfy` isJust)
     let idle = addUTCTime (2 * idleTime + 10) later
-    resolveSession st idle token `shouldReturn` Nothing
+    resolveSession st idle "127.0.0.1" token `shouldReturn` Nothing
     -- And it is gone, not merely refused.
-    resolveSession st now token `shouldReturn` Nothing
+    resolveSession st now "127.0.0.1" token `shouldReturn` Nothing
 
 console :: Spec
 console = describe "wiki-server users" $ do
@@ -229,7 +229,7 @@ console = describe "wiki-server users" $ do
       table `shouldBe` Right ["LOGIN  NAME  ADMINISTRATOR  SIGNS IN", "ada    Ada   yes            yes"]
       withStorage defaultConfig dir $ \st -> do
         now <- getCurrentTime
-        Right (user, _) <- signIn st now "ada" "correct horse"
+        Right (user, _) <- signIn st now "127.0.0.1" "ada" "correct horse"
         s <- runSqliteWiki st (AsUser user.id) session
         [g.permission | g <- s.grants.global] `shouldBe` [Administer]
 
@@ -245,7 +245,7 @@ console = describe "wiki-server users" $ do
       _ <- run dir (Left "not asked") (SetUserDisabled "bea" False)
       withStorage defaultConfig dir $ \st -> do
         now <- getCurrentTime
-        signIn st now "bea" "battery staple" >>= (`shouldSatisfy` isRight)
+        signIn st now "127.0.0.1" "bea" "battery staple" >>= (`shouldSatisfy` isRight)
 
   it "says what is wrong, and changes nothing: an unknown login, a password not given, one too short" $
     withSystemTempDirectory "wiki-console-test" $ \dir -> do

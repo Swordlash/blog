@@ -83,7 +83,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import System.Timeout (timeout)
 import Web.Storage.IndexedDB (MonadIndexedDB)
-import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), PasswordResetApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
 import Wiki.Api.Backups (Backups (..))
@@ -93,6 +93,7 @@ import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.Api.Links qualified as Links
+import Wiki.Api.Security (EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
@@ -106,6 +107,7 @@ import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Respon
 import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
+import Wiki.App.Security (MonadSecurity (..))
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Id (PageId)
 import Wiki.Core.User (Standing (..))
@@ -454,6 +456,7 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   invite email = write (withJson "POST" links.admin.invite NewInvitation {email})
   revokeInvitation i = write_ (R.delete (links.admin.revokeInvitation i))
   unlinkUserIdentity u provider = write_ (R.delete (links.admin.unlinkIdentity u provider))
+  removeSecondFactor u = write_ (R.delete (links.admin.removeSecondFactor u))
 
   -- Kept as the wiki's settings are, so that the administration a server
   -- rendered is the program's first render. Asking a provider and sending
@@ -533,6 +536,33 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
   -- nothing kept is let go.
   changePassword change = withPassword (withJson "PUT" links.account.changePassword change)
 
+  -- The end of a sign-in, as signing in is: the cookie of the sign-in
+  -- waiting goes with it, as the browser sends every cookie of the wiki's.
+  confirmSecondFactor code = signingIn (withJson "POST" links.secondFactor OneTimeCode {code})
+
+  -- None of these change who is asking, or anything read.
+  requestPasswordReset login =
+    call (withJson "POST" links.passwordReset.request ResetRequest {login}) <&> \case
+      Right r | r.status == 429 -> Left (TooManyAttempts (tooMany r))
+      answered -> first SignInFailed (answerNothing answered)
+  resetPassword token password = answerNothing <$> call (withJson "POST" (links.passwordReset.reset token) NewPasswordByMail {password})
+  verifyEmail token = answerNothing <$> call (R.post (links.emailVerification token))
+
+-- | The account's safety, over the API's @account\/…@ endpoints. Nothing is
+-- kept: the panel reads them afresh each time it is opened, and none of
+-- them changes what the wiki shows.
+instance (MonadIO m) => MonadSecurity (HttpWiki m) where
+  securityAvailable = pure True
+  ownSessions = answer <$> call (R.get links.account.sessions)
+  endOwnSession ref = answer <$> call (R.delete (links.account.endSession ref))
+  endOtherSessions = answer <$> call (R.delete links.account.endOtherSessions)
+  secondFactorState = answer <$> call (R.get links.account.secondFactorState)
+  enrolTotp = answer <$> call (R.post links.account.enrolTotp)
+  confirmTotp code = withPassword (withJson "PUT" links.account.confirmTotp OneTimeCode {code})
+  removeOwnSecondFactor code = withPassword (withJson "POST" links.account.removeSecondFactor OneTimeCode {code})
+  ownEmail = answer <$> call (R.get links.account.email)
+  setOwnEmail email = answer <$> call (withJson "PUT" links.account.setEmail EmailChange {email})
+
 -- | A request that signs someone in, as signing in, making oneself an
 -- account and accepting an invitation do: the session one then has, with
 -- the cache started over as it; or why not.
@@ -552,11 +582,17 @@ withPassword :: (MonadIO m, FromJSON a) => Request -> HttpWiki m (Either SignInE
 withPassword request = do
   answered <- call request
   pure $ case answered of
-    Right r | r.status == 401 -> Left WrongCredentials
-    Right r | r.status == 429 -> Left . TooManyAttempts $ case eitherDecodeStrict' r.body of
-      Right (ApiError.TooManyRequests why) -> why
-      _ -> "Too many attempts: wait a while, then try again."
+    Right r | r.status == 401 -> case eitherDecodeStrict' r.body of
+      Right ApiError.SecondFactorRequired -> Left SecondFactorNeeded
+      _ -> Left WrongCredentials
+    Right r | r.status == 429 -> Left (TooManyAttempts (tooMany r))
     _ -> first SignInFailed (answer answered)
+
+-- | What a 429 says of how long to wait.
+tooMany :: Response -> Text
+tooMany r = case eitherDecodeStrict' r.body of
+  Right (ApiError.TooManyRequests why) -> why
+  _ -> "Too many attempts: wait a while, then try again."
 
 -- | What has been read answers at once; anything else would wait, unless
 -- the transport answers at once itself ('newImmediateHttpEnv').

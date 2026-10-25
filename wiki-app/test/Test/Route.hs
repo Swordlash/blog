@@ -11,6 +11,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, chooseInt, elements, forAll, oneof, vectorOf, (===))
 import Wiki.Api.Account (InvitationToken (..))
+import Wiki.Api.Security (MailToken (..))
 import Wiki.App.Route
 import Wiki.Core.Slug (Slug, mkSlug)
 
@@ -51,6 +52,8 @@ genRoute =
     , PageSlides <$> genPath <*> genPath <*> oneof [pure 1, chooseInt (-3, 40)]
     , SpacePages <$> genPath
     , Invite . InvitationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
+    , ResetPassword . MailToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
+    , VerifyEmail . MailToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
     ]
 
 -- | A time with no fraction of a second: the others are made from it.
@@ -127,6 +130,8 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/s/a/p/b/slides/?slide=99" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 99)
       print route (Invite (InvitationToken "c2VjcmV0-_x")) `shouldBe` "/invite/c2VjcmV0-_x/"
       parse route "/invite/c2VjcmV0" `shouldBe` Right (Invite (InvitationToken "c2VjcmV0"))
+      print route (ResetPassword (MailToken "c2VjcmV0-_x")) `shouldBe` "/reset-password/c2VjcmV0-_x/"
+      parse route "/verify-email/c2VjcmV0/" `shouldBe` Right (VerifyEmail (MailToken "c2VjcmV0"))
       -- A space may be called invite: spaces are below /s/.
       print route (Space (slugs ["invite"])) `shouldBe` "/s/invite/"
 

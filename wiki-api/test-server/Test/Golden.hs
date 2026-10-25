@@ -24,6 +24,7 @@ import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
 import Wiki.Api.Info (ServerInfo (..))
+import Wiki.Api.Security (EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
 import Wiki.Core.Anchor (Anchor (..))
@@ -69,6 +70,11 @@ spec = describe "golden JSON" $ do
     golden "invited" Sample.invited
     golden "invitation-info" Sample.invitationInfo
     golden "sign-in-methods" Sample.signInMethods
+    golden "sessions" Sample.sessions
+    golden "second-factor" Sample.secondFactor
+    golden "totp-enrolment" Sample.enrolment
+    golden "recovery-codes" RecoveryCodes {codes = ["abcd-efgh-ijkl-mnop", "qrst-uvwx-yz23-4567"]}
+    golden "email-state" Sample.emailState
     golden "server-settings" Sample.serverSettings
     golden "provider-check" Sample.providerCheck
     golden "provider-check-failed" ProviderCheck {redirectUri = Nothing, clientSecret = NotSet, discovered = Nothing, problem = Just "Corp could not be reached at https://id.example.org/realms/corp/.well-known/openid-configuration."}
@@ -99,6 +105,7 @@ spec = describe "golden JSON" $ do
     golden "error-invalid" (Invalid "A page needs a title.")
     golden "error-unauthenticated" Unauthenticated
     golden "error-too-many-requests" (TooManyRequests "Too many failed attempts to sign in as ada: try again in 15 minutes.")
+    golden "error-second-factor-required" SecondFactorRequired
   describe "requests" $ do
     golden "new-space" NewSpace {parent = Just (SpaceId "s1"), name = "Guides"}
     golden "space-name" SpaceName {name = "Guides"}
@@ -123,7 +130,11 @@ spec = describe "golden JSON" $ do
     golden "space-grant-change" SpaceGrantChange {subject = SubjectGroup (GroupId "g1"), permission = View, granted = True}
     golden "group-name" GroupName {name = "writers"}
     golden "credentials" Credentials {login = "ada", password = "correct horse battery staple"}
-    golden "new-account" NewAccount {login = "ada", displayName = "Ada", password = "correct horse battery staple"}
+    golden "new-account" NewAccount {login = "ada", displayName = "Ada", password = "correct horse battery staple", email = Just "ada@example.org"}
+    golden "one-time-code" OneTimeCode {code = "287082"}
+    golden "email-change" EmailChange {email = "ada@example.org"}
+    golden "reset-request" ResetRequest {login = "ada"}
+    golden "new-password-by-mail" NewPasswordByMail {password = "correct horse battery staple"}
     golden "new-password" NewPassword {password = "correct horse battery staple"}
     golden "password-change" PasswordChange {current = Just "correct horse battery staple", new = "a longer passphrase than that"}
     golden "account-disabled" AccountDisabled {disabled = True}

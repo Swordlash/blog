@@ -46,6 +46,14 @@
 -- disconnected, which ends their sessions, as long as it is not one's own
 -- (which one disconnects from one's own account's panel, where one is
 -- kept from disconnecting one's last way in).
+--
+-- A user's e-mail address, if they gave one, is shown with whether it is
+-- verified, and a user who has a second factor is said to have one, with
+-- "Remove second factor" for one who has lost it (WP4.11 of docs/PLAN.md;
+-- not on one's own row, where the account panel takes it away with a
+-- code). A new user may be given an address, which the server mails a
+-- link to verify; where it sends no mail (and in the demo) the field is
+-- disabled, saying why.
 module Wiki.App.View.Admin
   ( Input (..)
   , component
@@ -62,6 +70,7 @@ import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Admin (Directory (..))
+import Wiki.Api.Security (AccountEmail (..))
 import Wiki.App.Backend (MonadLoad (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Common
@@ -90,11 +99,12 @@ data NewUser = NewUser
   { typedLogin :: Text
   , typedName :: Text
   , typedPassword :: Text
+  , typedEmail :: Text
   , asAdministrator :: Bool
   }
 
 noNewUser :: NewUser
-noNewUser = NewUser {typedLogin = "", typedName = "", typedPassword = "", asAdministrator = False}
+noNewUser = NewUser {typedLogin = "", typedName = "", typedPassword = "", typedEmail = "", asAdministrator = False}
 
 data State = State
   { input :: Input
@@ -125,6 +135,7 @@ data Action
   | TypedLogin Text
   | TypedDisplayName Text
   | TypedPassword Text
+  | TypedEmail Text
   | ChoseAdministrator Bool
   | CreateUser
   | AskPassword UserId
@@ -133,6 +144,7 @@ data Action
   | CancelPassword
   | SetDisabled User Bool
   | Unlink User Text
+  | RemoveSecondFactor User
   | TypedNewGroup Text
   | CreateGroup
   | StartRenaming Group
@@ -234,7 +246,7 @@ component =
               </tbody>
             </table>
           {% end %}
-          {{ newUserForm st }}
+          {{ newUserForm st d }}
         </div>
       |]
 
@@ -278,6 +290,12 @@ component =
           </td>
           <td class="user-account">
             <span class="account-state">{{ accountState }}</span>
+            {% for e in maybeToList email %}
+              <span class="account-email">{{ e.email <> (if e.verified then "" else " (not verified)") }}</span>
+            {% end %}
+            {% if secondFactor %}
+              <span class="account-second-factor">With a second factor</span>
+            {% end %}
             {% if settingThis %}
               <form class="inline-form password-form" {{ HE.preventingDefault (HE.onSubmit (const SavePassword)) }}>
                 <label class="field">
@@ -302,6 +320,9 @@ component =
               {% if yourself %}
                 <span class="admin-note disable-self">You cannot disable your own login here.</span>
               {% end %}
+              {% if secondFactor && not yourself %}
+                <button type="button" class="second-factor-remove" disabled={{ st.busy }} onClick={{ const (RemoveSecondFactor u) }}>Remove second factor</button>
+              {% end %}
               {% if not yourself %}
                 {% for provider in providers %}
                   <button type="button" class="identity-unlink" disabled={{ st.busy }} onClick={{ const (Unlink u provider) }}>
@@ -325,6 +346,8 @@ component =
               Grants {global = [GlobalGrant {subject = SubjectUser u.id, permission = Administer}], spaces = [], access = Open}
         disabled = u.id `Set.member` d.disabled
         hasPassword = u.id `Set.member` d.withPassword
+        secondFactor = u.id `Set.member` d.secondFactor
+        email = Map.lookup u.id d.emails
         yourself = Just u.id == ((\me -> me.id) <$> st.input.context.session.user)
         (settingThis, typedPassword) = case st.settingPassword of
           Just (uid, typed) | uid == u.id -> (True, typed)
@@ -340,8 +363,8 @@ component =
           | not (null providers) = "Signs in with " <> others
           | otherwise = "No password yet"
 
-    newUserForm :: State -> H.ComponentHTML Action Empty m
-    newUserForm st =
+    newUserForm :: State -> Directory -> H.ComponentHTML Action Empty m
+    newUserForm st d =
       [hh|
         <form class="user-create" aria-label="New user" {{ HE.preventingDefault (HE.onSubmit (const CreateUser)) }}>
           <h3>New user</h3>
@@ -357,6 +380,21 @@ component =
             <label class="field">
               <span>Password</span>
               <input type="password" class="user-create-password" autocomplete="new-password" value={{ st.newUser.typedPassword }} onValueInput={{ TypedPassword }} required>
+            </label>
+            <label class="field">
+              <span>E-mail</span>
+              <input
+                type="email"
+                class="user-create-email"
+                autocomplete="off"
+                placeholder={{ if d.mailing then "Optional: a link to verify it is mailed there" else "" :: Text }}
+                disabled={{ not d.mailing }}
+                value={{ st.newUser.typedEmail }}
+                onValueInput={{ TypedEmail }}
+              >
+              {% if not d.mailing %}
+                <span class="admin-note user-create-email-note">This wiki sends no mail, so an address could not be verified: set up mail in the Server section first.</span>
+              {% end %}
             </label>
             <label class="check user-create-administrator">
               <input type="checkbox" checked={{ st.newUser.asAdministrator }} onChecked={{ ChoseAdministrator }}>
@@ -486,11 +524,13 @@ component =
       TypedLogin t -> modify (\st -> st {newUser = st.newUser {typedLogin = t}})
       TypedDisplayName t -> modify (\st -> st {newUser = st.newUser {typedName = t}})
       TypedPassword t -> modify (\st -> st {newUser = st.newUser {typedPassword = t}})
+      TypedEmail t -> modify (\st -> st {newUser = st.newUser {typedEmail = t}})
       ChoseAdministrator b -> modify (\st -> st {newUser = st.newUser {asAdministrator = b}})
       CreateUser -> do
         form <- gets (\st -> st.newUser)
         modify (\st -> st {busy = True, usersProblem = Nothing, usersTold = Nothing})
-        createUser NewAccount {login = form.typedLogin, displayName = form.typedName, password = form.typedPassword} >>= \case
+        let email = mfilter (not . T.null) (Just (T.strip form.typedEmail))
+        createUser NewAccount {login = form.typedLogin, displayName = form.typedName, password = form.typedPassword, email} >>= \case
           Left e -> modify (\st -> st {busy = False, usersProblem = Just e})
           Right account -> do
             -- Made: whatever comes of making them an administrator, the
@@ -500,7 +540,14 @@ component =
               st
                 { newUser = noNewUser
                 , usersProblem = leftToMaybe made
-                , usersTold = Just (account.user.displayName <> " (" <> account.user.login <> ") can sign in now.")
+                , usersTold =
+                    Just
+                      ( account.user.displayName
+                          <> " ("
+                          <> account.user.login
+                          <> ") can sign in now."
+                          <> maybe "" (\e -> " A link to verify " <> e <> " is sent to it.") email
+                      )
                 }
             H.raise (Changed Nothing)
       AskPassword u -> modify (\st -> st {settingPassword = Just (u, ""), usersProblem = Nothing, usersTold = Nothing})
@@ -522,6 +569,11 @@ component =
           (\st -> st {usersProblem = Nothing, usersTold = Just (u.displayName <> " no longer signs in with that account: their sessions have ended.")})
           usersFailed
           (unlinkUserIdentity u.id provider)
+      RemoveSecondFactor u ->
+        change
+          (\st -> st {usersProblem = Nothing, usersTold = Just (u.displayName <> " signs in with their password alone now: they may set up a new second factor.")})
+          usersFailed
+          (removeSecondFactor u.id)
       TypedNewGroup t -> modify (\st -> st {newGroup = t})
       CreateGroup -> do
         name <- gets (\st -> st.newGroup)

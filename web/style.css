@@ -291,7 +291,9 @@ select {
   white-space: nowrap;
 }
 
-.sign-in-form {
+.sign-in-form,
+.sign-in-code-form,
+.reset-request-form {
   position: absolute;
   right: 0;
   top: calc(100% + 0.3rem);
@@ -307,13 +309,38 @@ select {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
 }
 
-.sign-in-form .field {
+.sign-in-form .field,
+.sign-in-code-form .field,
+.reset-request-form .field {
   flex: none;
 }
 
-.sign-in-form .actions {
+.sign-in-form .actions,
+.sign-in-code-form .actions,
+.reset-request-form .actions {
   display: flex;
   gap: 0.5rem;
+}
+
+.reset-request-form p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* "Forgot your password?": a button that reads as a link. */
+.link-button {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 0.9rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  background: none;
 }
 
 /* Always there, so that the inputs keep their places; no box of its own. */
@@ -3463,7 +3490,11 @@ table.invitations td {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  width: min(22rem, calc(100vw - 2rem));
+  width: min(24rem, calc(100vw - 2rem));
+  /* Sessions, a second factor and an address make it long: it scrolls
+     within the window rather than past it. */
+  max-height: calc(100vh - var(--header-height, 4rem) - 1rem);
+  overflow-y: auto;
   padding: 0.8rem;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -3549,6 +3580,179 @@ table.invitations td {
 .account-told {
   margin: 0;
   font-size: 0.9rem;
+}
+
+/* ---- An account's safety (WP4.11) ----------------------------------------- */
+
+/* The account panel's sessions, second factor and address
+   (Wiki.App.View.Security). */
+.account-security {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+.account-security section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.account-security h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.account-security p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.account-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 0 0.4rem;
+  padding: 0;
+  list-style: none;
+}
+
+.session-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.1rem 0.5rem;
+  align-items: center;
+}
+
+.session-address {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.session-times {
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.session-this,
+.session-end {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.session-this {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.sessions-end-others,
+.second-factor-start,
+.second-factor-remove-ask {
+  align-self: flex-start;
+}
+
+.code-form,
+.email-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.code-form .actions,
+.email-form .actions,
+.account-email .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* The QR code of a second factor's secret: dark modules on white, whatever
+   the page's colours, at a size a phone's camera reads off a screen. */
+.totp-qr {
+  display: block;
+  width: 12rem;
+  height: 12rem;
+  background: #ffffff;
+}
+
+.totp-secret code,
+.recovery-code-list code {
+  font-size: 0.9rem;
+  word-break: break-all;
+}
+
+.recovery-code-list {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 0.2rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recovery-kept {
+  align-self: flex-start;
+}
+
+/* The demo's account panel hangs under its switcher, as the server's under
+   the user's name. */
+.demo-account-panel {
+  z-index: 21;
+}
+
+.user-menu-account {
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid var(--border);
+}
+
+/* The pages of a password reset's link and of an address's verification,
+   as an invitation's. */
+.password-reset,
+.email-verification {
+  max-width: 30rem;
+}
+
+.reset-form,
+.reset-done,
+.verify-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.reset-told {
+  display: contents;
+}
+
+.reset-error,
+.verify-error {
+  margin: 0;
+}
+
+.reset-unusable,
+.verify-unusable {
+  color: var(--muted);
+}
+
+/* The administration's account column: an address, a second factor. */
+.user-account .account-email,
+.user-account .account-second-factor {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.user-account .second-factor-remove {
+  margin-left: 0.3rem;
 }
 
 /* The help under a checkbox's label, on its own line. */

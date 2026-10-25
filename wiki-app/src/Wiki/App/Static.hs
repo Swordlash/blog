@@ -70,6 +70,7 @@ import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..), route)
+import Wiki.App.Security (MonadSecurity)
 import Wiki.App.Shell qualified as Shell
 import Wiki.Core.Markdown (parseMarkdown)
 import Wiki.Core.Page (Page (body, id, space))
@@ -196,7 +197,7 @@ startServed how env base at container =
 -- the application.
 startApp
   :: forall m
-   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadSecurity m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => Bool
   -> Int
   -> Start

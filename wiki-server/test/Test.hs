@@ -9,6 +9,7 @@ import Test.Server.Backups qualified as Backups
 import Test.Server.Comments qualified as Comments
 import Test.Server.Export qualified as Export
 import Test.Server.Http qualified as Http
+import Test.Server.Hygiene qualified as Hygiene
 import Test.Server.Import qualified as Import
 import Test.Server.Mail qualified as Mail
 import Test.Server.Oidc qualified as Oidc
@@ -17,6 +18,7 @@ import Test.Server.Presence qualified as Presence
 import Test.Server.Render qualified as Render
 import Test.Server.Settings qualified as Settings
 import Test.Server.Static qualified as Static
+import Test.Server.Totp qualified as Totp
 import Test.Storage qualified as Storage
 import Test.Storage.Accounts qualified as StorageAccounts
 import Test.Storage.Backup qualified as Backup
@@ -45,3 +47,5 @@ main = hspec $ do
   Backups.spec
   Oidc.spec
   Export.spec
+  Totp.spec
+  Hygiene.spec

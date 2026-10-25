@@ -5,6 +5,7 @@
 -- > GET  auth/<provider>/start?next=<path>[&link=1 | &invite=<secret>]
 -- > GET  auth/<provider>/callback?code=…&state=…
 -- > POST auth/<provider>/callback          (a form, from Apple)
+-- > POST auth/<provider>/second-factor     (a form, of this module's page)
 --
 -- @start@ remembers what the round trip is for ("Wiki.Server.Oidc"'s
 -- 'Pending': to sign in, to connect the provider's account to the user
@@ -44,6 +45,16 @@
 -- turned into an address of the callback, which a page of this site goes
 -- to, with the cookie.
 --
+-- = A second factor
+--
+-- A user who has a second factor (WP4.11 of docs/PLAN.md,
+-- "Wiki.Server.SecondFactor") is not signed in by their provider's account
+-- alone, as they are not by their password alone: the callback keeps the
+-- sign-in waiting, gives the browser the cookie that names it, and answers
+-- a page of its own with a form for the code, which it posts to
+-- @second-factor@; the right code signs them in and goes on to where they
+-- were. Wrong codes count against their login as failed sign-ins do.
+--
 -- = What it costs
 --
 -- Signing in with an identity someone has costs the server little, and is
@@ -67,22 +78,26 @@ import Data.ByteString.Char8 qualified as BC
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
-import Network.HTTP.Types (Header, Status, hCacheControl, hContentType, hCookie, hLocation, hSetCookie, methodGet, methodHead, methodPost, parseQueryText, status200, status302, status400, status403, status404, status405, status429, status502)
+import Network.HTTP.Types (Header, Status, hCacheControl, hContentType, hCookie, hLocation, hSetCookie, methodGet, methodHead, methodPost, parseQueryText, status200, status302, status400, status401, status403, status404, status405, status429, status502)
 import Network.Wai (Application, Request (..), Response, responseLBS, strictRequestBody)
 import Protolude
 import Web.FormUrlEncoded (urlEncodeParams)
-import Wiki.Api.Account (InvitationToken (..))
+import Wiki.Api.Account
+  ( Account (..)
+  , InvitationToken (..)
+  )
 import Wiki.Api.Auth (callbackPath)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (User (..))
-import Wiki.Server.Accounts (Intent (..), Landing (..), Refusal (..), endSession, landWith)
+import Wiki.Server.Accounts (Intent (..), Landing (..), Refusal (..), accountOf, endSession, landWith, startSession)
 import Wiki.Server.Api (Caller (..), Env (..), Signing (..), currentProviders, registering)
 import Wiki.Server.Limiter (Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
 import Wiki.Server.Log (Level (..), Logger, logWith)
 import Wiki.Server.Oidc (Answer (..), OidcOption (..), Pending (..), Provider (..), Secrets (..), authorizeUrl, claimsFor, endpointsOf, flowLifetime, newSecrets, remember, takePending)
+import Wiki.Server.SecondFactor (PendingSignIn (..), checkCode, finishPending, holdSignIn, pendingCookie, pendingSignIn, requestPending, wrongCode)
 import Wiki.Server.Session (CookieSettings (..), sessionCookie)
-import Wiki.Server.Storage (Who (..))
+import Wiki.Server.Storage (Who (..), withDatabase)
 
 -- | The cookie that binds a round trip to the browser that started it.
 flowCookieName :: Text
@@ -107,6 +122,8 @@ authApplication logger env caller mount name rest request respond = do
               params = [(k, v) | (k, Just v) <- form, k `elem` ["code", "state", "error", "error_description", "user"]]
               target = mount <> callbackPath name <> "?" <> decodeUtf8 (toS (urlEncodeParams params))
           respond (page status200 [] (onwards "Signing in…" "Signing you in…" target))
+    (Just p, Just signing, ["second-factor"])
+      | requestMethod request == methodPost -> secondStep logger env signing mount p request respond
     (Just _, Just _, [_]) -> respond (page status405 [("Allow", "GET, HEAD")] (problem "Not here" "This address is only followed, as a link." mount))
     _ -> respond (page status404 [] (problem "Not found" "This wiki signs in with no provider of that name." mount))
   where
@@ -178,7 +195,7 @@ callback logger env signing mount p params request respond = do
                 logged "failed" [("error", why)]
                 refused status502 ("Cannot sign in with " <> p.label) why flow.next
               Right claimed ->
-                landWith env.storage now flow.intent claimed >>= \case
+                landWith env.storage now address flow.intent claimed >>= \case
                   Left refusal -> do
                     count
                     logged "refused" [("reason", show refusal)]
@@ -197,9 +214,77 @@ callback logger env signing mount p params request respond = do
                   Right (Linked user) -> do
                     logged "linked" [("user", user.id.text)]
                     respond (page status200 clearing (onwards "Connected" ("Your account at " <> p.label <> " signs you in now.") flow.next))
+                  Right (SecondFactorFor user) -> do
+                    logged "second-factor" [("user", user.id.text)]
+                    held <- holdSignIn env.pending now user.id user.login flow.next
+                    respond (page status200 (clearing <> [(hSetCookie, encodeUtf8 (pendingCookie signing.cookies held))]) (codeForm mount p Nothing))
         _ -> do
           logged "unknown" []
           refused status400 "Cannot sign in" "This sign-in has expired, or was not started in this browser: start it again." mount
+
+-- | End a provider's sign-in that waits for a second factor, with the code
+-- its page's form posts.
+secondStep :: Logger -> Env -> Signing -> Text -> Provider -> Application
+secondStep logger env signing mount p request respond = do
+  now <- getCurrentTime
+  body <- strictRequestBody request
+  let code = fromMaybe "" (head [v | (k, Just v) <- parseQueryText (toS body), k == "code"])
+      held = requestPending request
+      clearing = [(hSetCookie, encodeUtf8 (pendingCookie signing.cookies ""))]
+      logged outcome extra = logWith logger Info ([("event", "oidc"), ("provider", p.option.name), ("outcome", outcome)] <> extra)
+      expired = respond (page status400 clearing (problem "Cannot sign in" "This sign-in has expired, or was begun in another browser: sign in again." mount))
+  waiting <- maybe (pure Nothing) (pendingSignIn env.pending now) held
+  case (held, waiting) of
+    (Just token, Just w) ->
+      Limiter.verdict env.limiter now w.login signing.address >>= \case
+        Refused seconds ->
+          respond (page status429 [] (codeForm mount p (Just ("Too many wrong codes: try again in " <> show ((seconds + 59) `div` 60) <> " minutes."))))
+        Allowed ->
+          checkCode env.storage now w.user code >>= \case
+            False -> do
+              wrongCode env.pending token
+              Limiter.failed env.limiter now w.login signing.address
+              logged "wrong-code" [("user", w.user.text)]
+              still <- pendingSignIn env.pending now token
+              if isJust still
+                then respond (page status401 [] (codeForm mount p (Just "That code is not right: try again.")))
+                else expired
+            True -> do
+              finishPending env.pending token
+              Limiter.succeeded env.limiter w.login signing.address
+              accountOf env.storage w.user >>= \case
+                Just a | not a.disabled -> do
+                  session <- withDatabase env.storage (\c -> startSession c now w.user signing.address)
+                  traverse_ (endSession env.storage) signing.token
+                  logged "signed-in" [("user", w.user.text)]
+                  respond $
+                    page
+                      status200
+                      (clearing <> [(hSetCookie, encodeUtf8 (sessionCookie signing.cookies session))])
+                      (onwards "Signed in" ("Signed in as " <> a.user.displayName <> ".") w.next)
+                _ -> expired
+    _ -> expired
+
+-- | The page that asks for a second factor's code, saying why the last one
+-- was not taken, if it was not.
+codeForm :: Text -> Provider -> Maybe Text -> Text
+codeForm mount p told =
+  frame
+    "Second factor"
+    ""
+    ( T.concat
+        [ "<h1>One more step</h1>"
+        , "<p>Your account has a second factor. Type the code your authenticator application shows, or one of your recovery codes.</p>"
+        , maybe "" (\t -> "<p role=\"alert\">" <> escape t <> "</p>") told
+        , "<form method=\"post\" action=\""
+        , escape (mount <> "auth/" <> p.option.name <> "/second-factor")
+        , "\"><p><label>Code <input name=\"code\" autocomplete=\"one-time-code\" autocapitalize=\"none\" spellcheck=\"false\" required autofocus></label></p>"
+        , "<p><button type=\"submit\">Sign in</button></p></form>"
+        , "<p><a href=\""
+        , escape mount
+        , "\">Back to the wiki</a></p>"
+        ]
+    )
 
 -- | Why landing was refused, for a person to read, with the page's status.
 refusalText :: Provider -> Refusal -> (Status, Text, Text)

@@ -251,7 +251,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       _ <- run (deleteAttachment gone.id) >>= ok
       _ <- run (renameSpace space.id "Kept and renamed") >>= ok
       _ <- run (setSpacePublic space.id True) >>= ok
-      bea <- run (createUser NewAccount {login = "bea", displayName = "Bea", password = "bea's password"}) >>= ok
+      bea <- run (createUser NewAccount {login = "bea", displayName = "Bea", password = "bea's password", email = Nothing}) >>= ok
       _ <- run (setDisabled bea.user.id True) >>= ok
       _ <- run (setSpaceGrant space.id (SubjectUser bea.user.id) Edit True) >>= ok
       _ <- run (setCreateSpaces bea.user.id True) >>= ok

@@ -12,6 +12,7 @@
 -- > wiki-server users password --data DIR LOGIN
 -- > wiki-server users admin    --data DIR LOGIN (--on | --off)
 -- > wiki-server users disable  --data DIR LOGIN (--on | --off)
+-- > wiki-server users second-factor-remove --data DIR LOGIN
 --
 -- Each runs on the data directory, as @backup@ does, and may while the
 -- server runs on it: the database waits for the server's writes rather
@@ -62,11 +63,12 @@ import System.IO (hFlush, hGetEcho, hIsTerminalDevice, hSetEcho)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.ServerSettings (ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, providerProblems, redirectUri)
 import Wiki.App.Backend (WikiError (..))
+import Wiki.App.Backend.Admin (MonadAdmin (removeSecondFactor))
 import Wiki.Core.User (User (..))
 import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdministrator, setDisabled, setPassword)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Secret (revealed)
-import Wiki.Server.Storage (Storage, readServerSettings, withStorageAside)
+import Wiki.Server.Storage (Storage, Who (..), readServerSettings, runSqliteWiki, withStorageAside)
 import Wiki.Server.Storage.Backup (Restore (..))
 
 -- | A command, on a data directory.
@@ -89,6 +91,9 @@ data UsersCommand
     SetUserAdministrator Text Bool
   | -- | Disable a user's login, which signs them out, or enable it.
     SetUserDisabled Text Bool
+  | -- | Take a user's second factor away (WP4.11 of docs/PLAN.md), for one
+    -- who has lost it and whose administrators cannot sign in either.
+    RemoveSecondFactor Text
   deriving stock (Eq, Show)
 
 -- | The options of @wiki-server users@.
@@ -100,6 +105,7 @@ usersParser =
         <> command "password" (info (users (SetUserPassword <$> login)) (progDesc "Give a user a new password, read from the terminal or standard input; it signs them out"))
         <> command "admin" (info (users (SetUserAdministrator <$> login <*> onOff "an administrator")) (progDesc "Make a user an administrator (--on), or not (--off)"))
         <> command "disable" (info (users (SetUserDisabled <$> login <*> onOff "disabled")) (progDesc "Disable a user's login (--on), which signs them out, or enable it again (--off)"))
+        <> command "second-factor-remove" (info (users (RemoveSecondFactor <$> login)) (progDesc "Take a user's second factor away, so that they sign in with their password alone"))
     )
   where
     users c = Users <$> strOption (long "data" <> metavar "DIR" <> help "The server's data directory") <*> c
@@ -145,6 +151,11 @@ runUsers askPassword u = withStorageAside u.dataDir $ \st -> runExceptT $ case u
     a <- found st login
     _ <- wiki (setDisabled st a.user.id yes)
     pure [describe a.user <> (if yes then " cannot sign in any more; their sessions have ended." else " can sign in again.")]
+  RemoveSecondFactor login -> do
+    a <- found st login
+    -- The user is there: what is not found is their second factor.
+    _ <- withExceptT (const (describe a.user <> " has no second factor.")) (ExceptT (runSqliteWiki st Administrator (removeSecondFactor a.user.id)))
+    pure [describe a.user <> " signs in with their password alone now."]
   where
     wiki :: IO (Either WikiError a) -> ExceptT Text IO a
     wiki = withExceptT explain . ExceptT

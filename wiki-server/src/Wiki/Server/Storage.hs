@@ -107,7 +107,7 @@ import Wiki.Api.Account (Account, NewAccount (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, Backups (..), applyBackupChange, checkBackupSettings)
 import Wiki.Api.Events (PageEvent (..))
-import Wiki.Api.ServerSettings (ServerSettingsChange, applyChange, checkServerSettings, secretState)
+import Wiki.Api.ServerSettings (ServerSettingsChange, ServerSettingsOf (..), applyChange, checkServerSettings, secretState)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -618,6 +618,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   invite email = liftIO newToken >>= run Writes . inviteTx email
   revokeInvitation = run Writes . revokeInvitationTx
   unlinkUserIdentity u = run Writes . unlinkUserIdentityTx u
+  removeSecondFactor = run Writes . removeSecondFactorTx
 
   -- The server's own settings: kept in memory as soon as they are
   -- committed, as the wiki's are, and never given back with a secret.
@@ -1390,6 +1391,9 @@ directoryTx = do
   stored <- db loadGrants
   (disabled, withPassword) <- db loadAccountFlags
   identities <- db loadIdentityProviders
+  secondFactor <- db loadSecondFactorUsers
+  emails <- db loadEmails
+  server <- asks (\x -> x.server)
   let ids = Set.fromList (map (\u -> u.id) users)
       holding p = Set.fromList [u | GlobalGrant (SubjectUser u) p' <- stored.global, p' == p, u `Set.member` ids]
   pure
@@ -1400,6 +1404,10 @@ directoryTx = do
       , disabled
       , withPassword
       , identities = Map.restrictKeys identities ids
+      , secondFactor = Set.intersection secondFactor ids
+      , emails = Map.restrictKeys emails ids
+      , -- As the server's mailer is made ("Wiki.Server.Mail"'s 'mailerFrom').
+        mailing = isJust server.publicUrl && isJust server.mail
       , groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) groups
       , membership = Map.filter (not . Set.null) (Map.restrictKeys membership (Set.fromList (map (\g -> g.id) groups)))
       }
@@ -1529,6 +1537,15 @@ unlinkUserIdentityTx u provider = do
   gone <- db (\c -> deleteIdentity c u provider)
   unless gone (failWith NotFound)
   db (`deleteSessionsOf` u)
+
+-- | An administrator takes a user's second factor away, for one who has
+-- lost it (WP4.11 of docs/PLAN.md).
+removeSecondFactorTx :: UserId -> Tx ()
+removeSecondFactorTx u = do
+  requireAdministrator
+  _ <- findUser u
+  had <- db (`deleteSecondFactor` u)
+  unless had (failWith NotFound)
 
 --------------------------------------------------------------------------------
 -- Comments

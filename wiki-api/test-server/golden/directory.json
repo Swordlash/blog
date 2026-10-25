@@ -8,6 +8,16 @@
   "disabled": [
     "u2"
   ],
+  "emails": {
+    "u1": {
+      "email": "ada@example.org",
+      "verified": true
+    },
+    "u2": {
+      "email": "edgar@example.org",
+      "verified": false
+    }
+  },
   "groups": [
     {
       "id": "g1",
@@ -20,11 +30,15 @@
       "google"
     ]
   },
+  "mailing": true,
   "membership": {
     "g1": [
       "u2"
     ]
   },
+  "secondFactor": [
+    "u1"
+  ],
   "users": [
     {
       "displayName": "Ada",

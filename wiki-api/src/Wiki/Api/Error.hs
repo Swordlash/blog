@@ -30,10 +30,12 @@ import Protolude
 -- > {"error": "Invalid", "message": "A page needs a title."}
 -- > {"error": "Unauthenticated"}
 -- > {"error": "TooManyRequests", "message": "Too many failed attempts: try again in 15 minutes."}
+-- > {"error": "SecondFactorRequired"}
 --
--- The last two are signing in's ("Wiki.Api.Account"), which @MonadWiki@
--- has no method for: a login and password that do not match, and a login
--- tried too often. A client that reads them where a @WikiError@ is wanted
+-- The last three are signing in's ("Wiki.Api.Account"), which @MonadWiki@
+-- has no method for: a login and password that do not match, a login
+-- tried too often, and a password that is right where a second factor is
+-- wanted too ("Wiki.Api.Security"). A client that reads them where a @WikiError@ is wanted
 -- takes them for the nearest one ('Forbidden', 'Invalid').
 --
 -- Which of them a request gets, when more than one would apply, is decided
@@ -57,6 +59,10 @@ data ApiError
   | -- | Asked too often, as the text says: signing in, after too many
     -- failed attempts: status 429.
     TooManyRequests Text
+  | -- | The login and password are right, and the account has a second
+    -- factor ("Wiki.Api.Security"): status 401, with a cookie that the
+    -- code then ends the sign-in with.
+    SecondFactorRequired
   deriving stock (Eq, Show)
 
 instance ToJSON ApiError where
@@ -71,6 +77,7 @@ instance ToJSON ApiError where
         Invalid t -> ("Invalid", ["message" .= t])
         Unauthenticated -> ("Unauthenticated", [])
         TooManyRequests t -> ("TooManyRequests", ["message" .= t])
+        SecondFactorRequired -> ("SecondFactorRequired", [])
 
 instance FromJSON ApiError where
   parseJSON = withObject "ApiError" $ \o ->
@@ -81,6 +88,7 @@ instance FromJSON ApiError where
       "Invalid" -> Invalid <$> o .: "message"
       "Unauthenticated" -> pure Unauthenticated
       "TooManyRequests" -> TooManyRequests <$> o .: "message"
+      "SecondFactorRequired" -> pure SecondFactorRequired
       other -> parseFail ("not an error the API knows: " <> show other)
 
 -- | The status an error is answered with.
@@ -92,6 +100,7 @@ errorStatus = \case
   Invalid _ -> 400
   Unauthenticated -> 401
   TooManyRequests _ -> 429
+  SecondFactorRequired -> 401
 
 -- | The error a response with this status means when its body is not an
 -- 'ApiError': one the server's own routing answered before any handler ran

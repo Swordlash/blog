@@ -162,14 +162,14 @@ administration = describe "the administrator on the admin listener" $ do
     (.status) <$> sendJson r methodPost (onAdmin r links.signIn) Credentials {login = "editor", password = "editor's password"} `shouldReturn` 400
 
   it "makes a user with a password, who signs in on the public listener" $ withPasswords identity $ \r -> do
-    made :: Account <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "bea", displayName = "Bea", password = "bea's password"} >>= jsonAs 201
+    made :: Account <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "bea", displayName = "Bea", password = "bea's password", email = Nothing} >>= jsonAs 201
     (made.user.login, made.hasPassword, made.disabled) `shouldBe` ("bea", True, False)
     token <- signInAs r "bea" "bea's password"
     (me, _) <- sessionWith r [cookie token]
     (\u -> u.id) <$> me.user `shouldBe` Just made.user.id
-    again <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "BEA", displayName = "", password = "another password"}
+    again <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "BEA", displayName = "", password = "another password", email = Nothing}
     (json again :: IO ApiError) >>= (`shouldSatisfy` \case Conflict _ -> True; _ -> False)
-    short <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "cid", displayName = "", password = "short"}
+    short <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "cid", displayName = "", password = "short", email = Nothing}
     short.status `shouldBe` 400
 
   it "is refused the account operations on the public listener unless an administrator is signed in" $ withPasswords identity $ \r -> do
@@ -331,7 +331,7 @@ guards = describe "requests from other sites" $ do
     signIn <- sendBare r methodPost (onPublic r links.signIn) [(hContentType, "application/json")] body
     (signIn.status, setCookie signIn) `shouldBe` (403, Nothing)
     jsonAs 403 signIn `shouldReturn` Forbidden
-    made <- sendBare r methodPost (onAdmin r links.admin.createUser) [(hContentType, "application/json")] (encode NewAccount {login = "eve", displayName = "", password = "eve's password"})
+    made <- sendBare r methodPost (onAdmin r links.admin.createUser) [(hContentType, "application/json")] (encode NewAccount {login = "eve", displayName = "", password = "eve's password", email = Nothing})
     made.status `shouldBe` 403
     -- Reading needs no header.
     (.status) <$> sendBare r methodGet (onPublic r links.session) [] "" `shouldReturn` 200

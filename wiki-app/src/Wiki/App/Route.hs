@@ -26,6 +26,8 @@
 -- > /search/?q=mermaid&space=docs  Search (Just "mermaid") (Just [docs]) True
 -- > /search/?q=x&space=team&only   Search (Just "x") (Just [team]) False
 -- > /invite/<secret>/              Invite (InvitationToken <secret>)
+-- > /reset-password/<secret>/      ResetPassword (MailToken <secret>)
+-- > /verify-email/<secret>/        VerifyEmail (MailToken <secret>)
 --
 -- Every address but the home's ends in a slash, because each is a directory
 -- with an @index.html@ in it on a static host (the prerender writes one per
@@ -64,6 +66,7 @@ import Halogen.Router.Duplex (RouteDuplex (..), RouteDuplex', as, flag, many1, n
 import Halogen.Router.Duplex qualified as Duplex
 import Protolude
 import Wiki.Api.Account (InvitationToken (..))
+import Wiki.Api.Security (MailToken (..))
 import Wiki.Core.Id (SpaceId)
 import Wiki.Core.Page (Page)
 import Wiki.Core.Path (findChild, parsePath, renderPath, resolvePath)
@@ -122,6 +125,13 @@ data Route
     -- makes the account it invites to (WP3.5 of docs/PLAN.md). Its 'Show'
     -- hides the secret, so that a log that names a route does not name it.
     Invite InvitationToken
+  | -- | A password reset's page, by the secret of the link mailed for it:
+    -- the form that sets a new password (WP4.11 of docs/PLAN.md). Its
+    -- 'Show' hides the secret, as an invitation's does.
+    ResetPassword MailToken
+  | -- | The page of a link mailed to verify an e-mail address, by its
+    -- secret.
+    VerifyEmail MailToken
   deriving stock (Eq, Show)
 
 -- | What a version in a history is compared with.
@@ -184,6 +194,14 @@ route =
           (\case Invite t -> Just t; _ -> Nothing)
           Invite
           (prefix "invite" (directory (as (\t -> t.text) (Right . InvitationToken) segment)))
+      , alternative
+          (\case ResetPassword t -> Just t; _ -> Nothing)
+          ResetPassword
+          (prefix "reset-password" (directory (as (\t -> t.text) (Right . MailToken) segment)))
+      , alternative
+          (\case VerifyEmail t -> Just t; _ -> Nothing)
+          VerifyEmail
+          (prefix "verify-email" (directory (as (\t -> t.text) (Right . MailToken) segment)))
       ]
   where
     spaceAndPage :: (RouteDuplex' [Slug] -> RouteDuplex' [Slug]) -> RouteDuplex' ([Slug], [Slug])

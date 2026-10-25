@@ -165,7 +165,7 @@ component =
         st <- get
         for_ st.input.accounts $ \a -> unless st.busy $ do
           modify (\s -> s {busy = True, problem = Nothing})
-          lift (a.acceptInvitation st.input.token NewAccount {login = st.typedLogin, displayName = st.typedName, password = st.typedPassword}) >>= \case
+          lift (a.acceptInvitation st.input.token NewAccount {login = st.typedLogin, displayName = st.typedName, password = st.typedPassword, email = Nothing}) >>= \case
             Left e -> modify (\s -> s {busy = False, problem = Just (accountErrorText e)})
             Right s -> do
               modify (\x -> x {busy = False, typedPassword = ""})

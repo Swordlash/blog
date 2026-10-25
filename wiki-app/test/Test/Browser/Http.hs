@@ -22,6 +22,7 @@ module Test.Browser.Http
   , serverStops
   , serveDemo
   , answerWith
+  , answerRaw
   , asked
   , offline
   , browserGoes

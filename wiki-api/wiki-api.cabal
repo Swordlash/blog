@@ -63,6 +63,7 @@ library
       Wiki.Api.Import
       Wiki.Api.Info
       Wiki.Api.Links
+      Wiki.Api.Security
       Wiki.Api.ServerSettings
       Wiki.Api.Types
       Wiki.Api.Upload

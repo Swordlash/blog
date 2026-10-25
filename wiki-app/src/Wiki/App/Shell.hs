@@ -122,6 +122,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Live (..))
 import Wiki.App.Recent (rememberVisit)
 import Wiki.App.Route (Route (..))
+import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Admin qualified as AdminView
 import Wiki.App.View.Common
@@ -133,13 +134,16 @@ import Wiki.App.View.Invite qualified as InviteView
 import Wiki.App.View.NewPage qualified as NewPageView
 import Wiki.App.View.NewSpace qualified as NewSpaceView
 import Wiki.App.View.Page qualified as PageView
+import Wiki.App.View.Reset qualified as ResetView
 import Wiki.App.View.Search qualified as SearchBox
 import Wiki.App.View.SearchResults qualified as SearchResultsView
+import Wiki.App.View.Security qualified as SecurityView
 import Wiki.App.View.Server qualified as ServerView
 import Wiki.App.View.SignIn qualified as SignInView
 import Wiki.App.View.Slides qualified as SlidesView
 import Wiki.App.View.Source qualified as SourceView
 import Wiki.App.View.Space qualified as SpaceView
+import Wiki.App.View.VerifyEmail qualified as VerifyEmailView
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Page (Page (attachments, id, title))
@@ -185,6 +189,9 @@ type Slots =
     .+ ("access" .== H.Slot (Const Void) ViewOutput ())
     .+ ("server" .== H.Slot (Const Void) ViewOutput ())
     .+ ("invite" .== H.Slot (Const Void) InviteView.Output ())
+    .+ ("reset" .== H.Slot (Const Void) ResetView.Output ())
+    .+ ("verifyEmail" .== H.Slot (Const Void) Void ())
+    .+ ("demoAccount" .== H.Slot (Const Void) Void ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -224,6 +231,9 @@ data State m = State
   -- ^ The views' 'revision': how many times the wiki has been reloaded
   -- after a change.
   , menuOpen :: Bool
+  , demoAccountOpen :: Bool
+  -- ^ Whether the demo's account panel (its one session, and the server's
+  -- features shown disabled) is open.
   , panel :: Panel
   -- ^ What the administration's section on the wiki's data shows.
   , kept :: Bool
@@ -279,11 +289,13 @@ data Action
   | SessionChanged Session
   | OpenSignIn
   | FromInvite InviteView.Output
+  | FromReset ResetView.Output
+  | ToggleDemoAccount
   | Online Bool
 
 component
   :: forall output m
-   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadSecurity m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => H.Component Query (Input m) output m
 component =
   H.mkComponent
@@ -325,6 +337,7 @@ component =
               , switcherOpen = False
               , generation = 0
               , menuOpen = False
+              , demoAccountOpen = False
               , panel = Actions Nothing
               , kept
               , settled = False
@@ -487,7 +500,22 @@ component =
                   </button>
                 </li>
               {% end %}
+              {% if isJust st.session.user %}
+                <li class="user-menu-account">
+                  <button type="button" class="demo-account-toggle" onClick={{ const ToggleDemoAccount }}>Your account…</button>
+                </li>
+              {% end %}
             </ul>
+          {% end %}
+          {% if st.demoAccountOpen && isJust st.session.user %}
+            <section class="account-panel demo-account-panel" aria-label="Your account">
+              <h2>Your account</h2>
+              <p class="account-note">The demo has no passwords: you switch between its users above.</p>
+              {{ HH.slot_ "demoAccount" () SecurityView.component () }}
+              <div class="actions">
+                <button type="button" onClick={{ const ToggleDemoAccount }}>Close</button>
+              </div>
+            </section>
           {% end %}
         </div>
       |]
@@ -722,6 +750,8 @@ component =
       Search text space subspaces ->
         HH.slot "searchResults" () SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
       Invite token -> HH.slot "invite" () InviteView.component InviteView.Input {accounts = st.accounts, token, session = st.session, home = Router.href st.router Home} FromInvite
+      ResetPassword token -> HH.slot "reset" () ResetView.component ResetView.Input {accounts = st.accounts, token, session = st.session} FromReset
+      VerifyEmail token -> HH.slot_ "verifyEmail" () VerifyEmailView.component VerifyEmailView.Input {accounts = st.accounts, token}
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading
@@ -843,7 +873,7 @@ component =
       -- What was asked or told about the wiki's data was asked of, or told
       -- to, the user one was.
       SwitchTo user -> withDemo $ \demo -> do
-        modify (\st -> st {menuOpen = False, panel = Actions Nothing, settled = False})
+        modify (\st -> st {menuOpen = False, demoAccountOpen = False, panel = Actions Nothing, settled = False})
         lift (demo.switchTo user)
         reload Nothing
       AskReset -> modify (\st -> st {panel = ConfirmingReset})
@@ -903,6 +933,9 @@ component =
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
         restartFeed
         reload (Just Home)
+      -- A password set with a reset's link: the way in, with it.
+      FromReset ResetView.SignInWanted -> H.tell "signIn" () (SignInView.Prompt "Sign in with your new password.")
+      ToggleDemoAccount -> modify (\st -> st {demoAccountOpen = not st.demoAccountOpen, menuOpen = False})
 
     -- The live channel, opened again as whoever is asking now.
     restartFeed :: H.HalogenM (State m) Action Slots output m ()
@@ -1037,13 +1070,18 @@ overNetwork :: State m -> Bool
 overNetwork st = isJust st.accounts
 
 -- | Whether what the shell shows is the closed wiki's frame: the wiki is
--- closed to whoever is asking, and the route is not an invitation's.
+-- closed to whoever is asking, and the route is not a mailed link's.
 isShut :: State m -> Bool
-isShut st = st.world == WorldReady && shutOut st.session && not (isInvite st.route)
+isShut st = st.world == WorldReady && shutOut st.session && not (isMailedLink st.route)
 
-isInvite :: Route -> Bool
-isInvite = \case
+-- | Whether a route is the page of a link mailed to someone who may not be
+-- able to sign in yet: an invitation's, a password reset's, an address's
+-- verification. A closed wiki shows them all the same.
+isMailedLink :: Route -> Bool
+isMailedLink = \case
   Invite _ -> True
+  ResetPassword _ -> True
+  VerifyEmail _ -> True
   _ -> False
 
 -- | Whether the user may administer the wiki as a whole: who is shown the
@@ -1116,6 +1154,8 @@ crumbs st = case st.route of
   _ | st.world /= WorldReady -> []
   _ | isShut st -> [("Sign in", Nothing)]
   Invite _ -> [("Invitation", Nothing)]
+  ResetPassword _ -> [("New password", Nothing)]
+  VerifyEmail _ -> [("E-mail address", Nothing)]
   Home -> []
   Space path -> spaceCrumbs path
   SpacePages path -> spaceCrumbs path <> [("Pages and settings", Nothing)]

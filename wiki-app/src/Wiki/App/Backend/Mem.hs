@@ -253,6 +253,7 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
     writeAt (\now -> inviteIn now token email)
   revokeInvitation = write . revokeInvitationIn
   unlinkUserIdentity u = query . unlinkUserIdentityIn u
+  removeSecondFactor = query . removeSecondFactorIn
 
   -- Kept for the tab's life, as the wiki's settings are; a provider is not
   -- asked and no mail is sent, which take a server.

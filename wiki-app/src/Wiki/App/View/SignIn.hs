@@ -27,6 +27,15 @@
 -- way in; and a link to connect each provider they have no account of
 -- yet. The server's operator has no account, and no such button.
 --
+-- A user with a second factor (WP4.11 of docs/PLAN.md) is asked for its code
+-- after their password, in the same form, which then has the code's field
+-- only; a sign-in left waiting too long starts over with the password.
+-- Under the sign-in form, "Forgot your password?" opens a form that asks
+-- for a reset by mail with a login or an e-mail address, answered alike
+-- whether or not that names anyone. The account panel ends with the
+-- account's safety ("Wiki.App.View.Security": sessions, the second factor,
+-- the e-mail address).
+--
 -- Signing in or out tells the shell the new session ('AccountChanged'),
 -- which reloads everything as that reader. The shell can also open the
 -- form with a word of its own ('Prompt'): when a session has ended by
@@ -47,18 +56,22 @@ module Wiki.App.View.SignIn
 where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.Row (Empty)
+import Data.Row (type (.==))
 import Halogen qualified as H
+import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Account (LinkedIdentity (..), NewAccount (..), PasswordChange (..), SignInMethods (..), mayDisconnect)
 import Wiki.Api.Auth (Purpose (..), startUrl)
-import Wiki.App.Account (Accounts (..), accountErrorText, passwordErrorText, signInErrorText)
+import Wiki.Api.Security (resetLifetime)
+import Wiki.App.Account (Accounts (..), SignInError (..), accountErrorText, codeErrorText, passwordErrorText, signInErrorText)
 import Wiki.App.Backend (Session (..), WikiError (..))
 import Wiki.App.Editor.Browser (focusElement)
+import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Common (ariaBool, errorMessage)
+import Wiki.App.View.Security qualified as SecurityView
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.User (SignInProvider (..), Standing (..), User (..), minimumPasswordLength)
@@ -77,9 +90,27 @@ data Query a = Prompt Text a
 -- | Someone signed in or out: who is asking now.
 newtype Output = AccountChanged Session
 
+-- | Which step of signing in the form is at.
+data Step
+  = -- | The login and the password.
+    AtPassword
+  | -- | The second factor's code, the password having been right.
+    AtCode
+  | -- | Asking for a password reset by mail.
+    AtReset
+  deriving stock (Eq)
+
+type Slots = ("security" .== H.Slot (Const Void) Void ())
+
 data State m = State
   { input :: Input m
   , open :: Bool
+  , step :: Step
+  , typedCode :: Text
+  , codeField :: H.RefLabel
+  , resetField :: H.RefLabel
+  , resetTold :: Maybe Text
+  -- ^ That a reset was asked for.
   , typedLogin :: Text
   , typedPassword :: Text
   , notice :: Maybe Text
@@ -117,6 +148,11 @@ data Action
   | TypedLogin Text
   | TypedPassword Text
   | Submit
+  | TypedCode Text
+  | SubmitCode
+  | ForgotPassword
+  | SubmitReset
+  | BackToPassword
   | SignOut
   | ToggleRegister
   | TypedName Text
@@ -130,7 +166,7 @@ data Action
   | TypedRepeat Text
   | SavePassword
 
-component :: forall m. (MonadUUID m, MonadIO m) => H.Component Query (Input m) Output m
+component :: forall m. (MonadUUID m, MonadIO m, MonadSecurity m) => H.Component Query (Input m) Output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -139,10 +175,17 @@ component =
           registerField <- H.newRefLabel "register-login"
           currentField <- H.newRefLabel "password-current"
           newField <- H.newRefLabel "password-new"
+          codeField <- H.newRefLabel "sign-in-code"
+          resetField <- H.newRefLabel "reset-login"
           pure
             State
               { input
               , open = False
+              , step = AtPassword
+              , typedCode = ""
+              , codeField
+              , resetField
+              , resetTold = Nothing
               , typedLogin = ""
               , typedPassword = ""
               , notice = Nothing
@@ -178,7 +221,7 @@ component =
     receive :: Input m -> Action
     receive input = Receive input.session input.here
 
-    render :: State m -> H.ComponentHTML Action Empty m
+    render :: State m -> H.ComponentHTML Action Slots m
     render st = case st.input.session of
       Session {user = Just u, standing = SignedIn} ->
         [hh|
@@ -201,7 +244,13 @@ component =
             {% if st.registering %}
               {{ registerForm st }}
             {% end %}
-            {% if st.open %}
+            {% if st.open && st.step == AtCode %}
+              {{ codeForm st }}
+            {% end %}
+            {% if st.open && st.step == AtReset %}
+              {{ resetForm st }}
+            {% end %}
+            {% if st.open && st.step == AtPassword %}
               <form class="sign-in-form" aria-label="Sign in" {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}>
                 <div class="sign-in-told">
                   {% for n in maybeToList st.notice %}
@@ -225,15 +274,63 @@ component =
                   <button type="submit" class="primary" disabled={{ st.busy }}>Sign in</button>
                   <button type="button" onClick={{ const Close }}>Cancel</button>
                 </div>
+                <button type="button" class="link-button forgot-password" onClick={{ const ForgotPassword }}>Forgot your password?</button>
                 {{ providerLinks st "Sign in with " }}
               </form>
             {% end %}
           </div>
         |]
 
+    -- The second factor's code, once the password was right.
+    codeForm :: State m -> H.ComponentHTML Action Slots m
+    codeForm st =
+      [hh|
+        <form class="sign-in-code-form" aria-label="Second factor" {{ HE.preventingDefault (HE.onSubmit (const SubmitCode)) }}>
+          <p class="sign-in-notice" role="status">Your account has a second factor: type the code your authenticator application shows, or one of your recovery codes.</p>
+          <label class="field">
+            <span>Code</span>
+            <input type="text" name="code" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" required onValueInput={{ TypedCode }} {{ HP.ref st.codeField }}>
+          </label>
+          <div class="sign-in-told">
+            {% for p in maybeToList st.problem %}
+              <p class="error sign-in-error" role="alert">{{ p }}</p>
+            {% end %}
+          </div>
+          <div class="actions">
+            <button type="submit" class="primary" disabled={{ st.busy }}>Sign in</button>
+            <button type="button" onClick={{ const Close }}>Cancel</button>
+          </div>
+        </form>
+      |]
+
+    -- A password reset by mail, asked for with a login or an address.
+    resetForm :: State m -> H.ComponentHTML Action Slots m
+    resetForm st =
+      [hh|
+        <form class="reset-request-form" aria-label="Forgot your password?" {{ HE.preventingDefault (HE.onSubmit (const SubmitReset)) }}>
+          <p>Give your login or your e-mail address. If your account has a verified address, a link to choose a new password is mailed there; it works once, for {{ show (round (resetLifetime / 60) :: Int) <> " minutes" :: Text }}.</p>
+          <label class="field">
+            <span>Login or e-mail address</span>
+            <input type="text" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required onValueInput={{ TypedLogin }} {{ HP.ref st.resetField }}>
+          </label>
+          <div class="sign-in-told">
+            {% for t in maybeToList st.resetTold %}
+              <p class="reset-told" role="status">{{ t }}</p>
+            {% end %}
+            {% for p in maybeToList st.problem %}
+              <p class="error reset-request-error" role="alert">{{ p }}</p>
+            {% end %}
+          </div>
+          <div class="actions">
+            <button type="submit" class="primary" disabled={{ st.busy }}>Mail me a link</button>
+            <button type="button" onClick={{ const BackToPassword }}>Back to sign in</button>
+          </div>
+        </form>
+      |]
+
     -- Making oneself an account, in an open wiki: as the sign-in form, with
     -- a display name, and a password that is new.
-    registerForm :: State m -> H.ComponentHTML Action Empty m
+    registerForm :: State m -> H.ComponentHTML Action Slots m
     registerForm st =
       [hh|
         <form class="register-form" aria-label="Create account" {{ HE.preventingDefault (HE.onSubmit (const Register)) }}>
@@ -264,7 +361,7 @@ component =
 
     -- The providers to sign in with, if the server has any: links to the
     -- server's round trip, which comes back here.
-    providerLinks :: State m -> Text -> H.ComponentHTML Action Empty m
+    providerLinks :: State m -> Text -> H.ComponentHTML Action Slots m
     providerLinks st verb =
       [hh|
         <div class="sign-in-providers">
@@ -275,12 +372,13 @@ component =
       |]
 
     -- How the user signed in signs in, and the ways to change it.
-    accountPanel :: State m -> H.ComponentHTML Action Empty m
+    accountPanel :: State m -> H.ComponentHTML Action Slots m
     accountPanel st =
       [hh|
         <section class="account-panel" aria-label="How you sign in">
           <h2>How you sign in</h2>
           {{ body }}
+          {{ HH.slot_ "security" () SecurityView.component () }}
         </section>
       |]
       where
@@ -340,7 +438,7 @@ component =
     -- A new password, typed twice, and the current one where there is
     -- one. The inputs go with the form when it closes, and what was typed
     -- in them with them.
-    passwordForm :: State m -> SignInMethods -> H.ComponentHTML Action Empty m
+    passwordForm :: State m -> SignInMethods -> H.ComponentHTML Action Slots m
     passwordForm st m =
       [hh|
         <form class="password-change" aria-label={{ verb }} {{ HE.preventingDefault (HE.onSubmit (const SavePassword)) }}>
@@ -373,7 +471,7 @@ component =
         verb :: Text
         verb = if m.password then "Change password" else "Set password"
 
-    handleAction :: Action -> H.HalogenM (State m) Action Empty Output m ()
+    handleAction :: Action -> H.HalogenM (State m) Action Slots Output m ()
     handleAction = \case
       Receive session here -> modify (\st -> st {input = Input {accounts = st.input.accounts, session, here}})
       Toggle ->
@@ -389,10 +487,43 @@ component =
           modify (\s -> s {busy = True, problem = Nothing})
           result <- lift (st.input.accounts.signIn st.typedLogin st.typedPassword)
           case result of
+            Left SecondFactorNeeded -> do
+              modify (\s -> s {busy = False, step = AtCode, typedPassword = "", typedCode = "", notice = Nothing, problem = Nothing})
+              gets (\s -> s.codeField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
             Left e -> modify (\s -> s {busy = False, problem = Just (signInErrorText e)})
             Right s -> do
               modify (\x -> x {busy = False, open = False, typedPassword = "", notice = Nothing, problem = Nothing})
               H.raise (AccountChanged s)
+      TypedCode typedCode -> modify (\st -> st {typedCode})
+      SubmitCode -> do
+        st <- get
+        unless st.busy $ do
+          modify (\s -> s {busy = True, problem = Nothing})
+          lift (st.input.accounts.confirmSecondFactor st.typedCode) >>= \case
+            -- Waited too long, or too many wrong codes: from the password.
+            Left (SignInFailed (Invalid why)) -> modify (\s -> s {busy = False, step = AtPassword, typedCode = "", problem = Just why})
+            Left e -> modify (\s -> s {busy = False, problem = Just (codeErrorText e)})
+            Right s -> do
+              modify (\x -> x {busy = False, open = False, step = AtPassword, typedCode = "", notice = Nothing, problem = Nothing})
+              H.raise (AccountChanged s)
+      ForgotPassword -> do
+        modify (\st -> st {step = AtReset, typedLogin = "", typedPassword = "", notice = Nothing, problem = Nothing, resetTold = Nothing})
+        gets (\st -> st.resetField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
+      BackToPassword -> do
+        modify (\st -> st {step = AtPassword, typedLogin = "", problem = Nothing, resetTold = Nothing})
+        gets (\st -> st.loginField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
+      SubmitReset -> do
+        st <- get
+        unless st.busy $ do
+          modify (\s -> s {busy = True, problem = Nothing, resetTold = Nothing})
+          lift (st.input.accounts.requestPasswordReset st.typedLogin) >>= \case
+            Left e -> modify (\s -> s {busy = False, problem = Just (signInErrorText e)})
+            Right () ->
+              modify $ \s ->
+                s
+                  { busy = False
+                  , resetTold = Just "If that is the login or the verified address of an account, a link to choose a new password has been mailed to its address. Look in your mail, and in its spam folder too."
+                  }
       ToggleRegister ->
         gets (\st -> st.registering) >>= \case
           True -> close
@@ -406,7 +537,7 @@ component =
         st <- get
         unless st.busy $ do
           modify (\s -> s {busy = True, problem = Nothing})
-          result <- lift (st.input.accounts.register NewAccount {login = st.typedLogin, displayName = st.typedName, password = st.typedPassword})
+          result <- lift (st.input.accounts.register NewAccount {login = st.typedLogin, displayName = st.typedName, password = st.typedPassword, email = Nothing})
           case result of
             Left e -> modify (\s -> s {busy = False, problem = Just (accountErrorText e)})
             Right s -> do
@@ -474,15 +605,15 @@ component =
           -- was; the next request says whether it still is.
           traverse_ (H.raise . AccountChanged) (rightToMaybe result)
 
-    handleQuery :: Query a -> H.HalogenM (State m) Action Empty Output m (Maybe a)
+    handleQuery :: Query a -> H.HalogenM (State m) Action Slots Output m (Maybe a)
     handleQuery (Prompt why next) = openForm (Just why) $> Just next
 
-    openForm :: Maybe Text -> H.HalogenM (State m) Action Empty Output m ()
+    openForm :: Maybe Text -> H.HalogenM (State m) Action Slots Output m ()
     openForm notice = do
       modify $ \st ->
-        if st.open
+        if st.open && st.step == AtPassword
           then st {notice, problem = Nothing}
-          else st {open = True, registering = False, notice, problem = Nothing, typedLogin = "", typedPassword = ""}
+          else st {open = True, step = AtPassword, registering = False, notice, problem = Nothing, typedLogin = "", typedPassword = "", typedCode = ""}
       gets (\st -> st.loginField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
 
     -- The form to change the password closed, and what was typed in it
@@ -490,5 +621,5 @@ component =
     forgetPassword :: State m -> State m
     forgetPassword st = st {changingPassword = False, typedCurrent = "", typedNew = "", typedRepeat = "", passwordProblem = Nothing}
 
-    close :: H.HalogenM (State m) Action Empty Output m ()
-    close = modify (\st -> st {open = False, registering = False, notice = Nothing, problem = Nothing, typedPassword = ""})
+    close :: H.HalogenM (State m) Action Slots Output m ()
+    close = modify (\st -> st {open = False, step = AtPassword, registering = False, notice = Nothing, problem = Nothing, typedPassword = "", typedCode = "", resetTold = Nothing})

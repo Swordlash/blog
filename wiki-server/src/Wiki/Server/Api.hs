@@ -25,6 +25,16 @@
 -- could not be sent, the answer carries it, for the panel to show the
 -- link to pass on.
 --
+-- A user's account is kept safe here too (WP4.11 of docs/PLAN.md,
+-- "Wiki.Api.Security"): their sessions, a second factor, which makes signing
+-- in a step longer ('SecondFactorRequired' and a cookie of the sign-in half
+-- done, "Wiki.Server.SecondFactor"), an e-mail address verified by a mailed
+-- link, and a password reset by mail ("Wiki.Server.Reset"). Wrong codes are
+-- counted as failed sign-ins of the user's login. A reset is answered alike
+-- whatever it names: what it names is looked up, and mailed, on a thread of
+-- its own after the answer, so that neither the answer nor the time it
+-- takes tells who has an account.
+--
 -- The mailer and the providers people sign in with are made from the
 -- server's settings as they are at each request ('currentMailer',
 -- 'currentProviders'), which the administration changes (WP4.4 of
@@ -38,6 +48,7 @@ module Wiki.Server.Api
   , callerAs
   , apiApplication
   , registering
+  , resetting
   , handlers
   , currentMailer
   , currentProviders
@@ -60,7 +71,7 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Database.SQLite.Simple (Only (..), query_)
-import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, hVary, methodGet, methodHead, status200, status304, status405, status503)
+import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, hSetCookie, hVary, methodGet, methodHead, status200, status304, status405, status503)
 import Network.HTTP.Types.URI (urlEncode)
 import Network.Wai (Application, Middleware, Request (..), Response, mapResponseHeaders, responseFile, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Parse (defaultParseRequestBodyOptions, setMaxRequestFileSize, setMaxRequestNumFiles, setMaxRequestParmsSize)
@@ -70,7 +81,7 @@ import Servant.Multipart (Mem, MultipartOptions (..))
 import Servant.Server.Generic (AsServer)
 import System.Directory (doesFileExist)
 import Wiki.Api
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewPassword (..), PasswordChange (..), SignInMethods)
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), checkEmail)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
@@ -78,6 +89,7 @@ import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Export (formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
+import Wiki.Api.Security (EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), TotpEnrolment (..))
 import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), named, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
@@ -100,13 +112,18 @@ import Wiki.Server.Export (Exported (..), Exports, availableFormats, exportPage,
 import Wiki.Server.Import (applyImport, planImport, readUpload)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
-import Wiki.Server.Mail (Mailer (..), SendMail, invitationMessage, mailerFrom, testMessage)
+import Wiki.Server.Log (Level (..), Logger, logWith)
+import Wiki.Server.Mail (Mailer (..), SendMail, invitationMessage, mailerFrom, resetMessage, testMessage, verificationMessage)
 import Wiki.Server.Oidc (Endpoints (..), Flows, Provider, ProviderCache, endpointsOf, freshProvider, optionOf, providersFor, signInProvider)
+import Wiki.Server.Reset qualified as Reset
+import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
+import Wiki.Server.SecondFactor qualified as SecondFactor
 import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles)
 import Wiki.Server.Storage.Layout (backupsDir)
+import Wiki.Server.Totp (otpauthUri, qrRows, secretText)
 
 -- | What the handlers work with, the same for every request.
 data Env = Env
@@ -137,6 +154,14 @@ data Env = Env
   -- ^ The exports being made ("Wiki.Server.Export"), one a person.
   , backups :: BackupService
   -- ^ The thread that backs the server up ("Wiki.Server.Backups").
+  , resets :: Limiter
+  -- ^ The requests for a password reset, every one counted by the address
+  -- it came from.
+  , pending :: PendingSignIns
+  -- ^ The sign-ins waiting for a second factor's code.
+  , logger :: Logger
+  -- ^ Where what happens after an answer is told: a reset's mail that
+  -- could not be sent.
   }
 
 -- | Who is asking, as the listener found them for a request.
@@ -154,6 +179,9 @@ data Signing = Signing
   , token :: Maybe Text
   -- ^ The session id its cookie carried, if any: the session that signing
   -- out (or in again) ends.
+  , pending :: Maybe Text
+  -- ^ The id of a sign-in waiting for its second factor that its cookie
+  -- carried, if any ("Wiki.Server.SecondFactor").
   , cookies :: CookieSettings
   }
 
@@ -283,7 +311,12 @@ handlers env caller =
                 { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
                 }
           Allowed ->
-            liftIO (Accounts.signIn env.storage now credentials.login credentials.password) >>= \case
+            liftIO (Accounts.signIn env.storage now s.address credentials.login credentials.password) >>= \case
+              Left (Accounts.SecondFactorWanted user) -> do
+                -- Right so far, but not signed in: the code is to come,
+                -- with the cookie that names this sign-in.
+                held <- liftIO (holdSignIn env.pending now user.id user.login "")
+                throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies held))]}
               Left _ -> do
                 liftIO (Limiter.failed env.limiter now credentials.login s.address)
                 refuse ApiError.Unauthenticated
@@ -296,17 +329,85 @@ handlers env caller =
         -- Who they are now: nobody, in the wiki as it is open or closed.
         nobody <- liftIO (runSqliteWiki env.storage Anonymous session)
         addHeader (clearCookie s.cookies) <$> sessionInfo nobody
-    , register = \new -> making (\now -> Accounts.register env.storage now new)
+    , secondFactor = \body -> do
+        s <- signingHere
+        now <- liftIO getCurrentTime
+        waiting <- liftIO (maybe (pure Nothing) (pendingSignIn env.pending now) s.pending)
+        case (s.pending, waiting) of
+          (Just held, Just p) ->
+            limitedFor p.login s $ do
+              right <- liftIO (checkCode env.storage now p.user body.code)
+              if not right
+                then do
+                  liftIO (wrongCode env.pending held)
+                  liftIO (Limiter.failed env.limiter now p.login s.address)
+                  refuse ApiError.Unauthenticated
+                else do
+                  liftIO (finishPending env.pending held)
+                  liftIO (Limiter.succeeded env.limiter p.login s.address)
+                  liftIO (Accounts.accountOf env.storage p.user) >>= \case
+                    Just a | not a.disabled -> do
+                      token <- liftIO (withDatabase env.storage (\c -> Accounts.startSession c now p.user s.address))
+                      startedAs s a.user token
+                    _ -> refuse ApiError.Unauthenticated
+          _ -> refuse (ApiError.Invalid "This sign-in has expired, or was begun in another browser: sign in again with your password.")
+    , passwordReset =
+        PasswordResetApi
+          { request = requestingReset
+          , reset = \token body -> do
+              now <- liftIO getCurrentTime
+              liftIO (Reset.resetPassword env.storage now token body.password) >>= either (throwError . wikiError) (const (pure NoContent))
+          }
+    , emailVerification = \token -> do
+        now <- liftIO getCurrentTime
+        liftIO (Reset.verifyEmail env.storage now token) >>= either (throwError . wikiError) (const (pure NoContent))
+    , register = \new -> making (\now -> Accounts.register env.storage now (maybe "" (\s -> s.address) caller.signing) new)
     , invitations =
         InvitationsApi
           { details = invitationDetails
-          , accept = \token new -> making (\now -> Accounts.acceptInvitation env.storage now token new)
+          , accept = \token new -> making (\now -> Accounts.acceptInvitation env.storage now (maybe "" (\s -> s.address) caller.signing) token new)
           }
     , account =
         AccountApi
           { identities = signedInUser >>= \u -> liftIO (Accounts.signInMethods env.storage u) >>= either (throwError . wikiError) pure
           , unlinkIdentity = \provider -> signedInUser >>= \u -> liftIO (Accounts.unlinkIdentity env.storage u provider) >>= either (throwError . wikiError) pure
           , changePassword = ownPassword
+          , sessions = do
+              u <- signedInUser
+              now <- liftIO getCurrentTime
+              liftIO (Accounts.listSessions env.storage now u (caller.signing >>= \s -> s.token))
+          , endSession = \ref -> do
+              u <- signedInUser
+              now <- liftIO getCurrentTime
+              liftIO (Accounts.endSessionOf env.storage now u (caller.signing >>= \s -> s.token) ref) >>= either (throwError . wikiError) pure
+          , endOtherSessions = do
+              u <- signedInUser
+              now <- liftIO getCurrentTime
+              liftIO (Accounts.endOtherSessions env.storage now u (caller.signing >>= \s -> s.token))
+          , secondFactorState = signedInUser >>= liftIO . secondFactorState env.storage
+          , enrolTotp = do
+              u <- signedInUser
+              login <- loginOf u
+              now <- liftIO getCurrentTime
+              secret <- liftIO (enrol env.storage now u) >>= either (throwError . wikiError) pure
+              settings <- liftIO (readServerSettings env.storage)
+              let issuer = maybe "Wiki" (\url -> "Wiki " <> hostOfUrl url) settings.publicUrl
+                  uri = otpauthUri issuer login secret
+              pure TotpEnrolment {secret = secretText secret, uri, qr = fromMaybe [] (qrRows uri)}
+          , confirmTotp = \body -> withCode (\u now -> confirm env.storage now u body.code) <&> RecoveryCodes
+          , removeSecondFactor = \body -> withCode (\u now -> SecondFactor.remove env.storage now u body.code)
+          , email = do
+              u <- signedInUser
+              emailStateOf u Nothing
+          , setEmail = \body -> do
+              u <- signedInUser
+              mailer <- liftIO (currentMailer env)
+              when (isNothing mailer && not (T.null (T.strip body.email))) $
+                refuse (ApiError.Invalid "This wiki does not send mail yet, so an address could not be verified: ask an administrator to set up its mail server.")
+              now <- liftIO getCurrentTime
+              made <- liftIO (Reset.setEmail env.storage now u body.email) >>= either (throwError . wikiError) pure
+              sent <- liftIO (traverse (mailVerification u) made)
+              emailStateOf u (join sent)
           }
     , spaces =
         SpacesApi
@@ -385,7 +486,17 @@ handlers env caller =
           , deleteGroup = \g -> wiki (deleteGroup g) $> NoContent
           , addMember = \g u -> wiki (addMember g u) $> NoContent
           , removeMember = \g u -> wiki (removeMember g u) $> NoContent
-          , createUser = wiki . createUser
+          , createUser = \new -> do
+              -- An address that cannot be one is refused before the user is
+              -- made, so that nothing is left half done.
+              for_ new.email $ \e -> unless (T.null (T.strip e)) (either (refuse . ApiError.Invalid) (const pass) (checkEmail e))
+              made <- wiki (createUser new)
+              for_ (mfilter (not . T.null . T.strip) new.email) $ \e -> do
+                now <- liftIO getCurrentTime
+                liftIO (Reset.setEmail env.storage now made.user.id e) >>= \case
+                  Right (Just toVerify) -> void (liftIO (mailVerification made.user.id toVerify))
+                  _ -> pass
+              pure made
           , setPassword = \u body -> wiki (setPassword u body.password)
           , setDisabled = \u body -> wiki (setDisabled u body.disabled)
           , settings = wiki wikiSettings
@@ -397,6 +508,7 @@ handlers env caller =
           , invite = \body -> wiki (invite body.email) >>= liftIO . mailed
           , revokeInvitation = \i -> wiki (revokeInvitation i) $> NoContent
           , unlinkIdentity = \u provider -> wiki (unlinkUserIdentity u provider) $> NoContent
+          , removeSecondFactor = \u -> wiki (removeSecondFactor u) $> NoContent
           , server = wiki serverSettings
           , setServer = wiki . setServerSettings
           , checkProvider = \name given -> administrator >> liftIO (checkingProvider env name given) >>= either refuse pure
@@ -511,6 +623,82 @@ handlers env caller =
             Right methods -> do
               liftIO (Limiter.succeeded env.limiter login s.address)
               pure methods
+    -- The login of the user signed in.
+    loginOf :: UserId -> Handler Text
+    loginOf u = liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) (\(a :: Account) -> pure a.user.login)
+    -- Something that takes a guess at a code of the user's login, from the
+    -- request's address, as the limit on failed sign-ins allows: refused
+    -- while there have been too many wrong guesses.
+    limitedFor :: Text -> Signing -> Handler a -> Handler a
+    limitedFor login s attempt = do
+      now <- liftIO getCurrentTime
+      liftIO (Limiter.verdict env.limiter now login s.address) >>= \case
+        Refused seconds ->
+          throwError
+            (apiError (ApiError.TooManyRequests ("Too many wrong codes or passwords: try again in " <> waitText seconds <> ".")))
+              { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
+              }
+        Allowed -> attempt
+    -- A code of the user signed in, given to change their second factor: a
+    -- wrong one counted as a failed sign-in, and answered 401 as one is; a
+    -- right one forgets them.
+    withCode :: (UserId -> UTCTime -> IO (Either CodeRefusal a)) -> Handler a
+    withCode act = do
+      u <- signedInUser
+      s <- signingHere
+      login <- loginOf u
+      limitedFor login s $ do
+        now <- liftIO getCurrentTime
+        liftIO (act u now) >>= \case
+          Left WrongCode -> do
+            liftIO (Limiter.failed env.limiter now login s.address)
+            refuse ApiError.Unauthenticated
+          Left (CodeRefused e) -> throwError (wikiError e)
+          Right a -> do
+            liftIO (Limiter.succeeded env.limiter login s.address)
+            pure a
+    -- A user's address as they see it, with why its link could not be
+    -- sent just now, if it could not.
+    emailStateOf :: UserId -> Maybe Text -> Handler EmailState
+    emailStateOf u mailError = do
+      mailing <- isJust <$> liftIO (currentMailer env)
+      (email, verified) <- liftIO (Reset.emailOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) pure
+      pure EmailState {email, verified, mailing, mailError}
+    -- Mail the link that verifies a user's address: why not, if it was not
+    -- sent.
+    mailVerification :: UserId -> (Text, Text) -> IO (Maybe Text)
+    mailVerification u (address, token) =
+      currentMailer env >>= \case
+        Nothing -> pure (Just "This wiki does not send mail yet.")
+        Just m -> do
+          login <- maybe "" (\(a :: Account) -> a.user.login) <$> Accounts.accountOf env.storage u
+          leftToMaybe <$> m.deliver (verificationMessage m.publicUrl address login token)
+    -- Ask for a password reset: limited by the address asking, refused alike
+    -- for every login where the server sends no mail, and otherwise answered
+    -- at once and alike, the looking up and the mailing done after.
+    requestingReset :: ResetRequest -> Handler NoContent
+    requestingReset body = do
+      s <- signingHere
+      now <- liftIO getCurrentTime
+      liftIO (Limiter.verdict env.resets now resetting s.address) >>= \case
+        Refused seconds ->
+          throwError
+            (apiError (ApiError.TooManyRequests ("Too many password resets asked for from here: try again in " <> waitText seconds <> ".")))
+              { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
+              }
+        Allowed -> do
+          liftIO (Limiter.failed env.resets now resetting s.address)
+          liftIO (currentMailer env) >>= \case
+            Nothing -> refuse (ApiError.Invalid "This wiki does not send mail, so it cannot reset a password by mail: ask one of its administrators to set a new one for you.")
+            Just m -> do
+              void . liftIO . forkIO $ do
+                mails <- Reset.requestReset env.storage now body.login
+                for_ mails $ \r -> do
+                  login <- maybe "" (\(a :: Account) -> a.user.login) <$> Accounts.accountOf env.storage r.user
+                  m.deliver (resetMessage m.publicUrl r.email login r.token r.expiresAt) >>= \case
+                    Right () -> logWith env.logger Info [("event", "password-reset"), ("user", r.user.text), ("outcome", "mailed")]
+                    Left why -> logWith env.logger Warning [("event", "password-reset"), ("user", r.user.text), ("outcome", "failed"), ("error", why)]
+              pure NoContent
     invitationDetails :: InvitationToken -> Handler InvitationInfo
     invitationDetails token = do
       now <- liftIO getCurrentTime
@@ -572,6 +760,15 @@ sendingTestMail env body = case checkEmail body.to of
 -- that matters.
 registering :: Text
 registering = "~accounts"
+
+-- | What the limit on password resets counts requests as, likewise.
+resetting :: Text
+resetting = "~resets"
+
+-- | The host of the wiki's public address, which an authenticator
+-- application shows its codes under.
+hostOfUrl :: Text -> Text
+hostOfUrl = T.takeWhile (\c -> c /= '/' && c /= ':') . T.drop 3 . snd . T.breakOn "://"
 
 -- | How long to wait, in words: in minutes, rounded up, or seconds under one.
 waitText :: Int -> Text

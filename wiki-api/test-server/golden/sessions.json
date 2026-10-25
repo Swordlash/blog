@@ -1,0 +1,16 @@
+[
+  {
+    "address": "100.64.0.7",
+    "createdAt": "2026-10-24T09:30:12.345678Z",
+    "current": true,
+    "id": "0a1b2c3d",
+    "lastSeenAt": "2026-10-25T00:00:00Z"
+  },
+  {
+    "address": "",
+    "createdAt": "2026-10-24T09:30:12.345678Z",
+    "current": false,
+    "id": "4e5f6a7b",
+    "lastSeenAt": "2026-10-24T09:30:12.345678Z"
+  }
+]

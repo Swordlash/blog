@@ -70,7 +70,7 @@ spaceNames r hs = map (\s -> s.name) <$> (getUrlWith r (onPublic r links.spaces.
 -- | Make oneself an account: the reply.
 register :: Running -> [Header] -> Text -> Text -> IO Reply
 register r hs login password =
-  send r methodPost (onPublic r links.register) ((hContentType, "application/json") : hs) (jsonBody NewAccount {login, displayName = "", password})
+  send r methodPost (onPublic r links.register) ((hContentType, "application/json") : hs) (jsonBody NewAccount {login, displayName = "", password, email = Nothing})
 
 jsonBody :: NewAccount -> LByteString
 jsonBody = encode
@@ -85,7 +85,7 @@ inviteAs r email = sendJson r methodPost (onAdmin r links.admin.invite) NewInvit
 
 accept :: Running -> Text -> Text -> Text -> IO Reply
 accept r token login password =
-  send r methodPost (onPublic r (links.invitations.accept (InvitationToken token))) [(hContentType, "application/json")] (jsonBody NewAccount {login, displayName = "Invited", password})
+  send r methodPost (onPublic r (links.invitations.accept (InvitationToken token))) [(hContentType, "application/json")] (jsonBody NewAccount {login, displayName = "Invited", password, email = Nothing})
 
 details :: Running -> Text -> IO Reply
 details r token = getUrl r (onPublic r (links.invitations.details (InvitationToken token)))
@@ -125,7 +125,7 @@ open = describe "an open wiki" $ do
     (register r [] "someone" "short" >>= jsonAs 400) >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
 
   it "refuses an account made from another site's page, without the application's header" $ withDemoRunning identity $ \r -> do
-    reply <- sendBare r methodPost (onPublic r links.register) [(hContentType, "application/json")] (jsonBody NewAccount {login = "csrf", displayName = "", password = "a long password"})
+    reply <- sendBare r methodPost (onPublic r links.register) [(hContentType, "application/json")] (jsonBody NewAccount {login = "csrf", displayName = "", password = "a long password", email = Nothing})
     reply.status `shouldBe` 403
 
   it "limits how many accounts are tried from one address" $ withDemoRunning identity $ \r -> do
@@ -135,7 +135,7 @@ open = describe "an open wiki" $ do
     header "Retry-After" reply `shouldSatisfy` isJust
 
   it "is refused to the admin listener, where nobody signs in" $ withDemoRunning identity $ \r -> do
-    reply <- send r methodPost (onAdmin r links.register) [(hContentType, "application/json")] (jsonBody NewAccount {login = "x", displayName = "", password = "a long password"})
+    reply <- send r methodPost (onAdmin r links.register) [(hContentType, "application/json")] (jsonBody NewAccount {login = "x", displayName = "", password = "a long password", email = Nothing})
     reply.status `shouldBe` 400
 
 closed :: Spec

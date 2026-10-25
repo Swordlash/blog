@@ -111,7 +111,12 @@ atRunTime = describe "through the mail server set while the server runs" $
 
 logs :: Spec
 logs = describe "the log" $
-  it "writes no invitation's secret in a path" $ do
+  it "writes no secret of a mailed link in a path: an invitation's, a password reset's, an address's verification" $ do
+    redactedPath "/reset-password/s3cr3t/" `shouldBe` "/reset-password/…/"
+    redactedPath "/api/v1/password-reset/s3cr3t" `shouldBe` "/api/v1/password-reset/…"
+    redactedPath "/api/v1/password-reset" `shouldBe` "/api/v1/password-reset"
+    redactedPath "/verify-email/s3cr3t/" `shouldBe` "/verify-email/…/"
+    redactedPath "/api/v1/email-verification/s3cr3t" `shouldBe` "/api/v1/email-verification/…"
     redactedPath "/invite/s3cr3t/" `shouldBe` "/invite/…/"
     redactedPath "/wiki/api/v1/invitations/s3cr3t" `shouldBe` "/wiki/api/v1/invitations/…"
     redactedPath "/admin/api/v1/admin/invitations/i1" `shouldBe` "/admin/api/v1/admin/invitations/…"

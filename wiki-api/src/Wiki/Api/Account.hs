@@ -79,12 +79,16 @@ data NewAccount = NewAccount
   , displayName :: Text
   -- ^ What pages show them as; their login if blank.
   , password :: Text
+  , email :: Maybe Text
+  -- ^ Their e-mail address, which a link mailed to it verifies (WP4.11 of
+  -- docs/PLAN.md); only the administration's "New user" gives one, and
+  -- may leave it out.
   }
   deriving stock (Eq, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 instance Show NewAccount where
-  showsPrec _ a rest = "NewAccount {login = " <> show a.login <> ", displayName = " <> show a.displayName <> ", password = <hidden>}" <> rest
+  showsPrec _ a rest = "NewAccount {login = " <> show a.login <> ", displayName = " <> show a.displayName <> ", password = <hidden>, email = " <> show a.email <> "}" <> rest
 
 -- | A user's new password: @PUT \/api\/v1\/admin\/users\/\<id>\/password@.
 -- Their sessions end with it, so that whoever knew the old one is signed

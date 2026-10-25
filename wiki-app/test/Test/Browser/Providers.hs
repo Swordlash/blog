@@ -209,7 +209,7 @@ administration m = describe "the administration's accounts" $
       unmount ui
       serverStops
   where
-    withIdentities d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = Map.fromList [(UserId "user-editor", ["hub"])], groups = d.groups, membership = d.membership}
+    withIdentities d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = Map.fromList [(UserId "user-editor", ["hub"])], secondFactor = d.secondFactor, emails = d.emails, mailing = d.mailing, groups = d.groups, membership = d.membership}
 
 shouldContainText :: Element s -> Text -> PageM s ()
 shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)

@@ -21,6 +21,7 @@ import Test.Browser.Persist qualified as Persist
 import Test.Browser.Providers qualified as Providers
 import Test.Browser.Search qualified as Search
 import Test.Browser.Backups qualified as Backups
+import Test.Browser.Security qualified as Security
 import Test.Browser.Server qualified as Server
 import Test.Browser.Shell qualified as Shell
 import Test.Browser.Slides qualified as Slides
@@ -66,6 +67,7 @@ main = runBrowserTests $ do
   describe "Signing in with a provider" (Providers.spec BrowserDOM)
   describe "Wiki.App.View.Comments" (Comments.spec BrowserDOM)
   describe "Wiki.App.View.Export" (Export.spec BrowserDOM)
+  describe "Keeping an account safe" (Security.spec BrowserDOM)
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

@@ -12,7 +12,9 @@
 -- of the line: a search's words are what someone looked for, which the log
 -- has no need to keep. Nor is an invitation's secret, which is part of its
 -- link's path and of the API's addresses for it: whoever reads the log
--- could make an account with it, so it is written as @…@ ('redactedPath').
+-- could make an account with it, so it is written as @…@ ('redactedPath');
+-- nor, likewise, the secret of a password reset's link or of one that
+-- verifies an e-mail address.
 module Wiki.Server.Log
   ( Logger
   , stdoutLogger
@@ -124,7 +126,7 @@ redactedPath :: Text -> Text
 redactedPath = T.intercalate "/" . go . T.splitOn "/"
   where
     go = \case
-      word : _ : rest | word `elem` ["invite", "invitations"] -> word : "…" : go rest
+      word : _ : rest | word `elem` ["invite", "invitations", "reset-password", "password-reset", "verify-email", "email-verification"] -> word : "…" : go rest
       segment : rest -> segment : go rest
       [] -> []
 

@@ -42,7 +42,7 @@ spec = describe "migrations" $ do
       migrate c `shouldReturn` [1 .. length migrations]
       schemaVersion c `shouldReturn` length migrations
       tables <- tableNames c
-      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "sign_in_providers", "threads", "comments", "schema_version"] $ \t ->
+      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "sign_in_providers", "threads", "comments", "totp", "recovery_codes", "reset_tokens", "email_verifications", "schema_version"] $ \t ->
         tables `shouldContain` [t]
       rows <- query_ c "SELECT version FROM schema_version ORDER BY version"
       map fromOnly rows `shouldBe` [1 .. length migrations]
@@ -139,6 +139,30 @@ spec = describe "migrations" $ do
       (try (execute_ c "UPDATE spaces SET home_page = 'page-2'") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
       execute_ c "DELETE FROM pages WHERE id = 'page-1'"
       query_ c "SELECT home_page, icon, description FROM spaces" `shouldReturn` [(Nothing :: Maybe Text, Just ("{\"emoji\":\"x\"}" :: Text), "What it is for." :: Text)]
+
+  it "bring a database of spaces' profiles up to account hygiene: users without an address, sessions with an id of their own, a second factor that goes with its user" $
+    withFreshDatabase $ \_ c -> do
+      applyMigrations (take 7 migrations) c `shouldReturn` [1 .. 7]
+      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
+      execute_ c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ('h1', 'user-1', 'now', 'now', 'later')"
+      execute_ c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ('h2', 'user-1', 'now', 'now', 'later')"
+      migrate c `shouldReturn` [8 .. length migrations]
+      query_ c "SELECT email, email_verified_at FROM users" `shouldReturn` [(Nothing :: Maybe Text, Nothing :: Maybe Text)]
+      ids <- query_ c "SELECT public_id, address FROM sessions ORDER BY id_hash"
+      map snd ids `shouldBe` ["" :: Text, ""]
+      -- Each session has an id of its own, which is not its key.
+      let publicIds = mapMaybe fst ids :: [Text]
+      length publicIds `shouldBe` 2
+      ordNub publicIds `shouldBe` publicIds
+      tables <- tableNames c
+      for_ ["totp", "recovery_codes", "reset_tokens", "email_verifications"] $ \t -> tables `shouldContain` [t]
+      execute_ c "PRAGMA foreign_keys = ON"
+      execute_ c "INSERT INTO totp (user_id, secret, created_at) VALUES ('user-1', 'GEZDGNBV', 'now')"
+      execute_ c "INSERT INTO recovery_codes (user_id, code_hash) VALUES ('user-1', 'x')"
+      execute_ c "INSERT INTO reset_tokens (token_hash, user_id, created_at, expires_at) VALUES ('t', 'user-1', 'now', 'later')"
+      execute_ c "INSERT INTO email_verifications (token_hash, user_id, email, created_at, expires_at) VALUES ('v', 'user-1', 'ada@example.org', 'now', 'later')"
+      execute_ c "DELETE FROM users WHERE id = 'user-1'"
+      query_ c "SELECT (SELECT count(*) FROM totp) + (SELECT count(*) FROM recovery_codes) + (SELECT count(*) FROM reset_tokens) + (SELECT count(*) FROM email_verifications) + (SELECT count(*) FROM sessions)" `shouldReturn` [Only (0 :: Int)]
 
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do

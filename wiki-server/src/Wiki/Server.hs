@@ -43,6 +43,7 @@ import Wiki.Server.Log (Level (..), Logger, logWith, stdoutLogger)
 import Wiki.Server.Mail (SendMail, smtpSend)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen)
+import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
 import Wiki.Server.Storage (Config (..), DataDirInUse (..), readServerSettings, withStorage)
@@ -98,6 +99,9 @@ withServerUsing logger raw sendMail action = do
   limiter <- newLimiter defaultLimits
   -- Five accounts made, or tried, from an address in fifteen minutes.
   registrations <- newLimiter defaultLimits {perLogin = 5, perAddress = 5}
+  -- Ten password resets asked for from an address in fifteen minutes.
+  resets <- newLimiter defaultLimits {perLogin = 10, perAddress = 10}
+  pending <- newPendingSignIns
   events <- newHub
   exports <- newExports
   -- A data directory another server has open is a configuration this one
@@ -119,6 +123,9 @@ withServerUsing logger raw sendMail action = do
             , events
             , exports
             , backups
+            , resets
+            , pending
+            , logger
             }
         public =
           Listener

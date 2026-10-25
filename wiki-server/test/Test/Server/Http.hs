@@ -38,6 +38,7 @@ import Wiki.Server.Limiter (defaultLimits, newLimiter)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Render (inProcess)
+import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Storage (Storage, Who (..))
 
 spec :: Spec
@@ -110,4 +111,6 @@ apiEnv storage = do
   exports <- newExports
   -- Its thread is not run: these backups are made by nobody.
   backups <- newBackupService (silentLogger (const pass)) "rclone" storage
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups}
+  resets <- newLimiter defaultLimits
+  pending <- newPendingSignIns
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups, resets, pending, logger = silentLogger (const pass)}

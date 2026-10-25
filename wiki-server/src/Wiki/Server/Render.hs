@@ -136,6 +136,10 @@ routeOf mount raw = do
 statusOf :: Route -> Cache -> Status
 statusOf at c = case at of
   Invite token -> refusal (Map.lookup token c.invitationAt)
+  -- A mailed link's page is the same to anyone, in a closed wiki too; its
+  -- secret is checked when its form is sent.
+  ResetPassword _ -> status200
+  VerifyEmail _ -> status200
   _ | maybe False shutOut c.session -> status401
   Unknown -> status404
   Space s -> ofSpace s
