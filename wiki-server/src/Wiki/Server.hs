@@ -81,7 +81,7 @@ serve options = do
 withServer :: Logger -> ServeOptions -> (Server -> IO a) -> IO a
 withServer logger raw action = do
   options <- either (throwIO . ServerError) pure (checkOptions raw)
-  password <- fmap toS <$> lookupEnv (toS smtpPasswordVariable)
+  password <- mfilter (not . T.null) . fmap toS <$> lookupEnv (toS smtpPasswordVariable)
   mailer <- for (smtpOf options) $ \smtp -> do
     when (isJust smtp.user && isNothing password) $
       throwIO (ServerError ["--smtp-user " <> fromMaybe "" smtp.user <> " needs its password in the environment variable " <> smtpPasswordVariable])

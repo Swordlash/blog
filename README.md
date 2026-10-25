@@ -237,6 +237,25 @@ like the other options; `--static` goes back to the demo.
   locked out is recovered. Sign in on the public address with that login.
   Sessions last two weeks without use. Behind HTTPS, run the server with
   `--secure-cookies`.
+- **Open or closed.** The administration's "Who may come in" says whether the
+  wiki is open (the default: anyone reads the public spaces, and "Create account"
+  beside "Sign in" lets anyone make an account, which holds no grant until given
+  one, or `create-spaces` if the same section says so) or closed (anyone not
+  signed in sees the way to sign in and nothing else, and accounts come by
+  invitation). An invitation is for an e-mail address; its link makes one
+  account, once, within a week. The server mails it when it has an SMTP server:
+
+  ```sh
+  WIKI_SMTP_PASSWORD='…' sh toolchain/deploy-local.sh --server \
+    --smtp-host smtp.example.org --smtp-user wiki --smtp-from 'Wiki <wiki@example.org>' \
+    --public-url http://your-machine.tailnet.ts.net:8080/
+  ```
+
+  (`--smtp-port` 587 by default, STARTTLS; 465 is implicit TLS;
+  `--smtp-security plain` for a relay on the same machine.) The password is kept
+  in `~/.config/wiki-demo/<name>.env`, mode 600, for the unit, and never on a
+  command line; the options are remembered, and `--no-smtp` forgets them. Without
+  SMTP the panel shows each invitation's link once, as it is made, to pass on.
 - **The admin listener.** `http://127.0.0.1:8081/admin/` (`--admin-port` changes
   the port) serves the same application to whoever is on the machine, as the
   administrator, with no login; it listens on loopback only, and no firewall rule
@@ -357,6 +376,11 @@ there with the compose file beside it.
   ```
 - **Who is asking.** The published port serves whoever signs in there, and
   anyone else as an anonymous reader: public spaces only, nothing changed.
+  Whether the wiki is open or closed is the administration's to say; to mail
+  invitations, give the server `--smtp-host` and the rest (the commented
+  `command` in `docker-compose.yml`) and the SMTP account's password in
+  `WIKI_SMTP_PASSWORD`, which the compose file passes on as an environment
+  variable.
   `WIKI_PORT` changes the host's port and `WIKI_BIND` the
   host's address it is published on (`WIKI_BIND=127.0.0.1` behind a reverse proxy
   on the same machine).

@@ -148,8 +148,9 @@ async function newPage({ anonymous = false } = {}) {
   page.on("pageerror", (error) => failures.push(`page error at ${page.url()}: ${error.message}`));
   page.on("console", (message) => {
     // An address that is not there is served with a 404 (the walk loads
-    // some on purpose); a conflict is a 409.
-    if (message.type() === "error" && !/\b(404|409)\b/.test(message.text())) {
+    // some on purpose); a conflict is a 409; a closed wiki's page, to a
+    // visitor, a 401.
+    if (message.type() === "error" && !/\b(401|404|409)\b/.test(message.text())) {
       failures.push(`console error at ${page.url()}: ${message.text()}`);
     }
   });
@@ -588,6 +589,39 @@ try {
   assert.equal((await fetch(url("/api/v1/admin/directory"))).status, 403, "the administration's API, to a visitor");
   await visitor.context().close();
   console.log("ok: a visitor who is not signed in sees the public space and nothing else, and no administration");
+
+  // A closed wiki: someone who is not signed in is shown the way to sign in
+  // and nothing else, rendered so by the server and adopted with nothing to
+  // repair; an invitation's link makes them an account, and the wiki opens
+  // again for everyone.
+  const closing = await api("admin/settings", { method: "PUT", body: JSON.stringify({ access: "Closed", newAccountsCreateSpaces: false }) });
+  assert.equal(closing.status, 200, "closing the wiki");
+  assert.equal((await fetch(url("/api/v1/spaces"))).status, 401, "the spaces of a closed wiki, to a visitor");
+  const outsider = await newPage({ anonymous: true });
+  const shut = await loadAdopted(outsider, "/s/smoke-public/");
+  assert.equal(shut.status, 401, "a page of a closed wiki, to a visitor");
+  assert.ok(shut.shown.includes("Sign in to read this wiki"), `a closed wiki's page: ${shut.shown}`);
+  assert.ok(!shut.shown.includes("Smoke public"), "a closed wiki's page shows its spaces");
+  assert.deepEqual(shut.repairs, [], "adopting a closed wiki's page repaired it");
+  assert.deepEqual(shut.asked, [], "the program asked the API for what the page carries");
+  assert.equal(await outsider.locator("#app .wiki-sidebar").count(), 0, "a closed wiki's sidebar, to a visitor");
+  const invited = await api("admin/invitations", { method: "POST", body: JSON.stringify({ email: "ivy@example.org" }) });
+  assert.equal(invited.status, 201, "the invitation");
+  const invitedPage = await loadAdopted(outsider, `/invite/${invited.body.token}/`);
+  assert.equal(invitedPage.status, 200, "the invitation's page");
+  assert.deepEqual(invitedPage.repairs, [], "adopting the invitation's page repaired it");
+  await outsider.locator("#app .invitation-form input[name=login]").fill("ivy");
+  await outsider.locator("#app .invitation-form input[name=name]").fill("Ivy Invited");
+  await outsider.locator("#app .invitation-form input[name=password]").fill("ivy's password");
+  await outsider.locator("#app .invitation-form button[type=submit]").click();
+  await outsider.locator("#app .account .user-name", { hasText: "Ivy Invited" }).waitFor({ timeout });
+  await outsider.locator("#app .wiki-sidebar a", { hasText: "Smoke public" }).waitFor({ timeout });
+  await outsider.context().close();
+  assert.ok(!log.includes(invited.body.token), "the invitation's secret is in the server's log");
+  const opening = await api("admin/settings", { method: "PUT", body: JSON.stringify({ access: "Open", newAccountsCreateSpaces: false }) });
+  assert.equal(opening.status, 200, "opening the wiki");
+  assert.equal((await fetch(url("/api/v1/spaces"))).status, 200, "the spaces of an open wiki, to a visitor");
+  console.log("ok: a closed wiki shows a visitor only the way to sign in, an invitation makes them an account, and it opens again");
 
   // Everything is there for a browser that has seen nothing.
   const fresh = await newPage();

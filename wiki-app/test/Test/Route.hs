@@ -10,6 +10,7 @@ import Protolude hiding (print)
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, chooseInt, elements, forAll, oneof, vectorOf, (===))
+import Wiki.Api.Account (InvitationToken (..))
 import Wiki.App.Route
 import Wiki.Core.Slug (Slug, mkSlug)
 
@@ -48,6 +49,7 @@ genRoute =
         <*> oneof [pure Nothing, Just <$> elements [demoTime, addUTCTime 0.000123456789 demoTime, addUTCTime 86399.5 demoTime]]
         <*> elements [AgainstPrevious, AgainstCurrent]
     , PageSlides <$> genPath <*> genPath <*> oneof [pure 1, chooseInt (-3, 40)]
+    , Invite . InvitationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
     ]
 
 -- | A time with no fraction of a second: the others are made from it.
@@ -122,6 +124,10 @@ spec = describe "Wiki.App.Route" $ do
       -- the view's to bring back into it.
       parse route "/s/a/p/b/slides/?slide=last" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 1)
       parse route "/s/a/p/b/slides/?slide=99" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 99)
+      print route (Invite (InvitationToken "c2VjcmV0-_x")) `shouldBe` "/invite/c2VjcmV0-_x/"
+      parse route "/invite/c2VjcmV0" `shouldBe` Right (Invite (InvitationToken "c2VjcmV0"))
+      -- A space may be called invite: spaces are below /s/.
+      print route (Space (slugs ["invite"])) `shouldBe` "/s/invite/"
 
     it "reads an address without its last slash too" $ do
       parse route "/s/docs" `shouldBe` Right (Space (slugs ["docs"]))

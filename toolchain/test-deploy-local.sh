@@ -585,6 +585,58 @@ undeploy --purge-data >"$case_dir/purge-data" 2>&1 || fail 'undeploy --purge-dat
 [ ! -e "$HOME/wiki-demo" ] || fail '--purge-data kept the data'
 pass 'undeploy --purge keeps data/ for the next deploy, and --purge-data deletes it'
 
+# Mail for invitations: the SMTP server's options, refused without what
+# they need before anything is built, passed to the server, its password
+# kept in a file of mode 600 the unit reads and never in the unit, all
+# remembered, and forgotten with --no-smtp.
+fixture mail
+p=$(free_port 127.0.0.2)
+a=$(free_port 127.0.0.1)
+smtp='--smtp-host mail.example.org --smtp-user wiki --public-url https://wiki.example.org/'
+out=$case_dir/refused
+# shellcheck disable=SC2086
+if deploy --server --port "$p" --admin-port "$a" $smtp --smtp-from 'Wiki <wiki@example.org>' >"$out" 2>&1; then fail 'deployed an SMTP user without its password'; fi
+assert_contains "$out" 'needs its password'
+if deploy --server --port "$p" --admin-port "$a" --smtp-host mail.example.org --public-url https://wiki.example.org/ >"$out" 2>&1; then fail 'deployed SMTP without a sender'; fi
+assert_contains "$out" 'needs --smtp-from'
+if deploy --server --port "$p" --admin-port "$a" --smtp-password secret >"$out" 2>&1; then fail 'took a password on the command line'; fi
+assert_contains "$out" 'WIKI_SMTP_PASSWORD'
+if deploy --port "$p" --smtp-host mail.example.org >"$out" 2>&1; then fail 'took SMTP for the demo'; fi
+assert_contains "$out" "are for the wiki's server"
+assert_lacks "$EVENTS" 'npm'
+out=$case_dir/mailing
+# shellcheck disable=SC2086
+WIKI_SMTP_PASSWORD='pa"ss%word' deploy --server --port "$p" --admin-port "$a" $smtp --smtp-from 'Wiki <wiki@example.org>' >"$out" 2>&1 ||
+  fail 'the deploy with SMTP failed'
+assert_contains "$HOME/$unit" '--smtp-host "mail.example.org" --smtp-port 587 --smtp-user "wiki" --smtp-from "Wiki <wiki@example.org>" --public-url "https://wiki.example.org/"'
+assert_contains "$HOME/$unit" "EnvironmentFile=$HOME/.config/wiki-demo/wiki-demo.env"
+assert_lacks "$HOME/$unit" 'ss%word'
+env_file=$HOME/.config/wiki-demo/wiki-demo.env
+[ "$(stat -c %a "$env_file")" = 600 ] || fail "the password's file is mode $(stat -c %a "$env_file")"
+assert_contains "$env_file" 'WIKI_SMTP_PASSWORD="pa\"ss%word"'
+assert_lacks "$HOME/.config/wiki-demo/wiki-demo.state" 'ss%word'
+[ "$(state smtp_from)" = 'Wiki <wiki@example.org>' ] || fail 'the state does not record the sender'
+assert_contains "$out" 'Invitations are mailed through mail.example.org:587, with links below https://wiki.example.org/.'
+[ "$(http_get "http://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the server with SMTP does not answer'
+deploy --status >"$case_dir/status" 2>&1
+assert_contains "$case_dir/status" 'invitations are mailed through mail.example.org:587'
+pass 'the SMTP options are checked before the build, passed to the server, and its password kept in a file of mode 600'
+
+out=$case_dir/again
+deploy --no-build >"$out" 2>&1 || fail 'a redeploy with SMTP remembered failed'
+assert_contains "$HOME/$unit" '--smtp-host "mail.example.org"'
+assert_contains "$HOME/$unit" 'EnvironmentFile='
+assert_contains "$env_file" 'ss%word'
+out=$case_dir/forgotten
+deploy --no-build --no-smtp >"$out" 2>&1 || fail 'a redeploy with --no-smtp failed'
+assert_lacks "$HOME/$unit" 'smtp'
+assert_lacks "$HOME/$unit" 'EnvironmentFile'
+[ ! -e "$env_file" ] || fail '--no-smtp kept the password'
+[ -z "$(state smtp_host)" ] || fail '--no-smtp kept the SMTP server'
+assert_contains "$out" 'Invitations are not mailed'
+undeploy --purge-data >/dev/null 2>&1
+pass 'the SMTP server is remembered with its password, and forgotten with --no-smtp'
+
 fixture not-a-server
 out=$case_dir/out
 if deploy --admin-port 9001 >"$out" 2>&1; then fail '--admin-port deployed the demo'; fi

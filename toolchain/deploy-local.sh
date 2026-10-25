@@ -5,6 +5,9 @@
 #
 #   sh toolchain/deploy-local.sh [--server | --static] [--port N] [--bind ADDRESS]
 #                                [--admin-port N] [--dir DIR] [--name NAME]
+#                                [--smtp-host HOST --smtp-from ADDRESS --public-url URL
+#                                 [--smtp-port N] [--smtp-security tls|starttls|plain]
+#                                 [--smtp-user USER] | --no-smtp]
 #                                [--no-build] [--no-firewall] [--enable-linger] [--force]
 #   sh toolchain/deploy-local.sh --stop [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--name NAME]
@@ -58,6 +61,16 @@
 #                    the administration to whoever is on this machine (default the
 #                    previous one, or 8081); from elsewhere, through
 #                    ssh -L 8081:127.0.0.1:8081 <this machine>
+#   --smtp-host HOST --server: mail invitations through this SMTP server (WP3.5), with
+#                    --smtp-from (the sender, "Wiki <wiki@example.org>") and --public-url
+#                    (the wiki's address its links start with, https://wiki.example.org/);
+#                    --smtp-port (587; 465 is implicit TLS, any other STARTTLS),
+#                    --smtp-security to say otherwise, --smtp-user to sign in to it, whose
+#                    password is read from WIKI_SMTP_PASSWORD when this runs and kept in
+#                    ~/.config/wiki-demo/<name>.env (mode 600), never on a command line.
+#                    All remembered for the next run; without SMTP the administration
+#                    shows an invitation's link to pass on instead
+#   --no-smtp        forget the SMTP server, and its password
 #   --dir DIR        where to install (default the previous one, or ~/<name>)
 #   --name NAME      the deployment, and its unit NAME.service (default wiki-demo);
 #                    deployments with different names live side by side
@@ -91,6 +104,7 @@ usage() {
 
 name=wiki-demo
 opt_port='' opt_bind='' opt_dir='' opt_mode='' opt_admin_port=''
+opt_smtp_host='' opt_smtp_port='' opt_smtp_security='' opt_smtp_user='' opt_smtp_from='' opt_public_url='' no_smtp=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
@@ -104,6 +118,21 @@ while [ $# -gt 0 ]; do
     --static) opt_mode=static ;;
     --admin-port) need_value $# "$1"; opt_admin_port=$2; shift ;;
     --admin-port=*) opt_admin_port=${1#*=} ;;
+    --smtp-host) need_value $# "$1"; opt_smtp_host=$2; shift ;;
+    --smtp-host=*) opt_smtp_host=${1#*=} ;;
+    --smtp-port) need_value $# "$1"; opt_smtp_port=$2; shift ;;
+    --smtp-port=*) opt_smtp_port=${1#*=} ;;
+    --smtp-security) need_value $# "$1"; opt_smtp_security=$2; shift ;;
+    --smtp-security=*) opt_smtp_security=${1#*=} ;;
+    --smtp-user) need_value $# "$1"; opt_smtp_user=$2; shift ;;
+    --smtp-user=*) opt_smtp_user=${1#*=} ;;
+    --smtp-from) need_value $# "$1"; opt_smtp_from=$2; shift ;;
+    --smtp-from=*) opt_smtp_from=${1#*=} ;;
+    --public-url) need_value $# "$1"; opt_public_url=$2; shift ;;
+    --public-url=*) opt_public_url=${1#*=} ;;
+    --no-smtp) no_smtp=1 ;;
+    --smtp-password | --smtp-password=*)
+      die "the SMTP password is not an option: give it in the environment variable WIKI_SMTP_PASSWORD when deploying, which keeps it out of every command line" ;;
     --trust-network | --no-trust-network)
       die "$1 is gone: the public address serves whoever signs in. Make an administrator with the console (<dir>/bin/wiki-server users add --data <dir>/data LOGIN --admin, which asks for the password) and sign in as them" ;;
     --dir) need_value $# "$1"; opt_dir=$2; shift ;;
@@ -136,8 +165,24 @@ prev_rule_port=$(state_get rule_port)
 prev_mode=$(state_get mode)
 prev_admin_port=$(state_get admin_port)
 prev_trust=$(state_get trust)
+prev_smtp_host=$(state_get smtp_host)
+prev_smtp_port=$(state_get smtp_port)
+prev_smtp_security=$(state_get smtp_security)
+prev_smtp_user=$(state_get smtp_user)
+prev_smtp_from=$(state_get smtp_from)
+prev_public_url=$(state_get public_url)
+# The SMTP account's password, kept for the unit apart from the state, which
+# anyone may read: mode 600.
+env_file=$STATE_DIR/$name.env
 
 user=$(id -un)
+
+# A word of a unit's ExecStart, quoted for systemd: in double quotes, with
+# its quotes and backslashes escaped, and its % and $ doubled, which systemd
+# would otherwise expand.
+unit_word() {
+  printf '"%s"' "$(printf '%s' "$1" | sed -e 's/[\\"]/\\&/g' -e 's/%/%%/g' -e 's/[$]/$$/g')"
+}
 
 # Where the deployment can be reached: the bind address, or for 0.0.0.0 the
 # Tailscale address, and the MagicDNS name when Tailscale has one.
@@ -201,6 +246,11 @@ if [ "$action" = status ]; then
     latest=$(ls "$prev_dir/data/backups" 2>/dev/null | grep '[.]sqlite$' | tail -n 1 || true)
     say "backups: ${backups:-0} in $prev_dir/data/backups${latest:+, the latest $latest}"
     say "users: $prev_dir/bin/wiki-server users list --data $prev_dir/data (the first administrator: users add --data $prev_dir/data LOGIN --admin)"
+    if [ -n "$prev_smtp_host" ]; then
+      say "invitations are mailed through $prev_smtp_host:${prev_smtp_port:-587} from $prev_smtp_from, with links below $prev_public_url"
+    else
+      say "no SMTP: the administration shows an invitation's link to pass on"
+    fi
   else
     say "the serverless demo, as static files"
     [ ! -d "$prev_dir/data" ] || say "a server's data is kept in $prev_dir/data"
@@ -248,6 +298,46 @@ if [ "$mode" = server ]; then
   [ "$admin_port" != "$port" ] || die "--admin-port and --port are both $port: choose two ports"
 else
   [ -z "$opt_admin_port" ] || die "--admin-port is for the wiki's server: add --server"
+fi
+
+# The SMTP server invitations are mailed through, as given or as before;
+# --no-smtp forgets it. Checked here, before the build, as the server would
+# check it at its start.
+if [ -n "$no_smtp" ]; then
+  [ -z "$opt_smtp_host$opt_smtp_port$opt_smtp_security$opt_smtp_user$opt_smtp_from$opt_public_url" ] ||
+    die "--no-smtp and an SMTP option: choose one"
+  smtp_host='' smtp_port='' smtp_security='' smtp_user='' smtp_from='' public_url=''
+else
+  smtp_host=${opt_smtp_host:-$prev_smtp_host}
+  smtp_port=${opt_smtp_port:-$prev_smtp_port}
+  smtp_security=${opt_smtp_security:-$prev_smtp_security}
+  smtp_user=${opt_smtp_user:-$prev_smtp_user}
+  smtp_from=${opt_smtp_from:-$prev_smtp_from}
+  public_url=${opt_public_url:-$prev_public_url}
+fi
+if [ "$mode" != server ]; then
+  [ -z "$opt_smtp_host$opt_smtp_port$opt_smtp_security$opt_smtp_user$opt_smtp_from$opt_public_url" ] ||
+    die "the SMTP options are for the wiki's server: add --server"
+elif [ -n "$smtp_host" ]; then
+  [ -n "$smtp_from" ] || die "--smtp-host needs --smtp-from, the address the mail is sent from"
+  [ -n "$public_url" ] || die "--smtp-host needs --public-url, the wiki's address its links start with (https://wiki.example.org/)"
+  case $public_url in
+    http://?* | https://?*) ;;
+    *) die "invalid --public-url '$public_url': it starts with http:// or https://" ;;
+  esac
+  case ${smtp_port:-587} in
+    '' | 0* | *[!0-9]*) die "invalid --smtp-port '$smtp_port': a number from 1 to 65535" ;;
+  esac
+  case $smtp_security in
+    '' | tls | starttls | plain) ;;
+    *) die "invalid --smtp-security '$smtp_security': tls, starttls or plain" ;;
+  esac
+  if [ -n "$smtp_user" ] && [ -z "${WIKI_SMTP_PASSWORD:-}" ] && [ ! -s "$env_file" ]; then
+    die "--smtp-user $smtp_user needs its password: run this again with it in the environment variable WIKI_SMTP_PASSWORD"
+  fi
+else
+  [ -z "$opt_smtp_port$opt_smtp_security$opt_smtp_user$opt_smtp_from$opt_public_url" ] ||
+    die "--smtp-port, --smtp-security, --smtp-user, --smtp-from and --public-url go with --smtp-host"
 fi
 
 # The directory, absolute and with symbolic links resolved, so that the
@@ -465,6 +555,29 @@ if [ "$mode" = server ]; then
   # finish (the server gives them ten seconds).
   service_extra="UMask=0077
 TimeoutStopSec=30"
+  if [ -n "$smtp_host" ]; then
+    exec_start="$exec_start --smtp-host $(unit_word "$smtp_host") --smtp-port ${smtp_port:-587}"
+    [ -z "$smtp_security" ] || exec_start="$exec_start --smtp-security $smtp_security"
+    [ -z "$smtp_user" ] || exec_start="$exec_start --smtp-user $(unit_word "$smtp_user")"
+    exec_start="$exec_start --smtp-from $(unit_word "$smtp_from") --public-url $(unit_word "$public_url")"
+  fi
+  # The password, from this run's environment or the last; never in the
+  # unit, which anyone may read.
+  if [ -n "$smtp_host" ] && [ -n "$smtp_user" ]; then
+    if [ -n "${WIKI_SMTP_PASSWORD:-}" ]; then
+      mkdir -p "$STATE_DIR"
+      (
+        umask 077
+        printf 'WIKI_SMTP_PASSWORD="%s"\n' "$(printf '%s' "$WIKI_SMTP_PASSWORD" | sed 's/[\\"]/\\&/g')" >"$env_file.tmp"
+      )
+      mv "$env_file.tmp" "$env_file"
+      say "kept the SMTP password in $env_file"
+    fi
+    service_extra="$service_extra
+EnvironmentFile=$env_file"
+  else
+    rm -f "$env_file"
+  fi
 else
   description="Wiki demo ($name) from $dir on $bind:$port"
   exec_start="\"$node\" \"$dir/server.mjs\" --root \"$dir/app\" --port $port --bind $bind"
@@ -554,6 +667,13 @@ Stop:    sh toolchain/undeploy-local.sh --name $name   (--purge deletes the file
 EOF
   printf '\nThe public address serves whoever signs in there, and anyone else as an anonymous\n'
   printf 'reader, who sees the public spaces only; the operator is on the admin listener.\n'
+  printf 'Whether the wiki is open (anyone may make an account) or closed (by invitation\n'
+  printf 'only, nothing shown to anyone not signed in) is the administration'"'"'s "Who may come in".\n'
+  if [ -n "$smtp_host" ]; then
+    printf 'Invitations are mailed through %s:%s, with links below %s.\n' "$smtp_host" "${smtp_port:-587}" "$public_url"
+  else
+    printf 'Invitations are not mailed (no --smtp-host): the administration shows their links.\n'
+  fi
   if [ "$prev_trust" = yes ]; then
     printf '%s: the previous deployment took everyone at %s for the administrator\n' "$PROG" "$listen"
     printf '%s: (--trust-network); that is gone. Sign in as an administrator there, made with\n' "$PROG"

@@ -111,10 +111,13 @@ COPY --from=build /out/ /
 FROM ${DEBIAN} AS runtime
 # libgmp is the one library the binary links beyond glibc (SQLite is compiled
 # into it); curl is for the health check and for reaching the admin listener
-# from inside the container (`docker compose exec wiki curl ...`).
+# from inside the container (`docker compose exec wiki curl ...`); the CA
+# certificates are what the server checks an SMTP server's TLS certificate
+# against, when it mails invitations (--smtp-host, with its account's
+# password in WIKI_SMTP_PASSWORD; see docker-compose.yml).
 # hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends curl libgmp10 \
+ && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 \
  && rm -rf /var/lib/apt/lists/*
 # The server runs as an unprivileged user that owns /data. A named volume
 # takes the ownership and mode of the image's /data the first time it is

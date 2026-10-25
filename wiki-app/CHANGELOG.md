@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+An open or closed wiki (WP3.5). The header offers "Create account" beside
+"Sign in" in an open wiki; a closed one shows someone not signed in its name,
+the way to sign in and a word on why, at every route, and reads nothing else
+for them (`Wiki.App.Backend.shutOut`). A new route, `Invite` at
+`/invite/<secret>/`, shows an invitation's form (`Wiki.App.View.Invite`),
+which makes the account and signs its maker in. The administration gains a
+section "Who may come in" (`Wiki.App.View.Access`): open or closed, whether
+new accounts may create spaces, and in a closed wiki the invitations with
+"Invite" and "Revoke", the link shown once to copy when it was not mailed.
+`MonadAdmin` gains `wikiSettings`, `setWikiSettings`, `invitations`, `invite`
+and `revokeInvitation`; `MonadAccount` (and `Accounts`) gains `register`,
+`invitationFor` and `acceptInvitation`. The demo implements the settings and
+invitations for the tab's life only (it starts open, as its pages are
+prerendered) and makes no account from a link. The backend over HTTP keeps
+and preloads the settings, the invitations and an invitation's details.
+
 Accounts and permissions in the administration and in each space.
 `MonadAdmin` gains `setCreateSpaces`, `createUser`, `setPassword` and
 `setDisabled`, and `MonadWiki` gains `spaceAccess` and `setSpaceGrant`, with

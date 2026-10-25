@@ -22,6 +22,13 @@
 # administrator with the console, then sign in as them:
 #
 #   docker compose exec wiki wiki-server users add --data /data LOGIN --admin
+#
+# Whether the wiki is open or closed is the administration's to say. To mail
+# invitations, name the SMTP server in the command (see `command` below) and
+# give the password of its account, if it has one, in WIKI_SMTP_PASSWORD in
+# the environment `docker compose` runs in (or in an .env file beside this
+# one); it reaches the server as an environment variable, never on a command
+# line. Without SMTP the administration shows an invitation's link instead.
 name: wiki
 
 services:
@@ -33,6 +40,13 @@ services:
       - "${WIKI_BIND:-0.0.0.0}:${WIKI_PORT:-8080}:8080"
     volumes:
       - wiki-data:/data
+    environment:
+      # The SMTP account's password, for --smtp-user; empty when there is none.
+      WIKI_SMTP_PASSWORD: ${WIKI_SMTP_PASSWORD:-}
+    # To mail invitations, the image's command with the SMTP server added:
+    # command: [serve, --listen, "0.0.0.0:8080", --admin-listen, "127.0.0.1:8081",
+    #           --smtp-host, smtp.example.org, --smtp-user, wiki,
+    #           --smtp-from, "Wiki <wiki@example.org>", --public-url, "https://wiki.example.org/"]
     # The server lets requests in flight finish for up to 10 s after SIGTERM.
     stop_grace_period: 15s
 

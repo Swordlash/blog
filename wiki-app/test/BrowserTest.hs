@@ -5,6 +5,7 @@ import Protolude
 import Test.Browser.Islands qualified as Islands
 import Test.Hspec.Halogen (describe, runBrowserTests)
 #if defined(wasm32_HOST_ARCH)
+import Test.Browser.Access qualified as Access
 import Test.Browser.Admin qualified as Admin
 import Test.Browser.Editor qualified as Editor
 import Test.Browser.History qualified as History
@@ -52,6 +53,7 @@ main = runBrowserTests $ do
   describe "The order of a space's children" (Order.spec BrowserDOM)
   describe "Wiki.App.View.Admin" (Admin.spec BrowserDOM)
   describe "Wiki.App.View.Permissions" (Permissions.spec BrowserDOM)
+  describe "Whom the wiki lets in" (Access.spec BrowserDOM)
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

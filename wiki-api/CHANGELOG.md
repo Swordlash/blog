@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Whom the wiki lets in (WP3.5). `WikiApi` gains `register` (`POST
+accounts`, a `NewAccount`, answering the session with its cookie) and
+`invitations` (`InvitationsApi`: `details`, `GET invitations/<secret>`
+answering `InvitationInfo {email, expiresAt}`, and `accept`, `POST` there
+with a `NewAccount`). `AdminApi` gains `settings` and `setSettings` (`GET`
+and `PUT admin/settings`, `WikiSettings {access, newAccountsCreateSpaces}`),
+`invitations` (`Invitations {mailing, invitations}`), `invite` (`POST
+admin/invitations`, `NewInvitation {email}`, 201 `Invited {invitation, token,
+mailError}`) and `revokeInvitation`. `Wiki.Api.Admin` has `defaultSettings`,
+`checkEmail` and `invitationLifetime` (seven days); `Wiki.Api.Account` has
+`InvitationToken`, whose `Show` hides it. A session's `grants` now carries
+`access`. In a closed wiki the API answers someone not signed in 401 but for
+`info`, `session`, `accounts` and `invitations`.
+
 Permissions on a space, and who may create spaces. `SpacesApi` gains
 `access` (`GET spaces/<space>/grants`, answering
 `Wiki.Core.Permission.SpaceAccess`: the grants on the space and its

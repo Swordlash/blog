@@ -73,6 +73,12 @@ state_write() {
     printf 'rule_port=%s\n' "$rule_port"
     printf 'mode=%s\n' "${mode:-static}"
     printf 'admin_port=%s\n' "${admin_port:-}"
+    printf 'smtp_host=%s\n' "${smtp_host:-}"
+    printf 'smtp_port=%s\n' "${smtp_port:-}"
+    printf 'smtp_security=%s\n' "${smtp_security:-}"
+    printf 'smtp_user=%s\n' "${smtp_user:-}"
+    printf 'smtp_from=%s\n' "${smtp_from:-}"
+    printf 'public_url=%s\n' "${public_url:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -248,6 +254,12 @@ undeploy() {
   rule_port=$(state_get rule_port)
   mode=$(state_get mode)
   admin_port=$(state_get admin_port)
+  smtp_host=$(state_get smtp_host)
+  smtp_port=$(state_get smtp_port)
+  smtp_security=$(state_get smtp_security)
+  smtp_user=$(state_get smtp_user)
+  smtp_from=$(state_get smtp_from)
+  public_url=$(state_get public_url)
   if [ -n "$rule_port" ]; then
     if [ -n "${no_firewall:-}" ]; then
       say "--no-firewall: leaving the firewall rule for port $rule_port as it is"
@@ -271,7 +283,7 @@ undeploy() {
         say "deleted $dir"
       fi
     fi
-    rm -f "$state_file"
+    rm -f "$state_file" "$STATE_DIR/$name.env"
     say "removed the deployment $name"
   elif [ -f "$state_file" ]; then
     state_write

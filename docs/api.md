@@ -90,7 +90,7 @@ of the server, not a refusal.
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | GET | `api/v1/info` | | `ServerInfo` `{"name", "apiVersion"}` | | |
-| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups, and how they came to be who they are | | `session` |
+| GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), and how they came to be who they are | | `session` |
 | POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
 | DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
 
@@ -293,6 +293,50 @@ What a merge keeps of each side (a merged space keeps the server's settings
 unless the server's are empty, attachments follow their pages by content
 hash, positions follow the archive's order after the server's; the archive's
 users, groups and grants are not imported) is the plan's WP2.8.
+
+### Whom the wiki lets in
+
+| Method | Path | Body | Response | Errors | |
+| ------ | ---- | ---- | -------- | ------ | - |
+| POST | `api/v1/accounts` | `NewAccount` `{"login", "displayName", "password"}` | `SessionInfo` of the account made, and `Set-Cookie` with its session | 403 (a closed wiki), 400, 409, 429 | (`register`) |
+| GET | `api/v1/invitations/<secret>` | | `InvitationInfo` `{"email", "expiresAt"}` | 404 (used, revoked, expired or none) | (`invitationFor`) |
+| POST | `api/v1/invitations/<secret>` | `NewAccount` | `SessionInfo` of the account made, and `Set-Cookie`; the invitation is used up | 404, 400, 409, 429 | (`acceptInvitation`) |
+| GET | `api/v1/admin/settings` | | `WikiSettings` `{"access", "newAccountsCreateSpaces"}`, `access` `"Open"` or `"Closed"` | 403 | `wikiSettings` |
+| PUT | `api/v1/admin/settings` | `WikiSettings` | `WikiSettings` as they now are | 403, 400 | `setWikiSettings` |
+| GET | `api/v1/admin/invitations` | | `Invitations` `{"mailing", "invitations"}`: whether the server mails them, and every `Invitation` `{"id", "email", "createdAt", "expiresAt", "expired"}` not used, the latest first | 403 | `invitations` |
+| POST | `api/v1/admin/invitations` | `NewInvitation` `{"email"}` | 201 `Invited` `{"invitation", "token", "mailError"}` | 403, 400 | `invite` |
+| DELETE | `api/v1/admin/invitations/<invitation>` | | 204 | 403, 404 | `revokeInvitation` |
+
+A wiki is **open** (the default, and what a wiki made before the setting
+is) or **closed** (WP3.5 of the plan). The access travels in every
+session's grants (`grants.access`), so the application knows before anyone
+signs in which it is.
+
+- Open: anyone reads the public spaces, and may make themself an account
+  (`POST accounts`), which holds no grant unless `newAccountsCreateSpaces`
+  gives it the global `create-spaces`, and is signed in at once.
+- Closed: someone who has not signed in is answered 401 `Unauthenticated`
+  for every endpoint but `info`, `session` (all three methods), `accounts`
+  (which answers 403) and `invitations/…`, and every page of the
+  application is the way to sign in, with a 401, but an invitation's
+  (`/invite/<secret>/`, 404 when the invitation cannot be used). Public
+  spaces are public to those signed in only. The admin listener is not
+  affected: its operator is the administrator.
+
+Accounts in a closed wiki come by invitation: an administrator invites an
+e-mail address, and the invitation's link (`<public url>invite/<secret>/`)
+makes one account, once, within seven days; it is gone when used, revoked
+or replaced (inviting an address again gives it a new link), and an
+expired one stays listed until then. The secret is 32 random bytes, kept
+as its SHA-256 only, so it is given back once: in the mail, when the
+server has SMTP (`--smtp-host` and the rest, and `mailing` is true), and
+otherwise in the answer that made it (`token`), for the panel to show the
+link to pass on; when the mail could not be sent, `mailError` says why and
+`token` is given too. Making an account either way is limited to five
+attempts an address in fifteen minutes, every attempt counted, and needs
+the application's header like any write. No secret is ever written in
+the log: the path segment after `invite` or `invitations` is logged as
+`…`.
 
 ### Administration
 

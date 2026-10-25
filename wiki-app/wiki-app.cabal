@@ -269,6 +269,7 @@ test-suite wiki-app-browser-test
   hs-source-dirs:   test
   main-is:          BrowserTest.hs
   other-modules:
+      Test.Browser.Access
       Test.Browser.Admin
       Test.Browser.Editor
       Test.Browser.History

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+An open or closed wiki (WP3.5). Migration `0003-settings.sql` adds
+`settings` (an existing wiki stays open) and `invitations`. The settings are
+kept in memory once read, and replaced under the connection's lock when they
+change. In a closed wiki the public listener answers someone not signed in 401
+on the API (but for `info`, `session`, `accounts`, `invitations`) and renders
+every page as the way to sign in, with a 401, but an invitation's; the admin
+listener is unchanged. Accounts may be made by anyone in an open wiki and by
+invitation in any wiki, five attempts an address in fifteen minutes; new
+accounts get the global `create-spaces` if the settings say so. Invitations
+are mailed through SMTP with `--smtp-host`, `--smtp-port` (587; 465 is
+implicit TLS, any other STARTTLS), `--smtp-security tls|starttls|plain`,
+`--smtp-user` (its password from `WIKI_SMTP_PASSWORD`, never the command
+line), `--smtp-from` and `--public-url`, through `smtp-mail` (which needs
+`allow-newer` for `serialise` and `cborg` on GHC 9.14, in `cabal.project`);
+without SMTP the panel shows the link. Invitation secrets never reach the log.
+
 `--trust-network` is gone, with its warning and its refusal on `0.0.0.0`:
 the public listener serves whoever signs in, and anyone else as an anonymous
 reader; make the first administrator with `wiki-server users add LOGIN

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Whom the wiki lets in: `Wiki.Core.Access` (`Access = Open | Closed`,
+`accessName`, `readAccess`, `takesNewAccounts`). `Grants` gains an `access`
+field, so that every rule obeys it without another argument: a public space
+grants `View` to whomever `Wiki.Core.Permission.publicTo` says, everyone in
+an open wiki and only those signed in in a closed one. Grants combined with
+`<>` are closed if either is; `mempty` is open. Code that builds a `Grants`
+with its constructor names `access` too. An archive's `grants.json` does not
+carry it and reads back open. `Wiki.Core.Id.InvitationId` is new.
+
 `Wiki.Core.Permission.SpaceAccess` (a space's grants and its ancestors',
 with the users and groups a grant may be given to) and
 `keepsAdministering`, whether revoking a grant leaves someone able to

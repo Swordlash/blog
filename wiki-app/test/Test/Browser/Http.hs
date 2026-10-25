@@ -22,6 +22,7 @@ module Test.Browser.Http
   , answerWith
   , asked
   , offline
+  , startServer
   , startServerWith
   )
 where
