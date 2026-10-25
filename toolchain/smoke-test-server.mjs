@@ -342,7 +342,7 @@ async function migrateTheDemo() {
   const summary = page.locator("#app .import-summary");
   await summary.waitFor({ timeout });
   const told = await summary.textContent();
-  for (const line of ["3 spaces created", "1 space merged with the server's", "7 pages created", "1 page replaced by the imported one", "1 page left out"]) {
+  for (const line of ["3 spaces created", "1 space merged with the server's", "8 pages created", "1 page replaced by the imported one", "1 page left out"]) {
     assert.ok(told.includes(line), `the summary does not say "${line}": ${told}`);
   }
   // The shell has reloaded the tree of spaces, with the demo's in it.
@@ -366,7 +366,7 @@ async function migrateTheDemo() {
   await dialog.locator(".import-apply").click();
   await summary.waitFor({ timeout });
   const again = await summary.textContent();
-  for (const line of ["4 spaces merged with the server's", "1 page created", "8 pages kept as the server had them"]) {
+  for (const line of ["4 spaces merged with the server's", "1 page created", "9 pages kept as the server had them"]) {
     assert.ok(again.includes(line), `the second summary does not say "${line}": ${again}`);
   }
   const spaces = (await api("spaces")).body;
@@ -379,7 +379,7 @@ async function migrateTheDemo() {
     assert.deepEqual(slugs, [...new Set(slugs)], `a page of ${space} is there twice`);
     total += slugs.length;
   }
-  assert.equal(total, 9, "the demo's nine pages, once each");
+  assert.equal(total, 10, "the demo's ten pages, once each");
   await page.context().close();
   console.log("ok: imported again from the demo's data in this browser, everything is merged and nothing is there twice");
 }
