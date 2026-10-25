@@ -2194,3 +2194,50 @@ Amended by the planning session after each work package's report.
   saved" not seen in 30 s, no `PUT …/draft` logged), untouched by this PR and green on the
   previous PR; the one re-run passed, so a timing flake of the autosave on the runner; if it
   recurs, make the step robust (wait for the draft request, or type then wait past the 2 s).
+- **WP4.5 merged** (2026-10-25, PR #64, `main` at `dbcc242`). Comments as decision 23 says.
+  Core: `Wiki.Core.Anchor` (`Anchor {exact, prefix, suffix}`, 32 characters of context each
+  side; `locate` finds a single occurrence wherever it moved, tells several apart by how much
+  context matches, ties and misses are `Orphaned`, occurrences found one character at a time
+  since overlapping ones were missed; `renderedText` without islands; `highlight`, a pure pass
+  over the VDom wrapping parts of single text nodes in `<mark class="comment-mark"
+  data-thread>`, the quote starting last wins an overlap); `Wiki.Core.Comment` (`Thread
+  {id, page, anchor, resolved, createdAt, comments}`, `Comment {id, thread, author, body,
+  createdAt, editedAt}`, the rules, `checkCommentBody` ≤ 20 000 characters, the folds);
+  `CommentThreadId`, `CommentId`. API: `CommentsApi` at `pages/<page>/threads…` (list, open,
+  reply, edit, delete comment, delete thread, resolve/reopen); `Wiki.Api.Events`
+  (`ClientMessage` `subscribe`/`unsubscribe`, `ServerMessage` `subscribed` with the page's
+  threads, `refused`, `page` + `event`; an open `PageEvent` whose unknown types parse as
+  `Unknown`). Backends: `MonadComments` with one contract of 20 cases on Mem (IndexedDB store
+  `threads`, database version 4), Mem kept, SQLite (migration `0006-comments.sql`, after
+  WP4.4's 0005) and HTTP (threads cached and preloaded, a write folds into the cache).
+  Server: `Wiki.Server.Events` at `GET api/v1/events` (`websockets`, `wai-websockets`),
+  routed after the closed-wiki rule (anonymous 401 before the upgrade), foreign `Origin` 403
+  (`Host` or `X-Forwarded-Host` accepted), plain GET 426, logged as 101; subscriptions
+  checked when made and before each event; events published after commit; an outbox of 256
+  per connection, closed if it falls behind, pings every 20 s. The `subscribed` answer carries
+  the page's threads read in the same hold of the connection as the subscription
+  (`Storage.threadsThen`), so nothing falls between a page's render and its subscription and a
+  reconnect catches up the same way, with no HTTP request. App: quotes marked on the page, a
+  "Comments (n)" toggle (unresolved inline threads, orphaned included) opening the side panel
+  (`View/Comments.hs`), a floating "Comment" button on a selection (`jsbits/comments.js`),
+  quote ↔ thread focus, page threads under the article, anonymous readers see threads and
+  "Sign in to comment."; `Wiki.App.Live` (`MonadLive`, HTTP only): one socket per tab, opened
+  lazily, page subscribed while shown, reconnect 1 s doubling to 30 s, restarted on session
+  changes; the demo seeds the first post with three threads. Rules: deleting a thread's first
+  comment deletes the thread and is refused while it has replies; space administrators delete
+  any thread, its opener while every comment is theirs. Comments render through
+  `renderSections`; `Body` generic over slots. Also fixed, found by the runner: the editor was
+  read-only while a save was in flight (textarea `readOnly` mirrored into CodeMirror), so
+  keystrokes during Ctrl+S were silently dropped and no draft followed; the attribute and the
+  toolbar's `not saving` guard are gone, with a browser test holding a save while typing. Tests:
+  anchoring natively with a property, highlight markup, rules and folds, the contract on four
+  backends, HTTP per rule, the WebSocket end to end, migration from 5, hydration at zero
+  repairs, 8 browser cases plus the catch-up and the editor race, both smoke tests (the
+  server's shows a comment across two tabs over the real WebSocket); server 580, app 855, core
+  625, browser 175; `app.wasm` 9.5 MB. Limits: a thread the tab opens between `subscribe` and
+  its answer can blink and lose focus; a socket keeps the identity it opened with until the
+  client restarts it; touch selection and scroll untested; exports carry no comments; a
+  reverse proxy must forward the upgrade and keep `Host`. For presence: `PageEvent` is open,
+  `ClientMessage` needs a constructor, `Env.events` holds the hub, nothing is replayed so
+  re-announce on `Replaced`. Known flake: `Test.Server.Api` "logs each request…" races the log
+  line written after the response under full-suite load.
