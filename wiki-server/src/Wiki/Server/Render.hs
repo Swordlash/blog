@@ -138,6 +138,7 @@ statusOf at c = case at of
   EditPage s p -> ofSpace s `unlessRefused` ofPage s p
   PageSource s p -> ofSpace s `unlessRefused` ofPage s p
   PageHistory s p v _ -> ofSpace s `unlessRefused` ofPage s p `unlessRefused` ofVersion s p v
+  PageSlides s p _ -> ofSpace s `unlessRefused` ofPage s p
   NewPage s _ -> ofSpace s
   _ -> status200
   where

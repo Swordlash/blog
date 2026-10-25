@@ -101,13 +101,18 @@ anonymous = describe "for someone not signed in" $ do
     history `shouldSatisfy` T.isInfixOf "<title>History · Tour · Wiki</title>"
     appIn history `shouldSatisfy` T.isInfixOf "Version 1 (current)"
     appIn history `shouldSatisfy` T.isInfixOf "<td class=\"diff-text\"># Tour</td>"
+    (slidesStatus, slides) <- page r r.public "/s/docs/p/markdown-guide/presentations/slides/?slide=3"
+    slidesStatus `shouldBe` 200
+    slides `shouldSatisfy` T.isInfixOf "<title>Slides · Presentations · Wiki</title>"
+    appIn slides `shouldSatisfy` T.isInfixOf "<div class=\"slide-frame current\" data-slide=\"3\">"
+    appIn slides `shouldSatisfy` T.isInfixOf ">3 / 7</span>"
     (searchStatus, search) <- page r r.public "/search/?q=tour"
     searchStatus `shouldBe` 200
     appIn search `shouldSatisfy` T.isInfixOf "class=\"search-hit\""
     appIn search `shouldNotSatisfy` T.isInfixOf "Searching…"
 
   it "renders nothing of a private space but that it is private, with a 403" $ withDemoRunning identity $ \r -> do
-    for_ ["/s/team/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/"] $ \path -> do
+    for_ ["/s/team/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/", "/s/team/p/team-handbook/slides/"] $ \path -> do
       (status, html) <- page r r.public path
       status `shouldBe` 403
       html `shouldNotSatisfy` T.isInfixOf "handbook"
@@ -115,7 +120,7 @@ anonymous = describe "for someone not signed in" $ do
       appIn html `shouldSatisfy` T.isInfixOf "error-forbidden"
 
   it "renders what is not there with a 404: an address, a space, a page, a version" $ withDemoRunning identity $ \r -> do
-    for_ ["/nowhere/at/all", "/s/nowhere/", "/s/docs/p/nowhere/", "/s/docs/p/nowhere/history/", "/s/docs/p/tour/history/?version=2020-01-01T00%3A00%3A00Z"] $ \path -> do
+    for_ ["/nowhere/at/all", "/s/nowhere/", "/s/docs/p/nowhere/", "/s/docs/p/nowhere/history/", "/s/docs/p/nowhere/slides/", "/s/docs/p/tour/history/?version=2020-01-01T00%3A00%3A00Z"] $ \path -> do
       (status, html) <- page r r.public path
       (path, status) `shouldBe` (path, 404)
       appIn html `shouldSatisfy` \a -> "Not found" `T.isInfixOf` a || "error-not-found" `T.isInfixOf` a
@@ -211,6 +216,7 @@ addresses = describe "a request's address" $ do
     routeOf "/" "/s/docs/p/tour/" `shouldReturn` Page (slugs "docs") (slugs "tour")
     routeOf "/admin/" "/admin/s/docs/p/tour/source/" `shouldReturn` PageSource (slugs "docs") (slugs "tour")
     routeOf "/" "/s/docs/p/tour/history/?against=current" `shouldReturn` PageHistory (slugs "docs") (slugs "tour") Nothing AgainstCurrent
+    routeOf "/" "/s/docs/p/tour/slides/?slide=2" `shouldReturn` PageSlides (slugs "docs") (slugs "tour") 2
     routeOf "/wiki/" "/wiki/search/?q=a%20b&only" `shouldReturn` Search (Just "a b") Nothing False
     routeOf "/" "/s/docs" `shouldReturn` Space (slugs "docs")
     routeOf "/" "/elsewhere/" `shouldReturn` Unknown

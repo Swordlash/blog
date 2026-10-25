@@ -157,3 +157,6 @@ SQLite's `VACUUM INTO`, into `DIR/backups/<time>.sqlite`, keeping the last N
 (10 unless told). An attachment's file is deleted only when the storage is
 opened and neither the database nor a backup kept refers to it, so that a
 backup restored finds every file it names.
+
+A page's slides (`…/p/<page>/slides/`) are rendered per request like every
+other route, with a 403 or a 404 where the page would have one.

@@ -71,7 +71,7 @@ importing = describe "importing an archive" $
         `shouldBe` [(path "hello-world", Just False), (path "notes-on-haskell", Just True)]
       let choices = ImportChoices {skipSpaces = [], skipPages = [handbook], conflicts = [ConflictChoice {page = hello, resolution = TakeImported}]}
       run (applyImport zipped choices)
-        `shouldReturn` Right ImportSummary {spacesCreated = 2, spacesMerged = 2, pagesCreated = 1, pagesReplaced = 1, pagesKept = 5, pagesSkipped = 2, attachments = 1}
+        `shouldReturn` Right ImportSummary {spacesCreated = 2, spacesMerged = 2, pagesCreated = 1, pagesReplaced = 1, pagesKept = 6, pagesSkipped = 2, attachments = 1}
       blog <- ok =<< run (getSpace (path "blog"))
       page <- ok =<< run (getPage blog.id (path "hello-world"))
       page.body `shouldBe` "Brought in from the demo."

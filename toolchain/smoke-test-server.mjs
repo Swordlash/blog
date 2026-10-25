@@ -610,6 +610,7 @@ try {
     ["/s/smoke-space/p/first-page/", 200, "Saved by someone else."],
     ["/s/smoke-space/p/first-page/source/", 200, "(attachment:notes.txt)"],
     ["/s/smoke-space/p/first-page/history/", 200, "Version 1"],
+    ["/s/smoke-space/p/first-page/slides/", 200, "1 / 1"],
     ["/s/smoke-space/p/first-page/edit/", 200, "Editing First page"],
     ["/s/smoke-space/new-page/", 200, "New page"],
     ["/new-space/", 200, "New space"],
