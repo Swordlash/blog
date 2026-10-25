@@ -12,7 +12,9 @@
 -- seconds while someone types, so they put the draft in its place instead.
 --
 -- What someone else changes on the server is not seen until this client
--- writes, or the page is loaded again: the cache lives as long as the page.
+-- writes, or the page is loaded again: the cache lives as long as the page;
+-- but for a save of a page the live channel tells of ('afterEvent'), which
+-- lets go of the pages read, and of what a save changes with them.
 --
 -- A refusal is an answer too, and is kept as one: that a space is not
 -- there ('NotFound') or that the reader may not see it ('Forbidden') is
@@ -63,6 +65,7 @@ module Wiki.App.Backend.Http.Cache
   , withBackups
   , withThreads
   , afterComment
+  , afterEvent
   , forgetThreads
   , afterWrite
   )
@@ -74,7 +77,7 @@ import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken)
 import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
 import Wiki.Api.Backups (Backups)
-import Wiki.Api.Events (PageEvent, applyEvent)
+import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.Comment (Thread)
@@ -235,6 +238,17 @@ afterComment :: PageId -> Either WikiError PageEvent -> Cache -> Cache
 afterComment pid outcome c = case outcome of
   Right event -> c {threads = Map.adjust (fmap (applyEvent event)) pid c.threads}
   Left _ -> forgetThreads pid c
+
+-- | The cache after an event the live channel told of a page: a change to
+-- its comments folded into its threads ('afterComment'), and a save of it
+-- (by anyone, in any tab) letting go of every page read, with what a save
+-- changes besides the page: its space's list of pages (titles), the
+-- searches (its text) and its history. Who is asking, the spaces, the
+-- drafts (another's save leaves this author's alone) and the threads stay.
+afterEvent :: PageId -> PageEvent -> Cache -> Cache
+afterEvent pid = \case
+  PageChanged _ -> \c -> c {pageAt = mempty, pages = mempty, searches = [], versionLists = mempty}
+  event -> afterComment pid (Right event)
 
 -- | The cache without a page's threads: they have changed, or may have.
 forgetThreads :: PageId -> Cache -> Cache

@@ -1,5 +1,11 @@
 [
   {
+    "editing": [
+      {
+        "id": "u2",
+        "name": "Bea"
+      }
+    ],
     "subscribed": "p1",
     "threads": [
       {
@@ -142,6 +148,25 @@
     "event": {
       "thread": "t2",
       "type": "thread-deleted"
+    },
+    "page": "p1"
+  },
+  {
+    "event": {
+      "editors": [
+        {
+          "id": "u2",
+          "name": "Bea"
+        }
+      ],
+      "type": "editing"
+    },
+    "page": "p1"
+  },
+  {
+    "event": {
+      "type": "page-changed",
+      "updatedAt": "2026-10-25T00:00:00Z"
     },
     "page": "p1"
   }

@@ -2,7 +2,8 @@
 -- browser reads the server's and writes its own. Their JSON is pinned by
 -- the golden files of @wiki-api-server-test@; here, that they read back,
 -- that an event of a type this program does not know is read and changes
--- nothing, and that an event applied twice counts once.
+-- nothing, that an older server's answer is read as nobody editing, and
+-- that an event applied twice counts once.
 module Test.Events (spec) where
 
 import Data.Aeson (decode, eitherDecode, encode)
@@ -27,7 +28,8 @@ spec :: Spec
 spec = describe "Events" $ do
   it "reads back every message it writes" $ do
     let messages =
-          [ Subscribed (PageId "p") [thread]
+          [ Subscribed (PageId "p") [thread] []
+          , Subscribed (PageId "p") [] [Author {id = UserId "u", name = "U"}]
           , Refused (PageId "p")
           , Event (PageId "p") (ThreadOpened thread)
           , Event (PageId "p") (CommentAdded (comment "c2" "Reply."))
@@ -35,18 +37,31 @@ spec = describe "Events" $ do
           , Event (PageId "p") (CommentDeleted (CommentThreadId "t") (CommentId "c2"))
           , Event (PageId "p") (ThreadResolved (CommentThreadId "t") True)
           , Event (PageId "p") (ThreadDeleted (CommentThreadId "t"))
+          , Event (PageId "p") (Editing [Author {id = UserId "u", name = "U"}, Author {id = UserId "v", name = "V"}])
+          , Event (PageId "p") (Editing [])
+          , Event (PageId "p") (PageChanged time)
           ]
     decode (encode messages) `shouldBe` Just messages
-    decode (encode [Subscribe (PageId "p"), Unsubscribe (PageId "p")]) `shouldBe` Just [Subscribe (PageId "p"), Unsubscribe (PageId "p")]
+    let said = [Subscribe (PageId "p"), Unsubscribe (PageId "p"), StartEditing (PageId "p"), StopEditing (PageId "p")]
+    decode (encode said) `shouldBe` Just said
+
+  it "reads a server's answer that says nothing of who edits as nobody editing" $ do
+    let older = "{\"subscribed\": \"p\", \"threads\": []}"
+    eitherDecode older `shouldBe` Right (Subscribed (PageId "p") [] [])
 
   it "reads an event of a type it does not know, which changes nothing" $ do
-    let later = "{\"page\": \"p\", \"event\": {\"type\": \"page-changed\", \"by\": \"u\"}}"
-    eitherDecode later `shouldBe` Right (Event (PageId "p") (Unknown "page-changed"))
-    applyEvent (Unknown "page-changed") [thread] `shouldBe` [thread]
+    let later = "{\"page\": \"p\", \"event\": {\"type\": \"page-moved\", \"to\": \"q\"}}"
+    eitherDecode later `shouldBe` Right (Event (PageId "p") (Unknown "page-moved"))
+    applyEvent (Unknown "page-moved") [thread] `shouldBe` [thread]
+
+  it "changes no thread for who is editing, or for a page saved" $ do
+    applyEvent (Editing [Author {id = UserId "u", name = "U"}]) [thread] `shouldBe` [thread]
+    applyEvent (PageChanged time) [thread] `shouldBe` [thread]
 
   it "refuses a message of the tab's that says neither or both" $ do
     (decode "{}" :: Maybe ClientMessage) `shouldBe` Nothing
     (decode "{\"subscribe\": \"p\", \"unsubscribe\": \"p\"}" :: Maybe ClientMessage) `shouldBe` Nothing
+    (decode "{\"editing\": \"p\", \"stopped\": \"p\"}" :: Maybe ClientMessage) `shouldBe` Nothing
 
   it "applies each event to a page's threads, and the same event twice once" $ do
     let reply = comment "c2" "Reply."

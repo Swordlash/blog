@@ -49,7 +49,7 @@ import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Events (PageEvent (..))
+import Wiki.Api.Events (PageEvent (CommentAdded, CommentDeleted, CommentEdited, ThreadDeleted, ThreadOpened, ThreadResolved))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Islands (MonadIslands)

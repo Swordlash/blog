@@ -19,12 +19,13 @@ import Halogen.Subscription qualified as HS
 import Protolude
 import Test.Hspec
 import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
+import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Http
-import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
+import Wiki.App.Backend.Http.Cache (Cache (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Http.Request
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -294,6 +295,21 @@ caching = describe "what it keeps" $ do
     runHttpWiki env (discardDraft hello.id) `shouldReturn` Right ()
     runHttpWiki env (atOnce ((,) <$> getDraft hello.id <*> listPages hello.space)) `shouldReturn` Just (Right Nothing, Right blogPages)
     length <$> readIORef asked `shouldReturn` 3
+
+  it "lets the pages read go when the live channel tells of a save, and keeps the rest" $ do
+    (env, _) <- backend answering
+    spaces <- runHttpWiki env listSpaces
+    _ <- runHttpWiki env (listPages hello.space)
+    _ <- runHttpWiki env (getDraft hello.id)
+    read' <- cacheOf env
+    let saved = afterEvent hello.id (PageChanged demoNow) read'
+    Map.null saved.pages `shouldBe` True
+    cachedPage hello.space (slugs "hello-world") saved `shouldBe` Nothing
+    saved.spaces `shouldBe` Just spaces
+    saved.drafts `shouldBe` read'.drafts
+    saved.session `shouldBe` read'.session
+    -- Who is editing changes nothing kept.
+    afterEvent hello.id (Editing []) read' `shouldBe` read'
 
   it "keeps a refusal the wiki decided, and asks again after one it did not" $ do
     (env, asked) <- backend $ \r ->

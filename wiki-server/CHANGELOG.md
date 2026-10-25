@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Presence and edit conflicts (WP4.12). The live channel keeps, per
+connection, the pages its tab says it edits (`{"editing": page}`, from
+someone who may edit the page; `{"stopped": page}`), in memory
+(`Wiki.Server.Presence`), and drops them with the connection; whenever who
+edits a page changes, every connection subscribed to it is told who else
+edits it (`Editing`), and the answer to a subscription says so too. A save of
+a page, and a version restored, is told to the page's subscribers as
+`PageChanged` with the new version's time, once committed (`Config.publish`
+is now about pages, not only their comments). `Storage.editorOf` names
+someone who may edit a page. No migration.
+
 Scheduled backups, off by default (WP4.9). The server backs itself up once an
 administrator turns that on in the administration (`GET`/`PUT
 api/v1/admin/server/backups`, `POST …/run` for "Back up now"); nothing turns it

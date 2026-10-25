@@ -78,6 +78,7 @@ library
         Wiki.Server.Oidc
         Wiki.Server.Options
         Wiki.Server.Password
+        Wiki.Server.Presence
         Wiki.Server.Render
         Wiki.Server.Secret
         Wiki.Server.Session
@@ -189,6 +190,7 @@ test-suite wiki-server-test
         Test.Server.Mail
         Test.Server.Oidc
         Test.Server.Options
+        Test.Server.Presence
         Test.Server.Render
         Test.Server.Settings
         Test.Server.Static

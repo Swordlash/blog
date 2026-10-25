@@ -288,8 +288,8 @@ characters long, a quote not blank and at most 2000 (400).
 ### The live channel
 
 `api/v1/events` is a WebSocket, not a servant route: one per browser tab, on
-which the tab says which pages it shows and the server tells it what happens
-to their comments as it happens (decision 23 of the plan,
+which the tab says which pages it shows and which it edits, and the server
+tells it what happens to them as it happens (decision 23 of the plan,
 `Wiki.Api.Events`). The upgrade is a request like any other: who is asking is
 found from its session cookie, a closed wiki answers someone who has not
 signed in 401 before upgrading, an upgrade whose `Origin` is not the
@@ -299,14 +299,25 @@ A connection stays who it was opened as: a tab that signs in or out opens
 another.
 
 Every message is a JSON text frame. The tab sends `{"subscribe": "<page>"}`
-and `{"unsubscribe": "<page>"}`; the server answers a subscription with
-`{"subscribed": "<page>", "threads": [Thread]}`, or `{"refused": "<page>"}`
-for a page that is not there or that the connection's user may not read,
-and then sends `{"page":
-"<page>", "event": PageEvent}` for each change to the page's comments, once it
-is committed, to every connection subscribed to it (the tab that made the
-change included), checking again that the user may read the page. A
-`PageEvent` is an object with a `type`, below.
+and `{"unsubscribe": "<page>"}`, and `{"editing": "<page>"}` when it opens
+the page's editor and `{"stopped": "<page>"}` when it closes it; the server
+answers a subscription with `{"subscribed": "<page>", "threads": [Thread],
+"editing": [Author]}`, or `{"refused": "<page>"}` for a page that is not
+there or that the connection's user may not read, and then sends `{"page":
+"<page>", "event": PageEvent}` for each change to the page's comments and
+each save of it, once it is committed, and each change of who edits it, to
+every connection subscribed to it (the tab that made the change included),
+checking again that the user may read the page. A `PageEvent` is an object
+with a `type`, below.
+
+Who edits a page is kept per connection, in memory: from `{"editing"}` (taken
+only from someone who may edit the page; anyone else's is ignored) until
+`{"stopped"}` or the connection's end, which a closed tab or a lost network
+comes to. A connection is told everyone editing the page on other
+connections, each person once (their id and display name, as a comment's
+author), so a tab never hears of itself but does hear of its own user in
+another tab; the answer to a subscription's `editing` says who it is then. A
+tab that connects again says again which pages it edits.
 
 The answer's `threads` are the page's threads as `GET
 api/v1/pages/<page>/threads` would give the connection's user at that
@@ -328,10 +339,11 @@ its subscription, and asks for nothing more to catch up.
 | `comment-deleted` | `thread`, `comment`: ids | a reply was deleted |
 | `thread-resolved` | `thread`: id, `resolved`: bool | a thread was resolved or reopened |
 | `thread-deleted` | `thread`: id | a thread was deleted, or its first comment with it |
+| `editing` | `editors`: [`Author`] | who else edits the page changed: these do now |
+| `page-changed` | `updatedAt`: time | the page was saved (or a version restored): its new version's time |
 
 The type is open: a client ignores an event of a type it does not know, so
-that later ones ("someone is editing this page", "this page changed") ride
-the same channel. Nothing is replayed: a tab that loses its connection
+that later ones ride the same channel. Nothing is replayed: a tab that loses its connection
 connects again and subscribes again, and the answers are what it missed.
 The server pings every 20 seconds, keeps subscriptions in memory, closes a
 connection that does not keep up with its messages (256 waiting), and

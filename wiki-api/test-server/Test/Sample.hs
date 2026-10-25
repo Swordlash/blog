@@ -17,6 +17,7 @@ module Test.Sample
   , inlineThread
   , pageThread
   , reply
+  , author
   , importChoices
   , importSummary
   , serverStatus
@@ -401,6 +402,10 @@ providerCheck =
     }
 
 -- | A reply to 'inlineThread', edited since.
+-- | Someone as a comment and the live channel name them.
+author :: Author
+author = Author {id = UserId "u2", name = "Bea"}
+
 reply :: Comment
 reply =
   Comment

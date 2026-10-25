@@ -13,6 +13,7 @@ import Test.Server.Import qualified as Import
 import Test.Server.Mail qualified as Mail
 import Test.Server.Oidc qualified as Oidc
 import Test.Server.Options qualified as Options
+import Test.Server.Presence qualified as Presence
 import Test.Server.Render qualified as Render
 import Test.Server.Settings qualified as Settings
 import Test.Server.Static qualified as Static
@@ -38,6 +39,7 @@ main = hspec $ do
   Accounts.spec
   Access.spec
   Comments.spec
+  Presence.spec
   Mail.spec
   Settings.spec
   Backups.spec

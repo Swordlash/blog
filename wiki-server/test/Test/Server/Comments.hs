@@ -7,7 +7,11 @@
 -- the tab's user reads them; two tabs on a page, one comments and both
 -- hear of it; a page one may not read is refused, and nothing of it is heard; a closed
 -- wiki refuses someone not signed in before the upgrade; another site's
--- page is refused; a request that is no WebSocket's is told so.
+-- page is refused; a request that is no WebSocket's is told so. And who
+-- edits a page (WP4.12): told to the page's other tabs when an editor
+-- opens and closes, and when its connection ends; in the answer to a
+-- subscription; ignored from someone who may not edit the page; and a save
+-- of the page told to its tabs, with the new version's time.
 --
 -- The demo's wiki is the server's, as in "Test.Server.Access": the
 -- reader may read the blog, the editor edit it, and the administrator
@@ -24,12 +28,15 @@ import System.Timeout (timeout)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
-import Wiki.Api (AdminApi (..), CommentsApi (..), SpacesApi (..), WikiApi (..))
+import Web.HttpApiData (toUrlPiece)
+import Wiki.Api (AdminApi (..), CommentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..), eventsPath)
 import Wiki.Api.Links (links)
+import Wiki.Api.Types (PageEdit (..))
+import Wiki.Api.Version (pageVersion)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
@@ -66,10 +73,13 @@ signedIn r = People <$> as "admin" <*> as "editor" <*> as "reader"
 -- | The id of the page at a path in the space at a path, as the operator
 -- finds it.
 pageAt :: (HasCallStack) => Running -> Text -> Text -> IO PageId
-pageAt r space page = do
+pageAt r space page = (\p -> p.id) <$> pageNamed r space page
+
+-- | The page itself.
+pageNamed :: (HasCallStack) => Running -> Text -> Text -> IO Page
+pageNamed r space page = do
   s :: Space <- ok200 (getUrl r (onAdmin r (links.spaces.atPath [slug space])))
-  p :: Page <- ok200 (getUrl r (onAdmin r (links.spaces.pageAt s.id [slug page])))
-  pure p.id
+  ok200 (getUrl r (onAdmin r (links.spaces.pageAt s.id [slug page])))
   where
     slug t = either (panic . show) identity (mkSlug t)
 
@@ -184,7 +194,7 @@ answer :: (HasCallStack) => WS.Connection -> PageId -> IO [Thread]
 answer c p = do
   say c (Subscribe p)
   hear c >>= \case
-    Subscribed q threads | q == p -> pure threads
+    Subscribed q threads _ | q == p -> pure threads
     other -> assertFailure ("not the answer to the subscription: " <> show other)
 
 subscribe :: (HasCallStack) => WS.Connection -> PageId -> IO ()
@@ -241,6 +251,74 @@ live = describe "the live channel" $ do
       later :: Thread <- created (asWith r (Just people.editor) methodPost (links.comments p).open NewThread {anchor = Nothing, body = "After."})
       hear reading `shouldReturn` Event p (ThreadOpened later)
       hear watching `shouldReturn` Event p (ThreadOpened later)
+
+  it "tells a page's tabs who opens its editor and closes it, and that a lost connection closes it" $ withDemoRunning identity $ \r -> do
+    people <- signedIn r
+    p <- notesOf r
+    let edgar = Author {id = UserId "user-editor", name = "Edgar Editor"}
+        ada = Author {id = UserId "user-admin", name = "Ada Admin"}
+    channel r [people.reader] $ \reading -> do
+      subscribe reading p
+      channel r [people.editor] $ \editing -> do
+        subscribe editing p
+        say editing (StartEditing p)
+        hear reading `shouldReturn` Event p (Editing [edgar])
+        -- The tab that edits is told of nobody but others.
+        hear editing `shouldReturn` Event p (Editing [])
+        -- A tab subscribing now hears it in the answer.
+        channel r [] $ \late -> do
+          say late (Subscribe p)
+          hear late >>= \case
+            Subscribed q _ editors | q == p -> editors `shouldBe` [edgar]
+            other -> assertFailure ("not the answer to the subscription: " <> show other)
+        -- Another editor, in two tabs, is one person; the first tab hears
+        -- of them, and they hear of each other's tab and of Edgar.
+        channel r [people.admin] $ \first' -> channel r [people.admin] $ \second' -> do
+          subscribe first' p
+          subscribe second' p
+          say first' (StartEditing p)
+          hear reading `shouldReturn` Event p (Editing [edgar, ada])
+          hear editing `shouldReturn` Event p (Editing [ada])
+          hear first' `shouldReturn` Event p (Editing [edgar])
+          hear second' `shouldReturn` Event p (Editing [edgar, ada])
+          say second' (StartEditing p)
+          hear reading `shouldReturn` Event p (Editing [edgar, ada])
+          hear first' `shouldReturn` Event p (Editing [edgar, ada])
+          hear second' `shouldReturn` Event p (Editing [edgar, ada])
+          say first' (StopEditing p)
+          hear reading `shouldReturn` Event p (Editing [edgar, ada])
+          hear second' `shouldReturn` Event p (Editing [edgar])
+        -- Ada's tabs are gone, with their connections.
+        hear reading `shouldReturn` Event p (Editing [edgar])
+        say editing (StopEditing p)
+        hear reading `shouldReturn` Event p (Editing [])
+        say editing (StartEditing p)
+        hear reading `shouldReturn` Event p (Editing [edgar])
+      -- The editor's tab is gone without a word: its connection was.
+      hear reading `shouldReturn` Event p (Editing [])
+
+  it "takes nobody's word for editing a page they may not edit" $ withDemoRunning identity $ \r -> do
+    people <- signedIn r
+    p <- notesOf r
+    other <- pageAt r "blog" "hello-world"
+    channel r [people.editor] $ \watching -> channel r [people.reader] $ \reading -> channel r [] $ \nobody -> do
+      subscribe watching p
+      subscribe reading p
+      subscribe nobody p
+      say reading (StartEditing p)
+      say nobody (StartEditing p)
+      -- The next thing heard is the answer to this, not anyone editing.
+      subscribe watching other
+
+  it "tells a page's tabs that it was saved, with the time of the version saved" $ withDemoRunning identity $ \r -> do
+    people <- signedIn r
+    page <- pageNamed r "blog" "notes-on-haskell"
+    let p = page.id
+    channel r [] $ \watching -> do
+      subscribe watching p
+      reply <- send r methodPut (onPublic r (links.pages.save p)) [(hContentType, "application/json"), people.editor, ("If-Match", encodeUtf8 (toUrlPiece (pageVersion page)))] (encode PageEdit {title = page.title, body = "Saved again."})
+      saved :: Page <- jsonAs 200 reply
+      hear watching `shouldReturn` Event p (PageChanged saved.updatedAt)
 
   it "refuses a page one may not read, and tells nothing of it" $ withDemoRunning identity $ \r -> do
     people <- signedIn r

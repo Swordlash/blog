@@ -82,6 +82,7 @@ module Wiki.Server.Storage
   , blobPath
   , spaceIconFile
   , mayReadPage
+  , editorOf
   , threadsThen
 
     -- * Whole wikis
@@ -182,9 +183,10 @@ data Config = Config
   -- space whose icon is one: the server's route for it, which serves
   -- 'spaceIconFile'.
   , publish :: PageId -> PageEvent -> IO ()
-  -- ^ Who is told what happens to a page's comments: the server's live
-  -- channel ("Wiki.Server.Events"). Called once the change is committed,
-  -- before anyone else may use the connection, so it must not wait.
+  -- ^ Who is told what happens to a page: the server's live channel
+  -- ("Wiki.Server.Events"), told of every change to its comments and of
+  -- every save of it. Called once the change is committed, before anyone
+  -- else may use the connection, so it must not wait.
   }
 
 -- | Attachments at @\/api\/v1\/attachments\/\<id\>@, and nobody told of
@@ -538,7 +540,7 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   listPages = run Reads . listPagesTx
   getPage sid = run Reads . getPageTx sid
   createPage sid parent title = run Writes . createPageTx sid parent title
-  savePage pid base title = run Writes . savePageTx pid base title
+  savePage pid base title = saving . savePageTx pid base title
   movePage pid sid = run Writes . movePageTx pid sid
   deletePage = run Writes . deletePageTx
   uploadAttachment pid name mediaType = run Writes . uploadAttachmentTx pid name mediaType
@@ -554,7 +556,7 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   discardDraft = run Writes . discardDraftTx
   listVersions = run Reads . listVersionsTx
   getVersion pid = run Reads . getVersionTx pid
-  restoreVersion pid at = run Writes . restoreVersionTx pid at
+  restoreVersion pid at = saving . restoreVersionTx pid at
 
 -- | The administration's, as the class's Haddock says
 -- ("Wiki.App.Backend.Admin"): each operation one transaction that first
@@ -678,6 +680,22 @@ copyDatabase st target = withDatabase st (`backupInto` target)
 mayReadPage :: Storage -> Who -> PageId -> IO Bool
 mayReadPage st who pid = isRight <$> transact st who Reads (findNode pid >>= chainOfPage >>= requireView)
 
+-- | Someone as the live channel names whoever edits a page, if they may
+-- edit it ('Nothing' if they may not, or it is not there, or they are
+-- nobody signed in): what it asks before it tells anyone that they do.
+editorOf :: Storage -> Who -> PageId -> IO (Maybe Author)
+editorOf st who pid =
+  rightToMaybe
+    <$> transact
+      st
+      who
+      Reads
+      ( do
+          p <- findNode pid
+          requireEdit =<< chainOfPage p
+          asks (\x -> x.user) >>= maybe (failWith Forbidden) (\u -> pure Author {id = u.id, name = u.displayName})
+      )
+
 -- | A page's threads as someone may read them ('Left' if they may not, or
 -- the page is not there), and something done with them before any write
 -- can commit: what the live channel subscribes with ("Wiki.Server.Events"),
@@ -706,6 +724,13 @@ commenting tx = SqliteWiki $ do
   liftIO $
     fmap (\(a, _, _) -> a)
       <$> transactThen env.storage env.who Writes tx (\(_, page, event) -> env.storage.config.publish page event)
+
+-- | A save of a page, which, once it is committed, is told to whoever
+-- listens: a tab showing the page reads it again.
+saving :: (MonadIO m) => Tx Page -> SqliteWiki m (Either WikiError Page)
+saving tx = SqliteWiki $ do
+  env <- ask
+  liftIO (transactThen env.storage env.who Writes tx (\p -> env.storage.config.publish p.id (PageChanged p.updatedAt)))
 
 -- | An attachment someone may view (they may view its page), and the file
 -- its bytes are in when the storage keeps them; 'Nothing' for one that lives

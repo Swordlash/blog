@@ -78,10 +78,10 @@ spec = describe "golden JSON" $ do
     golden "threads" [Sample.inlineThread, Sample.pageThread]
     golden "comment" Sample.reply
   describe "the live channel's messages" $ do
-    golden "client-messages" [Subscribe (PageId "p1"), Unsubscribe (PageId "p1")]
+    golden "client-messages" [Subscribe (PageId "p1"), Unsubscribe (PageId "p1"), StartEditing (PageId "p1"), StopEditing (PageId "p1")]
     golden
       "server-messages"
-      [ Subscribed (PageId "p1") [Sample.inlineThread, Sample.pageThread]
+      [ Subscribed (PageId "p1") [Sample.inlineThread, Sample.pageThread] [Sample.author]
       , Refused (PageId "p2")
       , Event (PageId "p1") (ThreadOpened Sample.pageThread)
       , Event (PageId "p1") (CommentAdded Sample.reply)
@@ -89,6 +89,8 @@ spec = describe "golden JSON" $ do
       , Event (PageId "p1") (CommentDeleted (CommentThreadId "t1") (CommentId "c2"))
       , Event (PageId "p1") (ThreadResolved (CommentThreadId "t1") True)
       , Event (PageId "p1") (ThreadDeleted (CommentThreadId "t2"))
+      , Event (PageId "p1") (Editing [Sample.author])
+      , Event (PageId "p1") (PageChanged Sample.later)
       ]
   describe "errors" $ do
     golden "error-not-found" NotFound

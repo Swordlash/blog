@@ -245,7 +245,7 @@ newHttpEnvWith transport start = liftIO $ do
   cache <- newIORef start
   changes <- HS.create
   let change f = atomicModifyIORef' cache (\c -> (f c, ()))
-  feed <- newFeed (\page event -> change (afterComment page (Right event))) (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads)
+  feed <- newFeed (\page event -> change (afterEvent page event)) (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads)
   pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, changes, feed}
 
 -- | A backend over a transport that answers at once, a server's

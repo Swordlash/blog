@@ -39,6 +39,19 @@
 -- A socket is opened as whoever the browser's cookie says, and stays so:
 -- signing in or out 'restart's it.
 --
+-- = Editing
+--
+-- The editor says which page it edits ('startEditing', 'stopEditing'),
+-- and the feed tells the server, now if the socket is open and again
+-- each time it opens anew, after the pages watched have been subscribed
+-- to: the server forgets who edits with the connection that said so, so a
+-- new connection says it again. Who else edits a page comes as an event
+-- ('Wiki.Api.Events.Editing'), and with the answer to its subscription,
+-- which the feed tells as such an event after 'Replaced'; the feed keeps
+-- the last it heard of each page watched ('editorsOf'), for a view that
+-- starts watching a page another view watches already, which hears no
+-- answer of its own.
+--
 -- Natively there is no WebSocket ("Halogen.Net.WebSocket" gives one that
 -- never connects), and a feed does nothing: the server renders its pages
 -- with a backend over HTTP, whose page views watch their pages too.
@@ -60,6 +73,7 @@ import Control.Monad.Trans.Class (MonadTrans)
 import Data.Aeson (decodeStrict', encode)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Type.Equality (type (~))
 import Halogen.JSBits (inBrowser)
 import Halogen.Net.WebSocket qualified as WS
@@ -67,9 +81,10 @@ import Halogen.Query.HalogenM (HalogenM)
 import Halogen.Subscription (Emitter (..), Listener (..))
 import Halogen.Subscription qualified as HS
 import Protolude
-import Wiki.Api.Events (ClientMessage (..), PageEvent, ServerMessage (..), eventsPath)
+import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..), eventsPath)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Id (PageId)
+import Wiki.Core.Version (Author)
 
 -- | What the tab hears.
 data Heard
@@ -90,6 +105,12 @@ data Feed = Feed
   , unwatch :: PageId -> IO ()
   , restart :: IO ()
   -- ^ Open the socket again, as whoever the cookie now says.
+  , startEditing :: PageId -> IO ()
+  -- ^ Say that this tab edits a page, until 'stopEditing'.
+  , stopEditing :: PageId -> IO ()
+  , editorsOf :: PageId -> IO (Maybe [Author])
+  -- ^ Who else edits a page watched, as last heard; 'Nothing' until the
+  -- server has said.
   }
 
 -- | A feed that hears nothing: what there is natively, and for a backend
@@ -97,7 +118,16 @@ data Feed = Feed
 quietFeed :: IO Feed
 quietFeed = do
   channel <- HS.create
-  pure Feed {heard = channel.emitter, watch = \_ -> pass, unwatch = \_ -> pass, restart = pass}
+  pure
+    Feed
+      { heard = channel.emitter
+      , watch = \_ -> pass
+      , unwatch = \_ -> pass
+      , restart = pass
+      , startEditing = \_ -> pass
+      , stopEditing = \_ -> pass
+      , editorsOf = \_ -> pure Nothing
+      }
 
 -- | The tab's channel.
 class (Monad m) => MonadLive m where
@@ -125,6 +155,10 @@ data Channel = Channel
   -- ^ Whether it is open, and can send.
   , pages :: Map PageId Int
   -- ^ The pages watched, each with how many watch it.
+  , editing :: Set PageId
+  -- ^ The pages this tab edits.
+  , known :: Map PageId [Author]
+  -- ^ Who else edits each page watched, as the socket open now said.
   , pause :: Int
   -- ^ How long to wait before opening it again, in milliseconds.
   , generation :: Int
@@ -151,7 +185,7 @@ newFeed keep catchUp forget
   | not inBrowser = quietFeed
   | otherwise = do
       channel <- HS.create
-      held <- newIORef Channel {socket = Nothing, connecting = False, open = False, pages = mempty, pause = firstPause, generation = 0}
+      held <- newIORef Channel {socket = Nothing, connecting = False, open = False, pages = mempty, editing = mempty, known = mempty, pause = firstPause, generation = 0}
       let keeping = Keeping {keep, catchUp, forget}
       let tell = channel.listener.notify
           watch page = do
@@ -164,7 +198,7 @@ newFeed keep catchUp forget
           unwatch page = do
             gone <- atomicModifyIORef' held $ \c -> case Map.lookup page c.pages of
               Just n | n > 1 -> (c {pages = Map.insert page (n - 1) c.pages}, False)
-              Just _ -> (c {pages = Map.delete page c.pages}, True)
+              Just _ -> (c {pages = Map.delete page c.pages, known = Map.delete page c.known}, True)
               Nothing -> (c, False)
             when gone $ do
               c <- readIORef held
@@ -173,10 +207,17 @@ newFeed keep catchUp forget
               forget page
           restart = do
             old <- atomicModifyIORef' held $ \c ->
-              (c {socket = Nothing, open = False, connecting = not (null c.pages), generation = c.generation + 1, pause = firstPause}, c)
+              (c {socket = Nothing, open = False, connecting = not (null c.pages), known = mempty, generation = c.generation + 1, pause = firstPause}, c)
             traverse_ WS.close' old.socket
             unless (null old.pages) (connect held keeping tell)
-      pure Feed {heard = channel.emitter, watch, unwatch, restart}
+          startEditing page = do
+            c <- atomicModifyIORef' held (\c -> let c' = c {editing = Set.insert page c.editing} in (c', c))
+            when (c.open && not (Set.member page c.editing)) (say c (StartEditing page))
+          stopEditing page = do
+            c <- atomicModifyIORef' held (\c -> let c' = c {editing = Set.delete page c.editing} in (c', c))
+            when (c.open && Set.member page c.editing) (say c (StopEditing page))
+          editorsOf page = Map.lookup page . (\c -> c.known) <$> readIORef held
+      pure Feed {heard = channel.emitter, watch, unwatch, restart, startEditing, stopEditing, editorsOf}
 
 firstPause, longestPause :: Int
 firstPause = 1000
@@ -192,6 +233,7 @@ connect held keeping tell = do
   generation <- (\c -> c.generation) <$> readIORef held
   let current = (\c -> c.generation == generation) <$> readIORef held
       watched page = Map.member page . (\c -> c.pages) <$> readIORef held
+      heardEditors page editors = atomicModifyIORef' held (\c -> (c {known = Map.insert page editors c.known}, ()))
   WS.open eventsPath [] >>= \case
     -- Refused on the spot (the address is no WebSocket's): no socket,
     -- and no point in trying again.
@@ -201,23 +243,32 @@ connect held keeping tell = do
       void . (WS.opened socket).registerHandler $ \() -> whenM current $ do
         c <- atomicModifyIORef' held (\c -> let c' = c {open = True, pause = firstPause} in (c', c'))
         for_ (Map.keys c.pages) (say c . Subscribe)
+        -- The server knows nothing of what this tab edits on a new
+        -- connection.
+        for_ (Set.toList c.editing) (say c . StartEditing)
       void . (WS.messages socket).registerHandler $ \case
         WS.TextMessage text -> whenM current $ case decodeStrict' (encodeUtf8 text) of
           Just (Event page event) -> whenM (watched page) $ do
+            case event of
+              Editing editors -> heardEditors page editors
+              _ -> pass
             keeping.keep page event
             tell (Heard page event)
           -- An answer about a page unwatched since it was asked for is no
-          -- longer anyone's.
-          Just (Subscribed page threads) -> whenM (watched page) $ do
+          -- longer anyone's. Who else edits the page is told after the
+          -- threads, as the event that says it.
+          Just (Subscribed page threads editors) -> whenM (watched page) $ do
             keeping.catchUp page threads
+            heardEditors page editors
             tell (Replaced page threads)
+            tell (Heard page (Editing editors))
           _ -> pass
         WS.BinaryMessage _ -> pass
       void . (WS.closed socket).registerHandler $ \_ -> whenM current $ do
         -- Opened again after a pause, if anything is watched; otherwise
         -- when something is.
         c <- atomicModifyIORef' held $ \c ->
-          (c {socket = Nothing, open = False, connecting = not (null c.pages), pause = min longestPause (c.pause * 2)}, c)
+          (c {socket = Nothing, open = False, connecting = not (null c.pages), known = mempty, pause = min longestPause (c.pause * 2)}, c)
         -- What changes now goes unheard.
         traverse_ keeping.forget (Map.keys c.pages)
         unless (null c.pages) . void . forkIO $ do

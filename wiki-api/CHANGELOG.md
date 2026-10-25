@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Presence and saves on the live channel (WP4.12). `ClientMessage` gains
+`StartEditing` (`{"editing": page}`) and `StopEditing` (`{"stopped":
+page}`); `PageEvent` gains `Editing [Author]` (`{"type": "editing",
+"editors": [...]}`, who else edits the page, by id and display name, never
+by login) and `PageChanged UTCTime` (`{"type": "page-changed", "updatedAt":
+...}`, the page was saved). `Subscribed` carries a third field, who else
+edits the page then (`"editing"`), read as empty from a server that does not
+send it. `applyEvent` changes no thread for either new event. A client
+message must name exactly one of its four keys.
+
 Scheduled backups (WP4.9). `Wiki.Api.Backups`: `BackupSettingsOf s` (whether
 the server backs itself up, a `Schedule` of `DailyAt` hour and minute in UTC
 or `EveryHours`, a `Retention` of days and weeks, and a `DestinationOf s`, a

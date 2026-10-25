@@ -37,6 +37,17 @@
 -- subscribes again, and the answers carry what it shows afresh, as after
 -- any lost connection, so a lost event costs nothing.
 --
+-- = Who edits
+--
+-- A tab that opens a page's editor says so, and says when it closes it
+-- (WP4.12 of docs/PLAN.md); the hub keeps that per connection
+-- ("Wiki.Server.Presence"), from someone who may edit the page only, and
+-- drops it with the connection. Each time who edits a page changes, every
+-- connection subscribed to it is told who edits it besides itself
+-- ('Editing'), and the answer to a subscription says who does then. The
+-- storage tells the hub of every save of a page too ('PageChanged'), as
+-- of its comments.
+--
 -- The subscriptions are kept in memory, for the one process the server
 -- is. Pings every 20 seconds keep a quiet connection from being taken for
 -- a dead one, by Warp (which drops a connection idle for 30) or a proxy.
@@ -63,14 +74,17 @@ import Network.WebSockets qualified as WS
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Api.Error qualified as ApiError
-import Wiki.Api.Events (ClientMessage (..), PageEvent, ServerMessage (..))
+import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
 import Wiki.Core.Id (PageId)
-import Wiki.Server.Storage (Storage, Who, mayReadPage, threadsThen)
+import Wiki.Server.Presence (Key, Presence, editorsFor, leave, nobodyEditing, startEditing, stopEditing)
+import Wiki.Server.Storage (Storage, Who, editorOf, mayReadPage, threadsThen)
 
--- | Every connection open, and what each is subscribed to.
+-- | Every connection open, what each is subscribed to, and what each edits.
 data Hub = Hub
-  { connections :: TVar (Map Int Connection)
-  , next :: TVar Int
+  { connections :: TVar (Map Key Connection)
+  , presence :: TVar Presence
+  -- ^ Who edits which page, by connection.
+  , next :: TVar Key
   , closing :: TVar Bool
   -- ^ Set when the server stops: no connection is taken any more.
   }
@@ -102,7 +116,7 @@ data Outgoing
 
 -- | A hub with nobody connected.
 newHub :: IO Hub
-newHub = Hub <$> newTVarIO mempty <*> newTVarIO 0 <*> newTVarIO False
+newHub = Hub <$> newTVarIO mempty <*> newTVarIO nobodyEditing <*> newTVarIO 0 <*> newTVarIO False
 
 -- | How many messages a connection may have waiting before it is taken to
 -- be behind, and closed.
@@ -117,6 +131,24 @@ publish hub page event = atomically $ do
   for_ connections $ \c -> do
     subscribed <- Set.member page <$> readTVar c.pages
     when subscribed $ enqueue c (Tell page event)
+
+-- | Tell every connection subscribed to a page who edits it besides
+-- itself, as the presence now says: in the transaction that changed it.
+tellEditors :: Hub -> PageId -> STM ()
+tellEditors hub page = do
+  connections <- readTVar hub.connections
+  now <- readTVar hub.presence
+  for_ (Map.toList connections) $ \(k, c) -> do
+    subscribed <- Set.member page <$> readTVar c.pages
+    when subscribed $ enqueue c (Tell page (Editing (editorsFor k page now)))
+
+-- | Change the presence, and if that changed who edits a page, tell its
+-- subscribers.
+changePresence :: Hub -> PageId -> (Presence -> (Presence, Bool)) -> STM ()
+changePresence hub page change = do
+  (now, changed) <- change <$> readTVar hub.presence
+  writeTVar hub.presence now
+  when changed (tellEditors hub page)
 
 -- | Close every connection, and take no more: the server is stopping, and
 -- would otherwise wait for them (Warp waits ten seconds for the
@@ -163,28 +195,42 @@ serve storage hub who pending = do
         writeTVar hub.next (k + 1)
         modifyTVar' hub.connections (Map.insert k connection)
         pure k
-      let leave = atomically (modifyTVar' hub.connections (Map.delete key))
-      flip finally leave . WS.withPingThread socket 20 pass $
-        race_ (sending socket connection) (receiving socket connection)
+      -- Gone: it edits nothing any more, which the pages it edited hear.
+      let gone = atomically $ do
+            modifyTVar' hub.connections (Map.delete key)
+            (now, edited) <- leave key <$> readTVar hub.presence
+            writeTVar hub.presence now
+            traverse_ (tellEditors hub) edited
+      flip finally gone . WS.withPingThread socket 20 pass $
+        race_ (sending socket connection) (receiving key socket connection)
           `catch` \(_ :: WS.ConnectionException) -> pass
   where
     may page = mayReadPage storage who page
 
     -- What the tab asks for: subscriptions, each checked and answered.
-    receiving socket connection = forever $ do
+    receiving key socket connection = forever $ do
       message <- WS.receiveData socket
       case decode message of
         -- Answered with the page's threads, read as the connection's user
         -- may, and subscribed before the storage lets anything else write:
         -- every change committed after that read is told after the answer.
+        -- Who else edits the page is in it, read in the same transaction
+        -- as the subscription is made, so that every change of it after
+        -- the answer is told after it.
         Just (Subscribe page) -> do
           read' <- threadsThen storage who page $ \threads -> atomically $ do
             modifyTVar' connection.pages (Set.insert page)
-            enqueue connection (Say (Subscribed page threads))
+            editors <- editorsFor key page <$> readTVar hub.presence
+            enqueue connection (Say (Subscribed page threads editors))
           when (isLeft read') $ atomically $ do
             modifyTVar' connection.pages (Set.delete page)
             enqueue connection (Say (Refused page))
         Just (Unsubscribe page) -> atomically (modifyTVar' connection.pages (Set.delete page))
+        -- Taken from someone who may edit the page, named as the storage
+        -- names them; from anyone else, nothing to do.
+        Just (StartEditing page) ->
+          editorOf storage who page >>= traverse_ (\author -> atomically (changePresence hub page (startEditing key page author)))
+        Just (StopEditing page) -> atomically (changePresence hub page (stopEditing key page))
         -- Something else, from a newer tab or none: nothing to do.
         Nothing -> pass
 

@@ -858,7 +858,7 @@ comments m = describe "a page's comments" $ do
     before <- readsSoFar
     unsafeIOToPageM js_server_hang_up
     eventually $ said `shouldReturn` [Subscribe hello.id, Subscribe hello.id]
-    tell (Subscribed hello.id [made])
+    tell (Subscribed hello.id [made] [])
     eventually $ length <$> findAll ui ".page-comments .comment-thread" `shouldReturn` 1
     readsSoFar `shouldReturn` before
     length <$> findAll ui "mark.comment-mark" `shouldReturn` 0
@@ -901,7 +901,7 @@ comments m = describe "a page's comments" $ do
             , createdAt = demoNow
             , comments = [Comment {id = CommentId "comment-meanwhile", thread = CommentThreadId "thread-meanwhile", author = grace, body = "Made meanwhile.", createdAt = demoNow, editedAt = Nothing}]
             }
-    tell (Subscribed hello.id (preloaded <> [meanwhile]))
+    tell (Subscribed hello.id (preloaded <> [meanwhile]) [])
     find ui ".page-comments #comment-thread-thread-meanwhile .comment-body" >>= (`shouldHaveText` "Made meanwhile.")
     find ui "mark.comment-mark[data-thread='thread-hello-1']" >>= (`shouldHaveText` "a blog that is also a wiki")
     asked `shouldReturn` []

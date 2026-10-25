@@ -4,5 +4,11 @@
   },
   {
     "unsubscribe": "p1"
+  },
+  {
+    "editing": "p1"
+  },
+  {
+    "stopped": "p1"
   }
 ]
