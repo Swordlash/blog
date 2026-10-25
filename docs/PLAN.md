@@ -2287,6 +2287,15 @@ Amended by the planning session after each work package's report.
   bracket needs no escape outside links, and `docs/markdown.md` says so. A commonmark syntax
   spec of our own in `wiki-core` beside `mathSpec`, the same `Math` nodes, so rendering,
   search, slides and the preview need nothing. Started on `wp4.7-tex-delimiters` beside WP4.6.
+- **WP4.7 merged** (2026-10-25, PR #66, `main` at `5c87f9d`). `\(…\)` and `\[…\]` read as
+  inline and display math through `Wiki.Core.Markdown.TexMath.texMathSpec`, placed before
+  `defaultSyntaxSpec` so it sees the backslash before the escape does; the same `Math` and
+  `MathBlock` nodes, so nothing downstream changed. Accepted with it: an opener nothing
+  closes in the paragraph falls back to the escape; an existing page with a literal `\[…\]`
+  pair now shows a formula (none in the demo). `attachmentReference` writes a name's brackets
+  as `&#91;`/`&#93;` since `\[1\]` would be math (the read-back property caught it);
+  `parsec` added to wiki-core; `docs/markdown.md` documents the four delimiters; a browser
+  test checks the preview sets both kinds. Rebased over WP4.6 with one changelog conflict.
 - **WP4.8 Pin bump to haskell-halogen `f7ee7e3`** (the owner merged #72 to #76 on
   2026-10-25): a subscription's action now runs nested in the effect that dispatched its
   event (`preventDefault` from a `Window` emitter's action is in time when the page itself
