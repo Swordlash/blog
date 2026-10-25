@@ -158,11 +158,13 @@ test-suite wiki-server-test
     buildable: False
   else
     other-modules:
+        Test.Server.Access
         Test.Server.Accounts
         Test.Server.Api
         Test.Server.Fixture
         Test.Server.Http
         Test.Server.Import
+        Test.Server.Mail
         Test.Server.Options
         Test.Server.Render
         Test.Server.Static

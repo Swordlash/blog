@@ -29,6 +29,7 @@ import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Persist
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Export (encodeJson)
 import Wiki.Core.Id (PageId (..), UserId (..))
@@ -62,13 +63,17 @@ runKept opened = runMemWikiWith opened.store opened.wiki
 
 -- | What a reload has to bring back of a wiki: everything but who is signed
 -- in and the tab's object URLs, with the grants in an order of their own,
--- since the store keeps them by space.
+-- since the store keeps them by space; and but the wiki's settings and
+-- invitations, which the demo keeps for as long as the tab only: it starts
+-- open, as its prerendered pages are.
 lasting :: MemState -> MemState
 lasting st =
   st
     { current = Nothing
     , objectUrls = mempty
-    , grants = Grants {global = st.grants.global, spaces = sort st.grants.spaces, access = st.grants.access}
+    , grants = Grants {global = st.grants.global, spaces = sort st.grants.spaces, access = Open}
+    , newAccountsCreateSpaces = False
+    , invitations = mempty
     }
 
 -- | The wiki a fresh start from the database finds, which must be the one

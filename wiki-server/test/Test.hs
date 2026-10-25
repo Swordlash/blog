@@ -2,10 +2,12 @@ module Main (main) where
 
 import Protolude
 import Test.Hspec (hspec)
+import Test.Server.Access qualified as Access
 import Test.Server.Accounts qualified as Accounts
 import Test.Server.Api qualified as Api
 import Test.Server.Http qualified as Http
 import Test.Server.Import qualified as Import
+import Test.Server.Mail qualified as Mail
 import Test.Server.Options qualified as Options
 import Test.Server.Render qualified as Render
 import Test.Server.Static qualified as Static
@@ -29,3 +31,5 @@ main = hspec $ do
   Render.spec
   Import.spec
   Accounts.spec
+  Access.spec
+  Mail.spec

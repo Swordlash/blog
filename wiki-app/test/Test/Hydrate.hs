@@ -25,14 +25,15 @@ import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Halogen.HTML.Core (ElemName (..))
 import Halogen.Router.Duplex (decodeComponent)
 import Halogen.VDom.DOM.Monad (appendChild, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
 import Protolude
 import Test.Hspec
-import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Links (links, searchQueryOf)
@@ -45,12 +46,15 @@ import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Http.Request (Request (..), Response (..))
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..), savePageIn)
+import Wiki.App.Backend.Mem.State qualified as M
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.Static (Rendered (..), Start (..), prerenderedRoutes, renderLoading, startLoading, startRoute, startServed)
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (SpaceId (..), UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath, pathOf)
+import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Space qualified as S
 
 spec :: Spec
@@ -111,6 +115,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Search (Just "words") Nothing True
       , Admin
       , Unknown
+      , Invite (InvitationToken "valid")
       ]
 
 -- | The pages a server renders, adopted by the program that starts from
@@ -122,11 +127,11 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
 -- saved once, so that it has a history.
 servedPages :: Spec
 servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
-  for_ [("someone not signed in", Nothing), ("the administrator", Just (UserId "user-admin"))] $ \(whom, who) ->
+  for_ principals $ \(whom, wiki) ->
     describe ("as " <> whom) $
       for_ routes $ \at ->
         it ("keeps every node at " <> show at <> ", and asks nothing") $ do
-          transport <- apiOver (savedOnce {current = who})
+          transport <- apiOver wiki
           rendering <- newImmediateHttpEnv transport
           container <- detached (fmap snd . startServed Build rendering "/" at)
           original <- nodesOf container
@@ -143,6 +148,17 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
           map fst adopted `shouldBe` map fst original
   where
     path = either (panic . show) identity . parsePath
+    -- Someone not signed in, in the open wiki and in the wiki closed (to
+    -- whom every route is the way to sign in, but for an invitation's), and
+    -- the administrator, in the wiki closed (which changes nothing for them
+    -- but the administration's section on it).
+    principals =
+      [ ("someone not signed in", savedOnce {current = Nothing})
+      , ("someone not signed in, the wiki closed", closed savedOnce {current = Nothing})
+      , ("the administrator", savedOnce {current = Just (UserId "user-admin")})
+      , ("the administrator, the wiki closed", closed savedOnce {current = Just (UserId "user-admin")})
+      ]
+    closed st = st {M.grants = Grants {global = st.grants.global, spaces = st.grants.spaces, access = Closed}}
     routes =
       prerenderedRoutes (demoState demoNow)
         <> [ PageHistory (path "blog") (path "hello-world") (Just helloMade) AgainstPrevious
@@ -159,6 +175,8 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , NewSpace Nothing
            , Admin
            , Unknown
+           , Invite (InvitationToken "valid")
+           , Invite (InvitationToken "used")
            ]
 
 -- | The demo with its first post saved once by the editor.
@@ -184,9 +202,12 @@ apiOver st = do
   wiki <- newMemWiki st
   let spacePath s = fromMaybe [] (pathOf (`Map.lookup` st.spaces) s)
       pagePath p = fromMaybe [] (pathOf (`Map.lookup` st.pages) p)
+  now <- getCurrentTime
   table <- runMemWiki wiki $ do
     me <- session
     people <- directory
+    settings <- wikiSettings
+    invited <- invitations
     spaces <- listSpaces
     perSpace <- for (Map.elems st.spaces) $ \s -> do
       space <- getSpace (spacePath s.id)
@@ -207,6 +228,9 @@ apiOver st = do
           ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing} :: Either WikiError SessionInfo))
               : (links.spaces.list, answerOf (Right spaces :: Either WikiError [S.Space]))
               : (links.admin.directory, answerOf people)
+              : (links.admin.settings, answerOf settings)
+              : (links.admin.invitations, answerOf invited)
+              : (links.invitations.details (InvitationToken "valid"), answerOf (Right InvitationInfo {email = "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
               : concat perSpace
           )
       )

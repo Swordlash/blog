@@ -13,6 +13,7 @@ import Test.Hspec
 import Test.Server.Fixture (withRunningAs)
 import Wiki.Server (Server (..), ServerError (..), withServer)
 import Wiki.Server.Log (silentLogger)
+import Wiki.Server.Mail (Security (..), Smtp (..))
 import Wiki.Server.Options
 
 spec :: Spec
@@ -66,6 +67,30 @@ rules = describe "a configuration" $ do
     case parsed ["--data", "data", "--listen", "0.0.0.0:8080"] of
       Success o -> checkOptions o `shouldSatisfy` isRight
       _ -> expectationFailure "--listen 0.0.0.0:8080 was not taken"
+
+  it "mails through an SMTP server only with a sender and the wiki's address, and its port says how" $ do
+    let parsed = execParserPure defaultPrefs (info serveOptions mempty)
+        smtp = ["--data", "data", "--smtp-host", "mail.example.org"]
+    case parsed (smtp <> ["--smtp-from", "Wiki <wiki@example.org>", "--public-url", "https://wiki.example.org/wiki"]) of
+      Success o -> do
+        let checked = checkOptions o
+        (.publicUrl) <$> checked `shouldBe` Right (Just "https://wiki.example.org/wiki/")
+        (smtpOf <$> checked) `shouldBe` Right (Just Smtp {host = "mail.example.org", port = 587, security = StartTls, user = Nothing, from = "Wiki <wiki@example.org>"})
+      _ -> expectationFailure "the SMTP options were not taken"
+    case parsed (smtp <> ["--smtp-port", "465", "--smtp-user", "wiki", "--smtp-from", "wiki@example.org", "--public-url", "http://100.64.0.7:8080/"]) of
+      Success o -> ((\x -> x.security) <$> smtpOf o, o.smtpUser) `shouldBe` (Just ImplicitTls, Just "wiki")
+      _ -> expectationFailure "--smtp-port 465 was not taken"
+    case parsed (smtp <> ["--smtp-security", "plain", "--smtp-from", "w@example.org", "--public-url", "http://localhost/"]) of
+      Success o -> (\x -> x.security) <$> smtpOf o `shouldBe` Just Plain
+      _ -> expectationFailure "--smtp-security plain was not taken"
+    case parsed (smtp <> ["--smtp-password", "secret"]) of
+      Failure _ -> pass
+      _ -> expectationFailure "a password was taken on the command line"
+    options {smtpHost = Just "mail.example.org"} `shouldSatisfy` refusedFor "--smtp-from is needed"
+    options {smtpHost = Just "mail.example.org"} `shouldSatisfy` refusedFor "--public-url is needed"
+    options {smtpUser = Just "wiki"} `shouldSatisfy` refusedFor "--smtp-port, --smtp-security, --smtp-user and --smtp-from go with --smtp-host"
+    options {publicUrl = Just "wiki.example.org"} `shouldSatisfy` refusedFor "--public-url must start with http:// or https://"
+    options {publicUrl = Just "https:///"} `shouldSatisfy` refusedFor "--public-url has no host"
 
 refusedAtStart :: Spec
 refusedAtStart = describe "a server" $ do

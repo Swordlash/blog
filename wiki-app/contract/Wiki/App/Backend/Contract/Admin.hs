@@ -18,10 +18,11 @@ import Protolude hiding (reader)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.Api.Account (Account (..), NewAccount (..))
-import Wiki.Api.Admin (Directory (..))
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), defaultSettings)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin
 import Wiki.App.Backend.Contract (As (..), Fixture (..), Run)
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
 import Wiki.Core.Slug (Slug, mkSlug)
@@ -44,6 +45,7 @@ spec _ withFixture = around withFixture $ describe "MonadAdmin contract" $ do
   accounts
   groups
   membership
+  letsIn
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -339,3 +341,60 @@ membership = describe "addMember and removeMember" $ do
     run admin (addMember writers.id (UserId "user-nobody")) >>= (`shouldFailWith` NotFound)
     run admin (addMember (GroupId "group-nothing") readerId) >>= (`shouldFailWith` NotFound)
     run admin (removeMember (GroupId "group-nothing") readerId) >>= (`shouldFailWith` NotFound)
+
+--------------------------------------------------------------------------------
+-- Whom the wiki lets in
+
+letsIn :: (MonadWiki m, MonadAdmin m) => SpecWith (Fixture m)
+letsIn = describe "wikiSettings, invitations and the rest" $ do
+  it "keep a wiki open by default, and refuse its settings to whoever does not administer it" $ \(Fixture run) -> do
+    run admin wikiSettings >>= ok >>= (`shouldBe` defaultSettings)
+    for_ [Anonymous, editor, reader] $ \who -> do
+      run who wikiSettings >>= (`shouldFailWith` Forbidden)
+      run who (setWikiSettings closedWiki) >>= (`shouldFailWith` Forbidden)
+      run who invitations >>= (`shouldFailWith` Forbidden)
+      run who (invite "bea@example.org") >>= (`shouldFailWith` Forbidden)
+      run who (revokeInvitation (InvitationId "invitation-nothing")) >>= (`shouldFailWith` Forbidden)
+    run admin wikiSettings >>= ok >>= (`shouldBe` defaultSettings)
+
+  it "close a wiki to whoever has not signed in, public spaces included, and open it again" $ \(Fixture run) -> do
+    run admin (setWikiSettings closedWiki) >>= ok >>= (`shouldBe` closedWiki)
+    run admin wikiSettings >>= ok >>= (`shouldBe` closedWiki)
+    nobody <- run Anonymous session
+    (nobody.user, nobody.grants.access) `shouldBe` (Nothing, Closed)
+    run Anonymous (getSpace [slug "blog"]) >>= (`shouldFailWith` Forbidden)
+    -- Someone signed in reads the public spaces as before.
+    (\s -> s.grants.access) <$> run reader session `shouldReturn` Closed
+    run reader (getSpace [slug "blog"]) >>= ok >>= \s -> s.name `shouldBe` "Blog"
+    _ <- run admin (setWikiSettings defaultSettings) >>= ok
+    run Anonymous (getSpace [slug "blog"]) >>= ok >>= \s -> s.name `shouldBe` "Blog"
+    (\s -> s.grants.access) <$> run Anonymous session `shouldReturn` Open
+
+  it "keep whether new accounts create spaces" $ \(Fixture run) -> do
+    let creating = WikiSettings {access = Open, newAccountsCreateSpaces = True}
+    _ <- run admin (setWikiSettings creating) >>= ok
+    run admin wikiSettings >>= ok >>= (`shouldBe` creating)
+
+  it "invite an address, with the link's secret when it is not mailed, in place of any invitation it had" $ \(Fixture run) -> do
+    made <- run admin (invite "  bea@example.org ") >>= ok
+    (made.invitation.email, made.invitation.expired, isJust made.token) `shouldBe` ("bea@example.org", False, True)
+    made.invitation.expiresAt `shouldSatisfy` (> made.invitation.createdAt)
+    again <- run admin (invite "BEA@example.org") >>= ok
+    again.token `shouldNotBe` made.token
+    listed <- run admin invitations >>= ok
+    map (\i -> i.email) listed.invitations `shouldBe` ["BEA@example.org"]
+    _ <- run admin (invite "cy@example.org") >>= ok
+    length . (\l -> l.invitations) <$> (run admin invitations >>= ok) `shouldReturn` 2
+
+  it "refuse an address that is not one" $ \(Fixture run) ->
+    for_ ["", "bea", "bea@", "@example.org", "bea@example", "b ea@example.org"] $ \e ->
+      run admin (invite e) >>= shouldBeInvalid
+
+  it "revoke an invitation, which is then gone" $ \(Fixture run) -> do
+    made <- run admin (invite "bea@example.org") >>= ok
+    run admin (revokeInvitation made.invitation.id) >>= ok
+    (\l -> l.invitations) <$> (run admin invitations >>= ok) `shouldReturn` []
+    run admin (revokeInvitation made.invitation.id) >>= (`shouldFailWith` NotFound)
+
+closedWiki :: WikiSettings
+closedWiki = WikiSettings {access = Closed, newAccountsCreateSpaces = False}

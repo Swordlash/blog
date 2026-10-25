@@ -8,9 +8,12 @@ import Protolude
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec
+import Wiki.Api.Admin (WikiSettings (..), defaultSettings)
+import Wiki.Core.Access (Access (..))
 import Wiki.Server.Storage (closeStorage, defaultConfig, openStorage, withStorage)
 import Wiki.Server.Storage.Layout (databaseFile)
 import Wiki.Server.Storage.Migrate
+import Wiki.Server.Storage.Rows (loadSettings)
 
 -- | A database in a temporary file of its own.
 withFreshDatabase :: (FilePath -> Connection -> IO a) -> IO a
@@ -37,7 +40,7 @@ spec = describe "migrations" $ do
       migrate c `shouldReturn` [1 .. length migrations]
       schemaVersion c `shouldReturn` length migrations
       tables <- tableNames c
-      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "schema_version"] $ \t ->
+      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "schema_version"] $ \t ->
         tables `shouldContain` [t]
       rows <- query_ c "SELECT version FROM schema_version ORDER BY version"
       map fromOnly rows `shouldBe` [1 .. length migrations]
@@ -56,6 +59,18 @@ spec = describe "migrations" $ do
       execute_ c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ('h', 'user-1', 'a', 'b', 'c')"
       execute_ c "DELETE FROM users WHERE id = 'user-1'"
       query_ c "SELECT count(*) FROM sessions" `shouldReturn` [Only (0 :: Int)]
+
+  it "bring a database of accounts up to settings: an open wiki, and no invitation" $
+    withFreshDatabase $ \_ c -> do
+      applyMigrations (take 2 migrations) c `shouldReturn` [1, 2]
+      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
+      migrate c `shouldReturn` [3 .. length migrations]
+      tables <- tableNames c
+      for_ ["settings", "invitations"] $ \t -> tables `shouldContain` [t]
+      query_ c "SELECT count(*) FROM settings" `shouldReturn` [Only (0 :: Int)]
+      loadSettings c `shouldReturn` defaultSettings
+      defaultSettings.access `shouldBe` Open
+      query_ c "SELECT count(*) FROM users" `shouldReturn` [Only (1 :: Int)]
 
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do

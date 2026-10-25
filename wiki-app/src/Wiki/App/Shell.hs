@@ -968,6 +968,8 @@ hereIs path = \case
 
 waitsForPage :: State m -> Bool
 waitsForPage st = case (st.route, st.here) of
+  -- The closed frame shows no view that could say it has loaded.
+  _ | isShut st -> False
   (Page _ _, InSpace {}) -> True
   (EditPage _ _, InSpace {}) -> True
   (PageSource _ _, InSpace {}) -> True

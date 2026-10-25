@@ -55,9 +55,10 @@ import Wiki.Api.Links (links)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Standing (..))
-import Wiki.Server (Server (..), withServer)
+import Wiki.Server (Server (..), withServerMailer)
 import Wiki.Server.Log (silentLogger)
-import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions)
+import Wiki.Server.Mail (Mailer (..), Message, Smtp (..))
+import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions, smtpOf)
 import Wiki.Server.Storage (defaultConfig, importArchive, withStorage)
 
 -- | A server being driven by a test.
@@ -71,6 +72,10 @@ data Running = Running
   , logged :: IORef [Text]
   -- ^ What it logged, the latest first.
   , manager :: Manager
+  , outbox :: IORef [Message]
+  -- ^ What it mailed, the latest first: a server whose options name an
+  -- SMTP host mails here instead ('withRunningPrepared'), and one whose
+  -- host is @unreachable.test@ fails to.
   }
 
 -- | The files of a small built application, by path: what the tests of
@@ -138,6 +143,7 @@ withRunningPrepared change prepare test =
       BS.writeFile (staticDir </> path) bytes
     prepare dataDir staticDir
     logged <- newIORef []
+    outbox <- newIORef []
     manager <- newManager defaultManagerSettings {managerResponseTimeout = responseTimeoutMicro 60000000}
     let options =
           change
@@ -146,7 +152,18 @@ withRunningPrepared change prepare test =
               , adminListen = Just (Listen "127.0.0.1" 0)
               , staticDir = Just staticDir
               }
-    withServer (silentLogger (\line -> modifyIORef' logged (line :))) options $ \server ->
+        -- Mail goes into the outbox, as a mail server would take it, or
+        -- not at all.
+        mailer =
+          smtpOf options <&> \smtp ->
+            Mailer
+              { publicUrl = fromMaybe "" options.publicUrl
+              , deliver = \m ->
+                  if smtp.host == "unreachable.test"
+                    then pure (Left "The mail server at unreachable.test:587 did not answer in time.")
+                    else Right <$> modifyIORef' outbox (m :)
+              }
+    withServerMailer (silentLogger (\line -> modifyIORef' logged (line :))) options mailer $ \server ->
       test
         Running
           { public = root server.publicAddress
@@ -155,6 +172,7 @@ withRunningPrepared change prepare test =
           , staticDir
           , logged
           , manager
+          , outbox
           }
   where
     root = \case
