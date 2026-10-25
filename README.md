@@ -253,7 +253,9 @@ like the other options; `--static` goes back to the demo.
   as `backups/<time>.sqlite` and the attachments' files under `attachments/`,
   the files it already has skipped; nothing is ever deleted there. The section
   shows the last backup's time, size and result, when the next is due, and has
-  "Back up now". The deploy's `--keep` counts every file in `data/backups`, so a
+  "Back up now". Both prune the same directory, each by its own rule: a
+  scheduled backup deletes the deploy's backups that its days and weeks do not
+  keep, and the deploy's `--keep` counts every file in `data/backups`, so a
   deploy keeps only the ten newest even when the panel asks for weeks more.
 - **Restoring.** `wiki-server restore BACKUP --data DIR [--attachments DIR]`
   puts a backup back into a data directory no server is running on: it checks
