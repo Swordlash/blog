@@ -60,6 +60,7 @@ spec = describe "golden JSON" $ do
     golden "invitations" Sample.invitations
     golden "invited" Sample.invited
     golden "invitation-info" Sample.invitationInfo
+    golden "sign-in-methods" Sample.signInMethods
   describe "errors" $ do
     golden "error-not-found" NotFound
     golden "error-forbidden" Forbidden

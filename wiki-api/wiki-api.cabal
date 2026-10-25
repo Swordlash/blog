@@ -54,6 +54,7 @@ library
       Wiki.Api
       Wiki.Api.Account
       Wiki.Api.Admin
+      Wiki.Api.Auth
       Wiki.Api.Error
       Wiki.Api.Import
       Wiki.Api.Info

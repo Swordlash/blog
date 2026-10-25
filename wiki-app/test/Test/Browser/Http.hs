@@ -149,7 +149,7 @@ serveDemo = do
       pages <- for spaces $ \s -> (s,) . fromRight [] <$> listPages s.id
       people <- directory
       pure (me, spaces, pages, people)
-  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing}
+  answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = []}
   for_ people (answerWith "GET" links.admin.directory 200)
   answerWith "GET" "api/v1/spaces" 200 spaces
   for_ pages $ \(s, ps) -> do
@@ -257,10 +257,10 @@ signedInAs :: Text -> IO SessionInfo
 signedInAs uid = do
   wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId uid)})
   me <- runMemWiki wiki session
-  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn}
+  pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = []}
 
 nobody :: SessionInfo
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = []}
 
 -- | Signing in and out from the header, over the server's backend.
 accounts :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec

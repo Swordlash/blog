@@ -31,6 +31,7 @@ module Wiki.Server.Api
   , Signing (..)
   , callerAs
   , apiApplication
+  , registering
   , handlers
 
     -- * Errors
@@ -85,6 +86,7 @@ import Wiki.Server.Import (applyImport, planImport, readUpload)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
 import Wiki.Server.Mail (Mailer (..), invitationMessage)
+import Wiki.Server.Oidc (Flows, Provider, signInProvider)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles)
@@ -106,6 +108,10 @@ data Env = Env
   -- server hash a password.
   , mailer :: Maybe Mailer
   -- ^ Where invitations are mailed, if the server mails them.
+  , providers :: [Provider]
+  -- ^ The providers people may sign in with ("Wiki.Server.Oidc").
+  , flows :: Flows
+  -- ^ The round trips through their pages under way.
   }
 
 -- | Who is asking, as the listener found them for a request.
@@ -271,6 +277,11 @@ handlers env caller =
           { details = invitationDetails
           , accept = \token new -> making (\now -> Accounts.acceptInvitation env.storage now token new)
           }
+    , account =
+        AccountApi
+          { identities = signedInUser >>= \u -> liftIO (Accounts.signInMethods env.storage u) >>= either (throwError . wikiError) pure
+          , unlinkIdentity = \provider -> signedInUser >>= \u -> liftIO (Accounts.unlinkIdentity env.storage u provider) >>= either (throwError . wikiError) pure
+          }
     , spaces =
         SpacesApi
           { list = ask' listSpaces
@@ -350,10 +361,21 @@ handlers env caller =
           , invitations = (\listed -> Invitations {mailing = isJust env.mailer, invitations = listed.invitations}) <$> wiki invitations
           , invite = \body -> wiki (invite body.email) >>= liftIO . mailed
           , revokeInvitation = \i -> wiki (revokeInvitation i) $> NoContent
+          , unlinkIdentity = \u provider -> wiki (unlinkUserIdentity u provider) $> NoContent
           }
     }
   where
     who = caller.who
+    -- The session as the API answers it: with the providers the server
+    -- signs in with, which the storage does not know.
+    sessionInfo :: Session -> SessionInfo
+    sessionInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider env.providers}
+    -- The user signed in, for what only a user signed in has: refused to
+    -- someone who is not, and to the operator, who signs in with nothing.
+    signedInUser = case who of
+      AsUser u -> pure u
+      Anonymous -> refuse ApiError.Unauthenticated
+      Administrator -> refuse (ApiError.Invalid "Nobody signs in here: everyone who reaches this address is the administrator.")
     -- What signs in and out where nobody does (the admin listener, where
     -- everyone is the administrator already) is refused, saying so.
     signingHere = maybe (refuse (ApiError.Invalid "Nobody signs in here: everyone who reaches this address is the administrator.")) pure caller.signing
@@ -409,10 +431,6 @@ handlers env caller =
 -- that matters.
 registering :: Text
 registering = "~accounts"
-
--- | The session as the API answers it.
-sessionInfo :: Session -> SessionInfo
-sessionInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing}
 
 -- | How long to wait, in words: in minutes, rounded up, or seconds under one.
 waitText :: Int -> Text

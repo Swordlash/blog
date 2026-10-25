@@ -30,6 +30,24 @@
 -- the global create-spaces, and its maker is signed in as it at once.
 -- The secret is checked before the password is hashed, so that a link
 -- that lets nobody in costs the server nothing.
+--
+-- = Signing in with a provider
+--
+-- A user may sign in with an account at a provider instead of a password,
+-- or beside one (WP3.6 of docs/PLAN.md): an identity, the provider's
+-- account by the subject the provider knows it by ("Wiki.Server.Oidc" has
+-- the provider say who it is). 'landWith' decides what that comes to, in
+-- one transaction, by the same rules as the rest: the user whose identity
+-- it is is signed in, unless they are disabled; one that is no one's is
+-- connected to the user signed in who asked for that, or makes an account
+-- in an open wiki, or with an invitation in any wiki, which it uses up;
+-- otherwise a closed wiki refuses it. An account made so has no password,
+-- and a login made from what the provider said ('loginCandidates').
+--
+-- A user may disconnect their identities ('unlinkIdentity'), but not the
+-- last way they have in: an identity they cannot do without, having no
+-- password and no other. The administration may (its own operation,
+-- "Wiki.Server.Storage").
 module Wiki.Server.Accounts
   ( -- * Accounts
     accountOf
@@ -45,6 +63,16 @@ module Wiki.Server.Accounts
   , register
   , invitationFor
   , acceptInvitation
+
+    -- * Signing in with a provider
+  , Claimed (..)
+  , Intent (..)
+  , Landing (..)
+  , Refusal (..)
+  , landWith
+  , loginCandidates
+  , signInMethods
+  , unlinkIdentity
 
     -- * Sessions
   , signIn
@@ -63,7 +91,7 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID.Types qualified as UUID
 import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query, query_)
 import Protolude
-import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), NewAccount (..))
+import Wiki.Api.Account (Account (..), LinkedIdentity (..), InvitationInfo (..), InvitationToken (..), NewAccount (..), SignInMethods (..), signsInSomehow, withoutIdentity)
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Access (takesNewAccounts)
@@ -71,7 +99,7 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (User (..), checkLogin)
 import Wiki.Server.Password (checkPassword, hashPassword, newToken, tokenHash, verifyPassword)
 import Wiki.Server.Storage (Storage, readSettings, settingsWith, withDatabase)
-import Wiki.Server.Storage.Rows (AccountRow, Stamp (..), accountFromRow, deleteInvitation, deleteSessionsOf, grantCreateSpaces, insertAccount, loadAccount, pendingInvitation, selectAccounts, updateDisabled, updatePasswordHash)
+import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accountFromRow, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, pendingInvitation, refreshIdentity, selectAccounts, updateDisabled, updatePasswordHash)
 
 --------------------------------------------------------------------------------
 -- Accounts
@@ -211,7 +239,7 @@ acceptInvitation st now token new = runExceptT $ do
 
 -- | An account to make, checked, with its password hashed: its id, login,
 -- display name and the password's hash.
-prepared :: NewAccount -> ExceptT WikiError IO (UserId, Text, Text, Text)
+prepared :: NewAccount -> ExceptT WikiError IO (UserId, Text, Text, Maybe Text)
 prepared new = do
   (login, password) <- either (throwError . Invalid) pure ((,) <$> checkLogin new.login <*> checkPassword new.password)
   phc <- liftIO (hashPassword password)
@@ -219,18 +247,180 @@ prepared new = do
   let name = case T.strip new.displayName of
         "" -> login
         n -> n
-  pure (UserId uid, login, name, phc)
+  pure (UserId uid, login, name, Just phc)
 
 -- | Make a checked account, in a transaction under way, with the grant the
--- wiki's settings give a new one, and sign its maker in.
-makeAccount :: Connection -> UTCTime -> WikiSettings -> (UserId, Text, Text, Text) -> IO (Either WikiError (User, Text))
+-- wiki's settings give a new one, and sign its maker in. One without a
+-- password signs in another way: with a provider's account.
+makeAccount :: Connection -> UTCTime -> WikiSettings -> (UserId, Text, Text, Maybe Text) -> IO (Either WikiError (User, Text))
 makeAccount c now settings (uid, login, name, phc) =
-  insertAccount c uid login name (Just phc) >>= \case
+  insertAccount c uid login name phc >>= \case
     Left taken -> pure (Left (Conflict ("There is a user with the login " <> taken <> " already.")))
     Right account -> do
       when settings.newAccountsCreateSpaces (grantCreateSpaces c uid)
       token <- startSession c now uid
       pure (Right (account.user, token))
+
+--------------------------------------------------------------------------------
+-- Signing in with a provider
+
+-- | What a provider said of one of its accounts, once the server has
+-- checked that the provider said it ("Wiki.Server.Oidc").
+data Claimed = Claimed
+  { provider :: Text
+  -- ^ The provider, by the name the configuration gives it.
+  , subject :: Text
+  -- ^ Who the account is at the provider, for good.
+  , email :: Maybe Text
+  -- ^ Its e-mail address, only if the provider verified it.
+  , name :: Maybe Text
+  -- ^ The person's name, as they gave it there.
+  , login :: Maybe Text
+  -- ^ What they are called there, if anything (a GitHub login, an OpenID
+  -- Connect @preferred_username@): the first choice of a login here.
+  }
+  deriving stock (Eq, Show)
+
+-- | What signing in with a provider was asked for.
+data Intent
+  = -- | To sign in: as the user whose identity it is, or as a new account
+    -- where the wiki takes one.
+    SignInOnly
+  | -- | To connect it to this user, who was signed in when they asked.
+    LinkTo UserId
+  | -- | To make the account this invitation invites to.
+    Invited InvitationToken
+  deriving stock (Eq, Show)
+
+-- | What it came to.
+data Landing
+  = -- | Signed in as this user, whose new session's id this is; and
+    -- whether the account was made just now.
+    SignedInAs User Text Bool
+  | -- | The identity is this user's now (or already was).
+    Linked User
+  deriving stock (Eq, Show)
+
+-- | Why it came to nothing.
+data Refusal
+  = -- | The identity is a disabled user's.
+    DisabledAccount
+  | -- | Connecting it was asked for, but it is another user's.
+    AnotherUsers
+  | -- | Connecting it was asked for, but the user has an identity at that
+    -- provider already.
+    HasOneThere
+  | -- | Connecting it was asked for by a user who is gone, or disabled,
+    -- since.
+    NoOneToLink
+  | -- | It is no one's, and the wiki is closed.
+    ClosedWiki
+  | -- | It was to make an invitation's account, and the invitation cannot
+    -- be used (used, revoked or expired).
+    UnusableInvitation
+  deriving stock (Eq, Show)
+
+-- | Sign in with a provider's account, connect it, or make an account with
+-- it, as asked and as the wiki's rules allow, in one transaction (see the
+-- module's Haddock). What the provider says of the account now is kept
+-- with the identity.
+landWith :: Storage -> UTCTime -> Intent -> Claimed -> IO (Either Refusal Landing)
+landWith st now intent claimed = withDatabase st $ \c -> immediately c $
+  identityOf c claimed.provider claimed.subject >>= \case
+    Just found -> do
+      refreshIdentity c claimed.provider claimed.subject claimed.email claimed.name
+      case intent of
+        LinkTo me
+          | found.user /= me -> pure (Left AnotherUsers)
+          | otherwise -> maybe (Left NoOneToLink) (Right . Linked . (\a -> a.user)) <$> active c me
+        _ ->
+          active c found.user >>= \case
+            Nothing -> pure (Left DisabledAccount)
+            Just a -> Right . (\token -> SignedInAs a.user token False) <$> startSession c now a.user.id
+    Nothing -> case intent of
+      LinkTo me ->
+        active c me >>= \case
+          Nothing -> pure (Left NoOneToLink)
+          Just a -> do
+            theirs <- identitiesOf c me
+            if any (\i -> i.provider == claimed.provider) theirs
+              then pure (Left HasOneThere)
+              else do
+                insertIdentity c now me claimed.provider claimed.subject claimed.email claimed.name
+                pure (Right (Linked a.user))
+      Invited token ->
+        pendingInvitation c now (tokenHash token.text) >>= \case
+          Nothing -> pure (Left UnusableInvitation)
+          Just (i, _) -> do
+            made <- newAccount c
+            void (deleteInvitation c i)
+            pure (Right made)
+      SignInOnly -> do
+        settings <- settingsWith st c
+        if takesNewAccounts settings.access
+          then Right <$> newAccount c
+          else pure (Left ClosedWiki)
+  where
+    -- A user who may sign in: there, and not disabled.
+    active c u = mfilter (\a -> not a.disabled) <$> loadAccount c u
+    -- An account for the identity, with the first login of its candidates
+    -- no one has, and no password.
+    newAccount c = do
+      settings <- settingsWith st c
+      uid <- UserId . UUID.toText <$> generateV4
+      let tries = take 100 (loginCandidates claimed)
+          made login =
+            makeAccount c now settings (uid, login, fromMaybe login (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
+          go = \case
+            [] -> do
+              -- A hundred taken: one with a random end, which nobody has.
+              suffix <- T.take 8 . T.filter (/= '-') . UUID.toText <$> generateV4
+              made (fromMaybe "user" (head tries) <> "-" <> suffix)
+            l : rest -> made l >>= either (const (go rest)) (pure . Right)
+      go tries >>= \case
+        Left e -> panic ("no login could be made for an identity: " <> show e)
+        Right (user, token) -> do
+          insertIdentity c now user.id claimed.provider claimed.subject claimed.email claimed.name
+          pure (SignedInAs user token True)
+
+-- | The logins to try for an account made with a provider's account, the
+-- first that no one has to be taken: what the person is called there,
+-- else their e-mail address's local part, else their name, made into
+-- something a login can be (lower case, letters, digits, dots and
+-- underscores, with dashes between words, at most 40 characters), else
+-- @user@; then the same with @-2@, @-3@ and so on after it.
+loginCandidates :: Claimed -> [Text]
+loginCandidates claimed = base : [base <> "-" <> show n | n <- [2 :: Int ..]]
+  where
+    base = fromMaybe "user" (find (not . T.null) (map loginOf (catMaybes [claimed.login, localPart <$> claimed.email, claimed.name])))
+    localPart = T.takeWhile (/= '@')
+    loginOf = T.take 40 . T.intercalate "-" . filter (not . T.null) . T.split (not . allowed) . T.toLower
+    allowed ch = isAscii ch && (isAlphaNum ch || ch == '.' || ch == '_')
+
+-- | How a user signs in: whether with a password, and their identities.
+signInMethods :: Storage -> UserId -> IO (Either WikiError SignInMethods)
+signInMethods st u = withDatabase st (`methodsOf` u)
+
+methodsOf :: Connection -> UserId -> IO (Either WikiError SignInMethods)
+methodsOf c u =
+  loadAccount c u >>= \case
+    Nothing -> pure (Left NotFound)
+    Just a -> do
+      theirs <- identitiesOf c u
+      pure (Right SignInMethods {password = a.hasPassword, identities = map (\i -> i.identity) theirs})
+
+-- | A user disconnects their identity at a provider: how they sign in
+-- then. 'NotFound' if they have none there, 'Conflict' if it is the last
+-- way they have in.
+unlinkIdentity :: Storage -> UserId -> Text -> IO (Either WikiError SignInMethods)
+unlinkIdentity st u provider = withDatabase st $ \c -> immediately c $ runExceptT $ do
+  before <- ExceptT (methodsOf c u)
+  unless (any (\i -> i.provider == provider) before.identities) (throwError NotFound)
+  let after = withoutIdentity provider before
+  unless (signsInSomehow after) $
+    throwError (Conflict "This is the only way you have to sign in: connect another account first, or ask an administrator for a password.")
+  _ <- liftIO (deleteIdentity c u provider)
+  pure after
 
 --------------------------------------------------------------------------------
 -- Sessions

@@ -31,6 +31,7 @@ import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space qualified as S
 import Wiki.Server.Api (Env (..))
 import Wiki.Server.Limiter (defaultLimits, newLimiter)
+import Wiki.Server.Oidc (newFlows)
 import Wiki.Server.Render (inProcess)
 import Wiki.Server.Storage (Storage, Who (..))
 
@@ -97,4 +98,5 @@ apiEnv storage = do
   startedAt <- getCurrentTime
   limiter <- newLimiter defaultLimits
   registrations <- newLimiter defaultLimits
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, mailer = Nothing}
+  flows <- newFlows
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, mailer = Nothing, providers = [], flows}

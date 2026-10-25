@@ -84,6 +84,7 @@ module Wiki.App.Backend.Mem.State
   , invitationsIn
   , inviteIn
   , revokeInvitationIn
+  , unlinkUserIdentityIn
   )
 where
 
@@ -538,6 +539,8 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
             }
       , -- Switched to, which is the demo's signing in.
         B.standing = SignedIn
+      , -- The demo signs in with no provider.
+        B.providers = []
       }
 
 -- | The spaces the current user may view, with their ancestors.
@@ -972,6 +975,8 @@ directoryIn st = do
       , A.creators = Set.fromList [u | GlobalGrant (SubjectUser u) CreateSpaces <- st.grants.global, Map.member u st.users]
       , A.disabled = Set.intersection st.disabled (Map.keysSet st.users)
       , A.withPassword = Set.intersection st.passwords (Map.keysSet st.users)
+      , -- The demo signs in with no provider.
+        A.identities = mempty
       , A.groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) (Map.elems st.groups)
       , A.membership = Map.filter (not . Set.null) (Map.restrictKeys st.membership (Map.keysSet st.groups))
       }
@@ -1143,3 +1148,11 @@ revokeInvitationIn i st = do
   requireAdministrator st
   unless (Map.member i st.invitations) (Left NotFound)
   pure (st {invitations = Map.delete i st.invitations}, ())
+
+-- | Disconnect a user's account at a provider: the demo's users have none,
+-- so there is never one to disconnect, once the user is found.
+unlinkUserIdentityIn :: UserId -> Text -> MemState -> Either WikiError ()
+unlinkUserIdentityIn u _ st = do
+  requireAdministrator st
+  _ <- findUser st u
+  Left NotFound

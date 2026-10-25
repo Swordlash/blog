@@ -335,8 +335,9 @@ signedIn =
     , groups = mempty
     , grants = mempty
     , standing = SignedIn
+    , providers = []
     }
-nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn}
+nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = []}
 
 accounts :: Spec
 accounts = describe "signing in and out" $ do

@@ -238,6 +238,7 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
     token <- liftIO (show <$> generateV4)
     writeAt (\now -> inviteIn now token email)
   revokeInvitation = write . revokeInvitationIn
+  unlinkUserIdentity u = query . unlinkUserIdentityIn u
 
 -- | Everything is in memory: every read answers at once, and nothing is
 -- ever out of reach.

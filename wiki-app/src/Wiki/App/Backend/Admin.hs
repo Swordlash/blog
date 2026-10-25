@@ -65,6 +65,13 @@
 -- all of it in memory, mails nothing, and makes no account from a link:
 -- that takes a server (the invited person's half is
 -- "Wiki.App.Account"'s).
+--
+-- = Providers
+--
+-- A user may sign in with an account at a provider (WP3.6 of
+-- docs/PLAN.md), which the 'directory' lists by the provider's name
+-- ('Wiki.Api.Admin.Directory.identities'), and which an administrator may
+-- disconnect. The demo signs in with no provider: its users have none.
 module Wiki.App.Backend.Admin
   ( MonadAdmin (..)
   )
@@ -168,6 +175,15 @@ class (Monad m) => MonadAdmin m where
   revokeInvitation :: InvitationId -> m (Either WikiError ())
   default revokeInvitation :: (MonadTrans t, m ~ t n, MonadAdmin n) => InvitationId -> m (Either WikiError ())
   revokeInvitation = lift . revokeInvitation
+
+  -- | Disconnect a user's account at a provider (WP3.6 of docs/PLAN.md),
+  -- by the provider's name: they no longer sign in with it, and their
+  -- sessions end, as with a new password. 'NotFound' if they have none
+  -- there. Unlike a user disconnecting their own, it may be their last way
+  -- in.
+  unlinkUserIdentity :: UserId -> Text -> m (Either WikiError ())
+  default unlinkUserIdentity :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Text -> m (Either WikiError ())
+  unlinkUserIdentity u = lift . unlinkUserIdentity u
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadAdmin m) => MonadAdmin (HalogenM st act slots output m)

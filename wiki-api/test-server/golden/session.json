@@ -24,6 +24,12 @@
   "groups": [
     "g1"
   ],
+  "providers": [
+    {
+      "label": "GitHub",
+      "name": "github"
+    }
+  ],
   "standing": "SignedIn",
   "user": {
     "displayName": "Ada",

@@ -47,6 +47,15 @@ module Wiki.Server.Storage.Rows
   , updateDisabled
   , deleteSessionsOf
 
+    -- * Identities
+  , IdentityRow (..)
+  , identityOf
+  , identitiesOf
+  , insertIdentity
+  , refreshIdentity
+  , deleteIdentity
+  , loadIdentityProviders
+
     -- * Writes
   , insertUser
   , insertGroup
@@ -84,7 +93,7 @@ import Database.SQLite.Simple.FromField (FieldParser, FromField (..), ResultErro
 import Database.SQLite.Simple.FromRow (RowParser, field, fieldWith)
 import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
-import Wiki.Api.Account (Account (..), InvitationInfo (..))
+import Wiki.Api.Account (Account (..), LinkedIdentity (..), InvitationInfo (..))
 import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
 import Wiki.Core.Access (Access (..), accessName, readAccess)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -626,6 +635,61 @@ updateDisabled c u disabled = execute c "UPDATE users SET disabled = ? WHERE id 
 -- | End every session of a user.
 deleteSessionsOf :: Connection -> UserId -> IO ()
 deleteSessionsOf c u = execute c "DELETE FROM sessions WHERE user_id = ?" (Only u.text)
+
+--------------------------------------------------------------------------------
+-- Identities
+
+-- | An identity as its row has it (migrations/0004-identities.sql).
+data IdentityRow = IdentityRow
+  { provider :: Text
+  , subject :: Text
+  , user :: UserId
+  , identity :: LinkedIdentity
+  }
+
+-- | The identity a provider's account is, if it is anyone's.
+identityOf :: Connection -> Text -> Text -> IO (Maybe IdentityRow)
+identityOf c provider subject =
+  head
+    . map identityRow
+    <$> query c "SELECT provider, subject, user_id, email, display_name, linked_at FROM identities WHERE provider = ? AND subject = ?" (provider, subject)
+
+-- | A user's identities, by provider.
+identitiesOf :: Connection -> UserId -> IO [IdentityRow]
+identitiesOf c u =
+  map identityRow
+    <$> query c "SELECT provider, subject, user_id, email, display_name, linked_at FROM identities WHERE user_id = ? ORDER BY provider" (Only u.text)
+
+identityRow :: (Text, Text, Text, Maybe Text, Maybe Text, Stamp) -> IdentityRow
+identityRow (provider, subject, uid, email, name, Stamp linkedAt) =
+  IdentityRow {provider, subject, user = UserId uid, identity = LinkedIdentity {provider, email, name, linkedAt}}
+
+-- | Connect a provider's account to a user. The caller has made sure that
+-- it is no one's, and that the user has none at that provider.
+insertIdentity :: Connection -> UTCTime -> UserId -> Text -> Text -> Maybe Text -> Maybe Text -> IO ()
+insertIdentity c now u provider subject email name =
+  execute
+    c
+    "INSERT INTO identities (provider, subject, user_id, email, display_name, linked_at) VALUES (?, ?, ?, ?, ?, ?)"
+    (provider, subject, u.text, email, name, Stamp now)
+
+-- | What a provider says of an account now, kept for the next time it is
+-- shown.
+refreshIdentity :: Connection -> Text -> Text -> Maybe Text -> Maybe Text -> IO ()
+refreshIdentity c provider subject email name =
+  execute c "UPDATE identities SET email = ?, display_name = ? WHERE provider = ? AND subject = ?" (email, name, provider, subject)
+
+-- | Disconnect a user's account at a provider: whether they had one.
+deleteIdentity :: Connection -> UserId -> Text -> IO Bool
+deleteIdentity c u provider = do
+  execute c "DELETE FROM identities WHERE user_id = ? AND provider = ?" (u.text, provider)
+  (> 0) <$> changes c
+
+-- | The providers each user has an identity at, by user.
+loadIdentityProviders :: Connection -> IO (Map UserId [Text])
+loadIdentityProviders c = do
+  rows <- query_ c "SELECT user_id, provider FROM identities ORDER BY provider"
+  pure (Map.fromListWith (flip (<>)) [(UserId u, [p]) | (u, p) <- rows])
 
 --------------------------------------------------------------------------------
 -- Whom the wiki lets in

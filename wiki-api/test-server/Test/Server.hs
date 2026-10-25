@@ -24,7 +24,8 @@ import Servant.Server.Generic (AsServer)
 import Test.Hspec
 import Test.Sample qualified as Sample
 import Wiki.Api
-import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..))
+import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), NewAccount (..), NewPassword (..), withoutIdentity)
+import Wiki.Api.Auth (Purpose (..), callbackPath, startUrl)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invited (..), NewInvitation (..), defaultSettings)
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
@@ -79,6 +80,14 @@ stubs =
               if t == InvitationToken "secret" && new.password == "long enough"
                 then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
                 else refuse NotFound
+          }
+    , account =
+        AccountApi
+          { identities = pure Sample.signInMethods
+          , unlinkIdentity = \provider ->
+              if provider == "github"
+                then pure (withoutIdentity "github" Sample.signInMethods)
+                else refuse (Conflict "This is the only way you have to sign in.")
           }
     , spaces =
         SpacesApi
@@ -177,6 +186,7 @@ stubs =
           , invitations = pure Sample.invitations
           , invite = \body -> pure (invitedAs body.email)
           , revokeInvitation = \i -> if i == InvitationId "i1" then pure NoContent else refuse NotFound
+          , unlinkIdentity = \u provider -> if u == UserId "u2" && provider == "github" then pure NoContent else refuse NotFound
           }
     }
 
@@ -438,6 +448,24 @@ spec = describe "a server of the API's type" $ do
       (status <$> request methodDelete (links.admin.revokeInvitation (InvitationId "i1")) [] "") `shouldReturn` 204
       answers (request methodDelete (links.admin.revokeInvitation (InvitationId "i2")) [] "") 404 NotFound
       links.admin.revokeInvitation (InvitationId "i1") `shouldBe` "api/v1/admin/invitations/i1"
+
+  describe "signing in with providers" $ do
+    it "tells how the user signs in, and disconnects a provider's account by its name" $ do
+      links.account.identities `shouldBe` "api/v1/account/identities"
+      answers (getAt links.account.identities) 200 Sample.signInMethods
+      answers (request methodDelete (links.account.unlinkIdentity "github") [] "") 200 (withoutIdentity "github" Sample.signInMethods)
+      answers (request methodDelete (links.account.unlinkIdentity "google") [] "") 409 (Conflict "This is the only way you have to sign in.")
+
+    it "lets the administration disconnect a user's account at a provider" $ do
+      links.admin.unlinkIdentity (UserId "u2") "github" `shouldBe` "api/v1/admin/users/u2/identities/github"
+      (status <$> request methodDelete (links.admin.unlinkIdentity (UserId "u2") "github") [] "") `shouldReturn` 204
+      answers (request methodDelete (links.admin.unlinkIdentity (UserId "u1") "github") [] "") 404 NotFound
+
+    it "makes the addresses that sign in with a provider, relative and with their purpose" $ do
+      startUrl "github" SignInWith "/s/docs/" `shouldBe` "auth/github/start?next=%2Fs%2Fdocs%2F"
+      startUrl "github" Connect "/" `shouldBe` "auth/github/start?next=%2F&link=1"
+      startUrl "google" (AcceptInvitation (InvitationToken "abc")) "/wiki/" `shouldBe` "auth/google/start?next=%2Fwiki%2F&invite=abc"
+      callbackPath "google" `shouldBe` "auth/google/callback"
 
   describe "a space's permissions" $ do
     it "lists the grants on a space and its ancestors, with whom a grant may be given to" $ do

@@ -16,7 +16,7 @@ module Wiki.Server
   ( -- * Running a server
     serve
   , withServer
-  , withServerMailer
+  , withServerUsing
   , Server (..)
   , ServerError (..)
   )
@@ -24,6 +24,7 @@ where
 
 import Control.Concurrent.Async qualified as Async
 import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Network.Socket (AddrInfo (..), AddrInfoFlag (..), Family (..), SockAddr (..), Socket, SocketOption (..), SocketType (..), bind, close, defaultHints, getAddrInfo, getSocketName, listen, openSocket, setSocketOption)
@@ -37,7 +38,8 @@ import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
 import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
 import Wiki.Server.Log (Level (..), Logger, logWith, stdoutLogger)
 import Wiki.Server.Mail (Mailer, Smtp (..), securityName, smtpMailer)
-import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen, smtpOf, smtpPasswordVariable)
+import Wiki.Server.Oidc (OidcOption (..), Provider (..), kindName, newFlows, newProviders, redirectUri, secretVariable)
+import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, oidcSecrets, renderListen, smtpOf, smtpPasswordVariable)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
 import Wiki.Server.Storage (Config (..), withStorage)
@@ -76,8 +78,8 @@ serve options = do
 -- | Run a server while an action runs: its sockets bound, its storage open
 -- (migrated if need be), both closed when the action returns or throws.
 -- A configuration 'checkOptions' refuses throws a 'ServerError', as does a
--- static directory that is not there, and an SMTP user without a password
--- in the environment.
+-- static directory that is not there, an SMTP user without a password in
+-- the environment, and a provider without its client's secret there.
 withServer :: Logger -> ServeOptions -> (Server -> IO a) -> IO a
 withServer logger raw action = do
   options <- either (throwIO . ServerError) pure (checkOptions raw)
@@ -87,13 +89,21 @@ withServer logger raw action = do
       throwIO (ServerError ["--smtp-user " <> fromMaybe "" smtp.user <> " needs its password in the environment variable " <> smtpPasswordVariable])
     logWith logger Info [("event", "mail"), ("smtp", smtp.host <> ":" <> show smtp.port), ("security", securityName smtp.security), ("from", smtp.from)]
     pure (smtpMailer smtp password (fromMaybe "" options.publicUrl))
-  withServerMailer logger options mailer action
+  secrets <- for options.oidc $ \o -> (secretVariable o.name,) . fmap toS <$> lookupEnv (toS (secretVariable o.name))
+  configured <- either (throwIO . ServerError) pure (oidcSecrets options (\v -> join (lookup v secrets)))
+  providers <- newProviders (fromMaybe "" options.publicUrl) configured
+  for_ providers $ \p ->
+    logWith logger Info [("event", "oidc"), ("provider", p.option.name), ("kind", kindName p.option.kind), ("redirect", redirectUri p.publicUrl p.option.name)]
+  withServerUsing logger options mailer providers action
 
 -- | 'withServer' with the mail sent through this mailer, or none, whatever
--- the options say of SMTP: what the tests run, with a mailer of their own.
-withServerMailer :: Logger -> ServeOptions -> Maybe Mailer -> (Server -> IO a) -> IO a
-withServerMailer logger raw mailer action = do
+-- the options say of SMTP, and these providers to sign in with, whatever
+-- the environment says of their secrets: what the tests run, with a mailer
+-- and secrets of their own.
+withServerUsing :: Logger -> ServeOptions -> Maybe Mailer -> [Provider] -> (Server -> IO a) -> IO a
+withServerUsing logger raw mailer providers action = do
   options <- either (throwIO . ServerError) pure (checkOptions raw)
+  flows <- newFlows
   site <- for options.staticDir $ \dir -> openStaticSite dir >>= either (throwIO . ServerError . pure) pure
   startedAt <- getCurrentTime
   limiter <- newLimiter defaultLimits
@@ -110,6 +120,8 @@ withServerMailer logger raw mailer action = do
             , limiter
             , registrations
             , mailer
+            , providers
+            , flows
             }
         public =
           Listener

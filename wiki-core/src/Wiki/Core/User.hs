@@ -5,6 +5,7 @@
 module Wiki.Core.User
   ( User (..)
   , Standing (..)
+  , SignInProvider (..)
   , Group (..)
   , Membership
   , groupsOf
@@ -48,6 +49,19 @@ data Standing
   | -- | The server's operator, who is the administrator by where they ask
     -- from: the server's loopback admin listener.
     Operator
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | A provider people may sign in with instead of a password (OpenID
+-- Connect, WP3.6 of docs/PLAN.md), as the application shows it: the name
+-- the server's configuration gives it, which is also its place in the
+-- addresses that sign in with it (@auth\/\<name>\/start@), and the label
+-- of its button ("Sign in with GitHub"). Its client's secret, and
+-- everything else of how the server talks to it, stay on the server.
+data SignInProvider = SignInProvider
+  { name :: Text
+  , label :: Text
+  }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 

@@ -3,7 +3,11 @@
 -- | An invitation's page (@\/invite\/\<secret>\/@, WP3.5 of docs/PLAN.md):
 -- whom the invitation is for, and the form that makes its account, with the
 -- login, display name and password the person invited chooses. Making it
--- signs them in ('Accepted'), and the shell shows them the wiki.
+-- signs them in ('Accepted'), and the shell shows them the wiki. Where the
+-- server signs in with providers (WP3.6 of docs/PLAN.md), the account may
+-- be made with one instead, through a link to the server's round trip
+-- that carries the invitation ("Wiki.Api.Auth"), and signs in with it from
+-- then on.
 --
 -- An invitation that cannot be used (used already, revoked, expired) says
 -- so, and so does the page to someone signed in, who has an account
@@ -28,16 +32,20 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken, NewAccount (..))
+import Wiki.Api.Auth (Purpose (..), startUrl)
 import Wiki.App.Account (Accounts (..), accountErrorText)
 import Wiki.App.Backend (MonadLoad (..), Session (..), WikiError (..))
 import Wiki.App.View.Common (failureView)
-import Wiki.Core.User (User (..), minimumPasswordLength)
+import Wiki.Core.User (SignInProvider (..), User (..), minimumPasswordLength)
 
 data Input m = Input
   { accounts :: Maybe (Accounts m)
   -- ^ Signing in and making accounts, over a backend where people do.
   , token :: InvitationToken
   , session :: Session
+  , home :: Text
+  -- ^ The wiki's home page's address, where making the account with a
+  -- provider comes back to.
   }
 
 -- | The account is made, and this is the session its maker now has.
@@ -131,6 +139,14 @@ component =
               <div class="actions">
                 <button type="submit" class="primary" disabled={{ st.busy }}>Create my account</button>
               </div>
+              {% if not (null st.input.session.providers) %}
+                <div class="sign-in-providers">
+                  <p>Or sign in with an account you have elsewhere:</p>
+                  {% for p in st.input.session.providers %}
+                    <a class="provider-link" href={{ startUrl p.name (AcceptInvitation st.input.token) st.input.home }}>{{ "Create my account with " <> p.label }}</a>
+                  {% end %}
+                </div>
+              {% end %}
             </form>
           |]
 

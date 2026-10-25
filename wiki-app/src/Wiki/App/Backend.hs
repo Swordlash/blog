@@ -147,7 +147,7 @@ import Wiki.Core.Permission (Grants (..), Principal (..), SpaceAccess, SpacePerm
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
-import Wiki.Core.User (Standing (..), User (..))
+import Wiki.Core.User (SignInProvider, Standing (..), User (..))
 import Wiki.Core.Version (Version, VersionInfo)
 
 -- | Why a request was not carried out. See the module's Haddock for which is
@@ -194,6 +194,11 @@ data Session = Session
   , standing :: Standing
   -- ^ How they came to be who they are: whether they may sign in, or sign
   -- out, over a backend where people do.
+  , providers :: [SignInProvider]
+  -- ^ The providers one may sign in with instead of a password, over a
+  -- backend that has any (a server whose configuration names them, WP3.6
+  -- of docs/PLAN.md): part of the session so that the page a server
+  -- renders and the program's first render offer the same.
   }
   deriving stock (Eq, Show)
 
@@ -206,7 +211,7 @@ anonymous = anonymousIn Open
 -- ("Wiki.Core.Access"), so that the application knows before anyone signs
 -- in whether there is anything to show them.
 anonymousIn :: Access -> Session
-anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn}
+anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = []}
 
 -- | Whether the wiki is closed to whoever is asking: it is closed, and they
 -- have not signed in. They are shown the way to sign in and nothing else.

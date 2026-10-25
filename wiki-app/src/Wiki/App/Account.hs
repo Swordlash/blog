@@ -24,6 +24,15 @@
 -- read first ('invitationFor', to be told whom it is for) and then accept
 -- with the login and password they choose ('acceptInvitation'). Either
 -- signs them in as the new account, as 'signIn' does.
+--
+-- And someone may sign in with an account at a provider instead of a
+-- password (OpenID Connect, WP3.6 of docs/PLAN.md), which the server's
+-- configuration names: the session says which ('Session.providers'). That
+-- is a round trip through the provider's pages, which the browser makes by
+-- following a link to the server ("Wiki.Api.Auth"), not a method here; once
+-- signed in, a user sees the providers' accounts they sign in with
+-- ('identities') and may disconnect one ('unlinkIdentity'), unless it is
+-- their last way in.
 module Wiki.App.Account
   ( MonadAccount (..)
   , SignInError (..)
@@ -39,7 +48,7 @@ import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Halogen.Subscription (Emitter)
 import Protolude
-import Wiki.Api.Account (InvitationInfo, InvitationToken, NewAccount)
+import Wiki.Api.Account (InvitationInfo, InvitationToken, NewAccount, SignInMethods)
 import Wiki.App.Backend (Session, WikiError (..))
 
 -- | Why signing in did not work.
@@ -107,6 +116,18 @@ class (Monad m) => MonadAccount m where
   default acceptInvitation :: (MonadTrans t, m ~ t n, MonadAccount n) => InvitationToken -> NewAccount -> m (Either SignInError Session)
   acceptInvitation t = lift . acceptInvitation t
 
+  -- | How the user signed in signs in: whether with a password, and with
+  -- which providers' accounts.
+  identities :: m (Either WikiError SignInMethods)
+  default identities :: (MonadTrans t, m ~ t n, MonadAccount n) => m (Either WikiError SignInMethods)
+  identities = lift identities
+
+  -- | Disconnect the user's account at a provider, by the provider's name:
+  -- how they sign in then. 'Conflict' if it is their last way in.
+  unlinkIdentity :: Text -> m (Either WikiError SignInMethods)
+  default unlinkIdentity :: (MonadTrans t, m ~ t n, MonadAccount n) => Text -> m (Either WikiError SignInMethods)
+  unlinkIdentity = lift . unlinkIdentity
+
 -- | A component's handlers sign in and out through its monad.
 instance (MonadAccount m) => MonadAccount (HalogenM st act slots output m)
 
@@ -119,8 +140,10 @@ data Accounts m = Accounts
   , register :: NewAccount -> m (Either SignInError Session)
   , invitationFor :: InvitationToken -> m (Either WikiError InvitationInfo)
   , acceptInvitation :: InvitationToken -> NewAccount -> m (Either SignInError Session)
+  , identities :: m (Either WikiError SignInMethods)
+  , unlinkIdentity :: Text -> m (Either WikiError SignInMethods)
   }
 
 -- | The methods, from the monad's instance.
 accounts :: (MonadAccount m) => Accounts m
-accounts = Accounts {signIn, signOut, sessionChanges, register, invitationFor, acceptInvitation}
+accounts = Accounts {signIn, signOut, sessionChanges, register, invitationFor, acceptInvitation, identities, unlinkIdentity}

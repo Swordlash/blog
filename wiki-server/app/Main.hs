@@ -4,6 +4,7 @@
 -- >                     [--base-path PATH] [--static DIR] [--secure-cookies] …
 -- > wiki-server backup --data DIR [--keep N]
 -- > wiki-server users (list | add | password | admin | disable) --data DIR …
+-- > wiki-server oidc check --oidc NAME=KIND,CLIENT-ID[,ISSUER] … --public-url URL [NAME]
 -- > wiki-server --version
 --
 -- @serve@ (also what runs with no command) serves the wiki from the data
@@ -12,13 +13,14 @@
 -- copies ("Wiki.Server.Storage.Backup"), which the deploy script runs before
 -- it starts a new server; @users@ makes and changes the wiki's users and
 -- their passwords ("Wiki.Server.Console"), which is how the first
--- administrator is made.
+-- administrator is made; @oidc check@ asks the providers a server would
+-- sign in with how to, and prints the redirect URI to register with each.
 module Main (main) where
 
 import Options.Applicative
 import Protolude
 import Wiki.Server (ServerError (..), serve)
-import Wiki.Server.Console (Users, readPassword, runUsers, usersParser)
+import Wiki.Server.Console (OidcCheck, Users, environmentSecret, oidcCheckParser, readPassword, runOidcCheck, runUsers, usersParser)
 import Wiki.Server.Options (ServeOptions, serveOptions)
 import Wiki.Server.Storage.Backup (backup, defaultKeep)
 import Wiki.Server.Version (serverVersion)
@@ -31,6 +33,8 @@ data Command
     Backup FilePath Int
   | -- | Make or change a user.
     Users Users
+  | -- | Check the providers to sign in with.
+    Oidc OidcCheck
 
 commands :: ParserInfo Command
 commands =
@@ -39,6 +43,7 @@ commands =
           ( command "serve" (info (Serve <$> serveOptions) (progDesc "Serve the wiki (the default command)"))
               <> command "backup" (info backupCommand (progDesc "Copy the database aside into DIR/backups, keeping the last few copies"))
               <> command "users" (info (Users <$> usersParser) (progDesc "List, make and change the wiki's users: the first administrator is made here"))
+              <> command "oidc" (info (Oidc <$> oidcCheckParser) (progDesc "Check the providers people sign in with, and print their redirect URIs"))
           )
           <|> (Serve <$> serveOptions)
       )
@@ -69,3 +74,7 @@ main =
         Left why -> do
           putErrText ("wiki-server: " <> why)
           exitWith (ExitFailure 1)
+    Oidc c -> do
+      (fine, lines') <- runOidcCheck environmentSecret c
+      traverse_ putText lines'
+      unless fine (exitWith (ExitFailure 1))

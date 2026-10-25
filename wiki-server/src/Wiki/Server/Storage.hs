@@ -532,6 +532,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   invitations = run Reads invitationsTx
   invite email = liftIO newToken >>= run Writes . inviteTx email
   revokeInvitation = run Writes . revokeInvitationTx
+  unlinkUserIdentity u = run Writes . unlinkUserIdentityTx u
 
 -- | An attachment someone may view (they may view its page), and the file
 -- its bytes are in when the storage keeps them; 'Nothing' for one that lives
@@ -570,6 +571,9 @@ sessionTx = do
         , -- The administrator is the operator; anyone else named is a user
           -- the server took the request for, which is whoever signed in.
           standing = if u.id == administratorId then Operator else SignedIn
+        , -- The server's configuration names them, not the storage: the
+          -- API adds them ("Wiki.Server.Api").
+          providers = []
         }
 
 listSpacesTx :: Tx [Space]
@@ -1086,6 +1090,7 @@ directoryTx = do
   membership <- db loadMembership
   stored <- db loadGrants
   (disabled, withPassword) <- db loadAccountFlags
+  identities <- db loadIdentityProviders
   let ids = Set.fromList (map (\u -> u.id) users)
       holding p = Set.fromList [u | GlobalGrant (SubjectUser u) p' <- stored.global, p' == p, u `Set.member` ids]
   pure
@@ -1095,6 +1100,7 @@ directoryTx = do
       , creators = holding CreateSpaces
       , disabled
       , withPassword
+      , identities = Map.restrictKeys identities ids
       , groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) groups
       , membership = Map.filter (not . Set.null) (Map.restrictKeys membership (Set.fromList (map (\g -> g.id) groups)))
       }
@@ -1193,6 +1199,17 @@ revokeInvitationTx i = do
   requireAdministrator
   gone <- db (`deleteInvitation` i)
   unless gone (failWith NotFound)
+
+-- | An administrator disconnects a user's account at a provider, even
+-- their last way in (see 'MonadAdmin'), and ends the user's sessions, as
+-- a new password does: one of them may have been begun with it.
+unlinkUserIdentityTx :: UserId -> Text -> Tx ()
+unlinkUserIdentityTx u provider = do
+  requireAdministrator
+  _ <- findUser u
+  gone <- db (\c -> deleteIdentity c u provider)
+  unless gone (failWith NotFound)
+  db (`deleteSessionsOf` u)
 
 --------------------------------------------------------------------------------
 -- Whole wikis

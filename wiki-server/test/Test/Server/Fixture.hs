@@ -55,7 +55,7 @@ import Wiki.Api.Links (links)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Standing (..))
-import Wiki.Server (Server (..), withServerMailer)
+import Wiki.Server (Server (..), withServerUsing)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Mailer (..), Message, Smtp (..))
 import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions, smtpOf)
@@ -163,7 +163,7 @@ withRunningPrepared change prepare test =
                     then pure (Left "The mail server at unreachable.test:587 did not answer in time.")
                     else Right <$> modifyIORef' outbox (m :)
               }
-    withServerMailer (silentLogger (\line -> modifyIORef' logged (line :))) options mailer $ \server ->
+    withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options mailer [] $ \server ->
       test
         Running
           { public = root server.publicAddress

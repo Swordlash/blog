@@ -44,7 +44,7 @@ import Protolude
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Permission (Grants, SpacePermission, Subject)
-import Wiki.Core.User (Standing, User)
+import Wiki.Core.User (SignInProvider, Standing, User)
 
 -- | The answer to @GET \/api\/v1\/session@: who the current user is, with
 -- what the client needs to run the permission rules itself and hide what
@@ -61,6 +61,11 @@ data SessionInfo = SessionInfo
   , standing :: Standing
   -- ^ Whether they signed in (and may sign out), have not (and may sign
   -- in), or are the server's operator (and need neither).
+  , providers :: [SignInProvider]
+  -- ^ The providers one may sign in with instead of a password (WP3.6 of
+  -- docs/PLAN.md), in the order the server's configuration names them:
+  -- what the forms that sign in and make accounts offer. A wiki that
+  -- names none has none.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

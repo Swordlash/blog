@@ -24,6 +24,7 @@ module Test.Sample
   , invitations
   , invited
   , invitationInfo
+  , signInMethods
   )
 where
 
@@ -31,7 +32,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
-import Wiki.Api.Account (Account (..), InvitationInfo (..))
+import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Import
 import Wiki.Api.Types (SessionInfo (..))
@@ -45,7 +46,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Group (..), Standing (..), User (..))
+import Wiki.Core.User (Group (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | A time with a fraction of a second, as a page's version has.
@@ -154,6 +155,7 @@ sessionInfo =
           , access = Open
           }
     , standing = SignedIn
+    , providers = [SignInProvider {name = "github", label = "GitHub"}]
     }
 
 -- | A user's account, as the administration sees it.
@@ -235,6 +237,7 @@ directory =
     , creators = Set.fromList [UserId "u1"]
     , disabled = Set.fromList [UserId "u2"]
     , withPassword = Set.fromList [UserId "u1"]
+    , identities = Map.fromList [(UserId "u2", ["github", "google"])]
     , groups = [Group {id = GroupId "g1", name = "writers"}]
     , membership = Map.fromList [(GroupId "g1", Set.fromList [UserId "u2"])]
     }
@@ -276,3 +279,11 @@ invited = Invited {invitation, token = Just "c2VjcmV0IG9mIGFuIGludml0YXRpb24gZm9
 -- | An invitation as its link shows it.
 invitationInfo :: InvitationInfo
 invitationInfo = InvitationInfo {email = "bea@example.org", expiresAt = later}
+
+-- | How a user signs in: with a password, and an account at GitHub.
+signInMethods :: SignInMethods
+signInMethods =
+  SignInMethods
+    { password = True
+    , identities = [LinkedIdentity {provider = "github", email = Just "ada@example.org", name = Just "Ada Lovelace", linkedAt = time}]
+    }

@@ -33,6 +33,12 @@
 -- back: the field is emptied once it is saved.
 --
 -- Deleting a group asks first, in place, as deleting a space does.
+--
+-- A user who signs in with a provider's account (WP3.6 of docs/PLAN.md)
+-- is said to ("Signs in with GitHub"), and each such account may be
+-- disconnected, which ends their sessions, as long as it is not one's own
+-- (which one disconnects from one's own account's panel, where one is
+-- kept from disconnecting one's last way in).
 module Wiki.App.View.Admin
   ( Input (..)
   , component
@@ -42,6 +48,7 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
@@ -52,7 +59,7 @@ import Wiki.App.Backend (MonadLoad (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Common
 import Wiki.Core.Id (GroupId, UserId)
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), SignInProvider (..), User (..))
 
 newtype Input = Input {context :: Context}
 
@@ -116,6 +123,7 @@ data Action
   | SavePassword
   | CancelPassword
   | SetDisabled User Bool
+  | Unlink User Text
   | TypedNewGroup Text
   | CreateGroup
   | StartRenaming Group
@@ -282,6 +290,13 @@ component =
               {% if yourself %}
                 <span class="admin-note disable-self">You cannot disable your own login here.</span>
               {% end %}
+              {% if not yourself %}
+                {% for provider in providers %}
+                  <button type="button" class="identity-unlink" disabled={{ st.busy }} onClick={{ const (Unlink u provider) }}>
+                    {{ "Disconnect " <> labelOf provider }}
+                  </button>
+                {% end %}
+              {% end %}
             {% end %}
           </td>
         </tr>
@@ -295,10 +310,15 @@ component =
         (settingThis, typedPassword) = case st.settingPassword of
           Just (uid, typed) | uid == u.id -> (True, typed)
           _ -> (False, "")
+        providers = Map.findWithDefault [] u.id d.identities
+        labelOf name = maybe name (\p -> p.label) (find (\p -> p.name == name) st.input.context.session.providers)
+        others = T.intercalate " and " (map labelOf providers)
         accountState :: Text
         accountState
           | disabled = "Disabled"
-          | hasPassword = "Signs in with a password"
+          | hasPassword && null providers = "Signs in with a password"
+          | hasPassword = "Signs in with a password and " <> others
+          | not (null providers) = "Signs in with " <> others
           | otherwise = "No password yet"
 
     newUserForm :: State -> H.ComponentHTML Action Empty m
@@ -478,6 +498,11 @@ component =
           (\st -> st {usersProblem = Nothing, usersTold = Just (if off then u.displayName <> " can no longer sign in: their sessions have ended." else u.displayName <> " can sign in again.")})
           usersFailed
           (void <$> setDisabled u.id off)
+      Unlink u provider ->
+        change
+          (\st -> st {usersProblem = Nothing, usersTold = Just (u.displayName <> " no longer signs in with that account: their sessions have ended.")})
+          usersFailed
+          (unlinkUserIdentity u.id provider)
       TypedNewGroup t -> modify (\st -> st {newGroup = t})
       CreateGroup -> do
         name <- gets (\st -> st.newGroup)

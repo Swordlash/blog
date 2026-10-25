@@ -36,6 +36,13 @@ module Wiki.Api.Account
   , NewPassword (..)
   , AccountDisabled (..)
   , Account (..)
+
+    -- * Signing in with a provider
+  , LinkedIdentity (..)
+  , SignInMethods (..)
+  , signsInSomehow
+  , withoutIdentity
+  , mayDisconnect
   )
 where
 
@@ -99,6 +106,47 @@ data Account = Account
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+-- | An account at a provider (OpenID Connect, WP3.6 of docs/PLAN.md) that
+-- signs a user in: the provider, by the name the server's configuration
+-- gives it, and what it said of the user the last time they signed in
+-- with it. Who the user is at the provider (its subject) stays on the
+-- server, which is all it needs it for.
+data LinkedIdentity = LinkedIdentity
+  { provider :: Text
+  , email :: Maybe Text
+  -- ^ Their e-mail address, if the provider said it had verified one.
+  , name :: Maybe Text
+  -- ^ Their name there, if it said one.
+  , linkedAt :: UTCTime
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | How the user who is asking signs in: @GET \/api\/v1\/account\/identities@.
+data SignInMethods = SignInMethods
+  { password :: Bool
+  -- ^ Whether they have a password.
+  , identities :: [LinkedIdentity]
+  -- ^ The providers' accounts they may sign in with, by provider.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | Whether a user could still sign in: with a password, or with one of
+-- their identities. Disconnecting an identity that would leave them with
+-- neither is refused.
+signsInSomehow :: SignInMethods -> Bool
+signsInSomehow m = m.password || not (null m.identities)
+
+-- | How a user signs in once their identity at a provider is disconnected.
+withoutIdentity :: Text -> SignInMethods -> SignInMethods
+withoutIdentity provider m = m {identities = filter (\i -> i.provider /= provider) m.identities}
+
+-- | Whether a user may disconnect their identity at a provider: it would
+-- not leave them without a way to sign in.
+mayDisconnect :: Text -> SignInMethods -> Bool
+mayDisconnect provider = signsInSomehow . withoutIdentity provider
 
 -- | The secret an invitation's link carries (@\/invite\/\<token>\/@):
 -- random, single use, and kept by the server only as a hash, as a session

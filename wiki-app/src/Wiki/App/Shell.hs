@@ -424,7 +424,7 @@ component =
       Nothing
         | st.world /= WorldReady -> Nothing
         | Just accounts <- st.accounts ->
-            Just (HH.slot "signIn" () SignInView.component SignInView.Input {accounts, session = st.session} FromAccount)
+            Just (HH.slot "signIn" () SignInView.component SignInView.Input {accounts, session = st.session, here = Router.href st.router st.route} FromAccount)
         | otherwise -> Just [hh|<span class="user-name">{{ maybe "Not signed in" (\u -> u.displayName) st.session.user }}</span>|]
 
     -- The demo's menu of who one is: nobody, or one of its users.
@@ -645,7 +645,7 @@ component =
       NewSpace parent -> HH.slot "newSpace" () NewSpaceView.component NewSpaceView.Input {context = context st, parent} FromView
       Search text space subspaces ->
         HH.slot "searchResults" () SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
-      Invite token -> HH.slot "invite" () InviteView.component InviteView.Input {accounts = st.accounts, token, session = st.session} FromInvite
+      Invite token -> HH.slot "invite" () InviteView.component InviteView.Input {accounts = st.accounts, token, session = st.session, home = Router.href st.router Home} FromInvite
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading

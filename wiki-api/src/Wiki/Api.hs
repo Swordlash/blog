@@ -48,6 +48,7 @@ module Wiki.Api
   , ArchiveApi (..)
   , AdminApi (..)
   , InvitationsApi (..)
+  , AccountApi (..)
 
     -- * Sessions
   , WithCookie
@@ -68,7 +69,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
 import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
-import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword)
+import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, SignInMethods)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
@@ -114,6 +115,7 @@ data WikiApi mode = WikiApi
   -- 'Wiki.Api.Error.Conflict', and too many attempts from one address
   -- 'Wiki.Api.Error.TooManyRequests'.
   , invitations :: mode :- "invitations" :> NamedRoutes InvitationsApi
+  , account :: mode :- "account" :> NamedRoutes AccountApi
   , spaces :: mode :- "spaces" :> NamedRoutes SpacesApi
   , pages :: mode :- "pages" :> NamedRoutes PagesApi
   , attachments :: mode :- "attachments" :> NamedRoutes AttachmentsApi
@@ -280,6 +282,12 @@ data AdminApi mode = AdminApi
   -- can, and otherwise the answer carries it.
   , revokeInvitation :: mode :- "invitations" :> Capture "invitation" InvitationId :> DeleteNoContent
   -- ^ @revokeInvitation@: its link no longer makes an account.
+  , unlinkIdentity :: mode :- "users" :> Capture "user" UserId :> "identities" :> Capture "provider" Text :> DeleteNoContent
+  -- ^ @unlinkUserIdentity@: the user no longer signs in with that
+  -- provider's account (WP3.6 of docs/PLAN.md). Allowed even when it was
+  -- their last way in: an administrator may be taking away an account
+  -- that should never have been connected, and gives them a password
+  -- after. One they do not have is 'Wiki.Api.Error.NotFound'.
   }
   deriving stock (Generic)
 
@@ -293,6 +301,24 @@ data InvitationsApi mode = InvitationsApi
   -- ^ Make the account it invites to, with the login, name and password
   -- chosen, and be signed in as it: the invitation is used up. As
   -- 'register', but in a wiki open or closed.
+  }
+  deriving stock (Generic)
+
+-- | The account of whoever is asking, signed in (WP3.6 of docs/PLAN.md):
+-- the providers' accounts they sign in with. Signing in with one, and
+-- connecting one, are not here but at the server's own addresses
+-- (@auth\/\<provider>\/start@, "Wiki.Api.Auth"), which the browser goes to
+-- rather than fetches. Someone not signed in is refused with
+-- 'Wiki.Api.Error.Unauthenticated', the server's operator, who signs in
+-- with nothing, with 'Wiki.Api.Error.Invalid'.
+data AccountApi mode = AccountApi
+  { identities :: mode :- "identities" :> Get '[JSON] SignInMethods
+  -- ^ Whether they have a password, and their identities.
+  , unlinkIdentity :: mode :- "identities" :> Capture "provider" Text :> Delete '[JSON] SignInMethods
+  -- ^ Disconnect the identity of a provider: how they sign in then. One
+  -- that would leave them no way to sign in (no password, no other
+  -- identity) is 'Wiki.Api.Error.Conflict', one they do not have
+  -- 'Wiki.Api.Error.NotFound'.
   }
   deriving stock (Generic)
 

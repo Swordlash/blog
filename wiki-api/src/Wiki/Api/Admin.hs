@@ -92,6 +92,10 @@ data Directory = Directory
   -- ^ The users who have a password to sign in with. One brought in with
   -- an imported wiki, or made without one on the console, has none until
   -- one is set.
+  , identities :: Map UserId [Text]
+  -- ^ The providers each user may sign in with instead of a password
+  -- (WP3.6 of docs/PLAN.md), by the names the server's configuration gives
+  -- them; a user with none may be left out.
   , groups :: [Group]
   -- ^ Every group, by name.
   , membership :: Membership

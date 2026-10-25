@@ -28,7 +28,10 @@
 -- and nothing else, with a 401 too ("Wiki.Server.Render"). The
 -- application's files (its program, its styles) are served to anyone, since
 -- the page that signs one in needs them and they hold nothing of the
--- wiki's.
+-- wiki's. So are the addresses that sign in with a provider (@auth\/…@,
+-- "Wiki.Server.Auth"), which are the way in to a closed wiki as much as
+-- 'openToAnyone' is: they are answered before the closed wiki's rule, and
+-- only on the public listener, where people sign in.
 module Wiki.Server.App
   ( Listener (..)
   , Finding (..)
@@ -50,6 +53,7 @@ import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Accounts (Resolved (..), resolveSession)
 import Wiki.Server.Api (Caller (..), Env (..), Signing (..), apiApplication)
+import Wiki.Server.Auth (authApplication)
 import Wiki.Server.Log (Logger, logRequests)
 import Wiki.Server.Render (renderPage)
 import Wiki.Server.Session (CookieSettings, clearCookie, requestToken, sameOrigin, sessionCookie)
@@ -158,6 +162,7 @@ listenerRoutes logger env site l caller request respond = do
           rest@("api" : "v1" : endpoint)
             | shut, take 1 endpoint `notElem` map pure openToAnyone -> unauthenticated
             | otherwise -> api request {pathInfo = rest} respond
+          "auth" : provider : more -> authApplication logger env caller l.mount provider more request respond
           rest -> maybe notFound (\s -> serveStatic s l.mount (Just pages) rest request respond) site
     | readOnly && null segments -> redirect (encodeUtf8 l.mount)
     | otherwise -> notFound

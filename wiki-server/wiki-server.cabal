@@ -65,11 +65,13 @@ library
         Wiki.Server.Accounts
         Wiki.Server.Api
         Wiki.Server.App
+        Wiki.Server.Auth
         Wiki.Server.Console
         Wiki.Server.Import
         Wiki.Server.Limiter
         Wiki.Server.Log
         Wiki.Server.Mail
+        Wiki.Server.Oidc
         Wiki.Server.Options
         Wiki.Server.Password
         Wiki.Server.Render
@@ -101,6 +103,9 @@ library
         filepath,
         haskell-halogen-core,
         haskell-halogen-router,
+        http-api-data,
+        http-client,
+        http-client-tls,
         http-types,
         network,
         optparse-applicative,

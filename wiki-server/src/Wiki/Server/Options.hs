@@ -18,6 +18,11 @@
 -- server cannot know by itself behind a proxy. The SMTP password is not an
 -- option: it is read from the environment (@WIKI_SMTP_PASSWORD@), so that
 -- it is in no process list and no shell history.
+--
+-- People may sign in with the providers @--oidc@ names (WP3.6,
+-- "Wiki.Server.Oidc"), each registered there with the redirect URI below
+-- @--public-url@, which they need for it; each client's secret comes from
+-- the environment too ('Wiki.Server.Oidc.secretVariable').
 module Wiki.Server.Options
   ( -- * Options
     ServeOptions (..)
@@ -34,6 +39,9 @@ module Wiki.Server.Options
   , smtpOf
   , smtpPasswordVariable
 
+    -- * Providers
+  , oidcSecrets
+
     -- * Checks
   , checkOptions
   , normaliseBasePath
@@ -48,6 +56,7 @@ import Network.Socket qualified as Socket
 import Options.Applicative
 import Protolude
 import Wiki.Server.Mail (Security (..), Smtp (..), securityFor, securityName)
+import Wiki.Server.Oidc (OidcOption (..), checkOidcOption, parseOidcOption, secretVariable)
 
 -- | An address to listen on: a numeric IPv4 or IPv6 address and a port
 -- (port 0 for any free one, which the tests use).
@@ -175,7 +184,10 @@ data ServeOptions = ServeOptions
   -- ^ The sender of the mail.
   , publicUrl :: Maybe Text
   -- ^ The wiki's address as its readers reach it, which a mail's links
-  -- start with.
+  -- start with, and the redirect URIs of the providers.
+  , oidc :: [OidcOption]
+  -- ^ The providers people may sign in with, in the order their buttons
+  -- show.
   }
   deriving stock (Eq, Show)
 
@@ -197,6 +209,7 @@ defaultServeOptions dataDir =
     , smtpUser = Nothing
     , smtpFrom = Nothing
     , publicUrl = Nothing
+    , oidc = []
     }
 
 -- | The environment variable the SMTP account's password is read from.
@@ -232,7 +245,8 @@ serveOptions = do
   smtpSecurity <- optional (option security (long "smtp-security" <> metavar "tls|starttls|plain" <> help "How to protect the connection, if not as the port implies (plain only for a mail server on this machine or network)"))
   smtpUser <- optional (strOption (long "smtp-user" <> metavar "USER" <> help ("The account to sign in to the SMTP server as; its password is read from " <> toS smtpPasswordVariable)))
   smtpFrom <- optional (strOption (long "smtp-from" <> metavar "ADDRESS" <> help "The sender of the mail: wiki@example.org, or \"Wiki <wiki@example.org>\""))
-  publicUrl <- optional (strOption (long "public-url" <> metavar "URL" <> help "The wiki's address as its readers reach it (https://wiki.example.org/), which mailed links start with"))
+  publicUrl <- optional (strOption (long "public-url" <> metavar "URL" <> help "The wiki's address as its readers reach it (https://wiki.example.org/), which mailed links and the providers' redirect URIs start with"))
+  oidc <- many (option (eitherReader (first toS . parseOidcOption . toS)) (long "oidc" <> metavar "NAME=KIND,CLIENT-ID[,ISSUER]" <> help "A provider to sign in with (KIND google, apple, github or oidc, which needs its ISSUER); its client secret is read from WIKI_OIDC_<NAME>_SECRET. Repeatable"))
   pure
     ServeOptions
       { dataDir
@@ -249,6 +263,7 @@ serveOptions = do
       , smtpUser
       , smtpFrom
       , publicUrl
+      , oidc
       }
   where
     address = eitherReader (first toS . parseListen . toS)
@@ -303,3 +318,19 @@ checkOptions o =
            | isNothing o.smtpHost
            , o.smtpPort /= 587 || isJust o.smtpSecurity || isJust o.smtpUser || isJust o.smtpFrom
            ]
+        <> concatMap checkOidcOption o.oidc
+        <> ["--oidc names " <> n <> " more than once" | n <- ordNub names, length (filter (== n) names) > 1]
+        <> ["--public-url is needed with --oidc: the providers send people back below it (<public-url>auth/<name>/callback)" | not (null o.oidc), isNothing o.publicUrl]
+    names = map (\p -> p.name) o.oidc
+
+-- | Each provider with its client's secret, read from the environment by
+-- this lookup ('Wiki.Server.Oidc.secretVariable'), or every provider whose
+-- secret is missing.
+oidcSecrets :: ServeOptions -> (Text -> Maybe Text) -> Either [Text] [(OidcOption, Text)]
+oidcSecrets o lookupSecret = case partitionEithers (map withSecret o.oidc) of
+  ([], found) -> Right found
+  (missing, _) -> Left missing
+  where
+    withSecret p = case mfilter (not . T.null) (lookupSecret (secretVariable p.name)) of
+      Just s -> Right (p, s)
+      Nothing -> Left ("--oidc " <> p.name <> " needs its client secret in the environment variable " <> secretVariable p.name)

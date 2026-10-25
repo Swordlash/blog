@@ -56,7 +56,7 @@ import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.User (Standing (..), User (..))
+import Wiki.Core.User (SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | Any text, Unicode included.
@@ -125,7 +125,8 @@ genSessionInfo = do
   groups <- Set.fromList <$> resize 3 (listOf genGroupId)
   grants <- genGrants
   standing <- elements [NotSignedIn, SignedIn, Operator]
-  pure SessionInfo {user, groups, grants, standing}
+  providers <- resize 3 (listOf (SignInProvider <$> genText <*> genText))
+  pure SessionInfo {user, groups, grants, standing, providers}
 
 genCredentials :: Gen Credentials
 genCredentials = Credentials <$> genText <*> genText

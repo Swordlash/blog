@@ -83,7 +83,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import System.Timeout (timeout)
 import Web.Storage.IndexedDB (MonadIndexedDB)
-import Wiki.Api (AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
 import Wiki.Api.Error qualified as ApiError
@@ -431,6 +431,7 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   invitations = cached (\c -> c.invitations) (R.get links.admin.invitations) withInvitations
   invite email = write (withJson "POST" links.admin.invite NewInvitation {email})
   revokeInvitation i = write_ (R.delete (links.admin.revokeInvitation i))
+  unlinkUserIdentity u provider = write_ (R.delete (links.admin.unlinkIdentity u provider))
 
 -- | Signing in and out ("Wiki.App.Account"), each of which starts the
 -- cache over with the session it answered with.
@@ -450,6 +451,11 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
   -- the program's first render too.
   invitationFor token = cached (\c -> Map.lookup token c.invitationAt) (R.get (links.invitations.details token)) (withInvitationAt token)
   acceptInvitation token new = signingIn (withJson "POST" (links.invitations.accept token) (new :: NewAccount))
+
+  -- Read afresh each time they are shown: they change by a round trip
+  -- through a provider's pages, which this program does not see.
+  identities = answer <$> call (R.get links.account.identities)
+  unlinkIdentity provider = write (R.delete (links.account.unlinkIdentity provider))
 
 -- | A request that signs someone in, as signing in, making oneself an
 -- account and accepting an invitation do: the session one then has, with
