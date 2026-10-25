@@ -8,6 +8,7 @@ import Test.Server.Api qualified as Api
 import Test.Server.Http qualified as Http
 import Test.Server.Import qualified as Import
 import Test.Server.Mail qualified as Mail
+import Test.Server.Oidc qualified as Oidc
 import Test.Server.Options qualified as Options
 import Test.Server.Render qualified as Render
 import Test.Server.Static qualified as Static
@@ -33,3 +34,4 @@ main = hspec $ do
   Accounts.spec
   Access.spec
   Mail.spec
+  Oidc.spec

@@ -110,6 +110,8 @@ reading = describe "directory" $ do
     d.administrators `shouldBe` Set.singleton adminId
     d.creators `shouldBe` Set.singleton editorId
     (d.disabled, d.withPassword) `shouldBe` (mempty, mempty)
+    -- No one signs in with a provider in a wiki that has just been made.
+    d.identities `shouldBe` mempty
     map (\g -> g.name) d.groups `shouldBe` ["writers"]
     Map.elems d.membership `shouldBe` [Set.singleton editorId]
     Map.keys d.membership `shouldBe` map (\g -> g.id) d.groups
@@ -141,6 +143,8 @@ refusing = describe "refusals" $
       run who (setPassword readerId "a good password") >>= (`shouldFailWith` Forbidden)
       run who (setPassword nobody "") >>= (`shouldFailWith` Forbidden)
       run who (setDisabled readerId True) >>= (`shouldFailWith` Forbidden)
+      run who (unlinkUserIdentity readerId "github") >>= (`shouldFailWith` Forbidden)
+      run who (unlinkUserIdentity nobody "github") >>= (`shouldFailWith` Forbidden)
     -- Nothing was changed.
     d <- directoryNow run
     map (\g -> g.name) d.groups `shouldBe` ["writers"]
@@ -182,6 +186,11 @@ administrators = describe "setAdministrator" $ do
 
   it "finds nobody for an id that is no user's" $ \(Fixture run) ->
     run admin (setAdministrator (UserId "user-nobody") True) >>= (`shouldFailWith` NotFound)
+
+  it "finds no account at a provider that a user has not connected, nor a user for an id that is none" $ \(Fixture run) -> do
+    readerId <- idOf run reader
+    run admin (unlinkUserIdentity readerId "github") >>= (`shouldFailWith` NotFound)
+    run admin (unlinkUserIdentity (UserId "user-nobody") "github") >>= (`shouldFailWith` NotFound)
 
 --------------------------------------------------------------------------------
 -- Creating spaces

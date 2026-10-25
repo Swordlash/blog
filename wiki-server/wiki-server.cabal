@@ -166,10 +166,12 @@ test-suite wiki-server-test
         Test.Server.Access
         Test.Server.Accounts
         Test.Server.Api
+        Test.Server.FakeProvider
         Test.Server.Fixture
         Test.Server.Http
         Test.Server.Import
         Test.Server.Mail
+        Test.Server.Oidc
         Test.Server.Options
         Test.Server.Render
         Test.Server.Static
@@ -186,19 +188,24 @@ test-suite wiki-server-test
         bytestring,
         case-insensitive,
         containers,
+        cryptohash-sha256,
         directory,
         filepath,
         hspec >= 2,
+        http-api-data,
         http-client,
         http-types,
         network,
         optparse-applicative,
         protolude,
+        ram,
         servant,
         sqlite-simple,
         temporary,
         text,
         time,
+        wai,
+        warp,
         wiki-api,
         wiki-app,
         wiki-app:contract,

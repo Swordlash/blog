@@ -56,7 +56,9 @@ import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Standing (..))
 import Wiki.Server (Server (..), withServerUsing)
+import Test.Server.FakeProvider (clientSecret)
 import Wiki.Server.Log (silentLogger)
+import Wiki.Server.Oidc (newProviders)
 import Wiki.Server.Mail (Mailer (..), Message, Smtp (..))
 import Wiki.Server.Options (Listen (..), ServeOptions (..), defaultServeOptions, smtpOf)
 import Wiki.Server.Storage (defaultConfig, importArchive, withStorage)
@@ -163,7 +165,9 @@ withRunningPrepared change prepare test =
                     then pure (Left "The mail server at unreachable.test:587 did not answer in time.")
                     else Right <$> modifyIORef' outbox (m :)
               }
-    withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options mailer [] $ \server ->
+    -- Each provider the options name has the fake provider's secret.
+    providers <- newProviders (fromMaybe "" options.publicUrl) [(o, clientSecret) | o <- options.oidc]
+    withServerUsing (silentLogger (\line -> modifyIORef' logged (line :))) options mailer providers $ \server ->
       test
         Running
           { public = root server.publicAddress

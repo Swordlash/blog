@@ -14,12 +14,14 @@ import Test.Server.Fixture (withRunningAs)
 import Wiki.Server (Server (..), ServerError (..), withServer)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Security (..), Smtp (..))
+import Wiki.Server.Oidc (Kind (..), OidcOption (..), renderOidcOption, secretVariable)
 import Wiki.Server.Options
 
 spec :: Spec
 spec = describe "the server's options" $ do
   addresses
   rules
+  providers
   refusedAtStart
 
 addresses :: Spec
@@ -91,6 +93,45 @@ rules = describe "a configuration" $ do
     options {smtpUser = Just "wiki"} `shouldSatisfy` refusedFor "--smtp-port, --smtp-security, --smtp-user and --smtp-from go with --smtp-host"
     options {publicUrl = Just "wiki.example.org"} `shouldSatisfy` refusedFor "--public-url must start with http:// or https://"
     options {publicUrl = Just "https:///"} `shouldSatisfy` refusedFor "--public-url has no host"
+
+providers :: Spec
+providers = describe "providers to sign in with" $ do
+  let parsed = execParserPure defaultPrefs (info serveOptions mempty)
+      options = defaultServeOptions "data"
+      google = OidcOption {name = "google", kind = Google, clientId = "id.apps.googleusercontent.com", issuer = Nothing}
+      refusedFor prefix o = either (any (prefix `T.isPrefixOf`)) (const False) (checkOptions o)
+  it "are read from --oidc, as many as given, in order" $
+    case parsed ["--data", "data", "--public-url", "https://wiki.example.org/", "--oidc", "google=google,id.apps.googleusercontent.com", "--oidc", "corp=oidc,wiki,https://id.example.org/realms/x", "--oidc", "gh=github,Iv1.abc"] of
+      Success o -> do
+        checkOptions o `shouldSatisfy` isRight
+        o.oidc
+          `shouldBe` [ google
+                     , OidcOption {name = "corp", kind = Generic, clientId = "wiki", issuer = Just "https://id.example.org/realms/x"}
+                     , OidcOption {name = "gh", kind = GitHub, clientId = "Iv1.abc", issuer = Nothing}
+                     ]
+        map renderOidcOption o.oidc `shouldBe` ["google=google,id.apps.googleusercontent.com", "corp=oidc,wiki,https://id.example.org/realms/x", "gh=github,Iv1.abc"]
+      _ -> expectationFailure "the providers were not taken"
+  it "refuses one that cannot be read" $ do
+    for_ [["--oidc", "google"], ["--oidc", "x=facebook,id"], ["--oidc", "x=google"], ["--oidc", "x=oidc,a,b,c"]] $ \args ->
+      case parsed (["--data", "data"] <> args) of
+        Failure _ -> pass
+        _ -> expectationFailure ("taken: " <> show args)
+  it "needs --public-url, an issuer for oidc, a name of letters, digits and dashes, and each name once" $ do
+    options {oidc = [google]} `shouldSatisfy` refusedFor "--public-url is needed with --oidc"
+    let withUrl o = options {publicUrl = Just "https://wiki.example.org/", oidc = o}
+    withUrl [OidcOption {name = "corp", kind = Generic, clientId = "c", issuer = Nothing}] `shouldSatisfy` refusedFor "--oidc corp: a provider of kind oidc needs its issuer"
+    withUrl [OidcOption {name = "Corp_1", kind = Google, clientId = "c", issuer = Nothing}] `shouldSatisfy` refusedFor "--oidc Corp_1: a provider's name is lower-case letters"
+    withUrl [google, google] `shouldSatisfy` refusedFor "--oidc names google more than once"
+    withUrl [OidcOption {name = "corp", kind = Generic, clientId = "c", issuer = Just "http://id.example.org"}] `shouldSatisfy` refusedFor "--oidc corp: the address http://id.example.org must start with https://"
+    checkOptions (withUrl [OidcOption {name = "local", kind = Generic, clientId = "c", issuer = Just "http://127.0.0.1:9000"}]) `shouldSatisfy` isRight
+  it "take their secrets from the environment, never the command line" $ do
+    let o = options {publicUrl = Just "https://wiki.example.org/", oidc = [google, OidcOption {name = "my-corp", kind = Generic, clientId = "c", issuer = Just "https://id.example.org"}]}
+    secretVariable "my-corp" `shouldBe` "WIKI_OIDC_MY_CORP_SECRET"
+    oidcSecrets o (\v -> if v `elem` ["WIKI_OIDC_GOOGLE_SECRET", "WIKI_OIDC_MY_CORP_SECRET"] then Just ("secret of " <> v) else Nothing)
+      `shouldBe` Right [(google, "secret of WIKI_OIDC_GOOGLE_SECRET"), (OidcOption {name = "my-corp", kind = Generic, clientId = "c", issuer = Just "https://id.example.org"}, "secret of WIKI_OIDC_MY_CORP_SECRET")]
+    oidcSecrets o (\v -> if v == "WIKI_OIDC_GOOGLE_SECRET" then Just "s" else Nothing)
+      `shouldBe` Left ["--oidc my-corp needs its client secret in the environment variable WIKI_OIDC_MY_CORP_SECRET"]
+    oidcSecrets o (const (Just "")) `shouldSatisfy` isLeft
 
 refusedAtStart :: Spec
 refusedAtStart = describe "a server" $ do

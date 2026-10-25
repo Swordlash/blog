@@ -40,7 +40,7 @@ spec = describe "migrations" $ do
       migrate c `shouldReturn` [1 .. length migrations]
       schemaVersion c `shouldReturn` length migrations
       tables <- tableNames c
-      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "schema_version"] $ \t ->
+      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "schema_version"] $ \t ->
         tables `shouldContain` [t]
       rows <- query_ c "SELECT version FROM schema_version ORDER BY version"
       map fromOnly rows `shouldBe` [1 .. length migrations]
@@ -71,6 +71,20 @@ spec = describe "migrations" $ do
       loadSettings c `shouldReturn` defaultSettings
       defaultSettings.access `shouldBe` Open
       query_ c "SELECT count(*) FROM users" `shouldReturn` [Only (1 :: Int)]
+
+  it "bring a database of settings up to identities: none, each a user's, and gone with them" $
+    withFreshDatabase $ \_ c -> do
+      applyMigrations (take 3 migrations) c `shouldReturn` [1, 2, 3]
+      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
+      migrate c `shouldReturn` [4 .. length migrations]
+      tableNames c >>= (`shouldContain` ["identities"])
+      query_ c "SELECT count(*) FROM identities" `shouldReturn` [Only (0 :: Int)]
+      execute_ c "PRAGMA foreign_keys = ON"
+      execute_ c "INSERT INTO identities (provider, subject, user_id, linked_at) VALUES ('github', '42', 'user-1', 'now')"
+      -- A provider's account is one user's at most.
+      (try (execute_ c "INSERT INTO identities (provider, subject, user_id, linked_at) VALUES ('github', '42', 'user-1', 'later')") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
+      execute_ c "DELETE FROM users WHERE id = 'user-1'"
+      query_ c "SELECT count(*) FROM identities" `shouldReturn` [Only (0 :: Int)]
 
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do
