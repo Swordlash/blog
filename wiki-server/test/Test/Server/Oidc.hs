@@ -361,6 +361,8 @@ overHttp = describe "over HTTP" $ do
       safeNext "/wiki/" (Just "/other/") `shouldBe` "/wiki/"
       safeNext "/wiki/" (Just "/wiki/s/x/") `shouldBe` "/wiki/s/x/"
       safeNext "/" Nothing `shouldBe` "/"
+      safeNext "/" (Just "") `shouldBe` "/"
+      safeNext "/wiki/" (Just "/wiki") `shouldBe` "/wiki"
 
     it "limits the accounts made from one address" $ withOidc $ \fake r -> do
       for_ [1 .. 5 :: Int] $ \n -> do

@@ -213,7 +213,7 @@ refusalText p = \case
 safeNext :: Text -> Maybe Text -> Text
 safeNext mount = \case
   Just n
-    | mount `T.isPrefixOf` n || n == T.dropEnd 1 mount
+    | mount `T.isPrefixOf` n || (not (T.null n) && n == T.dropEnd 1 mount)
     , not ("//" `T.isInfixOf` n)
     , T.all (\c -> not (isControl c) && c /= '\\') n ->
         n
