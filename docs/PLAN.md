@@ -1932,3 +1932,51 @@ Amended by the planning session after each work package's report.
   pandoc/Beamer export: build on `deckOf` (level-1 title → title page or `\section`,
   level-2 → frame title, notes → `\note{}`, theme/aspect → `\usetheme`/`aspectratio`),
   pre-split since pandoc cuts at headings; islands would need server-side rendering.
+- **WP3.5 merged** (2026-10-25, PR #59, `main` at `a13a5f7`). Migration `0003-settings.sql`:
+  `settings (key, value)` (no row = default, so an existing deployment stays open) and
+  `invitations (id, email, token_hash, created_at, expires_at)`. `Wiki.Core.Access` (`Open |
+  Closed`) is a field of `Grants`; `Permission.publicTo access who` decides whether a public
+  space grants `View` to someone not signed in (never in a closed wiki), every rule follows
+  with no new argument; `<>` keeps closed if either side is, `mempty` is open; exports do
+  not carry it. Sessions carry `grants.access`, so the client knows the mode before sign-in.
+  The storage keeps the settings in memory and replaces them under the connection lock on a
+  write. Server: a closed wiki answers an anonymous caller 401 `Unauthenticated` on every API
+  endpoint but `info`, `session`, `accounts`, `invitations/…`, and renders the sign-in frame
+  with 401 for every page but an invitation's (404 when unusable); the admin listener is
+  unchanged. API: `POST api/v1/accounts` (open wiki only, signs in, limited 5 per address per
+  15 min together with invitation acceptance), `GET/POST api/v1/invitations/<secret>`,
+  `GET/PUT admin/settings` (`WikiSettings {access, newAccountsCreateSpaces}`, the latter for
+  self-made and invited accounts alike), `GET/POST admin/invitations` (`Invited {invitation,
+  token?, mailError?}`), `DELETE admin/invitations/<id>`. Invitations: 32 random bytes, stored
+  as SHA-256, single use, 7 days, inviting an address again replaces it; the link is shown
+  once, when made and only if not mailed (showing it later would mean storing the secret in
+  clear); expired ones stay listed as such until revoked or replaced; no secret in logs
+  (`Log.redactedPath`, hiding `Show` instances). Mail: `Wiki.Server.Mail` over `smtp-mail` +
+  `mime-mail` (MAIL/RCPT/DATA driven by hand so a failure message cannot quote the secret,
+  30 s timeout); options `--smtp-host`, `--smtp-port` (587; 465 implicit TLS), `--smtp-security
+  tls|starttls|plain`, `--smtp-user`, `--smtp-from`, `--public-url`, password only from
+  `WIKI_SMTP_PASSWORD`; `cabal.project` gains `allow-newer` for `serialise` and `cborg` (tls
+  2.4 on GHC 9.14). `Accounts` factors `prepared`, `makeAccount`, `startSession` out of
+  `signIn` (for OIDC). App: route `Invite` at `/invite/<secret>/` (a top-level prefix, no slug
+  word reserved); `View/SignIn` gains "Create account" (open wiki only), `View/Invite`,
+  `View/Access` panel section "Who may come in" (open/closed radio, the create-spaces
+  checkbox, invite form with the link once and "Copy link", table with Revoke, read even
+  when open, shown when closed); the shell shows a closed frame to a visitor at every route
+  but `Invite`; `MonadAdmin` gains `wikiSettings`, `setWikiSettings`, `invitations`, `invite`,
+  `revokeInvitation`; `MonadAccount` gains `register`, `invitationFor`, `acceptInvitation`;
+  the demo keeps settings and invitations for the tab's life, starts open, takes no
+  invitations. Deploy: `deploy-local.sh` takes the SMTP options and `--no-smtp`, remembers
+  them, keeps the password in `~/.config/wiki-demo/<name>.env` (mode 600, `EnvironmentFile=`,
+  deleted by `--purge`); compose passes `WIKI_SMTP_PASSWORD`; the image adds
+  `ca-certificates` (not built here). Tests: 23 HTTP cases (`Test.Server.Access`), a real SMTP
+  conversation against a sink plus redaction, options, migration from 2, contract on four
+  backends, hydration of the closed frame and both invitation pages at zero repairs, 7
+  browser cases, the server smoke test closes the wiki, makes an account by invitation and
+  reopens, 2 deploy cases; core 597, app 691, server 451, browser 141; `app.wasm` 8.77 MB.
+  Not done: no e-mail on the user record; a setting changed by another process is seen only
+  after a restart (nothing does that); no console `settings` command (the admin listener is
+  the recovery). For WP3.6: an unknown identity becomes an account through `makeAccount`
+  without a password (`insertAccount` takes `Maybe`), `register`'s path in an open wiki and
+  `acceptInvitation`'s in a closed one (the invite page offering "sign in with …", the
+  secret in the OIDC `state`); the callback endpoints join `App.openToAnyone`; rate-limit
+  with `env.registrations`.
