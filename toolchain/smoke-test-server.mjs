@@ -232,7 +232,9 @@ async function newPage({ anonymous = false } = {}) {
     await route.continue();
   });
   await page.route("**/api/v1/**", async (route) => {
-    page.apiAsked.push(route.request().url());
+    // What the program asks, not what the page shows from the API's
+    // addresses (a space's icon, an attached image), which is the page's.
+    if (route.request().resourceType() === "fetch") page.apiAsked.push(route.request().url());
     await page.apiGate;
     await route.continue();
   });
@@ -254,6 +256,11 @@ async function programStarted(page) {
 // fills it, or the browser writes a time in the reader's zone) and inside
 // the editor's host, where CodeMirror goes in place of the textarea.
 const unadopted = ".wiki-math, .wiki-mermaid, .wiki-tikz, .wiki-code, .wiki-time, .editor-cm";
+// What the browser fills in from what it keeps itself, after the first
+// render, whatever the server sent: the directory's spaces visited last,
+// which this browser's local storage holds (Wiki.App.Recent). Neither it nor
+// what is in it is a repair.
+const browsers = ".recent-spaces";
 
 // Load an address with app.wasm and the API held back: mark every node of
 // the page as the server sent it, and what its content says, let the
@@ -268,23 +275,24 @@ async function loadAdopted(page, path) {
   const response = await page.goto(url(path), { waitUntil: "commit" });
   await page.locator("#app .wiki").waitFor({ timeout });
   const shown = await page.locator("#app .wiki-content").textContent();
-  await page.evaluate((unadopted) => {
+  await page.evaluate(({ unadopted, browsers }) => {
     const app = document.querySelector("#app");
     app.querySelector(".wiki").dataset.prerendered = "true";
     const marks = new Map();
     const walker = document.createTreeWalker(app, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
       if (node.parentElement?.closest(unadopted)) continue;
+      if ((node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest(browsers)) continue;
       marks.set(node, node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].map((a) => `${a.name}=${a.value}`).join(" "));
     }
     window.smokePrerendered = marks;
-  }, unadopted);
+  }, { unadopted, browsers });
   releaseWasm();
   page.wasmGate = null;
   await eventually(async () => assert.ok(await programStarted(page), "no listener yet"), `${path}: the program starting`);
   // A moment for anything the adoption would change to be changed.
   await page.waitForTimeout(300);
-  const repairs = await page.evaluate((unadopted) => {
+  const repairs = await page.evaluate(({ unadopted, browsers }) => {
     const app = document.querySelector("#app");
     const found = [];
     for (const [node, was] of window.smokePrerendered) {
@@ -299,10 +307,11 @@ async function loadAdopted(page, path) {
     const walker = document.createTreeWalker(app, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
       if (node.parentElement?.closest(unadopted)) continue;
+      if ((node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement)?.closest(browsers)) continue;
       if (!window.smokePrerendered.has(node) && !(node.nodeType === Node.TEXT_NODE && node.data === "")) found.push(`built: ${node.nodeName}`);
     }
     return found;
-  }, unadopted);
+  }, { unadopted, browsers });
   const asked = [...page.apiAsked];
   releaseApi();
   page.apiGate = null;
@@ -460,7 +469,7 @@ try {
   const front = await fetch(url("/"));
   assert.equal(front.status, 200);
   const frontHtml = await front.text();
-  assert.match(frontHtml, /<h1>Welcome to the wiki<\/h1>/, "the front page is not rendered");
+  assert.match(frontHtml, /<section class="directory">.*<h1>Spaces<\/h1>/s, "the front page, the directory of spaces, is not rendered");
   assert.ok(!frontHtml.includes("Loading…"), "the front page is the application loading");
   assert.match(frontHtml, /<script type="application\/json" id="wiki-preload">/, "the front page carries nothing for the program");
   const page = await newPage({ anonymous: true });
@@ -688,9 +697,11 @@ try {
   await icon.waitFor({ timeout });
   const iconSrc = await icon.getAttribute("src");
   assert.match(iconSrc, /^api\/v1\/spaces\/[^/]+\/icon\/[0-9a-f]{64}$/, "the icon's address");
-  const served = await fetch(new URL(iconSrc, page.url()), { headers: { Cookie: sessionCookie } });
-  assert.equal(served.status, 200, "the icon, served");
-  assert.ok(Buffer.from(await served.arrayBuffer()).equals(pixel), "the icon's bytes");
+  // Relative to the page's base, as the browser fetched it.
+  const iconAddress = await page.evaluate((src) => new URL(src, document.baseURI).href, iconSrc);
+  const iconServed = await fetch(iconAddress, { headers: { Cookie: sessionCookie } });
+  assert.equal(iconServed.status, 200, "the icon, served");
+  assert.ok(Buffer.from(await iconServed.arrayBuffer()).equals(pixel), "the icon's bytes");
   await eventually(async () => assert.equal(await icon.evaluate((img) => img.complete && img.naturalWidth), 1, "not yet"), "the icon drawn");
   console.log("ok: a space's settings give it a description, an emoji, and an uploaded image the server serves");
   await page.context().close();
@@ -830,8 +841,8 @@ try {
     ["/", 200, "Smoke space"],
     ["/s/smoke-public/", 200, "Smoke public"],
     ["/s/smoke-public/pages/", 200, "Where the smoke test writes in public."],
-    ["/s/smoke-space/", 200, "First page"],
-    ["/s/smoke-space/pages/", 200, "Pages and settings"],
+    ["/s/smoke-space/", 200, "Welcome to Smoke space."],
+    ["/s/smoke-space/pages/", 200, "Space settings"],
     ["/s/smoke-space/p/first-page/", 200, "Saved by someone else."],
     ["/s/smoke-space/p/first-page/source/", 200, "(attachment:notes.txt)"],
     ["/s/smoke-space/p/first-page/history/", 200, "Version 1"],
