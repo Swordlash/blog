@@ -18,3 +18,12 @@ function wiki_test_watch_keys() {
 function wiki_test_last_key_prevented() {
   return wikiTestKeyPrevented === true;
 }
+
+// Dispatch a keydown of this key to the page's body, as a key pressed with
+// nothing focused, and say whether a listener prevented its default. The
+// listeners run during the dispatch, so this is what they did there.
+function wiki_test_dispatch_key(key) {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+  document.body.dispatchEvent(event);
+  return event.defaultPrevented;
+}

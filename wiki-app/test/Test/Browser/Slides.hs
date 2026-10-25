@@ -9,7 +9,7 @@ module Test.Browser.Slides (spec) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Text qualified as T
-import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, start)
@@ -18,8 +18,10 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
 $( browserJS
-     ["jsbits/test-location.js"]
-     [("js_location_hash", "wiki_test_location_hash", Unsafe, [t|IO JSText|])]
+     ["jsbits/test-location.js", "jsbits/test-keys.js"]
+     [ ("js_location_hash", "wiki_test_location_hash", Unsafe, [t|IO JSText|])
+     , ("js_dispatch_key", "wiki_test_dispatch_key", Unsafe, [t|JSText -> IO Bool|])
+     ]
  )
 
 spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
@@ -80,6 +82,21 @@ spec m = do
     find ui ".slides-position" >>= (`shouldHaveText` "1 / 7")
     find ui ".slides-progress" >>= (\p -> getAttribute p "aria-valuenow") >>= (`shouldBe` Just "1")
 
+  it "hears its keys anywhere on the page, keeps them from scrolling it, and stops when it goes" $ runPage $ do
+    ui <- start m Nothing (PageSlides docs presentations 1)
+    _ <- find ui ".slides-view"
+    -- A key dispatched to the page's body, outside the view: heard, and
+    -- its default prevented during the dispatch itself.
+    dispatchKey "ArrowRight" `shouldReturn` True
+    find ui ".slides-position" >>= (`shouldHaveText` "2 / 7")
+    -- Not one of the slides' keys: left to the browser.
+    dispatchKey "x" `shouldReturn` False
+    find ui ".slides-view a.slides-back" >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "Presentations")
+    -- The view is gone, and its listener with it.
+    dispatchKey "ArrowRight" `shouldReturn` False
+    location `shouldReturn` "#/s/docs/p/markdown-guide/presentations/"
+
   it "comes back to the slide in its address" $ runPage $ do
     ui <- start m Nothing (PageSlides docs presentations 5)
     find ui ".slide-frame.current .slide-title" >>= (`shouldHaveText` "Code")
@@ -139,3 +156,4 @@ spec m = do
     docs = slugs ["docs"]
     presentations = slugs ["markdown-guide", "presentations"]
     location = unsafeIOToPageM (fromJSText <$> js_location_hash)
+    dispatchKey key = unsafeIOToPageM (js_dispatch_key (toJSText key))

@@ -16,6 +16,16 @@ The browser's own cache is no longer told `no-store`: `Halogen.Net.Fetch` has
 no cache mode, and the server's `Cache-Control: private, no-cache` on every
 API answer already makes the browser ask it each time.
 
+The slides' keys are heard on the whole page through
+`Halogen.Query.Event.Window.keyDown`, subscribed while the slides are shown,
+rather than by a listener on the view that needed the focus inside it; a key
+that is one of theirs still has its default prevented as the browser
+dispatches it. Over the server's backend the shell listens to
+`Window.online`: while the browser is offline a notice in the corner says
+the wiki cannot be reached, and when it comes back what the shell failed to
+load for want of the network is loaded again. The shell's and the slides'
+components now ask for `MonadUnliftIO` (the emitters are lowered to `IO`).
+
 An open or closed wiki (WP3.5). The header offers "Create account" beside
 "Sign in" in an open wiki; a closed one shows someone not signed in its name,
 the way to sign in and a word on why, at every route, and reads nothing else

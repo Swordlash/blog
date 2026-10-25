@@ -8,9 +8,11 @@
 // (Escape), or "" for any other key, which the browser keeps. Keys with Ctrl,
 // Alt or Cmd held are the browser's (Ctrl+P prints, Alt+Left goes back), and
 // so is a key typed into a field, and Space or Enter on a button or a link,
-// which press it.
+// which press it. It is asked by the window's listener, which hears a key
+// after every element's own: a key one of them has handled already, and
+// kept from the browser, is theirs.
 function wiki_slides_key(event) {
-  if (typeof event.key !== "string") return "";
+  if (typeof event.key !== "string" || event.defaultPrevented) return "";
   if (event.ctrlKey || event.metaKey || event.altKey) return "";
   const target = event.target;
   if (target instanceof Element && target.closest("input:not([type=checkbox]), textarea, select, [contenteditable]")) return "";

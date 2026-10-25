@@ -19,16 +19,19 @@
 -- to the window: its text is sized in units of the slide's width, so a
 -- slide looks the same in a window, on a projector and on paper.
 --
--- The keys, read in the keydown's listener (@jsbits/slides.js@), so that the
--- browser does not also scroll: → ↓ Space PageDown Enter for the next
--- slide, ← ↑ PageUp Backspace Shift+Space for the one before, Home and End
--- for the first and the last, @f@ for full screen (Escape, the browser's
--- own key, leaves it), @n@ or @s@ for the notes, @o@ for the overview, and
--- Escape to close it. A swipe to the left or the right on a touch screen
--- goes to the next or the previous slide. The keys reach the view while
--- focus is in it, which it takes when it is shown; anything in it (a
--- button, a link) passes them on, and a click anywhere on it brings focus
--- back.
+-- The keys, pressed anywhere on the page, which the view covers: → ↓ Space
+-- PageDown Enter for the next slide, ← ↑ PageUp Backspace Shift+Space for
+-- the one before, Home and End for the first and the last, @f@ for full
+-- screen (Escape, the browser's own key, leaves it), @n@ or @s@ for the
+-- notes, @o@ for the overview, and Escape to close it. They are heard
+-- through haskell-halogen's window emitter ('Window.keyDown'), subscribed
+-- to while the view is shown, and each is read as the browser dispatches
+-- it (@jsbits/slides.js@), so that the browser does not also scroll for
+-- one of them. A key typed into a field, Space or Enter on a button or a
+-- link (which press it), and a key with Ctrl, Alt or Cmd held are left to
+-- the browser. A swipe to the left or the right on a touch screen goes to
+-- the next or the previous slide. The view takes focus when it is shown, so
+-- that Tab starts among its controls.
 --
 -- The slide shown is in the address (@?slide=3@, 'PageSlides'), so that a
 -- reload or a link comes back to it. Moving replaces the address rather than
@@ -41,6 +44,7 @@ module Wiki.App.View.Slides
   )
 where
 
+import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
 import Data.List (zip3)
 import Data.Map.Strict qualified as Map
@@ -50,12 +54,17 @@ import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText)
+import Halogen.Query.Event.Window qualified as Window
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
+import Halogen.Subscription (Emitter)
+import Halogen.Subscription qualified as HS
 import Halogen.TH (hh)
+import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Web.DOM.Internal.Types (Element (..))
-import Web.Event.Event (Event (..), EventType (..))
+import Web.Event.Event (Event (..), EventType (..), preventDefault)
+import Web.UIEvent.KeyboardEvent qualified as KeyboardEvent
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
@@ -70,9 +79,9 @@ import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 
--- The key is read in the keydown's listener and a touch's place in the
--- touch's, while the browser dispatches them, so those bindings are pure;
--- the rest return on the spot.
+-- The key is read in the keydown's listener ('slideKeys') and a touch's
+-- place in the touch's, while the browser dispatches them, so those
+-- bindings are pure; the rest return on the spot.
 $( browserJS
      ["jsbits/slides.js"]
      [ ("js_slides_key", "wiki_slides_key", Unsafe, [t|Event -> JSText|])
@@ -143,7 +152,7 @@ data Action
   | Print
   | Retry
 
-component :: forall query m. (MonadLoad m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -189,7 +198,6 @@ component =
                 ref={{ st.view }}
                 class="slides-view {{ viewClasses st deck }}"
                 {{ [attr "tabindex" "-1", attr "role" "region", attr "aria-label" (page.title <> ", as slides")] }}
-                {{ HE.preventingDefault (HE.handler' (EventType "keydown") keyAction) }}
               >
                 <div
                   class="slides-stage"
@@ -260,22 +268,6 @@ component =
         [HP.class_ "button slides-back"]
         [HH.text "Back to page"]
 
-    -- Decided in the listener, which keeps the browser from scrolling for
-    -- a key that is one of the slides'.
-    keyAction :: Event -> Maybe Action
-    keyAction event =
-      Key <$> case fromJSText (js_slides_key event) of
-        "next" -> Just Next
-        "previous" -> Just Previous
-        "first" -> Just ToFirst
-        "last" -> Just ToLast
-        "choose" -> Just Choose
-        "fullscreen" -> Just ToggleFullscreen
-        "notes" -> Just ToggleNotes
-        "overview" -> Just ToggleOverview
-        "leave" -> Just Leave
-        _ -> Nothing
-
     touchAt :: (Double -> Double -> Action) -> Event -> Maybe Action
     touchAt make event =
       let x = js_slides_touch_x event
@@ -284,9 +276,13 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
-      -- The page was loaded with the initial state, and the shell is told;
-      -- or it is loaded now.
-      Initialize ->
+      -- The keys are listened to from now until the view goes away, which
+      -- unsubscribes; made in 'H.liftEffect', before the load can wait, so
+      -- that no key pressed meanwhile goes unheard. The page was loaded
+      -- with the initial state, and the shell is told; or it is loaded now.
+      Initialize -> do
+        keys <- H.liftEffect slideKeys
+        void $ H.subscribe (Key <$> keys)
         gets (\st -> st.loaded) >>= \case
           Loading -> load
           _ -> do
@@ -370,7 +366,7 @@ component =
         let input = st.input
         Router.redirect input.context.router (PageSlides (spacePathOf input.context.spaces input.space.id) input.path n)
 
-    -- Keys reach the view while focus is in it.
+    -- Focus into the view, where Tab then finds its controls.
     focusView :: H.HalogenM State Action Slots ViewOutput m ()
     focusView = gets (\st -> st.view) >>= H.getRef >>= traverse_ (H.liftEffect . liftIO . js_slides_focus)
 
@@ -385,6 +381,40 @@ component =
         modify (\st -> st {loaded, current = within loaded (if null st.asked then now.slide else st.current)})
         focusView
         H.raise Loaded
+
+-- | The slides' keys pressed anywhere on the page, as commands.
+--
+-- Whether a key is one of them is decided in the window's listener, while
+-- the browser dispatches the key, and the browser is told there not to take
+-- its own action for it (Space and the arrows would scroll), before the
+-- command is handed to the component. The command's action may run later,
+-- if the tree is busy as the key arrives, and preventing the default from
+-- there would then be too late.
+slideKeys :: (MonadBrowserDOM n, MonadUnliftIO n) => n (Emitter IO Command)
+slideKeys = do
+  HS.Emitter register <- Window.keyDown
+  pure . HS.makeEmitter $ \push -> do
+    HS.Subscription stop <- register $ \pressed -> do
+      let event = KeyboardEvent.toEvent pressed
+      for_ (commandOf event) $ \command -> do
+        preventDefault event
+        push command
+    pure stop
+
+-- | Which of the slides' commands a keydown is for, if any
+-- ('js_slides_key').
+commandOf :: Event -> Maybe Command
+commandOf event = case fromJSText (js_slides_key event) of
+  "next" -> Just Next
+  "previous" -> Just Previous
+  "first" -> Just ToFirst
+  "last" -> Just ToLast
+  "choose" -> Just Choose
+  "fullscreen" -> Just ToggleFullscreen
+  "notes" -> Just ToggleNotes
+  "overview" -> Just ToggleOverview
+  "leave" -> Just Leave
+  _ -> Nothing
 
 -- | The page the input names, with where each of its attachments is fetched
 -- from, and as slides, or why it cannot be shown. Markdown that cannot be
