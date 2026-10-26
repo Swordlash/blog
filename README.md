@@ -439,7 +439,10 @@ the demo).
 
 ## Running the demo
 
-Build it and serve it on <http://127.0.0.1:8080>, with the toolchain below:
+The demo runs at **<https://swordlash.github.io/blog/>**, deployed from `main` by
+CI (below): everything you write there stays in your browser.
+
+Or build it and serve it on <http://127.0.0.1:8080>, with the toolchain below:
 
 ```sh
 npm ci
@@ -448,12 +451,14 @@ npm run serve-wasm      # runs build-wasm first; or build-wasm alone, to build o
 
 Or, without a toolchain, take the page a CI run built: download the `app`
 artifact of a run of the `CI` workflow on GitHub (the run's page, under
-*Artifacts*), unzip it, and serve the directory with any static server that
-answers an address with no file of its own with the directory's `404.html`, as
-GitHub Pages does. `npx http-server <dir>` does:
+*Artifacts*, kept for three days), unzip it, and serve the directory under
+`/blog/`, the path it is built for, with any static server that answers an
+address with no file of its own with the directory's `404.html`, as GitHub
+Pages does. `npx http-server` does, from a directory holding it as `blog/`
+(then open <http://127.0.0.1:8080/blog/>):
 
 ```sh
-unzip app.zip -d app && npx http-server app -p 8080
+mkdir site && unzip app.zip -d site/blog && cp site/blog/404.html site/ && npx http-server site -p 8080
 ```
 
 The front page invites you to the tour, which says what to try. Nothing you do is
@@ -1098,8 +1103,23 @@ the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 `.github/workflows/build.yml` runs three jobs on every pull request to `main` and every
 push to it: `native` (build and test natively, and test the deploy scripts with
 `toolchain/test-deploy-local.sh`), `wasm` (build for wasm, run the test
-suites and the smoke test in headless Chromium, and on a hosted runner keep the built
+suites and the smoke test in headless Chromium, and keep the built
 page as the run's `app` artifact) and `format` (`npm run format-check`).
+
+A fourth, `deploy`, publishes the demo on GitHub Pages, at
+<https://swordlash.github.io/blog/>, on a push to `main` once the three have
+passed, and on a run by hand from `main` (*Run workflow*) to redeploy. It takes the
+`app` artifact the `wasm` job built (every run builds the page for Pages' base path,
+`HALOGEN_BASE_PATH=/blog/`, and the smoke test serves it under that path); when
+`tested` skips the build on a fast-forward, it downloads the page from the pull
+request's run that `tested` found, which then must still have its artifact (kept
+three days; without it the full CI runs and builds the page again). It checks that the
+page was built for the path Pages serves it at (`configure-pages`), then uploads and
+deploys it (`upload-pages-artifact`, `deploy-pages`, environment `github-pages`). It
+runs only while the repository is public, since Pages refuses a private repository
+on a free account; until then it is skipped, and so is uploading the page from the
+self-hosted runner. Pages must be set to deploy from GitHub Actions (Settings, Pages,
+Source).
 
 Two things keep it from building the same tree twice. A change to Markdown files alone
 runs nothing. And on a push to `main`, a first job, `tested`

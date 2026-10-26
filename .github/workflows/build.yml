@@ -27,9 +27,12 @@ on:
         default: self-hosted
 
 # A new push to a branch (or to a pull request's branch) cancels the run still
-# going for the previous one: only the newest commit's result matters.
+# going for the previous one: only the newest commit's result matters. The
+# branch is named with its repository, so that a fork's pull request from a
+# branch named like one of ours neither cancels our run nor is cancelled by
+# it.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -109,6 +112,7 @@ jobs:
       actions: read
     outputs:
       tested: ${{ steps.check.outputs.tested }}
+      run_id: ${{ steps.check.outputs.run_id }}
 
     steps:
     - name: Checkout code
@@ -116,10 +120,15 @@ jobs:
       with:
         fetch-depth: 0
 
+    # Once the demo is deployed (the repository is public, see the deploy
+    # job), the run found must also have kept the page it built, which the
+    # deploy job takes from it: a run from before the page was kept, or
+    # whose artifact has expired, does not count, and the full CI runs.
     - name: Look for a passing pull request run of this tree
       id: check
       env:
         GH_TOKEN: ${{ github.token }}
+        REQUIRE_ARTIFACT: ${{ github.event.repository.private == false && 'app' || '' }}
       run: sh toolchain/ci-already-tested.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
   native:
@@ -218,11 +227,24 @@ jobs:
     - name: Test the deploy scripts (deploy-local, undeploy-local, the static servers)
       run: sh toolchain/test-deploy-local.sh
 
+    # The tested job's script, against a fake GitHub API: a second.
+    - name: Test ci-already-tested.sh
+      run: sh toolchain/test-ci-already-tested.sh
+
   wasm:
     needs: tested
     if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
     # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
     runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
+    # The page is built, tested and kept for GitHub Pages, which serves a
+    # project's site under the repository's name: every run builds it so,
+    # pull requests too, since main is fast-forwarded to a pull request's
+    # head and the deploy then takes the page that pull request's run built
+    # (see the tested and deploy jobs). build-wasm.sh writes it into each
+    # page's <base href> and every link; the smoke test serves the build
+    # under it. Change it here if the site moves to a domain of its own (/).
+    env:
+      HALOGEN_BASE_PATH: /${{ github.event.repository.name }}/
 
     steps:
     - name: Checkout code
@@ -404,18 +426,22 @@ jobs:
     - name: Smoke-test the page in a browser
       run: npm run smoke-test
 
-    # Nothing is deployed from here yet: the built page is kept with the run
-    # instead, to download and serve. Only on a hosted runner: the account's
-    # artifact storage quota refused uploads while the repository was
-    # private, and on the self-hosted runner the page stays on the machine
-    # under dist-newstyle/wasm/public/app anyway.
+    # The built page, kept with the run as the artifact `app`: the deploy job
+    # publishes it, from this run or, on a push to main the tested job
+    # skipped, from the pull request's run that built it. Three days is long
+    # enough for a pull request to be fast-forwarded onto main, and a run
+    # whose page has expired by then is not counted as tested (the full CI
+    # runs again and keeps a page of its own). While the repository is
+    # private, only on a hosted runner: the account's artifact storage quota
+    # refused uploads then, and nothing is deployed anyway.
     - name: Upload the built page
-      if: runner.environment == 'github-hosted'
+      if: runner.environment == 'github-hosted' || github.event.repository.private == false
       uses: actions/upload-artifact@v5
       with:
         name: app
         path: dist-newstyle/wasm/public/app/
         if-no-files-found: error
+        retention-days: 3
 
   format:
     needs: tested
@@ -466,3 +492,83 @@ jobs:
       run: |
         fourmolu --version
         sh run_fourmolu.sh --mode check
+
+  # The demo on GitHub Pages: the page the wasm job built for the Pages base
+  # path, from this run, or on a push the tested job found already tested,
+  # from the pull request's run that built it (ci-already-tested.sh checked
+  # that it still has it). Only from main (a push, or a run by hand there,
+  # to redeploy), once every build job has passed or been skipped as
+  # tested, and only once the repository is public: Pages on a private
+  # repository of a free account refuses to deploy, so until then the job
+  # is skipped, as its name says, rather than making main red.
+  deploy:
+    name: deploy (to GitHub Pages, once the repository is public)
+    needs: [tested, native, wasm, format]
+    if: >-
+      ${{ !cancelled() &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.event.repository.private == false &&
+      (needs.tested.outputs.tested == 'true' ||
+      (needs.native.result == 'success' && needs.wasm.result == 'success' && needs.format.result == 'success')) }}
+    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
+    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
+    permissions:
+      contents: read
+      actions: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # One deployment at a time, queued rather than cancelled by another
+    # run's (a run by hand beside a push). A newer push to main still cancels
+    # this whole run, deploy included, as the workflow's group says, and
+    # deploys its own page.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+
+    steps:
+    # Into the job's own temporary directory, which the runner empties for
+    # each job: the self-hosted runner keeps its workspace between runs, and
+    # this job checks nothing out (which would clean it), so a page
+    # downloaded into the workspace would be laid over the files of the
+    # last deploy's, and a file the new build no longer has would be
+    # published again.
+    - name: Download the built page
+      uses: actions/download-artifact@v5
+      with:
+        name: app
+        path: ${{ runner.temp }}/app
+        run-id: ${{ needs.tested.outputs.tested == 'true' && needs.tested.outputs.run_id || github.run_id }}
+        github-token: ${{ github.token }}
+
+    - name: Setup Pages
+      id: pages
+      uses: actions/configure-pages@v6
+
+    # The page has its base path in every <base href> and link, so it works
+    # only where it was built to be served. Pages says where that is: under
+    # the repository's name, or at the root of a custom domain. A page built
+    # for elsewhere is refused here rather than published broken.
+    - name: Check the page was built for where Pages serves it
+      env:
+        PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+      run: |
+        expected="${PAGES_BASE_PATH%/}/"
+        built=$(sed -n 's/.*<base href="\([^"]*\)">.*/\1/p' "$RUNNER_TEMP/app/index.html" | head -n 1)
+        printf 'Pages serves the site at %s; the page was built for %s.\n' "$expected" "$built"
+        if [ "$built" != "$expected" ]; then
+          echo "::error::The page was built for the base path $built, but Pages serves it at $expected: set HALOGEN_BASE_PATH in the wasm job to $expected."
+          exit 1
+        fi
+
+    - name: Upload the page for Pages
+      uses: actions/upload-pages-artifact@v5
+      with:
+        path: ${{ runner.temp }}/app
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v5
