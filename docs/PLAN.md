@@ -232,6 +232,23 @@ confirms it against reality and the plan is amended if it does not hold.
     would reconnect by itself, but the owner asked for WebSockets and the same channel is
     meant to carry what a client sends later (presence, "editing now").
 
+24. **Public under MIT; the server binary is GPL-governed when conveyed** (proposed
+    2026-10-26, awaiting the owner). The repository's own code goes under the MIT licence:
+    the simplest permissive one, and compatible with every dependency. The one constraint
+    is `wiki-server`, which links pandoc (GPL-2.0-or-later), texmath and skylighting (both
+    GPL-2 "or any later version" by their file notices and README, whatever their cabal
+    field says); a binary of it is a combined work under the GPL, taken at version 3 since
+    haskell-halogen (Apache-2.0) is linked too, and the GPL binds only whoever *conveys*
+    binaries. Nothing conveys one today: the deploy and the Dockerfile build from source,
+    and no release or image is published; the README says so, with a table of the
+    third-party licences. Ruled out: Apache-2.0 (haskell-halogen's) would be the natural
+    match but adds nothing and is incompatible with GPL-2-only code should a dependency
+    ever be that; AGPL-3 and GPL-3 for our own code would close the door on reuse for no
+    gain, since the browser side links nothing copyleft. The demo on Pages conveys TikZJax
+    (GPL-3.0-or-later, served unmodified as its own worker beside its licence text) and its
+    BaKoMa Computer Modern fonts, whose licence the release package must determine and
+    name (the npm package ships none).
+
 ## Repository layout
 
 ```
@@ -956,6 +973,69 @@ Candidates, ordered by likely value; each becomes a work package when it comes u
   WP4.4, WP4.5 and WP3.7, since it reshapes the shell's sidebar that the comments' side
   panel touches. Confirmed by the owner on 2026-10-25; it starts as soon as those three are
   merged.
+
+### Phase 5: public release
+
+The owner's ask (2026-10-26): "powoli przygotować do releasu na public": a licence, the
+demo deployed on GitHub Pages from the browser's IndexedDB, and the self-hosted runner
+kept for the owner's own pull requests. Three steps, in this order, since the Pages deploy
+and the fork gating can only be tested once the repository is public, and the licence
+must be in before it is.
+
+- **WP5.1 Licence, runner gating, `--server` by default.** `LICENSE` becomes MIT (decision
+  24, once confirmed), the four `.cabal` files say `license: MIT` and `license-file`, and
+  the README's licence section lists the third-party licences: in `wiki-server`'s binary
+  pandoc, texmath and skylighting (GPL, so conveying a binary follows the GPL; none is
+  conveyed), haskell-halogen (Apache-2.0); in the page KaTeX (MIT), Mermaid (MIT),
+  highlight.js (BSD-3), CodeMirror (MIT), fflate (MIT), TikZJax (GPL-3.0-or-later, served
+  unmodified as its own worker: `web/bundle.sh` copies its `LICENSE` beside the
+  `NOTICE.txt` it writes, since conveying GPL code needs the text) and TikZJax's BaKoMa
+  fonts (licence found and named). The plan's own note that TikZJax sits "beside a
+  proprietary repository" is answered by this. CI: the workflow chooses its runner by
+  trust, `self-hosted` for a push, a dispatch and a pull request whose head is in this
+  repository (only write access pushes one: the owner, and the Claude sessions acting as
+  them), `ubuntu-latest` for a pull request from a fork or a bot actor, through one
+  expression on `runs-on`; a `workflow_dispatch` input `runner` (`self-hosted`, default,
+  or `hosted`) runs the hosted path by hand, which has not run since the runner moved to
+  the owner's machine and is exercised once after the repository is public (free then).
+  The README's CI section documents the two layers: this, and the repository setting the
+  owner clicks (Settings, Actions, General, "Fork pull request workflows from outside
+  collaborators": require approval for all external contributors), and says plainly that
+  GitHub advises against self-hosted runners on public repositories, what limits the
+  exposure here (the runner's own user, approved fork runs going to hosted runners, no
+  secrets in the workflow) and what remains. `deploy-local.sh`: `--server` becomes the
+  first run's default and `--static` the opt-in, since the demo's home is Pages; the
+  state remembers the mode as before, so the owner's deployment does not move; header,
+  README and the first-install test cases follow. Hygiene before the flip, listed for the
+  owner in the report: the `maintainer` address in the `.cabal` files becomes public (the
+  owner's call to keep or drop), pull request texts become public (the tailnet hostname
+  appears in some; it is in Certificate Transparency logs anyway), secret scanning and
+  push protection to turn on after the flip. Tests: `test-deploy-local.sh`'s first-install
+  cases, a native test that every `.cabal` names the licence file, and the workflow
+  expression checked by `actionlint` or by hand on a dispatch. No migration.
+- **The owner's step.** Confirm decision 24, make the repository public, click the Actions
+  setting above, turn on secret scanning and push protection, set Pages to deploy from
+  GitHub Actions (Settings, Pages, Source), and run the workflow once with `runner:
+  hosted`.
+- **WP5.2 The demo on GitHub Pages.** A `deploy` job on a push to `main`, after the wasm
+  build, publishes `dist-newstyle/wasm/public/app` built with `WIKI_BACKEND=demo` and
+  `HALOGEN_BASE_PATH=/blog/` (the repository's name; the owner may give it a domain
+  later) through `actions/configure-pages`, `upload-pages-artifact` and `deploy-pages`
+  (`pages: write`, `id-token: write`, environment `github-pages`), which work from the
+  self-hosted runner. The `tested` skip has to be met: on a fast-forward push the wasm
+  job is skipped, so either every wasm job (pull requests too) keeps the built page as
+  the run's artifact and the deploy job downloads it from the run
+  `ci-already-tested.sh` found (`actions/download-artifact` with `run-id`), or the deploy
+  rebuilds on `main` (another quarter of an hour on the runner); the first, unless it
+  proves brittle, with the reason reported. The demo's IndexedDB database is named
+  `wiki` (`Wiki.App.Demo`), and IndexedDB is per origin: `swordlash.github.io` hosts
+  haskell-halogen's gallery and whatever else the owner publishes, so the name becomes
+  one of the wiki's own (`wiki-demo`, or the base path in it) before the first deploy;
+  the service worker's caches already carry their scope. WP4.17's manifest and worker
+  under a base path are verified where it counts: `npm run smoke-test` against a build
+  made with the base path and served under that prefix, and the installability check in
+  Chromium; the hydration count stays at zero repairs. The README's "Running the demo"
+  points at the public address. No migration.
 
 ## Delegation protocol
 
@@ -2745,6 +2825,17 @@ Amended by the planning session after each work package's report.
   packages. A process note: the first push of `semaphore: True` broke the wasm build, which
   the native gate did not show; a project-file change needs both backends built like any
   CPP'd code.
+- **Phase 5 proposed** (2026-10-26). The owner asked to prepare a public release: a licence
+  (which, given the dependencies), the demo on GitHub Pages from IndexedDB, and the
+  self-hosted runner kept to the owner's own pull requests. Licences checked in the cabal
+  store and the Hackage tarballs: 285 dependencies, all permissive but pandoc
+  (GPL-2.0-or-later), texmath and skylighting (cabal says `GPL-2`, the file notices and
+  README say version 2 or later), which only `wiki-server` links; in the page, TikZJax is
+  GPL-3.0-or-later and its BaKoMa fonts come without a licence file. Decision 24 (MIT,
+  proposed) and Phase 5 (WP5.1 licence, runner gating and `--server` by default; the
+  owner's step; WP5.2 the Pages deploy) are written; nothing starts before the owner
+  confirms the licence. The tree and the history hold neither the tailnet hostname nor
+  secrets (grepped); the `maintainer` address is in the `.cabal` files.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
