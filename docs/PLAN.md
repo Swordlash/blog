@@ -2535,6 +2535,48 @@ Amended by the planning session after each work package's report.
   the next package touching `Storage.hs`. Tests: core 682, app 959, server 732 (2 pending),
   browser 212; both smoke tests walk the blog, the server's checks the public blog, head tags,
   both feeds, the sitemap and the 404s.
+- **WP4.13 merged** (2026-10-26, PR #74, `main` at `f769551`). Migration
+  `0011-notifications.sql`. Mentions: `Wiki.Core.Markdown.Mention`, a pass after commonmark
+  (`splitMentions`, a `Mention` inline; skipped inside code, links and embeds; a trailing `.`
+  or `-` is not part of the login; `mentions` collects a document's logins);
+  `Options.resolveMention` turns one into a link when the login exists, else plain text; a
+  mention links to a search for `@login` titled with the user's name (no profile pages), and
+  logins are resolved only for the mentions a view shows and only for someone signed in.
+  Rules as pure functions in `Wiki.Core.Notification` (`recipients`, `pageWatch`/`spaceWatch`
+  tri-state: a page's mark, then the nearest space's, then "my own page"; `newlyMentioned`,
+  `digest`, mail modes; the type is `Happened`, not `Activity`, to avoid WP4.10's
+  `Wiki.Api.Activity`), with QuickCheck properties: nobody of their own actions, nobody of a
+  page they may not read, each person once. API `Wiki.Api.Notifications` (list, mark read,
+  settings, people, page and space watches), `POST unsubscribe/<secret>`, `ServerMessage`
+  `Notified`. `MonadNotifications` with a contract on Mem, IndexedDB (store `notifications`,
+  database version 5), SQLite, HTTP (people, notices and watches cached and preloaded); the
+  live channel gains `listen`/`unlisten`. Server: notifications created in the save's or
+  comment's transaction and sent to the user's connections after commit (`Events.notify`); a
+  new page notifies watchers as a save does; `Wiki.Server.Notifier` mails at once or as a
+  daily digest from 07:00 UTC, only to a verified address, re-checking the permission to read
+  before mailing, waiting a wake or a minute before its first look (its start-up pruning
+  locked the database under a test); the unsubscribe token is an HMAC with a key in
+  `settings`; pruning keeps 90 days and at most 500 per user; the operator account gets none
+  (403). UI: `View/Bell.hs` (unread count, the latest 50, mark read per item and all, live),
+  `View/Watch.hs` (one element in the page's action bar, one in the space's and the blog
+  view's actions), `View/NotificationSettings.hs` (one block in the account panel and the
+  demo's; the mail setting is NULL until chosen, an unverified address counts as off),
+  `View/Unsubscribe.hs` (`/unsubscribe/<secret>/` with a confirm button so a mail program's
+  fetch turns nothing off); the server renders all of it, adopted without repair. Also added
+  (the planning session's ask): `setSpaceProfileTx` and `uploadSpaceIconTx` now record
+  `space.profile` in the audit log with the fields that changed in words, a save that changed
+  nothing records nothing. For later packages: a view that shows Markdown fills
+  `Body.Place.people` through `Body.askPeople`/`unasked`; a new HTTP read must be answered by
+  `Test.Hydrate.apiOver` and `Test.Browser.Http.serveDemo` or be in the preload where tests
+  assert nothing else is asked. Tests: core 714, app 996, server 773 (2 pending), browser 217;
+  the server's smoke test mentions a user in a comment and sees the bell in their tab over the
+  WebSocket.
+- **Wave B complete** (2026-10-26): WP4.10, WP4.14, WP4.13 merged in that order; migrations
+  `0009`, `0010`, `0011`. Two packages took `0009` at once and the second renumbered at rebase,
+  as planned. Open for the owner: nothing new.
+- **Wave C started** (2026-10-26) from `main` after WP4.13: WP4.15 on `wp4.15-toc-templates`
+  and WP4.17 on `wp4.17-offline-pwa`, in parallel worktrees; the next migration is `0012`
+  (WP4.15's `template` flag; WP4.17 has none).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
