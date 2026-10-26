@@ -417,10 +417,18 @@ like the other options; `--static` goes back to the demo.
   administrators (or takes it away), who then have the same page on the public
   listener, signed in; and it keeps groups and their members. Who may read,
   edit and administer a space is in the space's own "Space settings", for
-  whoever administers it.
+  whoever administers it. Its "Activity" lists every change made to the
+  administration (who, when, what, from where), and the Server section's
+  "Status" the last twenty errors the server logged.
+- **Health and metrics.** `curl http://<address>:8080/healthz` (on either
+  listener, with no login) answers `{"status": "ok", "schemaVersion": …,
+  "lastBackupAgeSeconds": …}`; `curl http://127.0.0.1:8081/metrics` gives
+  Prometheus its metrics (requests by route and status, latency, pages, users,
+  sizes, the newest backup's age), on the admin listener only. `docs/api.md`
+  lists them.
 - **Logs.** `journalctl --user -u wiki-demo -f`: one `key=value` line per request
-  (listener, who, method, path, status, milliseconds), and an error line with the
-  exception for anything that fails.
+  (listener, who, method, path, route, status, milliseconds), and an error line
+  with the exception for anything that fails, or answers with a 5xx.
 
 #### Bringing the demo's pages into the server
 

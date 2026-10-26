@@ -1031,6 +1031,33 @@ try {
   // ---- 4. The demo's pages brought into the server ---------------------------
 
   await migrateTheDemo();
+
+  // ---- 5. What the server says of itself -------------------------------------
+
+  // Its health on both listeners; its metrics on the admin one only, by
+  // route pattern; and the audit log of what the walk changed in the
+  // administration, newest first.
+  const adminRoot = /listener=admin address="?(http:\/\/[^\s"]+?)\/admin\/?"?(\s|$)/m.exec(log)?.[1];
+  assert.ok(adminRoot, `the admin listener's address is not in the log:\n${log}`);
+  for (const root of [origin, adminRoot]) {
+    const health = await fetch(`${root}/healthz`);
+    assert.equal(health.status, 200, `${root}/healthz`);
+    const said = await health.json();
+    assert.equal(said.status, "ok", `${root}/healthz: ${JSON.stringify(said)}`);
+    assert.ok(said.schemaVersion >= 9, `${root}/healthz: ${JSON.stringify(said)}`);
+  }
+  const metrics = await fetch(`${adminRoot}/metrics`);
+  assert.equal(metrics.status, 200, "the metrics on the admin listener");
+  assert.ok((metrics.headers.get("content-type") ?? "").startsWith("text/plain; version=0.0.4"), metrics.headers.get("content-type"));
+  const scraped = await metrics.text();
+  assert.ok(scraped.includes('wiki_http_requests_total{listener="public",route="/api/v1/session",method="POST",status="2xx"}'), "signing in is counted by its route");
+  assert.ok(/^wiki_users \d+$/m.test(scraped) && /^wiki_database_bytes \d+$/m.test(scraped), "the gauges");
+  assert.ok(!scraped.includes(sessionToken), "a session's secret in the metrics");
+  assert.equal((await fetch(url("/metrics"))).status, 404, "the metrics on the public listener");
+  const logged = await (await fetch(`${adminRoot}/admin/api/v1/admin/activity`)).json();
+  assert.ok(logged.available && logged.entries.length > 0, `the activity: ${JSON.stringify(logged)}`);
+  assert.ok(logged.entries.some((e) => e.action === "group.create"), `no group made in the activity: ${JSON.stringify(logged.entries.map((e) => e.action))}`);
+  console.log("ok: /healthz on both listeners, /metrics on the admin one only by route pattern, and the walk's administration in the activity");
 } catch (error) {
   failures.push(String(error.stack ?? error));
   if (process.env.SMOKE_DEBUG) {
