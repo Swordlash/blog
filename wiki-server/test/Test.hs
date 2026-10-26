@@ -8,6 +8,7 @@ import Test.Server.Api qualified as Api
 import Test.Server.Backups qualified as Backups
 import Test.Server.Comments qualified as Comments
 import Test.Server.Export qualified as Export
+import Test.Server.Feed qualified as Feed
 import Test.Server.Http qualified as Http
 import Test.Server.Hygiene qualified as Hygiene
 import Test.Server.Import qualified as Import
@@ -40,6 +41,7 @@ main = hspec $ do
   Api.spec
   Static.spec
   Render.spec
+  Feed.spec
   Import.spec
   Accounts.spec
   Access.spec

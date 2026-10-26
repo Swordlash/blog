@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RSS 2.0 (the RSS Advisory Board's specification, 2009) as a RELAX NG
+  schema in its XML syntax, which xmllint reads: RSS has no schema of its
+  own. A channel has its title, link and description and any of the
+  optional elements, an item any of its elements; dates are RFC 822's, and
+  elements in other namespaces (Atom's link, Dublin Core's creator) are
+  allowed anywhere the specification allows extensions. That an item has a
+  title or a description the tests check themselves.
+-->
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+  <start>
+    <element name="rss">
+      <attribute name="version"><value>2.0</value></attribute>
+      <zeroOrMore><ref name="foreignAttribute"/></zeroOrMore>
+      <ref name="channel"/>
+    </element>
+  </start>
+
+  <define name="channel">
+    <element name="channel">
+      <interleave>
+        <element name="title"><text/></element>
+        <element name="link"><ref name="url"/></element>
+        <element name="description"><text/></element>
+        <optional><element name="language"><text/></element></optional>
+        <optional><element name="copyright"><text/></element></optional>
+        <optional><element name="managingEditor"><text/></element></optional>
+        <optional><element name="webMaster"><text/></element></optional>
+        <optional><element name="pubDate"><ref name="rfc822"/></element></optional>
+        <optional><element name="lastBuildDate"><ref name="rfc822"/></element></optional>
+        <zeroOrMore><ref name="category"/></zeroOrMore>
+        <optional><element name="generator"><text/></element></optional>
+        <optional><element name="docs"><ref name="url"/></element></optional>
+        <optional>
+          <element name="cloud">
+            <attribute name="domain"><text/></attribute>
+            <attribute name="port"><data type="nonNegativeInteger"/></attribute>
+            <attribute name="path"><text/></attribute>
+            <attribute name="registerProcedure"><text/></attribute>
+            <attribute name="protocol"><text/></attribute>
+            <empty/>
+          </element>
+        </optional>
+        <optional><element name="ttl"><data type="nonNegativeInteger"/></element></optional>
+        <optional>
+          <element name="image">
+            <interleave>
+              <element name="url"><ref name="url"/></element>
+              <element name="title"><text/></element>
+              <element name="link"><ref name="url"/></element>
+              <optional><element name="width"><data type="nonNegativeInteger"/></element></optional>
+              <optional><element name="height"><data type="nonNegativeInteger"/></element></optional>
+              <optional><element name="description"><text/></element></optional>
+            </interleave>
+          </element>
+        </optional>
+        <optional><element name="rating"><text/></element></optional>
+        <optional>
+          <element name="textInput">
+            <interleave>
+              <element name="title"><text/></element>
+              <element name="description"><text/></element>
+              <element name="name"><text/></element>
+              <element name="link"><ref name="url"/></element>
+            </interleave>
+          </element>
+        </optional>
+        <optional>
+          <element name="skipHours">
+            <oneOrMore><element name="hour"><data type="nonNegativeInteger"><param name="maxInclusive">23</param></data></element></oneOrMore>
+          </element>
+        </optional>
+        <optional>
+          <element name="skipDays">
+            <oneOrMore>
+              <element name="day">
+                <choice>
+                  <value>Monday</value><value>Tuesday</value><value>Wednesday</value><value>Thursday</value>
+                  <value>Friday</value><value>Saturday</value><value>Sunday</value>
+                </choice>
+              </element>
+            </oneOrMore>
+          </element>
+        </optional>
+        <zeroOrMore><ref name="foreignElement"/></zeroOrMore>
+        <zeroOrMore><ref name="item"/></zeroOrMore>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="item">
+    <element name="item">
+      <interleave>
+        <optional><element name="title"><text/></element></optional>
+        <optional><element name="link"><ref name="url"/></element></optional>
+        <optional><element name="description"><text/></element></optional>
+        <optional><element name="author"><text/></element></optional>
+        <zeroOrMore><ref name="category"/></zeroOrMore>
+        <optional><element name="comments"><ref name="url"/></element></optional>
+        <optional>
+          <element name="enclosure">
+            <attribute name="url"><ref name="url"/></attribute>
+            <attribute name="length"><data type="nonNegativeInteger"/></attribute>
+            <attribute name="type"><text/></attribute>
+            <empty/>
+          </element>
+        </optional>
+        <optional>
+          <element name="guid">
+            <optional><attribute name="isPermaLink"><choice><value>true</value><value>false</value></choice></attribute></optional>
+            <text/>
+          </element>
+        </optional>
+        <optional><element name="pubDate"><ref name="rfc822"/></element></optional>
+        <optional>
+          <element name="source">
+            <attribute name="url"><ref name="url"/></attribute>
+            <text/>
+          </element>
+        </optional>
+        <zeroOrMore><ref name="foreignElement"/></zeroOrMore>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="category">
+    <element name="category">
+      <optional><attribute name="domain"><text/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+
+  <!-- An absolute http or https URL. -->
+  <define name="url">
+    <data type="string"><param name="pattern">https?://\S+</param></data>
+  </define>
+
+  <!-- RFC 822's date and time, with RSS's four-digit year. -->
+  <define name="rfc822">
+    <data type="string">
+      <param name="pattern">((Mon|Tue|Wed|Thu|Fri|Sat|Sun), )?\d{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}(:\d{2})? ([+\-]\d{4}|UT|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|[A-IK-Z])</param>
+    </data>
+  </define>
+
+  <define name="foreignElement">
+    <element>
+      <anyName><except><nsName ns=""/></except></anyName>
+      <zeroOrMore>
+        <choice>
+          <attribute><anyName/></attribute>
+          <text/>
+          <ref name="anyElement"/>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="foreignAttribute">
+    <attribute><anyName><except><nsName ns=""/></except></anyName></attribute>
+  </define>
+
+  <define name="anyElement">
+    <element>
+      <anyName/>
+      <zeroOrMore>
+        <choice>
+          <attribute><anyName/></attribute>
+          <text/>
+          <ref name="anyElement"/>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+</grammar>

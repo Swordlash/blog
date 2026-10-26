@@ -11,6 +11,7 @@ extra-doc-files:    CHANGELOG.md
 -- Embedded into the library at compile time (Wiki.Server.Storage.Migrate), so
 -- that the binary carries its schema with it.
 extra-source-files: migrations/*.sql
+                    test/schemas/*.rng
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built
 -- with (cabal.project makes them errors) and the extensions its code assumes.
@@ -196,6 +197,7 @@ test-suite wiki-server-test
         Test.Server.Comments
         Test.Server.Export
         Test.Server.FakeProvider
+        Test.Server.Feed
         Test.Server.Fixture
         Test.Server.Http
         Test.Server.Hygiene
@@ -234,6 +236,7 @@ test-suite wiki-server-test
         network,
         optparse-applicative,
         pandoc-types,
+        process,
         protolude,
         ram,
         servant,
@@ -248,4 +251,5 @@ test-suite wiki-server-test
         wiki-app,
         wiki-app:contract,
         wiki-core,
-        wiki-server
+        wiki-server,
+        xml-conduit

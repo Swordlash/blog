@@ -3,10 +3,12 @@
 module Test.Storage.Migrate (spec) where
 
 import Database.SQLite.Simple (Connection, Only (..), execute_, query_, withConnection)
+import Data.Text qualified as T
 import Database.SQLite.Simple qualified as SQLite
 import Protolude
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
+import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.Api.Admin (WikiSettings (..), defaultSettings)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
@@ -163,6 +165,20 @@ spec = describe "migrations" $ do
       execute_ c "INSERT INTO email_verifications (token_hash, user_id, email, created_at, expires_at) VALUES ('v', 'user-1', 'ada@example.org', 'now', 'later')"
       execute_ c "DELETE FROM users WHERE id = 'user-1'"
       query_ c "SELECT (SELECT count(*) FROM totp) + (SELECT count(*) FROM recovery_codes) + (SELECT count(*) FROM reset_tokens) + (SELECT count(*) FROM email_verifications) + (SELECT count(*) FROM sessions)" `shouldReturn` [Only (0 :: Int)]
+
+  it "bring a database up to spaces shown as blogs: none is, and a space is one or not" $
+    withFreshDatabase $ \_ c -> do
+      -- Found by its name, so that the test holds whatever number the step
+      -- is given.
+      step <- maybe (assertFailure "no migration adds the blog flag") pure (find (\m -> "space-blog" `T.isInfixOf` m.name) migrations)
+      let earlier = takeWhile (\m -> m.version < step.version) migrations
+      applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
+      execute_ c "INSERT INTO spaces (id, name, slug, parent, public, created_at, position, subspace_order, page_order, math_macros) VALUES ('space-1', 'S', 's', NULL, 1, 'now', 0, 'name', 'name', '')"
+      migrate c `shouldReturn` [step.version .. length migrations]
+      query_ c "SELECT blog FROM spaces" `shouldReturn` [Only False]
+      execute_ c "UPDATE spaces SET blog = 1"
+      query_ c "SELECT blog FROM spaces" `shouldReturn` [Only True]
+      (try (execute_ c "UPDATE spaces SET blog = 2") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
 
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do
