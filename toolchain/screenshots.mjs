@@ -159,13 +159,17 @@ try {
     const heading = document.getElementById("mathematics");
     heading.scrollIntoView({ block: "start" });
     // Then below whatever stays at the top of the window as it scrolls (the
-    // header, the page's actions), with a little room above.
+    // header, the page's actions), with a little room above, or less room
+    // where that keeps the whole of the diagram under it in the window.
     const stuck = [...document.querySelectorAll("#app *")]
       .filter((e) => ["sticky", "fixed"].includes(getComputedStyle(e).position))
       .map((e) => e.getBoundingClientRect())
       .filter((r) => r.top < 200 && r.width > window.innerWidth / 3)
       .reduce((bottom, r) => Math.max(bottom, r.bottom), 0);
     window.scrollBy(0, heading.getBoundingClientRect().top - stuck - 16);
+    const diagram = document.querySelector("#app .page-body .wiki-mermaid > svg").getBoundingClientRect();
+    const below = diagram.bottom - (window.innerHeight - 12);
+    if (below > 0) window.scrollBy(0, Math.min(below, heading.getBoundingClientRect().top - stuck));
   });
   await shoot(page, "page.png");
 
