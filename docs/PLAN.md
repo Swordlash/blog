@@ -2324,6 +2324,37 @@ Amended by the planning session after each work package's report.
   `wp4.9-backups`, WP4.11 on `wp4.11-account-hygiene`, WP4.12 on `wp4.12-presence`, WP4.16
   on `wp4.16-export`. Each brief names what the others touch (the page's action bar, the
   panel's Server section, migrations numbered at rebase).
+- **WP4.16 merged** (2026-10-26, PR #68, `main` at `a777568`). `pandoc` 3.12.1 linked into
+  `wiki-server` as a library, built `+embed_data_files -http` (an export can never make the
+  server fetch anything), two `allow-newer` entries (`pandoc:crypton`,
+  `pandoc-types:QuickCheck`) so the rest of the plan does not move; about 20 minutes once
+  into the cabal store, so the first CI run and the first `deploy-local.sh` after it are that
+  much longer. `Wiki.Api.Export`: `docx`, `html` (self-contained, MathML, served sandboxed),
+  `epub`, `pdf`, `pptx`, `beamer-tex`, `beamer-pdf`; `GET pages/<id>/export/<format>` and
+  `GET spaces/<id>/export/<format>`; the session's new `exports` field lists what this server
+  makes, so the Export menu (`View/Export.hs`, a `<details>` in the page's action bar and the
+  space's actions; none in the demo) and the panel's "Export" row (whether `xelatex` was
+  found, looked up on every request) are right in the server's render. `Wiki.Server.Export.
+  Document` is pure: our Markdown read by pandoc's reader with our extensions, raw HTML
+  through our allowlist first, every formula with the KaTeX macros (built-in, the space's, the
+  page's) expanded by texmath, image attachments in the media bag, other attachments and page
+  links as links under the public address, Mermaid a note with its source, TikZ raw LaTeX in
+  the LaTeX outputs and a note elsewhere, decks cut as `Slides.deckOf` (level 1 title or
+  section slide, `::: notes` to `\note{}` or speaker notes, aspect 16:9/4:3, `beamer` theme
+  Madrid), a space as one document in page order with title page and three-level contents.
+  Export permission is read permission; one export at a time per person (429 meanwhile); 60 s
+  timeout that also stops TeX; a pandoc or TeX failure is `Invalid` with its message. Review
+  added `restrictTeX`: `openin_any=p`, `openout_any=p`, `shell_escape=f` set in the process
+  environment before each `makePDF`, since a TikZ block or a formula is author-written TeX
+  and `\input{/etc/passwd}` would otherwise reach xelatex; a PDF test exports such a page and
+  checks nothing leaked (pending where `xelatex` is absent, as the other PDF test). Limits:
+  the document is built in memory, not streamed, and `HEAD` builds it too; only
+  `\newcommand`, `\renewcommand`, `\DeclareMathOperator` are expanded; the PDF path has run
+  nowhere yet (no `xelatex` in the agent's container; the runner decides). Tests: 23 server
+  cases (mapping natively, each format over HTTP with structure checks, refusals, the lock),
+  6 browser cases, the server's smoke test downloads a DOCX; server 629 (2 pending). The
+  Dockerfile takes `--build-arg WIKI_TEX=1`. Skylighting is now linked, ready for the
+  server-render swap.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
