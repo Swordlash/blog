@@ -13,7 +13,9 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Network.HTTP.Types (methodPost)
 import Protolude
+import System.Environment (lookupEnv)
 import Test.Hspec
 import Test.Server.Fixture
 import Test.Storage.Fixture (demoArchive)
@@ -23,7 +25,7 @@ import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Export (ExportFormat (..), formatMediaType)
 import Wiki.Api.Links (attachmentUrl, links)
-import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Api.Types (NewPage (..), SessionInfo (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
@@ -32,7 +34,7 @@ import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (..), pageTreeOrder)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Server.Export (availableFormats, newExports, oneAtATime, texEngine)
+import Wiki.Server.Export (availableFormats, newExports, oneAtATime, restrictTeX, texEngine, texLimits)
 import Wiki.Server.Export.Document
 
 spec :: Spec
@@ -323,6 +325,21 @@ oneAtATimeEach = describe "one export at a time" $ do
 
 pdfs :: Spec
 pdfs = describe "PDFs, typeset by xelatex" $ do
+  it "keep TeX to its working directory, with no programs, through kpathsea's variables" $ do
+    restrictTeX
+    for_ texLimits $ \(name, value) -> lookupEnv name `shouldReturn` Just value
+    texLimits `shouldBe` [("openin_any", "p"), ("openout_any", "p"), ("shell_escape", "f")]
+
+  it "do not let a page's formula read the server's files into the PDF" $ withDemoRunning identity $ \r -> do
+    tex <- texEngine
+    when (isNothing tex) (pendingWith "xelatex is not on this machine: TeX's limits were not tested against it")
+    docs <- spaceAt r "docs"
+    made <- sendJson r methodPost (r.admin <> "/admin/" <> links.spaces.createPage docs.id) NewPage {parent = Nothing, title = "Prying", body = "Here: $\\input{/etc/passwd}$ and\n\n```tikz\n\\node {\\input{/etc/passwd}};\n```\n"} >>= jsonAs 201
+    reply <- getUrl r (r.admin <> "/admin/" <> links.pages.export (made :: Page).id Pdf)
+    -- Refused, as TeX cannot open the file; or made without it.
+    BSL.toStrict reply.body `shouldSatisfy` (not . ("root:" `BS.isInfixOf`))
+    when (reply.status == 200) (BS.take 5 (BSL.toStrict reply.body) `shouldBe` "%PDF-")
+
   it "are offered exactly where the machine has xelatex" $ withRunning $ \r -> do
     tex <- isJust <$> texEngine
     formats <- availableFormats

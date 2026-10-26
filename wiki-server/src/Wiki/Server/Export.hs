@@ -30,6 +30,17 @@
 -- the session tells the application what is offered ('availableFormats'),
 -- and a PDF asked for without it is refused, saying so.
 --
+-- TeX is a programming language with files and a shell at hand, and a
+-- PDF hands it what authors wrote: a TikZ picture is LaTeX by design, and
+-- texmath writes a control sequence it does not know back out into a
+-- formula, so @\\input{\/etc\/passwd}@ in a formula would put a file of
+-- the server's into the PDF, and @\\openout@ would write one. So before
+-- the engine runs, TeX's own limits are set in the server's environment,
+-- which pandoc hands the engine ('restrictTeX'): files are read and written
+-- only under the directory it typesets in (and TeX's own trees), and no
+-- program is run, not even the few TeX Live allows by default. Nothing here
+-- passes the engine an option that would lift them.
+--
 -- An export takes time and memory, so each person has one at a time
 -- ('Exports'), and none takes more than 'exportTimeout'; the TeX engine is
 -- stopped with it.
@@ -46,6 +57,8 @@ module Wiki.Server.Export
     -- * What can be made
   , availableFormats
   , texEngine
+  , restrictTeX
+  , texLimits
 
     -- * Writing
   , writeDocument
@@ -63,6 +76,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Protolude
 import System.Directory (doesFileExist, findExecutable)
+import System.Environment (setEnv)
 import System.Timeout (timeout)
 import Text.Pandoc (PandocError, PandocIO, Verbosity (..), WriterOptions (..), compileDefaultTemplate, def, renderError, runIO, setMediaBag, setVerbosity, writeBeamer, writeDocx, writeEPUB3, writeHtml5String, writeLaTeX, writePowerpoint)
 import Text.Pandoc.Builder qualified as B
@@ -111,6 +125,21 @@ data Exported = Exported
 -- | The TeX engine the PDFs are made with, if the server's machine has one.
 texEngine :: IO (Maybe FilePath)
 texEngine = findExecutable "xelatex"
+
+-- | What TeX may do, as kpathsea's variables, which its environment
+-- overrides its configuration with: read and write files only under the
+-- working directory and @TEXMFOUTPUT@ (the temporary directory pandoc
+-- typesets in; @p@, paranoid, also refuses dot files and @..@), and run no
+-- program at all (@f@; TeX Live's default, restricted, still runs a few).
+texLimits :: [([Char], [Char])]
+texLimits = [("openin_any", "p"), ("openout_any", "p"), ("shell_escape", "f")]
+
+-- | Set 'texLimits' in the server's environment, which pandoc gives the TeX
+-- engine it runs. Process-wide, which is right: nothing else the server
+-- runs reads them. Done before every PDF, so that nothing can have changed
+-- them since.
+restrictTeX :: IO ()
+restrictTeX = traverse_ (uncurry setEnv) texLimits
 
 -- | The formats the server makes documents in: all of them where it has a
 -- TeX engine, all but the PDFs where it has not.
@@ -344,6 +373,7 @@ writeDocument format bag toc doc = do
       Nothing -> pure (Left (formatLabel format <> " needs xelatex, which this server's machine does not have."))
       Just engine -> do
         o <- standalone name
+        liftIO restrictTeX
         makePDF engine [] writer o d <&> \case
           Left logged -> Left ("TeX could not make the PDF: " <> texError (decodeUtf8With lenientDecode (BSL.toStrict logged)))
           Right bytes -> Right (BSL.toStrict bytes)
