@@ -30,6 +30,7 @@ module Wiki.App.Demo
 where
 
 import Data.ByteString.Base64 qualified as Base64
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, fromGregorian)
 import Protolude
@@ -84,6 +85,10 @@ demoState now = flip execState emptyState $ do
 
   handbook <- page team Nothing "Team handbook" 25 teamHandbook
   _ <- page team (Just handbook) "On-call" 20 onCall
+  -- One of the team's templates, which "New page" offers beside the
+  -- wiki's own (Wiki.Core.Template).
+  weekly <- page team Nothing "Weekly sync" 18 weeklySync
+  modify (\st -> st {pages = Map.adjust (\p -> p {template = True}) weekly st.pages})
 
   wiki <- page projects Nothing "The wiki" 8 theWiki
   attach wiki "tree.png" "image/png" treePng
@@ -264,6 +269,10 @@ teamHandbook =
   , "Private to the team: only people granted a permission on this space, or"
   , "on the wiki as a whole, can read it."
   , ""
+  , "[[toc]]"
+  , ""
+  , "## The week"
+  , ""
   , "| Day       | Who   | What                 |"
   , "| --------- | ----- | -------------------- |"
   , "| Monday    | Ada   | Planning             |"
@@ -275,6 +284,32 @@ teamHandbook =
   , "- [x] Get an account"
   , "- [x] Read this page"
   , "- [ ] Read [on-call](team-handbook/on-call)"
+  , ""
+  , "## Meetings"
+  , ""
+  , "Notes of a meeting start from the team's [Weekly sync](weekly-sync)"
+  , "template: choose it under \"New page\"."
+  ]
+
+-- | The team's template for the notes of its weekly meeting: its
+-- placeholders are filled in when a page is made from it.
+weeklySync :: [Text]
+weeklySync =
+  [ "# {{title}}"
+  , ""
+  , "Weekly sync of {{date}}, notes by {{author}}."
+  , ""
+  , "## Since last week"
+  , ""
+  , "- "
+  , ""
+  , "## Blocked"
+  , ""
+  , "- "
+  , ""
+  , "## Next"
+  , ""
+  , "- [ ] "
   ]
 
 onCall :: [Text]

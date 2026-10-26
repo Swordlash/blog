@@ -82,12 +82,15 @@ importing = describe "importing an archive" $
         `shouldBe` [(path "hello-world", Just False), (path "notes-on-haskell", Just True)]
       let choices = ImportChoices {skipSpaces = [], skipPages = [handbook], conflicts = [ConflictChoice {page = hello, resolution = TakeImported}]}
       run (applyImport zipped choices)
-        `shouldReturn` Right ImportSummary {spacesCreated = 2, spacesMerged = 2, pagesCreated = 1, pagesReplaced = 1, pagesKept = 6, pagesSkipped = 2, attachments = 1}
+        `shouldReturn` Right ImportSummary {spacesCreated = 2, spacesMerged = 2, pagesCreated = 2, pagesReplaced = 1, pagesKept = 6, pagesSkipped = 2, attachments = 1}
       blog <- ok =<< run (getSpace (path "blog"))
       page <- ok =<< run (getPage blog.id (path "hello-world"))
       page.body `shouldBe` "Brought in from the demo."
       crew <- ok =<< run (getSpace (path "crew/projects"))
       map (\p -> p.title) <$> (ok =<< run (listPages crew.id)) `shouldReturn` ["The wiki"]
+      -- The team's template came in as one.
+      team <- ok =<< run (getSpace (path "crew"))
+      (\p -> p.template) <$> (ok =<< run (getPage team.id (path "weekly-sync"))) `shouldReturn` True
       -- Again: everything is there already, but the pages left out.
       again <- ok =<< run (previewImport zipped)
       [s.status | s <- again.spaces] `shouldBe` replicate 4 SpaceMerged

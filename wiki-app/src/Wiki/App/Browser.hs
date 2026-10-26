@@ -22,6 +22,8 @@ module Wiki.App.Browser
   , localTime
   , consoleWarn
   , keepHeights
+  , keepContents
+  , revealFragment
   , PageBackend (..)
   , pageBackend
 
@@ -56,7 +58,7 @@ import Wiki.Core.Id (CommentThreadId (..))
 -- dispatches it, and the click does not change meanwhile, so that binding is
 -- pure.
 $( browserJS
-     ["jsbits/browser.js", "jsbits/archive.js", "jsbits/comments.js", "jsbits/layout.js"]
+     ["jsbits/browser.js", "jsbits/archive.js", "jsbits/comments.js", "jsbits/layout.js", "jsbits/toc.js"]
      [ ("js_clicked_href", "wiki_clicked_href", Unsafe, [t|Event -> JSText|])
      , ("js_scroll_to", "wiki_scroll_to", Unsafe, [t|JSText -> IO ()|])
      , ("js_set_title", "wiki_set_title", Unsafe, [t|JSText -> IO ()|])
@@ -80,6 +82,8 @@ $( browserJS
      , ("js_clicked_thread", "wiki_clicked_thread", Unsafe, [t|Event -> JSText|])
      , ("js_reveal", "wiki_reveal", Unsafe, [t|JSText -> IO ()|])
      , ("js_keep_heights", "wiki_keep_heights", Unsafe, [t|IO ()|])
+     , ("js_keep_contents", "wiki_keep_contents", Unsafe, [t|IO ()|])
+     , ("js_reveal_fragment", "wiki_reveal_fragment", Unsafe, [t|IO ()|])
      ]
  )
 
@@ -253,3 +257,16 @@ reveal selector = when inBrowser (liftIO (js_reveal (toJSText selector)))
 -- document from then on. Natively there is no layout, and it does nothing.
 keepHeights :: (MonadIO m) => m ()
 keepHeights = liftIO js_keep_heights
+
+-- | Mark the section being read in the page's lists of its headings, and
+-- keep whether its "Contents" panel is folded in this browser (see
+-- @jsbits/toc.js@). Once is enough, as for 'keepHeights'. Natively there is
+-- nothing to read, and it does nothing.
+keepContents :: (MonadIO m) => m ()
+keepContents = liftIO js_keep_contents
+
+-- | Scroll to the heading the address's fragment names, if it names one
+-- that is shown: what the browser does in a page it was sent, for one the
+-- program shows. Natively nothing.
+revealFragment :: (MonadIO m) => m ()
+revealFragment = liftIO js_reveal_fragment

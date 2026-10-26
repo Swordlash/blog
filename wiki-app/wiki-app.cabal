@@ -304,6 +304,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Admin
       Test.Browser.Backups
       Test.Browser.Comments
+      Test.Browser.Contents
       Test.Browser.Editor
       Test.Browser.Export
       Test.Browser.History

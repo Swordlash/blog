@@ -18,3 +18,11 @@ function wiki_test_box(selector) {
   const box = element.getBoundingClientRect();
   return box.top + " " + box.bottom + " " + window.innerHeight;
 }
+
+// Scroll the window so that the element a selector finds is at the top,
+// as following a link to it would (its scroll-margin kept), and wait for
+// two frames, as wiki_test_scroll_to does.
+async function wiki_test_scroll_into_view(selector) {
+  document.querySelector(selector)?.scrollIntoView();
+  await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+}

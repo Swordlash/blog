@@ -11,7 +11,8 @@
 -- space alone, as Confluence does: its icon and name, a link back to the
 -- directory and a menu of the other spaces to switch to, the way up to the
 -- space it is a subspace of, its home page and its list of pages, its
--- pages as a tree, and its subspaces below them. Elsewhere it lists the
+-- pages as a tree, its templates ('Wiki.Core.Page.template') apart from
+-- the tree, and its subspaces below them. Elsewhere it lists the
 -- spaces. A space's own route shows its home page, if it has one
 -- ('Wiki.Core.Space.homePage'), and otherwise its list of pages; a space
 -- shown as a blog shows its posts instead, under its home page
@@ -124,7 +125,7 @@ import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Backend.Notifications (MonadNotifications)
-import Wiki.App.Browser (download, historyEntry, historyGo, keepHeights, setDocumentTitle, unzipFiles, zipFiles)
+import Wiki.App.Browser (download, historyEntry, historyGo, keepContents, keepHeights, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..))
@@ -166,7 +167,7 @@ import Wiki.Core.Blog (excerpt, firstImage)
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
-import Wiki.Core.Page (Page (attachments, body, id, title))
+import Wiki.Core.Page (Page (attachments, body, id, title), templatePages, treePages)
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
@@ -775,10 +776,20 @@ component =
             <li><a class="space-pages-link" {{ [attr "aria-current" "page" | st.route == SpacePages path] }} {{ Router.linkProps st.router Followed (SpacePages path) }}>Pages and settings</a></li>
           </ul>
           <h2>Pages</h2>
-          {% if null pages %}
+          {% if null tree %}
             <p class="empty">No pages yet.</p>
           {% else %}
-            {{ pageTree st.router Followed path space.pageOrder pages ((\p -> p.id) <$> currentPage st) (\_ _ _ -> []) }}
+            {{ pageTree st.router Followed path space.pageOrder tree ((\p -> p.id) <$> currentPage st) (\_ _ _ -> []) }}
+          {% end %}
+          {% if not (null templates) %}
+            <h2>Templates</h2>
+            <ul class="sidebar-templates">
+              {% for t in templates %}
+                <li class="page-node{% if Just t.id == here %} current{% end %}">
+                  <a {{ [attr "aria-current" "page" | Just t.id == here] }} {{ Router.linkProps st.router Followed (Page path (pagePathOf pages t.id)) }}>{{ t.title }}</a>
+                </li>
+              {% end %}
+            </ul>
           {% end %}
           {% if not (null subspaces) %}
             <h2>Subspaces</h2>
@@ -796,6 +807,10 @@ component =
           Posts p _ -> p == path
           _ -> False
         subspaces = subspacesOf st.spaces (Just space.id)
+        -- The space's templates are listed apart from its tree.
+        tree = treePages pages
+        templates = templatePages pages
+        here = (\p -> p.id) <$> currentPage st
         -- The space this one is under, if the user may go there.
         above = space.parent >>= \p -> find (\x -> x.id == p && mayView ctx x.id) st.spaces
         -- The spaces to switch to: each space the user may view that is
@@ -911,8 +926,10 @@ component =
         gets (\st -> st.accounts) >>= traverse_ (\a -> lift a.sessionChanges >>= void . H.subscribe . fmap SessionChanged)
         entry <- H.liftEffect historyEntry
         modify (\st -> st {entry})
-        -- The bars that stick under the header need its height.
+        -- The bars that stick under the header need its height; the
+        -- lists of a page's headings mark the section being read.
         H.liftEffect keepHeights
+        H.liftEffect keepContents
         -- What the route shows was loaded with the initial state, unless
         -- the backend would have waited for it.
         gets (\st -> st.world) >>= \case

@@ -12,6 +12,24 @@
 -- ("Wiki.Core.Blog") says when it was posted, and links to the posts
 -- before and after it.
 --
+-- = Contents, and templates
+--
+-- A page with enough headings ('Wiki.Core.Markdown.Toc.contentsPanel')
+-- shows a "Contents" panel (WP4.15 of docs/PLAN.md): the list of its
+-- headings, made from the parsed page as it is loaded, so that the server
+-- and the prerender render it as the program does. It sits beside the text
+-- on a wide window, with the comments' panel under it when that is open,
+-- and above the text on a narrow one; it folds (a @\<details>@ whose state
+-- this browser keeps), and the section being read is marked in it by
+-- @jsbits/toc.js@, without the program. A page that places the list itself
+-- with @[[toc]]@ shows no panel. The address's fragment, if it names a
+-- heading, is scrolled to once the page is first shown.
+--
+-- Whoever may edit the page may make it one of its space's templates, or
+-- an ordinary page again ("Use as template", one button that stays pressed);
+-- a template says so above its text. The page the space opens at cannot be
+-- one.
+--
 -- = Comments
 --
 -- The page's comments (WP4.5 of docs/PLAN.md) are loaded with it, by
@@ -68,7 +86,7 @@ import Wiki.Api.Links (pageExportUrl)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError)
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
-import Wiki.App.Browser (ArticleLink, Selected (..), clickedThread, followArticleLink, readSelection, reveal)
+import Wiki.App.Browser (ArticleLink, Selected (..), clickedThread, followArticleLink, readSelection, reveal, revealFragment)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Heard)
 import Wiki.App.Live qualified as Live
@@ -90,11 +108,12 @@ import Wiki.Core.Id
   )
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Notification (WatchTarget (..))
-import Wiki.Core.Page (Page (attachments, body, createdAt, id, parent, slug, space, title, updatedAt))
+import Wiki.Core.Page (Page (attachments, body, createdAt, id, parent, slug, space, template, title, updatedAt))
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (blog, description, homePage, icon, id, name), SpaceProfile (..))
+import Wiki.Core.Template (placeholderNames)
 import Wiki.Core.User (User (id))
 import Wiki.Core.Version (Author)
 
@@ -120,9 +139,11 @@ data Threads
 data Loaded
   = Loading
   | Failed WikiError
-  | -- | The page, where each of its attachments is fetched from, and
-    -- whether it is written as slides.
-    Ready Page (Map AttachmentId Text) Bool
+  | -- | The page, where each of its attachments is fetched from, whether
+    -- it is written as slides, and what its "Contents" panel lists, if it
+    -- shows one ("Wiki.Core.Markdown.Toc"): worked out once, as it is
+    -- loaded, rather than at each render.
+    Ready Page (Map AttachmentId Text) Bool (Maybe [Md.Entry])
 
 data Mode
   = Viewing
@@ -181,6 +202,7 @@ data Action
   | ToggleComments
   | ClickedQuote CommentThreadId
   | SetAsHome
+  | SetTemplate Bool
   | ShowChanged
 
 component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
@@ -193,7 +215,7 @@ component =
         initialState = \input -> do
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
           threads <- case loaded of
-            Ready page _ _ -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
+            Ready page _ _ _ -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
           let logins = Body.unasked Body.noPeople (bodiesOf loaded threads)
           people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
@@ -230,7 +252,7 @@ component =
     render st@State {input, loaded, mode, problem} = case loaded of
       Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> failureView e Retry
-      Ready page urls deck ->
+      Ready page urls deck contents ->
         [hh|
           <div class="page-view">
             {{ parts }}
@@ -247,9 +269,10 @@ component =
             [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ liveNote st }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
+                <> toList (templateNote page)
                 <> Body.heading page.title page.body
                 <> toList (postInfo input page)
-                <> [textAndPanel st place rendered text page]
+                <> [textAndPanel st place rendered text page contents]
                 <> attachments page urls
                 <> [commentsOf st place text page CommentsView.Below]
           place = placeOf input page urls st.people.found
@@ -273,6 +296,7 @@ component =
                , button "Move" StartMove
                , button "Delete" (Open ConfirmingDelete)
                ]
+            <> useAsTemplate
             <> setHome
       | otherwise = [viewSource, history] <> present <> export <> [comments] <> setHome
       where
@@ -293,7 +317,26 @@ component =
           [ [hh|<button type="button" class="set-home" onClick={{ const SetAsHome }}>Set as home page</button>|]
           | mayAdminister input.context input.space.id
           , input.space.homePage /= Just page.id
+          , not page.template
           ]
+        -- One of the space's templates, which "New page" offers, or not
+        -- any more: for whoever may edit it, for every page but the one
+        -- the space opens at.
+        useAsTemplate =
+          [ [hh|<button type="button" class="use-as-template" aria-pressed={{ ariaBool page.template }} onClick={{ const (SetTemplate (not page.template)) }}>Use as template</button>|]
+          | input.space.homePage /= Just page.id
+          ]
+
+    -- What a template is, said on it, since it is not in the tree.
+    templateNote :: Page -> Maybe (H.ComponentHTML Action Slots m)
+    templateNote page =
+      guard page.template
+        $> HH.p
+          [HP.class_ "template-note", attr "role" "note"]
+          ( [HH.text "This page is a template: \"New page\" offers it, with "]
+              <> intercalate [HH.text ", "] [[HH.code_ [HH.text ("{{" <> name <> "}}")]] | name <- placeholderNames]
+              <> [HH.text " filled in."]
+          )
 
     -- A post of a blog ("Wiki.Core.Blog"): when it was posted, and the
     -- posts before and after it.
@@ -369,10 +412,11 @@ component =
       -> Either Md.ParseError [H.ComponentHTML Action Slots m]
       -> Text
       -> Page
+      -> Maybe [Md.Entry]
       -> H.ComponentHTML Action Slots m
-    textAndPanel st place rendered text page =
+    textAndPanel st place rendered text page contents =
       [hh|
-        <div class="page-main{% if st.panelOpen %} with-comments{% end %}" ref={{ st.text }}>
+        <div class="page-main{% if side %} with-side{% end %}{% if isJust contents %} with-contents{% end %}{% if st.panelOpen %} with-comments{% end %}" ref={{ st.text }}>
           <div class="page-text" onMouseUp={{ const Selecting }} onKeyUp={{ const Selecting }} {{ quoteClicks }}>
             {{ Body.articleOf FollowLink place page.body marked }}
           </div>
@@ -386,12 +430,25 @@ component =
               Comment
             </button>
           {% end %}
-          {% if st.panelOpen %}
-            {{ commentsOf st place text page CommentsView.Beside }}
+          {% if side %}
+            <div class="page-side">
+              {% for entries in maybeToList contents %}
+                <details class="page-contents" open>
+                  <summary class="page-contents-title">Contents</summary>
+                  <nav aria-label="Contents" {{ Body.followingLinks FollowLink place }}>{{ Md.contentsList entries }}</nav>
+                </details>
+              {% end %}
+              {% if st.panelOpen %}
+                {{ commentsOf st place text page CommentsView.Beside }}
+              {% end %}
+            </div>
           {% end %}
         </div>
       |]
       where
+        -- The column beside the text (above it on a narrow screen): the
+        -- page's contents, and the panel of comments when it is open.
+        side = isJust contents || st.panelOpen
         marked = highlight (markings st text) <$> rendered
         quoteClicks = HE.handler' (EventType "click") (fmap ClickedQuote . clickedThread)
         position :: Selected -> Text
@@ -477,9 +534,13 @@ component =
       Initialize -> do
         gets (\st -> st.input.feed) >>= traverse_ (\f -> void (H.subscribe (Heard <$> f.heard)))
         gets (\st -> st.loaded) >>= \case
-          Loading -> load
+          Loading -> load >> H.liftEffect revealFragment
           _ -> do
             H.raise Loaded
+            -- The heading the address names, if it names one, once the
+            -- page is shown: the browser scrolls to it in a page it was
+            -- sent, but not in one the program shows itself.
+            H.liftEffect revealFragment
             watch
             resolvePeople
             gets (\st -> st.threads) >>= \case
@@ -599,6 +660,7 @@ component =
       SetAsHome -> withPage $ \page -> do
         space <- gets (\st -> st.input.space)
         setSpaceProfile space.id SpaceProfile {description = space.description, icon = space.icon, homePage = Just page.id, blog = space.blog} >>= done (const Nothing)
+      SetTemplate template -> withPage $ \page -> setPageTemplate page.id template >>= done (const Nothing)
       Delete -> withPage $ \page -> do
         input <- gets (\st -> st.input)
         let spacePath = spacePathOf input.context.spaces input.space.id
@@ -643,7 +705,7 @@ component =
     watch = do
       st <- get
       let shown = case st.loaded of
-            Ready page _ _ -> Just page.id
+            Ready page _ _ _ -> Just page.id
             _ -> Nothing
       when (shown /= st.watching) $ do
         for_ st.input.feed $ \f -> H.liftEffect . liftIO $ do
@@ -660,7 +722,7 @@ component =
     withPage :: (Page -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
     withPage k =
       gets (\st -> st.loaded) >>= \case
-        Ready page _ _ -> k page
+        Ready page _ _ _ -> k page
         _ -> pass
 
     done :: (a -> Maybe Route) -> Either WikiError a -> H.HalogenM State Action Slots ViewOutput m ()
@@ -678,7 +740,8 @@ fetch input =
     Left e -> pure (Failed e)
     Right page -> do
       urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
-      pure (Ready page urls (either (const False) isDeck (Md.parseMarkdown page.body)))
+      let parsed = Md.parseMarkdown page.body
+      pure (Ready page urls (either (const False) isDeck parsed) (either (const Nothing) Md.contentsPanel parsed))
 
 -- | The spaces a page may be moved to: those where the rules allow it.
 targetSpaces :: Context -> Page -> [Space]
@@ -726,7 +789,7 @@ placeOf input page urls people =
 -- | The Markdown the view shows: the page's, and its comments'.
 bodiesOf :: Loaded -> Threads -> [Text]
 bodiesOf loaded threads = case loaded of
-  Ready page _ _ -> page.body : [c.body | ThreadsReady ts <- [threads], t <- ts, c <- t.comments]
+  Ready page _ _ _ -> page.body : [c.body | ThreadsReady ts <- [threads], t <- ts, c <- t.comments]
   _ -> []
 
 -- | Whether the reader is busy with the page as it is shown: something

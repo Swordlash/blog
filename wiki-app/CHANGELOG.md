@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+Tables of contents and templates (WP4.15). A page with three headings or
+more shows a "Contents" panel: beside the text on a wide window (with the
+comments' panel under it when that is open), above it on a narrower one,
+foldable (this browser remembers), with the section being read marked
+(`jsbits/toc.js`, an IntersectionObserver setting `data-current`); a page
+with `[[toc]]` shows the list there instead. A heading shows a `#` link to
+itself on hover; following it, or any link to a place in the page, puts the
+place in the address bar, and a page opened at an address with a fragment
+scrolls to it. Templates: "Use as template" in a page's actions (for whoever
+may edit it), a note on a template, the space's templates under "Templates"
+in its sidebar and its pages rather than in the tree, and "New page" offers
+"Blank", the space's templates and the built-in ones, filling in the title,
+the date and the author. `MonadWiki` gains `setPageTemplate`, on every
+backend and in the contract; page counts leave templates out, and so does a
+search unless its query asks for them. The demo's team has a template,
+"Weekly sync", and its handbook a `[[toc]]`.
+
 Reading offline and installing (WP4.17). The page links a web manifest
 (`web/manifest.webmanifest`: every address relative, so one file serves any
 base path) with icons `web/bundle.sh` draws from `web/src/icon.svg`

@@ -63,7 +63,7 @@ import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Math (Macros (..), spaceMacros)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, orderName)
-import Wiki.Core.Page (Page (id, title))
+import Wiki.Core.Page (Page (id, title), templatePages, treePages)
 import Wiki.Core.Permission (mayCreateSpace, mayMoveSpace)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (description, id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), subspacesOf)
@@ -137,13 +137,26 @@ component =
           <div class="actions">{{ actions ctx space mode }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = ctx, target = WatchSpace space.id} | notified ctx] }}</div>
           {{ form ctx space pages mode }}{{ errorView <$> problem }}{{ macrosView ctx space }}
           <h2>Pages</h2>
-          {{ pageList }}{{ subspaces ctx space }}
+          {{ pageList }}{{ templateList }}{{ subspaces ctx space }}
         </section>
       |]
       where
+        -- Its templates are listed apart from its tree.
+        tree = treePages pages
         pageList
-          | null pages = [hh|<p class="empty">No pages yet.</p>|]
-          | otherwise = pageTree ctx.router Followed (spacePathOf ctx.spaces space.id) space.pageOrder pages Nothing pageControls
+          | null tree = [hh|<p class="empty">No pages yet.</p>|]
+          | otherwise = pageTree ctx.router Followed (spacePathOf ctx.spaces space.id) space.pageOrder tree Nothing pageControls
+        templateList =
+          [hhs|
+            {% if not (null (templatePages pages)) %}
+              <h2>Templates</h2>
+              <ul class="space-templates">
+                {% for t in templatePages pages %}
+                  <li>{{ Router.link ctx.router Followed (Page (spacePathOf ctx.spaces space.id) (pagePathOf pages t.id)) [] [HH.text t.title] }}</li>
+                {% end %}
+              </ul>
+            {% end %}
+          |]
         pageControls p atTop atBottom =
           [moveButtons p.title atTop atBottom (ShiftPage p.id) | space.pageOrder == ByHand, mayEdit ctx space.id]
 

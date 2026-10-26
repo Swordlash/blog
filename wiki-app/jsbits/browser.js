@@ -15,9 +15,20 @@ function wiki_clicked_href(event) {
   return link.getAttribute("href");
 }
 
+// Scroll to an element of the page by its id, as following a link to
+// #id would, and put #id in the address bar, so that the address shown is
+// the place's, to copy and pass on. The entry is replaced rather than a
+// new one pushed (the router hears nothing of it, and Back leaves the
+// page), with its state kept (wiki_history_entry's number); the address is
+// written out from the path, since a bare #id would be read against the
+// page's <base href>. Under a router that keeps the route in the fragment
+// (#/s/…, the browser tests'), the fragment is the router's, and is left.
 function wiki_scroll_to(id) {
   const element = document.getElementById(id);
-  if (element !== null) element.scrollIntoView();
+  if (element === null) return;
+  element.scrollIntoView();
+  if (location.hash.startsWith("#/")) return;
+  history.replaceState(history.state, "", location.pathname + location.search + "#" + encodeURIComponent(id));
 }
 
 function wiki_set_title(title) {
