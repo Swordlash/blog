@@ -1064,6 +1064,31 @@ must be in before it is.
   name (WP5.2's). Tests: the smoke test still passes with any demo page added; the
   screenshot script runs under `npm run screenshots` and is checked by CI only in that it
   parses (`node --check`). No migration.
+- **WP5.4 Run on whichever runner is free** (the owner, 2026-10-26, once the hosted path
+  worked and the minutes proved free for a public repository: "niech sobie chodzi na self
+  hosted albo ubuntu latest, które jest wolne"). GitHub has no "first available" across a
+  self-hosted runner and its hosted ones (`runs-on` with several labels is a conjunction),
+  so a first job picks: `plan`, on `ubuntu-latest` (seconds, free), which takes over the
+  `tested` job's work on a push and, for every event, decides the runner the build jobs
+  take through `toolchain/ci-pick-runner.sh`: `ubuntu-latest` when the run is not trusted
+  (a fork's pull request, a bot actor, the dispatch input `runner: hosted`; the trust rule
+  stays written in the workflow and reaches the script as an input, so the YAML still
+  shows it), else `self-hosted` unless the owner's machine is busy, which the script
+  learns from the Actions API with the run's own token (`actions: read`): any other run of
+  this workflow queued or in progress with a job whose labels name `self-hosted` and whose
+  status is queued or in progress; then `ubuntu-latest`. Any API error answers
+  `ubuntu-latest`, which is always there. The build jobs' `runs-on` becomes the job's
+  output; the deploy job takes it too. Known and accepted: the token cannot see whether
+  the self-hosted runner is online (that needs `administration: read`, which a workflow
+  token cannot have), so a run picked for a machine that is off waits in its queue as
+  today; the owner's way out is the dispatch with `runner: hosted`, or turning the machine
+  on. Tests: `toolchain/test-ci-pick-runner.sh` against a fake API, as
+  `test-ci-already-tested.sh` is: idle picks self-hosted; a queued or running
+  self-hosted job of another run picks hosted; this run's own jobs do not count; hosted
+  jobs elsewhere do not count; an API error picks hosted; untrusted picks hosted without
+  an API call; the dispatch input wins. `actionlint` clean; the README's CI section says
+  the rule and that `plan` runs on the hosted runners for everyone. After WP5.2, whose
+  workflow this builds on.
 
 ## Delegation protocol
 
@@ -2971,6 +2996,42 @@ Amended by the planning session after each work package's report.
   request" reads the log right after the response, before the line is written (passes
   alone); `smoke-test-server.mjs` line ~557 asserts the address before it changed (needs
   an `eventually`). Both are a small fix for the next package that touches them.
+- **The hosted path works end to end** (2026-10-26): Dependabot's #80 went green on the
+  hosted runners after #82 (format, native with its tests and the deploy-script tests,
+  wasm with the build, the browser tests and the smoke test; the wasm job 28 minutes with
+  the store cached). The dispatch on `main` was cancelled by a fast-forward push sharing
+  its concurrency group, which #84 fixes. The owner then asked for WP5.4 (above), chosen
+  over always-hosted and over a fixed split per job; it starts after #84 merges.
+- **WP5.2 merged** (2026-10-26, PR #84, `main` at `263d3d1`; its first agent was killed by
+  accident and a second finished from the worktree). The `deploy` job runs on a push to
+  `main` or a dispatch from it, after `native`, `wasm` and `format` or the `tested` skip,
+  only while the repository is public (its name says so), on the same runner expression,
+  with `pages: write`, `id-token: write`, environment `github-pages` and a `pages`
+  concurrency group that queues; it downloads the artifact `app` (from the run
+  `ci-already-tested.sh` found when `tested` is true, else this run) into
+  `$RUNNER_TEMP` (the self-hosted workspace persists, and a download into it would be laid
+  over the last deploy's files), runs `configure-pages`, refuses a page whose `<base
+  href>` is not the path Pages reports, then `upload-pages-artifact` and `deploy-pages`.
+  Every wasm job builds, tests and smoke-tests the page for `HALOGEN_BASE_PATH=/blog/`
+  and uploads it as `app` (3 days) from both runner kinds while public;
+  `ci-already-tested.sh` prints `run_id` and, with `REQUIRE_ARTIFACT=app`, counts a run
+  only if it still has an unexpired `app` (`test-ci-already-tested.sh`, 8 cases, in the
+  native job). The concurrency group names the head repository and gives a dispatch its
+  own group (its run id), so a fast-forward and a run by hand no longer cancel each other.
+  The demo's database is `wiki-demo` (a browser's old local `wiki` database is left, not
+  opened; an export carries it over). `web/bundle.sh` writes `licenses.txt` from esbuild's
+  metafiles (`web/src/licenses.mjs`): the 68 packages that contributed bytes to a bundle,
+  with their licence texts from their own directories, and a bundled package without a
+  licence file fails the build; chosen over `--legal-comments=external`, which only
+  collects comments the sources carry. The smoke test takes `HALOGEN_BASE_PATH`, serves
+  the build under that prefix only, checks `<base href>` and installability with
+  Chromium's own view (`Page.getAppManifest`, `getInstallabilityErrors` empty, the
+  worker's scope the base path); `smoke-test-server.mjs` prerenders its own page for `/`;
+  the hydration test adopts the pages under `/blog/` too. CI also runs `node --check
+  toolchain/screenshots.mjs`. Gate green at `/` and under `/blog/` (44 pages adopted with
+  nothing repaired), 230 browser tests, `actionlint` clean, 38/10/10 deploy cases. Not
+  run here: the deploy itself; the push of this merge is the first, and `configure-pages`
+  fails if Pages' source is not "GitHub Actions" (the owner's setting).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
