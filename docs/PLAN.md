@@ -2940,6 +2940,37 @@ Amended by the planning session after each work package's report.
   its fixture) has a case for it and passes its 20. Dependabot's first run also showed
   the hosted wasm job builds the dependency store (about 35 minutes) and caches it. The
   dispatch with `runner: hosted` was started again after the merge.
+- **WP5.3 merged** (2026-10-26, PR #83, `main` at `34c8de8`; its first agent was killed by
+  accident and a second finished from the worktree). The README opens for a visitor: what
+  the wiki is, the demo's address, four screenshots in a table (`page.png`: the Markdown
+  guide at its Mathematics section with the formulas, `\ce` and the Mermaid flowchart;
+  `editor.png`: the Mathematics page in the editor beside its preview; `slides.png`: the
+  Presentations deck at its formulas slide; `spaces.png`: the directory; 79, 132, 40 and
+  81 KB, taken by `toolchain/screenshots.mjs` under `npm run screenshots` at 1280×800 in
+  headless Chromium, byte-identical across runs), then "Writing pages" with the Markdown
+  as typed per library (KaTeX inline and display, the Docs space's macros, a page macro,
+  `\ce`; Mermaid; TikZ with `\usetikzlibrary`; code; an alert; `[[toc]]`; images and
+  attachments; links) and "Presentations" with the demo's own seven-slide deck; "What it
+  does" is a feature list; the operational sections stay (`docs/` has no deployment guide
+  to repeat), with two pointers to `docs/api.md`. Deviation from the plan's text, accepted:
+  the examples link to whichever demo page already shows each one (Markdown guide,
+  Mathematics, Docs' pages and settings, Diagrams, Tour, Team handbook, Presentations)
+  rather than all living in Presentations and Tour; the demo gained only a TikZ picture on
+  Diagrams loading `positioning` and `arrows.meta`, since no page had a
+  `\usetikzlibrary`. `wiki-app/test/Test/Readme.hs` (native) checks every example is on
+  the page it links to line for line, every link resolves to a demo space or page, every
+  `#fragment` names a heading of that page by `headingSlug`, and every screenshot exists
+  under 300 KB; `Test.Demo` requires a `\usetikzlibrary` and a `[[toc]]` in the demo.
+  Gate green (wasm, native, 1040 wiki-app examples, browser 230, smoke 84 s, format).
+  Not done: CI runs no `node --check` on `screenshots.mjs` (one workflow line, WP5.2's
+  file). To keep in mind: the demo's address appears in the README's links and in
+  `Test.Readme.demoAddress`; a change to a demo page's text under an example, or a
+  renamed heading, fails the test, so the README and the demo change together; after a
+  change to the wiki's look, `npm run build-wasm` then `npm run screenshots` and commit.
+  Flaky, seen by both WP5.2 and WP5.3 and left alone: `Test.Server.Api`'s "logs each
+  request" reads the log right after the response, before the line is written (passes
+  alone); `smoke-test-server.mjs` line ~557 asserts the address before it changed (needs
+  an `eventually`). Both are a small fix for the next package that touches them.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
