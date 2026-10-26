@@ -2,7 +2,8 @@ cabal-version:      3.0
 name:               wiki-app
 version:            0.1.0.0
 synopsis:           The wiki's browser application, in Halogen
-license:            NONE
+license:            MIT
+license-file:       LICENSE
 author:             Mateusz Goślinowski
 maintainer:         mateusz.goslinowski@gmail.com
 category:           Web
@@ -264,6 +265,7 @@ test-suite wiki-app-test
         Test.Hydrate
         Test.Import
         Test.Islands
+        Test.Licence
         Test.Link
         Test.Manifest
         Test.Route
@@ -276,6 +278,7 @@ test-suite wiki-app-test
         base64-bytestring,
         bytestring,
         containers,
+        directory,
         hspec >= 2,
         protolude,
         text,

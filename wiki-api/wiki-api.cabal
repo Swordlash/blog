@@ -2,7 +2,8 @@ cabal-version:      3.0
 name:               wiki-api
 version:            0.1.0.0
 synopsis:           Request and response types shared by the wiki's client and server
-license:            NONE
+license:            MIT
+license-file:       LICENSE
 author:             Mateusz Goślinowski
 maintainer:         mateusz.goslinowski@gmail.com
 category:           Web

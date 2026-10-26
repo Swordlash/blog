@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+Licensed under the MIT licence (WP5.1), where it was proprietary: the
+package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
+
 Tables of contents and templates (WP4.15). A page's JSON carries
 `template`; `PagesApi` gains `template` (`PUT pages/<id>/template` with
 `PageTemplate {"template": bool}`), and the search a `templates` flag, so

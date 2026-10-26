@@ -804,7 +804,7 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 | [wiki-api/](wiki-api/) | `wiki-api` | Request and response types (aeson), shared by the client and the server. |
 | [wiki-app/](wiki-app/) | `wiki-app` | The Halogen application: `wiki-app` (the wasm program) and `wiki-app-prerender` (native: writes the page with the application already rendered into it). |
 | [wiki-server/](wiki-server/) | `wiki-server` | The server, native only. A placeholder until Phase 2. |
-| [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS, and `bundle.sh`, which bundles the islands' libraries from `web/src/`. |
+| [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS, and `bundle.sh`, which bundles the islands' libraries from `web/src/`; `licenses/`, the texts of TikZJax's licence and its fonts', which the bundle serves beside them. |
 | [toolchain/](toolchain/) | | Build and test scripts, adapted from haskell-halogen's. |
 
 At the top, `Dockerfile` and `docker-compose.yml` run the server in Docker
@@ -904,4 +904,60 @@ sh toolchain/test-wasm.sh --test-options='--match "/Slug/"'   # extra args go to
 
 ## License
 
-Proprietary; see `LICENSE`.
+MIT; see [`LICENSE`](LICENSE). Each package carries a copy of it, as cabal wants
+the licence file inside the package.
+
+The code was written with Claude (Claude Code, Anthropic's coding agent) under
+the owner's direction: the owner decided what to build and how, and reviewed it;
+Claude wrote it.
+
+The libraries it is built with keep their own licences. All are permissive but
+three, which only the server links:
+
+| Where | Library | Licence |
+| --- | --- | --- |
+| `wiki-server` | [pandoc](https://github.com/jgm/pandoc) | GPL-2.0-or-later |
+| `wiki-server` | [texmath](https://github.com/jgm/texmath) | GPL-2.0-or-later (its cabal file says GPL-2; its file notices and README say "or any later version") |
+| `wiki-server` | [skylighting](https://github.com/jgm/skylighting) | GPL-2.0-or-later (likewise) |
+| the server and the page (`app.wasm`) | [haskell-halogen](https://github.com/Swordlash/haskell-halogen) | Apache-2.0 |
+| the page | [KaTeX](https://katex.org/) | MIT |
+| the page | [Mermaid](https://mermaid.js.org/), with the libraries it bundles (DOMPurify among them: MPL-2.0 or Apache-2.0) | MIT |
+| the page | [highlight.js](https://highlightjs.org/) | BSD-3-Clause |
+| the page (the editor) | [CodeMirror](https://codemirror.net/) and `@lezer/highlight` | MIT |
+| the page | [fflate](https://github.com/101arrowz/fflate) (the export's zip files) | MIT |
+| the page | [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim) (`wasi-shim.js`) | MIT or Apache-2.0 |
+| the page | [TikZJax](https://github.com/drgrice1/tikzjax) (`tikzjax/`) | GPL-3.0-or-later |
+| the page | the BaKoMa Computer Modern fonts TikZJax draws with (`tikzjax/fonts/`) | the BaKoMa Fonts Licence |
+
+The versions are those `package-lock.json` and the cabal plan pin; the other
+Haskell dependencies, some 280 of them, are under permissive licences (BSD, MIT,
+ISC, Apache-2.0 and the like).
+
+**The server's binary is GPL-governed when conveyed.** `wiki-server` links pandoc,
+texmath and skylighting, so a binary of it is a work combined with GPL code, and
+whoever conveys one (hands it to someone else, or publishes it, in an image or a
+release) conveys it under the GPL, version 3, which is the version that also
+admits haskell-halogen's Apache-2.0: with its source, under the same terms. This
+repository conveys no binary: the deploy script and the `Dockerfile` build from
+source on the machine that runs the server, and no release or image is
+published. The repository's own code stays MIT either way.
+
+**TikZJax** is served as it is published on npm (`@drgrice1/tikzjax`),
+unmodified, as a worker and files of its own, which the page talks to by
+messages. `web/bundle.sh` writes beside it `tikzjax/NOTICE.txt`, saying where its
+source is, and `tikzjax/LICENSE.txt`, the GPL's text, as conveying it (as the demo
+does) requires; neither its npm package nor its repository has a licence file,
+only `package.json`'s `GPL-3.0+`, so the text is the FSF's, kept in
+`web/licenses/GPL-3.0.txt`.
+
+**Its fonts** are the BaKoMa Computer Modern fonts (Copyright (C) 1994, 1995,
+Basil K. Malyshev), from [CTAN](https://ctan.org/tex-archive/fonts/cm/ps-type1/bakoma),
+which TikZJax's build converts to WOFF2. Their licence, the
+[BaKoMa Fonts Licence](https://mirrors.ctan.org/fonts/cm/ps-type1/bakoma/LICENCE),
+lets anyone copy and distribute them, and modify them and distribute what was
+modified, for any purpose, without fee, provided that its copyright notice,
+author statement and permission notice (and, for modified fonts, the original
+fonts' location) appear with all copies; using them, embedded in an SVG for
+instance, needs no notice at all. `web/bundle.sh` copies that licence from
+`web/licenses/BaKoMa-LICENCE.txt` into `tikzjax/fonts/LICENCE.txt`, and the
+notice names the original location.

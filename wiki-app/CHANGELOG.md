@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+Licensed under the MIT licence (WP5.1), where it was proprietary: the
+package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
+
 Tables of contents and templates (WP4.15). A page with three headings or
 more shows a "Contents" panel: beside the text on a wide window (with the
 comments' panel under it when that is open), above it on a narrower one,

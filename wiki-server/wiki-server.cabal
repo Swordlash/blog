@@ -2,7 +2,8 @@ cabal-version:      3.0
 name:               wiki-server
 version:            0.1.0.0
 synopsis:           The wiki's server: persistence, and the application's files
-license:            NONE
+license:            MIT
+license-file:       LICENSE
 author:             Mateusz Goślinowski
 maintainer:         mateusz.goslinowski@gmail.com
 category:           Web

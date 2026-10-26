@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+Licensed under the MIT licence (WP5.1), where it was proprietary: the
+package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
+
 Tables of contents and templates (WP4.15). Every heading gets its `id` from
 `Wiki.Core.Slug.headingSlug` (lower case, letters of every alphabet kept,
 punctuation and symbols dropped, white space a dash, `section` when nothing

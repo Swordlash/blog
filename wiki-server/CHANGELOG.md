@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Licensed under the MIT licence (WP5.1), where it was proprietary: the
+package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
+A binary of `wiki-server` links pandoc, texmath and skylighting, which are
+GPL-2.0-or-later, so whoever conveys one conveys it under the GPL (version 3,
+since haskell-halogen's Apache-2.0 is linked too); the README's licence
+section has the table of third-party licences.
+
 Tables of contents and templates (WP4.15). Migration `0012-page-template.sql`
 adds `pages.template`; `PUT api/v1/pages/<id>/template` sets it, as whoever
 may edit the page (not a save: no version, `updated_at` unchanged; a
