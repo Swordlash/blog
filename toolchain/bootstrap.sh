@@ -90,12 +90,11 @@ NODE_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
 PLAYWRIGHT_VERSION=1.63.0
 # The formatter, at the version the README names and CI checks with
 # (.github/workflows/build.yml holds the same version and checksum). The
-# checksum is that of the release's linux-x86_64 binary, checked when it is
-# set. It is not set yet: the release could not be downloaded where this was
-# written, and CI prints it (the format job's "Install fourmolu" step), so
-# copy it from there into both places.
+# checksum is that of the release's fourmolu-<version>-linux-x86_64.zip
+# (since 0.20.0.0 the releases ship zips, one binary inside), checked before
+# it is unpacked.
 FOURMOLU_VERSION=0.21.0.0
-FOURMOLU_SHA256=
+FOURMOLU_SHA256=aadf6931653df7b96f52014cf8eb4285a3e8778cd0b531499fc3ee013e1e00c7
 # The lexer and parser generators ghc-lib-parser runs while it compiles. For a
 # cross build cabal makes them for wasm too (alex.wasm, happy.wasm), cannot run
 # those, and falls back to the alex and happy on PATH, which must be native
@@ -694,18 +693,19 @@ install_fourmolu() {
   FOURMOLU=$GHCUP_BIN/fourmolu
   mkdir -p "$GHCUP_BIN"
   tmp=$FOURMOLU.download
-  rm -f "$tmp"
-  printf '+ fetch fourmolu %s release binary\n' "$FOURMOLU_VERSION" >>"$LOG"
-  if fetch "https://github.com/fourmolu/fourmolu/releases/download/v$FOURMOLU_VERSION/fourmolu-$FOURMOLU_VERSION-linux-x86_64" \
-    "$tmp" >>"$LOG" 2>&1; then
-    if [ -n "$FOURMOLU_SHA256" ]; then
-      check_sha256 "$tmp" "$FOURMOLU_SHA256" || fail "checking fourmolu's checksum"
-    fi
-    chmod 755 "$tmp"
-    mv "$tmp" "$FOURMOLU"
+  rm -rf "$tmp" "$tmp.zip"
+  printf '+ fetch fourmolu %s release zip\n' "$FOURMOLU_VERSION" >>"$LOG"
+  if fetch "https://github.com/fourmolu/fourmolu/releases/download/v$FOURMOLU_VERSION/fourmolu-$FOURMOLU_VERSION-linux-x86_64.zip" \
+    "$tmp.zip" >>"$LOG" 2>&1; then
+    check_sha256 "$tmp.zip" "$FOURMOLU_SHA256" || fail "checking fourmolu's checksum"
+    # The zip holds one directory with the binary in it; -j drops the directory.
+    unzip -q -o -j "$tmp.zip" '*/fourmolu' -d "$tmp" >>"$LOG" 2>&1 || fail "unpacking fourmolu's release zip"
+    chmod 755 "$tmp/fourmolu"
+    mv "$tmp/fourmolu" "$FOURMOLU"
+    rm -rf "$tmp" "$tmp.zip"
     say "installed fourmolu $FOURMOLU_VERSION's release binary into $GHCUP_BIN"
   else
-    rm -f "$tmp"
+    rm -rf "$tmp" "$tmp.zip"
     say "fourmolu's release binary could not be downloaded; building fourmolu $FOURMOLU_VERSION from Hackage into $GHCUP_BIN (this takes a while)"
     run "building fourmolu" cabal install "fourmolu-$FOURMOLU_VERSION" --ignore-project \
       --with-compiler="$(command -v ghc)" --installdir="$GHCUP_BIN" \

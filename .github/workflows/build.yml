@@ -85,11 +85,10 @@ env:
   GHC_WASM_FLAVOUR: '9.14'
   NODE_VERSION: '24'
   FOURMOLU_VERSION: '0.21.0.0'
-  # Of the release's fourmolu-<version>-linux-x86_64 binary, checked when set.
-  # Not set yet: the release could not be downloaded where this was written.
-  # The format job prints the binary's checksum; copy it here and into
-  # toolchain/bootstrap.sh.
-  FOURMOLU_SHA256: ''
+  # Of the release's fourmolu-<version>-linux-x86_64.zip (since 0.20.0.0 the
+  # releases ship zips, one binary inside), checked before it is unpacked.
+  # toolchain/bootstrap.sh holds the same value.
+  FOURMOLU_SHA256: 'aadf6931653df7b96f52014cf8eb4285a3e8778cd0b531499fc3ee013e1e00c7'
   # Native lexer and parser generators for the wasm build of ghc-lib-parser,
   # under haskell-halogen-th: a happy it accepts, not 2.2.
   ALEX_VERSION: '3.5.4.2'
@@ -430,22 +429,23 @@ jobs:
         path: ~/fourmolu
         key: ${{ runner.os }}-fourmolu-${{ env.FOURMOLU_VERSION }}-${{ env.FOURMOLU_SHA256 }}
 
-    # The release binary. Its checksum is printed, and checked against the
-    # pinned one (when there is one) whether it was downloaded or restored.
+    # The release's zip, checked against the pinned checksum, with the one
+    # binary inside it. The cache key carries the checksum, so a restored
+    # binary is one made from a zip that passed the check.
     - name: Install fourmolu
       if: runner.environment == 'github-hosted'
       run: |
         mkdir -p ~/fourmolu
         if [ ! -x ~/fourmolu/fourmolu ]; then
-          curl --fail --location --retry 5 --output ~/fourmolu/fourmolu.download \
-            "https://github.com/fourmolu/fourmolu/releases/download/v$FOURMOLU_VERSION/fourmolu-$FOURMOLU_VERSION-linux-x86_64"
-          chmod 755 ~/fourmolu/fourmolu.download
-          mv ~/fourmolu/fourmolu.download ~/fourmolu/fourmolu
+          zip="$HOME/fourmolu/fourmolu-$FOURMOLU_VERSION-linux-x86_64.zip"
+          curl --fail --location --retry 5 --output "$zip" \
+            "https://github.com/fourmolu/fourmolu/releases/download/v$FOURMOLU_VERSION/fourmolu-$FOURMOLU_VERSION-linux-x86_64.zip"
+          printf '%s  %s\n' "$FOURMOLU_SHA256" "$zip" | sha256sum --check
+          unzip -q -o -j "$zip" '*/fourmolu' -d ~/fourmolu
+          chmod 755 ~/fourmolu/fourmolu
+          rm "$zip"
         fi
-        sha256sum ~/fourmolu/fourmolu
-        if [ -n "$FOURMOLU_SHA256" ]; then
-          printf '%s  %s\n' "$FOURMOLU_SHA256" ~/fourmolu/fourmolu | sha256sum --check
-        fi
+        ~/fourmolu/fourmolu --version
         echo ~/fourmolu >> "$GITHUB_PATH"
 
     # The bootstrap installs fourmolu at the same pin (and checks the same
