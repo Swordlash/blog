@@ -1,107 +1,441 @@
 # blog
 
-A Confluence-style wiki, written in Haskell with
-[haskell-halogen](https://github.com/Swordlash/haskell-halogen) and compiled to
-WebAssembly for the browser.
+[![CI](https://github.com/Swordlash/blog/actions/workflows/build.yml/badge.svg)](https://github.com/Swordlash/blog/actions/workflows/build.yml)
 
-What it is for: spaces and subspaces, each a tree of pages written in Markdown, with
-Mermaid diagrams, LaTeX (inline and block), highlighted code, images, video and other
-attachments, previewed live in the browser as you write. Users, groups and permissions
-on spaces decide who may read, edit or administer what; a space can be public, which
-makes the same application a blog.
+A wiki in the manner of Confluence, written in Haskell and running in the
+browser: spaces and subspaces, each a tree of pages written in Markdown with
+formulas, diagrams, TikZ pictures, highlighted code and attachments; an editor
+with the page previewed beside it as you type; pages shown as slide decks;
+comments, history, search; and users, groups and permissions on spaces, where a
+public space makes the same wiki a blog. The browser application is
+[haskell-halogen](https://github.com/Swordlash/haskell-halogen) components
+compiled to WebAssembly, and it renders the Markdown itself, so the preview never
+waits for a server. It runs as a serverless demo that keeps its wiki in the
+browser, served as static files, or over its own server, `wiki-server`, which
+keeps the wiki in SQLite.
 
-How it is built: the browser application is Halogen components over a backend
-interface, implemented once in memory (a serverless demo deployable as static files)
-and once over HTTP to a Haskell server with persistence. Markdown is parsed and
-rendered to Halogen HTML in the browser, so the preview never waits for a server.
+**The demo: <https://swordlash.github.io/blog/>.** It opens at a tour that says
+what to try, and nothing written there leaves your browser.
+
+| | |
+| --- | --- |
+| ![A page of the demo with formulas set by KaTeX and a diagram drawn by Mermaid](docs/screenshots/page.png) | ![The editor, with the page's preview beside the Markdown](docs/screenshots/editor.png) |
+| A page: formulas set by KaTeX, a diagram drawn by Mermaid. | The editor, the preview beside the Markdown. |
+| ![A slide of the demo's deck, with a formula](docs/screenshots/slides.png) | ![The front page, the directory of spaces](docs/screenshots/spaces.png) |
+| A page presented as slides. | The front page: the directory of spaces. |
+
+## Writing pages
+
+Pages are Markdown, [CommonMark](https://commonmark.org) with GitHub's
+extensions, and what the wiki adds to it is written in Markdown too. Each example
+below is part of a page of the demo, as its author typed it, and the line under
+it links to that page, where it renders. The complete reference for authors is
+[docs/markdown.md](docs/markdown.md); the demo's
+[Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/) is
+the same, written in what it describes (open any page's "Source" to see its
+Markdown).
+
+### Mathematics, with KaTeX
+
+Formulas are set in the browser by [KaTeX](https://katex.org), between dollars
+or between LaTeX's own delimiters (`\(…\)` inline, `\[…\]` on a line of their
+own), or in a `math` fence:
+
+```markdown
+Between single dollars inline, $e^{i\pi} + 1 = 0$, and between double
+dollars on a line of their own:
+
+$$
+\begin{pmatrix} a & b \\ c & d \end{pmatrix}^{-1}
+= \frac{1}{ad - bc} \begin{pmatrix} d & -b \\ -c & a \end{pmatrix}
+$$
+```
+
+Euler's identity in the line, and a matrix's inverse set on its own:
+[Mathematics](https://swordlash.github.io/blog/s/docs/p/markdown-guide/mathematics/).
+
+KaTeX has no `\usepackage`; macros take its place, in three layers. Some are
+built in for every page (`\abs`, `\norm`, `\dv`, `\E`, `\Var` and more). A
+space's administrator gives the space its own, one `\newcommand` a line, under
+"Math macros" in its settings; these are the demo's `Docs` space's:
+
+```tex
+\newcommand{\vect}[1]{\boldsymbol{#1}}
+\newcommand{\Hom}{\operatorname{Hom}}
+\newcommand{\eps}{\epsilon}
+```
+
+They are on [Docs' pages and settings](https://swordlash.github.io/blog/s/docs/pages/),
+and every page of the space and of its subspaces may use them:
+
+```markdown
+This space has its own, in its settings, which its pages and its
+subspaces' pages may use: $\vect{v} \in V$, $f \in \Hom(V, W)$; and
+here $\eps$ is $\epsilon$, where the built-in one is $\varepsilon$.
+```
+
+A bold vector, an upright Hom, and the space's `\eps` set over the built-in one:
+[Mathematics](https://swordlash.github.io/blog/s/docs/p/markdown-guide/mathematics/#macros).
+And a formula may define its own, which then holds in every formula after it on
+the page, as in a LaTeX document:
+
+```markdown
+$$
+\newcommand{\dist}[2]{d\left(#1, #2\right)}
+\dist{x}{z} \le \dist{x}{y} + \dist{y}{z}
+$$
+
+so that from here on $\dist{x}{x} = 0$.
+```
+
+The triangle inequality, and the macro used again further down:
+[Mathematics](https://swordlash.github.io/blog/s/docs/p/markdown-guide/mathematics/#macros).
+Chemistry is mhchem's `\ce`, which KaTeX comes with:
+
+```markdown
+`\ce` writes chemical formulas and equations (mhchem): $\ce{H2O}$,
+$\ce{SO4^2-}$, and
+
+$$\ce{CO2 + C -> 2 CO}$$
+```
+
+Formulas and a reaction, with sub- and superscripts in their places:
+[Mathematics](https://swordlash.github.io/blog/s/docs/p/markdown-guide/mathematics/#chemistry).
+
+### Diagrams, with Mermaid
+
+A `mermaid` fence is drawn by [Mermaid](https://mermaid.js.org), in the browser:
+
+````markdown
+```mermaid
+flowchart TD
+  Markdown --> Parser[commonmark]
+  Parser --> Halogen[Halogen HTML]
+  Halogen --> Page
+```
+````
+
+A flowchart of how a page is rendered:
+[Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#diagrams);
+a class diagram and a pie chart are on
+[Diagrams](https://swordlash.github.io/blog/s/docs/p/markdown-guide/diagrams/).
+
+### Pictures, with TikZ
+
+A `tikz` fence is drawn by TikZ, real TeX run in the browser by
+[TikZJax](https://github.com/drgrice1/tikzjax), for a figure whose every point
+you place. It holds a picture's commands, a whole `tikzpicture` or a `tikzcd`
+diagram, and the lines at its top that load a library or a package:
+
+````markdown
+```tikz
+\usetikzlibrary{positioning, arrows.meta}
+\begin{tikzpicture}[node distance=2cm, box/.style={draw, rounded corners}, >={Stealth[length=3mm]}]
+  \node[box] (md) {Markdown};
+  \node[box, right=of md] (html) {Halogen HTML};
+  \node[box, right=of html] (page) {the page};
+  \draw[->] (md) -- node[above] {parse} (html);
+  \draw[->] (html) -- node[above] {render} (page);
+\end{tikzpicture}
+```
+````
+
+Three boxes in a row, placed by `positioning`, joined by `arrows.meta`'s arrows:
+[Diagrams](https://swordlash.github.io/blog/s/docs/p/markdown-guide/diagrams/),
+beside a commutative diagram and a plot drawn with pgfplots. Which libraries and
+packages TeX has is in [docs/markdown.md](docs/markdown.md#pictures).
+
+### Highlighted code
+
+A fence with a language is highlighted by [highlight.js](https://highlightjs.org):
+
+````markdown
+```haskell
+main :: IO ()
+main = putStrLn "Hello, world"
+```
+````
+
+Haskell, coloured by its syntax:
+[Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#code).
+The names a fence may give each of some seventy languages are listed in
+[docs/markdown.md](docs/markdown.md#code).
+
+### Alerts
+
+GitHub's alerts make a box of their kind (`NOTE`, `TIP`, `IMPORTANT`,
+`WARNING`, `CAUTION`):
+
+```markdown
+> [!NOTE]
+> Your edits are kept in this browser, so a reload finds them. On the
+> **Administration** page, linked at the top right for an administrator,
+> **Export the wiki** saves all of it as a zip file, **Import a wiki** brings
+> such a file back, and **Reset the demo content** puts back the pages you
+> see now.
+```
+
+A note, marked as one, at the top of the
+[Tour](https://swordlash.github.io/blog/s/docs/p/tour/).
+
+### A table of contents
+
+Every heading gets an `id` to link to. A page with three headings or more has a
+"Contents" panel beside it; `[[toc]]` on a line of its own puts the list in the
+page instead:
+
+```markdown
+# Team handbook
+
+Private to the team: only people granted a permission on this space, or
+on the wiki as a whole, can read it.
+
+[[toc]]
+
+## The week
+```
+
+The page's headings, listed where `[[toc]]` is, each a link to its section:
+[Team handbook](https://swordlash.github.io/blog/s/team/p/team-handbook/) (in
+the private `Team` space, which the demo's `admin`, whom it starts as, may read).
+
+### Images and attachments
+
+An image is Markdown's, from the web:
+
+```markdown
+An image from the web:
+
+![The Earth seen from Apollo 17 (NASA, public domain)](https://upload.wikimedia.org/wikipedia/commons/thumb/9/97/The_Earth_seen_from_Apollo_17.jpg/960px-The_Earth_seen_from_Apollo_17.jpg)
+```
+
+The photograph, under the guide's
+[Images, video and attachments](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#images-video-and-attachments),
+beside a video from the web written the same way. A file attached to the page
+is named with `attachment:`, and shows as what it is: an image, a video or audio
+player, or else a link that downloads it.
+
+```markdown
+And a file attached to this page, by its name:
+
+![A tree](attachment:tree.png)
+```
+
+The attached image, under the photograph and the video:
+[Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#images-video-and-attachments).
+The editor writes these for you when a file is dropped or pasted into it.
+
+### Links between pages
+
+A link to another page is its path, from this page or (with a leading `/`)
+from the wiki's root, and a wiki link is shorter still:
+
+```markdown
+Paragraphs, *emphasis*, **strong emphasis**, ~~strikethrough~~,
+`inline code` and links, to the web (<https://commonmark.org>) or to other
+pages by their path from this one: [diagrams](markdown-guide/diagrams), or
+the [tour](tour) next to this page, or [[tour|the same, as a wiki link]].[^paths]
+```
+
+Links to the guide's subpage and to the tour, a wiki link with a label of its
+own, and a footnote: [Markdown guide](https://swordlash.github.io/blog/s/docs/p/markdown-guide/#text).
+A link to a page that is not there is shown as broken.
+
+Tables, task lists, footnotes, `@` mentions, the HTML a page may hold and its
+colours are in [docs/markdown.md](docs/markdown.md), with everything above in
+full.
+
+## Presentations
+
+Any page can be a slide deck, and is an ordinary page all the same. This is the
+demo's [Presentations](https://swordlash.github.io/blog/s/docs/p/markdown-guide/presentations/),
+whole:
+
+````markdown
+# Presentations
+
+::: {.slides theme=beamer aspect=16:9}
+:::
+
+Any page can be a slide deck. Press **Present** above the page: this one is
+a deck, and its slides tell you how it is written.
+
+::: notes
+These are the speaker's notes: on the page they are a box like this one;
+on the slides they are hidden until you press **n**.
+:::
+
+---
+
+## Slides
+
+- A line with `---` alone on it, after a blank line, starts the next slide.
+- The first heading on a slide is its title; a `#` heading makes a title
+  slide, like this deck's first.
+- A `::: notes` box holds what only the speaker sees.
+- Everything a page shows, a slide shows: tables, code, formulas, diagrams.
+
+::: notes
+Mention that a page with no `---` is one slide, and is not offered as a
+deck.
+:::
+
+---
+
+## Formulas
+
+Euler's identity, $e^{i\pi} + 1 = 0$, set by KaTeX, and on its own:
+
+$$
+\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
+$$
+
+::: notes
+The macros a page defines hold on every slide after the one that defines them.
+:::
+
+---
+
+## A diagram
+
+```mermaid
+flowchart LR
+  page[A page] -->|---| slides[Slides]
+  slides --> screen[Full screen]
+  slides --> paper[Print to PDF]
+```
+
+---
+
+## Code
+
+```haskell
+-- A deck is a page's Markdown, cut at its breaks.
+deckOf :: [Block] -> Deck
+```
+
+---
+
+## Presenting
+
+| Key | What it does |
+| --- | --- |
+| → Space PageDown | the next slide |
+| ← PageUp | the slide before |
+| Home End | the first and the last |
+| f | full screen (Escape leaves it) |
+| n | the speaker's notes |
+| o | every slide, to pick one |
+
+On a touch screen, swipe. **Print** puts one slide on each page: choose
+"Save as PDF" to keep the deck as a file.
+
+---
+
+## Themes
+
+A `slides` box anywhere in the page says how the slides look:
+
+```markdown
+::: {.slides theme=dark aspect=4:3}
+:::
+```
+
+Themes are `beamer` (the default), `light` and `dark`; slides are `16:9`
+(the default) or `4:3`.
+````
+
+It is [these seven slides](https://swordlash.github.io/blog/s/docs/p/markdown-guide/presentations/slides/)
+(`Wiki.Core.Slides` cuts them):
+
+- **What makes it a deck.** There is no front matter: a page with a `---` at
+  its top level is a deck, and so is one with a box of the class `slides`,
+  which, anywhere in the page, says how the deck looks and shows nothing
+  itself: `theme=beamer` (the default: a title bar, and a footer with the
+  page's title and the slide's number), `light` or `dark`, and `aspect=16:9`
+  (the default) or `4:3`.
+- **Slides.** A `---` on a line of its own, after a blank line, starts the next
+  slide (inside a list, a quotation or a box it stays a rule). The first heading
+  on a slide is its title; a slide titled with a `#` heading is a title slide.
+  Formulas, diagrams, pictures, code, tables and images are on a slide as on a
+  page, with the macros defined on the slides before.
+- **Notes.** A `::: notes` box holds the speaker's notes of its slide: a box on
+  the page, hidden on the slide until **n** shows them under it.
+- **Showing it.** "Present", above a page that is a deck, opens it full screen:
+  the arrow keys, Space, PageUp and PageDown move, Home and End go to the ends,
+  **f** fills the screen, **o** shows every slide to pick one, and on a touch
+  screen a swipe moves. The slide is in the address (`?slide=3`), so a link or a
+  reload comes back to it. "Print" puts one slide on each page, of the slide's
+  shape, so the browser's "Save as PDF" keeps the deck as a file; "with notes"
+  prints each slide on an A4 page above its notes.
+- **Exporting it.** On a wiki served by `wiki-server` (the demo has no server,
+  so no "Export"), "Export" above a deck downloads it as PowerPoint, as Beamer
+  LaTeX, or as a Beamer PDF where the server has `xelatex`: its slides cut as
+  "Present" cuts them, a first title slide made the title page, the notes as
+  Beamer's notes or PowerPoint's speaker notes, `beamer` as Beamer's Madrid
+  theme, `light` its plain look and `dark` light on dark, the aspect carried
+  over (PowerPoint gets 16:9). Every page, deck or not, also exports as Word, a
+  web page, an e-book or a PDF; see
+  [docs/markdown.md](docs/markdown.md#exported-as-documents).
+
+## What it does
+
+- **Spaces** in a tree, public or private, each a tree of pages, shown one at a
+  time as Confluence shows them; the front page is a directory of spaces, and a
+  space has a description, an icon and a home page of its own. Pages are listed
+  by name, by date or in an order put by hand.
+- **Pages in Markdown** ([above](#writing-pages), and
+  [docs/markdown.md](docs/markdown.md)), with templates to start one from.
+- **An editor** that shows the Markdown as it will look while it is typed
+  (CodeMirror), with the preview beside it or in its place, files dropped or
+  pasted in as attachments, drafts kept a few seconds after the typing stops,
+  and a conflict shown in place when someone else saved first.
+- **Slides** made of any page, presented, printed and exported
+  ([above](#presentations)).
+- **History**: every save a version, its changes shown word by word, and any
+  version restored.
+- **Comments** on a quote of the page or on the whole page, in threads, with
+  replies and resolving, arriving live in every tab over `wiki-server`.
+- **Mentions and notifications**: `@login` tells someone, under a bell in the
+  header, as do comments on and changes to the pages they watch; over
+  `wiki-server`, by mail too.
+- **Search** by title and text (`/` to focus it), in every space or one.
+- **Blogs**: a space shown as a blog lists its pages as posts, newest first,
+  with an Atom and an RSS feed over `wiki-server`.
+- **Users, groups and permissions** to view, edit or administer a space; over
+  `wiki-server`, accounts with passwords, a second factor, sign-in with Google,
+  GitHub, Apple or any OpenID Connect provider, and invitations.
+- **Export** of a page or a space as Word, a web page, an e-book, a PDF, a deck
+  as PowerPoint or Beamer (over `wiki-server`), and of the whole wiki as a zip
+  file, which another wiki, the demo's or a server's, imports.
+- **Every route at an address of its own**, prerendered for the demo and
+  rendered per request by `wiki-server`, so a page arrives complete and the
+  program adopts it rather than draw it again.
+- **Offline reading and installing**: a service worker keeps the application and
+  the last pages read, and the wiki installs as an application.
+- **For the operator** of `wiki-server`: backups (before every deploy, on a
+  schedule, copied off the machine), an administration panel, health and
+  Prometheus metrics ([below](#the-wikis-server)).
+
+## How it is built
+
+The browser application is Halogen components over a backend interface,
+implemented once in memory (the serverless demo) and once over HTTP to the
+Haskell server. Markdown is parsed (`commonmark-hs`) and rendered to Halogen
+HTML in the browser, by the same `wiki-core` the server renders pages with;
+KaTeX, Mermaid, TikZJax and highlight.js fill the elements Halogen leaves to
+them.
 
 There are two ways to run it, from the same `app.wasm`: the serverless demo,
-the whole reading and writing experience over a wiki seeded with demo content and
-kept in the browser, deployable as static files; and the wiki's server,
-`wiki-server`, which keeps the wiki in SQLite and serves the application, which
-then reads and writes the wiki over HTTP. The page says which
+the whole reading and writing experience over a wiki seeded with demo content
+and kept in the browser, deployable as static files; and the wiki's server,
+`wiki-server` (servant and SQLite), which keeps the wiki and serves the
+application, which then reads and writes the wiki over HTTP. The page says which
 (`<meta name="wiki-backend" content="demo">` or `"server"`), so the build decides
 by the pages it writes: `npm run build-wasm` writes the demo's (what GitHub Pages
 serves), `WIKI_BACKEND=server npm run build-wasm` the server's, and
 `toolchain/deploy-local.sh` deploys the server with those (and, with `--static`,
-the demo). The plan of work is in [docs/PLAN.md](docs/PLAN.md): phases from the
-serverless MVP demo through a server with persistence to authentication and
-authorisation.
-
-## What works
-
-- Spaces in a tree, public or private, each holding a tree of pages; creating,
-  renaming, moving and deleting spaces and pages as the permissions allow.
-- One space at a time, as Confluence shows them: the front page is a directory
-  of spaces (each a card with its icon, description and number of pages, and the
-  ones this browser visited last), and inside a space the sidebar shows that
-  space alone, its pages and its subspaces, with a menu to switch to another. A
-  space opens at its home page; its administrator gives it a description, an
-  icon (an emoji, a colour or an uploaded image) and another home page in its
-  "Space settings".
-- Pages written in Markdown, whose syntax is described for authors in
-  [docs/markdown.md](docs/markdown.md): GitHub's extensions, footnotes, alerts,
-  wiki links, formulas drawn by KaTeX, diagrams by Mermaid, code highlighted by
-  highlight.js, images, video and attachments.
-- An editor that shows the Markdown as it will look while it is typed
-  (CodeMirror 6: bold, italics, larger headings, code on its own background,
-  their markers dimmed), beside a live preview, files dropped or chosen into
-  it as attachments, Save (Ctrl+S) that stays and Save and close, a conflict
-  shown in place when someone else saved first, and a guard against losing
-  unsaved changes. A new page is made from its title first, so files can be
-  attached to it at once. What is typed is kept as a draft only its author sees,
-  a few seconds after the typing stops, and taken up again the next time they
-  edit the page.
-- Each space's subspaces and pages listed by name (a number in a name read as a
-  number), by date, newest or oldest first, or in an order put by hand, as the
-  space's administrators choose.
-- A history for every page: each save is a version, listed with its time and
-  author, and a version's changes shown line by line with the words that
-  changed marked, against the version before or the page as it is now. An
-  editor restores a version by saving it again as the latest, so nothing in
-  between is lost.
-- Comments, as Confluence has them: text selected in a page is commented on
-  from a button beside it, its quote marked in the page and its thread in a
-  panel beside it (a thread whose text the page no longer has kept, and said
-  so), with replies, edits, deletion, and resolving; and threads about the
-  whole page under it. Over `wiki-server` a comment made in one tab shows in
-  every other tab on the page as it is made, over a WebSocket.
-- Mentions and notifications: `@login` in a page or a comment tells that user,
-  under a bell in the header with an unread count, as do comments on the pages
-  they watch (their own, and those they or a space of theirs chose with a
-  "Watch" button) and changes of them. Over `wiki-server` they arrive live,
-  and are mailed at once or in a daily digest (07:00 UTC) to a verified
-  address, as each user chooses in their account panel, with a link in each
-  mail that turns it off.
-- Export over `wiki-server`: a page as Word, a standalone web page, an e-book or
-  a PDF, a deck also as PowerPoint and as a Beamer presentation (its LaTeX, or
-  its PDF), and a space as one document of its pages with a title page and a
-  table of contents, from an "Export" menu. The server makes them with pandoc,
-  linked into it; only the PDFs need something installed (below).
-- Search by title and text from a box in the header (`/` to focus it), in every
-  space or in one, with a page of results at an address of its own.
-- Three demo users and nobody, switched between in the header instead of a
-  sign-in, each seeing the wiki through their permissions.
-- An address for every route, and a prerendered page for each route the demo
-  starts with, so that a link or a reload lands on the page before the program
-  has loaded, which then adopts the page rather than render it again.
-- The same over `wiki-server`: the server's build shows the application while it
-  loads what the route shows from the server, keeps what it has read so that going
-  back to it is instant, and says so in place, with a "Try again", when the server
-  cannot be reached. Its administration exports the wiki and imports another into
-  it, the demo's pages among them, choosing what to bring in and which page stays
-  where both have one; and it lists the wiki's users, marks and unmarks
-  administrators, and keeps groups and their members (the demo's too).
-- Reading offline, and the wiki as an application to install: a service worker
-  keeps the application and the last 50 pages read (and what the program read
-  for them) in the browser, and offline shows a page read before with "You are
-  reading an offline copy from …", or an offline page listing what can be read,
-  for one never read; "Install" in the header where the browser offers it
-  (Chromium). A browser lets a service worker in only on a secure page: over
-  HTTPS, or from `localhost`/`127.0.0.1` on the same machine. The deploy script
-  serves over HTTPS by default (below); a wiki served over plain HTTP to other
-  machines (`--http`, on a Tailscale address) works as before, without either.
-  Signing out lets go of the pages kept.
+the demo).
 
 ## Running the demo
 
@@ -502,23 +836,19 @@ to the demo, keeping `data/`.
   # then open http://127.0.0.1:8081/admin/ there
   ```
 
-  `curl http://127.0.0.1:8081/admin/api/v1/admin/status` says which version runs,
-  where its data is, and how many spaces, pages, attachments and backups it has.
-  Its "Administration" page makes users with a password, gives them a new one,
-  disables and enables their logins, lets them create spaces, and marks them as
-  administrators (or takes it away), who then have the same page on the public
-  listener, signed in; and it keeps groups and their members. Who may read,
-  edit and administer a space is in the space's own "Space settings", for
-  whoever administers it. Its "Activity" lists every change made to the
-  administration (who, when, what, from where), and the Server section's
-  "Status" the last twenty errors the server logged.
-- **Health and metrics.** `curl https://<machine>.<tailnet>.ts.net/healthz`, or
-  `http://127.0.0.1:8080/healthz` on the machine (on either listener, with no
-  login), answers `{"status": "ok", "schemaVersion": …,
-  "lastBackupAgeSeconds": …}`; `curl http://127.0.0.1:8081/metrics` gives
-  Prometheus its metrics (requests by route and status, latency, pages, users,
-  sizes, the newest backup's age), on the admin listener only. `docs/api.md`
-  lists them.
+  `curl http://127.0.0.1:8081/admin/api/v1/admin/status` says which version
+  runs, where its data is and how much it holds. Its "Administration" page
+  keeps users (passwords, logins disabled, who may
+  create spaces, who administers), groups and their members, the wiki's
+  "Activity" (every change made to the administration) and the Server
+  section's "Status" (the last twenty errors logged); who may read, edit and
+  administer a space is in that space's "Space settings". `docs/api.md` says
+  what each listener serves
+  ([The two listeners](docs/api.md#the-two-listeners)).
+- **Health and metrics.** `/healthz`, on either listener and with no login,
+  says whether the server can read its database and how old its last backup is;
+  `http://127.0.0.1:8081/metrics`, on the admin listener only, gives Prometheus
+  its metrics. [docs/api.md](docs/api.md#health-and-metrics) lists them.
 - **Logs.** `journalctl --user -u wiki-demo -f`: one `key=value` line per request
   (listener, who, method, path, route, status, milliseconds), and an error line
   with the exception for anything that fails, or answers with a 5xx.
@@ -664,9 +994,10 @@ there with the compose file beside it.
 
 ## Working on it
 
-`AGENTS.md` describes how the work is organised: a planning session cuts the plan into
-work packages and delegates each to an implementing agent. Toolchain and conventions
-follow haskell-halogen's.
+The plan of work, with the decisions taken and the work packages it was cut
+into, is [docs/PLAN.md](docs/PLAN.md). `AGENTS.md` describes how the work is
+organised: a planning session cuts the plan into work packages and delegates each
+to an implementing agent. Toolchain and conventions follow haskell-halogen's.
 
 ## Toolchain
 
@@ -684,9 +1015,9 @@ It reuses the pinned GHC, cabal and wasm compiler found on `PATH`, and any Node
 (unless one is already on `PATH`) and through it the pinned compiler, making it
 ghcup's default. Missing tools go to: the wasm sysroot into `~/.ghc-wasm`; Node into
 `~/.wiki-toolchain/node`; Chromium's headless shell where Playwright keeps its
-browsers; and fourmolu, the formatter, into ghcup's bin directory (its release binary,
-or built from Hackage where GitHub's downloads are refused, as in Claude Code's cloud
-sessions); and native `alex` and `happy` (pinned, happy below 2.2) into the same
+browsers; and fourmolu, the formatter, into ghcup's bin directory (from its
+release zip, checked against a pinned hash, or built from Hackage where GitHub's
+downloads are refused, as in Claude Code's cloud sessions); and native `alex` and `happy` (pinned, happy below 2.2) into the same
 directory, which the wasm build of `ghc-lib-parser`, under the `hh` quoter, runs from
 `PATH`. Debian packages it needs (GMP's headers, `zstd`, `jq` and a few more) it
 installs with `apt-get` when it runs as root or with password-less `sudo`, and names
@@ -866,9 +1197,10 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 | [wiki-core/](wiki-core/) | `wiki-core` | The domain: types, Markdown rendering, permission rules. Native and wasm. |
 | [wiki-api/](wiki-api/) | `wiki-api` | Request and response types (aeson), shared by the client and the server. |
 | [wiki-app/](wiki-app/) | `wiki-app` | The Halogen application: `wiki-app` (the wasm program) and `wiki-app-prerender` (native: writes the page with the application already rendered into it). |
-| [wiki-server/](wiki-server/) | `wiki-server` | The server, native only. A placeholder until Phase 2. |
+| [wiki-server/](wiki-server/) | `wiki-server` | The server, native only: servant over SQLite, rendering each page per request, with pandoc for the exports. |
+| [docs/](docs/) | | The authors' Markdown reference (`markdown.md`), the HTTP API (`api.md`), the export format (`export.md`), the plan of work (`PLAN.md`), and the README's screenshots. |
 | [web/](web/) | | The page around the application: `index.html`, `index.js` (loads `app.wasm`), CSS, and `bundle.sh`, which bundles the islands' libraries from `web/src/`; `licenses/`, the texts of TikZJax's licence and its fonts', which the bundle serves beside them. |
-| [toolchain/](toolchain/) | | Build and test scripts, adapted from haskell-halogen's. |
+| [toolchain/](toolchain/) | | Build, test and deploy scripts, adapted from haskell-halogen's, and `screenshots.mjs`, which takes the README's screenshots. |
 
 At the top, `Dockerfile` and `docker-compose.yml` run the server in Docker
 (above); `.dockerignore` keeps everything but the sources
@@ -890,11 +1222,20 @@ npm run serve-wasm              # build-wasm, then serve it on http://127.0.0.1:
 npm run test-wasm               # the test suites on wasm, under Node; wiki-app-browser-test in Chromium
 npm run test                    # test-native, then test-wasm
 npm run smoke-test              # the built page in headless Chromium: the demo (every prerendered route, a walk with back, forward and reload, dark and phone), then the server's build against a real wiki-server
+npm run screenshots             # the README's screenshots, from the built demo in headless Chromium, into docs/screenshots
 npm run dev-test                # wiki-app-browser-test in browser GHCi, rerun on save (needs ghciwatch)
 npm run format                  # fourmolu over every package
 npm run format-check            # the same, failing on what it would change (as CI does)
 npm run clean                   # remove dist-newstyle/wasm/public
 ```
+
+`npm run screenshots` (`toolchain/screenshots.mjs`) takes the four screenshots at
+the top of this README from the page `npm run build-wasm` built, in headless
+Chromium at 1280 by 800, once KaTeX, Mermaid and highlight.js have drawn; take
+them again when the look changes, and commit them. Each has to stay under 300 KB,
+which the script and `wiki-app-test` check; the same test checks that every
+example under [Writing pages](#writing-pages) and [Presentations](#presentations)
+is, word for word, on the demo's page it links to.
 
 The islands bundle is `web/bundle.sh <output-dir>`: esbuild bundles KaTeX and
 highlight.js (with `web/src/islands.js`) into `islands.js`, which publishes

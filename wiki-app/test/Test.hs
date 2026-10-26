@@ -14,6 +14,7 @@ import Test.Islands qualified as Islands
 import Test.Licence qualified as Licence
 import Test.Link qualified as Link
 import Test.Manifest qualified as Manifest
+import Test.Readme qualified as Readme
 import Test.Route qualified as Route
 import Test.Shell qualified as Shell
 
@@ -33,3 +34,4 @@ main = hspec $ do
   Import.spec
   Manifest.spec
   Licence.spec
+  Readme.spec
