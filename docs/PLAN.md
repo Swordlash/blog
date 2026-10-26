@@ -2927,6 +2927,19 @@ Amended by the planning session after each work package's report.
   owner's machine, and the next steps of it (`haskell-actions/setup`, the caches, the
   wasm toolchain from ghc-wasm-meta) are exercised by a dispatch on `main` with `runner:
   hosted`, started after the merge.
+- **The hosted path's second rot, fixed** (2026-10-26, PR #82, `main` at `4ad21a8`). With
+  fourmolu fetched, the hosted `native` and `wasm` jobs failed in `bootstrap.sh ready`,
+  the gate every `npm run` goes through: it demanded the whole toolchain whatever the
+  command (fourmolu, the wasm sysroot, alex and happy, Chromium), which the self-hosted
+  runner has and a hosted job does not (the native job has GHC, cabal and Node; the wasm
+  job installs Chromium after its build and no fourmolu; ghc-wasm-meta's `setup.sh`
+  writes no sysroot marker). The gate now checks per command (native: GHC and cabal;
+  wasm builds: the sysroot, the generators, Node, the npm packages; browser tests:
+  Chromium on top; fourmolu nobody's), the hosted wasm job writes the marker, and
+  `test-bootstrap.sh` (run by hand, and failing since WP4.3 for want of the WASI shim in
+  its fixture) has a case for it and passes its 20. Dependabot's first run also showed
+  the hosted wasm job builds the dependency store (about 35 minutes) and caches it. The
+  dispatch with `runner: hosted` was started again after the merge.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
