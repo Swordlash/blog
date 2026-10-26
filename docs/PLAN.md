@@ -3032,6 +3032,13 @@ Amended by the planning session after each work package's report.
   nothing repaired), 230 browser tests, `actionlint` clean, 38/10/10 deploy cases. Not
   run here: the deploy itself; the push of this merge is the first, and `configure-pages`
   fails if Pages' source is not "GitHub Actions" (the owner's setting).
+- **The demo is live on GitHub Pages** (2026-10-26, 22:28Z): the push of #84's merge
+  found the pull request's run and its `app` artifact (`tested` skipped the builds),
+  `configure-pages` answered (the owner had set the source to GitHub Actions), the base
+  path check passed, and the deploy took under a minute; `https://swordlash.github.io/blog/`
+  answers 200 with `<base href="/blog/">`, the manifest, `licenses.txt` and `app.wasm`
+  (10.9 MB). WP5.4 started on `wp5.4-pick-runner` from `main` `8e0b380`; Dependabot's #80
+  asked to rebase, to be fast-forwarded after its hosted run.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
