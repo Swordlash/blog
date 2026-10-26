@@ -32,7 +32,7 @@ import Halogen.VDom.DOM.Monad (appendChild, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
 import Protolude
 import Test.Hspec
-import Wiki.Api (AdminApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), InvitationsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Activity (firstPage)
 import Wiki.Api.Admin (LoggedError (..), ServerStatus (..))
@@ -44,22 +44,28 @@ import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http (Transport (..), cacheOf, newHttpEnvWith, newImmediateHttpEnv)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Http.Request (Request (..), Response (..))
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..), savePageIn)
 import Wiki.App.Backend.Mem.State qualified as M
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.Static (Rendered (..), Start (..), prerenderedRoutes, renderLoading, startLoading, startRoute, startServed)
+import Wiki.App.View.Body qualified as Body
 import Wiki.Core.Access (Access (..))
+import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id (SpaceId (..), UserId (..))
+import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Space qualified as S
 import Wiki.Core.User (SignInProvider (..))
+import Wiki.Core.Version (Author)
 
 spec :: Spec
 spec = do
@@ -124,6 +130,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Invite (InvitationToken "valid")
       , ResetPassword (MailToken "secret")
       , VerifyEmail (MailToken "secret")
+      , Unsubscribe (MailToken "secret")
       ]
 
 -- | The pages a server renders, adopted by the program that starts from
@@ -195,6 +202,7 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , Invite (InvitationToken "used")
            , ResetPassword (MailToken "secret")
            , VerifyEmail (MailToken "secret")
+           , Unsubscribe (MailToken "secret")
            ]
 
 -- | The demo with its first post saved once by the editor.
@@ -241,11 +249,19 @@ apiOver providers st = do
         versions <- listVersions p.id
         each <- for (Map.keys (Map.findWithDefault mempty p.id st.versions)) $ \at ->
           (links.pages.version p.id (VersionTime at),) . answerOf <$> getVersion p.id at
+        threads <- fromRight [] <$> listThreads p.id
+        watch <- watching (WatchPage p.id)
+        let logins = Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments])
+        named <- Body.askPeople logins
         pure
           ( [(links.spaces.pageAt s.id (pagePath p.id), answerOf page), (links.pages.draft p.id, answerOf draft), (links.pages.versions p.id, answerOf versions)]
+              <> [(links.notifications.pageWatch p.id, answerOf watch)]
+              <> [(links.notifications.people logins, answerOf (Right named :: Either WikiError (Map Text Author))) | not (null logins)]
               <> each
           )
-      pure ([(links.spaces.atPath (spacePath s.id), answerOf space), (links.spaces.listPages s.id, answerOf pages), (links.spaces.postDetails s.id, answerOf details)] <> concat perPage)
+      spaceWatch <- watching (WatchSpace s.id)
+      pure ([(links.spaces.atPath (spacePath s.id), answerOf space), (links.spaces.listPages s.id, answerOf pages), (links.spaces.postDetails s.id, answerOf details), (links.notifications.spaceWatch s.id, answerOf spaceWatch)] <> concat perPage)
+    told <- notifications
     pure
       ( Map.fromList
           ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports} :: Either WikiError SessionInfo))
@@ -258,6 +274,7 @@ apiOver providers st = do
               : (links.admin.backups, answerOf kept)
               : (links.admin.activity Nothing Nothing, answerOf logged)
               : (links.admin.status, answerOf (Right status :: Either WikiError ServerStatus))
+              : (links.notifications.list, answerOf told)
               : (links.invitations.details (InvitationToken "valid"), answerOf (Right InvitationInfo {email = "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
               : concat perSpace
           )

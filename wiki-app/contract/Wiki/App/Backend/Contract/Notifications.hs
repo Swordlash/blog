@@ -115,6 +115,12 @@ mentioning = describe "mentions" $ do
     length <$> toldOf run reader `shouldReturn` 1
     toldOf run editor `shouldReturn` []
 
+  it "tells whom a new page mentions" $ \(Fixture run) -> do
+    blog <- spaceAt run "blog"
+    made <- run editor (createPage blog.id Nothing "Thanks" "Thanks, @reader.") >>= ok
+    editorName <- nameOf run editor
+    toldOf run reader `shouldReturn` [(Mentioned, editorName, made.id)]
+
   it "tells whom a comment mentions, and whom an edit of it newly mentions" $ \(Fixture run) -> do
     notes <- pageAt run "blog" "notes-on-haskell"
     t <- run reader (openThread notes.id Nothing "What do you think, @editor?") >>= ok

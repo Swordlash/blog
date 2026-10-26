@@ -940,8 +940,9 @@ createPageIn sid parent title body now st = do
     Left (Invalid "A page's parent has to be in the same space.")
   t <- nonBlank "A page's title" title
   let (st', page) = insertPage sid parent t body now st
-  -- Its first version is its maker's.
-  pure (recordVersion (currentUserId st) page st', page)
+  -- Its first version is its maker's. A new page is a save too: whom it
+  -- mentions, and whoever watches its space, are told.
+  pure (tell now page Nothing "" PageSaved (newlyMentioned "" body) (recordVersion (currentUserId st) page st'), page)
 
 -- | Save a page's title and body, if nobody has saved it since the version
 -- given.

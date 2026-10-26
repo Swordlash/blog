@@ -65,6 +65,24 @@ https://example.com is a link too. Links that leave the wiki get
 
 A link that names nothing the wiki knows is shown as broken, as its text.
 
+## Mentions
+
+`@` and someone's login mentions them: @ada is told of it, under the bell at
+the top of the wiki and by mail if they chose so, when the page is saved
+or the comment made (a page saved again does not tell again of a mention it
+had). To someone signed in, a mention of one of the wiki's users is a link
+to a search for the mention, titled with their name; a login that is
+nobody's, and every mention to someone not signed in, is the text as
+written.
+
+A mention starts a word: the `@` in an address such as ada@example.org, or
+in a path, mentions nobody. A login is written with letters, digits, `_`,
+`.` and `-`, and does not end in a `.` or a `-`, which are taken to be the
+sentence's: "thanks, @ada." mentions `ada`. A login with other characters
+cannot be mentioned. Nothing in code, `` `@ada` ``, or in a link's text is
+a mention; to write an `@` before a word without mentioning anyone, put it
+in code.
+
 ## Images, video and attachments
 
 An image is `![caption](destination)`: ![A diagram](https://example.com/diagram.png)

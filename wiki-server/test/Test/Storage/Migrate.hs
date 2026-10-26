@@ -44,7 +44,7 @@ spec = describe "migrations" $ do
       migrate c `shouldReturn` [1 .. length migrations]
       schemaVersion c `shouldReturn` length migrations
       tables <- tableNames c
-      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "sign_in_providers", "threads", "comments", "totp", "recovery_codes", "reset_tokens", "email_verifications", "schema_version"] $ \t ->
+      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "sign_in_providers", "threads", "comments", "totp", "recovery_codes", "reset_tokens", "email_verifications", "watches", "notifications", "schema_version"] $ \t ->
         tables `shouldContain` [t]
       rows <- query_ c "SELECT version FROM schema_version ORDER BY version"
       map fromOnly rows `shouldBe` [1 .. length migrations]
@@ -179,6 +179,25 @@ spec = describe "migrations" $ do
       execute_ c "UPDATE spaces SET blog = 1"
       query_ c "SELECT blog FROM spaces" `shouldReturn` [Only True]
       (try (execute_ c "UPDATE spaces SET blog = 2") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
+
+  it "bring a database up to notifications: nobody told of anything, everyone watching their own, the mail not chosen, all going with its user" $
+    withFreshDatabase $ \_ c -> do
+      -- Found by its name, as the blog's step is.
+      step <- maybe (assertFailure "no migration adds notifications") pure (find (\m -> "notifications" `T.isInfixOf` m.name) migrations)
+      let earlier = takeWhile (\m -> m.version < step.version) migrations
+      applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
+      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
+      execute_ c "INSERT INTO spaces (id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order) VALUES ('s1', NULL, 'S', 's', 0, '', 'now', 0, 'name', 'name')"
+      execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('p1', 's1', NULL, 'P', 'p', '', 'now', 'now', 0, '')"
+      migrate c `shouldReturn` [step.version .. length migrations]
+      query_ c "SELECT notification_mail, watch_own FROM users" `shouldReturn` [(Nothing :: Maybe Text, 1 :: Int)]
+      query_ c "SELECT (SELECT count(*) FROM watches) + (SELECT count(*) FROM notifications)" `shouldReturn` [Only (0 :: Int)]
+      execute_ c "PRAGMA foreign_keys = ON"
+      execute_ c "INSERT INTO watches (user_id, page_id, watching) VALUES ('user-1', 'p1', 1)"
+      execute_ c "INSERT INTO watches (user_id, space_id, watching) VALUES ('user-1', 's1', 0)"
+      execute_ c "INSERT INTO notifications (id, user_id, kind, page_id, actor, actor_name, title, created_at, seq) VALUES ('n1', 'user-1', 'changed', 'p1', 'user-2', 'Bea', 'P', 'now', 0)"
+      execute_ c "DELETE FROM users WHERE id = 'user-1'"
+      query_ c "SELECT (SELECT count(*) FROM watches) + (SELECT count(*) FROM notifications)" `shouldReturn` [Only (0 :: Int)]
 
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do

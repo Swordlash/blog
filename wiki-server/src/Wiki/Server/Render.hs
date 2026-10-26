@@ -164,6 +164,7 @@ statusOf at c = case at of
   -- secret is checked when its form is sent.
   ResetPassword _ -> status200
   VerifyEmail _ -> status200
+  Unsubscribe _ -> status200
   _ | maybe False shutOut c.session -> status401
   Unknown -> status404
   Space s -> ofSpace s

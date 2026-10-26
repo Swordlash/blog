@@ -66,6 +66,7 @@ import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event (..), EventType (..), preventDefault)
 import Web.UIEvent.KeyboardEvent qualified as KeyboardEvent
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
+import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
@@ -78,6 +79,7 @@ import Wiki.Core.Page (Page (attachments, body, title))
 import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, themeName)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
+import Wiki.Core.Version (Author)
 
 -- The key is read in the keydown's listener ('slideKeys') and a touch's
 -- place in the touch's, while the browser dispatches them, so those
@@ -110,9 +112,9 @@ type Slots = Body.IslandSlots
 data Loaded
   = Loading
   | Failed WikiError
-  | -- | The page, where each of its attachments is fetched from, and the
-    -- page as slides.
-    Ready Page (Map AttachmentId Text) Deck
+  | -- | The page, where each of its attachments is fetched from, the
+    -- page as slides, and whom it mentions ("Wiki.App.View.Body").
+    Ready Page (Map AttachmentId Text) Deck (Map Text Author)
 
 data State = State
   { input :: Input
@@ -152,7 +154,7 @@ data Action
   | Print
   | Retry
 
-component :: forall query m. (MonadLoad m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -189,8 +191,8 @@ component =
     render st = case st.loaded of
       Loading -> [hh|<p class="loading">Loading…</p>|]
       Failed e -> failureView e Retry
-      Ready page urls deck ->
-        let place = Body.Place {context = st.input.context, space = st.input.space, pages = st.input.pages, path = st.input.path, attachments = page.attachments, urls}
+      Ready page urls deck people ->
+        let place = Body.Place {context = st.input.context, space = st.input.space, pages = st.input.pages, path = st.input.path, attachments = page.attachments, urls, people}
             count = length deck.slides
             rendered = zip3 [1 ..] deck.slides (Body.slides place deck)
          in [hh|
@@ -419,13 +421,14 @@ commandOf event = case fromJSText (js_slides_key event) of
 -- | The page the input names, with where each of its attachments is fetched
 -- from, and as slides, or why it cannot be shown. Markdown that cannot be
 -- read (which CommonMark makes rare) is one slide that says so.
-fetch :: (MonadWiki n) => Input -> n Loaded
+fetch :: (MonadWiki n, MonadNotifications n) => Input -> n Loaded
 fetch input =
   getPage input.space.id input.path >>= \case
     Left e -> pure (Failed e)
     Right page -> do
       urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
-      pure (Ready page urls (either unreadable deckOf (parseMarkdown page.body)))
+      people <- Body.askPeople (Body.unasked Body.noPeople [page.body])
+      pure (Ready page urls (either unreadable deckOf (parseMarkdown page.body)) people)
   where
     unreadable _ = deckOf []
 
@@ -436,7 +439,7 @@ position n count = show n <> " / " <> show count
 
 slideCount :: Loaded -> Int
 slideCount = \case
-  Ready _ _ deck -> length deck.slides
+  Ready _ _ deck _ -> length deck.slides
   _ -> 1
 
 -- | A slide number brought within the deck.

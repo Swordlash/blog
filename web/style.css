@@ -4184,3 +4184,173 @@ mark.comment-mark-focused {
     display: none;
   }
 }
+
+/* Notifications (WP4.13): the header's bell with its list, the "Watch"
+   toggle of a page and a space, and a mention in a page. */
+.notifications {
+  position: relative;
+}
+
+.notifications-toggle {
+  position: relative;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  line-height: 1;
+}
+
+.notifications-toggle:hover,
+.notifications-toggle[aria-expanded="true"] {
+  border-color: var(--border);
+  background: var(--background);
+}
+
+.notifications-count {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  min-width: 1.15rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+
+.notifications-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  z-index: 20;
+  width: min(24rem, calc(100vw - 2rem));
+  max-height: calc(100vh - var(--header-height, 4rem) - 1rem);
+  overflow-y: auto;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+}
+
+.notifications-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.notifications-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.notifications-empty {
+  margin: 0.3rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.notification-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notification {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.4rem;
+  border-radius: 6px;
+}
+
+.notification + .notification {
+  border-top: 1px solid var(--border);
+}
+
+.notification.unread {
+  background: var(--h-blue);
+}
+
+.notification-link {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  color: var(--text);
+}
+
+.notification-link:hover {
+  text-decoration: none;
+}
+
+.notification-what {
+  font-weight: 600;
+}
+
+.notification-page {
+  color: var(--accent);
+}
+
+.notification-excerpt {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notification-time {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.notification-read {
+  flex: none;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.8rem;
+}
+
+.watch-toggle.watching {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.account-notifications h3 {
+  margin: 0.4rem 0;
+  font-size: 0.95rem;
+}
+
+.notification-settings fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0 0 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.notification-settings .choice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+a.mention {
+  padding: 0 0.15rem;
+  border-radius: 4px;
+  background: var(--h-blue);
+}
+
+@media print {
+  .notifications,
+  .watch-toggle {
+    display: none;
+  }
+}

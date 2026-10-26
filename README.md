@@ -65,6 +65,13 @@ authorisation.
   so), with replies, edits, deletion, and resolving; and threads about the
   whole page under it. Over `wiki-server` a comment made in one tab shows in
   every other tab on the page as it is made, over a WebSocket.
+- Mentions and notifications: `@login` in a page or a comment tells that user,
+  under a bell in the header with an unread count, as do comments on the pages
+  they watch (their own, and those they or a space of theirs chose with a
+  "Watch" button) and changes of them. Over `wiki-server` they arrive live,
+  and are mailed at once or in a daily digest (07:00 UTC) to a verified
+  address, as each user chooses in their account panel, with a link in each
+  mail that turns it off.
 - Export over `wiki-server`: a page as Word, a standalone web page, an e-book or
   a PDF, a deck also as PowerPoint and as a Beamer presentation (its LaTeX, or
   its PDF), and a space as one document of its pages with a title page and a

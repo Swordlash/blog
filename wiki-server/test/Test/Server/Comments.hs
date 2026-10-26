@@ -229,8 +229,9 @@ live = describe "the live channel" $ do
       gone <- asWithout r (Just people.admin) methodDelete ((links.comments p).delete t.id)
       gone.status `shouldBe` 204
       hear watching `shouldReturn` Event p (ThreadDeleted t.id)
-      -- And the tab that comments hears of its own, too.
-      replicateM_ 2 (void (hear reading))
+      -- And the tab that comments hears of its own, too, and of the
+      -- notification of the reply in its thread (WP4.13).
+      replicateM_ 3 (void (hear reading))
       hear reading `shouldReturn` Event p (ThreadDeleted t.id)
 
   it "answers a subscription with the page's threads as the tab's user reads them, and tells only what follows" $ withDemoRunning identity $ \r -> do

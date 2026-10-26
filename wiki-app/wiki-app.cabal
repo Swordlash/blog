@@ -311,6 +311,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Islands
       Test.Browser.Macros
       Test.Browser.Mount
+      Test.Browser.Notifications
       Test.Browser.Order
       Test.Browser.Permissions
       Test.Browser.Persist

@@ -31,6 +31,27 @@ demo's addresses are paths, and it announces no feeds). `Rendered` and
 `Served` gain `meta`. The demo's Blog is shown as a blog, without a home
 page.
 
+Mentions, watching and notifications (WP4.13). A mention, `@login`, is a
+link to a search for it, titled with the user's name, for someone signed in
+(`Wiki.App.View.Body`'s `Place` gains `people`, asked of the backend for the
+logins a view shows: `askPeople`, `unasked`). The header has a bell beside
+the user's name (`View.Bell`) with the unread count, the latest
+notifications linking to their page or thread, "Mark read" and "Mark all
+read", live over the server's WebSocket; a page's action bar and a space's
+actions have a "Watch" button (`View.Watch`); the account panel, and the
+demo's, a "Notifications" block (`View.NotificationSettings`): mail never,
+at once or daily, and whether one's own pages and threads are watched. A
+new capability, `Wiki.App.Backend.Notifications.MonadNotifications`, on both
+backends (the demo keeps its notifications in IndexedDB store
+`notifications`, database version 5, and mails nothing), with a contract in
+`wiki-app:contract`. `Live.Feed` gains `listen`/`unlisten`, which keep the
+socket open with no page shown, and `Heard` gains `Notice` and `Reopened`.
+New route `Unsubscribe` (`/unsubscribe/<secret>/`, `View.Unsubscribe`),
+shown in a closed wiki too. The shell, the page, the slides, the editor and
+the space's and the blog's views ask for `MonadNotifications`; a blog's
+view has the space's "Watch" button among its actions, and resolves the
+mentions of its home page.
+
 Account hygiene (WP4.11). The account panel under a signed-in user's name
 gains `Wiki.App.View.Security`: their sessions with "Sign out" and "Sign out
 everywhere", a second factor set up from a QR code drawn as an `<svg>` of

@@ -45,6 +45,17 @@ or http, and the listener's place). The pages the server renders carry the
 head `Wiki.App.Head` describes. An import shows a space as a blog when the
 archive does.
 
+Mentions, watching and notifications (WP4.13). Migration
+`0011-notifications.sql`: `watches`, `notifications`, and `users`'
+`notification_mail` and `watch_own`. Notifications are made in the save's or
+comment's transaction, told to the user's connections over the live channel
+once committed, and mailed by a thread of the server's (`Wiki.Server.Notifier`):
+at once, or in a daily digest from 07:00 UTC, only to a verified address,
+after checking again that the user may read the page, with an unsubscribe
+link signed with a key the server keeps in `settings`. Notifications are
+kept 90 days, at most 500 a user. The API's `notifications…` and
+`unsubscribe/<secret>` are served; the latter is open in a closed wiki.
+
 Account hygiene (WP4.11). Migration `0008-account-hygiene.sql`: `users.email`
 and `email_verified_at`; `sessions.public_id` (filled for existing sessions)
 and `address`; tables `totp`, `recovery_codes`, `reset_tokens` and

@@ -29,6 +29,7 @@
 -- > /invite/<secret>/              Invite (InvitationToken <secret>)
 -- > /reset-password/<secret>/      ResetPassword (MailToken <secret>)
 -- > /verify-email/<secret>/        VerifyEmail (MailToken <secret>)
+-- > /unsubscribe/<secret>/         Unsubscribe (MailToken <secret>)
 --
 -- Every address but the home's ends in a slash, because each is a directory
 -- with an @index.html@ in it on a static host (the prerender writes one per
@@ -139,6 +140,9 @@ data Route
   | -- | The page of a link mailed to verify an e-mail address, by its
     -- secret.
     VerifyEmail MailToken
+  | -- | The page of the link a notification's mail carries, by its secret,
+    -- which turns that mail off.
+    Unsubscribe MailToken
   deriving stock (Eq, Show)
 
 -- | What a version in a history is compared with.
@@ -215,6 +219,10 @@ route =
           (\case VerifyEmail t -> Just t; _ -> Nothing)
           VerifyEmail
           (prefix "verify-email" (directory (as (\t -> t.text) (Right . MailToken) segment)))
+      , alternative
+          (\case Unsubscribe t -> Just t; _ -> Nothing)
+          Unsubscribe
+          (prefix "unsubscribe" (directory (as (\t -> t.text) (Right . MailToken) segment)))
       ]
   where
     spaceAndPage :: (RouteDuplex' [Slug] -> RouteDuplex' [Slug]) -> RouteDuplex' ([Slug], [Slug])

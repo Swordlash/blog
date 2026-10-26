@@ -32,7 +32,8 @@
 //    and only that, with no way to the administration; and a fresh browser,
 //    signed in, finding all of it there; a comment and who is editing,
 //    across two tabs of two users over the WebSocket, and a save shown in
-//    the other tab.
+//    the other tab; a comment that mentions the other user, told under the
+//    bell in their tab.
 // 3. Every route the walk went through, loaded afresh: each served with its
 //    status and its content before app.wasm runs, adopted with nothing to
 //    repair and no request to the API; and a page read with JavaScript off.
@@ -1028,8 +1029,21 @@ try {
   });
   assert.equal(savedLive.status, 200, "the save Sam's tab shows");
   await samTab.locator("#app .page-view .page-body", { hasText: "Saved while Sam reads." }).waitFor({ timeout });
-  await samTab.context().close();
   console.log("ok: two users' tabs on a page: one's editor is named in the other's page and editor, until it closes or its tab goes; a save shows in the other tab live");
+  // A mention (WP4.13): Ada's comment names Sam, who is told at once under
+  // the bell in his tab, over the WebSocket, and sees the mention as a link.
+  const mentioned = await fetch(url(`/api/v1/pages/${encodeURIComponent(shownPage.id)}/threads`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", Cookie: sessionCookie },
+    body: JSON.stringify({ anchor: null, body: "Over to you, @sam." }),
+  });
+  assert.equal(mentioned.status, 201, "the comment that mentions Sam");
+  await samTab.locator("#app .notifications-count", { hasText: "1" }).waitFor({ timeout });
+  await samTab.locator("#app .notifications-toggle").click();
+  await samTab.locator("#app .notification-list .notification-what", { hasText: `${adminName} mentioned you` }).waitFor({ timeout });
+  await samTab.locator("#app .page-comments a.mention", { hasText: "@sam" }).waitFor({ timeout });
+  await samTab.context().close();
+  console.log("ok: a comment that mentions a user is told under the bell in their tab, over the WebSocket, and links to them");
 
   // ---- 3. Every route of the walk, rendered by the server --------------------
 
@@ -1048,6 +1062,7 @@ try {
     ["/new-space/", 200, "New space"],
     ["/search/?q=smoke", 200, "First page"],
     ["/admin/", 200, "Smoke testers"],
+    ["/unsubscribe/not-a-secret/", 200, "Stop the mail"],
     ["/s/smoke-space/p/no-such-page/", 404, "There is nothing here"],
     ["/no/such/address", 404, "Not found"],
   ];

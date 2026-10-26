@@ -61,7 +61,7 @@ module Wiki.App.View.SignIn
 where
 
 import Control.Monad.UUID (MonadUUID)
-import Data.Row (type (.==))
+import Data.Row (type (.+), type (.==))
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -73,9 +73,11 @@ import Wiki.Api.Auth (Purpose (..), startUrl)
 import Wiki.Api.Security (resetLifetime)
 import Wiki.App.Account (Accounts (..), SignInError (..), accountErrorText, codeErrorText, passwordErrorText, signInErrorText)
 import Wiki.App.Backend (Session (..), WikiError (..))
+import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser (focusElement)
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Common (ariaBool, errorMessage)
+import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
 import Wiki.App.View.Security qualified as SecurityView
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Permission (Grants (..))
@@ -105,7 +107,7 @@ data Step
     AtReset
   deriving stock (Eq)
 
-type Slots = ("security" .== H.Slot (Const Void) Void ())
+type Slots = ("security" .== H.Slot (Const Void) Void ()) .+ ("notifications" .== H.Slot (Const Void) Void ())
 
 data State m = State
   { input :: Input m
@@ -171,7 +173,7 @@ data Action
   | TypedRepeat Text
   | SavePassword
 
-component :: forall m. (MonadUUID m, MonadIO m, MonadSecurity m) => H.Component Query (Input m) Output m
+component :: forall m. (MonadUUID m, MonadIO m, MonadSecurity m, MonadNotifications m) => H.Component Query (Input m) Output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -388,6 +390,10 @@ component =
           <h2>How you sign in</h2>
           {{ body }}
           {{ HH.slot_ "security" () SecurityView.component () }}
+          <section class="account-notifications" aria-label="Notifications">
+            <h3>Notifications</h3>
+            {{ HH.slot_ "notifications" () NotificationSettingsView.component () }}
+          </section>
         </section>
       |]
       where

@@ -173,6 +173,7 @@ import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Events (PageEvent (PageChanged))
 import Wiki.Api.Events qualified as Event
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
+import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser
   ( EditorKey (..)
   , Files
@@ -441,7 +442,7 @@ savedNoticeTime = 3_000_000
 
 component
   :: forall m
-   . (MonadLoad m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
+   . (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
   => H.Component Query Input ViewOutput m
 component =
   H.mkComponent
@@ -1539,6 +1540,8 @@ placeOf input work =
     , Body.path = input.path
     , Body.attachments = work.attachments
     , Body.urls = work.urls
+    , -- The preview asks whom the work mentions itself.
+      Body.people = mempty
     }
 
 -- | What a line beside the buttons says of the draft.

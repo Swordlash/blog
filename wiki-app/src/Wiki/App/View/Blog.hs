@@ -12,7 +12,10 @@
 -- the backend's to say ('postDetails'), loaded as every view loads what it
 -- shows: with the initial state over a backend that answers at once, and
 -- otherwise in the initializer. So are the addresses of the home page's
--- attachments.
+-- attachments, and whom it mentions (WP4.13).
+--
+-- Its actions have the space's "Watch" button ("Wiki.App.View.Watch"), as
+-- the space's view of a space that is no blog does.
 module Wiki.App.View.Blog
   ( Input (..)
   , component
@@ -21,6 +24,7 @@ where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
+import Data.Row (type (.+), type (.==))
 import Data.Text qualified as T
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Halogen qualified as H
@@ -31,14 +35,17 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
+import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, followArticleLink)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
+import Wiki.App.View.Watch qualified as WatchView
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Blog (PostDetails (..), excerptOf, noDetails, onPage, pageCount, posts)
 import Wiki.Core.Id (AttachmentId, PageId (..))
+import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (description, id, name, public))
@@ -63,7 +70,11 @@ data Loaded
 data State = State
   { input :: Input
   , loaded :: Loaded
+  , people :: Body.People
+  -- ^ Whom the home page mentions.
   }
+
+type Slots = Body.IslandSlots .+ ("watch" .== H.Slot (Const Void) Void ())
 
 data Action
   = Initialize
@@ -72,7 +83,7 @@ data Action
   | FollowLink ArticleLink
   | Retry
 
-component :: forall query m. (MonadLoad m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -81,7 +92,9 @@ component =
         -- 'Initialize'.
         initialState = \input -> do
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
-          pure State {input, loaded}
+          let logins = Body.unasked Body.noPeople (homeBodies input)
+          people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
+          pure State {input, loaded, people}
       , render
       , eval =
           H.mkEval
@@ -92,8 +105,8 @@ component =
               }
       }
   where
-    render :: State -> H.ComponentHTML Action Body.IslandSlots m
-    render State {input = Input {context = ctx, space, pages, page}, loaded} =
+    render :: State -> H.ComponentHTML Action Slots m
+    render State {input = Input {context = ctx, space, pages, page}, loaded, people} =
       [hh|
         <section class="blog-view">
           <header class="view-header space-header">
@@ -101,8 +114,8 @@ component =
             <span class="badge {{ if space.public then "badge-public" else "badge-private" :: Text }}">{{ if space.public then "Public" else "Private" :: Text }}</span>
           </header>
           {% if not (T.null space.description) %}<p class="space-description">{{ space.description }}</p>{% end %}
-          {% if mayEdit ctx space.id %}
-            <div class="actions">{{ Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button new-post"] [HH.text "New post"] }}</div>
+          {% if mayEdit ctx space.id || notified ctx %}
+            <div class="actions">{{ [Router.link ctx.router Followed (NewPage path Nothing) [HP.class_ "button new-post"] [HH.text "New post"] | mayEdit ctx space.id] }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = ctx, target = WatchSpace space.id} | notified ctx] }}</div>
           {% end %}
           {{ body }}
         </section>
@@ -119,7 +132,7 @@ component =
             [hh|
               <div class="blog-body">
                 {% for home in maybeToList (homeOf space pages) %}
-                  <div class="blog-home">{{ Body.article FollowLink (placeOf ctx space pages home urls) home.body }}</div>
+                  <div class="blog-home">{{ Body.article FollowLink (placeOf ctx space pages home urls people.found) home.body }}</div>
                 {% end %}
                 <h2 class="blog-posts-heading">Posts</h2>
                 {% if null all' %}
@@ -137,7 +150,7 @@ component =
               </div>
             |]
 
-    card :: Context -> [Slug] -> Map PageId PostDetails -> Page -> H.ComponentHTML Action Body.IslandSlots m
+    card :: Context -> [Slug] -> Map PageId PostDetails -> Page -> H.ComponentHTML Action Slots m
     card ctx path details p =
       [hh|
         <li class="space-card post-card" data-page={{ p.id.text }}>
@@ -155,18 +168,22 @@ component =
               <> [HH.span [HP.class_ "post-author"] [HH.text a.name] | Just a <- [d.author]]
               <> [HH.span [HP.class_ "post-comments"] [HH.text (comments d.comments)]]
 
-    handleAction :: Action -> H.HalogenM State Action Body.IslandSlots ViewOutput m ()
+    handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
-      Initialize ->
+      Initialize -> do
         gets (\st -> st.loaded) >>= \case
           Loading -> load
           _ -> H.raise Loaded
+        resolvePeople
       Receive input -> do
         old <- gets (\st -> st.input)
-        modify (\st -> st {input})
+        -- Whom the home page mentions is asked again in another wiki:
+        -- who is asking may be someone else now.
+        modify (\st -> st {input, people = if old.context.revision /= input.context.revision then Body.noPeople else st.people})
         -- What the posts are listed with changes with the wiki, and with
         -- the space; the page of them shown does not need it again.
         when (old.space.id /= input.space.id || old.context.revision /= input.context.revision) load
+        resolvePeople
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       FollowLink target -> do
         router <- gets (\st -> st.input.context.router)
@@ -176,7 +193,7 @@ component =
         load
 
     -- On a worker, as every view loads; the shell is told either way.
-    load :: H.HalogenM State Action Body.IslandSlots ViewOutput m ()
+    load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
       loaded <- lift (either Failed identity <$> attempt (fetch input))
@@ -184,6 +201,20 @@ component =
       now <- gets (\st -> st.input.space.id)
       when (now == input.space.id) $ modify (\st -> st {loaded})
       H.raise Loaded
+
+    -- Ask whom the home page mentions, of the logins not asked about yet.
+    resolvePeople :: H.HalogenM State Action Slots ViewOutput m ()
+    resolvePeople = do
+      st <- get
+      let logins = Body.unasked st.people (homeBodies st.input)
+      unless (null logins) $
+        lift (attempt (Body.askPeople logins)) >>= \case
+          Right found -> modify (\s -> s {people = Body.answered logins found s.people})
+          Left _ -> pass
+
+-- | The Markdown the view shows whole: the home page's, if it has one.
+homeBodies :: Input -> [Text]
+homeBodies input = [h.body | h <- maybeToList (homeOf input.space input.pages)]
 
 -- | What the posts are listed with, and where the home page's attachments
 -- are fetched from.
@@ -204,9 +235,9 @@ pageRoute path n
 
 -- | Where the home page is read: its links resolved among the space's
 -- pages, as the page view resolves them.
-placeOf :: Context -> Space -> [Page] -> Page -> Map AttachmentId Text -> Body.Place
-placeOf ctx space pages home urls =
-  Body.Place {context = ctx, space, pages, path = pagePathOf pages home.id, attachments = home.attachments, urls}
+placeOf :: Context -> Space -> [Page] -> Page -> Map AttachmentId Text -> Map Text Author -> Body.Place
+placeOf ctx space pages home urls people =
+  Body.Place {context = ctx, space, pages, path = pagePathOf pages home.id, attachments = home.attachments, urls, people}
 
 -- | How many comments, as people say it.
 comments :: Int -> Text

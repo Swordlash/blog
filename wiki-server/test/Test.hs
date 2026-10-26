@@ -14,6 +14,7 @@ import Test.Server.Hygiene qualified as Hygiene
 import Test.Server.Import qualified as Import
 import Test.Server.Mail qualified as Mail
 import Test.Server.Metrics qualified as Metrics
+import Test.Server.Notifications qualified as Notifications
 import Test.Server.Observability qualified as Observability
 import Test.Server.Oidc qualified as Oidc
 import Test.Server.Options qualified as Options
@@ -57,3 +58,4 @@ main = hspec $ do
   Audit.spec
   Metrics.spec
   Observability.spec
+  Notifications.spec

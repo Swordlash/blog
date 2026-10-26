@@ -36,7 +36,7 @@ module Wiki.Server.Notifier
   )
 where
 
-import Control.Concurrent.STM (TVar, modifyTVar', newTVarIO, readTVar, registerDelay)
+import Control.Concurrent.STM (TVar, modifyTVar', newTVarIO, readTVar, readTVarIO, registerDelay)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), getCurrentTime, timeToTimeOfDay, todHour, utctDay)
 import Halogen.Router.Duplex qualified as Duplex
@@ -77,19 +77,33 @@ digestHour :: Int
 digestHour = 7
 
 -- | Until it is cancelled (the server stopping): look when woken, and every
--- minute.
+-- minute. Not as the server starts: what was due before it stopped waits
+-- for the first minute, so that a server starting writes nothing to its
+-- database it was not asked to (a digest's day, the pruning) while whoever
+-- started it may still be at work on the file.
 runNotifier :: Notifier -> IO ()
-runNotifier n = forever $ do
-  let Wake v = n.wake
-  seen <- atomically (readTVar v)
-  getCurrentTime >>= \now ->
-    mailRound n now `catch` \(e :: SomeException) ->
-      logWith n.logger Error [("event", "notification-mail"), ("error", show e)]
-  timer <- registerDelay 60_000_000
-  atomically $ do
-    woken <- (/= seen) <$> readTVar v
-    late <- readTVar timer
-    check (woken || late)
+runNotifier n = do
+  readTVarIO v >>= waitFrom
+  forever $ do
+    seen <- readTVarIO v
+    -- What goes wrong is logged and tried again at the next look; but the
+    -- server stopping, which cancels the thread, ends it.
+    now <- getCurrentTime
+    try (mailRound n now) >>= \case
+      Left e
+        | Just (_ :: SomeAsyncException) <- fromException e -> throwIO e
+        | otherwise -> logWith n.logger Error [("event", "notification-mail"), ("error", show (e :: SomeException))]
+      Right () -> pass
+    waitFrom seen
+  where
+    Wake v = n.wake
+    -- Until woken since the count was this, or a minute has passed.
+    waitFrom seen = do
+      timer <- registerDelay 60_000_000
+      atomically $ do
+        woken <- (/= seen) <$> readTVar v
+        late <- readTVar timer
+        check (woken || late)
 
 -- | One look: mail what is due, and once a day the digests and the
 -- pruning.

@@ -13,6 +13,16 @@ Spaces shown as blogs (WP4.14). A space's JSON and a profile's carry
 spaces/<id>/post-details`): what each page of a space is listed with as a
 post, as an object keyed by the page's id.
 
+Mentions, watching and notifications (WP4.13). `Wiki.Api.Notifications`:
+`NotificationsApi` at `notifications` (`list`, `markRead`, `settings`,
+`setSettings`, `people`, `pageWatch`, `setPageWatch`, `spaceWatch`,
+`setSpaceWatch`), with `Notifications`, `ReadMark`,
+`NotificationSettings`, `NotificationSettingsChange` and `Watching`;
+`WikiApi` gains `notifications` and `unsubscribe` (`POST
+unsubscribe/<secret>`, open in a closed wiki). `ServerMessage` gains
+`Notified` (`{"notification": …}`), sent to every connection of the user
+the notification is for. `PageChanged` is unchanged.
+
 Account hygiene (WP4.11). `Wiki.Api.Security`: `SessionRef`,
 `SessionSummary`, `SecondFactorState`, `TotpEnrolment`, `OneTimeCode`,
 `RecoveryCodes`, `EmailState`, `EmailChange`, `AccountEmail`, `MailToken`,

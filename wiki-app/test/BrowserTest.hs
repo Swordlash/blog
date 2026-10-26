@@ -15,6 +15,7 @@ import Test.Browser.Http qualified as Http
 import Test.Browser.Hydrate qualified as Hydrate
 import Test.Browser.Import qualified as Import
 import Test.Browser.Macros qualified as Macros
+import Test.Browser.Notifications qualified as Notifications
 import Test.Browser.Order qualified as Order
 import Test.Browser.Permissions qualified as Permissions
 import Test.Browser.Persist qualified as Persist
@@ -70,6 +71,7 @@ main = runBrowserTests $ do
   describe "Wiki.App.View.Comments" (Comments.spec BrowserDOM)
   describe "Wiki.App.View.Export" (Export.spec BrowserDOM)
   describe "Keeping an account safe" (Security.spec BrowserDOM)
+  describe "Mentions, watching and notifications" (Notifications.spec BrowserDOM)
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

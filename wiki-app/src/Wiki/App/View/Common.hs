@@ -15,6 +15,7 @@ module Wiki.App.View.Common
   , mayView
   , mayEdit
   , mayAdminister
+  , notified
 
     -- * Paths
   , spacePathOf
@@ -52,7 +53,7 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Numeric.Natural (Natural)
 import Protolude
-import Wiki.App.Backend (Session (grants), WikiError (..), sessionPrincipal)
+import Wiki.App.Backend (Session (grants, standing, user), WikiError (..), sessionPrincipal)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Order (ChildOrder, Shift (..))
@@ -61,6 +62,7 @@ import Wiki.Core.Path (ancestry, childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (Grants, Principal, canAdministerSpace, canEdit, canView, spaceChain)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (homePage, icon, id, name, slug), colourOf, iconLetter)
+import Wiki.Core.User (Standing (..))
 import Wiki.Core.Version (Author (..))
 
 -- | What the shell knows that every view needs: the router, who is asking,
@@ -101,6 +103,11 @@ mayView, mayEdit, mayAdminister :: Context -> SpaceId -> Bool
 mayView ctx sid = canView (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 mayEdit ctx sid = canEdit (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 mayAdminister ctx sid = canAdministerSpace (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
+
+-- | Whether the reader is told of things (WP4.13 of docs/PLAN.md): one of
+-- the wiki's users, signed in. The server's operator, who is none, is not.
+notified :: Context -> Bool
+notified ctx = isJust ctx.session.user && ctx.session.standing /= Operator
 
 -- | A space's path, among the spaces given; empty if it is not there.
 spacePathOf :: [Space] -> SpaceId -> [Slug]

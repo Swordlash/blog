@@ -69,6 +69,7 @@ import Wiki.App.Backend.Http (HttpEnv, Transport, cacheOf, newHttpEnv, newImmedi
 import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Head (Head (..), Site, escapeHtml, headTags, untitled)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..), route)
@@ -203,7 +204,7 @@ startServed how env base at container =
 -- dispose of the application.
 startApp
   :: forall m
-   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadSecurity m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadSecurity m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => Bool
   -> Int
   -> Start

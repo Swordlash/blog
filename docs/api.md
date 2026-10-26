@@ -344,12 +344,68 @@ its subscription, and asks for nothing more to catch up.
 | `editing` | `editors`: [`Author`] | who else edits the page changed: these do now |
 | `page-changed` | `updatedAt`: time | the page was saved (or a version restored): its new version's time |
 
+Besides what happens to the pages it subscribed to, a connection opened by a
+user is sent `{"notification": Notification}` for every notification made
+for that user (below), whatever page it is about, once the write that made
+it is committed. Nobody else's connection is, and nothing is sent to a
+connection of someone not signed in.
+
 The type is open: a client ignores an event of a type it does not know, so
 that later ones ride the same channel. Nothing is replayed: a tab that loses its connection
 connects again and subscribes again, and the answers are what it missed.
 The server pings every 20 seconds, keeps subscriptions in memory, closes a
 connection that does not keep up with its messages (256 waiting), and
 closes every connection when it stops.
+
+### Notifications
+
+| Method | Path | Body | Response | Errors | `MonadNotifications` |
+| ------ | ---- | ---- | -------- | ------ | -------------------- |
+| GET | `api/v1/notifications` | | `Notifications` `{"unread", "items": [Notification]}` | 403 | `notifications` |
+| POST | `api/v1/notifications/read` | `ReadMark` `{"ids": [id], "everything": bool}` | `Notifications` | 403 | `markRead` |
+| GET | `api/v1/notifications/settings` | | `NotificationSettings` `{"mail", "watchOwn", "verifiedEmail", "mailing"}` | 403 | `notificationSettings` |
+| PUT | `api/v1/notifications/settings` | `NotificationSettingsChange` `{"mail", "watchOwn"}` | `NotificationSettings` | 403 | `setNotificationSettings` |
+| GET | `api/v1/notifications/people?login[]=<login>&…` | | `{"<login>": Author}`, of those that are users' | | `mentionable` |
+| GET | `api/v1/notifications/watches/pages/<page>` | | `Watch` `{"watching", "reason"}` | 404, 403 | `watching` |
+| PUT | `api/v1/notifications/watches/pages/<page>` | `Watching` `{"watching": bool}` | `Watch` | 404, 403 | `setWatching` |
+| GET | `api/v1/notifications/watches/spaces/<space>` | | `Watch` | 404, 403 | `watching` |
+| PUT | `api/v1/notifications/watches/spaces/<space>` | `Watching` | `Watch` | 404, 403 | `setWatching` |
+| POST | `api/v1/unsubscribe/<secret>` | | 204 | 404 | `unsubscribe` |
+
+Mentions, watching and notifications (WP4.13 of the plan,
+`Wiki.Core.Notification`). A `Notification` is `{"id", "kind", "page",
+"thread", "actor", "title", "excerpt", "createdAt", "read", "location"}`:
+`kind` is `mentioned` (a page or a comment mentions the user), `replied` (a
+comment in a thread they opened or replied in), `commented` (a comment on a
+page they watch) or `changed` (a save of a page they watch); `thread` is the
+comment's thread or `null`; `actor` is who did it, `{"id", "name"}`, named as
+they were then; `title` the page's title then; `excerpt` the start of the
+comment, or empty; `location` where the page is now, `{"space": [slug],
+"page": [slug]}`. Each write tells each user once, the first kind that
+applies in that order, never the one who did it, and never someone who may
+not read the page; a notification of a page the user may no longer read is
+left out of the list. The list is the latest 50, the newest first; `unread`
+counts all of those kept (90 days, at most 500 a user).
+
+A page is watched as its `Watch` says: `{"watching": bool, "reason"}`, the
+reason `{"tag": "Chosen"}` (the user chose so for it), `{"tag": "FromSpace",
+"contents": "<space>"}` (the nearest of its spaces with a choice),
+`{"tag": "OwnPage"}` (they made it, the author of its first version, and
+watch their own) or `{"tag": "Unchosen"}`. A space is watched by its own
+choice, else its nearest ancestor's. `PUT` makes a choice for that page or
+space, which wins over the rest.
+
+`mail` is `off`, `now` or `daily`: at once, or in one digest a day from
+07:00 UTC, grouped by page; until the user chooses, `now` with a verified
+address and `off` without one, and nothing is mailed to an address that is
+not verified, or by a server without mail settings (`mailing`). Before a
+notification is mailed the server asks again whether its user may read the
+page. Each mail carries a link to `unsubscribe/<secret>/`, the application's
+page whose button posts to `api/v1/unsubscribe/<secret>`: the secret names
+the user and is signed by the server, works without signing in (in a closed
+wiki too) and only turns the mail off. Everything else here is the signed-in
+user's own: someone not signed in, and the operator on the admin listener,
+are refused (403); `people` names nobody to someone not signed in.
 
 ### Search
 

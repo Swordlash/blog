@@ -29,6 +29,7 @@ module Test.Browser.Http
   , browserGoes
   , startServer
   , startServerWith
+  , tellServer
   )
 where
 
@@ -55,7 +56,9 @@ import Wiki.Api.Admin (ServerStatus (..))
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
+import Wiki.Api.Events qualified as Events
 import Wiki.Api.Links (links)
+import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..))
 import Wiki.Api.ServerSettings (ServerSettings, noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
@@ -68,15 +71,18 @@ import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.Shell qualified as Shell
+import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (spacePathOf)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), UserId (..))
+import Wiki.Core.Notification (Watch (..), WatchReason (..), WatchTarget (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Space qualified as S
 import Wiki.Core.User (Standing (..))
@@ -167,6 +173,22 @@ serveDemo = do
       threads <- for (concatMap (\(_, ps, _) -> ps) pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
       counts <- pageCounts
       pure (me, spaces, pages, people, threads, counts)
+  -- What the bell, the "Watch" buttons and the mentions read
+  -- ("Wiki.App.View.Bell", "Wiki.App.View.Watch", "Wiki.App.View.Body").
+  (named, watched) <- unsafeIOToPageM $ do
+    wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
+    runMemWiki wiki $ do
+      named <- for (concatMap (\(_, ps, _) -> ps) pages) $ \p -> do
+        let logins = Body.unasked Body.noPeople (p.body : [c.body | (q, ts) <- threads, q == p.id, t <- ts, c <- t.comments])
+        (logins,) <$> mentionable logins
+      watched <-
+        (<>)
+          <$> for (concatMap (\(_, ps, _) -> ps) pages) (\p -> (links.notifications.pageWatch p.id,) . fromRight (Watch False Unchosen) <$> watching (WatchPage p.id))
+          <*> for spaces (\s -> (links.notifications.spaceWatch s.id,) . fromRight (Watch False Unchosen) <$> watching (WatchSpace s.id))
+      pure (named, watched)
+  answerWith "GET" links.notifications.list 200 Notifications {unread = 0, items = []}
+  for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (links.notifications.people logins) 200 found)
+  for_ watched $ \(url, w) -> answerWith "GET" url 200 w
   for_ threads $ \(p, ts) -> answerWith "GET" (links.comments p).list 200 ts
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = []}
   for_ people (answerWith "GET" links.admin.directory 200)
@@ -284,7 +306,7 @@ testRouter = panic "the backend's browser tests run in a browser"
 #endif
 
 -- | A program against the server, through the page's fetch.
-overHttp :: HttpEnv -> (forall n. (MonadLoad n, MonadComments n) => n a) -> PageM s a
+overHttp :: HttpEnv -> (forall n. (MonadLoad n, MonadComments n, MonadNotifications n) => n a) -> PageM s a
 overHttp env program = unsafeIOToPageM (runHttpWiki env program)
 
 spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
@@ -591,12 +613,15 @@ views m = describe "the application over it" $ do
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Tour")
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
+    -- Whom the tour mentions is asked once it is shown, and answered.
+    find ui ".page-body a.mention" >>= (`shouldHaveText` "@editor")
     -- The page came with its space's pages: it was not asked for again.
     urls <- map (\r -> r.url) <$> asked
     filter (T.isInfixOf "/pages/at/") urls `shouldBe` []
     -- A page of the same space opens at once, from what was read; only
-    -- its comments, which nothing has read yet, are asked for.
-    let notComments = filter (\r -> not ("/threads" `T.isSuffixOf` r.url))
+    -- its comments and whether it is watched, which nothing has read yet,
+    -- are asked for.
+    let notComments = filter (\r -> not ("/threads" `T.isSuffixOf` r.url || "notifications/watches/pages/" `T.isInfixOf` r.url))
     before <- length . notComments <$> asked
     find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
@@ -796,9 +821,15 @@ views m = describe "the application over it" $ do
       docs <- getSpace (slugs ["docs"])
       fmap join . for (rightToMaybe docs) $ \s -> do
         _ <- listPages s.id
-        -- And the tour's comments, which its page shows.
+        -- And the tour's comments, which its page shows, whom they and
+        -- the tour mention, whether the tour is watched, and the bell's
+        -- notifications.
         page <- getPage s.id (slugs ["tour"])
-        for_ page (\p -> listThreads p.id)
+        for_ page $ \p -> do
+          threads <- fromRight [] <$> listThreads p.id
+          _ <- mentionable (Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments]))
+          watching (WatchPage p.id)
+        _ <- notifications
         pure ((\p -> p.id) <$> rightToMaybe page)
     carried <- unsafeIOToPageM (cacheOf reading)
     serverStops
@@ -837,6 +868,10 @@ said :: PageM s [ClientMessage]
 said = do
   messages <- unsafeIOToPageM js_server_said >>= either (\e -> panic ("what was said: " <> toS e)) pure . eitherDecodeStrict' . encodeUtf8 . fromJSText
   pure (mapMaybe (decodeStrict' . encodeUtf8) (messages :: [Text]))
+
+-- | The server says this on the live channel, for the other specs.
+tellServer :: ServerMessage -> PageM s ()
+tellServer = tell
 
 -- | The server says this on the live channel.
 tell :: ServerMessage -> PageM s ()
@@ -904,6 +939,9 @@ comments m = describe "a page's comments" $ do
       _ <- listPages blog.id
       page <- either (panic . show) identity <$> getPage blog.id (slugs ["hello-world"])
       threads <- either (panic . show) identity <$> listThreads page.id
+      -- The bell's, and the page's "Watch" button's.
+      _ <- notifications
+      _ <- watching (WatchPage page.id)
       pure (page, threads)
     carried <- unsafeIOToPageM (cacheOf reading)
     serverStops
@@ -1028,7 +1066,7 @@ presence m = describe "who is editing" $ do
     -- Leaving the editor: it stops editing, and stops listening.
     find ui ".wiki-sidebar .page-tree a[href$='#/s/blog/p/notes-on-haskell/']" >>= click
     find ui ".leave-confirm button.danger" >>= click
-    eventually $ (\ms -> [msg | msg <- ms, msg `elem` [StopEditing hello.id, Unsubscribe hello.id]]) <$> said `shouldReturn` [StopEditing hello.id, Unsubscribe hello.id]
+    eventually $ (\ms -> [msg | msg <- ms, msg `elem` [StopEditing hello.id, Events.Unsubscribe hello.id]]) <$> said `shouldReturn` [StopEditing hello.id, Events.Unsubscribe hello.id]
     unmount ui
     serverStops
 

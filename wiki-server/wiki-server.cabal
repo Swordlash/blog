@@ -207,6 +207,7 @@ test-suite wiki-server-test
         Test.Server.Mail
         Test.Server.Metrics
         Test.Server.Observability
+        Test.Server.Notifications
         Test.Server.Oidc
         Test.Server.Options
         Test.Server.Presence

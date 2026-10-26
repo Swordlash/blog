@@ -55,6 +55,7 @@ genRoute =
     , Invite . InvitationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
     , ResetPassword . MailToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
     , VerifyEmail . MailToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
+    , Unsubscribe . MailToken <$> elements ["u-1.0123abcd", "x"]
     ]
 
 -- | A time with no fraction of a second: the others are made from it.
@@ -133,6 +134,7 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/invite/c2VjcmV0" `shouldBe` Right (Invite (InvitationToken "c2VjcmV0"))
       print route (ResetPassword (MailToken "c2VjcmV0-_x")) `shouldBe` "/reset-password/c2VjcmV0-_x/"
       parse route "/verify-email/c2VjcmV0/" `shouldBe` Right (VerifyEmail (MailToken "c2VjcmV0"))
+      parse route "/unsubscribe/u-1.0123abcd/" `shouldBe` Right (Unsubscribe (MailToken "u-1.0123abcd"))
       -- A space may be called invite: spaces are below /s/.
       print route (Space (slugs ["invite"])) `shouldBe` "/s/invite/"
 

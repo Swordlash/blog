@@ -1322,6 +1322,9 @@ createPageTx sid parent title body = do
           }
   author <- asks (\x -> x.author)
   db $ \x -> insertPage x page >> insertVersion x page author
+  -- A new page is a save too: whom it mentions, and whoever watches its
+  -- space, are told.
+  tellTx page.id sid page.title Nothing "" PageSaved (newlyMentioned "" body)
   pure page
 
 -- | Save a page as a new version of it, if nobody has saved one since the

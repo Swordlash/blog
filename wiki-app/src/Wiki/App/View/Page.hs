@@ -67,6 +67,7 @@ import Wiki.Api.Export (pageFormats)
 import Wiki.Api.Links (pageExportUrl)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (exports, user), WikiError)
 import Wiki.App.Backend.Comments (MonadComments (..))
+import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Browser (ArticleLink, Selected (..), clickedThread, followArticleLink, readSelection, reveal)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Heard)
@@ -76,10 +77,11 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Comments qualified as CommentsView
 import Wiki.App.View.Common
 import Wiki.App.View.Export (exportMenu)
+import Wiki.App.View.Watch qualified as WatchView
 import Wiki.Core.Anchor (Anchor, Located (..), Marking (Marking), Range (..), highlight, locate, renderedText)
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Blog (Neighbours (..), neighbours)
-import Wiki.Core.Comment (Thread (..), isInline, mayComment)
+import Wiki.Core.Comment (Comment (..), Thread (..), isInline, mayComment)
 import Wiki.Core.Id
   ( AttachmentId
   , CommentThreadId (..)
@@ -87,6 +89,7 @@ import Wiki.Core.Id
   , SpaceId
   )
 import Wiki.Core.Markdown qualified as Md
+import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page (Page (attachments, body, createdAt, id, parent, slug, space, title, updatedAt))
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
@@ -106,7 +109,7 @@ data Input = Input
   -- ^ The tab's live channel, over a backend that has one.
   }
 
-type Slots = Body.IslandSlots .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement)
+type Slots = Body.IslandSlots .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ())
 
 -- | The page's threads, as far as they have been loaded.
 data Threads
@@ -153,6 +156,8 @@ data State = State
   , text :: H.RefLabel
   -- ^ The element the article is in, with the panel beside it: whose
   -- selection is read, and where the button to comment on it goes.
+  , people :: Body.People
+  -- ^ Whom the page and its comments mention.
   }
 
 data Action
@@ -178,7 +183,7 @@ data Action
   | SetAsHome
   | ShowChanged
 
-component :: forall query m. (MonadLoad m, MonadComments m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadComments m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -190,6 +195,8 @@ component =
           threads <- case loaded of
             Ready page _ _ -> maybe ThreadsLoading threadsOf <$> atOnce (listThreads page.id)
             _ -> pure ThreadsLoading
+          let logins = Body.unasked Body.noPeople (bodiesOf loaded threads)
+          people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
           text <- H.newRefLabel "page-text"
           pure
             State
@@ -206,6 +213,7 @@ component =
               , editors = []
               , changed = False
               , text
+              , people
               }
       , render
       , eval =
@@ -236,7 +244,7 @@ component =
             -- Its own class too: the bar stays under the header while the
             -- page scrolls (web/style.css), so that a long page is edited
             -- without scrolling back up to it.
-            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ liveNote st }}</div>|]
+            [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ liveNote st }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
                 <> Body.heading page.title page.body
@@ -244,7 +252,7 @@ component =
                 <> [textAndPanel st place rendered text page]
                 <> attachments page urls
                 <> [commentsOf st place text page CommentsView.Below]
-          place = placeOf input page urls
+          place = placeOf input page urls st.people.found
           -- Rendered once: the article shows it, its quotes marked, and
           -- its text is where they are looked for.
           rendered = Body.rendered place page.body
@@ -473,6 +481,7 @@ component =
           _ -> do
             H.raise Loaded
             watch
+            resolvePeople
             gets (\st -> st.threads) >>= \case
               ThreadsLoading -> loadThreads
               _ -> pass
@@ -488,7 +497,9 @@ component =
           unwatchAll
           modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = []})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
-          modify (\st -> st {mode = Viewing, problem = Nothing, changed = False})
+          -- Whom mentions name is asked again: who is asking may be someone
+          -- else now.
+          modify (\st -> st {mode = Viewing, problem = Nothing, changed = False, people = Body.noPeople})
           load
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       FollowLink target -> do
@@ -529,6 +540,7 @@ component =
       FromComments out -> case out of
         CommentsView.Did event -> do
           modify (\st -> st {threads = applied event st.threads})
+          resolvePeople
           case event of
             ThreadOpened t | isInline t -> modify (\st -> st {quoting = Nothing, focused = Just t.id})
             _ -> pass
@@ -550,17 +562,18 @@ component =
               gets busy >>= \case
                 True -> modify (\st -> st {changed = True})
                 False -> H.raise (Changed Nothing)
-          Live.Heard page event | Just page == here -> modify (\st -> st {threads = applied event st.threads})
+          Live.Heard page event | Just page == here -> modify (\st -> st {threads = applied event st.threads}) >> resolvePeople
           -- The server's answer to the subscription: the threads as they
           -- are now, whatever was shown, and what changed since the page
           -- was read (or the channel was lost) with them. A thread focused
           -- that is gone is not focused any more.
-          Live.Replaced page threads | Just page == here ->
+          Live.Replaced page threads | Just page == here -> do
             modify $ \st ->
               st
                 { threads = ThreadsReady threads
                 , focused = st.focused >>= \f -> f <$ find (\t -> t.id == f) threads
                 }
+            resolvePeople
           _ -> pass
       Selecting -> do
         st <- get
@@ -601,6 +614,7 @@ component =
       now <- gets (\st -> st.input)
       when (now.space.id == input.space.id && now.path == input.path) $ do
         modify (\st -> st {loaded})
+        resolvePeople
         H.raise Loaded
         watch
         loadThreads
@@ -611,6 +625,18 @@ component =
       threads <- threadsOf <$> listThreads page.id
       -- Only if it is still the page shown.
       withPage $ \now -> when (now.id == page.id) (modify (\st -> st {threads}))
+      resolvePeople
+
+    -- Ask whom the page and its comments mention, of the logins not asked
+    -- about yet.
+    resolvePeople :: H.HalogenM State Action Slots ViewOutput m ()
+    resolvePeople = do
+      st <- get
+      let logins = Body.unasked st.people (bodiesOf st.loaded st.threads)
+      unless (null logins) $
+        lift (attempt (Body.askPeople logins)) >>= \case
+          Right found -> modify (\s -> s {people = Body.answered logins found s.people})
+          Left _ -> pass
 
     -- Listen for what happens to the page shown, and to nothing else.
     watch :: H.HalogenM State Action Slots ViewOutput m ()
@@ -693,9 +719,15 @@ applied event = \case
   other -> other
 
 -- | Where the page is, for its links and its comments'.
-placeOf :: Input -> Page -> Map AttachmentId Text -> Body.Place
-placeOf input page urls =
-  Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls}
+placeOf :: Input -> Page -> Map AttachmentId Text -> Map Text Author -> Body.Place
+placeOf input page urls people =
+  Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls, people}
+
+-- | The Markdown the view shows: the page's, and its comments'.
+bodiesOf :: Loaded -> Threads -> [Text]
+bodiesOf loaded threads = case loaded of
+  Ready page _ _ -> page.body : [c.body | ThreadsReady ts <- [threads], t <- ts, c <- t.comments]
+  _ -> []
 
 -- | Whether the reader is busy with the page as it is shown: something
 -- selected in it, a quote being commented on, a rename or a move begun.

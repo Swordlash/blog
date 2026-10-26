@@ -101,7 +101,7 @@ import Wiki.Api.Types
 import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http.Cache
@@ -554,7 +554,10 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
         result <- answer <$> call (R.get (links.notifications.people logins))
         case result of
           Right found -> modifyCache (withPeople logins found) $> found
-          Left e -> liftIO (throwIO e)
+          Left e@(Unreachable _) -> liftIO (throwIO e)
+          -- Refused (a server from before mentions): nobody, as far as this
+          -- page can tell.
+          Left _ -> modifyCache (withPeople logins mempty) $> mempty
   notifications = cached (\c -> c.notices) (R.get links.notifications.list) withNotices
   markRead m = do
     result <- answer <$> call (withJson "POST" links.notifications.markRead m)

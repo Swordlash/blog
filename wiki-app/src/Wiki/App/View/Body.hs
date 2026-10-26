@@ -22,8 +22,22 @@
 -- click on one that leads somewhere in the wiki is caught on the article
 -- around them, kept from the browser in the click's listener, and followed
 -- by the router ("Wiki.App.Browser").
+--
+-- A mention, @\@login@, is a link when the place knows the login for a
+-- user's ('Place' @people@): to a search for the mention, which finds the
+-- pages that mention them (the wiki has no page of a user's own). Whom
+-- logins name is asked of the backend ('askPeople') by the view that
+-- shows the Markdown, for the logins it has not asked about yet
+-- ('unasked'), and only for someone signed in: to anyone else the wiki
+-- says nothing of who its users are, and a mention is its text.
 module Wiki.App.View.Body
   ( Place (..)
+  , People (..)
+  , noPeople
+  , unasked
+  , askPeople
+  , answered
+  , withPeople
   , IslandSlots
   , HasIslands
   , heading
@@ -40,6 +54,7 @@ where
 import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
 import Data.Row (HasType, type (.==))
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -48,19 +63,23 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh, hhs)
 import Protolude
 import Web.Event.Event (EventType (..))
+import Wiki.App.Backend (MonadWiki (..), Session (user))
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Browser (ArticleLink, articleLink)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
-import Wiki.App.Route (PageLink (..), resolvePageLink)
+import Wiki.App.Route (PageLink (..), Route (Search), resolvePageLink)
 import Wiki.App.View.Common
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
 import Wiki.Core.Id (AttachmentId)
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Math (spaceMacros)
+import Wiki.Core.Notification (mentionedIn)
 import Wiki.Core.Page (Page)
 import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
+import Wiki.Core.Version (Author (..))
 
 -- | Where a page's Markdown is read: what its links and attachments are
 -- resolved against.
@@ -75,7 +94,43 @@ data Place = Place
   , attachments :: [Attachment]
   , urls :: Map AttachmentId Text
   -- ^ Where each attachment is fetched from ('Wiki.App.Backend.attachmentUrl').
+  , people :: Map Text Author
+  -- ^ Whom the logins mentioned name, of those that are users'.
   }
+
+-- | What a view knows of whom the Markdown it shows mentions: the users
+-- found, and every login asked about, found or not.
+data People = People
+  { found :: Map Text Author
+  , asked :: Set Text
+  }
+  deriving stock (Eq, Show)
+
+noPeople :: People
+noPeople = People {found = mempty, asked = mempty}
+
+-- | The logins these Markdown texts mention that have not been asked
+-- about.
+unasked :: People -> [Text] -> [Text]
+unasked p bodies = Set.toList (foldMap mentionedIn bodies `Set.difference` p.asked)
+
+-- | Who these logins are, for someone signed in: nothing is asked for none,
+-- or for someone not signed in.
+askPeople :: (MonadWiki n, MonadNotifications n) => [Text] -> n (Map Text Author)
+askPeople = \case
+  [] -> pure mempty
+  logins ->
+    session >>= \s -> case s.user of
+      Nothing -> pure mempty
+      Just _ -> mentionable logins
+
+-- | A place where these people are known too.
+withPeople :: Map Text Author -> Place -> Place
+withPeople found p = p {people = found <> p.people}
+
+-- | What is known after these logins were asked about.
+answered :: [Text] -> Map Text Author -> People -> People
+answered logins found p = People {found = found <> p.found, asked = Set.fromList logins <> p.asked}
 
 -- | A page's islands, one child component each, indexed by their keys in
 -- the document: an island whose key stays the same across a render keeps
@@ -189,6 +244,9 @@ options place =
     , Md.tikz = \k source -> island k (Islands.Tikz source)
     , Md.resolveLink = resolve place
     , Md.pageHref = \(PageLink r fragment) -> Router.href place.context.router r <> fragment
+    , Md.resolveMention = \login ->
+        (\a -> Md.MentionTarget {href = Router.href place.context.router (Search (Just ("@" <> login)) Nothing True), name = a.name})
+          <$> Map.lookup login place.people
     }
   where
     island key = HH.slot_ "island" key Islands.component

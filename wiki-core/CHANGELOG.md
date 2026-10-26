@@ -19,6 +19,16 @@ formulas as their TeX, cut on a word at 300 characters with an ellipsis),
 `firstImage`, and `PostDetails` (a post's first author and its count of
 comments).
 
+Mentions, watching and notifications (WP4.13). The Markdown tree gains
+`Mention`, made of `@login` in text outside code, links and embeds
+(`Wiki.Core.Markdown.Mention.splitMentions`, `mentions`); `Options` gains
+`resolveMention` (a `MentionTarget`), `const Nothing` by default, which
+writes a mention as its text. `Wiki.Core.Notification`: the notification
+and its kinds, watches (`pageWatch`, `spaceWatch`, a mark per page or space
+over the nearest space's, over one's own page), the mail modes, who is told
+of what (`recipients`, `newlyMentioned`) and the digest (`digest`).
+`Wiki.Core.Id` gains `NotificationId`.
+
 Math between LaTeX's delimiters (WP4.7): `parseMarkdown` reads `\(…\)` as
 inline math and `\[…\]` as display math, beside `$…$` and `$$…$$`, through
 `Wiki.Core.Markdown.TexMath.texMathSpec` (pandoc's

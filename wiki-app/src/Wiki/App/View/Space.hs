@@ -51,14 +51,17 @@ import Protolude hiding (State)
 import Wiki.Api.Export (spaceFormats)
 import Wiki.Api.Links (spaceExportUrl)
 import Wiki.App.Backend (MonadLoad, MonadWiki (..), Session (exports), WikiError)
+import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Islands (Island (..), MonadIslands (..))
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.App.View.Export (exportMenu)
 import Wiki.App.View.SpaceSettings qualified as SpaceSettings
+import Wiki.App.View.Watch qualified as WatchView
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Math (Macros (..), spaceMacros)
+import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, orderName)
 import Wiki.Core.Page (Page (id, title))
 import Wiki.Core.Permission (mayCreateSpace, mayMoveSpace)
@@ -94,7 +97,7 @@ data State = State
 
 -- | The formula the macros are tried on, set as the space's pages would
 -- set it.
-type Slots = ("island" .== H.Slot (Const Void) Void ()) .+ ("settings" .== H.Slot (Const Void) ViewOutput ())
+type Slots = ("island" .== H.Slot (Const Void) Void ()) .+ ("settings" .== H.Slot (Const Void) ViewOutput ()) .+ ("watch" .== H.Slot (Const Void) Void ())
 
 data Action
   = Receive Input
@@ -113,7 +116,7 @@ data Action
   | ShiftPage PageId Shift
   | ShiftSpace SpaceId Shift
 
-component :: forall query m. (MonadLoad m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
+component :: forall query m. (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -131,7 +134,7 @@ component =
             <span class="badge {{ if space.public then "badge-public" else "badge-private" :: Text }}">{{ if space.public then "Public" else "Private" :: Text }}</span>
           </header>
           {% if not (T.null space.description) %}<p class="space-description">{{ space.description }}</p>{% end %}
-          <div class="actions">{{ actions ctx space mode }}</div>
+          <div class="actions">{{ actions ctx space mode }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = ctx, target = WatchSpace space.id} | notified ctx] }}</div>
           {{ form ctx space pages mode }}{{ errorView <$> problem }}{{ macrosView ctx space }}
           <h2>Pages</h2>
           {{ pageList }}{{ subspaces ctx space }}
