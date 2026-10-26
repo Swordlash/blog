@@ -232,8 +232,12 @@ confirms it against reality and the plan is amended if it does not hold.
     would reconnect by itself, but the owner asked for WebSockets and the same channel is
     meant to carry what a client sends later (presence, "editing now").
 
-24. **Public under MIT; the server binary is GPL-governed when conveyed** (proposed
-    2026-10-26, awaiting the owner). The repository's own code goes under the MIT licence:
+24. **Public under MIT; the server binary is GPL-governed when conveyed** (proposed and
+    confirmed by the owner, 2026-10-26: "Dobra róbmy"; the owner also noted that code
+    written wholly by AI may not be copyrightable at all, which argues for a permissive
+    licence rather than against one: copyleft would have nothing to enforce with, and the
+    README says plainly that the code was written with Claude under the owner's
+    direction). The repository's own code goes under the MIT licence:
     the simplest permissive one, and compatible with every dependency. The one constraint
     is `wiki-server`, which links pandoc (GPL-2.0-or-later), texmath and skylighting (both
     GPL-2 "or any later version" by their file notices and README, whatever their cabal
@@ -984,7 +988,8 @@ must be in before it is.
 
 - **WP5.1 Licence, runner gating, `--server` by default.** `LICENSE` becomes MIT (decision
   24, once confirmed), the four `.cabal` files say `license: MIT` and `license-file`, and
-  the README's licence section lists the third-party licences: in `wiki-server`'s binary
+  the README's licence section says the code was written with Claude under the owner's
+  direction, and lists the third-party licences: in `wiki-server`'s binary
   pandoc, texmath and skylighting (GPL, so conveying a binary follows the GPL; none is
   conveyed), haskell-halogen (Apache-2.0); in the page KaTeX (MIT), Mermaid (MIT),
   highlight.js (BSD-3), CodeMirror (MIT), fflate (MIT), TikZJax (GPL-3.0-or-later, served
@@ -1008,7 +1013,7 @@ must be in before it is.
   state remembers the mode as before, so the owner's deployment does not move; header,
   README and the first-install test cases follow. Hygiene before the flip, listed for the
   owner in the report: the `maintainer` address in the `.cabal` files becomes public (the
-  owner's call to keep or drop), pull request texts become public (the tailnet hostname
+  owner's call to keep or drop; kept unless told otherwise), pull request texts become public (the tailnet hostname
   appears in some; it is in Certificate Transparency logs anyway), secret scanning and
   push protection to turn on after the flip. Tests: `test-deploy-local.sh`'s first-install
   cases, a native test that every `.cabal` names the licence file, and the workflow
@@ -2836,6 +2841,8 @@ Amended by the planning session after each work package's report.
   owner's step; WP5.2 the Pages deploy) are written; nothing starts before the owner
   confirms the licence. The tree and the history hold neither the tailnet hostname nor
   secrets (grepped); the `maintainer` address is in the `.cabal` files.
+- **WP5.1 started** (2026-10-26) on `wp5.1-public-release` from `main` `ba29135`, alone;
+  decision 24 confirmed (MIT).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
