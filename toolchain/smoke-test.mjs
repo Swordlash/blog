@@ -43,23 +43,25 @@
 // 3. The same page in a dark scheme and at a phone's width, a page shown
 //    as slides (moved through, reloaded, printed), and a page's source
 //    copied to the clipboard.
+// 4. The demo as an application (WP4.17): its manifest and icons, its
+//    service worker taking over the page, and the page read again offline
+//    from what the worker kept, and the worker's offline page for a page
+//    never read. Every other part runs with service workers blocked, so
+//    that what it holds back (app.wasm, until the page is marked) is held
+//    back: a worker's own requests and what it answers from its cache pass
+//    by Playwright's routes.
 //
 // Needs the Chromium that Playwright's version in package-lock.json launches
-// (toolchain/bootstrap.sh installs it), and no network: index.js loads
-// @bjorn3/browser_wasi_shim from jsDelivr, which the test serves from
-// node_modules (the same version), and the demo's NASA image and video on
-// Wikimedia Commons are answered locally with stand-ins.
+// (toolchain/bootstrap.sh installs it), and no network: the demo's NASA
+// image and video on Wikimedia Commons are answered locally with stand-ins.
 import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
-import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { extname, join, normalize, relative, resolve, sep } from "node:path";
 import { chromium } from "playwright";
 
 const started = Date.now();
 const root = resolve(process.argv[2] ?? "dist-newstyle/wasm/public/app");
-// The directory of the shim's index.js, which index.js imports from the CDN.
-const shimDir = dirname(fileURLToPath(import.meta.resolve("@bjorn3/browser_wasi_shim")));
 
 // instantiateStreaming refuses a .wasm served without its media type, so the
 // server has to get these right.
@@ -71,6 +73,9 @@ const types = {
   ".woff2": "font/woff2",
   ".woff": "font/woff",
   ".ttf": "font/ttf",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".webmanifest": "application/manifest+json",
 };
 
 // A static server, as Pages is: a directory's address serves its index.html,
@@ -115,7 +120,7 @@ const standInImage = Buffer.from(
 // is set, so that the prerendered page can be seen before the program
 // replaces it.
 async function newPage(options = {}) {
-  const context = await browser.newContext(options);
+  const context = await browser.newContext({ serviceWorkers: "block", ...options });
   const page = await context.newPage();
   // Every address the page and its workers ask for, until it is emptied.
   page.requested = [];
@@ -127,13 +132,6 @@ async function newPage(options = {}) {
     if (message.type() === "error" && !message.text().includes("404")) {
       failures.push(`console error at ${page.url()}: ${message.text()}`);
     }
-  });
-  await page.route("https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@*/dist/**", async (route) => {
-    const file = new URL(route.request().url()).pathname.replace(/^.*\/dist\//, "");
-    await route.fulfill({
-      contentType: "text/javascript",
-      body: await readFile(join(shimDir, normalize(file))),
-    });
   });
   // The video gets no answer it can play, which a page shows as a player
   // with nothing in it, as it would offline; that is not an error.
@@ -994,6 +992,71 @@ try {
   await commenter.locator("#app .comments-toggle", { hasText: "Comments (3)" }).waitFor({ timeout });
   await commenter.context().close();
   console.log("ok: a quote is marked, text selected is commented on, and the comment is kept across a reload");
+
+  // ---- 4. The demo as an application, read offline ---------------------------
+
+  // In a block of its own: its names are its own.
+  {
+    // What a browser reads to install it: the manifest, linked from the page,
+    // and its icons.
+    const manifest = await (await fetch(url("/manifest.webmanifest"))).json();
+    assert.equal(manifest.display, "standalone");
+    assert.equal(manifest.start_url, "./");
+    for (const icon of manifest.icons) {
+      const fetched = await fetch(url(`/${icon.src}`));
+      assert.equal(fetched.status, 200, `the manifest's icon ${icon.src}`);
+    }
+    // A browser that lets service workers in, as a reader's does.
+    const offlineContext = await browser.newContext();
+    const reader = await offlineContext.newPage();
+    reader.on("pageerror", (error) => failures.push(`page error at ${reader.url()}: ${error.message}`));
+    reader.on("console", (message) => {
+      // Offline, what is not kept fails to load (the photograph from
+      // Wikimedia Commons); that is what offline is.
+      if (message.type() === "error" && !/ERR_INTERNET_DISCONNECTED|Failed to load resource|404/.test(message.text())) {
+        failures.push(`console error at ${reader.url()}: ${message.text()}`);
+      }
+    });
+    await reader.route("https://upload.wikimedia.org/**", (route) => route.fulfill({ contentType: "image/png", body: standInImage }));
+    await reader.goto(url("/"));
+    await reader.locator("#app .directory h1", { hasText: "Spaces" }).waitFor({ timeout });
+    assert.equal(await reader.locator('head link[rel="manifest"]').getAttribute("href"), "./manifest.webmanifest");
+    // The worker takes the page over, and keeps the page it did not serve
+    // (the one that installed it) when the page asks.
+    await eventually(async () => assert.ok(await reader.evaluate(() => navigator.serviceWorker.controller !== null), "no worker"), "the service worker taking the page over");
+    const keptPage = (path) =>
+      reader.evaluate(async (address) => {
+        for (const name of await caches.keys()) {
+          if (name.startsWith("wiki-pages ") && (await (await caches.open(name)).match(address))) return true;
+        }
+        return false;
+      }, url(path));
+    await eventually(async () => assert.ok(await keptPage("/"), "not kept"), "the front page kept by the worker");
+    // A page loaded while the worker serves the page is kept as it comes.
+    await reader.goto(url("/s/blog/p/hello-world/"));
+    await reader.locator("#app .wiki-content h1", { hasText: "Hello" }).waitFor({ timeout });
+    await eventually(async () => assert.ok(await keptPage("/s/blog/p/hello-world/"), "not kept"), "a page kept by the worker");
+    // Offline: the page again, from what the worker kept, and the program
+    // started on it from the application's files the worker kept. The demo's
+    // wiki is in the browser, so it says nothing of an offline copy.
+    await offlineContext.setOffline(true);
+    await reader.reload();
+    await reader.locator("#app .wiki-content h1", { hasText: "Hello" }).waitFor({ timeout });
+    await eventually(async () => assert.ok(await programStarted(reader), "no listener yet"), "the program starting offline");
+    assert.equal(await reader.locator("#app .offline-copy").count(), 0, "the demo says it is an offline copy");
+    // A page never read here: the worker's offline page, which lists the
+    // pages it kept.
+    await reader.goto(url("/s/docs/"));
+    await reader.locator(".offline-page h1", { hasText: "This page is not available offline" }).waitFor({ timeout });
+    await reader.locator(".offline-page .offline-pages a", { hasText: "Hello" }).click();
+    await reader.locator("#app .wiki-content h1", { hasText: "Hello" }).waitFor({ timeout });
+    await offlineContext.setOffline(false);
+    await reader.goto(url("/s/docs/"));
+    await reader.locator("#app .sidebar-space-name", { hasText: "Docs" }).waitFor({ timeout });
+    assert.equal(await reader.locator(".offline-page").count(), 0, "the offline page, online");
+    await offlineContext.close();
+    console.log("ok: the demo is installable (a manifest and its icons, a service worker), and reads offline what it read, with an offline page for the rest");
+  }
 } catch (error) {
   // What the page reported is usually why it did not get there.
   failures.push(String(error.stack ?? error));

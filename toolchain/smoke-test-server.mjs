@@ -59,24 +59,31 @@
 //    her name, this browser's marked, and "Sign out everywhere" ending the
 //    other; a second factor set up there from the QR code's secret, which
 //    the next sign-in with her password then asks for.
+// 8. Reading offline (WP4.17): a browser that lets the service worker in
+//    reads a few pages, goes offline and reloads one, which is shown from
+//    what the worker kept, saying "You are reading an offline copy from …"
+//    with the offline notice; a page followed by a link offline is shown
+//    from the API's answers kept; a page never read gets the worker's
+//    offline page; back online, the page is the live one again; and
+//    signing out lets go of what was kept. Every other part runs with
+//    service workers blocked, so that what it holds back or counts
+//    (app.wasm, the API's requests) passes through Playwright's routes,
+//    which a worker's requests and its cache's answers do not.
 //
 // Needs the native builds of wiki-server and wiki-app-prerender (npm run
 // build-native; WIKI_SERVER and WIKI_PRERENDER name other binaries), the
-// Chromium Playwright launches, and no network (the WASI shim index.js loads
-// from jsDelivr is served from node_modules).
+// Chromium Playwright launches, and no network.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, join, normalize, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, extname, join, normalize, resolve } from "node:path";
 import { chromium } from "playwright";
 
 const started = Date.now();
 const built = resolve(process.argv[2] ?? "dist-newstyle/wasm/public/app");
-const shimDir = dirname(fileURLToPath(import.meta.resolve("@bjorn3/browser_wasi_shim")));
 const timeout = 30_000;
 const failures = [];
 
@@ -84,7 +91,8 @@ const failures = [];
 const binary = (variable, target) =>
   process.env[variable] ?? execFileSync("cabal", ["list-bin", "-v0", target, "--builddir=dist-newstyle/native"], { encoding: "utf8" }).trim();
 
-// The server's build: the demo's files but its pages, and the server's page.
+// The server's build: the demo's files but its pages (the worker's offline
+// page is not one of them), and the server's page.
 const work = await mkdtemp(join(tmpdir(), "wiki-smoke-server-"));
 const app = join(work, "app");
 const data = join(work, "data");
@@ -92,7 +100,7 @@ await cp(built, app, {
   recursive: true,
   filter: (source) => {
     const rel = source.slice(built.length).replace(/^[/\\]/, "");
-    return !(rel.endsWith(".html") && !rel.includes("/")) && !/^(s|search)([/\\]|$)/.test(rel);
+    return !(rel.endsWith(".html") && !rel.includes("/") && rel !== "offline.html") && !/^(s|search)([/\\]|$)/.test(rel);
   },
 });
 execFileSync(binary("WIKI_PRERENDER", "wiki-app:exe:wiki-app-prerender"), ["--server", "web/index.html", app], { stdio: "inherit" });
@@ -214,11 +222,11 @@ async function eventually(check, what) {
   throw new Error(`${what}: ${last?.message ?? last}`);
 }
 
-// A page that reports what goes wrong in it, with the shim answered
-// locally; app.wasm and the API wait for their gates when they are set.
+// A page that reports what goes wrong in it; app.wasm and the API wait for
+// their gates when they are set.
 // Signed in as the administrator, unless told it is someone who is not.
 async function newPage({ anonymous = false } = {}) {
-  const context = await browser.newContext({ acceptDownloads: true });
+  const context = await browser.newContext({ acceptDownloads: true, serviceWorkers: "block" });
   if (!anonymous) await context.addCookies([{ name: "wiki_session", value: sessionToken, url: origin }]);
   const page = await context.newPage();
   page.on("pageerror", (error) => failures.push(`page error at ${page.url()}: ${error.message}`));
@@ -232,10 +240,6 @@ async function newPage({ anonymous = false } = {}) {
   });
   // Leaving the editor with unsaved work asks; the walk says leave.
   page.on("dialog", (dialog) => dialog.accept());
-  await page.route("https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@*/dist/**", async (route) => {
-    const file = new URL(route.request().url()).pathname.replace(/^.*\/dist\//, "");
-    await route.fulfill({ contentType: "text/javascript", body: await readFile(join(shimDir, normalize(file))) });
-  });
   page.wasmGate = null;
   page.apiGate = null;
   page.apiAsked = [];
@@ -1117,6 +1121,110 @@ try {
   assert.ok(logged.available && logged.entries.length > 0, `the activity: ${JSON.stringify(logged)}`);
   assert.ok(logged.entries.some((e) => e.action === "group.create"), `no group made in the activity: ${JSON.stringify(logged.entries.map((e) => e.action))}`);
   console.log("ok: /healthz on both listeners, /metrics on the admin one only by route pattern, and the walk's administration in the activity");
+
+  // ---- 8. Reading offline, through the service worker ------------------------
+
+  // In a block of its own: its names are its own.
+  {
+    // A browser that lets the worker in, as a reader's does, signed in as the
+    // administrator. Offline, what the worker has not kept fails to load (the
+    // bell, the live channel), as it would without one: that is what offline
+    // is, and the page says so.
+    const offlineContext = await browser.newContext();
+    await offlineContext.addCookies([{ name: "wiki_session", value: sessionToken, url: origin }]);
+    const reader = await offlineContext.newPage();
+    reader.on("pageerror", (error) => failures.push(`page error at ${reader.url()}: ${error.message}`));
+    reader.on("console", (message) => {
+      if (message.type() === "error" && !/ERR_INTERNET_DISCONNECTED|Failed to load resource|WebSocket|\b(401|404|409)\b/.test(message.text())) {
+        failures.push(`console error at ${reader.url()}: ${message.text()}`);
+      }
+    });
+    reader.on("dialog", (dialog) => dialog.accept());
+    // What the worker keeps of this wiki: each answer's address (a path) and
+    // when it was kept, by the kind of cache ("pages", "answers").
+    const kept = () =>
+      reader.evaluate(async () => {
+        const found = {};
+        for (const name of await caches.keys()) {
+          const kind = name.split(" ")[0].replace(/^wiki-/, "");
+          const cache = await caches.open(name);
+          for (const request of await cache.keys()) {
+            (found[kind] ??= []).push({ path: new URL(request.url).pathname, at: (await cache.match(request)).headers.get("X-Wiki-Kept-At") });
+          }
+        }
+        return found;
+      });
+    const keptPaths = async (kind) => ((await kept())[kind] ?? []).map((entry) => entry.path);
+    const firstPage = "/s/smoke-space/p/first-page/";
+    await reader.goto(url("/s/smoke-space/"));
+    await reader.locator("#app .sidebar-space-name", { hasText: "Smoke space" }).waitFor({ timeout });
+    await eventually(async () => assert.ok(await reader.evaluate(() => navigator.serviceWorker.controller !== null), "no worker"), "the service worker taking the page over");
+    // The page that installed the worker, which the worker did not serve, is
+    // kept when the page asks; one loaded since, as it is served.
+    await eventually(async () => assert.ok((await keptPaths("pages")).includes("/s/smoke-space/"), "not kept"), "the first page kept");
+    await reader.goto(url(firstPage));
+    await reader.locator("#app .page-body", { hasText: "Saved by someone else." }).waitFor({ timeout });
+    await eventually(async () => assert.ok(await programStarted(reader), "no listener yet"), "the program starting");
+    await eventually(async () => assert.ok((await keptPaths("pages")).includes(firstPage), "not kept"), "a page kept");
+    // A link followed to another space: what the program reads for it is
+    // kept, but for what is never kept (who is asking, the administration,
+    // the account, notifications).
+    const toPublic = async () => {
+      await reader.locator("#app .space-switcher-toggle").click();
+      await reader.locator("#app .space-switcher-option", { hasText: "Smoke public" }).click();
+      await reader.locator("#app .sidebar-space-name", { hasText: "Smoke public" }).waitFor({ timeout });
+      await reader.locator("#app .wiki-content :is(.page-view, .space-view, .blog-view)").first().waitFor({ timeout });
+      assert.equal(await reader.locator("#app .wiki-content .error").count(), 0, "the public space, failed");
+    };
+    await toPublic();
+    await eventually(async () => assert.ok((await keptPaths("answers")).length > 0, "nothing kept"), "the API's answers kept");
+    const answers = await keptPaths("answers");
+    assert.ok(answers.every((path) => !/\/api\/v1\/(session|admin|account|notifications)(\/|$)/.test(path)), `kept what is never kept: ${answers}`);
+    console.log(`note: the worker kept ${(await keptPaths("pages")).length} pages and ${answers.length} answers of the API`);
+
+    // Offline: the page reloaded is the copy kept, saying so, with the
+    // offline notice, and the program starts on it from the files kept.
+    await offlineContext.setOffline(true);
+    await reader.goto(url(firstPage));
+    const copyLine = reader.locator("#app .wiki-content > .offline-copy");
+    await copyLine.waitFor({ timeout });
+    await reader.locator("#app .offline-notice", { hasText: "You are offline" }).waitFor({ timeout });
+    await reader.locator("#app .page-body", { hasText: "Saved by someone else." }).waitFor({ timeout });
+    await eventually(async () => assert.ok(await programStarted(reader), "no listener yet"), "the program starting offline");
+    // The time, in the reader's zone and language, once the island has it.
+    await eventually(async () => assert.match(await copyLine.textContent(), /^\s*You are reading an offline copy from \S.*\.\s*$/s), "the offline copy's line");
+    // A link followed offline: shown from the API's answers kept, and the
+    // line goes, which was about the page served.
+    await toPublic();
+    assert.equal(await reader.locator("#app .offline-copy").count(), 0, "the offline copy's line, on another route");
+    // A page never read here: the worker's offline page, with the pages it
+    // has.
+    await reader.goto(url("/s/smoke-public/pages/"));
+    await reader.locator(".offline-page h1", { hasText: "This page is not available offline" }).waitFor({ timeout });
+    await reader.locator(".offline-page .offline-pages a").first().waitFor({ timeout });
+    console.log("ok: offline, a page read here is the copy the worker kept, saying since when, with the offline notice; a link followed shows what was kept; a page never read gets the offline page");
+
+    // Back online: the live page.
+    await offlineContext.setOffline(false);
+    await reader.goto(url(firstPage));
+    await reader.locator("#app .page-body", { hasText: "Saved by someone else." }).waitFor({ timeout });
+    await eventually(async () => assert.ok(await programStarted(reader), "no listener yet"), "the program starting online");
+    assert.equal(await reader.locator("#app .offline-copy").count(), 0, "the offline copy's line, online");
+    assert.equal(await reader.locator("#app .offline-notice").count(), 0, "the offline notice, online");
+    // Signing out lets go of every page and answer kept as the administrator;
+    // what is read after, as nobody, is kept again.
+    const signingOut = await reader.evaluate(() => new Date().toISOString());
+    await reader.locator("#app .sign-out").click();
+    await reader.locator("#app .sign-in-toggle").waitFor({ timeout });
+    await eventually(async () => {
+      const after = await kept();
+      const older = [...(after.pages ?? []), ...(after.answers ?? [])].filter((entry) => entry.at < signingOut);
+      assert.deepEqual(older, [], "kept from before signing out");
+      assert.ok((after.app ?? []).length > 0, "the application's files let go of");
+    }, "what was kept let go of on signing out");
+    await offlineContext.close();
+    console.log("ok: back online the page is the live one, and signing out lets go of the pages and answers kept");
+  }
 } catch (error) {
   failures.push(String(error.stack ?? error));
   if (process.env.SMOKE_DEBUG) {
