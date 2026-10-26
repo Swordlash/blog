@@ -100,8 +100,11 @@ spec m = do
     find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "The third post")
     clickButton ui ".page-view .actions button" "Delete"
     find ui ".page-view .confirm button.danger" >>= click
-    -- Back to the space, which opens at its home page.
-    find ui ".page-body h1" >>= (`shouldHaveText` "Hello, world")
+    -- Back to the space, which opens at its posts (it is shown as a blog),
+    -- the deleted one no longer among them.
+    eventually $ do
+      posts <- traverse textContent =<< findAll ui ".blog-view .post-title"
+      posts `shouldBe` ["Notes on Haskell", "Hello, world"]
     eventually $ do
       links <- traverse textContent =<< findAll ui ".wiki-sidebar .page-tree a"
       links `shouldBe` ["Hello, world", "Notes on Haskell"]
