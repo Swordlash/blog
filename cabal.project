@@ -4,6 +4,14 @@ packages:
   wiki-app
   wiki-server
 
+-- Build across packages in parallel and, through a semaphore cabal shares with
+-- GHC (-jsem), across the modules of one package too. A change usually touches
+-- one or two packages, where package-level parallelism alone would leave the
+-- other cores idle; the semaphore keeps the whole build to $ncpus jobs rather
+-- than cabal's jobs times GHC's. Every other project file imports this one.
+jobs: $ncpus
+semaphore: True
+
 -- haskell-halogen comes from one pinned commit: only haskell-halogen-core is on
 -- Hackage, and the application needs the router, the hooks and the th quoters
 -- as well. Every package it is used from is listed, jsbits included (the WASM
