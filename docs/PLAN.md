@@ -2908,6 +2908,12 @@ Amended by the planning session after each work package's report.
   go, make the repository public, require approval for all external contributors, turn on
   secret scanning and push protection, set Pages to deploy from GitHub Actions, run the
   workflow once with `runner: hosted`.
+- **WP5.2 and WP5.3 started** (2026-10-26) on `wp5.2-pages` and `wp5.3-readme`, both from
+  `main` `b4d75ac`, side by side (WP5.2 owns the workflow, the toolchain scripts, `web/`
+  and the demo's database name, and one paragraph of the README; WP5.3 owns the rest of
+  the README, `docs/screenshots/`, `toolchain/screenshots.mjs` and the demo's page texts).
+  WP5.2's deploy job is gated on the repository being public, so it can merge before the
+  owner flips it without making `main` red.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
