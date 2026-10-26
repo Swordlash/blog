@@ -5,8 +5,11 @@
 #   sh toolchain/undeploy-local.sh [--name NAME] [--purge | --purge-data] [--no-firewall]
 #
 # It stops and disables the systemd user service, removes its unit file and
-# reloads systemd, and closes the firewall rule the deployment opened (with
-# `sudo -n`, or by printing the commands when sudo needs a password). The
+# reloads systemd, closes the firewall rule the deployment opened (with
+# `sudo -n`, or by printing the commands when sudo needs a password), and
+# turns off the deployment's `tailscale serve` (`tailscale serve --https=443
+# off`) when it still proxies to the deployment's port, printing the command
+# to run as root when you may not change Tailscale's configuration. The
 # deployed files stay where they are unless --purge is given, which deletes
 # the target directory too (only if it carries the deployment's marker) and
 # forgets the deployment's state, but keeps the wiki's data (<dir>/data: the

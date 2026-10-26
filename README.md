@@ -97,9 +97,10 @@ authorisation.
   reading an offline copy from …", or an offline page listing what can be read,
   for one never read; "Install" in the header where the browser offers it
   (Chromium). A browser lets a service worker in only on a secure page: over
-  HTTPS, or from `localhost`/`127.0.0.1` on the same machine. A wiki served over
-  plain HTTP to other machines (as on a Tailscale address) works as before,
-  without either. Signing out lets go of the pages kept.
+  HTTPS, or from `localhost`/`127.0.0.1` on the same machine. The deploy script
+  serves over HTTPS by default (below); a wiki served over plain HTTP to other
+  machines (`--http`, on a Tailscale address) works as before, without either.
+  Signing out lets go of the pages kept.
 
 ## Running the demo
 
@@ -128,8 +129,9 @@ sent anywhere, and a reload starts the demo over.
 `toolchain/deploy-local.sh` builds the demo (or, with `--server`, the wiki's
 server; see [The wiki's server](#the-wikis-server)) and serves it from a Linux machine of
 your own (x86_64 Debian or Ubuntu) as a systemd user service, for you and your
-devices on its Tailscale network. Run it from the checkout, as the user the service
-should run as (not root):
+devices on its Tailscale network, over HTTPS at the machine's name there,
+`https://<machine>.<tailnet>.ts.net/`. Run it from the checkout, as the user the
+service should run as (not root):
 
 ```sh
 sh toolchain/deploy-local.sh --port 8080    # or: npm run deploy-local -- --port 8080
@@ -145,26 +147,79 @@ and `server.mjs`, a static server with no dependencies that serves the page as
 GitHub Pages does, `404.html` included. It writes and enables
 `~/.config/systemd/user/wiki-demo.service`, which runs that server with the Node the
 bootstrap installed, by absolute path, so the service depends on neither the checkout
-nor its `node_modules`; starts it, checks that it answers, and prints the address to
-open, `http://<tailscale address or MagicDNS name>:8080/`.
+nor its `node_modules`; starts it on `127.0.0.1:8080`, checks that it answers, puts
+it behind `tailscale serve`, checks that the HTTPS address answers, and prints it
+first among the addresses to open.
 
-- It listens on the machine's Tailscale address (`tailscale ip -4`), so only your
-  tailnet reaches it; when Tailscale does not answer it listens on 127.0.0.1 and
-  says so. `--bind 0.0.0.0` listens everywhere.
-- If ufw is installed and active, it allows the port on `tailscale0` only
-  (`ufw allow in on tailscale0 to any port 8080 proto tcp comment 'wiki-demo'`),
+### HTTPS, through `tailscale serve`
+
+The server listens on 127.0.0.1 only, and Tailscale serves it to your tailnet:
+the deploy runs, as you,
+
+```sh
+tailscale serve --bg http://127.0.0.1:8080
+```
+
+after which tailscaled answers `https://<machine>.<tailnet>.ts.net/` on port 443,
+terminating TLS with a Let's Encrypt certificate it fetches and renews itself, and
+proxies to the server. It is reachable from your tailnet only: the script never
+turns on Funnel, which would publish it on the internet. tailscaled keeps that
+configuration across restarts, so it is set once; every later deploy reads
+`tailscale serve status` and leaves it as it is when it already proxies to the
+port (a serve you set by hand for that port counts as the deployment's), moves it
+when the port changed, and leaves alone, saying so, anything else served at that
+address. The wiki's server runs with `--secure-cookies` behind it.
+
+Before the first deploy, once for the tailnet:
+
+- Turn on **MagicDNS** and **HTTPS Certificates** in the
+  [DNS settings](https://login.tailscale.com/admin/dns) of Tailscale's admin
+  console. Without them the deploy says which is off and serves plain HTTP, as
+  `--http` does, until a later run finds them on. The machine's name, as with any
+  publicly trusted certificate, is then written into the public Certificate
+  Transparency logs: `<machine>.<tailnet>.ts.net` is visible to anyone who looks,
+  though nothing behind it is reachable from outside the tailnet.
+- Let your user change Tailscale's configuration without sudo, once:
+  `sudo tailscale set --operator=$USER`. Otherwise the deploy cannot set the serve
+  itself; it prints the command to run as root
+  (`sudo tailscale serve --bg http://127.0.0.1:8080`) and the operator command, and
+  goes on, the wiki answering on 127.0.0.1 meanwhile. Run either, and the next
+  deploy finds the serve set. A Tailscale older than 1.52, whose `serve` command
+  had another form, gets that form printed instead (`tailscale serve https:443 /
+  http://127.0.0.1:8080`); upgrading is better.
+
+The first request to the address fetches the certificate, which can take a
+minute: the deploy tries for that long, then warns rather than fails (try
+`curl https://<machine>.<tailnet>.ts.net/` a little later). The service worker
+and "Install" (reading offline, above) need HTTPS, as a browser lets them in only
+on a secure page.
+
+`--http` serves plain HTTP instead, for a tailnet without HTTPS certificates: the
+server listens on the machine's Tailscale address (`tailscale ip -4`), without
+`--secure-cookies`, and is opened at `http://<tailscale address or MagicDNS
+name>:8080/`; a serve an earlier deploy set is turned off (`tailscale serve
+--https=443 off`). It is remembered like the other options, and `--https` goes
+back. `--bind` with any other address than 127.0.0.1 implies `--http`; `--bind
+0.0.0.0` listens everywhere.
+
+### What else it does
+
+- When Tailscale does not answer at all, it listens on 127.0.0.1 and says so.
+- With `--http`, if ufw is installed and active, it allows the port on `tailscale0`
+  only (`ufw allow in on tailscale0 to any port 8080 proto tcp comment 'wiki-demo'`),
   through `sudo -n`; when sudo needs a password it prints the commands for you to
-  run instead. `--no-firewall` leaves the firewall alone. Without ufw it changes
-  nothing: Tailscale's ACLs and the bind address already limit who can connect.
-  With nftables instead, add the rule yourself, for example
-  `sudo nft add rule inet filter input iifname "tailscale0" tcp dport 8080 accept`
-  (and the same in `/etc/nftables.conf` to keep it after a reboot).
+  run instead. Over HTTPS the port is on 127.0.0.1 and needs no rule, and the rule
+  of an earlier plain-HTTP deploy is deleted. `--no-firewall` leaves the firewall
+  alone. Without ufw it changes nothing: Tailscale's ACLs and the bind address
+  already limit who can connect. With nftables instead, add the rule yourself, for
+  example `sudo nft add rule inet filter input iifname "tailscale0" tcp dport 8080
+  accept` (and the same in `/etc/nftables.conf` to keep it after a reboot).
 - A user service stops when you log out and does not start at boot unless lingering
   is on for your user. It says whether it is; `sudo loginctl enable-linger $USER`
   (or `--enable-linger`) turns it on.
 - Running it again rebuilds and replaces the deployment: the old service stops
-  before its files are replaced, and when the port changes the old port's rule is
-  deleted and the new one added. Options not given are those of the previous run,
+  before its files are replaced, the serve stays as it is, and when the port
+  changes the serve (or with `--http` the firewall rule) moves to the new one. Options not given are those of the previous run,
   kept in `~/.config/wiki-demo/wiki-demo.state`; `--no-build` redeploys the last
   build as it is, for a quick change of port.
 - It only ever empties a directory it created (it leaves a `.wiki-demo-deployment`
@@ -174,15 +229,17 @@ open, `http://<tailscale address or MagicDNS name>:8080/`.
   can run side by side, each with its own `--dir` (default `~/NAME`) and port.
 
 `journalctl --user -u wiki-demo -f` shows the requests, one line each;
-`sh toolchain/deploy-local.sh --status` the deployment and its service. To take it
-down without deploying anything new:
+`sh toolchain/deploy-local.sh --status` the deployment, its serve and its service.
+To take it down without deploying anything new:
 
 ```sh
 sh toolchain/undeploy-local.sh              # or: npm run undeploy-local
 ```
 
-which stops and disables the service, removes its unit and closes the port it
-opened (as above, printing the commands when sudo needs a password), and keeps the
+which stops and disables the service, removes its unit, closes the port it
+opened (as above, printing the commands when sudo needs a password), turns its
+serve off (`tailscale serve --https=443 off`, when it still proxies to the
+deployment's port; printed for you to run when you may not), and keeps the
 files; `--purge` deletes them and the deployment's state as well (but for a server's
 `data/`, which `--purge-data` deletes too), `--name` picks the deployment. It needs no toolchain, and with nothing deployed it says so and
 succeeds. `sh toolchain/deploy-local.sh --stop` does the same.
@@ -228,8 +285,13 @@ before it has loaded anything, which then loads the route itself. The administra
 imports another's into it, merging rather than replacing (below).
 
 The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/app
---listen <tailscale address>:8080 --admin-listen 127.0.0.1:8081`, and checks that
-both listeners answer. `--server` and the ports are remembered for the next run,
+--listen 127.0.0.1:8080 --admin-listen 127.0.0.1:8081 --secure-cookies` behind
+`tailscale serve` (with `--http`, `--listen <tailscale address>:8080` and no
+`--secure-cookies`), and checks that both listeners and the HTTPS address answer.
+The admin listener is not served: it stays on this machine. When the
+administration's Server section has no public address yet, the deploy says to
+set it to the HTTPS one (and says so too when it holds another); it is a setting
+of the panel, not of the script. `--server` and the ports are remembered for the next run,
 like the other options; `--static` goes back to the demo.
 
 - **PDFs, optionally.** Pages export as Word, HTML, EPUB, PowerPoint and Beamer
@@ -320,8 +382,9 @@ like the other options; `--static` goes back to the demo.
   `--off` enables it) and takes away a second factor its user has lost
   (`users second-factor-remove LOGIN`). It is also how an installation whose
   administrators are all locked out is recovered. Sign in on the public address
-  with that login. Sessions last two weeks without use. Behind HTTPS, run the
-  server with `--secure-cookies`.
+  with that login. Sessions last two weeks without use. Behind HTTPS the server
+  must run with `--secure-cookies`, which the deploy script passes over HTTPS;
+  behind a proxy of your own, pass it yourself.
 - **Keeping an account safe.** The panel under a signed-in user's name lists
   where they are signed in (when, from which address, this browser marked),
   with "Sign out" for each other session and "Sign out everywhere"; sets up a
@@ -353,7 +416,7 @@ like the other options; `--static` goes back to the demo.
   change takes effect at once, with no deploy and no restart. The section has:
 
   - *the public address*, the wiki's address as people reach it
-    (`http://your-machine.tailnet.ts.net:8080/`, `https://wiki.example.org/`), which
+    (`https://your-machine.tailnet.ts.net/`, `https://wiki.example.org/`), which
     mailed links and the providers' redirect URIs start with; mail and providers need
     it;
   - *mail*: the SMTP server's host and port (587 is STARTTLS, 465 implicit TLS; "none"
@@ -436,8 +499,9 @@ like the other options; `--static` goes back to the demo.
   whoever administers it. Its "Activity" lists every change made to the
   administration (who, when, what, from where), and the Server section's
   "Status" the last twenty errors the server logged.
-- **Health and metrics.** `curl http://<address>:8080/healthz` (on either
-  listener, with no login) answers `{"status": "ok", "schemaVersion": …,
+- **Health and metrics.** `curl https://<machine>.<tailnet>.ts.net/healthz`, or
+  `http://127.0.0.1:8080/healthz` on the machine (on either listener, with no
+  login), answers `{"status": "ok", "schemaVersion": …,
   "lastBackupAgeSeconds": …}`; `curl http://127.0.0.1:8081/metrics` gives
   Prometheus its metrics (requests by route and status, latency, pages, users,
   sizes, the newest backup's age), on the admin listener only. `docs/api.md`
@@ -454,7 +518,10 @@ the server's administration imports it from there, or from the demo's export:
 1. Deploy the server with the demo's name and port (the defaults, as the demo was
    deployed), so that it serves the address the browser kept the demo's data for:
    `sh toolchain/deploy-local.sh --server`, and make yourself an administrator
-   with the console (above).
+   with the console (above). The address includes the scheme: a demo deployed
+   over plain HTTP (before HTTPS was the default, or with `--http`) kept its data
+   for `http://…:8080/`, which the HTTPS address does not reach, so deploy the
+   server with `--http` for the import, or export the demo first (below).
 2. In the browser you wrote the demo in, open the wiki at that address, sign in,
    then "Administration" in the header. Under "Wiki data", "Import this browser's demo
    data…" is offered when the demo left its wiki in this browser at this address.
@@ -478,7 +545,8 @@ the server's administration imports it from there, or from the demo's export:
 ### Testing the scripts
 
 The regression tests run both scripts against fakes of systemctl, loginctl, ufw,
-sudo, tailscale and cabal (whose `wiki-server` is a script) in a temporary home,
+sudo, tailscale (with `tailscale serve`), curl and cabal (whose `wiki-server` is a
+script) in a temporary home,
 start the installed server as the unit would, test the static server over HTTP,
 and run the same cases against the real `wiki-server` (`npm run build-native`
 first, or name one with `WIKI_SERVER`):

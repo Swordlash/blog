@@ -9,8 +9,12 @@
 #
 #   - a state file, $STATE_DIR/<name>.state, of key=value lines: the target
 #     directory, port and bind address, how the address was chosen, the
-#     port whose firewall rule this opened (empty when it opened none), and
-#     what is deployed (mode: static, or server with its admin_port);
+#     port whose firewall rule this opened (empty when it opened none),
+#     what is deployed (mode: static, or server with its admin_port), and
+#     how it is reached: https (yes, the default, or no for --http), and when
+#     HTTPS is in effect the MagicDNS name it is served on (https_host) and
+#     the port `tailscale serve` proxies that name to (serve_port), which is
+#     what undeploying turns off;
 #   - a target directory holding a marker file, .wiki-demo-deployment, which
 #     names the deployment: only a directory carrying it is ever emptied or
 #     deleted;
@@ -73,6 +77,9 @@ state_write() {
     printf 'rule_port=%s\n' "$rule_port"
     printf 'mode=%s\n' "${mode:-static}"
     printf 'admin_port=%s\n' "${admin_port:-}"
+    printf 'https=%s\n' "${https:-}"
+    printf 'https_host=%s\n' "${https_host:-}"
+    printf 'serve_port=%s\n' "${serve_port:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -219,12 +226,91 @@ firewall_close() {
   ufw_run delete allow in on "$TS_IFACE" to any port "$1" proto tcp
 }
 
+# HTTPS, through `tailscale serve`. tailscaled terminates TLS on the
+# machine's MagicDNS name, with a certificate it fetches from Let's Encrypt
+# and renews itself, and proxies to the deployment's listener on 127.0.0.1;
+# the name is reachable from the tailnet only (Funnel, which would publish
+# it on the internet, is never turned on here). The serve configuration is
+# kept by tailscaled across restarts, so a deploy sets it once and checks it
+# afterwards. Changing it needs root or tailscaled's operator
+# (`tailscale set --operator=USER`); the script never runs sudo for it, and
+# prints the command instead when it may not.
+
+# The root handler of the HTTPS server on port 443, from the text of
+# `tailscale serve status`: a block headed by `https://<name> (tailnet only)`
+# (or `(Funnel on)`; port 443 is left out of the header, any other port is
+# not), whose lines are `|-- <mount> <type> <target>`. Prints
+# "<type> <target> <tailnet|funnel>" for the mount /, or nothing.
+serve_root() {
+  awk '
+    /^[a-z+-]+:\/\// {
+      inblock = ($1 ~ /^https:\/\/[^:\/]+$/)
+      funnel = ($0 ~ /\(Funnel on\)/)
+      next
+    }
+    inblock && $1 == "|--" && $2 == "/" {
+      print $3, $4, (funnel ? "funnel" : "tailnet")
+      exit
+    }
+  '
+}
+
+# Reads the serve configuration into serve_type, serve_target and
+# serve_funnel (all empty when nothing is served at https://<name>/). Fails
+# when tailscale is missing or does not answer.
+serve_read() {
+  serve_type='' serve_target='' serve_funnel=''
+  command -v tailscale >/dev/null 2>&1 || return 1
+  serve_text=$(timeout 10 tailscale serve status </dev/null 2>/dev/null) || return 1
+  # shellcheck disable=SC2034 # serve_funnel is read by deploy-local.sh.
+  read -r serve_type serve_target serve_funnel <<EOF2
+$(printf '%s\n' "$serve_text" | serve_root)
+EOF2
+  return 0
+}
+
+# Whether https://<name>/ proxies to 127.0.0.1 on the given port, as
+# serve_read last found it.
+serve_proxies_to() {
+  [ "$serve_type" = proxy ] && { [ "$serve_target" = "http://127.0.0.1:$1" ] || [ "$serve_target" = "http://127.0.0.1:$1/" ]; }
+}
+
+# What to run when the user may not change the serve configuration: the
+# command as root, or, once, making the user tailscaled's operator, after
+# which the deploy does it itself.
+serve_rights_hint() {
+  printf '%s: run it as root:\n    sudo tailscale %s\n' "$PROG" "$1"
+  printf '%s: or let %s configure Tailscale without sudo, once, and run this again:\n    sudo tailscale set --operator=%s\n' "$PROG" "$(id -un)" "$(id -un)"
+}
+
+# Turn off the HTTPS server on 443 when it proxies to this deployment's port
+# (the deployment's serve, set by it or by hand as it asked), and leave it
+# alone otherwise. Never fails: what it cannot do it prints.
+serve_off() {
+  if ! serve_read; then
+    say "Tailscale does not answer, so cannot tell whether tailscale serve still proxies to 127.0.0.1:$1; if it does: tailscale serve --https=443 off"
+    return 0
+  fi
+  if ! serve_proxies_to "$1"; then
+    say "tailscale serve does not proxy to 127.0.0.1:$1: nothing of this deployment's to turn off"
+    return 0
+  fi
+  say "tailscale serve --https=443 off"
+  if serve_out=$(timeout 30 tailscale serve --https=443 off </dev/null 2>&1); then
+    say "turned tailscale serve off: https://<this machine>/ no longer proxies to 127.0.0.1:$1"
+  else
+    printf '%s\n' "$serve_out" | sed 's/^/    /' >&2
+    warn "could not turn tailscale serve off (see above)"
+    serve_rights_hint 'serve --https=443 off'
+  fi
+}
+
 # Take the deployment down: stop and disable the service, remove its unit,
-# and close the firewall rule it opened. With purge set, also delete the
-# target directory (only if it carries this deployment's marker) and the state
-# file, but for a server's data/ (and the marker beside it, so that the
-# directory is still known as this deployment's); purge_data deletes that
-# too. no_firewall leaves the firewall alone. Running it when nothing is
+# close the firewall rule it opened, and turn off its `tailscale serve`. With
+# purge set, also delete the target directory (only if it carries this
+# deployment's marker) and the state file, but for a server's data/ (and the
+# marker beside it, so that the directory is still known as this
+# deployment's); purge_data deletes that too. no_firewall leaves the firewall alone. Running it when nothing is
 # deployed says so and succeeds.
 undeploy() {
   if [ ! -f "$state_file" ] && [ ! -f "$unit_file" ]; then
@@ -248,6 +334,13 @@ undeploy() {
   rule_port=$(state_get rule_port)
   mode=$(state_get mode)
   admin_port=$(state_get admin_port)
+  https=$(state_get https)
+  https_host=$(state_get https_host)
+  serve_port=$(state_get serve_port)
+  if [ -n "$serve_port" ]; then
+    serve_off "$serve_port"
+    serve_port='' https_host=''
+  fi
   if [ -n "$rule_port" ]; then
     if [ -n "${no_firewall:-}" ]; then
       say "--no-firewall: leaving the firewall rule for port $rule_port as it is"
