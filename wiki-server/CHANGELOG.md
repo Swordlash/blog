@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Reading offline (WP4.17). A `.webmanifest` file is served as
+`application/manifest+json`. The service worker, `sw.js`, is one of the
+application's files at the place the wiki is served at, which is its scope, so
+it needs no `Service-Worker-Allowed` header, under the base path and the admin
+listener's `/admin/` alike.
+
 Observability (WP4.10). Migration `0009-audit-log.sql`: the `audit_log`
 table, one row for each write of the administration's (grants on spaces and
 of the wiki, a space made public, groups and members, accounts, the wiki's,

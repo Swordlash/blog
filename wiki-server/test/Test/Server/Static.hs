@@ -76,6 +76,17 @@ publicListener = describe "on the public listener" $ do
     leaked.status `shouldBe` 404
     bodyText leaked `shouldSatisfy` T.isInfixOf "<title>missing</title>"
 
+  it "serves the service worker, the manifest and the offline page as files, at the worker's scope" $ withRunning $ \r -> do
+    worker <- getUrl r (r.public <> "/sw.js")
+    (worker.status, header "Content-Type" worker, header "Cache-Control" worker) `shouldBe` (200, Just "text/javascript; charset=utf-8", Just "no-cache")
+    -- At the place the site is served at, which is the scope it asks for:
+    -- nothing has to allow it a wider one.
+    header "Service-Worker-Allowed" worker `shouldBe` Nothing
+    manifest <- getUrl r (r.public <> "/manifest.webmanifest")
+    (manifest.status, header "Content-Type" manifest) `shouldBe` (200, Just "application/manifest+json")
+    offline <- getUrl r (r.public <> "/offline.html")
+    (offline.status, bodyText offline) `shouldSatisfy` (\(s, b) -> s == 200 && "<base href=\"/\"><title>offline</title>" `T.isInfixOf` b)
+
   it "is the API's below api/v1, even where a file would be" $ withRunning $ \r -> do
     ok200 (getUrl r (r.public <> "/api/v1/info")) `shouldReturn` ServerInfo {name = "Wiki", apiVersion = 1}
 
@@ -91,6 +102,8 @@ adminListener = describe "on the admin listener" $ do
     (missing.status, bodyText missing) `shouldSatisfy` (\(s, b) -> s == 404 && "<base href=\"/admin/\"><title>missing</title>" `T.isInfixOf` b)
     wasm <- getUrlWith r (r.admin <> "/admin/app.wasm") [("Accept-Encoding", "br")]
     (wasm.status, header "Content-Encoding" wasm) `shouldBe` (200, Just "br")
+    -- The service worker too, whose scope is then /admin/.
+    (.status) <$> getUrl r (r.admin <> "/admin/sw.js") `shouldReturn` 200
 
   it "redirects its root and its place without the slash there, and nothing else" $ withRunning $ \r -> do
     for_ [("/", "/admin/"), ("/admin", "/admin/")] $ \(asked, target) -> do
@@ -109,6 +122,7 @@ basePath = describe "under a base path" $ do
       page <- getUrl r (r.public <> "/wiki/")
       bodyText page `shouldSatisfy` T.isInfixOf "<base href=\"/wiki/\"><title>front</title>"
       ok200 (getUrl r (r.public <> "/wiki/api/v1/info")) `shouldReturn` ServerInfo {name = "Wiki", apiVersion = 1}
+      (.status) <$> getUrl r (r.public <> "/wiki/sw.js") `shouldReturn` 200
       for_ [("/", "/wiki/"), ("/wiki", "/wiki/")] $ \(asked, target) -> do
         redirect <- getUrl r (r.public <> asked)
         (redirect.status, header "Location" redirect) `shouldBe` (302, Just target)

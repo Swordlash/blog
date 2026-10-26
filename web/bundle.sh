@@ -23,7 +23,13 @@
 #                    as published), which tikz.js runs, with the worker that
 #                    starts it (web/src/tikz-worker.js);
 #   islands.css      KaTeX's stylesheet and the islands' own (web/src/islands.css);
-#   fonts/           KaTeX's fonts, where islands.css's url()s point.
+#   fonts/           KaTeX's fonts, where islands.css's url()s point;
+#   wasi-shim.js     @bjorn3/browser_wasi_shim, which web/index.js starts the
+#                    program with, from node_modules rather than a CDN, so
+#                    that the page starts with no network;
+#   icon.svg, icons/ the wiki's icon and the manifest's PNGs drawn from it,
+#   sw.js            and the service worker, versioned by this build's files
+#                    (web/src/pwa.mjs, after everything else).
 #
 # toolchain/build-wasm.sh runs it into the page it builds, and the browser
 # test suite's wiki-app/test/web/bundle.sh into the test page.
@@ -88,3 +94,13 @@ npx esbuild web/src/islands.css \
   --loader:.woff2=file --loader:.woff=file --loader:.ttf=file \
   --asset-names='fonts/[name]' \
   --outfile="$out_dir/islands.css"
+
+# The WASI shim, one module (its package's dist/ is several), at the
+# version package-lock.json pins.
+npx esbuild node_modules/@bjorn3/browser_wasi_shim/dist/index.js \
+  --bundle --minify --format=esm --target=es2022 --log-level=warning \
+  --outfile="$out_dir/wasi-shim.js"
+
+# Last: the service worker's version is a hash of the files written above
+# (and of the page's own, which toolchain/build-wasm.sh copied first).
+node web/src/pwa.mjs "$out_dir"

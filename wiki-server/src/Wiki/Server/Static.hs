@@ -22,6 +22,13 @@
 -- * nothing outside the directory is ever served, a symbolic link that
 --   leads out of it included.
 --
+-- The service worker (@sw.js@, WP4.17 of docs/PLAN.md) is one of the
+-- files, at the place the site is served at, which is the scope it asks
+-- for: so it needs no @Service-Worker-Allowed@ header, under the public
+-- listener's base path and the admin listener's @\/admin\/@ alike. Like
+-- every file it is revalidated, which is how a browser finds a new build's
+-- worker.
+--
 -- What it does that the static server did not: every page is served with
 -- the @\<base href>@ of the place it is served at, and a build for the
 -- server (one with a @template.html@, which @wiki-app-prerender --server@
@@ -259,6 +266,8 @@ mediaType file = Map.findWithDefault "application/octet-stream" (map toLower (ta
         , (".mjs", "text/javascript; charset=utf-8")
         , (".css", "text/css; charset=utf-8")
         , (".json", "application/json")
+        , -- The wiki's web manifest, which a browser reads to install it.
+          (".webmanifest", "application/manifest+json")
         , (".map", "application/json")
         , (".wasm", "application/wasm")
         , (".svg", "image/svg+xml")

@@ -264,6 +264,7 @@ test-suite wiki-app-test
         Test.Import
         Test.Islands
         Test.Link
+        Test.Manifest
         Test.Route
         Test.Shell
     build-depends:

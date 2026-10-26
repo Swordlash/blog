@@ -12,6 +12,7 @@ import Test.Hydrate qualified as Hydrate
 import Test.Import qualified as Import
 import Test.Islands qualified as Islands
 import Test.Link qualified as Link
+import Test.Manifest qualified as Manifest
 import Test.Route qualified as Route
 import Test.Shell qualified as Shell
 
@@ -29,3 +30,4 @@ main = hspec $ do
   Blog.spec
   Hydrate.spec
   Import.spec
+  Manifest.spec

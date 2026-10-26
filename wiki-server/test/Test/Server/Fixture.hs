@@ -98,6 +98,9 @@ site =
   , ("tikzjax/core.dump.gz", "a dump, compressed")
   , ("tikzjax/core.dump.gz.br", "not to be used")
   , ("style.css", "body {}")
+  , ("sw.js", "self.addEventListener(\"fetch\", () => {});")
+  , ("manifest.webmanifest", "{\"name\": \"Wiki\", \"start_url\": \"./\"}")
+  , ("offline.html", "<!doctype html><html><head><title>offline</title></head><body>offline</body></html>")
   ]
 
 -- | The template a server's build has for the pages the server renders

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Offline - Wiki</title>
+    <!-- The wiki's offline page: what its service worker (web/src/sw.js)
+         shows, offline, for an address it has no copy of, with its base and
+         the list of the pages it has copies of filled in. -->
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="stylesheet" href="style.css">
+  </head>
+  <body>
+    <div id="app">
+      <div class="wiki wiki-offline">
+        <header class="wiki-header">
+          <a class="wiki-brand" href="./">Wiki</a>
+        </header>
+        <div class="wiki-body">
+          <main class="wiki-content">
+            <section class="offline-page">
+              <h1>This page is not available offline</h1>
+              <p>You are offline, and this page has not been read on this device, so there is no copy of it here. It will be there once the connection is back.</p>
+              <h2>Pages you can read offline</h2>
+              <ul class="offline-pages">
+        <!-- wiki-offline-pages -->
+              </ul>
+            </section>
+          </main>
+        </div>
+        <p class="offline-notice" role="alert">You are offline: the wiki cannot be reached until the connection is back.</p>
+      </div>
+    </div>
+  </body>
+</html>

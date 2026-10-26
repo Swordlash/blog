@@ -8,6 +8,12 @@
          over HTTP from the server that served this page, which
          wiki-app-prerender --server writes here. -->
     <meta name="wiki-backend" content="demo">
+    <!-- The wiki as an application that can be installed (web/manifest.webmanifest)
+         and read offline (web/src/sw.js, which index.js registers). -->
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <meta name="theme-color" content="#f6f8fa" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#151b23" media="(prefers-color-scheme: dark)">
     <link rel="stylesheet" href="./islands.css">
     <link rel="stylesheet" href="./style.css">
   </head>

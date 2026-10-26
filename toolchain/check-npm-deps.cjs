@@ -16,6 +16,9 @@ const packages = ["build-native", "test-native"].includes(target) ? [] : [
   ["highlight.js", ["highlight.js/lib/common", "highlight.js/lib/languages/haskell"]],
   ["mermaid", ["mermaid"]],
   ["fflate", ["fflate"]],
+  // The WASI shim web/index.js starts the program with, bundled as
+  // wasi-shim.js.
+  ["@bjorn3/browser_wasi_shim", ["@bjorn3/browser_wasi_shim"]],
   // The editor's CodeMirror (web/src/editor.js).
   ["@codemirror/state", ["@codemirror/state"]],
   ["@codemirror/view", ["@codemirror/view"]],
