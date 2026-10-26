@@ -149,6 +149,7 @@ search Input {context, text, space, subspaces} =
                 , space = (\c -> (\s -> s.id) <$> lastMay c) =<< chain
                 , includeSubspaces = subspaces
                 , limit = limitOf
+                , templates = False
                 }
 
 -- | Whether the page has to search again: for other words or another space,

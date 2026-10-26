@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Tables of contents and templates (WP4.15). Migration `0012-page-template.sql`
+adds `pages.template`; `PUT api/v1/pages/<id>/template` sets it, as whoever
+may edit the page (not a save: no version, `updated_at` unchanged; a
+space's home page cannot be one). A search leaves templates out unless it
+has `templates`, and `spaces/page-counts` does not count them. An import
+keeps the flag of a page it makes, and a page it replaces keeps its own.
+
 Reading offline (WP4.17). A `.webmanifest` file is served as
 `application/manifest+json`. The service worker, `sw.js`, is one of the
 application's files at the place the wiki is served at, which is its scope, so

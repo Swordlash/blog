@@ -63,12 +63,15 @@ spec = describe "Wiki.Api.Links" $ do
     searchUrl (searchQuery "mermaid diagrams") `shouldBe` "api/v1/search?q=mermaid%20diagrams&limit=50"
     searchUrl (narrow "x")
       `shouldBe` "api/v1/search?q=x&space=s1&only&limit=10"
+    searchUrl (searchQuery "agenda") {templates = True}
+      `shouldBe` "api/v1/search?q=agenda&limit=50&templates"
 
   it "reads a search's parameters as the query they came from" $ do
-    searchQueryOf (Just "x") (Just s) True (Just 10) `shouldBe` narrow "x"
-    searchQueryOf Nothing Nothing False Nothing `shouldBe` searchQuery ""
+    searchQueryOf (Just "x") (Just s) True (Just 10) False `shouldBe` narrow "x"
+    searchQueryOf Nothing Nothing False Nothing False `shouldBe` searchQuery ""
+    searchQueryOf (Just "agenda") Nothing False Nothing True `shouldBe` (searchQuery "agenda") {templates = True}
   where
     -- A search of one space alone, for ten hits at most.
-    narrow text = SearchQuery {text, space = Just (SpaceId "s1"), includeSubspaces = False, limit = 10}
+    narrow text = SearchQuery {text, space = Just (SpaceId "s1"), includeSubspaces = False, limit = 10, templates = False}
     attachment source name =
       Attachment {id = AttachmentId "a1", name, mediaType = "image/png", size = 1, source}

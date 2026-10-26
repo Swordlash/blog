@@ -145,7 +145,8 @@ genPage = do
   createdAt <- genUtcTime
   updatedAt <- genUtcTime
   position <- arbitrary
-  pure Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt, position}
+  template <- arbitrary
+  pure Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt, position, template}
 
 genUser :: Gen User
 genUser = do
@@ -216,7 +217,8 @@ genSearchQuery = do
   space <- oneof [pure Nothing, Just <$> genSpaceId]
   includeSubspaces <- arbitrary
   limit <- arbitrary
-  pure SearchQuery {text, space, includeSubspaces, limit}
+  templates <- arbitrary
+  pure SearchQuery {text, space, includeSubspaces, limit, templates}
 
 genSnippet :: Gen Snippet
 genSnippet = Snippet <$> listOf (Piece <$> genText <*> arbitrary)

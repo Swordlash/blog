@@ -91,7 +91,7 @@ anonymous = describe "for someone not signed in" $ do
     appIn space `shouldSatisfy` T.isInfixOf "Markdown guide"
     space `shouldSatisfy` T.isInfixOf "<title>Docs · Wiki</title>"
     -- A space opens at its home page, the tour, in a sidebar of its own.
-    appIn space `shouldSatisfy` T.isInfixOf "<h1 id=\"tour\">Tour</h1>"
+    appIn space `shouldSatisfy` T.isInfixOf "<h1 id=\"tour\">Tour<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#tour\"></a></h1>"
     appIn space `shouldSatisfy` T.isInfixOf "class=\"wiki-sidebar space-sidebar\""
     -- No other space in the sidebar (the tour links to the blog itself).
     appIn space `shouldNotSatisfy` T.isInfixOf "class=\"space-link\" href=\"/s/blog/\""

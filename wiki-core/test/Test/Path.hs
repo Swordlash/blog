@@ -50,6 +50,7 @@ page sp i s parent =
     , createdAt = epoch
     , updatedAt = epoch
     , position = 0
+    , template = False
     }
   where
     epoch = UTCTime (fromGregorian 2026 1 1) 0

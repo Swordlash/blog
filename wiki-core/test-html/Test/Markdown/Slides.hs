@@ -20,8 +20,8 @@ spec = describe "Slides.renderDeck" $ do
     let slides = rendered defaultOptions "## One\n\nFirst.\n\n::: notes\nSay it.\n:::\n\n---\n\n# Two\n\nSecond."
     length slides `shouldBe` 2
     for slides (\s -> (,,) <$> renderHtml s.title <*> renderHtml s.body <*> renderHtml s.notes)
-      `shouldReturn` [ ("<h2 id=\"one\">One</h2>", "<p>First.</p>", "<p>Say it.</p>")
-                     , ("<h1 id=\"two\">Two</h1>", "<p>Second.</p>", "")
+      `shouldReturn` [ ("<h2 id=\"one\">One<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#one\"></a></h2>", "<p>First.</p>", "<p>Say it.</p>")
+                     , ("<h1 id=\"two\">Two<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#two\"></a></h1>", "<p>Second.</p>", "")
                      ]
 
   it "gives the islands of every slide keys unique in the deck" $ do

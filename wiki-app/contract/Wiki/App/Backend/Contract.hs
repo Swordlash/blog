@@ -76,6 +76,7 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   creatingPages
   savingPages
   movingPages
+  templates
   deletingPages
   attachments
   searching
@@ -944,7 +945,7 @@ spacesFound run who q = Set.fromList . map fst <$> hitsFor run who q
 
 -- | A query for these words in a space, with or without its subspaces.
 inSpace :: SpaceId -> Bool -> Text -> SearchQuery
-inSpace sid includeSubspaces text = SearchQuery {text, space = Just sid, includeSubspaces, limit = 50}
+inSpace sid includeSubspaces text = SearchQuery {text, space = Just sid, includeSubspaces, limit = 50, templates = False}
 
 searching :: (MonadWiki m) => SpecWith (Fixture m)
 searching = describe "searchPages" $ do
@@ -987,6 +988,68 @@ searching = describe "searchPages" $ do
     void (run editor (savePage p.id p.updatedAt "Marsupials" "The wombat digs.") >>= ok)
     hitsFor run Anonymous (searchQuery "quokka") `shouldReturn` []
     hitsFor run Anonymous (searchQuery "wombat") `shouldReturn` [("blog", "Marsupials")]
+
+--------------------------------------------------------------------------------
+-- Templates
+
+templates :: (MonadWiki m) => SpecWith (Fixture m)
+templates = describe "setPageTemplate" $ do
+  it "makes a page a template and an ordinary page again, changing nothing else" $ \(Fixture run) -> do
+    diagrams <- pageAt run admin "docs" "markdown-guide/diagrams"
+    diagrams.template `shouldBe` False
+    made <- run admin (setPageTemplate diagrams.id True) >>= ok
+    (made.template, made.title, made.body, made.updatedAt, made.slug, made.parent) `shouldBe` (True, diagrams.title, diagrams.body, diagrams.updatedAt, diagrams.slug, diagrams.parent)
+    (\p -> p.template) <$> pageAt run Anonymous "docs" "markdown-guide/diagrams" `shouldReturn` True
+    docs <- spaceAt run admin "docs"
+    listed <- run Anonymous (listPages docs.id) >>= ok
+    [p.title | p <- listed, p.template] `shouldBe` ["Diagrams"]
+    -- No version is kept: it is not a save.
+    run admin (listVersions diagrams.id) >>= ok >>= (`shouldSatisfy` ((== 1) . length))
+    again <- run admin (setPageTemplate diagrams.id True) >>= ok
+    again.template `shouldBe` True
+    back <- run admin (setPageTemplate diagrams.id False) >>= ok
+    (back.template, back.updatedAt) `shouldBe` (False, diagrams.updatedAt)
+
+  it "keeps a save from an editor open on it working" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    p <- run editor (createPage blog.id Nothing "Agenda" "# {{title}}") >>= ok
+    _ <- run editor (setPageTemplate p.id True) >>= ok
+    saved <- run editor (savePage p.id p.updatedAt "Agenda" "# {{title}}\n\n## Items") >>= ok
+    saved.template `shouldBe` True
+
+  it "takes Edit on the page's space" $ \(Fixture run) -> do
+    hello <- pageAt run admin "blog" "hello-world"
+    tour <- pageAt run admin "docs" "tour"
+    run Anonymous (setPageTemplate hello.id True) >>= (`shouldFailWith` Forbidden)
+    run reader (setPageTemplate hello.id True) >>= (`shouldFailWith` Forbidden)
+    run editor (setPageTemplate tour.id True) >>= (`shouldFailWith` Forbidden)
+    void (run editor (setPageTemplate hello.id True) >>= ok)
+    run admin (setPageTemplate (PageId "no-such-page") True) >>= (`shouldFailWith` NotFound)
+
+  it "refuses to make a space's home page a template" $ \(Fixture run) -> do
+    tour <- pageAt run admin "docs" "tour"
+    run admin (setPageTemplate tour.id True) >>= shouldBeInvalid
+    (\p -> p.template) <$> pageAt run admin "docs" "tour" `shouldReturn` False
+    void (run admin (setPageTemplate tour.id False) >>= ok)
+
+  it "leaves templates out of a search that does not ask for them" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    p <- run editor (createPage blog.id Nothing "Marsupials" "The quokka smiles.") >>= ok
+    _ <- run editor (setPageTemplate p.id True) >>= ok
+    hitsFor run Anonymous (searchQuery "quokka") `shouldReturn` []
+    hitsFor run Anonymous (searchQuery "quokka") {templates = True} `shouldReturn` [("blog", "Marsupials")]
+    hitsFor run Anonymous (inSpace blog.id False "quokka") {templates = True} `shouldReturn` [("blog", "Marsupials")]
+    _ <- run editor (setPageTemplate p.id False) >>= ok
+    hitsFor run Anonymous (searchQuery "quokka") `shouldReturn` [("blog", "Marsupials")]
+
+  it "does not count templates among a space's pages" $ \(Fixture run) -> do
+    docs <- spaceAt run admin "docs"
+    counted <- run Anonymous pageCounts
+    diagrams <- pageAt run admin "docs" "markdown-guide/diagrams"
+    _ <- run admin (setPageTemplate diagrams.id True) >>= ok
+    recounted <- run Anonymous pageCounts
+    Map.lookup docs.id recounted `shouldBe` (subtract 1 <$> Map.lookup docs.id counted)
+    Map.delete docs.id recounted `shouldBe` Map.delete docs.id counted
 
 --------------------------------------------------------------------------------
 -- Drafts
@@ -1441,6 +1504,7 @@ neverThrown = describe "errors" $ do
           , void <$> createPage s Nothing "X" ""
           , void <$> savePage p hello.updatedAt "X" ""
           , void <$> movePage p s Nothing
+          , void <$> setPageTemplate p True
           , deletePage p
           , void <$> uploadAttachment p "x" "text/plain" ""
           , deleteAttachment (AttachmentId "no-such-attachment")

@@ -45,11 +45,38 @@ spec = describe "Markdown.Render" $ do
 
   describe "headings" $ do
     it "writes the level and the id" $
-      "## Getting started" `shows'` "<h2 id=\"getting-started\">Getting started</h2>"
+      "## Getting started" `shows'` "<h2 id=\"getting-started\">Getting started<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#getting-started\"></a></h2>"
     it "writes an id and classes given in braces" $
-      "# Intro {#start .lead}" `shows'` "<h1 class=\"lead\" id=\"start\">Intro</h1>"
+      "# Intro {#start .lead}" `shows'` "<h1 class=\"lead\" id=\"start\">Intro<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#start\"></a></h1>"
     it "writes no attribute other than id and class" $
-      "# Intro {onclick=\"x()\"}" `shows'` "<h1 id=\"intro\">Intro</h1>"
+      "# Intro {onclick=\"x()\"}" `shows'` "<h1 id=\"intro\">Intro<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#intro\"></a></h1>"
+
+    it "has no link to itself where the options say so" $
+      showsWith defaultOptions {headingAnchors = False} "## Getting started" "<h2 id=\"getting-started\">Getting started</h2>"
+    it "ends with an empty link to itself, which adds no text" $
+      "# Zażółć gęślą" `shows'` "<h1 id=\"zażółć-gęślą\">Zażółć gęślą<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#zażółć-gęślą\"></a></h1>"
+
+  describe "the table of contents" $ do
+    it "is [[toc]] as a nested list of links to the headings, where it is written" $
+      "[[toc]]\n\n# A\n\n## B\n\n# A"
+        `shows'` ( "<nav aria-label=\"Contents\" class=\"toc\"><p class=\"toc-title\">Contents</p>"
+                     <> "<ul class=\"toc-list\"><li><a href=\"#a\">A</a><ul class=\"toc-list\"><li><a href=\"#b\">B</a></li></ul></li>"
+                     <> "<li><a href=\"#a-2\">A</a></li></ul></nav>"
+                     <> "<h1 id=\"a\">A<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#a\"></a></h1><h2 id=\"b\">B<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#b\"></a></h2><h1 id=\"a-2\">A<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#a-2\"></a></h1>"
+                 )
+    it "lists a heading by its text without markup" $
+      "# The *big* run\n\n[[toc]]"
+        `shows'` ( "<h1 id=\"the-big-run\">The <em>big</em> run<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#the-big-run\"></a></h1>"
+                     <> "<nav aria-label=\"Contents\" class=\"toc\"><p class=\"toc-title\">Contents</p>"
+                     <> "<ul class=\"toc-list\"><li><a href=\"#the-big-run\">The big run</a></li></ul></nav>"
+                 )
+    it "is nothing in a page without headings" $
+      "Text.\n\n[[toc]]" `shows'` "<p>Text.</p>"
+    it "is the same list as the panel's" $ do
+      let doc = either (panic . show) identity (parseMarkdown "# A\n\n## B\n\n## C")
+      panel <- renderHtml @Empty [maybe (HH.text "") contentsList (contentsPanel doc)]
+      inline <- markdown "# A\n\n## B\n\n## C\n\n[[toc]]"
+      (panel `T.isInfixOf` inline) `shouldBe` True
 
   describe "lists" $ do
     it "writes a tight list's items without paragraphs" $

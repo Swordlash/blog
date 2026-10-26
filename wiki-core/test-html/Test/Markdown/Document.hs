@@ -26,8 +26,8 @@ spec = describe "docs/markdown.md" $ do
   it "renders, with the constructs it shows" $ do
     html <- markdown =<< T.readFile guidePath
     for_
-      [ "<h1 id=\"writing-pages\">Writing pages</h1>"
-      , "<h2 id=\"images-video-and-attachments\">Images, video and attachments</h2>"
+      [ "<h1 id=\"writing-pages\">Writing pages<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#writing-pages\"></a></h1>"
+      , "<h2 id=\"images-video-and-attachments\">Images, video and attachments<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#images-video-and-attachments\"></a></h2>"
       , "<a href=\"#headings\">Headings</a>"
       , "<a class=\"wikilink\" href=\"onboarding\">our onboarding</a>"
       , "<a href=\"https://example.com\" rel=\"noopener\" title=\"and a title\">with a label</a>"
@@ -91,3 +91,4 @@ kind = \case
   Alert {} -> "alert"
   Footnotes _ -> "footnotes"
   RawHtmlBlock _ -> "raw"
+  TableOfContents -> "toc"

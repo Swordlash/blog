@@ -129,6 +129,7 @@ spec = describe "golden JSON" $ do
     golden "new-page" NewPage {parent = Nothing, title = "Tour", body = "# Tour"}
     golden "page-edit" PageEdit {title = "Tour", body = "# Tour, again"}
     golden "page-move" PageMove {space = SpaceId "s2", parent = Just (PageId "p9")}
+    golden "page-template" PageTemplate {template = True}
     golden "new-thread" NewThread {anchor = Just Anchor {exact = "a diagram", prefix = "Here is ", suffix = " of the wiki."}, body = "Which **diagram**?"}
     golden "new-page-thread" NewThread {anchor = Nothing, body = "A good tour."}
     golden "comment-text" CommentText {body = "Agreed."}

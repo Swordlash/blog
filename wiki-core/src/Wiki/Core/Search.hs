@@ -13,8 +13,8 @@
 -- ('bodyText'): the Markdown's prose without its syntax, with the sources of
 -- its code, diagrams and formulas, which people search for as well.
 --
--- What a backend does with 'space' and 'includeSubspaces' it does before the
--- matcher sees the pages, since only it knows which pages are in which space
+-- What a backend does with 'space', 'includeSubspaces' and 'templates' it
+-- does before the matcher sees the pages, since only it knows which pages are in which space
 -- and which the user may view: 'searchPlain' is handed the pages already
 -- chosen, as 'Candidate's. A candidate carries its page's title and text
 -- already folded ('Searchable'), made once per version of the page rather
@@ -80,14 +80,19 @@ data SearchQuery = SearchQuery
   -- ^ With a 'space', its subspaces' pages too, at any depth.
   , limit :: Int
   -- ^ At most this many hits, the best first.
+  , templates :: Bool
+  -- ^ Whether the spaces' templates ('Wiki.Core.Page.template') are
+  -- searched too. They are not, unless this asks for them: a template is
+  -- the start of a page rather than a page to read, and its placeholders
+  -- would be found by every search for a meeting.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 -- | A query for these words in every space, for a list of the size a page of
--- results shows.
+-- results shows, without the templates.
 searchQuery :: Text -> SearchQuery
-searchQuery text = SearchQuery {text, space = Nothing, includeSubspaces = True, limit = 50}
+searchQuery text = SearchQuery {text, space = Nothing, includeSubspaces = True, limit = 50, templates = False}
 
 -- | The words of a query, folded as the text they are looked for in.
 queryWords :: SearchQuery -> [Text]
@@ -230,6 +235,8 @@ bodyText source =
       Alert _ bs -> blocks bs
       Footnotes notes -> T.intercalate "\n" [blocks bs | Footnote _ _ bs <- notes]
       RawHtmlBlock raw -> htmlText (parseHtml raw)
+      -- The list it stands for is the headings' text, found already.
+      TableOfContents -> ""
 
 -- | A text as it is compared: each character as 'foldLetter' folds it,
 -- ignoring case and diacritics.

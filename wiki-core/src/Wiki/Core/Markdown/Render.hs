@@ -33,7 +33,10 @@
 -- attachment of any other type a download link. A URL of an unknown type is
 -- an image, as in plain Markdown. An embedded page is a link to it.
 --
--- __Layout.__ Headings carry their @id@. Task list items start with a
+-- __Layout.__ Headings carry their @id@, and end with an empty link to
+-- it, @\<a class=\"heading-anchor\">@, which the stylesheet shows as a @#@
+-- on hover. @[[toc]]@ is the document's table of contents
+-- ("Wiki.Core.Markdown.Toc"), a @\<nav class=\"toc\">@. Task list items start with a
 -- disabled checkbox. Footnote references are @\<sup class=\"footnote-ref\">@
 -- links to @#fn-N@, and the notes are a @\<section class=\"footnotes\">@ at
 -- the end, each ending with a link back to its first reference. Table cells
@@ -67,6 +70,7 @@ import Protolude
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
+import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
 import Wiki.Core.Math (Macros (..), definesMacros)
 
 -- | What the renderer leaves to its caller.
@@ -98,6 +102,9 @@ data Options page w i = Options
   , resolveMention :: Text -> Maybe MentionTarget
   -- ^ Where a mention of a login leads, if it is a user's that the reader
   -- may be shown.
+  , headingAnchors :: Bool
+  -- ^ Whether a heading ends with its link to itself: in a page, but not
+  -- where nothing shows it (a feed, read without the stylesheet).
   }
 
 -- | Whom a mention names, as its link shows them.
@@ -137,6 +144,7 @@ defaultOptions =
     , resolveLink = defaultResolveLink
     , pageHref = identity
     , resolveMention = const Nothing
+    , headingAnchors = True
     }
 
 -- | What a destination is when nothing is known about the wiki: a URL, used
@@ -166,7 +174,9 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
     renderBlock = \case
       Para xs -> single . HH.p_ <$> renderInlines xs
       Plain xs -> renderInlines xs
-      Heading level attrs xs -> single . headingOf level (idAndClasses attrs []) <$> renderInlines xs
+      Heading level attrs xs -> do
+        inner <- renderInlines xs
+        pure [headingOf level (idAndClasses attrs []) (inner <> (if opts.headingAnchors then headingAnchor attrs else []))]
       ThematicBreak -> pure [HH.hr_]
       BlockQuote bs -> single . HH.blockquote_ <$> renderBlocks' bs
       CodeBlock _ lang code -> island code <&> \k -> [opts.codeBlock k lang code]
@@ -185,6 +195,11 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
       Footnotes notes ->
         single . HH.section [classesProp ["footnotes"]] . single . listOf (OrderedList (firstNote notes)) False <$> traverse renderNote notes
       RawHtmlBlock raw -> pure (renderRawHtml opts raw)
+      TableOfContents -> pure (contentsNav contents)
+
+    -- The table of contents a @[[toc]]@ shows: of the whole document, every
+    -- section of it.
+    contents = tableOfContents (concat sections)
 
     renderBlocks' :: [Block] -> R [HH.HTML w i]
     renderBlocks' bs = concat <$> traverse renderBlock bs
@@ -389,6 +404,18 @@ firstNote :: [Footnote] -> Int
 firstNote = \case
   Footnote n _ _ : _ -> n
   [] -> 1
+
+-- | The link to a heading that its heading ends with, shown on hover (see
+-- @web/style.css@): an empty @\<a class="heading-anchor">@ whose @#@ the
+-- stylesheet draws, so that the page's text (what a comment quotes,
+-- "Wiki.Core.Anchor", and what a search finds) has no @#@ after every
+-- heading. Following it puts the heading's address in the address bar.
+headingAnchor :: Attributes -> [HH.HTML w i]
+headingAnchor attrs =
+  [ HH.a [HP.href ("#" <> ident), classesProp ["heading-anchor"], HP.attr (HH.AttrName "aria-label") "Link to this section"] []
+  | Just ident <- [attribute "id" attrs]
+  , not (T.null ident)
+  ]
 
 isTask :: ListItem -> Bool
 isTask (ListItem task _) = isJust task

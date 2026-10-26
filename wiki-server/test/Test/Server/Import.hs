@@ -99,6 +99,7 @@ pageWith i s parent sl body position attachments =
     , createdAt = time
     , updatedAt = time
     , position
+    , template = False
     }
 
 -- | An attachment kept in an archive, under a blob of the archive's own.

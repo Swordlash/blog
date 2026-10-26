@@ -207,6 +207,9 @@ data PageNode = PageNode
   , slug :: Slug
   , createdAt :: UTCTime
   , position :: Int
+  , template :: Bool
+  -- ^ Whether it is one of its space's templates: what a search that does
+  -- not ask for them leaves out.
   }
 
 instance TreeNode PageNode where
@@ -221,7 +224,7 @@ instance Sibling PageNode where
   siblingPosition p = p.position
 
 nodeColumns :: Text
-nodeColumns = "id, space_id, parent, title, slug, created_at, position"
+nodeColumns = "id, space_id, parent, title, slug, created_at, position, template"
 
 nodeRow :: RowParser PageNode
 nodeRow = do
@@ -232,7 +235,8 @@ nodeRow = do
   slug <- slugField
   createdAt <- stamp
   position <- field
-  pure PageNode {id, space, parent, title, slug, createdAt, position}
+  template <- field
+  pure PageNode {id, space, parent, title, slug, createdAt, position, template}
 
 -- | The pages of a space, as nodes.
 pageNodes :: Connection -> SpaceId -> IO [PageNode]
@@ -345,7 +349,7 @@ loadMembership c = do
   pure (Map.fromListWith (<>) [(GroupId g, Set.singleton (UserId u)) | (g, u) <- rows])
 
 pageColumns :: Text
-pageColumns = "id, space_id, parent, title, slug, body, created_at, updated_at, position"
+pageColumns = "id, space_id, parent, title, slug, body, created_at, updated_at, position, template"
 
 -- | A page's row, waiting for its attachments.
 pageRow :: RowParser ([Attachment] -> Page)
@@ -359,7 +363,8 @@ pageRow = do
   createdAt <- stamp
   updatedAt <- stamp
   position <- field
-  pure (\attachments -> Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt, position})
+  template <- field
+  pure (\attachments -> Page {id, space, parent, title, slug, body, attachments, createdAt, updatedAt, position, template})
 
 attachmentColumns :: Text
 attachmentColumns = "a.id, a.name, a.media_type, a.size, a.url, a.blob"
@@ -584,7 +589,7 @@ insertPage :: Connection -> Page -> IO ()
 insertPage c p =
   execute
     c
-    (sql ("INSERT INTO pages (" <> pageColumns <> ", search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
+    (sql ("INSERT INTO pages (" <> pageColumns <> ", search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
     [ toField p.id.text
     , toField p.space.text
     , toField (fmap (\x -> x.text) p.parent)
@@ -594,6 +599,7 @@ insertPage c p =
     , toField (Stamp p.createdAt)
     , toField (Stamp p.updatedAt)
     , toField p.position
+    , toField p.template
     , toField (bodyText p.body)
     ]
 

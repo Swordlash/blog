@@ -29,6 +29,7 @@ module Wiki.Api.Types
   , NewPage (..)
   , PageEdit (..)
   , PageMove (..)
+  , PageTemplate (..)
 
     -- * Either
   , ShiftBy (..)
@@ -157,6 +158,11 @@ data PageMove = PageMove
   -- ^ The page of that space to put it under, or 'Nothing' for its top
   -- level.
   }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | Whether a page is one of its space's templates: @setPageTemplate@.
+newtype PageTemplate = PageTemplate {template :: Bool}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 

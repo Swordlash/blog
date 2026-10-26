@@ -18,6 +18,7 @@
   "position": 2,
   "slug": "tour",
   "space": "s1",
+  "template": false,
   "title": "Tour",
   "updatedAt": "2026-10-24T09:30:12.345678Z"
 }

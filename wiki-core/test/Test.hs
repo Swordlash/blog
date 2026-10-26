@@ -14,6 +14,7 @@ import Test.Markdown.Edit qualified as Edit
 import Test.Markdown.Link qualified as Link
 import Test.Markdown.Mention qualified as Mention
 import Test.Markdown.Tikz qualified as Tikz
+import Test.Markdown.Toc qualified as Toc
 import Test.Math qualified as Math
 import Test.Notification qualified as Notification
 import Test.Order qualified as Order
@@ -24,6 +25,7 @@ import Test.Search qualified as Search
 import Test.Slides qualified as Slides
 import Test.Slug qualified as Slug
 import Test.Space qualified as Space
+import Test.Template qualified as Template
 
 main :: IO ()
 main = hspec $ do
@@ -49,3 +51,5 @@ main = hspec $ do
   Notification.spec
   Space.spec
   Blog.spec
+  Toc.spec
+  Template.spec

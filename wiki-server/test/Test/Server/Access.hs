@@ -142,7 +142,7 @@ closed :: Spec
 closed = describe "a closed wiki" $ do
   it "answers someone not signed in 401 on the API, but for what signing in needs" $ withDemoRunning identity $ \r -> do
     closeWiki r
-    for_ [links.spaces.list, links.spaces.atPath [], links.search (Just "tour") Nothing False Nothing, links.admin.directory] $ \address ->
+    for_ [links.spaces.list, links.spaces.atPath [], links.search (Just "tour") Nothing False Nothing False, links.admin.directory] $ \address ->
       (getUrl r (onPublic r address) >>= jsonAs 401) `shouldReturn` Unauthenticated
     _ <- getUrl r (onPublic r links.info) >>= jsonAs @Value 200
     me <- sessionOf r []

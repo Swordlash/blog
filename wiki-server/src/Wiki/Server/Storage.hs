@@ -629,6 +629,7 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   createPage sid parent title = run Writes . createPageTx sid parent title
   savePage pid base title = saving . savePageTx pid base title
   movePage pid sid = run Writes . movePageTx pid sid
+  setPageTemplate pid = run Writes . setPageTemplateTx pid
   deletePage = run Writes . deletePageTx
   uploadAttachment pid name mediaType = run Writes . uploadAttachmentTx pid name mediaType
   deleteAttachment = run Writes . deleteAttachmentTx
@@ -914,11 +915,12 @@ listSpacesTx = do
       listed = Set.fromList (map (\s -> s.id) (concat visible))
   pure (spaceTreeOrder (Map.elems (Map.restrictKeys ctx.spaces listed)))
 
--- | How many pages each space the asker may view has.
+-- | How many pages each space the asker may view has, its templates not
+-- counted.
 pageCountsTx :: Tx (Map SpaceId Int)
 pageCountsTx = do
   ctx <- ask
-  counted <- db (\c -> query_ c "SELECT space_id, count(*) FROM pages GROUP BY space_id")
+  counted <- db (\c -> query_ c "SELECT space_id, count(*) FROM pages WHERE template = 0 GROUP BY space_id")
   let byId = Map.fromList [(SpaceId sid, n) | (sid, n) <- counted]
   pure
     ( Map.fromList
@@ -995,6 +997,7 @@ searchPagesTx q = do
         , text = Searchable {title = folded r.node.title, body = folded r.text}
         }
     | r <- rows
+    , q.templates || not r.node.template
     , Just c <- [Map.lookup r.node.space searched]
     , Just pagePath <- [pathOf (`Map.lookup` nodes) r.node.id]
     ]
@@ -1046,6 +1049,7 @@ createSpaceTx parent name = do
           , createdAt = time
           , updatedAt = time
           , position = 0
+          , template = False
           }
       withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False} space
   author <- asks (\x -> x.author)
@@ -1340,6 +1344,7 @@ createPageTx sid parent title body = do
           , createdAt = time
           , updatedAt = time
           , position = nextPosition (childrenOf nodes parent)
+          , template = False
           }
   author <- asks (\x -> x.author)
   db $ \x -> insertPage x page >> insertVersion x page author
@@ -1374,6 +1379,7 @@ savePageTx pid base title body = do
           , createdAt = p.createdAt
           , updatedAt
           , position = p.position
+          , template = p.template
           }
   author <- asks (\x -> x.author)
   db $ \c -> do
@@ -1426,6 +1432,18 @@ movePageTx pid destination parent = do
     when (destination /= p.space) $
       for_ subtree $
         \q -> execute c "UPDATE spaces SET home_page = NULL WHERE home_page = ?" (Only q.text)
+  findPage pid
+
+-- | Make a page one of its space's templates, or not. Not a save: nothing
+-- else of the page changes, and no version is kept.
+setPageTemplateTx :: PageId -> Bool -> Tx Page
+setPageTemplateTx pid template = do
+  p <- findNode pid
+  (s, c) <- findSpace p.space
+  requireEdit c
+  when (template && s.homePage == Just pid) $
+    invalid "A space's home page cannot be a template."
+  db $ \conn -> execute conn "UPDATE pages SET template = ? WHERE id = ?" (template, pid.text)
   findPage pid
 
 -- | Delete a page: the pages under it, and the versions, attachments and

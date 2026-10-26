@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Tables of contents and templates (WP4.15). A page's JSON carries
+`template`; `PagesApi` gains `template` (`PUT pages/<id>/template` with
+`PageTemplate {"template": bool}`), and the search a `templates` flag, so
+that `searchQueryOf` takes one more argument.
+
 Observability (WP4.10). `Wiki.Api.Activity` (`Activity`, `ActivityQuery`,
 `firstPage`, `activityPageSize`) and `AdminApi.activity` (`GET
 admin/activity?actor=&offset=`); `ServerStatus` gains `schemaVersion`,

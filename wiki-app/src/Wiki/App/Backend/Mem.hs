@@ -189,6 +189,7 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   createPage sid parent title body = writeAt (createPageIn sid parent title body)
   savePage pid base title body = writeAt (savePageIn pid base title body)
   movePage pid sid = write . movePageIn pid sid
+  setPageTemplate pid = write . setPageTemplateIn pid
   deletePage = write . deletePageIn
   uploadAttachment pid name mediaType = write . uploadAttachmentIn pid name mediaType
   deleteAttachment aid = do

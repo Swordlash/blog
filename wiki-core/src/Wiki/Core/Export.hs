@@ -475,7 +475,8 @@ spaceCreatedDefault fallback pages sid = Map.findWithDefault fallback sid earlie
 -- page, @body@ empty if missing, @updatedAt@ the creation if missing.
 -- @position@, among its siblings by hand, was added after version 1 was
 -- first written (an additive field): 0 if missing, and written only when it
--- is not.
+-- is not. @template@, whether the page is one of its space's templates, is
+-- another (WP4.15): false if missing, and written only when true.
 encodePage :: Page -> Value
 encodePage p =
   object $
@@ -489,6 +490,7 @@ encodePage p =
     , "updatedAt" .= p.updatedAt
     ]
       <> ["position" .= p.position | p.position /= 0]
+      <> ["template" .= True | p.template]
 
 -- | A page read back, with no attachments yet.
 parsePage :: Value -> Parser Page
@@ -502,7 +504,8 @@ parsePage = withObject "page" $ \o -> do
   createdAt <- o .: "createdAt"
   updatedAt <- o .:? "updatedAt" .!= createdAt
   position <- o .:? "position" .!= 0
-  pure Page {id, space, parent, title, slug, body, attachments = [], createdAt, updatedAt, position}
+  template <- o .:? "template" .!= False
+  pure Page {id, space, parent, title, slug, body, attachments = [], createdAt, updatedAt, position, template}
 
 -- | An attachment's record as it was read: the page it is attached to, the
 -- attachment, and the file of the archive its bytes are in, if it names

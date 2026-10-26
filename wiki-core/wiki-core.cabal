@@ -8,6 +8,8 @@ maintainer:         mateusz.goslinowski@gmail.com
 category:           Web
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
+-- The built-in templates (Wiki.Core.Template), embedded when it is compiled.
+extra-source-files: templates/*.md
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built
 -- with (cabal.project makes them errors) and the extensions its code assumes.
@@ -70,6 +72,7 @@ library
       Wiki.Core.Markdown.Render
       Wiki.Core.Markdown.TexMath
       Wiki.Core.Markdown.Tikz
+      Wiki.Core.Markdown.Toc
       Wiki.Core.Math
       Wiki.Core.Notification
       Wiki.Core.Order
@@ -80,8 +83,11 @@ library
       Wiki.Core.Slides
       Wiki.Core.Slug
       Wiki.Core.Space
+      Wiki.Core.Template
       Wiki.Core.User
       Wiki.Core.Version
+  other-modules:
+      Wiki.Core.Template.Embed
   build-depends:
       aeson,
       array,
@@ -96,6 +102,7 @@ library
       protolude,
       row-types,
       tagsoup >= 0.14.8 && < 0.15,
+      template-haskell,
       text,
       time
 
@@ -126,6 +133,7 @@ test-suite wiki-core-test
       Test.Markdown.Link
       Test.Markdown.Mention
       Test.Markdown.Tikz
+      Test.Markdown.Toc
       Test.Math
       Test.Notification
       Test.Order
@@ -136,6 +144,7 @@ test-suite wiki-core-test
       Test.Slides
       Test.Slug
       Test.Space
+      Test.Template
   build-depends:
       QuickCheck,
       aeson,

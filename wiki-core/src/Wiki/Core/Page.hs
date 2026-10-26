@@ -3,6 +3,8 @@
 -- | Pages: Markdown in a tree within a space.
 module Wiki.Core.Page
   ( Page (..)
+  , treePages
+  , templatePages
   , childPages
   , positionPage
   , pageTreeOrder
@@ -10,6 +12,7 @@ module Wiki.Core.Page
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Attachment (Attachment)
@@ -42,6 +45,12 @@ data Page = Page
   , position :: Int
   -- ^ Where it was put among its siblings by hand, for a space that orders
   -- its pages 'Wiki.Core.Order.ByHand'.
+  , template :: Bool
+  -- ^ Whether it is one of its space's templates ("Wiki.Core.Template"):
+  -- a page like any other (it has a history, comments and the space's
+  -- permissions), listed under the space's "Templates" rather than in its
+  -- tree, left out of a search that does not ask for templates, and
+  -- offered as the start of a new page.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -56,6 +65,19 @@ instance Sibling Page where
   siblingName p = p.title
   siblingCreatedAt p = p.createdAt
   siblingPosition p = p.position
+
+-- | The pages a space's tree shows: all but its templates, which are
+-- listed apart ('templatePages'). A page under a template is a template's
+-- part and is left out with it.
+treePages :: [Page] -> [Page]
+treePages pages = [p | p <- pages, not (underTemplate p)]
+  where
+    byId = Map.fromList [(p.id, p) | p <- pages]
+    underTemplate p = p.template || maybe False underTemplate (p.parent >>= (`Map.lookup` byId))
+
+-- | A space's templates, among its pages, by title.
+templatePages :: [Page] -> [Page]
+templatePages pages = sortOn (\p -> p.title) [p | p <- pages, p.template]
 
 -- | The pages under a page ('Nothing' for the space's top level), among the
 -- pages of its space, in the space's page order

@@ -196,6 +196,8 @@ postHtml base spaces space pages p = case Md.parseMarkdown p.body of
       Md.defaultOptions
         { Md.resolveLink = resolve
         , Md.pageHref = \(PageLink r fragment) -> addressOf base (Duplex.print route r) <> fragment
+        , -- A feed reader has no stylesheet to show them on hover.
+          Md.headingAnchors = False
         }
     resolve destination = case Md.classifyDestination destination of
       Md.ToAttachment name -> case findAttachment name p.attachments of

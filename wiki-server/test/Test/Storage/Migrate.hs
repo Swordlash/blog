@@ -199,6 +199,20 @@ spec = describe "migrations" $ do
       execute_ c "DELETE FROM users WHERE id = 'user-1'"
       query_ c "SELECT (SELECT count(*) FROM watches) + (SELECT count(*) FROM notifications)" `shouldReturn` [Only (0 :: Int)]
 
+  it "bring a database up to templates: no page is one, and a page is one or not" $
+    withFreshDatabase $ \_ c -> do
+      -- Found by its name, as the blog's step is.
+      step <- maybe (assertFailure "no migration adds the template flag") pure (find (\m -> "page-template" `T.isInfixOf` m.name) migrations)
+      let earlier = takeWhile (\m -> m.version < step.version) migrations
+      applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
+      execute_ c "INSERT INTO spaces (id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order) VALUES ('s1', NULL, 'S', 's', 0, '', 'now', 0, 'name', 'name')"
+      execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('p1', 's1', NULL, 'P', 'p', '', 'now', 'now', 0, '')"
+      migrate c `shouldReturn` [step.version .. length migrations]
+      query_ c "SELECT template FROM pages" `shouldReturn` [Only False]
+      execute_ c "UPDATE pages SET template = 1"
+      query_ c "SELECT template FROM pages" `shouldReturn` [Only True]
+      (try (execute_ c "UPDATE pages SET template = 2") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
+
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do
       _ <- migrate c

@@ -15,6 +15,10 @@ module Wiki.Core.Slug
   , slugify
   , freshSlug
   , foldLetter
+
+    -- * Headings
+  , headingSlug
+  , freshName
   )
 where
 
@@ -170,3 +174,41 @@ freshSlug taken base
     go n =
       let candidate = Slug (slugText base <> "-" <> show n)
        in if taken candidate then go (n + 1) else candidate
+
+--------------------------------------------------------------------------------
+-- Headings
+
+-- | The @id@ a heading of a page gets from its text, which a link to a part
+-- of the page names after the @#@ (@\/s\/docs\/p\/tour\/#getting-started@).
+--
+-- Not a 'Slug': a heading's id is only ever read in the page it is in, never
+-- typed into a path or a file name, so it keeps the letters of every script
+-- as they are written rather than folding them to ASCII ('slugify'), and
+-- @Zażółć gęślą@ is @zażółć-gęślą@, as GitHub and pandoc write it. The text
+-- is lowercased; letters, digits, combining marks, @-@ and @_@ are kept;
+-- white space becomes a dash; everything else (punctuation, symbols,
+-- emoji) is dropped; and dashes are collapsed and trimmed, so that
+-- @A – B@ is @a-b@. A heading with nothing of that is @section@.
+--
+-- Every renderer gets a heading's id from the parsed document
+-- ("Wiki.Core.Markdown.Ast"), which uses this one function, so the editor's
+-- preview, the page, the prerender and the server's render give a heading
+-- the same id, and a link to it holds in all of them.
+headingSlug :: Text -> Text
+headingSlug heading = case T.intercalate "-" (filter (not . T.null) (T.split (== '-') kept)) of
+  "" -> "section"
+  ident -> ident
+  where
+    kept = T.concatMap keep (T.toLower heading)
+    keep c
+      | isAlphaNum c || isMark c || c == '_' = T.singleton c
+      | isSpace c || c == '-' = "-"
+      | otherwise = ""
+
+-- | The name itself if it is free, and otherwise the first of @name-2@,
+-- @name-3@, … that is, as 'freshSlug' makes a slug free: how a heading
+-- whose id an earlier one has already taken is told apart from it.
+freshName :: (Text -> Bool) -> Text -> Text
+freshName taken base
+  | not (taken base) = base
+  | otherwise = fromMaybe base (find (not . taken) [base <> "-" <> show n | n <- [2 :: Int ..]])

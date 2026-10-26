@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+Tables of contents and templates (WP4.15). Every heading gets its `id` from
+`Wiki.Core.Slug.headingSlug` (lower case, letters of every alphabet kept,
+punctuation and symbols dropped, white space a dash, `section` when nothing
+is left), made unique in document order with `-2`, `-3`… (`freshName`),
+clear of every id written in braces, in one pass at parse time: it replaces
+commonmark-extensions' `autoIdentifiersSpec`, so the second of two headings
+with the same text is now `x-2` where it was `x-1`. A heading renders with an
+empty `<a class="heading-anchor" href="#id">` at its end. `[[toc]]` as a
+paragraph of its own parses as the new block `TableOfContents` and renders as
+a `<nav class="toc">` of the document's headings; `Wiki.Core.Markdown.Toc`
+makes that list from the parsed document (`tableOfContents`,
+`contentsPanel`, `contentsList`). `Page` gains `template`, which the export
+writes as an additive field (`"template": true`, false when missing), and
+`Wiki.Core.Page` `treePages` and `templatePages`; a template is no post of a
+blog. `SearchQuery` gains `templates`, false in `searchQuery`.
+`Wiki.Core.Template`: the built-in templates (meeting notes, a decision
+record, a how-to guide), Markdown files under `templates/` embedded when the
+package is compiled, and `fillTemplate`, which fills `{{title}}`,
+`{{date}}` and `{{author}}` in one pass.
+
 Observability (WP4.10). `Wiki.Core.Audit`: an audit log's entry (who, when,
 what, to what, what changed, from where) and its record; an `Archive` gains
 `audit`, written as `audit.json` when it has entries and read as none when

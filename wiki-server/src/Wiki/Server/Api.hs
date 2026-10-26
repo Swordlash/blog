@@ -460,6 +460,7 @@ handlers env caller =
           { save = \p version edit -> versioned <$> wiki (savePage p version.time edit.title edit.body)
           , move = \p body -> wiki (movePage p body.space body.parent)
           , shift = \p body -> wiki (shiftPage p body.shift)
+          , template = \p body -> wiki (setPageTemplate p body.template)
           , delete = \p -> wiki (deletePage p) $> NoContent
           , upload = \p u -> wiki (uploadAttachment p u.name u.mediaType (BSL.toStrict u.bytes))
           , draft = wiki . getDraft
@@ -475,10 +476,10 @@ handlers env caller =
           { delete = \a -> wiki (deleteAttachment a) $> NoContent
           , content = \a name request respond -> liftIO (attachmentContent env caller.who a name request respond)
           }
-    , search = \q space only limit ->
+    , search = \q space only limit templates ->
         -- At most 200 hits, whatever is asked: the search box asks for a
         -- few, and the results page for 50.
-        ask' (searchPages (clampLimit (searchQueryOf q space only limit)))
+        ask' (searchPages (clampLimit (searchQueryOf q space only limit templates)))
     , archive =
         ArchiveApi
           { export = do

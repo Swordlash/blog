@@ -31,9 +31,19 @@ A line of three dashes is a thematic break:
 
 Every heading gets an `id` made from its text, so that a link can point at
 it: this section is `#headings`, and a link to it is
-[Headings](#headings). Two headings with the same text get `-1`, `-2`
-added. To choose the `id` yourself, put it in braces after the heading:
-`## Setup {#install}`.
+[Headings](#headings). The `id` is the text in lower case, with spaces
+made dashes and punctuation left out; letters of every alphabet stay as
+they are, so `## Zażółć gęślą` is `#zażółć-gęślą`. A second heading with
+the same text gets `-2` added, a third `-3`, and so on down the page. To
+choose the `id` yourself, put it in braces after the heading:
+`## Setup {#install}`. Pointing at a heading shows a `#` after it, a link
+to it: follow it, and the address bar has the heading's address, to copy
+and pass on.
+
+A page with three headings or more has a "Contents" panel beside it (above
+it on a narrow screen), which lists them and marks the section being read.
+To put the list in the page instead, write `[[toc]]` on a line of its own
+where it should go; the panel is then not shown.
 
 ## Lists
 

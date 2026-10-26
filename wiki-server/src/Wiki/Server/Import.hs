@@ -342,6 +342,7 @@ importPage c blobs a choices spacePath target progress pm
                   , createdAt = theirs.createdAt
                   , updatedAt
                   , position = theirs.position
+                  , template = theirs.template
                   }
           execute
             c
@@ -367,6 +368,7 @@ importPage c blobs a choices spacePath target progress pm
               , createdAt = pm.archived.createdAt
               , updatedAt = pm.archived.updatedAt
               , position = maybe 0 fromOnly (head siblings)
+              , template = pm.archived.template
               }
       insertPage c page
       insertVersion c page Nothing

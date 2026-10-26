@@ -350,7 +350,7 @@ listShown st = st.open && not (T.null (T.strip st.text))
 
 -- | The query for what the box holds.
 queryOf :: State -> SearchQuery
-queryOf st = SearchQuery {text = st.text, space = st.space, includeSubspaces = st.subspaces, limit = shown}
+queryOf st = SearchQuery {text = st.text, space = st.space, includeSubspaces = st.subspaces, limit = shown, templates = False}
 
 -- | The page of all results for what the box holds.
 resultsRoute :: State -> Route

@@ -92,7 +92,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
   it "shows a page with its breadcrumbs, its page tree and its islands as their sources" $ do
     Rendered {html, title} <- render (as Nothing) (Page (slugs ["docs"]) (slugs ["markdown-guide", "mathematics"]))
     title `shouldBe` "Mathematics · Markdown guide · Wiki"
-    html `contains` "<h1 id=\"mathematics\">Mathematics</h1>"
+    html `contains` "<h1 id=\"mathematics\">Mathematics<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#mathematics\"></a></h1>"
     html `contains` "<span aria-current=\"page\">Mathematics</span>"
     html `contains` "<a href=\"/s/docs/p/markdown-guide/\">Markdown guide</a>"
     html `contains` "<span class=\"wiki-math wiki-math-inline\">"
@@ -128,7 +128,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
   it "opens a space at its home page, in the space's sidebar" $ do
     Rendered {html, title} <- render (as (Just "user-admin")) (Space (slugs ["team"]))
     title `shouldBe` "Team · Wiki"
-    html `contains` "<h1 id=\"team-handbook\">Team handbook</h1>"
+    html `contains` "<h1 id=\"team-handbook\">Team handbook<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#team-handbook\"></a></h1>"
     html `contains` "<nav aria-label=\"Space\" class=\"wiki-sidebar space-sidebar\">"
     html `contains` "<a aria-current=\"page\" class=\"sidebar-space\" href=\"/s/team/\"><span aria-hidden=\"true\" class=\"space-icon space-icon-emoji\">🧭</span><span class=\"sidebar-space-name\">Team</span></a>"
     html `contains` "<a class=\"space-pages-link\" href=\"/s/team/pages/\">Pages and settings</a>"
@@ -142,7 +142,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
   it "opens a subspace with the way up to the space it is in" $ do
     Rendered {html} <- render (as (Just "user-admin")) (Space (slugs ["team", "projects"]))
     html `contains` "<a class=\"sidebar-up\" href=\"/s/team/\">Up to Team</a>"
-    html `contains` "<h1 id=\"the-wiki\">The wiki</h1>"
+    html `contains` "<h1 id=\"the-wiki\">The wiki<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#the-wiki\"></a></h1>"
     html `contains` "<span aria-hidden=\"true\" class=\"space-icon space-icon-teal\">P</span>"
     Rendered {html = asReader} <- render (as (Just "user-reader")) (Space (slugs ["team", "projects"]))
     asReader `lacks` "sidebar-up"

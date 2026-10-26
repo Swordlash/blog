@@ -170,6 +170,7 @@ stubs =
                 else pure (versioned Sample.page {Page.id = p, Page.title = edit.title, Page.body = edit.body, Page.updatedAt = Sample.later})
           , move = \p body -> pure Sample.page {Page.id = p, Page.space = body.space, Page.parent = body.parent}
           , shift = \p body -> pure Sample.page {Page.id = p, Page.position = fromEnum body.shift}
+          , template = \p body -> pure Sample.page {Page.id = p, Page.template = body.template}
           , delete = \p -> if p == Sample.page.id then pure NoContent else refuse Forbidden
           , upload = \_ u ->
               pure Sample.attachment {Attachment.name = u.name, Attachment.mediaType = u.mediaType, Attachment.size = fromIntegral (BSL.length u.bytes)}
@@ -196,13 +197,13 @@ stubs =
                   then responseLBS (toEnum 200) [(hContentType, "image/png")] "PNG bytes"
                   else responseLBS (toEnum 404) [(hContentType, "application/json")] (encode NotFound)
           }
-    , search = \q space only limit ->
-        let query = searchQueryOf q space only limit
+    , search = \q space only limit templates ->
+        let query = searchQueryOf q space only limit templates
          in pure
               [ Sample.hit
                   { title = Snippet [Piece query.text True]
                   , space = fromMaybe (SpaceId "") query.space
-                  , snippet = Snippet [Piece (show (query.includeSubspaces, query.limit)) False]
+                  , snippet = Snippet [Piece (show (query.includeSubspaces, query.limit, query.templates)) False]
                   }
               ]
     , archive =
@@ -488,6 +489,7 @@ spec = describe "a server of the API's type" $ do
     it "moves one, moves it among its siblings, and deletes it" $ do
       answers (sendJson methodPost (links.pages.move p) PageMove {space = SpaceId "s2", parent = Nothing}) 200 Sample.page {Page.space = SpaceId "s2"}
       answers (sendJson methodPost (links.pages.shift p) ShiftBy {shift = ShiftUp}) 200 Sample.page {Page.position = fromEnum ShiftUp}
+      answers (sendJson methodPut (links.pages.template p) PageTemplate {template = True}) 200 Sample.page {Page.template = True}
       (status <$> request methodDelete (links.pages.delete p) [] "") `shouldReturn` 204
       answers (request methodDelete (links.pages.delete (PageId "other")) [] "") 403 Forbidden
 
@@ -545,16 +547,16 @@ spec = describe "a server of the API's type" $ do
 
   describe "search" $ do
     it "reads back the query its address was made from" $ do
-      let q = SearchQuery {text = "mermaid diagrams", space = Just s, includeSubspaces = False, limit = 7}
+      let q = SearchQuery {text = "mermaid diagrams", space = Just s, includeSubspaces = False, limit = 7, templates = True}
       r <- getAt (searchUrl q)
       status r `shouldBe` 200
       map (\(h :: SearchHit) -> (h.title, h.space, h.snippet)) <$> jsonBody r
-        `shouldBe` Just [(Snippet [Piece "mermaid diagrams" True], s, Snippet [Piece "(False,7)" False])]
+        `shouldBe` Just [(Snippet [Piece "mermaid diagrams" True], s, Snippet [Piece "(False,7,True)" False])]
 
     it "fills in what an address leaves out as the query's defaults" $ do
       r <- getAt "api/v1/search?q=x"
       map (\(h :: SearchHit) -> h.snippet) <$> jsonBody r
-        `shouldBe` Just [Snippet [Piece (show (True, (searchQuery "x").limit)) False]]
+        `shouldBe` Just [Snippet [Piece (show (True, (searchQuery "x").limit, False)) False]]
 
   describe "archives" $ do
     it "exports a zip file, to be saved as one" $ do

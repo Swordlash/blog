@@ -37,6 +37,7 @@ page i parent made =
     , createdAt = day made
     , updatedAt = day 100
     , position = 0
+    , template = False
     }
 
 blogSpace :: Maybe Text -> Space

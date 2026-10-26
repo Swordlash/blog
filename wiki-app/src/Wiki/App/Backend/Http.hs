@@ -437,6 +437,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   createPage sid parent title body = write (withJson "POST" (links.spaces.createPage sid) NewPage {parent, title, body})
   savePage pid base title body = write (ifMatch base (withJson "PUT" (links.pages.save pid) PageEdit {title, body}))
   movePage pid space parent = write (withJson "POST" (links.pages.move pid) PageMove {space, parent})
+  setPageTemplate pid template = write (withJson "PUT" (links.pages.template pid) PageTemplate {template})
   deletePage pid = write_ (R.delete (links.pages.delete pid))
   uploadAttachment pid name mediaType bytes = write (multipart (links.pages.upload pid) attachmentPart name mediaType bytes)
   deleteAttachment aid = write_ (R.delete (links.attachments.delete aid))

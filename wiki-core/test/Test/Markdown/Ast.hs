@@ -68,7 +68,7 @@ spec = describe "Markdown.Ast" $ do
     it "keeps letters outside ASCII in its id" $
       "## Zażółć gęślą" `parses` [Heading 2 [("id", "zażółć-gęślą")] [Str "Zażółć gęślą"]]
     it "gets a numbered id when the text repeats" $
-      "# A\n\n# A" `parses` [Heading 1 [("id", "a")] [Str "A"], Heading 1 [("id", "a-1")] [Str "A"]]
+      "# A\n\n# A" `parses` [Heading 1 [("id", "a")] [Str "A"], Heading 1 [("id", "a-2")] [Str "A"]]
     it "keeps an id given in braces" $
       "### Intro {#start .lead}" `parses` [Heading 3 [("id", "start"), ("class", "lead")] [Str "Intro"]]
     it "reads setext headings" $

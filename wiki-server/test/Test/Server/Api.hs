@@ -33,7 +33,7 @@ import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
-import Wiki.Core.Search (SearchHit (..), searchQuery)
+import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), User (..))
 import Wiki.Server.Storage (administratorUser)
@@ -42,6 +42,7 @@ spec :: Spec
 spec = describe "the API over HTTP" $ do
   whoIsAsking
   spacesAndPages
+  templates
   versions
   draftsAndSearch
   attachments
@@ -118,6 +119,36 @@ spacesAndPages = describe "spaces and pages" $ do
     map (\(s :: Space) -> s.id) <$> ok200 (getUrl r (onPublic r links.spaces.list)) `shouldReturn` [private.id]
     sendJson r methodPost (onPublic r links.spaces.create) NewSpace {parent = Nothing, name = "Mine"} >>= jsonAs 403 >>= (`shouldBe` Forbidden)
     sendJson r methodPut (onPublic r (links.spaces.rename private.id)) SpaceName {name = "Ours"} >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+
+templates :: Spec
+templates = describe "templates" $ do
+  it "makes a page a template, which a search then finds only when asked to, and an anonymous reader may not" $ withRunning $ \r -> do
+    (space, page) <- withSpace r True
+    let search q = map (\(h :: SearchHit) -> h.page) <$> ok200 (getUrl r (onPublic r (searchUrl q)))
+    search (searchQuery "first page") `shouldReturn` [page.id]
+    sendJson r methodPut (onPublic r (links.pages.template page.id)) PageTemplate {template = True} >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+    made <- ok200 (sendJson r methodPut (onAdmin r (links.pages.template page.id)) PageTemplate {template = True})
+    ((made :: Page).template, made.updatedAt, made.body) `shouldBe` (True, page.updatedAt, page.body)
+    (\(p :: Page) -> p.template) <$> ok200 (getUrl r (onPublic r (links.spaces.pageAt space.id [page.slug]))) `shouldReturn` True
+    search (searchQuery "first page") `shouldReturn` []
+    search (searchQuery "first page") {templates = True} `shouldReturn` [page.id]
+    getUrl r (onPublic r "api/v1/search?q=first&templates") >>= jsonAs 200 >>= (`shouldBe` [page.id]) . map (\(h :: SearchHit) -> h.page)
+    -- Not counted among the space's pages: its home page is.
+    counts <- ok200 (getUrl r (onPublic r links.spaces.pageCounts))
+    Map.lookup space.id counts `shouldBe` Just (1 :: Int)
+    back <- ok200 (sendJson r methodPut (onAdmin r (links.pages.template page.id)) PageTemplate {template = False})
+    (back :: Page).template `shouldBe` False
+    search (searchQuery "first page") `shouldReturn` [page.id]
+
+  it "refuses a space's home page, and what is not there" $ withRunning $ \r -> do
+    (space, _) <- withSpace r False
+    home <- maybe (panic "no home page") pure space.homePage
+    sendJson r methodPut (onAdmin r (links.pages.template home)) PageTemplate {template = True} >>= jsonAs 400 >>= (`shouldSatisfy` isInvalid)
+    sendJson r methodPut (onAdmin r (links.pages.template (PageId "no-such-page"))) PageTemplate {template = True} >>= jsonAs 404 >>= (`shouldBe` NotFound)
+  where
+    isInvalid = \case
+      Invalid _ -> True
+      _ -> False
 
 versions :: Spec
 versions = describe "versions" $ do

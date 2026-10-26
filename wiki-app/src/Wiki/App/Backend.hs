@@ -55,9 +55,10 @@
 --   profile ('setSpaceProfile', 'uploadSpaceIcon'), and reading and
 --   changing who is granted what on it ('spaceAccess', 'setSpaceGrant')
 --   need 'AdministerSpace' on it;
--- * creating, saving, moving and deleting pages, and uploading and deleting
---   attachments, need 'Edit' on the page's space (on both spaces, for a page
---   moved from one to another);
+-- * creating, saving, moving and deleting pages, making a page a template
+--   or not ('setPageTemplate'), and uploading and deleting attachments,
+--   need 'Edit' on the page's space (on both spaces, for a page moved from
+--   one to another);
 -- * moving a child up or down its list by hand needs 'Edit' on the space
 --   whose list it is: a page's own space, a subspace's parent;
 -- * reading, saving and discarding one's draft of a page need someone signed
@@ -458,6 +459,17 @@ class (Monad m) => MonadWiki m where
   movePage :: PageId -> SpaceId -> Maybe PageId -> m (Either WikiError Page)
   default movePage :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> SpaceId -> Maybe PageId -> m (Either WikiError Page)
   movePage p s = lift . movePage p s
+
+  -- | Make a page one of its space's templates, or an ordinary page again
+  -- ('Wiki.Core.Page.template'). It needs what saving the page needs,
+  -- 'Edit' on its space. It is not a save: the page keeps its title, its
+  -- body, its history and its @updatedAt@, so an editor open on it saves
+  -- as before. Making a template of a page that is one, or the other way
+  -- round, changes nothing and succeeds. A space's home page cannot be a
+  -- template ('Invalid'), since it opens the space.
+  setPageTemplate :: PageId -> Bool -> m (Either WikiError Page)
+  default setPageTemplate :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> Bool -> m (Either WikiError Page)
+  setPageTemplate p = lift . setPageTemplate p
 
   -- | Delete a page with the pages under it and their attachments.
   deletePage :: PageId -> m (Either WikiError ())

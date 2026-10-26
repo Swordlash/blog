@@ -55,14 +55,14 @@ import Wiki.Core.Version (Author)
 -- Posts
 
 -- | A space's posts, among its pages: its top-level pages but its home
--- page, the newest first. Whether the space is shown as a blog is the
+-- page and its templates ('Wiki.Core.Page.template'), the newest first. Whether the space is shown as a blog is the
 -- caller's to have asked.
 posts :: Space -> [Page] -> [Page]
 posts space pages = filter (isPost space) (childrenInOrder NewestFirst pages Nothing)
 
 -- | Whether a page of a space is one of its posts ('posts').
 isPost :: Space -> Page -> Bool
-isPost space p = p.space == space.id && isNothing p.parent && space.homePage /= Just p.id
+isPost space p = p.space == space.id && isNothing p.parent && space.homePage /= Just p.id && not p.template
 
 -- | The posts before and after one, in the order they are listed.
 data Neighbours = Neighbours

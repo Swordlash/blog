@@ -13,14 +13,20 @@
 --
 -- * GitHub's: pipe tables, task lists, footnotes, strikethrough, autolinks
 --   (bare @https://…@ and @www.…@), emoji shortcodes (@:tada:@), alerts
---   (@> [!NOTE]@), and heading identifiers made from the heading's text;
+--   (@> [!NOTE]@);
+-- * heading identifiers made from the heading's text ('headingSlug'),
+--   unique in the document: a heading with an @id@ of its own keeps it,
+--   and the others get theirs in document order, the second @Intro@
+--   @intro-2@, the third @intro-3@, none taking an id written out in
+--   braces anywhere in the page;
 -- * math, @$…$@ and @\\(…\\)@ inline, @$$…$$@ and @\\[…\\]@ display
 --   ("Wiki.Core.Markdown.TexMath"), and a @math@ fence;
 -- * attributes in braces after a heading, a fence's info string, a link,
 --   an image or inline code (@# Intro {#start}@, @![](a.png){width=300}@);
 -- * fenced divs (@::: warning@ … @:::@), for boxes styled by class;
 -- * wiki links, @[[page]]@ and @[[page|label]]@, read as ordinary links to
---   @page@;
+--   @page@, but for @[[toc]]@ as a paragraph of its own, which is where
+--   the page's table of contents goes ('TableOfContents');
 -- * mentions, @\@login@, in text outside code, links and embeds
 --   ("Wiki.Core.Markdown.Mention" says what counts as one).
 --
@@ -64,6 +70,7 @@ import Data.Text qualified as T
 import Protolude
 import Wiki.Core.Markdown.Mention (splitMentions)
 import Wiki.Core.Markdown.TexMath (texMathSpec)
+import Wiki.Core.Slug (freshName, headingSlug)
 
 -- | Attributes from braces, @{#id .class key=value}@, in the order written.
 -- Heading identifiers are among them, as @id@. Which of them reach the HTML
@@ -110,6 +117,9 @@ data Block
   | -- | A block of raw HTML, as written: rendered through the allowlist of
     -- "Wiki.Core.Markdown.Html", read as one document.
     RawHtmlBlock Text
+  | -- | @[[toc]]@ (or @[[TOC]]@) as a paragraph of its own: the page's table
+    -- of contents goes there ("Wiki.Core.Markdown.Toc").
+    TableOfContents
   deriving stock (Eq, Show)
 
 -- | An inline element.
@@ -180,7 +190,7 @@ newtype ParseError = ParseError Text
 -- | Parse a page's Markdown.
 parseMarkdown :: Text -> Either ParseError [Block]
 parseMarkdown source =
-  bimap (ParseError . show) (\(Blocks bs) -> map withMentions (toList bs))
+  bimap (ParseError . show) (\(Blocks bs) -> withHeadingIds (map (contentsMarker . withMentions) (toList bs)))
     $ runIdentity
     $ CM.commonmarkWith syntax "markdown" terminated
   where
@@ -202,7 +212,6 @@ syntax =
   CME.emojiSpec
     <> CME.strikethroughSpec
     <> CME.autolinkSpec
-    <> CME.autoIdentifiersSpec
     <> CME.taskListSpec
     <> CME.footnoteSpec
     <> CME.alertSpec
@@ -264,6 +273,59 @@ mentions = foldMap block'
       Strong xs -> inlines' xs
       Strikeout xs -> inlines' xs
       _ -> mempty
+
+----------------------------------------------------------------------
+-- Headings and the table of contents
+
+-- | The document with an @id@ on every heading: its own if it has one, and
+-- otherwise one made from its text ('headingSlug'), in document order, free
+-- of every id written in braces in the page and of the ids given to the
+-- headings before it ('freshName'). One pass over the parsed tree, so that
+-- whatever renders the tree, and whatever lists its headings, sees the same
+-- ids.
+--
+-- This replaces commonmark-extensions' @autoIdentifiersSpec@, which made the
+-- second @Intro@ @intro-1@ and did not stay clear of the ids written out.
+withHeadingIds :: [Block] -> [Block]
+withHeadingIds doc = evalState (traverse assign doc) written
+  where
+    written = Set.fromList (concatMap explicit doc)
+    explicit = \case
+      Heading _ attrs _ -> ownId attrs
+      Div attrs bs -> ownId attrs <> concatMap explicit bs
+      CodeBlock attrs _ _ -> ownId attrs
+      BlockQuote bs -> concatMap explicit bs
+      List _ items -> concat [concatMap explicit bs | ListItem _ bs <- items]
+      Alert _ bs -> concatMap explicit bs
+      Footnotes notes -> concat [concatMap explicit bs | Footnote _ _ bs <- notes]
+      _ -> []
+    ownId attrs = [i | Just i <- [attribute "id" attrs], not (T.null i)]
+    assign :: Block -> State (Set Text) Block
+    assign = \case
+      Heading level attrs xs
+        | null (ownId attrs) -> do
+            taken <- get
+            let ident = freshName (`Set.member` taken) (headingSlug (plainText xs))
+            put (Set.insert ident taken)
+            pure (Heading level (("id", ident) : filter ((/= "id") . fst) attrs) xs)
+      BlockQuote bs -> BlockQuote <$> traverse assign bs
+      List kind items -> List kind <$> traverse (\(ListItem task bs) -> ListItem task <$> traverse assign bs) items
+      Div attrs bs -> Div attrs <$> traverse assign bs
+      Alert kind bs -> Alert kind <$> traverse assign bs
+      Footnotes notes -> Footnotes <$> traverse (\(Footnote n label bs) -> Footnote n label <$> traverse assign bs) notes
+      other -> pure other
+
+-- | A paragraph that is nothing but the wiki link @[[toc]]@ is where the
+-- table of contents goes. Any other link to @toc@ stays a link, to a page
+-- of that name.
+contentsMarker :: Block -> Block
+contentsMarker = \case
+  Para [Link attrs dest _ [Str label]]
+    | "wikilink" `elem` classes attrs
+    , T.toLower dest == "toc"
+    , T.toLower label == "toc" ->
+        TableOfContents
+  other -> other
 
 ----------------------------------------------------------------------
 -- Mentions

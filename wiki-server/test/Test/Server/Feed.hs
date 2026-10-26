@@ -196,7 +196,7 @@ html = describe "a post's HTML" $
             , description = ""
             , blog = True
             }
-        pageOf i t body attachments = Page {id = PageId i, space = blog.id, parent = Nothing, title = t, slug = slugOf i, body, attachments, createdAt = time 1, updatedAt = time 1, position = 0}
+        pageOf i t body attachments = Page {id = PageId i, space = blog.id, parent = Nothing, title = t, slug = slugOf i, body, attachments, createdAt = time 1, updatedAt = time 1, position = 0, template = False}
         tree = Attachment {id = AttachmentId "a1", name = "tree.png", mediaType = "image/png", size = 3, source = SourceBlob (BlobId "b1")}
         post =
           pageOf

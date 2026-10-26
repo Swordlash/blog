@@ -66,16 +66,18 @@ spaceExportUrl = links.spaces.export
 -- | The address of a search: every field of the query is in it, so the
 -- server reads back the query that was asked.
 searchUrl :: SearchQuery -> Text
-searchUrl q = links.search (Just q.text) q.space (not q.includeSubspaces) (Just q.limit)
+searchUrl q = links.search (Just q.text) q.space (not q.includeSubspaces) (Just q.limit) q.templates
 
 -- | The query a search's parameters ask for: @q@ (no words, so no hits, if
 -- it is missing), @space@ (every space if missing), @only@ (only that
--- space, not its subspaces) and @limit@ ('searchQuery''s if missing).
-searchQueryOf :: Maybe Text -> Maybe SpaceId -> Bool -> Maybe Int -> SearchQuery
-searchQueryOf q space only limit =
+-- space, not its subspaces), @limit@ ('searchQuery''s if missing) and
+-- @templates@ (the templates too).
+searchQueryOf :: Maybe Text -> Maybe SpaceId -> Bool -> Maybe Int -> Bool -> SearchQuery
+searchQueryOf q space only limit templates =
   SearchQuery
     { text = fromMaybe "" q
     , space
     , includeSubspaces = not only
     , limit = fromMaybe (searchQuery "").limit limit
+    , templates
     }

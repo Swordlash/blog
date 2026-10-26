@@ -318,7 +318,7 @@ apiOver providers st = do
       query <- T.stripPrefix "api/v1/search?" url
       let params = [(k, decodeComponent (T.drop 1 v)) | pair <- T.splitOn "&" query, let (k, v) = T.breakOn "=" pair]
           param k = snd <$> find ((== k) . fst) params
-      pure (searchQueryOf (param "q") (SpaceId <$> param "space") (isJust (param "only")) (readMaybe . T.unpack =<< param "limit"))
+      pure (searchQueryOf (param "q") (SpaceId <$> param "space") (isJust (param "only")) (readMaybe . T.unpack =<< param "limit") (isJust (param "templates")))
 
 -- | A container holding the page the prerender writes for the route, as the
 -- browser has it before the program has loaded: the application that

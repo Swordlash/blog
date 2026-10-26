@@ -56,7 +56,7 @@ spec = describe "Markdown.Render, raw HTML" $ do
       "[x <a href=\"https://b.example\">y</a>](https://a.example)"
         `shows'` "<p><a href=\"https://a.example\" rel=\"noopener\">x y</a></p>"
     it "renders in headings and table cells" $ do
-      "# A <small>b</small>" `shows'` "<h1 id=\"a-b\">A <small>b</small></h1>"
+      "# A <small>b</small>" `shows'` "<h1 id=\"a-b\">A <small>b</small><a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#a-b\"></a></h1>"
       "| a |\n|---|\n| <kbd>k</kbd> |" `shows'` "<table><thead><tr><th>a</th></tr></thead><tbody><tr><td><kbd>k</kbd></td></tr></tbody></table>"
     it "renders the colours the toolbar writes, line by line, in lists and headings" $ do
       let coloured command source = fst (apply command source (Selection 0 (T.length source)))
@@ -65,7 +65,7 @@ spec = describe "Markdown.Render, raw HTML" $ do
       coloured (Highlight (Just Yellow)) "- a\n- b"
         `shows'` "<ul><li><mark class=\"h-yellow\">a</mark></li><li><mark class=\"h-yellow\">b</mark></li></ul>"
       coloured (TextColour (Just Blue)) "# Title"
-        `shows'` "<h1 id=\"title\"><span class=\"c-blue\">Title</span></h1>"
+        `shows'` "<h1 id=\"title\"><span class=\"c-blue\">Title</span><a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#title\"></a></h1>"
       coloured (Highlight (Just Yellow)) (coloured (TextColour (Just Red)) "*x*")
         `shows'` "<p><mark class=\"h-yellow\"><span class=\"c-red\"><em>x</em></span></mark></p>"
     it "drops HTML comments" $

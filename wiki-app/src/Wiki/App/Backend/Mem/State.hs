@@ -58,6 +58,7 @@ module Wiki.App.Backend.Mem.State
   , setSpaceOrderIn
   , shiftSpaceIn
   , shiftPageIn
+  , setPageTemplateIn
   , createPageIn
   , savePageIn
   , movePageIn
@@ -480,6 +481,7 @@ insertPage space parent title body now st0 =
           , createdAt = now
           , updatedAt = now
           , position = nextPosition (childrenOf (pagesOf space st) parent)
+          , template = False
           }
    in (recordVersion Nothing page st {pages = Map.insert page.id page st.pages, searchText = Map.insert page.id (prepare page) st.searchText}, page)
 
@@ -628,6 +630,7 @@ repage space parent slug position p =
     , createdAt = p.createdAt
     , updatedAt = p.updatedAt
     , position
+    , template = p.template
     }
 
 --------------------------------------------------------------------------------
@@ -668,11 +671,12 @@ getSpaceIn path st = case resolvePath (findChild (Map.elems st.spaces)) path of
   Right c | Just s <- lastMay c -> requireView st c >> pure s
   _ -> Left NotFound
 
--- | How many pages each space the current user may view has.
+-- | How many pages each space the current user may view has, its templates
+-- not counted.
 pageCountsIn :: MemState -> Map SpaceId Int
 pageCountsIn st =
   Map.fromList
-    [ (sid, length (pagesOf sid st))
+    [ (sid, length [p | p <- pagesOf sid st, not p.template])
     | sid <- Map.keys st.spaces
     , canView (currentPrincipal st) st.grants (chainOf st sid)
     ]
@@ -718,6 +722,7 @@ searchPagesIn q st =
     , wanted c
     , canView (currentPrincipal st) st.grants c
     , p <- pagesOf sid st
+    , q.templates || not p.template
     , Just pagePath <- [pathOf (`Map.lookup` st.pages) p.id]
     ]
   where
@@ -929,6 +934,18 @@ shiftPageIn pid how st = do
       st' = placePages (reposition (\q -> q.id) how pid siblings) st
   moved <- findPage st' pid
   pure (st', moved)
+
+-- | Make a page one of its space's templates, or not, as someone who edits
+-- its space. Not a save: nothing else of the page changes.
+setPageTemplateIn :: PageId -> Bool -> Write Page
+setPageTemplateIn pid template st = do
+  p <- findPage st pid
+  (s, c) <- findSpace st p.space
+  requireEdit st c
+  when (template && s.homePage == Just pid) $
+    Left (Invalid "A space's home page cannot be a template.")
+  let p' = p {template}
+  pure (st {pages = Map.insert pid p' st.pages}, p')
 
 -- | Create a page.
 createPageIn :: SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> Write Page

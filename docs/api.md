@@ -198,6 +198,7 @@ take that from themself, which the space's view does not offer.
 | PUT | `api/v1/pages/<page>` | `PageEdit` `{"title", "body"}`, with `If-Match` | `Page`, with its new `ETag` | 404, 403, 400, 409 | `savePage` |
 | POST | `api/v1/pages/<page>/move` | `PageMove` `{"space", "parent": id or null}` | `Page` | 404, 403, 400 | `movePage` |
 | POST | `api/v1/pages/<page>/shift` | `ShiftBy` `{"shift"}` | `Page`, with its new position | 404, 403, 400 | `shiftPage` |
+| PUT | `api/v1/pages/<page>/template` | `PageTemplate` `{"template": bool}` | `Page`; not a save, its `updatedAt` stays | 404, 403, 400 (a space's home page) | `setPageTemplate` |
 | DELETE | `api/v1/pages/<page>` | | 204 | 404, 403 | `deletePage` |
 
 ### Attachments
@@ -411,14 +412,15 @@ are refused (403); `people` names nobody to someone not signed in.
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
-| GET | `api/v1/search?q=<words>&space=<space>&only&limit=<n>` | | `[SearchHit]`, the best first | | `searchPages` |
+| GET | `api/v1/search?q=<words>&space=<space>&only&limit=<n>&templates` | | `[SearchHit]`, the best first | | `searchPages` |
 
 The parameters are the application's own search address's
 (`/search/?q=…&space=…&only`), except that `space` is the space's id rather
 than its path, since that is what a `SearchQuery` holds, and `limit` is
 added. `q` missing is no words, which finds nothing; `space` missing is every
 space the user may view; `only` present leaves out the space's subspaces;
-`limit` missing is 50. A search never refuses: a query with no words, a space
+`limit` missing is 50; `templates` present searches the spaces' templates
+too (a page's `template`), which are left out otherwise. A search never refuses: a query with no words, a space
 that is not there and one the user may not view all give `[]`.
 `Wiki.Api.Links.searchUrl` writes the address of a query, and
 `searchQueryOf` reads the query back, so both sides fill in the defaults

@@ -154,9 +154,11 @@ data WikiApi mode = WikiApi
           :> QueryParam "space" SpaceId
           :> QueryFlag "only"
           :> QueryParam "limit" Int
+          :> QueryFlag "templates"
           :> Get '[JSON] [SearchHit]
   -- ^ @searchPages@. The parameters are those of the application's own
-  -- search address (@\/search\/?q=…&space=…&only@), except that @space@ is
+  -- search address (@\/search\/?q=…&space=…&only@), and @templates@ for a
+  -- search of the spaces' templates too, except that @space@ is
   -- the space's id rather than its path, since that is what a
   -- 'Wiki.Core.Search.SearchQuery' holds. "Wiki.Api.Links" makes the
   -- address from a query, and 'Wiki.Api.Links.searchQueryOf' the query from
@@ -247,6 +249,8 @@ data PagesApi mode = PagesApi
   -- ^ @movePage@.
   , shift :: mode :- Capture "page" PageId :> "shift" :> ReqBody '[JSON] ShiftBy :> Post '[JSON] Page
   -- ^ @shiftPage@.
+  , template :: mode :- Capture "page" PageId :> "template" :> ReqBody '[JSON] PageTemplate :> Put '[JSON] Page
+  -- ^ @setPageTemplate@: whether the page is one of its space's templates.
   , delete :: mode :- Capture "page" PageId :> DeleteNoContent
   -- ^ @deletePage@.
   , upload :: mode :- Capture "page" PageId :> "attachments" :> MultipartForm Mem AttachmentUpload :> PostCreated '[JSON] Attachment

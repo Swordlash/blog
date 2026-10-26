@@ -134,6 +134,7 @@ page =
     , createdAt = time
     , updatedAt = time
     , position = 2
+    , template = False
     }
 
 draft :: Draft

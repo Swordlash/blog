@@ -112,7 +112,7 @@ spec = describe "a space shown as a blog, rendered" $ do
 
   it "shows its home page above its posts, and not among them" $ do
     Rendered {html} <- render (withHome (as Nothing)) (Space blogPath)
-    html `contains` "<div class=\"blog-home\"><article class=\"page-body\"><h1 id=\"notes-on-haskell\">Notes on Haskell</h1>"
+    html `contains` "<div class=\"blog-home\"><article class=\"page-body\"><h1 id=\"notes-on-haskell\">Notes on Haskell"
     html `lacks` "Notes on Haskell</span></a>"
     html `contains` "Hello, world</span></a>"
     comesBefore html "class=\"blog-home\"" "class=\"space-cards post-list\""
