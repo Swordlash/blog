@@ -2625,6 +2625,105 @@ Amended by the planning session after each work package's report.
   1000, browser 223.
 - **WP4.18 started** (2026-10-26) on `wp4.18-https-deploy` from `main` `1f1a7df`, beside
   WP4.15's pull request; it touches only `toolchain/` and the README.
+- **WP4.15 merged** (2026-10-26, PR #76, `main` at `f181a62`). Migration
+  `0012-page-template.sql`. Heading ids in one pass at parse time (`Ast.withHeadingIds` over
+  `Slug.headingSlug`: lower-cased, letters of every script with their diacritics kept, digits,
+  `_` and `-` kept, white space to `-`, punctuation and emoji dropped, dashes collapsed, an
+  empty result is `section`; duplicates `-2`, `-3`… in document order, never an id written in
+  braces), replacing commonmark-extensions' `autoIdentifiersSpec`, **so the second of two
+  equal headings is `x-2` where it was `x-1`** (old links to `-1` no longer hit). An empty
+  `<a class="heading-anchor">` ends each heading, the `#` drawn on hover by the stylesheet, so
+  the page's text, comment quotes and search are unchanged; `Options.headingAnchors` turns
+  them off (feeds do). `[[toc]]` as a paragraph that is exactly that wikilink (any case) is
+  the `TableOfContents` block, `<nav class="toc">`; `Wiki.Core.Markdown.Toc` builds the nested
+  list of top-level headings (a skipped level nests one down) for the inline list and the
+  "Contents" panel, a `<details>` shown for 3 or more headings when the page has no `[[toc]]`,
+  built from the parsed page so the server render and the prerender include it;
+  `jsbits/toc.js` keeps the fold in `localStorage` and marks the current section as
+  `data-current` with IntersectionObservers (the last heading above a line a quarter down the
+  window; the last in the window at the page's end), which both smoke tests leave out of
+  their repair counts. Layout: from 1200 px one sticky column beside the text (contents, the
+  comments stacked under them when open), 761 to 1199 px the comments beside and the contents
+  above, at 760 px and below both around the text. Following a fragment link writes `#id`
+  into the address bar with `replaceState`, and a page opened with a fragment scrolls to it
+  (`wiki_scroll_to` in `jsbits/browser.js`, leaving `#/…` hash routes alone). Templates:
+  `Page.template` (export additive), `treePages`/`templatePages`, a template is never a post,
+  `SearchQuery.templates` false by default (no search UI asks for them yet), `PUT
+  pages/<id>/template` (Edit; not a save: no version, `updatedAt` unchanged; a space's home
+  page refused), page counts leave templates out, an import keeps the archive's flag on a new
+  page; `Wiki.Core.Template` holds the built-ins (meeting notes, decision record, how-to) as
+  Markdown files embedded by Template Haskell (`template-haskell` now a wiki-core dependency,
+  builds on wasm); `fillTemplate` fills exactly `{{title}}`, `{{date}}` (UTC date),
+  `{{author}}` once; "Use as template" is one `aria-pressed` toggle in the action bar, a note
+  above a template page, "Templates" sections in the sidebar and the space's pages list, "New
+  page" offers Blank, the space's templates and the built-ins; the demo's Team space has a
+  "Weekly sync" template and the handbook a `[[toc]]`. Also on this pull request (the owner:
+  "utwardź, bo ciągle się pojawia"): the editor's "loses no keystroke while the preview
+  catches up with a long page" types the long run one word per `typeText` call, since
+  hspec-halogen's `typeText` is Playwright's `pressSequentially` with a 5 s timeout per call
+  it cannot change and three words timed out on a busy runner; passed three times in a row
+  and once under load; `--match` takes a plain substring of the description, not a path.
+  Limits: pandoc exports use pandoc's own heading ids; a heading titled like a footnote id can
+  collide with it; `[[toc]]` links in feeds are bare fragments; persisted demo data shows the
+  template only after a reset. Tests: `Test.Markdown.Toc`, `Test.Template`, render markup,
+  a contract section, HTTP for the flag and the search exclusion, migration from 11, export
+  dropping `[[toc]]`, hydration at zero repairs for the guide (panel) and the handbook
+  (`[[toc]]`), `Test.Browser.Contents` (7), both smoke tests (a page from a template; the
+  server's checks the imported template, the panel and `[[toc]]` at zero repairs, and
+  `#heading` scrolled to and marked); core 760, app 1029, server 789 (2 pending), browser 224.
+  Process note: the planning session pushed a plan-only commit to `main` while this pull
+  request's CI ran, which cost one extra rebase and CI cycle; plan commits are held on the
+  session branch while a pull request is in CI.
+- **WP4.18 merged** (2026-10-26, PR #77, `main` at `f9dfa80`). `deploy-local.sh --server`
+  and `--static` serve HTTPS by default: the listener binds to `127.0.0.1:<port>`, the
+  server's unit carries `--secure-cookies`, and once the service answers on loopback the
+  script runs `tailscale serve --bg http://127.0.0.1:<port>` (tailnet only, never Funnel),
+  then checks `https://<name>.<tailnet>.ts.net/` (`api/v1/info` for the server), waiting up
+  to `WIKI_DEPLOY_HTTPS_WAIT` (60 s) for the first certificate before warning, and prints that
+  address first. Each deploy reads `tailscale serve status`: a serve already proxying to the
+  port is left as it is (a hand-set one, as on the owner's machine, counts as the
+  deployment's), one on the deployment's previous port is moved, anything else at the
+  address is left alone with a warning. The script never runs sudo for the serve: it runs
+  `tailscale serve` as the user (tailscaled's operator) and, failing that, prints `sudo
+  tailscale serve --bg …` and `sudo tailscale set --operator=$USER` and carries on, answering
+  on loopback. `tailscale status --json` says whether MagicDNS (`CurrentTailnet.
+  MagicDNSEnabled`) and certificates (`CertDomains`) are on; if not, or when Tailscale does
+  not answer, it warns, points at the admin console's DNS page and serves plain HTTP, keeping
+  `https=yes` in the state so a later run moves to HTTPS; a CLI older than 1.52 gets the
+  older `serve https:443 /` form printed, not run. `--http` restores the old behaviour
+  (Tailscale address, ufw rule, no Secure cookies), turns the deployment's serve off and drops
+  `--secure-cookies` on redeploy; `--https` is the way back and drops a remembered
+  non-loopback bind; a `--bind` other than `127.0.0.1` (including `::1`) implies `--http`. A
+  deployment from before this change moves to HTTPS on its next run and its `tailscale0` ufw
+  rule is deleted. The script reads the admin listener's server settings and reminds the
+  owner to set the HTTPS address as the panel's public address when none or a different one
+  is set (a panel action, decision 11). `--status` shows the serve; `undeploy-local.sh` and
+  `--stop` run `tailscale serve --https=443 off` for the deployment's serve (edge: with more
+  than one handler on 443 the command asks for confirmation and fails under `/dev/null`, and
+  the hint wrongly suggests sudo). State gains `https`, `https_host`, `serve_port`. README:
+  HTTPS first, prerequisites (MagicDNS, HTTPS Certificates, the operator), the hostname in
+  public Certificate Transparency logs, the service worker and "Install" needing HTTPS, the
+  demo's browser data per scheme and port (an import from a plain-HTTP demo needs the server
+  on `--http` or an export first). Also: `toolchain/test-deploy-server.mjs` expected the
+  request log without `route=` (WP4.10) and had been failing unnoticed because
+  `test-deploy-local.sh` was not in CI; fixed, and the script now runs as a step of CI's
+  `native` job (about two minutes, fakes only, the real binary for the last stage). Not
+  tested against a real tailscaled (none in the sandbox); the CLI formats were checked against
+  Tailscale's sources; the owner's first real deploy is the end-to-end check. Known: a second
+  deployment (`--name`) on one machine cannot share port 443 and should use `--http`. Tests:
+  36 deploy cases (the fake `tailscale` records `serve`, answers `serve status`, simulates
+  access denied; a fake `curl` reaches the proxied listener), 10 deploy-server, 10 static.
+- **Wave C complete; the owner's Phase 4 pick is done** (2026-10-26). Merged in Phase 4:
+  WP4.2 slides, WP4.3 pin bump and `Net.Fetch`, WP4.4 server settings from the panel, WP4.5
+  comments, WP4.6 one space at a time, WP4.7 LaTeX delimiters, WP4.8 pin bump, WP4.16 export,
+  WP4.9 backups, WP4.12 presence, WP4.11 account hygiene, WP4.10 observability, WP4.14 blog,
+  WP4.13 notifications, WP4.17 offline/PWA, WP4.15 contents and templates, WP4.18 HTTPS
+  deploy. Migrations to `0012`. Open items: Polish interface (deferred by the owner); a retry
+  of the editor's draft on `online`; a search UI asking for templates; our heading ids in
+  pandoc exports; a second deployment on one machine cannot share port 443; the four Wave A
+  product questions ("Back up now" while backups are off, UTC backup times, the deploy's
+  `--keep 10` against the panel's retention, OIDC bypassing TOTP). Nothing is planned beyond
+  this without the owner's word.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
