@@ -1041,6 +1041,29 @@ must be in before it is.
   made with the base path and served under that prefix, and the installability check in
   Chromium; the hydration count stays at zero repairs. The README's "Running the demo"
   points at the public address. No migration.
+- **WP5.3 A README for the public, with examples** (the owner, 2026-10-26: "odświeżyć
+  readme i dodać jakieś więcej przykładów użycia bibliotek i prezentacji"). The README is
+  written today for the people building it: it opens with how it is built and lists what
+  works in the plan's order. It becomes a page for someone who finds the repository: what
+  the wiki is in a paragraph, the live demo's address (`https://swordlash.github.io/blog/`,
+  which WP5.2 makes real), screenshots (a page with a formula and a diagram, the editor
+  beside its preview, a deck, the directory of spaces; taken from the demo in Chromium by a
+  script `toolchain/screenshots.mjs` so they can be remade, committed under
+  `docs/screenshots/`, each under 300 KB), then "Writing pages" with a worked example per
+  library, each a fenced block of the Markdown as the author types it and a line on what
+  appears: math with KaTeX (inline, display, a macro of the space, `\ce` chemistry),
+  Mermaid, TikZ (with a `\usetikzlibrary`), highlighted code, GitHub's alerts, `[[toc]]`,
+  attachments and images, a wiki link; then "Presentations" with a complete small deck as
+  one page (the front matter or marker `Wiki.Core.Slides` reads, slides cut by `---`,
+  notes, a theme and aspect, how it is shown and exported to Beamer PDF and PPTX), the
+  same examples living in the demo's `Presentations` and `Tour` pages so each snippet in
+  the README links to a page where it renders (the demo content changes only where a
+  snippet has no page yet). The sections on running, deploying, the toolchain and CI stay,
+  shortened where they repeat `docs/`; `docs/markdown.md` stays the complete reference and
+  the README links to it. Nothing in `web/`, the workflow or `Wiki.App.Demo`'s database
+  name (WP5.2's). Tests: the smoke test still passes with any demo page added; the
+  screenshot script runs under `npm run screenshots` and is checked by CI only in that it
+  parses (`node --check`). No migration.
 
 ## Delegation protocol
 
@@ -2843,6 +2866,8 @@ Amended by the planning session after each work package's report.
   secrets (grepped); the `maintainer` address is in the `.cabal` files.
 - **WP5.1 started** (2026-10-26) on `wp5.1-public-release` from `main` `ba29135`, alone;
   decision 24 confirmed (MIT).
+- **WP5.3 added** (2026-10-26, the owner's ask while WP5.1 runs): the README for the
+  public, with examples per library and a deck, and screenshots. After WP5.1, beside WP5.2.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
