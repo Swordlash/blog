@@ -5,8 +5,9 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Protolude
 import Test.Hspec
+import Web.Storage.IndexedDB (Database (..))
 import Wiki.App.Backend.Mem.State (MemState (..))
-import Wiki.App.Demo (demoNow, demoState)
+import Wiki.App.Demo (demoDatabase, demoNow, demoState)
 import Wiki.App.Route qualified as Route
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
 import Wiki.Core.Markdown.Ast (parseMarkdown)
@@ -32,6 +33,12 @@ linkTargets body = map (T.takeWhile (/= ')')) (drop 1 (T.splitOn "](" body))
 
 spec :: Spec
 spec = describe "Wiki.App.Demo" $ do
+  -- IndexedDB is per origin, and the demo on GitHub Pages shares
+  -- swordlash.github.io with every other site published there: a name as
+  -- plain as "wiki" could be another's.
+  it "keeps its wiki in an IndexedDB database named for it" $
+    demoDatabase.name `shouldBe` "wiki-demo"
+
   it "has the spaces the tour describes" $
     sort [s.name | s <- Map.elems demo.spaces] `shouldBe` ["Blog", "Docs", "Projects", "Team"]
 

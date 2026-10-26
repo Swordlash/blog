@@ -54,9 +54,12 @@ demoNow :: UTCTime
 demoNow = UTCTime (fromGregorian 2026 10 1) 43200
 
 -- | Where the browser keeps the demo's wiki between visits: the IndexedDB
--- database @wiki@ of the page's origin.
+-- database @wiki-demo@ of the page's origin. IndexedDB is per origin, not per
+-- path, and the demo on GitHub Pages shares @swordlash.github.io@ with
+-- whatever else is published there (haskell-halogen's gallery among them),
+-- so the name is one no other site of that origin would choose.
 demoDatabase :: Database
-demoDatabase = memDatabase "wiki"
+demoDatabase = memDatabase "wiki-demo"
 
 -- | The demo's wiki, as it is at the time given: the pages were written in
 -- the weeks before it. @admin@ is signed in.

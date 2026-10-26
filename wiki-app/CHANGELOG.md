@@ -14,6 +14,17 @@ is under 300 KB.
 Licensed under the MIT licence (WP5.1), where it was proprietary: the
 package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
 
+The demo keeps its wiki in the IndexedDB database `wiki-demo`
+(`Wiki.App.Demo.demoDatabase`), no longer `wiki` (WP5.2). IndexedDB is per
+origin, and the demo on GitHub Pages shares `swordlash.github.io` with every
+other site published there, so the name has to be the wiki's own. A browser
+that used a demo built before this keeps what it wrote under the old name,
+which the demo no longer opens: it starts from the demo's own content, and
+the server's "Import this browser's demo data…" no longer finds the old
+database either. To carry such a wiki over, export it with a build from
+before this change ("Export the wiki" in its administration) and import the
+zip file. No public demo existed under the old name.
+
 Tables of contents and templates (WP4.15). A page with three headings or
 more shows a "Contents" panel: beside the text on a wide window (with the
 comments' panel under it when that is open), above it on a narrower one,
