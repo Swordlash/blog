@@ -701,7 +701,9 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
    libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0
    libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0
    libxrandr2`; on Ubuntu 22.04 and Debian 12 they are the same without the `t64`
-   suffixes, and 22.04 adds `libwayland-client0`.
+   suffixes, and 22.04 adds `libwayland-client0`. Add `libxml2-utils`: the server's
+   tests validate a blog's Atom and RSS feeds against their schemas with its `xmllint`,
+   and without it those checks are only pending.
 3. Re-run the workflow.
 
 ## Layout
