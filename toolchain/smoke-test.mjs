@@ -681,7 +681,12 @@ try {
   // offered by "New page" beside the built-in ones; the new page has its
   // title, today's date and its maker's name where the template has
   // {{title}}, {{date}} and {{author}}.
-  await toSpace("/s/team/");
+  // Every step is an entry of the history, which the walk goes back and
+  // forward through later.
+  await page.locator("#app .wiki-brand").click();
+  await arrive({ path: "/", view: "directory" }, "the front page, for the team's space");
+  await page.locator("#app .space-card-link[href='/s/team/']").click();
+  await arrive({ path: "/s/team/", view: "page-view", text: "Team handbook" }, "the team's space");
   await page.locator("#app .wiki-sidebar .sidebar-templates a", { hasText: "Weekly sync" }).waitFor({ timeout });
   await page.locator("#app .space-pages-link").click();
   await arrive({ path: "/s/team/pages/", view: "space-view", crumb: "Pages and settings" }, "Team's pages, for a page from a template");
