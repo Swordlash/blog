@@ -2468,6 +2468,43 @@ Amended by the planning session after each work package's report.
   `wp4.10-observability`, WP4.13 on `wp4.13-notifications`, WP4.14 on `wp4.14-blog`, in
   parallel worktrees; each brief names what the others touch (`Render.hs`, `View/Page.hs`,
   `View/Space.hs`, the account panel, migrations numbered at rebase).
+- **WP4.10 merged** (2026-10-26, PR #72, `main` at `fcb3c67`). Migration `0009-audit-log.sql`
+  (no foreign keys: rows outlive users and spaces and survive imports). `Wiki.Core.Audit`,
+  `Storage/Audit.hs`: one row per administration write in the same transaction (`record`):
+  space grants, public flag, space and page deletion, wiki-wide grants, groups and members,
+  accounts (create, password, disable, second-factor and identity removal), wiki, server and
+  backup settings, invitations, imports, self-registration and provider sign-ins
+  (`user.register` with the provider), the console's `users` commands as `administrator` from
+  `console`; secrets only as `changed`/`cleared`; refused writes record nothing; the address
+  reaches the storage through `Caller.address` and `runSqliteWikiFrom`. `GET
+  admin/activity?actor=&offset=`, 50 per page, newest first; the Admin page's "Activity"
+  section (`View/Activity.hs`) with a person filter and Newer/Older; the export carries
+  `audit.json` (only when there are entries; old archives import), import merges by id and
+  records itself. `GET /metrics` on the admin listener only, at the listener's root
+  (`http://127.0.0.1:8081/metrics`), Prometheus text written by hand (`Wiki.Server.Metrics`,
+  no dependency): `wiki_http_requests_total{listener,route,method,status}` (status class,
+  method from a fixed set), `wiki_http_request_duration_seconds{listener,route}` with the
+  default buckets, gauges `build_info`, `start_time_seconds`, `schema_version`,
+  `websockets_open`, `spaces`, `pages`, `attachments`, `users`, `database_bytes`, `blobs`,
+  `blob_bytes`, `backups_kept`, `backup_age_seconds` (the newest file in `data/backups`), the
+  counter `errors_total`; route labels are the patterns of servant's own router structure
+  (`Wiki.Server.Routes`), so ids and secrets never become labels. `GET /healthz` (new, not
+  extended: it did not exist) on both listeners before the closed-wiki rule: `status`,
+  `schemaVersion`, `lastBackupAgeSeconds`, 503 when the database cannot be read; the
+  Dockerfile's `HEALTHCHECK` asks it. `admin/status` gains `schemaVersion`, `lastBackup`,
+  `connections`, `errors` (the last 20 error-level log lines, `Log.keepingErrors`; a 5xx is
+  logged as an error; backup failures are warnings and show in the Backups part instead); the
+  Server section's "Status" block (`View/Status.hs`) with Refresh. Over HTTP the two reads
+  use `once`: the first from the server-rendered preload, then fetched fresh. Fixed on the
+  way: `Storage/Migrate.hs` has `-fforce-recomp`, so a new migration file is seen without
+  deleting the build. For the next packages: `Caller.address`; `Env.errors`, `Env.metrics`;
+  `logRequests` takes a route and an observer; `Archive.audit`; `applyImport` takes an actor
+  and an address; a new administration write calls `record` and adds its action to
+  `Wiki.Core.Audit.actionText` and `docs/api.md`; a new admin read must be answered by
+  `Test.Hydrate.apiOver` and `Test.Browser.Http.serveDemo`. Tests: `Test.Server.Metrics`,
+  `Test.Storage.Audit`, `Test.Server.Observability`, admin contract cases on three backends,
+  `Test.Browser.Activity`, goldens, the smoke test's step for `/healthz`, `/metrics` and the
+  activity; server 712 (2 pending), app 929, browser 210.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
