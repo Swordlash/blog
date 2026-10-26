@@ -328,12 +328,13 @@ other_port() {
 }
 https_url=https://box.tail1234.ts.net/
 
-# First install, over HTTPS (the default), then a re-run on another port.
+# First install of the demo (--static), over HTTPS (the default), then a
+# re-run on another port, which remembers the demo.
 fixture install
 p1=$(free_port 127.0.0.1)
 p2=$(other_port "$p1")
 out=$case_dir/first
-deploy --port "$p1" >"$out" 2>&1 || fail 'first install failed'
+deploy --static --port "$p1" >"$out" 2>&1 || fail 'first install failed'
 assert_contains "$EVENTS" 'bootstrap toolchain'
 assert_contains "$EVENTS" 'npm ci --no-audit --no-fund'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=demo'
@@ -374,7 +375,7 @@ assert_contains "$out" 'sudo loginctl enable-linger tester'
 assert_lacks "$EVENTS" 'loginctl enable-linger'
 assert_lacks "$EVENTS" 'cabal'
 [ "$(state mode)" = static ] || fail 'state does not record the demo'
-pass 'first install builds, installs, starts the service on 127.0.0.1 with the managed Node, serves it over HTTPS through tailscale serve'
+pass 'a first install with --static builds the demo, installs it, starts the service on 127.0.0.1 with the managed Node, serves it over HTTPS through tailscale serve'
 
 : >"$EVENTS"
 touch "$HOME/wiki-demo/app/stale.txt"
@@ -407,6 +408,18 @@ assert_lacks "$EVENTS" 'tailscale serve'
 assert_contains "$out" "tailscale serve already proxies $https_url to 127.0.0.1:$p2: leaving it as it is"
 assert_contains "$EVENTS" "curl $https_url"
 pass 'a re-run without options keeps the previous port and the serve as it is; --no-build skips the build'
+
+# A deployment of a version before --server kept no mode in its state: it
+# was the demo, and stays one, although the first run's default is now the
+# server.
+: >"$EVENTS"
+sed -i '/^mode=/d' "$HOME/.config/wiki-demo/wiki-demo.state"
+out=$case_dir/no-mode
+deploy --no-build >"$out" 2>&1 || fail 're-run of a deployment without a mode failed'
+assert_contains "$HOME/$unit" "/server.mjs\" --root"
+assert_lacks "$EVENTS" 'cabal'
+[ "$(state mode)" = static ] || fail 'a deployment without a mode did not stay the demo'
+pass 'a deployment from before --server, with no mode in its state, stays the demo'
 
 : >"$EVENTS"
 out=$case_dir/build-fails
@@ -471,19 +484,19 @@ mkdir -p "$HOME/notes" "$case_dir/outside"
 printf 'keep\n' >"$HOME/notes/todo.txt"
 for target in "$HOME" / "$case_dir/outside" "$HOME/notes" "$HOME/.."; do
   out=$case_dir/refused
-  if deploy --dir "$target" >"$out" 2>&1; then fail "deployed into $target"; fi
+  if deploy --static --dir "$target" >"$out" 2>&1; then fail "deployed into $target"; fi
   assert_contains "$out" 'refusing'
 done
 mkdir -p "$HOME/other"
 printf 'name=other\n' >"$HOME/other/.wiki-demo-deployment"
-if deploy --dir "$HOME/other" >"$out" 2>&1; then fail "deployed into another deployment's directory"; fi
+if deploy --static --dir "$HOME/other" >"$out" 2>&1; then fail "deployed into another deployment's directory"; fi
 assert_contains "$out" 'use --name other'
 [ -f "$HOME/notes/todo.txt" ] || fail 'an unmarked directory was emptied'
 assert_lacks "$EVENTS" 'npm'
 assert_lacks "$EVENTS" 'systemctl stop'
 mkdir -p "$HOME/empty"
 p=$(free_port 127.0.0.1)
-deploy --dir "$HOME/empty" --port "$p" --no-firewall >"$case_dir/empty" 2>&1 || fail 'an empty directory was refused'
+deploy --static --dir "$HOME/empty" --port "$p" --no-firewall >"$case_dir/empty" 2>&1 || fail 'an empty directory was refused'
 assert_lacks "$EVENTS" 'ufw'
 undeploy >/dev/null 2>&1
 pass 'refuses ~, /, directories outside ~, above it, unmarked or marked for another deployment, before building'
@@ -491,7 +504,7 @@ pass 'refuses ~, /, directories outside ~, above it, unmarked or marked for anot
 fixture forced
 p=$(free_port 127.0.0.1)
 out=$case_dir/forced
-deploy --dir "$case_dir/outside" --port "$p" --force >"$out" 2>&1 || fail '--force did not allow a directory outside ~'
+deploy --static --dir "$case_dir/outside" --port "$p" --force >"$out" 2>&1 || fail '--force did not allow a directory outside ~'
 undeploy --purge >/dev/null 2>&1
 [ ! -e "$case_dir/outside" ] || fail 'purge kept a marked directory outside ~'
 pass '--force allows a directory outside ~'
@@ -502,7 +515,7 @@ pass '--force allows a directory outside ~'
 fixture password
 p1=$(free_port 127.0.0.2)
 p2=$(free_port 127.0.0.2)
-deploy --http --port "$p1" >"$case_dir/first" 2>&1 || fail 'first install failed'
+deploy --static --http --port "$p1" >"$case_dir/first" 2>&1 || fail 'first install failed'
 : >"$EVENTS"
 out=$case_dir/locked
 FAKE_SUDO_PASSWORD=1 deploy --port "$p2" --no-build >"$out" 2>&1 || fail 'a password-protected sudo stopped the deployment'
@@ -529,7 +542,7 @@ fixture no-ufw
 rm "$case_dir/bin/ufw"
 p=$(free_port 127.0.0.2)
 out=$case_dir/out
-deploy --http --port "$p" >"$out" 2>&1 || fail 'deploy without ufw failed'
+deploy --static --http --port "$p" >"$out" 2>&1 || fail 'deploy without ufw failed'
 assert_contains "$out" 'ufw is not installed'
 assert_lacks "$EVENTS" 'ufw'
 [ -z "$(state rule_port)" ] || fail 'a rule was recorded without ufw'
@@ -539,7 +552,7 @@ pass 'without ufw the firewall is left alone'
 fixture no-tailscale
 p=$(free_port 127.0.0.1)
 out=$case_dir/out
-FAKE_TS_DOWN=1 deploy --port "$p" >"$out" 2>&1 || fail 'deploy without Tailscale failed'
+FAKE_TS_DOWN=1 deploy --static --port "$p" >"$out" 2>&1 || fail 'deploy without Tailscale failed'
 assert_contains "$out" 'warning: Tailscale does not answer'
 assert_contains "$HOME/$unit" '--bind 127.0.0.1'
 assert_contains "$out" "http://127.0.0.1:$p/"
@@ -564,11 +577,31 @@ p=$(free_port 127.0.0.1)
 holder=$!
 sleep 0.5
 out=$case_dir/out
-if deploy --port "$p" >"$out" 2>&1; then status=deployed; else status=refused; fi
+if deploy --static --port "$p" >"$out" 2>&1; then status=deployed; else status=refused; fi
 kill "$holder"
 [ "$status" = refused ] || fail 'deployed on a port another program holds'
 assert_contains "$out" "cannot listen on 127.0.0.1:$p"
 pass 'a port another program holds is refused before anything changes'
+
+# The first run's default is the wiki's server, which the next run keeps.
+fixture default
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+out=$case_dir/first
+deploy --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the first install without a mode failed'
+assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
+assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
+assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$HOME/wiki-demo/data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p --admin-listen 127.0.0.1:$a --secure-cookies"
+[ ! -e "$HOME/wiki-demo/server.mjs" ] || fail 'the first install without a mode installed the demo'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer'
+[ "$(state mode)" = server ] || fail 'state does not record the server'
+: >"$EVENTS"
+deploy --no-build >"$case_dir/again" 2>&1 || fail 'the redeploy without a mode failed'
+assert_contains "$HOME/$unit" '/bin/wiki-server" serve'
+assert_contains "$EVENTS" 'wiki-server backup'
+[ "$(state mode)" = server ] || fail 'the redeploy forgot the server'
+undeploy --purge-data >/dev/null 2>&1
+pass 'a first install without --server or --static deploys the server, and the next run keeps it'
 
 # The wiki's server.
 fixture server
@@ -783,7 +816,7 @@ pass 'a deployment with the old options loses them and their secrets, and is tol
 
 fixture not-a-server
 out=$case_dir/out
-if deploy --admin-port 9001 >"$out" 2>&1; then fail '--admin-port deployed the demo'; fi
+if deploy --static --admin-port 9001 >"$out" 2>&1; then fail '--admin-port deployed the demo'; fi
 assert_contains "$out" 'is for the wiki'"'"'s server'
 if deploy --server --port 9000 --admin-port 9000 >"$out" 2>&1; then fail 'one port for both listeners was deployed'; fi
 assert_contains "$out" 'both 9000'
@@ -806,7 +839,7 @@ pass 'a server deployment is not moved away from its data'
 # run moves it behind tailscale serve and deletes the rule.
 fixture upgrade
 p=$(free_port 127.0.0.2)
-deploy --http --port "$p" >"$case_dir/first" 2>&1 || fail 'the plain HTTP deploy failed'
+deploy --static --http --port "$p" >"$case_dir/first" 2>&1 || fail 'the plain HTTP deploy failed'
 assert_contains "$EVENTS" "ufw allow in on tailscale0 to any port $p proto tcp comment wiki-demo"
 sed -i '/^https=/d; /^https_host=/d; /^serve_port=/d' "$HOME/.config/wiki-demo/wiki-demo.state"
 : >"$EVENTS"
@@ -826,7 +859,7 @@ pass 'a deployment from before HTTPS moves behind tailscale serve on its next ru
 fixture no-operator
 p=$(free_port 127.0.0.1)
 out=$case_dir/out
-FAKE_TS_NO_OPERATOR=1 deploy --port "$p" >"$out" 2>&1 || fail 'a serve the user may not set stopped the deployment'
+FAKE_TS_NO_OPERATOR=1 deploy --static --port "$p" >"$out" 2>&1 || fail 'a serve the user may not set stopped the deployment'
 assert_contains "$EVENTS" "tailscale serve --bg http://127.0.0.1:$p"
 assert_contains "$out" 'Access denied'
 assert_contains "$out" "    sudo tailscale serve --bg http://127.0.0.1:$p"
@@ -857,7 +890,7 @@ fixture adopt
 p=$(free_port 127.0.0.1)
 printf 'http://127.0.0.1:%s\n' "$p" >"$FAKE_TS_SERVE"
 out=$case_dir/out
-FAKE_TS_FUNNEL=1 deploy --port "$p" >"$out" 2>&1 || fail 'deploying beside a serve set by hand failed'
+FAKE_TS_FUNNEL=1 deploy --static --port "$p" >"$out" 2>&1 || fail 'deploying beside a serve set by hand failed'
 assert_lacks "$EVENTS" 'tailscale serve'
 assert_contains "$out" "tailscale serve already proxies $https_url to 127.0.0.1:$p: leaving it as it is"
 assert_contains "$out" 'Funnel is on'
@@ -874,7 +907,7 @@ fixture other-serve
 p=$(free_port 127.0.0.1)
 printf 'http://127.0.0.1:3000\n' >"$FAKE_TS_SERVE"
 out=$case_dir/out
-deploy --port "$p" >"$out" 2>&1 || fail 'deploying beside another serve failed'
+deploy --static --port "$p" >"$out" 2>&1 || fail 'deploying beside another serve failed'
 assert_contains "$out" "$https_url already serves proxy http://127.0.0.1:3000, which this deployment did not set"
 assert_contains "$out" "tailscale serve --bg http://127.0.0.1:$p (or deploy this one with --http)"
 assert_lacks "$EVENTS" 'tailscale serve'
@@ -887,7 +920,7 @@ pass 'another serve at the HTTPS address is left alone by deploy and undeploy'
 fixture old-tailscale
 p=$(free_port 127.0.0.1)
 out=$case_dir/out
-FAKE_TS_VERSION=1.50.1 deploy --port "$p" >"$out" 2>&1 || fail 'deploying with an old Tailscale failed'
+FAKE_TS_VERSION=1.50.1 deploy --static --port "$p" >"$out" 2>&1 || fail 'deploying with an old Tailscale failed'
 assert_contains "$out" 'this Tailscale (1.50.1) is older than 1.52'
 assert_contains "$out" "    sudo tailscale serve https:443 / http://127.0.0.1:$p"
 assert_lacks "$EVENTS" 'tailscale serve'
@@ -899,7 +932,7 @@ pass 'a Tailscale older than 1.52 gets the older form of the command printed, no
 fixture no-magicdns
 p=$(free_port 127.0.0.2)
 out=$case_dir/out
-FAKE_TS_NO_MAGICDNS=1 deploy --port "$p" >"$out" 2>&1 || fail 'deploying without MagicDNS failed'
+FAKE_TS_NO_MAGICDNS=1 deploy --static --port "$p" >"$out" 2>&1 || fail 'deploying without MagicDNS failed'
 assert_contains "$out" 'warning: MagicDNS is off'
 assert_contains "$out" 'https://login.tailscale.com/admin/dns'
 assert_contains "$HOME/$unit" "--port $p --bind 127.0.0.2"
@@ -922,7 +955,7 @@ pass 'without MagicDNS or HTTPS certificates it serves plain HTTP and says what 
 fixture cert-pending
 p=$(free_port 127.0.0.1)
 out=$case_dir/out
-FAKE_HTTPS_DOWN=1 WIKI_DEPLOY_HTTPS_WAIT=2 deploy --port "$p" >"$out" 2>&1 || fail 'an HTTPS address not answering yet failed the deploy'
+FAKE_HTTPS_DOWN=1 WIKI_DEPLOY_HTTPS_WAIT=2 deploy --static --port "$p" >"$out" 2>&1 || fail 'an HTTPS address not answering yet failed the deploy'
 assert_contains "$out" "warning: $https_url does not answer yet"
 [ "$(grep -c "curl $https_url" "$EVENTS")" -ge 2 ] || fail 'the HTTPS address was not tried again'
 assert_contains "$out" "  $https_url"
@@ -933,7 +966,7 @@ pass 'an HTTPS address that does not answer yet is retried, then warned of'
 fixture bind
 p=$(free_port 127.0.0.2)
 out=$case_dir/out
-deploy --bind 0.0.0.0 --port "$p" >"$out" 2>&1 || fail 'deploying on 0.0.0.0 failed'
+deploy --static --bind 0.0.0.0 --port "$p" >"$out" 2>&1 || fail 'deploying on 0.0.0.0 failed'
 assert_contains "$out" '--bind 0.0.0.0 implies --http'
 assert_lacks "$EVENTS" 'tailscale serve'
 [ "$(state https)" = no ] || fail '--bind 0.0.0.0 was recorded as HTTPS'

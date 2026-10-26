@@ -23,7 +23,8 @@ then reads and writes the wiki over HTTP. The page says which
 (`<meta name="wiki-backend" content="demo">` or `"server"`), so the build decides
 by the pages it writes: `npm run build-wasm` writes the demo's (what GitHub Pages
 serves), `WIKI_BACKEND=server npm run build-wasm` the server's, and
-`toolchain/deploy-local.sh --server` deploys the server with those. The plan of work is in [docs/PLAN.md](docs/PLAN.md): phases from the
+`toolchain/deploy-local.sh` deploys the server with those (and, with `--static`,
+the demo). The plan of work is in [docs/PLAN.md](docs/PLAN.md): phases from the
 serverless MVP demo through a server with persistence to authentication and
 authorisation.
 
@@ -126,22 +127,30 @@ sent anywhere, and a reload starts the demo over.
 
 ## Deploying on your own machine
 
-`toolchain/deploy-local.sh` builds the demo (or, with `--server`, the wiki's
-server; see [The wiki's server](#the-wikis-server)) and serves it from a Linux machine of
-your own (x86_64 Debian or Ubuntu) as a systemd user service, for you and your
-devices on its Tailscale network, over HTTPS at the machine's name there,
-`https://<machine>.<tailnet>.ts.net/`. Run it from the checkout, as the user the
-service should run as (not root):
+`toolchain/deploy-local.sh` builds the wiki's server (see
+[The wiki's server](#the-wikis-server)), or with `--static` the demo, and serves it
+from a Linux machine of your own (x86_64 Debian or Ubuntu) as a systemd user
+service, for you and your devices on its Tailscale network, over HTTPS at the
+machine's name there, `https://<machine>.<tailnet>.ts.net/`. Run it from the
+checkout, as the user the service should run as (not root):
 
 ```sh
 sh toolchain/deploy-local.sh --port 8080    # or: npm run deploy-local -- --port 8080
 ```
 
+The first run deploys the server, since the demo's home is GitHub Pages and a
+machine of your own is for a wiki that keeps what is written in it; `--static`
+deploys the demo instead, as static files. Later runs deploy what the previous one
+did until told otherwise (`--server`, `--static`), so a deployment keeps its kind
+across redeploys, the demo deployments of earlier versions included.
+
 It runs the bootstrap (`toolchain/bootstrap.sh toolchain`), `npm ci` and
 `npm run build-wasm-opt`, the `-O2` production build, and stops on any failure
 before touching what is running. The first `-O2` build compiles every dependency
-again and can take over an hour; later ones take minutes. Then it stops the running
-service, empties `~/wiki-demo` (or `--dir`) and copies into it the built page
+again and can take over an hour; later ones take minutes. What follows is the
+demo's deployment (`--static`); the server's installs `bin/wiki-server` in place of
+`server.mjs`, beside its data, and adds its admin listener (below). It stops the
+running service, empties `~/wiki-demo` (or `--dir`) and copies into it the built page
 (`app/`, with a brotli'd copy of each compressible file for browsers that accept it)
 and `server.mjs`, a static server with no dependencies that serves the page as
 GitHub Pages does, `404.html` included. It writes and enables
@@ -246,9 +255,9 @@ succeeds. `sh toolchain/deploy-local.sh --stop` does the same.
 
 ### The wiki's server
 
-With `--server` the same script deploys the wiki's server, `wiki-server`, in
-place of the static demo: the wiki's pages, kept on this machine, served to
-your tailnet.
+On a first run, or with `--server` (which also moves a demo deployment over), the
+script deploys the wiki's server, `wiki-server`: the wiki's pages, kept on this
+machine, served to your tailnet.
 
 ```sh
 sh toolchain/deploy-local.sh --server --port 8080
@@ -291,8 +300,9 @@ The unit runs `wiki-server serve --data ~/wiki-demo/data --static ~/wiki-demo/ap
 The admin listener is not served: it stays on this machine. When the
 administration's Server section has no public address yet, the deploy says to
 set it to the HTTPS one (and says so too when it holds another); it is a setting
-of the panel, not of the script. `--server` and the ports are remembered for the next run,
-like the other options; `--static` goes back to the demo.
+of the panel, not of the script. The kind of deployment (`--server`, or `--static`) and
+the ports are remembered for the next run, like the other options; `--static` goes over
+to the demo, keeping `data/`.
 
 - **PDFs, optionally.** Pages export as Word, HTML, EPUB, PowerPoint and Beamer
   LaTeX with nothing installed. The PDFs are typeset by `xelatex`, which the

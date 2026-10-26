@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build the wiki and serve it from this machine, as a systemd user service:
-# the serverless demo (static files), or with --server the wiki's server,
-# wiki-server, with its data on this machine.
+# the wiki's server, wiki-server, with its data on this machine, or with
+# --static the serverless demo as static files (whose home is GitHub Pages).
 #
 #   sh toolchain/deploy-local.sh [--server | --static] [--http | --https] [--port N]
 #                                [--bind ADDRESS] [--admin-port N] [--dir DIR] [--name NAME]
@@ -63,10 +63,11 @@
 # taken from the previous run (the state is kept in
 # ~/.config/wiki-demo/<name>.state); the first run defaults to port 8080.
 #
-#   --server         deploy the wiki's server (wiki-server) with its data in <dir>/data,
-#                    rather than the serverless demo; remembered for the next run
-#   --static         deploy the serverless demo as static files (the first run's default);
-#                    a server deployment's data/ is kept, not deleted
+#   --server         deploy the wiki's server (wiki-server) with its data in <dir>/data
+#                    (the first run's default); remembered for the next run
+#   --static         deploy the serverless demo as static files instead, as GitHub Pages
+#                    serves it; remembered for the next run; a server deployment's data/
+#                    is kept, not deleted
 #   --http           serve plain HTTP on the Tailscale address, without Secure cookies,
 #                    for a tailnet without HTTPS certificates; remembered for the next run
 #   --https          serve HTTPS through `tailscale serve` (the first run's default)
@@ -175,6 +176,11 @@ prev_bind=$(state_get bind)
 prev_bind_choice=$(state_get bind_choice)
 prev_rule_port=$(state_get rule_port)
 prev_mode=$(state_get mode)
+# A deployment of a version before --server kept no mode, and was the demo:
+# it stays one, whatever the first run's default is now.
+if [ -z "$prev_mode" ] && [ -f "$state_file" ]; then
+  prev_mode=static
+fi
 prev_admin_port=$(state_get admin_port)
 prev_trust=$(state_get trust)
 # Unset in a deployment of a version before HTTPS was the default, which
@@ -344,7 +350,7 @@ fi
 # minutes (over an hour the first time), and the build before the running
 # service is touched.
 
-[ "$(id -u)" != 0 ] || die "run this as the user the demo should run as, not root: it installs a systemd user service under that user"
+[ "$(id -u)" != 0 ] || die "run this as the user the wiki should run as, not root: it installs a systemd user service under that user"
 require_systemd_user
 
 port=${opt_port:-${prev_port:-8080}}
@@ -353,7 +359,10 @@ case $port in
 esac
 { [ "$port" -ge 1024 ] && [ "$port" -le 65535 ]; } || die "invalid --port $port: a number from 1024 to 65535 (lower ports need root)"
 
-mode=${opt_mode:-${prev_mode:-static}}
+# The first run deploys the server: the demo's home is GitHub Pages, and a
+# machine of one's own is for a wiki that keeps what is written in it. A
+# later run keeps what the previous one deployed.
+mode=${opt_mode:-${prev_mode:-server}}
 admin_port=${opt_admin_port:-${prev_admin_port:-8081}}
 case $admin_port in
   '' | 0* | *[!0-9]*) die "invalid --admin-port '$admin_port': a number from 1024 to 65535" ;;
