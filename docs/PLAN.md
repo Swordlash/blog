@@ -2505,6 +2505,36 @@ Amended by the planning session after each work package's report.
   `Test.Storage.Audit`, `Test.Server.Observability`, admin contract cases on three backends,
   `Test.Browser.Activity`, goldens, the smoke test's step for `/healthz`, `/metrics` and the
   activity; server 712 (2 pending), app 929, browser 210.
+- **WP4.14 merged** (2026-10-26, PR #73, `main` at `8e33be4`). Migration `0010-space-blog.sql`
+  (`spaces.blog`); the flag is part of `SpaceProfile`, set from "Show as a blog" in Space
+  settings, carried by the export as an additive field. `Wiki.Core.Blog`: posts are the
+  space's top-level pages other than its home page, newest first by creation date (the first
+  version); nested pages are not posts; `neighbours`, pages of 10 (`?page=n`, the new `Posts`
+  route), `excerptOf` (the first paragraph with text, markup, images, inline code and footnote
+  marks dropped, formulas kept as TeX, cut on a word at 300 characters), `firstImage`. New
+  read `postDetails` (first author and comment count per page) on Mem, HTTP (cached,
+  preloaded, dropped on a comment write) and SQLite, `GET spaces/<id>/post-details`.
+  `View/Blog.hs` reuses the directory's cards, the home page above the list; `postInfo` in
+  `View/Page.hs` shows "Posted <date>" and Previous/Next in the blog's order. `Wiki.App.Head`:
+  the shell's `Settled` answers with a `Head` (title, description, `og:title/description/url/
+  type/image`, `<link rel="alternate">` for a public blog) written by `Static.withHead` for
+  both the prerender and the server render; further `<head>` content goes in `headTags`.
+  `Wiki.Server.Feed`: `/s/<space>/feed.xml` (Atom) and `/feed.rss` (RSS 2.0, author in
+  `dc:creator`) with the newest 20 posts' full HTML through the allowlist and absolute links;
+  `/sitemap.xml` of public spaces and pages with `lastmod`, capped at 50 000; only what an
+  anonymous reader may see, 404 otherwise and in a closed wiki; absolute addresses from the
+  panel's public URL, else the request's forwarded host and scheme (`Wiki.Server.Address`).
+  Limits: the demo's blog has two posts and no authors (more posts break 24 contract and
+  order tests; archives carry no versions, so imported pages have no author); the demo's
+  prerender has a path for `og:url`; feeds asked on the admin listener without a public URL
+  fall under `/admin/`; no visible feed link, only the `<link>`. Feed tests validate against
+  RELAX NG schemas (RFC 4287's; RSS 2.0's written from the spec) with `xmllint` and are
+  pending where it is missing (`libxml2-utils` added to the runner's package list in the
+  README). Follow-up noted: `setSpaceProfileTx` is not audited (WP4.10 left it out), so a
+  profile change, the blog flag included, writes no `audit_log` row; add a `record` there in
+  the next package touching `Storage.hs`. Tests: core 682, app 959, server 732 (2 pending),
+  browser 212; both smoke tests walk the blog, the server's checks the public blog, head tags,
+  both feeds, the sitemap and the 404s.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
