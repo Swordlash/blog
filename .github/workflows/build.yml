@@ -14,6 +14,17 @@ on:
     paths-ignore:
       - '**.md'
   workflow_dispatch:
+    inputs:
+      # Which runner a run by hand takes: the owner's (the default), or
+      # GitHub's hosted ones, to exercise the hosted path, which only fork
+      # pull requests and bots take otherwise.
+      runner:
+        description: "Where to run: self-hosted (the owner's machine) or hosted (ubuntu-latest)"
+        type: choice
+        options:
+          - self-hosted
+          - hosted
+        default: self-hosted
 
 # A new push to a branch (or to a pull request's branch) cancels the run still
 # going for the previous one: only the newest commit's result matters.
@@ -24,10 +35,29 @@ concurrency:
 permissions:
   contents: read
 
-# Where the jobs run: the self-hosted runner registered for this repository
-# (the owner's; GitHub's hosted runners are refused by the account's Actions
-# budget). To go back to hosted runners, set `runs-on: ubuntu-latest` here;
-# the hosted steps below still work. See the README's CI section.
+# Where the jobs run is chosen by trust, by one expression on every job's
+# `runs-on` (the same in each; GitHub has no way to name it once). The
+# self-hosted runner registered for this repository is the owner's machine,
+# and a job there runs whatever the checked-out tree builds (Template
+# Haskell, cabal's dependencies, npm's scripts) as the runner's user. So it
+# takes only what someone with write access put in this repository: a push
+# to main, a run by hand, a pull request whose head branch is in this
+# repository (only write access pushes one: the owner, and the Claude
+# sessions acting for them). A pull request from a fork, whose code anyone
+# may have written, and anything a bot started (Dependabot's branches are in
+# this repository, so the head alone would not tell), run on GitHub's hosted
+# runners instead, which start empty and are thrown away; so does a run by
+# hand with the input `runner: hosted`. A fork's pull request is compared
+# by the head's repository rather than by its `fork` flag, so that a head
+# whose repository has been deleted (null) goes to the hosted runners too.
+# A fork's run also waits for the owner's approval first: the repository's
+# setting, Settings, Actions, General, "Fork pull request workflows from
+# outside collaborators", requires it for every outside contributor. That
+# approval is the guard that holds when this one does not: a pull request's
+# run takes this file from the pull request's own tree, so a fork could
+# change the expression, and approving a fork's run means reading what it
+# changes here first. No job uses a secret but the run's own read-only
+# token. See the README's CI section.
 #
 # The two kinds of runner get the toolchain differently, and every step that
 # differs says which it is for with `runner.environment`. A hosted runner
@@ -73,7 +103,8 @@ jobs:
   # skip. Not run for pull requests or by hand, where they always run.
   tested:
     if: github.event_name == 'push'
-    runs-on: self-hosted
+    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
+    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
     permissions:
       contents: read
       actions: read
@@ -95,7 +126,8 @@ jobs:
   native:
     needs: tested
     if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
-    runs-on: self-hosted
+    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
+    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
 
     steps:
     - name: Checkout code
@@ -190,7 +222,8 @@ jobs:
   wasm:
     needs: tested
     if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
-    runs-on: self-hosted
+    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
+    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
 
     steps:
     - name: Checkout code
@@ -367,11 +400,11 @@ jobs:
     - name: Smoke-test the page in a browser
       run: npm run smoke-test
 
-    # The repository is private, so nothing is deployed: the built page is
-    # kept with the run instead, to download and serve. Only on a hosted
-    # runner: the account's artifact storage quota refuses uploads, and on
-    # the self-hosted runner the page stays on the machine under
-    # dist-newstyle/wasm/public/app anyway.
+    # Nothing is deployed from here yet: the built page is kept with the run
+    # instead, to download and serve. Only on a hosted runner: the account's
+    # artifact storage quota refused uploads while the repository was
+    # private, and on the self-hosted runner the page stays on the machine
+    # under dist-newstyle/wasm/public/app anyway.
     - name: Upload the built page
       if: runner.environment == 'github-hosted'
       uses: actions/upload-artifact@v5
@@ -383,7 +416,8 @@ jobs:
   format:
     needs: tested
     if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
-    runs-on: self-hosted
+    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
+    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
 
     steps:
     - name: Checkout code

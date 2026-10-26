@@ -764,16 +764,66 @@ commit, or of a merge commit's second parent with the same tree, and when there 
 the three jobs are skipped. Pull requests are rebased onto `main` and `main` is
 fast-forwarded to their head, so the push to `main` is normally that very commit.
 
-They run on the self-hosted runner registered for this repository (`runs-on: self-hosted`
-in every job); GitHub's hosted runners are refused by the account's Actions budget. To go
-back to them, change `runs-on` to `ubuntu-latest`: the hosted steps are kept. On a hosted
+### Which runner, and who may run on it
+
+The jobs run on one of two kinds of runner, chosen by trust by one expression on
+every job's `runs-on`:
+
+- **The self-hosted runner** registered for this repository, the owner's machine,
+  for a push to `main`, a run by hand (*Run workflow*), and a pull request whose
+  head branch is in this repository. Only someone with write access pushes such a
+  branch: the owner, and the Claude sessions working for them.
+- **GitHub's hosted runners** (`ubuntu-latest`) for a pull request from a fork
+  (its head's repository is not this one), for anything a bot started (an actor
+  whose name ends in `[bot]`, such as Dependabot, whose branches are in this
+  repository), and for a run by hand with the input `runner` set to `hosted`. That
+  input (`self-hosted` by default) is how the hosted path is exercised: it has not
+  run since the runner moved to the owner's machine, and runs free once the
+  repository is public.
+
+The second layer is a repository setting, which the owner sets once: Settings,
+Actions, General, "Fork pull request workflows from outside collaborators",
+**Require approval for all external contributors**. A fork's pull request then
+runs nothing until the owner approves the run, and the run it gets goes to the
+hosted runners.
+
+GitHub [advises against self-hosted runners on public
+repositories](https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#hardening-for-self-hosted-runners),
+because a job runs whatever code the pull request brings on the runner's machine,
+and a self-hosted runner, unlike a hosted one, is not thrown away after the job.
+What limits the exposure here: code from outside (a fork, a bot) is sent to the
+hosted runners, and a fork's only once the owner has approved its run; the runner runs as a
+user of its own, without `sudo` (as set up below), so a job reaches what that
+user can and no more; and the workflow uses no secret but the run's own token,
+which may only read the repository (and its Actions runs, in `tested`).
+
+What remains:
+
+- **The expression is in the workflow, and a pull request can change the
+  workflow.** A pull request's run uses the workflow file of the pull request's
+  own tree, so a fork could set `runs-on: self-hosted` in its copy. The approval
+  is what stops that: before approving a fork's run, read what it changes under
+  `.github/` (and in the build's scripts), and approve only a change you would
+  run on your own machine.
+- Whatever is on `main` or on a branch of this repository runs on the owner's
+  machine as the runner's user, build-time code included (Template Haskell,
+  `Setup.hs`, cabal's and npm's dependencies at their pinned versions): write
+  access to the repository is access to that user, and a dependency that turned
+  malicious would run there too.
+- `pull_request_target`, which runs with the repository's rights whatever the
+  pull request's origin, is not used, and must not be without the same care.
+
+### The toolchain on each runner
+
+On a hosted
 runner the toolchain comes from `haskell-actions/setup`, `setup-node`, ghc-wasm-meta
 and caches of the cabal store and the wasm tools, as in haskell-halogen. On a
 self-hosted runner every job runs `sh toolchain/bootstrap.sh toolchain` instead, which
 installs the toolchain into the runner user's home the first time (a while: GHC, the
 wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and puts it on
 `PATH` with `sh toolchain/bootstrap.sh path`. Nothing is cached or uploaded to GitHub
-there (the account's artifact storage quota refuses uploads): the toolchain, the cabal
+there (the account's artifact storage quota refused uploads while the repository was
+private): the toolchain, the cabal
 store and the built page stay on the machine. One runner runs one job at a time, so
 the jobs queue.
 
