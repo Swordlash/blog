@@ -2355,6 +2355,35 @@ Amended by the planning session after each work package's report.
   6 browser cases, the server's smoke test downloads a DOCX; server 629 (2 pending). The
   Dockerfile takes `--build-arg WIKI_TEX=1`. Skylighting is now linked, ready for the
   server-render swap.
+- **WP4.9 merged** (2026-10-26, PR #69, `main` at `bd0cf20`). Backups the server makes
+  itself, only once an administrator turns them on in the panel's Server section ("Backups",
+  `View/Backups.hs`, its own component mounted by the section; the demo shows it disabled).
+  `Wiki.Api.Backups`: on/off, `DailyAt h m` (**UTC**) or `EveryHours n`, retention `{daily,
+  weekly}` (the newest, plus the newest of each of the last N days and M ISO weeks), an
+  optional destination (a directory that must exist, or an `rclone` remote whose config is a
+  write-only secret as WP4.4's), `GET`/`PUT admin/server/backups`, `POST …/backups/run`.
+  `Wiki.Server.Backups`: a thread started with the server, rereading the settings each
+  minute and woken by a change or "Back up now"; `VACUUM INTO data/backups/<time>.sqlite`
+  with the storage held for the copy only, then `PRAGMA integrity_check` (a failing copy is
+  deleted), pruning, the off-site copy (`rclone copyto` + `rclone copy --ignore-existing` for
+  the blobs, laid out as a data directory, nothing deleted there; the config written per run
+  to a 0600 file in a 0700 temporary directory, deleted after); errors logged and retried a
+  minute later; the last result in the `backup-last` settings row (no migration, no log
+  table). `--rclone PATH` names the program only. `wiki-server restore BACKUP --data DIR
+  [--attachments DIR]` checks integrity, schema and version, refuses a directory a server
+  holds, moves the old database to `DIR/replaced/<time>/`, brings missing attachment files
+  over and warns about the rest. Live detection is an OS lock on `<data>/wiki.lock` held by
+  `openStorage` (not by `withStorageAside`, so the console's `users`, `oidc` and `backup`
+  work beside a running server); a second storage on one data directory is now refused
+  (`DataDirInUse`), tests that restarted a server use `withDemoRestarted`. Agent's choices
+  the owner may revisit: "Back up now" is refused while backups are off; schedule times are
+  UTC; the deploy's `backup --keep 10` counts every file in `data/backups`, so a deploy can
+  cut the panel's weekly history and the panel's pruning can delete deploy backups (both in
+  the README). Also fixed: the server smoke test's provider step clicked before the program
+  had adopted the page. Tests: 11 HTTP cases with a fake `rclone`, 7 storage cases including
+  back up → restore into a fresh directory → compare every table and the archive, 2 browser
+  cases, the smoke test turns backups on, backs up, has `restore` refused under the server
+  and done beside it. Not run: the Docker image (the README's Docker restore line).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
