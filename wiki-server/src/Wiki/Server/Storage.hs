@@ -84,6 +84,7 @@ module Wiki.Server.Storage
   , blobPath
   , spaceIconFile
   , mayReadPage
+  , locatedFor
   , editorOf
   , threadsThen
 
@@ -99,7 +100,7 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID (..))
 import Data.ByteString qualified as BS
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -112,10 +113,13 @@ import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
+import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark)
+import Wiki.Api.Security (MailToken (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkServerSettings, kindName, secretState, securityName)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Access (Access (..), accessName)
 import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -126,6 +130,7 @@ import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody, mayCommen
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Id
+import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), pageTreeOrder)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath)
@@ -147,6 +152,7 @@ import Wiki.Core.Permission
   , mayMovePage
   , mayMoveSpace
   )
+import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), bodyText, folded, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
@@ -160,6 +166,7 @@ import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
 import Wiki.Server.Storage.Comments qualified as Comments
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
 import Wiki.Server.Storage.Migrate (migrate, schemaVersion)
+import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Rows
 
 --------------------------------------------------------------------------------
@@ -196,6 +203,11 @@ data Config = Config
   -- ("Wiki.Server.Events"), told of every change to its comments and of
   -- every save of it. Called once the change is committed, before anyone
   -- else may use the connection, so it must not wait.
+  , notify :: [(UserId, Notification)] -> IO ()
+  -- ^ Who is told of the notifications a write made
+  -- ("Wiki.Core.Notification"): the users' tabs over the live channel,
+  -- and the thread that mails them. Called as 'publish' is, and must not
+  -- wait either.
   }
 
 -- | Attachments at @\/api\/v1\/attachments\/\<id\>@, and nobody told of
@@ -206,6 +218,7 @@ defaultConfig =
     { attachmentAddress = \a -> "/api/v1/attachments/" <> a.id.text
     , iconAddress = \s -> "/api/v1/spaces/" <> s.id.text <> "/icon"
     , publish = \_ _ -> pass
+    , notify = \_ -> pass
     }
 
 -- | Open the storage in a data directory ("Wiki.Server.Storage.Layout"),
@@ -374,6 +387,8 @@ data Ctx = Ctx
   , address :: Text
   -- ^ Where the request came from, as the audit log records it: a
   -- network address, @console@, or empty where it is not known.
+  , told :: IORef [(UserId, Notification)]
+  -- ^ The notifications the transaction made, told once it commits.
   }
 
 -- | An operation, in a transaction: what it finds wrong ends it with a
@@ -403,12 +418,15 @@ transactThen st who = transactThenFrom st who ""
 transactThenFrom :: Storage -> Who -> Text -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
 transactThenFrom st who address mode (Tx body) committed = withMVar st.connection $ \c -> do
   execute_ c (case mode of Reads -> "BEGIN"; Writes -> "BEGIN IMMEDIATE")
-  result <- (context st c who address >>= runExceptT . runReaderT body) `onException` execute_ c "ROLLBACK"
+  ctx <- context st c who address `onException` execute_ c "ROLLBACK"
+  result <- runExceptT (runReaderT body ctx) `onException` execute_ c "ROLLBACK"
   case result of
     Left _ -> execute_ c "ROLLBACK"
     Right a -> do
       execute_ c "COMMIT" `onException` execute_ c "ROLLBACK"
       committed a
+      made <- readIORef ctx.told
+      unless (null made) (st.config.notify (reverse made))
   pure result
 
 -- | What an operation starts from: the grants with whom the wiki is open
@@ -419,8 +437,9 @@ context st c who address = do
   rows <- loadGrants c
   wiki <- settingsWith st c
   server <- serverSettingsWith st c
+  told <- newIORef []
   let stored = Grants {global = rows.global, spaces = rows.spaces, access = wiki.access}
-  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator, wiki, server, address}
+  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator, wiki, server, address, told}
   case who of
     Anonymous -> pure (ctx stored Nothing Nothing Nothing Nothing)
     AsUser u ->
@@ -757,6 +776,12 @@ copyDatabase st target = withDatabase st (`backupInto` target)
 -- asks before it tells them of the page ("Wiki.Server.Events").
 mayReadPage :: Storage -> Who -> PageId -> IO Bool
 mayReadPage st who pid = isRight <$> transact st who Reads (findNode pid >>= chainOfPage >>= requireView)
+
+-- | A user's notification with where its page is now, if they may still
+-- read it: what the thread that mails them asks before it does
+-- ("Wiki.Server.Notifier").
+locatedFor :: Storage -> UserId -> Notification -> IO (Maybe Notification)
+locatedFor st u n = fromRight Nothing <$> transact st (AsUser u) Reads (locatedTx n)
 
 -- | Someone as the live channel names whoever edits a page, if they may
 -- edit it ('Nothing' if they may not, or it is not there, or they are
@@ -1334,6 +1359,7 @@ savePageTx pid base title body = do
       (t, body, Stamp updatedAt, bodyText body, pid.text)
     insertVersion c p' author
     for_ author $ \u -> execute c "DELETE FROM drafts WHERE page_id = ? AND author = ?" (pid.text, u.text)
+  tellTx p'.id p'.space p'.title Nothing "" PageSaved (newlyMentioned p.body body)
   pure p'
 
 -- | A page and the pages under it, by id, among the nodes of its space.
@@ -1799,18 +1825,20 @@ openThreadTx pid anchor body = do
     Comments.insertThread x tid pid checked time
     Comments.insertComment x cid tid u text time
   t <- threadNow pid tid
+  tellOfComment pid tid [u] text (mentionedIn text)
   pure (t, pid, ThreadOpened t)
 
 replyTx :: PageId -> CommentThreadId -> Text -> Tx (Comment, PageId, PageEvent)
 replyTx pid tid body = do
   (c, ts) <- discussion pid
-  _ <- threadIn ts tid
+  before <- threadIn ts tid
   u <- commenter c
   text <- commentText body
   cid <- CommentId <$> newId
   time <- now
   db (\x -> Comments.insertComment x cid tid u text time)
   made <- threadNow pid tid >>= (`commentIn` cid)
+  tellOfComment pid tid (ordNub (map (\x -> x.author.id) before.comments <> [u])) text (mentionedIn text)
   pure (made, pid, CommentAdded made)
 
 editCommentTx :: PageId -> CommentThreadId -> CommentId -> Text -> Tx (Comment, PageId, PageEvent)
@@ -1823,6 +1851,8 @@ editCommentTx pid tid cid body = do
   time <- now
   db (\x -> Comments.updateCommentBody x cid text time)
   edited <- threadNow pid tid >>= (`commentIn` cid)
+  p <- findNode pid
+  tellTx pid p.space p.title (Just tid) (excerptOf text) (EditedIn tid) (newlyMentioned old.body text)
   pure (edited, pid, CommentEdited edited)
 
 -- | The first comment of a thread is the thread: it goes with it, if
@@ -1857,6 +1887,166 @@ setResolvedTx pid tid resolved = do
     invalid "A thread about the whole page is not resolved: only one about a quote of it is."
   db (\x -> Comments.updateResolved x tid resolved)
   pure (t {resolved}, pid, ThreadResolved tid resolved)
+
+--------------------------------------------------------------------------------
+-- Notifications
+
+-- | Tell whoever the rules of "Wiki.Core.Notification" say of what the
+-- asker did to a page: a notification each, kept, waiting to be mailed
+-- if the user is mailed, and told once the transaction commits. The
+-- server's operator, who is no user, is told nothing, but what they do is
+-- told.
+tellTx :: PageId -> SpaceId -> Text -> Maybe CommentThreadId -> Text -> Occasion -> Set Text -> Tx ()
+tellTx pid sid title thread excerpt occasion logins = do
+  ctx <- ask
+  for_ ctx.author $ \actor -> do
+    stored <- db loadGrants
+    membership <- db loadMembership
+    telling <- db Notifications.loadTelling
+    maker <- db (`Notifications.pageMaker` pid)
+    nodes <- db (`pageNodes` sid)
+    let byLogin = Map.fromList [(t.user.login, t.user.id) | t <- telling]
+        grants = Grants {global = stored.global, spaces = stored.spaces, access = ctx.wiki.access}
+        watchers = [Watcher {principal = Permission.principal membership t.user.id, watchOwn = t.watchOwn, marks = t.marks} | t <- telling]
+        mailed = Set.fromList [t.user.id | t <- telling, t.mailing]
+        chain = chainOf ctx sid
+        happened =
+          Happened
+            { actor
+            , page = pid
+            , maker
+            , chain
+            , occasion
+            , mentioned = Set.fromList (mapMaybe (`Map.lookup` byLogin) (Set.toList logins))
+            }
+        location = PageLocation {space = map (\x -> x.slug) chain, page = fromMaybe [] (pathOf (\i -> find (\n -> n.id == i) nodes) pid)}
+        actorAuthor = maybe Author {id = actor, name = actor.text} (\u -> Author {id = u.id, name = u.displayName}) ctx.user
+    time <- now
+    for_ (recipients grants watchers happened) $ \(u, kind) -> do
+      i <- NotificationId <$> newId
+      let n = Notification {id = i, kind, page = pid, thread, actor = actorAuthor, title, excerpt, createdAt = time, read = False, location = Just location}
+      db (\c -> Notifications.insertNotification c u n (Set.member u mailed))
+      liftIO (modifyIORef' ctx.told ((u, n) :))
+
+-- | Tell of a comment made in a thread, by these people so far.
+tellOfComment :: PageId -> CommentThreadId -> [UserId] -> Text -> Set Text -> Tx ()
+tellOfComment pid tid people body logins = do
+  p <- findNode pid
+  tellTx pid p.space p.title (Just tid) (excerptOf body) (CommentedIn tid people) logins
+
+-- | The user asking, who must be one of the wiki's: the server's operator,
+-- who is not, has no notifications or watches.
+notified :: Tx UserId
+notified =
+  asks (\x -> x.user) >>= \case
+    Just u | u.id /= administratorId -> pure u.id
+    _ -> failWith Forbidden
+
+-- | A notification with where its page is now, if its user may still read
+-- it.
+locatedTx :: Notification -> Tx (Maybe Notification)
+locatedTx n = do
+  ctx <- ask
+  db (`pageNode` n.page) >>= \case
+    Nothing -> pure Nothing
+    Just p -> do
+      let chain = chainOf ctx p.space
+      if canView ctx.principal ctx.grants chain
+        then do
+          nodes <- db (`pageNodes` p.space)
+          let path = pathOf (\i -> find (\x -> x.id == i) nodes) p.id
+          pure (Just (withLocation (PageLocation (map (\x -> x.slug) chain) <$> path) n))
+        else pure Nothing
+
+notificationsTx :: Tx Notifications
+notificationsTx = do
+  u <- notified
+  shown <- catMaybes <$> (traverse locatedTx =<< db (`Notifications.loadNotifications` u))
+  pure Notifications {unread = length (filter (\n -> not n.read) shown), items = take maxListed shown}
+
+markReadTx :: ReadMark -> Tx Notifications
+markReadTx m = do
+  u <- notified
+  time <- now
+  db (\c -> Notifications.markNotificationsRead c u time m)
+  notificationsTx
+
+-- | A page or a space to watch, which the asker may view: its chain, and
+-- the page if it is one.
+watchedTx :: WatchTarget -> Tx ([Space], Maybe PageId)
+watchedTx = \case
+  WatchPage pid -> do
+    p <- findNode pid
+    c <- chainOfPage p
+    requireView c
+    pure (c, Just pid)
+  WatchSpace sid -> do
+    (_, c) <- findSpace sid
+    requireView c
+    pure (c, Nothing)
+
+watchingTx :: WatchTarget -> Tx Watch
+watchingTx target = do
+  (chain, page) <- watchedTx target
+  u <- notified
+  marks <- db (`Notifications.loadMarks` u)
+  case page of
+    Nothing -> pure (spaceWatch marks chain)
+    Just pid -> do
+      choices <- db (`Notifications.loadChoices` u)
+      maker <- db (`Notifications.pageMaker` pid)
+      pure (pageWatch (maybe True (\x -> x.watchOwn) choices) maker u marks chain pid)
+
+setWatchingTx :: WatchTarget -> Bool -> Tx Watch
+setWatchingTx target w = do
+  _ <- watchedTx target
+  u <- notified
+  db (\c -> Notifications.storeMark c u target w)
+  watchingTx target
+
+notificationSettingsTx :: Tx NotificationSettings
+notificationSettingsTx = do
+  u <- notified
+  server <- asks (\x -> x.server)
+  db (`Notifications.loadChoices` u) >>= \case
+    Nothing -> failWith Forbidden
+    Just cs ->
+      pure
+        NotificationSettings
+          { mail = effectiveMailMode cs.verified cs.mail
+          , watchOwn = cs.watchOwn
+          , verifiedEmail = cs.verified
+          , -- As the server's mailer is made ("Wiki.Server.Mail"'s 'mailerFrom').
+            mailing = isJust server.publicUrl && isJust server.mail
+          }
+
+setNotificationSettingsTx :: NotificationSettingsChange -> Tx NotificationSettings
+setNotificationSettingsTx change = do
+  u <- notified
+  db (\c -> Notifications.storeChoices c u change.mail change.watchOwn)
+  notificationSettingsTx
+
+-- | Of these logins, the users' who may sign in, for someone signed in.
+mentionableTx :: [Text] -> Tx (Map Text Author)
+mentionableTx logins =
+  asks (\x -> x.user) >>= \case
+    Nothing -> pure mempty
+    Just _ -> do
+      telling <- db Notifications.loadTelling
+      pure (Map.fromList [(t.user.login, Author {id = t.user.id, name = t.user.displayName}) | t <- telling, t.user.login `elem` logins])
+
+-- | Mentions, watches and notifications, as the class's Haddock says
+-- ("Wiki.App.Backend.Notifications"): each operation one transaction.
+instance (MonadIO m) => MonadNotifications (SqliteWiki m) where
+  mentionable = answer mempty . mentionableTx
+  notifications = run Reads notificationsTx
+  markRead = run Writes . markReadTx
+  watching = run Reads . watchingTx
+  setWatching target = run Writes . setWatchingTx target
+  notificationSettings = run Reads notificationSettingsTx
+  setNotificationSettings = run Writes . setNotificationSettingsTx
+  unsubscribe (MailToken token) =
+    run Writes (db (`Notifications.unsubscribeUser` token) >>= \found -> unless found (failWith NotFound))
 
 --------------------------------------------------------------------------------
 -- Whole wikis

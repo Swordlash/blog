@@ -90,6 +90,7 @@ import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Export (formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
+import Wiki.Api.Notifications (Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), TotpEnrolment (..))
 import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), named, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.Types
@@ -98,10 +99,13 @@ import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.App.Backend.Notifications qualified as Notifications
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (writeArchive)
 import Wiki.Core.Export.Zip (zipFiles)
 import Wiki.Core.Id
+import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Search (SearchQuery (..))
 import Wiki.Core.User (User (..))
@@ -555,6 +559,20 @@ handlers env caller =
           , delete = \t -> wiki (deleteThread p t) $> NoContent
           , resolve = \t r -> wiki (setResolved p t r.resolved)
           }
+    , -- The storage checks who may: everything is the user's own.
+      notifications =
+        NotificationsApi
+          { list = wiki notifications
+          , markRead = wiki . markRead
+          , settings = wiki notificationSettings
+          , setSettings = wiki . setNotificationSettings
+          , people = \logins -> runSqliteWiki env.storage who (mentionable logins)
+          , pageWatch = wiki . watching . WatchPage
+          , setPageWatch = \p w -> wiki (setWatching (WatchPage p) w.watching)
+          , spaceWatch = wiki . watching . WatchSpace
+          , setSpaceWatch = \sid w -> wiki (setWatching (WatchSpace sid) w.watching)
+          }
+    , unsubscribe = \token -> wiki (Notifications.unsubscribe token) $> NoContent
     }
   where
     who = caller.who

@@ -63,12 +63,13 @@ import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailure (..), MonadIndexedDB, StoreName (..))
 import Web.Storage.IndexedDB qualified as IDB
-import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError)
+import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
 import Wiki.App.Backend.Mem.Persist (Records, Stored (..), changes, records, restore, storeNames)
 import Wiki.App.Backend.Mem.State
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive)
@@ -285,6 +286,20 @@ instance (MonadIO m) => MonadComments (MemWiki m) where
   deleteComment pid tid = write . deleteCommentIn pid tid
   deleteThread pid = write . deleteThreadIn pid
   setResolved pid tid = write . setResolvedIn pid tid
+
+-- | Notifications, on the same store, kept as every other write is (each
+-- user's a record of "Wiki.App.Backend.Mem.Persist"'s): the bell and the
+-- watches, with no mail and no live channel. One switches users to see
+-- what another was told.
+instance (MonadIO m) => MonadNotifications (MemWiki m) where
+  mentionable = query . mentionableIn
+  notifications = query notificationsIn
+  markRead = write . markReadIn
+  watching = query . watchingIn
+  setWatching target = write . setWatchingIn target
+  notificationSettings = query notificationSettingsIn
+  setNotificationSettings = write . setNotificationSettingsIn
+  unsubscribe _ = pure (Left (Invalid "The demo sends no mail, so there is none to turn off."))
 
 -- | Everything is in memory: every read answers at once, and nothing is
 -- ever out of reach.

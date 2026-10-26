@@ -13,6 +13,7 @@ import Test.Hspec
 import Wiki.Api.Events
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id
+import Wiki.Core.Notification (Kind (..), Notification (..))
 import Wiki.Core.Version (Author (..))
 
 time :: UTCTime
@@ -40,6 +41,7 @@ spec = describe "Events" $ do
           , Event (PageId "p") (Editing [Author {id = UserId "u", name = "U"}, Author {id = UserId "v", name = "V"}])
           , Event (PageId "p") (Editing [])
           , Event (PageId "p") (PageChanged time)
+          , Notified Notification {id = NotificationId "n", kind = Mentioned, page = PageId "p", thread = Nothing, actor = Author {id = UserId "u", name = "U"}, title = "P", excerpt = "", createdAt = time, read = False, location = Nothing}
           ]
     decode (encode messages) `shouldBe` Just messages
     let said = [Subscribe (PageId "p"), Unsubscribe (PageId "p"), StartEditing (PageId "p"), StopEditing (PageId "p")]

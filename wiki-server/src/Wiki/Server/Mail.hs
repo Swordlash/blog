@@ -22,6 +22,8 @@ module Wiki.Server.Mail
   , resetLink
   , verificationMessage
   , verificationLink
+  , notificationMessage
+  , unsubscribeLink
 
     -- * Over SMTP
   , Smtp (..)
@@ -49,6 +51,7 @@ import Protolude
 import System.Timeout (timeout)
 import Text.Show (Show (showsPrec))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), securityFor, securityName)
+import Wiki.Core.Notification (DigestGroup (..), Notification (..), PageLocation, notificationText)
 import Wiki.Server.Secret (Kept, revealed)
 
 -- | Where mail goes, and the wiki's address its links start with.
@@ -146,6 +149,69 @@ verificationMessage publicUrl email login token =
           , "The link works once, for a day. If the account is not yours, ignore this mail."
           ]
     }
+
+-- | The link that turns a user's notification mail off: its page in the
+-- application, which asks before it does.
+unsubscribeLink :: Text -> Text -> Text
+unsubscribeLink publicUrl token = publicUrl <> "unsubscribe/" <> token <> "/"
+
+-- | The mail of a user's notifications ("Wiki.Core.Notification"): one
+-- mailed at once, or a day's digest, grouped by page, the page with the
+-- latest first, each with a link to it (made by the function given, from
+-- where the page is, below the wiki's address), and the link that turns
+-- the mail off.
+notificationMessage
+  :: Text
+  -- ^ The wiki's address.
+  -> Text
+  -- ^ The address mailed.
+  -> Text
+  -- ^ The secret of the user's unsubscribe link.
+  -> Bool
+  -- ^ Whether it is the day's digest.
+  -> (PageLocation -> Text)
+  -- ^ A page's path, below the wiki's address.
+  -> [DigestGroup]
+  -> Message
+notificationMessage publicUrl email token isDigest pathOf groups =
+  Message
+    { to = email
+    , subject
+    , body =
+        T.unlines $
+          [ "Hello,"
+          , ""
+          , if isDigest
+              then "This is what happened on the wiki at " <> publicUrl <> " that you were told of since the last digest."
+              else "This happened on the wiki at " <> publicUrl <> ":"
+          ]
+            <> concatMap section groups
+            <> [ ""
+               , "You are mailed what you are told of in the wiki, " <> (if isDigest then "once a day" else "as it happens") <> ": choose how in your account's settings."
+               , "To stop these mails, follow this link:"
+               , ""
+               , unsubscribeLink publicUrl token
+               ]
+    }
+  where
+    count = sum (map (\g -> length g.items) groups)
+    subject = case concatMap (\g -> g.items) groups of
+      [n] -> notificationText n <> " on " <> quoted n.title
+      _
+        | isDigest -> "Your digest from the wiki at " <> hostOf publicUrl <> ": " <> show count <> " notifications"
+        | otherwise -> show count <> " notifications from the wiki at " <> hostOf publicUrl
+    section g =
+      [ ""
+      , quoted g.title <> maybe "" (\l -> " (" <> publicUrl <> pathOf l <> ")") g.location
+      ]
+        <> map item g.items
+    item n =
+      "  - "
+        <> notificationText n
+        <> ", "
+        <> toS (formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC" n.createdAt)
+        <> (if T.null n.excerpt then "" else ": " <> quoted n.excerpt)
+    quoted t = "\"" <> t <> "\""
 
 -- | The host of the wiki's address.
 hostOf :: Text -> Text

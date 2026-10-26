@@ -76,6 +76,7 @@ library
       Wiki.App.Backend.Mem.Archive
       Wiki.App.Backend.Mem.Persist
       Wiki.App.Backend.Mem.State
+      Wiki.App.Backend.Notifications
       Wiki.App.Browser
       Wiki.App.Demo
       Wiki.App.DemoUsers
@@ -94,6 +95,7 @@ library
       Wiki.App.View.Admin
       Wiki.App.View.Backups
       Wiki.App.View.Invite
+      Wiki.App.View.Bell
       Wiki.App.View.Blog
       Wiki.App.View.Body
       Wiki.App.View.Comments
@@ -105,6 +107,7 @@ library
       Wiki.App.View.Import
       Wiki.App.View.NewPage
       Wiki.App.View.NewSpace
+      Wiki.App.View.NotificationSettings
       Wiki.App.View.Page
       Wiki.App.View.Permissions
       Wiki.App.View.Preview
@@ -120,7 +123,9 @@ library
       Wiki.App.View.Space
       Wiki.App.View.SpaceSettings
       Wiki.App.View.Status
+      Wiki.App.View.Unsubscribe
       Wiki.App.View.VerifyEmail
+      Wiki.App.View.Watch
 
   -- The version "Export the wiki" writes into an archive's manifest.
   other-modules:    Paths_wiki_app
@@ -180,6 +185,7 @@ library contract
         Wiki.App.Backend.Contract
         Wiki.App.Backend.Contract.Admin
         Wiki.App.Backend.Contract.Comments
+        Wiki.App.Backend.Contract.Notifications
     build-depends:
         HUnit,
         bytestring,

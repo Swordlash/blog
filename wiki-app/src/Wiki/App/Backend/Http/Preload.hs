@@ -38,6 +38,8 @@ module Wiki.App.Backend.Http.Preload
   , BackupsOf (..)
   , ThreadsOf (..)
   , PostDetailsOf (..)
+  , NoticesOf (..)
+  , WatchOf (..)
   , Answer (..)
   , preloadId
   , toPreload
@@ -64,6 +66,7 @@ import Wiki.Api.Admin (Directory, Invitations, ServerStatus, WikiSettings)
 import Wiki.Api.Backups (Backups)
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
+import Wiki.Api.Notifications (Notifications)
 import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend (WikiError (..))
@@ -73,11 +76,12 @@ import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
+import Wiki.Core.Notification (Watch, WatchTarget (..))
 import Wiki.Core.Page (Page)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
-import Wiki.Core.Version (Version, VersionInfo)
+import Wiki.Core.Version (Author, Version, VersionInfo)
 
 -- | The id of the page's script that holds the payload.
 preloadId :: Text
@@ -134,6 +138,16 @@ data Preload = Preload
   -- ^ A page's comments ('Wiki.App.Backend.Comments.listThreads'), for the
   -- page they are on; a payload written before there were any reads as
   -- without them.
+  , people :: Maybe (Map Text (Maybe Author))
+  -- ^ Who the logins mentioned are
+  -- ('Wiki.App.Backend.Notifications.mentionable'), @null@ for a login
+  -- that is nobody's; and as each of the next two, a payload written
+  -- before there were any reads as without them.
+  , notices :: Maybe NoticesOf
+  -- ^ The user's notifications ('Wiki.App.Backend.Notifications.notifications').
+  , watches :: Maybe [WatchOf]
+  -- ^ Whether the user watches a page or a space
+  -- ('Wiki.App.Backend.Notifications.watching').
   }
   deriving stock (Eq, Show, Generic)
 
@@ -214,6 +228,15 @@ data InvitationAt = InvitationAt {token :: InvitationToken, invitation :: Answer
 
 -- | A page's threads ('Wiki.App.Backend.Comments.listThreads').
 data ThreadsOf = ThreadsOf {page :: PageId, threads :: Answer [Thread]}
+  deriving stock (Eq, Show)
+
+-- | The user's notifications ('Wiki.App.Backend.Notifications.notifications').
+newtype NoticesOf = NoticesOf {notifications :: Answer Notifications}
+  deriving stock (Eq, Show)
+
+-- | Whether the user watches a page or a space, by the one it is: a
+-- @page@ or a @space@ field.
+data WatchOf = WatchOf {target :: WatchTarget, watch :: Answer Watch}
   deriving stock (Eq, Show)
 
 -- | What a read gave, or the API's refusal: written as the read's own field
@@ -328,6 +351,27 @@ instance ToJSON ThreadsOf where
 instance FromJSON ThreadsOf where
   parseJSON v = withObject "ThreadsOf" (\o -> ThreadsOf <$> o .: "page" <*> parseAnswer "threads" v) v
 
+instance ToJSON NoticesOf where
+  toJSON n = object (answerFields "notifications" n.notifications)
+
+instance FromJSON NoticesOf where
+  parseJSON v = NoticesOf <$> parseAnswer "notifications" v
+
+instance ToJSON WatchOf where
+  toJSON w = object (target : answerFields "watch" w.watch)
+    where
+      target = case w.target of
+        WatchPage p -> "page" .= p
+        WatchSpace s -> "space" .= s
+
+instance FromJSON WatchOf where
+  parseJSON v = withObject "WatchOf" (\o -> WatchOf <$> target o <*> parseAnswer "watch" v) v
+    where
+      target o =
+        o .:? "page" >>= \case
+          Just p -> pure (WatchPage p)
+          Nothing -> WatchSpace <$> o .: "space"
+
 -- | What the backend kept, as the page carries it: every answer it would
 -- give at once, and no page twice.
 toPreload :: Cache -> Preload
@@ -365,6 +409,11 @@ toPreload c =
     , threads = case [ThreadsOf {page, threads = toAnswer ts} | (page, ts) <- Map.toList c.threads, kept ts] of
         [] -> Nothing
         found -> Just found
+    , people = if Map.null c.people then Nothing else Just c.people
+    , notices = NoticesOf . toAnswer <$> mfilter kept c.notices
+    , watches = case [WatchOf {target, watch = toAnswer w} | (target, w) <- Map.toList c.watches, kept w] of
+        [] -> Nothing
+        found -> Just found
     }
 
 -- | The backend's cache as the page's payload says.
@@ -391,6 +440,9 @@ fromPreload p =
     , status = (\a -> fromAnswer a.status) <$> p.status
     , postDetails = Map.fromList [(d.space, fromAnswer d.details) | d <- fold p.postDetails]
     , threads = Map.fromList [(t.page, fromAnswer t.threads) | t <- fold p.threads]
+    , people = fold p.people
+    , notices = (\n -> fromAnswer n.notifications) <$> p.notices
+    , watches = Map.fromList [(w.target, fromAnswer w.watch) | w <- fold p.watches]
     }
 
 -- | Only what 'kept' keeps is ever written, which is an answer or a

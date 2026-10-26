@@ -1,0 +1,27 @@
+[
+  {
+    "reason": {
+      "tag": "Chosen"
+    },
+    "watching": true
+  },
+  {
+    "reason": {
+      "contents": "s1",
+      "tag": "FromSpace"
+    },
+    "watching": true
+  },
+  {
+    "reason": {
+      "tag": "OwnPage"
+    },
+    "watching": true
+  },
+  {
+    "reason": {
+      "tag": "Unchosen"
+    },
+    "watching": false
+  }
+]

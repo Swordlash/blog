@@ -42,6 +42,7 @@ import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
 import Wiki.Server.Log (Level (..), Logger, keepingErrors, logWith, newErrorRing, stdoutLogger)
 import Wiki.Server.Mail (SendMail, smtpSend)
 import Wiki.Server.Metrics (newMetrics)
+import Wiki.Server.Notifier (newNotifier, newWake, runNotifier, wakeUp)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen)
 import Wiki.Server.SecondFactor (newPendingSignIns)
@@ -110,11 +111,13 @@ withServerUsing given raw sendMail action = do
   resets <- newLimiter defaultLimits {perLogin = 10, perAddress = 10}
   pending <- newPendingSignIns
   events <- newHub
+  wake <- newWake
   exports <- newExports
   -- A data directory another server has open is a configuration this one
   -- cannot run with, said as the others are.
-  handle (\(DataDirInUse why) -> throwIO (ServerError [why])) $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events} options.dataDir $ \storage -> do
+  handle (\(DataDirInUse why) -> throwIO (ServerError [why])) $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} options.dataDir $ \storage -> do
     backups <- newBackupService logger options.rclone storage
+    let notifier = newNotifier logger sendMail wake storage
     let env =
           Env
             { storage
@@ -160,8 +163,9 @@ withServerUsing given raw sendMail action = do
       logWith logger Info ([("event", "oidc"), ("provider", p.name), ("kind", kindName p.kind)] <> [("redirect", redirectUri u p.name) | Just u <- [configured.publicUrl]])
     stopping <- newIORef False
     -- The thread that backs the server up, which does nothing until the
-    -- administration turns backups on; stopped with the server.
-    Async.withAsync (runScheduler backups) $ \_ -> bracket (bindAll listeners) (traverse_ (close . fst)) $ \bound -> do
+    -- administration turns backups on, and the one that mails
+    -- notifications; both stopped with the server.
+    Async.withAsync (runScheduler backups) $ \_ -> Async.withAsync (runNotifier notifier) $ \_ -> bracket (bindAll listeners) (traverse_ (close . fst)) $ \bound -> do
       let settings l =
             setGracefulShutdownTimeout (Just 10)
               . setOnException

@@ -27,6 +27,7 @@ import Wiki.App.Backend.Contract (As (..), Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
 import Wiki.App.Backend.Contract.Comments qualified as Comments
+import Wiki.App.Backend.Contract.Notifications qualified as Notifications
 import Wiki.App.Backend.Mem
 import Wiki.App.Backend.Mem.Persist
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -329,6 +330,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
   -- and the global grants, records the database has had from the start.
   Admin.spec (type (MemWiki IO)) (keptFixture >>=)
   Comments.spec (type (MemWiki IO)) (keptFixture >>=)
+  Notifications.spec (type (MemWiki IO)) (keptFixture >>=)
   where
     unreadable = \case
       Unreadable _ -> True

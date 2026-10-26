@@ -1,0 +1,42 @@
+{
+  "items": [
+    {
+      "actor": {
+        "id": "u2",
+        "name": "Bea"
+      },
+      "createdAt": "2026-10-25T00:00:00Z",
+      "excerpt": "Agreed, and @ada should see this.",
+      "id": "n1",
+      "kind": "replied",
+      "location": {
+        "page": [
+          "tour"
+        ],
+        "space": [
+          "docs"
+        ]
+      },
+      "page": "p1",
+      "read": false,
+      "thread": "t1",
+      "title": "Tour"
+    },
+    {
+      "actor": {
+        "id": "u2",
+        "name": "Bea"
+      },
+      "createdAt": "2026-10-24T09:30:12.345678Z",
+      "excerpt": "",
+      "id": "n0",
+      "kind": "changed",
+      "location": null,
+      "page": "p1",
+      "read": true,
+      "thread": null,
+      "title": "Tour"
+    }
+  ],
+  "unread": 1
+}

@@ -13,9 +13,12 @@
 --   it ('ClientMessage');
 -- * the server: @{"subscribed": "\<page>", "threads": […], "editing": […]}@
 --   or @{"refused": "\<page>"}@ in answer (a page that is not there, or
---   that the connection's user may not read, is refused), and
+--   that the connection's user may not read, is refused),
 --   @{"page": "\<page>", "event": …}@ for each thing that happens to a page
---   subscribed to ('ServerMessage').
+--   subscribed to, and @{"notification": …}@ for each notification made for
+--   the connection's user, whatever page it is about and whether or not
+--   the tab subscribed to anything (WP4.13: "Wiki.Core.Notification")
+--   ('ServerMessage').
 --
 -- An event is a 'PageEvent', an object with a @type@ and what it carries.
 -- The type is open: a client that does not know a type ignores it
@@ -59,6 +62,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Comment (Comment, Thread, resolvedAs, withComment, withThread, withoutComment, withoutThread)
 import Wiki.Core.Id
+import Wiki.Core.Notification (Notification)
 import Wiki.Core.Version (Author)
 
 -- | Something that happened to a page.
@@ -172,6 +176,8 @@ data ServerMessage
     Refused PageId
   | -- | Something happened to a page the tab hears about.
     Event PageId PageEvent
+  | -- | The connection's user has a new notification.
+    Notified Notification
   deriving stock (Eq, Show)
 
 instance ToJSON ServerMessage where
@@ -179,6 +185,7 @@ instance ToJSON ServerMessage where
     Subscribed p ts editors -> object ["subscribed" .= p, "threads" .= ts, "editing" .= editors]
     Refused p -> object ["refused" .= p]
     Event p e -> object ["page" .= p, "event" .= e]
+    Notified n -> object ["notification" .= n]
 
 instance FromJSON ServerMessage where
   parseJSON v = withObject "ServerMessage" message v
@@ -187,11 +194,13 @@ instance FromJSON ServerMessage where
         subscribed <- o .:? "subscribed"
         refused <- o .:? "refused"
         page <- o .:? "page"
-        case (subscribed, refused, page) of
+        notification <- o .:? "notification"
+        case (subscribed, refused, page, notification) of
           -- A server from before presence says nothing of who edits.
-          (Just p, _, _) -> Subscribed p <$> o .: "threads" <*> o .:? "editing" .!= []
-          (_, Just p, _) -> pure (Refused p)
-          (_, _, Just p) -> Event p <$> (o .: "event" :: Parser PageEvent)
+          (Just p, _, _, _) -> Subscribed p <$> o .: "threads" <*> o .:? "editing" .!= []
+          (_, Just p, _, _) -> pure (Refused p)
+          (_, _, Just p, _) -> Event p <$> (o .: "event" :: Parser PageEvent)
+          (_, _, _, Just n) -> pure (Notified n)
           _ -> parseFail ("not a message of the server's: " <> toS (show (v :: Value) :: Text))
 
 -- | The channel's address, below @api\/v1\/@, as servant's are relative to

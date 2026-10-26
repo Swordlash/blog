@@ -36,6 +36,7 @@ import Wiki.Api.Export (ExportFormat (..), formatMediaType, formatName)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, pageExportUrl, searchQueryOf, searchUrl, spaceExportUrl, spaceIconUrl)
+import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), MailToken (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), SecondFactorState (..), SessionRef (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Types
@@ -48,6 +49,7 @@ import Wiki.Core.Comment qualified as Comment
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Draft qualified as Draft
 import Wiki.Core.Id
+import Wiki.Core.Notification (MailMode (..), Notification (..), Watch (..), WatchReason (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page)
 import Wiki.Core.Page qualified as Page
@@ -264,6 +266,19 @@ stubs =
               , delete = \t -> here (if t == t1 then pure NoContent else refuse Forbidden)
               , resolve = \t r -> here (if t == t1 then pure Sample.inlineThread {Comment.resolved = r.resolved} else refuse (Invalid "A page thread is not resolved."))
               }
+    , notifications =
+        NotificationsApi
+          { list = pure Sample.notifications
+          , markRead = \m -> pure Sample.notifications {unread = if m.everything || Sample.notification.id `elem` m.ids then 0 else 1}
+          , settings = pure Sample.notificationSettings
+          , setSettings = \c -> pure NotificationSettings {mail = c.mail, watchOwn = c.watchOwn, verifiedEmail = True, mailing = True}
+          , people = \logins -> pure (Map.fromList [(l, Sample.author) | l <- logins, l == "bea"])
+          , pageWatch = \p -> if p == Sample.page.id then pure (Watch True OwnPage) else refuse NotFound
+          , setPageWatch = \_ w -> pure (Watch w.watching Chosen)
+          , spaceWatch = \_ -> pure (Watch False Unchosen)
+          , setSpaceWatch = \_ w -> pure (Watch w.watching Chosen)
+          }
+    , unsubscribe = \t -> if t == MailToken "unsubscribe" then pure NoContent else refuse NotFound
     }
 
 -- | The sample invitation, made for another address.
@@ -421,6 +436,26 @@ spec = describe "a server of the API's type" $ do
       status gone `shouldBe` 204
       answers (sendJson methodPut (threads.resolve t1) ThreadResolution {resolved = True}) 200 Sample.inlineThread {Comment.resolved = True}
       answers (sendJson methodPut (threads.resolve (CommentThreadId "t2")) ThreadResolution {resolved = True}) 400 (Invalid "A page thread is not resolved.")
+
+  describe "notifications" $ do
+    let n = links.notifications
+    it "lists them, marks them read and reads and sets their settings" $ do
+      answers (getAt n.list) 200 Sample.notifications
+      answers (sendJson methodPost n.markRead ReadMark {ids = [], everything = True}) 200 Sample.notifications {unread = 0}
+      answers (getAt n.settings) 200 Sample.notificationSettings
+      answers (sendJson methodPut n.setSettings NotificationSettingsChange {mail = MailOff, watchOwn = False}) 200 NotificationSettings {mail = MailOff, watchOwn = False, verifiedEmail = True, mailing = True}
+    it "names the users among the logins asked for, each a parameter of its own" $ do
+      n.people ["bea", "nobody"] `shouldBe` "api/v1/notifications/people?login[]=bea&login[]=nobody"
+      answers (getAt (n.people ["bea", "nobody"])) 200 (Map.fromList [("bea" :: Text, Sample.author)])
+    it "reads and sets a page's and a space's watch" $ do
+      answers (getAt (n.pageWatch p)) 200 (Watch True OwnPage)
+      answers (sendJson methodPut (n.setPageWatch p) Watching {watching = False}) 200 (Watch False Chosen)
+      answers (getAt (n.spaceWatch s)) 200 (Watch False Unchosen)
+      answers (sendJson methodPut (n.setSpaceWatch s) Watching {watching = True}) 200 (Watch True Chosen)
+    it "turns mail off with an unsubscribe link's secret" $ do
+      links.unsubscribe (MailToken "unsubscribe") `shouldBe` "api/v1/unsubscribe/unsubscribe"
+      (status <$> request methodPost (links.unsubscribe (MailToken "unsubscribe")) [] "") `shouldReturn` 204
+      answers (request methodPost (links.unsubscribe (MailToken "other")) [] "") 404 NotFound
 
   describe "pages" $ do
     it "lists a space's, and finds one by its path, with its version as the ETag" $ do

@@ -80,6 +80,7 @@ library
         Wiki.Server.Log
         Wiki.Server.Mail
         Wiki.Server.Metrics
+        Wiki.Server.Notifier
         Wiki.Server.Oidc
         Wiki.Server.Options
         Wiki.Server.Password
@@ -97,6 +98,7 @@ library
         Wiki.Server.Storage.Backup
         Wiki.Server.Storage.Blobs
         Wiki.Server.Storage.Comments
+        Wiki.Server.Storage.Notifications
         Wiki.Server.Storage.Layout
         Wiki.Server.Storage.Migrate
         Wiki.Server.Storage.Rows

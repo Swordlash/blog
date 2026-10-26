@@ -169,5 +169,29 @@
       "updatedAt": "2026-10-25T00:00:00Z"
     },
     "page": "p1"
+  },
+  {
+    "notification": {
+      "actor": {
+        "id": "u2",
+        "name": "Bea"
+      },
+      "createdAt": "2026-10-25T00:00:00Z",
+      "excerpt": "Agreed, and @ada should see this.",
+      "id": "n1",
+      "kind": "replied",
+      "location": {
+        "page": [
+          "tour"
+        ],
+        "space": [
+          "docs"
+        ]
+      },
+      "page": "p1",
+      "read": false,
+      "thread": "t1",
+      "title": "Tour"
+    }
   }
 ]

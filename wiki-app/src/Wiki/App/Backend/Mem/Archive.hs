@@ -74,6 +74,11 @@ fromArchive a =
         , server = noServerSettings
         , -- Nor comments (docs/export.md).
           threads = mempty
+        , -- Nor notifications, watches or how anyone is told: they are
+          -- each user's own, and about pages of the wiki exported.
+          notices = mempty
+        , watches = mempty
+        , choices = mempty
         , current = Nothing
         , counter = 1
         }

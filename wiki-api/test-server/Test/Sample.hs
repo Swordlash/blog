@@ -42,6 +42,9 @@ module Test.Sample
   , backupChange
   , backupsAfter
   , backupRcloneChange
+  , notification
+  , notifications
+  , notificationSettings
   )
 where
 
@@ -55,6 +58,7 @@ import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invite
 import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), OffSite (..), Retention (..), Schedule (..), Trigger (..))
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
+import Wiki.Api.Notifications (NotificationSettings (..), Notifications (..))
 import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState (..), SessionRef (..), SessionSummary (..), TotpEnrolment (..))
 import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..))
 import Wiki.Api.Types (SessionInfo (..))
@@ -67,6 +71,7 @@ import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
+import Wiki.Core.Notification (Kind (..), MailMode (..), Notification (..), PageLocation (..))
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
@@ -519,3 +524,29 @@ pageThread =
     , createdAt = later
     , comments = [Comment {id = CommentId "c3", thread = CommentThreadId "t2", author = Author {id = UserId "u1", name = "Ada"}, body = "A good tour.", createdAt = later, editedAt = Nothing}]
     }
+
+-- | Bea's reply, as the notification its thread's opener is told of it.
+notification :: Notification
+notification =
+  Notification
+    { id = NotificationId "n1"
+    , kind = Replied
+    , page = page.id
+    , thread = Just inlineThread.id
+    , actor = author
+    , title = "Tour"
+    , excerpt = "Agreed, and @ada should see this."
+    , createdAt = later
+    , read = False
+    , location = Just PageLocation {space = [slug "docs"], page = [slug "tour"]}
+    }
+
+notifications :: Notifications
+notifications =
+  Notifications
+    { unread = 1
+    , items = [notification, notification {id = NotificationId "n0", kind = Changed, thread = Nothing, excerpt = "", createdAt = time, read = True, location = Nothing}]
+    }
+
+notificationSettings :: NotificationSettings
+notificationSettings = NotificationSettings {mail = MailDaily, watchOwn = True, verifiedEmail = True, mailing = True}

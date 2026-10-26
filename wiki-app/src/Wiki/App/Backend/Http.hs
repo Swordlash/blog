@@ -94,6 +94,7 @@ import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.Api.Links qualified as Links
+import Wiki.Api.Notifications (NotificationsApi (..), Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Types
@@ -106,11 +107,13 @@ import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http.Cache
 import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, fromSessionInfo, ifMatch, multipart, multipartForm, sessionInfo, withJson)
 import Wiki.App.Backend.Http.Request qualified as R
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Id (PageId)
+import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.User (Standing (..))
 
 -- | How a request reaches the server: its answer, or why none came.
@@ -248,7 +251,7 @@ newHttpEnvWith transport start = liftIO $ do
   cache <- newIORef start
   changes <- HS.create
   let change f = atomicModifyIORef' cache (\c -> (f c, ()))
-  feed <- newFeed (\page event -> change (afterEvent page event)) (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads)
+  feed <- newFeed (\page event -> change (afterEvent page event)) (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads) (change . withNotice) (change forgetNotices)
   pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, changes, feed}
 
 -- | A backend over a transport that answers at once, a server's
@@ -536,6 +539,47 @@ commentWrite_ pid event request = do
   result <- answerNothing <$> call request
   modifyCache (afterComment pid (event <$ result))
   pure result
+
+-- | Notifications, over the API's @notifications…@. What the bell shows,
+-- whether a page or a space is watched and whom logins name are kept, so
+-- that a page the server rendered with them is the program's first render
+-- too; a mark read, a watch chosen and the settings change nothing else
+-- read, so they put what they answered in place rather than let
+-- everything go.
+instance (MonadIO m) => MonadNotifications (HttpWiki m) where
+  mentionable logins =
+    cachedPeople logins <$> readCache >>= \case
+      Just found -> pure found
+      Nothing -> do
+        result <- answer <$> call (R.get (links.notifications.people logins))
+        case result of
+          Right found -> modifyCache (withPeople logins found) $> found
+          Left e -> liftIO (throwIO e)
+  notifications = cached (\c -> c.notices) (R.get links.notifications.list) withNotices
+  markRead m = do
+    result <- answer <$> call (withJson "POST" links.notifications.markRead m)
+    when (kept result) (modifyCache (withNotices result))
+    pure result
+  watching target = cached (\c -> Map.lookup target c.watches) (R.get (watchLink target)) (withWatch target)
+    where
+      watchLink = \case
+        WatchPage p -> links.notifications.pageWatch p
+        WatchSpace sid -> links.notifications.spaceWatch sid
+
+  -- A space's watch changes how the pages under it are watched: every
+  -- watch kept goes, and the answer is put in its place.
+  setWatching target w = do
+    let request = case target of
+          WatchPage p -> withJson "PUT" (links.notifications.setPageWatch p) Watching {watching = w}
+          WatchSpace sid -> withJson "PUT" (links.notifications.setSpaceWatch sid) Watching {watching = w}
+    result <- answer <$> call request
+    modifyCache (\c -> (if kept result then withWatch target result else identity) c {watches = mempty})
+    pure result
+  notificationSettings = answer <$> call (R.get links.notifications.settings)
+
+  -- Whether one watches one's own changes how pages are watched.
+  setNotificationSettings change = (answer <$> call (withJson "PUT" links.notifications.setSettings change)) <* modifyCache (\c -> c {watches = mempty})
+  unsubscribe token = answerNothing <$> call (R.post (links.unsubscribe token))
 
 -- | The tab's live channel: one per backend, made with it, and opened when
 -- a page is first watched.

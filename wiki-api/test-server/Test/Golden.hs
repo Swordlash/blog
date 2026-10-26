@@ -24,12 +24,14 @@ import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
 import Wiki.Api.Info (Health (..), ServerInfo (..))
+import Wiki.Api.Notifications (NotificationSettingsChange (..), ReadMark (..), Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Blog (PostDetails (..))
-import Wiki.Core.Id (BlobId (..), CommentId (..), CommentThreadId (..), GroupId (..), PageId (..), SpaceId (..))
+import Wiki.Core.Id (BlobId (..), CommentId (..), CommentThreadId (..), GroupId (..), NotificationId (..), PageId (..), SpaceId (..))
+import Wiki.Core.Notification (MailMode (..), Watch (..), WatchReason (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Space (Icon (..), SpaceProfile (..))
@@ -87,6 +89,10 @@ spec = describe "golden JSON" $ do
     golden "backups-failed" Sample.backups {last = (\r -> r {file = Nothing, size = Nothing, failure = Just "The disk is full.", offSite = Nothing, trigger = Manual}) <$> Sample.backups.last, running = True}
     golden "threads" [Sample.inlineThread, Sample.pageThread]
     golden "comment" Sample.reply
+    golden "notifications" Sample.notifications
+    golden "notification-settings" Sample.notificationSettings
+    golden "watch" [Watch True Chosen, Watch True (FromSpace (SpaceId "s1")), Watch True OwnPage, Watch False Unchosen]
+    golden "people" (Map.fromList [("bea" :: Text, Sample.author)])
   describe "the live channel's messages" $ do
     golden "client-messages" [Subscribe (PageId "p1"), Unsubscribe (PageId "p1"), StartEditing (PageId "p1"), StopEditing (PageId "p1")]
     golden
@@ -101,6 +107,7 @@ spec = describe "golden JSON" $ do
       , Event (PageId "p1") (ThreadDeleted (CommentThreadId "t2"))
       , Event (PageId "p1") (Editing [Sample.author])
       , Event (PageId "p1") (PageChanged Sample.later)
+      , Notified Sample.notification
       ]
   describe "errors" $ do
     golden "error-not-found" NotFound
@@ -126,6 +133,9 @@ spec = describe "golden JSON" $ do
     golden "new-page-thread" NewThread {anchor = Nothing, body = "A good tour."}
     golden "comment-text" CommentText {body = "Agreed."}
     golden "thread-resolution" ThreadResolution {resolved = True}
+    golden "read-mark" ReadMark {ids = [NotificationId "n1"], everything = False}
+    golden "notification-settings-change" NotificationSettingsChange {mail = MailOff, watchOwn = False}
+    golden "watching" Watching {watching = True}
     golden "shift" ShiftBy {shift = ShiftToTop}
     golden "draft-edit" DraftEdit {base = Sample.time, title = "Tour", body = "# Tour, unsaved"}
     golden "import-choices" Sample.importChoices

@@ -113,6 +113,18 @@ module Wiki.App.Backend.Mem.State
   , deleteThreadIn
   , setResolvedIn
   , insertThread
+
+    -- * Notifications
+  , Choices (..)
+  , defaultChoices
+  , mentionableIn
+  , notificationsIn
+  , markReadIn
+  , watchingIn
+  , setWatchingIn
+  , notificationSettingsIn
+  , setNotificationSettingsIn
+  , insertNotification
   )
 where
 
@@ -138,6 +150,8 @@ import Wiki.Api.Admin
   )
 import Wiki.Api.Admin qualified as A
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
+import Wiki.Api.Notifications (NotificationSettings (NotificationSettings), NotificationSettingsChange, Notifications (Notifications), ReadMark)
+import Wiki.Api.Notifications qualified as N
 import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck (ProviderCheck), ServerSettings, ServerSettingsChange, ServerSettingsOf, applyChange, checkServerSettings, named, noServerSettings, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.ServerSettings qualified as SS
 import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAttachmentSize)
@@ -151,6 +165,8 @@ import Wiki.Core.Comment qualified as C
 import Wiki.Core.Draft (Draft (Draft))
 import Wiki.Core.Draft qualified as D
 import Wiki.Core.Id
+import Wiki.Core.Notification (Happened (..), MailMode, Mark, Notification (Notification), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, keptNotifications, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
+import Wiki.Core.Notification qualified as Notice
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), childPages, pageTreeOrder, positionPage)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath)
@@ -226,6 +242,14 @@ data MemState = MemState
   -- administration's "Server" section sets them, with their secrets, which
   -- never leave the tab: the demo keeps them for the tab's life, as it
   -- keeps the wiki's settings, and uses none of them.
+  , notices :: Map UserId [Notification]
+  -- ^ Each user's notifications ("Wiki.Core.Notification"), the newest
+  -- first, at most the second of 'keptNotifications'. Where each page is
+  -- is found when they are read.
+  , watches :: Map UserId Mark
+  -- ^ What each user chose to watch, or not.
+  , choices :: Map UserId Choices
+  -- ^ How each user is told, where they have chosen.
   , threads :: Map PageId [Thread]
   -- ^ Each page's comments ("Wiki.Core.Comment"), its threads in the order
   -- they were opened. The authors' names are those they had when they
@@ -260,6 +284,9 @@ emptyState =
     , invitations = mempty
     , server = noServerSettings
     , threads = mempty
+    , notices = mempty
+    , watches = mempty
+    , choices = mempty
     , current = Nothing
     , counter = 1
     }
@@ -932,7 +959,8 @@ savePageIn pid base title body now st = do
       p' = p {title = t, body, updatedAt}
       -- What was unsaved is saved now.
       drafts = maybe identity (\u -> Map.delete (pid, u)) (currentUserId st) st.drafts
-  pure (recordVersion (currentUserId st) p' st {pages = Map.insert pid p' st.pages, drafts, searchText = Map.insert pid (prepare p') st.searchText}, p')
+      saved = recordVersion (currentUserId st) p' st {pages = Map.insert pid p' st.pages, drafts, searchText = Map.insert pid (prepare p') st.searchText}
+  pure (tell now p' Nothing "" PageSaved (newlyMentioned p.body body) saved, p')
 
 -- | The page and the pages under it, by id.
 subtreeOf :: MemState -> PageId -> Set PageId
@@ -1435,18 +1463,19 @@ openThreadIn pid anchor body now st0 = do
       tid = CommentThreadId t
       first' = Comment {C.id = CommentId i, C.thread = tid, C.author = authorOf st2 u, C.body = text, C.createdAt = now, C.editedAt = Nothing}
       thread = Thread {C.id = tid, C.page = pid, C.anchor = checked, C.resolved = False, C.createdAt = now, C.comments = [first']}
-  pure (withThreads pid (<> [thread]) st2, thread)
+  pure (tellOfComment now pid tid [u] text (mentionedIn text) (withThreads pid (<> [thread]) st2), thread)
 
 -- | Reply to a thread of a page.
 replyIn :: PageId -> CommentThreadId -> Text -> UTCTime -> Write Comment
 replyIn pid tid body now st0 = do
   (c, ts) <- readable st0 pid
-  _ <- threadOf ts tid
+  t0 <- threadOf ts tid
   u <- commenter st0 c
   text <- commentBody body
   let (i, st1) = newId "comment" st0
       made = Comment {C.id = CommentId i, C.thread = tid, C.author = authorOf st1 u, C.body = text, C.createdAt = now, C.editedAt = Nothing}
-  pure (withThreads pid (map (\t -> if t.id == tid then t {C.comments = t.comments <> [made]} else t)) st1, made)
+      people = ordNub (map (\x -> x.author.id) t0.comments <> [u])
+  pure (tellOfComment now pid tid people text (mentionedIn text) (withThreads pid (map (\t -> if t.id == tid then t {C.comments = t.comments <> [made]} else t)) st1), made)
 
 -- | Edit one's own comment.
 editCommentIn :: PageId -> CommentThreadId -> CommentId -> Text -> UTCTime -> Write Comment
@@ -1458,7 +1487,7 @@ editCommentIn pid tid cid body now st = do
   text <- commentBody body
   let edited = old {C.body = text, C.editedAt = Just now, C.author = authorOf st old.author.id}
       updated x = if x.id == cid then edited else x
-  pure (withThreads pid (map (\x -> if x.id == tid then x {C.comments = map updated x.comments} else x)) st, edited)
+  pure (tellOfEdit now pid tid text (newlyMentioned old.body text) (withThreads pid (map (\x -> if x.id == tid then x {C.comments = map updated x.comments} else x)) st), edited)
 
 -- | Delete a comment; the first of a thread takes the thread, if it has no
 -- replies.
@@ -1495,3 +1524,156 @@ setResolvedIn pid tid resolved st = do
 -- demo's content.
 insertThread :: Thread -> MemState -> MemState
 insertThread t = withThreads t.page (<> [t])
+
+--------------------------------------------------------------------------------
+-- Notifications
+
+-- | How a user is told: how they would be mailed (the demo mails nobody,
+-- and keeps the choice all the same), and whether they watch what they make
+-- and the threads they are in.
+data Choices = Choices
+  { mail :: Maybe MailMode
+  , watchOwn :: Bool
+  }
+  deriving stock (Eq, Show)
+
+-- | What a user who has chosen nothing is told.
+defaultChoices :: Choices
+defaultChoices = Choices {mail = Nothing, watchOwn = True}
+
+choicesOf :: MemState -> UserId -> Choices
+choicesOf st u = Map.findWithDefault defaultChoices u st.choices
+
+-- | Who made a page: the author of its first version, if anyone known.
+makerOf :: MemState -> PageId -> Maybe UserId
+makerOf st pid = Map.lookup pid st.versions >>= Map.lookupMin >>= \(_, v) -> v.author
+
+-- | The users who may sign in.
+activeUsers :: MemState -> [User]
+activeUsers st = [u | u <- Map.elems st.users, not (Set.member u.id st.disabled)]
+
+-- | Tell whoever the rules of "Wiki.Core.Notification" say of what the
+-- current user did to a page: each a notification, the newest first, the
+-- oldest dropped past the most kept.
+tell :: UTCTime -> Page -> Maybe CommentThreadId -> Text -> Occasion -> Set Text -> MemState -> MemState
+tell now p thread excerpt occasion logins st = case currentUserId st of
+  Nothing -> st
+  Just actor ->
+    let users = activeUsers st
+        byLogin = Map.fromList [(u.login, u.id) | u <- users]
+        watchers =
+          [ Watcher {principal = principal st.membership u.id, watchOwn = (choicesOf st u.id).watchOwn, marks = Map.findWithDefault mempty u.id st.watches}
+          | u <- users
+          ]
+        happened =
+          Happened
+            { actor
+            , page = p.id
+            , maker = makerOf st p.id
+            , chain = chainOf st p.space
+            , occasion
+            , mentioned = Set.fromList (mapMaybe (`Map.lookup` byLogin) (Set.toList logins))
+            }
+        made (i, k) =
+          Notification
+            { Notice.id = NotificationId i
+            , Notice.kind = k
+            , Notice.page = p.id
+            , Notice.thread = thread
+            , Notice.actor = authorOf st actor
+            , Notice.title = p.title
+            , Notice.excerpt = excerpt
+            , Notice.createdAt = now
+            , Notice.read = False
+            , Notice.location = Nothing
+            }
+        add s (u, k) =
+          let (i, s') = newId "notification" s
+           in insertNotification u (made (i, k)) s'
+     in foldl' add st (recipients st.grants watchers happened)
+
+-- | Tell of a comment made in a thread, by these people so far.
+tellOfComment :: UTCTime -> PageId -> CommentThreadId -> [UserId] -> Text -> Set Text -> MemState -> MemState
+tellOfComment now pid tid people body logins st = case Map.lookup pid st.pages of
+  Just p -> tell now p (Just tid) (excerptOf body) (CommentedIn tid people) logins st
+  Nothing -> st
+
+-- | Tell of a comment edited: only whom it newly mentions.
+tellOfEdit :: UTCTime -> PageId -> CommentThreadId -> Text -> Set Text -> MemState -> MemState
+tellOfEdit now pid tid body logins st = case Map.lookup pid st.pages of
+  Just p -> tell now p (Just tid) (excerptOf body) (EditedIn tid) logins st
+  Nothing -> st
+
+-- | Give a user a notification, unchecked, the newest of theirs: for the
+-- demo's content, and for 'tell'.
+insertNotification :: UserId -> Notification -> MemState -> MemState
+insertNotification u n st = st {notices = Map.insert u (take (snd keptNotifications) (n : Map.findWithDefault [] u st.notices)) st.notices}
+
+-- | Of these logins, the users', as a mention names them: none for someone
+-- not signed in.
+mentionableIn :: [Text] -> MemState -> Map Text Author
+mentionableIn logins st = case currentUserId st of
+  Nothing -> mempty
+  Just _ -> Map.fromList [(u.login, authorOf st u.id) | u <- activeUsers st, u.login `elem` logins]
+
+-- | Someone signed in: who.
+signedIn :: MemState -> Either WikiError UserId
+signedIn st = maybe (Left Forbidden) Right (currentUserId st)
+
+-- | The current user's notifications of pages they may still read, each
+-- with where its page is now, the latest 'maxListed'.
+notificationsIn :: MemState -> Either WikiError Notifications
+notificationsIn st = do
+  u <- signedIn st
+  let shown = mapMaybe located (Map.findWithDefault [] u st.notices)
+  pure Notifications {N.unread = length (filter (\n -> not n.read) shown), N.items = take maxListed shown}
+  where
+    located n = do
+      p <- Map.lookup n.page st.pages
+      let c = chainOf st p.space
+      guard (canView (currentPrincipal st) st.grants c)
+      pagePath <- pathOf (`Map.lookup` st.pages) p.id
+      pure (withLocation (Just PageLocation {space = map (\x -> x.slug) c, page = pagePath}) n)
+
+-- | Mark some of the current user's notifications read, or all of them.
+markReadIn :: ReadMark -> Write Notifications
+markReadIn m st = do
+  u <- signedIn st
+  let marked n = if m.everything || n.id `elem` m.ids then n {Notice.read = True} else n
+      st' = st {notices = Map.adjust (map marked) u st.notices}
+  (st',) <$> notificationsIn st'
+
+-- | Whether the current user watches a page or a space they may view.
+watchingIn :: WatchTarget -> MemState -> Either WikiError Watch
+watchingIn target st = do
+  (c, onPage) <- case target of
+    WatchPage pid -> (\p -> (chainOf st p.space, Just p)) <$> findPage st pid
+    WatchSpace sid -> (\(_, c) -> (c, Nothing)) <$> findSpace st sid
+  requireView st c
+  u <- signedIn st
+  let marks = Map.findWithDefault mempty u st.watches
+  pure $ case onPage of
+    Just p -> pageWatch (choicesOf st u).watchOwn (makerOf st p.id) u marks c p.id
+    Nothing -> spaceWatch marks c
+
+-- | Choose to watch a page or a space, or not to.
+setWatchingIn :: WatchTarget -> Bool -> Write Watch
+setWatchingIn target w st = do
+  _ <- watchingIn target st
+  u <- signedIn st
+  let st' = st {watches = Map.insertWith (<>) u (Map.singleton target w) st.watches}
+  (st',) <$> watchingIn target st'
+
+-- | How the current user is told. The demo has no verified address and
+-- sends no mail.
+notificationSettingsIn :: MemState -> Either WikiError NotificationSettings
+notificationSettingsIn st = do
+  u <- signedIn st
+  let cs = choicesOf st u
+  pure NotificationSettings {N.mail = effectiveMailMode False cs.mail, N.watchOwn = cs.watchOwn, N.verifiedEmail = False, N.mailing = False}
+
+setNotificationSettingsIn :: NotificationSettingsChange -> Write NotificationSettings
+setNotificationSettingsIn change st = do
+  u <- signedIn st
+  let st' = st {choices = Map.insert u Choices {mail = Just change.mail, watchOwn = change.watchOwn} st.choices}
+  (st',) <$> notificationSettingsIn st'

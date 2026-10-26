@@ -42,6 +42,13 @@
 -- server renders the administration with, and its settings and invitations;
 -- and an invitation as its link shows it to the person invited, by the
 -- link's secret; and the server's own settings, without their secrets.
+--
+-- And so are what the bell shows (WP4.13 of docs/PLAN.md: the user's
+-- notifications), whether the user watches a page or a space, and which of
+-- the logins mentioned are users': the server renders the header and the
+-- page with them. A notification heard of over the live channel is put
+-- in front of those kept ('withNotice'); a mark read, or a watch chosen,
+-- puts what it answered in place, and changes nothing else.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
   , emptyCache
@@ -70,6 +77,12 @@ module Wiki.App.Backend.Http.Cache
   , forgetActivity
   , forgetStatus
   , withThreads
+  , withPeople
+  , withNotices
+  , withNotice
+  , forgetNotices
+  , withWatch
+  , cachedPeople
   , afterComment
   , afterEvent
   , forgetThreads
@@ -85,18 +98,20 @@ import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (Directory, Invitations, ServerStatus, WikiSettings)
 import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
+import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
+import Wiki.Core.Notification (Notification, Watch, WatchTarget)
 import Wiki.Core.Page (Page)
 import Wiki.Core.Path (findChild, resolvePath)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
-import Wiki.Core.Version (Version, VersionInfo)
+import Wiki.Core.Version (Author, Version, VersionInfo)
 
 -- | Each read's answer, as it came back: what it gave, or the refusal it
 -- was (see 'kept').
@@ -145,6 +160,13 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.Admin.serverStatus', likewise.
   , threads :: Map PageId (Either WikiError [Thread])
   -- ^ 'Wiki.App.Backend.Comments.listThreads', by page.
+  , people :: Map Text (Maybe Author)
+  -- ^ 'Wiki.App.Backend.Notifications.mentionable', by login: whom a
+  -- login is, or that it is nobody's.
+  , notices :: Maybe (Either WikiError Notifications)
+  -- ^ 'Wiki.App.Backend.Notifications.notifications'.
+  , watches :: Map WatchTarget (Either WikiError Watch)
+  -- ^ 'Wiki.App.Backend.Notifications.watching', by page or space.
   }
   deriving stock (Eq, Show)
 
@@ -171,6 +193,9 @@ emptyCache =
     , activity = Nothing
     , status = Nothing
     , threads = mempty
+    , people = mempty
+    , notices = Nothing
+    , watches = mempty
     }
 
 -- | Whether a read's answer is kept: what it gave, and a refusal the
@@ -266,6 +291,29 @@ forgetStatus c = c {status = Nothing}
 
 withThreads :: PageId -> Either WikiError [Thread] -> Cache -> Cache
 withThreads pid ts c = c {threads = Map.insert pid ts c.threads}
+
+-- | Who these logins are, as asked for: each of them, whether or not it
+-- is a user's.
+withPeople :: [Text] -> Map Text Author -> Cache -> Cache
+withPeople asked found c = c {people = Map.fromList [(l, Map.lookup l found) | l <- asked] <> c.people}
+
+-- | Who these logins are, if all of them are known: those that are users'.
+cachedPeople :: [Text] -> Cache -> Maybe (Map Text Author)
+cachedPeople logins c = Map.fromList . catMaybes <$> traverse (\l -> fmap (l,) <$> Map.lookup l c.people) logins
+
+withNotices :: Either WikiError Notifications -> Cache -> Cache
+withNotices n c = c {notices = Just n}
+
+-- | A notification heard of, in front of those kept.
+withNotice :: Notification -> Cache -> Cache
+withNotice n c = c {notices = fmap (\ns -> Notifications {unread = ns.unread + 1, items = n : ns.items}) <$> c.notices}
+
+-- | The notifications let go: some may have been missed.
+forgetNotices :: Cache -> Cache
+forgetNotices c = c {notices = Nothing}
+
+withWatch :: WatchTarget -> Either WikiError Watch -> Cache -> Cache
+withWatch t w c = c {watches = Map.insert t w c.watches}
 
 -- | The cache after a write to a page's comments: what it did folded into
 -- the page's threads, if they are kept; or, for a write whose outcome is

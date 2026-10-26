@@ -48,6 +48,17 @@
 -- storage tells the hub of every save of a page too ('PageChanged'), as
 -- of its comments.
 --
+-- = Notifications
+--
+-- The storage tells the hub too of every notification a write made
+-- ("Wiki.Core.Notification", WP4.13 of docs/PLAN.md), once it is
+-- committed ('notify'), and the hub hands each to every connection of the
+-- user it is for, whatever they are subscribed to: a tab hears of its
+-- user's notifications as long as it is connected. The storage made it
+-- only if they may read its page, a moment ago, so it is not checked
+-- again; one missed while a tab was not connected is in the list the tab
+-- reads when it connects again.
+--
 -- The subscriptions are kept in memory, for the one process the server
 -- is. Pings every 20 seconds keep a quiet connection from being taken for
 -- a dead one, by Warp (which drops a connection idle for 30) or a proxy.
@@ -55,6 +66,7 @@ module Wiki.Server.Events
   ( Hub
   , newHub
   , publish
+  , notify
   , closeAll
   , openConnections
   , eventsApplication
@@ -76,9 +88,10 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
-import Wiki.Core.Id (PageId)
+import Wiki.Core.Id (PageId, UserId)
+import Wiki.Core.Notification (Notification)
 import Wiki.Server.Presence (Key, Presence, editorsFor, leave, nobodyEditing, startEditing, stopEditing)
-import Wiki.Server.Storage (Storage, Who, editorOf, mayReadPage, threadsThen)
+import Wiki.Server.Storage (Storage, Who (..), editorOf, mayReadPage, threadsThen)
 
 -- | Every connection open, what each is subscribed to, and what each edits.
 data Hub = Hub
@@ -92,7 +105,9 @@ data Hub = Hub
 
 -- | A connection, as the hub sees it.
 data Connection = Connection
-  { pages :: TVar (Set PageId)
+  { user :: Maybe UserId
+  -- ^ The user it was made as, if it was made as one.
+  , pages :: TVar (Set PageId)
   , outbox :: TBQueue Outgoing
   , behind :: TVar Bool
   -- ^ Set when its outbox was full: the connection is closed.
@@ -137,6 +152,15 @@ publish hub page event = atomically $ do
   for_ connections $ \c -> do
     subscribed <- Set.member page <$> readTVar c.pages
     when subscribed $ enqueue c (Tell page event)
+
+-- | Tell every connection of each user of their notification. It never
+-- waits: called while the storage holds its connection.
+notify :: Hub -> [(UserId, Notification)] -> IO ()
+notify hub told = atomically $ do
+  connections <- readTVar hub.connections
+  for_ connections $ \c ->
+    for_ c.user $ \u ->
+      for_ [n | (v, n) <- told, v == u] $ \n -> enqueue c (Say (Notified n))
 
 -- | Tell every connection subscribed to a page who edits it besides
 -- itself, as the presence now says: in the transaction that changed it.
@@ -195,7 +219,7 @@ serve storage hub who pending = do
       pages <- newTVarIO mempty
       outbox <- newTBQueueIO outboxSize
       behind <- newTVarIO False
-      let connection = Connection {pages, outbox, behind}
+      let connection = Connection {user = case who of AsUser u -> Just u; _ -> Nothing, pages, outbox, behind}
       key <- atomically $ do
         k <- readTVar hub.next
         writeTVar hub.next (k + 1)

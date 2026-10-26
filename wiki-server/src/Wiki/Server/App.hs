@@ -170,9 +170,10 @@ addressOf request = case T.breakOnEnd ":" (show (remoteHost request)) of
 -- (to read it, sign in, with a second factor too, and out), making oneself
 -- an account (which a closed wiki refuses itself, with a 403 that says
 -- so), invitations, and the links mailed to someone who cannot sign in
--- yet: a password reset's and an address's verification.
+-- yet: a password reset's, an address's verification, and turning
+-- notification mail off.
 openToAnyone :: [Text]
-openToAnyone = ["info", "session", "accounts", "invitations", "password-reset", "email-verification"]
+openToAnyone = ["info", "session", "accounts", "invitations", "password-reset", "email-verification", "unsubscribe"]
 
 -- | A feed's address below @s\/@: the space's path, and which feed.
 feedOf :: [Text] -> Maybe ([Text], FeedKind)

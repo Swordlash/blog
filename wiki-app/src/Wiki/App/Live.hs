@@ -39,6 +39,17 @@
 -- A socket is opened as whoever the browser's cookie says, and stays so:
 -- signing in or out 'restart's it.
 --
+-- = Notifications
+--
+-- The server also tells a socket of every notification made for its user
+-- (WP4.13 of docs/PLAN.md, "Wiki.Core.Notification"), whatever page it is
+-- about: the header's bell 'listen's for them, which opens the socket
+-- even where no page is shown, and keeps it open (and opens it again)
+-- until it stops. Each is told as 'Notice', and handed to the backend
+-- first. A socket that opens again after it closed is told as 'Reopened':
+-- what was made meanwhile was not told, and the bell reads its
+-- notifications again.
+--
 -- = Editing
 --
 -- The editor says which page it edits ('startEditing', 'stopEditing'),
@@ -84,6 +95,7 @@ import Protolude
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..), eventsPath)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Id (PageId)
+import Wiki.Core.Notification (Notification)
 import Wiki.Core.Version (Author)
 
 -- | What the tab hears.
@@ -93,6 +105,11 @@ data Heard
   | -- | A page it watches has these threads: the answer to its
     -- subscription, which what it showed is replaced with.
     Replaced PageId [Thread]
+  | -- | The user has a new notification.
+    Notice Notification
+  | -- | The socket opened again after it had closed: what the server said
+    -- meanwhile went unheard.
+    Reopened
   deriving stock (Eq, Show)
 
 -- | The tab's live channel.
@@ -111,6 +128,9 @@ data Feed = Feed
   , editorsOf :: PageId -> IO (Maybe [Author])
   -- ^ Who else edits a page watched, as last heard; 'Nothing' until the
   -- server has said.
+  , listen :: IO ()
+  -- ^ Keep the socket open for the user's notifications, until 'unlisten'.
+  , unlisten :: IO ()
   }
 
 -- | A feed that hears nothing: what there is natively, and for a backend
@@ -127,6 +147,8 @@ quietFeed = do
       , startEditing = \_ -> pass
       , stopEditing = \_ -> pass
       , editorsOf = \_ -> pure Nothing
+      , listen = pass
+      , unlisten = pass
       }
 
 -- | The tab's channel.
@@ -157,6 +179,11 @@ data Channel = Channel
   -- ^ The pages watched, each with how many watch it.
   , editing :: Set PageId
   -- ^ The pages this tab edits.
+  , listeners :: Int
+  -- ^ How many listen for notifications.
+  , opened :: Bool
+  -- ^ Whether a socket has opened before, since the last restart: one
+  -- that opens again is 'Reopened'.
   , known :: Map PageId [Author]
   -- ^ Who else edits each page watched, as the socket open now said.
   , pause :: Int
@@ -166,27 +193,35 @@ data Channel = Channel
   -- says afterwards is not taken for the new one's.
   }
 
--- | What the backend does with what is heard of a page: keep its threads
--- up to date with an event, take the threads the server answered a
--- subscription with, and let them go when they may change unheard.
+-- | What the backend does with what is heard: keep a page's threads up to
+-- date with an event, take the threads the server answered a subscription
+-- with, let them go when they may change unheard, keep a notification, and
+-- let the notifications go when some may have been missed.
 data Keeping = Keeping
   { keep :: PageId -> PageEvent -> IO ()
   , catchUp :: PageId -> [Thread] -> IO ()
   , forget :: PageId -> IO ()
+  , notified :: Notification -> IO ()
+  , missed :: IO ()
   }
+
+-- | Whether there is anything to keep the socket open for.
+wanted :: Channel -> Bool
+wanted c = not (null c.pages) || c.listeners > 0
 
 -- | A feed whose socket is at @api\/v1\/events@, relative to the page's
 -- @\<base href>@, with what the backend does with what is heard: keep a
 -- page's threads up to date with an event, replace them with a
--- subscription's answer, and let them go when they may have changed
--- unheard.
-newFeed :: (PageId -> PageEvent -> IO ()) -> (PageId -> [Thread] -> IO ()) -> (PageId -> IO ()) -> IO Feed
-newFeed keep catchUp forget
+-- subscription's answer, let them go when they may have changed unheard,
+-- keep a notification, and let the notifications go when some may have
+-- been missed.
+newFeed :: (PageId -> PageEvent -> IO ()) -> (PageId -> [Thread] -> IO ()) -> (PageId -> IO ()) -> (Notification -> IO ()) -> IO () -> IO Feed
+newFeed keep catchUp forget notified missed
   | not inBrowser = quietFeed
   | otherwise = do
       channel <- HS.create
-      held <- newIORef Channel {socket = Nothing, connecting = False, open = False, pages = mempty, editing = mempty, known = mempty, pause = firstPause, generation = 0}
-      let keeping = Keeping {keep, catchUp, forget}
+      held <- newIORef Channel {socket = Nothing, connecting = False, open = False, pages = mempty, editing = mempty, listeners = 0, opened = False, known = mempty, pause = firstPause, generation = 0}
+      let keeping = Keeping {keep, catchUp, forget, notified, missed}
       let tell = channel.listener.notify
           watch page = do
             (c, first', start) <- atomicModifyIORef' held $ \c ->
@@ -207,9 +242,15 @@ newFeed keep catchUp forget
               forget page
           restart = do
             old <- atomicModifyIORef' held $ \c ->
-              (c {socket = Nothing, open = False, connecting = not (null c.pages), known = mempty, generation = c.generation + 1, pause = firstPause}, c)
+              (c {socket = Nothing, open = False, connecting = wanted c, known = mempty, opened = False, generation = c.generation + 1, pause = firstPause}, c)
             traverse_ WS.close' old.socket
-            unless (null old.pages) (connect held keeping tell)
+            when (wanted old) (connect held keeping tell)
+          listen = do
+            start <- atomicModifyIORef' held $ \c ->
+              let start = isNothing c.socket && not c.connecting
+               in (c {listeners = c.listeners + 1, connecting = c.connecting || start}, start)
+            when start (connect held keeping tell)
+          unlisten = atomicModifyIORef' held (\c -> (c {listeners = max 0 (c.listeners - 1)}, ()))
           startEditing page = do
             c <- atomicModifyIORef' held (\c -> let c' = c {editing = Set.insert page c.editing} in (c', c))
             when (c.open && not (Set.member page c.editing)) (say c (StartEditing page))
@@ -217,7 +258,7 @@ newFeed keep catchUp forget
             c <- atomicModifyIORef' held (\c -> let c' = c {editing = Set.delete page c.editing} in (c', c))
             when (c.open && Set.member page c.editing) (say c (StopEditing page))
           editorsOf page = Map.lookup page . (\c -> c.known) <$> readIORef held
-      pure Feed {heard = channel.emitter, watch, unwatch, restart, startEditing, stopEditing, editorsOf}
+      pure Feed {heard = channel.emitter, watch, unwatch, restart, startEditing, stopEditing, editorsOf, listen, unlisten}
 
 firstPause, longestPause :: Int
 firstPause = 1000
@@ -241,11 +282,15 @@ connect held keeping tell = do
     Right socket -> do
       atomicModifyIORef' held (\c -> (c {socket = Just socket, connecting = False}, ()))
       void . (WS.opened socket).registerHandler $ \() -> whenM current $ do
-        c <- atomicModifyIORef' held (\c -> let c' = c {open = True, pause = firstPause} in (c', c'))
+        (c, again) <- atomicModifyIORef' held (\c -> let c' = c {open = True, opened = True, pause = firstPause} in (c', (c', c.opened)))
         for_ (Map.keys c.pages) (say c . Subscribe)
         -- The server knows nothing of what this tab edits on a new
         -- connection.
         for_ (Set.toList c.editing) (say c . StartEditing)
+        -- Notifications made while it was closed were told to nobody.
+        when again $ do
+          keeping.missed
+          tell Reopened
       void . (WS.messages socket).registerHandler $ \case
         WS.TextMessage text -> whenM current $ case decodeStrict' (encodeUtf8 text) of
           Just (Event page event) -> whenM (watched page) $ do
@@ -262,15 +307,18 @@ connect held keeping tell = do
             heardEditors page editors
             tell (Replaced page threads)
             tell (Heard page (Editing editors))
+          Just (Notified n) -> do
+            keeping.notified n
+            tell (Notice n)
           _ -> pass
         WS.BinaryMessage _ -> pass
       void . (WS.closed socket).registerHandler $ \_ -> whenM current $ do
         -- Opened again after a pause, if anything is watched; otherwise
         -- when something is.
         c <- atomicModifyIORef' held $ \c ->
-          (c {socket = Nothing, open = False, connecting = not (null c.pages), known = mempty, pause = min longestPause (c.pause * 2)}, c)
+          (c {socket = Nothing, open = False, connecting = wanted c, known = mempty, pause = min longestPause (c.pause * 2)}, c)
         -- What changes now goes unheard.
         traverse_ keeping.forget (Map.keys c.pages)
-        unless (null c.pages) . void . forkIO $ do
+        when (wanted c) . void . forkIO $ do
           threadDelay (c.pause * 1000)
           whenM current (connect held keeping tell)

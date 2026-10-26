@@ -23,6 +23,7 @@ import Wiki.App.Backend.Contract (Fixture (..))
 import Wiki.App.Backend.Contract qualified as Contract
 import Wiki.App.Backend.Contract.Admin qualified as Admin
 import Wiki.App.Backend.Contract.Comments qualified as Comments
+import Wiki.App.Backend.Contract.Notifications qualified as Notifications
 import Wiki.App.Backend.Http (HttpWiki, applyImport, newHttpEnv, previewImport, runHttpWiki)
 import Wiki.App.Demo (demoNow)
 import Wiki.Core.Export (Archive (..), writeArchive)
@@ -47,6 +48,7 @@ spec = describe "HttpWiki against the server's API" $ do
   Contract.spec (type (HttpWiki IO)) fixture
   Admin.spec (type (HttpWiki IO)) fixture
   Comments.spec (type (HttpWiki IO)) fixture
+  Notifications.spec (type (HttpWiki IO)) fixture
   importing
   where
     fixture example =

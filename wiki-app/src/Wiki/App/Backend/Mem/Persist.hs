@@ -21,7 +21,9 @@
 -- one full title and body per save, so that a page saved a hundred times
 -- takes a hundred times its size. And so are pages' comments
 -- ("Wiki.Core.Comment"), which the export has none of either: a page's
--- threads, with their comments, are one record, under the page's id.
+-- threads, with their comments, are one record, under the page's id. And
+-- so are a user's notifications, what they watch and how they are told
+-- ("Wiki.Core.Notification"), one record under their id.
 --
 -- Everything here is pure: "Wiki.App.Backend.Mem" reads and writes the
 -- store, and works out what to write from two sets of 'records' with
@@ -39,6 +41,7 @@ module Wiki.App.Backend.Mem.Persist
   , draftsStore
   , versionsStore
   , threadsStore
+  , notificationsStore
   , storeNames
 
     -- * Records
@@ -57,18 +60,20 @@ import Data.Aeson.Types (Parser)
 import Data.Map.Lazy qualified as LazyMap
 import Data.Map.Merge.Strict qualified as Merge
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Time (Day (ModifiedJulianDay), UTCTime (..))
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Numeric.Natural (Natural)
 import Protolude
 import Web.Storage.IndexedDB (Database (..), StoreName)
 import Web.Storage.IndexedDB qualified as IDB
-import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions, emptyState, prepareSearch)
+import Wiki.App.Backend.Mem.State (Choices (..), MemState (..), Saved (..), completeVersions, emptyState, prepareSearch)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export
 import Wiki.Core.Id (BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
+import Wiki.Core.Notification (Mark, Notification, WatchTarget (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (Grants (..), SpaceGrant (..))
 import Wiki.Core.Space (Space (..))
@@ -78,11 +83,11 @@ import Wiki.Core.User (Group (..), User (..))
 -- when it is first opened; adding one later is a version bump, on which
 -- IndexedDB makes the new store and keeps the others with what they hold.
 -- Version 2 added 'draftsStore', version 3 'versionsStore', version 4
--- 'threadsStore'.
+-- 'threadsStore', version 5 'notificationsStore'.
 memDatabase :: Text -> Database
-memDatabase name = Database {name, version = 4, stores = storeNames}
+memDatabase name = Database {name, version = 5, stores = storeNames}
 
-usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore, threadsStore :: StoreName
+usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore, threadsStore, notificationsStore :: StoreName
 
 -- | A user's record, under their id.
 usersStore = "users"
@@ -122,9 +127,14 @@ versionsStore = "versions"
 -- comments.
 threadsStore = "threads"
 
+-- | A user's notifications, the marks of what they watch and their
+-- choices, as one record under their id. A database from before there was
+-- this store has none: nobody has been told anything, or chosen anything.
+notificationsStore = "notifications"
+
 -- | Every store of 'memDatabase'.
 storeNames :: [StoreName]
-storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore, threadsStore]
+storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore, threadsStore, notificationsStore]
 
 -- | A draft's key: its page's id and its author's, which are one draft's.
 draftKey :: Draft -> Text
@@ -166,7 +176,43 @@ records st =
       -- write would otherwise encode the whole history again.
       (versionsStore, LazyMap.fromList [(versionKey page at, encodeJson (encodeVersion page at v)) | (page, kept) <- Map.toList st.versions, (at, v) <- Map.toList kept])
     , (threadsStore, Map.fromList [(page.text, encodeJson (toJSON ts)) | (page, ts) <- Map.toList st.threads])
+    , (notificationsStore, Map.fromList [(u.text, encodeJson (encodeNotified st u)) | u <- Set.toList (Map.keysSet st.notices <> Map.keysSet st.watches <> Map.keysSet st.choices)])
     ]
+
+-- | A user's record of notifications: what they were told, what they
+-- marked to watch or not, and their choices.
+encodeNotified :: MemState -> UserId -> Value
+encodeNotified st u =
+  object
+    [ "user" .= u
+    , "notifications" .= Map.findWithDefault [] u st.notices
+    , "watches" .= [object [targetField t .= targetId t, "watching" .= w] | (t, w) <- Map.toList (Map.findWithDefault mempty u st.watches)]
+    , "mail" .= (Map.lookup u st.choices >>= \c -> c.mail)
+    , "watchOwn" .= maybe True (\c -> c.watchOwn) (Map.lookup u st.choices)
+    ]
+  where
+    targetField = \case
+      WatchPage _ -> "page"
+      WatchSpace _ -> "space"
+    targetId = \case
+      WatchPage p -> p.text
+      WatchSpace s -> s.text
+
+-- | A user's record of notifications: whose, what they were told, their
+-- marks, and their choices if they have made any.
+parseNotified :: Value -> Parser (UserId, [Notification], Mark, Maybe Choices)
+parseNotified = withObject "notifications" $ \o -> do
+  u <- o .: "user"
+  ns <- o .:? "notifications" .!= []
+  marks <- o .:? "watches" .!= [] >>= traverse (withObject "watch" (\w -> (,) <$> target w <*> w .: "watching"))
+  mail <- o .:? "mail"
+  watchOwn <- o .:? "watchOwn" .!= True
+  pure (u, ns, Map.fromList marks, if isNothing mail && watchOwn then Nothing else Just Choices {mail, watchOwn})
+  where
+    target w =
+      (w .:? "page") >>= \case
+        Just p -> pure (WatchPage (PageId p))
+        Nothing -> WatchSpace . SpaceId <$> w .: "space"
 
 -- | A version's record, with named fields, as a draft's.
 encodeVersion :: PageId -> UTCTime -> Saved -> Value
@@ -300,6 +346,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
       if all (\t -> t.page.text == key) ts
         then Right (PageId key, ts)
         else Left (failure threadsStore key "has threads of another page")
+    notified <- keyed notificationsStore parseNotified (\(u, _, _, _) -> u.text) UserId
     grants <- fmap concat . for (Map.toList (holding grantsStore)) $ \(key, bytes) -> do
       gs <- decoding grantsStore key (listOf parseSpaceGrant) bytes
       if all (\g -> g.space.text == key) gs
@@ -319,6 +366,9 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
           versions = Map.intersection (Map.fromListWith (<>) [(page, Map.singleton at v) | (page, at, v) <- Map.elems history]) pages
         , -- As versions: a page deleted takes its threads with it.
           threads = Map.intersection discussed pages
+        , notices = Map.filter (not . null) (map (\(_, ns, _, _) -> ns) notified)
+        , watches = Map.filter (not . null) (map (\(_, _, marks, _) -> marks) notified)
+        , choices = Map.mapMaybe (\(_, _, _, cs) -> cs) notified
         , -- Whom the demo is open to is not kept: it is open whenever
           -- it starts, as its prerendered pages are.
           grants = Grants {global, spaces = grants, access = Open}

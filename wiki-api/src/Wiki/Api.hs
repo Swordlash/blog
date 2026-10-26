@@ -10,8 +10,8 @@
 -- side of them (servant-server, servant-multipart) is native.
 --
 -- The API is a record of routes per resource ('SpacesApi', 'PagesApi',
--- 'AttachmentsApi', 'ArchiveApi', 'AdminApi', and a page's comments'
--- 'CommentsApi'), each field one endpoint named for the
+-- 'AttachmentsApi', 'ArchiveApi', 'AdminApi', a page's comments'
+-- 'CommentsApi', and the user's 'NotificationsApi'), each field one endpoint named for the
 -- @MonadWiki@ method it carries, gathered in 'WikiApi', with signing in
 -- and out beside the session's own read. docs/api.md lists
 -- every endpoint with its method, path, body, response and errors.
@@ -37,7 +37,8 @@
 -- * A closed wiki ("Wiki.Core.Access") answers someone who has not signed
 --   in with 'Wiki.Api.Error.Unauthenticated' (401) everywhere but 'info',
 --   'session' (to read it, sign in and out), 'register' (which refuses
---   them itself) and 'invitations'.
+--   them itself), 'invitations' and the links mailed to someone
+--   ('passwordReset', 'emailVerification', 'unsubscribe').
 module Wiki.Api
   ( -- * The API
     Api
@@ -52,6 +53,7 @@ module Wiki.Api
   , AccountApi (..)
   , PasswordResetApi (..)
   , CommentsApi (..)
+  , NotificationsApi (..)
 
     -- * Sessions
   , WithCookie
@@ -80,6 +82,7 @@ import Wiki.Api.Comments (CommentsApi (..))
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
+import Wiki.Api.Notifications (NotificationsApi (..))
 import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, MailToken, NewPasswordByMail, OneTimeCode, RecoveryCodes, ResetRequest, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment)
 import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types
@@ -165,6 +168,13 @@ data WikiApi mode = WikiApi
   -- @MonadComments@'s. The live channel that tells a tab of them as they
   -- happen is no servant route: the server upgrades @events@ to a
   -- WebSocket itself ("Wiki.Api.Events").
+  , notifications :: mode :- "notifications" :> NamedRoutes NotificationsApi
+  -- ^ The signed-in user's notifications, what they watch and how they are
+  -- told ("Wiki.Api.Notifications").
+  , unsubscribe :: mode :- "unsubscribe" :> Capture "token" MailToken :> PostNoContent
+  -- ^ Follow the link a notification's mail carries: the mail of the user
+  -- it names is turned off, without signing in. A link that is not one
+  -- is 'Wiki.Api.Error.NotFound'.
   }
   deriving stock (Generic)
 
