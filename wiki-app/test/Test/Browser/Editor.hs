@@ -319,13 +319,15 @@ spec m = do
     for_ (zip pieces pauses) $ \(word, pause) -> do
       typeText text word
       unsafeIOToPageM (threadDelay (pause * 1000))
-    -- In calls of three words, one after another with no pause between
-    -- them, since one call may take at most five seconds and the test build
-    -- types slower than the real one, slower still on a busy machine (a
-    -- call of a whole sentence timed out on CI, and one of five words
-    -- now and then).
-    for_ (chunksOf 3 [" " <> w | w <- T.words long]) $ \run ->
-      typeText text (mconcat run)
+    -- One word to a call, one call after another with no pause between
+    -- them: one call may take at most five seconds (Playwright's default,
+    -- which hspec-halogen's typeText keeps), and the test build types
+    -- slower than the real one, slower still on a busy machine. A call of a
+    -- whole sentence timed out on CI, then one of five words now and then,
+    -- then one of three words on a busy runner. The run is still typed
+    -- without pauses, so the preview of the long page is drawn as it goes.
+    for_ (T.words long) $ \word ->
+      typeText text (" " <> word)
     let expected = original <> mconcat pieces <> long
     eventually $ markdown ui `shouldReturn` expected
     eventually $ find ui ".editor-preview .page-body" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "w24 the quick")
@@ -663,9 +665,3 @@ dotPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChw
 -- | A length in CSS pixels, as computed styles give it ("14.4px").
 readPx :: Text -> Double
 readPx = fromMaybe 0 . readMaybe . T.unpack . T.dropEnd 2
-
--- | A list cut into runs of at most @n@.
-chunksOf :: Int -> [a] -> [[a]]
-chunksOf n = \case
-  [] -> []
-  xs -> let (run, rest) = splitAt n xs in run : chunksOf n rest
