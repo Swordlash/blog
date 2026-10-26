@@ -5,6 +5,9 @@
 -- screenshots it shows are there, each small enough for a page that is
 -- read on GitHub.
 --
+-- A link to a part of a page (its @#@ fragment) has to name one of the
+-- page's headings, by the id 'headingSlug' gives it, as the page renders it.
+--
 -- An example is a fenced block of @markdown@ (a page's text) or @tex@ (a
 -- space's math macros), and the paragraph right after it names the place
 -- it is on: its first link into the demo. A page's text is checked against
@@ -26,7 +29,7 @@ import Wiki.App.Route (Route, route)
 import Wiki.App.Route qualified as Route
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, resolvePath)
-import Wiki.Core.Slug (Slug)
+import Wiki.Core.Slug (Slug, headingSlug)
 import Wiki.Core.Space (Space (..))
 
 -- | The repository's root, from the package's directory, where the suite
@@ -49,6 +52,16 @@ spec = describe "README" $ do
     length links `shouldSatisfy` (>= 10)
     for_ links $ \address ->
       (address, either (const False) placeOf (parse route address)) `shouldBe` (address, True)
+
+  it "links to a part of a demo page only by a heading the page has" $ do
+    readme <- readReadme
+    let parts = demoFragments readme
+    length parts `shouldSatisfy` (>= 5)
+    for_ parts $ \(address, fragment) -> do
+      let headings = case parse route address of
+            Right (Route.Page s p) -> maybe [] (\pg -> headingIds pg.body) (pageAt s p)
+            _ -> []
+      (address, fragment, fragment `elem` headings) `shouldBe` (address, fragment, True)
 
   it "shows each example on the demo's page it links to, as it is written there" $ do
     readme <- readReadme
@@ -80,6 +93,28 @@ demoLinks readme =
   [ T.takeWhile (`notElem` (")># \n" :: [Char])) piece
   | piece <- drop 1 (T.splitOn demoAddress readme)
   , "/" `T.isPrefixOf` piece
+  ]
+
+-- | Every address in the README under the demo's that names a part of its
+-- page: the path, as 'demoLinks' gives it, and the fragment after the @#@.
+demoFragments :: Text -> [(Text, Text)]
+demoFragments readme =
+  [ (path, T.takeWhile (`notElem` (")> \n" :: [Char])) (T.drop 1 rest))
+  | piece <- drop 1 (T.splitOn demoAddress readme)
+  , "/" `T.isPrefixOf` piece
+  , let (path, rest) = T.break (`elem` (")># \n" :: [Char])) piece
+  , "#" `T.isPrefixOf` rest
+  ]
+
+-- | The ids of a page's headings, read from the ATX headings of its
+-- Markdown, as the renderer makes them.
+headingIds :: Text -> [Text]
+headingIds body =
+  [ headingSlug (T.strip (T.dropWhile (== '#') line))
+  | line <- T.lines body
+  , let hashes = T.length (T.takeWhile (== '#') line)
+  , hashes >= 1 && hashes <= 6
+  , " " `T.isPrefixOf` T.drop hashes line
   ]
 
 -- | The images under @docs/screenshots/@ the README shows.

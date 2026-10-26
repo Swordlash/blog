@@ -6,7 +6,8 @@ The demo's Diagrams page has a TikZ picture whose fence starts with
 `\usetikzlibrary` (WP5.3), so that the README's example of one links to a
 page where it is drawn. The test suite checks the README against the demo:
 each example of Markdown it shows is on the page it links to, word for word,
-each link into the demo leads to a space or a page the demo has, and each of
+each link into the demo leads to a space or a page the demo has (and to one
+of the page's headings, when it names one), and each of
 its screenshots (`docs/screenshots/`, taken by `toolchain/screenshots.mjs`)
 is under 300 KB.
 
