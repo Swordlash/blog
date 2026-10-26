@@ -27,6 +27,8 @@
 #   wasi-shim.js     @bjorn3/browser_wasi_shim, which web/index.js starts the
 #                    program with, from node_modules rather than a CDN, so
 #                    that the page starts with no network;
+#   licenses.txt     the licences of the npm packages bundled into the files
+#                    above, with their texts (web/src/licenses.mjs);
 #   icon.svg, icons/ the wiki's icon and the manifest's PNGs drawn from it,
 #   sw.js            and the service worker, versioned by this build's files
 #                    (web/src/pwa.mjs, after everything else).
@@ -39,6 +41,9 @@ cd "$(dirname "$0")/.."
 
 out_dir=${1:?usage: bundle.sh <output-dir>}
 mkdir -p "$out_dir"
+# Each bundle's metafile (what went into it), for the licences at the end.
+meta=$(mktemp -d)
+trap 'rm -rf "$meta"' EXIT
 
 # A classic script, not a module: the page and the browser test runner load it
 # with a plain <script>, before the application, so that the global is there
@@ -49,7 +54,7 @@ node web/check-macros.mjs
 npx esbuild web/src/islands.js \
   --bundle --minify --format=iife --target=es2022 --log-level=warning \
   --loader:.tex=text \
-  --outfile="$out_dir/islands.js"
+  --metafile="$meta/islands.json" --outfile="$out_dir/islands.js"
 
 # Mermaid loads each kind of diagram with a dynamic import of its own; split
 # into chunks, a page with a flowchart fetches the flowchart's code only.
@@ -57,19 +62,19 @@ rm -rf "$out_dir/islands"
 npx esbuild web/src/mermaid.js \
   --bundle --minify --format=esm --splitting --target=es2022 --log-level=warning \
   --chunk-names='chunks/[name]-[hash]' \
-  --outdir="$out_dir/islands"
+  --metafile="$meta/mermaid.json" --outdir="$out_dir/islands"
 
 # TikZ's driver, outside Mermaid's split build so that it stays one file in
 # islands/, where it finds TikZJax's files (../tikzjax/) by its own URL.
 npx esbuild web/src/tikz.js \
   --bundle --minify --format=esm --target=es2022 --log-level=warning \
-  --outfile="$out_dir/islands/tikz.js"
+  --metafile="$meta/tikz.json" --outfile="$out_dir/islands/tikz.js"
 
 # The editor's CodeMirror, one file in islands/ too: only the editor loads
 # it, so a reader's page never pays for it.
 npx esbuild web/src/editor.js \
   --bundle --minify --format=esm --target=es2022 --log-level=warning \
-  --outfile="$out_dir/islands/editor.js"
+  --metafile="$meta/editor.json" --outfile="$out_dir/islands/editor.js"
 
 # TikZJax's files, copied as they are published: run-tex.js is its worker
 # (TeX's WebAssembly runtime and dvi2html), tex.wasm.gz and core.dump.gz are
@@ -108,13 +113,18 @@ npx esbuild web/src/islands.css \
   --bundle --minify --log-level=warning \
   --loader:.woff2=file --loader:.woff=file --loader:.ttf=file \
   --asset-names='fonts/[name]' \
-  --outfile="$out_dir/islands.css"
+  --metafile="$meta/css.json" --outfile="$out_dir/islands.css"
 
 # The WASI shim, one module (its package's dist/ is several), at the
 # version package-lock.json pins.
 npx esbuild node_modules/@bjorn3/browser_wasi_shim/dist/index.js \
   --bundle --minify --format=esm --target=es2022 --log-level=warning \
-  --outfile="$out_dir/wasi-shim.js"
+  --metafile="$meta/wasi-shim.json" --outfile="$out_dir/wasi-shim.js"
+
+# The notices of every npm package bundled above, from the packages
+# themselves (web/src/licenses.mjs): a page served to the public conveys
+# each of them, and minifying keeps few of their own comments.
+node web/src/licenses.mjs "$out_dir" "$meta"/*.json
 
 # Last: the service worker's version is a hash of the files written above
 # (and of the page's own, which toolchain/build-wasm.sh copied first).
