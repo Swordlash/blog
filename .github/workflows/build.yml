@@ -178,6 +178,15 @@ jobs:
     - name: Test
       run: npm run test-native
 
+    # The deploy scripts against fakes of systemd, ufw, sudo, tailscale (and
+    # its serve) and curl, in a temporary home: nothing on the runner is
+    # touched, and every server the cases start is stopped when they end.
+    # Its last stage serves the static cases with the real wiki-server, the
+    # one the Build step made (cabal list-bin in dist-newstyle/native). About
+    # two minutes.
+    - name: Test the deploy scripts (deploy-local, undeploy-local, the static servers)
+      run: sh toolchain/test-deploy-local.sh
+
   wasm:
     needs: tested
     if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}

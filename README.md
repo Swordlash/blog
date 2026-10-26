@@ -555,6 +555,8 @@ first, or name one with `WIKI_SERVER`):
 sh toolchain/test-deploy-local.sh
 ```
 
+CI runs them in its `native` job, after the native tests (about two minutes).
+
 ## Running in Docker
 
 For a machine that should not carry the toolchain (a VPS, say), the server and
@@ -747,7 +749,8 @@ the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 ## CI
 
 `.github/workflows/build.yml` runs three jobs on every pull request to `main` and every
-push to it: `native` (build and test natively), `wasm` (build for wasm, run the test
+push to it: `native` (build and test natively, and test the deploy scripts with
+`toolchain/test-deploy-local.sh`), `wasm` (build for wasm, run the test
 suites and the smoke test in headless Chromium, and on a hosted runner keep the built
 page as the run's `app` artifact) and `format` (`npm run format-check`).
 
