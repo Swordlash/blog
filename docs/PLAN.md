@@ -2577,6 +2577,52 @@ Amended by the planning session after each work package's report.
 - **Wave C started** (2026-10-26) from `main` after WP4.13: WP4.15 on `wp4.15-toc-templates`
   and WP4.17 on `wp4.17-offline-pwa`, in parallel worktrees; the next migration is `0012`
   (WP4.15's `template` flag; WP4.17 has none).
+- **WP4.17 merged** (2026-10-26, PR #75, `main` at `8f78703`). No migration.
+  `web/manifest.webmanifest` (relative addresses, so one file serves the server's base path,
+  `/admin/` and the demo; `start_url`/`scope`/`id` `./`, standalone, theme `#f6f8fa`; an SVG
+  icon and 192/512 px PNGs, plain and maskable, drawn at build time by `web/src/pwa.mjs`, a
+  small rasteriser of our own over `web/src/icon.svg`, no dependency; there is no wiki-wide
+  icon, so the uploaded-icon branch never applies); linked from `web/index.html` (every page,
+  404 and the loading page included, comes from that template; `headTags` holds only what
+  differs per route). `web/src/sw.js`, written by `bundle.sh` as `sw.js` with a version that
+  is a hash of the files it precaches; activation deletes other versions' caches; **network
+  first for everything**, the cache only when the network fails, app files rewritten only on
+  an ETag change; cached on install: the program, scripts, CSS, KaTeX fonts, CodeMirror,
+  Mermaid's entry, the manifest, the icons, the offline page; cached on read: pages (50,
+  oldest out), API GETs (300), attachments and space icons only as images up to 1 MB; never
+  cached: `api/v1/session`, `admin/…`, `account/…`, `notifications…`, `events`, `archive/…`,
+  `invitations/…`, `password-reset/…`, `email-verification`, `unsubscribe`, `pages/*/draft`,
+  exports, anything under `auth/`; writes untouched; the first page, loaded before the worker
+  existed, is kept on a `keep-page` message. A page served from the cache offline gets `<meta
+  name="wiki-offline-copy" content="<time>">` from the worker (a page cannot read its own
+  response headers), which `Wiki.App.Offline` shows as "You are reading an offline copy from
+  <time>" above the route over the server backend (not the demo, whose content is live from
+  IndexedDB) with the `.offline-notice`, until the next route; `web/offline.html` for a page
+  never read, listing what can be read offline; "Install" in the header beside the bell while
+  the browser's `beforeinstallprompt` offer (kept by `index.js`) is open; sign-out over HTTP
+  deletes the page and answer caches (`forgetReads`), the app files stay; the WASI shim is
+  bundled from `node_modules` (locked 0.3.0) instead of jsDelivr so the page starts offline;
+  `.webmanifest` served as `application/manifest+json` by `Static.hs` and
+  `toolchain/deploy-server.mjs`. **Secure context only:** browsers run a service worker over
+  HTTPS or on localhost, so the owner's plain-HTTP Tailscale deploy gets no worker and no
+  Install and works as before; the admin listener on loopback and the demo on Pages do. HTTPS
+  (deferred from the owner's pick) is therefore the next productionisation item worth doing.
+  **Plan correction (drafts):** the plan said the editor keeps drafts locally and sends them
+  when back online; in fact the draft lives on the server (`saveDraft`), an autosave that
+  fails offline says "Draft not saved" quietly and retries at the next change, not on
+  `online`; verified, not rebuilt; a retry on `online` is a small follow-up. Under Playwright
+  a page the worker serves offline reads `navigator.onLine` as true, so the shell treats any
+  offline copy as offline. For later packages: the smoke tests' existing parts open pages with
+  `serviceWorkers: "block"` (their Playwright routes do not see a worker's traffic), new parts
+  need the same or their own context; the browser test runner loads every top-level `.js` in
+  its asset folder as a classic script, so `wiki-app/test/web/bundle.sh` deletes `sw.js` and
+  `wasi-shim.js`; a new API GET is cached unless added to the worker's never-cached list.
+  Tests: manifest validity and linking natively, the server serving `sw.js`, the manifest and
+  `offline.html` on both listeners and under a base path, 6 browser cases, one offline part in
+  each smoke test (offline reload with the copy line and notice, another space from cached
+  answers, a page never read gets the offline page, back online gets the live page, sign-out
+  leaves nothing cached); not tested: the caps and trimming. Server 774 (2 pending), app
+  1000, browser 223.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
