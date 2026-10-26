@@ -1553,7 +1553,9 @@ Amended by the planning session after each work package's report.
   GPL-3.0-or-later beside a proprietary repository; it is served unmodified as a separate
   worker with `tikzjax/NOTICE.txt`, which is fine while nothing is conveyed, and needs a
   decision before any public deployment (Phase 2 may render on the server instead); the
-  Computer Modern fonts came with no licence file. **Found:** following a link while a
+  Computer Modern fonts came with no licence file. (Answered by WP5.1: the repository is
+  MIT, the GPL text is served beside TikZJax, and the fonts are BaKoMa's, under a licence
+  that allows this; see decision 24.) **Found:** following a link while a
   Mermaid or TikZ island was drawing stalled navigation for 30 s and more when the island
   awaited the drawing in `lift`; worked around (drawings start and return, `islands.js`
   fills the element), reproduced by reverting `b65ad6e` and running the smoke test; the
@@ -2868,6 +2870,44 @@ Amended by the planning session after each work package's report.
   decision 24 confirmed (MIT).
 - **WP5.3 added** (2026-10-26, the owner's ask while WP5.1 runs): the README for the
   public, with examples per library and a deck, and screenshots. After WP5.1, beside WP5.2.
+- **WP5.1 merged** (2026-10-26, PR #79, `main` at `7fc422d`). `LICENSE` is MIT; each
+  package carries an identical copy, since `cabal check` rejects `license-file:
+  ../LICENSE` (`malformed-relative-path`), checked byte for byte by
+  `wiki-app/test/Test/Licence.hs` (native only; it reads the files as UTF-8 bytes, as the
+  POSIX locale broke on the `ś` of the author field). The README's licence section: MIT,
+  the sentence on Claude, a table of the third-party licences read from each package's
+  metadata (two beyond the plan's list: `@bjorn3/browser_wasi_shim` MIT or Apache-2.0,
+  `@lezer/highlight` MIT; DOMPurify named inside Mermaid's bundle), the GPL-3 rule for a
+  conveyed `wiki-server` binary, TikZJax and the fonts. TikZJax has no licence file in
+  its npm package nor its repository (every usual name 404s), only `package.json`'s
+  `GPL-3.0+`, so the FSF's text is kept in `web/licenses/GPL-3.0.txt` (sha256 matching
+  Debian's copy); the fonts are BaKoMa Computer Modern, converted to WOFF2 by TikZJax's
+  build, so modified, which the BaKoMa Fonts Licence (from CTAN, kept as
+  `web/licenses/BaKoMa-LICENCE.txt`) allows provided its notices and the originals'
+  location go with the copies: `bundle.sh` writes `tikzjax/LICENSE.txt`,
+  `tikzjax/fonts/LICENCE.txt` and a `NOTICE.txt` naming both, and the smoke test checks
+  all three are served. The original `kisonecat/tikzjax` says `GPL-3.0 or LPPL-1.3c`;
+  the fork shipped (`drgrice1`) says `GPL-3.0+`, which is followed. CI: one expression on
+  every job's `runs-on`, `ubuntu-latest` when the pull request's head repository is not
+  this one (compared by `full_name`, so a deleted fork, null, goes hosted too), the actor
+  ends in `[bot]`, or the dispatch input `runner` is `hosted`; `self-hosted` otherwise;
+  `actionlint` 1.7.7 clean; the README's CI section documents both layers and what
+  remains (a fork's run uses the fork's copy of the workflow, so approving one means
+  reading its `.github/` changes first; write access is access to the runner's user).
+  Deploy: `--server` is the first run's default, `--static` the opt-in; a state file from
+  before `--server` existed has no mode and stays the demo. Gate: native, wasm, 38 deploy
+  cases, smoke test, format, all green; CI green on the self-hosted runner with the new
+  expression (actor `Swordlash`). Not run: the hosted path, which only GitHub can run,
+  once the repository is public. Carried to WP5.2: the built page ships no notices for
+  the MIT/BSD libraries esbuild bundles (KaTeX, highlight.js, CodeMirror, fflate,
+  Mermaid, the WASI shim), which a public deploy should add (`--legal-comments=external`
+  or a licence file in the build); the `concurrency` group is keyed on the branch name
+  alone, so a fork's pull request with one of our branch names would share it (add the
+  head repository to the key). Noted: native tests need a UTF-8 locale (`LANG=C.UTF-8`).
+  **The owner's step is next**: confirm nothing in the `.cabal` `maintainer` field should
+  go, make the repository public, require approval for all external contributors, turn on
+  secret scanning and push protection, set Pages to deploy from GitHub Actions, run the
+  workflow once with `runner: hosted`.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
