@@ -472,6 +472,20 @@ try {
   );
   await cold.context().close();
 
+  // TikZJax is GPL and its fonts are BaKoMa's: a page that serves them
+  // serves their licences' texts beside them (web/bundle.sh), as conveying
+  // them requires.
+  for (const [path, says] of [
+    ["/tikzjax/LICENSE.txt", "GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007"],
+    ["/tikzjax/fonts/LICENCE.txt", "BaKoMa Fonts Licence"],
+    ["/tikzjax/NOTICE.txt", "Licence: GPL-3.0-or-later, whose text is LICENSE.txt"],
+  ]) {
+    const answer = await fetch(url(path));
+    assert.equal(answer.status, 200, `${path} is not served`);
+    assert.ok((await answer.text()).includes(says), `${path} does not say ${JSON.stringify(says)}`);
+  }
+  console.log("ok: TikZJax's licence and its fonts' are served beside them");
+
   // A page left while its picture is still being drawn: the next page shows
   // at once. (When an island's component waited for its drawing, following
   // a link then left the page as it was; see Wiki.App.Islands.Monad.) TeX's

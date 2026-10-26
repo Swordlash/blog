@@ -84,9 +84,24 @@ mkdir -p "$out_dir/tikzjax"
 cp -R "$tikzjax/run-tex.js" "$tikzjax/tex.wasm.gz" "$tikzjax/core.dump.gz" \
   "$tikzjax/tex_files" "$tikzjax/fonts" "$tikzjax/fonts.css" "$out_dir/tikzjax/"
 cp web/src/tikz-worker.js "$out_dir/tikzjax/worker.js"
-# TikZJax is free software under the GPL; say where its source is, beside it.
-printf 'TikZJax %s, from npm'"'"'s @drgrice1/tikzjax, unmodified.\nLicence: GPL-3.0-or-later. Source: https://github.com/drgrice1/tikzjax\n' \
-  "$(node -p 'require("./node_modules/@drgrice1/tikzjax/package.json").version')" >"$out_dir/tikzjax/NOTICE.txt"
+# TikZJax is free software under the GPL, and conveying it (as the demo on
+# GitHub Pages does) means conveying the licence's text and saying where its
+# source is, beside it. Its npm package and its repository hold no licence
+# file, only package.json's "GPL-3.0+", so the text is the FSF's, kept in
+# web/licenses/. Its fonts are the BaKoMa Computer Modern fonts, converted to
+# WOFF2 by TikZJax's build: modified fonts, which their licence lets anyone
+# distribute with its notice and the fonts' original location, so that
+# licence goes beside them.
+cp web/licenses/GPL-3.0.txt "$out_dir/tikzjax/LICENSE.txt"
+cp web/licenses/BaKoMa-LICENCE.txt "$out_dir/tikzjax/fonts/LICENCE.txt"
+printf '%s\n' \
+  "TikZJax $(node -p 'require("./node_modules/@drgrice1/tikzjax/package.json").version'), from npm's @drgrice1/tikzjax, unmodified." \
+  'Licence: GPL-3.0-or-later, whose text is LICENSE.txt. Source: https://github.com/drgrice1/tikzjax' \
+  '' \
+  'fonts/ holds the BaKoMa Computer Modern fonts, Copyright (C) 1994, 1995 Basil K. Malyshev,' \
+  'converted to WOFF2 by TikZJax'"'"'s build, under the BaKoMa Fonts Licence, whose text is' \
+  'fonts/LICENCE.txt. The original fonts: http://www.ctan.org/tex-archive/fonts/cm/ps-type1/bakoma' \
+  >"$out_dir/tikzjax/NOTICE.txt"
 
 # The fonts keep their names, since nothing caches them by hash yet.
 npx esbuild web/src/islands.css \
