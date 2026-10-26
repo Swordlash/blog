@@ -46,6 +46,8 @@ const types = {
   ".css": "text/css; charset=utf-8",
   ".json": "application/json",
   ".map": "application/json",
+  // The wiki's web manifest, which a browser reads to install it.
+  ".webmanifest": "application/manifest+json",
   ".wasm": "application/wasm",
   ".svg": "image/svg+xml",
   ".png": "image/png",
