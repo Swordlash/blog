@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The demo's Diagrams page has a TikZ picture whose fence starts with
+`\usetikzlibrary` (WP5.3), so that the README's example of one links to a
+page where it is drawn. The test suite checks the README against the demo:
+each example of Markdown it shows is on the page it links to, word for word,
+each link into the demo leads to a space or a page the demo has, and each of
+its screenshots (`docs/screenshots/`, taken by `toolchain/screenshots.mjs`)
+is under 300 KB.
+
 Licensed under the MIT licence (WP5.1), where it was proprietary: the
 package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
 
