@@ -136,6 +136,11 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     offline <- blocksOf ToOther place {publicUrl = Nothing} "See [[Tour]].\n"
     linkTargets offline `shouldBe` []
 
+  it "leaves out [[toc]], which the document's own table of contents stands for, but not a link to a page of that name" $ do
+    bs <- blocksOf ToOther place "# A\n\n[[toc]]\n\nText, and [[toc]] here.\n"
+    length bs `shouldBe` 2
+    headers bs `shouldBe` [(1, "a")]
+
   it "lets through only what the allowlist keeps of raw HTML, and reads it as pandoc's own" $ do
     bs <- blocksOf ToOther place "<script>alert('no')</script>\n\nPress <kbd>Ctrl</kbd> and <b onclick=\"steal()\">this</b>.\n\n<div class=\"box\"><img src=\"tree.png\" alt=\"A tree\" onerror=\"steal()\"></div>\n"
     raw bs `shouldBe` []

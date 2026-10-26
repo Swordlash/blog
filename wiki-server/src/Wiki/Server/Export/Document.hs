@@ -187,7 +187,16 @@ pageBlocks output place source = do
     . walk (concatMap dropOptions)
     . walk htmlInlines
     . walk (concatMap htmlBlock)
-    $ read'
+    $ filter (not . contentsMarker) read'
+
+-- | @[[toc]]@ as a paragraph of its own, where the page shows its table of
+-- contents ("Wiki.Core.Markdown.Toc"): pandoc reads it as a wiki link to a
+-- page called @toc@, and a document has a table of contents of the
+-- writer's, so it is left out.
+contentsMarker :: P.Block -> Bool
+contentsMarker = \case
+  P.Para [P.Link _ [P.Str label] (target, _)] -> T.toLower label == "toc" && T.toLower target == "toc"
+  _ -> False
 
 -- | A page, as a document of its own, titled as the page shows it
 -- ('titled').

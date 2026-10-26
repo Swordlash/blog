@@ -253,8 +253,11 @@ async function repairsOf(page) {
         const now = Object.fromEntries([...node.attributes].map((a) => [a.name, a.value]));
         for (const name of new Set([...Object.keys(mark.attributes), ...Object.keys(now)])) {
           // data-stuck is the layout's, set on a bar that sticks under the
-          // header once the window scrolls (wiki-app/jsbits/layout.js).
-          if (name === "data-prerendered" || name === "data-stuck" || mark.attributes[name] === now[name]) continue;
+          // header once the window scrolls (wiki-app/jsbits/layout.js), and
+          // data-current the contents', set on the link to the section
+          // being read (wiki-app/jsbits/toc.js).
+          const scripts = ["data-prerendered", "data-stuck", "data-current"];
+          if (scripts.includes(name) || mark.attributes[name] === now[name]) continue;
           const change = `${describe(node)} ${name}: ${JSON.stringify(mark.attributes[name]?.slice(0, 40))} -> ${JSON.stringify(now[name]?.slice(0, 40))}`;
           (mark.attributes[name]?.startsWith("data:") && now[name]?.startsWith("blob:") ? objectUrls : attributes).push(change);
         }
@@ -673,6 +676,38 @@ try {
   );
   await samePage("making a page");
   console.log("ok: a new page is made from its title, Ctrl+S saves it and stays, and Save and close shows it");
+
+  // A page from a template: the team's own, listed apart from its tree, is
+  // offered by "New page" beside the built-in ones; the new page has its
+  // title, today's date and its maker's name where the template has
+  // {{title}}, {{date}} and {{author}}.
+  await toSpace("/s/team/");
+  await page.locator("#app .wiki-sidebar .sidebar-templates a", { hasText: "Weekly sync" }).waitFor({ timeout });
+  await page.locator("#app .space-pages-link").click();
+  await arrive({ path: "/s/team/pages/", view: "space-view", crumb: "Pages and settings" }, "Team's pages, for a page from a template");
+  await page.locator("#app .space-view .actions a", { hasText: "New page" }).click();
+  await arrive({ path: "/s/team/new-page/", view: "new-page-view", crumb: "New page" }, "the new page's form, with templates");
+  const starts = await page.locator("#app .new-page-choice").allTextContents();
+  assert.deepEqual(
+    starts.map((t) => t.trim().split(/\s+/)[0]),
+    ["Blank", "Weekly", "Meeting", "Decision", "How-to"],
+    "what a new page may start from",
+  );
+  await page.locator("#app .new-page-title").pressSequentially("Smoke sync");
+  await page.locator("#app .new-page-choice", { hasText: "Weekly sync" }).locator("input").check();
+  await page.locator("#app .new-page-view button.primary").click();
+  await arrive({ path: "/s/team/p/smoke-sync/edit/", view: "editor", crumb: "Edit" }, "the editor on a page from a template");
+  await page.locator(editorText).waitFor({ timeout });
+  const today = new Date().toISOString().slice(0, 10);
+  await eventually(async () => {
+    const made = (await markdownIn(page)) ?? "";
+    assert.ok(made.startsWith("# Smoke sync\n"), `the template's title not filled in: ${made}`);
+    assert.ok(made.includes(`Weekly sync of ${today}, notes by Ada Admin.`), `the date and the author not filled in: ${made}`);
+  }, "the template's placeholders filled in");
+  await page.locator("#app .editor-save-close").click();
+  await arrive({ path: "/s/team/p/smoke-sync/", view: "page-view", crumb: "Smoke sync", text: "notes by Ada Admin" }, "the page made from a template");
+  await samePage("making a page from a template");
+  console.log("ok: New page offers the space's template and the built-in ones, and fills in the one chosen");
 
   // Search from the keyboard: "/" to the box, words, an arrow and Enter.
   // "/" is a character to type in a field, so nothing is focused first.

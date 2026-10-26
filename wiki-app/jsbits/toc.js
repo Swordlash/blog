@@ -80,7 +80,7 @@ function wiki_keep_contents() {
 // Scroll to the element the address's fragment names, if there is one: a
 // page shown by the program rather than sent by the server (or the
 // prerender) is not scrolled by the browser.
-// A fragment that is a route (#/s/…, under the browser tests' router) names
+// A fragment that is a route (#/s/..., under the browser tests' router) names
 // no element.
 function wiki_reveal_fragment() {
   if (location.hash.length < 2 || location.hash.startsWith("#/")) return;

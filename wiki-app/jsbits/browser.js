@@ -22,7 +22,7 @@ function wiki_clicked_href(event) {
 // page), with its state kept (wiki_history_entry's number); the address is
 // written out from the path, since a bare #id would be read against the
 // page's <base href>. Under a router that keeps the route in the fragment
-// (#/s/…, the browser tests'), the fragment is the router's, and is left.
+// (#/s/..., the browser tests'), the fragment is the router's, and is left.
 function wiki_scroll_to(id) {
   const element = document.getElementById(id);
   if (element === null) return;

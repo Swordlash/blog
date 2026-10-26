@@ -315,7 +315,7 @@ async function loadAdopted(page, path) {
       if (!app.contains(node)) {
         if (node.nodeType !== Node.TEXT_NODE || was.trim() !== "") found.push(`gone: ${was}`);
       } else {
-        const now = node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].filter((a) => a.name !== "data-prerendered" && a.name !== "data-stuck").map((a) => `${a.name}=${a.value}`).join(" ");
+        const now = node.nodeType === Node.TEXT_NODE ? node.data : [...node.attributes].filter((a) => !["data-prerendered", "data-stuck", "data-current"].includes(a.name)).map((a) => `${a.name}=${a.value}`).join(" ");
         const before = node.nodeType === Node.TEXT_NODE ? was : was.replace(/ ?data-prerendered=true/, "");
         if (now !== before) found.push(`changed: ${before} -> ${now}`);
       }
@@ -432,7 +432,7 @@ async function migrateTheDemo() {
   const summary = page.locator("#app .import-summary");
   await summary.waitFor({ timeout });
   const told = await summary.textContent();
-  for (const line of ["3 spaces created", "1 space merged with the server's", "8 pages created", "1 page replaced by the imported one", "1 page left out"]) {
+  for (const line of ["3 spaces created", "1 space merged with the server's", "9 pages created", "1 page replaced by the imported one", "1 page left out"]) {
     assert.ok(told.includes(line), `the summary does not say "${line}": ${told}`);
   }
   // The shell has reloaded the tree of spaces, with the demo's in it.
@@ -457,7 +457,7 @@ async function migrateTheDemo() {
   await dialog.locator(".import-apply").click();
   await summary.waitFor({ timeout });
   const again = await summary.textContent();
-  for (const line of ["4 spaces merged with the server's", "1 page created", "9 pages kept as the server had them"]) {
+  for (const line of ["4 spaces merged with the server's", "1 page created", "10 pages kept as the server had them"]) {
     assert.ok(again.includes(line), `the second summary does not say "${line}": ${again}`);
   }
   const spaces = (await api("spaces")).body;
@@ -470,9 +470,36 @@ async function migrateTheDemo() {
     assert.deepEqual(slugs, [...new Set(slugs)], `a page of ${space} is there twice`);
     total += slugs.length;
   }
-  assert.equal(total, 11, "the demo's ten pages, once each, and the server's Blog's home page");
+  assert.equal(total, 12, "the demo's eleven pages, once each, and the server's Blog's home page");
+  // The team's template came in as one: listed apart, and offered.
+  assert.deepEqual(
+    (await pagesOf("team")).filter((p) => p.template).map((p) => p.slug),
+    ["weekly-sync"],
+    "the demo's template is not one on the server",
+  );
   await page.context().close();
   console.log("ok: imported again from the demo's data in this browser, everything is merged and nothing is there twice");
+
+  // A long page with its "Contents" panel, and a page with [[toc]], as the
+  // server renders them: adopted with nothing to repair or ask, while the
+  // section being read is marked by the script alone.
+  const reader = await newPage();
+  for (const [path, expected] of [
+    ["/s/docs/p/markdown-guide/", "Contents"],
+    ["/s/team/p/team-handbook/", "Before your first day"],
+  ]) {
+    const loaded = await loadAdopted(reader, path);
+    assert.equal(loaded.status, 200, `${path}: the status`);
+    assert.ok(loaded.shown.includes(expected), `${path}: "${expected}" is not there before app.wasm`);
+    assert.deepEqual(loaded.repairs, [], `${path}: adopting it repaired it`);
+    assert.deepEqual(loaded.asked, [], `${path}: the program asked the API for what the page carries`);
+  }
+  assert.equal(await reader.locator("#app .page-body nav.toc").count(), 1, "the handbook's [[toc]]");
+  assert.equal(await reader.locator("#app .page-contents").count(), 0, "a panel beside a page with [[toc]]");
+  await reader.goto(url("/s/docs/p/markdown-guide/#footnotes"));
+  await reader.locator("#app .page-contents .toc-list a[href='#footnotes'][data-current]").waitFor({ timeout });
+  await reader.context().close();
+  console.log("ok: the server renders a page's contents and [[toc]], adopted with nothing to repair, and an address's #heading is scrolled to and marked");
 }
 
 const editorText = "#app .editor-cm .cm-content";
