@@ -726,10 +726,13 @@ on `PATH`. npm also applies the current environment directives after loading an 
 generated env file, so existing installations need no bootstrap reinstall for this fix.
 `build` and `serve` are aliases
 for the wasm commands and accept the same extra cabal arguments after `--`. The gate
-checks the complete pinned toolchain, including the formatter, parser generators and
-Chromium cache; browser launch validation stays in install mode. It checks package
-entry points and local executables needed by the selected command (`http-server` for
-serve, and the islands packages and esbuild for wasm), without downloads or writes.
+checks what the selected command needs and no more: the native commands need the
+pinned GHC and cabal only; the wasm builds need the wasm sysroot, the parser
+generators, Node and the npm packages as well (the islands packages and esbuild, and
+`http-server` for serve); the test commands that open a browser need the Chromium
+cache on top (browser launch validation stays in install mode). The formatter is
+checked by `check`, not by the gate: `npm run format` runs it directly. Nothing is
+downloaded or written.
 Missing tools or incompatible versions stop with instructions to run
 `sh toolchain/bootstrap.sh toolchain`, then retry. Missing npm dependencies require
 `npm ci` separately. A direct `bootstrap.sh ready` check uses the caller's `PATH`

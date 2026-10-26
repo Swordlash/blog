@@ -271,6 +271,11 @@ jobs:
         if [ ! -x "$HOME/.ghc-wasm/add_to_github_path.sh" ]; then
           SKIP_GHC=1 FLAVOUR="$GHC_WASM_FLAVOUR" "$RUNNER_TEMP/ghc-wasm-meta/setup.sh"
         fi
+        # The marker toolchain/bootstrap.sh leaves on a sysroot it installed,
+        # naming the ghc-wasm-meta revision: its readiness gate, which every
+        # npm command runs, takes the sysroot by it (the cache is keyed by the
+        # same revision).
+        touch "$HOME/.ghc-wasm/.bootstrap-$GHC_WASM_META_REV"
         # shellcheck source=/dev/null
         . ~/.ghc-wasm/env
         if ! ghcup whereis cabal "$CABAL_VERSION" >/dev/null 2>&1; then

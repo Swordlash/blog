@@ -9,7 +9,8 @@
 #   sh toolchain/bootstrap.sh path        # the same directories, one per line
 #   sh toolchain/bootstrap.sh check       # read-only inventory; never installs
 #   sh toolchain/bootstrap.sh ready [build-native|test-native|build-wasm|build-wasm-opt|test-wasm|test|dev-test|serve-wasm]
-#                                        # strict, read-only npm readiness gate
+#                                        # read-only readiness gate for that npm command:
+#                                        # it checks what the command needs, no more
 #
 # It reuses compatible tools on PATH first. Missing tools are installed on
 # x86_64 Linux as follows:
@@ -344,22 +345,32 @@ require_generators() {
 # browser profile or lock files. Install mode verifies runtime libraries by
 # launching it. Wasm's env is loaded only in a subshell, as the build does,
 # so native tools are checked before its CC and PATH can take over.
+#
+# Each command is checked for what it needs and nothing more, since a machine
+# need not hold the whole toolchain: the native commands need the host GHC and
+# cabal only (a hosted CI runner has just those for the native job; alex and
+# happy are built by cabal itself for a native build, and only the wasm build
+# falls back to PATH for them); the wasm builds need the wasm sysroot, the
+# generators, Node and the npm packages as well; the test commands that open a
+# browser need Chromium on top. fourmolu is nobody's: `npm run format` runs
+# it directly, and `check` reports it.
 ready() {
   target=${2:-build-wasm}
   case $target in
-    build-native | test-native | build-wasm | build-wasm-opt | test-wasm | test | dev-test | serve-wasm) ;;
+    build-native | test-native) needs=native ;;
+    build-wasm | build-wasm-opt | serve-wasm) needs=wasm ;;
+    test-wasm | test | dev-test) needs=browser ;;
     *) printf 'bootstrap: unknown readiness target: %s\n' "$target" >&2; return 2 ;;
   esac
   ready_failed=0
   ready_context=
   require_version ghc "$GHC_VERSION"
   require_version cabal "$CABAL_VERSION"
-  require_generators
-  if [ "$(fourmolu --version 2>/dev/null | head -n 1 || true)" != "fourmolu $FOURMOLU_VERSION" ]; then
-    printf 'bootstrap: not ready: fourmolu %s is required on PATH (found: %s; path: %s).\n' \
-      "$FOURMOLU_VERSION" "$(fourmolu --version 2>/dev/null | head -n 1 || true)" "$(command -v fourmolu || true)" >&2
-    ready_failed=1
+  if [ "$needs" = native ]; then
+    ready_done "$target"
+    return $?
   fi
+  require_generators
   if ! wasm_sysroot_ready; then
     printf 'bootstrap: not ready: the pinned wasm sysroot in %s is missing or incomplete.\n' "$WASM_PREFIX" >&2
     ready_failed=1
@@ -390,24 +401,30 @@ ready() {
     printf 'bootstrap: not ready: Node >=24 and npm are required on PATH.\n' >&2
     ready_failed=1
   else
-    playwright_location
-    location=
-    if [ -n "$cli" ]; then
-      location=$(node "$cli" install --dry-run --only-shell chromium 2>/dev/null | sed -n 's/^ *Install location: *//p' | head -n 1)
-    fi
-    if [ -z "$location" ] || ! chromium_cached; then
-      printf 'bootstrap: not ready: Chromium headless shell for Playwright %s is missing.\n' "$version" >&2
-      ready_failed=1
+    if [ "$needs" = browser ]; then
+      playwright_location
+      location=
+      if [ -n "$cli" ]; then
+        location=$(node "$cli" install --dry-run --only-shell chromium 2>/dev/null | sed -n 's/^ *Install location: *//p' | head -n 1)
+      fi
+      if [ -z "$location" ] || ! chromium_cached; then
+        printf 'bootstrap: not ready: Chromium headless shell for Playwright %s is missing.\n' "$version" >&2
+        ready_failed=1
+      fi
     fi
     if ! node "$ROOT/toolchain/check-npm-deps.cjs" "$ROOT" "$target"; then
       ready_failed=1
     fi
   fi
+  ready_done "$target"
+}
+
+ready_done() {
   if [ "$ready_failed" != 0 ]; then
     printf 'bootstrap: run `sh toolchain/bootstrap.sh toolchain`, then retry. npm build, serve and test commands load ~/.wiki-toolchain/env automatically; for direct commands, load `. ~/.wiki-toolchain/env` in this shell.\n' >&2
     return 1
   fi
-  printf 'bootstrap: ready for %s.\n' "$target"
+  printf 'bootstrap: ready for %s.\n' "$1"
 }
 
 if [ "$mode" = ready ]; then

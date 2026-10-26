@@ -243,7 +243,7 @@ readiness_fixture() {
   done
   printf 'export PATH="%s/compiler/bin:$PATH"\nexport CC=wasm-only-cc\n' "$HOME/.ghc-wasm" >"$HOME/.ghc-wasm/env"
   unset CC
-  for package in esbuild katex highlight.js mermaid fflate @drgrice1/tikzjax http-server \
+  for package in esbuild katex highlight.js mermaid fflate @drgrice1/tikzjax http-server @bjorn3/browser_wasi_shim \
     @codemirror/state @codemirror/view @codemirror/commands @codemirror/language @codemirror/lang-markdown @lezer/highlight; do
     mkdir -p "$case_dir/repo/node_modules/$package"
     printf '{"main":"index.js"}\n' >"$case_dir/repo/node_modules/$package/package.json"
@@ -431,10 +431,31 @@ assert_contains "$case_dir/generator" 'happy 2.1.7 is required'
 HAPPY_REPORT=2.1.7
 export HAPPY_REPORT
 rm "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME"
-if bootstrap ready >"$case_dir/chromium" 2>&1; then fail 'missing Chromium passed readiness'; fi
+if bootstrap ready test-wasm >"$case_dir/chromium" 2>&1; then fail 'missing Chromium passed readiness for a browser test'; fi
 assert_contains "$case_dir/chromium" 'Chromium headless shell'
 [ ! -s "$EVENTS" ] || fail 'strict readiness tried repairing a missing tool'
 pass 'strict checks reject generator pins and missing Chromium without repairs'
+
+# Each command is gated on what it needs: a hosted CI runner has the host GHC
+# and cabal alone for the native job, and the wasm job installs Chromium only
+# after its build; fourmolu is nobody's, since `npm run format` runs it itself.
+readiness_fixture needs
+rm "$case_dir/bin/fourmolu" "$CACHE/chrome-headless-shell-linux64/$CHROMIUM_NAME"
+bootstrap ready build-wasm >"$case_dir/wasm-no-browser"
+assert_contains "$case_dir/wasm-no-browser" 'ready for build-wasm'
+rm "$case_dir/bin/alex" "$case_dir/bin/happy" "$case_dir/bin/node" "$case_dir/bin/npm"
+rm -r "$HOME/.ghc-wasm"
+for command in build-native test-native; do
+  bootstrap ready "$command" >"$case_dir/$command"
+  assert_contains "$case_dir/$command" "ready for $command"
+done
+if bootstrap ready build-wasm >"$case_dir/wasm-native-only" 2>&1; then fail 'a wasm build passed readiness with the host tools alone'; fi
+assert_contains "$case_dir/wasm-native-only" 'alex 3.5.4.2 is required'
+assert_contains "$case_dir/wasm-native-only" 'wasm sysroot'
+assert_contains "$case_dir/wasm-native-only" 'Node >=24'
+if grep -F fourmolu "$case_dir/wasm-native-only" >/dev/null; then fail 'readiness asked for fourmolu'; fi
+[ ! -s "$EVENTS" ] || fail 'per-command readiness installed or launched something'
+pass 'the native commands need the host GHC and cabal alone; the wasm build needs no browser; nothing needs fourmolu'
 
 readiness_fixture wasm-shadow
 printf 'export NODE_REPORT=v23.11.0\n' >>"$HOME/.ghc-wasm/env"
