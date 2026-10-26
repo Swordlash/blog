@@ -1061,7 +1061,26 @@ setSpaceProfileTx sid p = do
   checked <- either invalid pure (checkProfile s (map (\n -> n.id) nodes) p)
   let s' = withProfile checked s
   db (`updateSpace` s')
+  -- Saved whole by the space's settings: a save that changed nothing is
+  -- no change to record.
+  let changed = profileChanges nodes s s'
+  unless (null changed) (record "space.profile" (spaceSubject s') changed)
   pure s'
+
+-- | What a change of a space's profile changed, in words: the description
+-- as it is now, the icon as what it is, the home page by its title.
+profileChanges :: [PageNode] -> Space -> Space -> [(Text, Text)]
+profileChanges nodes old new =
+  [("description", if T.null new.description then "none" else new.description) | old.description /= new.description]
+    <> [("icon", maybe "the default" iconText new.icon) | old.icon /= new.icon]
+    <> [("home page", maybe "none" titleOf new.homePage) | old.homePage /= new.homePage]
+    <> [("blog", yesNo new.blog) | old.blog /= new.blog]
+  where
+    iconText = \case
+      IconEmoji e -> e
+      IconColour c -> "colour " <> c
+      IconImage _ _ -> "an uploaded image"
+    titleOf pid = maybe pid.text (\n -> n.title) (find (\n -> n.id == pid) nodes)
 
 -- | Picture a space with an image, its bytes kept under their hash as an
 -- attachment's are. The image it had before is left to the collection of
@@ -1075,6 +1094,8 @@ uploadSpaceIconTx sid mediaType bytes = do
   blob <- liftIO (storeBlob dir bytes)
   let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog} s
   db (`updateSpace` s')
+  -- Part of the profile, set apart only because it has bytes.
+  record "space.profile" (spaceSubject s') [("icon", "an uploaded image")]
   pure s'
 
 -- | Change a space, as someone who administers it.

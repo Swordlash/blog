@@ -714,14 +714,15 @@ shows to anyone, as an invitation's.
 
 Every write of the administration's is recorded in the audit log in the
 same transaction as the write (WP4.10 of the plan): grants on spaces and of
-the wiki, a space made public or private, groups and their members,
+the wiki, a space made public or private, a space's profile (its
+description, icon, home page and whether it is a blog), groups and their members,
 accounts (made, a password set, disabled or enabled, a second factor or a
 provider's account taken away), the wiki's, the server's and the backups'
 settings, invitations made, revoked and accepted, an account made by its
 owner, deletions of spaces and pages, imports; and what the console does
 (`wiki-server users …`, recorded as `administrator` from `console`). An
 entry's `action` is one of `space.grant`, `space.revoke`, `space.public`,
-`space.delete`, `page.delete`, `user.create`, `user.register`,
+`space.profile`, `space.delete`, `page.delete`, `user.create`, `user.register`,
 `user.administrator`, `user.create-spaces`, `user.password`,
 `user.disable`, `user.enable`, `user.second-factor-remove`,
 `user.identity-remove`, `group.create`, `group.rename`, `group.delete`,

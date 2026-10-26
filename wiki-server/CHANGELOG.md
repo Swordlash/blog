@@ -54,7 +54,10 @@ at once, or in a daily digest from 07:00 UTC, only to a verified address,
 after checking again that the user may read the page, with an unsubscribe
 link signed with a key the server keeps in `settings`. Notifications are
 kept 90 days, at most 500 a user. The API's `notifications…` and
-`unsubscribe/<secret>` are served; the latter is open in a closed wiki.
+`unsubscribe/<secret>` are served; the latter is open in a closed wiki. A
+space's profile changed in its settings, or its icon uploaded, is recorded
+in the audit log as `space.profile`, with the fields that changed; a save
+that changed nothing is not.
 
 Account hygiene (WP4.11). Migration `0008-account-hygiene.sql`: `users.email`
 and `email_verified_at`; `sessions.public_id` (filled for existing sessions)

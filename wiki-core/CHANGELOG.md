@@ -27,7 +27,8 @@ writes a mention as its text. `Wiki.Core.Notification`: the notification
 and its kinds, watches (`pageWatch`, `spaceWatch`, a mark per page or space
 over the nearest space's, over one's own page), the mail modes, who is told
 of what (`recipients`, `newlyMentioned`) and the digest (`digest`).
-`Wiki.Core.Id` gains `NotificationId`.
+`Wiki.Core.Id` gains `NotificationId`. A post's excerpt writes a mention as
+its text. `Wiki.Core.Audit.actionText` knows `space.profile`.
 
 Math between LaTeX's delimiters (WP4.7): `parseMarkdown` reads `\(…\)` as
 inline math and `\[…\]` as display math, beside `$…$` and `$$…$$`, through

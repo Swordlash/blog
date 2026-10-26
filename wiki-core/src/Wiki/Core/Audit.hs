@@ -95,6 +95,7 @@ actionText a = Map.findWithDefault a a actions
       Map.fromList
         [ ("space.delete", "Deleted a space")
         , ("space.public", "Changed whether a space is public")
+        , ("space.profile", "Changed a space's description, icon, home page or blog")
         , ("space.grant", "Granted a permission on a space")
         , ("space.revoke", "Took a permission on a space away")
         , ("page.delete", "Deleted a page")
