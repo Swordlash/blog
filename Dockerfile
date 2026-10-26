@@ -149,7 +149,7 @@ COPY toolchain/docker-entrypoint.sh /usr/local/bin/wiki-entrypoint
 # would fail on the first non-ASCII character they write.
 ENV PATH=/opt/wiki/bin:$PATH \
     LANG=C.UTF-8 \
-    WIKI_HEALTH_URL=http://127.0.0.1:8080/api/v1/info
+    WIKI_HEALTH_URL=http://127.0.0.1:8080/healthz
 USER 10001:10001
 WORKDIR /data
 VOLUME /data

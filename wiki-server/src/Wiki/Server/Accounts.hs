@@ -424,20 +424,21 @@ landWith st now address intent claimed = withDatabase st $ \c ->
           pendingInvitation c now (tokenHash token.text) >>= \case
             Nothing -> pure (Left UnusableInvitation)
             Just (i, _) -> do
-              made <- newAccount c
+              made <- newAccount c [("invitation", i.text)]
               void (deleteInvitation c i)
               pure (Right made)
         SignInOnly -> do
           settings <- settingsWith st c
           if takesNewAccounts settings.access
-            then Right <$> newAccount c
+            then Right <$> newAccount c []
             else pure (Left ClosedWiki)
   where
     -- A user who may sign in: there, and not disabled.
     active c u = mfilter (\a -> not a.disabled) <$> loadAccount c u
     -- An account for the identity, with the first login of its candidates
-    -- no one has, and no password.
-    newAccount c = do
+    -- no one has, and no password: recorded in the audit log as made by its
+    -- owner, with the provider, as one made with a password is.
+    newAccount c detail = do
       settings <- settingsWith st c
       uid <- UserId . UUID.toText <$> generateV4
       let tries = take 100 (loginCandidates claimed)
@@ -453,6 +454,7 @@ landWith st now address intent claimed = withDatabase st $ \c ->
         Left e -> panic ("no login could be made for an identity: " <> show e)
         Right (user, token) -> do
           insertIdentity c now user.id claimed.provider claimed.subject claimed.email claimed.name
+          _ <- recordMade c address "user.register" (("provider", claimed.provider) : detail) (Right (user, token) :: Either () (User, Text))
           pure (SignedInAs user token True)
 
 -- | The logins to try for an account made with a provider's account, the

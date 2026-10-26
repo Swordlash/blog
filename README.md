@@ -547,7 +547,11 @@ there with the compose file beside it.
 
   ```sh
   docker compose exec wiki curl -s http://127.0.0.1:8081/admin/api/v1/admin/status
+  docker compose exec wiki curl -s http://127.0.0.1:8081/metrics
   ```
+
+  The image's health check asks `http://127.0.0.1:8080/healthz` (`WIKI_HEALTH_URL`),
+  which answers 503 when the database cannot be read.
 
   It is the API and the application as the administrator, as on the machine's own
   admin listener (the API is `docs/api.md`). Make the first administrator there

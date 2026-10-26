@@ -157,7 +157,7 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     summary revoked `shouldBe` ("invitation.revoke", "invitation", "bea@example.org", [])
     revoked.subject.id `shouldBe` Just i.id.text
 
-  it "the console's writes, as the operator's from the console, and an account someone makes" $ withDemo $ \st -> do
+  it "the console's writes, as the operator's from the console, and an account someone makes, with a password or a provider" $ withDemo $ \st -> do
     made <- recordsOne st (Accounts.createAccount st "cleo" "Cleo" (Just "a password of hers"))
     summary made `shouldBe` ("user.create", "user", "cleo", [("login", "cleo"), ("name", "Cleo")])
     made.actor `shouldBe` operator
@@ -170,6 +170,11 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     summary registered `shouldBe` ("user.register", "user", "dora", [])
     registered.actor.login `shouldBe` "dora"
     registered.address `shouldBe` "100.64.0.10"
+    -- One a provider's sign-in makes, with the provider.
+    landed <- recordsOne st (Accounts.landWith st now "100.64.0.11" Accounts.SignInOnly Accounts.Claimed {provider = "github", subject = "42", email = Nothing, name = Just "Eve", login = Just "eve"})
+    summary landed `shouldBe` ("user.register", "user", "eve", [("provider", "github")])
+    landed.actor.login `shouldBe` "eve"
+    landed.address `shouldBe` "100.64.0.11"
 
   it "an import, with what it did, as the administrator" $ withDemo $ \st -> do
     actor <- actorOf st Administrator
