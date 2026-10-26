@@ -30,6 +30,21 @@ logged as an error. `Logger` carries the level and fields to its writer.
 `Wiki.Server.Storage.Migrate` is compiled whenever the package is, so that a
 migration added is embedded without deleting the build directory.
 
+Spaces shown as blogs (WP4.14). Migration `0010-space-blog.sql` adds
+`spaces.blog`; the storage answers `postDetails` (the earliest version's
+author, the comments of every thread). `Wiki.Server.Feed` serves
+`/s/<space>/feed.xml` (Atom) and `/s/<space>/feed.rss` (RSS 2.0, the
+author as Dublin Core's `creator`) for a public space shown as a blog: its
+newest 20 posts whole, rendered through the allowlist with their links and
+attachments absolute; and `/sitemap.xml`, every public space and page with
+its last change, at most 50 000. Both answer what an anonymous reader may
+see whoever asks, and 404 otherwise and in a closed wiki. Absolute
+addresses are under the panel's public address, or the request's own
+(`Wiki.Server.Address`: `X-Forwarded-Host` or `Host`, `X-Forwarded-Proto`
+or http, and the listener's place). The pages the server renders carry the
+head `Wiki.App.Head` describes. An import shows a space as a blog when the
+archive does.
+
 Account hygiene (WP4.11). Migration `0008-account-hygiene.sql`: `users.email`
 and `email_verified_at`; `sessions.public_id` (filled for existing sessions)
 and `address`; tables `totp`, `recovery_codes`, `reset_tokens` and

@@ -7,6 +7,18 @@ what, to what, what changed, from where) and its record; an `Archive` gains
 `audit`, written as `audit.json` when it has entries and read as none when
 the file is missing, so every archive written before still imports.
 
+Spaces shown as blogs (WP4.14). `Space` and `SpaceProfile` gain `blog`, set
+with the profile; the export writes it as an additive field of a space's
+record (`"blog": true`, false when missing), so the format's version stays.
+`Wiki.Core.Blog`: `posts` (a space's top-level pages but its home page, the
+newest first by when each was made), `isPost`, `neighbours` (the older and
+the newer post), `postsPerPage` (10), `pageCount` and `onPage` (a number
+out of range brought to the nearest page), `excerpt`/`excerptOf` (the first
+paragraph with text, without markup, images, code or footnote marks,
+formulas as their TeX, cut on a word at 300 characters with an ellipsis),
+`firstImage`, and `PostDetails` (a post's first author and its count of
+comments).
+
 Math between LaTeX's delimiters (WP4.7): `parseMarkdown` reads `\(…\)` as
 inline math and `\[…\]` as display math, beside `$…$` and `$$…$$`, through
 `Wiki.Core.Markdown.TexMath.texMathSpec` (pandoc's

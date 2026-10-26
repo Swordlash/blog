@@ -162,9 +162,9 @@ serveDemo = do
     runMemWiki wiki $ do
       me <- session
       spaces <- listSpaces
-      pages <- for spaces $ \s -> (s,) . fromRight [] <$> listPages s.id
+      pages <- for spaces $ \s -> (\ps details -> (s, ps, details)) . fromRight [] <$> listPages s.id <*> (fromRight mempty <$> postDetails s.id)
       people <- directory
-      threads <- for (concatMap snd pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
+      threads <- for (concatMap (\(_, ps, _) -> ps) pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
       counts <- pageCounts
       pure (me, spaces, pages, people, threads, counts)
   for_ threads $ \(p, ts) -> answerWith "GET" (links.comments p).list 200 ts
@@ -176,9 +176,10 @@ serveDemo = do
   answerWith "GET" links.admin.status 200 quietServer
   answerWith "GET" "api/v1/spaces" 200 spaces
   answerWith "GET" links.spaces.pageCounts 200 counts
-  for_ pages $ \(s, ps) -> do
+  for_ pages $ \(s, ps, details) -> do
     answerWith "GET" (links.spaces.atPath (spacePathOf spaces s.id)) 200 s
     answerWith "GET" (links.spaces.listPages s.id) 200 ps
+    answerWith "GET" (links.spaces.postDetails s.id) 200 details
     for_ ps $ \p -> answerWith "GET" ("api/v1/pages/" <> p.id.text <> "/draft") 200 (Nothing :: Maybe ())
 
 -- | A server's status with nothing to say: what 'serveDemo' answers.

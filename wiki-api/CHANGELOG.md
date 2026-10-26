@@ -8,6 +8,11 @@ admin/activity?actor=&offset=`); `ServerStatus` gains `schemaVersion`,
 `lastBackup`, `connections` and `errors` (`LoggedError`); `Wiki.Api.Info.Health`
 for `/healthz`.
 
+Spaces shown as blogs (WP4.14). A space's JSON and a profile's carry
+`blog`. `SpacesApi` gains `postDetails` (`GET
+spaces/<id>/post-details`): what each page of a space is listed with as a
+post, as an object keyed by the page's id.
+
 Account hygiene (WP4.11). `Wiki.Api.Security`: `SessionRef`,
 `SessionSummary`, `SecondFactorState`, `TotpEnrolment`, `OneTimeCode`,
 `RecoveryCodes`, `EmailState`, `EmailChange`, `AccountEmail`, `MailToken`,

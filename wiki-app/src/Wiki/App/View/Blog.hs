@@ -41,8 +41,8 @@ import Wiki.Core.Blog (PostDetails (..), excerptOf, noDetails, onPage, pageCount
 import Wiki.Core.Id (AttachmentId, PageId (..))
 import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title))
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Version (Author (..))
 import Wiki.Core.Space (Space (description, id, name, public))
+import Wiki.Core.Version (Author (..))
 
 -- | The space, as the shell has loaded it, with its pages, and the page of
 -- its posts shown, counted from 1.

@@ -2,8 +2,8 @@
 -- that has them, all or none of them, and never over a newer schema.
 module Test.Storage.Migrate (spec) where
 
-import Database.SQLite.Simple (Connection, Only (..), execute_, query_, withConnection)
 import Data.Text qualified as T
+import Database.SQLite.Simple (Connection, Only (..), execute_, query_, withConnection)
 import Database.SQLite.Simple qualified as SQLite
 import Protolude
 import System.FilePath ((</>))

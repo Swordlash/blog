@@ -13,6 +13,24 @@ what the server's page carries once (`once`, the cache's `activity` and
 `status`, preloaded) and afresh after that, since they change on the server
 by themselves.
 
+Spaces shown as blogs (WP4.14). "Show as a blog" in Space settings. A blog
+opens at its posts (`Wiki.App.View.Blog`): under its home page, if it has
+one, each post as a card of the directory's with its title, date, author
+where known, comments and excerpt, ten a page, the later pages at
+`/s/<space>/?page=n` (the new route `Posts`, which a space that is no blog
+shows as `Space`). A post's page shows when it was posted and links to the
+previous (older) and the next (newer) post. `MonadWiki` gains
+`postDetails`, cached and preloaded over HTTP (a comment's write lets it
+go) and answered by the demo from its versions and threads. The shell's
+`Settled` answers with a `Wiki.App.Head.Head` rather than a title: a public
+page's description and OpenGraph properties (`og:title`, `og:description`,
+`og:url`, `og:type`, `og:image` from the page's first image or the space's
+uploaded icon) and a public blog's feeds, which `Wiki.App.Static.withHead`
+writes into a page for the prerender and the server alike (`headTags`; the
+demo's addresses are paths, and it announces no feeds). `Rendered` and
+`Served` gain `meta`. The demo's Blog is shown as a blog, without a home
+page.
+
 Account hygiene (WP4.11). The account panel under a signed-in user's name
 gains `Wiki.App.View.Security`: their sessions with "Sign out" and "Sign out
 everywhere", a second factor set up from a QR code drawn as an `<svg>` of

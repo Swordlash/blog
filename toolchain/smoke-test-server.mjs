@@ -749,6 +749,15 @@ try {
   assert.ok(Buffer.from(await iconServed.arrayBuffer()).equals(pixel), "the icon's bytes");
   await eventually(async () => assert.equal(await icon.evaluate((img) => img.complete && img.naturalWidth), 1, "not yet"), "the icon drawn");
   console.log("ok: a space's settings give it a description, an emoji, and an uploaded image the server serves");
+  // Shown as a blog, from the same settings, with a post of its own.
+  await page.locator("#app .space-settings .space-blog").check();
+  await page.locator("#app .space-profile-form button.primary").click();
+  await page.locator("#app .settings-saved", { hasText: "Saved" }).waitFor({ timeout });
+  const post = await api(`spaces/${encodeURIComponent(publicSpace.body.id)}/pages`, {
+    method: "POST",
+    body: JSON.stringify({ parent: null, title: "Smoke post", body: "The smoke test's *first* post." }),
+  });
+  assert.equal(post.status, 201, "the post");
   await page.context().close();
 
   // Someone who is not signed in sees the public space only, and no way to
@@ -767,8 +776,41 @@ try {
   await visitor.locator("#app .sign-in-toggle").waitFor({ timeout });
   assert.equal((await fetch(url("/s/smoke-space/"))).status, 403, "the private space, to a visitor");
   assert.equal((await fetch(url("/api/v1/admin/directory"))).status, 403, "the administration's API, to a visitor");
-  await visitor.context().close();
   console.log("ok: a visitor who is not signed in sees the public space and nothing else, and no administration");
+
+  // The public blog, as a visitor and a feed reader find it: its page
+  // adopted with nothing to repair, the head announcing its feeds and
+  // describing it, its Atom and RSS feeds with the post whole, the sitemap
+  // with its pages and nothing private.
+  const blogVisit = await loadAdopted(visitor, "/s/smoke-public/");
+  assert.equal(blogVisit.status, 200, "the public blog, to a visitor");
+  assert.ok(blogVisit.shown.includes("Smoke post") && blogVisit.shown.includes("No comments"), `the blog's posts: ${blogVisit.shown}`);
+  assert.deepEqual(blogVisit.repairs, [], "adopting the blog's page repaired it");
+  assert.deepEqual(blogVisit.asked, [], "the program asked the API for what the blog's page carries");
+  await visitor.locator("#app .post-link", { hasText: "Smoke post" }).click();
+  await visitor.locator("#app .post-date", { hasText: "Posted" }).waitFor({ timeout });
+  const postPage = await (await fetch(url("/s/smoke-public/p/smoke-post/"))).text();
+  for (const tag of [
+    '<meta property="og:title" content="Smoke post">',
+    '<meta name="description" content="The smoke test\'s first post.">',
+    '<link rel="alternate" type="application/atom+xml" title="Smoke public (Atom)" href="/s/smoke-public/feed.xml">',
+  ]) {
+    assert.ok(postPage.includes(tag), `the post's head has no ${tag}`);
+  }
+  const atom = await fetch(url("/s/smoke-public/feed.xml"));
+  assert.equal(atom.status, 200, "the public blog's Atom feed");
+  assert.match(atom.headers.get("content-type"), /^application\/atom\+xml/, "the Atom feed's type");
+  const atomText = await atom.text();
+  assert.ok(atomText.includes("<title>Smoke post</title>") && atomText.includes("&lt;em&gt;first&lt;/em&gt;"), `the Atom feed: ${atomText}`);
+  const rss = await fetch(url("/s/smoke-public/feed.rss"));
+  assert.equal(rss.status, 200, "the public blog's RSS feed");
+  assert.ok((await rss.text()).includes("<guid isPermaLink=\"true\">"), "the RSS feed's items");
+  assert.equal((await fetch(url("/s/smoke-space/feed.xml"))).status, 404, "a private space's feed");
+  const sitemap = await (await fetch(url("/sitemap.xml"))).text();
+  assert.ok(sitemap.includes("/s/smoke-public/p/smoke-post/</loc>"), `the sitemap: ${sitemap}`);
+  assert.ok(!sitemap.includes("smoke-space"), "the sitemap lists a private space");
+  await visitor.context().close();
+  console.log("ok: a public blog lists its posts, describes them to link previews, and has feeds and a sitemap, nothing private in them");
 
   // A closed wiki: someone who is not signed in is shown the way to sign in
   // and nothing else, rendered so by the server and adopted with nothing to
@@ -777,6 +819,8 @@ try {
   const closing = await api("admin/settings", { method: "PUT", body: JSON.stringify({ access: "Closed", newAccountsCreateSpaces: false }) });
   assert.equal(closing.status, 200, "closing the wiki");
   assert.equal((await fetch(url("/api/v1/spaces"))).status, 401, "the spaces of a closed wiki, to a visitor");
+  assert.equal((await fetch(url("/s/smoke-public/feed.xml"))).status, 404, "a closed wiki's feed");
+  assert.equal((await fetch(url("/sitemap.xml"))).status, 404, "a closed wiki's sitemap");
   const outsider = await newPage({ anonymous: true });
   const shut = await loadAdopted(outsider, "/s/smoke-public/");
   assert.equal(shut.status, 401, "a page of a closed wiki, to a visitor");

@@ -4,7 +4,8 @@
 -- demo's wiki: the directory of spaces and the spaces visited last, the
 -- sidebar of one space and switching to another, a subspace and the way up
 -- from it, a page made the space's home page, the space's settings with an
--- emoji and an uploaded image for its icon; and the page's actions, which
+-- emoji and an uploaded image for its icon; a space shown as a blog
+-- (WP4.14), its posts and a post's neighbours; and the page's actions, which
 -- stay under the header while a long page scrolls (the owner's request).
 module Test.Browser.Spaces (spec) where
 
@@ -71,7 +72,7 @@ spec m = do
     _ <- find ui ".space-switcher-option[aria-current=true][href$='#/s/docs/']"
     find ui ".space-switcher-option[href$='#/s/blog/']" >>= click
     find ui ".sidebar-space-name" >>= (`shouldHaveText` "Blog")
-    find ui ".page-body h1" >>= (`shouldHaveText` "Hello, world")
+    find ui ".blog-view h1" >>= (`shouldHaveText` "Blog")
     -- Closed again on arriving.
     length <$> findAll ui ".space-switcher-menu" `shouldReturn` 0
     find ui ".breadcrumbs li a" >>= (`shouldHaveText` "Spaces")
@@ -129,6 +130,54 @@ spec m = do
     _ <- find ui ".space-card-link[href$='#/s/blog/'] img.space-icon-image"
     find ui ".space-card-link[href$='#/s/blog/'] ~ .space-card-description" >>= (`shouldHaveText` "Notes, newest first.")
 
+  it "lists a blog's posts, the newest first, and goes from a post to the next and back" $ runPage $ do
+    ui <- start m Nothing (Space (slugs ["blog"]))
+    titles <- traverse textContent =<< findAll ui ".post-list .post-title"
+    titles `shouldBe` ["Notes on Haskell", "Hello, world"]
+    metas <- traverse textContent =<< findAll ui ".post-list .post-meta"
+    metas `shouldBe` ["19 September 2026 · No comments", "1 September 2026 · 5 comments"]
+    find ui ".post-card[data-page] .post-excerpt" >>= (`shouldSatisfy'` "WebAssembly")
+    find ui ".post-link[href$='#/s/blog/p/hello-world/']" >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "Hello, world")
+    find ui ".post-date" >>= (`shouldHaveText` "Posted 1 September 2026")
+    length <$> findAll ui ".post-previous" `shouldReturn` 0
+    find ui ".post-next" >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "Notes on Haskell")
+    length <$> findAll ui ".post-next" `shouldReturn` 0
+    find ui ".post-previous" >>= click
+    find ui ".page-body h1" >>= (`shouldHaveText` "Hello, world")
+    -- The space's own link goes back to the posts.
+    find ui ".wiki-sidebar .sidebar-space" >>= click
+    _ <- find ui ".blog-view .post-list"
+    find ui ".breadcrumbs [aria-current=page]" >>= (`shouldHaveText` "Blog")
+
+  it "shows a space as a blog, under its home page, once its administrator says so" $ runPage $ do
+    ui <- start m (Just "user-admin") (SpacePages (slugs ["docs"]))
+    find ui ".space-settings-toggle" >>= click
+    switch <- find ui ".space-settings .space-blog"
+    getProperty switch "checked" `shouldReturn` "false"
+    click switch
+    find ui ".space-profile-form button.primary" >>= click
+    find ui ".settings-saved" >>= (`shouldHaveText` "Saved")
+    find ui ".wiki-sidebar .sidebar-space" >>= click
+    find ui ".blog-view .blog-home h1" >>= (`shouldHaveText` "Tour")
+    -- Its home page is above the posts, and not among them; the pages
+    -- under the guide are not posts either.
+    titles <- traverse textContent =<< findAll ui ".post-list .post-title"
+    titles `shouldBe` ["Markdown guide"]
+    find ui ".new-post" >>= (`shouldHaveText` "New post")
+    find ui ".post-link" >>= click
+    find ui ".post-date" >>= (`shouldSatisfy'` "Posted")
+    -- And back: the space opens at its home page again.
+    find ui ".space-pages-link" >>= click
+    find ui ".space-settings-toggle" >>= click
+    find ui ".space-settings .space-blog" >>= click
+    find ui ".space-profile-form button.primary" >>= click
+    find ui ".settings-saved" >>= (`shouldHaveText` "Saved")
+    find ui ".wiki-sidebar .sidebar-space" >>= click
+    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "Tour")
+    length <$> findAll ui ".blog-view" `shouldReturn` 0
+
   it "renames a space in its settings, keeping its address" $ runPage $ do
     ui <- start m (Just "user-admin") (SpacePages (slugs ["blog"]))
     find ui ".space-settings-toggle" >>= click
@@ -176,6 +225,7 @@ spec m = do
         [top, bottom, window] -> pure (top, bottom, window)
         _ -> expectationFailure ("no box for " <> toS selector) >> pure (0, 0, 0)
     getAttribute' ui selector name = find ui selector >>= (`getAttribute` name)
+    shouldSatisfy' element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
 
 chooseFile :: Text -> Text -> Text -> Text -> IO ()
 chooseFile selector name mediaType base64 = evaluate =<< js_choose_file (toJSText selector) (toJSText name) (toJSText mediaType) (toJSText base64)

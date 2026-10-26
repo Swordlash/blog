@@ -572,7 +572,9 @@ try {
       await arrive({ path: "/", view: "directory" }, `the directory, for ${space.name}`);
     }
     await page.locator(`#app .space-card-link[href='${space.href}']`).click();
-    await arrive({ path: space.href, view: "page-view", crumb: space.name }, `the space ${space.name}`);
+    // The blog opens at its posts (WP4.14), the others at their home pages.
+    const opensAt = space.name === "Blog" ? "blog-view" : "page-view";
+    await arrive({ path: space.href, view: opensAt, crumb: space.name }, `the space ${space.name}`);
     assert.equal(await page.locator("#app .sidebar-space-name").textContent(), space.name, "the sidebar's space");
     const first = page.locator("#app .wiki-sidebar .page-tree a").first();
     const target = { href: await first.getAttribute("href"), title: await first.textContent() };
@@ -586,10 +588,23 @@ try {
   await samePage("going through the spaces");
   console.log("ok: every root space, and a page in each, by clicking, and the directory remembers them");
 
-  // The editor, as admin, with a save: Hello, world.
+  // The blog: its posts the newest first, each with its date and comments,
+  // and from a post to the one before it.
   await page.locator("#app .space-card-link[href='/s/blog/']").click();
-  await arrive({ path: "/s/blog/", view: "page-view", crumb: "Blog" }, "Blog again");
-  await page.locator("#app .wiki-sidebar .page-tree a[href='/s/blog/p/hello-world/']").click();
+  await arrive({ path: "/s/blog/", view: "blog-view", crumb: "Blog" }, "Blog again");
+  assert.deepEqual(await page.locator("#app .post-list .post-title").allTextContents(), ["Notes on Haskell", "Hello, world"], "the blog's posts");
+  assert.deepEqual(
+    await page.locator("#app .post-list .post-meta").allTextContents(),
+    ["19 September 2026 · No comments", "1 September 2026 · 5 comments"],
+    "the posts' dates and comments",
+  );
+  await page.locator("#app .post-link[href='/s/blog/p/notes-on-haskell/']").click();
+  await arrive({ path: "/s/blog/p/notes-on-haskell/", view: "page-view", crumb: "Notes on Haskell", text: "Posted 19 September 2026" }, "a post");
+  assert.equal(await page.locator("#app .post-next").count(), 0, "the newest post has no next");
+  console.log("ok: the blog lists its posts, the newest first, and a post its date");
+
+  // The editor, as admin, with a save: Hello, world, the post before.
+  await page.locator("#app .post-previous").click();
   await arrive({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world" }, "Hello, world");
 
   // Its source, and back to it by the link.

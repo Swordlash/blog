@@ -149,10 +149,10 @@ import Wiki.App.View.Slides qualified as SlidesView
 import Wiki.App.View.Source qualified as SourceView
 import Wiki.App.View.Space qualified as SpaceView
 import Wiki.App.View.VerifyEmail qualified as VerifyEmailView
-import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
-import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Attachment (findAttachment)
 import Wiki.Core.Blog (excerpt, firstImage)
+import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
+import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
 import Wiki.Core.Page (Page (attachments, body, id, title))
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
