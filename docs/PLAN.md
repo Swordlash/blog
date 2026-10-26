@@ -2914,6 +2914,19 @@ Amended by the planning session after each work package's report.
   the README, `docs/screenshots/`, `toolchain/screenshots.mjs` and the demo's page texts).
   WP5.2's deploy job is gated on the repository being public, so it can merge before the
   owner flips it without making `main` red.
+- **The repository is public** (2026-10-26, the owner), and the hosted path broke at once:
+  the owner's dispatch with `runner: hosted` and Dependabot's first pull request (#80,
+  fflate 0.8.3, routed to hosted runners by the `[bot]` rule as meant) both failed in the
+  `format` job, where `curl` got a 404 for `fourmolu-0.21.0.0-linux-x86_64`: since
+  0.20.0.0 fourmolu's releases ship `fourmolu-<version>-<os>-<arch>.zip`, one binary
+  inside, and the bare name is gone. Fixed by the planning session (PR #81, `main` at
+  `d5a62b8`): the job and `bootstrap.sh`'s `install_fourmolu` fetch the zip, check it
+  against `FOURMOLU_SHA256`, pinned at last (`aadf6931…`, the zip's), and unpack the
+  binary; checked here against the downloaded zip, `actionlint` clean. Process note: a
+  path CI does not run rots; the hosted path had not run since the runner moved to the
+  owner's machine, and the next steps of it (`haskell-actions/setup`, the caches, the
+  wasm toolchain from ghc-wasm-meta) are exercised by a dispatch on `main` with `runner:
+  hosted`, started after the merge.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
