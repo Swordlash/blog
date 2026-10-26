@@ -9,3 +9,14 @@ with-hc-pkg: wasm32-wasi-ghc-pkg-9.14.1.20260731
 
 -- WASM Template Haskell loads dynamic objects in its external interpreter.
 shared: True
+
+-- cabal.project's semaphore does not reach this compiler: it speaks semaphore
+-- protocol v2, and cabal 3.16 (the newest that accepts this GHC, see
+-- haskell-halogen's AGENTS.md) offers v1, which GHC refuses with a warning
+-- that -Werror makes an error. So the modules of this repository's own
+-- packages are built in parallel by GHC's own -j instead; cabal still builds
+-- packages in parallel, and the two overlap only where two local packages
+-- build at once (wiki-app and wiki-server), which is mild.
+semaphore: False
+program-options
+  ghc-options: -j
