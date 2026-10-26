@@ -783,7 +783,7 @@ wiki at, and answered before a closed wiki's rule:
 - `GET /metrics`, on the admin listener only (the public one answers 404):
   Prometheus's text format, version 0.0.4 (`text/plain; version=0.0.4`).
   `wiki_http_requests_total{listener, route, method, status}` (a counter;
-  `status` is the class, `2xx`), `wiki_http_request_duration_seconds{listener,
+  `status` is the class, `2xx`; `method` one of HTTP's own, or `OTHER`), `wiki_http_request_duration_seconds{listener,
   route}` (a histogram, buckets from 5 ms to 10 s; the live channel is
   counted but not timed), and gauges read at each scrape: `wiki_build_info
   {version}`, `wiki_start_time_seconds`, `wiki_schema_version`,

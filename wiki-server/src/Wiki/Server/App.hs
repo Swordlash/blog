@@ -115,7 +115,11 @@ listenerApp :: Logger -> Env -> Maybe StaticSite -> Listener -> Application
 listenerApp logger env site l request respond = do
   (caller, cookie) <- findCaller env l request
   let route = routePattern (pathSegments l.mount) (pathInfo request)
-      method = decodeUtf8With lenientDecode (requestMethod request)
+      -- A method as the metrics count it: one of HTTP's own, or @OTHER@,
+      -- so that a made-up verb makes no series of its own.
+      method = case decodeUtf8With lenientDecode (requestMethod request) of
+        m | m `elem` ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] -> m
+        _ -> "OTHER"
       -- The live channel is open for as long as its tab is: counted, not
       -- timed.
       observed status took = observe env.metrics l.name route method status (if route == "/api/v1/events" then Nothing else Just took)
