@@ -12,8 +12,10 @@ import Test.Markdown.Allowlist qualified as Allowlist
 import Test.Markdown.Ast qualified as Ast
 import Test.Markdown.Edit qualified as Edit
 import Test.Markdown.Link qualified as Link
+import Test.Markdown.Mention qualified as Mention
 import Test.Markdown.Tikz qualified as Tikz
 import Test.Math qualified as Math
+import Test.Notification qualified as Notification
 import Test.Order qualified as Order
 import Test.Path qualified as Path
 import Test.Permission qualified as Permission
@@ -33,6 +35,7 @@ main = hspec $ do
   Math.spec
   Allowlist.spec
   Link.spec
+  Mention.spec
   Path.spec
   Order.spec
   Permission.spec
@@ -43,5 +46,6 @@ main = hspec $ do
   Json.spec
   Anchor.spec
   Comment.spec
+  Notification.spec
   Space.spec
   Blog.spec

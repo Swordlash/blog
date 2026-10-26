@@ -33,6 +33,16 @@ spec = describe "Markdown.Render" $ do
     it "writes a block quote and a thematic break" $
       "> q\n\n---" `shows'` "<blockquote><p>q</p></blockquote><hr>"
 
+  describe "mentions" $ do
+    let people = defaultOptions {resolveMention = \login -> if login == "ada" then Just MentionTarget {href = "/search/?q=%40ada", name = "Ada Lovelace"} else Nothing}
+    it "links a mention of a user known to the options, titled with their name" $
+      showsWith people "Ask @ada." "<p>Ask <a class=\"mention\" href=\"/search/?q=%40ada\" title=\"Ada Lovelace\">@ada</a>.</p>"
+    it "writes a mention of nobody known as its text" $ do
+      showsWith people "Ask @nobody." "<p>Ask @nobody.</p>"
+      "Ask @ada." `shows'` "<p>Ask @ada.</p>"
+    it "writes a mention in a link's text, and in code, as text" $
+      showsWith people "[ask @ada](x) `@ada`" "<p><a href=\"x\">ask @ada</a> <code>@ada</code></p>"
+
   describe "headings" $ do
     it "writes the level and the id" $
       "## Getting started" `shows'` "<h2 id=\"getting-started\">Getting started</h2>"

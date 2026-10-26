@@ -20,7 +20,9 @@
 --   an image or inline code (@# Intro {#start}@, @![](a.png){width=300}@);
 -- * fenced divs (@::: warning@ … @:::@), for boxes styled by class;
 -- * wiki links, @[[page]]@ and @[[page|label]]@, read as ordinary links to
---   @page@.
+--   @page@;
+-- * mentions, @\@login@, in text outside code, links and embeds
+--   ("Wiki.Core.Markdown.Mention" says what counts as one).
 --
 -- Raw HTML in the source is kept as written, as 'RawHtml' (one tag or
 -- comment each, with the Markdown between them as ordinary inlines) and
@@ -49,6 +51,7 @@ module Wiki.Core.Markdown.Ast
   , plainText
   , attribute
   , classes
+  , mentions
   )
 where
 
@@ -56,8 +59,10 @@ import Commonmark qualified as CM
 import Commonmark.Entity qualified as CM
 import Commonmark.Extensions qualified as CME
 import Data.Sequence qualified as Seq
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Protolude
+import Wiki.Core.Markdown.Mention (splitMentions)
 import Wiki.Core.Markdown.TexMath (texMathSpec)
 
 -- | Attributes from braces, @{#id .class key=value}@, in the order written.
@@ -139,6 +144,10 @@ data Inline
     -- a comment. Rendered through the allowlist of
     -- "Wiki.Core.Markdown.Html", read with the inlines around it.
     RawHtml Text
+  | -- | A mention, @\@login@: the login, without the @\@@. Whether it is a
+    -- user's is the renderer's to ask; one that is not, and one in a link,
+    -- shows as it is written.
+    Mention Text
   deriving stock (Eq, Show)
 
 data MathKind = InlineMath | DisplayMath
@@ -171,7 +180,7 @@ newtype ParseError = ParseError Text
 -- | Parse a page's Markdown.
 parseMarkdown :: Text -> Either ParseError [Block]
 parseMarkdown source =
-  bimap (ParseError . show) (\(Blocks bs) -> toList bs)
+  bimap (ParseError . show) (\(Blocks bs) -> map withMentions (toList bs))
     $ runIdentity
     $ CM.commonmarkWith syntax "markdown" terminated
   where
@@ -222,6 +231,7 @@ plainText = foldMap $ \case
   FootnoteRef _ _ -> ""
   Emoji _ t -> t
   RawHtml _ -> ""
+  Mention login -> "@" <> login
 
 -- | The value of the first attribute with this name.
 attribute :: Text -> Attributes -> Maybe Text
@@ -231,6 +241,55 @@ attribute key attrs = head [v | (k, v) <- attrs, k == key]
 -- alike.
 classes :: Attributes -> [Text]
 classes attrs = concatMap T.words [v | ("class", v) <- attrs]
+
+-- | The logins a document mentions, outside links (where a mention is
+-- shown as text, since a link cannot hold one): whom it would notify.
+mentions :: [Block] -> Set Text
+mentions = foldMap block'
+  where
+    block' = \case
+      Para xs -> inlines' xs
+      Plain xs -> inlines' xs
+      Heading _ _ xs -> inlines' xs
+      BlockQuote bs -> mentions bs
+      List _ items -> foldMap (\(ListItem _ bs) -> mentions bs) items
+      Table _ header rows -> foldMap inlines' header <> foldMap (foldMap inlines') rows
+      Div _ bs -> mentions bs
+      Alert _ bs -> mentions bs
+      Footnotes notes -> foldMap (\(Footnote _ _ bs) -> mentions bs) notes
+      _ -> mempty
+    inlines' = foldMap $ \case
+      Mention login -> Set.singleton login
+      Emph xs -> inlines' xs
+      Strong xs -> inlines' xs
+      Strikeout xs -> inlines' xs
+      _ -> mempty
+
+----------------------------------------------------------------------
+-- Mentions
+
+-- | A block with the mentions in its text made 'Mention's: in every text
+-- but code's, a link's and an embed's (whose caption is an image's
+-- description, not text of the page's).
+withMentions :: Block -> Block
+withMentions = \case
+  Para xs -> Para (mentioning xs)
+  Plain xs -> Plain (mentioning xs)
+  Heading l attrs xs -> Heading l attrs (mentioning xs)
+  BlockQuote bs -> BlockQuote (map withMentions bs)
+  List kind items -> List kind [ListItem task (map withMentions bs) | ListItem task bs <- items]
+  Table aligns header rows -> Table aligns (map mentioning header) (map (map mentioning) rows)
+  Div attrs bs -> Div attrs (map withMentions bs)
+  Alert kind bs -> Alert kind (map withMentions bs)
+  Footnotes notes -> Footnotes [Footnote n label (map withMentions bs) | Footnote n label bs <- notes]
+  other -> other
+  where
+    mentioning = concatMap $ \case
+      Str t -> map (either Str Mention) (splitMentions t)
+      Emph xs -> [Emph (mentioning xs)]
+      Strong xs -> [Strong (mentioning xs)]
+      Strikeout xs -> [Strikeout (mentioning xs)]
+      other -> [other]
 
 ----------------------------------------------------------------------
 -- What commonmark builds

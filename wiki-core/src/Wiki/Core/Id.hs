@@ -18,6 +18,7 @@ module Wiki.Core.Id
   , InvitationId (..)
   , CommentThreadId (..)
   , CommentId (..)
+  , NotificationId (..)
   )
 where
 
@@ -71,5 +72,11 @@ newtype CommentThreadId = CommentThreadId {text :: Text}
 
 -- | A comment in a thread, unique within the wiki.
 newtype CommentId = CommentId {text :: Text}
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving newtype (FromJSON, ToJSON, FromJSONKey, ToJSONKey, FromHttpApiData, ToHttpApiData)
+
+-- | A notification of something that happened to a page someone watches
+-- ("Wiki.Core.Notification"), unique within the wiki.
+newtype NotificationId = NotificationId {text :: Text}
   deriving stock (Eq, Ord, Show, Generic)
   deriving newtype (FromJSON, ToJSON, FromJSONKey, ToJSONKey, FromHttpApiData, ToHttpApiData)

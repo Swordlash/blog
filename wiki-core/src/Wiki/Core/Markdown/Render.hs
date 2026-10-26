@@ -41,8 +41,13 @@
 -- @\<div class=\"alert alert-note\">@ with a @\<p class=\"alert-title\">@.
 -- Only @id@ and @class@ attributes from braces reach the HTML (and @width@
 -- and @height@ in pixels on an embed): any other could be an event handler.
+--
+-- __Mentions.__ @\@login@ is a link, @\<a class=\"mention\">@, to wherever
+-- 'resolveMention' says the user is, titled with their name; a login it
+-- does not know, and a mention in a link's text, are the text as written.
 module Wiki.Core.Markdown.Render
   ( Options (..)
+  , MentionTarget (..)
   , IslandKey (..)
   , defaultOptions
   , defaultResolveLink
@@ -90,7 +95,18 @@ data Options page w i = Options
   -- ^ What a link's or an embed's destination, as written, points at.
   , pageHref :: page -> Text
   -- ^ The @href@ of a link to a page.
+  , resolveMention :: Text -> Maybe MentionTarget
+  -- ^ Where a mention of a login leads, if it is a user's that the reader
+  -- may be shown.
   }
+
+-- | Whom a mention names, as its link shows them.
+data MentionTarget = MentionTarget
+  { href :: Text
+  , name :: Text
+  -- ^ Their display name, the link's title.
+  }
+  deriving stock (Eq, Show)
 
 -- | Which island this is: its source, and how many islands with the same
 -- source, of any kind, come before it in the document. No two islands of a document have
@@ -105,7 +121,7 @@ data IslandKey = IslandKey
 
 -- | Islands as the libraries that fill them expect their elements, filled
 -- with the source as text, so that the page reads without them; links as
--- written ('defaultResolveLink'). @page@ is 'Text' only to have a type:
+-- written ('defaultResolveLink'), mentions as text. @page@ is 'Text' only to have a type:
 -- nothing resolves to a page until a caller's 'resolveLink' does, and a
 -- record update that sets both 'resolveLink' and 'pageHref' picks the
 -- caller's own type.
@@ -120,6 +136,7 @@ defaultOptions =
     , tikz = \_ src -> HH.pre [HP.class_ (HH.ClassName "tikz")] [HH.text src]
     , resolveLink = defaultResolveLink
     , pageHref = identity
+    , resolveMention = const Nothing
     }
 
 -- | What a destination is when nothing is known about the wiki: a URL, used
@@ -261,6 +278,11 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
       -- Raw HTML is read with its neighbours, by 'inlinePieces', and does
       -- not get here; on its own it would be read the same way.
       RawHtml raw -> htmlPieces inLink (Html.parseFragments (if inLink then Html.PhrasingInLink else Html.Phrasing) [Html.Markup raw])
+      Mention login -> pure $ case opts.resolveMention login of
+        Just target
+          | not inLink ->
+              [PNode (HH.a [HP.href target.href, classesProp ["mention"], HP.title target.name] [HH.text ("@" <> login)])]
+        _ -> [PText ("@" <> login)]
 
     renderLink :: Attributes -> Text -> Text -> [Inline] -> R [Piece w i]
     renderLink attrs dest title xs = do

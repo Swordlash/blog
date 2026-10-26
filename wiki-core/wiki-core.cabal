@@ -66,10 +66,12 @@ library
       Wiki.Core.Markdown.Edit
       Wiki.Core.Markdown.Html
       Wiki.Core.Markdown.Link
+      Wiki.Core.Markdown.Mention
       Wiki.Core.Markdown.Render
       Wiki.Core.Markdown.TexMath
       Wiki.Core.Markdown.Tikz
       Wiki.Core.Math
+      Wiki.Core.Notification
       Wiki.Core.Order
       Wiki.Core.Page
       Wiki.Core.Path
@@ -122,8 +124,10 @@ test-suite wiki-core-test
       Test.Markdown.Ast
       Test.Markdown.Edit
       Test.Markdown.Link
+      Test.Markdown.Mention
       Test.Markdown.Tikz
       Test.Math
+      Test.Notification
       Test.Order
       Test.Path
       Test.Permission

@@ -165,6 +165,7 @@ inlineText = foldMap $ \case
   Math _ t -> t
   FootnoteRef _ _ -> ""
   Emoji _ t -> t
+  Mention l -> "@" <> l
   RawHtml _ -> ""
 
 -- | The destination of a page's first image, as written: what a link
