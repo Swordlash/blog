@@ -81,6 +81,11 @@
 -- be reached, before any request has failed to say so, and once it is back
 -- what the shell could not load for want of it is loaded again. The demo,
 -- which keeps its wiki in the browser, has nothing to say about it.
+-- A page the service worker served from what it kept, for want of a
+-- network ("Wiki.App.Offline"), says so too, and since when: "You are
+-- reading an offline copy from …", until the reader goes elsewhere. Where
+-- the browser offers to install the wiki as an application, the header has
+-- "Install".
 --
 -- The one route the shell does not simply follow is one away from an editor
 -- with unsaved changes: it asks the editor ('Editor.IsDirty') and, if the
@@ -101,6 +106,7 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -123,7 +129,9 @@ import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..))
 import Wiki.App.Islands (MonadIslands)
+import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..), Live (..))
+import Wiki.App.Offline (browserOnline, install, installAvailable, installChanges, offlineCopy)
 import Wiki.App.Recent (rememberVisit)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Security (MonadSecurity)
@@ -210,6 +218,7 @@ type Slots =
     .+ ("demoNotifications" .== H.Slot (Const Void) Void ())
     .+ ("bell" .== H.Slot (Const Void) Void ())
     .+ ("unsubscribe" .== H.Slot (Const Void) Void ())
+    .+ ("offlineCopy" .== H.Slot (Const Void) Void ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -265,8 +274,15 @@ data State m = State
   -- ('historyEntry'), which staying in the editor goes back to.
   , offline :: Bool
   -- ^ Whether the browser has said it went offline, and not yet that it is
-  -- back. It starts online: the page has just been loaded, over the
-  -- network.
+  -- back. It starts online, and is set when the shell starts if the
+  -- browser says it is offline or the page is an offline copy: a page the
+  -- service worker served offline was loaded without a network, and no
+  -- event says so.
+  , offlineCopy :: Maybe UTCTime
+  -- ^ When the page shown was kept, if the service worker served it
+  -- offline from what it kept; until the reader goes elsewhere.
+  , installable :: Bool
+  -- ^ Whether the browser offers to install the wiki.
   }
 
 -- | What the administration's section on the wiki's data shows.
@@ -310,6 +326,8 @@ data Action
   | FromReset ResetView.Output
   | ToggleDemoAccount
   | Online Bool
+  | InstallChanged
+  | Install
 
 component
   :: forall output m
@@ -362,6 +380,8 @@ component =
               , leaving = Nothing
               , entry = 0
               , offline = False
+              , offlineCopy = Nothing
+              , installable = False
               }
       , render
       , eval =
@@ -383,6 +403,7 @@ component =
           <div class="wiki-body">
             {{ sidebar st }}
             <main class="wiki-content">
+              {{ offlineCopyLine st }}
               {% if isJust st.leaving %}
                 {{ leaveConfirm }}
               {% end %}
@@ -401,6 +422,21 @@ component =
     offlineNotice :: H.ComponentHTML Action Slots m
     offlineNotice =
       [hh|<p class="offline-notice" role="alert">You are offline: the wiki cannot be reached until the connection is back.</p>|]
+
+    -- Above what the route shows, while it shows a page the service worker
+    -- kept: since when. The time is the reader's (an island, as every time
+    -- the wiki shows).
+    offlineCopyLine :: State m -> Maybe (H.ComponentHTML Action Slots m)
+    offlineCopyLine st = case st.offlineCopy of
+      Just at
+        | overNetwork st ->
+            Just
+              [hh|
+                <p class="offline-copy" role="status">
+                  You are reading an offline copy from {{ HH.slot_ "offlineCopy" () Islands.component (Islands.LocalTime at) }}.
+                </p>
+              |]
+      _ -> Nothing
 
     -- A closed wiki, to someone who has not signed in: its name, the way to
     -- sign in, and why there is nothing else.
@@ -440,6 +476,7 @@ component =
           {{ breadcrumbs st }}
           {{ searchBox }}
           {{ adminLink st }}
+          {{ installButton st }}
           {{ bell st }}
           {{ whoIsAsking st }}
         </header>
@@ -483,6 +520,13 @@ component =
             Administration
           </a>
         |]
+
+    -- The browser's offer to install the wiki as an application, where it
+    -- makes one (WP4.17 of docs/PLAN.md), beside who is asking.
+    installButton :: State m -> Maybe (H.ComponentHTML Action Slots m)
+    installButton st =
+      guard st.installable
+        $> [hh|<button type="button" class="install-app" title="Install the wiki as an application" onClick={{ const Install }}>Install</button>|]
 
     -- The signed-in user's notifications (WP4.13 of docs/PLAN.md), beside
     -- their name, once who is asking is known.
@@ -853,6 +897,15 @@ component =
         whenM (gets overNetwork) $ do
           connection <- H.liftEffect Window.online
           void $ H.subscribe (Online <$> connection)
+          -- A page the service worker served from what it kept was served
+          -- so because the wiki could not be reached, whatever the browser
+          -- says of its network.
+          copy <- H.liftEffect offlineCopy
+          online <- H.liftEffect browserOnline
+          modify (\st -> st {offlineCopy = copy, offline = isJust copy || not online})
+        installs <- H.liftEffect installChanges
+        void $ H.subscribe (InstallChanged <$ installs)
+        handleAction InstallChanged
         router <- gets (\st -> st.router)
         void $ H.subscribe (Arrived <$> Router.changes router)
         gets (\st -> st.accounts) >>= traverse_ (\a -> lift a.sessionChanges >>= void . H.subscribe . fmap SessionChanged)
@@ -880,6 +933,13 @@ component =
           (WorldFailed (Unreachable _), _) -> handleAction RetryWorld
           (WorldReady, SpaceFailed _ (Unreachable _)) -> handleAction RetryHere
           _ -> pass
+      InstallChanged -> do
+        installable <- H.liftEffect installAvailable
+        modify (\st -> st {installable})
+      -- The browser asks the reader; its offer is spent either way.
+      Install -> do
+        void install
+        handleAction InstallChanged
       Arrived r -> do
         now <- H.liftEffect historyEntry
         before <- gets (\st -> st.route)
@@ -1003,7 +1063,7 @@ component =
     arrive r entry = do
       -- What was asked or told about the wiki's data is not shown again on
       -- coming back to the administration.
-      modify (\st -> st {route = r, settled = False, menuOpen = False, switcherOpen = False, panel = Actions Nothing, leaving = Nothing, entry})
+      modify (\st -> st {route = r, settled = False, menuOpen = False, switcherOpen = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
       loadHere False
 
     -- After a change: everything again, and every view's own data too.

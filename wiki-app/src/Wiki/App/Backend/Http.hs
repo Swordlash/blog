@@ -110,6 +110,7 @@ import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
+import Wiki.App.Offline (forgetReads)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Id (PageId)
@@ -590,7 +591,9 @@ instance (MonadIO m) => MonadLive (HttpWiki m) where
   liveFeed = HttpWiki (asks (\env -> env.feed))
 
 -- | Signing in and out ("Wiki.App.Account"), each of which starts the
--- cache over with the session it answered with.
+-- cache over with the session it answered with. Signing out also lets go
+-- of the pages and answers the service worker kept for reading offline
+-- ("Wiki.App.Offline"), which were read as the user who signed out.
 instance (MonadIO m) => MonadAccount (HttpWiki m) where
   signIn login password = signingIn (withJson "POST" links.signIn Credentials {login, password})
   signOut =
@@ -599,6 +602,7 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
       Right info -> do
         let s = fromSessionInfo info
         startOver s
+        forgetReads
         pure (Right s)
   sessionChanges = HttpWiki (asks (\env -> env.changes.emitter))
   register new = signingIn (withJson "POST" links.register new)

@@ -4354,3 +4354,35 @@ a.mention {
     display: none;
   }
 }
+
+/* Reading offline and installing (WP4.17): the line over a page the service
+   worker served from what it kept, the header's "Install", and the offline
+   page the worker shows for a page it has no copy of (web/offline.html). */
+.offline-copy {
+  margin: 0 0 1rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--warning);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.install-app {
+  white-space: nowrap;
+}
+
+.offline-page .offline-pages {
+  padding-left: 1.25rem;
+}
+
+.offline-page .offline-none {
+  color: var(--muted);
+  list-style: none;
+  margin-left: -1.25rem;
+}
+
+@media print {
+  .offline-copy,
+  .install-app {
+    display: none;
+  }
+}

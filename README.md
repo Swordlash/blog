@@ -91,6 +91,15 @@ authorisation.
   it, the demo's pages among them, choosing what to bring in and which page stays
   where both have one; and it lists the wiki's users, marks and unmarks
   administrators, and keeps groups and their members (the demo's too).
+- Reading offline, and the wiki as an application to install: a service worker
+  keeps the application and the last 50 pages read (and what the program read
+  for them) in the browser, and offline shows a page read before with "You are
+  reading an offline copy from …", or an offline page listing what can be read,
+  for one never read; "Install" in the header where the browser offers it
+  (Chromium). A browser lets a service worker in only on a secure page: over
+  HTTPS, or from `localhost`/`127.0.0.1` on the same machine. A wiki served over
+  plain HTTP to other machines (as on a Tailscale address) works as before,
+  without either. Signing out lets go of the pages kept.
 
 ## Running the demo
 

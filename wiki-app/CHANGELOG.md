@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+Reading offline and installing (WP4.17). The page links a web manifest
+(`web/manifest.webmanifest`: every address relative, so one file serves any
+base path) with icons `web/bundle.sh` draws from `web/src/icon.svg`
+(`web/src/pwa.mjs`, 192 and 512 pixels, plain and maskable), and `index.js`
+registers a service worker (`web/src/sw.js`, written as `sw.js` with the
+build's version, a hash of the files it keeps, and their list): the
+application's files kept when it is installed, pages and the API's reads kept
+as they are read (50 pages, 300 answers, oldest out; images of at most 1 MB
+among the attachments; never `session`, `admin/…`, `account/…`,
+`notifications…`, drafts, exports, the archive, invitations, mail links,
+`events` or `auth/…`), all served from the network while there is one and
+from what was kept when there is not, with `web/offline.html` for a page
+never read. A new build's worker deletes every other version's caches. A page
+the worker served offline carries `<meta name="wiki-offline-copy">` with the
+time it was kept, which the shell reads (`Wiki.App.Offline.offlineCopy`) to say
+"You are reading an offline copy from …" above the route, over the network
+backend, until the reader goes elsewhere; the shell's offline notice now also
+shows from the start for such a page, or when `navigator.onLine` is false. "Install" sits in the header while the
+browser's `beforeinstallprompt` offer, kept by `index.js`, is open. Signing out
+over HTTP lets go of the pages and answers kept (`forgetReads`). The WASI shim
+is bundled as `wasi-shim.js` instead of being imported from jsDelivr, so that
+the page starts with no network.
+
 Observability (WP4.10). The administration gains "Activity"
 (`Wiki.App.View.Activity`): the audit log, newest first, fifty at a time,
 filtered by person; and the Server section a "Status" part

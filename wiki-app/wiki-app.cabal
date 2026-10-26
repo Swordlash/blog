@@ -85,6 +85,7 @@ library
       Wiki.App.Islands
       Wiki.App.Islands.Monad
       Wiki.App.Live
+      Wiki.App.Offline
       Wiki.App.Recent
       Wiki.App.Route
       Wiki.App.Security
@@ -313,6 +314,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Macros
       Test.Browser.Mount
       Test.Browser.Notifications
+      Test.Browser.Offline
       Test.Browser.Order
       Test.Browser.Permissions
       Test.Browser.Persist
