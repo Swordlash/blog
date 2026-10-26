@@ -93,7 +93,7 @@ import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices, ImportPlan, ImportSummary)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.Api.Links qualified as Links
-import Wiki.Api.Security (EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), ResetRequest (..))
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
@@ -557,11 +557,11 @@ instance (MonadIO m) => MonadSecurity (HttpWiki m) where
   endOwnSession ref = answer <$> call (R.delete (links.account.endSession ref))
   endOtherSessions = answer <$> call (R.delete links.account.endOtherSessions)
   secondFactorState = answer <$> call (R.get links.account.secondFactorState)
-  enrolTotp = answer <$> call (R.post links.account.enrolTotp)
+  enrolTotp password = withPassword (withJson "POST" links.account.enrolTotp CurrentPassword {password})
   confirmTotp code = withPassword (withJson "PUT" links.account.confirmTotp OneTimeCode {code})
   removeOwnSecondFactor code = withPassword (withJson "POST" links.account.removeSecondFactor OneTimeCode {code})
   ownEmail = answer <$> call (R.get links.account.email)
-  setOwnEmail email = answer <$> call (withJson "PUT" links.account.setEmail EmailChange {email})
+  setOwnEmail email password = withPassword (withJson "PUT" links.account.setEmail EmailChange {email, password})
 
 -- | A request that signs someone in, as signing in, making oneself an
 -- account and accepting an invitation do: the session one then has, with

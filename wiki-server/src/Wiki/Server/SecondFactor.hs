@@ -87,7 +87,13 @@ stateOf :: Connection -> UserId -> IO SecondFactorState
 stateOf c u = do
   enabled <- totpEnabled c u
   left <- query c "SELECT count(*) FROM recovery_codes WHERE user_id = ? AND used_at IS NULL" (Only u.text)
-  pure SecondFactorState {enabled, recoveryCodesLeft = if enabled then maybe 0 fromOnly (head left) else 0}
+  withPassword <- query c "SELECT password_hash IS NOT NULL FROM users WHERE id = ?" (Only u.text)
+  pure
+    SecondFactorState
+      { enabled
+      , recoveryCodesLeft = if enabled then maybe 0 fromOnly (head left) else 0
+      , asksPassword = maybe False ((/= (0 :: Int)) . fromOnly) (head withPassword)
+      }
 
 -- | Begin a second factor: a new secret, kept for the user but not asked
 -- for until 'confirm'. One begun before and not confirmed is replaced; one

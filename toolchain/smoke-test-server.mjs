@@ -54,6 +54,10 @@
 // 6. (Within 2.) Backups turned on in the Server section (WP4.9), one made
 //    by hand, and the console's restore of it: refused the running server's
 //    data directory, done into a fresh one.
+// 7. (Within 5.) Account hygiene (WP4.11): her sessions in the panel under
+//    her name, this browser's marked, and "Sign out everywhere" ending the
+//    other; a second factor set up there from the QR code's secret, which
+//    the next sign-in with her password then asks for.
 //
 // Needs the native builds of wiki-server and wiki-app-prerender (npm run
 // build-native; WIKI_SERVER and WIKI_PRERENDER name other binaries), the
@@ -61,7 +65,7 @@
 // from jsDelivr is served from node_modules).
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -830,10 +834,45 @@ try {
     body: JSON.stringify({ login: "olive", password: "olive's own password" }),
   });
   assert.equal(withPassword.status, 200, "signing in with the password she set");
+  // Her sessions: this browser's, marked, and the one just signed in from
+  // outside it, which "Sign out everywhere" ends while hers stays.
+  const outside = (withPassword.headers.get("set-cookie") ?? "").split(";")[0];
+  assert.ok(outside.startsWith("wiki_session="), "no session cookie for the password's sign-in");
+  await olive.locator("#app .account-toggle").click();
+  await olive.locator("#app .account-toggle").click();
+  await olive.locator("#app .session-item").nth(1).waitFor({ timeout });
+  assert.equal(await olive.locator("#app .session-item").count(), 2, "her two sessions are listed");
+  await olive.locator("#app .session-current .session-this", { hasText: "This browser" }).waitFor({ timeout });
+  await olive.locator("#app .sessions-end-others").click();
+  await olive.locator("#app .session-item").nth(1).waitFor({ state: "detached", timeout });
+  const ended = await (await fetch(url("/api/v1/session"), { headers: { Cookie: outside } })).json();
+  assert.equal(ended.user, null, "the session signed out everywhere still signs in");
+  // A second factor, from the QR code's secret as text, confirmed with a
+  // code computed here as her application would; then her password alone
+  // no longer signs her in.
+  await olive.locator("#app .second-factor-start").click();
+  // Her password first: a browser left signed in does not set one up.
+  await olive.locator("#app .totp-password-form input[name=password]").fill("olive's own password");
+  await olive.locator("#app .totp-password-form button[type=submit]").click();
+  const secret = ((await olive.locator("#app .totp-secret code").textContent()) ?? "").replace(/\s/g, "");
+  assert.ok((await olive.locator("#app .totp-qr rect").count()) > 50, "the QR code is drawn");
+  await olive.locator("#app .totp-confirm input[name=code]").fill(totp(secret, Date.now()));
+  await olive.locator("#app .totp-confirm button[type=submit]").click();
+  await olive.locator("#app .recovery-code-list li").nth(9).waitFor({ timeout });
+  await olive.locator("#app .recovery-kept").click();
+  await olive.locator("#app .second-factor-on").waitFor({ timeout });
+  const halfWay = await fetch(url("/api/v1/session"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
+    body: JSON.stringify({ login: "olive", password: "olive's own password" }),
+  });
+  assert.equal(halfWay.status, 401, "her password alone signed her in");
+  assert.equal((await halfWay.json()).error, "SecondFactorRequired", "the second factor was not asked for");
   await olive.context().close();
   for (const secret of [oidcSecret, ...oidcIssued]) assert.ok(!log.includes(secret), "a provider's code, token or secret is in the server's log");
   console.log("ok: signing in with a provider goes there and back, and lands signed in, as a new account, on the page it left");
   console.log("ok: a user who signs in with a provider sets a password from the panel under her name, and signs in with it");
+  console.log("ok: her sessions are listed in the panel and signed out everywhere but here; a second factor set up there is asked for after her password");
 
   // Everything is there for a browser that has seen nothing.
   const fresh = await newPage();
@@ -1015,3 +1054,19 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(`Smoke test of the server's build passed in ${Math.round((Date.now() - started) / 1000)} s (${basename(built)}).`);
+
+// The code of an authenticator application for a base32 secret at a moment
+// (RFC 6238: HMAC-SHA-1 of the 30-second step, six digits), as the smoke
+// test's own second, independent implementation of the server's.
+function totp(base32, millis) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const c of base32.toUpperCase().replace(/=+$/, "")) bits += alphabet.indexOf(c).toString(2).padStart(5, "0");
+  const key = Buffer.from(bits.match(/.{8}/g).map((b) => parseInt(b, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(millis / 1000 / 30)));
+  const mac = createHmac("sha1", key).update(counter).digest();
+  const offset = mac[mac.length - 1] & 0x0f;
+  const value = (mac.readUInt32BE(offset) & 0x7fffffff) % 1000000;
+  return value.toString().padStart(6, "0");
+}

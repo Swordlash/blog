@@ -79,7 +79,7 @@ import Wiki.Api.Comments (CommentsApi (..))
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
-import Wiki.Api.Security (EmailChange, EmailState, MailToken, NewPasswordByMail, OneTimeCode, RecoveryCodes, ResetRequest, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment)
+import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, MailToken, NewPasswordByMail, OneTimeCode, RecoveryCodes, ResetRequest, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment)
 import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
@@ -430,10 +430,12 @@ data AccountApi mode = AccountApi
   -- everywhere". Their sessions then, that one alone.
   , secondFactorState :: mode :- "second-factor" :> Get '[JSON] SecondFactorState
   -- ^ Whether they have a second factor.
-  , enrolTotp :: mode :- "second-factor" :> "totp" :> Post '[JSON] TotpEnrolment
-  -- ^ Begin a second factor: a new secret for an authenticator
-  -- application, not asked for at sign-in until it is confirmed. One who
-  -- has a second factor already is 'Wiki.Api.Error.Conflict'.
+  , enrolTotp :: mode :- "second-factor" :> "totp" :> ReqBody '[JSON] CurrentPassword :> Post '[JSON] TotpEnrolment
+  -- ^ Begin a second factor, with their current password where they have
+  -- one (a wrong one is 'Wiki.Api.Error.Unauthenticated', counted): a new
+  -- secret for an authenticator application, not asked for at sign-in until
+  -- it is confirmed. One who has a second factor already is
+  -- 'Wiki.Api.Error.Conflict'.
   , confirmTotp :: mode :- "second-factor" :> "totp" :> ReqBody '[JSON] OneTimeCode :> Put '[JSON] RecoveryCodes
   -- ^ Confirm it with a code the application shows: it is asked for at
   -- every sign-in from now on, and the answer is the recovery codes, shown
@@ -448,7 +450,9 @@ data AccountApi mode = AccountApi
   -- sends mail.
   , setEmail :: mode :- "email" :> ReqBody '[JSON] EmailChange :> Put '[JSON] EmailState
   -- ^ Give an e-mail address, or none: a new one is not verified until the
-  -- link mailed to it is followed. Without a mail server it is
+  -- link mailed to it is followed. Another address, or none, takes their
+  -- current password where they have one (a wrong one is
+  -- 'Wiki.Api.Error.Unauthenticated', counted). Without a mail server it is
   -- 'Wiki.Api.Error.Invalid'.
   }
   deriving stock (Generic)

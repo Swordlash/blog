@@ -300,11 +300,23 @@ like the other options; `--static` goes back to the demo.
 
   The same command gives a user a new password (`users password LOGIN`, which
   signs them out), makes or unmakes an administrator (`users admin LOGIN --on`,
-  `--off`) and disables a login (`users disable LOGIN --on`, which signs them out;
-  `--off` enables it). It is also how an installation whose administrators are all
-  locked out is recovered. Sign in on the public address with that login.
-  Sessions last two weeks without use. Behind HTTPS, run the server with
-  `--secure-cookies`.
+  `--off`), disables a login (`users disable LOGIN --on`, which signs them out;
+  `--off` enables it) and takes away a second factor its user has lost
+  (`users second-factor-remove LOGIN`). It is also how an installation whose
+  administrators are all locked out is recovered. Sign in on the public address
+  with that login. Sessions last two weeks without use. Behind HTTPS, run the
+  server with `--secure-cookies`.
+- **Keeping an account safe.** The panel under a signed-in user's name lists
+  where they are signed in (when, from which address, this browser marked),
+  with "Sign out" for each other session and "Sign out everywhere"; sets up a
+  second factor (a code from an authenticator application, scanned from a QR
+  code or typed, with ten recovery codes shown once), which signing in then
+  asks for after the password or a provider; and takes an e-mail address,
+  verified by a link mailed to it. "Forgot your password?" under the sign-in
+  form mails a link that sets a new password, once, within thirty minutes, to
+  a verified address only, and says the same whether or not the login exists.
+  Both need the mail server of the "Server" section; without it the forms say
+  so. An administrator removes a lost second factor from the Users table.
 - **Open or closed.** The administration's "Who may come in" says whether the
   wiki is open (the default: anyone reads the public spaces, and "Create account"
   beside "Sign in" lets anyone make an account, which holds no grant until given

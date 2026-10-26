@@ -52,10 +52,12 @@ class (Monad m) => MonadSecurity m where
   default secondFactorState :: (MonadTrans t, m ~ t n, MonadSecurity n) => m (Either WikiError SecondFactorState)
   secondFactorState = lift secondFactorState
 
-  -- | Begin one: a secret for their authenticator application.
-  enrolTotp :: m (Either WikiError TotpEnrolment)
-  default enrolTotp :: (MonadTrans t, m ~ t n, MonadSecurity n) => m (Either WikiError TotpEnrolment)
-  enrolTotp = lift enrolTotp
+  -- | Begin one, with their current password where they have one: a secret
+  -- for their authenticator application. 'WrongCredentials' for a wrong
+  -- password.
+  enrolTotp :: Maybe Text -> m (Either SignInError TotpEnrolment)
+  default enrolTotp :: (MonadTrans t, m ~ t n, MonadSecurity n) => Maybe Text -> m (Either SignInError TotpEnrolment)
+  enrolTotp = lift . enrolTotp
 
   -- | Turn it on with a code of the application's: the recovery codes,
   -- this once. 'WrongCredentials' for a wrong code.
@@ -76,10 +78,11 @@ class (Monad m) => MonadSecurity m where
   ownEmail = lift ownEmail
 
   -- | Give an address (a link to verify it is mailed there), or none
-  -- (blank).
-  setOwnEmail :: Text -> m (Either WikiError EmailState)
-  default setOwnEmail :: (MonadTrans t, m ~ t n, MonadSecurity n) => Text -> m (Either WikiError EmailState)
-  setOwnEmail = lift . setOwnEmail
+  -- (blank), with their current password where they have one and the
+  -- address changes. 'WrongCredentials' for a wrong password.
+  setOwnEmail :: Text -> Maybe Text -> m (Either SignInError EmailState)
+  default setOwnEmail :: (MonadTrans t, m ~ t n, MonadSecurity n) => Text -> Maybe Text -> m (Either SignInError EmailState)
+  setOwnEmail e = lift . setOwnEmail e
 
 -- | A component's handlers ask through its monad.
 instance (MonadSecurity m) => MonadSecurity (HalogenM st act slots output m)
@@ -97,12 +100,12 @@ instance (MonadIO m) => MonadSecurity (MemWiki m) where
         pure (Right [SessionSummary {id = SessionRef "demo", createdAt = now, lastSeenAt = now, address = "This browser", current = True}])
   endOwnSession _ = pure (Left (Invalid "The demo has one session, this browser's: switch to nobody to sign out."))
   endOtherSessions = ownSessions
-  secondFactorState = pure (Right SecondFactorState {enabled = False, recoveryCodesLeft = 0})
-  enrolTotp = pure (Left unavailable)
+  secondFactorState = pure (Right SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = False})
+  enrolTotp _ = pure (Left (SignInFailed unavailable))
   confirmTotp _ = pure (Left (SignInFailed unavailable))
   removeOwnSecondFactor _ = pure (Left (SignInFailed unavailable))
-  ownEmail = pure (Right EmailState {email = Nothing, verified = False, mailing = False, mailError = Nothing})
-  setOwnEmail _ = pure (Left unavailable)
+  ownEmail = pure (Right EmailState {email = Nothing, verified = False, mailing = False, mailError = Nothing, asksPassword = False})
+  setOwnEmail _ _ = pure (Left (SignInFailed unavailable))
 
 -- | What the demo says of what only a server does.
 unavailable :: WikiError

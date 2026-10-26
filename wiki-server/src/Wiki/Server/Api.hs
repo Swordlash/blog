@@ -89,7 +89,7 @@ import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Export (formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
-import Wiki.Api.Security (EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), TotpEnrolment (..))
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), TotpEnrolment (..))
 import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), named, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
@@ -385,8 +385,9 @@ handlers env caller =
               now <- liftIO getCurrentTime
               liftIO (Accounts.endOtherSessions env.storage now u (caller.signing >>= \s -> s.token))
           , secondFactorState = signedInUser >>= liftIO . secondFactorState env.storage
-          , enrolTotp = do
+          , enrolTotp = \body -> do
               u <- signedInUser
+              reauthenticated u body.password
               login <- loginOf u
               now <- liftIO getCurrentTime
               secret <- liftIO (enrol env.storage now u) >>= either (throwError . wikiError) pure
@@ -404,6 +405,13 @@ handlers env caller =
               mailer <- liftIO (currentMailer env)
               when (isNothing mailer && not (T.null (T.strip body.email))) $
                 refuse (ApiError.Invalid "This wiki does not send mail yet, so an address could not be verified: ask an administrator to set up its mail server.")
+              -- Another address, or none, would let whoever has the session
+              -- have the password reset: the password is asked for. The
+              -- same address again (its link sent again) changes nothing.
+              (before, _) <- liftIO (Reset.emailOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) pure
+              let same = (T.toCaseFold <$> before) == Just (T.toCaseFold (T.strip body.email))
+                  nothingThere = isNothing before && T.null (T.strip body.email)
+              unless (same || nothingThere) (reauthenticated u body.password)
               now <- liftIO getCurrentTime
               made <- liftIO (Reset.setEmail env.storage now u body.email) >>= either (throwError . wikiError) pure
               sent <- liftIO (traverse (mailVerification u) made)
@@ -657,13 +665,28 @@ handlers env caller =
           Right a -> do
             liftIO (Limiter.succeeded env.limiter login s.address)
             pure a
+    -- The current password of the user signed in, given to do what a
+    -- session alone may not: counted as a sign-in's is when wrong.
+    reauthenticated :: UserId -> Maybe Text -> Handler ()
+    reauthenticated u given = do
+      s <- signingHere
+      login <- loginOf u
+      limitedFor login s $ do
+        now <- liftIO getCurrentTime
+        liftIO (Accounts.currentPasswordIs env.storage u given) >>= \case
+          Just True -> liftIO (Limiter.succeeded env.limiter login s.address)
+          Just False -> do
+            liftIO (Limiter.failed env.limiter now login s.address)
+            refuse ApiError.Unauthenticated
+          Nothing -> refuse ApiError.Unauthenticated
     -- A user's address as they see it, with why its link could not be
     -- sent just now, if it could not.
     emailStateOf :: UserId -> Maybe Text -> Handler EmailState
     emailStateOf u mailError = do
       mailing <- isJust <$> liftIO (currentMailer env)
       (email, verified) <- liftIO (Reset.emailOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) pure
-      pure EmailState {email, verified, mailing, mailError}
+      asksPassword <- maybe False (\(a :: Account) -> a.hasPassword) <$> liftIO (Accounts.accountOf env.storage u)
+      pure EmailState {email, verified, mailing, mailError, asksPassword}
     -- Mail the link that verifies a user's address: why not, if it was not
     -- sent.
     mailVerification :: UserId -> (Text, Text) -> IO (Maybe Text)

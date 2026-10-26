@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+Account hygiene (WP4.11). The account panel under a signed-in user's name
+gains `Wiki.App.View.Security`: their sessions with "Sign out" and "Sign out
+everywhere", a second factor set up from a QR code drawn as an `<svg>` of
+`<rect>`s (`qrRuns`) and a confirming code, with recovery codes shown once,
+and removed with a code, and an e-mail address verified by a mailed link. A
+new capability, `Wiki.App.Security.MonadSecurity`, for both backends: the
+demo lists its one session (in a "Your account…" panel under its user
+switcher) and shows the second factor and mail disabled with a note. The
+sign-in form asks for the code after the password when the server wants one
+(`SignInError.SecondFactorNeeded`, `MonadAccount.confirmSecondFactor`), and
+offers "Forgot your password?" (`requestPasswordReset`). New routes
+`ResetPassword` (`/reset-password/<secret>/`, `View.Reset`) and `VerifyEmail`
+(`/verify-email/<secret>/`, `View.VerifyEmail`), shown in a closed wiki too.
+The administration's Users table shows each user's address and second
+factor, with "Remove second factor" (`MonadAdmin.removeSecondFactor`), and
+"New user" takes an e-mail address where the server sends mail.
+
 Presence and edit conflicts (WP4.12). Over the server's backend the page
 view says who has its editor open ("Edgar Editor is editing this page.", at
 the end of the action bar) and shows a save of the page made elsewhere at

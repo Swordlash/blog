@@ -24,7 +24,7 @@ import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
 import Wiki.Api.Info (ServerInfo (..))
-import Wiki.Api.Security (EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
 import Wiki.Core.Anchor (Anchor (..))
@@ -132,7 +132,8 @@ spec = describe "golden JSON" $ do
     golden "credentials" Credentials {login = "ada", password = "correct horse battery staple"}
     golden "new-account" NewAccount {login = "ada", displayName = "Ada", password = "correct horse battery staple", email = Just "ada@example.org"}
     golden "one-time-code" OneTimeCode {code = "287082"}
-    golden "email-change" EmailChange {email = "ada@example.org"}
+    golden "email-change" EmailChange {email = "ada@example.org", password = Just "correct horse battery staple"}
+    golden "current-password" CurrentPassword {password = Just "correct horse battery staple"}
     golden "reset-request" ResetRequest {login = "ada"}
     golden "new-password-by-mail" NewPasswordByMail {password = "correct horse battery staple"}
     golden "new-password" NewPassword {password = "correct horse battery staple"}

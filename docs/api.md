@@ -66,8 +66,9 @@ of the backend's `WikiError`, with its text where it has one:
 | 409 | `{"error": "Conflict", "message": "…"}` | the wiki has changed since the request was made |
 | 401 | `{"error": "Unauthenticated"}` | signing in failed: no account has that login and password, or it cannot sign in |
 | 429 | `{"error": "TooManyRequests", "message": "…"}` | signing in was tried too often; `Retry-After` says how many seconds to wait |
+| 401 | `{"error": "SecondFactorRequired"}` | the login and password are right, and the account has a second factor: the code is to come (below) |
 
-The last two are signing in's alone, and have no `WikiError` of their own:
+The last three are signing in's alone, and have no `WikiError` of their own:
 a client that meets them elsewhere takes them for forbidden and invalid.
 
 When more than one applies, the first in the order of `MonadWiki`'s Haddock
@@ -93,6 +94,7 @@ of the server, not a refusal.
 | GET | `api/v1/session` | | `SessionInfo` `{"user", "groups", "grants", "standing", "providers", "exports"}`: the user (`null` for nobody signed in), their groups, the grants given to them or their groups (with whom the wiki is open to, `grants.access`), how they came to be who they are, the providers one may sign in with, `{"name", "label"}` each (none where the server names none), and the formats pages and spaces export as (see [Documents](#documents)) | | `session` |
 | POST | `api/v1/session` | `Credentials` `{"login", "password"}` | `SessionInfo` of the user signed in, and `Set-Cookie` with their session | 401, 429, 400 | (`signIn`) |
 | DELETE | `api/v1/session` | | `SessionInfo` of nobody, and `Set-Cookie` clearing the session's | 400 | (`signOut`) |
+| POST | `api/v1/session/second-factor` | `OneTimeCode` `{"code"}`, with the `wiki_pending` cookie | as `POST session` | 401 (a wrong code, counted as a failed sign-in), 429, 400 (no sign-in waiting in this browser, or it expired) | (`confirmSecondFactor`) |
 
 `standing` is `"NotSignedIn"` (nobody: the application offers to sign in),
 `"SignedIn"` (a user with a session: it offers to sign out) or
@@ -558,6 +560,12 @@ Accounts made, and failed exchanges, count against the limit on making
 accounts (five an address in fifteen minutes; 429). Codes, tokens, states
 and secrets are never written in the log (the log has no query strings).
 
+A user with a second factor (below) who signs in with a provider is not
+signed in at the callback: the callback answers a page of its own with a
+form for the code, which it posts to `auth/<provider>/second-factor` with the
+`wiki_pending` cookie; the right code sets the session's cookie and goes on
+to `next`, a wrong one answers the form again (401), five end the sign-in.
+
 ### One's own password
 
 | Method | Path | Body | Response | Errors | |
@@ -576,12 +584,59 @@ against the sign-in limit of the user's login from that address (above),
 and once it is reached the answer is 429 with `Retry-After`, the right
 password included.
 
+### Keeping an account safe
+
+| Method | Path | Body | Response | Errors | |
+| ------ | ---- | ---- | -------- | ------ | - |
+| GET | `api/v1/account/sessions` | | `[SessionSummary]` `{"id", "createdAt", "lastSeenAt", "address", "current"}`, the most recently used first | 401, 400 (the operator) | (`ownSessions`) |
+| DELETE | `api/v1/account/sessions/<session>` | | the sessions then | 401, 404 (not one of theirs), 400 (the one asking: sign out instead) | (`endOwnSession`) |
+| DELETE | `api/v1/account/sessions` | | the sessions then: the one asking alone | 401 | (`endOtherSessions`) |
+| GET | `api/v1/account/second-factor` | | `SecondFactorState` `{"enabled", "recoveryCodesLeft"}` | 401 | (`secondFactorState`) |
+| POST | `api/v1/account/second-factor/totp` | | `TotpEnrolment` `{"secret", "uri", "qr"}`: the secret in base32, the `otpauth://` address, and that address as a QR code's modules, row by row (`"1"` dark, `"0"` light, no quiet zone) | 401, 409 (one is on already) | (`enrolTotp`) |
+| PUT | `api/v1/account/second-factor/totp` | `OneTimeCode` `{"code"}` | `RecoveryCodes` `{"codes"}`, shown this once | 401 (a wrong code, counted), 429, 404 (none begun), 409 | (`confirmTotp`) |
+| POST | `api/v1/account/second-factor/remove` | `OneTimeCode` (a code or a recovery code) | `SecondFactorState` | 401 (a wrong code, counted), 429, 404 (none on) | (`removeOwnSecondFactor`) |
+| GET | `api/v1/account/email` | | `EmailState` `{"email", "verified", "mailing", "mailError"}` | 401 | (`ownEmail`) |
+| PUT | `api/v1/account/email` | `EmailChange` `{"email"}` (`""` for none) | `EmailState`; a link to verify a new address is mailed to it, `mailError` says why if it could not be | 401, 400 (not an address, or the server sends no mail) | (`setOwnEmail`) |
+| POST | `api/v1/email-verification/<secret>` | | 204: the address the link was mailed to is the user's verified address | 404 (used, expired, or no longer the user's address) | (`verifyEmail`) |
+| POST | `api/v1/password-reset` | `ResetRequest` `{"login"}` (a login or an e-mail address) | 204, whatever it names | 429 (ten an address in fifteen minutes), 400 (the server sends no mail: for every login alike) | (`requestPasswordReset`) |
+| POST | `api/v1/password-reset/<secret>` | `NewPasswordByMail` `{"password"}` | 204: the password is set, every session of the user ends, nobody is signed in | 404 (used or expired), 400 | (`resetPassword`) |
+
+WP4.11 of the plan. A session is named by an id of its own (16 random bytes in
+hex), never by the secret its cookie carries; `address` is the network
+address it was last used from, and "last seen" is written at most once a
+minute.
+
+The second factor is TOTP as RFC 6238 has it (HMAC-SHA-1, 30-second steps,
+six digits), a code taken from one step before to one step after now and only
+if later than the last one taken, so each is taken once. Signing in with the
+password of a user who has one answers 401 `SecondFactorRequired` and sets a
+cookie of a sign-in waiting for its code, for five minutes:
+
+```
+Set-Cookie: wiki_pending=<id>; Path=<base path>; Max-Age=300; HttpOnly; SameSite=Strict
+```
+
+and `POST session/second-factor` ends it with a code or an unused recovery
+code (ten, `abcd-efgh-ijkl-mnop`, 80 random bits each, kept as SHA-256, each
+taken once, typed in any case with or without the dashes). Wrong codes count
+as failed sign-ins of the login from that address, and five end the sign-in.
+The secret is kept in the database in clear, as the server needs it.
+
+An e-mail address is trusted once the link mailed to it (a day, single use)
+is followed; only a verified address is sent a reset. A reset's link works
+once, for thirty minutes; an account is mailed at most three an hour; the
+answer to asking for one is the same whatever it names, and the looking up
+and mailing happen after it. Both links' secrets are kept as SHA-256 and left
+out of the log. The links are the application's pages
+`reset-password/<secret>/` and `verify-email/<secret>/`, which a closed wiki
+shows to anyone, as an invitation's.
+
 ### Administration
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
 | ------ | ---- | ---- | -------- | ------ | ------------ |
 | GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "spaces", "pages", "attachments", "users", "backups"}` | 403 | |
-| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "identities", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, the providers each user signs in with by their id (a user with none may be left out), every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
+| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "identities", "secondFactor", "emails", "mailing", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, the providers each user signs in with by their id (a user with none may be left out), the ids of those with a second factor, each user's e-mail address `{"email", "verified"}` by their id (a user with none left out), whether the server sends mail, every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
 | PUT | `api/v1/admin/users/<user>/administrator` | `AdministratorFlag` `{"administrator"}` | 204 | 403, 404 | `setAdministrator` |
 | PUT | `api/v1/admin/users/<user>/create-spaces` | `CreateSpacesFlag` `{"createSpaces"}` | 204 | 403, 404 | `setCreateSpaces` |
 | POST | `api/v1/admin/groups` | `GroupName` `{"name"}` | 201 `Group` `{"id", "name"}` | 403, 400 | `createGroup` |
@@ -589,7 +644,8 @@ password included.
 | DELETE | `api/v1/admin/groups/<group>` | | 204 | 403, 404 | `deleteGroup` |
 | PUT | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `addMember` |
 | DELETE | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `removeMember` |
-| POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password"}` | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403, 400, 409 (the login is taken, in any case) | `createUser` |
+| POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password", "email"}` (`email` optional: a link to verify it is mailed there) | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403, 400, 409 (the login is taken, in any case) | `createUser` |
+| DELETE | `api/v1/admin/users/<user>/second-factor` | | 204: the user signs in with their password alone | 403, 404 (none) | `removeSecondFactor` |
 | PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 | `setPassword` |
 | PUT | `api/v1/admin/users/<user>/disabled` | `AccountDisabled` `{"disabled"}` | `Account`; disabling ends the user's sessions | 403, 404 | `setDisabled` |
 

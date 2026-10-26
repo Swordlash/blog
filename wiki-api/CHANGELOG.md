@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+Account hygiene (WP4.11). `Wiki.Api.Security`: `SessionRef`,
+`SessionSummary`, `SecondFactorState`, `TotpEnrolment`, `OneTimeCode`,
+`RecoveryCodes`, `EmailState`, `EmailChange`, `AccountEmail`, `MailToken`,
+`ResetRequest`, `NewPasswordByMail`, `resetLifetime`, `verificationLifetime`.
+`WikiApi` gains `secondFactor` (`POST session/second-factor`),
+`passwordReset` (`PasswordResetApi`: `POST password-reset`,
+`POST password-reset/<secret>`) and `emailVerification`; `AccountApi` gains
+`sessions`, `endSession`, `endOtherSessions`, `secondFactorState`,
+`enrolTotp`, `confirmTotp`, `removeSecondFactor`, `email` and `setEmail`;
+`AdminApi` gains `removeSecondFactor`. `ApiError.SecondFactorRequired` (401).
+`NewAccount` gains an optional `email`; `Directory` gains `secondFactor`,
+`emails` and `mailing`.
+
 Presence and saves on the live channel (WP4.12). `ClientMessage` gains
 `StartEditing` (`{"editing": page}`) and `StopEditing` (`{"stopped":
 page}`); `PageEvent` gains `Editing [Author]` (`{"type": "editing",

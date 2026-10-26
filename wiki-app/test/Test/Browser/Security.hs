@@ -88,8 +88,8 @@ panel m = describe "the account panel" $ do
         [ SessionSummary {id = SessionRef "here", createdAt = demoNow, lastSeenAt = demoNow, address = "100.64.0.7", current = True}
         , SessionSummary {id = SessionRef "there", createdAt = demoNow, lastSeenAt = demoNow, address = "100.64.0.9", current = False}
         ]
-      off = SecondFactorState {enabled = False, recoveryCodesLeft = 0}
-      noAddress = EmailState {email = Nothing, verified = False, mailing = True, mailError = Nothing}
+      off = SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = True}
+      noAddress = EmailState {email = Nothing, verified = False, mailing = True, mailError = Nothing, asksPassword = True}
       opened = do
         serverStarts
         serveDemo
@@ -126,7 +126,11 @@ panel m = describe "the account panel" $ do
     find ui ".account-toggle" >>= click
     find ui ".second-factor-off" >>= (`shouldContainText` "Off")
     find ui ".second-factor-start" >>= click
+    -- Her password first, which she has.
+    find ui ".totp-password-form input[name=password]" >>= (`typeText` "rita's password")
+    find ui ".totp-password-form button[type=submit]" >>= click
     _ <- find ui ".totp-qr"
+    askedWith "POST" `shouldReturn` [("api/v1/account/second-factor/totp", "{\"password\":\"rita's password\"}")]
     -- A light square, and a rectangle for each run of dark modules.
     length <$> findAll ui ".totp-qr rect" `shouldReturn` 1 + length (qrRuns qr)
     find ui ".totp-secret code" >>= (`shouldHaveText` "GEZD GNBV GY3T QOJQ GEZD GNBV GY3T QOJQ")
@@ -134,7 +138,7 @@ panel m = describe "the account panel" $ do
     find ui ".totp-confirm button[type=submit]" >>= click
     find ui ".second-factor-error" >>= (`shouldContainText` "That code is not right")
     answerWith "PUT" "api/v1/account/second-factor/totp" 200 RecoveryCodes {codes = ["abcd-efgh-ijkl-mnop", "qrst-uvwx-yz23-4567"]}
-    answerWith "GET" "api/v1/account/second-factor" 200 SecondFactorState {enabled = True, recoveryCodesLeft = 2}
+    answerWith "GET" "api/v1/account/second-factor" 200 SecondFactorState {enabled = True, recoveryCodesLeft = 2, asksPassword = True}
     find ui ".totp-confirm button[type=submit]" >>= click
     eventually (length <$> findAll ui ".recovery-code-list li" `shouldReturn` 2)
     askedWith "PUT" `shouldReturn` replicate 2 ("api/v1/account/second-factor/totp", "{\"code\":\"123456\"}")
@@ -146,17 +150,18 @@ panel m = describe "the account panel" $ do
 
   it "gives an e-mail address, which a mailed link is to verify" $ runPage $ do
     opened
-    answerWith "PUT" "api/v1/account/email" 200 EmailState {email = Just "rita@example.org", verified = False, mailing = True, mailError = Nothing}
+    answerWith "PUT" "api/v1/account/email" 200 EmailState {email = Just "rita@example.org", verified = False, mailing = True, mailError = Nothing, asksPassword = True}
     ui <- startServer m Home
     find ui ".account-toggle" >>= click
     find ui ".email-current" >>= (`shouldContainText` "None")
     find ui ".email-edit" >>= click
     find ui ".email-form input[name=email]" >>= (`typeText` "rita@example.org")
+    find ui ".email-form input[name=password]" >>= (`typeText` "rita's password")
     find ui ".email-form button[type=submit]" >>= click
     find ui ".email-told" >>= (`shouldHaveText` "A link to verify it has been mailed to rita@example.org.")
     find ui ".email-current" >>= (`shouldContainText` "not verified yet")
     _ <- find ui ".email-resend"
-    askedWith "PUT" `shouldReturn` [("api/v1/account/email", "{\"email\":\"rita@example.org\"}")]
+    askedWith "PUT" `shouldReturn` [("api/v1/account/email", "{\"email\":\"rita@example.org\",\"password\":\"rita's password\"}")]
     unmount ui
     serverStops
 

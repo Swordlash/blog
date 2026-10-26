@@ -19,6 +19,11 @@
 --   while it is not verified, and "Remove". Without mail it is disabled,
 --   saying why.
 --
+-- Giving another address, removing it, and beginning a second factor ask
+-- for the user's current password, where they have one (the states say,
+-- @asksPassword@), so that a browser left signed in does not give the
+-- account away: each opens a form with its field first.
+--
 -- In the demo there is one session, this browser's, and the second factor
 -- and the e-mail are shown disabled with a note, since only a server has
 -- them ('securityAvailable').
@@ -43,7 +48,7 @@ import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Security (EmailState (..), RecoveryCodes (..), SecondFactorState (..), SessionRef, SessionSummary (..), TotpEnrolment (..))
-import Wiki.App.Account (codeErrorText)
+import Wiki.App.Account (codeErrorText, passwordErrorText)
 import Wiki.App.Backend (WikiError)
 import Wiki.App.Editor.Browser (focusElement)
 import Wiki.App.Security (MonadSecurity (..))
@@ -61,8 +66,13 @@ data State = State
   -- ^ Whether the form that takes the second factor away is open.
   , typedCode :: Text
   , mailbox :: Maybe (Either WikiError EmailState)
-  , editingEmail :: Bool
+  , emailForm :: EmailForm
   , typedEmail :: Text
+  , askingPassword :: Bool
+  -- ^ Whether the form for the password that begins a second factor is
+  -- open.
+  , typedPassword :: Text
+  , passwordField :: H.RefLabel
   , sessionsProblem :: Maybe Text
   , factorProblem :: Maybe Text
   , emailProblem :: Maybe Text
@@ -72,11 +82,22 @@ data State = State
   , emailField :: H.RefLabel
   }
 
+-- | Which form of the address's is open.
+data EmailForm
+  = NoEmailForm
+  | ChangingEmail
+  | RemovingEmail
+  deriving stock (Eq)
+
 data Action
   = Initialize
   | EndSession SessionRef
   | EndOthers
   | StartTotp
+  | SubmitTotpPassword
+  | CancelTotpPassword
+  | TypedPassword Text
+  | ConfirmClear
   | CancelTotp
   | TypedCode Text
   | ConfirmTotp
@@ -98,6 +119,7 @@ component =
       { initialState = \_ -> do
           codeField <- H.newRefLabel "second-factor-code"
           emailField <- H.newRefLabel "account-email"
+          passwordField <- H.newRefLabel "account-current-password"
           pure
             State
               { available = True
@@ -108,8 +130,11 @@ component =
               , removing = False
               , typedCode = ""
               , mailbox = Nothing
-              , editingEmail = False
+              , emailForm = NoEmailForm
               , typedEmail = ""
+              , askingPassword = False
+              , typedPassword = ""
+              , passwordField
               , sessionsProblem = Nothing
               , factorProblem = Nothing
               , emailProblem = Nothing
@@ -218,10 +243,30 @@ component =
                 [hh|
                   <div>
                     <p class="second-factor-off">Off: your password alone signs you in.</p>
-                    <button type="button" class="second-factor-start" disabled={{ st.busy }} onClick={{ const StartTotp }}>Set up a second factor…</button>
+                    {% if st.askingPassword %}
+                      <form class="totp-password-form" aria-label="Set up a second factor" {{ HE.preventingDefault (HE.onSubmit (const SubmitTotpPassword)) }}>
+                        {{ passwordInput st }}
+                        <div class="actions">
+                          <button type="submit" class="primary" disabled={{ st.busy }}>Continue</button>
+                          <button type="button" onClick={{ const CancelTotpPassword }}>Cancel</button>
+                        </div>
+                      </form>
+                    {% else %}
+                      <button type="button" class="second-factor-start" disabled={{ st.busy }} onClick={{ const StartTotp }}>Set up a second factor…</button>
+                    {% end %}
                     {{ factorProblemView st }}
                   </div>
                 |]
+
+    -- The user's current password, for what a session alone may not do.
+    passwordInput :: State -> H.ComponentHTML Action Empty m
+    passwordInput st =
+      [hh|
+        <label class="field">
+          <span>Your current password</span>
+          <input type="password" name="password" autocomplete="current-password" required onValueInput={{ TypedPassword }} {{ HP.ref st.passwordField }}>
+        </label>
+      |]
 
     -- A code typed into a form of its own, its field focused when it
     -- opens.
@@ -262,18 +307,31 @@ component =
             {% if not e.mailing %}
               <p class="account-note email-unavailable">{{ unavailableNote }}</p>
             {% end %}
-            {% if st.editingEmail %}
+            {% if st.emailForm == RemovingEmail %}
+              <form class="email-remove-form" aria-label="Remove your e-mail address" {{ HE.preventingDefault (HE.onSubmit (const ConfirmClear)) }}>
+                {{ passwordInput st }}
+                <div class="actions">
+                  <button type="submit" class="primary" disabled={{ st.busy }}>Remove address</button>
+                  <button type="button" onClick={{ const CancelEmail }}>Cancel</button>
+                </div>
+              </form>
+            {% end %}
+            {% if st.emailForm == ChangingEmail %}
               <form class="email-form" aria-label="Your e-mail address" {{ HE.preventingDefault (HE.onSubmit (const SaveEmail)) }}>
                 <label class="field">
                   <span>E-mail address</span>
                   <input type="email" name="email" autocomplete="email" required onValueInput={{ TypedEmail }} {{ HP.ref st.emailField }}>
                 </label>
+                {% if e.asksPassword %}
+                  {{ passwordInput st }}
+                {% end %}
                 <div class="actions">
                   <button type="submit" class="primary" disabled={{ st.busy }}>Save and send a link</button>
                   <button type="button" onClick={{ const CancelEmail }}>Cancel</button>
                 </div>
               </form>
-            {% else %}
+            {% end %}
+            {% if st.emailForm == NoEmailForm %}
               <div class="actions">
                 <button type="button" class="email-edit" disabled={{ st.busy || not e.mailing }} onClick={{ const EditEmail }}>
                   {{ if isJust e.email then "Change address…" else "Add an address…" :: Text }}
@@ -321,13 +379,15 @@ component =
         modify (\st -> st {mailbox = Just mailbox})
       EndSession ref -> sessionsChange (endOwnSession ref)
       EndOthers -> sessionsChange endOtherSessions
-      StartTotp -> busily $ do
-        modify (\st -> st {factorProblem = Nothing})
-        lift enrolTotp >>= \case
-          Left e -> modify (\st -> st {factorProblem = Just (errorMessage e)})
-          Right e -> do
-            modify (\st -> st {enrolment = Just e, typedCode = ""})
-            focusCode
+      StartTotp ->
+        gets (\st -> st.factor) >>= \case
+          Just (Right f) | f.asksPassword -> do
+            modify (\st -> st {askingPassword = True, typedPassword = "", factorProblem = Nothing})
+            focusPassword
+          _ -> enrol Nothing
+      SubmitTotpPassword -> gets (\st -> st.typedPassword) >>= enrol . Just
+      CancelTotpPassword -> modify (\st -> st {askingPassword = False, typedPassword = "", factorProblem = Nothing})
+      TypedPassword t -> modify (\st -> st {typedPassword = t})
       CancelTotp -> modify (\st -> st {enrolment = Nothing, typedCode = "", factorProblem = Nothing})
       TypedCode t -> modify (\st -> st {typedCode = t})
       ConfirmTotp -> busily $ do
@@ -349,16 +409,25 @@ component =
           Left e -> modify (\st -> st {factorProblem = Just (codeErrorText e)})
           Right f -> modify (\st -> st {factor = Just (Right f), removing = False, typedCode = "", factorProblem = Nothing})
       EditEmail -> do
-        modify (\st -> st {editingEmail = True, typedEmail = "", emailProblem = Nothing, emailTold = Nothing})
+        modify (\st -> st {emailForm = ChangingEmail, typedEmail = "", typedPassword = "", emailProblem = Nothing, emailTold = Nothing})
         gets (\st -> st.emailField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
-      CancelEmail -> modify (\st -> st {editingEmail = False, typedEmail = "", emailProblem = Nothing})
+      CancelEmail -> modify (\st -> st {emailForm = NoEmailForm, typedEmail = "", typedPassword = "", emailProblem = Nothing})
       TypedEmail t -> modify (\st -> st {typedEmail = t})
-      SaveEmail -> gets (\st -> st.typedEmail) >>= emailChange
+      SaveEmail -> do
+        st <- get
+        emailChange st.typedEmail (passwordIfAsked st)
+      -- The address one has: its link again, which asks nothing.
       ResendEmail ->
         gets (\st -> st.mailbox) >>= \case
-          Just (Right EmailState {email = Just address}) -> emailChange address
+          Just (Right EmailState {email = Just address}) -> emailChange address Nothing
           _ -> pass
-      ClearEmail -> emailChange ""
+      ClearEmail ->
+        gets (\st -> st.mailbox) >>= \case
+          Just (Right e) | e.asksPassword -> do
+            modify (\st -> st {emailForm = RemovingEmail, typedPassword = "", emailProblem = Nothing, emailTold = Nothing})
+            focusPassword
+          _ -> emailChange "" Nothing
+      ConfirmClear -> gets (\st -> st.typedPassword) >>= emailChange "" . Just
 
     -- Something done while nothing else may be.
     busily :: H.HalogenM State Action Empty output m () -> H.HalogenM State Action Empty output m ()
@@ -367,6 +436,25 @@ component =
         modify (\st -> st {busy = True})
         act
         modify (\st -> st {busy = False})
+
+    -- Begin a second factor, with the password if it was asked for.
+    enrol :: Maybe Text -> H.HalogenM State Action Empty output m ()
+    enrol password = busily $ do
+      modify (\st -> st {factorProblem = Nothing})
+      lift (enrolTotp password) >>= \case
+        Left e -> modify (\st -> st {factorProblem = Just (passwordErrorText e)})
+        Right e -> do
+          modify (\st -> st {enrolment = Just e, askingPassword = False, typedPassword = "", typedCode = ""})
+          focusCode
+
+    -- The password typed, where the address's state says it is asked.
+    passwordIfAsked :: State -> Maybe Text
+    passwordIfAsked st = case st.mailbox of
+      Just (Right e) | e.asksPassword -> Just st.typedPassword
+      _ -> Nothing
+
+    focusPassword :: H.HalogenM State Action Empty output m ()
+    focusPassword = gets (\st -> st.passwordField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
 
     focusCode :: H.HalogenM State Action Empty output m ()
     focusCode = gets (\st -> st.codeField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
@@ -378,17 +466,18 @@ component =
         Left e -> modify (\st -> st {sessionsProblem = Just (errorMessage e)})
         Right ss -> modify (\st -> st {sessions = Just (Right ss)})
 
-    emailChange :: Text -> H.HalogenM State Action Empty output m ()
-    emailChange address = busily $ do
+    emailChange :: Text -> Maybe Text -> H.HalogenM State Action Empty output m ()
+    emailChange address password = busily $ do
       modify (\st -> st {emailProblem = Nothing, emailTold = Nothing})
-      lift (setOwnEmail address) >>= \case
-        Left e -> modify (\st -> st {emailProblem = Just (errorMessage e)})
+      lift (setOwnEmail address password) >>= \case
+        Left e -> modify (\st -> st {emailProblem = Just (passwordErrorText e)})
         Right e ->
           modify $ \st ->
             st
               { mailbox = Just (Right e)
-              , editingEmail = False
+              , emailForm = NoEmailForm
               , typedEmail = ""
+              , typedPassword = ""
               , emailTold = case (e.email, e.mailError) of
                   (_, Just why) -> Just ("The link could not be mailed: " <> why)
                   (Just a, Nothing) | not e.verified -> Just ("A link to verify it has been mailed to " <> a <> ".")

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+Account hygiene (WP4.11). Migration `0008-account-hygiene.sql`: `users.email`
+and `email_verified_at`; `sessions.public_id` (filled for existing sessions)
+and `address`; tables `totp`, `recovery_codes`, `reset_tokens` and
+`email_verifications`, each going with its user. A session records where it
+was last used from, and its last use at most once a minute
+(`Accounts.seenEvery`); the cookie is still sent again hourly. A user lists
+their sessions and ends one or all others (`GET`/`DELETE
+api/v1/account/sessions[/<id>]`). A TOTP second factor (`Wiki.Server.Totp`:
+RFC 4226/6238 over crypton's HMAC-SHA1, checked against both RFCs' vectors;
+`Wiki.Server.SecondFactor`): begun, confirmed with a code (ten recovery
+codes, SHA-256), removed with a code or by an administrator (`DELETE
+api/v1/admin/users/<id>/second-factor`, and `wiki-server users
+second-factor-remove LOGIN`). The QR code's modules are computed with
+`qrcode-core` (an `allow-newer` on its `containers`). With one on, signing in
+with a password answers 401 `SecondFactorRequired` and a `wiki_pending`
+cookie (five minutes, five wrong codes) that `POST
+api/v1/session/second-factor` ends; a provider's callback answers a code form
+of its own posted to `auth/<provider>/second-factor`. Wrong codes count as
+failed sign-ins. E-mail addresses (`Wiki.Server.Reset`) set by the user or the
+administration's "New user", verified by a mailed link (a day,
+`POST api/v1/email-verification/<secret>`); a password reset
+(`POST api/v1/password-reset`) mails a single-use 30-minute link to a verified
+address only, three an hour per account at most, looked up and mailed on a
+thread after a 204 that is the same whatever the login, ten requests an
+address in fifteen minutes (`Env.resets`), refused alike where no mail is
+set; `POST api/v1/password-reset/<secret>` sets the password and ends every
+session. `Env` gains `resets`, `pending` and `logger`; `Signing` gains
+`pending`. The log hides the new links' secrets. `resolveSession`,
+`signIn`, `register`, `acceptInvitation` and `landWith` take the request's
+address.
+
 Presence and edit conflicts (WP4.12). The live channel keeps, per
 connection, the pages its tab says it edits (`{"editing": page}`, from
 someone who may edit the page; `{"stopped": page}`), in memory

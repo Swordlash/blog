@@ -30,6 +30,18 @@
 -- trusts only once a link it mails there has been followed ('MailToken'):
 -- only a verified address is sent a password reset.
 --
+-- = A session is not enough
+--
+-- Whoever finds a browser left signed in must not be able to take the
+-- account from its owner, as WP3.7 has it for a new password: an address
+-- that receives the reset, and a second factor the owner does not have,
+-- would each do that. So giving another address (or none), and beginning a
+-- second factor, take the user's current password where they have one
+-- ('CurrentPassword', the @password@ of 'EmailChange'); a wrong one counts
+-- as a failed sign-in. The states say whether it is asked
+-- (@asksPassword@). Sending the link again for the address one has changes
+-- nothing, and asks nothing.
+--
 -- = A password reset
 --
 -- Someone who has forgotten their password asks for a reset with their
@@ -48,6 +60,7 @@ module Wiki.Api.Security
   , TotpEnrolment (..)
   , OneTimeCode (..)
   , RecoveryCodes (..)
+  , CurrentPassword (..)
 
     -- * An e-mail address
   , EmailState (..)
@@ -102,6 +115,8 @@ data SecondFactorState = SecondFactorState
   { enabled :: Bool
   , recoveryCodesLeft :: Int
   -- ^ How many of their recovery codes have not been used.
+  , asksPassword :: Bool
+  -- ^ Whether beginning one takes their current password: they have one.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -124,6 +139,15 @@ data TotpEnrolment = TotpEnrolment
 
 instance Show TotpEnrolment where
   showsPrec _ _ rest = "TotpEnrolment <hidden>" <> rest
+
+-- | The password of the user asking, where they have one, given to do what
+-- a session alone may not: @POST \/api\/v1\/account\/second-factor\/totp@.
+newtype CurrentPassword = CurrentPassword {password :: Maybe Text}
+  deriving stock (Eq, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+instance Show CurrentPassword where
+  showsPrec _ c rest = "CurrentPassword {password = " <> maybe "Nothing" (const "Just <hidden>") c.password <> "}" <> rest
 
 -- | A code from an authenticator application, or a recovery code: what
 -- confirms a second factor, signs in with one and takes one away.
@@ -156,6 +180,9 @@ data EmailState = EmailState
   -- be verified, and nothing is sent.
   , mailError :: Maybe Text
   -- ^ Why the link to verify it could not be sent, just now.
+  , asksPassword :: Bool
+  -- ^ Whether giving another address, or none, takes their current
+  -- password: they have one.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -163,9 +190,17 @@ data EmailState = EmailState
 -- | A user's new e-mail address, or none (blank): @PUT
 -- \/api\/v1\/account\/email@. A new address is not verified, and a link to
 -- verify it is mailed to it; giving the same address again mails another.
-newtype EmailChange = EmailChange {email :: Text}
-  deriving stock (Eq, Show, Generic)
+-- Another address, or none, takes their current password, where they have
+-- one.
+data EmailChange = EmailChange
+  { email :: Text
+  , password :: Maybe Text
+  }
+  deriving stock (Eq, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+instance Show EmailChange where
+  showsPrec _ c rest = "EmailChange {email = " <> show c.email <> ", password = " <> maybe "Nothing" (const "Just <hidden>") c.password <> "}" <> rest
 
 -- | A user's address, as the administration sees it.
 data AccountEmail = AccountEmail

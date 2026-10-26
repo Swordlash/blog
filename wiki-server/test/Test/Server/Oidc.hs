@@ -34,7 +34,7 @@ import Wiki.Api (AccountApi (..), AdminApi (..), InvitationsApi (..), WikiApi (.
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), LinkedIdentity (..), PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invited (..), NewInvitation (..), WikiSettings (..))
 import Wiki.Api.Links (links)
-import Wiki.Api.Security (OneTimeCode (..), RecoveryCodes, TotpEnrolment (..))
+import Wiki.Api.Security (CurrentPassword (..), OneTimeCode (..), RecoveryCodes, TotpEnrolment (..))
 import Wiki.Api.ServerSettings (ProviderChange, ProviderKind (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -387,7 +387,7 @@ overHttp = describe "over HTTP" $ do
       withOidc $ \fake r -> do
         writeIORef fake.user (person "careful")
         c <- signedInWith r "acme" "next=%2F" []
-        enrolment :: TotpEnrolment <- send r methodPost (onPublic r links.account.enrolTotp) [c] "" >>= jsonAs 200
+        enrolment :: TotpEnrolment <- sendJson' r methodPost (onPublic r links.account.enrolTotp) [c] CurrentPassword {password = Nothing} >>= jsonAs 200
         secret <- maybe (assertFailure "not base32") pure (secretFromText enrolment.secret)
         now <- getCurrentTime
         _ :: RecoveryCodes <- sendJson' r methodPut (onPublic r links.account.confirmTotp) [c] OneTimeCode {code = codeAt secret now} >>= jsonAs 200

@@ -1,4 +1,5 @@
 {
+  "asksPassword": true,
   "enabled": true,
   "recoveryCodesLeft": 9
 }

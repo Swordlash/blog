@@ -95,6 +95,7 @@ module Wiki.Server.Accounts
     -- * One's own password
   , PasswordRefusal (..)
   , changePassword
+  , currentPasswordIs
 
     -- * Sessions
   , signIn
@@ -502,6 +503,15 @@ changePassword st u keep current new = runExceptT $ do
           Just token -> execute c "DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?" (u.text, tokenHash token)
           Nothing -> deleteSessionsOf c u
         first PasswordRefused <$> methodsOf c u
+
+-- | Whether a password given is the current one of a user, for what a
+-- session alone may not do (WP4.11 of docs/PLAN.md): 'Just True' for the
+-- right one, and for a user who has none (who signs in only with a
+-- provider's account, and gives none); 'Nothing' for a user who is not
+-- there.
+currentPasswordIs :: Storage -> UserId -> Maybe Text -> IO (Maybe Bool)
+currentPasswordIs st u given =
+  fmap (maybe True (\phc -> maybe False (verifyPassword phc) given)) <$> withDatabase st (`passwordHashOf` u)
 
 -- | A user's password's hash, if they are there: 'Nothing' for a user who
 -- is not, @Just Nothing@ for one without a password.

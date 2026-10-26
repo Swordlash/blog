@@ -325,7 +325,7 @@ sessions =
 
 -- | A second factor that is on, with most recovery codes left.
 secondFactor :: SecondFactorState
-secondFactor = SecondFactorState {enabled = True, recoveryCodesLeft = 9}
+secondFactor = SecondFactorState {enabled = True, recoveryCodesLeft = 9, asksPassword = True}
 
 -- | A second factor being set up: RFC 6238's own test secret.
 enrolment :: TotpEnrolment
@@ -338,7 +338,7 @@ enrolment =
 
 -- | An address given and not yet verified, where mail is sent.
 emailState :: EmailState
-emailState = EmailState {email = Just "ada@example.org", verified = False, mailing = True, mailError = Nothing}
+emailState = EmailState {email = Just "ada@example.org", verified = False, mailing = True, mailError = Nothing, asksPassword = True}
 
 -- | The server's settings as they are read: an address, a mail server whose
 -- password is set, and two providers, one of them without its secret.

@@ -143,7 +143,7 @@ sessions = describe "one's sessions" $ do
 -- that confirmed it, and the recovery codes.
 setUp :: Running -> Text -> IO (Text, Text, [Text])
 setUp r token = do
-  enrolment :: TotpEnrolment <- as r token methodPost links.account.enrolTotp "" >>= jsonAs 200
+  enrolment :: TotpEnrolment <- as r token methodPost links.account.enrolTotp (encode CurrentPassword {password = Just "editor's password"}) >>= jsonAs 200
   secret <- maybe (panic "not base32") pure (secretFromText enrolment.secret)
   now <- getCurrentTime
   let code = codeAt secret now
@@ -166,8 +166,8 @@ withCode r held code = send r methodPost (onPublic r links.secondFactor) [(hCont
 secondFactor :: Spec
 secondFactor = describe "a second factor" $ do
   it "is set up with a secret shown as text and a QR code, and is on only once a code confirms it" $ withEditor $ \r t -> do
-    (as r t methodGet links.account.secondFactorState "" >>= jsonAs 200) `shouldReturn` SecondFactorState {enabled = False, recoveryCodesLeft = 0}
-    enrolment :: TotpEnrolment <- as r t methodPost links.account.enrolTotp "" >>= jsonAs 200
+    (as r t methodGet links.account.secondFactorState "" >>= jsonAs 200) `shouldReturn` SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = True}
+    enrolment :: TotpEnrolment <- as r t methodPost links.account.enrolTotp (encode CurrentPassword {password = Just "editor's password"}) >>= jsonAs 200
     enrolment.uri `shouldSatisfy` T.isPrefixOf ("otpauth://totp/Wiki:editor?secret=" <> enrolment.secret)
     enrolment.qr `shouldSatisfy` (not . null)
     -- Not asked for until it is confirmed.
@@ -177,9 +177,9 @@ secondFactor = describe "a second factor" $ do
     now <- getCurrentTime
     codes :: RecoveryCodes <- as r t methodPut links.account.confirmTotp (encode OneTimeCode {code = codeAt secret now}) >>= jsonAs 200
     length codes.codes `shouldBe` 10
-    (as r t methodGet links.account.secondFactorState "" >>= jsonAs 200) `shouldReturn` SecondFactorState {enabled = True, recoveryCodesLeft = 10}
+    (as r t methodGet links.account.secondFactorState "" >>= jsonAs 200) `shouldReturn` SecondFactorState {enabled = True, recoveryCodesLeft = 10, asksPassword = True}
     -- On once: a second one is not begun over it.
-    (as r t methodPost links.account.enrolTotp "" >>= jsonAs 409) >>= (`shouldSatisfy` \case Conflict _ -> True; _ -> False)
+    (as r t methodPost links.account.enrolTotp (encode CurrentPassword {password = Just "editor's password"}) >>= jsonAs 409) >>= (`shouldSatisfy` \case Conflict _ -> True; _ -> False)
     directory :: Directory <- getUrl r (onAdmin r links.admin.directory) >>= jsonAs 200
     directory.secondFactor `shouldBe` Set.singleton (UserId "user-editor")
 
@@ -209,7 +209,7 @@ secondFactor = describe "a second factor" $ do
     _ <- withCode r again (T.toUpper recoveryCode) >>= jsonAs @SessionInfo 200
     third <- halfSignedIn r
     (withCode r third recoveryCode >>= jsonAs 401) `shouldReturn` Unauthenticated
-    (as r token methodGet links.account.secondFactorState "" >>= jsonAs 200) `shouldReturn` SecondFactorState {enabled = True, recoveryCodesLeft = 9}
+    (as r token methodGet links.account.secondFactorState "" >>= jsonAs 200) `shouldReturn` SecondFactorState {enabled = True, recoveryCodesLeft = 9, asksPassword = True}
 
   it "counts wrong codes as failed sign-ins: after five, not even the password is taken" $ withEditor $ \r t -> do
     _ <- setUp r t
@@ -223,7 +223,7 @@ secondFactor = describe "a second factor" $ do
     (as r t methodPost links.account.removeSecondFactor (encode OneTimeCode {code = "abcdef"}) >>= jsonAs 401) `shouldReturn` Unauthenticated
     recoveryCode <- maybe (panic "no recovery codes") pure (head recovery)
     (as r t methodPost links.account.removeSecondFactor (encode OneTimeCode {code = recoveryCode}) >>= jsonAs 200)
-      `shouldReturn` SecondFactorState {enabled = False, recoveryCodesLeft = 0}
+      `shouldReturn` SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = True}
     _ <- signInAs r "editor" "editor's password"
     _ <- setUp r t
     _ <- halfSignedIn r
@@ -241,23 +241,43 @@ email = describe "an e-mail address" $ do
   it "cannot be given where the server sends no mail, and says so" $ withEditor $ \r t -> do
     current :: EmailState <- as r t methodGet links.account.email "" >>= jsonAs 200
     (current.email, current.mailing) `shouldBe` (Nothing, False)
-    (as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.org"}) >>= jsonAs 400) >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
+    (as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.org", password = Just "editor\'s password"}) >>= jsonAs 400) >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
+
+  it "takes the current password to be given, changed or removed, but not to have its link sent again" $ withEditor $ \r t -> do
+    mailing r
+    let change address password = as r t methodPut links.account.setEmail (encode EmailChange {email = address, password})
+    (change "edgar@example.org" Nothing >>= jsonAs 401) `shouldReturn` Unauthenticated
+    (change "edgar@example.org" (Just "not the password") >>= jsonAs 401) `shouldReturn` Unauthenticated
+    given :: EmailState <- change "edgar@example.org" (Just "editor's password") >>= jsonAs 200
+    given.asksPassword `shouldBe` True
+    -- The same address again: its link again, nothing asked.
+    _ <- change "EDGAR@example.org" Nothing >>= jsonAs @EmailState 200
+    length <$> readIORef r.outbox `shouldReturn` 2
+    (change "" Nothing >>= jsonAs 401) `shouldReturn` Unauthenticated
+    removed :: EmailState <- change "" (Just "editor's password") >>= jsonAs 200
+    removed.email `shouldBe` Nothing
+    -- Nor is a second factor begun with the session alone.
+    (as r t methodPost links.account.enrolTotp (encode CurrentPassword {password = Nothing}) >>= jsonAs 401) `shouldReturn` Unauthenticated
+    -- Wrong passwords count as failed sign-ins.
+    replicateM_ 4 (change "edgar@example.net" (Just "wrong"))
+    reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = "editor's password"}
+    reply.status `shouldBe` 429
 
   it "is verified by the link mailed to it, once, and not if it has changed since" $ withEditor $ \r t -> do
     mailing r
-    given :: EmailState <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.org"}) >>= jsonAs 200
+    given :: EmailState <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.org", password = Just "editor\'s password"}) >>= jsonAs 200
     (given.email, given.verified, given.mailing, given.mailError) `shouldBe` (Just "edgar@example.org", False, True, Nothing)
     sent <- readIORef r.outbox
     map (\m -> m.to) sent `shouldBe` ["edgar@example.org"]
     first' <- maybe (panic "no link") pure =<< linkIn r "https://wiki.example.org/verify-email/"
     -- A new address: the first link no longer verifies anything.
-    _ <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.com"}) >>= jsonAs @EmailState 200
+    _ <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.com", password = Just "editor\'s password"}) >>= jsonAs @EmailState 200
     (send r methodPost (onPublic r (links.emailVerification (MailToken first'))) [] "" >>= jsonAs 404) `shouldReturn` NotFound
     second' <- maybe (panic "no link") pure =<< latestLink r "https://wiki.example.org/verify-email/"
     second' `shouldNotBe` first'
     -- Anyone with the link verifies it, signed in or not.
     (.status) <$> send r methodPost (onPublic r (links.emailVerification (MailToken second'))) [] "" `shouldReturn` 204
-    (as r t methodGet links.account.email "" >>= jsonAs 200) `shouldReturn` EmailState {email = Just "edgar@example.com", verified = True, mailing = True, mailError = Nothing}
+    (as r t methodGet links.account.email "" >>= jsonAs 200) `shouldReturn` EmailState {email = Just "edgar@example.com", verified = True, mailing = True, mailError = Nothing, asksPassword = True}
     (send r methodPost (onPublic r (links.emailVerification (MailToken second'))) [] "" >>= jsonAs 404) `shouldReturn` NotFound
     directory :: Directory <- getUrl r (onAdmin r links.admin.directory) >>= jsonAs 200
     directory.emails `shouldBe` Map.singleton (UserId "user-editor") AccountEmail {email = "edgar@example.com", verified = True}
@@ -290,7 +310,7 @@ reset = describe "a password reset" $ do
   it "is answered alike whoever it names, and mailed only to a verified address, whose link sets a password once and signs everyone out" $
     withEditor $ \r t -> do
       mailing r
-      _ <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.org"}) >>= jsonAs @EmailState 200
+      _ <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.org", password = Just "editor\'s password"}) >>= jsonAs @EmailState 200
       -- Not verified: no reset is mailed.
       unverified <- askReset r "editor"
       unverified.status `shouldBe` 204

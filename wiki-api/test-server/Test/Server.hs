@@ -35,7 +35,7 @@ import Wiki.Api.Export (ExportFormat (..), formatMediaType, formatName)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, pageExportUrl, searchQueryOf, searchUrl, spaceExportUrl, spaceIconUrl)
-import Wiki.Api.Security (EmailChange (..), EmailState (..), MailToken (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), SecondFactorState (..), SessionRef (..))
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), MailToken (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), SecondFactorState (..), SessionRef (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
@@ -115,11 +115,11 @@ stubs =
           , endSession = \ref -> if ref == SessionRef "4e5f6a7b" then pure (take 1 Sample.sessions) else refuse NotFound
           , endOtherSessions = pure (take 1 Sample.sessions)
           , secondFactorState = pure Sample.secondFactor
-          , enrolTotp = pure Sample.enrolment
+          , enrolTotp = \body -> if body.password == Just "the current one" then pure Sample.enrolment else refuse Unauthenticated
           , confirmTotp = \body -> if body.code == "287082" then pure RecoveryCodes {codes = ["abcd-efgh-ijkl-mnop"]} else refuse Unauthenticated
-          , removeSecondFactor = \body -> if body.code == "287082" then pure SecondFactorState {enabled = False, recoveryCodesLeft = 0} else refuse Unauthenticated
+          , removeSecondFactor = \body -> if body.code == "287082" then pure SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = True} else refuse Unauthenticated
           , email = pure Sample.emailState
-          , setEmail = \body -> pure EmailState {email = Just body.email, verified = False, mailing = True, mailError = Nothing}
+          , setEmail = \body -> pure EmailState {email = Just body.email, verified = False, mailing = True, mailError = Nothing, asksPassword = True}
           }
     , spaces =
         SpacesApi
@@ -638,11 +638,12 @@ spec = describe "a server of the API's type" $ do
     it "sets up a second factor, confirms it with a code, and takes it away with one" $ do
       links.account.enrolTotp `shouldBe` "api/v1/account/second-factor/totp"
       answers (getAt links.account.secondFactorState) 200 Sample.secondFactor
-      answers (request methodPost links.account.enrolTotp [] "") 200 Sample.enrolment
+      answers (sendJson methodPost links.account.enrolTotp CurrentPassword {password = Just "the current one"}) 200 Sample.enrolment
+      answers (sendJson methodPost links.account.enrolTotp CurrentPassword {password = Nothing}) 401 Unauthenticated
       answers (sendJson methodPut links.account.confirmTotp OneTimeCode {code = "287082"}) 200 RecoveryCodes {codes = ["abcd-efgh-ijkl-mnop"]}
       answers (sendJson methodPut links.account.confirmTotp OneTimeCode {code = "000000"}) 401 Unauthenticated
       links.account.removeSecondFactor `shouldBe` "api/v1/account/second-factor/remove"
-      answers (sendJson methodPost links.account.removeSecondFactor OneTimeCode {code = "287082"}) 200 SecondFactorState {enabled = False, recoveryCodesLeft = 0}
+      answers (sendJson methodPost links.account.removeSecondFactor OneTimeCode {code = "287082"}) 200 SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = True}
       links.admin.removeSecondFactor (UserId "u1") `shouldBe` "api/v1/admin/users/u1/second-factor"
       (status <$> request methodDelete (links.admin.removeSecondFactor (UserId "u1")) [] "") `shouldReturn` 204
       answers (request methodDelete (links.admin.removeSecondFactor (UserId "u2")) [] "") 404 NotFound
@@ -655,7 +656,7 @@ spec = describe "a server of the API's type" $ do
     it "reads and gives the user's e-mail address, and follows the link that verifies it" $ do
       links.account.email `shouldBe` "api/v1/account/email"
       answers (getAt links.account.email) 200 Sample.emailState
-      answers (sendJson methodPut links.account.setEmail EmailChange {email = "ada@example.com"}) 200 EmailState {email = Just "ada@example.com", verified = False, mailing = True, mailError = Nothing}
+      answers (sendJson methodPut links.account.setEmail EmailChange {email = "ada@example.com", password = Just "the current one"}) 200 EmailState {email = Just "ada@example.com", verified = False, mailing = True, mailError = Nothing, asksPassword = True}
       links.emailVerification (MailToken "secret") `shouldBe` "api/v1/email-verification/secret"
       (status <$> request methodPost (links.emailVerification (MailToken "secret")) [] "") `shouldReturn` 204
       answers (request methodPost (links.emailVerification (MailToken "other")) [] "") 404 NotFound

@@ -1,4 +1,5 @@
 {
+  "asksPassword": true,
   "email": "ada@example.org",
   "mailError": null,
   "mailing": true,
