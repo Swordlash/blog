@@ -2724,6 +2724,27 @@ Amended by the planning session after each work package's report.
   product questions ("Back up now" while backups are off, UTC backup times, the deploy's
   `--keep 10` against the panel's retention, OIDC bypassing TOTP). Nothing is planned beyond
   this without the owner's word.
+- **Build parallelism and the demo's PDFs** (2026-10-26, PR #78, `main` at `000bce4`; the
+  owner: "-j do builda", module-level over package-level, since a change rebuilds one or two
+  packages). No code: `cabal.project` sets `jobs: $ncpus` and `semaphore: True`, so cabal 3.16
+  hands GHC 9.14 a semaphore (`-jsem`) and the modules of one package compile in parallel
+  within the one job budget; `cabal-native-opt.project` inherits it, so the deploy's build
+  does too. The wasm cross compiler (`9.14.1.20260731`) speaks semaphore protocol v2 where
+  cabal 3.16 offers v1 (`-Wsemaphore-open-failure`, an error under `-Werror`), so
+  `cabal-wasm.project` turns the semaphore off and gives this repository's packages GHC's
+  `-j` through `program-options` instead; revisit `semaphore: True` there once cabal and the
+  wasm GHC agree on a protocol. Found on the way: the runner had gained `xelatex`, so
+  `Test.Server.Export`'s PDF test ran for the first time and failed, in order, on
+  `mhchem.sty` missing (`texlive-science`), on `\pu` (LaTeX's mhchem has none; `withPreamble`
+  now adds `\providecommand{\pu}[1]{\text{#1}}` for a page that uses it) and on `soul.sty`
+  (`texlive-plain-generic`; pandoc's strikeout and underline). The demo's PDF test is now
+  pending, naming the missing files, where `kpsewhich` finds no `mhchem.sty`, `tikz.sty`,
+  `soul.sty` or `beamer.cls`, and a new case exports a page that needs nothing beyond LaTeX.
+  The runner has `texlive-science`, `texlive-pictures` and `texlive-plain-generic` since
+  (the owner installed them), so the full PDF case runs in CI (16 s). README names the
+  packages. A process note: the first push of `semaphore: True` broke the wasm build, which
+  the native gate did not show; a project-file change needs both backends built like any
+  CPP'd code.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
