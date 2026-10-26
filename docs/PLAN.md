@@ -2418,6 +2418,56 @@ Amended by the planning session after each work package's report.
   three ways out and for presence over the fake server, the smoke test with two users' tabs
   over the real WebSocket. The editor's typing tests time out under heavy load on `main` too
   (pre-existing).
+- **WP4.11 merged** (2026-10-26, PR #71, `main` at `fedc318`). Migration
+  `0008-account-hygiene.sql` (`users.email`, `email_verified_at`; `sessions.public_id`,
+  `address`; tables `totp`, `recovery_codes`, `reset_tokens`, `email_verifications`, each
+  cascading with its user). Sessions: the account panel lists them (signed in, last seen at
+  most once a minute, address, this browser marked), "Sign out" per session, "Sign out
+  everywhere" keeps the current one; a session's `public_id` is what the page sees, never the
+  cookie's secret. TOTP: `Wiki.Server.Totp`, RFC 6238 over crypton's HMAC-SHA1, 30 s, 6
+  digits, ±1 step, each code once (`last_counter`), tested on the RFC 4226 and 6238 vectors;
+  the QR code's module matrix computed by `qrcode-core` on the server (native only;
+  `allow-newer: qrcode-core:containers`) and drawn by Halogen as an `<svg>` of `<rect>`s, one
+  per run of dark modules; one code confirms; ten recovery codes (80 bits, SHA-256) shown
+  once, each once; at sign-in 401 `SecondFactorRequired` with a `wiki_pending` cookie
+  (`HttpOnly; SameSite=Strict`, five minutes, five wrong codes) and `POST
+  session/second-factor`; **provider sign-ins need the code too** (the callback answers a
+  server-rendered code form posting to `auth/<provider>/second-factor`; the owner may want
+  OIDC to bypass TOTP, an easy change); wrong codes count as failed sign-ins; the user removes
+  it with a code, an administrator from the Users row or `wiki-server users
+  second-factor-remove LOGIN` (through `withStorageAside`, no lock). E-mail: set in the panel
+  or the administration's "New user", verified by a mailed link valid one day with a confirm
+  button (so mail scanners do not verify); not exported, like the password hash. Reset:
+  "Forgot your password?" takes a login or an address, mails a single-use 30-minute link to a
+  verified address only, answers 204 whatever the input with the lookup and the mail on a
+  thread after the answer, limited to 10 requests per address in 15 minutes and 3 mails per
+  account per hour; the reset ends every session and signs nobody in, so the second factor
+  still applies; without mail configured the forms say so. **Beyond the brief, accepted:**
+  changing or removing the address and starting a second factor require the current
+  password where the account has one (a hijacked session could otherwise set its address,
+  verify it and reset the password). The TOTP secret is stored in clear, as the mail
+  password is. Demo: the switcher's "Your account…" shows the one session, second factor and
+  mail disabled with a note. For the next packages: `MonadSecurity` (`Wiki.App.Security`) is
+  required by the shell; `SignInError` gains `SecondFactorNeeded`; `NewAccount` an optional
+  `email`; `Directory` gains `secondFactor`, `emails`, `mailing`; `resolveSession`, `signIn`,
+  `register`, `acceptInvitation`, `landWith` take the request's address; `Env` gains
+  `resets`, `pending`, `logger`; WP4.13 mails verified addresses only. Not exercised: the
+  pending cookie across a real cross-site provider redirect in Chromium (tested over HTTP
+  with an explicit cookie). Tests: `Test.Server.Totp`, `Test.Server.Hygiene`, the provider's
+  second factor in `Test.Server.Oidc`, migration from 7, log redaction, goldens, hydration at
+  zero repairs, `Test.Browser.Security` (9 cases); the smoke test lists sessions, signs out
+  everywhere, enrols a second factor from the QR's secret with a JavaScript TOTP and sees
+  `SecondFactorRequired`; server 686 (2 pending), app 927, browser 208; `app.wasm` 10 084 KiB
+  (2302 brotli).
+- **Wave A complete** (2026-10-26): WP4.16, WP4.9, WP4.12, WP4.11 merged in that order, each
+  rebased onto the one before (one cycle of CI per rebase on the serial runner; the pandoc
+  build cost one run about 40 minutes, cached since). Migrations: `0008` taken by WP4.11;
+  Wave B's start at `0009`. Open for the owner: "Back up now" while backups are off, backup
+  times in UTC, the deploy's `--keep 10` versus the panel's retention, OIDC bypassing TOTP.
+- **Wave B started** (2026-10-26) from `main` after WP4.11: WP4.10 on
+  `wp4.10-observability`, WP4.13 on `wp4.13-notifications`, WP4.14 on `wp4.14-blog`, in
+  parallel worktrees; each brief names what the others touch (`Render.hs`, `View/Page.hs`,
+  `View/Space.hs`, the account panel, migrations numbered at rebase).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
