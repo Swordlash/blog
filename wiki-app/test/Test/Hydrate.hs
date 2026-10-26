@@ -73,14 +73,18 @@ spec = do
   serverPage
   servedPages
 
+-- At the root, and under the base path GitHub Pages serves the demo at
+-- (@\/blog\/@, the repository's name), which is in every link the page has:
+-- a link the prerender wrote one way and the program another would be a
+-- repair.
 demoPages :: Spec
-demoPages = describe "Wiki.App.Static, adopted" $
+demoPages = for_ ["/", "/blog/"] $ \base -> describe ("Wiki.App.Static, adopted, under " <> toS base) $
   for_ (prerenderedRoutes (demoState demoNow)) $ \at ->
     it ("keeps every node of the prerendered page at " <> show at) $ do
-      container <- prerendered at
+      container <- prerendered base at
       original <- nodesOf container
       html <- markup container
-      (_, dispose) <- startRoute Adopt (demoState demoNow) "/" at container
+      (_, dispose) <- startRoute Adopt (demoState demoNow) base at container
       adopted <- nodesOf container
       markup container >>= (`shouldBe` html)
       dispose
@@ -323,8 +327,8 @@ apiOver providers st = do
 -- | A container holding the page the prerender writes for the route, as the
 -- browser has it before the program has loaded: the application that
 -- rendered it disposed of, and its nodes put back without their listeners.
-prerendered :: Route -> IO N.NativeNode
-prerendered at = detached (fmap snd . startRoute Build (demoState demoNow) "/" at)
+prerendered :: Text -> Route -> IO N.NativeNode
+prerendered base at = detached (fmap snd . startRoute Build (demoState demoNow) base at)
 
 -- | A container holding what an application started in it rendered, as
 -- the browser has it before the program has loaded: the application

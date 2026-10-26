@@ -103,7 +103,12 @@ await cp(built, app, {
     return !(rel.endsWith(".html") && !rel.includes("/") && rel !== "offline.html") && !/^(s|search)([/\\]|$)/.test(rel);
   },
 });
-execFileSync(binary("WIKI_PRERENDER", "wiki-app:exe:wiki-app-prerender"), ["--server", "web/index.html", app], { stdio: "inherit" });
+// At the root, whatever base path the demo's build was made for (the CI's
+// is GitHub Pages', /blog/), since the server below is served at its root.
+execFileSync(binary("WIKI_PRERENDER", "wiki-app:exe:wiki-app-prerender"), ["--server", "web/index.html", app], {
+  stdio: "inherit",
+  env: { ...process.env, HALOGEN_BASE_PATH: "/" },
+});
 const page404 = await readFile(join(app, "404.html"), "utf8");
 assert.match(page404, /<meta name="wiki-backend" content="server">/, "the server's page does not say so");
 
@@ -336,10 +341,15 @@ async function loadAdopted(page, path) {
 
 // The demo's build, served at the server's own address in place of the
 // server, as a static host serves it: what the owner had there before the
-// server took its address.
+// server took its address. It is served under the base path it was built
+// for, which its pages' <base href> says (/ for a build for the root,
+// GitHub Pages' /blog/ in CI); IndexedDB is the origin's whatever the path,
+// so the server finds the demo's wiki all the same.
+const demoBase = (await readFile(join(built, "index.html"), "utf8")).match(/<base href="([^"]*)">/)?.[1] ?? "/";
 const demoTypes = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".wasm": "application/wasm", ".woff2": "font/woff2", ".woff": "font/woff", ".ttf": "font/ttf" };
 async function serveTheDemo(route) {
-  const path = decodeURIComponent(new URL(route.request().url()).pathname);
+  const address = decodeURIComponent(new URL(route.request().url()).pathname);
+  const path = `/${address.slice(demoBase.length)}`;
   const file = join(built, normalize(path.endsWith("/") ? `${path}index.html` : path));
   const headers = { "Cache-Control": "no-store" };
   try {
@@ -377,9 +387,9 @@ async function migrateTheDemo() {
 
   // The demo, at the server's address: it keeps its wiki in this origin's
   // IndexedDB, and its administration exports it.
-  const demoAddress = `${origin}/**`;
+  const demoAddress = `${origin}${demoBase}**`;
   await page.route(demoAddress, serveTheDemo);
-  await page.goto(url("/"));
+  await page.goto(url(demoBase));
   await page.locator("#app .user-switcher-toggle", { hasText: "Ada Admin" }).waitFor({ timeout });
   await eventually(async () => assert.ok(await programStarted(page), "no listener yet"), "the demo's program starting");
   await page.locator("#app .wiki-header a.admin-link").click();

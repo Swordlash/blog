@@ -6,6 +6,10 @@
 //
 //   npm run smoke-test                      # after: npm run build-wasm
 //   node toolchain/smoke-test.mjs [dir]     # default dist-newstyle/wasm/public/app
+//   HALOGEN_BASE_PATH=/blog/ npm run smoke-test
+//                                           # a build made for that base path
+//                                           # (HALOGEN_BASE_PATH=/blog/ npm run
+//                                           # build-wasm), served under it
 //   SMOKE_DEBUG=<dir> npm run smoke-test    # also print what each prerendered page
 //                                           # shows, and on failure screenshot the
 //                                           # open pages into <dir>
@@ -51,6 +55,14 @@
 //    back: a worker's own requests and what it answers from its cache pass
 //    by Playwright's routes.
 //
+// HALOGEN_BASE_PATH is the base path the build was made for, as
+// toolchain/build-wasm.sh takes it (/ when unset): GitHub Pages serves the
+// demo under /blog/, the repository's name. The directory is then served
+// under that path only, as Pages serves a project's site, and everything
+// the test asks for or expects to see is under it: the walk below names
+// addresses as the wiki's routes (/s/docs/), and 'url', 'here', 'at' and
+// 'local' put them under the base path and take them out of it again.
+//
 // Needs the Chromium that Playwright's version in package-lock.json launches
 // (toolchain/bootstrap.sh installs it), and no network: the demo's NASA
 // image and video on Wikimedia Commons are answered locally with stand-ins.
@@ -62,6 +74,12 @@ import { chromium } from "playwright";
 
 const started = Date.now();
 const root = resolve(process.argv[2] ?? "dist-newstyle/wasm/public/app");
+// The base path, with a slash at each end, as the prerender writes it into
+// each page's <base href>.
+const base = `/${(process.env.HALOGEN_BASE_PATH ?? "/").split("/").filter((part) => part !== "").join("/")}/`.replace("//", "/");
+// A route's address on the site, and the route an address on the site is.
+const at = (path) => `${base}${path.replace(/^\//, "")}`;
+const local = (address) => (address.startsWith(base) ? `/${address.slice(base.length)}` : address);
 
 // instantiateStreaming refuses a .wasm served without its media type, so the
 // server has to get these right.
@@ -80,13 +98,24 @@ const types = {
 
 // A static server, as Pages is: a directory's address serves its index.html,
 // a directory's address without its slash is redirected to the one with it,
-// and an address with no file serves 404.html, with a 404.
+// and an address with no file serves 404.html, with a 404. The directory is
+// served under the base path; an address outside it is another site's, and
+// gets a bare 404.
 const server = createServer(async (request, response) => {
-  const path = decodeURIComponent(new URL(request.url, "http://x").pathname);
+  const address = decodeURIComponent(new URL(request.url, "http://x").pathname);
+  if (`${address}/` === base) {
+    response.writeHead(301, { location: base }).end();
+    return;
+  }
+  if (!address.startsWith(base)) {
+    response.writeHead(404, { "content-type": "text/plain" }).end("Not under the site's base path");
+    return;
+  }
+  const path = local(address);
   const file = join(root, normalize(path.endsWith("/") ? `${path}index.html` : path));
   try {
     if ((await stat(file)).isDirectory()) {
-      response.writeHead(301, { location: `${path}/` }).end();
+      response.writeHead(301, { location: `${address}/` }).end();
       return;
     }
     const body = await readFile(file);
@@ -99,10 +128,10 @@ const server = createServer(async (request, response) => {
 });
 await new Promise((ready) => server.listen(0, "127.0.0.1", ready));
 const origin = `http://127.0.0.1:${server.address().port}`;
-const url = (path) => `${origin}${path}`;
+const url = (path) => `${origin}${at(path)}`;
 const here = (page) => {
   const address = new URL(page.url());
-  return address.pathname + address.search;
+  return local(address.pathname) + address.search;
 };
 
 const timeout = 30_000;
@@ -375,7 +404,7 @@ try {
     // As a server sends it, before any script runs.
     const html = await (await fetch(url(path))).text();
     if (html.includes('<div class="wiki-tikz">')) guideAndDiagrams += 1;
-    assert.match(html, /<base href="\/">/, `${path}: no <base href>`);
+    assert.ok(html.includes(`<base href="${base}">`), `${path}: no <base href="${base}">`);
     assert.match(html, /<div id="app"><div class="wiki">/, `${path}: not prerendered`);
     assert.ok(html.includes(footerHtml), `${path}: no footer prerendered`);
     visitor.requested.length = 0;
@@ -485,6 +514,30 @@ try {
     assert.ok((await answer.text()).includes(says), `${path} does not say ${JSON.stringify(says)}`);
   }
   console.log("ok: TikZJax's licence and its fonts' are served beside them");
+  // And the notices of what esbuild bundled into the page's scripts and
+  // styles (web/src/licenses.mjs), each with its licence's text: the
+  // libraries the README's licence section names, and Mermaid's own
+  // dependencies, DOMPurify among them.
+  {
+    const answer = await fetch(url("/licenses.txt"));
+    assert.equal(answer.status, 200, "licenses.txt is not served");
+    const notices = await answer.text();
+    for (const [name, says] of [
+      ["katex", "The MIT License"],
+      ["highlight.js", "BSD 3-Clause License"],
+      ["@codemirror/view", "MIT License"],
+      ["@lezer/highlight", "MIT License"],
+      ["fflate", "MIT License"],
+      ["mermaid", "The MIT License"],
+      ["dompurify", "Apache License"],
+      ["@bjorn3/browser_wasi_shim", "Permission is hereby granted"],
+    ]) {
+      const entry = notices.split(`\n${"=".repeat(78)}\n`).find((part) => part.startsWith(`${name} `));
+      assert.ok(entry !== undefined, `licenses.txt does not list ${name}`);
+      assert.ok(entry.includes(says), `licenses.txt's ${name} does not say ${JSON.stringify(says)}`);
+    }
+    console.log(`ok: licenses.txt carries the notices of the ${notices.split(`\n${"=".repeat(78)}\n`).length - 1} npm packages bundled into the page`);
+  }
 
   // A page left while its picture is still being drawn: the next page shows
   // at once. (When an island's component waited for its drawing, following
@@ -542,8 +595,8 @@ try {
   // space's card there; the space opens at its home page.
   const toSpace = async (href) => {
     await page.locator("#app .wiki-brand").click();
-    await page.locator(`#app .space-card-link[href='${href}']`).click();
-    await page.locator(`#app .sidebar-space[href='${href}']`).waitFor({ timeout });
+    await page.locator(`#app .space-card-link[href='${at(href)}']`).click();
+    await page.locator(`#app .sidebar-space[href='${at(href)}']`).waitFor({ timeout });
   };
   // The spaces the sidebar's menu offers to switch to.
   const switchable = async () => {
@@ -551,7 +604,7 @@ try {
     await page.locator("#app .space-switcher-option").first().waitFor({ timeout });
     const hrefs = await page.locator("#app .space-switcher-option").evaluateAll((links) => links.map((a) => a.getAttribute("href")));
     await page.locator("#app .space-switcher-toggle").click();
-    return hrefs;
+    return hrefs.map(local);
   };
 
   // The tour, from the front page's invitation.
@@ -579,20 +632,20 @@ try {
   await arrive({ path: "/", view: "directory" }, "the directory");
   const roots = await page.locator("#app .space-card-link").evaluateAll((links) =>
     links.map((a) => ({ href: a.getAttribute("href"), name: a.querySelector(".space-card-name").textContent })),
-  );
+  ).then((links) => links.map((link) => ({ ...link, href: local(link.href) })));
   assert.deepEqual(roots.map((r) => r.name), ["Blog", "Docs", "Team"]);
   for (const space of roots) {
     if (here(page) !== "/") {
       await page.locator("#app .all-spaces").click();
       await arrive({ path: "/", view: "directory" }, `the directory, for ${space.name}`);
     }
-    await page.locator(`#app .space-card-link[href='${space.href}']`).click();
+    await page.locator(`#app .space-card-link[href='${at(space.href)}']`).click();
     // The blog opens at its posts (WP4.14), the others at their home pages.
     const opensAt = space.name === "Blog" ? "blog-view" : "page-view";
     await arrive({ path: space.href, view: opensAt, crumb: space.name }, `the space ${space.name}`);
     assert.equal(await page.locator("#app .sidebar-space-name").textContent(), space.name, "the sidebar's space");
     const first = page.locator("#app .wiki-sidebar .page-tree a").first();
-    const target = { href: await first.getAttribute("href"), title: await first.textContent() };
+    const target = { href: local(await first.getAttribute("href")), title: await first.textContent() };
     await first.click();
     await arrive({ path: target.href, view: "page-view", crumb: target.title }, `the page ${target.title}`);
   }
@@ -605,7 +658,7 @@ try {
 
   // The blog: its posts the newest first, each with its date and comments,
   // and from a post to the one before it.
-  await page.locator("#app .space-card-link[href='/s/blog/']").click();
+  await page.locator(`#app .space-card-link[href='${at("/s/blog/")}']`).click();
   await arrive({ path: "/s/blog/", view: "blog-view", crumb: "Blog" }, "Blog again");
   assert.deepEqual(await page.locator("#app .post-list .post-title").allTextContents(), ["Notes on Haskell", "Hello, world"], "the blog's posts");
   assert.deepEqual(
@@ -613,7 +666,7 @@ try {
     ["19 September 2026 · No comments", "1 September 2026 · 5 comments"],
     "the posts' dates and comments",
   );
-  await page.locator("#app .post-link[href='/s/blog/p/notes-on-haskell/']").click();
+  await page.locator(`#app .post-link[href='${at("/s/blog/p/notes-on-haskell/")}']`).click();
   await arrive({ path: "/s/blog/p/notes-on-haskell/", view: "page-view", crumb: "Notes on Haskell", text: "Posted 19 September 2026" }, "a post");
   assert.equal(await page.locator("#app .post-next").count(), 0, "the newest post has no next");
   console.log("ok: the blog lists its posts, the newest first, and a post its date");
@@ -699,7 +752,7 @@ try {
   // forward through later.
   await page.locator("#app .wiki-brand").click();
   await arrive({ path: "/", view: "directory" }, "the front page, for the team's space");
-  await page.locator("#app .space-card-link[href='/s/team/']").click();
+  await page.locator(`#app .space-card-link[href='${at("/s/team/")}']`).click();
   await arrive({ path: "/s/team/", view: "page-view", text: "Team handbook" }, "the team's space");
   await page.locator("#app .wiki-sidebar .sidebar-templates a", { hasText: "Weekly sync" }).waitFor({ timeout });
   await page.locator("#app .space-pages-link").click();
@@ -763,7 +816,7 @@ try {
   // Leaving the editor with changes by the back button asks first. Staying
   // goes back to the editor's entry, so the history is as long as before,
   // and the next back asks again; leaving then shows the page as it was.
-  await page.locator("#app .search-view a.search-hit[href='/s/docs/p/markdown-guide/diagrams/']").click();
+  await page.locator(`#app .search-view a.search-hit[href='${at("/s/docs/p/markdown-guide/diagrams/")}']`).click();
   await check({ path: "/s/docs/p/markdown-guide/diagrams/", view: "page-view", crumb: "Diagrams" }, "Diagrams");
   await page.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
   await check({ path: "/s/docs/p/markdown-guide/diagrams/edit/", view: "editor", crumb: "Edit" }, "editing Diagrams");
@@ -787,7 +840,7 @@ try {
   // the latest first with what the last save changed, an earlier version
   // chosen and restored, which saves it as a new version on top.
   await toSpace("/s/blog/");
-  await page.locator("#app .wiki-sidebar .page-tree a[href='/s/blog/p/smoke-page/']").click();
+  await page.locator(`#app .wiki-sidebar .page-tree a[href='${at("/s/blog/p/smoke-page/")}']`).click();
   await check({ path: "/s/blog/p/smoke-page/", view: "page-view", crumb: "Smoke page" }, "the new page again");
   for (const line of ["A second line.", "A third line."]) {
     await page.locator("#app .page-view .actions a", { hasText: "Edit" }).click();
@@ -824,7 +877,7 @@ try {
   // (IndexedDB), as admin again: who one was is not kept, and the demo
   // starts as admin.
   await toSpace("/s/blog/");
-  await page.locator("#app .wiki-sidebar .page-tree a[href='/s/blog/p/hello-world/']").click();
+  await page.locator(`#app .wiki-sidebar .page-tree a[href='${at("/s/blog/p/hello-world/")}']`).click();
   await check({ path: "/s/blog/p/hello-world/", view: "page-view", text: "Smoke test" }, "the edited page");
   // The prerendered page shows the demo's own content, so adopting it
   // repairs the edited page into what the browser keeps.
@@ -854,7 +907,7 @@ try {
   await page.locator("#app .admin-view .demo-told", { hasText: "back as it was at the start" }).waitFor({ timeout });
   const toHelloWorld = async (step, text) => {
     await toSpace("/s/blog/");
-    await page.locator("#app .wiki-sidebar .page-tree a[href='/s/blog/p/hello-world/']").click();
+    await page.locator(`#app .wiki-sidebar .page-tree a[href='${at("/s/blog/p/hello-world/")}']`).click();
     await check({ path: "/s/blog/p/hello-world/", view: "page-view", crumb: "Hello, world", text }, step);
   };
   await toHelloWorld("the page after the reset");
@@ -1078,6 +1131,22 @@ try {
     // The worker takes the page over, and keeps the page it did not serve
     // (the one that installed it) when the page asks.
     await eventually(async () => assert.ok(await reader.evaluate(() => navigator.serviceWorker.controller !== null), "no worker"), "the service worker taking the page over");
+    // Installable where the page is served: the worker's scope is the site's
+    // base path, and Chromium reads the manifest from under it with no
+    // errors, its start and scope there too, and finds nothing that keeps
+    // the page from being installed. Page.getInstallabilityErrors is
+    // Chromium's own check, the one behind its "Install" offer.
+    assert.equal(await reader.evaluate(async () => (await navigator.serviceWorker.getRegistration()).scope), url("/"), "the worker's scope");
+    const devtools = await offlineContext.newCDPSession(reader);
+    const read = await devtools.send("Page.getAppManifest");
+    assert.equal(read.url, url("/manifest.webmanifest"), "the manifest's address");
+    assert.deepEqual(read.errors, [], "the manifest's errors");
+    const declared = JSON.parse(read.data);
+    assert.equal(new URL(declared.start_url, read.url).href, url("/"), "the manifest's start_url");
+    assert.equal(new URL(declared.scope, read.url).href, url("/"), "the manifest's scope");
+    const { installabilityErrors } = await devtools.send("Page.getInstallabilityErrors");
+    assert.deepEqual(installabilityErrors, [], "what keeps the page from being installed");
+    await devtools.detach();
     const keptPage = (path) =>
       reader.evaluate(async (address) => {
         for (const name of await caches.keys()) {
@@ -1109,7 +1178,7 @@ try {
     await reader.locator("#app .sidebar-space-name", { hasText: "Docs" }).waitFor({ timeout });
     assert.equal(await reader.locator(".offline-page").count(), 0, "the offline page, online");
     await offlineContext.close();
-    console.log("ok: the demo is installable (a manifest and its icons, a service worker), and reads offline what it read, with an offline page for the rest");
+    console.log(`ok: the demo is installable under ${base} (a manifest and its icons, a service worker of that scope, nothing in the way by Chromium's check), and reads offline what it read, with an offline page for the rest`);
   }
 } catch (error) {
   // What the page reported is usually why it did not get there.
