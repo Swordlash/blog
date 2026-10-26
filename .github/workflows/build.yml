@@ -30,9 +30,12 @@ on:
 # going for the previous one: only the newest commit's result matters. The
 # branch is named with its repository, so that a fork's pull request from a
 # branch named like one of ours neither cancels our run nor is cancelled by
-# it.
+# it. A run by hand has a group of its own, its run's id: it names the same
+# ref as a push to main (refs/heads/main), and in a shared group a
+# fast-forward of main cancelled a run by hand still going (one on the
+# hosted runners, say) and a run by hand cancelled the push's.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || format('{0}-{1}', github.event.pull_request.head.repo.full_name || github.repository, github.head_ref || github.ref) }}
   cancel-in-progress: true
 
 permissions:
