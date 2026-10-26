@@ -21,7 +21,7 @@ slugs :: [Text] -> [Slug]
 slugs = map slug
 
 space :: Text -> Text -> Maybe Text -> Space
-space i s parent = Space {id = SpaceId i, name = s, slug = slug s, parent = SpaceId <$> parent, public = False, mathMacros = "", createdAt = UTCTime (fromGregorian 2026 1 1) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = ""}
+space i s parent = Space {id = SpaceId i, name = s, slug = slug s, parent = SpaceId <$> parent, public = False, mathMacros = "", createdAt = UTCTime (fromGregorian 2026 1 1) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False}
 
 -- | Two trees, with a slug (@backend@) under two parents.
 eng, backend, api, blog, blogBackend :: Space

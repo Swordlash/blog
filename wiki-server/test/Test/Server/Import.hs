@@ -77,6 +77,7 @@ spaceWith i parent s public mathMacros subspaceOrder pageOrder =
     , homePage = Nothing
     , icon = Nothing
     , description = ""
+    , blog = False
     }
 
 -- | A page of an archive: its id, its space's, its parent's, its slug, and
@@ -288,11 +289,11 @@ roundTrip = describe "an export" $ do
       shape copy `shouldReturn` expected
 
 -- | The docs of the tests with a profile: a description, an image for its
--- icon, and the tour for its home page.
+-- icon, the tour for its home page, and shown as a blog.
 profiled :: Archive
 profiled =
   docs
-    { spaces = [if s.id == SpaceId "s1" then withProfile SpaceProfile {description = "Guides.", icon = Just (IconImage (BlobId "b2") "image/png"), homePage = Just (PageId "p1")} s else s | s <- docs.spaces]
+    { spaces = [if s.id == SpaceId "s1" then withProfile SpaceProfile {description = "Guides.", icon = Just (IconImage (BlobId "b2") "image/png"), homePage = Just (PageId "p1"), blog = True} s else s | s <- docs.spaces]
     , blobs = docs.blobs <> Map.fromList [(BlobId "b2", "ICON")]
     }
 
@@ -302,7 +303,7 @@ profiles = describe "a space's profile" $ do
     _ <- apply r profiled importEverything
     made <- spaceAt r ["docs"]
     tour <- pageAt r ["docs"] ["tour"]
-    (made.description, made.homePage) `shouldBe` ("Guides.", Just tour.id)
+    (made.description, made.homePage, made.blog) `shouldBe` ("Guides.", Just tour.id, True)
     case made.icon of
       Just (IconImage b mediaType) -> (b, mediaType) `shouldBe` (blobOf "ICON", "image/png")
       other -> expectationFailure ("not an image: " <> show other)
@@ -311,7 +312,7 @@ profiles = describe "a space's profile" $ do
     -- And goes out again with an export, the image among the files.
     exported <- getUrl r (admin r links.archive.export)
     back <- either (assertFailure . toS) pure (unzipFiles (BSL.toStrict exported.body) >>= readArchive)
-    [(s.description, isJust s.homePage, Map.lookup (blobOf "ICON") back.blobs) | s <- back.spaces, s.name == made.name] `shouldBe` [("Guides.", True, Just "ICON")]
+    [(s.description, isJust s.homePage, s.blog, Map.lookup (blobOf "ICON") back.blobs) | s <- back.spaces, s.name == made.name] `shouldBe` [("Guides.", True, True, Just "ICON")]
 
   it "fills in what a merged space has none of, and keeps what it has" $ withRunning $ \r -> do
     ours <- makeSpace r "docs"
@@ -319,9 +320,9 @@ profiles = describe "a space's profile" $ do
     merged <- spaceAt r ["docs"]
     -- Its own home page, made with it; the archive's description and icon,
     -- which it had none of.
-    (merged.homePage, merged.description) `shouldBe` (ours.homePage, "Guides.")
+    (merged.homePage, merged.description, merged.blog) `shouldBe` (ours.homePage, "Guides.", True)
     (\case Just (IconImage _ _) -> True; _ -> False) merged.icon `shouldBe` True
-    _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setProfile ours.id)) SpaceProfile {description = "Ours.", icon = Just (IconEmoji "🦉"), homePage = Nothing})
+    _ :: Space <- ok200 (sendJson r methodPut (admin r (links.spaces.setProfile ours.id)) SpaceProfile {description = "Ours.", icon = Just (IconEmoji "🦉"), homePage = Nothing, blog = False})
     _ <- apply r profiled importEverything
     again <- spaceAt r ["docs"]
     tour <- pageAt r ["docs"] ["tour"]

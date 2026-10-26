@@ -87,6 +87,7 @@ import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
 import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
 import Wiki.Api.Zip (Zip)
 import Wiki.Core.Attachment (Attachment)
+import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page)
@@ -212,6 +213,10 @@ data SpacesApi mode = SpacesApi
   -- or take it away.
   , listPages :: mode :- Capture "space" SpaceId :> "pages" :> Get '[JSON] [Page]
   -- ^ @listPages@.
+  , postDetails :: mode :- Capture "space" SpaceId :> "post-details" :> Get '[JSON] (Map PageId PostDetails)
+  -- ^ @postDetails@: what each page of the space is listed with as a post
+  -- of a blog (its first author and its count of comments), as an object
+  -- keyed by the page's id.
   , pageAt :: mode :- Capture "space" SpaceId :> "pages" :> "at" :> CaptureAll "path" Slug :> Get '[JSON] (Versioned Page)
   -- ^ @getPage@: the page at a path of slugs from the space's top level.
   , createPage :: mode :- Capture "space" SpaceId :> "pages" :> ReqBody '[JSON] NewPage :> PostCreated '[JSON] (Versioned Page)

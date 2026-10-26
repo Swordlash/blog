@@ -3,6 +3,7 @@ module Main (main) where
 import Protolude
 import Test.Anchor qualified as Anchor
 import Test.Attachment qualified as Attachment
+import Test.Blog qualified as Blog
 import Test.Comment qualified as Comment
 import Test.Diff qualified as Diff
 import Test.Hspec (hspec)
@@ -43,3 +44,4 @@ main = hspec $ do
   Anchor.spec
   Comment.spec
   Space.spec
+  Blog.spec

@@ -427,6 +427,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   shiftSpace sid by = write (withJson "POST" (links.spaces.shift sid) ShiftBy {shift = by})
   shiftPage pid by = write (withJson "POST" (links.pages.shift pid) ShiftBy {shift = by})
   listPages sid = cached (\c -> Map.lookup sid c.pages) (R.get (links.spaces.listPages sid)) (withPages sid)
+  postDetails sid = cached (\c -> Map.lookup sid c.postDetails) (R.get (links.spaces.postDetails sid)) (withPostDetails sid)
   getPage sid path =
     cached (cachedPage sid path) (R.get (links.spaces.pageAt sid path)) (withPageAt sid path)
   createPage sid parent title body = write (withJson "POST" (links.spaces.createPage sid) NewPage {parent, title, body})

@@ -398,7 +398,8 @@ checkArchive a attachments = do
 -- missing), @icon@ (@{"emoji": …}@, @{"colour": …}@, or @{"image": blob,
 -- "mediaType": …, "file": …}@ with the image's bytes in the archive's file
 -- 'iconFile'; the default if missing, or of a kind this program does not
--- know) and @description@ (empty if missing).
+-- know), @description@ (empty if missing) and @blog@ (whether it is shown
+-- as a blog, "Wiki.Core.Blog"; false if missing).
 encodeSpace :: Space -> Value
 encodeSpace s =
   object $
@@ -416,6 +417,7 @@ encodeSpace s =
       <> ["homePage" .= home.text | Just home <- [s.homePage]]
       <> ["icon" .= encodeIcon s icon | Just icon <- [s.icon]]
       <> ["description" .= s.description | not (T.null s.description)]
+      <> ["blog" .= True | s.blog]
 
 -- | A space's icon as its record has it: an image names the file of the
 -- archive its bytes are in.
@@ -441,7 +443,8 @@ parseSpace createdBefore = withObject "space" $ \o -> do
   homePage <- fmap PageId <$> o .:? "homePage"
   icon <- (>>= parseMaybe parseJSON) <$> (o .:? "icon" :: Parser (Maybe Value))
   description <- o .:? "description" .!= ""
-  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description}
+  blog <- o .:? "blog" .!= False
+  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog}
 
 -- | An order as the archive writes it.
 orderText :: ChildOrder -> Text

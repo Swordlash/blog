@@ -32,6 +32,7 @@ space s parent public =
     , homePage = Nothing
     , icon = Nothing
     , description = ""
+    , blog = False
     }
 
 -- | Two private trees and a public one:

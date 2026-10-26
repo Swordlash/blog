@@ -36,6 +36,7 @@ blog =
     , homePage = Nothing
     , icon = Nothing
     , description = ""
+    , blog = False
     }
 
 ada, eve, rita :: Principal

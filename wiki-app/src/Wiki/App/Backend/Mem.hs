@@ -183,6 +183,7 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   shiftSpace sid = write . shiftSpaceIn sid
   shiftPage pid = write . shiftPageIn pid
   listPages = query . listPagesIn
+  postDetails = query . postDetailsIn
   getPage sid = query . getPageIn sid
   createPage sid parent title body = writeAt (createPageIn sid parent title body)
   savePage pid base title body = writeAt (savePageIn pid base title body)

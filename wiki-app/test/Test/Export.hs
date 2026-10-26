@@ -68,7 +68,7 @@ edited = do
     _ <- ok' =<< uploadAttachment tour.id "bytes.bin" "application/octet-stream" (BS.pack [0 .. 255])
     space <- ok' =<< createSpace (Just docs.id) "Exported"
     -- Profiles: a description and an emoji, and an image.
-    _ <- ok' =<< setSpaceProfile docs.id SpaceProfile {description = "How to use it.", icon = Just (IconEmoji "📘"), homePage = docs.homePage}
+    _ <- ok' =<< setSpaceProfile docs.id SpaceProfile {description = "How to use it.", icon = Just (IconEmoji "📘"), homePage = docs.homePage, blog = False}
     _ <- ok' =<< uploadSpaceIcon space.id "image/png" (BS.pack [0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
     page <- ok' =<< createPage space.id Nothing "Exported page" "# Exported\n\nWith *Markdown*."
     _ <- ok' =<< savePage page.id page.updatedAt "Exported page" "# Exported, then saved"

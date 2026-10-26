@@ -79,6 +79,7 @@ library
       Wiki.App.Browser
       Wiki.App.Demo
       Wiki.App.DemoUsers
+      Wiki.App.Head
       Wiki.App.Import
       Wiki.App.Islands
       Wiki.App.Islands.Monad
@@ -93,6 +94,7 @@ library
       Wiki.App.View.Admin
       Wiki.App.View.Backups
       Wiki.App.View.Invite
+      Wiki.App.View.Blog
       Wiki.App.View.Body
       Wiki.App.View.Comments
       Wiki.App.View.Common
@@ -249,6 +251,7 @@ test-suite wiki-app-test
         Test.Backend.Http
         Test.Backend.Mem
         Test.Backend.Persist
+        Test.Blog
         Test.Demo
         Test.Export
         Test.Hydrate

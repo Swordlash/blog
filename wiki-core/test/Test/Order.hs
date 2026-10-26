@@ -57,6 +57,7 @@ space i name parent made position subspaceOrder =
     , homePage = Nothing
     , icon = Nothing
     , description = ""
+    , blog = False
     }
 
 titles :: [Page] -> [Text]

@@ -4,6 +4,7 @@ import Protolude
 import Test.Backend.Http qualified as Http
 import Test.Backend.Mem qualified as Mem
 import Test.Backend.Persist qualified as Persist
+import Test.Blog qualified as Blog
 import Test.Demo qualified as Demo
 import Test.Export qualified as Export
 import Test.Hspec (hspec)
@@ -25,5 +26,6 @@ main = hspec $ do
   Route.spec
   Link.spec
   Shell.spec
+  Blog.spec
   Hydrate.spec
   Import.spec

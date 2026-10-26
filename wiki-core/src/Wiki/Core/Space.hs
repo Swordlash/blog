@@ -82,6 +82,10 @@ data Space = Space
   , description :: Text
   -- ^ What it is for, in a sentence or two of plain text, shown in the
   -- directory of spaces; empty for none.
+  , blog :: Bool
+  -- ^ Whether it is shown as a blog ("Wiki.Core.Blog"): it opens at its
+  -- posts, the newest first, under its home page if it has one, and a
+  -- public one has feeds.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -225,24 +229,26 @@ checkIconUpload mediaType size
 -- Profiles
 
 -- | What a space's administrator sets in its settings besides its name, its
--- permissions and its orders: its description, its icon and its home page
--- ('Wiki.App.Backend.setSpaceProfile'). An image is not set this way but
--- uploaded ('Wiki.App.Backend.uploadSpaceIcon'): a profile names one only
--- to keep the image the space has.
+-- permissions and its orders: its description, its icon, its home page
+-- and whether it is shown as a blog ('Wiki.App.Backend.setSpaceProfile').
+-- An image is not set this way but uploaded
+-- ('Wiki.App.Backend.uploadSpaceIcon'): a profile names one only to keep
+-- the image the space has.
 data SpaceProfile = SpaceProfile
   { description :: Text
   , icon :: Maybe Icon
   , homePage :: Maybe PageId
+  , blog :: Bool
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 -- | A space's profile as it is.
 profileOf :: Space -> SpaceProfile
-profileOf s = SpaceProfile {description = s.description, icon = s.icon, homePage = s.homePage}
+profileOf s = SpaceProfile {description = s.description, icon = s.icon, homePage = s.homePage, blog = s.blog}
 
 -- | A space with another profile. (A function, since a record update of
--- @icon@, @description@ or @homePage@ cannot tell a space's from a
+-- @icon@, @description@, @homePage@ or @blog@ cannot tell a space's from a
 -- profile's where both are in scope.)
 withProfile :: SpaceProfile -> Space -> Space
 withProfile p s =
@@ -260,6 +266,7 @@ withProfile p s =
     , homePage = p.homePage
     , icon = p.icon
     , description = p.description
+    , blog = p.blog
     }
 
 -- | The longest description a space may have, in characters.
@@ -281,7 +288,7 @@ checkProfile space pages p = do
   for_ p.homePage $ \h ->
     unless (h `elem` pages) $
       Left "A space's home page has to be one of its own pages."
-  pure SpaceProfile {description, icon, homePage = p.homePage}
+  pure SpaceProfile {description, icon, homePage = p.homePage, blog = p.blog}
   where
     checkIcon = \case
       IconEmoji e -> do

@@ -282,6 +282,7 @@ importSpace c blobs a choices progress m
                 homePage = Nothing
               , icon = Nothing
               , description = ""
+              , blog = False
               }
           pure i
       let placed =
@@ -295,7 +296,9 @@ importSpace c blobs a choices progress m
 -- | A space's description, icon and home page from the archive's, where
 -- the server's space has none of its own (one the import made has none
 -- yet): the home page is the page the archive's became, and an image is
--- kept under its hash, as an attachment's bytes are.
+-- kept under its hash, as an attachment's bytes are. A space the archive
+-- shows as a blog is shown as one (a flag has no "none of its own" to
+-- keep: a space already shown as a blog stays one).
 fillProfile :: Connection -> FilePath -> Archive -> SpaceMatch -> SpaceId -> Progress -> IO ()
 fillProfile c blobs a m target progress =
   Map.lookup target
@@ -310,7 +313,7 @@ fillProfile c blobs a m target progress =
             (own, _) -> pure own
           let description = if T.null theirs.description then m.archived.description else theirs.description
               homePage = theirs.homePage <|> (m.archived.homePage >>= (`Map.lookup` progress.pageIds))
-              filled = withProfile SpaceProfile {description, icon, homePage} theirs
+              filled = withProfile SpaceProfile {description, icon, homePage, blog = theirs.blog || m.archived.blog} theirs
           when (filled /= theirs) (updateSpace c filled)
       )
 

@@ -31,10 +31,11 @@ space i name parent =
     , homePage = Nothing
     , icon = Nothing
     , description = ""
+    , blog = False
     }
 
 profile :: Text -> Maybe Icon -> Maybe PageId -> SpaceProfile
-profile description icon homePage = SpaceProfile {description, icon, homePage}
+profile description icon homePage = SpaceProfile {description, icon, homePage, blog = False}
 
 none :: SpaceProfile
 none = profile "" Nothing Nothing

@@ -51,6 +51,7 @@ genRoute =
         <*> elements [AgainstPrevious, AgainstCurrent]
     , PageSlides <$> genPath <*> genPath <*> oneof [pure 1, chooseInt (-3, 40)]
     , SpacePages <$> genPath
+    , Posts <$> genPath <*> chooseInt (-3, 40)
     , Invite . InvitationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
     , ResetPassword . MailToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
     , VerifyEmail . MailToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
@@ -143,6 +144,14 @@ spec = describe "Wiki.App.Route" $ do
       print route (Space (slugs ["team", "pages"])) `shouldBe` "/s/team/~pages/"
       parse route "/s/team/~pages/pages/" `shouldBe` Right (SpacePages (slugs ["team", "pages"]))
       print route (Page (slugs ["a"]) (slugs ["pages"])) `shouldBe` "/s/a/p/~pages/"
+
+    it "writes a later page of a blog's posts as the space's address with its number" $ do
+      print route (Posts (slugs ["blog"]) 2) `shouldBe` "/s/blog/?page=2"
+      parse route "/s/blog/?page=3" `shouldBe` Right (Posts (slugs ["blog"]) 3)
+      parse route "/s/blog?page=3" `shouldBe` Right (Posts (slugs ["blog"]) 3)
+      parse route "/s/blog/?page=next" `shouldBe` Right (Posts (slugs ["blog"]) 1)
+      parse route "/s/blog/" `shouldBe` Right (Space (slugs ["blog"]))
+      parse route "/s/blog/pages/?page=2" `shouldBe` Right (SpacePages (slugs ["blog"]))
 
     it "reads an address without its last slash too" $ do
       parse route "/s/docs" `shouldBe` Right (Space (slugs ["docs"]))

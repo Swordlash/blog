@@ -1,0 +1,13 @@
+{
+  "p1": {
+    "author": {
+      "id": "u2",
+      "name": "Bea"
+    },
+    "comments": 3
+  },
+  "p2": {
+    "author": null,
+    "comments": 0
+  }
+}

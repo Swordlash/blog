@@ -28,6 +28,7 @@ import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByM
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
 import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Id (BlobId (..), CommentId (..), CommentThreadId (..), GroupId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
@@ -55,6 +56,7 @@ spec = describe "golden JSON" $ do
     golden "session" Sample.sessionInfo
     golden "space" Sample.space
     golden "page-counts" (Map.fromList [(SpaceId "s1", 5 :: Int), (SpaceId "s2", 0)])
+    golden "post-details" (Map.fromList [(PageId "p1", Sample.postDetails), (PageId "p2", PostDetails {author = Nothing, comments = 0})])
     golden "page" Sample.page
     golden "attachment" Sample.attachment
     golden "draft" Sample.draft
@@ -113,8 +115,8 @@ spec = describe "golden JSON" $ do
     golden "space-name" SpaceName {name = "Guides"}
     golden "space-public" SpacePublic {public = True}
     golden "space-math-macros" SpaceMathMacros {mathMacros = "\\R: \\mathbb{R}"}
-    golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") "image/png"), homePage = Just (PageId "p1")}
-    golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), homePage = Nothing}
+    golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") "image/png"), homePage = Just (PageId "p1"), blog = False}
+    golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), homePage = Nothing, blog = True}
     golden "space-order" SpaceOrder {children = ChildPages, order = NewestFirst}
     golden "space-move" SpaceMove {parent = Nothing}
     golden "new-page" NewPage {parent = Nothing, title = "Tour", body = "# Tour"}

@@ -183,6 +183,8 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , PageSlides (path "blog") (path "hello-world") 1
            , Search (Just "haskell") Nothing True
            , Search (Just "tour") (Just (path "docs")) False
+           , Posts (path "blog") 2
+           , Posts (path "docs") 3
            , Space (path "nowhere")
            , Page (path "docs") (path "nowhere")
            , NewPage (path "docs") Nothing
@@ -232,6 +234,7 @@ apiOver providers st = do
     perSpace <- for (Map.elems st.spaces) $ \s -> do
       space <- getSpace (spacePath s.id)
       pages <- listPages s.id
+      details <- postDetails s.id
       perPage <- for [p | p <- Map.elems st.pages, p.space == s.id] $ \p -> do
         page <- getPage s.id (pagePath p.id)
         draft <- getDraft p.id
@@ -242,7 +245,7 @@ apiOver providers st = do
           ( [(links.spaces.pageAt s.id (pagePath p.id), answerOf page), (links.pages.draft p.id, answerOf draft), (links.pages.versions p.id, answerOf versions)]
               <> each
           )
-      pure ([(links.spaces.atPath (spacePath s.id), answerOf space), (links.spaces.listPages s.id, answerOf pages)] <> concat perPage)
+      pure ([(links.spaces.atPath (spacePath s.id), answerOf space), (links.spaces.listPages s.id, answerOf pages), (links.spaces.postDetails s.id, answerOf details)] <> concat perPage)
     pure
       ( Map.fromList
           ( (links.session, answerOf (Right SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers, exports = me.exports} :: Either WikiError SessionInfo))

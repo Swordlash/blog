@@ -63,6 +63,7 @@ library
     exposed-modules:
         Wiki.Server
         Wiki.Server.Accounts
+        Wiki.Server.Address
         Wiki.Server.Api
         Wiki.Server.App
         Wiki.Server.Auth
@@ -72,6 +73,7 @@ library
         Wiki.Server.Export
         Wiki.Server.Export.Document
         Wiki.Server.Health
+        Wiki.Server.Feed
         Wiki.Server.Import
         Wiki.Server.Limiter
         Wiki.Server.Log
@@ -129,6 +131,7 @@ library
         protolude,
         qrcode-core >= 0.9.11 && < 0.10,
         ram,
+        row-types,
         servant-multipart,
         servant-server,
         smtp-mail >= 0.5.0.1,

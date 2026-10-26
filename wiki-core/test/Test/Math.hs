@@ -31,6 +31,7 @@ space i parent mathMacros =
     , homePage = Nothing
     , icon = Nothing
     , description = ""
+    , blog = False
     }
 
 -- | A tree: @maths@ defines two macros; @algebra@ under it defines one of

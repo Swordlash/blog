@@ -38,6 +38,7 @@ module Wiki.App.Backend.Mem.State
   , getSpaceIn
   , pageCountsIn
   , listPagesIn
+  , postDetailsIn
   , getPageIn
   , searchPagesIn
   , getDraftIn
@@ -144,6 +145,7 @@ import Wiki.App.Backend qualified as B
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Comment (Comment (Comment), Thread (Thread), checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Comment qualified as C
 import Wiki.Core.Draft (Draft (Draft))
@@ -381,6 +383,7 @@ insertSpace parent name public now st0 =
           , homePage = Nothing
           , icon = Nothing
           , description = ""
+          , blog = False
           }
    in (st {spaces = Map.insert space.id space st.spaces}, space)
 
@@ -505,7 +508,7 @@ clearHomes :: Set PageId -> MemState -> MemState
 clearHomes gone st = st {spaces = Map.map clear st.spaces}
   where
     clear s
-      | maybe False (`Set.member` gone) s.homePage = withProfile SpaceProfile {description = s.description, icon = s.icon, homePage = Nothing} s
+      | maybe False (`Set.member` gone) s.homePage = withProfile SpaceProfile {description = s.description, icon = s.icon, homePage = Nothing, blog = s.blog} s
       | otherwise = s
 
 -- | Forget the bytes behind every attachment of these pages.
@@ -580,6 +583,7 @@ respace parent slug position s =
     , homePage = s.homePage
     , icon = s.icon
     , description = s.description
+    , blog = s.blog
     }
 
 -- | A page in another place, perhaps in another space, at a position
@@ -653,6 +657,20 @@ listPagesIn sid st = do
   requireView st c
   pure (pageTreeOrder s.pageOrder (pagesOf sid st))
 
+-- | What each page of a space is listed with as a post: the author of its
+-- first version, and how many comments it has in all its threads.
+postDetailsIn :: SpaceId -> MemState -> Either WikiError (Map PageId PostDetails)
+postDetailsIn sid st = do
+  (_, c) <- findSpace st sid
+  requireView st c
+  pure (Map.fromList [(p.id, details p.id) | p <- pagesOf sid st])
+  where
+    details pid =
+      PostDetails
+        { author = authorOf st <$> (Map.lookupMin (Map.findWithDefault mempty pid st.versions) >>= \(_, v) -> v.author)
+        , comments = sum [length t.comments | t <- Map.findWithDefault [] pid st.threads]
+        }
+
 -- | The page at a path in a space.
 getPageIn :: SpaceId -> [Slug] -> MemState -> Either WikiError Page
 getPageIn sid path st = do
@@ -703,7 +721,7 @@ createSpaceIn parent name now st = do
       -- Its home page, whose first version is its maker's, as a page they
       -- made would be.
       (st3, home) = insertPage made.id Nothing homeTitle (homeBody n) now st2
-      space = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id} made
+      space = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False} made
   pure (recordVersion (currentUserId st) home st3 {spaces = Map.insert space.id space st3.spaces}, space)
   where
     who = currentPrincipal st
@@ -735,6 +753,7 @@ renameSpaceIn sid name = adjustSpace sid $ \s -> do
       , homePage = s.homePage
       , icon = s.icon
       , description = s.description
+      , blog = s.blog
       }
 
 -- | Make a space public or private.
@@ -772,7 +791,7 @@ uploadSpaceIconIn sid mediaType bytes st = do
   mt <- first Invalid (checkIconUpload mediaType (fromIntegral (BS.length bytes)))
   let (b, st1) = newId "blob" (dropIcon s st)
       blob = BlobId b
-      s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage} s
+      s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog} s
   pure (st1 {blobs = Map.insert blob bytes st1.blobs, spaces = Map.insert sid s' st1.spaces}, s')
 
 -- | Move a space under another or to the top level.

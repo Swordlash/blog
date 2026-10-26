@@ -151,6 +151,7 @@ import Protolude
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment)
+import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Children, Shift)
@@ -418,6 +419,14 @@ class (Monad m) => MonadWiki m where
   listPages :: SpaceId -> m (Either WikiError [Page])
   default listPages :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError [Page])
   listPages = lift . listPages
+
+  -- | What each page of a space is listed with as a post of a blog
+  -- ("Wiki.Core.Blog"): who wrote it (the author of its first version) and
+  -- how many comments it has, by page, for every page of the space, whether
+  -- the space is shown as a blog or not. Refused as 'listPages' is.
+  postDetails :: SpaceId -> m (Either WikiError (Map PageId PostDetails))
+  default postDetails :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError (Map PageId PostDetails))
+  postDetails = lift . postDetails
 
   -- | The page at a path of slugs from the space's top-level pages. The empty
   -- path names no page.

@@ -122,7 +122,8 @@ genSpace = do
   homePage <- oneof [pure Nothing, Just <$> genPageId]
   icon <- oneof [pure Nothing, Just <$> genIcon]
   description <- oneof [pure "", genText]
-  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description}
+  blog <- arbitrary
+  pure Space {id, name, slug, parent, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog}
 
 genIcon :: Gen Icon
 genIcon =
@@ -207,7 +208,7 @@ genChain = do
   for (zip chainIds (Nothing : map Just chainIds)) $ \(id, parent) -> do
     slug <- genSlug
     public <- frequency [(1, pure True), (3, pure False)]
-    pure Space {id, name = "", slug, parent, public, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = ""}
+    pure Space {id, name = "", slug, parent, public, mathMacros = "", createdAt = UTCTime (ModifiedJulianDay 60000) 0, position = 0, subspaceOrder = ByName, pageOrder = ByName, homePage = Nothing, icon = Nothing, description = "", blog = False}
 
 genSearchQuery :: Gen SearchQuery
 genSearchQuery = do

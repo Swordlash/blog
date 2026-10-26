@@ -18,6 +18,7 @@ module Test.Sample
   , pageThread
   , reply
   , author
+  , postDetails
   , importChoices
   , importSummary
   , serverStatus
@@ -59,6 +60,7 @@ import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCh
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..))
 import Wiki.Core.Audit qualified as Audit
@@ -101,6 +103,7 @@ space =
     , homePage = Just (PageId "p1")
     , icon = Just (IconEmoji "📘")
     , description = "How to write here."
+    , blog = False
     }
 
 attachment :: Attachment
@@ -474,6 +477,10 @@ providerCheck =
 -- | Someone as a comment and the live channel name them.
 author :: Author
 author = Author {id = UserId "u2", name = "Bea"}
+
+-- | What a post is listed with: its first author and its comments.
+postDetails :: PostDetails
+postDetails = PostDetails {author = Just author, comments = 3}
 
 reply :: Comment
 reply =

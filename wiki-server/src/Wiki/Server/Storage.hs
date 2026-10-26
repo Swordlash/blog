@@ -121,6 +121,7 @@ import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Audit (Actor (..))
 import Wiki.Core.Audit qualified as Audit
+import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..))
@@ -604,6 +605,7 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   shiftSpace sid = run Writes . shiftSpaceTx sid
   shiftPage pid = run Writes . shiftPageTx pid
   listPages = run Reads . listPagesTx
+  postDetails = run Reads . postDetailsTx
   getPage sid = run Reads . getPageTx sid
   createPage sid parent title = run Writes . createPageTx sid parent title
   savePage pid base title = saving . savePageTx pid base title
@@ -914,6 +916,24 @@ listPagesTx sid = do
   requireView c
   pageTreeOrder s.pageOrder <$> db (`loadPages` sid)
 
+-- | What each page of a space is listed with as a post: the author of its
+-- first version (the earliest, read as times rather than as the text they
+-- are kept as), and how many comments it has.
+postDetailsTx :: SpaceId -> Tx (Map PageId PostDetails)
+postDetailsTx sid = do
+  (_, c) <- findSpace sid
+  requireView c
+  nodes <- db (`pageNodes` sid)
+  versions <- db (`loadSpaceVersions` sid)
+  counts <- Map.fromList <$> db (`loadCommentCounts` sid)
+  let firsts = Map.fromListWith (\a b -> if a.updatedAt <= b.updatedAt then a else b) versions
+      details n =
+        PostDetails
+          { author = (Map.lookup n.id firsts >>= \r -> (versionOf n.id r).author)
+          , comments = Map.findWithDefault 0 n.id counts
+          }
+  pure (Map.fromList [(n.id, details n) | n <- nodes])
+
 getPageTx :: SpaceId -> [Slug] -> Tx Page
 getPageTx sid path = do
   (_, c) <- findSpace sid
@@ -981,6 +1001,7 @@ createSpaceTx parent name = do
           , homePage = Nothing
           , icon = Nothing
           , description = ""
+          , blog = False
           }
   db (`insertSpace` space)
   for_ ctx.creator $ \u ->
@@ -1001,7 +1022,7 @@ createSpaceTx parent name = do
           , updatedAt = time
           , position = 0
           }
-      withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id} space
+      withHome = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False} space
   author <- asks (\x -> x.author)
   db $ \c -> insertPage c home >> insertVersion c home author >> updateSpace c withHome
   pure withHome
@@ -1027,7 +1048,7 @@ uploadSpaceIconTx sid mediaType bytes = do
   mt <- either invalid pure (checkIconUpload mediaType (fromIntegral (BS.length bytes)))
   dir <- asks (\x -> x.blobs)
   blob <- liftIO (storeBlob dir bytes)
-  let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage} s
+  let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog} s
   db (`updateSpace` s')
   pure s'
 
@@ -1108,6 +1129,7 @@ renameSpaceTx sid name = adjustSpace sid $ \s -> do
       , homePage = s.homePage
       , icon = s.icon
       , description = s.description
+      , blog = s.blog
       }
 
 -- | Math macros as they are kept: as written, but for blank lines at the
@@ -1172,6 +1194,7 @@ respace parent slug position s =
     , homePage = s.homePage
     , icon = s.icon
     , description = s.description
+    , blog = s.blog
     }
 
 --------------------------------------------------------------------------------
@@ -1867,7 +1890,7 @@ importArchive st a = withDatabase st $ \c -> do
         hashes <- traverse (storeBlob (attachmentsDir st.dataDir)) a.blobs
         for_ a.spaces $ \sp ->
           insertSpace c $ case sp.icon of
-            Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage} sp
+            Just (IconImage b mt) -> withProfile SpaceProfile {description = sp.description, icon = Just (IconImage (Map.findWithDefault b b hashes) mt), homePage = sp.homePage, blog = sp.blog} sp
             _ -> sp
         for_ a.pages $ \p -> do
           insertPage c p

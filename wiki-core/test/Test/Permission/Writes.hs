@@ -28,6 +28,7 @@ space s parent =
     , homePage = Nothing
     , icon = Nothing
     , description = ""
+    , blog = False
     }
 
 -- | @eng ── backend@ and @ops@.

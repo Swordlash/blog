@@ -149,7 +149,7 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "opens a space without a home page at its pages" $ do
     let st = as (Just "user-admin")
-        withoutHome = st {spaces = Map.map (\x -> if x.name == "Docs" then S.withProfile S.SpaceProfile {S.description = x.description, S.icon = x.icon, S.homePage = Nothing} x else x) st.spaces}
+        withoutHome = st {spaces = Map.map (\x -> if x.name == "Docs" then S.withProfile S.SpaceProfile {S.description = x.description, S.icon = x.icon, S.homePage = Nothing, S.blog = x.blog} x else x) st.spaces}
     Rendered {html} <- render withoutHome (Space (slugs ["docs"]))
     html `contains` "<h1>Docs</h1>"
     html `contains` ">Space settings</button>"

@@ -66,11 +66,14 @@ import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
 import Wiki.App.Backend.Http.Request (Body (..))
 import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Route (Route (..), route, routeOfHref)
-import Wiki.App.Static (Served (..), renderServed, withTitle)
+import Wiki.App.Head (Site (..))
+import Wiki.App.Static (Served (..), renderServed, withHead)
 import Wiki.Core.Page (Page (id))
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (VersionInfo (updatedAt))
-import Wiki.Server.Api (Env, apiApplication, callerAs)
+import Wiki.Api.Links (attachmentUrl, spaceIconUrl)
+import Wiki.Server.Address (addressOf, hrefAddress, publicAddress)
+import Wiki.Server.Api (Env (..), apiApplication, callerAs)
 import Wiki.Server.Log (Level (..), Logger, logWith, redactedPath)
 import Wiki.Server.Static (withBaseHref)
 import Wiki.Server.Storage (Who)
@@ -94,12 +97,13 @@ renderPage logger env who mount template request = do
         atomicModifyIORef' answered (\as -> ((r.url, (\a -> a.status) <$> answer) : as, ()))
         pure answer
   outcome <- timeout renderTimeout (tryNotAsync (renderServed recorded mount at))
+  site <- siteFor env mount request
   asked <- reverse <$> readIORef answered
   let failures = [(url, either identity (\n -> "status " <> show n) a) | (url, a) <- asked, either (const True) (>= 500) a]
   finished <- getCurrentTime
   let ms = printf "%.1f" (realToFrac (diffUTCTime finished started) * 1000 :: Double) :: [Char]
       page served = do
-        filled <- fillMountPoint "app" served.html (withTitle served.title (withBaseHref mount template))
+        filled <- fillMountPoint "app" served.html (withHead site served.meta (withBaseHref mount template))
         withPreload served.cache filled
       result = case outcome of
         Nothing -> Left ("the render did not finish in " <> show (renderTimeout `div` 1_000_000) <> " s")
@@ -113,6 +117,26 @@ renderPage logger env who mount template request = do
     Left why ->
       logWith logger Error [("event", "render"), ("route", show at), ("error", why), ("ms", toS ms)]
   pure result
+
+-- | What a page the server renders knows of where it is, for what it says
+-- of itself in its head ("Wiki.App.Head"): its addresses under the wiki's
+-- public address ("Wiki.Server.Address"), its attachments' and its space's
+-- image there, and that a public blog has feeds ("Wiki.Server.Feed").
+siteFor :: Env -> Text -> Request -> IO Site
+siteFor env mount request = do
+  base <- publicAddress env.storage mount request
+  let absolute u
+        | "http://" `T.isPrefixOf` u || "https://" `T.isPrefixOf` u = u
+        | otherwise = addressOf base u
+  pure
+    Site
+      { address = hrefAddress base mount
+      , feeds = True
+      , attachmentAddress = Just . absolute . attachmentUrl
+      , iconAddress = \s -> case spaceIconUrl s of
+          "" -> Nothing
+          u -> Just (absolute u)
+      }
 
 -- | Catch what the render threw, but not what was thrown at it: the
 -- timeout's, above all.
@@ -143,6 +167,7 @@ statusOf at c = case at of
   _ | maybe False shutOut c.session -> status401
   Unknown -> status404
   Space s -> ofSpace s
+  Posts s _ -> ofSpace s
   SpacePages s -> ofSpace s
   Page s p -> ofSpace s `unlessRefused` ofPage s p
   EditPage s p -> ofSpace s `unlessRefused` ofPage s p

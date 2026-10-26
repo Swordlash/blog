@@ -468,7 +468,7 @@ profiles = describe "a space's profile and icon over HTTP" $ do
     givePassword r "user-editor" "editor's password"
     editor <- cookie <$> signInAs r "editor" "editor's password"
     blog :: Space <- spaceNamed r [session] "blog"
-    let profile = SpaceProfile {description = "Posts.", icon = Just (IconEmoji "📝"), homePage = blog.homePage}
+    let profile = SpaceProfile {description = "Posts.", icon = Just (IconEmoji "📝"), homePage = blog.homePage, blog = blog.blog}
     -- The editor edits the blog, and does not administer it.
     (.status) <$> setProfile r [editor] blog.id profile `shouldReturn` 403
     (.status) <$> setProfile r [] blog.id profile `shouldReturn` 403
@@ -477,7 +477,7 @@ profiles = describe "a space's profile and icon over HTTP" $ do
     (set.description, set.icon) `shouldBe` ("Posts.", Just (IconEmoji "📝"))
     seen :: Space <- spaceNamed r [] "blog"
     (seen.description, seen.icon, seen.homePage) `shouldBe` ("Posts.", Just (IconEmoji "📝"), blog.homePage)
-    setProfile r [session] blog.id SpaceProfile {description = "", icon = Nothing, homePage = Just (PageId "elsewhere")} >>= jsonAs 400 >>= \case
+    setProfile r [session] blog.id SpaceProfile {description = "", icon = Nothing, homePage = Just (PageId "elsewhere"), blog = False} >>= jsonAs 400 >>= \case
       Invalid _ -> pass
       other -> expectationFailure ("not invalid: " <> show other)
 

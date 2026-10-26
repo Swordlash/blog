@@ -32,6 +32,8 @@ module Wiki.Server.Storage.Rows
   , loadDraft
   , VersionRow (..)
   , loadVersions
+  , loadSpaceVersions
+  , loadCommentCounts
   , loadVersion
   , SearchRow (..)
   , loadSearchRows
@@ -252,7 +254,7 @@ sql :: Text -> Query
 sql = Query
 
 spaceColumns :: Text
-spaceColumns = "id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order, home_page, icon, description"
+spaceColumns = "id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order, home_page, icon, description, blog"
 
 spaceRow :: RowParser Space
 spaceRow = do
@@ -271,7 +273,8 @@ spaceRow = do
   -- default, as the export reads it.
   icon <- (>>= decodeStrict' . encodeUtf8) <$> (field :: RowParser (Maybe Text))
   description <- field
-  pure Space {id, parent, name, slug, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description}
+  blog <- field
+  pure Space {id, parent, name, slug, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog}
 
 -- | Every space, by id: a wiki has tens of them, and every permission is a
 -- question about a space's chain of ancestors, so each operation reads them
@@ -443,6 +446,27 @@ loadVersions c page =
     "SELECT v.updated_at, v.title, '', v.author, u.display_name FROM page_versions v LEFT JOIN users u ON u.id = v.author WHERE v.page_id = ?"
     (Only page.text)
 
+-- | Every version of every page of a space, without their bodies, by
+-- page: what the first author of each is read from. In no particular
+-- order, as 'loadVersions'.
+loadSpaceVersions :: Connection -> SpaceId -> IO [(PageId, VersionRow)]
+loadSpaceVersions c space =
+  queryWith
+    ((,) <$> (PageId <$> field) <*> versionRow)
+    c
+    "SELECT v.page_id, v.updated_at, v.title, '', v.author, u.display_name FROM page_versions v JOIN pages p ON p.id = v.page_id LEFT JOIN users u ON u.id = v.author WHERE p.space_id = ?"
+    (Only space.text)
+
+-- | How many comments each page of a space has, in all its threads; a page
+-- with none is left out.
+loadCommentCounts :: Connection -> SpaceId -> IO [(PageId, Int)]
+loadCommentCounts c space =
+  map (first PageId)
+    <$> query
+      c
+      "SELECT t.page_id, count(*) FROM comments m JOIN threads t ON t.id = m.thread_id JOIN pages p ON p.id = t.page_id WHERE p.space_id = ? GROUP BY t.page_id"
+      (Only space.text)
+
 -- | One version of a page, whole, by its time.
 loadVersion :: Connection -> PageId -> UTCTime -> IO (Maybe VersionRow)
 loadVersion c page at =
@@ -539,18 +563,19 @@ spaceValues s =
   , toField (fmap (\p -> p.text) s.homePage)
   , toField (fmap (decodeUtf8 . BSL.toStrict . encode) s.icon :: Maybe Text)
   , toField s.description
+  , toField s.blog
   ]
 
 -- | Add a space.
 insertSpace :: Connection -> Space -> IO ()
-insertSpace c s = execute c (sql ("INSERT INTO spaces (" <> spaceColumns <> ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) (spaceValues s)
+insertSpace c s = execute c (sql ("INSERT INTO spaces (" <> spaceColumns <> ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) (spaceValues s)
 
 -- | Write a space over the one with its id: every column of it.
 updateSpace :: Connection -> Space -> IO ()
 updateSpace c s =
   execute
     c
-    "UPDATE spaces SET parent = ?, name = ?, slug = ?, public = ?, math_macros = ?, created_at = ?, position = ?, subspace_order = ?, page_order = ?, home_page = ?, icon = ?, description = ? WHERE id = ?"
+    "UPDATE spaces SET parent = ?, name = ?, slug = ?, public = ?, math_macros = ?, created_at = ?, position = ?, subspace_order = ?, page_order = ?, home_page = ?, icon = ?, description = ?, blog = ? WHERE id = ?"
     (drop 1 (spaceValues s) <> [toField s.id.text])
 
 -- | Add a page, without its attachments, with the text the search compares

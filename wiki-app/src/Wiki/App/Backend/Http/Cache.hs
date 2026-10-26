@@ -35,7 +35,8 @@
 -- ('forgetThreads').
 --
 -- So is how many pages each space has, which the directory of spaces
--- shows. So are searches, by their query: the server renders the page of a
+-- shows, and what a blog's posts are listed with (their first authors and
+-- their counts of comments, which a comment's write lets go). So are searches, by their query: the server renders the page of a
 -- search's results with its hits, which the program then shows at once.
 -- And so is the administration's directory of the wiki's people, which the
 -- server renders the administration with, and its settings and invitations;
@@ -52,6 +53,7 @@ module Wiki.App.Backend.Http.Cache
   , withPageCounts
   , withSpaceAt
   , withPages
+  , withPostDetails
   , withPageAt
   , withDraft
   , withSearch
@@ -85,6 +87,7 @@ import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.Api.ServerSettings (ServerSettings)
 import Wiki.App.Backend (Session, WikiError (..))
+import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
@@ -107,6 +110,8 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.getSpace', by path.
   , pages :: Map SpaceId (Either WikiError [Page])
   -- ^ 'Wiki.App.Backend.listPages', by space.
+  , postDetails :: Map SpaceId (Either WikiError (Map PageId PostDetails))
+  -- ^ 'Wiki.App.Backend.postDetails', by space.
   , pageAt :: Map (SpaceId, [Slug]) (Either WikiError Page)
   -- ^ 'Wiki.App.Backend.getPage', by space and path.
   , drafts :: Map PageId (Either WikiError (Maybe Draft))
@@ -151,6 +156,7 @@ emptyCache =
     , pageCounts = Nothing
     , spaceAt = mempty
     , pages = mempty
+    , postDetails = mempty
     , pageAt = mempty
     , drafts = mempty
     , searches = []
@@ -204,6 +210,9 @@ withSpaceAt path s c = c {spaceAt = Map.insert path s c.spaceAt}
 
 withPages :: SpaceId -> Either WikiError [Page] -> Cache -> Cache
 withPages sid ps c = c {pages = Map.insert sid ps c.pages}
+
+withPostDetails :: SpaceId -> Either WikiError (Map PageId PostDetails) -> Cache -> Cache
+withPostDetails sid d c = c {postDetails = Map.insert sid d c.postDetails}
 
 withPageAt :: SpaceId -> [Slug] -> Either WikiError Page -> Cache -> Cache
 withPageAt sid path p c = c {pageAt = Map.insert (sid, path) p c.pageAt}
@@ -260,11 +269,12 @@ withThreads pid ts c = c {threads = Map.insert pid ts c.threads}
 
 -- | The cache after a write to a page's comments: what it did folded into
 -- the page's threads, if they are kept; or, for a write whose outcome is
--- not known (it failed, or was refused), the page's threads let go.
+-- not known (it failed, or was refused), the page's threads let go. The
+-- posts' details, which count comments, are let go either way.
 afterComment :: PageId -> Either WikiError PageEvent -> Cache -> Cache
 afterComment pid outcome c = case outcome of
-  Right event -> c {threads = Map.adjust (fmap (applyEvent event)) pid c.threads}
-  Left _ -> forgetThreads pid c
+  Right event -> c {threads = Map.adjust (fmap (applyEvent event)) pid c.threads, postDetails = mempty}
+  Left _ -> forgetThreads pid c {postDetails = mempty}
 
 -- | The cache after an event the live channel told of a page: a change to
 -- its comments folded into its threads ('afterComment'), and a save of it

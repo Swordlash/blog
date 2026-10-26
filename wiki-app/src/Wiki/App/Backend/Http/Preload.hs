@@ -37,6 +37,7 @@ module Wiki.App.Backend.Http.Preload
   , ServerOf (..)
   , BackupsOf (..)
   , ThreadsOf (..)
+  , PostDetailsOf (..)
   , Answer (..)
   , preloadId
   , toPreload
@@ -68,6 +69,7 @@ import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, kept)
 import Wiki.App.Backend.Http.Request (fromApiError, fromSessionInfo, sessionInfo)
+import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
@@ -124,6 +126,10 @@ data Preload = Preload
   , status :: Maybe StatusOf
   -- ^ The server's status ('Wiki.App.Backend.Admin.serverStatus'), as the
   -- directory.
+  , postDetails :: Maybe [PostDetailsOf]
+  -- ^ What a blog's posts are listed with ('Wiki.App.Backend.postDetails'),
+  -- for the blog's home; a payload written before there were any reads as
+  -- without them.
   , threads :: Maybe [ThreadsOf]
   -- ^ A page's comments ('Wiki.App.Backend.Comments.listThreads'), for the
   -- page they are on; a payload written before there were any reads as
@@ -141,6 +147,11 @@ data SpaceAt = SpaceAt {path :: [Slug], space :: Answer Space}
 
 -- | A space's pages ('Wiki.App.Backend.listPages').
 data SpacePages = SpacePages {space :: SpaceId, pages :: Answer [Page]}
+  deriving stock (Eq, Show)
+
+-- | What a space's pages are listed with as posts
+-- ('Wiki.App.Backend.postDetails').
+data PostDetailsOf = PostDetailsOf {space :: SpaceId, details :: Answer (Map PageId PostDetails)}
   deriving stock (Eq, Show)
 
 -- | A page by its space and its path ('Wiki.App.Backend.getPage').
@@ -232,6 +243,12 @@ instance ToJSON SpacePages where
 
 instance FromJSON SpacePages where
   parseJSON v = withObject "SpacePages" (\o -> SpacePages <$> o .: "space" <*> parseAnswer "pages" v) v
+
+instance ToJSON PostDetailsOf where
+  toJSON d = object (("space" .= d.space) : answerFields "details" d.details)
+
+instance FromJSON PostDetailsOf where
+  parseJSON v = withObject "PostDetailsOf" (\o -> PostDetailsOf <$> o .: "space" <*> parseAnswer "details" v) v
 
 instance ToJSON PageAt where
   toJSON p = object (["space" .= p.space, "path" .= p.path] <> answerFields "page" p.page)
@@ -342,6 +359,9 @@ toPreload c =
     , backups = BackupsOf . toAnswer <$> mfilter kept c.backups
     , activity = ActivityOf . toAnswer <$> mfilter kept c.activity
     , status = StatusOf . toAnswer <$> mfilter kept c.status
+    , postDetails = case [PostDetailsOf {space, details = toAnswer d} | (space, d) <- Map.toList c.postDetails, kept d] of
+        [] -> Nothing
+        found -> Just found
     , threads = case [ThreadsOf {page, threads = toAnswer ts} | (page, ts) <- Map.toList c.threads, kept ts] of
         [] -> Nothing
         found -> Just found
@@ -369,6 +389,7 @@ fromPreload p =
     , backups = (\b -> fromAnswer b.backups) <$> p.backups
     , activity = (\a -> fromAnswer a.activity) <$> p.activity
     , status = (\a -> fromAnswer a.status) <$> p.status
+    , postDetails = Map.fromList [(d.space, fromAnswer d.details) | d <- fold p.postDetails]
     , threads = Map.fromList [(t.page, fromAnswer t.threads) | t <- fold p.threads]
     }
 

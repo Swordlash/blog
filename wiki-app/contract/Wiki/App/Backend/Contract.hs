@@ -25,6 +25,7 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.App.Backend
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
+import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
@@ -33,7 +34,7 @@ import Wiki.Core.Path (parsePath, renderPath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
 import Wiki.Core.Slug (Slug, slugText)
-import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), maxIconSize)
+import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), maxIconSize, profileOf)
 import Wiki.Core.User (Group (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
@@ -68,6 +69,7 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   spacePermissions
   mathMacros
   profiles
+  posting
   movingSpaces
   deletingSpaces
   ordering
@@ -1170,8 +1172,12 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
 -- Profiles
 
 -- | A profile with these fields.
+-- | A profile with the blog's switch as given.
+asBlog :: Bool -> SpaceProfile -> SpaceProfile
+asBlog blog p = SpaceProfile {description = p.description, icon = p.icon, homePage = p.homePage, blog}
+
 profile :: Text -> Maybe Icon -> Maybe PageId -> SpaceProfile
-profile description icon homePage = SpaceProfile {description, icon, homePage}
+profile description icon homePage = SpaceProfile {description, icon, homePage, blog = False}
 
 -- | A 1×1 PNG, as an icon's bytes.
 png :: ByteString
@@ -1354,6 +1360,18 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
     run admin (deletePage guide.id) >>= ok
     (\x -> x.homePage) <$> spaceAt run admin "docs" `shouldReturn` Nothing
 
+  it "shows a space as a blog, and back, which every reader sees" $ \(Fixture run) -> do
+    blog <- spaceAt run Anonymous "blog"
+    blog.blog `shouldBe` True
+    docs <- spaceAt run admin "docs"
+    docs.blog `shouldBe` False
+    s <- run admin (setSpaceProfile docs.id (asBlog True (profileOf docs))) >>= ok
+    (s.blog, s.description, s.icon, s.homePage) `shouldBe` (True, docs.description, docs.icon, docs.homePage)
+    (\x -> x.blog) <$> spaceAt run Anonymous "docs" `shouldReturn` True
+    back <- run admin (setSpaceProfile docs.id (asBlog False (profileOf s))) >>= ok
+    back `shouldBe` docs
+    run editor (setSpaceProfile blog.id (asBlog False (profileOf blog))) >>= (`shouldFailWith` Forbidden)
+
   it "count the pages of each space someone may view" $ \(Fixture run) -> do
     let countsOf who = do
           counts <- run who pageCounts
@@ -1366,6 +1384,32 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
     s <- run editor (createSpace Nothing "Mine") >>= ok
     counts <- run editor pageCounts
     Map.lookup s.id counts `shouldBe` Just 1
+
+--------------------------------------------------------------------------------
+-- What a blog's posts are listed with
+
+posting :: (MonadWiki m) => SpecWith (Fixture m)
+posting = describe "postDetails" $ do
+  it "names each page's first author, for every page of the space, whoever may view it" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    made <- run editor (createPage blog.id Nothing "A new post" "Its *first* paragraph.") >>= ok
+    under <- run admin (createPage blog.id (Just made.id) "Notes" "Under it.") >>= ok
+    -- Saved since by someone else: the first author is still the maker.
+    _ <- run admin (savePage made.id made.updatedAt "A new post" "Changed.") >>= ok
+    pages <- run Anonymous (listPages blog.id) >>= ok
+    details <- run Anonymous (postDetails blog.id) >>= ok
+    Map.keysSet details `shouldBe` Set.fromList (map (\p -> p.id) pages)
+    me <- authorAs run editor
+    admin' <- authorAs run admin
+    (\d -> (d.author, d.comments)) <$> Map.lookup made.id details `shouldBe` Just (Just me, 0)
+    (\d -> d.author) <$> Map.lookup under.id details `shouldBe` Just (Just admin')
+    run reader (postDetails blog.id) >>= ok >>= (`shouldBe` details)
+
+  it "is refused as listPages is" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    run Anonymous (postDetails team.id) >>= (`shouldFailWith` Forbidden)
+    run admin (postDetails (SpaceId "no-such-space")) >>= (`shouldFailWith` NotFound)
+    void (run admin (postDetails team.id) >>= ok)
 
 --------------------------------------------------------------------------------
 -- Errors are values
@@ -1384,7 +1428,7 @@ neverThrown = describe "errors" $ do
           , void <$> renameSpace s "X"
           , void <$> setSpacePublic s True
           , void <$> setSpaceMathMacros s "\\newcommand{\\x}{1}"
-          , void <$> setSpaceProfile s SpaceProfile {description = "", icon = Nothing, homePage = Nothing}
+          , void <$> setSpaceProfile s SpaceProfile {description = "", icon = Nothing, homePage = Nothing, blog = False}
           , void <$> uploadSpaceIcon s "image/png" png
           , void <$> moveSpace s Nothing
           , deleteSpace s
@@ -1392,6 +1436,7 @@ neverThrown = describe "errors" $ do
           , void <$> shiftSpace s ShiftUp
           , void <$> shiftPage p ShiftUp
           , void <$> listPages s
+          , void <$> postDetails s
           , void <$> getPage s (path "x")
           , void <$> createPage s Nothing "X" ""
           , void <$> savePage p hello.updatedAt "X" ""

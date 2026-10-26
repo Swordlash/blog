@@ -38,11 +38,13 @@ module Wiki.App.View.Common
 
     -- * Words
   , whoIs
+  , dateOf
   )
 where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow, Router)
@@ -257,3 +259,7 @@ whoIs me = \case
       final : others@(_ : _) -> T.intercalate ", " (reverse others) <> " and " <> final
       _ -> T.concat names
     capitalised t = T.toUpper (T.take 1 t) <> T.drop 1 t
+
+-- | A day as people read it: @1 October 2026@.
+dateOf :: UTCTime -> Text
+dateOf = toS . formatTime defaultTimeLocale "%-d %B %Y"

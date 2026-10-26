@@ -8,7 +8,9 @@
 -- may read the page may, and, for someone who may edit it, edit it, add a page under
 -- it, rename, move or delete it; and, for someone who may administer its
 -- space, make it the page the space opens at ("Set as home page"). The URLs of its attachments are asked of the backend
--- ('attachmentUrl') once per load.
+-- ('attachmentUrl') once per load. A post of a space shown as a blog
+-- ("Wiki.Core.Blog") says when it was posted, and links to the posts
+-- before and after it.
 --
 -- = Comments
 --
@@ -50,6 +52,7 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -75,6 +78,7 @@ import Wiki.App.View.Common
 import Wiki.App.View.Export (exportMenu)
 import Wiki.Core.Anchor (Anchor, Located (..), Marking (Marking), Range (..), highlight, locate, renderedText)
 import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Blog (Neighbours (..), neighbours)
 import Wiki.Core.Comment (Thread (..), isInline, mayComment)
 import Wiki.Core.Id
   ( AttachmentId
@@ -83,11 +87,11 @@ import Wiki.Core.Id
   , SpaceId
   )
 import Wiki.Core.Markdown qualified as Md
-import Wiki.Core.Page (Page (attachments, body, id, parent, slug, space, title, updatedAt))
+import Wiki.Core.Page (Page (attachments, body, createdAt, id, parent, slug, space, title, updatedAt))
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space (description, homePage, icon, id, name), SpaceProfile (..))
+import Wiki.Core.Space (Space (blog, description, homePage, icon, id, name), SpaceProfile (..))
 import Wiki.Core.User (User (id))
 import Wiki.Core.Version (Author)
 
@@ -236,6 +240,7 @@ component =
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
                 <> Body.heading page.title page.body
+                <> toList (postInfo input page)
                 <> [textAndPanel st place rendered text page]
                 <> attachments page urls
                 <> [commentsOf st place text page CommentsView.Below]
@@ -281,6 +286,27 @@ component =
           | mayAdminister input.context input.space.id
           , input.space.homePage /= Just page.id
           ]
+
+    -- A post of a blog ("Wiki.Core.Blog"): when it was posted, and the
+    -- posts before and after it.
+    postInfo :: Input -> Page -> Maybe (H.ComponentHTML Action Slots m)
+    postInfo input page = do
+      guard input.space.blog
+      Neighbours {older, newer} <- neighbours input.space input.pages page.id
+      let spacePath = spacePathOf input.context.spaces input.space.id
+          linkTo p = Router.linkProps input.context.router Followed (Page spacePath [p.slug])
+      pure
+        [hh|
+          <div class="post-info">
+            <p class="post-date">Posted <time {{ [attr "datetime" (toS (iso8601Show page.createdAt))] }}>{{ dateOf page.createdAt }}</time></p>
+            {% if isJust older || isJust newer %}
+              <nav class="post-nav" aria-label="Posts">
+                {% for o in maybeToList older %}<a class="post-previous" rel="prev" {{ linkTo o }}><span class="post-nav-label">Previous</span><span class="post-nav-title">{{ o.title }}</span></a>{% end %}
+                {% for n in maybeToList newer %}<a class="post-next" rel="next" {{ linkTo n }}><span class="post-nav-label">Next</span><span class="post-nav-title">{{ n.title }}</span></a>{% end %}
+              </nav>
+            {% end %}
+          </div>
+        |]
 
     form :: Input -> Page -> Mode -> Maybe (H.ComponentHTML Action Slots m)
     form input page = \case
@@ -559,7 +585,7 @@ component =
       ShowChanged -> H.raise (Changed Nothing)
       SetAsHome -> withPage $ \page -> do
         space <- gets (\st -> st.input.space)
-        setSpaceProfile space.id SpaceProfile {description = space.description, icon = space.icon, homePage = Just page.id} >>= done (const Nothing)
+        setSpaceProfile space.id SpaceProfile {description = space.description, icon = space.icon, homePage = Just page.id, blog = space.blog} >>= done (const Nothing)
       Delete -> withPage $ \page -> do
         input <- gets (\st -> st.input)
         let spacePath = spacePathOf input.context.spaces input.space.id

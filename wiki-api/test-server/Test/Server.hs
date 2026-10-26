@@ -128,7 +128,7 @@ stubs =
           , pageCounts = pure (Map.fromList [(Sample.space.id, 5)])
           , setProfile = \s body -> pure (Space.withProfile body Sample.space {Space.id = s})
           , uploadIcon = \s u ->
-              pure (Space.withProfile Space.SpaceProfile {description = "", icon = Just (Space.IconImage (BlobId "b1") u.mediaType), homePage = Nothing} Sample.space {Space.id = s})
+              pure (Space.withProfile Space.SpaceProfile {description = "", icon = Just (Space.IconImage (BlobId "b1") u.mediaType), homePage = Nothing, blog = False} Sample.space {Space.id = s})
           , icon = \s b req respond ->
               liftIO . respond $
                 if s == Sample.space.id && b == BlobId "b1" && requestMethod req == methodGet
@@ -151,6 +151,7 @@ stubs =
                 then pure NoContent
                 else refuse NotFound
           , listPages = \s -> pure [Sample.page {Page.space = s}]
+          , postDetails = \s -> if s == Sample.space.id then pure (Map.fromList [(Sample.page.id, Sample.postDetails)]) else refuse Forbidden
           , pageAt = \s path ->
               if path == [Sample.slug "tour"] then pure (versioned Sample.page {Page.space = s}) else refuse NotFound
           , createPage = \s new ->
@@ -367,8 +368,12 @@ spec = describe "a server of the API's type" $ do
     it "counts their pages, keyed by the space's id" $
       answers (getAt links.spaces.pageCounts) 200 (Map.fromList [(s, 5 :: Int)])
 
+    it "says what a space's pages are listed with as posts, keyed by the page's id" $ do
+      answers (getAt (links.spaces.postDetails s)) 200 (Map.fromList [(Sample.page.id, Sample.postDetails)])
+      answers (getAt (links.spaces.postDetails (SpaceId "s2"))) 403 Forbidden
+
     it "sets a space's profile" $ do
-      let profile = Space.SpaceProfile {description = "Guides.", icon = Just (Space.IconColour "teal"), homePage = Nothing}
+      let profile = Space.SpaceProfile {description = "Guides.", icon = Just (Space.IconColour "teal"), homePage = Nothing, blog = True}
       answers (sendJson methodPut (links.spaces.setProfile s) profile) 200 (Space.withProfile profile Sample.space)
 
     it "uploads a space's icon as a multipart form, its type from its part, and serves it at the address its space names" $ do

@@ -42,6 +42,7 @@ module Wiki.App.Static
     -- * Pages
   , withBase
   , withTitle
+  , withHead
   , escapeHtml
   )
 where
@@ -68,6 +69,7 @@ import Wiki.App.Backend.Http (HttpEnv, Transport, cacheOf, newHttpEnv, newImmedi
 import Wiki.App.Backend.Http.Cache (Cache)
 import Wiki.App.Backend.Mem (MemWiki, newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
+import Wiki.App.Head (Head (..), Site, escapeHtml, headTags, untitled)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..), route)
 import Wiki.App.Security (MonadSecurity)
@@ -78,11 +80,13 @@ import Wiki.Core.Path (pathOf)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Space (Space (id))
 
--- | A route's page: the application's HTML, for the mount point, and the
--- document's title.
+-- | A route's page: the application's HTML, for the mount point, the
+-- document's title, and what else the page says about itself in its head
+-- ("Wiki.App.Head"), the title among it.
 data Rendered = Rendered
   { html :: Text
   , title :: Text
+  , meta :: Head
   }
 
 -- | The application at a route, over a wiki in this state, under this base
@@ -91,9 +95,9 @@ data Rendered = Rendered
 renderRoute :: MemState -> Text -> Route -> IO Rendered
 renderRoute wiki base at = do
   container <- N.newElement Nothing (ElemName "div")
-  (title, dispose) <- startRoute Build wiki base at container
+  (meta, dispose) <- startRoute Build wiki base at container
   html <- markup container `finally` dispose
-  pure Rendered {html, title}
+  pure Rendered {html, title = meta.title, meta}
 
 -- | The routes the build writes a page for: the front page, the page of
 -- search results, every space (its home page) and every space's list of
@@ -126,15 +130,15 @@ data Start = Build | Adopt
 
 -- | Start the application at a route in a container, over a wiki in this
 -- state, under this base path, and wait until it has loaded what the route
--- shows and its HTML has stopped changing. The document's title then, and
--- how to dispose of the application, which takes its HTML out of the
--- container again.
-startRoute :: Start -> MemState -> Text -> Route -> N.NativeNode -> IO (Text, IO ())
+-- shows and its HTML has stopped changing. What the page says about itself
+-- then (its title among it), and how to dispose of the application, which
+-- takes its HTML out of the container again.
+startRoute :: Start -> MemState -> Text -> Route -> N.NativeNode -> IO (Head, IO ())
 startRoute how wiki base at container = do
   ref <- newMemWiki wiki
   let run :: MemWiki MemDOM a -> IO a
       run = runMemDOM . runMemWiki ref
-  first (fromMaybe "Wiki") <$> startApp True slowly how run input base at container
+  first (fromMaybe (untitled "Wiki")) <$> startApp True slowly how run input base at container
 
 -- | The application for a wiki a server keeps, under this base path, as it
 -- shows before anything has been loaded: what the server's build serves at
@@ -144,7 +148,7 @@ renderLoading base = do
   container <- N.newElement Nothing (ElemName "div")
   dispose <- startLoading Build base Home container
   html <- markup container `finally` dispose
-  pure Rendered {html, title = "Wiki"}
+  pure Rendered {html, title = "Wiki", meta = untitled "Wiki"}
 
 -- | Start the application for a wiki a server keeps at a route in a
 -- container, under this base path, over a server that never answers, and
@@ -160,6 +164,7 @@ startLoading how base at container = do
 data Served = Served
   { html :: Text
   , title :: Text
+  , meta :: Head
   , cache :: Cache
   }
 
@@ -175,26 +180,27 @@ renderServed :: Transport -> Text -> Route -> IO Served
 renderServed transport base at = do
   env <- newImmediateHttpEnv transport
   container <- N.newElement Nothing (ElemName "div")
-  (title, dispose) <- startServed Build env base at container
+  (meta, dispose) <- startServed Build env base at container
   html <- markup container `finally` dispose
   cache <- cacheOf env
-  pure Served {html, title, cache}
+  pure Served {html, title = meta.title, meta, cache}
 
 -- | Start the application for a wiki a server keeps at a route in a
 -- container, over this backend, under this base path, and wait until it
 -- has loaded what the route shows (from what the backend has read, or by
 -- asking a transport that answers at once) and its HTML has stopped
--- changing. The document's title then, and how to dispose of it.
-startServed :: Start -> HttpEnv -> Text -> Route -> N.NativeNode -> IO (Text, IO ())
+-- changing. What the page says about itself then, and how to dispose of
+-- it.
+startServed :: Start -> HttpEnv -> Text -> Route -> N.NativeNode -> IO (Head, IO ())
 startServed how env base at container =
-  first (fromMaybe "Wiki") <$> startApp True briskly how (runMemDOM . runHttpWiki env) serverInput base at container
+  first (fromMaybe (untitled "Wiki")) <$> startApp True briskly how (runMemDOM . runHttpWiki env) serverInput base at container
 
 -- | Start the application in a container, over a backend run as given, with
 -- the shell's input for its router, at a route under a base path; wait,
 -- if asked, until the shell has loaded what the route shows, and then
 -- until its HTML has stopped changing, looking again every so many
--- microseconds. The document's title, if waited for, and how to dispose of
--- the application.
+-- microseconds. What the page says about itself, if waited for, and how to
+-- dispose of the application.
 startApp
   :: forall m
    . (MonadLoad m, MonadAdmin m, MonadComments m, MonadSecurity m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
@@ -206,7 +212,7 @@ startApp
   -> Text
   -> Route
   -> N.NativeNode
-  -> IO (Maybe Text, IO ())
+  -> IO (Maybe Head, IO ())
 startApp waitForShell pace how run inputFor base at container = do
   router <- run (Router.newRouter base Unknown route)
   Router.redirect router at
@@ -235,14 +241,11 @@ withBase base = T.replace "<head>" ("<head>\n    <base href=\"" <> escapeHtml ba
 withTitle :: Text -> Text -> Text
 withTitle title = T.replace "<title>Wiki</title>" ("<title>" <> escapeHtml title <> "</title>")
 
--- | Text as it is written in HTML, in an element or an attribute's value.
-escapeHtml :: Text -> Text
-escapeHtml = T.concatMap $ \case
-  '&' -> "&amp;"
-  '<' -> "&lt;"
-  '>' -> "&gt;"
-  '"' -> "&quot;"
-  c -> T.singleton c
+-- | A page titled for its route, with what else it says about itself
+-- ('headTags') after the title, for a writer that knows this of where it
+-- is.
+withHead :: Site -> Head -> Text -> Text
+withHead site h = T.replace "<title>Wiki</title>" ("<title>" <> escapeHtml h.title <> "</title>" <> headTags site h)
 
 -- | How often the prerender looks, in microseconds: it writes its pages
 -- once, so it can afford to look slowly.
@@ -257,7 +260,7 @@ briskly = 1_000
 
 -- | Ask until the answer is there, every so many microseconds; ten seconds
 -- is far longer than a render takes, and longer means something is wrong.
-settled :: Int -> IO (Maybe Text) -> IO Text
+settled :: Int -> IO (Maybe a) -> IO a
 settled pace asking = go (10_000_000 `div` pace)
   where
     go 0 = panic "Wiki.App.Static: the shell did not finish loading"

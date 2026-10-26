@@ -446,6 +446,7 @@ handlers env caller =
           , access = wiki . spaceAccess
           , setGrant = \s body -> wiki (setSpaceGrant s body.subject body.permission body.granted) $> NoContent
           , listPages = wiki . listPages
+          , postDetails = wiki . postDetails
           , pageAt = \s path -> versioned <$> wiki (getPage s path)
           , createPage = \s new -> versioned <$> wiki (createPage s new.parent new.title new.body)
           , export = \s format request respond -> liftIO (exporting request respond (\key -> exportSpace env.exports key env.storage who s format))

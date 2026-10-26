@@ -50,7 +50,7 @@ spec = describe "JSON" $ do
       toJSON (SpaceId "s1") `shouldBe` toJSON ("s1" :: Text)
     it "with a record's field names, and a slug as its text" $ do
       let s = either (panic . show) identity (mkSlug "eng")
-      toJSON Space {id = SpaceId "s1", name = "Engineering", slug = s, parent = Nothing, public = True, mathMacros = "\\newcommand{\\x}{1}", createdAt = UTCTime (fromGregorian 2026 1 2) 0, position = 3, subspaceOrder = ByHand, pageOrder = NewestFirst, homePage = Just (PageId "p1"), icon = Just (IconEmoji "📘"), description = "Where we write"}
+      toJSON Space {id = SpaceId "s1", name = "Engineering", slug = s, parent = Nothing, public = True, mathMacros = "\\newcommand{\\x}{1}", createdAt = UTCTime (fromGregorian 2026 1 2) 0, position = 3, subspaceOrder = ByHand, pageOrder = NewestFirst, homePage = Just (PageId "p1"), icon = Just (IconEmoji "📘"), description = "Where we write", blog = True}
         `shouldBe` object
           [ "id" .= ("s1" :: Text)
           , "name" .= ("Engineering" :: Text)
@@ -65,6 +65,7 @@ spec = describe "JSON" $ do
           , "homePage" .= ("p1" :: Text)
           , "icon" .= object ["emoji" .= ("📘" :: Text)]
           , "description" .= ("Where we write" :: Text)
+          , "blog" .= True
           ]
     it "with membership as an object keyed by group" $
       toJSON (Map.fromList [(GroupId "devs", Set.fromList [UserId "bob"])] :: Membership)

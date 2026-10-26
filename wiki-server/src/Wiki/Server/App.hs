@@ -39,6 +39,10 @@
 -- ("Wiki.Server.Health"). Every request is counted for them by its route's
 -- pattern ("Wiki.Server.Routes"), as it is logged.
 --
+-- A public blog's feeds and the sitemap ("Wiki.Server.Feed") are answered
+-- beside the pages, before the application's files, on both listeners and
+-- whoever asks, with what an anonymous reader may see.
+--
 -- The live channel, @api\/v1\/events@, is upgraded to a WebSocket
 -- ("Wiki.Server.Events") after the closed wiki's rule, for whoever the
 -- listener found: on the admin listener the operator, on the public one
@@ -66,6 +70,7 @@ import Wiki.Server.Accounts (Resolved (..), resolveSession)
 import Wiki.Server.Api (Caller (..), Env (..), Signing (..), apiApplication)
 import Wiki.Server.Auth (authApplication)
 import Wiki.Server.Events (eventsApplication)
+import Wiki.Server.Feed (FeedKind (..), feedApplication, sitemapApplication)
 import Wiki.Server.Health (healthApplication, metricsApplication)
 import Wiki.Server.Log (Logger, logRequests)
 import Wiki.Server.Metrics (observe)
@@ -169,6 +174,16 @@ addressOf request = case T.breakOnEnd ":" (show (remoteHost request)) of
 openToAnyone :: [Text]
 openToAnyone = ["info", "session", "accounts", "invitations", "password-reset", "email-verification"]
 
+-- | A feed's address below @s\/@: the space's path, and which feed.
+feedOf :: [Text] -> Maybe ([Text], FeedKind)
+feedOf segments = do
+  (path, file) <- unsnoc segments
+  guard (not (null path))
+  case file of
+    "feed.xml" -> Just (path, Atom)
+    "feed.rss" -> Just (path, Rss)
+    _ -> Nothing
+
 -- | The routes of a listener, for whoever is asking.
 listenerRoutes :: Logger -> Env -> Maybe StaticSite -> Listener -> Caller -> Application
 listenerRoutes logger env site l caller request respond = do
@@ -199,6 +214,13 @@ listenerRoutes logger env site l caller request respond = do
             | endpoint == ["events"] -> eventsApplication env.storage env.events caller.who request respond
             | otherwise -> api request {pathInfo = rest} respond
           "auth" : provider : more -> authApplication logger env caller l.mount provider more request respond
+          -- A blog's feeds and the sitemap, for anyone, of what anyone
+          -- may read ("Wiki.Server.Feed"), whoever asks.
+          ["sitemap.xml"] | readOnly -> sitemapApplication env.storage l.mount request respond
+          "s" : rest
+            | readOnly
+            , Just (path, kind) <- feedOf rest ->
+                feedApplication env.storage l.mount kind path request respond
           rest -> maybe notFound (\s -> serveStatic s l.mount (Just pages) rest request respond) site
     | readOnly && null segments -> redirect (encodeUtf8 l.mount)
     | otherwise -> notFound

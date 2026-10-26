@@ -24,7 +24,9 @@
 -- and shows its route.
 --
 -- Each page is rendered as the demo starts, with nobody signed in
--- ("Wiki.App.Static"), so a private space's page says that it is private.
+-- ("Wiki.App.Static"), so a private space's page says that it is private;
+-- a public one says what it is to a link preview in its head
+-- ("Wiki.App.Head"), as the server's pages do.
 -- The site's base path, from @HALOGEN_BASE_PATH@ (@\/@ when unset;
 -- @toolchain\/build-wasm.sh@ passes it on), is written into each page's
 -- @\<base href>@: the template's relative @.\/index.js@ and @.\/style.css@
@@ -55,7 +57,8 @@ import System.Environment (lookupEnv)
 import System.FilePath (takeDirectory, (</>))
 import Wiki.App (Route (..), route)
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.App.Static (Rendered (..), prerenderedRoutes, renderLoading, renderRoute, withBase, withTitle)
+import Wiki.App.Head (Site (..))
+import Wiki.App.Static (Rendered (..), prerenderedRoutes, renderLoading, renderRoute, withBase, withHead, withTitle)
 
 main :: IO ()
 main = do
@@ -78,13 +81,21 @@ demoPages base template outputDir page = do
   router <- runMemDOM (Router.newRouter base Unknown route)
   let home = Router.href router Home
   for_ (Unknown : prerenderedRoutes demo) $ \r -> do
-    Rendered {html, title} <- renderRoute demo base r
-    filled <- either (die . ((toS template <> ": ") <>)) pure (fillMountPoint "app" html (withBase home (withTitle title page)))
+    Rendered {html, meta} <- renderRoute demo base r
+    filled <- either (die . ((toS template <> ": ") <>)) pure (fillMountPoint "app" html (withBase home (withHead demoSite meta page)))
     let file = case r of
           Unknown -> outputDir </> "404.html"
           _ -> outputDir </> toS (T.drop (T.length home) (Router.href router r)) </> "index.html"
     createDirectoryIfMissing True (takeDirectory file)
     B.writeFile file (encodeUtf8 filled)
+
+-- | What the demo's pages know of where they are: nothing but their paths.
+-- The demo is served wherever its files are put, so a link preview's
+-- address is the page's path, without a host; its attachments live in
+-- the reader's browser and have no address to give; and it has no feeds,
+-- which need a server.
+demoSite :: Site
+demoSite = Site {address = identity, feeds = False, attachmentAddress = const Nothing, iconAddress = const Nothing}
 
 -- | The server's template and its two pages, and none of a demo build's: a
 -- page of the demo's left at a space's address would be served there in

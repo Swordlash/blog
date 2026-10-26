@@ -3,7 +3,7 @@
 -- | A space's settings, for whoever may administer it, opened from the
 -- space's list of pages ("Wiki.App.View.Space"): its name, its description
 -- and its icon, which the directory of spaces shows, the page it opens at,
--- and, below them, who may do what on it ("Wiki.App.View.Permissions",
+-- whether it is shown as a blog ("Wiki.Core.Blog"), and, below them, who may do what on it ("Wiki.App.View.Permissions",
 -- which has the public switch).
 --
 -- The profile is one form, saved with one press: the name, if it changed
@@ -37,7 +37,7 @@ import Wiki.Core.Id (PageId)
 import Wiki.Core.Page (Page (id, title), pageTreeOrder)
 import Wiki.Core.Space
   ( Icon (..)
-  , Space (description, homePage, icon, id, name, pageOrder)
+  , Space (blog, description, homePage, icon, id, name, pageOrder)
   , SpaceProfile (..)
   , defaultColour
   , iconColourName
@@ -67,6 +67,7 @@ data Fields = Fields
   , colour :: Text
   , emoji :: Text
   , home :: Maybe PageId
+  , blog :: Bool
   }
   deriving stock (Eq)
 
@@ -90,6 +91,7 @@ data Action
   | ChoseColour Int
   | TypedEmoji Text
   | ChoseHome Int
+  | ShowAsBlog Bool
   | ImageChosen Event
   | Save
   | FromPermissions ViewOutput
@@ -156,6 +158,14 @@ component =
               </select>
             </label>
             <p class="field-hint">The page the space opens at. Without one, it opens at the list of its pages.</p>
+            <label class="check space-blog-field">
+              <input type="checkbox" class="space-blog" checked={{ f.blog }} onChecked={{ ShowAsBlog }}>
+              <span>Show as a blog</span>
+            </label>
+            <p class="field-hint">
+              The space then opens at its posts, its top-level pages, the newest first, under its home page;
+              each post shows its date and links to the posts before and after it. A public blog has feeds.
+            </p>
             {{ errorView <$> st.problem }}
             <div class="actions">
               <button type="submit" class="primary" disabled={{ st.busy }}>Save settings</button>
@@ -189,6 +199,7 @@ component =
       ChoseKind kind -> edit (\f -> f {kind})
       ChoseColour n -> for_ (atMay iconColours n) $ \colour -> edit (\f -> f {colour})
       TypedEmoji emoji -> edit (\f -> f {emoji})
+      ShowAsBlog blog -> edit (asBlog blog)
       ChoseHome n -> do
         input <- gets (\st -> st.input)
         for_ (atMay (homeChoices input) n) $ \(home, _) -> edit (\f -> f {home})
@@ -215,7 +226,7 @@ component =
             modify (\s -> s {busy = True, problem = Nothing, saved = False})
             result <- runExceptT $ do
               when (T.strip f.typedName /= space.name) $ void (ExceptT (renameSpace space.id f.typedName))
-              ExceptT (setSpaceProfile space.id SpaceProfile {description = f.typedDescription, icon, homePage = f.home})
+              ExceptT (setSpaceProfile space.id SpaceProfile {description = f.typedDescription, icon, homePage = f.home, blog = f.blog})
             case result of
               Left e -> modify (\s -> s {busy = False, problem = Just e})
               Right updated -> do
@@ -246,7 +257,13 @@ fieldsOf s =
         Just (IconEmoji e) -> e
         _ -> ""
     , home = s.homePage
+    , blog = s.blog
     }
+
+-- | The form with the blog's switch as given. (A function, since a record
+-- update of @blog@ cannot tell the form's from a space's.)
+asBlog :: Bool -> Fields -> Fields
+asBlog blog f = Fields {typedName = f.typedName, typedDescription = f.typedDescription, kind = f.kind, colour = f.colour, emoji = f.emoji, home = f.home, blog}
 
 -- | The icon the form chooses, or why it chooses none it can save: an
 -- image is the one the space has, uploaded.
@@ -267,7 +284,7 @@ isImage = \case
 -- | The space as its icon would be with what the form chooses, for the
 -- preview; an emoji not typed yet is shown as the default.
 previewed :: State -> Space
-previewed st = withProfile SpaceProfile {description = space.description, icon, homePage = space.homePage} space
+previewed st = withProfile SpaceProfile {description = space.description, icon, homePage = space.homePage, blog = space.blog} space
   where
     space = st.input.space
     icon = case iconOf space st.fields of

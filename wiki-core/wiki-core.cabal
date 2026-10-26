@@ -55,6 +55,7 @@ library
       Wiki.Core.Anchor
       Wiki.Core.Attachment
       Wiki.Core.Audit
+      Wiki.Core.Blog
       Wiki.Core.Comment
       Wiki.Core.Diff
       Wiki.Core.Draft
@@ -112,6 +113,7 @@ test-suite wiki-core-test
   other-modules:
       Test.Anchor
       Test.Attachment
+      Test.Blog
       Test.Comment
       Test.Diff
       Test.Gen

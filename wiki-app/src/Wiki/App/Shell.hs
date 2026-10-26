@@ -13,8 +13,10 @@
 -- space it is a subspace of, its home page and its list of pages, its
 -- pages as a tree, and its subspaces below them. Elsewhere it lists the
 -- spaces. A space's own route shows its home page, if it has one
--- ('Wiki.Core.Space.homePage'), and otherwise its list of pages; every
--- space shown is remembered as recently visited ("Wiki.App.Recent").
+-- ('Wiki.Core.Space.homePage'), and otherwise its list of pages; a space
+-- shown as a blog shows its posts instead, under its home page
+-- ("Wiki.App.View.Blog"); every space shown is remembered as recently
+-- visited ("Wiki.App.Recent").
 --
 -- The shell holds what every view needs and loads it itself: who is signed
 -- in, the tree of spaces, and the space the route is in with its pages
@@ -118,6 +120,7 @@ import Wiki.App.Backend.Comments (MonadComments)
 import Wiki.App.Browser (download, historyEntry, historyGo, keepHeights, setDocumentTitle, unzipFiles, zipFiles)
 import Wiki.App.DemoUsers (Demo (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
+import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Live (Feed (..), Live (..))
 import Wiki.App.Recent (rememberVisit)
@@ -126,6 +129,7 @@ import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Activity qualified as ActivityView
 import Wiki.App.View.Admin qualified as AdminView
+import Wiki.App.View.Blog qualified as BlogView
 import Wiki.App.View.Common
 import Wiki.App.View.Directory qualified as DirectoryView
 import Wiki.App.View.Editor qualified as Editor
@@ -147,11 +151,14 @@ import Wiki.App.View.Space qualified as SpaceView
 import Wiki.App.View.VerifyEmail qualified as VerifyEmailView
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (SpaceId, UserId)
-import Wiki.Core.Page (Page (attachments, id, title))
+import Wiki.Core.Attachment (findAttachment)
+import Wiki.Core.Blog (excerpt, firstImage)
+import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
+import Wiki.Core.Page (Page (attachments, body, id, title))
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
-import Wiki.Core.Permission (GlobalPermission (Administer), hasGlobalPermission, mayCreateSpace)
+import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Icon (..), Space (icon, id, name, pageOrder, parent), subspacesOf)
+import Wiki.Core.Space (Icon (..), Space (blog, description, icon, id, name, pageOrder, parent), subspacesOf)
 import Wiki.Core.User (User (..))
 
 -- | The router, a route the home page invites a newcomer to (the demo's
@@ -168,14 +175,16 @@ data Input m = Input
   }
 
 -- | Whether the shell has loaded everything the route shows; when it has,
--- the document's title for it. The prerender waits for this before it
--- takes the page's HTML.
-data Query a = Settled (Maybe Text -> a)
+-- what the page says about itself (its title, and for a public page what a
+-- link preview shows, "Wiki.App.Head"). The prerender and the server wait
+-- for this before they take the page's HTML.
+data Query a = Settled (Maybe Head -> a)
 
 type Slots =
   ("space" .== H.Slot (Const Void) ViewOutput ())
     .+ ("directory" .== H.Slot (Const Void) ViewOutput ())
     .+ ("page" .== H.Slot (Const Void) ViewOutput ())
+    .+ ("blog" .== H.Slot (Const Void) ViewOutput ())
     .+ ("source" .== H.Slot (Const Void) ViewOutput ())
     .+ ("history" .== H.Slot (Const Void) ViewOutput ())
     .+ ("newSpace" .== H.Slot (Const Void) ViewOutput ())
@@ -719,7 +728,10 @@ component =
       where
         ctx = context st
         path = spacePathOf st.spaces space.id
-        entering = st.route == Space path
+        entering = st.route == Space path || isPosts st.route
+        isPosts = \case
+          Posts p _ -> p == path
+          _ -> False
         subspaces = subspacesOf st.spaces (Just space.id)
         -- The space this one is under, if the user may go there.
         above = space.parent >>= \p -> find (\x -> x.id == p && mayView ctx x.id) st.spaces
@@ -760,8 +772,13 @@ component =
         LoadingSpace _ -> loading
         SpaceFailed _ e -> failureView e RetryHere
         InSpace _ space pages -> case st.route of
-          -- Entering a space shows its home page, if it has one.
+          -- Entering a blog shows its posts, at the page of them asked for.
+          Space _ | space.blog -> blogView space pages 1
+          Posts _ n | space.blog -> blogView space pages n
+          -- Entering a space shows its home page, if it has one, at any
+          -- page of posts it is asked for.
           Space _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
+          Posts _ _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
           Page _ path -> pageView space pages path
           PageSource _ path -> HH.slot "source" () SourceView.component SourceView.Input {context = context st, space, path} FromView
           PageHistory _ path version against ->
@@ -775,6 +792,7 @@ component =
           _ -> HH.slot "space" () SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
       where
         pageView space pages path = HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path, feed = st.feed} FromView
+        blogView space pages page = HH.slot "blog" () BlogView.component BlogView.Input {context = context st, space, pages, page} FromView
 
     loading :: H.ComponentHTML Action Slots m
     loading = [hh|<p class="loading">Loading…</p>|]
@@ -1029,7 +1047,7 @@ component =
     handleQuery :: Query a -> H.HalogenM (State m) Action Slots output m (Maybe a)
     handleQuery (Settled reply) = do
       st <- get
-      pure (Just (reply (if st.settled then Just (documentTitle st) else Nothing)))
+      pure (Just (reply (if st.settled then Just (headOf st) else Nothing)))
 
 -- | What every route shows around it: who is signed in, who else one may
 -- be in the demo, the tree of spaces, where the images of those pictured
@@ -1100,6 +1118,7 @@ context st = Context {router = st.router, session = st.session, spaces = st.spac
 spaceOfRoute :: Route -> Maybe [Slug]
 spaceOfRoute = \case
   Space path -> Just path
+  Posts path _ -> Just path
   SpacePages path -> Just path
   Page path _ -> Just path
   EditPage path _ -> Just path
@@ -1122,8 +1141,10 @@ waitsForPage st = case (st.route, st.here) of
   _ | isShut st -> False
   -- The directory says when it has counted the spaces' pages.
   (Home, _) -> st.world == WorldReady
-  -- A space's own route shows its home page, if it has one.
-  (Space _, InSpace _ space pages) -> isJust (homeOf space pages)
+  -- A space's own route shows its posts, if it is a blog, or its home
+  -- page, if it has one.
+  (Space _, InSpace _ space pages) -> space.blog || isJust (homeOf space pages)
+  (Posts _ _, InSpace _ space pages) -> space.blog || isJust (homeOf space pages)
   (Page _ _, InSpace {}) -> True
   (EditPage _ _, InSpace {}) -> True
   (PageSource _ _, InSpace {}) -> True
@@ -1138,6 +1159,7 @@ currentPageOf pages path = rightToMaybe (resolvePath (findChild pages) path) >>=
 currentPage :: State m -> Maybe Page
 currentPage st = case (st.route, st.here) of
   (Space _, InSpace _ space pages) -> homeOf space pages
+  (Posts _ _, InSpace _ space pages) -> homeOf space pages
   (Page _ path, InSpace _ _ pages) -> currentPageOf pages path
   (EditPage _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageSource _ path, InSpace _ _ pages) -> currentPageOf pages path
@@ -1161,6 +1183,7 @@ crumbs st = case st.route of
   VerifyEmail _ -> [("E-mail address", Nothing)]
   Home -> []
   Space path -> spaceCrumbs path
+  Posts path n -> spaceCrumbs path <> [("Page " <> show n, Nothing)]
   SpacePages path -> spaceCrumbs path <> [("Pages and settings", Nothing)]
   Page path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath
   EditPage path pagePath -> spaceCrumbs path <> pageCrumbs path pagePath <> [("Edit", Nothing)]
@@ -1201,6 +1224,72 @@ documentTitle st = case reverse (map fst (crumbs st)) of
     SpaceFailed _ NotFound -> "Not found · Wiki"
     _ -> "Wiki"
   names -> mconcat (intersperse " · " (take 2 names)) <> " · Wiki"
+
+-- | What the page says about itself: its title, and for a public page in a
+-- space (the space's own route, a page of its posts, or a page) what a
+-- link preview shows, and on every page of a public blog where its feeds
+-- are ("Wiki.App.Head").
+headOf :: State m -> Head
+headOf st = Head {title = documentTitle st, preview, feeds}
+  where
+    ctx = context st
+    public space = canView Nothing st.session.grants (chainOf ctx space.id)
+    href = Router.href st.router
+    feeds = case st.here of
+      InSpace path space _
+        | space.blog
+        , public space
+        , isJust (spaceOfRoute st.route) ->
+            Just Feeds {address = href (Space path), name = space.name}
+      _ -> Nothing
+    preview = case (st.route, st.here) of
+      _ | isShut st -> Nothing
+      (Space path, InSpace _ space pages) | public space -> Just (ofSpace path space pages)
+      (Posts path _, InSpace _ space pages) | public space -> Just (ofSpace path space pages)
+      (Page path pagePath, InSpace _ space pages)
+        | public space
+        , Just p <- currentPageOf pages pagePath ->
+            Just (ofPage space p (href (Page path pagePath)))
+      _ -> Nothing
+    -- A space's own route: a blog, or a space without a home page, by its
+    -- description; a space that opens at its home page, as that page but
+    -- at the space's address, by its description first.
+    ofSpace path space pages = case homeOf space pages of
+      Just home
+        | not space.blog ->
+            let p = ofPage space home (href (Space path))
+             in Preview
+                  { title = space.name
+                  , description = if T.null space.description then p.description else space.description
+                  , url = p.url
+                  , kind = "website"
+                  , image = p.image
+                  }
+      _ ->
+        Preview
+          { title = space.name
+          , description = space.description
+          , url = href (Space path)
+          , kind = "website"
+          , image = spaceImage space
+          }
+    ofPage space p url =
+      let blocks = either (const []) identity (parseMarkdown p.body)
+          said = excerpt blocks
+       in Preview
+            { title = p.title
+            , description = if T.null said then space.description else said
+            , url
+            , kind = "article"
+            , image = (firstImage blocks >>= imageOf p) <|> spaceImage space
+            }
+    imageOf p destination = case classifyDestination destination of
+      ToUrl url | "http://" `T.isPrefixOf` url || "https://" `T.isPrefixOf` url -> Just (WebImage url)
+      ToAttachment name -> AttachedImage <$> findAttachment name p.attachments
+      _ -> Nothing
+    spaceImage space = case space.icon of
+      Just (IconImage _ _) -> Just (SpaceImage space)
+      _ -> Nothing
 
 -- | How much an archive holds, for a person to read.
 archiveSummary :: Archive -> Text

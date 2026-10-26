@@ -97,13 +97,14 @@ demoState now = flip execState emptyState $ do
   _ <- page docs (Just guide) "Presentations" 2 presentations
 
   -- Each space's profile: what the directory of spaces shows of it, and the
-  -- page it opens at. Projects keeps a colour, as a space whose
-  -- administrator chose no emoji does.
+  -- page it opens at. The blog is shown as one, and opens at its posts.
+  -- Projects keeps a colour, as a space whose administrator chose no emoji
+  -- does.
   modify $
-    setProfile blog SpaceProfile {description = "Posts about this wiki and about writing it in Haskell.", icon = Just (IconEmoji "✍️"), homePage = Just hello}
-      . setProfile team SpaceProfile {description = "How the team works: its handbook, who is on call, and its projects.", icon = Just (IconEmoji "🧭"), homePage = Just handbook}
-      . setProfile projects SpaceProfile {description = "What the team is building, this wiki first.", icon = Just (IconColour "teal"), homePage = Just wiki}
-      . setProfile docs SpaceProfile {description = "How to use this wiki: a guided tour, and everything its Markdown can do.", icon = Just (IconEmoji "📘"), homePage = Just tourPage}
+    setProfile blog SpaceProfile {description = "Posts about this wiki and about writing it in Haskell.", icon = Just (IconEmoji "✍️"), homePage = Nothing, blog = True}
+      . setProfile team SpaceProfile {description = "How the team works: its handbook, who is on call, and its projects.", icon = Just (IconEmoji "🧭"), homePage = Just handbook, blog = False}
+      . setProfile projects SpaceProfile {description = "What the team is building, this wiki first.", icon = Just (IconColour "teal"), homePage = Just wiki, blog = False}
+      . setProfile docs SpaceProfile {description = "How to use this wiki: a guided tour, and everything its Markdown can do.", icon = Just (IconEmoji "📘"), homePage = Just tourPage, blog = False}
   modify (\st -> st {current = Just adminId})
   where
     adminId = UserId "user-admin"

@@ -7,6 +7,7 @@
 --
 -- > /                              Home
 -- > /s/team/projects/              Space [team, projects]
+-- > /s/blog/?page=2                Posts [blog] 2
 -- > /s/team/projects/pages/        SpacePages [team, projects]
 -- > /s/docs/p/markdown-guide/      Page [docs] [markdown-guide]
 -- > /s/docs/p/tour/edit/           EditPage [docs] [tour]
@@ -82,6 +83,12 @@ data Route
     -- its home page ('Wiki.Core.Space.homePage'), or, for a space without
     -- one, its list of pages ('SpacePages').
     Space [Slug]
+  | -- | A space entered at a later page of its posts, for a space shown as
+    -- a blog ("Wiki.Core.Blog"): its path, and the page, counted from 1.
+    -- The page is a parameter (@page@), so that a reload, or a link, comes
+    -- back to it; the first page is the space's own route, 'Space', and a
+    -- space that is no blog shows what 'Space' shows at any page.
+    Posts [Slug] Int
   | -- | A space's pages and subspaces, with what may be done to it (its
     -- settings among them), by its path.
     SpacePages [Slug]
@@ -151,6 +158,12 @@ route =
   root $
     alternatives
       [ alternative (\case Home -> Just (); _ -> Nothing) (const Home) noArgs
+      , -- Before 'Space', which reads the same path and leaves the query
+        -- alone: this one reads it only with its parameter.
+        alternative
+          (\case Posts s n -> Just (s, n); _ -> Nothing)
+          (uncurry Posts)
+          (prefix "s" (directory ((,) <$> Duplex.lmap fst slugs <*> Duplex.lmap snd pageParam)))
       , alternative (\case Space s -> Just s; _ -> Nothing) Space (prefix "s" (directory slugs))
       , alternative (\case SpacePages s -> Just s; _ -> Nothing) SpacePages (prefix "s" (directory (suffix slugs "pages")))
       , alternative
@@ -236,6 +249,10 @@ route =
         <$> Duplex.lmap
           (\n -> if n == 1 then Nothing else Just n)
           (Duplex.optional (as show (\t -> maybe (Left ("not a number: " <> t)) Right (readMaybe t)) (param "slide")))
+    -- A page of posts, counted from 1, always written; one that is not a
+    -- number reads as the first.
+    pageParam :: RouteDuplex' Int
+    pageParam = as show (\t -> Right (fromMaybe 1 (readMaybe t))) (param "page")
     -- A parameter that is not a path is read as the empty path, which names
     -- no space, rather than refused: an optional parameter that is refused
     -- reads as left out, which would search every space instead.
