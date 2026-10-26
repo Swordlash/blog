@@ -56,6 +56,7 @@ module Wiki.Server.Events
   , newHub
   , publish
   , closeAll
+  , openConnections
   , eventsApplication
   )
 where
@@ -103,6 +104,11 @@ enqueue :: Connection -> Outgoing -> STM ()
 enqueue c message = do
   full <- isFullTBQueue c.outbox
   if full then writeTVar c.behind True else writeTBQueue c.outbox message
+
+-- | How many connections are open: what the server's status and metrics
+-- say of the live channel.
+openConnections :: Hub -> IO Int
+openConnections hub = Map.size <$> readTVarIO hub.connections
 
 -- | What a connection's sending thread has to do.
 data Outgoing

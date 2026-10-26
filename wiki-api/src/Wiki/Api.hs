@@ -73,6 +73,7 @@ import Protolude
 import Servant.API
 import Servant.Multipart.API (Mem, MultipartForm)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
+import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.Comments (CommentsApi (..))
@@ -297,7 +298,12 @@ data ArchiveApi mode = ArchiveApi
 -- anything they named is looked for.
 data AdminApi mode = AdminApi
   { status :: mode :- "status" :> Get '[JSON] ServerStatus
-  -- ^ The server's version, data directory and counts.
+  -- ^ The server's version, data directory and counts, its schema's
+  -- version, the newest backup, and the last errors it logged.
+  , activity :: mode :- "activity" :> QueryParam "actor" UserId :> QueryParam "offset" Int :> Get '[JSON] Activity
+  -- ^ @activity@: a page of the audit log ("Wiki.Api.Activity"), the
+  -- newest first, from @offset@ on (0 if missing), of one actor's entries
+  -- or everyone's.
   , directory :: mode :- "directory" :> Get '[JSON] Directory
   -- ^ @directory@: the users, who of them is an administrator, the groups
   -- and their members.

@@ -58,7 +58,8 @@ import Halogen.IO.Util (readEmbedded)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken)
-import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
+import Wiki.Api.Activity (Activity)
+import Wiki.Api.Admin (Directory, Invitations, ServerStatus, WikiSettings)
 import Wiki.Api.Backups (Backups)
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
@@ -116,6 +117,13 @@ data Preload = Preload
   , backups :: Maybe BackupsOf
   -- ^ The backups ('Wiki.App.Backend.Admin.backups'), as the directory;
   -- a payload written before there were any reads as without them.
+  , activity :: Maybe ActivityOf
+  -- ^ The first page of the audit log ('Wiki.App.Backend.Admin.activity'),
+  -- as the directory; a payload written before there was one reads as
+  -- without it.
+  , status :: Maybe StatusOf
+  -- ^ The server's status ('Wiki.App.Backend.Admin.serverStatus'), as the
+  -- directory.
   , threads :: Maybe [ThreadsOf]
   -- ^ A page's comments ('Wiki.App.Backend.Comments.listThreads'), for the
   -- page they are on; a payload written before there were any reads as
@@ -179,6 +187,14 @@ newtype ServerOf = ServerOf {server :: Answer ServerSettings}
 
 -- | The backups ('Wiki.App.Backend.Admin.backups').
 newtype BackupsOf = BackupsOf {backups :: Answer Backups}
+  deriving stock (Eq, Show)
+
+-- | The first page of the audit log ('Wiki.App.Backend.Admin.activity').
+newtype ActivityOf = ActivityOf {activity :: Answer Activity}
+  deriving stock (Eq, Show)
+
+-- | The server's status ('Wiki.App.Backend.Admin.serverStatus').
+newtype StatusOf = StatusOf {status :: Answer ServerStatus}
   deriving stock (Eq, Show)
 
 -- | An invitation by its link's secret ('Wiki.App.Account.invitationFor').
@@ -271,6 +287,18 @@ instance ToJSON BackupsOf where
 instance FromJSON BackupsOf where
   parseJSON v = BackupsOf <$> parseAnswer "backups" v
 
+instance ToJSON ActivityOf where
+  toJSON a = object (answerFields "activity" a.activity)
+
+instance FromJSON ActivityOf where
+  parseJSON v = ActivityOf <$> parseAnswer "activity" v
+
+instance ToJSON StatusOf where
+  toJSON a = object (answerFields "status" a.status)
+
+instance FromJSON StatusOf where
+  parseJSON v = StatusOf <$> parseAnswer "status" v
+
 instance ToJSON InvitationAt where
   toJSON i = object (("token" .= i.token) : answerFields "invitation" i.invitation)
 
@@ -312,6 +340,8 @@ toPreload c =
         found -> Just found
     , server = ServerOf . toAnswer <$> mfilter kept c.server
     , backups = BackupsOf . toAnswer <$> mfilter kept c.backups
+    , activity = ActivityOf . toAnswer <$> mfilter kept c.activity
+    , status = StatusOf . toAnswer <$> mfilter kept c.status
     , threads = case [ThreadsOf {page, threads = toAnswer ts} | (page, ts) <- Map.toList c.threads, kept ts] of
         [] -> Nothing
         found -> Just found
@@ -337,6 +367,8 @@ fromPreload p =
     , invitationAt = Map.fromList [(i.token, fromAnswer i.invitation) | i <- fold p.invitationsAt]
     , server = (\s -> fromAnswer s.server) <$> p.server
     , backups = (\b -> fromAnswer b.backups) <$> p.backups
+    , activity = (\a -> fromAnswer a.activity) <$> p.activity
+    , status = (\a -> fromAnswer a.status) <$> p.status
     , threads = Map.fromList [(t.page, fromAnswer t.threads) | t <- fold p.threads]
     }
 

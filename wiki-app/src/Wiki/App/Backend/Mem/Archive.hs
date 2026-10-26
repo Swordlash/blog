@@ -34,12 +34,16 @@ toArchive createdAt app st =
     , spaces = Map.elems st.spaces
     , pages = Map.elems st.pages
     , blobs = st.blobs
+    , -- The demo keeps no audit log (WP4.10 of docs/PLAN.md): its
+      -- administration is its one reader's, in this browser.
+      audit = []
     }
 
 -- | The wiki an archive holds, with nobody signed in. Its ids are the
 -- archive's, and the counter new ids are made from starts after the
 -- largest of them ('nextCounter'). An archive has no history: each page's
--- starts with the page as it is in it ('completeVersions').
+-- starts with the page as it is in it ('completeVersions'), and the
+-- archive's audit log is left out, as the demo keeps none.
 fromArchive :: Archive -> MemState
 fromArchive a =
   completeVersions (prepareSearch st {counter = nextCounter st})

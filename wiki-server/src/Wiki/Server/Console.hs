@@ -68,7 +68,8 @@ import Wiki.Core.User (User (..))
 import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdministrator, setDisabled, setPassword)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Secret (revealed)
-import Wiki.Server.Storage (Storage, Who (..), readServerSettings, runSqliteWiki, withStorageAside)
+import Wiki.Server.Storage (Storage, Who (..), readServerSettings, runSqliteWikiFrom, withStorageAside)
+import Wiki.Server.Storage.Audit (consoleAddress)
 import Wiki.Server.Storage.Backup (Restore (..))
 
 -- | A command, on a data directory.
@@ -154,7 +155,7 @@ runUsers askPassword u = withStorageAside u.dataDir $ \st -> runExceptT $ case u
   RemoveSecondFactor login -> do
     a <- found st login
     -- The user is there: what is not found is their second factor.
-    _ <- withExceptT (const (describe a.user <> " has no second factor.")) (ExceptT (runSqliteWiki st Administrator (removeSecondFactor a.user.id)))
+    _ <- withExceptT (const (describe a.user <> " has no second factor.")) (ExceptT (runSqliteWikiFrom st Administrator consoleAddress (removeSecondFactor a.user.id)))
     pure [describe a.user <> " signs in with their password alone now."]
   where
     wiki :: IO (Either WikiError a) -> ExceptT Text IO a

@@ -39,8 +39,9 @@ import Wiki.Server.Events (closeAll, newHub)
 import Wiki.Server.Events qualified as Events
 import Wiki.Server.Export (newExports)
 import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
-import Wiki.Server.Log (Level (..), Logger, logWith, stdoutLogger)
+import Wiki.Server.Log (Level (..), Logger, keepingErrors, logWith, newErrorRing, stdoutLogger)
 import Wiki.Server.Mail (SendMail, smtpSend)
+import Wiki.Server.Metrics (newMetrics)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen)
 import Wiki.Server.SecondFactor (newPendingSignIns)
@@ -90,7 +91,13 @@ withServer logger options = withServerUsing logger options smtpSend
 -- | 'withServer' with mail sent this way, whatever mail server the
 -- administration has set: what the tests run, with an outbox of their own.
 withServerUsing :: Logger -> ServeOptions -> SendMail -> (Server -> IO a) -> IO a
-withServerUsing logger raw sendMail action = do
+withServerUsing given raw sendMail action = do
+  -- Every error logged is kept, the last twenty, for the administration's
+  -- status (WP4.10 of docs/PLAN.md); every request counted, for the
+  -- metrics.
+  errors <- newErrorRing
+  metrics <- newMetrics
+  let logger = keepingErrors errors given
   options <- either (throwIO . ServerError) pure (checkOptions raw)
   flows <- newFlows
   providerCache <- newProviderCache
@@ -126,6 +133,8 @@ withServerUsing logger raw sendMail action = do
             , resets
             , pending
             , logger
+            , errors
+            , metrics
             }
         public =
           Listener

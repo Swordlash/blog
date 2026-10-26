@@ -7,6 +7,7 @@
 -- the same code.
 module Wiki.Api.Info
   ( ServerInfo (..)
+  , Health (..)
   , apiVersion
   )
 where
@@ -27,3 +28,20 @@ data ServerInfo = ServerInfo
 -- | The API version these types describe, the @v1@ in its paths.
 apiVersion :: Int
 apiVersion = 1
+
+-- | The answer to @GET \/healthz@, at the root of either listener, for a
+-- health check (Docker's, a monitor's) to ask without signing in: whether
+-- the server answers and its database with it, the version of the
+-- database's schema, and how long ago the newest backup kept was made.
+-- Nothing in it says anything of the wiki's content or people.
+data Health = Health
+  { status :: Text
+  -- ^ @ok@, or @failing@ when the database could not be read (with a
+  -- 503).
+  , schemaVersion :: Int
+  , lastBackupAgeSeconds :: Maybe Int
+  -- ^ How long ago the newest backup in the data directory was made, in
+  -- seconds; @null@ when there is none.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)

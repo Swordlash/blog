@@ -1,0 +1,54 @@
+{
+  "actors": [
+    {
+      "id": "u1",
+      "login": "ada"
+    },
+    {
+      "id": "~administrator",
+      "login": "administrator"
+    }
+  ],
+  "available": true,
+  "entries": [
+    {
+      "action": "space.grant",
+      "actor": {
+        "id": "u1",
+        "login": "ada"
+      },
+      "address": "100.64.0.7",
+      "at": "2026-10-25T00:00:00Z",
+      "detail": {
+        "permission": "edit",
+        "to": "group writers"
+      },
+      "id": "e2",
+      "subject": {
+        "id": "s1",
+        "kind": "space",
+        "name": "Docs"
+      }
+    },
+    {
+      "action": "user.create",
+      "actor": {
+        "id": "~administrator",
+        "login": "administrator"
+      },
+      "address": "console",
+      "at": "2026-10-24T09:30:12.345678Z",
+      "detail": {
+        "login": "ada",
+        "name": "Ada"
+      },
+      "id": "e1",
+      "subject": {
+        "id": "u1",
+        "kind": "user",
+        "name": "ada"
+      }
+    }
+  ],
+  "more": true
+}

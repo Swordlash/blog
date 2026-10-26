@@ -73,13 +73,13 @@ whoIsAsking = describe "who is asking" $ do
     (operator :: SessionInfo).user `shouldBe` Just administratorUser
     map (\g -> g.permission) operator.grants.global `shouldBe` [Administer]
 
-  it "logs each request with its listener, principal, status and time, but not its query" $ withRunning $ \r -> do
+  it "logs each request with its listener, principal, route, status and time, but not its query" $ withRunning $ \r -> do
     _ <- getUrl r (onPublic r (searchUrl (searchQuery "secret words")))
     logged <- readIORef r.logged
     case filter ("path=/api/v1/search" `T.isInfixOf`) logged of
       [line] -> do
         line `shouldSatisfy` T.isInfixOf "listener=public principal=anonymous"
-        line `shouldSatisfy` T.isInfixOf "method=GET path=/api/v1/search status=200 ms="
+        line `shouldSatisfy` T.isInfixOf "method=GET path=/api/v1/search route=/api/v1/search status=200 ms="
         line `shouldNotSatisfy` T.isInfixOf "secret"
       other -> expectationFailure ("expected one line, got " <> show other)
 

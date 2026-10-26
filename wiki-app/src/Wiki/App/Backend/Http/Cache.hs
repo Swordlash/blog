@@ -63,6 +63,10 @@ module Wiki.App.Backend.Http.Cache
   , withInvitationAt
   , withServerSettings
   , withBackups
+  , withActivity
+  , withStatus
+  , forgetActivity
+  , forgetStatus
   , withThreads
   , afterComment
   , afterEvent
@@ -75,7 +79,8 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken)
-import Wiki.Api.Admin (Directory, Invitations, WikiSettings)
+import Wiki.Api.Activity (Activity)
+import Wiki.Api.Admin (Directory, Invitations, ServerStatus, WikiSettings)
 import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.Api.ServerSettings (ServerSettings)
@@ -127,6 +132,12 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.Admin.serverSettings'.
   , backups :: Maybe (Either WikiError Backups)
   -- ^ 'Wiki.App.Backend.Admin.backups'.
+  , activity :: Maybe (Either WikiError Activity)
+  -- ^ 'Wiki.App.Backend.Admin.activity', its first page only: what the
+  -- server rendered the administration with, answered once (the backend's
+  -- 'once').
+  , status :: Maybe (Either WikiError ServerStatus)
+  -- ^ 'Wiki.App.Backend.Admin.serverStatus', likewise.
   , threads :: Map PageId (Either WikiError [Thread])
   -- ^ 'Wiki.App.Backend.Comments.listThreads', by page.
   }
@@ -151,6 +162,8 @@ emptyCache =
     , invitationAt = mempty
     , server = Nothing
     , backups = Nothing
+    , activity = Nothing
+    , status = Nothing
     , threads = mempty
     }
 
@@ -227,6 +240,20 @@ withServerSettings s c = c {server = Just s}
 
 withBackups :: Either WikiError Backups -> Cache -> Cache
 withBackups b c = c {backups = Just b}
+
+withActivity :: Either WikiError Activity -> Cache -> Cache
+withActivity a c = c {activity = Just a}
+
+withStatus :: Either WikiError ServerStatus -> Cache -> Cache
+withStatus st c = c {status = Just st}
+
+-- | The cache without the log's first page, once it has been answered.
+forgetActivity :: Cache -> Cache
+forgetActivity c = c {activity = Nothing}
+
+-- | The cache without the server's status, once it has been answered.
+forgetStatus :: Cache -> Cache
+forgetStatus c = c {status = Nothing}
 
 withThreads :: PageId -> Either WikiError [Thread] -> Cache -> Cache
 withThreads pid ts c = c {threads = Map.insert pid ts c.threads}

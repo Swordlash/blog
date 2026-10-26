@@ -12,6 +12,8 @@ import Test.Server.Http qualified as Http
 import Test.Server.Hygiene qualified as Hygiene
 import Test.Server.Import qualified as Import
 import Test.Server.Mail qualified as Mail
+import Test.Server.Metrics qualified as Metrics
+import Test.Server.Observability qualified as Observability
 import Test.Server.Oidc qualified as Oidc
 import Test.Server.Options qualified as Options
 import Test.Server.Presence qualified as Presence
@@ -21,6 +23,7 @@ import Test.Server.Static qualified as Static
 import Test.Server.Totp qualified as Totp
 import Test.Storage qualified as Storage
 import Test.Storage.Accounts qualified as StorageAccounts
+import Test.Storage.Audit qualified as Audit
 import Test.Storage.Backup qualified as Backup
 import Test.Storage.Contract qualified as Contract
 import Test.Storage.Migrate qualified as Migrate
@@ -49,3 +52,6 @@ main = hspec $ do
   Export.spec
   Totp.spec
   Hygiene.spec
+  Audit.spec
+  Metrics.spec
+  Observability.spec

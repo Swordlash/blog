@@ -124,6 +124,7 @@ import Wiki.App.Recent (rememberVisit)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
+import Wiki.App.View.Activity qualified as ActivityView
 import Wiki.App.View.Admin qualified as AdminView
 import Wiki.App.View.Common
 import Wiki.App.View.Directory qualified as DirectoryView
@@ -192,6 +193,7 @@ type Slots =
     .+ ("reset" .== H.Slot (Const Void) ResetView.Output ())
     .+ ("verifyEmail" .== H.Slot (Const Void) Void ())
     .+ ("demoAccount" .== H.Slot (Const Void) Void ())
+    .+ ("activity" .== H.Slot (Const Void) Void ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -536,6 +538,7 @@ component =
               {{ HH.slot "access" () AccessView.component AccessView.Input {context = context st} FromView }}
               {{ HH.slot "server" () ServerView.component ServerView.Input {context = context st} FromView }}
               {{ HH.slot "people" () AdminView.component AdminView.Input {context = context st} FromView }}
+              {{ HH.slot_ "activity" () ActivityView.component ActivityView.Input {context = context st} }}
             </section>
           |]
       | otherwise =

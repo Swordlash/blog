@@ -30,6 +30,11 @@
 -- * The archive's users, groups and grants are not imported: the server's
 --   people are its own. A space made by an import has no grants, as one the
 --   administrator makes has none.
+-- * The archive's audit log is merged into the server's: each of its
+--   entries that the server does not have (by its id) is brought in, as it
+--   was written, so that importing an export of this server's own puts
+--   back its log and importing it twice brings nothing twice. The import
+--   itself is then recorded, as whoever applied it, with what it did.
 --
 -- The plan is pure ('matchArchive', 'toPlan') and is worked out again when
 -- the import is applied, inside the transaction that applies it, against
@@ -59,6 +64,7 @@ import Database.SQLite.Simple (Connection, Only (..), execute, execute_, query)
 import Protolude
 import Wiki.Api.Import
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Audit (Actor, Subject (..))
 import Wiki.Core.Export (Archive (..), readArchive)
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id
@@ -69,6 +75,7 @@ import Wiki.Core.Search (bodyText)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
 import Wiki.Server.Storage (Storage, storageDataDir, withDatabase)
+import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, restoreAudit)
 import Wiki.Server.Storage.Blobs (blobOf, storeBlob)
 import Wiki.Server.Storage.Layout (attachmentsDir)
 import Wiki.Server.Storage.Rows
@@ -210,17 +217,39 @@ data Progress = Progress
   -- is now.
   }
 
--- | Import an archive as chosen, in one transaction: either all of it is
--- in the storage afterwards, or (it threw) none of it.
-applyImport :: Storage -> Archive -> ImportChoices -> IO ImportSummary
-applyImport st a choices = withDatabase st $ \c -> do
+-- | Import an archive as chosen, in one transaction, as someone asking
+-- from an address (which the audit log records): either all of it is in
+-- the storage afterwards, or (it threw) none of it.
+applyImport :: Storage -> Actor -> Text -> Archive -> ImportChoices -> IO ImportSummary
+applyImport st actor address a choices = withDatabase st $ \c -> do
   execute_ c "BEGIN IMMEDIATE"
   flip onException (execute_ c "ROLLBACK") $ do
     matches <- matchIn c a
     let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty}
     done <- foldlM (importSpace c (attachmentsDir (storageDataDir st)) a choices) start matches
+    restoreAudit c a.audit
+    let s = done.summary
+    insertAudit
+      c
+      Recorded
+        { actor
+        , action = "wiki.import"
+        , subject = Subject {kind = "wiki", id = Nothing, name = a.app}
+        , detail =
+            [ ("written", show a.createdAt)
+            , ("spaces made", show s.spacesCreated)
+            , ("spaces merged", show s.spacesMerged)
+            , ("pages made", show s.pagesCreated)
+            , ("pages replaced", show s.pagesReplaced)
+            , ("pages kept", show s.pagesKept)
+            , ("pages skipped", show s.pagesSkipped)
+            , ("attachments", show s.attachments)
+            , ("log entries", show (length a.audit))
+            ]
+        , address
+        }
     execute_ c "COMMIT"
-    pure done.summary
+    pure s
 
 importSpace :: Connection -> FilePath -> Archive -> ImportChoices -> Progress -> SpaceMatch -> IO Progress
 importSpace c blobs a choices progress m

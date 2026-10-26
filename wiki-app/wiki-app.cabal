@@ -89,6 +89,7 @@ library
       Wiki.App.Shell
       Wiki.App.Editor.Browser
       Wiki.App.View.Access
+      Wiki.App.View.Activity
       Wiki.App.View.Admin
       Wiki.App.View.Backups
       Wiki.App.View.Invite
@@ -116,6 +117,7 @@ library
       Wiki.App.View.Source
       Wiki.App.View.Space
       Wiki.App.View.SpaceSettings
+      Wiki.App.View.Status
       Wiki.App.View.VerifyEmail
 
   -- The version "Export the wiki" writes into an archive's manifest.
@@ -287,6 +289,7 @@ test-suite wiki-app-browser-test
   main-is:          BrowserTest.hs
   other-modules:
       Test.Browser.Access
+      Test.Browser.Activity
       Test.Browser.Admin
       Test.Browser.Backups
       Test.Browser.Comments

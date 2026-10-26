@@ -21,6 +21,7 @@ module Test.Sample
   , importChoices
   , importSummary
   , serverStatus
+  , activity
   , directory
   , spaceAccess
   , settings
@@ -48,7 +49,8 @@ import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), SignInMethods (..))
-import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), ServerStatus (..), WikiSettings (..))
+import Wiki.Api.Activity (Activity (..))
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), LoggedError (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), OffSite (..), Retention (..), Schedule (..), Trigger (..))
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Import
@@ -58,6 +60,8 @@ import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Audit (Actor (..), AuditEntry (..))
+import Wiki.Core.Audit qualified as Audit
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
@@ -246,6 +250,39 @@ serverStatus =
     , attachments = 4
     , users = 2
     , backups = 1
+    , schemaVersion = 9
+    , lastBackup = Just time
+    , connections = 2
+    , errors = [LoggedError {at = later, route = "/api/v1/pages/:page", message = "SQLite3 returned ErrorIO"}]
+    }
+
+-- | A page of the audit log, as the administration's Activity reads it.
+activity :: Activity
+activity =
+  Activity
+    { available = True
+    , entries =
+        [ AuditEntry
+            { id = "e2"
+            , at = later
+            , actor = Actor {id = UserId "u1", login = "ada"}
+            , action = "space.grant"
+            , subject = Audit.Subject {kind = "space", id = Just "s1", name = "Docs"}
+            , detail = Map.fromList [("to", "group writers"), ("permission", "edit")]
+            , address = "100.64.0.7"
+            }
+        , AuditEntry
+            { id = "e1"
+            , at = time
+            , actor = Actor {id = UserId "~administrator", login = "administrator"}
+            , action = "user.create"
+            , subject = Audit.Subject {kind = "user", id = Just "u1", name = "ada"}
+            , detail = Map.fromList [("login", "ada"), ("name", "Ada")]
+            , address = "console"
+            }
+        ]
+    , more = True
+    , actors = [Actor {id = UserId "u1", login = "ada"}, Actor {id = UserId "~administrator", login = "administrator"}]
     }
 
 -- | The wiki's people, as the administration reads them: two users, one of

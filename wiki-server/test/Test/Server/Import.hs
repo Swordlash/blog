@@ -118,6 +118,7 @@ archive spaces pages =
     , spaces
     , pages
     , blobs = Map.fromList [(BlobId "b1", "PNG")]
+    , audit = []
     }
 
 zipped :: Archive -> LByteString

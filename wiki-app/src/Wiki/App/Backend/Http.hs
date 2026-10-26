@@ -85,6 +85,7 @@ import System.Timeout (timeout)
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), PasswordResetApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
+import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
@@ -350,6 +351,28 @@ cached look request keep =
       when (kept result) (modifyCache (keep result))
       pure result
 
+-- | A read of what changes on the server by itself (the audit log, the
+-- server's status): answered from what the page the server rendered
+-- carries, once, so that the program's first render is that page; and
+-- asked afresh every other time, so that a view opened again shows it as
+-- it is now. Only the server's own render keeps what it read, for the page
+-- to carry.
+once
+  :: (MonadIO m, FromJSON a)
+  => (Cache -> Maybe (Either WikiError a))
+  -> (Cache -> Cache)
+  -> Request
+  -> (Either WikiError a -> Cache -> Cache)
+  -> HttpWiki m (Either WikiError a)
+once look forget request keep = do
+  immediate <- HttpWiki (asks (\env -> env.immediate))
+  look <$> readCache >>= \case
+    Just a -> unless immediate (modifyCache forget) $> a
+    Nothing -> do
+      result <- answer <$> call request
+      when (immediate && kept result) (modifyCache (keep result))
+      pure result
+
 -- | A read that cannot be refused: kept when it succeeds.
 cachedAlways
   :: (MonadIO m, FromJSON a)
@@ -474,6 +497,16 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   backups = cached (\c -> mfilter (either (const True) (\b -> not b.running)) c.backups) (R.get links.admin.backups) withBackups
   setBackupSettings new = write (withJson "PUT" links.admin.setBackups new)
   backUpNow = write (R.post links.admin.backUpNow)
+
+  -- What changes by itself on the server: the first page of the log and
+  -- the status as the page the server rendered carries them, once, and
+  -- asked afresh after that.
+  activity q
+    | q == firstPage = once (\c -> c.activity) forgetActivity (R.get (activityLink q)) withActivity
+    | otherwise = answer <$> call (R.get (activityLink q))
+    where
+      activityLink a = links.admin.activity a.actor (mfilter (> 0) (Just a.offset))
+  serverStatus = fmap Just <$> once (\c -> c.status) forgetStatus (R.get links.admin.status) withStatus
 
 -- | A page's comments, over the API's @pages\/\<page>\/threads@. A
 -- page's threads are kept as any read is, so that a page the server

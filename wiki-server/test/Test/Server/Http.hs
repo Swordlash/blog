@@ -35,7 +35,8 @@ import Wiki.Server.Backups (newBackupService)
 import Wiki.Server.Events (newHub)
 import Wiki.Server.Export (newExports)
 import Wiki.Server.Limiter (defaultLimits, newLimiter)
-import Wiki.Server.Log (silentLogger)
+import Wiki.Server.Log (newErrorRing, silentLogger)
+import Wiki.Server.Metrics (newMetrics)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Render (inProcess)
 import Wiki.Server.SecondFactor (newPendingSignIns)
@@ -113,4 +114,6 @@ apiEnv storage = do
   backups <- newBackupService (silentLogger (const pass)) "rclone" storage
   resets <- newLimiter defaultLimits
   pending <- newPendingSignIns
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups, resets, pending, logger = silentLogger (const pass)}
+  errors <- newErrorRing
+  metrics <- newMetrics
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups, resets, pending, logger = silentLogger (const pass), errors, metrics}

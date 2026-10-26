@@ -23,7 +23,7 @@ import Wiki.Api.Backups (BackupRecord (..), Backups (..), Trigger (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
-import Wiki.Api.Info (ServerInfo (..))
+import Wiki.Api.Info (Health (..), ServerInfo (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
@@ -50,6 +50,8 @@ spec :: Spec
 spec = describe "golden JSON" $ do
   describe "responses" $ do
     golden "server-info" ServerInfo {name = "Wiki", apiVersion = 1}
+    golden "health" Health {status = "ok", schemaVersion = 9, lastBackupAgeSeconds = Just 3600}
+    golden "activity" Sample.activity
     golden "session" Sample.sessionInfo
     golden "space" Sample.space
     golden "page-counts" (Map.fromList [(SpaceId "s1", 5 :: Int), (SpaceId "s2", 0)])

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+Observability (WP4.10). Migration `0009-audit-log.sql`: the `audit_log`
+table, one row for each write of the administration's (grants on spaces and
+of the wiki, a space made public, groups and members, accounts, the wiki's,
+the server's and the backups' settings, invitations made, revoked and
+accepted, accounts people make themselves, deletions of spaces and pages,
+imports, and what `wiki-server users …` does, as `administrator` from
+`console`), written by the storage in the write's own transaction
+(`Wiki.Server.Storage.Audit`); its `detail` says what changed, a secret only
+as `changed` or `cleared`; `address` is the request's (`Caller.address`,
+`runSqliteWikiFrom`). `GET api/v1/admin/activity` pages through it, by
+actor. The export carries it (`audit.json`), `importArchive` restores it and
+the panel's import merges it, each entry once by id, and records itself.
+`GET /metrics` on the admin listener only, Prometheus text written by hand
+(`Wiki.Server.Metrics`): requests by listener, route pattern, method and
+status class, a latency histogram, and gauges for live channels, spaces,
+pages, attachments, users, the database's and the blobs' bytes, the backups
+kept and the newest one's age, the schema's version, errors logged. Route
+patterns are read from the API's own servant router
+(`Wiki.Server.Routes`), so no id or secret of an address is a label; the
+request log gains a `route` field. `GET /healthz` on both listeners
+(`Wiki.Server.Health`): status, schema version, the newest backup's age.
+`GET api/v1/admin/status` gains `schemaVersion`, `lastBackup`,
+`connections` and the last twenty errors logged (`Wiki.Server.Log`'s
+`ErrorRing`, kept by `keepingErrors`); a request answered with a 5xx is now
+logged as an error. `Logger` carries the level and fields to its writer.
+`Wiki.Server.Storage.Migrate` is compiled whenever the package is, so that a
+migration added is embedded without deleting the build directory.
+
 Account hygiene (WP4.11). Migration `0008-account-hygiene.sql`: `users.email`
 and `email_verified_at`; `sessions.public_id` (filled for existing sessions)
 and `address`; tables `totp`, `recovery_codes`, `reset_tokens` and

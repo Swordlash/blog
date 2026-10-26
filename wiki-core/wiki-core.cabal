@@ -54,6 +54,7 @@ library
       Wiki.Core.Access
       Wiki.Core.Anchor
       Wiki.Core.Attachment
+      Wiki.Core.Audit
       Wiki.Core.Comment
       Wiki.Core.Diff
       Wiki.Core.Draft

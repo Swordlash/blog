@@ -15,6 +15,12 @@
 -- could make an account with it, so it is written as @…@ ('redactedPath');
 -- nor, likewise, the secret of a password reset's link or of one that
 -- verifies an e-mail address.
+--
+-- The last errors logged are kept in memory too, twenty of them
+-- ('ErrorRing', 'keepingErrors'), for the administration's status to show
+-- (WP4.10 of docs/PLAN.md): what the log has, so never a secret, and lost
+-- when the server stops. A request that is answered with a 5xx is such an
+-- error, whether its handler threw or answered so.
 module Wiki.Server.Log
   ( Logger
   , stdoutLogger
@@ -23,11 +29,22 @@ module Wiki.Server.Log
   , Level (..)
   , logRequests
   , redactedPath
+
+    -- * The last errors
+  , ErrorRing
+  , newErrorRing
+  , keepingErrors
+  , recentErrors
+  , errorCount
+  , ringSize
   )
 where
 
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (lookup)
+import Data.Sequence qualified as Seq
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import GHC.Clock (getMonotonicTime)
 import Network.HTTP.Types (hContentType, status500, statusCode)
 import Network.Wai (Middleware, Request (..), Response, responseLBS, responseStatus)
@@ -35,9 +52,11 @@ import Network.Wai.Internal (Response (ResponseRaw))
 import Protolude
 import System.IO (BufferMode (..), hFlush, hSetBuffering)
 import Text.Printf (printf)
+import Wiki.Api.Admin (LoggedError (..))
 
--- | Where log lines go: each call writes one whole line.
-newtype Logger = Logger (Text -> IO ())
+-- | Where log lines go: each call writes one whole line, made of its level
+-- and fields.
+newtype Logger = Logger (Level -> [(Text, Text)] -> IO ())
 
 -- | Lines to standard output, one at a time, each flushed as it is
 -- written, so that two threads never interleave and the journal has every
@@ -46,11 +65,11 @@ stdoutLogger :: IO Logger
 stdoutLogger = do
   hSetBuffering stdout LineBuffering
   lock <- newMVar ()
-  pure (Logger (\line -> withMVar lock (\_ -> putText line >> hFlush stdout)))
+  pure (Logger (\level fields -> withMVar lock (\_ -> putText (renderLine level fields) >> hFlush stdout)))
 
 -- | A logger that writes nothing, or into what the caller gives (the tests).
 silentLogger :: (Text -> IO ()) -> Logger
-silentLogger = Logger
+silentLogger write = Logger (\level fields -> write (renderLine level fields))
 
 data Level = Info | Warning | Error
   deriving stock (Eq, Show)
@@ -63,8 +82,46 @@ levelText = \case
 
 -- | Write a line: the level, then the fields in the order given.
 logWith :: Logger -> Level -> [(Text, Text)] -> IO ()
-logWith (Logger write) level fields =
-  write (T.unwords [k <> "=" <> quote v | (k, v) <- ("level", levelText level) : fields])
+logWith (Logger write) = write
+
+renderLine :: Level -> [(Text, Text)] -> Text
+renderLine level fields = T.unwords [k <> "=" <> quote v | (k, v) <- ("level", levelText level) : fields]
+
+-- | The last errors logged, the newest first, at most 'ringSize', and how
+-- many there have been since the server started.
+data ErrorRing = ErrorRing (IORef (Seq LoggedError, Int))
+
+-- | How many errors are kept.
+ringSize :: Int
+ringSize = 20
+
+newErrorRing :: IO ErrorRing
+newErrorRing = ErrorRing <$> newIORef (mempty, 0)
+
+-- | A logger that writes what this one does, and keeps every error line in
+-- the ring too: its @error@ field as the message, and where it happened as
+-- its @route@ (a request's route pattern), its @event@ (a part of the
+-- server) or, failing both, its @path@ (already redacted).
+keepingErrors :: ErrorRing -> Logger -> Logger
+keepingErrors (ErrorRing ring) (Logger write) = Logger $ \level fields -> do
+  write level fields
+  when (level == Error) $ do
+    at <- getCurrentTime
+    let entry =
+          LoggedError
+            { at
+            , route = fromMaybe "" (lookup "route" fields <|> lookup "event" fields <|> lookup "path" fields)
+            , message = fromMaybe (renderLine level fields) (lookup "error" fields)
+            }
+    atomicModifyIORef' ring (\(kept, n) -> ((Seq.take ringSize (entry Seq.<| kept), n + 1), ()))
+
+-- | The errors kept, the newest first.
+recentErrors :: ErrorRing -> IO [LoggedError]
+recentErrors (ErrorRing ring) = toList . fst <$> readIORef ring
+
+-- | How many errors have been logged since the server started.
+errorCount :: ErrorRing -> IO Int
+errorCount (ErrorRing ring) = snd <$> readIORef ring
 
 -- | A value as logfmt writes it: as it is when it is one plain word, quoted
 -- with its quotes and backslashes escaped otherwise.
@@ -84,12 +141,14 @@ quote v
       c -> T.singleton c
 
 -- | Log every request a listener answers, as someone: what was asked, by
--- whom, what the answer's status was and how long it took. A handler that
--- throws is logged with its exception and, if nothing was sent yet,
--- answered with a 500 (servant's own answer to an exception would be the
--- same, without saying what went wrong anywhere).
-logRequests :: Logger -> Text -> Text -> Middleware
-logRequests logger listener principal app request respond = do
+-- whom, the route pattern it was for, what the answer's status was and how
+-- long it took, which is also told to the observer given (the server's
+-- metrics). A handler that throws is logged with its exception and, if
+-- nothing was sent yet, answered with a 500 (servant's own answer to an
+-- exception would be the same, without saying what went wrong anywhere).
+-- An answer with a 5xx is logged as an error.
+logRequests :: Logger -> Text -> Text -> Text -> (Int -> Double -> IO ()) -> Middleware
+logRequests logger listener principal route observe app request respond = do
   started <- getMonotonicTime
   sent <- newIORef Nothing
   let respond' response = writeIORef sent (Just (statusOf response)) >> respond response
@@ -99,10 +158,15 @@ logRequests logger listener principal app request respond = do
         , ("from", show (remoteHost request))
         , ("method", decodeUtf8 (requestMethod request))
         , ("path", redactedPath (decodeUtf8With lenientDecode (rawPathInfo request)))
+        , ("route", route)
         ]
       done status = do
         finished <- getMonotonicTime
-        logWith logger Info (context <> [("status", show status), ("ms", T.pack (printf "%.1f" ((finished - started) * 1000)))])
+        let timing = [("status", show status), ("ms", T.pack (printf "%.1f" ((finished - started) * 1000)))]
+        observe status (finished - started)
+        if status >= 500
+          then logWith logger Error (context <> timing <> [("error", "answered " <> show status)])
+          else logWith logger Info (context <> timing)
   try (app request respond') >>= \case
     Right received -> do
       readIORef sent >>= done . fromMaybe 0
@@ -115,7 +179,10 @@ logRequests logger listener principal app request respond = do
             Just _ -> throwIO e
             Nothing -> do
               received <- respond (responseLBS status500 [(hContentType, "text/plain; charset=utf-8")] "Internal server error\n")
-              done (500 :: Int)
+              finished <- getMonotonicTime
+              -- Logged as an error once already, with what was thrown.
+              observe 500 (finished - started)
+              logWith logger Info (context <> [("status", "500"), ("ms", T.pack (printf "%.1f" ((finished - started) * 1000)))])
               pure received
 
 -- | A request's path as the log writes it: with the segment after

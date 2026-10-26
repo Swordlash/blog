@@ -18,6 +18,8 @@
 --   its file, @attachments/\<attachment id>/\<name>@, which holds the bytes.
 -- * @icons/\<space id>@: the image a space is pictured with, for a space
 --   whose icon is one (its record names the file, 'iconFile').
+-- * @audit.json@: the audit log ("Wiki.Core.Audit"), oldest first, written
+--   only when it has entries; an archive without it has none.
 --
 -- Every record is a JSON object with named fields, written and read by the
 -- functions here rather than derived from the Haskell types, so that
@@ -96,6 +98,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Audit (AuditEntry (..), encodeAuditEntry, parseAuditEntry)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
@@ -118,6 +121,9 @@ data Archive = Archive
   , spaces :: [Space]
   , pages :: [Page]
   , blobs :: Map BlobId ByteString
+  , audit :: [AuditEntry]
+  -- ^ The audit log, oldest first: who did what to the wiki's
+  -- administration (WP4.10 of docs/PLAN.md).
   }
   deriving stock (Eq, Show)
 
@@ -155,6 +161,7 @@ writeArchive a =
        , Just (IconImage blob _) <- [s.icon]
        , Just bytes <- [Map.lookup blob a.blobs]
        ]
+    <> [("audit.json", encodeJson (map encodeAuditEntry a.audit)) | not (null a.audit)]
   where
     manifest =
       object
@@ -222,6 +229,13 @@ readArchive entries = do
   pages <- records current "pages.json" parsePage
   spaces <- records current "spaces.json" (parseSpace (spaceCreatedDefault createdAt pages))
   attachments <- records current "attachments.json" parseAttachment
+  -- Optional: an archive written before there was an audit log, or of a
+  -- wiki whose log is empty, has none.
+  audit <- case Map.lookup "audit.json" entries of
+    Nothing -> Right []
+    Just bytes -> do
+      value <- jsonOf "audit.json" bytes
+      records (Map.singleton "audit.json" value) "audit.json" parseAuditEntry
   blobs <- fmap Map.fromList . for [(x, file) | AttachmentRecord {attachment = x, file = Just file} <- attachments] $ \(x, file) -> do
     blob <- case x.source of
       SourceBlob b -> Right b
@@ -251,13 +265,16 @@ readArchive entries = do
           , spaces
           , pages = [p {attachments = attachedTo p.id} | p <- pages]
           , blobs = blobs <> Map.fromList icons
+          , audit
           }
   checkArchive archive attachments
   pure archive
   where
     jsonFile path = do
       bytes <- note ("It has no " <> path <> ".") (Map.lookup path entries)
-      inFile path (first toS (eitherDecodeStrict' bytes))
+      jsonOf path bytes
+
+    jsonOf path bytes = inFile path (first toS (eitherDecodeStrict' bytes))
 
     migrate :: Int -> Files -> Either Text Files
     migrate version files
@@ -296,6 +313,7 @@ checkArchive a attachments = do
   unique "pages.json" "page" (map (\p -> p.id.text) a.pages)
   unique "attachments.json" "attachment" [r.attachment.id.text | r <- attachments]
   unique "attachments.json" "blob" [b.text | r <- attachments, SourceBlob b <- [r.attachment.source]]
+  unique "audit.json" "entry" (map (\e -> e.id) a.audit)
   for_ (Map.toList a.membership) $ \(g, members) -> for_ members $ \u ->
     unless (Set.member u userIds) $
       Left ("groups.json: the group " <> show g.text <> " has the member " <> show u.text <> ", who is not in users.json.")

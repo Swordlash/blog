@@ -33,6 +33,12 @@
 -- 'openToAnyone' is: they are answered before the closed wiki's rule, and
 -- only on the public listener, where people sign in.
 --
+-- At the root of each listener, outside the place it serves the wiki at
+-- and before a closed wiki's rule, @\/healthz@ says whether the server is
+-- well, and on the admin listener only @\/metrics@ gives its metrics
+-- ("Wiki.Server.Health"). Every request is counted for them by its route's
+-- pattern ("Wiki.Server.Routes"), as it is logged.
+--
 -- The live channel, @api\/v1\/events@, is upgraded to a WebSocket
 -- ("Wiki.Server.Events") after the closed wiki's rule, for whoever the
 -- listener found: on the admin listener the operator, on the public one
@@ -60,8 +66,11 @@ import Wiki.Server.Accounts (Resolved (..), resolveSession)
 import Wiki.Server.Api (Caller (..), Env (..), Signing (..), apiApplication)
 import Wiki.Server.Auth (authApplication)
 import Wiki.Server.Events (eventsApplication)
+import Wiki.Server.Health (healthApplication, metricsApplication)
 import Wiki.Server.Log (Logger, logRequests)
+import Wiki.Server.Metrics (observe)
 import Wiki.Server.Render (renderPage)
+import Wiki.Server.Routes (routePattern)
 import Wiki.Server.SecondFactor (requestPending)
 import Wiki.Server.Session (CookieSettings, clearCookie, requestToken, sameOrigin, sessionCookie)
 import Wiki.Server.Static (StaticSite, serveStatic)
@@ -105,7 +114,12 @@ pathSegments = filter (not . T.null) . T.splitOn "/"
 listenerApp :: Logger -> Env -> Maybe StaticSite -> Listener -> Application
 listenerApp logger env site l request respond = do
   (caller, cookie) <- findCaller env l request
-  logRequests logger l.name (principalName caller.who) (routes caller) request (respond . mapResponseHeaders (withCookie cookie))
+  let route = routePattern (pathSegments l.mount) (pathInfo request)
+      method = decodeUtf8With lenientDecode (requestMethod request)
+      -- The live channel is open for as long as its tab is: counted, not
+      -- timed.
+      observed status took = observe env.metrics l.name route method status (if route == "/api/v1/events" then Nothing else Just took)
+  logRequests logger l.name (principalName caller.who) route observed (routes caller) request (respond . mapResponseHeaders (withCookie cookie))
   where
     routes caller = listenerRoutes logger env site l caller
     -- The handler's own cookie (signing in or out) wins over the one found.
@@ -117,21 +131,23 @@ listenerApp logger env site l request respond = do
 -- if the request's needs changing.
 findCaller :: Env -> Listener -> Request -> IO (Caller, [Header])
 findCaller env l request = case l.finding of
-  EveryoneAdministers -> pure (Caller {who = Administrator, signing = Nothing}, [])
+  EveryoneAdministers -> pure (Caller {who = Administrator, address, signing = Nothing}, [])
   BySession cookies -> do
     let token = requestToken request
-        signing = Signing {address = addressOf request, token, pending = requestPending request, cookies}
+        signing = Signing {address, token, pending = requestPending request, cookies}
     case token of
-      Nothing -> pure (Caller {who = Anonymous, signing = Just signing}, [])
+      Nothing -> pure (Caller {who = Anonymous, address, signing = Just signing}, [])
       Just t -> do
         now <- getCurrentTime
         resolveSession env.storage now signing.address t >>= \case
-          Nothing -> pure (Caller {who = Anonymous, signing = Just signing {token = Nothing}}, [(hSetCookie, encodeUtf8 (clearCookie cookies))])
+          Nothing -> pure (Caller {who = Anonymous, address, signing = Just signing {token = Nothing}}, [(hSetCookie, encodeUtf8 (clearCookie cookies))])
           Just found ->
             pure
-              ( Caller {who = AsUser found.user, signing = Just signing}
+              ( Caller {who = AsUser found.user, address, signing = Just signing}
               , [(hSetCookie, encodeUtf8 (sessionCookie cookies t)) | found.refreshed]
               )
+  where
+    address = addressOf request
 
 -- | The address a request came from, without its port: what failed
 -- attempts to sign in are counted for.
@@ -164,6 +180,9 @@ listenerRoutes logger env site l caller request respond = do
       unauthenticated =
         respond (responseLBS status401 [(hContentType, "application/json"), (hCacheControl, "private, no-cache"), (hVary, "Cookie")] "{\"error\":\"Unauthenticated\"}")
   if
+    -- What a listener says of the server to a machine, at its root.
+    | segments == ["healthz"] -> healthApplication env request respond
+    | segments == ["metrics"], EveryoneAdministers <- l.finding -> metricsApplication env request respond
     | mounted `isPrefixOf` segments ->
         case drop (length mounted) segments of
           -- The place itself without its slash.

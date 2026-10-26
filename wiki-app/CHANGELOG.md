@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Observability (WP4.10). The administration gains "Activity"
+(`Wiki.App.View.Activity`): the audit log, newest first, fifty at a time,
+filtered by person; and the Server section a "Status" part
+(`Wiki.App.View.Status`): the program, its schema, the newest backup, live
+channels, the wiki's counts and the last errors the server logged, with
+"Refresh". `MonadAdmin` gains `activity` and `serverStatus`; the demo keeps no
+log and has no server, and both parts say so. Over HTTP both are read from
+what the server's page carries once (`once`, the cache's `activity` and
+`status`, preloaded) and afresh after that, since they change on the server
+by themselves.
+
 Account hygiene (WP4.11). The account panel under a signed-in user's name
 gains `Wiki.App.View.Security`: their sessions with "Sign out" and "Sign out
 everywhere", a second factor set up from a QR code drawn as an `<svg>` of

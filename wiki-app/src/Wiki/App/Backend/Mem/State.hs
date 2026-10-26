@@ -100,6 +100,8 @@ module Wiki.App.Backend.Mem.State
     -- * Backups
   , backupsIn
   , refuseBackupsIn
+  , activityIn
+  , serverStatusIn
 
     -- * Comments
   , listThreadsIn
@@ -122,7 +124,17 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Api.Account (Account (Account), NewAccount)
 import Wiki.Api.Account qualified as Acc
-import Wiki.Api.Admin (Directory (Directory), Invitation (Invitation), Invitations (Invitations), Invited (Invited), WikiSettings (WikiSettings), checkEmail, invitationLifetime)
+import Wiki.Api.Activity (Activity (..))
+import Wiki.Api.Admin
+  ( Directory (Directory)
+  , Invitation (Invitation)
+  , Invitations (Invitations)
+  , Invited (Invited)
+  , ServerStatus
+  , WikiSettings (WikiSettings)
+  , checkEmail
+  , invitationLifetime
+  )
 import Wiki.Api.Admin qualified as A
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck (ProviderCheck), ServerSettings, ServerSettingsChange, ServerSettingsOf, applyChange, checkServerSettings, named, noServerSettings, providerProblems, providerWith, redirectUri, secretState)
@@ -1330,6 +1342,18 @@ backupsIn :: MemState -> Either WikiError Backups
 backupsIn st = do
   requireAdministrator st
   pure Backups {available = False, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
+
+-- | The audit log, which the demo does not keep (WP4.10 of
+-- docs/PLAN.md): its administration is its one reader's, in this browser,
+-- and the section says so.
+activityIn :: MemState -> Either WikiError Activity
+activityIn st = do
+  requireAdministrator st
+  pure Activity {available = False, entries = [], more = False, actors = []}
+
+-- | The server's status: the demo has no server.
+serverStatusIn :: MemState -> Either WikiError (Maybe ServerStatus)
+serverStatusIn st = requireAdministrator st $> Nothing
 
 -- | What the demo says to setting backups up, or to making one.
 refuseBackupsIn :: MemState -> Either WikiError Backups

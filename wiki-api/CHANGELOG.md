@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Observability (WP4.10). `Wiki.Api.Activity` (`Activity`, `ActivityQuery`,
+`firstPage`, `activityPageSize`) and `AdminApi.activity` (`GET
+admin/activity?actor=&offset=`); `ServerStatus` gains `schemaVersion`,
+`lastBackup`, `connections` and `errors` (`LoggedError`); `Wiki.Api.Info.Health`
+for `/healthz`.
+
 Account hygiene (WP4.11). `Wiki.Api.Security`: `SessionRef`,
 `SessionSummary`, `SecondFactorState`, `TotpEnrolment`, `OneTimeCode`,
 `RecoveryCodes`, `EmailState`, `EmailChange`, `AccountEmail`, `MailToken`,

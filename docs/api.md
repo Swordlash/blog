@@ -641,7 +641,8 @@ shows to anyone, as an invitation's.
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
 | ------ | ---- | ---- | -------- | ------ | ------------ |
-| GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "spaces", "pages", "attachments", "users", "backups"}` | 403 | |
+| GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "spaces", "pages", "attachments", "users", "backups", "schemaVersion", "lastBackup", "connections", "errors"}`: the schema's version (its last migration), when the newest backup kept in the data directory was made (`null` for none), how many live channels are open, and the last errors the server logged since it started, the newest first, twenty at most, each `LoggedError` `{"at", "route", "message"}` (`route` a route pattern such as `/api/v1/pages/:page`, or the part of the server, such as `backup-scheduler`; never an address with its ids or secrets) | 403 | `serverStatus` |
+| GET | `api/v1/admin/activity?actor=<user>&offset=<n>` | | `Activity` `{"available", "entries", "more", "actors"}`: the audit log, the newest first, at most 50 entries from `offset` on (0 if missing), of one actor's (`actor` a user's id, or `~administrator` for the operator) or everyone's; each `AuditEntry` `{"id", "at", "actor": {"id", "login"}, "action", "subject": {"kind", "id", "name"}, "detail", "address"}`; `more` whether older entries follow; `actors` everyone the log has an entry of, by login | 403 | `activity` |
 | GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "identities", "secondFactor", "emails", "mailing", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, the providers each user signs in with by their id (a user with none may be left out), the ids of those with a second factor, each user's e-mail address `{"email", "verified"}` by their id (a user with none left out), whether the server sends mail, every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
 | PUT | `api/v1/admin/users/<user>/administrator` | `AdministratorFlag` `{"administrator"}` | 204 | 403, 404 | `setAdministrator` |
 | PUT | `api/v1/admin/users/<user>/create-spaces` | `CreateSpacesFlag` `{"createSpaces"}` | 204 | 403, 404 | `setCreateSpaces` |
@@ -654,6 +655,26 @@ shows to anyone, as an invitation's.
 | DELETE | `api/v1/admin/users/<user>/second-factor` | | 204: the user signs in with their password alone | 403, 404 (none) | `removeSecondFactor` |
 | PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 | `setPassword` |
 | PUT | `api/v1/admin/users/<user>/disabled` | `AccountDisabled` `{"disabled"}` | `Account`; disabling ends the user's sessions | 403, 404 | `setDisabled` |
+
+Every write of the administration's is recorded in the audit log in the
+same transaction as the write (WP4.10 of the plan): grants on spaces and of
+the wiki, a space made public or private, groups and their members,
+accounts (made, a password set, disabled or enabled, a second factor or a
+provider's account taken away), the wiki's, the server's and the backups'
+settings, invitations made, revoked and accepted, an account made by its
+owner, deletions of spaces and pages, imports; and what the console does
+(`wiki-server users …`, recorded as `administrator` from `console`). An
+entry's `action` is one of `space.grant`, `space.revoke`, `space.public`,
+`space.delete`, `page.delete`, `user.create`, `user.register`,
+`user.administrator`, `user.create-spaces`, `user.password`,
+`user.disable`, `user.enable`, `user.second-factor-remove`,
+`user.identity-remove`, `group.create`, `group.rename`, `group.delete`,
+`group.member-add`, `group.member-remove`, `settings.wiki`,
+`settings.server`, `settings.backups`, `invitation.create`,
+`invitation.revoke`, `invitation.accept`, `wiki.import`; its `detail` is an
+object of texts saying what changed, in which a secret (a password, a client
+secret, the rclone configuration) is only ever `changed` or `cleared`;
+`address` is where the request came from. Reads are not recorded.
 
 Only for the global `administer` permission: the operator on the admin
 listener (decision 11 of the plan), and on the public one a user granted it,
@@ -748,6 +769,35 @@ was not. The demo's backend keeps the settings for the tab's life, answers
 `wiki-server oidc check --data DIR [NAME]` does what `check` does, from the
 machine, for the providers set in that data directory, and prints each
 redirect URI.
+
+## Health and metrics
+
+Two addresses at the root of a listener, outside the place it serves the
+wiki at, and answered before a closed wiki's rule:
+
+- `GET /healthz`, on both listeners, to anyone: `Health` `{"status",
+  "schemaVersion", "lastBackupAgeSeconds"}`, 200 with `"ok"`, or 503 with
+  `"failing"` when the database cannot be read; `lastBackupAgeSeconds` is
+  how long ago the newest backup in the data directory was made, `null` when
+  there is none. Nothing of the wiki's content or people.
+- `GET /metrics`, on the admin listener only (the public one answers 404):
+  Prometheus's text format, version 0.0.4 (`text/plain; version=0.0.4`).
+  `wiki_http_requests_total{listener, route, method, status}` (a counter;
+  `status` is the class, `2xx`), `wiki_http_request_duration_seconds{listener,
+  route}` (a histogram, buckets from 5 ms to 10 s; the live channel is
+  counted but not timed), and gauges read at each scrape: `wiki_build_info
+  {version}`, `wiki_start_time_seconds`, `wiki_schema_version`,
+  `wiki_websockets_open`, `wiki_spaces`, `wiki_pages`, `wiki_attachments`,
+  `wiki_users`, `wiki_database_bytes` (with the write-ahead log),
+  `wiki_blobs`, `wiki_blob_bytes`, `wiki_backups_kept`,
+  `wiki_backup_age_seconds` (absent when there is no backup), and the counter
+  `wiki_errors_total`. A `route` is the pattern the request matched, read
+  from the API's own router (`/api/v1/spaces/:space/name`), or
+  `/api/v1/events`, `/auth/:provider/<step>`, `/static` (the build's files),
+  `/page` (a page the server renders), `/healthz`, `/metrics`, and
+  `/api/unmatched`, `/auth/unmatched`, `/unmatched` for what matches
+  nothing; never an address, so ids make no series and no secret of an
+  address is a label.
 
 ## The two listeners
 

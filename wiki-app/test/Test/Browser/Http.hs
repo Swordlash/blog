@@ -21,6 +21,7 @@ module Test.Browser.Http
   , serverStarts
   , serverStops
   , serveDemo
+  , quietServer
   , answerWith
   , answerRaw
   , asked
@@ -49,6 +50,8 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database, MonadIndexedDB)
 import Wiki.Api (AdminApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (SignInMethods (..))
+import Wiki.Api.Activity (Activity (..))
+import Wiki.Api.Admin (ServerStatus (..))
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
@@ -169,12 +172,32 @@ serveDemo = do
   for_ people (answerWith "GET" links.admin.directory 200)
   answerWith "GET" links.admin.server 200 (noServerSettings :: ServerSettings)
   answerWith "GET" links.admin.backups 200 Backups {available = True, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
+  answerWith "GET" (links.admin.activity Nothing Nothing) 200 Activity {available = True, entries = [], more = False, actors = []}
+  answerWith "GET" links.admin.status 200 quietServer
   answerWith "GET" "api/v1/spaces" 200 spaces
   answerWith "GET" links.spaces.pageCounts 200 counts
   for_ pages $ \(s, ps) -> do
     answerWith "GET" (links.spaces.atPath (spacePathOf spaces s.id)) 200 s
     answerWith "GET" (links.spaces.listPages s.id) 200 ps
     for_ ps $ \p -> answerWith "GET" ("api/v1/pages/" <> p.id.text <> "/draft") 200 (Nothing :: Maybe ())
+
+-- | A server's status with nothing to say: what 'serveDemo' answers.
+quietServer :: ServerStatus
+quietServer =
+  ServerStatus
+    { version = "wiki-server test"
+    , startedAt = demoNow
+    , dataDir = "/data"
+    , spaces = 4
+    , pages = 20
+    , attachments = 0
+    , users = 3
+    , backups = 0
+    , schemaVersion = 9
+    , lastBackup = Nothing
+    , connections = 1
+    , errors = []
+    }
 
 -- | The shell over the backend over HTTP, through the page's fetch, at a
 -- route, with a router of its own that keeps the route in the fragment.

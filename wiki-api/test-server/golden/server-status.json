@@ -1,8 +1,18 @@
 {
   "attachments": 4,
   "backups": 1,
+  "connections": 2,
   "dataDir": "/home/owner/wiki-demo/data",
+  "errors": [
+    {
+      "at": "2026-10-25T00:00:00Z",
+      "message": "SQLite3 returned ErrorIO",
+      "route": "/api/v1/pages/:page"
+    }
+  ],
+  "lastBackup": "2026-10-24T09:30:12.345678Z",
   "pages": 12,
+  "schemaVersion": 9,
   "spaces": 3,
   "startedAt": "2026-10-24T09:30:12.345678Z",
   "users": 2,

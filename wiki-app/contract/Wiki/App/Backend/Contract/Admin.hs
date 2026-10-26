@@ -18,6 +18,7 @@ import Protolude hiding (reader)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.Api.Account (Account (..), NewAccount (..))
+import Wiki.Api.Activity (Activity (..), firstPage)
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Backups (BackupSettingsOf (..), Backups (..), defaultBackupSettings)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
@@ -50,6 +51,7 @@ spec _ withFixture = around withFixture $ describe "MonadAdmin contract" $ do
   letsIn
   serverSide
   backingUp
+  observing
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -468,3 +470,15 @@ backingUp = describe "backups, setBackupSettings and backUpNow" $
       run who backups >>= (`shouldFailWith` Forbidden)
       run who (setBackupSettings defaultBackupSettings {enabled = True}) >>= (`shouldFailWith` Forbidden)
       run who backUpNow >>= (`shouldFailWith` Forbidden)
+
+-- | The audit log and the server's status (WP4.10 of docs/PLAN.md): what
+-- each backend has of them differs (the demo keeps no log and has no
+-- server), but only whoever administers the wiki reads either.
+observing :: (MonadAdmin m) => SpecWith (Fixture m)
+observing = describe "activity and serverStatus" $
+  it "are refused to whoever does not administer the wiki" $ \(Fixture run) -> do
+    for_ [editor, reader] $ \who -> do
+      run who (activity firstPage) >>= (`shouldFailWith` Forbidden)
+      run who serverStatus >>= (`shouldFailWith` Forbidden)
+    logged <- run admin (activity firstPage) >>= ok
+    length logged.entries `shouldSatisfy` (<= 50)

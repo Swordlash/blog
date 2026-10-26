@@ -267,6 +267,11 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   setBackupSettings _ = query refuseBackupsIn
   backUpNow = query refuseBackupsIn
 
+  -- Neither: the demo keeps no audit log and has no server, which the
+  -- sections say.
+  activity _ = query activityIn
+  serverStatus = query serverStatusIn
+
 -- | A page's comments, on the same store, kept as every other write is
 -- (each page's threads a record of "Wiki.App.Backend.Mem.Persist"'s). The
 -- demo has no live channel: what someone else comments is nobody else's

@@ -36,7 +36,7 @@ module Wiki.App.View.Server
 where
 
 import Data.Map.Strict qualified as Map
-import Data.Row (type (.==))
+import Data.Row (type (.+), type (.==))
 import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
@@ -49,12 +49,14 @@ import Wiki.App.Backend (MonadLoad (..), Session (exports), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Backups qualified as Backups
 import Wiki.App.View.Common
+import Wiki.App.View.Status qualified as Status
 
 newtype Input = Input {context :: Context}
 
--- | The part of the section that is a component of its own: the backups
--- ("Wiki.App.View.Backups").
-type Slots = ("backups" .== H.Slot (Const Void) Void ())
+-- | The parts of the section that are components of their own: the
+-- backups ("Wiki.App.View.Backups") and the server's status
+-- ("Wiki.App.View.Status").
+type Slots = ("backups" .== H.Slot (Const Void) Void ()) .+ ("status" .== H.Slot (Const Void) Void ())
 
 data Loaded
   = Loading
@@ -175,6 +177,7 @@ component =
             providers people may sign in with. They are set here and nowhere else, and take effect
             at once. Passwords and client secrets are typed once and never shown again.
           </p>
+          {{ HH.slot_ "status" () Status.component Status.Input {context = st.input.context} }}
           {{ body }}
           {{ HH.slot_ "backups" () Backups.component Backups.Input {context = st.input.context} }}
         </section>

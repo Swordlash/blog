@@ -71,22 +71,26 @@ library
         Wiki.Server.Events
         Wiki.Server.Export
         Wiki.Server.Export.Document
+        Wiki.Server.Health
         Wiki.Server.Import
         Wiki.Server.Limiter
         Wiki.Server.Log
         Wiki.Server.Mail
+        Wiki.Server.Metrics
         Wiki.Server.Oidc
         Wiki.Server.Options
         Wiki.Server.Password
         Wiki.Server.Presence
         Wiki.Server.Render
         Wiki.Server.Reset
+        Wiki.Server.Routes
         Wiki.Server.SecondFactor
         Wiki.Server.Secret
         Wiki.Server.Session
         Wiki.Server.Static
         Wiki.Server.Version
         Wiki.Server.Storage
+        Wiki.Server.Storage.Audit
         Wiki.Server.Storage.Backup
         Wiki.Server.Storage.Blobs
         Wiki.Server.Storage.Comments
@@ -194,6 +198,8 @@ test-suite wiki-server-test
         Test.Server.Hygiene
         Test.Server.Import
         Test.Server.Mail
+        Test.Server.Metrics
+        Test.Server.Observability
         Test.Server.Oidc
         Test.Server.Options
         Test.Server.Presence
@@ -203,6 +209,7 @@ test-suite wiki-server-test
         Test.Server.Totp
         Test.Storage
         Test.Storage.Accounts
+        Test.Storage.Audit
         Test.Storage.Backup
         Test.Storage.Contract
         Test.Storage.Fixture

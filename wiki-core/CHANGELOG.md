@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Observability (WP4.10). `Wiki.Core.Audit`: an audit log's entry (who, when,
+what, to what, what changed, from where) and its record; an `Archive` gains
+`audit`, written as `audit.json` when it has entries and read as none when
+the file is missing, so every archive written before still imports.
+
 Math between LaTeX's delimiters (WP4.7): `parseMarkdown` reads `\(…\)` as
 inline math and `\[…\]` as display math, beside `$…$` and `$$…$$`, through
 `Wiki.Core.Markdown.TexMath.texMathSpec` (pandoc's

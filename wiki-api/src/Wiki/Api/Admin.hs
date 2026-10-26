@@ -18,6 +18,7 @@
 module Wiki.Api.Admin
   ( -- * The server
     ServerStatus (..)
+  , LoggedError (..)
 
     -- * The wiki's people
   , Directory (..)
@@ -63,6 +64,28 @@ data ServerStatus = ServerStatus
   , users :: Int
   , backups :: Int
   -- ^ How many backups of the database are kept in the data directory.
+  , schemaVersion :: Int
+  -- ^ The version of the database's schema: its last migration.
+  , lastBackup :: Maybe UTCTime
+  -- ^ When the newest backup kept in the data directory was made, by the
+  -- server's schedule, by hand or by a deploy; none if there is none.
+  , connections :: Int
+  -- ^ How many live channels (WebSockets) are open.
+  , errors :: [LoggedError]
+  -- ^ The last errors the server logged since it started, the newest
+  -- first, twenty at most (WP4.10 of docs/PLAN.md): kept in memory only.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | An error the server logged: when, where (the route pattern of the
+-- request it answered, @\/api\/v1\/pages\/:page@, never the address with
+-- its ids and secrets; or the part of the server, @backup-scheduler@), and
+-- what, as the log has it, which never holds a secret.
+data LoggedError = LoggedError
+  { at :: UTCTime
+  , route :: Text
+  , message :: Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

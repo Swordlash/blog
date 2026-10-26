@@ -1,4 +1,12 @@
 {-# LANGUAGE TemplateHaskell #-}
+-- The migrations are embedded from a directory ('embedDir'), and GHC only
+-- knows the files it found there when it last compiled this module: a file
+-- added later would not make it compile again, and the program would carry
+-- the schema without it. cabal does see the new file (the package's
+-- extra-source-files has the directory) and builds the package again, so
+-- this module is compiled whenever the package is, which is cheap; the
+-- modules that use it are compiled again only if what it exports changed.
+{-# OPTIONS_GHC -fforce-recomp #-}
 
 -- | The database's schema, as numbered SQL files applied in order.
 --

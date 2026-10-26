@@ -19,6 +19,7 @@ Haddock says the same as this page.
 | `attachments.json`               | `[{"id", "page", "name", "mediaType", "size", "url"}]` for a file on the web, `[{…, "blob", "file"}]` for one whose bytes the wiki keeps |
 | `attachments/<id>/<name>`        | an attachment's bytes, as `file` names them |
 | `icons/<space id>`               | the image a space is pictured with, as its `icon`'s `file` names it |
+| `audit.json`                     | `[{"id", "at", "actor": {"id", "login"}, "action", "subject": {"kind", "id", "name"}, "detail", "address"}]`, the audit log, oldest first; only when it has entries |
 
 A subject is `{"user": id}` or `{"group": id}`. A global permission is
 `"administer"` or `"create-spaces"`, a permission on a space `"view"`,
@@ -51,6 +52,16 @@ is its readers', and its authors are the wiki's users by id, which another
 wiki's are not. The demo's import replaces the comments there were with
 none, as it replaces the pages they were on; the server's merge leaves its
 own as they are.
+
+The audit log (the server's record of every change to its administration,
+`Wiki.Core.Audit`) is in `audit.json`, oldest first, written only when there
+is one: the demo keeps none, so its archives have no such file. An entry
+names its actor and its subject by id and by name as they were, since the
+ids are another wiki's once the archive is imported. The server's import
+merges an archive's log into its own: each entry it does not have, by its
+`id`, is brought in as it was written, so an export of the server imported
+back restores its log and importing an archive twice brings nothing twice;
+the import is then recorded itself. The demo's import leaves the log out.
 
 ## Compatibility
 

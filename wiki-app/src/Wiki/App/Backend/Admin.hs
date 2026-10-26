@@ -98,6 +98,18 @@
 -- which only the server itself does: the storage under it refuses, as it
 -- refuses to ask a provider. The demo, whose wiki is in the browser, makes
 -- none: its 'backups' say they are not available, and it refuses the rest.
+--
+-- = Activity and status
+--
+-- Every write of the administration's (grants, groups, accounts, settings,
+-- invitations, deletions of spaces and pages, imports) is recorded in an
+-- audit log ("Wiki.Core.Audit", WP4.10 of docs/PLAN.md), in the same
+-- transaction as the write, which 'activity' lists a page at a time, the
+-- newest first, everyone's or one actor's. The server's status
+-- ('serverStatus': its version, its schema, its newest backup, the last
+-- errors it logged) is the server's own. The demo keeps no log and has no
+-- server: its 'activity' says it is not available, and its 'serverStatus'
+-- is 'Nothing'.
 module Wiki.App.Backend.Admin
   ( MonadAdmin (..)
   )
@@ -108,7 +120,8 @@ import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Account (Account, NewAccount)
-import Wiki.Api.Admin (Directory, Invitations, Invited, WikiSettings)
+import Wiki.Api.Activity (Activity, ActivityQuery)
+import Wiki.Api.Admin (Directory, Invitations, Invited, ServerStatus, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.App.Backend (WikiError (..))
@@ -260,6 +273,16 @@ class (Monad m) => MonadAdmin m where
   backUpNow :: m (Either WikiError Backups)
   default backUpNow :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError Backups)
   backUpNow = lift backUpNow
+
+  -- | A page of the audit log, the newest first.
+  activity :: ActivityQuery -> m (Either WikiError Activity)
+  default activity :: (MonadTrans t, m ~ t n, MonadAdmin n) => ActivityQuery -> m (Either WikiError Activity)
+  activity = lift . activity
+
+  -- | How the server is: 'Nothing' where there is no server (the demo).
+  serverStatus :: m (Either WikiError (Maybe ServerStatus))
+  default serverStatus :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError (Maybe ServerStatus))
+  serverStatus = lift serverStatus
 
 -- | A component's handlers reach the backend through its monad.
 instance (MonadAdmin m) => MonadAdmin (HalogenM st act slots output m)

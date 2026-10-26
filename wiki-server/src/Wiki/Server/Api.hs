@@ -82,6 +82,7 @@ import Servant.Server.Generic (AsServer)
 import System.Directory (doesFileExist)
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods)
+import Wiki.Api.Activity (ActivityQuery (..))
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), checkEmail)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
@@ -107,13 +108,14 @@ import Wiki.Core.User (User (..))
 import Wiki.Server.Accounts (endSession)
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Backups (BackupService, currentBackups, requestBackup, settingsChanged)
-import Wiki.Server.Events (Hub)
+import Wiki.Server.Events (Hub, openConnections)
 import Wiki.Server.Export (Exported (..), Exports, availableFormats, exportPage, exportSpace)
 import Wiki.Server.Import (applyImport, planImport, readUpload)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
-import Wiki.Server.Log (Level (..), Logger, logWith)
+import Wiki.Server.Log (ErrorRing, Level (..), Logger, logWith, recentErrors)
 import Wiki.Server.Mail (Mailer (..), SendMail, invitationMessage, mailerFrom, resetMessage, testMessage, verificationMessage)
+import Wiki.Server.Metrics (Metrics)
 import Wiki.Server.Oidc (Endpoints (..), Flows, Provider, ProviderCache, endpointsOf, freshProvider, optionOf, providersFor, signInProvider)
 import Wiki.Server.Reset qualified as Reset
 import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
@@ -121,7 +123,7 @@ import Wiki.Server.SecondFactor qualified as SecondFactor
 import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
-import Wiki.Server.Storage.Backup (backupFiles)
+import Wiki.Server.Storage.Backup (backupFiles, backupTime)
 import Wiki.Server.Storage.Layout (backupsDir)
 import Wiki.Server.Totp (otpauthUri, qrRows, secretText)
 
@@ -162,11 +164,19 @@ data Env = Env
   , logger :: Logger
   -- ^ Where what happens after an answer is told: a reset's mail that
   -- could not be sent.
+  , errors :: ErrorRing
+  -- ^ The last errors the logger has logged ("Wiki.Server.Log"), which
+  -- the administration's status shows.
+  , metrics :: Metrics
+  -- ^ The requests counted ("Wiki.Server.Metrics").
   }
 
 -- | Who is asking, as the listener found them for a request.
 data Caller = Caller
   { who :: Who
+  , address :: Text
+  -- ^ Where the request came from: what the audit log records of a write
+  -- of the administration's.
   , signing :: Maybe Signing
   -- ^ How they sign in and out, on a listener where people do: the public
   -- one.
@@ -188,7 +198,7 @@ data Signing = Signing
 -- | Someone who does not sign in or out: the principal of a page the
 -- server renders, whose requests are its own.
 callerAs :: Who -> Caller
-callerAs who = Caller {who, signing = Nothing}
+callerAs who = Caller {who, address = "", signing = Nothing}
 
 -- | The API as a WAI application, answering as someone: every refusal, the
 -- routing's own included, as an 'ApiError'.
@@ -479,11 +489,13 @@ handlers env caller =
           , importApply = \apply -> do
               administrator
               archive <- either (refuse . notAnArchive) pure (readUpload (BSL.toStrict apply.archive))
-              liftIO (applyImport env.storage archive apply.choices)
+              actor <- liftIO (actorOf env.storage who)
+              liftIO (applyImport env.storage actor caller.address archive apply.choices)
           }
     , admin =
         AdminApi
-          { status = administrator >> liftIO (serverStatus env)
+          { status = administrator >> liftIO (statusOfServer env)
+          , activity = \actor offset -> wiki (activity ActivityQuery {actor, offset = fromMaybe 0 offset})
           , -- The storage checks who may: these are the administration's
             -- own operations ("Wiki.App.Backend.Admin").
             directory = wiki directory
@@ -562,7 +574,7 @@ handlers env caller =
     -- everyone is the administrator already) is refused, saying so.
     signingHere = maybe (refuse (ApiError.Invalid "Nobody signs in here: everyone who reaches this address is the administrator.")) pure caller.signing
     ask' :: SqliteWiki IO a -> Handler a
-    ask' = liftIO . runSqliteWiki env.storage who
+    ask' = liftIO . runSqliteWikiFrom env.storage who caller.address
     wiki :: SqliteWiki IO (Either WikiError a) -> Handler a
     wiki program = ask' program >>= either (throwError . wikiError) pure
     -- An export, as a file to download, made for whoever is asking with
@@ -901,12 +913,15 @@ disposition a = how <> "; filename=\"" <> encodeUtf8 ascii <> "\"; filename*=UTF
     ascii = T.map (\c -> if isAscii c && isPrint c && c `notElem` ['"', '\\'] then c else '_') a.name
 
 -- | What the operator sees of the server.
-serverStatus :: Env -> IO ServerStatus
-serverStatus env = do
+statusOfServer :: Env -> IO ServerStatus
+statusOfServer env = do
   counts <- withDatabase env.storage $ \c ->
     for ["spaces", "pages", "attachments", "users"] $ \table ->
       maybe 0 fromOnly . head <$> query_ c ("SELECT count(*) FROM " <> table)
-  kept <- length <$> backupFiles (backupsDir env.dataDir)
+  files <- backupFiles (backupsDir env.dataDir)
+  schemaVersion <- schemaVersionOf env.storage
+  connections <- openConnections env.events
+  errors <- recentErrors env.errors
   case counts of
     [spaces, pages, attachments, users] ->
       pure
@@ -918,6 +933,10 @@ serverStatus env = do
           , pages
           , attachments
           , users
-          , backups = kept
+          , backups = length files
+          , schemaVersion
+          , lastBackup = lastMay files >>= backupTime
+          , connections
+          , errors
           }
     _ -> panic "four counts were asked for"

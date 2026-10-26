@@ -77,6 +77,8 @@ module Wiki.Server.Storage
     -- * The wiki
   , SqliteWiki
   , runSqliteWiki
+  , runSqliteWikiFrom
+  , actorOf
   , attachmentFile
   , exportedPage
   , blobPath
@@ -88,6 +90,9 @@ module Wiki.Server.Storage
     -- * Whole wikis
   , importArchive
   , exportArchive
+
+    -- * The audit log
+  , schemaVersionOf
   )
 where
 
@@ -103,17 +108,19 @@ import Data.UUID.Types qualified as UUID
 import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, open, query, query_, withConnection)
 import Protolude
 import System.Directory (createDirectoryIfMissing)
-import Wiki.Api.Account (Account, NewAccount (..))
+import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
-import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, Backups (..), applyBackupChange, checkBackupSettings)
+import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
-import Wiki.Api.ServerSettings (ServerSettingsChange, ServerSettingsOf (..), applyChange, checkServerSettings, secretState)
+import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkServerSettings, kindName, secretState, securityName)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
-import Wiki.Core.Access (Access (..))
+import Wiki.Core.Access (Access (..), accessName)
 import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Audit (Actor (..))
+import Wiki.Core.Audit qualified as Audit
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..))
@@ -146,11 +153,12 @@ import Wiki.Core.User (Group (..), Standing (..), User (..), checkLogin, checkPa
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
+import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, loadActivity, loadAuditLog, restoreAudit)
 import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupFiles, backupInto, loadBackupSettings, loadLastBackup, lockDataDir, referencedBlobs, storeBackupSettings, storeLastBackup, unlockDataDir)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
 import Wiki.Server.Storage.Comments qualified as Comments
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
-import Wiki.Server.Storage.Migrate (migrate)
+import Wiki.Server.Storage.Migrate (migrate, schemaVersion)
 import Wiki.Server.Storage.Rows
 
 --------------------------------------------------------------------------------
@@ -362,6 +370,9 @@ data Ctx = Ctx
   -- ^ The wiki's settings as the transaction began.
   , server :: Kept
   -- ^ The server's own settings as the transaction began.
+  , address :: Text
+  -- ^ Where the request came from, as the audit log records it: a
+  -- network address, @console@, or empty where it is not known.
   }
 
 -- | An operation, in a transaction: what it finds wrong ends it with a
@@ -376,14 +387,22 @@ data Mode = Reads | Writes
 -- | Run an operation as someone, in a transaction of its own: committed if
 -- it succeeds, rolled back if it fails or throws.
 transact :: Storage -> Who -> Mode -> Tx a -> IO (Either WikiError a)
-transact st who mode body = transactThen st who mode body (const pass)
+transact st who = transactFrom st who ""
+
+-- | 'transact', for a request from an address, which the audit log records.
+transactFrom :: Storage -> Who -> Text -> Mode -> Tx a -> IO (Either WikiError a)
+transactFrom st who address mode body = transactThenFrom st who address mode body (const pass)
 
 -- | 'transact', and once the transaction has committed, and before anyone
 -- else may use the connection, something done with what it gave.
 transactThen :: Storage -> Who -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
-transactThen st who mode (Tx body) committed = withMVar st.connection $ \c -> do
+transactThen st who = transactThenFrom st who ""
+
+-- | 'transactThen', for a request from an address.
+transactThenFrom :: Storage -> Who -> Text -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
+transactThenFrom st who address mode (Tx body) committed = withMVar st.connection $ \c -> do
   execute_ c (case mode of Reads -> "BEGIN"; Writes -> "BEGIN IMMEDIATE")
-  result <- (context st c who >>= runExceptT . runReaderT body) `onException` execute_ c "ROLLBACK"
+  result <- (context st c who address >>= runExceptT . runReaderT body) `onException` execute_ c "ROLLBACK"
   case result of
     Left _ -> execute_ c "ROLLBACK"
     Right a -> do
@@ -393,14 +412,14 @@ transactThen st who mode (Tx body) committed = withMVar st.connection $ \c -> do
 
 -- | What an operation starts from: the grants with whom the wiki is open
 -- to, which the rules take from them.
-context :: Storage -> Connection -> Who -> IO Ctx
-context st c who = do
+context :: Storage -> Connection -> Who -> Text -> IO Ctx
+context st c who address = do
   spaces <- loadSpaces c
   rows <- loadGrants c
   wiki <- settingsWith st c
   server <- serverSettingsWith st c
   let stored = Grants {global = rows.global, spaces = rows.spaces, access = wiki.access}
-  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator, wiki, server}
+  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator, wiki, server, address}
   case who of
     Anonymous -> pure (ctx stored Nothing Nothing Nothing Nothing)
     AsUser u ->
@@ -486,6 +505,37 @@ now = liftIO getCurrentTime
 fallbackSlug :: Text -> Slug
 fallbackSlug t = either (\e -> panic ("not a slug: " <> t <> ", " <> show e)) identity (mkSlug t)
 
+-- | Record a write of the administration's in the audit log, in this
+-- transaction, as whoever is asking, from where they ask (WP4.10 of
+-- docs/PLAN.md): what was done, to what, and what changed, never a secret.
+record :: Text -> Audit.Subject -> [(Text, Text)] -> Tx ()
+record action subject detail = do
+  ctx <- ask
+  let actor = maybe nobody (\u -> Actor {id = u.id, login = u.login}) ctx.user
+  db (\c -> insertAudit c Recorded {actor, action, subject, detail, address = ctx.address})
+  where
+    nobody = Actor {id = UserId "~anonymous", login = "anonymous"}
+
+-- | What an entry names a space, a page, a user or a group as.
+spaceSubject :: Space -> Audit.Subject
+spaceSubject sp = Audit.Subject {kind = "space", id = Just sp.id.text, name = sp.name}
+
+userSubject :: User -> Audit.Subject
+userSubject u = Audit.Subject {kind = "user", id = Just u.id.text, name = u.login}
+
+groupSubject :: GroupId -> Text -> Audit.Subject
+groupSubject g name = Audit.Subject {kind = "group", id = Just g.text, name}
+
+settingsSubject :: Text -> Audit.Subject
+settingsSubject name = Audit.Subject {kind = "settings", id = Nothing, name}
+
+-- | A space's path, as a person reads it: @docs/guides@.
+spacePathText :: [Space] -> Text
+spacePathText = T.intercalate "/" . map (\sp -> slugText sp.slug)
+
+yesNo :: Bool -> Text
+yesNo b = if b then "yes" else "no"
+
 --------------------------------------------------------------------------------
 -- The wiki
 
@@ -498,19 +548,35 @@ newtype SqliteWiki m a = SqliteWiki (ReaderT Env m a)
 data Env = Env
   { storage :: Storage
   , who :: Who
+  , address :: Text
+  -- ^ Where the request came from, for the audit log.
   }
 
 instance (MonadUUID m) => MonadUUID (SqliteWiki m) where
   generateV4 = SqliteWiki (lift generateV4)
 
--- | Run a program against the wiki in a storage, as someone.
+-- | Run a program against the wiki in a storage, as someone, from where
+-- nobody knows (what the server renders, which writes nothing).
 runSqliteWiki :: Storage -> Who -> SqliteWiki m a -> m a
-runSqliteWiki storage who (SqliteWiki program) = runReaderT program Env {storage, who}
+runSqliteWiki storage who = runSqliteWikiFrom storage who ""
+
+-- | Run a program as someone asking from an address: what the audit log
+-- records for each write of the administration's it makes.
+runSqliteWikiFrom :: Storage -> Who -> Text -> SqliteWiki m a -> m a
+runSqliteWikiFrom storage who address (SqliteWiki program) = runReaderT program Env {storage, who, address}
+
+-- | Someone as the audit log names them: a user by their login, the
+-- operator as @administrator@, nobody as @anonymous@.
+actorOf :: Storage -> Who -> IO Actor
+actorOf st who = case who of
+  Anonymous -> pure Actor {id = UserId "~anonymous", login = "anonymous"}
+  Administrator -> pure Actor {id = administratorId, login = administratorUser.login}
+  AsUser u -> maybe Actor {id = u, login = u.text} (\found -> Actor {id = found.id, login = found.login}) <$> withDatabase st (`loadUser` u)
 
 run :: (MonadIO m) => Mode -> Tx a -> SqliteWiki m (Either WikiError a)
 run mode tx = SqliteWiki $ do
   env <- ask
-  liftIO (transact env.storage env.who mode tx)
+  liftIO (transactFrom env.storage env.who env.address mode tx)
 
 -- | A read that cannot fail; the 'Left' it cannot give is the default.
 answer :: (MonadIO m) => a -> Tx a -> SqliteWiki m a
@@ -522,7 +588,7 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   getSpace = run Reads . getSpaceTx
   createSpace parent = run Writes . createSpaceTx parent
   renameSpace sid = run Writes . renameSpaceTx sid
-  setSpacePublic sid public = run Writes (adjustSpace sid (\s -> pure s {public}))
+  setSpacePublic sid = run Writes . setSpacePublicTx sid
   setSpaceMathMacros sid macros = run Writes (adjustSpace sid (\s -> pure s {mathMacros = trimLines macros}))
   setSpaceProfile sid = run Writes . setSpaceProfileTx sid
   uploadSpaceIcon sid mediaType = run Writes . uploadSpaceIconTx sid mediaType
@@ -586,7 +652,9 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
             requireAdministrator
             db (\c -> insertAccount c (UserId uid) login name (Just phc)) >>= \case
               Left taken -> failWith (Conflict ("There is a user with the login " <> taken <> " already."))
-              Right account -> pure account
+              Right account -> do
+                record "user.create" (userSubject account.user) [("login", login), ("name", name)]
+                pure account
   setPassword u password =
     run Reads (requireAdministrator >> findUser u) >>= \case
       Left e -> pure (Left e)
@@ -594,9 +662,10 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
         Left why -> pure (Left (Invalid why))
         Right p -> do
           phc <- liftIO (hashPassword p)
-          run Writes $ changeAccountTx u $ \c -> updatePasswordHash c u phc >> deleteSessionsOf c u
+          -- The password is no detail of the log's: that it changed is.
+          run Writes $ changeAccountTx "user.password" [] u $ \c -> updatePasswordHash c u phc >> deleteSessionsOf c u
   setDisabled u disabled =
-    run Writes $ changeAccountTx u $ \c -> do
+    run Writes $ changeAccountTx (if disabled then "user.disable" else "user.enable") [] u $ \c -> do
       updateDisabled c u disabled
       when disabled (deleteSessionsOf c u)
   createGroup = run Writes . createGroupTx
@@ -610,7 +679,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   -- committed, before the connection is let go.
   setWikiSettings new = SqliteWiki $ do
     env <- ask
-    liftIO (transactThen env.storage env.who Writes (setWikiSettingsTx new) (writeIORef env.storage.settings . Just))
+    liftIO (transactThenFrom env.storage env.who env.address Writes (setWikiSettingsTx new) (writeIORef env.storage.settings . Just))
 
   -- The storage mails nothing: whether the server does, it says itself
   -- ("Wiki.Server.Api").
@@ -625,7 +694,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   serverSettings = run Reads (requireAdministrator >> asks (\x -> hideSecrets x.server))
   setServerSettings change = SqliteWiki $ do
     env <- ask
-    fmap hideSecrets <$> liftIO (transactThen env.storage env.who Writes (setServerSettingsTx change) (writeIORef env.storage.serverKept . Just))
+    fmap hideSecrets <$> liftIO (transactThenFrom env.storage env.who env.address Writes (setServerSettingsTx change) (writeIORef env.storage.serverKept . Just))
 
   -- Asking a provider and sending mail take the server, which the storage
   -- is not: its API does both ("Wiki.Server.Api"), with what the storage
@@ -640,10 +709,16 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   backups = SqliteWiki (ask >>= \env -> liftIO (readBackups env.storage env.who))
   setBackupSettings change = SqliteWiki $ do
     env <- ask
-    liftIO (transact env.storage env.who Writes (setBackupSettingsTx change)) >>= \case
+    liftIO (transactFrom env.storage env.who env.address Writes (setBackupSettingsTx change)) >>= \case
       Left e -> pure (Left e)
       Right _ -> liftIO (readBackups env.storage env.who)
   backUpNow = run Reads (requireAdministrator >> failWith (Invalid "Only the server makes a backup."))
+
+  -- The audit log, as the storage keeps it; and the server's status, which
+  -- is the server's own (its errors, its connections): its API answers
+  -- that ("Wiki.Server.Api").
+  activity q = run Reads (requireAdministrator >> db (`loadActivity` q))
+  serverStatus = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API says how the server is."))
 
 -- | The backups, as someone may read them (an administrator): their
 -- settings with the configuration as whether it is set, the last made or
@@ -995,6 +1070,25 @@ setSpaceGrantTx sid subject permission granted = do
     if granted
       then insertGrants conn Grants {global = [], spaces = [grant], access = Open}
       else deleteSpaceGrant conn grant
+  (sp, _) <- findSpace sid
+  grantee <- case subject of
+    SubjectUser u -> maybe ("user " <> u.text) (\x -> "user " <> x.login) <$> db (`loadUser` u)
+    SubjectGroup g -> maybe ("group " <> g.text) (\x -> "group " <> x.name) . find (\x -> x.id == g) <$> db loadGroups
+  record (if granted then "space.grant" else "space.revoke") (spaceSubject sp) [("to", grantee), ("permission", permissionText permission)]
+
+-- | A permission on a space, as the log writes it.
+permissionText :: SpacePermission -> Text
+permissionText = \case
+  View -> "view"
+  Edit -> "edit"
+  AdministerSpace -> "administer"
+
+-- | Make a space public, or private again.
+setSpacePublicTx :: SpaceId -> Bool -> Tx Space
+setSpacePublicTx sid public = do
+  s' <- adjustSpace sid (\s -> pure s {public})
+  record "space.public" (spaceSubject s') [("public", yesNo public)]
+  pure s'
 
 renameSpaceTx :: SpaceId -> Text -> Tx Space
 renameSpaceTx sid name = adjustSpace sid $ \s -> do
@@ -1045,9 +1139,19 @@ moveSpaceTx sid destination = do
 -- schema's foreign keys cascade.
 deleteSpaceTx :: SpaceId -> Tx ()
 deleteSpaceTx sid = do
-  (_, c) <- findSpace sid
+  (s, c) <- findSpace sid
   requireAdminister c
+  ctx <- ask
+  let below = [sp | sp <- Map.elems ctx.spaces, sp.id /= sid, within sid (chainOf ctx sp.id)]
+  -- What goes with it, counted before it goes.
+  counts <- for (sid : map (\sp -> sp.id) below) $ \x -> db (\conn -> query conn "SELECT count(*) FROM pages WHERE space_id = ?" (Only x.text))
   db $ \x -> execute x "DELETE FROM spaces WHERE id = ?" (Only sid.text)
+  record
+    "space.delete"
+    (spaceSubject s)
+    ( [("path", spacePathText c), ("pages", show (sum [n | [Only n] <- counts] :: Int))]
+        <> [("subspaces", show (length below)) | not (null below)]
+    )
 
 -- | A space in another place in the tree, at a position there. Written out
 -- in full, because a record update of fields that pages have too could not
@@ -1256,8 +1360,16 @@ movePageTx pid destination parent = do
 deletePageTx :: PageId -> Tx ()
 deletePageTx pid = do
   p <- findNode pid
-  requireEdit =<< chainOfPage p
-  db $ \c -> execute c "DELETE FROM pages WHERE id = ?" (Only pid.text)
+  c <- chainOfPage p
+  requireEdit c
+  nodes <- db (`pageNodes` p.space)
+  let under = Set.size (subtreeOf nodes pid) - 1
+      path = maybe "" (T.intercalate "/" . map slugText) (pathOf (`Map.lookup` Map.fromList [(n.id, n) | n <- nodes]) pid)
+  db $ \x -> execute x "DELETE FROM pages WHERE id = ?" (Only pid.text)
+  record
+    "page.delete"
+    Audit.Subject {kind = "page", id = Just pid.text, name = p.title}
+    ([("space", spacePathText c), ("path", path)] <> [("pages under it", show under) | under > 0])
 
 --------------------------------------------------------------------------------
 -- Attachments
@@ -1418,20 +1530,24 @@ directoryTx = do
 setGlobalGrantTx :: GlobalPermission -> UserId -> Bool -> Tx ()
 setGlobalGrantTx permission u granted = do
   requireAdministrator
-  _ <- findUser u
+  user <- findUser u
   let grant = GlobalGrant {subject = SubjectUser u, permission}
   db $ \c ->
     if granted
       then insertGrants c Grants {global = [grant], spaces = [], access = Open}
       else deleteGlobalGrant c grant
+  case permission of
+    Administer -> record "user.administrator" (userSubject user) [("administrator", yesNo granted)]
+    CreateSpaces -> record "user.create-spaces" (userSubject user) [("creates spaces", yesNo granted)]
 
 -- | Change the account of a user who is there, as an administrator, and
 -- give it back as it then is.
-changeAccountTx :: UserId -> (Connection -> IO ()) -> Tx Account
-changeAccountTx u change = do
+changeAccountTx :: Text -> [(Text, Text)] -> UserId -> (Connection -> IO ()) -> Tx Account
+changeAccountTx action detail u change = do
   requireAdministrator
-  _ <- findUser u
+  user <- findUser u
   db change
+  record action (userSubject user) detail
   db (`loadAccount` u) >>= maybe (failWith NotFound) pure
 
 -- | A group's name, checked: not blank, and no other group's but for case.
@@ -1449,29 +1565,33 @@ createGroupTx name = do
   n <- groupNameTx Nothing name
   g <- (\i -> Group {id = GroupId i, name = n}) <$> newId
   db (`insertGroup` g)
+  record "group.create" (groupSubject g.id n) []
   pure g
 
 renameGroupTx :: GroupId -> Text -> Tx Group
 renameGroupTx gid name = do
   requireAdministrator
-  _ <- findGroup gid
+  old <- findGroup gid
   n <- groupNameTx (Just gid) name
   db (\c -> renameGroupRow c gid n)
+  record "group.rename" (groupSubject gid n) [("was", old.name)]
   pure Group {id = gid, name = n}
 
 deleteGroupTx :: GroupId -> Tx ()
 deleteGroupTx gid = do
   requireAdministrator
-  _ <- findGroup gid
+  g <- findGroup gid
   db (`deleteGroupRows` gid)
+  record "group.delete" (groupSubject gid g.name) []
 
 -- | Put a user in a group, or take them out; either is done once.
 setMemberTx :: Bool -> GroupId -> UserId -> Tx ()
 setMemberTx member gid u = do
   requireAdministrator
-  _ <- findGroup gid
-  _ <- findUser u
+  g <- findGroup gid
+  user <- findUser u
   db (\c -> (if member then insertMember else deleteMember) c gid u)
+  record (if member then "group.member-add" else "group.member-remove") (groupSubject gid g.name) [("user", user.login)]
 
 --------------------------------------------------------------------------------
 -- Whom the wiki lets in
@@ -1480,6 +1600,7 @@ setWikiSettingsTx :: WikiSettings -> Tx WikiSettings
 setWikiSettingsTx new = do
   requireAdministrator
   db (`storeSettings` new)
+  record "settings.wiki" (settingsSubject "whom the wiki lets in") [("access", accessName new.access), ("new accounts create spaces", yesNo new.newAccountsCreateSpaces)]
   pure new
 
 -- | The server's settings with a change written over them, checked
@@ -1490,6 +1611,7 @@ setServerSettingsTx change = do
   old <- asks (\x -> x.server)
   new <- either invalid pure (checkServerSettings isJust (applyChange Secret old change))
   db (`storeServerSettings` new)
+  record "settings.server" (settingsSubject "the server") (serverChanges old new)
   pure new
 
 -- | The backups' settings with a change written over them, checked
@@ -1500,7 +1622,48 @@ setBackupSettingsTx change = do
   old <- db loadBackupSettings
   new <- either invalid pure (checkBackupSettings (applyBackupChange Secret old change))
   db (`storeBackupSettings` new)
+  record "settings.backups" (settingsSubject "backups") (backupChanges old new)
   pure new
+
+-- | What a change of the server's settings changed, in words: a secret as
+-- changed or cleared, never what it is.
+serverChanges :: Kept -> Kept -> [(Text, Text)]
+serverChanges old new =
+  [("public address", fromMaybe "none" new.publicUrl) | old.publicUrl /= new.publicUrl]
+    <> mail
+    <> concatMap provider (ordNub (map (\p -> p.name) (old.providers <> new.providers)))
+  where
+    mail = case (old.mail, new.mail) of
+      (Just _, Nothing) -> [("mail", "removed")]
+      (before, Just m) ->
+        [("mail", m.host <> ":" <> show m.port <> " (" <> securityName m.security <> "), from " <> m.from) | fmap void before /= Just (void m)]
+          <> [("mail password", secretChange (m.password)) | fmap (\b -> b.password) before /= Just m.password]
+      (Nothing, Nothing) -> []
+    provider name = case (find ((== name) . (\p -> p.name)) old.providers, find ((== name) . (\p -> p.name)) new.providers) of
+      (Nothing, Just p) -> [("provider " <> name, "added (" <> kindName p.kind <> ")")]
+      (Just _, Nothing) -> [("provider " <> name, "removed")]
+      (Just a, Just b) ->
+        [("provider " <> name, "changed") | void a /= void b]
+          <> [("provider " <> name <> " secret", secretChange b.secret) | a.secret /= b.secret]
+      (Nothing, Nothing) -> []
+
+-- | A secret that is not what it was: changed, or cleared.
+secretChange :: Maybe Secret -> Text
+secretChange = maybe "cleared" (const "changed")
+
+-- | What a change of the backups' settings changed, in words: the rclone
+-- configuration as changed or cleared.
+backupChanges :: KeptBackups -> KeptBackups -> [(Text, Text)]
+backupChanges old new =
+  [("on", yesNo new.enabled) | old.enabled /= new.enabled]
+    <> [("schedule", scheduleText new.schedule) | old.schedule /= new.schedule]
+    <> [("keep", show new.keep.daily <> " days, " <> show new.keep.weekly <> " weeks") | old.keep /= new.keep]
+    <> [("copied to", maybe "nowhere" destinationText new.destination) | fmap void old.destination /= fmap void new.destination]
+    <> [("rclone configuration", secretChange c) | ToRclone _ c <- maybeToList new.destination, configOf old.destination /= Just c]
+  where
+    configOf = \case
+      Just (ToRclone _ c) -> Just c
+      _ -> Nothing
 
 invitationsTx :: Tx Invitations
 invitationsTx = do
@@ -1519,13 +1682,16 @@ inviteTx raw token = do
   t <- now
   let invitation = Invitation {id = i, email, createdAt = t, expiresAt = addUTCTime invitationLifetime t, expired = False}
   db (\c -> insertInvitation c invitation (tokenHash token))
+  record "invitation.create" Audit.Subject {kind = "invitation", id = Just i.text, name = email} []
   pure Invited {invitation, token = Just token, mailError = Nothing}
 
 revokeInvitationTx :: InvitationId -> Tx ()
 revokeInvitationTx i = do
   requireAdministrator
+  email <- db (\c -> query c "SELECT email FROM invitations WHERE id = ?" (Only i.text))
   gone <- db (`deleteInvitation` i)
   unless gone (failWith NotFound)
+  record "invitation.revoke" Audit.Subject {kind = "invitation", id = Just i.text, name = maybe "" fromOnly (head email)} []
 
 -- | An administrator disconnects a user's account at a provider, even
 -- their last way in (see 'MonadAdmin'), and ends the user's sessions, as
@@ -1533,19 +1699,21 @@ revokeInvitationTx i = do
 unlinkUserIdentityTx :: UserId -> Text -> Tx ()
 unlinkUserIdentityTx u provider = do
   requireAdministrator
-  _ <- findUser u
+  user <- findUser u
   gone <- db (\c -> deleteIdentity c u provider)
   unless gone (failWith NotFound)
   db (`deleteSessionsOf` u)
+  record "user.identity-remove" (userSubject user) [("provider", provider)]
 
 -- | An administrator takes a user's second factor away, for one who has
 -- lost it (WP4.11 of docs/PLAN.md).
 removeSecondFactorTx :: UserId -> Tx ()
 removeSecondFactorTx u = do
   requireAdministrator
-  _ <- findUser u
+  user <- findUser u
   had <- db (`deleteSecondFactor` u)
   unless had (failWith NotFound)
+  record "user.second-factor-remove" (userSubject user) []
 
 --------------------------------------------------------------------------------
 -- Comments
@@ -1709,6 +1877,7 @@ importArchive st a = withDatabase st $ \c -> do
                   SourceBlob b -> maybe x.source SourceBlob (Map.lookup b hashes)
                   url -> url
              in insertAttachment c p.id ordinal x {source}
+        restoreAudit c a.audit
         execute_ c "COMMIT"
         pure (Right ())
 
@@ -1719,17 +1888,18 @@ importArchive st a = withDatabase st $ \c -> do
 exportArchive :: Storage -> Text -> IO (Either Text Archive)
 exportArchive st app = do
   createdAt <- getCurrentTime
-  (users, groups, membership, grants, spaces, pages) <-
+  (users, groups, membership, grants, spaces, pages, audit) <-
     withDatabase st $ \c -> do
       execute_ c "BEGIN"
       records <-
-        (,,,,,)
+        (,,,,,,)
           <$> loadUsers c
           <*> loadGroups c
           <*> loadMembership c
           <*> loadGrants c
           <*> (Map.elems <$> loadSpaces c)
           <*> loadAllPages c
+          <*> loadAuditLog c
       execute_ c "COMMIT"
       pure records
   blobs <- for [(x, b) | p <- pages, x <- p.attachments, SourceBlob b <- [x.source]] $ \(x, b) ->
@@ -1738,4 +1908,8 @@ exportArchive st app = do
   icons <- for [(sp, b) | sp <- spaces, Just (IconImage b _) <- [sp.icon]] $ \(sp, b) ->
     maybe (Left ("The image of the icon of the space " <> show sp.id.text <> " (" <> sp.name <> ") is missing.")) (Right . (b,))
       <$> readBlob (attachmentsDir st.dataDir) b
-  pure $ (\kept -> Archive {createdAt, app, users, groups, membership, grants, spaces, pages, blobs = Map.fromList kept}) <$> sequence (blobs <> icons)
+  pure $ (\kept -> Archive {createdAt, app, users, groups, membership, grants, spaces, pages, blobs = Map.fromList kept, audit}) <$> sequence (blobs <> icons)
+
+-- | The version of the database's schema: its last migration.
+schemaVersionOf :: Storage -> IO Int
+schemaVersionOf st = withDatabase st schemaVersion

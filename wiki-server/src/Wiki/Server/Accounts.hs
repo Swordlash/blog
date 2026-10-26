@@ -12,6 +12,12 @@
 -- ("Wiki.Server.Password") that the rest of the server should not wait
 -- for.
 --
+-- What the console does ('createAccount', 'setPassword', 'setDisabled',
+-- 'setAdministrator') is recorded in the audit log as the operator's,
+-- from the console (WP4.10 of docs/PLAN.md), as the administration's own
+-- writes are by "Wiki.Server.Storage"; so is an account someone makes
+-- themself, by registering or with an invitation, as theirs.
+--
 -- = Sessions
 --
 -- Signing in makes a session: a random id, which the cookie carries
@@ -129,10 +135,12 @@ import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Security (SessionRef (..), SessionSummary (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Access (takesNewAccounts)
-import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Audit (Actor (..), Subject (..))
+import Wiki.Core.Id (InvitationId (..), UserId (..))
 import Wiki.Core.User (User (..), checkLogin)
 import Wiki.Server.Password (checkPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
 import Wiki.Server.Storage (Storage, readSettings, settingsWith, withDatabase)
+import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
 import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accountFromRow, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, pendingInvitation, refreshIdentity, selectAccounts, totpEnabled, updateDisabled, updatePasswordHash)
 
 --------------------------------------------------------------------------------
@@ -176,7 +184,12 @@ createAccount st rawLogin rawName password = runExceptT $ do
         "" -> login
         n -> n
   ExceptT . withDatabase st $ \c ->
-    immediately c (first taken <$> insertAccount c (UserId uid) login name phc)
+    immediately c $
+      insertAccount c (UserId uid) login name phc >>= \case
+        Left t -> pure (Left (taken t))
+        Right account -> do
+          fromConsole c "user.create" account.user [("login", login), ("name", name)]
+          pure (Right account)
   where
     taken login = Conflict ("There is a user with the login " <> login <> " already.")
 
@@ -186,33 +199,40 @@ setPassword st u password = case checkPassword password of
   Left why -> pure (Left (Invalid why))
   Right p -> do
     phc <- hashPassword p
-    changeAccount st u $ \c -> do
+    changeAccount st u "user.password" [] $ \c -> do
       updatePasswordHash c u phc
       deleteSessionsOf c u
 
 -- | Disable a user's login, which ends their sessions, or enable it again.
 setDisabled :: Storage -> UserId -> Bool -> IO (Either WikiError Account)
-setDisabled st u disabled = changeAccount st u $ \c -> do
+setDisabled st u disabled = changeAccount st u (if disabled then "user.disable" else "user.enable") [] $ \c -> do
   updateDisabled c u disabled
   when disabled (deleteSessionsOf c u)
 
 -- | Make a user an administrator (the global @administer@, granted to
 -- them), or take it away. What their groups are granted is not changed.
 setAdministrator :: Storage -> UserId -> Bool -> IO (Either WikiError Account)
-setAdministrator st u administrator = changeAccount st u $ \c ->
+setAdministrator st u administrator = changeAccount st u "user.administrator" [("administrator", if administrator then "yes" else "no")] $ \c ->
   if administrator
     then execute c "INSERT OR IGNORE INTO global_grants (subject_kind, subject_id, permission) VALUES ('user', ?, 'administer')" (Only u.text)
     else execute c "DELETE FROM global_grants WHERE subject_kind = 'user' AND subject_id = ? AND permission = 'administer'" (Only u.text)
 
--- | Change a user who is there, in one transaction, and give back their
--- account as it then is; 'NotFound' for a user who is not.
-changeAccount :: Storage -> UserId -> (Connection -> IO ()) -> IO (Either WikiError Account)
-changeAccount st u change = withDatabase st $ \c -> immediately c $ do
+-- | Change a user who is there, from the console, in one transaction with
+-- its row in the audit log, and give back their account as it then is;
+-- 'NotFound' for a user who is not.
+changeAccount :: Storage -> UserId -> Text -> [(Text, Text)] -> (Connection -> IO ()) -> IO (Either WikiError Account)
+changeAccount st u action detail change = withDatabase st $ \c -> immediately c $ do
   loadAccount c u >>= \case
     Nothing -> pure (Left NotFound)
-    Just _ -> do
+    Just a -> do
       change c
+      fromConsole c action a.user detail
       maybe (Left NotFound) Right <$> loadAccount c u
+
+-- | Record what the console did to a user.
+fromConsole :: Connection -> Text -> User -> [(Text, Text)] -> IO ()
+fromConsole c action u detail =
+  insertAudit c Recorded {actor = operator, action, subject = Subject {kind = "user", id = Just u.id.text, name = u.login}, detail, address = consoleAddress}
 
 -- | Run something in a transaction that holds the write lock from its
 -- start: committed if it gives a 'Right', rolled back if it gives a 'Left'
@@ -242,7 +262,7 @@ register st now address new = runExceptT $ do
     -- Closed meanwhile, while the password was hashed.
     settings <- settingsWith st c
     if takesNewAccounts settings.access
-      then makeAccount c now address settings made
+      then makeAccount c now address settings made >>= recordMade c address "user.register" []
       else pure (Left Forbidden)
 
 -- | Whom an invitation is for, if it can be used now.
@@ -269,7 +289,15 @@ acceptInvitation st now address token new = runExceptT $ do
           settings <- settingsWith st c
           made' <- makeAccount c now address settings made
           when (isRight made') (void (deleteInvitation c i))
-          pure made'
+          recordMade c address "invitation.accept" [("invitation", i.text)] made'
+
+-- | Record that someone made themself an account, as themself, from where
+-- they asked, in the transaction that made it.
+recordMade :: Connection -> Text -> Text -> [(Text, Text)] -> Either e (User, Text) -> IO (Either e (User, Text))
+recordMade c address action detail made = do
+  for_ made $ \(u, _) ->
+    insertAudit c Recorded {actor = Actor {id = u.id, login = u.login}, action, subject = Subject {kind = "user", id = Just u.id.text, name = u.login}, detail, address}
+  pure made
 
 -- | An account to make, checked, with its password hashed: its id, login,
 -- display name and the password's hash.

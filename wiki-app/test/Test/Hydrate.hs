@@ -34,6 +34,8 @@ import Protolude
 import Test.Hspec
 import Wiki.Api (AdminApi (..), InvitationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
+import Wiki.Api.Activity (firstPage)
+import Wiki.Api.Admin (LoggedError (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Links (links, searchQueryOf)
@@ -224,6 +226,7 @@ apiOver providers st = do
     invited <- invitations
     server <- serverSettings
     kept <- backups
+    logged <- activity firstPage
     spaces <- listSpaces
     counts <- pageCounts
     perSpace <- for (Map.elems st.spaces) $ \s -> do
@@ -250,6 +253,8 @@ apiOver providers st = do
               : (links.admin.invitations, answerOf invited)
               : (links.admin.server, answerOf server)
               : (links.admin.backups, answerOf kept)
+              : (links.admin.activity Nothing Nothing, answerOf logged)
+              : (links.admin.status, answerOf (Right status :: Either WikiError ServerStatus))
               : (links.invitations.details (InvitationToken "valid"), answerOf (Right InvitationInfo {email = "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
               : concat perSpace
           )
@@ -259,6 +264,23 @@ apiOver providers st = do
     ("GET", _, Just q) -> Right . answerOf . Right @WikiError <$> runMemWiki wiki (searchPages q)
     _ -> pure (Right (refusal ApiError.NotFound))
   where
+    -- A server's status, with an error it logged: the demo has no
+    -- server to say it.
+    status =
+      ServerStatus
+        { version = "wiki-server test"
+        , startedAt = demoNow
+        , dataDir = "/data"
+        , spaces = Map.size st.spaces
+        , pages = Map.size st.pages
+        , attachments = 0
+        , users = Map.size st.users
+        , backups = 1
+        , schemaVersion = 9
+        , lastBackup = Just demoNow
+        , connections = 0
+        , errors = [LoggedError {at = demoNow, route = "/api/v1/spaces", message = "the disk is full"}]
+        }
     answerOf :: (ToJSON a) => Either WikiError a -> Response
     answerOf = \case
       Right a -> Response 200 (toS (encode a))
