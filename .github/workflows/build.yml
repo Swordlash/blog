@@ -417,13 +417,28 @@ jobs:
       run: npm run build-wasm
 
     # Before the tests: browser suites and the smoke test run in headless
-    # Chromium. `--with-deps` installs its Debian packages, which needs root:
-    # a self-hosted runner has them installed once by hand (the README lists
+    # Chromium, Playwright's headless shell. On a hosted runner it is cached
+    # by the lockfile, which pins the playwright version, so on a hit the
+    # install below is a no-op and on a miss it is the CDN download alone
+    # (a second). Not `--with-deps`: the runner image already has every
+    # library the shell needs, and the apt-get that option runs fetched
+    # fonts and upgrades the tests do not use, at times from a mirror at
+    # 34 kB/s for ten minutes (haskell-halogen's #89 has the log). Should a
+    # future image drop a library, the suites fail with Playwright's message
+    # naming it, and `--with-deps` comes back for that library. A self-hosted
+    # runner has the Debian packages installed once by hand (the README lists
     # them), and the bootstrap has already installed this Chromium and checked
-    # that it starts, so there this only confirms it.
+    # that it starts, so there the install only confirms it.
+    - name: Cache Chromium
+      if: runner.environment == 'github-hosted'
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
     - name: Install Chromium
       if: runner.environment == 'github-hosted'
-      run: npx playwright install --with-deps --only-shell chromium
+      run: npx playwright install --only-shell chromium
 
     - name: Install Chromium (self-hosted)
       if: runner.environment == 'self-hosted'
