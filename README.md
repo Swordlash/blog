@@ -1100,10 +1100,10 @@ the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 
 ## CI
 
-`.github/workflows/build.yml` runs three jobs on every pull request to `main` and every
-push to it: `native` (build and test natively, and test the deploy scripts with
-`toolchain/test-deploy-local.sh`), `wasm` (build for wasm, run the test
-suites and the smoke test in headless Chromium, and keep the built
+`.github/workflows/build.yml` runs three build jobs on every pull request to `main` and
+every push to it, after a first job, `plan` (below): `native` (build and test natively,
+and test the deploy scripts with `toolchain/test-deploy-local.sh`), `wasm` (build for
+wasm, run the test suites and the smoke test in headless Chromium, and keep the built
 page as the run's `app` artifact) and `format` (`npm run format-check`).
 
 A fourth, `deploy`, publishes the demo on GitHub Pages, at
@@ -1111,8 +1111,8 @@ A fourth, `deploy`, publishes the demo on GitHub Pages, at
 passed, and on a run by hand from `main` (*Run workflow*) to redeploy. It takes the
 `app` artifact the `wasm` job built (every run builds the page for Pages' base path,
 `HALOGEN_BASE_PATH=/blog/`, and the smoke test serves it under that path); when
-`tested` skips the build on a fast-forward, it downloads the page from the pull
-request's run that `tested` found, which then must still have its artifact (kept
+`plan` skips the build on a fast-forward, it downloads the page from the pull
+request's run that `plan` found, which then must still have its artifact (kept
 three days; without it the full CI runs and builds the page again). It checks that the
 page was built for the path Pages serves it at (`configure-pages`), then uploads and
 deploys it (`upload-pages-artifact`, `deploy-pages`, environment `github-pages`). It
@@ -1122,28 +1122,45 @@ self-hosted runner. Pages must be set to deploy from GitHub Actions (Settings, P
 Source).
 
 Two things keep it from building the same tree twice. A change to Markdown files alone
-runs nothing. And on a push to `main`, a first job, `tested`
+runs nothing. And on a push to `main`, the first job, `plan`
 (`toolchain/ci-already-tested.sh`), looks for a passing pull request run of the pushed
 commit, or of a merge commit's second parent with the same tree, and when there is one
-the three jobs are skipped. Pull requests are rebased onto `main` and `main` is
+the three build jobs are skipped. Pull requests are rebased onto `main` and `main` is
 fast-forwarded to their head, so the push to `main` is normally that very commit.
 
 ### Which runner, and who may run on it
 
-The jobs run on one of two kinds of runner, chosen by trust by one expression on
-every job's `runs-on`:
+The build jobs and the deploy run on one of two kinds of runner, which the first
+job, `plan`, picks for the whole run. `plan` itself runs on GitHub's hosted runners
+for everyone (a few seconds, free on a public repository), and every other job's
+`runs-on` is its answer:
 
-- **The self-hosted runner** registered for this repository, the owner's machine,
-  for a push to `main`, a run by hand (*Run workflow*), and a pull request whose
-  head branch is in this repository. Only someone with write access pushes such a
-  branch: the owner, and the Claude sessions working for them.
-- **GitHub's hosted runners** (`ubuntu-latest`) for a pull request from a fork
-  (its head's repository is not this one), for anything a bot started (an actor
-  whose name ends in `[bot]`, such as Dependabot, whose branches are in this
-  repository), and for a run by hand with the input `runner` set to `hosted`. That
-  input (`self-hosted` by default) is how the hosted path is exercised: it has not
-  run since the runner moved to the owner's machine, and runs free once the
-  repository is public.
+- **GitHub's hosted runners** (`ubuntu-latest`) for a run that is not trusted: a
+  pull request from a fork (its head's repository is not this one), anything a
+  bot started (an actor whose name ends in `[bot]`, such as Dependabot, whose
+  branches are in this repository), and a run by hand with the input `runner` set
+  to `hosted`. The rule is one expression in the workflow, `plan`'s `TRUSTED`.
+- For a trusted run (a push to `main`, a run by hand, a pull request whose head
+  branch is in this repository, which only someone with write access pushes: the
+  owner, and the Claude sessions working for them), **the self-hosted runner**
+  registered for this repository, the owner's machine, **when it is free**, and
+  the hosted runners when it is busy. Busy means another run of the workflow, queued
+  or in progress, has a job that asked for `self-hosted` and is queued or running;
+  `toolchain/ci-pick-runner.sh` asks the Actions API with the run's own token
+  (`actions: read`). A run that lists no jobs yet counts as busy, since where it
+  will run cannot be known, and so does any doubt: an API error, or an answer the
+  script cannot read, picks the hosted runners, which are always there.
+
+GitHub has no "whichever is free" of its own (`runs-on` with several labels asks for
+a runner that carries them all), hence the extra job. `plan` writes what it picked
+and why in one line in the run's summary. Two runs that start within seconds of each
+other can both find the machine free and queue there one after the other, as every
+run did before. What the token cannot see is whether the machine is on (that needs
+`administration: read`, which a workflow's token cannot have): a run sent to it while
+it is off waits in the queue until it is back. The way out is to cancel it and run the
+workflow by hand with `runner: hosted` (*Run workflow*; the input is `self-hosted`,
+the owner's machine when it is free, by default), which is also how the hosted path is
+exercised on demand.
 
 The second layer is a repository setting, which the owner sets once: Settings,
 Actions, General, "Fork pull request workflows from outside collaborators",
@@ -1159,16 +1176,17 @@ What limits the exposure here: code from outside (a fork, a bot) is sent to the
 hosted runners, and a fork's only once the owner has approved its run; the runner runs as a
 user of its own, without `sudo` (as set up below), so a job reaches what that
 user can and no more; and the workflow uses no secret but the run's own token,
-which may only read the repository (and its Actions runs, in `tested`).
+which may only read the repository (and its Actions runs, in `plan`).
 
 What remains:
 
-- **The expression is in the workflow, and a pull request can change the
-  workflow.** A pull request's run uses the workflow file of the pull request's
-  own tree, so a fork could set `runs-on: self-hosted` in its copy. The approval
-  is what stops that: before approving a fork's run, read what it changes under
-  `.github/` (and in the build's scripts), and approve only a change you would
-  run on your own machine.
+- **The rule is in the workflow and its script, and a pull request can change
+  both.** A pull request's run uses the workflow file and the scripts of the pull
+  request's own tree, so a fork could set `runs-on: self-hosted` in its copy, or
+  make `toolchain/ci-pick-runner.sh` answer `self-hosted`. The approval is what
+  stops that: before approving a fork's run, read what it changes under
+  `.github/` and in `toolchain/` (and in the build's other scripts), and approve
+  only a change you would run on your own machine.
 - Whatever is on `main` or on a branch of this repository runs on the owner's
   machine as the runner's user, build-time code included (Template Haskell,
   `Setup.hs`, cabal's and npm's dependencies at their pinned versions): write
@@ -1189,7 +1207,8 @@ wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and puts
 there (the account's artifact storage quota refused uploads while the repository was
 private): the toolchain, the cabal
 store and the built page stay on the machine. One runner runs one job at a time, so
-the jobs queue.
+a run's jobs queue there one after another, and a run that finds another's jobs on
+the machine goes to the hosted runners (see above).
 
 To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 

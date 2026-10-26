@@ -15,11 +15,12 @@ on:
       - '**.md'
   workflow_dispatch:
     inputs:
-      # Which runner a run by hand takes: the owner's (the default), or
-      # GitHub's hosted ones, to exercise the hosted path, which only fork
-      # pull requests and bots take otherwise.
+      # Which runner a run by hand takes: the owner's (the default) when it
+      # is free, as for a push, or GitHub's hosted ones whatever the owner's
+      # machine is doing, to exercise the hosted path, or to get a run going
+      # while the machine is off.
       runner:
-        description: "Where to run: self-hosted (the owner's machine) or hosted (ubuntu-latest)"
+        description: "Where to run: self-hosted (the owner's machine, when it is free) or hosted (ubuntu-latest)"
         type: choice
         options:
           - self-hosted
@@ -41,8 +42,10 @@ concurrency:
 permissions:
   contents: read
 
-# Where the jobs run is chosen by trust, by one expression on every job's
-# `runs-on` (the same in each; GitHub has no way to name it once). The
+# Where the jobs run is decided once, by the first job, `plan`, which runs
+# on GitHub's hosted runners for every run (seconds, and free on a public
+# repository) and hands its answer to every other job's `runs-on`. It goes
+# by trust first, by one expression (`plan`'s TRUSTED). The
 # self-hosted runner registered for this repository is the owner's machine,
 # and a job there runs whatever the checked-out tree builds (Template
 # Haskell, cabal's dependencies, npm's scripts) as the runner's user. So it
@@ -56,14 +59,23 @@ permissions:
 # hand with the input `runner: hosted`. A fork's pull request is compared
 # by the head's repository rather than by its `fork` flag, so that a head
 # whose repository has been deleted (null) goes to the hosted runners too.
+# A trusted run then takes the owner's machine only if it is free:
+# toolchain/ci-pick-runner.sh asks the Actions API, with the run's own
+# token, whether another run of this workflow has a job queued or running
+# there, and sends this run to the hosted runners if one has (GitHub has
+# no "whichever is free" of its own: `runs-on` with several labels asks for
+# a runner that carries them all). Whether the machine is on, the token
+# cannot see, so a run sent to it while it is off waits until it is back
+# (or is cancelled, and run by hand with `runner: hosted`).
 # A fork's run also waits for the owner's approval first: the repository's
 # setting, Settings, Actions, General, "Fork pull request workflows from
 # outside collaborators", requires it for every outside contributor. That
-# approval is the guard that holds when this one does not: a pull request's
-# run takes this file from the pull request's own tree, so a fork could
-# change the expression, and approving a fork's run means reading what it
-# changes here first. No job uses a secret but the run's own read-only
-# token. See the README's CI section.
+# approval is the guard that holds when the trust rule does not: a pull
+# request's run takes this file and the script from the pull request's own
+# tree, so a fork could change either, and approving a fork's run means
+# reading what it changes here and in toolchain/ci-pick-runner.sh first.
+# No job uses a secret but the run's own read-only token. See the README's
+# CI section.
 #
 # The two kinds of runner get the toolchain differently, and every step that
 # differs says which it is for with `runner.environment`. A hosted runner
@@ -101,21 +113,18 @@ env:
   HAPPY_VERSION: '2.1.7'
 
 jobs:
-  # On a push to main, whether a pull request's run has already built and
-  # tested this tree and passed: pull requests are rebased and main is
-  # fast-forwarded to their head (AGENTS.md), so the push is usually the
-  # very commit the pull request's last run tested. The build jobs then
-  # skip. Not run for pull requests or by hand, where they always run.
-  tested:
-    if: github.event_name == 'push'
-    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
-    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
+  # What the run does and where, decided on a hosted runner for every run:
+  # whether the build jobs need to run at all (on a push), and which runner
+  # they and the deploy take (see the top).
+  plan:
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     outputs:
       tested: ${{ steps.check.outputs.tested }}
       run_id: ${{ steps.check.outputs.run_id }}
+      runner: ${{ steps.pick.outputs.runner }}
 
     steps:
     - name: Checkout code
@@ -123,22 +132,41 @@ jobs:
       with:
         fetch-depth: 0
 
+    # On a push to main, whether a pull request's run has already built and
+    # tested this tree and passed: pull requests are rebased and main is
+    # fast-forwarded to their head (AGENTS.md), so the push is usually the
+    # very commit the pull request's last run tested. The build jobs then
+    # skip. Not asked for pull requests or by hand, where they always run.
     # Once the demo is deployed (the repository is public, see the deploy
     # job), the run found must also have kept the page it built, which the
     # deploy job takes from it: a run from before the page was kept, or
     # whose artifact has expired, does not count, and the full CI runs.
     - name: Look for a passing pull request run of this tree
+      if: github.event_name == 'push'
       id: check
       env:
         GH_TOKEN: ${{ github.token }}
         REQUIRE_ARTIFACT: ${{ github.event.repository.private == false && 'app' || '' }}
       run: sh toolchain/ci-already-tested.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
+    # For every event, on a push too (the deploy needs a runner even when
+    # the build jobs skip). TRUSTED is the trust rule (see the top): false
+    # for a pull request from a fork, anything a bot started, and a run by
+    # hand asking for the hosted runners. The script prints its answer and
+    # why in one line, in the log and in the run's summary.
+    - name: Pick the runner
+      id: pick
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TRUSTED: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'false' || 'true' }}
+        RUNNER_INPUT: ${{ inputs.runner }}
+      run: sh toolchain/ci-pick-runner.sh >> "$GITHUB_OUTPUT"
+
   native:
-    needs: tested
-    if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
-    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
-    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
+    # The runner plan picked; see the top.
+    runs-on: ${{ needs.plan.outputs.runner }}
 
     steps:
     - name: Checkout code
@@ -230,9 +258,12 @@ jobs:
     - name: Test the deploy scripts (deploy-local, undeploy-local, the static servers)
       run: sh toolchain/test-deploy-local.sh
 
-    # The tested job's script, against a fake GitHub API: a second.
+    # The plan job's scripts, against a fake GitHub API: a second each.
     - name: Test ci-already-tested.sh
       run: sh toolchain/test-ci-already-tested.sh
+
+    - name: Test ci-pick-runner.sh
+      run: sh toolchain/test-ci-pick-runner.sh
 
     # The README's screenshots are taken by hand (npm run screenshots, which
     # needs a wasm build and Chromium), so nothing in CI runs the script:
@@ -241,15 +272,15 @@ jobs:
       run: node --check toolchain/screenshots.mjs
 
   wasm:
-    needs: tested
-    if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
-    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
-    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
+    # The runner plan picked; see the top.
+    runs-on: ${{ needs.plan.outputs.runner }}
     # The page is built, tested and kept for GitHub Pages, which serves a
     # project's site under the repository's name: every run builds it so,
     # pull requests too, since main is fast-forwarded to a pull request's
     # head and the deploy then takes the page that pull request's run built
-    # (see the tested and deploy jobs). build-wasm.sh writes it into each
+    # (see the plan and deploy jobs). build-wasm.sh writes it into each
     # page's <base href> and every link; the smoke test serves the build
     # under it. Change it here if the site moves to a domain of its own (/).
     env:
@@ -451,7 +482,7 @@ jobs:
       run: npm run smoke-test
 
     # The built page, kept with the run as the artifact `app`: the deploy job
-    # publishes it, from this run or, on a push to main the tested job
+    # publishes it, from this run or, on a push to main the plan job
     # skipped, from the pull request's run that built it. Three days is long
     # enough for a pull request to be fast-forwarded onto main, and a run
     # whose page has expired by then is not counted as tested (the full CI
@@ -468,10 +499,10 @@ jobs:
         retention-days: 3
 
   format:
-    needs: tested
-    if: ${{ !cancelled() && needs.tested.outputs.tested != 'true' }}
-    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
-    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
+    needs: plan
+    if: needs.plan.outputs.tested != 'true'
+    # The runner plan picked; see the top.
+    runs-on: ${{ needs.plan.outputs.runner }}
 
     steps:
     - name: Checkout code
@@ -518,7 +549,7 @@ jobs:
         sh run_fourmolu.sh --mode check
 
   # The demo on GitHub Pages: the page the wasm job built for the Pages base
-  # path, from this run, or on a push the tested job found already tested,
+  # path, from this run, or on a push the plan job found already tested,
   # from the pull request's run that built it (ci-already-tested.sh checked
   # that it still has it). Only from main (a push, or a run by hand there,
   # to redeploy), once every build job has passed or been skipped as
@@ -527,16 +558,16 @@ jobs:
   # is skipped, as its name says, rather than making main red.
   deploy:
     name: deploy (to GitHub Pages, once the repository is public)
-    needs: [tested, native, wasm, format]
+    needs: [plan, native, wasm, format]
     if: >-
       ${{ !cancelled() &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       github.event.repository.private == false &&
-      (needs.tested.outputs.tested == 'true' ||
+      (needs.plan.outputs.tested == 'true' ||
       (needs.native.result == 'success' && needs.wasm.result == 'success' && needs.format.result == 'success')) }}
-    # Self-hosted unless a fork, a bot or the input says otherwise; see the top.
-    runs-on: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'ubuntu-latest' || 'self-hosted' }}
+    # The runner plan picked for the build jobs; see the top.
+    runs-on: ${{ needs.plan.outputs.runner }}
     permissions:
       contents: read
       actions: read
@@ -565,7 +596,7 @@ jobs:
       with:
         name: app
         path: ${{ runner.temp }}/app
-        run-id: ${{ needs.tested.outputs.tested == 'true' && needs.tested.outputs.run_id || github.run_id }}
+        run-id: ${{ needs.plan.outputs.tested == 'true' && needs.plan.outputs.run_id || github.run_id }}
         github-token: ${{ github.token }}
 
     - name: Setup Pages
