@@ -2,7 +2,8 @@
 
 -- | A space's pages and subspaces (its route 'SpacePages', and the space's
 -- own route for a space without a home page): its icon, name and
--- description, its pages as a tree, its subspaces, the math macros its
+-- description, its pages as a tree, its templates ('Wiki.Core.Page.template')
+-- apart from the tree, its subspaces, the math macros its
 -- pages are set with, its export as one document ("Wiki.App.View.Export"),
 -- and what the current user may do to it (a new page,
 -- in the editor; a new subspace, its settings ("Wiki.App.View.SpaceSettings":

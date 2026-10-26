@@ -8,6 +8,9 @@ may edit the page (not a save: no version, `updated_at` unchanged; a
 space's home page cannot be one). A search leaves templates out unless it
 has `templates`, and `spaces/page-counts` does not count them. An import
 keeps the flag of a page it makes, and a page it replaces keeps its own.
+Feeds render headings without their anchor links, and an exported document
+leaves out a `[[toc]]` paragraph, since its writer has a table of contents
+of its own.
 
 Reading offline (WP4.17). A `.webmanifest` file is served as
 `application/manifest+json`. The service worker, `sw.js`, is one of the

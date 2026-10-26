@@ -9,7 +9,9 @@ is left), made unique in document order with `-2`, `-3`… (`freshName`),
 clear of every id written in braces, in one pass at parse time: it replaces
 commonmark-extensions' `autoIdentifiersSpec`, so the second of two headings
 with the same text is now `x-2` where it was `x-1`. A heading renders with an
-empty `<a class="heading-anchor" href="#id">` at its end. `[[toc]]` as a
+empty `<a class="heading-anchor" href="#id">` at its end, unless the new
+`Options` field `headingAnchors` is false (a caller that builds `Options`
+without `defaultOptions` has to set it). `[[toc]]` as a
 paragraph of its own parses as the new block `TableOfContents` and renders as
 a `<nav class="toc">` of the document's headings; `Wiki.Core.Markdown.Toc`
 makes that list from the parsed document (`tableOfContents`,
