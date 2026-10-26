@@ -768,16 +768,16 @@ if [ -n "$https_host" ]; then
     [ "$serve_funnel" != funnel ] ||
       warn "Funnel is on for https://$https_host/ (tailscale serve status): the wiki is public on the internet, not only on your tailnet. This script never turns it on"
     # The first certificate is fetched as the first request arrives, which
-    # takes a moment.
-    waited=0 https_ok=
+    # takes a moment; tailscaled may hold that request's handshake while it
+    # does, so the wait is counted by the clock rather than by attempts.
+    started=$(date +%s) https_ok=
     while :; do
       if https_answers "https://$https_host/$probe_path"; then
         https_ok=1
         break
       fi
-      [ "$waited" -lt "${WIKI_DEPLOY_HTTPS_WAIT:-60}" ] || break
+      [ "$(($(date +%s) - started))" -lt "${WIKI_DEPLOY_HTTPS_WAIT:-60}" ] || break
       sleep 2
-      waited=$((waited + 2))
     done
     if [ -n "$https_ok" ]; then
       say "it answers on https://$https_host/$probe_path"
