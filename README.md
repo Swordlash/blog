@@ -298,8 +298,11 @@ like the other options; `--static` goes back to the demo.
   LaTeX with nothing installed. The PDFs are typeset by `xelatex`, which the
   server looks for on its `PATH` each time: install it and they are offered at
   once, with no restart (`sudo apt install texlive-xetex`, and
-  `texlive-pictures` for TikZ pictures, `texlive-science` for `\ce`
-  chemistry). The administration's "Server" section says whether it was found.
+  `texlive-pictures` for TikZ pictures, `texlive-science` for `\ce` and
+  `\pu` chemistry, `texlive-plain-generic` for struck-out and underlined
+  text, which pandoc sets with `soul`; a missing package is named in the
+  export's error). The administration's "Server" section says whether it was
+  found.
 - **Where the data lives.** `data/` is the whole wiki: the SQLite database and the
   attachments under their content hash. No deploy ever deletes it: a redeploy
   replaces everything else in the directory, and so does going back to the demo.

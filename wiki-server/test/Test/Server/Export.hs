@@ -16,6 +16,7 @@ import Data.Text qualified as T
 import Network.HTTP.Types (methodPost)
 import Protolude
 import System.Environment (lookupEnv)
+import System.Process (readProcessWithExitCode)
 import Test.Hspec
 import Test.Server.Fixture
 import Test.Storage.Fixture (demoArchive)
@@ -310,6 +311,13 @@ overHttp = describe "over HTTP" $ do
 exported' :: (HasCallStack) => Running -> PageId -> ExportFormat -> IO ByteString
 exported' r pid format = getUrl r (r.public <> "/" <> links.pages.export pid format) >>= (`exported` format)
 
+-- | Whether the TeX engine's trees hold a file, by kpathsea's own lookup, as
+-- the engine would find it.
+texHas :: Text -> IO Bool
+texHas file = do
+  (code, out, _) <- readProcessWithExitCode "kpsewhich" [toS file] ""
+  pure (code == ExitSuccess && not (T.null (T.strip (toS out))))
+
 oneAtATimeEach :: Spec
 oneAtATimeEach = describe "one export at a time" $ do
   it "refuses a second export of someone's while their first is made, but not someone else's" $ do
@@ -358,9 +366,23 @@ pdfs = describe "PDFs, typeset by xelatex" $ do
     (_, pages) <- docsIds r
     getUrl r (r.public <> "/" <> links.pages.export (pages Map.! "Tour").id Pdf) >>= jsonAs 400 >>= (`shouldBe` Invalid "PDF needs xelatex, which this server's machine does not have.")
 
-  it "are made of a page, a deck and a space where it has" $ withDemoRunning identity $ \r -> do
+  it "are made of a page that needs nothing beyond LaTeX where it has" $ withDemoRunning identity $ \r -> do
     tex <- texEngine
     when (isNothing tex) (pendingWith "xelatex is not on this machine: the PDFs were not tested")
+    (_, pages) <- docsIds r
+    bytes <- exported' r (pages Map.! "Tour").id Pdf
+    BS.take 5 bytes `shouldBe` "%PDF-"
+
+  it "are made of a page, a deck and a space where it has, with the packages they load" $ withDemoRunning identity $ \r -> do
+    tex <- texEngine
+    when (isNothing tex) (pendingWith "xelatex is not on this machine: the PDFs were not tested")
+    -- The demo's Mathematics page writes chemistry (mhchem), its guide draws
+    -- a TikZ picture and strikes text out (pandoc sets that with soul), and
+    -- its deck is a Beamer presentation: the engine must have those
+    -- packages, which Debian's texlive-xetex alone does not bring.
+    missing <- filterM (fmap not . texHas) ["mhchem.sty", "tikz.sty", "soul.sty", "beamer.cls"]
+    unless (null missing) $
+      pendingWith ("xelatex is on this machine, but without " <> toS (T.intercalate ", " missing) <> " (Debian: texlive-science, texlive-pictures, texlive-plain-generic, texlive-latex-recommended), so the demo's PDFs were not tested")
     (docs, pages) <- docsIds r
     for_ [((pages Map.! "Mathematics").id, Pdf), ((pages Map.! "Presentations").id, BeamerPdf)] $ \(pid, format) -> do
       bytes <- exported' r pid format

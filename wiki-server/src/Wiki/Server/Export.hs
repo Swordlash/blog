@@ -380,8 +380,10 @@ writeDocument format bag toc doc = do
 
 -- | What a document's LaTeX needs in its preamble: the TikZ packages its
 -- pictures load, and mhchem where a formula writes chemistry (@\\ce@,
--- @\\pu@), which KaTeX has built in and LaTeX has not. Other formats do
--- not read it.
+-- @\\pu@), which KaTeX has built in and LaTeX has not. LaTeX's mhchem has
+-- no @\\pu@ (a quantity with its unit is KaTeX's own addition), so one is
+-- defined beside it, setting the quantity as text, which keeps the space
+-- between the number and its unit. Other formats do not read it.
 withPreamble :: P.Pandoc -> P.Pandoc
 withPreamble (P.Pandoc (P.Meta meta) bs) = case tikzPreamble bs <> chemistry of
   [] -> P.Pandoc (P.Meta meta) bs
@@ -392,9 +394,11 @@ withPreamble (P.Pandoc (P.Meta meta) bs) = case tikzPreamble bs <> chemistry of
           _ -> P.MetaList [ours]
      in P.Pandoc (P.Meta (Map.insert "header-includes" included meta)) bs
   where
-    chemistry = ["\\usepackage[version=4]{mhchem}" | not (null (query chemical bs))]
-    chemical = \case
-      P.Math _ tex | any (`T.isInfixOf` tex) ["\\ce{", "\\pu{"] -> [()]
+    chemistry =
+      ["\\usepackage[version=4]{mhchem}" | not (null (query (chemical ["\\ce{", "\\pu{"]) bs))]
+        <> ["\\providecommand{\\pu}[1]{\\text{#1}}" | not (null (query (chemical ["\\pu{"]) bs))]
+    chemical commands = \case
+      P.Math _ tex | any (`T.isInfixOf` tex) commands -> [()]
       _ -> []
 
 -- | What of TeX's log says what went wrong: its errors (the lines that
