@@ -803,6 +803,9 @@ try {
   // The server rendered that page for her session: the cookie came with it.
   const landed = await olive.evaluate(async () => (await fetch("api/v1/session")).json());
   assert.equal(landed.user?.login, "olive", "signed in as someone else");
+  // The page she lands on is the server's, there before the program: a
+  // click on her name before the program has adopted it opens nothing.
+  await eventually(async () => assert.ok(await programStarted(olive), "no listener yet"), "Olive's program starting");
   await olive.locator("#app .account-toggle").click();
   await olive.locator("#app .identity .identity-provider", { hasText: "Fake" }).waitFor({ timeout });
   assert.equal(await olive.locator("#app .identity-disconnect").getAttribute("disabled"), "", "her only way in may be disconnected");
