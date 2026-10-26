@@ -2623,6 +2623,8 @@ Amended by the planning session after each work package's report.
   answers, a page never read gets the offline page, back online gets the live page, sign-out
   leaves nothing cached); not tested: the caps and trimming. Server 774 (2 pending), app
   1000, browser 223.
+- **WP4.18 started** (2026-10-26) on `wp4.18-https-deploy` from `main` `1f1a7df`, beside
+  WP4.15's pull request; it touches only `toolchain/` and the README.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
@@ -2720,6 +2722,29 @@ migration test refuses gaps), and whichever merges second rebases.
   timeout and a temporary directory; a `pandoc` failure is an `ApiError` with its message.
   Skylighting, which comes with pandoc, may then replace highlight.js in the server render
   (the Phase 4 candidate above) in a later package. No migration.
+- **WP4.18 HTTPS by default, through `tailscale serve`** (the owner, 2026-10-26, after
+  setting it up by hand: "udało się, możesz dodać do skryptu deploy żeby robił https by
+  default"). `deploy-local.sh --server` serves over HTTPS by default on the machine's
+  MagicDNS name: the public listener binds to `127.0.0.1` (no port on the Tailscale
+  interface, no ufw rule), the unit passes `--secure-cookies`, and the script configures
+  `tailscale serve --bg http://127.0.0.1:<port>` (tailnet only, never Funnel), which
+  terminates TLS with a Let's Encrypt certificate tailscaled fetches and renews itself. The
+  serve configuration persists in tailscaled, so it is set once and checked on every deploy
+  (`tailscale serve status`); when the user may not configure it (no operator rights, no
+  sudo), the script prints the one command to run and goes on, and the deploy still answers
+  on loopback. After the service starts, the script checks `https://<name>.<tailnet>.ts.net/`
+  answers, prints that address as the one to open, and reminds the owner to set it as the
+  panel's public address when the panel has none (that stays a panel setting, decision 11:
+  no command-line bootstrap). `--http` keeps today's behaviour (the Tailscale address,
+  plain HTTP, no Secure cookies) for a tailnet without HTTPS certificates. `--bind` with an
+  address other than loopback implies `--http`. Prerequisites (MagicDNS and "HTTPS
+  Certificates" in the tailnet's DNS settings; the hostname enters public Certificate
+  Transparency logs) go in the README, which makes HTTPS the documented path and notes that
+  the service worker and "Install" of WP4.17 need it. `undeploy-local.sh` turns the serve off
+  (`tailscale serve --https=443 off`) when it was the deploy's, with the same rights caveat.
+  Tests: `toolchain/test-deploy-local.sh`'s fake `tailscale` learns `serve` (recording its
+  arguments, answering `serve status`), with cases for the default, `--http`, a `serve` the
+  user may not set, and the undeploy. No change to the server's code.
 - **WP4.17 Offline and PWA.** A web manifest (name, icons from the wiki's own, theme
   colour) and a service worker that caches the application's files (versioned by the build)
   and the last pages read (HTML and API answers, in the browser's Cache API), serving them
