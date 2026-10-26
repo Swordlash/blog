@@ -344,6 +344,7 @@ select {
 }
 
 /* Always there, so that the inputs keep their places; no box of its own. */
+.sign-in-step,
 .sign-in-told {
   display: contents;
 }

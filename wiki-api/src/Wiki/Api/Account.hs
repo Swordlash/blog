@@ -53,7 +53,7 @@ module Wiki.Api.Account
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson (FromJSON, ToJSON (..), defaultOptions, genericToJSON, omitNothingFields)
 import Data.Time (UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
@@ -82,10 +82,15 @@ data NewAccount = NewAccount
   , email :: Maybe Text
   -- ^ Their e-mail address, which a link mailed to it verifies (WP4.11 of
   -- docs/PLAN.md); only the administration's "New user" gives one, and
-  -- may leave it out.
+  -- may leave it out, as it is left out of the JSON when there is none.
   }
   deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving anyclass (FromJSON)
+
+-- Through 'toJSON' alone, as the other bodies are written: their keys in
+-- order.
+instance ToJSON NewAccount where
+  toJSON = genericToJSON defaultOptions {omitNothingFields = True}
 
 instance Show NewAccount where
   showsPrec _ a rest = "NewAccount {login = " <> show a.login <> ", displayName = " <> show a.displayName <> ", password = <hidden>, email = " <> show a.email <> "}" <> rest

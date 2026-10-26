@@ -41,6 +41,11 @@
 -- form with a word of its own ('Prompt'): when a session has ended by
 -- itself.
 --
+-- The second factor's form and the reset's are each in a container of
+-- their own that is always there, so that neither takes the place of the
+-- sign-in form's, whose login field (with what was typed in it) would
+-- otherwise become their first field.
+--
 -- The inputs are not controlled (the component never writes their value),
 -- so that a render arriving while someone types never loses a key; what
 -- was typed is kept as it is typed. What the form says (the shell's word,
@@ -244,12 +249,16 @@ component =
             {% if st.registering %}
               {{ registerForm st }}
             {% end %}
-            {% if st.open && st.step == AtCode %}
-              {{ codeForm st }}
-            {% end %}
-            {% if st.open && st.step == AtReset %}
-              {{ resetForm st }}
-            {% end %}
+            <div class="sign-in-step">
+              {% if st.open && st.step == AtCode %}
+                {{ codeForm st }}
+              {% end %}
+            </div>
+            <div class="sign-in-step">
+              {% if st.open && st.step == AtReset %}
+                {{ resetForm st }}
+              {% end %}
+            </div>
             {% if st.open && st.step == AtPassword %}
               <form class="sign-in-form" aria-label="Sign in" {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}>
                 <div class="sign-in-told">
