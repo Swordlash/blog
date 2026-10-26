@@ -2384,6 +2384,40 @@ Amended by the planning session after each work package's report.
   back up → restore into a fresh directory → compare every table and the archive, 2 browser
   cases, the smoke test turns backups on, backs up, has `restore` refused under the server
   and done beside it. Not run: the Docker image (the README's Docker restore line).
+- **WP4.12 merged** (2026-10-26, PR #70, `main` at `7d2a9d9`). Presence and edit conflicts
+  over WP4.5's channel, no migration. Protocol: `ClientMessage` gains `StartEditing`/
+  `StopEditing`; `PageEvent` gains `Editing [Author]` and `PageChanged UTCTime` (the new
+  version's time, not the body); `Subscribed` carries who was editing. **Deviation from the
+  plan's wording, accepted:** editors are `Author` (id and display name), not `User`, since
+  `User` carries the login and these events reach anonymous readers of public pages. Server:
+  `Wiki.Server.Presence` is a pure value kept by the hub in the same STM transaction as the
+  notifications; `editing` is accepted only from someone who may edit the page
+  (`Storage.editorOf`); each change tells a page's subscribers who edits it other than that
+  connection (so one's own other tab shows as "You (in another tab)"); a connection's end
+  drops its presence; `savePage` and `restoreVersion` publish `PageChanged` after commit. App:
+  `Live.Feed` gains `startEditing`, `stopEditing`, `editorsOf`, re-announces after a
+  reconnect and remembers the last editors per page; the HTTP cache drops read pages on
+  `PageChanged`; the page view shows "X is editing this page." as the last element of the
+  action bar and reloads at once on a newer save, or offers "Changed since: show the new
+  version" while the reader is busy (text selected, a quote being commented on, rename or
+  move open); the editor announces itself only once it knows who else edits, asks first when
+  someone does ("Edit anyway" / "Back to the page"), names the others, notes a save made
+  meanwhile, says `stopped` on finalize (no `pagehide` handler: a closed tab ends the
+  connection). Conflict view on 409: their version and its author read, the author's text
+  saved as a draft at once, their version diffed against the author's text with
+  `Wiki.Core.Diff` rendered by the new shared `View/Diff.hs` (taken out of the history view),
+  two columns from 961 px; "Keep mine" saves over theirs, "Take theirs" loads theirs and
+  discards the draft, "Merge by hand" keeps the author's text with their changes since the
+  base beside it and saves against their version next. The demo has the conflict view but no
+  presence, and two demo tabs cannot conflict (each holds its own wiki). Limits: "X is
+  editing" can be stale while the socket is down (corrected on reconnect); one's own save
+  from another tab reads "Someone else has saved"; the reload costs one extra request. For
+  WP4.10: `Hub.connections` and `Hub.presence` count sockets and editors. For WP4.13:
+  `PageChanged` carries only `updatedAt`; extend it rather than adding a second event. Tests:
+  `Test.Server.Presence`, three WebSocket cases, cache `afterEvent`, browser cases for the
+  three ways out and for presence over the fake server, the smoke test with two users' tabs
+  over the real WebSocket. The editor's typing tests time out under heavy load on `main` too
+  (pre-existing).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
