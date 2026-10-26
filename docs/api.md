@@ -591,17 +591,23 @@ password included.
 | GET | `api/v1/account/sessions` | | `[SessionSummary]` `{"id", "createdAt", "lastSeenAt", "address", "current"}`, the most recently used first | 401, 400 (the operator) | (`ownSessions`) |
 | DELETE | `api/v1/account/sessions/<session>` | | the sessions then | 401, 404 (not one of theirs), 400 (the one asking: sign out instead) | (`endOwnSession`) |
 | DELETE | `api/v1/account/sessions` | | the sessions then: the one asking alone | 401 | (`endOtherSessions`) |
-| GET | `api/v1/account/second-factor` | | `SecondFactorState` `{"enabled", "recoveryCodesLeft"}` | 401 | (`secondFactorState`) |
-| POST | `api/v1/account/second-factor/totp` | | `TotpEnrolment` `{"secret", "uri", "qr"}`: the secret in base32, the `otpauth://` address, and that address as a QR code's modules, row by row (`"1"` dark, `"0"` light, no quiet zone) | 401, 409 (one is on already) | (`enrolTotp`) |
+| GET | `api/v1/account/second-factor` | | `SecondFactorState` `{"enabled", "recoveryCodesLeft", "asksPassword"}` | 401 | (`secondFactorState`) |
+| POST | `api/v1/account/second-factor/totp` | `CurrentPassword` `{"password"}` (where the user has one) | `TotpEnrolment` `{"secret", "uri", "qr"}`: the secret in base32, the `otpauth://` address, and that address as a QR code's modules, row by row (`"1"` dark, `"0"` light, no quiet zone) | 401 (nobody signed in, or a wrong password, counted), 429, 409 (one is on already) | (`enrolTotp`) |
 | PUT | `api/v1/account/second-factor/totp` | `OneTimeCode` `{"code"}` | `RecoveryCodes` `{"codes"}`, shown this once | 401 (a wrong code, counted), 429, 404 (none begun), 409 | (`confirmTotp`) |
 | POST | `api/v1/account/second-factor/remove` | `OneTimeCode` (a code or a recovery code) | `SecondFactorState` | 401 (a wrong code, counted), 429, 404 (none on) | (`removeOwnSecondFactor`) |
-| GET | `api/v1/account/email` | | `EmailState` `{"email", "verified", "mailing", "mailError"}` | 401 | (`ownEmail`) |
-| PUT | `api/v1/account/email` | `EmailChange` `{"email"}` (`""` for none) | `EmailState`; a link to verify a new address is mailed to it, `mailError` says why if it could not be | 401, 400 (not an address, or the server sends no mail) | (`setOwnEmail`) |
+| GET | `api/v1/account/email` | | `EmailState` `{"email", "verified", "mailing", "mailError", "asksPassword"}` | 401 | (`ownEmail`) |
+| PUT | `api/v1/account/email` | `EmailChange` `{"email", "password"}` (`""` for none; the password where the user has one, unless the address is the one they have) | `EmailState`; a link to verify a new address is mailed to it, `mailError` says why if it could not be | 401 (nobody signed in, or a wrong password, counted), 429, 400 (not an address, or the server sends no mail) | (`setOwnEmail`) |
 | POST | `api/v1/email-verification/<secret>` | | 204: the address the link was mailed to is the user's verified address | 404 (used, expired, or no longer the user's address) | (`verifyEmail`) |
 | POST | `api/v1/password-reset` | `ResetRequest` `{"login"}` (a login or an e-mail address) | 204, whatever it names | 429 (ten an address in fifteen minutes), 400 (the server sends no mail: for every login alike) | (`requestPasswordReset`) |
 | POST | `api/v1/password-reset/<secret>` | `NewPasswordByMail` `{"password"}` | 204: the password is set, every session of the user ends, nobody is signed in | 404 (used or expired), 400 | (`resetPassword`) |
 
-WP4.11 of the plan. A session is named by an id of its own (16 random bytes in
+WP4.11 of the plan. A session alone does not give an account away: giving
+another address (or none) and beginning a second factor take the current
+password where the user has one, as a new password does (WP3.7); `asksPassword`
+in the states says whether. A wrong one counts as a failed sign-in. Sending
+the link again for the address one has asks nothing.
+
+A session is named by an id of its own (16 random bytes in
 hex), never by the secret its cookie carries; `address` is the network
 address it was last used from, and "last seen" is written at most once a
 minute.
