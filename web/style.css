@@ -4515,8 +4515,12 @@ a.mention {
 }
 
 .page-main.with-side > .page-text {
-  grid-row: 2;
+  grid-row: 1;
   grid-column: 1;
+}
+
+.page-main.with-contents > .page-text {
+  grid-row: 2;
 }
 
 .page-side > .page-contents {
@@ -4525,8 +4529,12 @@ a.mention {
 }
 
 .page-side > .comments-panel {
-  grid-row: 3;
+  grid-row: 2;
   grid-column: 1;
+}
+
+.page-main.with-contents .page-side > .comments-panel {
+  grid-row: 3;
 }
 
 @media (min-width: 761px) {
@@ -4535,8 +4543,12 @@ a.mention {
   }
 
   .page-side > .comments-panel {
-    grid-row: 2;
+    grid-row: 1;
     grid-column: 2;
+  }
+
+  .page-main.with-contents .page-side > .comments-panel {
+    grid-row: 2;
   }
 }
 
@@ -4573,6 +4585,7 @@ a.mention {
     overflow-y: auto;
   }
 
+  /* Flex items now: where the grid put them no longer counts. */
   .page-side > .page-contents,
   .page-side > .comments-panel {
     flex-shrink: 0;

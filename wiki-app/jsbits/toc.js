@@ -7,7 +7,11 @@
 // The marking costs nothing per scroll: an IntersectionObserver hears a
 // heading cross the line a quarter of the way down the window, and only
 // then is the current section worked out again, as the last heading above
-// that line. Nothing of it reaches Halogen, which renders the lists the
+// that line (the first heading, while none is: what comes before it is
+// the start of the page). The last sections of a page may never reach the
+// line, since the page ends first: once the window is scrolled to the end
+// of the page, which a second observer hears as the page's footer comes
+// fully into view, the last heading in the window is the one read. Nothing of it reaches Halogen, which renders the lists the
 // same whatever is read; the attribute is the script's alone, and the
 // smoke tests do not count it as a repair of the page (as data-stuck).
 
@@ -30,10 +34,15 @@ function wiki_keep_contents() {
   const line = () => window.innerHeight / 4;
   let headings = [];
   let panels = [];
+  let footer = null;
+  const atTheEnd = () =>
+    window.scrollY > 0 && window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4;
   const mark = () => {
-    let current = null;
+    let current = headings.length > 0 ? headings[0].id : null;
+    const end = atTheEnd();
     for (const heading of headings) {
-      if (heading.getBoundingClientRect().top <= line()) current = heading.id;
+      const top = heading.getBoundingClientRect().top;
+      if (top <= line() || (end && top < window.innerHeight)) current = heading.id;
       else break;
     }
     for (const link of document.querySelectorAll(".toc-list a[href^='#']")) {
@@ -46,6 +55,7 @@ function wiki_keep_contents() {
     }
   };
   const crossing = new IntersectionObserver(mark, { rootMargin: "0px 0px -75% 0px" });
+  const ending = new IntersectionObserver(mark, { threshold: [0, 1] });
   const rewatch = () => {
     const now = headingsShown();
     if (now.length !== headings.length || now.some((heading, i) => heading !== headings[i])) {
@@ -53,6 +63,12 @@ function wiki_keep_contents() {
       for (const heading of now) crossing.observe(heading);
       headings = now;
       mark();
+    }
+    const last = document.querySelector(".page-view .page-meta");
+    if (last !== footer) {
+      ending.disconnect();
+      if (last !== null) ending.observe(last);
+      footer = last;
     }
     // A panel shown afresh is folded if this browser folded the last one.
     const shown = [...document.querySelectorAll("details.page-contents")];

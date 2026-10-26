@@ -496,8 +496,8 @@ async function migrateTheDemo() {
   }
   assert.equal(await reader.locator("#app .page-body nav.toc").count(), 1, "the handbook's [[toc]]");
   assert.equal(await reader.locator("#app .page-contents").count(), 0, "a panel beside a page with [[toc]]");
-  await reader.goto(url("/s/docs/p/markdown-guide/#footnotes"));
-  await reader.locator("#app .page-contents .toc-list a[href='#footnotes'][data-current]").waitFor({ timeout });
+  await reader.goto(url("/s/docs/p/markdown-guide/#mathematics"));
+  await reader.locator("#app .page-contents .toc-list a[href='#mathematics'][data-current]").waitFor({ timeout });
   await reader.context().close();
   console.log("ok: the server renders a page's contents and [[toc]], adopted with nothing to repair, and an address's #heading is scrolled to and marked");
 }

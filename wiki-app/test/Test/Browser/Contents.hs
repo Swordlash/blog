@@ -41,24 +41,26 @@ spec m = do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
     panel <- find ui ".page-side .page-contents"
     getAttribute panel "open" `shouldReturn` Just ""
-    titles <- traverse textContent =<< findAll ui ".page-contents .toc-list > li > a"
-    titles `shouldBe` ["Writing pages"]
-    nested <- traverse textContent =<< findAll ui ".page-contents .toc-list .toc-list > li > a"
-    take 3 nested `shouldBe` ["Text", "Headings", "Lists"]
+    titles <- traverse textContent =<< findAll ui ".page-contents nav > .toc-list > li > a"
+    titles `shouldBe` ["Markdown guide"]
+    nested <- traverse textContent =<< findAll ui ".page-contents nav > .toc-list > li > .toc-list > li > a"
+    take 3 nested `shouldBe` ["Text", "Code", "Mathematics"]
+    deeper <- traverse textContent =<< findAll ui ".page-contents a[href='#text'] + .toc-list > li > a"
+    deeper `shouldBe` ["Lists", "Tasks", "Tables"]
     -- Nothing of the panel's in the page's text.
     length <$> findAll ui ".page-text .toc" `shouldReturn` 0
     -- At the top, the first section is the one read.
-    eventually $ current ui `shouldReturn` ["#writing-pages"]
+    eventually $ current ui `shouldReturn` ["#markdown-guide"]
     scrollTo "#tables"
     eventually $ current ui `shouldReturn` ["#tables"]
-    scrollTo "#math"
-    eventually $ current ui `shouldReturn` ["#math"]
-    -- A section's link scrolls to it, and its heading is not under the
-    -- bars that stick at the top.
-    find ui ".page-contents a[href='#footnotes']" >>= click
-    eventually $ current ui `shouldReturn` ["#footnotes"]
+    scrollTo "#mathematics"
+    eventually $ current ui `shouldReturn` ["#mathematics"]
+    -- A section's link scrolls to it: the last, at the end of the page,
+    -- which cannot be scrolled to the top of the window.
+    find ui ".page-contents a[href='#images-video-and-attachments']" >>= click
+    eventually $ current ui `shouldReturn` ["#images-video-and-attachments"]
     scrollTop 0
-    eventually $ current ui `shouldReturn` ["#writing-pages"]
+    eventually $ current ui `shouldReturn` ["#markdown-guide"]
 
   it "folds the panel, and keeps it folded on the next long page" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
@@ -73,11 +75,12 @@ spec m = do
     eventually $ find again ".page-contents .toc-list" >>= shouldBeVisible
 
   it "shows no panel for a page with few headings, and the list where [[toc]] is" $ runPage $ do
-    ui <- start m (Just "user-admin") (Page (slugs ["docs"]) (slugs ["tour"]))
-    _ <- find ui ".page-view .page-body"
+    ui <- start m (Just "user-admin") (Page (slugs ["team"]) (slugs ["team-handbook", "on-call"]))
+    find ui ".page-view .page-body h1" >>= (`shouldHaveText` "On-call")
     length <$> findAll ui ".page-contents" `shouldReturn` 0
     unmount ui
     handbook <- start m (Just "user-admin") (Page (slugs ["team"]) (slugs ["team-handbook"]))
+    _ <- find handbook ".page-body nav.toc"
     inline <- traverse textContent =<< findAll handbook ".page-body nav.toc .toc-list a"
     inline `shouldBe` ["Team handbook", "The week", "Before your first day", "Meetings"]
     length <$> findAll handbook ".page-contents" `shouldReturn` 0
@@ -87,15 +90,18 @@ spec m = do
 
   it "ends each heading with a link to itself" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))
-    anchor <- find ui ".page-body h2#headings > a.heading-anchor"
-    getAttribute anchor "href" `shouldReturn` Just "#headings"
+    anchor <- find ui ".page-body h2#code > a.heading-anchor"
+    getAttribute anchor "href" `shouldReturn` Just "#code"
     -- It adds nothing to the heading's text.
-    find ui ".page-body h2#headings" >>= (`shouldHaveText` "Headings")
+    find ui ".page-body h2#code" >>= (`shouldHaveText` "Code")
+    -- Shown on hover only, by the stylesheet.
+    getAttribute anchor "aria-label" `shouldReturn` Just "Link to this section"
     click anchor
-    eventually $ current ui `shouldReturn` ["#headings"]
+    eventually $ current ui `shouldReturn` ["#code"]
 
   it "makes a page a template, listed apart from the tree, and an ordinary page again" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-admin") (Page (slugs ["docs"]) (slugs ["markdown-guide", "diagrams"]))
+    _ <- find ui ".page-actions .use-as-template"
     tree <- traverse textContent =<< findAll ui ".wiki-sidebar .page-tree a"
     tree `shouldBe` ["Markdown guide", "Diagrams", "Mathematics", "Presentations", "Tour"]
     length <$> findAll ui ".sidebar-templates" `shouldReturn` 0
@@ -113,10 +119,12 @@ spec m = do
     (\p -> p.template) <$> readPage wiki ["docs"] ["markdown-guide", "diagrams"] `shouldReturn` False
 
   it "makes a new page from the space's template, its placeholders filled in" $ runPage $ do
-    (ui, wiki) <- startWith m (Just "user-admin") (Space (slugs ["team"]))
+    ui <- start m (Just "user-admin") (Space (slugs ["team"]))
+    _ <- find ui ".wiki-sidebar .sidebar-templates a"
     (traverse textContent =<< findAll ui ".wiki-sidebar .sidebar-templates a") `shouldReturn` ["Weekly sync"]
     unmount ui
-    (form, _) <- startWith m (Just "user-admin") (NewPage (slugs ["team"]) Nothing)
+    (form, wiki) <- startWith m (Just "user-admin") (NewPage (slugs ["team"]) Nothing)
+    _ <- find form ".new-page-choice"
     choices <- traverse textContent =<< findAll form ".new-page-choice"
     map (T.takeWhile (/= ' ') . T.strip) choices `shouldBe` ["Blank", "Weekly", "Meeting", "Decision", "How-to"]
     find form ".new-page-title" >>= (`typeText` "Sync of the 26th")
