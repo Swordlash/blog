@@ -165,8 +165,8 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 100));
   const lines = wikiServer
     ? [
-        /^level=info listener=public principal=anonymous from=127\.0\.0\.1:\d+ method=GET path=\/app\.wasm status=200 ms=[\d.]+$/,
-        /^level=info listener=public principal=anonymous from=127\.0\.0\.1:\d+ method=GET path=\/s\/blog\/p\/no-such-page\/ status=404 ms=[\d.]+$/,
+        /^level=info listener=public principal=anonymous from=127\.0\.0\.1:\d+ method=GET path=\/app\.wasm route=\/static status=200 ms=[\d.]+$/,
+        /^level=info listener=public principal=anonymous from=127\.0\.0\.1:\d+ method=GET path=\/s\/blog\/p\/no-such-page\/ route=\/page status=404 ms=[\d.]+$/,
       ]
     : [/^127\.0\.0\.1 GET \/app\.wasm 200 br \d+ms$/, /^127\.0\.0\.1 GET \/s\/blog\/p\/no-such-page\/ 404 \d+ms$/];
   for (const line of lines) assert.ok(log.some((l) => line.test(l)), `${line}\n${log.join("\n")}`);
