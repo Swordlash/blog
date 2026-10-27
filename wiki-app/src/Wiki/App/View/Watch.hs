@@ -1,13 +1,15 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The "Watch" bell of a page or a space (WP4.13 of docs/PLAN.md): whether
--- the signed-in user watches it, and why ("Wiki.Core.Notification": they
--- chose so, a space it is in is watched, they made the page), as a toggle
--- that chooses for this page or space whatever decided before.
+-- | The "Watch" button of a page or a space (WP4.13 of docs/PLAN.md):
+-- whether the signed-in user watches it, and why ("Wiki.Core.Notification":
+-- they chose to, a space it is in is watched, or they created the page).
+-- It is a toggle that sets the choice for this page or space, overriding
+-- whatever decided before.
 --
--- Read with the initial state over a backend that answers at once, as the
--- page around it is, and otherwise in 'Initialize'; read again when the
--- page or space it is about changes, or the wiki is reloaded.
+-- It is fetched in the initial state on a backend that answers at once,
+-- as the page around it is, and otherwise in 'Initialize'; and fetched
+-- again when the page or space it is about changes, or the wiki is
+-- reloaded.
 module Wiki.App.View.Watch
   ( Input (..)
   , component
@@ -63,7 +65,8 @@ component =
             <span aria-hidden="true">{{ if w.watching then "🔔" else "🔕" :: Text }}</span> {{ if w.watching then "Watching" else "Watch" :: Text }}
           </button>
         |]
-      -- Not known yet, or not to be known (a page gone): nothing to press.
+      -- Not known yet, or never to be known (a page that no longer exists):
+      -- nothing to press.
       _ -> [hh|<button type="button" class="button watch-toggle" disabled><span aria-hidden="true">🔕</span> Watch</button>|]
       where
         what = case st.input.target of

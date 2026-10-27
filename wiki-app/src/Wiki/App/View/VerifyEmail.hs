@@ -2,14 +2,15 @@
 
 -- | The page of a link mailed to verify an e-mail address
 -- (@\/verify-email\/\<secret>\/@, WP4.11 of docs/PLAN.md): a button that
--- confirms the address is the user's, so that it may receive a password
--- reset. A button rather than a confirmation on arrival, so that a mail
--- program that fetches links to look at them confirms nothing, and so that
--- the page the server renders is the program's first render.
+-- confirms the address belongs to the user, so that it may receive a
+-- password reset. It is a button rather than a confirmation on arrival, so
+-- that a mail program that fetches links to preview them confirms nothing,
+-- and so that the page the server prerenders matches the program's first
+-- render.
 --
 -- It needs nobody signed in: the link's secret is the proof. A link that
--- has been used, has expired, or whose address is no longer the user's says
--- so; the demo, which sends no mail, says that it verifies nothing.
+-- was used, has expired, or whose address no longer belongs to the user
+-- says so. The demo, which sends no mail, says that it verifies nothing.
 module Wiki.App.View.VerifyEmail
   ( Input (..)
   , component

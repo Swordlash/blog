@@ -1,41 +1,43 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The safety of one's account, in the account panel (WP4.11 of
+-- | The account security section of the account panel (WP4.11 of
 -- docs/PLAN.md, "Wiki.App.Security"): where one is signed in, a second
 -- factor, and an e-mail address.
 --
--- * __Sessions.__ Each session of the user's, with when it began, when and
---   from where it was last used, and "Sign out" on every one but this
---   browser's, which is marked; "Sign out everywhere" ends them all but
---   this one.
--- * __Second factor.__ Off, it is set up in two steps: "Set up a second
---   factor…" asks the server for a secret, shown as a QR code drawn here,
---   an @\<svg>@ of @\<rect>@s ('qrRuns'), and as text to type, and one code
---   the application then shows turns it on. The recovery codes come with
---   it, shown this once, until "I have kept them". On, it says how many
---   recovery codes are left and is taken away with a code.
--- * __E-mail.__ The address, whether it is verified, a form to give
---   another (a link to verify it is mailed there), "Send the link again"
---   while it is not verified, and "Remove". Without mail it is disabled,
---   saying why.
+-- * __Sessions.__ Each of the user's sessions, with when it began, and
+--   when and from where it was last used. Every session except this
+--   browser's, which is marked, has "Sign out"; "Sign out everywhere" ends
+--   all of them except this one.
+-- * __Second factor.__ When it is off, it is set up in two steps. "Set up
+--   a second factor…" asks the server for a secret, shown as a QR code
+--   drawn here (an @\<svg>@ of @\<rect>@s, 'qrRuns') and as text to type.
+--   Then one code from the authenticator application turns it on. The
+--   recovery codes come with it, shown this once, until "I have kept
+--   them". When it is on, the section says how many recovery codes are
+--   left, and it is turned off with a code.
+-- * __E-mail.__ The address, whether it is verified, a form to set another
+--   one (a verification link is mailed there), "Send the link again" while
+--   it is not verified, and "Remove". Without mail it is disabled, saying
+--   why.
 --
--- Giving another address, removing it, and beginning a second factor ask
--- for the user's current password, where they have one (the states say,
--- @asksPassword@), so that a browser left signed in does not give the
--- account away: each opens a form with its field first.
+-- Setting another address, removing it, and starting a second factor ask
+-- for the user's current password, where they have one (the states'
+-- @asksPassword@ says), so that someone at a browser left signed in cannot
+-- take over the account. Each opens a form with the password field first.
 --
--- What the second factor and the address are said to do depends on whether
--- the user has a password (the states' @asksPassword@): one who has none
--- signs in with a provider's account, which a second factor follows as a
--- password is, and has no password to reset (WP5.6 of docs/PLAN.md);
--- 'factorOffText' and 'addressText' say it.
+-- What the second factor and the address are said to do depends on
+-- whether the user has a password (the states' @asksPassword@). A user
+-- without one signs in with a provider's account, which a second factor
+-- follows as it follows a password, and has no password to reset (WP5.6 of
+-- docs/PLAN.md); 'factorOffText' and 'addressText' word it accordingly.
 --
 -- In the demo there is one session, this browser's, and the second factor
 -- and the e-mail are shown disabled with a note, since only a server has
 -- them ('securityAvailable').
 --
--- Everything is read when the panel opens (in the initializer: the server
--- never renders it), and each part reads back what it changed.
+-- Everything is fetched when the panel opens (in the initializer: the
+-- server never prerenders it), and each part fetches again what it
+-- changed.
 module Wiki.App.View.Security
   ( component
   , qrRuns
@@ -71,13 +73,13 @@ data State = State
   , recovery :: Maybe [Text]
   -- ^ The recovery codes of a second factor just turned on, shown once.
   , removing :: Bool
-  -- ^ Whether the form that takes the second factor away is open.
+  -- ^ Whether the form that turns the second factor off is open.
   , typedCode :: Text
   , mailbox :: Maybe (Either WikiError EmailState)
   , emailForm :: EmailForm
   , typedEmail :: Text
   , askingPassword :: Bool
-  -- ^ Whether the form for the password that begins a second factor is
+  -- ^ Whether the form for the password that starts a second factor is
   -- open.
   , typedPassword :: Text
   , passwordField :: H.RefLabel
@@ -90,7 +92,7 @@ data State = State
   , emailField :: H.RefLabel
   }
 
--- | Which form of the address's is open.
+-- | Which of the address's forms is open.
 data EmailForm
   = NoEmailForm
   | ChangingEmail
@@ -276,7 +278,7 @@ component =
         </label>
       |]
 
-    -- A code typed into a form of its own, its field focused when it
+    -- A code typed into its own form, its field focused when the form
     -- opens.
     codeForm :: State -> Text -> Text -> Action -> Action -> H.ComponentHTML Action Empty m
     codeForm st cls verb submit back =
@@ -420,7 +422,7 @@ component =
       SaveEmail -> do
         st <- get
         emailChange st.typedEmail (passwordIfAsked st)
-      -- The address one has: its link again, which asks nothing.
+      -- The current address: send its link again, which needs no password.
       ResendEmail ->
         gets (\st -> st.mailbox) >>= \case
           Just (Right EmailState {email = Just address}) -> emailChange address Nothing
@@ -433,7 +435,7 @@ component =
           _ -> emailChange "" Nothing
       ConfirmClear -> gets (\st -> st.typedPassword) >>= emailChange "" . Just
 
-    -- Something done while nothing else may be.
+    -- Run something while nothing else may run.
     busily :: H.HalogenM State Action Empty output m () -> H.HalogenM State Action Empty output m ()
     busily act =
       gets (\st -> st.busy) >>= \busy -> unless busy $ do
@@ -441,7 +443,8 @@ component =
         act
         modify (\st -> st {busy = False})
 
-    -- Begin a second factor, with the password if it was asked for.
+    -- Start setting up a second factor, with the password if it was asked
+    -- for.
     enrol :: Maybe Text -> H.HalogenM State Action Empty output m ()
     enrol password = busily $ do
       modify (\st -> st {factorProblem = Nothing})
@@ -451,7 +454,7 @@ component =
           modify (\st -> st {enrolment = Just e, askingPassword = False, typedPassword = "", typedCode = ""})
           focusCode
 
-    -- The password typed, where the address's state says it is asked.
+    -- The typed password, where the address's state says it is asked for.
     passwordIfAsked :: State -> Maybe Text
     passwordIfAsked st = case st.mailbox of
       Just (Right e) | e.asksPassword -> Just st.typedPassword
@@ -495,17 +498,17 @@ component =
       1 -> "You have one recovery code left."
       n -> "You have " <> show n <> " recovery codes left."
 
--- | A time, for a person to read.
+-- | A time, in words for a person to read.
 stamped :: UTCTime -> Text
 stamped = toS . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
 
--- | A secret in groups of four, to type.
+-- | A secret in groups of four characters, to type.
 grouped :: Text -> Text
 grouped = T.unwords . T.chunksOf 4
 
--- | A QR code's dark modules, row by row, as runs to draw: each run of
--- dark modules in a row is one rectangle, (column, row, width), so that a
--- code of some fifty modules a side is a few hundred @\<rect>@s, not a
+-- | A QR code's dark modules, row by row, as runs to draw. Each run of dark
+-- modules in a row is one rectangle (column, row, width), so that a code
+-- of some fifty modules a side is a few hundred @\<rect>@s, not a
 -- thousand.
 qrRuns :: [Text] -> [(Int, Int, Int)]
 qrRuns rows = concat (zipWith runsOf [0 ..] rows)
@@ -517,9 +520,9 @@ qrRuns rows = concat (zipWith runsOf [0 ..] rows)
           | c == '1' = let (dark, rest) = L.span (== '1') cells in (x, y, length dark) : go (x + length dark) rest
           | otherwise = let (light, rest) = L.span (/= '1') cells in go (x + length light) rest
 
--- | A QR code as an @\<svg>@ of rectangles, with the quiet zone of four
--- modules around it that a reader needs, light on dark whatever the page's
--- colours are; nothing when there is no code.
+-- | A QR code as an @\<svg>@ of rectangles, with the four-module quiet zone
+-- around it that a reader needs, light on dark whatever the page's colours
+-- are; nothing when there is no code.
 qrCode :: [Text] -> HH.HTML w i
 qrCode [] = HH.text ""
 qrCode rows =
@@ -536,18 +539,18 @@ qrCode rows =
     outer = length rows + 2 * quiet
     box = "0 0 " <> show outer <> " " <> show outer
 
--- | What a second factor that is off means, for a user with a password or
--- without one. One without signs in with a provider's account, which asks
--- for a code once a second factor is on, as a password does
--- ("Wiki.Server.Auth").
+-- | What it means that the second factor is off, for a user with a
+-- password or without one. A user without a password signs in with a
+-- provider's account, which asks for a code once a second factor is on,
+-- as a password does ("Wiki.Server.Auth").
 factorOffText :: Bool -> Text
 factorOffText hasPassword
   | hasPassword = "Off: your password alone signs you in."
   | otherwise = "Off: signing in with your provider's account asks for no code."
 
--- | What a user's address is for, as it is now. Only a user with a
--- password has one to forget: a user without signs in with a provider's
--- account, and is mailed no link to set one (WP5.6 of docs/PLAN.md).
+-- | What a user's address is used for, as things are. Only a user with a
+-- password can forget one: a user without one signs in with a provider's
+-- account, and is not mailed a link to set one (WP5.6 of docs/PLAN.md).
 addressText :: EmailState -> Text
 addressText e = case e.email of
   Nothing

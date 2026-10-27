@@ -1,42 +1,43 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
--- | A page presented as slides ("Wiki.Core.Slides"), for anyone who may read
--- the page: one slide at a time over the whole window, or the whole screen,
--- with the speaker's notes below it on request, an overview of every slide,
--- and a print stylesheet that puts each slide on a page of its own, so that
--- the browser's "Save as PDF" makes the deck a file.
+-- | The slides view: a page presented as slides ("Wiki.Core.Slides"), for
+-- anyone who may read the page. It shows one slide at a time over the
+-- whole window, or full screen, with the speaker's notes below it on
+-- request, an overview of every slide, and a print stylesheet that puts
+-- each slide on its own page, so that the browser's "Save as PDF" turns
+-- the deck into a file.
 --
--- It asks the backend for the page as the page view does ('getPage'), so it
--- is refused where the page is and for the same reasons. The slides are the
--- page's Markdown rendered as the page is ("Wiki.App.View.Body"): the same
--- links, the same islands, which are drawn once, on every slide, when the
--- deck is shown, so that moving between slides draws nothing and printing
--- finds every slide drawn.
+-- It fetches the page from the backend as the page view does ('getPage'),
+-- so it is refused where the page is, and for the same reasons. The slides
+-- are the page's Markdown rendered as the page is ("Wiki.App.View.Body"):
+-- the same links and the same islands. The islands are drawn once, on
+-- every slide, when the deck is shown, so that moving between slides draws
+-- nothing and printing finds every slide drawn.
 --
--- Every slide is in the page, the one shown marked @current@; the others
--- are hidden by the stylesheet (@web/style.css@), which also scales a slide
--- to the window: its text is sized in units of the slide's width, so a
--- slide looks the same in a window, on a projector and on paper.
+-- Every slide is in the page, the one shown with the class @current@; the
+-- stylesheet (@web/style.css@) hides the others. It also scales a slide to
+-- the window: its text is sized in units of the slide's width, so a slide
+-- looks the same in a window, on a projector and on paper.
 --
--- The keys, pressed anywhere on the page, which the view covers: → ↓ Space
+-- The keys work anywhere on the page, which the view covers: → ↓ Space
 -- PageDown Enter for the next slide, ← ↑ PageUp Backspace Shift+Space for
--- the one before, Home and End for the first and the last, @f@ for full
+-- the previous one, Home and End for the first and the last, @f@ for full
 -- screen (Escape, the browser's own key, leaves it), @n@ or @s@ for the
--- notes, @o@ for the overview, and Escape to close it. They are heard
--- through haskell-halogen's window emitter ('Window.keyDown'), subscribed
--- to while the view is shown, and each is read as the browser dispatches
--- it (@jsbits/slides.js@), so that the browser does not also scroll for
--- one of them. A key typed into a field, Space or Enter on a button or a
--- link (which press it), and a key with Ctrl, Alt or Cmd held are left to
--- the browser. A swipe to the left or the right on a touch screen goes to
--- the next or the previous slide. The view takes focus when it is shown, so
--- that Tab starts among its controls.
+-- notes, @o@ for the overview, and Escape to close the overview. They are
+-- received through haskell-halogen's window emitter ('Window.keyDown'),
+-- subscribed to while the view is shown. Each is recognised while the
+-- browser dispatches it (@jsbits/slides.js@), so that the browser does not
+-- also scroll for one of them. A key typed into a field, Space or Enter on
+-- a button or a link (which activates it), and a key with Ctrl, Alt or Cmd
+-- held are left to the browser. A swipe to the left or the right on a
+-- touch screen goes to the next or the previous slide. The view takes
+-- focus when it is shown, so that Tab starts among its controls.
 --
 -- The slide shown is in the address (@?slide=3@, 'PageSlides'), so that a
--- reload or a link comes back to it. Moving replaces the address rather than
--- adding to the session history: the browser's Back leaves the slides, as it
--- would leave a page however far it was scrolled.
+-- reload or a link returns to it. Moving between slides replaces the
+-- address rather than adding to the session history: the browser's Back
+-- leaves the slides, as it leaves a page however far it was scrolled.
 module Wiki.App.View.Slides
   ( Input (..)
   , Slots
@@ -81,9 +82,9 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (Author)
 
--- The key is read in the keydown's listener ('slideKeys') and a touch's
--- place in the touch's, while the browser dispatches them, so those
--- bindings are pure; the rest return on the spot.
+-- The key is read in the keydown's listener ('slideKeys'), and a touch's
+-- position in the touch's listener, while the browser dispatches them, so
+-- those bindings are pure; the rest return at once.
 $( browserJS
      ["jsbits/slides.js"]
      [ ("js_slides_key", "wiki_slides_key", Unsafe, [t|Event -> JSText|])
@@ -96,9 +97,9 @@ $( browserJS
      ]
  )
 
--- | The page at a path in a space the shell has loaded, with the space's
--- pages (for the links between them), and the slide asked for, counted from
--- 1.
+-- | The slides view's input: the page at a path in a space the shell has
+-- loaded, with the space's pages (for the links between them), and the
+-- requested slide, counted from 1.
 data Input = Input
   { context :: Context
   , space :: Space
@@ -112,8 +113,8 @@ type Slots = Body.IslandSlots
 data Loaded
   = Loading
   | Failed WikiError
-  | -- | The page, where each of its attachments is fetched from, the
-    -- page as slides, and whom it mentions ("Wiki.App.View.Body").
+  | -- | The page, the URL of each of its attachments, the page as slides,
+    -- and the people it mentions ("Wiki.App.View.Body").
     Ready Page (Map AttachmentId Text) Deck (Map Text Author)
 
 data State = State
@@ -124,19 +125,19 @@ data State = State
   , notesOpen :: Bool
   -- ^ Whether the speaker's notes are shown below the slide.
   , overview :: Bool
-  -- ^ Whether every slide is shown, small, to choose one.
+  -- ^ Whether every slide is shown, small, to pick one.
   , printNotes :: Bool
   -- ^ Whether printing puts each slide's notes under it.
   , asked :: [Int]
-  -- ^ The slides this view has put in the address, latest first, which the
-  -- shell hands back in the input: not a slide to go to, since the view is
-  -- there already, or has moved on.
+  -- ^ The slides this view has put in the address, latest first. The
+  -- shell passes them back in the input, and they are not slides to go to:
+  -- the view is there already, or has moved on.
   , view :: H.RefLabel
   , touch :: Maybe (Double, Double)
   -- ^ Where a touch on the slides started.
   }
 
--- | A key's command ('js_slides_key').
+-- | The command for a key ('js_slides_key').
 data Command = Next | Previous | ToFirst | ToLast | Choose | ToggleFullscreen | ToggleNotes | ToggleOverview | Leave
   deriving stock (Eq, Show)
 
@@ -279,9 +280,10 @@ component =
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
       -- The keys are listened to from now until the view goes away, which
-      -- unsubscribes; made in 'H.liftEffect', before the load can wait, so
-      -- that no key pressed meanwhile goes unheard. The page was loaded
-      -- with the initial state, and the shell is told; or it is loaded now.
+      -- unsubscribes. The subscription is made in 'H.liftEffect', before
+      -- the load can wait, so that no key pressed meanwhile is missed. The
+      -- page was loaded with the initial state, and the shell is told; or
+      -- it is loaded now.
       Initialize -> do
         keys <- H.liftEffect slideKeys
         void $ H.subscribe (Key <$> keys)
@@ -305,14 +307,14 @@ component =
                 modify (\s -> s {loaded = Loading, current = 1, notesOpen = False, overview = False, asked = []})
                 load
             | old.context.revision /= input.context.revision -> load
-            -- Another slide in the address: the shell waits to hear that
-            -- it is shown (a render of the shell hands the same input
-            -- again, which is nothing to tell). It is gone to, unless it is
-            -- one this view put there itself, which it is at already or
-            -- has moved on from; one from elsewhere (a link) is gone to.
+            -- Another slide in the address: the shell waits to learn that
+            -- it is shown (a render of the shell passes the same input
+            -- again, which needs no reply). The view goes to it, unless the
+            -- view put it there itself, in which case it is already there or
+            -- has moved on; a slide from elsewhere (a link) is gone to.
             | input.slide /= old.slide -> do
-                -- Asked for here: the oldest asking for it is answered,
-                -- and what was asked before that has been already.
+                -- This view requested it: the oldest request for it is
+                -- answered, and the requests before that were already.
                 if input.slide `elem` st.asked
                   then
                     modify (\s -> s {asked = reverse (drop 1 (dropWhile (/= input.slide) (reverse s.asked)))})
@@ -338,7 +340,7 @@ component =
           ToggleOverview -> modify (\s -> s {overview = not s.overview})
           Leave -> modify (\s -> s {overview = False})
       -- A slide clicked in the overview is the one to show; a click on the
-      -- slide shown, outside it, is only a click.
+      -- slide shown, outside the overview, is only a click.
       Picked n ->
         gets (\st -> st.overview) >>= \case
           True -> do
@@ -347,7 +349,7 @@ component =
           False -> pass
       TouchStart x y -> modify (\st -> st {touch = Just (x, y)})
       -- A swipe: further across than up or down, and far enough not to be
-      -- a tap. Leftwards is onwards, as a page is turned.
+      -- a tap. Leftwards goes forward, as when turning a page.
       TouchEnd x y -> do
         started <- gets (\st -> st.touch)
         modify (\st -> st {touch = Nothing})
@@ -358,7 +360,7 @@ component =
       SetPrintNotes b -> modify (\st -> st {printNotes = b})
       Print -> H.liftEffect (liftIO js_slides_print)
 
-    -- Show a slide, and put it in the address, in place of the one there.
+    -- Show a slide, and put it in the address, replacing the one there.
     goTo :: Int -> H.HalogenM State Action Slots ViewOutput m ()
     goTo wanted = do
       st <- get
@@ -376,7 +378,7 @@ component =
     load = do
       input <- gets (\st -> st.input)
       loaded <- fetch input
-      -- Only if the page asked for is still the one to show: another
+      -- Only if the requested page is still the one to show: another
       -- navigation may have overtaken this load.
       now <- gets (\st -> st.input)
       when (now.space.id == input.space.id && now.path == input.path) $ do
@@ -387,11 +389,11 @@ component =
 -- | The slides' keys pressed anywhere on the page, as commands.
 --
 -- Whether a key is one of them is decided in the window's listener, while
--- the browser dispatches the key, and the browser is told there not to take
--- its own action for it (Space and the arrows would scroll), before the
--- command is handed to the component. The command's action may run later,
--- if the tree is busy as the key arrives, and preventing the default from
--- there would then be too late.
+-- the browser dispatches the key, and the browser is told there not to
+-- take its own action for it (Space and the arrows would scroll), before
+-- the command is passed to the component. The command's action may run
+-- later, if the tree is busy when the key arrives, and preventing the
+-- default from there would then be too late.
 slideKeys :: (MonadBrowserDOM n, MonadUnliftIO n) => n (Emitter IO Command)
 slideKeys = do
   HS.Emitter register <- Window.keyDown
@@ -418,9 +420,10 @@ commandOf event = case fromJSText (js_slides_key event) of
   "leave" -> Just Leave
   _ -> Nothing
 
--- | The page the input names, with where each of its attachments is fetched
--- from, and as slides, or why it cannot be shown. Markdown that cannot be
--- read (which CommonMark makes rare) is one slide that says so.
+-- | Fetch the page the input names, with the URL of each of its
+-- attachments, and as slides; or the reason it cannot be shown. Markdown
+-- that cannot be parsed (which CommonMark makes rare) becomes one slide
+-- that says so.
 fetch :: (MonadWiki n, MonadNotifications n) => Input -> n Loaded
 fetch input =
   getPage input.space.id input.path >>= \case
@@ -432,8 +435,8 @@ fetch input =
   where
     unreadable _ = deckOf []
 
--- | A slide's number among how many there are, as the footer and the
--- controls write it.
+-- | A slide's number out of the total, as the footer and the controls
+-- write it.
 position :: Int -> Int -> Text
 position n count = show n <> " / " <> show count
 
@@ -442,12 +445,12 @@ slideCount = \case
   Ready _ _ deck _ -> length deck.slides
   _ -> 1
 
--- | A slide number brought within the deck.
+-- | A slide number brought within the deck's range.
 within :: Loaded -> Int -> Int
 within loaded n = max 1 (min (slideCount loaded) n)
 
 -- | The view's classes besides its own: the deck's theme and shape, and
--- what is open.
+-- which panels are open.
 viewClasses :: State -> Deck -> Text
 viewClasses st deck =
   T.unwords

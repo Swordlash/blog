@@ -1,22 +1,24 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | A page's history, in place of the page, for anyone who may read the
--- page: its versions, the latest first, and for the one chosen what it
--- changed (a diff against the version before it) or what has changed since
--- (against the page as it is now), with a way back to the page. Whoever may
--- edit the page may restore a version, which saves its title and body as
--- the page's latest, once they have said so in place.
+-- | The history view: a page's history, in place of the page, for anyone
+-- who may read the page. It lists the page's versions, the latest first,
+-- and for the chosen one shows what it changed (a diff against the version
+-- before it) or what has changed since (against the current page), with a
+-- link back to the page. Someone who may edit the page may restore a
+-- version, which saves its title and body as the page's latest version,
+-- after confirming in place.
 --
--- It asks the backend for the page as the page view does ('getPage'), so it
--- is refused where the page is and for the same reasons; then for the
--- page's history and the versions it compares, which the latest needs no
--- request for, being the page.
+-- It fetches the page from the backend as the page view does ('getPage'),
+-- so it is refused where the page is, and for the same reasons. Then it
+-- fetches the page's history and the versions it compares; the latest
+-- needs no request, since it is the page.
 --
--- The diff is "Wiki.Core.Diff"'s, worked out once when the versions are
--- loaded and rendered here as Halogen HTML: a table of lines with their
--- numbers in the old and the new text, those taken out and put in marked,
--- and within a line that was changed rather than replaced the words that
--- changed. Unchanged lines away from a change are left out and counted.
+-- The diff comes from "Wiki.Core.Diff", worked out once when the versions
+-- are loaded, and rendered here as Halogen HTML. It is a table of lines
+-- with their numbers in the old and the new text, with removed and added
+-- lines marked, and, within a line that was changed rather than replaced,
+-- the words that changed. Unchanged lines away from a change are left out
+-- and counted.
 module Wiki.App.View.History
   ( Input (..)
   , component
@@ -46,8 +48,8 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
--- | A page of a space the shell has loaded, the version of it to show and
--- what to compare that with: the route's.
+-- | The history view's input, from the route: a page of a space the shell
+-- has loaded, the version of it to show, and what to compare it with.
 data Input = Input
   { context :: Context
   , space :: Space
@@ -63,11 +65,11 @@ type Slots = ("time" .== H.Slot (Const Void) Void Text)
 -- (1), and what the history lists of it.
 type Numbered = (Int, VersionInfo)
 
--- | What is shown of the history.
+-- | The part of the history shown.
 data Viewed = Viewed
   { page :: Page
   , versions :: [Numbered]
-  -- ^ The latest first; the latest is the page.
+  -- ^ The latest first; the latest is the current page.
   , chosen :: Numbered
   , version :: Version
   -- ^ The chosen version, whole.
@@ -81,7 +83,7 @@ data Comparison
     FirstVersion Diff
   | -- | What the chosen version changed from the one before it.
     FromPrevious Numbered Version Diff
-  | -- | What has changed since the chosen version, up to the page as it is.
+  | -- | What has changed since the chosen version, up to the current page.
     SinceThen Version Diff
 
 data Loaded
@@ -93,9 +95,9 @@ data State = State
   { input :: Input
   , loaded :: Loaded
   , confirming :: Bool
-  -- ^ Whether "Restore this version" is asking first.
+  -- ^ Whether "Restore this version" is asking for confirmation.
   , problem :: Maybe WikiError
-  -- ^ Why the last restore was not made.
+  -- ^ Why the last restore failed.
   }
 
 data Action
@@ -112,10 +114,10 @@ component =
   H.mkComponent
     H.ComponentSpec
       { initialState = \input -> do
-          -- Loaded at once rather than in 'Initialize', so that the first
-          -- render is the page the server or the prerender shows (see
-          -- "Wiki.App.Shell"), over a backend that can ('atOnce');
-          -- otherwise in 'Initialize'.
+          -- Loaded at once rather than in 'Initialize', when the backend
+          -- can ('atOnce'), so that the first render is the page the server
+          -- or the prerender shows (see "Wiki.App.Shell"); otherwise loaded
+          -- in 'Initialize'.
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
           pure State {input, loaded, confirming = False, problem = Nothing}
       , render
@@ -180,8 +182,8 @@ component =
       where
         (n, chosen) = shown.chosen
 
-    -- Against the version before, or the page as it is: a choice only for
-    -- a version that is not the latest, which the page is.
+    -- Compare with the version before, or with the current page: a choice
+    -- only for a version that is not the latest, which is the page.
     compareChoice :: Input -> Viewed -> [H.ComponentHTML Action Slots m]
     compareChoice input shown
       | isLatest shown shown.chosen = []
@@ -202,9 +204,9 @@ component =
           | against == current = [hh|<strong class="diff-against-chosen" aria-current="true">{{ label :: Text }}</strong>|]
           | otherwise = Router.link input.context.router Followed (versionRoute input shown shown.chosen against) [] [HH.text label]
 
-    -- Restoring, for whoever may edit the page, of any version but the
-    -- latest, which the page already is; asked in place first, as the
-    -- editor's Cancel asks.
+    -- Restoring, for someone who may edit the page, of any version except
+    -- the latest, which the page already is; confirmed in place first, as
+    -- the editor's Cancel asks.
     restoreView :: State -> Viewed -> [H.ComponentHTML Action Slots m]
     restoreView st shown
       | isLatest shown shown.chosen || not (mayEdit st.input.context st.input.space.id) = []
@@ -264,10 +266,11 @@ component =
           Ready shown -> do
             modify (\s -> s {confirming = False})
             restoreVersion shown.page.id (snd shown.chosen).updatedAt shown.page.updatedAt >>= \case
-              -- The page, as it now is: the shell reloads and goes there.
+              -- The page as it now is: the shell reloads and navigates
+              -- there.
               Right _ -> H.raise (Changed (Just (Page (spacePathOf st.input.context.spaces st.input.space.id) st.input.path)))
-              -- Saved since, perhaps: what is shown is loaded again, so
-              -- that the newer version is there to see.
+              -- Perhaps saved since: what is shown is loaded again, so that
+              -- the newer version can be seen.
               Left e -> do
                 modify (\s -> s {problem = Just e})
                 load
@@ -277,16 +280,16 @@ component =
     load = do
       input <- gets (\st -> st.input)
       loaded <- fetch input
-      -- Only if what was asked for is still what to show: another
+      -- Only if the requested history is still what to show: another
       -- navigation may have overtaken this load.
       now <- gets (\st -> st.input)
       when (now.space.id == input.space.id && now.path == input.path && now.version == input.version && now.against == input.against) $ do
         modify (\st -> st {loaded})
         H.raise Loaded
 
--- | The history the input asks for, with the versions compared and their
--- diff, or why it cannot be shown. A version the history does not have is
--- 'NotFound'.
+-- | Fetch the history the input asks for, with the versions compared and
+-- their diff, or the reason it cannot be shown. A version the history does
+-- not have is 'NotFound'.
 fetch :: (MonadWiki n) => Input -> n Loaded
 fetch input = either Failed Ready <$> runExceptT go
   where
@@ -320,14 +323,14 @@ versionRoute input shown v against =
     (if isLatest shown v then Nothing else Just (snd v).updatedAt)
     (if isLatest shown v then AgainstPrevious else against)
 
--- | Whether a version is the latest: the page as it is.
+-- | Whether a version is the latest: the current page.
 isLatest :: Viewed -> Numbered -> Bool
 isLatest shown (n, _) = n == length shown.versions
 
 versionName :: Viewed -> Int -> Text
 versionName shown n = "Version " <> show n <> (if n == length shown.versions then " (current)" else "")
 
--- | Who saved a version, for a person to read.
+-- | Who saved a version, in words for a person to read.
 authorName :: Maybe Author -> Text
 authorName = maybe "someone unknown" (\a -> a.name)
 

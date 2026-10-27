@@ -1,11 +1,11 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | A diff of two texts ("Wiki.Core.Diff"), rendered as Halogen HTML: a
--- table of lines with their numbers in the old and the new text, those
--- taken out and put in marked, and within a line that was changed rather
--- than replaced the words that changed; unchanged lines away from a change
--- are left out and counted. What the page's history shows between two
--- versions ("Wiki.App.View.History") and the editor between the author's
+-- table of lines with their numbers in the old and the new text, with
+-- removed and added lines marked, and, within a line that was changed
+-- rather than replaced, the words that changed. Unchanged lines away from
+-- a change are left out and counted. The history view shows it between two
+-- versions ("Wiki.App.View.History"), and the editor between the author's
 -- text and a version saved meanwhile ("Wiki.App.View.Editor").
 module Wiki.App.View.Diff
   ( diffView
@@ -44,8 +44,8 @@ line l =
       Unchanged -> ("diff-kept", " ") :: (Text, Text)
       Removed -> ("diff-removed", "−")
       Added -> ("diff-added", "+")
-    -- A line changed whole is marked by its row; only a line with
-    -- something kept has its changed words marked.
+    -- A line changed entirely is marked on its row; only a line with
+    -- something unchanged has its changed words marked.
     partly = any (\s -> not s.changed) l.segments
     segment s
       | s.changed && partly && l.kind == Removed = [hh|<del>{{ s.text }}</del>|]
@@ -53,8 +53,8 @@ line l =
       | otherwise = HH.text s.text
     number = maybe "" (show :: Int -> Text)
 
--- | A title that changed, the old struck out and the new put in; nothing
--- for one that did not.
+-- | A title that changed, the old one struck out and the new one added;
+-- nothing for one that did not change.
 titleChange :: Text -> Text -> [HH.HTML w i]
 titleChange old new
   | old == new = []

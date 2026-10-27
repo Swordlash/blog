@@ -1,8 +1,8 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | What the shell's views share: the context the shell hands each of them,
--- what they tell it back, the permission questions they ask of the context,
--- and a few pieces of HTML they all render.
+-- | What the shell's views share: the 'Context' the shell gives each of
+-- them, the 'ViewOutput' they send back, the permission checks they run on
+-- the context, and a few pieces of HTML they all render.
 module Wiki.App.View.Common
   ( -- * From the shell to a view, and back
     Context (..)
@@ -65,12 +65,13 @@ import Wiki.Core.Space (Icon (..), Space (homePage, icon, id, name, slug), colou
 import Wiki.Core.User (Standing (..))
 import Wiki.Core.Version (Author (..))
 
--- | What the shell knows that every view needs: the router, who is asking,
--- and the tree of spaces ('Wiki.App.Backend.listSpaces'), with where the
--- images of those pictured with one are fetched from
--- ('Wiki.App.Backend.spaceIconUrl'), and a revision that the shell counts
--- up whenever it has reloaded them because something changed (a write,
--- another user), so that a view knows to reload what it holds too.
+-- | 'Context': what the shell knows that every view needs. That is the
+-- router, who is asking, and the tree of spaces
+-- ('Wiki.App.Backend.listSpaces'), with the URLs of the spaces' icon images
+-- ('Wiki.App.Backend.spaceIconUrl'). It also has a revision, which the
+-- shell increments whenever it has reloaded them because something changed
+-- (a write, another user), so that a view knows to reload its own data
+-- too.
 data Context = Context
   { router :: Router Route
   , session :: Session
@@ -79,11 +80,11 @@ data Context = Context
   , revision :: Int
   }
 
--- | What a view tells the shell.
+-- | What a view sends back to the shell.
 data ViewOutput
-  = -- | The wiki has changed: reload what is shown, and go to this route if
-    -- there is one (where a new, moved or renamed thing now is, or where a
-    -- deleted one was).
+  = -- | The wiki has changed: reload what is shown, and navigate to this
+    -- route if there is one (where a new, moved or renamed thing now is, or
+    -- where a deleted one was).
     Changed (Maybe Route)
   | -- | The view has loaded what it shows.
     Loaded
@@ -91,11 +92,12 @@ data ViewOutput
 principalOf :: Context -> Maybe Principal
 principalOf ctx = sessionPrincipal ctx.session
 
--- | The grants that concern the current user.
+-- | The grants that apply to the current user.
 grantsOf :: Context -> Grants
 grantsOf ctx = ctx.session.grants
 
--- | A space's chain, from its top-level ancestor down, as the rules want it.
+-- | A space's chain, from its top-level ancestor down, in the form the
+-- permission rules take.
 chainOf :: Context -> SpaceId -> [Space]
 chainOf ctx = spaceChain ctx.spaces
 
@@ -104,8 +106,8 @@ mayView ctx sid = canView (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 mayEdit ctx sid = canEdit (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 mayAdminister ctx sid = canAdministerSpace (principalOf ctx) (grantsOf ctx) (chainOf ctx sid)
 
--- | Whether the reader is told of things (WP4.13 of docs/PLAN.md): one of
--- the wiki's users, signed in. The server's operator, who is none, is not.
+-- | Whether the reader gets notifications (WP4.13 of docs/PLAN.md): only a
+-- signed-in user of the wiki. The server's operator is not a user, so not.
 notified :: Context -> Bool
 notified ctx = isJust ctx.session.user && ctx.session.standing /= Operator
 
@@ -123,11 +125,11 @@ findSpace spaces path = case resolvePath (findChild spaces) path of
   Right chain@(_ : _) -> Just chain
   _ -> Nothing
 
--- | Whether the space is the other one or under it.
+-- | Whether the first space is the second one or under it.
 descendsFrom :: [Space] -> SpaceId -> SpaceId -> Bool
 descendsFrom spaces ancestor sid = any (\s -> s.id == ancestor) (spaceChain spaces sid)
 
--- | What went wrong, said in place of what could not be shown or done.
+-- | The error, shown in place of what could not be shown or done.
 errorView :: WikiError -> HH.HTML w i
 errorView e = [hh|<div class="error {{ errorClass e }}" role="alert">{{ errorMessage e }}</div>|]
   where
@@ -139,9 +141,9 @@ errorView e = [hh|<div class="error {{ errorClass e }}" role="alert">{{ errorMes
       Invalid _ -> "error-invalid"
       Unreachable _ -> "error-unreachable"
 
--- | What could not be loaded, and why: 'errorView', with a button to try
--- again when the backend could not be reached, which is the one error that
--- trying again may cure.
+-- | What could not be loaded, and why: 'errorView', with a "Try again"
+-- button when the backend could not be reached, which is the one error a
+-- retry may fix.
 failureView :: WikiError -> i -> HH.HTML w i
 failureView e again = case e of
   Unreachable _ ->
@@ -161,10 +163,10 @@ errorMessage = \case
   Invalid why -> why
   Unreachable why -> "The wiki's server could not be reached (" <> why <> "). Check the connection, and try again."
 
--- | The pages of a space as a tree of links, in the space's page order, the
--- current page marked, and after each link what the function gives for the
--- page, told whether it is the first and the last of its siblings (the
--- space's view puts buttons there that move it).
+-- | The pages of a space as a tree of links, in the space's page order,
+-- with the current page marked. After each link comes what the function
+-- returns for the page, given whether it is the first and the last of its
+-- siblings (the space's view puts buttons there that move it).
 pageTree
   :: Router Route
   -> (Follow Route -> action)
@@ -189,10 +191,10 @@ pageTree router onFollow spacePath order pages current controls = level Nothing
     pageLink p here = Router.link router onFollow (Page spacePath (pagePathOf pages p.id)) [attr "aria-current" "page" | here] [HH.text p.title]
     below p = [level (Just p.id) | not (null (childrenOf pages (Just p.id)))]
 
--- | How a space is pictured beside its name ('Wiki.Core.Space.Icon'): its
--- emoji, its image (from where the context says it is fetched), or the
--- first letter of its name on its colour. Decoration only: the name is
--- always beside it, so a screen reader is not told it twice.
+-- | A space's icon beside its name ('Wiki.Core.Space.Icon'): its emoji,
+-- its image (from the URL the context gives), or the first letter of its
+-- name on its colour. Decoration only: the name is always beside it, so a
+-- screen reader does not read it twice.
 spaceIcon :: Map SpaceId Text -> Space -> HH.HTML w i
 spaceIcon urls s = case s.icon of
   Just (IconEmoji e) -> [hh|<span class="space-icon space-icon-emoji" aria-hidden="true">{{ e }}</span>|]
@@ -207,9 +209,9 @@ homeOf :: Space -> [Page] -> Maybe Page
 homeOf s pages = s.homePage >>= \h -> find (\p -> p.id == h) pages
 
 -- | Buttons that move a child of a space by hand: to the top, up, down, to
--- the bottom, told whether it is the first and the last of its siblings
--- (where moving further that way does nothing, so the buttons are
--- disabled). Each says what it moves, for a screen reader.
+-- the bottom. Given whether it is the first and the last of its siblings,
+-- the buttons that would do nothing are disabled. Each names what it
+-- moves, for a screen reader.
 moveButtons :: Text -> Bool -> Bool -> (Shift -> i) -> HH.HTML w i
 moveButtons name atTop atBottom onShift =
   [hh|
@@ -223,7 +225,7 @@ moveButtons name atTop atBottom onShift =
 button :: Text -> i -> HH.HTML w i
 button label action = [hh|<button type="button" onClick={{ const action }}>{{ label }}</button>|]
 
--- | A labelled text field, its value kept by the component.
+-- | A labelled text field, whose value the component keeps.
 textField :: Text -> Text -> (Text -> i) -> HH.HTML w i
 textField label value onInput =
   [hh|
@@ -241,7 +243,7 @@ attr name = HP.attr (HH.AttrName name)
 ariaBool :: Bool -> Text
 ariaBool b = if b then "true" else "false"
 
--- | A size in bytes, as people read it.
+-- | A size in bytes, in the units people read.
 fileSize :: Natural -> Text
 fileSize n
   | n < 1024 = show n <> " bytes"
@@ -249,10 +251,10 @@ fileSize n
   | otherwise = show (n `div` (1024 * 1024)) <> " MB"
 
 -- | Some people named as the subject of a sentence, with its verb: "Ada
--- is", "Ada and Grace are", "Ada, Grace and Rita are". Whoever is the
--- reader (by their id) is "you (in another tab)", since the live channel
--- never names a tab to itself ("Wiki.Api.Events"): it is the reader
--- editing elsewhere. Nobody is "Nobody is".
+-- is", "Ada and Grace are", "Ada, Grace and Rita are". The reader (by
+-- their id) is "you (in another tab)", since the live channel never
+-- reports a tab to itself ("Wiki.Api.Events"): it must be the reader
+-- editing elsewhere. Nobody gives "Nobody is".
 whoIs :: Maybe UserId -> [Author] -> Text
 whoIs me = \case
   [] -> "Nobody is"

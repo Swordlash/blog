@@ -1,20 +1,20 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The directory of spaces, the wiki's front page: a card for each
--- top-level space (its icon, name and description, how many pages it has
+-- | The directory of spaces, the wiki's front page. It has a card for each
+-- top-level space (its icon, name and description, how many pages it has,
 -- and whether it is public), the spaces this browser visited last
--- ("Recently visited", "Wiki.App.Recent"), and the way to a new space for
--- whoever may make one.
+-- ("Recently visited", "Wiki.App.Recent"), and a link to create a new
+-- space for someone who may.
 --
--- The cards come from the tree of spaces the shell has loaded; how many
--- pages each has is the backend's to say ('pageCounts'), loaded as every
--- view loads what it shows: with the initial state over a backend that
--- answers at once, and otherwise in the initializer, the cards shown
--- meanwhile without their counts. The recently visited spaces are read
--- from the browser after the first render, which is so the same as the
--- page the prerender or the server wrote.
+-- The cards come from the tree of spaces the shell has loaded. The number
+-- of pages in each comes from the backend ('pageCounts'), loaded as every
+-- view loads its data: in the initial state on a backend that answers at
+-- once, and otherwise in the initializer, with the cards shown meanwhile
+-- without their counts. The recently visited spaces are read from the
+-- browser after the first render, so that render matches the page the
+-- prerender or the server wrote.
 --
--- A top-level space someone may not view, listed because they may view a
+-- A top-level space the user may not view, listed because they may view a
 -- subspace of it, is a card without a link, naming the subspaces they may
 -- open.
 module Wiki.App.View.Directory
@@ -42,8 +42,8 @@ import Wiki.Core.Path (childrenOf)
 import Wiki.Core.Permission (mayCreateSpace)
 import Wiki.Core.Space (Space (description, id, name, public, slug), subspacesOf)
 
--- | The shell's context, and a route a newcomer is invited to (the demo's
--- tour), if there is one.
+-- | The directory's input: the shell's context, and a route a newcomer is
+-- invited to (the demo's tour), if there is one.
 data Input = Input
   { context :: Context
   , welcome :: Maybe Route
@@ -52,7 +52,7 @@ data Input = Input
 data State = State
   { input :: Input
   , counts :: Maybe (Map SpaceId Int)
-  -- ^ How many pages each space has, once loaded.
+  -- ^ The number of pages in each space, once loaded.
   , recent :: [SpaceId]
   -- ^ The spaces this browser visited last, once read.
   }
@@ -67,8 +67,8 @@ component =
   H.mkComponent
     H.ComponentSpec
       { initialState = \input -> do
-          -- At once over a backend that can, so that the first render is
-          -- the page the prerender shows; otherwise in 'Initialize'.
+          -- At once on a backend that can, so that the first render is the
+          -- page the prerender shows; otherwise in 'Initialize'.
           counts <- join <$> atOnce (rightToMaybe <$> attempt pageCounts)
           pure State {input, counts, recent = []}
       , render
@@ -103,7 +103,7 @@ component =
       |]
       where
         ctx = st.input.context
-        -- There from the first render, empty and hidden, so that what the
+        -- Present from the first render, empty and hidden, so that what the
         -- browser remembers fills it in place rather than moving what
         -- follows it.
         shown = [s | sid <- st.recent, Just s <- [find (\x -> x.id == sid) ctx.spaces], mayView ctx s.id]
@@ -162,7 +162,7 @@ component =
         subspacesMeta = case length (childrenOf ctx.spaces (Just s.id)) of
           0 -> Nothing
           n -> Just (counted n "subspace" "subspaces")
-        -- The subspaces under it someone may view, each a link.
+        -- The subspaces under it the user may view, each a link.
         openable =
           intersperse
             (HH.text ", ")
@@ -173,7 +173,7 @@ component =
             , mayView ctx x.id
             ]
 
-    -- A new space at the top level, for someone who may make one.
+    -- A link to a new top-level space, for someone who may create one.
     newSpace :: Context -> Maybe (H.ComponentHTML Action Empty m)
     newSpace ctx =
       guard (mayCreateSpace (principalOf ctx) (grantsOf ctx) Nothing)
@@ -193,9 +193,9 @@ component =
         when (old.context.revision /= input.context.revision) load
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
 
-    -- The counts, on a worker; without them (the server could not be
-    -- reached) the cards are shown as they are, and the shell is told all
-    -- the same.
+    -- Load the counts on a worker thread. Without them (the server could
+    -- not be reached) the cards are shown without counts, and the shell is
+    -- told all the same.
     load :: H.HalogenM State Action Empty ViewOutput m ()
     load = do
       counts <- rightToMaybe <$> lift (attempt pageCounts)
@@ -206,6 +206,6 @@ component =
 pathName :: Context -> Space -> Text
 pathName ctx s = T.intercalate " / " (map (\x -> x.name) (chainOf ctx s.id))
 
--- | A number of things, as people say it.
+-- | A number of things, in words.
 counted :: Int -> Text -> Text -> Text
 counted n singular plural = show n <> " " <> if n == 1 then singular else plural

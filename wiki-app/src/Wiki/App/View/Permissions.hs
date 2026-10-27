@@ -1,29 +1,29 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | Who may do what on a space (decision 9 of the plan), shown in the
--- space's view to whoever may administer it, when they open it: whether
--- the space is public, the grants on it, which can be revoked, the grants
--- it inherits from the spaces above it, shown with the space they are on
--- and changed there, and a form that grants a user or a group a permission
--- on it.
+-- | The permissions view: who may do what on a space (decision 9 of the
+-- plan). The space's view shows it, when opened, to someone who may
+-- administer the space. It shows whether the space is public; the grants
+-- on it, which can be revoked; the grants it inherits from the spaces
+-- above it, with the space they are on, where they are changed; and a
+-- form that grants a user or a group a permission on it.
 --
--- What it shows it reads in one go ('spaceAccess'), at once where the
--- backend can answer at once, and otherwise in its initializer, saying
--- meanwhile that it is loading (decision 18). After a change it tells the
--- space's view, which tells the shell ('Changed'): the shell reloads who is
--- signed in (whose own grants may be the ones changed, and with them what
--- the rules let them see and do) and counts up the context's revision, on
--- which this reads the space's grants again; until then its controls stay
--- disabled, so that nothing is asked twice of a wiki that has not been read
--- back.
+-- Everything it shows comes from one read ('spaceAccess'): at once where
+-- the backend can answer at once, and otherwise in its initializer, which
+-- shows a loading state meanwhile (decision 18 of the plan). After a
+-- change it tells the space's view, which tells the shell ('Changed'). The
+-- shell reloads who is signed in (their own grants may be the ones
+-- changed, and with them what the rules let them see and do) and
+-- increments the context's revision, which makes this view fetch the
+-- space's grants again. Until then its controls stay disabled, so that
+-- nothing is requested twice before the change is visible.
 --
 -- A grant whose revocation would leave the current user unable to
--- administer the space is not offered to revoke, with a note why
--- ('keepsAdministering'): the backend would allow it, but it would close
--- this section on them at once, which is more likely a slip than a wish;
--- another administrator of the space, or of the wiki, can do it. The
--- wiki's administrators, who may administer every space whatever its
--- grants, may revoke every one.
+-- administer the space is not offered for revocation, with a note why
+-- ('keepsAdministering'). The backend would allow it, but it would lock
+-- them out of this section at once, which is more likely a slip than
+-- intended; another administrator of the space, or of the wiki, can do it.
+-- The wiki's administrators, who may administer every space whatever its
+-- grants, may revoke every grant.
 module Wiki.App.View.Permissions
   ( Input (..)
   , component
@@ -47,7 +47,7 @@ import Wiki.Core.Permission (SpaceAccess (..), SpaceGrant (..), SpacePermission 
 import Wiki.Core.Space (Space (id, name, public))
 import Wiki.Core.User (Group (..), User (..))
 
--- | The space, as the space's view has it.
+-- | The permissions view's input: the space, as the space's view has it.
 data Input = Input
   { context :: Context
   , space :: Space
@@ -62,11 +62,13 @@ data State = State
   { input :: Input
   , loaded :: Loaded
   , who :: Int
-  -- ^ Which of the users and groups ('candidates') is chosen to grant to.
+  -- ^ Which of the users and groups ('candidates') is selected to be
+  -- granted.
   , what :: SpacePermission
-  -- ^ What is chosen to grant them.
+  -- ^ The permission selected to grant them.
   , busy :: Bool
-  -- ^ A change has been asked for and the grants not read again since.
+  -- ^ A change has been requested, and the grants not fetched again
+  -- since.
   , problem :: Maybe WikiError
   }
 
@@ -87,7 +89,7 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           -- Read here when the backend answers at once, as the other views
-          -- read what they show; otherwise in 'Initialize'.
+          -- read their data; otherwise in 'Initialize'.
           loaded <- maybe Loading (either Failed Ready) <$> atOnce (spaceAccess input.space.id)
           pure State {input, loaded, who = 0, what = View, busy = False, problem = Nothing}
       , render
@@ -232,8 +234,8 @@ component =
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
-      -- The shell has reloaded the wiki after a change, this section's or
-      -- another's: read the grants again.
+      -- The shell has reloaded the wiki after a change, by this section or
+      -- another: fetch the grants again.
       Receive input -> do
         old <- gets (\st -> (st.input.context.revision, st.input.space.id))
         modify (\st -> st {input})
@@ -251,9 +253,10 @@ component =
           _ -> pass
       Revoke g -> change (setSpaceGrant g.space g.subject g.permission False)
 
-    -- Ask for a change. Done, the space's view is told, and the controls
-    -- stay disabled until the grants have been read again ('Receive');
-    -- refused, why is said in place, and the controls are given back.
+    -- Request a change. If it is made, the space's view is told, and the
+    -- controls stay disabled until the grants have been fetched again
+    -- ('Receive'). If it is refused, the reason is shown in place, and the
+    -- controls are enabled again.
     change :: H.HalogenM State Action Empty ViewOutput m (Either WikiError ()) -> H.HalogenM State Action Empty ViewOutput m ()
     change request = do
       modify (\st -> st {busy = True, problem = Nothing})
@@ -267,7 +270,7 @@ component =
       result <- spaceAccess sid
       modify (\st -> st {loaded = either Failed Ready result, busy = False})
 
--- | Whom a permission may be granted to: every user, then every group.
+-- | Who a permission may be granted to: every user, then every group.
 candidates :: SpaceAccess -> [Subject]
 candidates access = map (\u -> SubjectUser u.id) access.users <> map (\g -> SubjectGroup g.id) access.groups
 
@@ -275,14 +278,14 @@ candidates access = map (\u -> SubjectUser u.id) access.users <> map (\g -> Subj
 permissions :: [SpacePermission]
 permissions = [minBound .. maxBound]
 
--- | Whom a grant is for, for a person to read: a user by name and login, a
--- group by name, and one that is no longer there by its id.
+-- | Who a grant is for, in words for a person to read: a user by name and
+-- login, a group by name, and one that no longer exists by its id.
 subjectName :: SpaceAccess -> Subject -> Text
 subjectName access = \case
   SubjectUser u -> maybe u.text (\x -> x.displayName <> " (" <> x.login <> ")") (findUser access u)
   SubjectGroup g -> maybe g.text (\x -> "Group " <> x.name) (findGroup access g)
 
--- | Whom a grant is for, as a test or a stylesheet picks it out: a user's
+-- | Who a grant is for, as a test or a stylesheet identifies it: a user's
 -- login, a group's name.
 subjectKey :: SpaceAccess -> Subject -> Text
 subjectKey access = \case
@@ -301,7 +304,7 @@ permissionName = \case
   Edit -> "Edit"
   AdministerSpace -> "Administer"
 
--- | A permission as the form offers it, with what it brings with it.
+-- | A permission as the form offers it, with what it includes.
 permissionChoice :: SpacePermission -> Text
 permissionChoice = \case
   View -> "View: read its pages"

@@ -1,33 +1,35 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | A page's comments as the page view shows them (WP4.5 of docs/PLAN.md),
--- in one of two places ('Placement'): its inline threads in a panel beside
--- the page ('Beside'), each under the quote it is about, in the order the
--- quotes are in the page and those whose quote the page no longer has
--- last, marked as such; and its threads about the whole page under it
--- ('Below'), in the order they were opened, with a form for a new one.
+-- | The comments view: a page's comments as the page view shows them
+-- (WP4.5 of docs/PLAN.md), in one of two places ('Placement'). Beside the
+-- page ('Beside'), a panel holds its inline threads, each under the quote
+-- it is about, in the order of the quotes in the page, with threads whose
+-- quote the page no longer contains last, marked as such. Under the page
+-- ('Below') are its threads about the whole page, in the order they were
+-- opened, with a form for a new one.
 --
--- The page view ("Wiki.App.View.Page") holds the threads, which it loads
--- and keeps up to date with what the live channel says ("Wiki.App.Live"),
--- and finds the quotes in the page ("Wiki.Core.Anchor"); this component is
--- handed them, and holds only what is being written: the new thread's
--- comment, each thread's reply, the comment being edited, the deletion
--- being confirmed. What a write did it tells the page view as the event
--- the server would ('Did'), which the page view folds into its threads as
--- it folds what it hears, so a write counts once however it is heard of.
+-- The page view ("Wiki.App.View.Page") holds the threads: it loads them,
+-- keeps them up to date with the live channel ("Wiki.App.Live"), and
+-- finds the quotes in the page ("Wiki.Core.Anchor"). This component gets
+-- them, and holds only what is being written: the new thread's comment,
+-- each thread's reply, the comment being edited, and the deletion being
+-- confirmed. It reports what a write did to the page view as the event the
+-- server would send ('Did'). The page view applies that event to its
+-- threads as it applies the events it receives, so a write counts once
+-- however it is reported.
 --
 -- A comment is Markdown, rendered as the page is ("Wiki.App.View.Body":
 -- links resolved against the page, islands drawn, raw HTML through the
--- allowlist), and every comment shown is a section of one document, so
--- that no two of them draw islands under the same key.
+-- allowlist). Every comment shown is a section of one document, so that
+-- no two of them draw islands under the same key.
 --
--- What someone may do follows "Wiki.Core.Comment"'s rules, as the backend
--- checks them: someone not signed in reads the threads and is told to sign
--- in to comment; whoever may read the page and is signed in comments,
--- replies, and resolves or reopens an inline thread; a comment's author
--- edits and deletes it; whoever administers the space deletes any comment
--- and any thread, and a thread's opener deletes it while all of it is
--- theirs.
+-- What someone may do follows the rules of "Wiki.Core.Comment", which the
+-- backend also checks. Someone not signed in reads the threads and is
+-- told to sign in to comment. Someone signed in who may read the page
+-- comments, replies, and resolves or reopens an inline thread. A comment's
+-- author edits and deletes it. An administrator of the space deletes any
+-- comment and any thread, and a thread's opener may delete it while all
+-- its comments are theirs.
 module Wiki.App.View.Comments
   ( Placement (..)
   , Comments (..)
@@ -76,8 +78,8 @@ data Comments
   | CommentsFailed WikiError
   | CommentsReady [Shown]
 
--- | A thread, with where its quote is in the page (an inline thread's), in
--- the order they are shown.
+-- | A thread, with where its quote is in the page (for an inline thread),
+-- in the order threads are shown.
 data Shown = Shown
   { thread :: Thread
   , located :: Located
@@ -86,7 +88,8 @@ data Shown = Shown
 data Input = Input
   { context :: Context
   , place :: Body.Place
-  -- ^ Where the page is, which its comments' links are resolved against.
+  -- ^ The place the comments' links are resolved against: where the page
+  -- is.
   , page :: PageId
   , space :: SpaceId
   , placement :: Placement
@@ -95,24 +98,24 @@ data Input = Input
   -- ^ The thread the reader has chosen, by clicking its quote in the page
   -- or the thread itself.
   , quoting :: Maybe Anchor
-  -- ^ A quote of the page the reader has chosen to comment on: a new
-  -- inline thread, in the panel beside the page.
+  -- ^ A quote of the page the reader chose to comment on: a new inline
+  -- thread, in the panel beside the page.
   }
 
--- | What the page view is told.
+-- | What the comments view sends to the page view.
 data Output
-  = -- | A write was made, and did this.
+  = -- | A write was made, with this event as its result.
     Did PageEvent
   | -- | The reader chose a thread.
     Focus CommentThreadId
-  | -- | The reader gave up the new inline thread.
+  | -- | The reader abandoned the new inline thread.
     StopQuoting
   | -- | The reader closed the panel.
     Close
   | -- | The threads failed to load: try again.
     Reload
 
--- | A deletion being confirmed.
+-- | A deletion awaiting confirmation.
 data Deleting
   = DeletingComment CommentThreadId CommentId
   | DeletingThread CommentThreadId
@@ -148,7 +151,7 @@ data Action
   | TryAgain
 
 -- | The islands of the comments' Markdown, and of the times they were
--- written at (each under a key no Markdown's island has).
+-- written at (each under a key no Markdown island has).
 type Slots = Body.IslandSlots
 
 component :: forall query m. (MonadComments m, MonadIslands m, MonadUUID m) => H.Component query Input Output m
@@ -360,7 +363,7 @@ component =
               </form>
             |]
 
-    -- Someone not signed in is told how to comment, under threads they
+    -- Someone not signed in is told how to comment, under the threads they
     -- may read.
     signInLine :: State -> Maybe (H.ComponentHTML Action Slots m)
     signInLine st
@@ -375,7 +378,8 @@ component =
       Receive input -> do
         old <- gets (\st -> st.input)
         modify (\st -> st {input})
-        -- A new quote is a new thread: what was written for another goes.
+        -- A new quote means a new thread: text written for another is
+        -- discarded.
         when (old.page /= input.page || old.quoting /= input.quoting) $
           modify (\st -> st {drafted = if old.page /= input.page then "" else st.drafted, problem = Nothing})
         when (old.page /= input.page) $
@@ -410,7 +414,7 @@ component =
         st <- get
         case st.deleting of
           Just (DeletingComment tid cid) -> do
-            -- The first comment of a thread is the thread.
+            -- The first comment of a thread stands for the whole thread.
             let first' = case st.input.comments of
                   CommentsReady shown -> any (\s -> s.thread.id == tid && fmap (\c -> c.id) (head s.thread.comments) == Just cid) shown
                   _ -> False
@@ -426,8 +430,8 @@ component =
       CloseIt -> H.raise Close
       TryAgain -> H.raise Reload
 
-    -- What a write gave: told as the event it was, and the form it came
-    -- from emptied; or why not.
+    -- Handle a write's result: report it as the event it was and empty the
+    -- form it came from; or show why it failed.
     done :: (a -> PageEvent) -> (State -> State) -> Either WikiError a -> H.HalogenM State Action Slots Output m ()
     done event after = \case
       Left e -> modify (\st -> st {problem = Just e})

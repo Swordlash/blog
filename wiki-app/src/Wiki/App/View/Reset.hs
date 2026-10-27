@@ -4,15 +4,15 @@
 -- docs/PLAN.md): the link mailed to someone who asked for one, with a form
 -- for a new password, typed twice. Setting it ends every session the user
 -- had and signs nobody in, so that a second factor, if they have one, is
--- still asked for: the page then offers to sign in ('SignInWanted').
+-- still asked for; the page then offers to sign in ('SignInWanted').
 --
--- Nothing is read before the form is sent: the link's secret is checked
--- when the password is set, and a link that has been used or has expired
--- says so then. So the page the server renders is the form itself, as the
--- program renders it. Someone signed in is told to sign out first, since
--- the reset would sign them out without warning; a wiki that signs nobody
--- in (the demo) says that it has no passwords to reset. The inputs are not
--- controlled, as the sign-in form's are not ("Wiki.App.View.SignIn").
+-- Nothing is fetched before the form is sent: the link's secret is checked
+-- when the password is set, and a link that was used or has expired is
+-- reported then. So the page the server prerenders is the form itself, as
+-- the program renders it. Someone signed in is told to sign out first,
+-- since the reset would sign them out without warning. A wiki that signs
+-- nobody in (the demo) says that it has no passwords to reset. The inputs
+-- are uncontrolled, like the sign-in form's ("Wiki.App.View.SignIn").
 module Wiki.App.View.Reset
   ( Input (..)
   , Output (..)
@@ -33,7 +33,7 @@ import Wiki.Core.User (User (..), minimumPasswordLength)
 
 data Input m = Input
   { accounts :: Maybe (Accounts m)
-  -- ^ Signing in and out, over a backend where people do.
+  -- ^ Signing in and out, on a backend where people do.
   , token :: MailToken
   , session :: Session
   }

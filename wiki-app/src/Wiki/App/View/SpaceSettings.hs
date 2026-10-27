@@ -1,19 +1,20 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | A space's settings, for whoever may administer it, opened from the
--- space's list of pages ("Wiki.App.View.Space"): its name, its description
--- and its icon, which the directory of spaces shows, the page it opens at,
--- whether it is shown as a blog ("Wiki.Core.Blog"), and, below them, who may do what on it ("Wiki.App.View.Permissions",
--- which has the public switch).
+-- | The space settings view, for someone who may administer the space,
+-- opened from the space's list of pages ("Wiki.App.View.Space"). It edits
+-- the space's name, description and icon, which the directory of spaces
+-- shows; the page it opens at; whether it is shown as a blog
+-- ("Wiki.Core.Blog"); and, below them, its permissions
+-- ("Wiki.App.View.Permissions", which has the public switch).
 --
--- The profile is one form, saved with one press: the name, if it changed
+-- The profile is one form, saved with one button: the name, if it changed
 -- ('renameSpace'), then the rest ('setSpaceProfile'). The icon is the
 -- default (the name's first letter on a colour picked for the space), a
--- colour chosen from the palette, an emoji, or an image; an image is
--- uploaded as soon as it is chosen ('uploadSpaceIcon') and then kept by the
--- profile, until another kind of icon is saved. After each change the
--- shell reloads the wiki; the form then shows the space as it is, unless
--- something typed in it is not saved yet, which it keeps.
+-- colour chosen from the palette, an emoji, or an image. An image is
+-- uploaded as soon as it is chosen ('uploadSpaceIcon'), and the profile
+-- then keeps it until another kind of icon is saved. After each change the
+-- shell reloads the wiki, and the form then shows the space as it is,
+-- unless it holds unsaved input, which it keeps.
 module Wiki.App.View.SpaceSettings
   ( Input (..)
   , component
@@ -47,8 +48,8 @@ import Wiki.Core.Space
   , withProfile
   )
 
--- | The space, as the space's view has it, with its pages, among which its
--- home page is chosen.
+-- | The view's input: the space, as the space view has it, with its pages,
+-- from which the home page is chosen.
 data Input = Input
   { context :: Context
   , space :: Space
@@ -59,7 +60,7 @@ data Input = Input
 data Kind = DefaultKind | ColourKind | EmojiKind | ImageKind
   deriving stock (Eq, Show, Enum, Bounded)
 
--- | What the form holds: what is typed and chosen in it.
+-- | The form's contents: what is typed and chosen in it.
 data Fields = Fields
   { typedName :: Text
   , typedDescription :: Text
@@ -75,9 +76,9 @@ data State = State
   { input :: Input
   , fields :: Fields
   , busy :: Bool
-  -- ^ A change has been asked for and the space not read back since.
+  -- ^ A change has been requested, and the space not fetched again since.
   , saved :: Bool
-  -- ^ The last save worked, and nothing has been typed since.
+  -- ^ The last save succeeded, and nothing has been typed since.
   , problem :: Maybe WikiError
   }
 
@@ -182,8 +183,8 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
-      -- The space as it is now, unless what is typed in the form has not
-      -- been saved, which is kept.
+      -- Show the space as it is now, unless the form holds unsaved input,
+      -- which is kept.
       Receive input -> do
         st <- get
         let unsaved = st.fields /= fieldsOf st.input.space
@@ -212,8 +213,8 @@ component =
           uploadSpaceIcon sid file.mediaType bytes >>= \case
             Left e -> modify (\st -> st {busy = False, problem = Just e})
             Right _ -> do
-              -- The image is the icon now: the form says so, whatever kind
-              -- it showed before.
+              -- The image is the icon now: the form shows that, whatever
+              -- kind it showed before.
               modify (\st -> st {fields = st.fields {kind = ImageKind}})
               H.raise (Changed Nothing)
       Save -> do
@@ -230,8 +231,8 @@ component =
             case result of
               Left e -> modify (\s -> s {busy = False, problem = Just e})
               Right updated -> do
-                -- What was saved, as the space will be read back, so that
-                -- the form is not taken for one with unsaved changes.
+                -- What was saved, as the space will be when fetched again,
+                -- so that the form does not count as having unsaved changes.
                 modify (\s -> s {saved = True, fields = (fieldsOf updated) {typedName = T.strip f.typedName}})
                 H.raise (Changed Nothing)
       FromPermissions out -> H.raise out
@@ -239,7 +240,7 @@ component =
     edit :: (Fields -> Fields) -> H.HalogenM State Action Slots ViewOutput m ()
     edit change = modify (\st -> st {fields = change st.fields, saved = False})
 
--- | The form as a space fills it.
+-- | The form filled in from a space.
 fieldsOf :: Space -> Fields
 fieldsOf s =
   Fields
@@ -260,13 +261,13 @@ fieldsOf s =
     , blog = s.blog
     }
 
--- | The form with the blog's switch as given. (A function, since a record
--- update of @blog@ cannot tell the form's from a space's.)
+-- | The form with the blog switch set as given. (A function, since a
+-- record update of @blog@ cannot tell the form's field from a space's.)
 asBlog :: Bool -> Fields -> Fields
 asBlog blog f = Fields {typedName = f.typedName, typedDescription = f.typedDescription, kind = f.kind, colour = f.colour, emoji = f.emoji, home = f.home, blog}
 
--- | The icon the form chooses, or why it chooses none it can save: an
--- image is the one the space has, uploaded.
+-- | The icon the form chooses, or why it chooses none that can be saved:
+-- an image must be the one the space has, already uploaded.
 iconOf :: Space -> Fields -> Either Text (Maybe Icon)
 iconOf space f = case f.kind of
   DefaultKind -> Right Nothing
@@ -281,8 +282,8 @@ isImage = \case
   Just (IconImage _ _) -> True
   _ -> False
 
--- | The space as its icon would be with what the form chooses, for the
--- preview; an emoji not typed yet is shown as the default.
+-- | The space with the icon the form chooses, for the preview; an emoji
+-- not typed yet is shown as the default icon.
 previewed :: State -> Space
 previewed st = withProfile SpaceProfile {description = space.description, icon, homePage = space.homePage, blog = space.blog} space
   where
@@ -292,8 +293,8 @@ previewed st = withProfile SpaceProfile {description = space.description, icon, 
       Right i -> i
       Left _ -> Nothing
 
--- | The pages a home page is chosen among, in the order the space lists
--- them, each under the pages above it: none first.
+-- | The pages the home page can be chosen from, in the order the space
+-- lists them, each under the pages above it, with "none" first.
 homeChoices :: Input -> [(Maybe PageId, Text)]
 homeChoices input =
   (Nothing, "None: the list of its pages")

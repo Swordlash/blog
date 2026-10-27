@@ -1,17 +1,18 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | A page's Markdown, in place of the page, for anyone who may read the
--- page (decision 14 of the plan): the page's title, a link back to it, and
--- the source in a @\<pre>@ with a button that copies it.
+-- | The source view: a page's Markdown, in place of the page, for anyone
+-- who may read the page (decision 14 of the plan). It shows the page's
+-- title, a link back to it, and the source in a @\<pre>@ with a button
+-- that copies it.
 --
--- It asks the backend for the page as the page view does ('getPage'), so it
--- is refused where the page is and for the same reasons, with the same
--- message in place (not found, or not permitted, with the way to switch to
--- someone who is). Reading the source asks no more than reading the page:
--- whether the reader may edit it plays no part.
+-- It fetches the page from the backend as the page view does ('getPage'),
+-- so it is refused where the page is, for the same reasons, with the same
+-- message in place (not found, or not permitted, with how to switch to
+-- someone who is permitted). Reading the source needs no more than reading
+-- the page: whether the reader may edit it does not matter.
 --
 -- The way back is a link to the page's route rather than the browser's
--- back button, since a reader may have arrived here by the address.
+-- back button, since the reader may have arrived here by the address.
 module Wiki.App.View.Source
   ( Input (..)
   , component
@@ -36,7 +37,8 @@ import Wiki.Core.Page (Page (body, title))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 
--- | The page at a path in a space the shell has loaded.
+-- | The source view's input: the page at a path in a space the shell has
+-- loaded.
 data Input = Input
   { context :: Context
   , space :: Space
@@ -48,11 +50,11 @@ data Loaded
   | Failed WikiError
   | Ready Page
 
--- | What the last press of Copy did.
+-- | The result of the last press of Copy.
 data Copied
   = NotYet
   | Copied
-  | -- | The browser would not copy; the text is left selected.
+  | -- | The browser refused to copy; the text is left selected.
     Selected
 
 data State = State
@@ -63,8 +65,8 @@ data State = State
   -- copied.
   , copied :: Copied
   , copies :: Int
-  -- ^ How many times Copy has been pressed, so that the wait to clear its
-  -- "Copied" clears only the latest.
+  -- ^ How many times Copy has been pressed, so that the timer that clears
+  -- its "Copied" clears only the latest.
   }
 
 data Action
@@ -81,9 +83,10 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           source <- H.newRefLabel "page-source"
-          -- Loaded at once rather than in 'Initialize', so that the first
-          -- render is the page the prerender shows (see "Wiki.App.Shell"),
-          -- over a backend that can ('atOnce'); otherwise in 'Initialize'.
+          -- Loaded at once rather than in 'Initialize', when the backend
+          -- can ('atOnce'), so that the first render is the page the
+          -- prerender shows (see "Wiki.App.Shell"); otherwise in
+          -- 'Initialize'.
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
           pure State {input, loaded, source, copied = NotYet, copies = 0}
       , render
@@ -157,9 +160,9 @@ component =
       Forget n -> modify (\st -> if st.copies == n then st {copied = NotYet} else st)
 
     -- Copying waits for the browser's clipboard, so it is done off the
-    -- component's loop; "Copied" is taken back a little later, unless Copy
-    -- has been pressed again meanwhile. Being told the text could not be
-    -- copied stays until then.
+    -- component's loop. "Copied" is removed a little later, unless Copy
+    -- has been pressed again meanwhile. A message that the text could not
+    -- be copied also stays until then.
     copyOut :: Element -> Text -> H.HalogenM State Action Empty ViewOutput m ()
     copyOut element text = do
       n <- gets (\st -> st.copies + 1)
@@ -174,13 +177,13 @@ component =
     load = do
       input <- gets (\st -> st.input)
       loaded <- fetch input
-      -- Only if the page asked for is still the one to show: another
+      -- Only if the requested page is still the one to show: another
       -- navigation may have overtaken this load.
       now <- gets (\st -> st.input)
       when (now.space.id == input.space.id && now.path == input.path) $ do
         modify (\st -> st {loaded})
         H.raise Loaded
 
--- | The page the input names, or why it cannot be shown.
+-- | Fetch the page the input names, or the reason it cannot be shown.
 fetch :: (MonadWiki n) => Input -> n Loaded
 fetch input = either Failed Ready <$> getPage input.space.id input.path

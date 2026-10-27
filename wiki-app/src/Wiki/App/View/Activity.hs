@@ -1,20 +1,22 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The administration's "Activity" (WP4.10 of docs/PLAN.md,
--- "Wiki.Api.Activity"): the audit log, the newest first, a page at a time,
--- everyone's or one person's. Each entry says when, who, what to what, what
--- changed (never a secret: the log does not hold one) and from where.
+-- | The administration's "Activity" section (WP4.10 of docs/PLAN.md,
+-- "Wiki.Api.Activity"): the audit log, the newest first, one page at a
+-- time, for everyone or for one person. Each entry says when, who, what
+-- was done to what, what changed (never a secret: the log holds none), and
+-- from which address.
 --
--- It is a component of its own, mounted by the administration's page, and
--- reads the log as the other sections read what they show: at once where
--- the backend answers at once (the demo, and a page the server rendered,
--- which carries the first page of the log), and otherwise in its
--- initializer. It reads it again when the wiki has changed (the context's
--- revision), since what changed it is in the log, and when another person
--- or page is chosen.
+-- It is a separate component, mounted by the administration page, and
+-- reads the log as the other sections read their data: at once where the
+-- backend answers at once (the demo, and a page the server prerendered,
+-- which carries the log's first page), and otherwise in its initializer. It
+-- fetches the log again when the wiki has changed (the context's
+-- revision), since that change is in the log, and when another person or
+-- page is chosen.
 --
--- The demo keeps no log (its administration is its one reader's, in this
--- browser): its backend says it is not available, and the section says so.
+-- The demo keeps no log (its administration has one user, in this
+-- browser): its backend says the log is not available, and the section
+-- says so.
 module Wiki.App.View.Activity
   ( Input (..)
   , component
@@ -47,7 +49,8 @@ data State = State
   , query :: ActivityQuery
   , loaded :: Loaded
   , busy :: Bool
-  -- ^ Another page, or another person's, is being read: the controls wait.
+  -- ^ Another page, or another person's entries, are being fetched: the
+  -- controls wait.
   }
 
 data Action
@@ -177,11 +180,11 @@ component =
       result <- lift (activity q)
       modify (\st -> st {loaded = either Failed Ready result, busy = False})
 
--- | When, as a person reads it.
+-- | A time, in words for a person to read.
 timeText :: UTCTime -> Text
 timeText = toS . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
 
--- | What it was done to, after the action's words: its name.
+-- | What the action was done to, after the action's words: its name.
 subjectText :: Subject -> Text
 subjectText s
   | T.null s.name = ""

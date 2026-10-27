@@ -2,36 +2,38 @@
 
 -- | The administration's section on the server itself (WP4.4 of
 -- docs/PLAN.md, "Wiki.Api.ServerSettings"): the wiki's public address,
--- the mail server invitations go through, and the providers people sign
--- in with; and, not a setting but what the server's machine has, whether
--- it exports PDFs. This is the only place they are set (the owner's decision of
--- 2026-10-25): the server's admin listener serves it before anyone can
--- sign in, and a change takes effect with the next request, with no
--- restart. One component over the administration's backend
--- ("Wiki.App.Backend.Admin"), shown by the shell beside "Who may come in".
+-- the mail server invitations are sent through, and the sign-in
+-- providers; and, not a setting but a property of the server's machine,
+-- whether it exports PDFs. This is the only place they are set (the
+-- owner's decision of 2026-10-25): the server's admin listener serves it
+-- before anyone can sign in, and a change takes effect with the next
+-- request, without a restart. It is one component over the
+-- administration's backend ("Wiki.App.Backend.Admin"), which the shell
+-- shows beside "Who may come in".
 --
--- What it shows it reads in one go, as the other sections do: at once
--- where the backend answers at once (the demo, and a page the server
--- rendered, which carries the settings), and otherwise in its initializer.
+-- Everything it shows comes from one read, as in the other sections: at
+-- once where the backend answers at once (the demo, and a page the server
+-- prerendered, which carries the settings), and otherwise in its
+-- initializer.
 --
 -- One thing is edited at a time (the address, the mail server, or one
--- provider), in a form that replaces what it edits, and saving writes the
--- settings whole, with what is not being edited as it was read. A secret
--- (the mail account's password, a provider's client secret) is typed once
--- into a password field and never shown again, not even to this page: the
--- backend says only whether it is set. A form for something that has one
--- offers "Replace…" (a field for a new one; left empty, it keeps the old)
--- and "Clear"; saving without either keeps it.
+-- provider), in a form that replaces what it edits. Saving writes all the
+-- settings at once, with everything not being edited as it was read. A
+-- secret (the mail account's password, a provider's client secret) is
+-- typed once into a password field and never shown again, not even to
+-- this page: the backend says only whether it is set. A form for something
+-- that has a secret offers "Replace…" (a field for a new one; left empty,
+-- it keeps the old) and "Clear"; saving without either keeps it.
 --
 -- A provider can be checked ("Check"): the server asks it how to sign in,
--- as it is saved or, from its form, as typed, and says where it found its
--- endpoints or why it could not. Each provider shows the redirect URI to
--- register with it, below the wiki's public address. Its form says under
--- each field what goes there and where it comes from, in the README's
--- words ('providerHints'), and what to do with the redirect URI
--- ('providerRedirect'). A test mail goes to
--- an address typed, through the mail server as saved. The demo keeps the
--- settings for the tab's life and does neither, which it says.
+-- with its saved settings or, from its form, as typed, and reports where
+-- it found the provider's endpoints, or why it could not. Each provider
+-- shows the redirect URI to register with it, under the wiki's public
+-- address. Its form explains under each field what goes there and where
+-- it comes from, in the README's words ('providerHints'), and what to do
+-- with the redirect URI ('providerRedirect'). A test mail goes to a typed
+-- address, through the saved mail server. The demo stores the settings
+-- for the tab's life and does neither, which it says.
 module Wiki.App.View.Server
   ( Input (..)
   , component
@@ -88,8 +90,8 @@ data MailForm = MailForm
   , typedUser :: Text
   , typedPassword :: Text
   , passwordSet :: Bool
-  -- ^ Whether the server has one already: then the field is offered only
-  -- once "Replace…" is chosen.
+  -- ^ Whether the server has a password already: if so, the field is
+  -- offered only once "Replace…" is chosen.
   , replacingPassword :: Bool
   , clearingPassword :: Bool
   , typedFrom :: Text
@@ -107,7 +109,7 @@ data ProviderForm = ProviderForm
   , formCheck :: Maybe Checked
   }
 
--- | What checking a provider came to.
+-- | The result of checking a provider.
 data Checked
   = Checking
   | CheckedAs (Either WikiError ProviderCheck)
@@ -119,7 +121,7 @@ data State = State
   , busy :: Bool
   , refusal :: Maybe WikiError
   , checks :: Map Text Checked
-  -- ^ What checking each provider saved came to.
+  -- ^ The result of checking each saved provider.
   , testTo :: Text
   , tested :: Maybe (Either WikiError MailTestResult)
   }
@@ -208,8 +210,8 @@ component =
         </div>
       |]
 
-    -- What pages and spaces export as (WP4.16 of docs/PLAN.md), and above
-    -- all whether the PDFs are among them: they need a TeX engine on the
+    -- The formats pages and spaces export to (WP4.16 of docs/PLAN.md),
+    -- and above all whether PDF is among them: it needs a TeX engine on the
     -- server's machine, which the server looks for at each request, so
     -- that installing one takes effect without a restart.
     exportView :: [ExportFormat] -> H.ComponentHTML Action Slots m
@@ -355,7 +357,7 @@ component =
         </form>
       |]
 
-    -- The providers, one row each, and the form of the one edited.
+    -- The providers, one row each, and the form of the one being edited.
     providersView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
     providersView st settings =
       [hh|
@@ -479,8 +481,8 @@ component =
           |]
         (Nothing, why) -> [hh|<p class="server-provider-checked error" role="alert">{{ fromMaybe "It could not be asked." why }}</p>|]
 
-    -- A secret's field: typed once, never shown. Where one is set, the
-    -- field is offered only to replace it, and it may be cleared.
+    -- A secret's field: typed once, never shown. Where a secret is set,
+    -- the field is offered only to replace it, and it may be cleared.
     secretField :: Text -> Text -> Bool -> Bool -> Bool -> Text -> (Text -> Action) -> Action -> Maybe Action -> H.ComponentHTML Action Slots m
     secretField label name isSet replacing clearing typed onTyped onReplace onClear
       | isSet && not replacing =
@@ -592,10 +594,10 @@ component =
       EditingProvider was form -> st {editing = EditingProvider was (f form)}
       _ -> st
 
-    -- Write the settings as read, changed so. Done, the form closes, the
-    -- shell is told (who may sign in with what has changed) and the
-    -- settings are read again; refused, why is said in place, and the form
-    -- stays open.
+    -- Write the settings as read, with this change. If it succeeds, the
+    -- form closes, the shell is told (who may sign in with what has
+    -- changed), and the settings are fetched again. If it is refused, the
+    -- reason is shown in place, and the form stays open.
     save :: (ServerSettings -> ServerSettingsChange) -> H.HalogenM State Action Slots ViewOutput m ()
     save change = withSettings $ \s -> do
       modify (\st -> st {busy = True, refusal = Nothing})
@@ -615,8 +617,8 @@ component =
 unchanged :: ServerSettings -> ServerSettingsChange
 unchanged = fmap (const Nothing)
 
--- | Whether something is being edited, which the other "Change" buttons
--- wait for.
+-- | Whether something is being edited; the other "Change" buttons wait
+-- until it is not.
 editingSomething :: State -> Bool
 editingSomething st = case st.editing of
   NotEditing -> False
@@ -666,8 +668,8 @@ mailFormOf m =
     , typedFrom = m.from
     }
 
--- | The mail server as the form says, or why it cannot be one. The
--- password is kept unless one is typed, or it is cleared.
+-- | The mail server as the form describes it, or why it cannot be one.
+-- The password is kept unless one is typed, or it is cleared.
 mailChangeOf :: MailForm -> Either Text MailChange
 mailChangeOf f = do
   port <- case readMaybe (T.strip f.typedPort) :: Maybe Integer of
@@ -712,7 +714,8 @@ providerFormOf' p =
     , formCheck = Nothing
     }
 
--- | The provider as the form says: its secret kept unless one is typed.
+-- | The provider as the form describes it: its secret kept unless one is
+-- typed.
 providerChangeOf :: ProviderForm -> ProviderChange
 providerChangeOf f =
   ProviderSettings
@@ -747,17 +750,18 @@ issuerLabel = \case
   GitHub -> "Address, for GitHub Enterprise (left empty, github.com)"
   _ -> "Address in place of its own (left empty, its own)"
 
--- | What the provider form's hints say, under each of its fields, for the
--- kind chosen: in the README's words (its "Signing in with Google, GitHub,
--- Apple or another provider"), what the field is, and where its value
--- comes from when the wiki is registered with the provider.
+-- | The provider form's hints under each of its fields, for the kind of
+-- provider chosen, in the README's words (its "Signing in with Google,
+-- GitHub, Apple or another provider"): what the field is, and where its
+-- value comes from when the wiki is registered with the provider.
 data ProviderHints = ProviderHints
   { name :: Text
   , kind :: Text
   , clientId :: Text
   , address :: Text
-  -- ^ The fourth field's: an OpenID Connect provider's issuer, a GitHub
-  -- Enterprise server, or a proxy in place of Google's or Apple's own.
+  -- ^ The hint for the fourth field: an OpenID Connect provider's issuer,
+  -- a GitHub Enterprise server, or a proxy in place of Google's or Apple's
+  -- own.
   , secret :: Text
   }
 
@@ -787,8 +791,8 @@ providerHints k =
     }
 
 -- | The redirect URI the provider form says to register, given the wiki's
--- public address and the name typed: none until both are there, and then
--- the URI, with what to do with it.
+-- public address and the name typed: nothing until both are there, and
+-- then the URI, with what to do with it.
 providerRedirect :: Maybe Text -> Text -> HH.HTML w i
 providerRedirect publicUrl name = case publicUrl of
   Nothing ->

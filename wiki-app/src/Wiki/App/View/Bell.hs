@@ -1,19 +1,20 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The header's bell (WP4.13 of docs/PLAN.md): the signed-in user's
--- notifications ("Wiki.Core.Notification"), as a button with how many are
--- unread, which opens a list of the latest, each a link to its page (and
--- to its thread, for a comment), with "Mark read" on each unread one and
--- "Mark all read".
+-- notifications ("Wiki.Core.Notification"). It is a button showing how
+-- many are unread, which opens a list of the latest, each a link to its
+-- page (and to its thread, for a comment), with "Mark read" on each unread
+-- one and "Mark all read".
 --
--- The notifications are read with the initial state over a backend that
+-- The notifications are fetched in the initial state on a backend that
 -- answers at once, so that the server's page has the count the program
--- starts with, and otherwise in 'Initialize'. Over a backend with a live
+-- starts with, and otherwise in 'Initialize'. On a backend with a live
 -- channel ("Wiki.App.Live") the bell listens for the user's notifications
--- as they are made, which keeps the tab's socket open wherever the reader
--- is, and reads them again when the socket opens anew, since what was made
--- while it was closed was told to nobody. The demo has no channel: one
--- switches to another of its users to see what they were told.
+-- as they are made, which keeps the tab's WebSocket open wherever the
+-- reader is. It fetches them again when the socket reopens, since
+-- notifications made while it was closed were delivered to nobody. The
+-- demo has no channel: to see what another user was notified of, switch
+-- to that user.
 --
 -- Following a notification's link marks it read.
 module Wiki.App.View.Bell
@@ -151,8 +152,8 @@ component =
         |]
       Nothing -> [hh|<span class="notification-link">{{ inner }}</span>|]
       where
-        -- The router's link, but for its address, which names the thread
-        -- too, for a link opened in a tab of its own.
+        -- The router's link, except for its address, which also names the
+        -- thread, for a link opened in a new tab.
         props l = HP.href (Router.href st.input.context.router (Page l.space l.page) <> maybe "" (\t -> "#" <> threadElementId t) n.thread) : drop 1 (Router.linkProps st.input.context.router (Follow n.id) (Page l.space l.page))
         inner =
           [hhs|
@@ -173,7 +174,7 @@ component =
             )
         whenM (gets (\st -> isNothing st.notices)) reload
       Finalize -> gets (\st -> st.input.feed) >>= traverse_ (\f -> H.liftEffect (liftIO f.unlisten))
-      -- Another reload of the world (a write, someone signed in): read
+      -- Another reload of the wiki (a write, someone signed in): fetch
       -- again, as what is shown may have changed.
       Receive input -> do
         old <- gets (\st -> st.input)
@@ -181,7 +182,8 @@ component =
         when (old.context.revision /= input.context.revision) reload
       Toggle -> modify (\st -> st {open = not st.open})
       Heard heard -> case heard of
-        -- One told twice (a tab that heard it, then read it) counts once.
+        -- A notification received twice (a tab that received it, then
+        -- fetched it) counts once.
         Live.Notice n -> modify $ \st ->
           st {notices = fmap (\ns -> if any (\x -> x.id == n.id) ns.items then ns else ns {unread = ns.unread + 1, items = n : ns.items}) <$> st.notices}
         Live.Reopened -> reload
@@ -206,11 +208,11 @@ component =
       result <- lift (markRead m)
       modify (\st -> st {busy = False, notices = either (const st.notices) (Just . Right) result})
 
--- | A notification's kind, as the stylesheet and the tests find it.
+-- | A notification's kind, as a class the stylesheet and the tests use.
 kindClass :: Notification -> Text
 kindClass n = T.toLower (show n.kind)
 
--- | When, as people read it, in UTC: the same in the page the server
--- renders and in the program.
+-- | A time, in words for a person to read, in UTC: the same in the page
+-- the server prerenders and in the program.
 stamped :: UTCTime -> Text
 stamped = toS . formatTime defaultTimeLocale "%-d %b %Y, %H:%M UTC"

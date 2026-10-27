@@ -3,18 +3,18 @@
 -- | The editor's preview: a draft rendered as the page view will show it
 -- once it is saved ("Wiki.App.View.Body").
 --
--- A component of its own so that typing does not re-render it. The editor
--- re-renders on every keystroke, and hands its child the same input each
--- time until the debounce lets the draft through; Halogen re-renders a
--- child only when its state changes, and this one's changes only when what
--- it shows does. So a keystroke costs the textarea's render, not a parse
--- and a render of the whole page, and the islands, in slots keyed by their
--- source ('Wiki.Core.Markdown.IslandKey'), are drawn again only when their
--- own source changes.
+-- It is a separate component so that typing does not re-render it. The
+-- editor re-renders on every keystroke, and passes its child the same
+-- input each time until the debounce lets the new draft through. Halogen
+-- re-renders a child only when its state changes, and this child's state
+-- changes only when what it shows does. So a keystroke costs the
+-- textarea's render, not a parse and render of the whole page, and the
+-- islands, in slots keyed by their source ('Wiki.Core.Markdown.IslandKey'),
+-- are drawn again only when their own source changes.
 --
--- Whom the draft mentions is asked as it is typed, for the logins not
--- asked about yet ("Wiki.App.View.Body"), on a fiber of the preview's own,
--- so that a mention becomes a link once it is known.
+-- The people the draft mentions are looked up as it is typed, for the
+-- logins not looked up yet ("Wiki.App.View.Body"), on a fiber of the
+-- preview's own, so that a mention becomes a link once it is known.
 module Wiki.App.View.Preview
   ( Input (..)
   , component
@@ -33,7 +33,8 @@ import Wiki.App.View.Body (IslandSlots, Place (..))
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (Context (..))
 
--- | The draft's title and Markdown, and where it is read.
+-- | The preview's input: the draft's title and Markdown, and the place it
+-- is read in.
 data Input = Input
   { place :: Place
   , title :: Text
@@ -43,7 +44,7 @@ data Input = Input
 data State = State
   { input :: Input
   , known :: Body.People
-  -- ^ Whom the draft mentions, as far as asked.
+  -- ^ The people the draft mentions, as far as they have been looked up.
   }
 
 data Action = Initialize | Receive Input | FollowLink ArticleLink
@@ -86,9 +87,9 @@ component =
           Right found -> modify (\s -> s {known = Body.answered logins found s.known})
           Left _ -> pass
 
--- | Whether two inputs show the same: the same draft, read in the same
--- place, as of the same revision of the wiki. (The router, the one thing in
--- the context that cannot be compared, is the application's one router.)
+-- | Whether two inputs show the same thing: the same draft, read in the
+-- same place, at the same revision of the wiki. (The router, the one part
+-- of the context that cannot be compared, is the application's only one.)
 same :: Input -> Input -> Bool
 same a b =
   a.title == b.title

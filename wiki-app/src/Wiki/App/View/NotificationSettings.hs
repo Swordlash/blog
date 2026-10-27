@@ -1,16 +1,16 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | How the signed-in user is told (WP4.13 of docs/PLAN.md), in the account
--- panel: their notifications mailed not at all, at once, or as a daily
--- digest, and whether they watch the pages they make and the threads they
--- are in. Each choice is kept as it is made.
+-- | The signed-in user's notification settings (WP4.13 of docs/PLAN.md),
+-- in the account panel: notifications mailed never, at once, or as a daily
+-- digest, and whether they watch the pages they create and the threads
+-- they take part in. Each choice is saved as it is made.
 --
--- Mail needs a verified address and a server that sends mail: without
--- either, the choice of mail is shown disabled, saying what is missing (the
+-- Mail needs a verified address and a server that sends mail. Without
+-- either, the mail choice is shown disabled, saying what is missing (the
 -- demo has neither).
 --
--- Read when the panel opens, as the rest of the panel is: the server never
--- renders it.
+-- Fetched when the panel opens, like the rest of the panel: the server
+-- never prerenders it.
 module Wiki.App.View.NotificationSettings
   ( component
   )

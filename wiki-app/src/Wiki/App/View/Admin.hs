@@ -1,66 +1,69 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The administration's sections on the wiki's people (decision 11 of the
--- plan): its users, with switches for whether each is an administrator and
--- whether they may create spaces, their accounts (whether they have a
--- password, a new one, their login disabled or enabled) and a form for a
--- new one; and its groups, with their members, to make, rename and
--- delete, and to put users in and take them out of. One component over the
--- administration's backend ("Wiki.App.Backend.Admin"), the same on the
--- demo's wiki, on the server's admin listener and on its public one: only
--- who is asking differs, and the shell shows it only to someone who may
--- administer the wiki.
+-- | The administration's sections on the wiki's users and groups
+-- (decision 11 of the plan). Users are listed with switches for whether
+-- each is an administrator and whether they may create spaces, with their
+-- account controls (whether they have a password, a new password, their
+-- login disabled or enabled), and with a form for a new user. Groups are
+-- listed with their members; they can be created, renamed and deleted,
+-- and users can be added to them and removed from them. It is one
+-- component over the administration's backend ("Wiki.App.Backend.Admin"),
+-- the same on the demo's wiki, on the server's admin listener and on its
+-- public listener: only who is asking differs. The shell shows it only to
+-- someone who may administer the wiki.
 --
--- What it shows it reads in one go ('directory'), at once where the
--- backend can answer at once, and otherwise in its initializer, saying
--- meanwhile that it is loading (decision 18). After a change it tells the
--- shell ('Changed'), which reloads who is signed in (a change of
--- membership may change what they may do) and counts up the context's
--- revision, on which the directory is read again; until then its controls
--- stay disabled, so that nothing is asked twice of a wiki that has not
--- been read back.
+-- Everything it shows comes from one read ('directory'): at once where
+-- the backend can answer at once, and otherwise in its initializer, which
+-- shows a loading state meanwhile (decision 18 of the plan). After a
+-- change it tells the shell ('Changed'), which reloads who is signed in (a
+-- change of membership may change what they may do) and increments the
+-- context's revision, which makes this view fetch the directory again.
+-- Until then its controls stay disabled, so that nothing is requested
+-- twice before the change is visible.
 --
--- An administrator is not offered to take that from themself: the switch
--- on their own row is disabled, with a note why. The backend would allow
--- it (the operator on the server's admin listener can always give it
--- back), but from the panel it would lock its user out of the panel at
--- once, which is more likely a slip than a wish. The operator on the
--- admin listener is no user of the wiki and has no row, so they may change
--- every one. Nor is an administrator offered to disable their own login,
--- which would sign them out on the spot, for the same reason.
+-- An administrator is not offered to remove their own administrator
+-- status: the switch on their own row is disabled, with a note why. The
+-- backend would allow it (the operator on the server's admin listener can
+-- always give it back), but from the panel it would lock the user out of
+-- the panel at once, which is more likely a slip than intended. The
+-- operator on the admin listener is not a user of the wiki and has no row,
+-- so they may change every row. For the same reason, an administrator is
+-- not offered to disable their own login, which would sign them out at
+-- once.
 --
 -- An administrator may create spaces whatever their own create-spaces
--- grant says, since administering the wiki implies it
--- ("Wiki.Core.Permission"): their switch shows what the rules make of
--- their grants, on, and is disabled, with a note why, rather than showing
--- a grant they do not need as missing. A grant they hold all the same is
--- kept, and shown and toggled again if they stop being an administrator.
+-- grant says, since administering the wiki includes it
+-- ("Wiki.Core.Permission"). So their switch shows the effective permission,
+-- on, and is disabled, with a note why, rather than showing a grant they
+-- do not need as missing. A grant they hold anyway is kept, and shown and
+-- toggled again if they stop being an administrator.
 --
--- A password is typed into a form of its own, in place, and never shown
--- back: the field is emptied once it is saved. Where the server sends mail
--- and the user has a verified address, no password is typed for them: the
--- panel mails them, once asked whether to, the link that "Forgot your
--- password?" mails (WP5.6 of docs/PLAN.md), with which they choose one
--- themselves; the panel types one only where that cannot be, and says why
--- under the button. A user who signs in with a provider the server has and
--- has no password has none to set, and is offered neither
--- ('passwordControl').
+-- A password is typed into its own form, in place, and never shown back:
+-- the field is emptied once it is saved. Where the server sends mail and
+-- the user has a verified address, no password is typed for them. Instead,
+-- after asking for confirmation, the panel mails them the same link that
+-- "Forgot your password?" mails (WP5.6 of docs/PLAN.md), with which they
+-- choose a password themselves. The panel offers typing a password only
+-- where a link is impossible, and says why under the button. A user who
+-- signs in with one of the server's providers and has no password has none
+-- to set, and is offered neither ('passwordControl').
 --
--- Deleting a group asks first, in place, as deleting a space does.
+-- Deleting a group asks for confirmation first, in place, as deleting a
+-- space does.
 --
 -- A user who signs in with a provider's account (WP3.6 of docs/PLAN.md)
--- is said to ("Signs in with GitHub"), and each such account may be
--- disconnected, which ends their sessions, as long as it is not one's own
--- (which one disconnects from one's own account's panel, where one is
--- kept from disconnecting one's last way in).
+-- is shown as such ("Signs in with GitHub"), and each such account may be
+-- disconnected, which ends their sessions, except on one's own row. One's
+-- own accounts are disconnected from one's own account panel, which
+-- prevents disconnecting one's last way to sign in.
 --
 -- A user's e-mail address, if they gave one, is shown with whether it is
--- verified, and a user who has a second factor is said to have one, with
--- "Remove second factor" for one who has lost it (WP4.11 of docs/PLAN.md;
--- not on one's own row, where the account panel takes it away with a
--- code). A new user may be given an address, which the server mails a
--- link to verify; where it sends no mail (and in the demo) the field is
--- disabled, saying why.
+-- verified. A user who has a second factor is shown as having one, with
+-- "Remove second factor" for someone who has lost theirs (WP4.11 of
+-- docs/PLAN.md; not on one's own row, where the account panel removes it
+-- with a code). A new user may be given an address, to which the server
+-- mails a verification link; where it sends no mail (and in the demo) the
+-- field is disabled, saying why.
 module Wiki.App.View.Admin
   ( Input (..)
   , component
@@ -99,12 +102,12 @@ data Loaded
   | Failed WikiError
   | Ready Directory
 
--- | What is open in the groups' section, besides the lists.
+-- | What is open in the groups section, besides the lists.
 data Editing
   = Idle
   | -- | The form renaming a group, with the name typed so far.
     Renaming GroupId Text
-  | -- | Asking whether to delete a group.
+  | -- | Asking for confirmation to delete a group.
     ConfirmingDelete GroupId
 
 -- | The form for a new user, as typed so far.
@@ -126,18 +129,19 @@ data State = State
   , settingPassword :: Maybe (UserId, Text)
   -- ^ The user whose new password is being typed, and what is typed.
   , confirmingLink :: Maybe UserId
-  -- ^ The user whom the panel asks whether to mail a link to choose a
+  -- ^ The user for whom the panel asks whether to mail a link to choose a
   -- password.
   , usersTold :: Maybe Text
-  -- ^ What the last change to an account did, said once it is done.
+  -- ^ The result of the last account change, shown once it is done.
   , editing :: Editing
   , newGroup :: Text
   -- ^ The name typed for a new group.
   , chosen :: Map GroupId Int
-  -- ^ For each group, which of the users who are not in it is chosen to
-  -- add; the first unless another has been.
+  -- ^ For each group, which of the users not in it is selected to be
+  -- added; the first unless another has been selected.
   , busy :: Bool
-  -- ^ A change has been asked for and the directory not read again since.
+  -- ^ A change has been requested, and the directory not fetched again
+  -- since.
   , usersProblem :: Maybe WikiError
   , groupsProblem :: Maybe WikiError
   }
@@ -356,7 +360,8 @@ component =
         administrator = u.id `Set.member` d.administrators
         creator = u.id `Set.member` d.creators
         -- Whether the rules let them create spaces without their own
-        -- create-spaces grant: by what else they hold, as an administrator.
+        -- create-spaces grant, because of what else they hold, as an
+        -- administrator.
         createsAnyway =
           administrator
             && canCreateSpaces
@@ -382,8 +387,8 @@ component =
           | providerOnly = "Signs in with " <> others
           | not (null providers) = "No way in: the server no longer signs in with " <> others
           | otherwise = "No password yet"
-        -- The password's button: a link to mail, asked about first, or a
-        -- password to type, with why no link; or none.
+        -- The password button: a link to mail, after confirmation; or a
+        -- password to type, with the reason there is no link; or nothing.
         passwordView :: Maybe (H.ComponentHTML Action Empty m)
         passwordView = case passwordControl d u.id of
           NoPasswordControl -> Nothing
@@ -566,8 +571,8 @@ component =
       Retry -> do
         modify (\st -> st {loaded = Loading})
         load
-      -- The shell has reloaded the wiki after a change, this panel's or
-      -- another view's: read the directory again.
+      -- The shell has reloaded the wiki after a change, by this panel or
+      -- another view: fetch the directory again.
       Receive input -> do
         old <- gets (\st -> st.input.context.revision)
         modify (\st -> st {input})
@@ -586,8 +591,9 @@ component =
         createUser NewAccount {login = form.typedLogin, displayName = form.typedName, password = form.typedPassword, email} >>= \case
           Left e -> modify (\st -> st {busy = False, usersProblem = Just e})
           Right account -> do
-            -- Made: whatever comes of making them an administrator, the
-            -- form is done with and the directory is read again.
+            -- Created: whatever the result of making them an
+            -- administrator, the form is done, and the directory is fetched
+            -- again.
             made <- if form.asAdministrator then setAdministrator account.user.id True else pure (Right ())
             modify $ \st ->
               st
@@ -606,7 +612,8 @@ component =
       AskPassword u -> modify (\st -> st {settingPassword = Just (u, ""), confirmingLink = Nothing, usersProblem = Nothing, usersTold = Nothing})
       AskLink u -> modify (\st -> st {confirmingLink = Just u, settingPassword = Nothing, usersProblem = Nothing, usersTold = Nothing})
       CancelLink -> modify (\st -> st {confirmingLink = Nothing})
-      -- A mail changes nothing the directory shows: it is not read again.
+      -- A mail changes nothing the directory shows, so it is not fetched
+      -- again.
       MailLink u address -> do
         modify (\st -> st {busy = True, usersProblem = Nothing, usersTold = Nothing})
         sendPasswordLink u.id >>= \case
@@ -670,14 +677,15 @@ component =
         groupsFailed e st = st {groupsProblem = Just e}
         usersFailed e st = st {usersProblem = Just e}
         usersDone st = st {usersProblem = Nothing, usersTold = Nothing}
-        -- A user's name, as the directory last read has it.
+        -- A user's name, as the last fetched directory has it.
         nameOf st u = case st.loaded of
           Ready d | Just x <- find (\x -> x.id == u) d.users -> x.displayName
           _ -> "The user"
 
-    -- Ask for a change. Done, the shell is told, and the controls stay
-    -- disabled until the directory has been read again ('Receive'); refused,
-    -- why is said in place, and the controls are given back.
+    -- Request a change. If it is made, the shell is told, and the controls
+    -- stay disabled until the directory has been fetched again ('Receive').
+    -- If it is refused, the reason is shown in place, and the controls are
+    -- enabled again.
     change
       :: (State -> State)
       -> (WikiError -> State -> State)
@@ -698,7 +706,8 @@ component =
         st
           { loaded = either Failed Ready result
           , busy = False
-          , -- Who is not in a group has changed: the first is chosen again.
+          , -- The users not in each group have changed: the first is
+            -- selected again.
             chosen = mempty
           }
 
@@ -708,11 +717,11 @@ yesNo b = if b then "Yes" else "No"
 -- | What the account column offers for a user's password (WP5.6 of
 -- docs/PLAN.md).
 data PasswordControl
-  = -- | Nothing: they sign in with a provider the server has, and have no
-    -- password to set.
+  = -- | Nothing: they sign in with one of the server's providers, and have
+    -- no password to set.
     NoPasswordControl
-  | -- | "Send a password link…": mail the link to choose one that "Forgot
-    -- your password?" mails, to this verified address.
+  | -- | "Send a password link…": mail the same link to choose a password
+    -- that "Forgot your password?" mails, to this verified address.
     SendLink Text
   | -- | "Set password…" or "Reset password…": type one for them, since no
     -- link can be mailed, for this reason.
@@ -723,16 +732,16 @@ data PasswordControl
 data NoLink
   = -- | The server sends no mail.
     NoMail
-  | -- | Their login is disabled, which a link does not work for.
+  | -- | Their login is disabled, and a link does not work for it.
     LoginDisabled
   | -- | They have no address, or have not verified the one they have.
     NoVerifiedAddress
   deriving stock (Eq, Show)
 
--- | What the panel offers for a user's password, by what the directory
--- says of them: none to a user who has no password to set, a link to mail
--- where the server sends mail and the user has a verified address and may
--- sign in, and a password to type otherwise.
+-- | What the panel offers for a user's password, from what the directory
+-- says about them: nothing for a user who has no password to set; a link
+-- to mail where the server sends mail and the user has a verified address
+-- and may sign in; and a password to type otherwise.
 passwordControl :: Directory -> UserId -> PasswordControl
 passwordControl d u
   | u `Set.member` d.providerOnly = NoPasswordControl
@@ -742,18 +751,18 @@ passwordControl d u
       Just e | e.verified -> SendLink e.email
       _ -> TypePassword NoVerifiedAddress
 
--- | Why no link is mailed, in the words under the button.
+-- | Why no link is mailed, as written under the button.
 noLinkText :: NoLink -> Text
 noLinkText = \case
   NoMail -> "The server sends no mail: type a password for them"
   LoginDisabled -> "Their login is disabled: type a password for them"
   NoVerifiedAddress -> "No verified address: type a password for them"
 
--- | A user as the list of whom to add names them.
+-- | A user as the list of users to add names them.
 userLabel :: User -> Text
 userLabel u = u.displayName <> " (" <> u.login <> ")"
 
--- | How many members a group has, for a person to read.
+-- | How many members a group has, in words for a person to read.
 counted :: Int -> Text
 counted = \case
   0 -> "no members"

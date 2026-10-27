@@ -1,23 +1,23 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | An invitation's page (@\/invite\/\<secret>\/@, WP3.5 of docs/PLAN.md):
--- whom the invitation is for, and the form that makes its account, with the
--- login, display name and password the person invited chooses. Making it
--- signs them in ('Accepted'), and the shell shows them the wiki. Where the
--- server signs in with providers (WP3.6 of docs/PLAN.md), the account may
--- be made with one instead, through a link to the server's round trip
--- that carries the invitation ("Wiki.Api.Auth"), and signs in with it from
--- then on.
+-- who the invitation is for, and the form that creates the account, with
+-- the login, display name and password the invited person chooses.
+-- Creating it signs them in ('Accepted'), and the shell shows them the
+-- wiki. Where the server offers sign-in with providers (WP3.6 of
+-- docs/PLAN.md), the account may be created with one instead, through a
+-- link to the server's round trip that carries the invitation
+-- ("Wiki.Api.Auth"); the user then signs in with that provider.
 --
 -- An invitation that cannot be used (used already, revoked, expired) says
--- so, and so does the page to someone signed in, who has an account
--- already; a wiki that signs nobody in (the demo, which has no accounts
--- of this kind) says that it takes no invitations.
+-- so. So does the page shown to someone signed in, who already has an
+-- account. A wiki that signs nobody in (the demo, which has no such
+-- accounts) says that it accepts no invitations.
 --
--- The invitation is read as the shell reads what a route shows: in the
--- initial state where the backend answers at once (the server's render,
--- whose answer the page carries), otherwise in the initializer. The
--- inputs are not controlled, as the sign-in form's are not
+-- The invitation is fetched as the shell loads a route's data: in the
+-- initial state where the backend answers at once (the server's
+-- prerender, whose response the page carries), otherwise in the
+-- initializer. The inputs are uncontrolled, like the sign-in form's
 -- ("Wiki.App.View.SignIn").
 module Wiki.App.View.Invite
   ( Input (..)
@@ -40,15 +40,15 @@ import Wiki.Core.User (SignInProvider (..), User (..), minimumPasswordLength)
 
 data Input m = Input
   { accounts :: Maybe (Accounts m)
-  -- ^ Signing in and making accounts, over a backend where people do.
+  -- ^ Signing in and creating accounts, on a backend where people do.
   , token :: InvitationToken
   , session :: Session
   , home :: Text
-  -- ^ The wiki's home page's address, where making the account with a
-  -- provider comes back to.
+  -- ^ The address of the wiki's home page, where creating the account
+  -- with a provider returns to.
   }
 
--- | The account is made, and this is the session its maker now has.
+-- | The account was created, and this is the new user's session.
 newtype Output = Accepted Session
 
 data Loaded

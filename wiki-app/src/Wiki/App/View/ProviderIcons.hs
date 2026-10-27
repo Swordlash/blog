@@ -1,15 +1,16 @@
 -- | The two providers' logos, for the editor's buttons that open the
--- writing assistant with one or the other ("Wiki.App.View.Editor"): each an
--- SVG path in a 24 by 24 box, drawn in the provider's colour or the text's.
+-- writing assistant with one or the other ("Wiki.App.View.Editor"): each
+-- is an SVG path in a 24 by 24 box, drawn in the provider's colour or the
+-- text's colour.
 --
--- They come from simple-icons (npm simple-icons), whose drawings are
--- under CC0-1.0, copied here as they are published: Claude's ('claudePath')
--- from simple-icons 16.36.0 (siClaude, colour #D97757), OpenAI's
--- ('openAiPath') from simple-icons 15.22.0 (siOpenai), the last release that
--- had it: simple-icons 16.0.0 removed it because nobody had asked OpenAI's
+-- They come from simple-icons (npm simple-icons), whose drawings are under
+-- CC0-1.0, copied here as published. Claude's ('claudePath') is from
+-- simple-icons 16.36.0 (siClaude, colour #D97757). OpenAI's ('openAiPath')
+-- is from simple-icons 15.22.0 (siOpenai), the last release that had it:
+-- simple-icons 16.0.0 removed it because nobody had asked OpenAI's
 -- permission to keep it (simple-icons pull request 13944). The logos are
--- trademarks of their owners, shown only to name the provider a button asks;
--- licenses.txt and the README's table of licences say so.
+-- trademarks of their owners, shown only to name the provider a button
+-- uses; licenses.txt and the README's table of licences say so.
 module Wiki.App.View.ProviderIcons
   ( claudePath
   , claudeColour

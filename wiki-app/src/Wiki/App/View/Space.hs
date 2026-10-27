@@ -1,37 +1,38 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | A space's pages and subspaces (its route 'SpacePages', and the space's
--- own route for a space without a home page): its icon, name and
--- description, its pages as a tree, its templates ('Wiki.Core.Page.template')
--- apart from the tree, its subspaces, the math macros its
--- pages are set with, its export as one document ("Wiki.App.View.Export"),
--- and what the current user may do to it (a new page,
--- in the editor; a new subspace, its settings ("Wiki.App.View.SpaceSettings":
--- its name, description, icon and home page, and its permissions, public or
--- private among them), giving it math macros, choosing the order of its
--- subspaces and of its pages, moving it, deleting it). An action the rules
--- forbid is not offered; the backend checks the rules again, and a refusal
--- is shown in place.
+-- | The space view: a space's pages and subspaces (its route 'SpacePages',
+-- and the space's own route for a space without a home page). It shows
+-- the space's icon, name and description, its pages as a tree, its
+-- templates ('Wiki.Core.Page.template') apart from the tree, its
+-- subspaces, the math macros its pages are typeset with, and its export as
+-- one document ("Wiki.App.View.Export"). It also offers the actions the
+-- current user may take on it: a new page, in the editor; a new subspace;
+-- its settings ("Wiki.App.View.SpaceSettings": its name, description,
+-- icon and home page, and its permissions, including public or private);
+-- its math macros; the order of its subspaces and of its pages; moving
+-- it; deleting it. An action the rules forbid is not offered. The backend
+-- checks the rules again, and a refusal is shown in place.
 --
--- __Settings__ are a section of their own, opened from the actions: their
--- permissions read the space's grants, which nothing else shows, so they
--- are read only when asked for; the page a prerender or the server shows
--- has them closed. They stay open while the shell reloads the wiki after a
--- change made there, for as long as their user may administer the space.
+-- __Settings__ are a separate section, opened from the actions. Their
+-- permissions part reads the space's grants, which nothing else shows, so
+-- they are fetched only when asked for, and the page a prerender or the
+-- server shows has them closed. They stay open while the shell reloads
+-- the wiki after a change made there, as long as their user may still
+-- administer the space.
 --
 -- __Order__ ("Wiki.Core.Order"): the pages and the subspaces are listed in
--- the orders the space has, which whoever administers it chooses here. An
--- order by hand gives each page and subspace buttons that move it up, down,
--- to the top and to the bottom, for whoever may edit the space.
+-- the space's orders, which its administrator chooses here. In the order
+-- by hand, each page and subspace has buttons that move it up, down, to
+-- the top and to the bottom, for someone who may edit the space.
 --
 -- __Math macros__ ("Wiki.Core.Math") are edited as a block of TeX in a
--- textarea. KaTeX reads the block, over the macros of the space's
--- ancestors, as it is typed, and its error, if it cannot read all of it, is
--- shown under the block; a formula typed under it is set with the block as
--- it stands, for the author to see what the macros make. A block KaTeX
--- cannot read is not saved: the error is shown and the form stays open.
--- (One that gets into a space by other means, an import, never stops a
--- page from being drawn.)
+-- textarea. KaTeX parses the block, on top of the macros of the space's
+-- ancestors, as it is typed, and its error, if it cannot parse all of it,
+-- is shown under the block. A formula typed under it is typeset with the
+-- block as it stands, so the author sees what the macros produce. A block
+-- KaTeX cannot parse is not saved: the error is shown and the form stays
+-- open. (A block that gets into a space another way, through an import,
+-- never stops a page from rendering.)
 module Wiki.App.View.Space
   ( Input (..)
   , component
@@ -69,7 +70,8 @@ import Wiki.Core.Permission (mayCreateSpace, mayMoveSpace)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (description, id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), subspacesOf)
 
--- | The space, as the shell has loaded it, with its pages.
+-- | The space view's input: the space, as the shell has loaded it, with
+-- its pages.
 data Input = Input
   { context :: Context
   , space :: Space
@@ -81,12 +83,12 @@ data Mode
   | -- | Moving to the destination at this index of 'destinations'.
     Moving Int
   | ConfirmingDelete
-  | -- | Editing the math macros: the block, KaTeX's error for it if it has
-    -- one, and a formula to try them on.
+  | -- | Editing the math macros: the block, KaTeX's error for it if any,
+    -- and a formula to try them on.
     EditingMacros Text (Maybe Text) Text
   | -- | Choosing the orders: of the subspaces, and of the pages.
     Ordering ChildOrder ChildOrder
-  | -- | Its settings: its profile, and who may do what on it.
+  | -- | Its settings: its profile, and its permissions.
     ManagingSettings
   deriving stock (Eq)
 
@@ -96,8 +98,8 @@ data State = State
   , problem :: Maybe WikiError
   }
 
--- | The formula the macros are tried on, set as the space's pages would
--- set it.
+-- | The formula the macros are tried on, typeset as the space's pages
+-- would typeset it.
 type Slots = ("island" .== H.Slot (Const Void) Void ()) .+ ("settings" .== H.Slot (Const Void) ViewOutput ()) .+ ("watch" .== H.Slot (Const Void) Void ())
 
 data Action
@@ -174,7 +176,8 @@ component =
         <> [button "Order" EditOrder | admin]
         <> [button "Move" (Open (Moving 0)) | admin, not (null (destinations ctx space))]
         <> [button "Delete" (Open ConfirmingDelete) | admin]
-        -- Its pages as one document, for whoever may view it, as a page's.
+        -- Its pages as one document, for anyone who may view it, as for a
+        -- page.
         <> exportMenu (spaceFormats ctx.session.exports) (spaceExportUrl space.id) space.name
       where
         admin = mayAdminister ctx space.id
@@ -217,7 +220,7 @@ component =
             </div>
           |]
 
-    -- The textarea is controlled, as the other fields are: what it shows is
+    -- The textarea is controlled, like the other fields: what it shows is
     -- what was typed, so the value the render sets is the one it has.
     macrosForm :: Context -> Space -> Text -> Maybe Text -> Text -> H.ComponentHTML Action Slots m
     macrosForm ctx space block macroError sample =
@@ -257,9 +260,10 @@ component =
         </label>
       |]
 
-    -- What the space's pages are set with besides the built-in macros:
-    -- the blocks of the space's chain, each under the name of its space,
-    -- for whoever writes a page here to know what they may use.
+    -- The macros the space's pages are typeset with besides the built-in
+    -- ones: the blocks of the space and its ancestors, each under its
+    -- space's name, so that whoever writes a page here knows what is
+    -- available.
     macrosView :: Context -> Space -> Maybe (H.ComponentHTML Action Slots m)
     macrosView ctx space = case [s | s <- chainOf ctx space.id, not (T.null (T.strip s.mathMacros))] of
       [] -> Nothing
@@ -304,10 +308,9 @@ component =
     handleAction = \case
       Receive input -> do
         old <- gets (\st -> st.input)
-        -- What was open is about the space as it was: after a change, or on
-        -- another space, it is closed.
-        -- The permissions stay open after a change made there, for whoever
-        -- still administers the space.
+        -- What was open concerns the space as it was: after a change, or
+        -- on another space, it is closed. The permissions stay open after a
+        -- change made there, for someone who still administers the space.
         mode <- gets (\st -> st.mode)
         let staying = mode == ManagingSettings && old.space.id == input.space.id && mayAdminister input.context input.space.id
         if old.space.id /= input.space.id || old.context.revision /= input.context.revision
@@ -384,7 +387,8 @@ kindClass = \case
   ChildSpaces -> "subspaces"
   ChildPages -> "pages"
 
--- | The macros the space's own are read over: those of the spaces above it.
+-- | The macros the space's own macros are read on top of: those of the
+-- spaces above it.
 parentMacros :: Context -> Space -> Macros
 parentMacros ctx space = maybe mempty (spaceMacros ctx.spaces) space.parent
 

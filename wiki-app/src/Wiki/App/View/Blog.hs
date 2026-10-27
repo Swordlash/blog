@@ -1,21 +1,22 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | A space shown as a blog ("Wiki.Core.Blog"), as it opens: its icon,
--- name and description, its home page if it has one, and then its posts,
--- the newest first, ten to a page, each as a card (the directory of
--- spaces' cards, "Wiki.App.View.Directory") with its title, its date, its
--- author, how many comments it has and its first paragraph; and links to
--- the newer and the older posts when there are more than ten.
+-- | The blog view: a space shown as a blog ("Wiki.Core.Blog"), as it
+-- opens. It shows the space's icon, name and description, its home page if
+-- it has one, and then its posts, the newest first, ten per page. Each post
+-- is a card (like the cards of the directory of spaces,
+-- "Wiki.App.View.Directory") with its title, its date, its author, its
+-- number of comments and its first paragraph. Links lead to newer and
+-- older posts when there are more than ten.
 --
--- The posts and their dates and excerpts come from the pages the shell has
--- loaded with the space; who wrote each and how many comments it has are
--- the backend's to say ('postDetails'), loaded as every view loads what it
--- shows: with the initial state over a backend that answers at once, and
--- otherwise in the initializer. So are the addresses of the home page's
--- attachments, and whom it mentions (WP4.13).
+-- The posts, with their dates and excerpts, come from the pages the shell
+-- has loaded with the space. Each post's author and number of comments
+-- come from the backend ('postDetails'), loaded as every view loads its
+-- data: in the initial state on a backend that answers at once, and
+-- otherwise in the initializer. The same goes for the URLs of the home
+-- page's attachments, and for the people it mentions (WP4.13).
 --
--- Its actions have the space's "Watch" button ("Wiki.App.View.Watch"), as
--- the space's view of a space that is no blog does.
+-- Its actions include the space's "Watch" button ("Wiki.App.View.Watch"),
+-- as in the space view of a space that is not a blog.
 module Wiki.App.View.Blog
   ( Input (..)
   , component
@@ -51,8 +52,8 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (description, id, name, public))
 import Wiki.Core.Version (Author (..))
 
--- | The space, as the shell has loaded it, with its pages, and the page of
--- its posts shown, counted from 1.
+-- | The blog view's input: the space, as the shell has loaded it, with its
+-- pages, and the page of posts shown, counted from 1.
 data Input = Input
   { context :: Context
   , space :: Space
@@ -60,8 +61,8 @@ data Input = Input
   , page :: Int
   }
 
--- | What the posts are listed with, and where the home page's attachments
--- are fetched from, as far as they have been loaded.
+-- | The details the posts are listed with, and the URLs of the home page's
+-- attachments, as far as they have been loaded.
 data Loaded
   = Loading
   | Failed WikiError
@@ -71,7 +72,7 @@ data State = State
   { input :: Input
   , loaded :: Loaded
   , people :: Body.People
-  -- ^ Whom the home page mentions.
+  -- ^ The people the home page mentions.
   }
 
 type Slots = Body.IslandSlots .+ ("watch" .== H.Slot (Const Void) Void ())
@@ -177,11 +178,11 @@ component =
         resolvePeople
       Receive input -> do
         old <- gets (\st -> st.input)
-        -- Whom the home page mentions is asked again in another wiki:
-        -- who is asking may be someone else now.
+        -- The people the home page mentions are looked up again after the
+        -- wiki is reloaded: the current user may be someone else now.
         modify (\st -> st {input, people = if old.context.revision /= input.context.revision then Body.noPeople else st.people})
-        -- What the posts are listed with changes with the wiki, and with
-        -- the space; the page of them shown does not need it again.
+        -- The posts' details change with the wiki and with the space; a
+        -- different page of posts does not need them again.
         when (old.space.id /= input.space.id || old.context.revision /= input.context.revision) load
         resolvePeople
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
@@ -192,7 +193,8 @@ component =
         modify (\st -> st {loaded = Loading})
         load
 
-    -- On a worker, as every view loads; the shell is told either way.
+    -- Load on a worker thread, as every view does; the shell is told
+    -- either way.
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
@@ -202,7 +204,8 @@ component =
       when (now == input.space.id) $ modify (\st -> st {loaded})
       H.raise Loaded
 
-    -- Ask whom the home page mentions, of the logins not asked about yet.
+    -- Look up the people the home page mentions, for the logins not looked
+    -- up yet.
     resolvePeople :: H.HalogenM State Action Slots ViewOutput m ()
     resolvePeople = do
       st <- get
@@ -212,12 +215,12 @@ component =
           Right found -> modify (\s -> s {people = Body.answered logins found s.people})
           Left _ -> pass
 
--- | The Markdown the view shows whole: the home page's, if it has one.
+-- | The Markdown the view shows in full: the home page's, if any.
 homeBodies :: Input -> [Text]
 homeBodies input = [h.body | h <- maybeToList (homeOf input.space input.pages)]
 
--- | What the posts are listed with, and where the home page's attachments
--- are fetched from.
+-- | Fetch the details the posts are listed with, and the URLs of the home
+-- page's attachments.
 fetch :: (MonadWiki n) => Input -> n Loaded
 fetch input =
   postDetails input.space.id >>= \case
@@ -227,19 +230,20 @@ fetch input =
       urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) attachments
       pure (Ready details urls)
 
--- | The route of a page of a blog's posts: the space's own for the first.
+-- | The route of a page of a blog's posts: the space's own route for the
+-- first.
 pageRoute :: [Slug] -> Int -> Route
 pageRoute path n
   | n <= 1 = Space path
   | otherwise = Posts path n
 
--- | Where the home page is read: its links resolved among the space's
--- pages, as the page view resolves them.
+-- | The place the home page is read in: its links are resolved among the
+-- space's pages, as the page view resolves them.
 placeOf :: Context -> Space -> [Page] -> Page -> Map AttachmentId Text -> Map Text Author -> Body.Place
 placeOf ctx space pages home urls people =
   Body.Place {context = ctx, space, pages, path = pagePathOf pages home.id, attachments = home.attachments, urls, people}
 
--- | How many comments, as people say it.
+-- | A number of comments, in words.
 comments :: Int -> Text
 comments = \case
   0 -> "No comments"

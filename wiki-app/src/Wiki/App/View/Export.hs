@@ -1,11 +1,12 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The "Export" menu a page and a space show (WP4.16 of docs/PLAN.md): a
--- link for each document the backend exports them as ("Wiki.Api.Export"),
--- which the browser downloads by itself, as it does an attachment. The
--- menu is a @\<details>@, so it opens and closes with no program, in a page
--- the server rendered as much as in the application; a backend that
--- exports nothing (the demo, which has no pandoc) shows none.
+-- | The "Export" menu of a page and of a space (WP4.16 of docs/PLAN.md): a
+-- link for each document format the backend exports them to
+-- ("Wiki.Api.Export"), which the browser downloads by itself, as it does an
+-- attachment. The menu is a @\<details>@ element, so it opens and closes
+-- without the program, in a page the server prerendered as well as in the
+-- application. A backend that exports nothing (the demo, which has no
+-- pandoc) shows no menu.
 module Wiki.App.View.Export
   ( exportMenu
   )
@@ -16,8 +17,8 @@ import Halogen.TH (hh)
 import Protolude
 import Wiki.Api.Export (ExportFormat, exportFileName, formatLabel, formatName)
 
--- | The menu for these formats, with each one's address, for a document
--- titled so: nothing when there are none.
+-- | The menu for these formats, with each one's URL, for a document with
+-- this title; nothing when there are no formats.
 exportMenu :: [ExportFormat] -> (ExportFormat -> Text) -> Text -> [HH.HTML w i]
 exportMenu formats url title
   | null formats = []

@@ -2,23 +2,24 @@
 
 -- | The "Backups" part of the administration's "Server" section (WP4.9 of
 -- docs/PLAN.md, "Wiki.Api.Backups"): whether the server backs itself up,
--- when, how many it keeps, and where it copies them off the machine; the
--- last backup's time, size and result; and "Back up now". They are off
--- until they are turned on here, which is the only place they are set.
+-- when, how many backups it keeps, and where it copies them off the
+-- machine; the last backup's time, size and result; and "Back up now".
+-- Backups are off until they are turned on here, which is the only place
+-- they are set.
 --
--- It is a component of its own inside the Server section, which mounts
--- it, so that what it keeps (the settings as typed, a backup under way)
--- is its own. It reads the backups as the section's other parts read
--- theirs: at once where the backend answers at once (the demo, and a page
--- the server rendered, which carries them), and otherwise in its
+-- It is a separate component inside the Server section, which mounts it,
+-- so that its own state (the settings as typed, a running backup) belongs
+-- to it. It reads the backups as the section's other parts read their
+-- data: at once where the backend answers at once (the demo, and a page
+-- the server prerendered, which carries them), and otherwise in its
 -- initializer.
 --
 -- The settings are changed in a form that replaces what is shown, and
--- saved whole. The rclone configuration, a secret, is typed once and never
--- shown again, as the section's passwords are: "Replace…" and "Clear".
--- "Back up now" answers once the backup is made, or, if it takes longer
--- (a slow copy off the machine), with it under way: the part then reads
--- the backups again every few seconds until it is done.
+-- saved all at once. The rclone configuration, a secret, is typed once and
+-- never shown again, like the section's passwords: "Replace…" and "Clear".
+-- "Back up now" answers once the backup is made, or, if it takes longer (a
+-- slow copy off the machine), while it is still running. The part then
+-- fetches the backups' state again every few seconds until it is done.
 --
 -- The demo makes no backups: its wiki is in the browser. Its backend says
 -- they are not available, and the part is shown disabled, with a note.
@@ -67,7 +68,7 @@ data Form = Form
   , typedRemote :: Text
   , typedConfig :: Text
   , configSet :: Bool
-  -- ^ Whether the server has a configuration already: then the field is
+  -- ^ Whether the server has a configuration already: if so, the field is
   -- offered only once "Replace…" is chosen.
   , replacingConfig :: Bool
   , clearingConfig :: Bool
@@ -80,7 +81,7 @@ data State = State
   , busy :: Bool
   , refusal :: Maybe WikiError
   , watching :: Bool
-  -- ^ Whether a backup under way is being waited for.
+  -- ^ Whether a running backup is being waited for.
   }
 
 data Action
@@ -105,8 +106,8 @@ data Action
   | ReplaceConfig
   | ClearConfig
 
--- | How long to wait before reading the backups again while one is under
--- way, in microseconds.
+-- | How long to wait before fetching the backups' state again while one
+-- is running, in microseconds.
 lookAgain :: Int
 lookAgain = 2_000_000
 
@@ -335,7 +336,8 @@ component =
       ReplaceConfig -> onForm (\f -> f {replacingConfig = True, clearingConfig = False})
       ClearConfig -> onForm (\f -> f {clearingConfig = True})
 
-    -- Read the backups again in a while, once: a backup is under way.
+    -- Fetch the backups' state again once, after a while: a backup is
+    -- running.
     watch :: H.HalogenM State Action Empty Void m ()
     watch =
       unlessM (gets (\st -> st.watching)) $ do
@@ -359,7 +361,7 @@ component =
         Right b | b.running -> watch
         _ -> pass
 
--- | The form for settings as they are.
+-- | The form for the current settings.
 formOf :: BackupSettings -> Form
 formOf s =
   Form
@@ -395,7 +397,7 @@ formOf s =
       DailyAt _ _ -> True
       EveryHours _ -> False
 
--- | The settings as the form says, or why they cannot be: the
+-- | The settings as the form describes them, or why they cannot be: the
 -- configuration kept unless one is typed, or it is cleared.
 changeOf :: Form -> Either Text BackupSettingsChange
 changeOf f = do
@@ -441,7 +443,7 @@ stateText s
   where
     plural n what = show n <> " " <> what <> (if n == 1 then "" else "s")
 
--- | The last backup, in a line: when, what it came to, and its size.
+-- | The last backup, in one line: when, its result, and its size.
 lastText :: BackupRecord -> Text
 lastText r =
   timeText r.startedAt
@@ -464,7 +466,7 @@ lastProblems = \case
 timeText :: UTCTime -> Text
 timeText = toS . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
 
--- | A size in bytes, as a person reads one.
+-- | A size in bytes, in the units people read.
 sizeText :: Integer -> Text
 sizeText bytes
   | bytes < 1024 = show bytes <> " bytes"

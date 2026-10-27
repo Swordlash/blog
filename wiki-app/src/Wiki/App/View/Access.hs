@@ -1,25 +1,26 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The administration's section on whom the wiki lets in (WP3.5 of
--- docs/PLAN.md): whether it is open or closed ("Wiki.Core.Access"),
--- whether every new account (made by its owner, by invitation or by
--- signing in with a provider) is let create spaces, and, in a
--- closed wiki, the invitations, with a form to invite an e-mail address.
--- One component over the administration's backend
--- ("Wiki.App.Backend.Admin"), the same on the demo's wiki and the
--- server's, shown by the shell to an administrator only.
+-- docs/PLAN.md): whether the wiki is open or closed ("Wiki.Core.Access"),
+-- whether every new account (created by its owner, by invitation, or by
+-- signing in with a provider) may create spaces, and, in a closed wiki,
+-- the invitations, with a form to invite an e-mail address. It is one
+-- component over the administration's backend ("Wiki.App.Backend.Admin"),
+-- the same on the demo's wiki and the server's, and the shell shows it to
+-- administrators only.
 --
--- What it shows it reads in one go, as the people's section does
+-- Everything it shows comes from one read, as in the users section
 -- ("Wiki.App.View.Admin"): at once where the backend answers at once, and
 -- otherwise in its initializer. After a change it tells the shell, which
 -- reloads who is asking (closing the wiki changes what their session
--- says) and counts up the context's revision, on which this reads again.
+-- says) and increments the context's revision, which makes this view
+-- fetch again.
 --
--- An invitation's link carries a secret that the backend gives back only
--- as the invitation is made, and only if it was not mailed: the link is
--- shown then, under the form, to copy and pass on, and never again. An
--- invitation made again for the same address gets a new link, which is the
--- way to a link lost.
+-- An invitation's link carries a secret that the backend returns only
+-- when the invitation is made, and only if it was not mailed. The link is
+-- shown then, under the form, to copy and pass on, and never again.
+-- Inviting the same address again gives a new link, which is how to
+-- replace a lost one.
 module Wiki.App.View.Access
   ( Input (..)
   , component
@@ -52,7 +53,7 @@ data Loaded
   | Failed WikiError
   | Ready WikiSettings Invitations
 
--- | An invitation just made, as the panel tells of it: to whom, whether it
+-- | An invitation just made, as the panel reports it: to whom, whether it
 -- was mailed, and its link if it was not.
 data Made = Made
   { email :: Text
@@ -258,9 +259,9 @@ component =
         Ready settings _ -> change (void <$> setWikiSettings (f settings))
         _ -> pass
 
-    -- Ask for a change. Done, the shell is told, and the controls stay
-    -- disabled until the settings have been read again ('Receive');
-    -- refused, why is said in place.
+    -- Request a change. If it is made, the shell is told, and the controls
+    -- stay disabled until the settings have been fetched again
+    -- ('Receive'). If it is refused, the reason is shown in place.
     change :: H.HalogenM State Action Empty ViewOutput m (Either WikiError ()) -> H.HalogenM State Action Empty ViewOutput m ()
     change request = do
       modify (\st -> st {busy = True, problem = Nothing})
@@ -273,7 +274,7 @@ component =
       result <- lift readBoth
       modify (\st -> st {loaded = fromRead result, busy = False})
 
--- | The settings and the invitations, in one go.
+-- | Fetch the settings and the invitations together.
 readBoth :: (MonadAdmin n) => n (Either WikiError (WikiSettings, Invitations))
 readBoth = runExceptT ((,) <$> ExceptT wikiSettings <*> ExceptT invitations)
 

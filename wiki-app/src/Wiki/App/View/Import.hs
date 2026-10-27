@@ -1,31 +1,32 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | Bringing a wiki into the server's: the import in the administration's
--- section on the wiki's data, over a backend that merges an archive into
--- what it has (the server's, "Wiki.Api.Import"), where the demo's own
--- import replaces everything instead.
+-- | The import of a wiki into the server's wiki, in the administration's
+-- section on the wiki's data. It is offered on a backend that merges an
+-- archive into its content (the HTTP backend, "Wiki.Api.Import"); the
+-- demo's own import replaces everything instead.
 --
 -- It takes the wiki from one of two sources: a zip file of an export
--- ("Wiki.Core.Export"), chosen from the computer, or the wiki the demo left
--- in this browser, which is offered only when there is one here (IndexedDB
--- keeps a database per origin, so there is one when the demo was served
--- from the address the server now has). Either goes to the server for a
--- preview, which answers with what importing it would do, and the dialog
--- "What to migrate" shows that as a tree of the source's spaces and their
--- pages, each with a box, all checked, marked against the server's content
--- as new, as already there (a space, merged), or in conflict (a page at the
--- same path), with the choice between keeping the server's page, the
--- default, and taking the imported one. What it does with the boxes and the
--- choices is "Wiki.App.Import"'s. "Import" sends the same archive again
--- with the choices; the server works the plan out once more, against its
--- content as it is then, and answers with what it did, which is shown
--- afterwards, and the shell reloads the wiki ('Changed').
+-- ("Wiki.Core.Export"), chosen from the computer, or the wiki the demo
+-- left in this browser. The latter is offered only when it exists here
+-- (IndexedDB keeps one database per origin, so it exists when the demo was
+-- served from the address the server now has). Either goes to the server
+-- for a preview, which answers with what importing it would do. The
+-- dialog "What to migrate" shows that as a tree of the source's spaces and
+-- their pages, each with a checkbox, all checked, marked against the
+-- server's content as new, as already there (a space, which is merged), or
+-- in conflict (a page at the same path). A conflict offers the choice
+-- between keeping the server's page, the default, and taking the imported
+-- one. How the boxes and the choices work is in "Wiki.App.Import".
+-- "Import" sends the same archive again with the choices. The server works
+-- the plan out again, against its content at that moment, and answers with
+-- what it did, which is then shown, and the shell reloads the wiki
+-- ('Changed').
 --
--- Every request waits for the server (an archive goes up as an upload does,
--- for up to six minutes), so it is made in a handler, never in an effect,
--- and meanwhile the section says what it is waiting for and offers nothing
--- that would start another. One that gets no answer says so, with "Try
--- again".
+-- Every request waits for the server (an archive is uploaded like any
+-- upload, for up to six minutes), so it is made in a handler, never in an
+-- effect. Meanwhile the section says what it is waiting for and offers
+-- nothing that would start another request. A request that gets no
+-- response says so, with "Try again".
 module Wiki.App.View.Import
   ( Migration (..)
   , Input (..)
@@ -49,31 +50,32 @@ import Wiki.App.Import
 import Wiki.App.View.Common
 import Wiki.Core.Slug (Slug, slugText)
 
--- | What the import needs of its monad: the server's two steps, and the
+-- | What the import needs from its monad: the server's two steps, and the
 -- demo's wiki in this browser as a source.
 data Migration m = Migration
   { previewImport :: ByteString -> m (Either WikiError ImportPlan)
   -- ^ What importing this zip file would do.
   , applyImport :: ByteString -> ImportChoices -> m (Either WikiError ImportSummary)
-  -- ^ Import this zip file, as chosen.
+  -- ^ Import this zip file, with these choices.
   , findDemoData :: m Bool
-  -- ^ Whether the demo has left a wiki in this browser, asked without
-  -- making one.
+  -- ^ Whether the demo has left a wiki in this browser, checked without
+  -- creating one.
   , readDemoData :: m (Either Text ByteString)
-  -- ^ That wiki, as a zip file of an export, or why it cannot be read.
+  -- ^ That wiki, as a zip file of an export, or the reason it cannot be
+  -- read.
   }
 
 newtype Input m = Input {migration :: Migration m}
 
--- | A wiki to import: what to call it, and its zip file.
+-- | A wiki to import: its name to show, and its zip file.
 data Source = Source
   { name :: Text
   , zipped :: ByteString
   }
 
--- | Where the import is.
+-- | The import's current step.
 data Step
-  = -- | Offering the sources, under what the last import did, if anything.
+  = -- | Offering the sources, under the result of the last import, if any.
     Start (Maybe Outcome)
   | -- | Reading the demo's wiki from this browser.
     ReadingDemo
@@ -81,12 +83,12 @@ data Step
     Previewing Source
   | -- | The preview failed.
     PreviewFailed Source WikiError
-  | -- | The dialog, and why the import failed if it did.
+  | -- | The dialog, and why the import failed, if it did.
     Choosing Source ImportPlan Selection (Maybe WikiError)
   | -- | Waiting for the server to import.
     Applying Source ImportPlan Selection
 
--- | What the last import did, or why there was nothing to import.
+-- | The result of the last import, or why there was nothing to import.
 data Outcome
   = Imported Text ImportSummary
   | Refused Text
@@ -95,10 +97,10 @@ data State m = State
   { migration :: Migration m
   , demoHere :: Maybe Bool
   -- ^ Whether the demo's wiki is in this browser; 'Nothing' until known,
-  -- which is shown as not here: the server renders the administration
-  -- without knowing what the reader's browser keeps, and the program's
-  -- first render has to be that page, so the zip export is offered from
-  -- the start and the demo's data only once the browser has said.
+  -- which is shown as absent. The server prerenders the administration
+  -- without knowing what the reader's browser stores, and the program's
+  -- first render must match that page. So the zip export is offered from
+  -- the start, and the demo's data only once the browser has answered.
   , step :: Step
   }
 
@@ -181,8 +183,8 @@ component =
         |]
 
     -- What to migrate: the source's spaces and pages, each with its box,
-    -- and a choice for each conflict; while the import is being made,
-    -- the same, with nothing to change.
+    -- and a choice for each conflict; while the import is running, the
+    -- same, but read-only.
     dialog :: Source -> ImportPlan -> Selection -> Bool -> Maybe WikiError -> H.ComponentHTML Action Empty m
     dialog source plan sel applying problem =
       [hh|
@@ -317,8 +319,8 @@ component =
 
     handleAction :: Action -> H.HalogenM (State m) Action Empty ViewOutput m ()
     handleAction = \case
-      -- Asked once, in a fiber: a browser answers at once, but it is
-      -- asked of the browser's storage, which may wait.
+      -- Checked once, in a fiber: a browser answers at once, but the check
+      -- reads the browser's storage, which may wait.
       Initialize -> do
         migration <- gets (\st -> st.migration)
         here <- lift migration.findDemoData
@@ -362,7 +364,7 @@ component =
       migration <- gets (\st -> st.migration)
       lift (migration.previewImport source.zipped) >>= \case
         Right plan -> modify (\st -> st {step = Choosing source plan everything Nothing})
-        -- A refusal says why the file is not one to import; trying again
+        -- A refusal says why the file cannot be imported; trying again
         -- would be refused again.
         Left e@(Unreachable _) -> modify (\st -> st {step = PreviewFailed source e})
         Left e -> modify (\st -> st {step = Start (Just (Refused ("Not imported: " <> source.name <> ". " <> errorMessage e)))})
@@ -380,12 +382,12 @@ component =
             Left e -> modify (\st -> st {step = Choosing source plan sel (Just e)})
         _ -> pass
 
--- | A path of slugs as it reads in an address.
+-- | A path of slugs as written in an address.
 pathText :: [Slug] -> Text
 pathText = T.intercalate "/" . map slugText
 
--- | When a page was saved, as the server says it, in UTC: the dialog's
--- reader may be anywhere, and says which.
+-- | When a page was saved, as the server reports it, in UTC: the dialog's
+-- reader may be anywhere, so the time says which zone it is in.
 savedAt :: UTCTime -> Text
 savedAt = toS . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
 

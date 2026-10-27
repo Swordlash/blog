@@ -1,24 +1,24 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The form for a new page: its title, and what it starts from, under the
--- page the route names or at the space's top level. Creating it makes the
--- page at once, with its body, and opens the editor on it, so that the page has an id from
--- the start: files can be attached to it before anything is written, and
--- the editor has only ever to save a page that exists. A page made and
--- then left without a word written stays, empty; deleting it is the page's
--- Delete, as for any other.
+-- page the route names or at the space's top level. Creating it creates
+-- the page at once, with its body, and opens the editor on it, so that the
+-- page has an id from the start: files can be attached to it before
+-- anything is written, and the editor only ever saves a page that exists.
+-- A page created and then left without a word written stays, empty; it is
+-- deleted with the page's Delete, as any other page is.
 --
 -- A page starts blank, or from a template ("Wiki.Core.Template"): one of
--- the space's own (its pages flagged 'Wiki.Core.Page.template'), or one the
--- wiki has built in (meeting notes, a decision record, a how-to guide). A
+-- the space's own (its pages marked 'Wiki.Core.Page.template'), or one
+-- built into the wiki (meeting notes, a decision record, a how-to guide). A
 -- template's body is copied into the new page with @{{title}}@, @{{date}}@
--- and @{{author}}@ filled in: the title typed, today's date (UTC, as ISO
--- 8601 writes it) and the display name of whoever makes it.
+-- and @{{author}}@ filled in: the title typed, today's date (UTC, in ISO
+-- 8601 format) and the display name of the user creating it.
 --
--- Only someone the rules let edit the space is shown the form; the backend
--- checks again, and a refusal is shown in place. The title's input is not
--- controlled (the component never sets its text), so no render between a
--- key and its input event can take a typed character back.
+-- Only someone the rules let edit the space sees the form; the backend
+-- checks again, and a refusal is shown in place. The title's input is
+-- uncontrolled (the component never sets its text), so no render between
+-- a key press and its input event can undo a typed character.
 module Wiki.App.View.NewPage
   ( Input (..)
   , component
@@ -49,8 +49,8 @@ import Wiki.Core.Template (Placeholders (Placeholders), builtinTemplates, fillTe
 import Wiki.Core.Template qualified as Template
 import Wiki.Core.User (User (displayName))
 
--- | The space the shell has loaded, with its pages, and where in it the
--- page goes.
+-- | The form's input: the space the shell has loaded, with its pages, and
+-- where in it the page goes.
 data Input = Input
   { context :: Context
   , space :: Space
@@ -75,7 +75,7 @@ data Start
   = Blank
   | -- | One of the space's templates.
     SpaceTemplate PageId
-  | -- | One of the wiki's own, by its key.
+  | -- | One of the wiki's built-in templates, by its key.
     BuiltIn Text
   deriving stock (Eq, Show)
 
@@ -153,15 +153,15 @@ component =
             modify (\s -> s {creating = False})
             case result of
               Left e -> modify (\s -> s {problem = Just e})
-              -- The editor, on the page just made: the shell reloads the
-              -- space's pages, which now have it, and goes there.
+              -- The editor, on the page just created: the shell reloads the
+              -- space's pages, which now include it, and navigates there.
               Right page ->
                 H.raise (Changed (Just (EditPage (spacePathOf st.input.context.spaces st.input.space.id) (fromMaybe [] st.input.parent <> [page.slug]))))
           _ -> pass
 
--- | The new page's body: nothing, or the template chosen with its
--- placeholders filled in. A template of the space's that is not among its
--- pages any more (deleted since the form was shown) starts it blank.
+-- | The new page's body: empty, or the chosen template with its
+-- placeholders filled in. A space template no longer among its pages
+-- (deleted since the form was shown) gives a blank page.
 startingBody :: (MonadIO n) => State -> n Text
 startingBody st = case st.start of
   Blank -> pure ""
@@ -173,8 +173,8 @@ startingBody st = case st.start of
       let author = maybe "" (\u -> u.displayName) st.input.context.session.user
       pure (fillTemplate Placeholders {Template.title = T.strip st.title, Template.date = today, Template.author = author} body)
 
--- | The page the new one goes under, if the route names one; 'Nothing' for
--- the space's top level; 'NotFound' for a path that names no page.
+-- | The page the new one goes under, if the route names one; 'Nothing'
+-- for the space's top level; 'NotFound' for a path that names no page.
 under :: Input -> Either WikiError (Maybe Page)
 under input = case input.parent of
   Nothing -> Right Nothing
@@ -188,7 +188,7 @@ headingOf input = case input.parent of
   Nothing -> "New page in " <> input.space.name
   Just parent -> "New page under " <> maybe "a page" (\p -> p.title) (pageAt input.pages parent)
 
--- | Where Cancel goes: where the page would have been made.
+-- | Where Cancel navigates to: where the page would have been created.
 leaving :: Input -> Route
 leaving input = case input.parent of
   Just parent -> Page spacePath parent

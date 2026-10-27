@@ -2,21 +2,21 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 -- | The search box in the shell's header, and how a hit is shown, here and
--- on the page of all results ("Wiki.App.View.SearchResults").
+-- on the search results page ("Wiki.App.View.SearchResults").
 --
 -- The box is an input and a space selector: every space, or one space and
--- (unless that is unticked) its subspaces. What is typed is searched for
+-- (unless that is unticked) its subspaces. The text typed is searched for
 -- ('Wiki.App.Backend.searchPages') once typing pauses for 'pause', and the
 -- best hits are listed under the input while focus is anywhere in the box.
--- Each hit is a link to its page, with its space's path and a snippet of its
--- text, the matches marked.
+-- Each hit is a link to its page, with its space's path and a snippet of
+-- its text, the matches highlighted.
 --
 -- From the keyboard: @/@ anywhere outside a field focuses the input (see
--- @jsbits/search.js@), the arrows move through the hits, Enter opens the one
--- selected or, with none selected, the page of all results, and Escape closes
--- the list. Whatever leads away (a hit, the page of results) closes the list
--- and takes focus out of the box, so that @/@ works again where the reader
--- lands.
+-- @jsbits/search.js@), the arrows move through the hits, Enter opens the
+-- selected hit or, with none selected, the search results page, and
+-- Escape closes the list. Whatever navigates away (a hit, the results
+-- page) closes the list and takes focus out of the box, so that @/@ works
+-- again wherever the reader lands.
 module Wiki.App.View.Search
   ( Input (..)
   , component
@@ -67,11 +67,11 @@ $( browserJS
 
 newtype Input = Input {context :: Context}
 
--- | The hits for what was last searched for, or none searched for yet.
+-- | The hits for the last search, or none if nothing was searched yet.
 data Results
   = NotSearched
   | Found SearchQuery [SearchHit]
-  | -- | The search could not be made: the backend could not be reached.
+  | -- | The search failed: the backend could not be reached.
     Unanswered SearchQuery WikiError
 
 data State = State
@@ -85,11 +85,11 @@ data State = State
   -- ^ Whether focus is in the box, and the list has not been closed since.
   , selected :: Maybe Int
   , pending :: Maybe H.ForkId
-  -- ^ The search waiting for typing to pause.
+  -- ^ The search waiting for the typing to pause.
   , box :: H.RefLabel
   , input :: H.RefLabel
   , bound :: Maybe Element
-  -- ^ The input the @/@ shortcut focuses, once it is bound.
+  -- ^ The input the @/@ shortcut focuses, once the shortcut is bound.
   }
 
 data Action
@@ -108,14 +108,14 @@ data Action
   | KeepFocus
   | Followed (Follow Route)
 
--- | How long typing has to pause before what is typed is searched for: long
+-- | How long typing must pause before the text is searched for: long
 -- enough not to search for every letter of a word typed quickly, short
 -- enough that the list seems to follow the typing.
 pause :: Int
 pause = 150_000
 
--- | How many hits the list under the box shows; the page of all results
--- shows the rest.
+-- | How many hits the list under the box shows; the results page shows
+-- the rest.
 shown :: Int
 shown = 8
 
@@ -195,11 +195,11 @@ component =
         </div>
       |]
 
-    -- The keys that move through the list and pick from it, decided in the
-    -- input's listener, which keeps the browser from acting on them (moving
-    -- the cursor, submitting) while it dispatches the key, whatever the
-    -- component is busy with; any other key makes no action and is the
-    -- browser's.
+    -- The keys that move through the list and pick from it, recognised in
+    -- the input's listener, which stops the browser's own action for them
+    -- (moving the cursor, submitting) while it dispatches the key, whatever
+    -- the component is busy with. Any other key makes no action and is left
+    -- to the browser.
     listKey :: Event -> Maybe Action
     listKey event = case fromJSText (js_search_key event) of
       "ArrowDown" -> Just (Move 1)
@@ -207,17 +207,17 @@ component =
       "Enter" -> Just Pick
       _ -> Nothing
 
-    -- Escape, anywhere in the box, closes the list, and does what the
-    -- browser does with it as well (a search input clears its text).
+    -- Escape, anywhere in the box, closes the list, and the browser also
+    -- does its own action (a search input clears its text).
     closeKey :: Event -> Maybe Action
     closeKey event = case fromJSText (js_search_key event) of
       "Escape" -> Just Close
       _ -> Nothing
 
-    -- The list under the input. A press on it would take focus from the
-    -- input before the click it starts lands, closing the list under the
-    -- pointer, so the press is kept from doing that, in its listener
-    -- ('KeepFocus' itself does nothing).
+    -- The list under the input. A mouse press on it would take focus from
+    -- the input before the click lands, closing the list under the pointer,
+    -- so the press is stopped from doing that in its listener ('KeepFocus'
+    -- itself does nothing).
     dropdown :: State -> H.ComponentHTML Action Empty m
     dropdown st =
       [hh|
@@ -253,10 +253,11 @@ component =
       Finalize -> gets (\st -> st.bound) >>= traverse_ (H.liftEffect . liftIO . js_search_unbind_shortcut)
       Receive Input {context} -> do
         before <- gets (\st -> st.context)
-        -- A space that is gone, or no longer visible, is no longer chosen.
+        -- A space that no longer exists, or is no longer visible, is
+        -- deselected.
         modify (\st -> st {context, space = mfilter (mayView context) st.space})
-        -- Someone else signed in, or the wiki changed: what they may find has
-        -- changed with it.
+        -- Someone else signed in, or the wiki changed: what they may find
+        -- has changed too.
         when (changed before context) (schedule False)
       Typed text -> do
         modify (\st -> st {text, open = True, selected = Nothing})
@@ -271,10 +272,11 @@ component =
         modify (\st -> st {pending = Nothing})
         q <- gets queryOf
         unless (T.null (T.strip q.text)) $ do
-          -- On a worker, where the backend's failure to answer is caught.
+          -- On a worker thread, where the backend's failure to answer is
+          -- caught.
           found <- lift (attempt (searchPages q))
-          -- Unless something else has been typed or chosen meanwhile, whose
-          -- own search will come.
+          -- Unless something else has been typed or chosen meanwhile, which
+          -- will get its own search.
           current <- gets queryOf
           when (current == q) $ modify (\st -> st {results = either (Unanswered q) (Found q) found, selected = Nothing})
       Move step -> move step
@@ -293,7 +295,7 @@ component =
         Router.follow router f
         leave
 
-    -- Search for what is typed: after a pause in typing, or at once for a
+    -- Search for the typed text: after a pause in typing, or at once for a
     -- change of the space or the session. Blank text clears the list.
     schedule :: Bool -> H.HalogenM State Action Empty output m ()
     schedule afterPause = do
@@ -335,24 +337,24 @@ component =
           H.liftEffect (Router.navigate router r)
           leave
 
-    -- Close the list and take focus out of the box, for wherever the reader
-    -- is going.
+    -- Close the list and take focus out of the box, wherever the reader is
+    -- going.
     leave :: H.HalogenM State Action Empty output m ()
     leave = do
       modify (\st -> st {open = False, selected = Nothing})
       ref <- gets (\st -> st.input)
       H.getRef ref >>= traverse_ (H.liftEffect . liftIO . js_search_blur)
 
--- | Whether the list under the input is shown: while focus is in the box and
--- there is something typed to list hits for.
+-- | Whether the list under the input is shown: while focus is in the box
+-- and there is typed text to list hits for.
 listShown :: State -> Bool
 listShown st = st.open && not (T.null (T.strip st.text))
 
--- | The query for what the box holds.
+-- | The query for the box's contents.
 queryOf :: State -> SearchQuery
 queryOf st = SearchQuery {text = st.text, space = st.space, includeSubspaces = st.subspaces, limit = shown, templates = False}
 
--- | The page of all results for what the box holds.
+-- | The search results page for the box's contents.
 resultsRoute :: State -> Route
 resultsRoute st =
   Search
@@ -368,22 +370,22 @@ changed a b = sessionOf a /= sessionOf b || a.revision /= b.revision
     sessionOf c = c.session
 
 -- | The spaces the selector offers: those the user may view, by their path
--- of names, in the order of those.
+-- of names, sorted by it.
 choices :: Context -> [(SpaceId, Text)]
 choices ctx =
   sortOn
     (T.toCaseFold . snd)
     [(s.id, T.intercalate " / " (spaceNamesOf ctx.spaces (spacePathOf ctx.spaces s.id))) | s <- ctx.spaces, mayView ctx s.id]
 
--- | The names of the spaces on a path, from the top level; the slugs of a
--- path the spaces given do not have.
+-- | The names of the spaces on a path, from the top level; the path's
+-- slugs for spaces the given list does not have.
 spaceNamesOf :: [Space] -> [Slug] -> [Text]
 spaceNamesOf spaces path = case findSpace spaces path of
   Just chain -> map (\s -> s.name) chain
   Nothing -> [renderPath path]
 
--- | What a link to a hit holds: its title, its space's path and its
--- snippet, the matches marked in both.
+-- | The contents of a link to a hit: its title, its space's path and its
+-- snippet, with the matches highlighted in both.
 hitContents :: [Space] -> SearchHit -> [HH.HTML w i]
 hitContents spaces hit =
   [hhs|
@@ -392,6 +394,6 @@ hitContents spaces hit =
     <span class="search-hit-snippet">{{ snippetHtml hit.snippet }}</span>
   |]
 
--- | A snippet's text, its matches in @\<mark>@.
+-- | A snippet's text, with its matches in @\<mark>@.
 snippetHtml :: Snippet -> [HH.HTML w i]
 snippetHtml (Snippet pieces) = [if p.match then HH.mark_ [HH.text p.text] else HH.text p.text | p <- pieces]

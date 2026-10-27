@@ -1,18 +1,19 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | The "Status" part of the administration's "Server" section (WP4.10 of
--- docs/PLAN.md): which program is running and since when, the version of
--- its database's schema, its newest backup, how many live channels are
--- open, how much the wiki holds, and the last errors the server logged
--- (twenty at most, kept in memory since it started: the message, when, and
--- the route they happened on, never a secret, as the log has none).
+-- docs/PLAN.md): which program version is running and since when, the
+-- version of its database's schema, its newest backup, how many live
+-- channels are open, how much the wiki holds, and the last errors the
+-- server logged (twenty at most, kept in memory since it started: the
+-- message, when, and the route it happened on, never a secret, since the
+-- log has none).
 --
--- A component of its own inside the Server section, as the backups are
+-- It is a separate component inside the Server section, like the backups
 -- ("Wiki.App.View.Backups"). It reads the status at once where the backend
--- answers at once (a page the server rendered carries it), and otherwise
--- in its initializer; "Refresh" reads it again, as does a change of the
--- wiki. The demo has no server: its backend says so, and the part shows
--- a note.
+-- answers at once (a page the server prerendered carries it), and
+-- otherwise in its initializer. "Refresh" fetches it again, as does a
+-- change of the wiki. The demo has no server: its backend says so, and the
+-- part shows a note.
 module Wiki.App.View.Status
   ( Input (..)
   , component
@@ -143,7 +144,7 @@ component =
       result <- lift serverStatus
       modify (\st -> st {loaded = either Failed Ready result, busy = False})
 
--- | A time, as a person reads it.
+-- | A time, in words for a person to read.
 timeText :: UTCTime -> Text
 timeText = toS . formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC"
 

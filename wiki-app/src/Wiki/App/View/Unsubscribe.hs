@@ -1,15 +1,15 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The page of the link a notification's mail carries
+-- | The page of the unsubscribe link in a notification mail
 -- (@\/unsubscribe\/\<secret>\/@, WP4.13 of docs/PLAN.md): a button that
--- turns the user's notification mail off. A button rather than doing it on
--- arrival, so that a mail program that fetches links to look at them turns
--- nothing off, and so that the page the server renders is the program's
--- first render.
+-- turns the user's notification mail off. It is a button rather than
+-- acting on arrival, so that a mail program that fetches links to preview
+-- them turns nothing off, and so that the page the server prerenders
+-- matches the program's first render.
 --
 -- It needs nobody signed in, in a closed wiki too: the link's secret names
--- the user and does that one thing. One that names nobody says so; the
--- demo, which sends no mail, says that too.
+-- the user and allows only this one action. A link that names nobody says
+-- so; the demo, which sends no mail, says so too.
 module Wiki.App.View.Unsubscribe
   ( Input (..)
   , component

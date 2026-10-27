@@ -1,9 +1,9 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The page of all results of a search (the route 'Search'): what the box
--- in the header lists the best of, in full, each hit shown as the box shows
--- it. The search box is where a search is typed; this page is where Enter in
--- it leads, and an address a search can be kept and shared by.
+-- | The search results page (the route 'Search'): all the results the box
+-- in the header lists the best of, each hit shown as the box shows it. A
+-- search is typed into the search box; this page is where Enter in it
+-- leads, and its address lets a search be kept and shared.
 module Wiki.App.View.SearchResults
   ( Input (..)
   , component
@@ -41,9 +41,9 @@ data Results
   | -- | The space searched is not one the user can see.
     NoSpace
   | Hits [SearchHit]
-  | -- | Not searched yet: the backend would have waited.
+  | -- | Not searched yet: the backend would have had to wait.
     Searching
-  | -- | The search could not be made.
+  | -- | The search failed.
     SearchFailed WikiError
 
 data State = State
@@ -53,7 +53,7 @@ data State = State
 
 data Action = Initialize | Receive Input | Followed (Follow Route) | Retry
 
--- | As many hits as a page of results lists: more than anyone reads through,
+-- | How many hits a results page lists: more than anyone reads through,
 -- few enough that the page stays quick to render.
 limitOf :: Int
 limitOf = 200
@@ -104,8 +104,8 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty ViewOutput m ()
     handleAction = \case
-      -- The results came with the initial state, and the shell is told;
-      -- or they are searched for now.
+      -- The results came with the initial state, and the shell is told; or
+      -- they are searched for now.
       Initialize ->
         gets (\st -> st.results) >>= \case
           Searching -> load
@@ -122,15 +122,18 @@ component =
     load :: H.HalogenM State Action Empty ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      -- On a worker, where the backend's failure to answer is caught.
+      -- On a worker thread, where the backend's failure to answer is
+      -- caught.
       results <- either SearchFailed identity <$> lift (attempt (search input))
-      -- Unless the input has changed meanwhile, whose own load will come.
+      -- Unless the input has changed meanwhile, in which case its own load
+      -- will come.
       now <- gets (\st -> st.input)
       unless (differs now input) $ do
         modify (\st -> st {results})
         H.raise Loaded
 
--- | The pages the input asks for, or why there are none to look for.
+-- | Search for the pages the input asks for, or say why there is nothing
+-- to search.
 search :: (MonadWiki n) => Input -> n Results
 search Input {context, text, space, subspaces} =
   case (T.strip <$> text, traverse (findSpace context.spaces) space) of
@@ -152,10 +155,10 @@ search Input {context, text, space, subspaces} =
                 , templates = False
                 }
 
--- | Whether the page has to search again: for other words or another space,
--- or because who is asking or the wiki has changed. The tree of spaces counts
--- too: a space searched in is looked up there, and it changes when the shell
--- reloads the wiki.
+-- | Whether the page must search again: for other words or another space,
+-- or because the current user or the wiki has changed. The tree of spaces
+-- counts too: the searched space is looked up in it, and it changes when
+-- the shell reloads the wiki.
 differs :: Input -> Input -> Bool
 differs a b =
   a.text /= b.text
@@ -165,7 +168,7 @@ differs a b =
     || a.context.revision /= b.context.revision
     || a.context.spaces /= b.context.spaces
 
--- | How many pages match, and where they were looked for.
+-- | How many pages match, and where they were searched.
 summary :: Input -> Int -> Text
 summary input n =
   count <> " for “" <> maybe "" T.strip input.text <> "”" <> case input.space of
