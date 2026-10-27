@@ -3086,6 +3086,14 @@ Amended by the planning session after each work package's report.
   request-log test, the smoke test's address check, `--legal-comments`-style notices
   are done). The three pull requests #86, #85, #87 were rebased as a chain
   (#86 → #85 → #87) and fast-forwarded in that order, one CI run each on the final tree.
+- **The hosted caches are on `main`** (2026-10-27, 01:10Z): the dispatch with `runner:
+  hosted` after WP5.4's merge went green end to end (`plan`, `format`, `native` with the
+  store from cache, `wasm` building its store in 43 minutes and saving it on `main`,
+  Chromium cached and installed in 6 s, tests, smoke test, artifact, deploy); from now a
+  hosted wasm job on any branch restores that store. The pushes of #86, #85 and #87 each
+  found their pull request's run and redeployed the demo in under a minute (the first of
+  the three was cancelled by the next push while its `tested` waited for the machine; the
+  later deploys carried its change).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
