@@ -13,7 +13,7 @@
 const wikiTestVoid = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
 
 function wikiTestEscape(text, attribute) {
-  const escaped = text.replaceAll("&", "&amp;").replaceAll(" ", "&nbsp;");
+  const escaped = text.replaceAll("&", "&amp;").replaceAll("\u00a0", "&nbsp;");
   return attribute ? escaped.replaceAll('"', "&quot;") : escaped.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
