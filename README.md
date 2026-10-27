@@ -747,7 +747,11 @@ to the demo, keeping `data/`.
   form mails a link that sets a new password, once, within thirty minutes, to
   a verified address only, and says the same whether or not the login exists.
   Both need the mail server of the "Server" section; without it the forms say
-  so. An administrator removes a lost second factor from the Users table.
+  so. An administrator removes a lost second factor from the Users table, and
+  there sends a user that same link with "Send a password link…" rather than
+  typing a password for them (mailed at once, at most one a minute); where the
+  server sends no mail, or the user has no verified address, the table types one
+  instead ("Set password…", "Reset password…") and says why under the button.
 - **Open or closed.** The administration's "Who may come in" says whether the
   wiki is open (the default: anyone reads the public spaces, and "Create account"
   beside "Sign in" lets anyone make an account, which holds no grant until given
@@ -825,12 +829,18 @@ to the demo, keeping `data/`.
   one they need an invitation, whose page offers the providers too. A user signed in
   connects a provider's account, or disconnects one, from the menu under their name
   (never the last way they have in); the administration shows who signs in with what
-  and may disconnect an account.
+  and may disconnect an account. An account that signs in with a provider and has
+  no password has none to set: neither its user nor an administrator gives it one,
+  and "Forgot your password?" mails it nothing. Once its last provider is
+  disconnected, or removed from the "Server" section, it has no way in, and the
+  administration offers a password for it as for anyone else.
 - **One's own password.** A user signed in changes their password from the menu
-  under their name ("Change password…", giving the current one), or sets one
-  there if they sign in only with a provider ("Set a password…"); their other
+  under their name ("Change password…", giving the current one); their other
   sessions end, this one stays. Wrong current passwords count against the
-  sign-in limit.
+  sign-in limit. A user who signs in with a provider and has no password is
+  offered none to set: they sign in there. One left with no way in (no password,
+  and their provider gone from the server) sets one there without a current one
+  ("Set a password…").
 - **The admin listener.** `http://127.0.0.1:8081/admin/` (`--admin-port` changes
   the port) serves the same application to whoever is on the machine, as the
   administrator, with no login; it listens on loopback only, and no firewall rule

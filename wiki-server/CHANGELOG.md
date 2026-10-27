@@ -8,6 +8,23 @@ named `.bin` rather than gzip files named `.gz`, since a corporate proxy may
 refuse to download a gzip archive from a site it does not know. A `.gz` is
 still sent as `application/gzip`, as its own bytes.
 
+No password for accounts that sign in with a provider; the administrator
+mails password links (WP5.6). An account that has no password and an
+identity at a provider the server's settings have has no password to set:
+`PUT account/password` and `PUT admin/users/<id>/password` answer 400 with
+the reason, "Forgot your password?" mails it no link, and a link mailed
+before sets none (400). Only configured providers count, so an account whose
+last provider is disconnected or removed from the settings may be given a
+password again. The directory says who (`providerOnly`). New `POST
+admin/users/<id>/password-link` mails a user the reset's own link, to their
+verified address, at once (204), recorded in the audit log as
+`user.password-link`; 400 with the reason when the server sends no mail,
+the user has no password to set, is disabled or has no verified address,
+or the mail fails (the link is then forgotten); 429 within a minute of any
+reset link the account was given. The public reset's limits do not apply
+to it, but it counts towards the account's three an hour. The console's
+`users password` is unchanged: it stays the operator's way in.
+
 Licensed under the MIT licence (WP5.1), where it was proprietary: the
 package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
 A binary of `wiki-server` links pandoc, texmath and skylighting, which are

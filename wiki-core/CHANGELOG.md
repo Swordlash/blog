@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+The audit log names `user.password-link` (WP5.6): "Mailed a user a link to
+choose a password".
+
 Licensed under the MIT licence (WP5.1), where it was proprietary: the
 package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
 

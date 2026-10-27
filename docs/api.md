@@ -607,7 +607,8 @@ is kept only if the provider says it is verified. Then:
   invitation (`invite=…`), makes the invitation's account and uses the
   invitation up; otherwise it makes an account in an open wiki and is
   refused in a closed one (403);
-- an account so made has no password, a login made from the provider's
+- an account so made has no password (and none to set while it signs in
+  with a provider the server has: see "One's own password"), a login made from the provider's
   login, the e-mail's local part or the name (lower case, a number after it
   if taken), and the display name the provider gives.
 
@@ -628,10 +629,18 @@ to `next`, a wrong one answers the form again (401), five end the sign-in.
 
 | Method | Path | Body | Response | Errors | |
 | ------ | ---- | ---- | -------- | ------ | - |
-| PUT | `api/v1/account/password` | `PasswordChange` `{"current", "new"}` | `SignInMethods` as they are then; the user's other sessions end | 401 (nobody signed in, or `current` missing or wrong), 429, 400 (the operator, or a `new` that cannot be a password) | (`changePassword`) |
+| PUT | `api/v1/account/password` | `PasswordChange` `{"current", "new"}` | `SignInMethods` as they are then; the user's other sessions end | 401 (nobody signed in, or `current` missing or wrong), 429, 400 (the operator, a `new` that cannot be a password, or a user who has no password to set) | (`changePassword`) |
 
 A user signed in changes their password, or sets one if they have none
-(one who signs in only with a provider's account, WP3.7 of the plan). Where
+and no provider to sign in with (WP3.7 of the plan). A user who has no
+password and an account at a provider the server's settings have has no
+password to set (WP5.6): they sign in there, and this endpoint, the
+administrator's `PUT admin/users/<user>/password` and `password-link`
+answer 400 with the reason, as a reset's link does (below). Only the
+providers the server has now count: a user whose last provider was
+disconnected, or removed from the server's settings, has no way in, and
+may be given a password, or set one if they are still signed in. `Directory`'s
+`providerOnly` lists who has none to set, by this rule. Where
 they have one, `current` must be it: a session alone is not enough, so that
 whoever finds a browser left signed in cannot lock its owner out. Where they
 have none, `current` is `null` or left out. `new` must have 8 to 1024
@@ -657,7 +666,7 @@ password included.
 | PUT | `api/v1/account/email` | `EmailChange` `{"email", "password"}` (`""` for none; the password where the user has one, unless the address is the one they have) | `EmailState`; a link to verify a new address is mailed to it, `mailError` says why if it could not be | 401 (nobody signed in, or a wrong password, counted), 429, 400 (not an address, or the server sends no mail) | (`setOwnEmail`) |
 | POST | `api/v1/email-verification/<secret>` | | 204: the address the link was mailed to is the user's verified address | 404 (used, expired, or no longer the user's address) | (`verifyEmail`) |
 | POST | `api/v1/password-reset` | `ResetRequest` `{"login"}` (a login or an e-mail address) | 204, whatever it names | 429 (ten an address in fifteen minutes), 400 (the server sends no mail: for every login alike) | (`requestPasswordReset`) |
-| POST | `api/v1/password-reset/<secret>` | `NewPasswordByMail` `{"password"}` | 204: the password is set, every session of the user ends, nobody is signed in | 404 (used or expired), 400 | (`resetPassword`) |
+| POST | `api/v1/password-reset/<secret>` | `NewPasswordByMail` `{"password"}` | 204: the password is set, every session of the user ends, nobody is signed in | 404 (used or expired), 400 (a password that cannot be one, or a user who has no password to set) | (`resetPassword`) |
 
 WP4.11 of the plan. A session alone does not give an account away: giving
 another address (or none) and beginning a second factor take the current
@@ -687,10 +696,24 @@ as failed sign-ins of the login from that address, and five end the sign-in.
 The secret is kept in the database in clear, as the server needs it.
 
 An e-mail address is trusted once the link mailed to it (a day, single use)
-is followed; only a verified address is sent a reset. A reset's link works
+is followed; only a verified address is sent a reset, and never one of a
+user who has no password to set (one who signs in with a provider the
+server has, WP5.6), whose link, if mailed before, sets none. A reset's link works
 once, for thirty minutes; an account is mailed at most three an hour; the
 answer to asking for one is the same whatever it names, and the looking up
-and mailing happen after it. Both links' secrets are kept as SHA-256 and left
+and mailing happen after it.
+
+An administrator has the same link mailed to a user with `POST
+admin/users/<user>/password-link` (WP5.6): mailed at once, to the user's
+verified address, answered 204 once it is sent, and recorded in the audit
+log (`user.password-link`). Neither limit of the request above applies to
+it (the address's ten in fifteen minutes, the account's three an hour),
+but it counts towards the account's three, and a user mailed any reset's
+link less than a minute ago is mailed none (429, with `Retry-After`), so
+that a button clicked twice mails once. A link that could not be mailed is
+forgotten, and the answer (400) says why. The administration offers it
+instead of typing a password wherever the server sends mail and the user
+has a verified address. Both links' secrets are kept as SHA-256 and left
 out of the log. The links are the application's pages
 `reset-password/<secret>/` and `verify-email/<secret>/`, which a closed wiki
 shows to anyone, as an invitation's.
@@ -701,7 +724,7 @@ shows to anyone, as an invitation's.
 | ------ | ---- | ---- | -------- | ------ | ------------ |
 | GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "spaces", "pages", "attachments", "users", "backups", "schemaVersion", "lastBackup", "connections", "errors"}`: the schema's version (its last migration), when the newest backup kept in the data directory was made (`null` for none), how many live channels are open, and the last errors the server logged since it started, the newest first, twenty at most, each `LoggedError` `{"at", "route", "message"}` (`route` a route pattern such as `/api/v1/pages/:page`, or the part of the server, such as `backup-scheduler`; never an address with its ids or secrets) | 403 | `serverStatus` |
 | GET | `api/v1/admin/activity?actor=<user>&offset=<n>` | | `Activity` `{"available", "entries", "more", "actors"}`: the audit log, the newest first, at most 50 entries from `offset` on (0 if missing), of one actor's (`actor` a user's id, or `~administrator` for the operator) or everyone's; each `AuditEntry` `{"id", "at", "actor": {"id", "login"}, "action", "subject": {"kind", "id", "name"}, "detail", "address"}`; `more` whether older entries follow; `actors` everyone the log has an entry of, by login | 403 | `activity` |
-| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "identities", "secondFactor", "emails", "mailing", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, the providers each user signs in with by their id (a user with none may be left out), the ids of those with a second factor, each user's e-mail address `{"email", "verified"}` by their id (a user with none left out), whether the server sends mail, every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
+| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "identities", "providerOnly", "secondFactor", "emails", "mailing", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, the providers each user signs in with by their id (a user with none may be left out), the ids of those who have no password to set (none, and an account at a provider the server has: see "One's own password"), the ids of those with a second factor, each user's e-mail address `{"email", "verified"}` by their id (a user with none left out), whether the server sends mail, every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
 | PUT | `api/v1/admin/users/<user>/administrator` | `AdministratorFlag` `{"administrator"}` | 204 | 403, 404 | `setAdministrator` |
 | PUT | `api/v1/admin/users/<user>/create-spaces` | `CreateSpacesFlag` `{"createSpaces"}` | 204 | 403, 404 | `setCreateSpaces` |
 | POST | `api/v1/admin/groups` | `GroupName` `{"name"}` | 201 `Group` `{"id", "name"}` | 403, 400 | `createGroup` |
@@ -711,14 +734,15 @@ shows to anyone, as an invitation's.
 | DELETE | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `removeMember` |
 | POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password", "email"}` (`email` optional: a link to verify it is mailed there) | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403, 400, 409 (the login is taken, in any case) | `createUser` |
 | DELETE | `api/v1/admin/users/<user>/second-factor` | | 204: the user signs in with their password alone | 403, 404 (none) | `removeSecondFactor` |
-| PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 | `setPassword` |
+| PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 (a password that cannot be one, or a user who has no password to set) | `setPassword` |
+| POST | `api/v1/admin/users/<user>/password-link` | | 204: the link "Forgot your password?" mails is mailed to the user's verified address | 403, 404, 400 with the reason (the server sends no mail, the user has no password to set, their login is disabled, they have no verified address, or the mail could not be sent), 429 (a link was mailed to them less than a minute ago) | `sendPasswordLink` |
 | PUT | `api/v1/admin/users/<user>/disabled` | `AccountDisabled` `{"disabled"}` | `Account`; disabling ends the user's sessions | 403, 404 | `setDisabled` |
 
 Every write of the administration's is recorded in the audit log in the
 same transaction as the write (WP4.10 of the plan): grants on spaces and of
 the wiki, a space made public or private, a space's profile (its
 description, icon, home page and whether it is a blog), groups and their members,
-accounts (made, a password set, disabled or enabled, a second factor or a
+accounts (made, a password set or a link to choose one mailed, disabled or enabled, a second factor or a
 provider's account taken away), the wiki's, the server's and the backups'
 settings, invitations made, revoked and accepted, an account made by its
 owner, deletions of spaces and pages, imports; and what the console does

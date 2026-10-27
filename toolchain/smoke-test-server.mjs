@@ -51,7 +51,9 @@
 //    a real one, added in the administration's "Server" section while the
 //    server runs (WP4.4), with the wiki's public address, and checked there;
 //    "Sign in with Fake" in the header's form goes there and back, and
-//    lands signed in, as a new account, on the page it left.
+//    lands signed in, as a new account, on the page it left. That account
+//    has no password to set (WP5.6), in its panel or the administration's,
+//    until the administration disconnects its provider and types it one.
 // 6. (Within 2.) Backups turned on in the Server section (WP4.9), one made
 //    by hand, and the console's restore of it: refused the running server's
 //    data directory, done into a fresh one.
@@ -906,15 +908,46 @@ try {
   await olive.locator("#app .account-toggle").click();
   await olive.locator("#app .identity .identity-provider", { hasText: "Fake" }).waitFor({ timeout });
   assert.equal(await olive.locator("#app .identity-disconnect").getAttribute("disabled"), "", "her only way in may be disconnected");
-  // She sets a password of her own in the same panel, without a current
-  // one, and may sign in with it; the provider's account may go then.
-  await olive.locator("#app .password-change-toggle", { hasText: "Set a password" }).click();
-  await olive.locator("#app .password-change input[name=new]").fill("olive's own password");
-  await olive.locator("#app .password-change input[name=repeat]").fill("olive's own password");
-  await olive.locator("#app .password-change button[type=submit]").click();
-  await olive.locator("#app .account-told", { hasText: "Your password is set" }).waitFor({ timeout });
+  // She signs in with a provider and has no password: none to set (WP5.6),
+  // in the panel or through the API, nor from the administration.
+  assert.equal(await olive.locator("#app .password-change-toggle").count(), 0, "a password to set, for an account that signs in with a provider");
+  // Asked outside her page, whose console would report the refusal.
+  const oliveSession = (await olive.context().cookies()).find((c) => c.name === "wiki_session");
+  assert.ok(oliveSession, "no session cookie for Olive");
+  const ownRefused = await fetch(url("/api/v1/account/password"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "X-Wiki-Request": "1", Cookie: `wiki_session=${oliveSession.value}` },
+    body: JSON.stringify({ current: null, new: "olive's own password" }),
+  });
+  assert.equal(ownRefused.status, 400, "her own password, set while she signs in with a provider");
+  const oliveId = landed.user.id;
+  assert.ok((await api("admin/directory")).body.providerOnly.includes(oliveId), "the directory says she has no password to set");
+  const administration = await newPage();
+  await administration.goto(url("/admin/"));
+  await eventually(async () => assert.ok(await programStarted(administration), "no listener yet"), "the administration's program starting");
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .identity-unlink", { hasText: "Disconnect Fake" }).waitFor({ timeout });
+  assert.equal(await administration.locator("#app .admin-view .user-row[data-login=olive] .password-ask").count(), 0, "a password offered for her by the administration");
+  // Disconnected there, she has no way in (her session ends with it), and
+  // the administration gives her a password, typed since this server sends
+  // no mail, which the button says.
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .identity-unlink").click();
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .password-hint", { hasText: "The server sends no mail" }).waitFor({ timeout });
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .password-ask", { hasText: "Set password" }).click();
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .password-new").fill("olive's own password");
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .password-form button.primary").click();
+  await administration.locator("#app .admin-view .user-row[data-login=olive] .account-state", { hasText: "Signs in with a password" }).waitFor({ timeout });
+  await administration.context().close();
+  // She signs in with it in her browser, from the header's form.
+  await olive.reload();
+  await eventually(async () => assert.ok(await programStarted(olive), "no listener yet"), "Olive's program starting again");
+  await olive.locator("#app .sign-in-toggle").click();
+  await olive.locator("#app .sign-in-form input[name=login]").fill("olive");
+  await olive.locator("#app .sign-in-form input[name=password]").fill("olive's own password");
+  await olive.locator("#app .sign-in-form button[type=submit]").click();
+  await olive.locator("#app .account .account-toggle", { hasText: "Olive Oidc" }).waitFor({ timeout });
+  await olive.locator("#app .account-toggle").click();
   await olive.locator("#app .account-password", { hasText: "With your password" }).waitFor({ timeout });
-  assert.equal(await olive.locator("#app .identity-disconnect").getAttribute("disabled"), null, "the provider's account, once she has a password");
+  await olive.locator("#app .password-change-toggle", { hasText: "Change password" }).waitFor({ timeout });
   const withPassword = await fetch(url("/api/v1/session"), {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Wiki-Request": "1" },
@@ -958,7 +991,7 @@ try {
   await olive.context().close();
   for (const secret of [oidcSecret, ...oidcIssued]) assert.ok(!log.includes(secret), "a provider's code, token or secret is in the server's log");
   console.log("ok: signing in with a provider goes there and back, and lands signed in, as a new account, on the page it left");
-  console.log("ok: a user who signs in with a provider sets a password from the panel under her name, and signs in with it");
+  console.log("ok: a user who signs in with a provider has no password to set, until the administration disconnects it and gives her one, which she signs in with");
   console.log("ok: her sessions are listed in the panel and signed out everywhere but here; a second factor set up there is asked for after her password");
 
   // Everything is there for a browser that has seen nothing.

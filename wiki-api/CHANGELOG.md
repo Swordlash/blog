@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+No password for accounts that sign in with a provider; password links
+mailed by the administration (WP5.6). `Wiki.Api.Account.providerOnly` is the
+rule (no password, and an account at a provider the server has);
+`Directory` gains `providerOnly`, the users it holds for. `AdminApi` gains
+`sendPasswordLink` (`POST admin/users/<id>/password-link`, `PostNoContent`).
+
 Licensed under the MIT licence (WP5.1), where it was proprietary: the
 package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
 
