@@ -1227,6 +1227,27 @@ must be in before it is.
 - **WP5.16 Scalability audit** (the owner, 2026-10-27, "przejrzyj cały kod na rzeczy które
   się nie skalują na dużo userów i stron"): a read-only review, findings ranked by impact
   with evidence, each with the smallest fix; packages cut from it.
+  Done the same evening: `docs/scalability-audit.md` (14 findings with code locations,
+  estimates and the smallest fix each; what is fine listed too). The top of the ranking: one
+  SQLite connection held for every request, backup, import and export (WAL is on, the MVar
+  defeats it); every page view a full server render that reads the whole space ~10 times and
+  embeds it in the HTML; every save loading every user, watch and grant and scanning the whole
+  notifications table per recipient (`max(seq)` with no index); the live hub doing one
+  permission transaction per event per subscriber; search folding every page of the wiki per
+  keystroke; sitemap and feeds reading the whole public wiki with bodies per request; the
+  bell locating up to 500 notifications with a whole-space node load each. Cut into waves,
+  one agent at a time on the storage layer:
+  - **WP5.16a** (findings 1, 3, 6, 4): read connections beside the one writer, the backup's
+    `VACUUM INTO` and `resolveSession` off the writer; an index on `notifications (seq)` and
+    `tellTx` loading only the users who could be told; the bell counting unread in SQL and
+    locating 50, not 500; one permission check per user per publish, jittered reconnect.
+  - **WP5.16b** (5, 7, 8, 9, 11): the fold stored at save and matched in SQL by space; a
+    node-only sitemap and cached feeds; `WHERE user_id = ?` / `WHERE login IN` instead of whole
+    tables, indexed path resolution, `max-age` on attachments, `pages (space_id, template)` and
+    `group_members (user_id)` indexes; the first-version join instead of every version,
+    `listVersions` paged; the audit log's actor query and keyset paging.
+  - **WP5.16c** (10, 12, 13): streamed export, `Tmp` multipart, metrics from the table, the
+    demo reading attachments and versions lazily.
 - **Later, by the owner (2026-10-27, "zapisz to na potem"): a migration to PostgreSQL.**
   Not now; when it comes, as one port of the whole storage layer (WP5.7's spike says why
   not half and half), most likely with `rel8`, migrations hand-written, SQLite kept or
