@@ -3279,6 +3279,26 @@ Amended by the planning session after each work package's report.
   with the same `Options`, the 92 golden files unchanged as the proof, `Generic` kept only
   where another class needs it, compile times of `Preload`, `wiki-api` and `wiki-core` before
   and after in the report.
+- **WP5.9 merged as something else** (2026-10-27, PR #94, `main` at `4f59c3e`). The
+  measurements overturned the premise: `Preload.hs` had only two Generic instances, and its
+  cost was the Simplifier and CodeGen on 21 mirror records (`SpaceAt`, `PageAt`, `…Of`),
+  their derived `Eq`/`Show`, and the two conversions `toPreload`/`fromPreload`, at -O1. The
+  owner then decided: one type, no per-module `-O0`. `Preload` and its mirrors are gone;
+  `preloadJSON`/`parsePreload` write and read `Cache` directly, 390 hydration payloads
+  byte-identical. `Preload.hs` alone: native 17 s/4.9 GB → 10.5 s/1.5 GB, wasm 15.9 s/5.6 GB
+  → 6.6 s/1.5 GB (`-fno-specialise` would give 8.5 s/0.7 GB and 5.2 s/0.7 GB; not added, the
+  owner dislikes per-module flags). The Generic → Template Haskell swap of `wiki-api` and
+  `wiki-core` was built and measured but not merged: GHC's work drops 8–19 % everywhere, but
+  on wasm every package that runs a splice pays 20–25 s for the external interpreter
+  (`wiki-api` 26 → 45 s, `wiki-core` 38 → 51 s), and wasm is the owner's priority; it is
+  kept on `wp5.9-aeson-th-reference` (with `Wiki.Core.Json.deriveValueJSON`, which encodes
+  through `Value` so keys stay sorted as Generic's did). The PR body carries a ranking of
+  the wasm build by module (clean, `-j1`: 485 s, 90 s of it outside GHC's passes):
+  `Wiki.App.Shell` 114 s and 21 GB on its own (its 28-label `Slots` row type), the `hh`
+  views next (`Editor` 15 s, `SignIn` 11 s, `Server` and `Admin` 10.5 s), and CodeGen run
+  twice per module because the wasm project builds `shared: True` for TH (33 s of `.dyn_o`).
+  Next on compile time, when the owner says so: WP5.13, `Shell`'s slots and the `.dyn_o`
+  question, measured the same way.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
