@@ -3039,6 +3039,53 @@ Amended by the planning session after each work package's report.
   answers 200 with `<base href="/blog/">`, the manifest, `licenses.txt` and `app.wasm`
   (10.9 MB). WP5.4 started on `wp5.4-pick-runner` from `main` `8e0b380`; Dependabot's #80
   asked to rebase, to be fast-forwarded after its hosted run.
+- **Dependabot's #80 merged** (2026-10-26, `main` at `b6a1744`, fflate 0.8.3): its rebased
+  run went green on the hosted runners, the `[bot]` rule routing it there as meant; its
+  wasm job spent 19 minutes in `--with-deps`'s apt (below). Fast-forwarded at the owner's
+  word; the push redeployed the demo from the hosted run's artifact.
+- **Two small fixes by the planning session** (2026-10-26): #86 (`main` at `c04ade5`): a
+  slide's page body read the page's variables (code's background, the highlighter's and
+  inline colours, surfaces, borders), which the system's dark scheme switches to
+  light-on-dark values, so on the default and light themes code was dark text on a dark
+  box (the owner's screenshot of the demo's "Themes" slide); each slide theme now
+  re-declares the page's set for its own background, scoped to `.slide` and
+  `.slides-theme-dark .slide`; checked in Chromium under both schemes. #85 (`main` at
+  `e408f14`): on hosted runners Playwright's Chromium is cached by the lockfile and
+  installed without `--with-deps`, whose apt-get fetched fonts and upgrades the tests do
+  not use from a mirror at 34 kB/s (the same finding as haskell-halogen's #89; the runner
+  image has every library the shell needs).
+- **WP5.4 merged** (2026-10-27, PR #87, `main` at `d9549ce`). The `tested` job is `plan`, on
+  `ubuntu-latest` for every run (`contents: read, actions: read`), with outputs `tested`,
+  `run_id` (a push only, `ci-already-tested.sh` unchanged) and `runner`, from
+  `toolchain/ci-pick-runner.sh`: `ubuntu-latest` without an API call when the dispatch
+  input is `hosted` or `TRUSTED` (WP5.1's expression, evaluated once in the workflow) is
+  not `true`; else `self-hosted` unless another run of `build.yml` is queued or in
+  progress with a job whose labels name `self-hosted` and whose status is queued or in
+  progress (`waiting` and completed jobs do not count; a queued run that lists no jobs yet
+  counts as busy, the safe side); any API error, unreadable response or missing tool
+  answers `ubuntu-latest`; the newest 30 queued and 30 in-progress runs, 100 jobs each,
+  no further paging; a small JSON reader in awk (nested ids, steps' statuses and field
+  order made grep unsafe), passing with mawk and gawk. The build jobs take `runs-on:
+  ${{ needs.plan.outputs.runner }}` and drop `!cancelled()` (a failed `plan` skips them
+  rather than starting them with an empty `runs-on`); `deploy` takes it too.
+  `test-ci-pick-runner.sh`: 17 cases against a fake `curl`, in the native job. The README's
+  CI section states the rule, that `plan` runs on the hosted runners for everyone, the
+  machine-off case, and that a fork's `toolchain/` must be read before approving its run.
+  Its own pull request was the first real run: `plan` wrote "Runner: ubuntu-latest,
+  because the owner's machine is busy: job 'tested' of run 40416602976 is queued there"
+  and the build went hosted. Accepted limits: the token cannot see whether the machine
+  is online; two overlapping `plan`s can both pick the machine (the second queues); one
+  pick per run. Found on the way: the hosted wasm job rebuilt its dependency store on
+  every branch because Actions caches are visible only from the branch that saved them
+  and from the base branch, and the wasm store had been saved only on pull request
+  branches (the dispatches on `main` were cancelled before the save by the shared
+  concurrency group, now fixed; pushes to `main` skip the build); a dispatch with
+  `runner: hosted` on `main` after this merge saves it where every branch reads it.
+  To do, small: a weekly `schedule` that warms the hosted caches on `main`, since GitHub
+  evicts a cache unused for 7 days; and the three fixes carried from WP5.2/5.3 (the
+  request-log test, the smoke test's address check, `--legal-comments`-style notices
+  are done). The three pull requests #86, #85, #87 were rebased as a chain
+  (#86 → #85 → #87) and fast-forwarded in that order, one CI run each on the final tree.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
