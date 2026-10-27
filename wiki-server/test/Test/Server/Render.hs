@@ -219,7 +219,7 @@ preloads = describe "what a page carries for the program" $ do
     p <- preloadIn html
     (isJust p.session, map (\s -> s.path) p.spacesAt, length p.pages) `shouldBe` (True, [slugs "docs"], 1)
     -- The page is in its space's list, so not carried again by itself.
-    p.pagesAt `shouldBe` []
+    map (\x -> x.path) p.pagesAt `shouldBe` []
 
 addresses :: Spec
 addresses = describe "a request's address" $ do

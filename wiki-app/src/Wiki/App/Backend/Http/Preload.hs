@@ -1,3 +1,15 @@
+{-# OPTIONS_GHC -O0 #-}
+
+-- Compiled without optimisation (WP5.9 of docs/PLAN.md). This is glue the
+-- program runs once, as it starts, to read what the page carries, and with
+-- optimisation GHC spent about ten seconds and 3 GB of allocation on it:
+-- simplifying 'fromPreload''s maps, specialised to every key they have,
+-- the instances' long chains of fields, and the code for them all. Without,
+-- it takes a third of that, and reading a page's payload takes about a fifth
+-- longer, some hundredths of a millisecond natively, since the parsing is
+-- aeson's and the instances of the types the payload holds, compiled with
+-- optimisation in their own modules.
+
 -- | What a page the server rendered carries for the program: the answers
 -- the server's render read, as the backend over HTTP keeps them
 -- ("Wiki.App.Backend.Http.Cache"), written into the page as JSON
@@ -149,95 +161,71 @@ data Preload = Preload
   -- ^ Whether the user watches a page or a space
   -- ('Wiki.App.Backend.Notifications.watching').
   }
-  deriving stock (Eq, Show, Generic)
-
-instance ToJSON Preload
-
-instance FromJSON Preload
 
 -- | A space by its path ('Wiki.App.Backend.getSpace').
 data SpaceAt = SpaceAt {path :: [Slug], space :: Answer Space}
-  deriving stock (Eq, Show)
 
 -- | A space's pages ('Wiki.App.Backend.listPages').
 data SpacePages = SpacePages {space :: SpaceId, pages :: Answer [Page]}
-  deriving stock (Eq, Show)
 
 -- | What a space's pages are listed with as posts
 -- ('Wiki.App.Backend.postDetails').
 data PostDetailsOf = PostDetailsOf {space :: SpaceId, details :: Answer (Map PageId PostDetails)}
-  deriving stock (Eq, Show)
 
 -- | A page by its space and its path ('Wiki.App.Backend.getPage').
 data PageAt = PageAt {space :: SpaceId, path :: [Slug], page :: Answer Page}
-  deriving stock (Eq, Show)
 
 -- | The signed-in user's draft of a page, or that they have none
 -- ('Wiki.App.Backend.getDraft').
 data DraftOf = DraftOf {page :: PageId, draft :: Answer (Maybe Draft)}
-  deriving stock (Eq, Show)
 
 -- | A search's hits ('Wiki.App.Backend.searchPages').
 data SearchOf = SearchOf {query :: SearchQuery, hits :: [SearchHit]}
-  deriving stock (Eq, Show, Generic)
-
-instance ToJSON SearchOf
-
-instance FromJSON SearchOf
 
 -- | A page's history ('Wiki.App.Backend.listVersions').
 data VersionsOf = VersionsOf {page :: PageId, versions :: Answer [VersionInfo]}
-  deriving stock (Eq, Show)
 
 -- | One version of a page ('Wiki.App.Backend.getVersion').
 data VersionOf = VersionOf {page :: PageId, updatedAt :: UTCTime, version :: Answer Version}
-  deriving stock (Eq, Show)
 
 -- | The wiki's people, as the administration reads them
 -- ('Wiki.App.Backend.Admin.directory').
 newtype DirectoryOf = DirectoryOf {directory :: Answer Directory}
-  deriving stock (Eq, Show)
 
 -- | The wiki's settings ('Wiki.App.Backend.Admin.wikiSettings').
 newtype SettingsOf = SettingsOf {settings :: Answer WikiSettings}
-  deriving stock (Eq, Show)
 
 -- | The invitations ('Wiki.App.Backend.Admin.invitations').
 newtype InvitationsOf = InvitationsOf {invitations :: Answer Invitations}
-  deriving stock (Eq, Show)
 
 -- | The server's own settings ('Wiki.App.Backend.Admin.serverSettings').
 newtype ServerOf = ServerOf {server :: Answer ServerSettings}
-  deriving stock (Eq, Show)
 
 -- | The backups ('Wiki.App.Backend.Admin.backups').
 newtype BackupsOf = BackupsOf {backups :: Answer Backups}
-  deriving stock (Eq, Show)
 
 -- | The first page of the audit log ('Wiki.App.Backend.Admin.activity').
 newtype ActivityOf = ActivityOf {activity :: Answer Activity}
-  deriving stock (Eq, Show)
 
 -- | The server's status ('Wiki.App.Backend.Admin.serverStatus').
 newtype StatusOf = StatusOf {status :: Answer ServerStatus}
-  deriving stock (Eq, Show)
 
 -- | An invitation by its link's secret ('Wiki.App.Account.invitationFor').
 data InvitationAt = InvitationAt {token :: InvitationToken, invitation :: Answer InvitationInfo}
-  deriving stock (Eq, Show)
 
 -- | A page's threads ('Wiki.App.Backend.Comments.listThreads').
 data ThreadsOf = ThreadsOf {page :: PageId, threads :: Answer [Thread]}
-  deriving stock (Eq, Show)
 
 -- | The user's notifications ('Wiki.App.Backend.Notifications.notifications').
 newtype NoticesOf = NoticesOf {notifications :: Answer Notifications}
-  deriving stock (Eq, Show)
 
 -- | Whether the user watches a page or a space, by the one it is: a
 -- @page@ or a @space@ field.
 data WatchOf = WatchOf {target :: WatchTarget, watch :: Answer Watch}
-  deriving stock (Eq, Show)
+
+-- The records here have no 'Eq' or 'Show' of their own: nothing compares or
+-- shows them but the server's tests, which compare answers, and deriving
+-- them for twenty records was a quarter of what the module cost to compile.
 
 -- | What a read gave, or the API's refusal: written as the read's own field
 -- (@space@, @pages@, …) or as @error@, the API's error body.
@@ -371,6 +359,74 @@ instance FromJSON WatchOf where
         o .:? "page" >>= \case
           Just p -> pure (WatchPage p)
           Nothing -> WatchSpace <$> o .: "space"
+
+-- Written by hand, as the instances above are, rather than derived: through
+-- 'Generic' they cost the compiler a gigabyte more, and a Template Haskell
+-- splice would start GHC's interpreter for this module, which on
+-- WebAssembly takes twenty seconds before anything is compiled. Field for
+-- field the record's: each written, 'Nothing' as @null@, and each 'Maybe'
+-- read as 'Nothing' when it is not there, so that a payload written before
+-- the field was reads as without it.
+instance ToJSON SearchOf where
+  toJSON s = object ["query" .= s.query, "hits" .= s.hits]
+
+instance FromJSON SearchOf where
+  parseJSON = withObject "SearchOf" $ \o -> SearchOf <$> o .: "query" <*> o .: "hits"
+
+instance ToJSON Preload where
+  toJSON p =
+    object
+      [ "session" .= p.session
+      , "spaces" .= p.spaces
+      , "pageCounts" .= p.pageCounts
+      , "spacesAt" .= p.spacesAt
+      , "pages" .= p.pages
+      , "pagesAt" .= p.pagesAt
+      , "drafts" .= p.drafts
+      , "searches" .= p.searches
+      , "versionLists" .= p.versionLists
+      , "versions" .= p.versions
+      , "directory" .= p.directory
+      , "settings" .= p.settings
+      , "invitations" .= p.invitations
+      , "invitationsAt" .= p.invitationsAt
+      , "server" .= p.server
+      , "backups" .= p.backups
+      , "activity" .= p.activity
+      , "status" .= p.status
+      , "postDetails" .= p.postDetails
+      , "threads" .= p.threads
+      , "people" .= p.people
+      , "notices" .= p.notices
+      , "watches" .= p.watches
+      ]
+
+instance FromJSON Preload where
+  parseJSON = withObject "Preload" $ \o -> do
+    session <- o .:? "session"
+    spaces <- o .:? "spaces"
+    pageCounts <- o .:? "pageCounts"
+    spacesAt <- o .: "spacesAt"
+    pages <- o .: "pages"
+    pagesAt <- o .: "pagesAt"
+    drafts <- o .: "drafts"
+    searches <- o .: "searches"
+    versionLists <- o .: "versionLists"
+    versions <- o .: "versions"
+    directory <- o .:? "directory"
+    settings <- o .:? "settings"
+    invitations <- o .:? "invitations"
+    invitationsAt <- o .:? "invitationsAt"
+    server <- o .:? "server"
+    backups <- o .:? "backups"
+    activity <- o .:? "activity"
+    status <- o .:? "status"
+    postDetails <- o .:? "postDetails"
+    threads <- o .:? "threads"
+    people <- o .:? "people"
+    notices <- o .:? "notices"
+    watches <- o .:? "watches"
+    pure Preload {..}
 
 -- | What the backend kept, as the page carries it: every answer it would
 -- give at once, and no page twice.
