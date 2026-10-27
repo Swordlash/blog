@@ -1069,19 +1069,27 @@ must be in before it is.
   screenshot script runs under `npm run screenshots` and is checked by CI only in that it
   parses (`node --check`). No migration.
 - **WP4.19 The writing assistant, bring-your-own-key** (the owner, 2026-10-27; decision
-  21). In the editor, an "Assistant" entry in the toolbar opens a side panel (beside the
-  preview, under the attachments on narrow screens) with actions on the selection, or on
-  the whole body when nothing is selected: improve the writing, fix grammar and spelling,
-  shorten, expand, summarise, continue writing, translate (a language typed), and a free
-  instruction typed by the user; the answer streams into the panel as it arrives, and the
-  user then clicks "Replace selection", "Insert below" or "Copy"; nothing is written into
-  the page without that click, and the page's Markdown is never changed by the assistant
-  on its own. The prompt tells the model it is editing a page of this wiki written in
-  the wiki's Markdown (GitHub's extensions, `$…$` math, `mermaid`, `tikz` and `math`
-  fences, alerts, `[[toc]]`, wiki links), asks for the same Markdown and nothing around
-  it, and sends the page's title, the selection with a little context around it (or the
-  body, cut to a cap, which the panel says), never attachments nor other pages; the
-  assembly is pure and tested natively. Providers: Anthropic (Claude) and OpenAI, through
+  21; reshaped the same day: "w formie chata, z zaznaczeniem, agent robi edit", as the
+  code editors do). In the editor, an "Assistant" entry in the toolbar opens a side panel
+  (beside the preview, under the attachments on narrow screens) that is a chat: the
+  user's and the assistant's messages, streamed, an input with Send and Stop, and
+  shortcuts that fill the input (improve, fix grammar, shorten, expand, summarise,
+  continue, translate). A selection in the editor at the time of sending is attached to
+  the message as a chip and goes to the model with a little context around it; without
+  one the model gets the body, cut to a cap the panel says. The conversation lasts the
+  editing session and is sent whole each turn. The model edits the page itself through
+  two tools, `replace {old_text, new_text}` and `insert {anchor, before|after, text}`
+  (the texts unique in the page, or `start`/`end`), run by the SDKs' tool loop; each
+  call is applied to the editor's document as a tracked change (inserted text marked,
+  removed text kept visible and struck until decided) and answered to the model with
+  "applied" or why not; the user accepts or rejects per change or all at once, Save with
+  pending changes accepts them, Stop aborts the stream and leaves what was applied
+  pending. The system prompt puts the authors' reference `docs/markdown.md` first,
+  embedded at compile time and marked cacheable (Anthropic's `cache_control`, OpenAI's
+  prefix cache), then tells the model it edits a page of this wiki, in its Markdown, and
+  sends the page's title and the context above, never attachments nor other pages; the
+  tool definitions, the prompt's assembly, finding a unique occurrence, applying an edit
+  and accept/reject are pure and tested natively. Providers: Anthropic (Claude) and OpenAI, through
   their official JavaScript SDKs (`@anthropic-ai/sdk`, `openai`), bundled by
   `web/bundle.sh` as an island of its own (`islands/assistant.js`, fetched the first time
   the panel opens, as the editor's own code is), with streaming, retries and typed errors
@@ -1102,11 +1110,12 @@ must be in before it is.
   travel to the provider over TLS anyway, but the wiki's own page is not secure). Errors
   are shown in the panel as the provider gives them (an invalid key, a rate limit, a
   model that is not there, the network) without the key in them. Tests: the prompt's
-  assembly and the cap natively; the settings' storage over the contract (keys per user,
-  forgotten on request); browser tests for the panel with the fake provider (an action
-  on a selection streams and "Replace selection" writes it; "Insert below"; an error
-  shown; the panel closed cancels the stream); the smoke test opens the settings and the
-  panel in the demo; `licenses.txt` gains the SDKs. The hydration tests stay at zero
+  assembly, the cap, the tools and the change set natively; the settings' storage over
+  the contract (keys per user, forgotten on request); browser tests for the chat with a
+  scripted fake provider (a turn with a selection whose `replace` shows a tracked change,
+  accepted and rejected; two edits in a turn; an insert at the end; a `replace` of absent
+  text answered with the tool error and the model's follow-up shown; Stop mid-stream); the
+  smoke test opens the settings and the chat in the demo; `licenses.txt` gains the SDKs. The hydration tests stay at zero
   repairs (the panel is client-side only). No migration, no server change.
 - **WP5.4 Run on whichever runner is free** (the owner, 2026-10-26, once the hosted path
   worked and the minutes proved free for a public repository: "niech sobie chodzi na self
