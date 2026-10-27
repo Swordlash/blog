@@ -281,9 +281,11 @@ async function programStarted(page) {
 const unadopted = ".wiki-math, .wiki-mermaid, .wiki-tikz, .wiki-code, .wiki-time, .editor-cm";
 // What the browser fills in from what it keeps itself, after the first
 // render, whatever the server sent: the directory's spaces visited last,
-// which this browser's local storage holds (Wiki.App.Recent). Neither it nor
-// what is in it is a repair.
-const browsers = ".recent-spaces";
+// which this browser's local storage holds (Wiki.App.Recent), and the
+// editor's bubbles of the writing assistant, which come with the settings
+// this browser's IndexedDB keeps for the user (Wiki.App.Assistant). Neither
+// they nor what is in them is a repair.
+const browsers = ".recent-spaces, .editor-providers";
 
 // Load an address with app.wasm and the API held back: mark every node of
 // the page as the server sent it, and what its content says, let the
