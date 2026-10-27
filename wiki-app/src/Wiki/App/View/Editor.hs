@@ -1143,7 +1143,7 @@ component =
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})
-      -- Also after the first render, which a prerendered page shows.
+        -- Also after the first render, which a prerendered page shows.
         scripted <- H.liftEffect scriptedInstalled
         when scripted $ modify (\st -> st {scripted})
         -- The assistant's settings, and whether each provider with a key
@@ -1647,7 +1647,7 @@ component =
             Left (Conflict why) -> conflicted why after
             Left e -> do
               modify (\s -> s {problem = Just e})
-          -- Still unsaved: still worth a draft.
+              -- Still unsaved: still worth a draft.
               scheduleAutosave
             Right saved -> do
               -- Saved: the next save is made against this version, and
