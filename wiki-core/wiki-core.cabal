@@ -73,6 +73,7 @@ library
       Wiki.Core.Draft
       Wiki.Core.Export
       Wiki.Core.Id
+      Wiki.Core.Json
       Wiki.Core.Markdown
       Wiki.Core.Markdown.Ast
       Wiki.Core.Markdown.Edit
