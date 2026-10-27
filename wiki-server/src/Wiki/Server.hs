@@ -1,17 +1,18 @@
 -- | The server: the storage opened in its data directory, and two
--- listeners over it in one process, each a Warp server of its own
+-- listeners over it in one process, each its own Warp server
 -- ("Wiki.Server.App" says what each serves, and as whom).
 --
 -- Both listeners' sockets are bound before either serves, so that a
--- configuration that cannot listen (an address that is not this machine's,
--- a port another program holds) fails at once, with the address, rather
--- than after one of them has started. A listener that fails afterwards
--- takes the server down with it, for systemd to restart: a server with half
--- its listeners is not one to keep running.
+-- configuration that cannot listen (an address that is not this
+-- machine's, a port another program holds) fails at once, naming the
+-- address, rather than after one of them has started. A listener that
+-- fails afterwards takes the server down with it, for systemd to restart:
+-- a server with only some of its listeners should not keep running.
 --
 -- On @SIGTERM@ (systemd stopping it) or @SIGINT@ the server stops
--- accepting connections, gives the requests under way up to ten seconds to
--- finish, and closes the database, so that a stop never cuts a write short.
+-- accepting connections, gives the requests in progress up to ten seconds
+-- to finish, and closes the database, so that stopping never interrupts a
+-- write.
 module Wiki.Server
   ( -- * Running a server
     serve
@@ -60,14 +61,14 @@ instance Exception ServerError
 -- | A running server.
 data Server = Server
   { publicAddress :: SockAddr
-  -- ^ Where the public listener listens: its port, if port 0 was asked for.
+  -- ^ The public listener's address: its port, if port 0 was requested.
   , adminAddress :: Maybe SockAddr
   , stop :: IO ()
   -- ^ Stop accepting connections, and let 'wait' return once the requests
-  -- under way have been answered.
+  -- in progress have been answered.
   , wait :: IO ()
-  -- ^ Wait until both listeners have stopped; rethrow what stopped one if
-  -- it failed.
+  -- ^ Wait until both listeners have stopped; rethrow the exception that
+  -- stopped one if it failed.
   }
 
 -- | Run a server until it is told to stop (@SIGTERM@, @SIGINT@), logging to
@@ -82,19 +83,19 @@ serve options = do
   logWith logger Info [("event", "stopped")]
 
 -- | Run a server while an action runs: its sockets bound, its storage open
--- (migrated if need be), both closed when the action returns or throws.
--- A configuration 'checkOptions' refuses throws a 'ServerError', as does a
--- static directory that is not there. Mail goes out over SMTP, through
+-- (migrated if needed), both closed when the action returns or throws. A
+-- configuration 'checkOptions' refuses throws a 'ServerError', as does a
+-- static directory that does not exist. Mail is sent over SMTP, through
 -- the mail server the administration has set ('smtpSend').
 withServer :: Logger -> ServeOptions -> (Server -> IO a) -> IO a
 withServer logger options = withServerUsing logger options smtpSend
 
 -- | 'withServer' with mail sent this way, whatever mail server the
--- administration has set: what the tests run, with an outbox of their own.
+-- administration has set: what the tests run, with their own outbox.
 withServerUsing :: Logger -> ServeOptions -> SendMail -> (Server -> IO a) -> IO a
 withServerUsing given raw sendMail action = do
   -- Every error logged is kept, the last twenty, for the administration's
-  -- status (WP4.10 of docs/PLAN.md); every request counted, for the
+  -- status (WP4.10 of docs/PLAN.md), and every request is counted, for the
   -- metrics.
   errors <- newErrorRing
   metrics <- newMetrics
@@ -105,16 +106,17 @@ withServerUsing given raw sendMail action = do
   site <- for options.staticDir $ \dir -> openStaticSite dir >>= either (throwIO . ServerError . pure) pure
   startedAt <- getCurrentTime
   limiter <- newLimiter defaultLimits
-  -- Five accounts made, or tried, from an address in fifteen minutes.
+  -- Five accounts created, or attempted, from an address in fifteen
+  -- minutes.
   registrations <- newLimiter defaultLimits {perLogin = 5, perAddress = 5}
-  -- Ten password resets asked for from an address in fifteen minutes.
+  -- Ten password resets requested from an address in fifteen minutes.
   resets <- newLimiter defaultLimits {perLogin = 10, perAddress = 10}
   pending <- newPendingSignIns
   events <- newHub
   wake <- newWake
   exports <- newExports
   -- A data directory another server has open is a configuration this one
-  -- cannot run with, said as the others are.
+  -- cannot run with, reported like the others.
   handle (\(DataDirInUse why) -> throwIO (ServerError [why])) $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} options.dataDir $ \storage -> do
     backups <- newBackupService logger options.rclone storage
     let notifier = newNotifier logger sendMail wake storage
@@ -153,8 +155,8 @@ withServerUsing given raw sendMail action = do
             }
         listeners = (options.listen, public) : [(a, admin) | Just a <- [options.adminListen]]
     logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
-    -- What the administration has set, as the server starts with it (the
-    -- secrets left out); a change is seen by the next request, unlogged.
+    -- The administration's settings as the server starts with them
+    -- (secrets left out); a change is seen by the next request, unlogged.
     configured <- readServerSettings storage
     logWith logger Info [("event", "server-settings"), ("public-url", fromMaybe "none" configured.publicUrl)]
     for_ configured.mail $ \m ->
@@ -164,14 +166,14 @@ withServerUsing given raw sendMail action = do
     stopping <- newIORef False
     -- The thread that backs the server up, which does nothing until the
     -- administration turns backups on, and the one that mails
-    -- notifications; both stopped with the server.
+    -- notifications; both are stopped with the server.
     Async.withAsync (runScheduler backups) $ \_ -> Async.withAsync (runNotifier notifier) $ \_ -> bracket (bindAll listeners) (traverse_ (close . fst)) $ \bound -> do
       let settings l =
             setGracefulShutdownTimeout (Just 10)
               . setOnException
                 ( \_ e -> do
-                    -- Closing the listening socket to stop is how Warp
-                    -- is stopped, and its accept failing then is no news.
+                    -- Closing the listening socket is how Warp is stopped,
+                    -- so its accept failing then is expected.
                     stopped <- readIORef stopping
                     when (defaultShouldDisplayException e && not stopped) $
                       logWith logger Warning [("event", "connection"), ("listener", l.name), ("error", show e)]
@@ -183,10 +185,10 @@ withServerUsing given raw sendMail action = do
         pure address
       threads <- for bound $ \(socket, (_, l)) -> Async.async (runSettingsSocket (settings l) socket (listenerApp logger env site l))
       -- Warp stops accepting when its listening socket is closed, then
-      -- waits for the connections it has to finish, ten seconds at most.
-      -- The sockets are this function's own, so they are closed here rather
-      -- than through Warp's shutdown handler, which a listener installs only
-      -- once its thread has started.
+      -- waits up to ten seconds for its open connections to finish. The
+      -- sockets belong to this function, so they are closed here rather
+      -- than through Warp's shutdown handler, which a listener installs
+      -- only once its thread has started.
       let stopAll = writeIORef stopping True >> closeAll events >> traverse_ (close . fst) bound
           waitAll = case threads of
             [only] -> Async.wait only
@@ -197,8 +199,8 @@ withServerUsing given raw sendMail action = do
           publicAddress : rest -> action Server {publicAddress, adminAddress = head rest, stop = stopAll, wait = waitAll}
           [] -> throwIO (ServerError ["no listener"])
 
--- | Bind every listener's socket, or none: one that fails closes those
--- bound before it, and says which address it was.
+-- | Bind every listener's socket, or none: if one fails, those bound
+-- before it are closed, and the error names its address.
 bindAll :: [(Listen, Listener)] -> IO [(Socket, (Listen, Listener))]
 bindAll = \case
   [] -> pure []
@@ -223,6 +225,6 @@ bindListen l = do
       listen socket 1024
       pure socket
 
--- | An address as a URL's start.
+-- | An address as the start of a URL.
 showAddress :: SockAddr -> Text
 showAddress a = "http://" <> T.pack (show a)

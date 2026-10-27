@@ -1,51 +1,51 @@
 {-# LANGUAGE MultiWayIf #-}
 
--- | The built application's files, as the server serves them: the
--- prerendered pages, @app.wasm@, the islands' bundle and the rest of what
+-- | Serving the built application's files: the prerendered pages,
+-- @app.wasm@, the islands' bundle and everything else
 -- @toolchain\/build-wasm.sh@ writes into its output directory.
 --
--- It behaves as the static server the demo's deployment ran
--- (@toolchain\/deploy-server.mjs@), which in turn behaves as GitHub Pages:
+-- It behaves like the static server the demo's deployment ran
+-- (@toolchain\/deploy-server.mjs@), which in turn behaves like GitHub
+-- Pages:
 --
 -- * a directory's address serves its @index.html@, and a directory's
---   address without its slash is redirected to the one with it;
+--   address without its trailing slash is redirected to the one with it;
 -- * an address with no file serves @404.html@ with a 404, which the
---   application, once loaded, reads as its own route (a space made since
---   the build, an editor);
--- * a file's precompressed sibling (@\<file>.br@, then @\<file>.gz@) is sent
---   to a client that accepts that encoding, except for a file that is
---   itself compressed (TikZJax's @.gz@ files, which its worker inflates), and
---   a file goes out with its media type (a @.wasm@ must be
+--   application, once loaded, reads as its own route (a space created
+--   since the build, an editor);
+-- * a file's precompressed sibling (@\<file>.br@, then @\<file>.gz@) is
+--   sent to a client that accepts that encoding, except for a file that is
+--   itself compressed (TikZJax's @.gz@ files, which its worker inflates);
+--   and a file is sent with its media type (a @.wasm@ must be
 --   @application\/wasm@ to be compiled as it streams in);
--- * every answer is revalidated (@no-cache@ with an @ETag@), since a deploy
---   replaces the files under the same names;
--- * nothing outside the directory is ever served, a symbolic link that
---   leads out of it included.
+-- * every response must be revalidated (@no-cache@ with an @ETag@), since
+--   a deploy replaces the files under the same names;
+-- * nothing outside the directory is ever served, including through a
+--   symbolic link that leads out of it.
 --
 -- The service worker (@sw.js@, WP4.17 of docs/PLAN.md) is one of the
--- files, at the place the site is served at, which is the scope it asks
--- for: so it needs no @Service-Worker-Allowed@ header, under the public
--- listener's base path and the admin listener's @\/admin\/@ alike. Like
--- every file it is revalidated, which is how a browser finds a new build's
--- worker.
+-- files, at the path the site is served at, which is the scope it
+-- requests. So it needs no @Service-Worker-Allowed@ header, under the
+-- public listener's base path and the admin listener's @\/admin\/@ alike.
+-- Like every file it is revalidated, which is how a browser finds a new
+-- build's worker.
 --
--- What it does that the static server did not: every page is served with
--- the @\<base href>@ of the place it is served at, and a build for the
--- server (one with a @template.html@, which @wiki-app-prerender --server@
--- writes) has its pages rendered per request instead ('PageRenderer',
--- "Wiki.Server.Render"): every address a page would be served at (a
--- directory's, or one with no file) gets the application rendered at the
--- route it names, as the request's principal sees it, and the address of
--- a file still gets the file. When that render fails, the page is the one
--- the address would have had without it, the build's own.
+-- What it does beyond the static server: every page is served with the
+-- @\<base href>@ of the path it is served at, and a build for the server
+-- (one with a @template.html@, which @wiki-app-prerender --server@ writes)
+-- has its pages prerendered per request instead ('PageRenderer',
+-- "Wiki.Server.Render"). Every address a page would be served at (a
+-- directory's, or one with no file) gets the application prerendered at
+-- the route it names, as the user who sent the request sees it, and a
+-- file's address still gets the file. When that prerender fails, the page
+-- is the one the address would have had without it, the build's own.
 --
--- The @\<base href>@: every page is served with that of the place it is
--- served at. The application
--- resolves its scripts and its API against that base, so the same build
--- serves under the public listener's base path and under the admin
--- listener's @\/admin\/@; a page whose @\<base href>@ is already right goes
--- out as its file (and its precompressed sibling), one that is not is
--- rewritten as it is sent.
+-- The @\<base href>@: every page is served with that of the path it is
+-- served at. The application resolves its scripts and its API against that
+-- base, so the same build serves under the public listener's base path and
+-- under the admin listener's @\/admin\/@. A page whose @\<base href>@ is
+-- already right is sent as its file (or its precompressed sibling); one
+-- that is not is rewritten as it is sent.
 module Wiki.Server.Static
   ( StaticSite
   , openStaticSite
@@ -82,15 +82,14 @@ openStaticSite dir =
     (Right . StaticSite <$> canonicalizePath dir)
     (pure (Left ("--static " <> toS dir <> " is not a directory")))
 
--- | How a page is rendered for a request, into the build's template: the
--- page and its status, or why there is none to send.
+-- | How a page is prerendered for a request, into the build's template:
+-- the page and its status, or why there is none to send.
 type PageRenderer = Text -> Request -> IO (Either Text (Status, Text))
 
--- | Answer a request for a file, by its path below the place the site is
--- served at (the request's 'pathInfo' with that place's segments taken
--- off), whose own address is given as the @\<base href>@ its pages get;
--- or for a page, rendered if the build has a template and a renderer is
--- given.
+-- | Answer a request for a file, by its path under the path the site is
+-- served at (the request's 'pathInfo' with that path's segments removed),
+-- whose own address is the @\<base href>@ its pages get; or for a page,
+-- prerendered if the build has a template and a renderer is given.
 serveStatic :: StaticSite -> Text -> Maybe PageRenderer -> [Text] -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 serveStatic site base renderer segments request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
@@ -125,17 +124,18 @@ serveStatic site base renderer segments request respond
                   Left _ -> built
         | otherwise -> built
 
--- | The build's template for the pages the server renders, if it has one.
+-- | The build's template for the pages the server prerenders, if it has
+-- one.
 readTemplate :: StaticSite -> IO (Maybe Text)
 readTemplate site = do
   let file = site.root </> "template.html"
   ifM (regularFile site file) (Just . decodeUtf8 <$> BS.readFile file) (pure Nothing)
 
--- | A page rendered for this request: for no one else, so revalidated
--- every time and never by a tag, and never compressed beforehand. It shows
--- what its reader may see and who they are, so it is the browser's alone
--- (@private@: no cache between it and the server keeps it) and varies with
--- the session's cookie.
+-- | A page prerendered for this request and nobody else: so it must be
+-- revalidated every time, never by an ETag, and is never precompressed. It
+-- shows what its reader may see and who they are, so it belongs to the
+-- browser alone (@private@: no cache between it and the server stores it)
+-- and varies with the session cookie.
 rendered :: Status -> Text -> Response
 rendered status page =
   responseLBS
@@ -147,8 +147,9 @@ rendered status page =
     ]
     (BSL.fromStrict (encodeUtf8 page))
 
--- | Whether every @%@ of a raw path starts an escape, two hex digits: one
--- that does not is no address at all, rather than an address of no file.
+-- | Whether every @%@ of a raw path starts an escape of two hex digits: a
+-- path that fails this is not an address at all, rather than an address of
+-- no file.
 wellEscaped :: ByteString -> Bool
 wellEscaped raw = case BS.elemIndex 37 raw of
   Nothing -> True
@@ -168,8 +169,8 @@ regularFile site file =
     )
     (pure False)
 
--- | A file's answer: the file, its precompressed sibling, or (a page whose
--- base is not this place's) the page rewritten.
+-- | A file's response: the file, its precompressed sibling, or (for a
+-- page whose base is not this path's) the page rewritten.
 send :: StaticSite -> Text -> Request -> Status -> FilePath -> IO Response
 send site base request status file = do
   let extension = map toLower (takeExtension file)
@@ -178,7 +179,7 @@ send site base request status file = do
   rewritten <-
     if extension == ".html"
       then do
-        -- As bytes: the locale a service runs in may not be UTF-8.
+        -- Read as bytes: the locale a service runs in may not be UTF-8.
         page <- decodeUtf8 <$> BS.readFile file
         let based = withBaseHref base page
         pure (if based == page then Nothing else Just based)
@@ -213,17 +214,17 @@ send site base request status file = do
       Just page -> pure (responseLBS status headers (BSL.fromStrict (encodeUtf8 page)))
       Nothing -> do
         let body = maybe file snd sibling
-        -- Warp answers a file's range requests and conditional requests
-        -- itself, but only for a whole file sent with a 200; one sent with
-        -- another status is given as a part, all of it, to keep its status.
+        -- Warp answers a file's range and conditional requests itself, but
+        -- only for a whole file sent with a 200. A file sent with another
+        -- status is given as a part, all of it, to keep its status.
         part <-
           if status == status200
             then pure Nothing
             else (\n -> Just FilePart {filePartOffset = 0, filePartByteCount = n, filePartFileSize = n}) <$> getFileSize body
         pure (responseFile status headers body part)
 
--- | The encodings an @Accept-Encoding@ header accepts, but those it gives a
--- quality of zero.
+-- | The encodings an @Accept-Encoding@ header accepts, except those it
+-- gives a quality of zero.
 acceptedEncodings :: ByteString -> [Text]
 acceptedEncodings header =
   [ T.toLower (T.strip name)
@@ -236,8 +237,8 @@ acceptedEncodings header =
       ["q", q] -> T.all (`elem` ['0', '.']) q
       _ -> False
 
--- | A page with the given @\<base href>@: the one it has replaced, or one
--- put first in its head if it has none.
+-- | A page with the given @\<base href>@: replacing the one it has, or put
+-- first in its head if it has none.
 withBaseHref :: Text -> Text -> Text
 withBaseHref base page = case T.breakOn "<base href=\"" page of
   (before, rest)
@@ -251,7 +252,7 @@ withBaseHref base page = case T.breakOn "<base href=\"" page of
   where
     escaped = T.concatMap (\case '&' -> "&amp;"; '"' -> "&quot;"; '<' -> "&lt;"; '>' -> "&gt;"; c -> T.singleton c) base
 
--- | A plain-text answer.
+-- | A plain-text response.
 plain :: Status -> Text -> [Header] -> Response
 plain status text headers = responseLBS status ((hContentType, "text/plain; charset=utf-8") : headers) (BSL.fromStrict (encodeUtf8 (text <> "\n")))
 
@@ -288,11 +289,11 @@ mediaType file = Map.findWithDefault "application/octet-stream" (map toLower (ta
         , (".pdf", "application/pdf")
         , (".zip", "application/zip")
         , -- A file whose own name ends in .gz is data its reader inflates
-          -- itself, so it goes out as it is, with no Content-Encoding.
+          -- itself, so it is sent as it is, with no Content-Encoding.
           (".gz", "application/gzip")
-        , -- Opaque data, named so explicitly: TikZJax's compressed files,
-          -- the zlib streams under tikzjax/ that its worker inflates
-          -- itself, which web/bundle.sh names .bin rather than .gz because
-          -- a corporate proxy may refuse to download a gzip archive.
+        , -- Opaque data, named explicitly: TikZJax's compressed files, the
+          -- zlib streams under tikzjax/ that its worker inflates itself,
+          -- which web/bundle.sh names .bin rather than .gz because a
+          -- corporate proxy may refuse to download a gzip archive.
           (".bin", "application/octet-stream")
         ]

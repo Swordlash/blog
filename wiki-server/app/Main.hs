@@ -9,14 +9,14 @@
 -- > wiki-server --version
 --
 -- @serve@ (also what runs with no command) serves the wiki from the data
--- directory on its two listeners ("Wiki.Server", "Wiki.Server.Options");
--- @backup@ copies the database aside into DIR/backups, keeping the last N
--- copies ("Wiki.Server.Storage.Backup"), which the deploy script runs before
--- it starts a new server; @restore@ puts one back as the database of a
--- data directory no server is running on, the attachments' files it lacks
--- brought from a copy if one is given; @users@ makes and changes the wiki's users and
--- their passwords ("Wiki.Server.Console"), which is how the first
--- administrator is made; @oidc check@ asks the providers the
+-- directory on its two listeners ("Wiki.Server", "Wiki.Server.Options").
+-- @backup@ copies the database into DIR/backups, keeping the last N copies
+-- ("Wiki.Server.Storage.Backup"); the deploy script runs it before it
+-- starts a new server. @restore@ restores a backup as the database of a
+-- data directory no server is running on, bringing the attachment files it
+-- lacks from a copy if one is given. @users@ creates and changes the wiki's
+-- users and their passwords ("Wiki.Server.Console"), which is how the first
+-- administrator is created. @oidc check@ asks the providers the
 -- administration has set how to sign in, and prints the redirect URI to
 -- register with each.
 module Main (main) where
@@ -33,11 +33,11 @@ import Wiki.Server.Version (serverVersion)
 data Command
   = -- | Serve the wiki.
     Serve ServeOptions
-  | -- | Back the database of a data directory up, keeping this many.
+  | -- | Back up a data directory's database, keeping this many backups.
     Backup FilePath Int
-  | -- | Put a backup back as a data directory's database.
+  | -- | Restore a backup as a data directory's database.
     Restore Restore
-  | -- | Make or change a user.
+  | -- | Create or change a user.
     Users Users
   | -- | Check the providers to sign in with.
     Oidc OidcCheck

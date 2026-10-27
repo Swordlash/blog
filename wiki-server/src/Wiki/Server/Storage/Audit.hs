@@ -1,11 +1,12 @@
 -- | The audit log's rows (WP4.10 of docs/PLAN.md, "Wiki.Core.Audit"): one
--- for each write to the wiki's administration, inserted by the operation
--- that makes the write, in its transaction ('insertAudit'), and read by the
--- administration's "Activity", newest first ('loadActivity'), and by an
--- export, oldest first ('loadAuditLog'). An import brings an archive's
--- entries in, each once ('restoreAudit').
+-- for each administration write, inserted by the operation that makes the
+-- write, in its transaction ('insertAudit'). The administration's
+-- "Activity" reads them newest first ('loadActivity'), and an export
+-- oldest first ('loadAuditLog'). An import adds an archive's entries, each
+-- once ('restoreAudit').
 --
--- Nothing here checks who may: these run inside a transaction that has.
+-- Nothing here checks permissions: these run inside a transaction that
+-- has already checked them.
 module Wiki.Server.Storage.Audit
   ( -- * Writing
     Recorded (..)
@@ -35,8 +36,8 @@ import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Storage.Rows (Stamp (..))
 
--- | What a write records: everything of an entry but its id and time,
--- which 'insertAudit' gives it.
+-- | What a write records: everything of an entry except its id and time,
+-- which 'insertAudit' assigns.
 data Recorded = Recorded
   { actor :: Actor
   , action :: Text
@@ -47,19 +48,19 @@ data Recorded = Recorded
 
 -- | The server's operator, as an entry names them: the administrator of
 -- the admin listener, and of the console. The id is the administrator's
--- ("Wiki.Server.Storage"'s @administratorId@), which no user has.
+-- (@administratorId@ in "Wiki.Server.Storage"), which no user has.
 operator :: Actor
 operator = Actor {id = UserId "~administrator", login = "administrator"}
 
--- | Where a write made from the server's console (@wiki-server users …@)
--- comes from.
+-- | The address recorded for a write made from the server's console
+-- (@wiki-server users …@).
 consoleAddress :: Text
 consoleAddress = "console"
 
--- | A time as the log's column has it: ISO 8601 in UTC with exactly six
--- digits of the fraction of a second, so that the text sorts as the time
--- does (which 'Stamp''s, with as many digits as there are, does not within
--- a second), and reads back as a 'Stamp'.
+-- | A time as the log's column stores it: ISO 8601 in UTC with exactly
+-- six digits of fraction, so that the text sorts in time order (which
+-- 'Stamp''s format, with as many digits as needed, does not within a
+-- second), and parses back as a 'Stamp'.
 newtype LogTime = LogTime UTCTime
 
 instance ToField LogTime where
@@ -71,15 +72,15 @@ instance ToField LogTime where
           <> "Z"
       )
 
--- | Record a write, now, in the transaction under way.
+-- | Record a write, now, in the running transaction.
 insertAudit :: Connection -> Recorded -> IO ()
 insertAudit c r = do
   i <- UUID.toText <$> generateV4
   t <- getCurrentTime
   insertEntry c "INSERT INTO" AuditEntry {id = i, at = t, actor = r.actor, action = r.action, subject = r.subject, detail = Map.fromList r.detail, address = r.address}
 
--- | Bring in an archive's entries, each one that is not here already (by
--- its id): an import of the same archive twice brings them in once.
+-- | Add an archive's entries, each one not already here (by its id): an
+-- import of the same archive twice adds them once.
 restoreAudit :: Connection -> [AuditEntry] -> IO ()
 restoreAudit c = traverse_ (insertEntry c "INSERT OR IGNORE INTO")
 
@@ -109,7 +110,8 @@ entryOf ((i, Stamp at, actorId, login, action) :. (kind, subjectId, name, detail
 columns :: Text
 columns = "id, at, actor_id, actor_login, action, subject_kind, subject_id, subject_name, detail, address"
 
--- | A page of the log, the newest first, and whom it can be filtered by.
+-- | A page of the log, the newest first, and the actors it can be
+-- filtered by.
 loadActivity :: Connection -> ActivityQuery -> IO Activity
 loadActivity c q = do
   let offset = max 0 q.offset
@@ -127,6 +129,6 @@ loadActivity c q = do
       , actors = sortOn (\a -> (T.toCaseFold a.login, a.id)) [Actor {id = UserId i, login} | (i, login) <- named]
       }
 
--- | The whole log, the oldest first: what an export carries.
+-- | The whole log, the oldest first: what an export contains.
 loadAuditLog :: Connection -> IO [AuditEntry]
 loadAuditLog c = map entryOf <$> query_ c (Query ("SELECT " <> columns <> " FROM audit_log ORDER BY at, id"))

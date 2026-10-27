@@ -1,11 +1,11 @@
--- | What a listener says of the server to a machine (WP4.10 of
+-- | What a listener reports about the server to a machine (WP4.10 of
 -- docs/PLAN.md): @\/healthz@, on both listeners, for a health check, and
 -- @\/metrics@, on the admin listener only, for Prometheus. Both are at the
--- listener's root, outside the place it serves the wiki at, and both are
--- answered to anyone who reaches them, before a closed wiki's rule: what
--- @\/healthz@ says is nothing of the wiki's content or people, and
+-- listener's root, outside the path where it serves the wiki, and both are
+-- answered to anyone who reaches them, before the closed wiki's rule.
+-- @\/healthz@ reveals nothing of the wiki's content or users, and
 -- @\/metrics@ is on the loopback listener, where whoever can reach the
--- machine is the administrator already (decision 11).
+-- machine is the administrator already (decision 11 of the plan).
 module Wiki.Server.Health
   ( healthApplication
   , metricsApplication
@@ -47,13 +47,13 @@ healthApplication env request respond
             Left _ -> (status503, Health {status = "failing", schemaVersion = 0, lastBackupAgeSeconds = age})
       respond (responseLBS status [(hContentType, "application/json"), (hCacheControl, "no-store")] (encode health))
 
--- | When the newest backup kept in a data directory was made, by its
--- name: by the server's schedule, by hand or by a deploy.
+-- | When the newest backup in a data directory was made, read from its
+-- name: by the server's schedule, by hand, or by a deploy.
 lastBackupAt :: FilePath -> IO (Maybe UTCTime)
 lastBackupAt dataDir = (>>= backupTime) . lastMay <$> backupFiles (backupsDir dataDir)
 
--- | @GET \/metrics@: the requests counted and what the server has, in the
--- Prometheus text format ("Wiki.Server.Metrics").
+-- | @GET \/metrics@: the requests counted and what the server holds, in
+-- the Prometheus text format ("Wiki.Server.Metrics").
 metricsApplication :: Env -> Application
 metricsApplication env request respond
   | requestMethod request `notElem` [methodGet, methodHead] = respond (responseLBS status405 [("Allow", "GET, HEAD")] "")
@@ -62,7 +62,7 @@ metricsApplication env request respond
       samples <- metricSamples env
       respond (responseLBS status200 [(hContentType, contentType), (hCacheControl, "no-store")] (toS (encodeUtf8 (renderMetrics counted samples))))
 
--- | What the server has, read now.
+-- | What the server holds, read now.
 metricSamples :: Env -> IO [Sample]
 metricSamples env = do
   now <- getCurrentTime

@@ -3,24 +3,25 @@
 -- chose, through the mail server the administration has set
 -- ("Wiki.Server.Mail"), and only to a verified address.
 --
--- A notification is made by the write it is about, in its transaction,
--- marked to be mailed if its user is mailed at all ("Wiki.Server.Storage").
--- This thread mails it later, never inside a transaction (sending a mail
--- may take half a minute): it is woken as notifications are made
--- ('wakeUp', which the storage's @notify@ calls), and looks every minute
--- besides, for the digest. Before it mails a notification it asks again
--- whether its user may read its page, since a grant may have been taken
--- away since it was made; one they may not read any more is not mailed.
+-- A notification is created by the write it is about, in that write's
+-- transaction, and queued for mail if its user gets mail at all
+-- ("Wiki.Server.Storage"). This thread mails it later, never inside a
+-- transaction (sending a mail may take half a minute). It is woken when
+-- notifications are created ('wakeUp', which the storage's @notify@
+-- calls), and also checks every minute, for the digest. Before it mails a
+-- notification it checks again whether its user may read its page, since
+-- a grant may have been removed since it was created; a notification about
+-- a page they can no longer read is not mailed.
 --
--- A user mailed at once gets one mail of what is waiting for them when
--- the thread looks, usually one notification; a user mailed daily gets
--- the day's in one digest, grouped by page ('Wiki.Core.Notification.digest'),
--- once a day from 'digestHour' UTC. Without a mail server (or the wiki's
--- address its links start with) nothing can be mailed, and what waits is
--- let go rather than mailed late once one is set. A mail that fails is
--- logged and tried again at the next look. Once a day the thread also
--- deletes the notifications no longer kept
--- ('Wiki.Core.Notification.keptNotifications').
+-- A user who gets mail at once gets one mail with what is queued for them
+-- when the thread checks, usually one notification. A user who gets mail
+-- daily gets the day's notifications in one digest, grouped by page
+-- ('Wiki.Core.Notification.digest'), once a day from 'digestHour' UTC.
+-- Without a mail server (or the wiki's address for the links to start
+-- with) nothing can be mailed, and the queue is cleared rather than mailed
+-- late once a server is set. A mail that fails is logged and retried at the
+-- next check. Once a day the thread also deletes the notifications no
+-- longer kept ('Wiki.Core.Notification.keptNotifications').
 module Wiki.Server.Notifier
   ( -- * Waking it
     Wake
@@ -50,18 +51,18 @@ import Wiki.Server.Mail (Mailer (..), SendMail, mailerFrom, notificationMessage)
 import Wiki.Server.Storage (Storage, locatedFor, readServerSettings, withDatabase)
 import Wiki.Server.Storage.Notifications (Pending (..), clearPending, lastDigest, loadPending, pruneNotifications, storeLastDigest, unsubscribeToken)
 
--- | What wakes the thread: counted up when notifications are made.
+-- | What wakes the thread: incremented when notifications are created.
 newtype Wake = Wake (TVar Int)
 
 newWake :: IO Wake
 newWake = Wake <$> newTVarIO 0
 
--- | Notifications were made: the thread looks now rather than within the
--- minute. It never waits.
+-- | Notifications were created: the thread checks now rather than within
+-- the minute. It never waits.
 wakeUp :: Wake -> IO ()
 wakeUp (Wake v) = atomically (modifyTVar' v (+ 1))
 
--- | The thread, and what it needs.
+-- | The notifier thread's state, and what it needs.
 data Notifier = Notifier
   { storage :: Storage
   , logger :: Logger
@@ -76,18 +77,18 @@ newNotifier logger sendMail wake storage = Notifier {storage, logger, sendMail, 
 digestHour :: Int
 digestHour = 7
 
--- | Until it is cancelled (the server stopping): look when woken, and every
--- minute. Not as the server starts: what was due before it stopped waits
--- for the first minute, so that a server starting writes nothing to its
--- database it was not asked to (a digest's day, the pruning) while whoever
--- started it may still be at work on the file.
+-- | Until it is cancelled (the server stopping), check when woken, and
+-- every minute. Not when the server starts: what was due before it
+-- stopped waits for the first minute, so that a starting server writes
+-- nothing to its database it was not asked to (a digest's day, the
+-- pruning) while whoever started it may still be working on the file.
 runNotifier :: Notifier -> IO ()
 runNotifier n = do
   readTVarIO v >>= waitFrom
   forever $ do
     seen <- readTVarIO v
-    -- What goes wrong is logged and tried again at the next look; but the
-    -- server stopping, which cancels the thread, ends it.
+    -- Failures are logged and retried at the next check; but the server
+    -- stopping, which cancels the thread, ends it.
     now <- getCurrentTime
     try (mailRound n now) >>= \case
       Left e
@@ -97,7 +98,7 @@ runNotifier n = do
     waitFrom seen
   where
     Wake v = n.wake
-    -- Until woken since the count was this, or a minute has passed.
+    -- Wait until woken since the count was this, or a minute has passed.
     waitFrom seen = do
       timer <- registerDelay 60_000_000
       atomically $ do
@@ -105,7 +106,7 @@ runNotifier n = do
         late <- readTVar timer
         check (woken || late)
 
--- | One look: mail what is due, and once a day the digests and the
+-- | One check: mail what is due, and once a day the digests and the
 -- pruning.
 mailRound :: Notifier -> UTCTime -> IO ()
 mailRound n now = do

@@ -1,45 +1,46 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | Pages and spaces exported as documents (WP4.16 of docs/PLAN.md), with
--- pandoc linked into the server as a library: no program is run but the
--- TeX engine that makes a PDF.
+-- | Export of pages and spaces as documents (WP4.16 of docs/PLAN.md),
+-- with pandoc linked into the server as a library: no program is run
+-- except the TeX engine that makes a PDF.
 --
--- What a page becomes is "Wiki.Server.Export.Document"'s; here it is read
--- as its reader may read it, its images are put into pandoc's media bag
--- from the blob store, and the document is written in the format asked
--- for ("Wiki.Api.Export"):
+-- What a page becomes is decided in "Wiki.Server.Export.Document". Here
+-- the page is read as its reader may read it, its images are put into
+-- pandoc's media bag from the blob store, and the document is written in
+-- the requested format ("Wiki.Api.Export"):
 --
--- * DOCX, its formulas as Word's own equations, which texmath makes;
+-- * DOCX, with its formulas as Word's own equations, which texmath makes;
 -- * HTML, one standalone page with its images inside it (pandoc's
 --   self-contained HTML) and its formulas as MathML, which a browser shows
---   with no script;
+--   without a script;
 -- * EPUB;
--- * PDF, which pandoc's LaTeX writer and @xelatex@ make, through pandoc's
---   own PDF path in a temporary directory it removes after;
+-- * PDF, made by pandoc's LaTeX writer and @xelatex@, through pandoc's own
+--   PDF path in a temporary directory it removes afterwards;
 -- * for a deck ("Wiki.Core.Slides"): PowerPoint, and Beamer's LaTeX or its
---   PDF. The deck's aspect is Beamer's @aspectratio@, its theme a Beamer
---   theme ('beamerLook'); PowerPoint gets pandoc's own reference
---   presentation, which is 16:9, whatever the deck says.
+--   PDF. The deck's aspect ratio becomes Beamer's @aspectratio@, and its
+--   theme a Beamer theme ('beamerLook'). PowerPoint gets pandoc's own
+--   reference presentation, which is 16:9, whatever the deck says.
 --
 -- A space is one document of its pages in its order, under a title page
 -- (its name, its description, when it was exported) and a table of
 -- contents.
 --
 -- The PDFs need @xelatex@, which is looked for on the server's @PATH@ each
--- time it matters ('texEngine'), so that installing it needs no restart:
--- the session tells the application what is offered ('availableFormats'),
--- and a PDF asked for without it is refused, saying so.
+-- time it matters ('texEngine'), so that installing it needs no restart.
+-- The session tells the application which formats are offered
+-- ('availableFormats'), and a PDF requested without it is refused, saying
+-- so.
 --
--- TeX is a programming language with files and a shell at hand, and a
--- PDF hands it what authors wrote: a TikZ picture is LaTeX by design, and
--- texmath writes a control sequence it does not know back out into a
--- formula, so @\\input{\/etc\/passwd}@ in a formula would put a file of
--- the server's into the PDF, and @\\openout@ would write one. So before
--- the engine runs, TeX's own limits are set in the server's environment,
--- which pandoc hands the engine ('restrictTeX'): files are read and written
--- only under the directory it typesets in (and TeX's own trees), and no
--- program is run, not even the few TeX Live allows by default. Nothing here
--- passes the engine an option that would lift them.
+-- TeX is a programming language with access to files and a shell, and a
+-- PDF gives it what authors wrote: a TikZ picture is LaTeX by design, and
+-- texmath writes an unknown control sequence back out into a formula. So
+-- @\\input{\/etc\/passwd}@ in a formula would put a file of the server's
+-- into the PDF, and @\\openout@ would write one. So before the engine runs,
+-- TeX's own limits are set in the server's environment, which pandoc
+-- passes to the engine ('restrictTeX'): files are read and written only
+-- under the directory it typesets in (and TeX's own trees), and no program
+-- is run, not even the few TeX Live allows by default. Nothing here passes
+-- the engine an option that would lift those limits.
 --
 -- An export takes time and memory, so each person has one at a time
 -- ('Exports'), and none takes more than 'exportTimeout'; the TeX engine is
@@ -104,18 +105,19 @@ import Wiki.Core.Space (Space (..))
 import Wiki.Server.Export.Document
 import Wiki.Server.Storage (Storage, Who (..), blobPath, exportedPage, readServerSettings, runSqliteWiki)
 
--- | Whose exports are being made: one at a time each.
+-- | Whose exports are in progress: at most one each.
 newtype Exports = Exports (TVar (Set Text))
 
 newExports :: IO Exports
 newExports = Exports <$> newTVarIO Set.empty
 
--- | How long an export may take, TeX's run included: one that takes longer
--- is stopped and refused.
+-- | How long an export may take, TeX's run included: one that takes
+-- longer is stopped and refused.
 exportTimeout :: Int
 exportTimeout = 60_000_000
 
--- | A document made: the name it is saved under, its format and its bytes.
+-- | A finished document: the file name it is saved under, its format and
+-- its bytes.
 data Exported = Exported
   { fileName :: Text
   , format :: ExportFormat
@@ -126,30 +128,31 @@ data Exported = Exported
 texEngine :: IO (Maybe FilePath)
 texEngine = findExecutable "xelatex"
 
--- | What TeX may do, as kpathsea's variables, which its environment
--- overrides its configuration with: read and write files only under the
+-- | What TeX may do, as kpathsea's variables, which override its
+-- configuration from the environment: read and write files only under the
 -- working directory and @TEXMFOUTPUT@ (the temporary directory pandoc
 -- typesets in; @p@, paranoid, also refuses dot files and @..@), and run no
 -- program at all (@f@; TeX Live's default, restricted, still runs a few).
 texLimits :: [([Char], [Char])]
 texLimits = [("openin_any", "p"), ("openout_any", "p"), ("shell_escape", "f")]
 
--- | Set 'texLimits' in the server's environment, which pandoc gives the TeX
--- engine it runs. Process-wide, which is right: nothing else the server
--- runs reads them. Done before every PDF, so that nothing can have changed
--- them since.
+-- | Set 'texLimits' in the server's environment, which pandoc gives the
+-- TeX engine it runs. This is process-wide, which is right: nothing else
+-- the server runs reads them. It is done before every PDF, so that nothing
+-- can have changed them since.
 restrictTeX :: IO ()
 restrictTeX = traverse_ (uncurry setEnv) texLimits
 
--- | The formats the server makes documents in: all of them where it has a
--- TeX engine, all but the PDFs where it has not.
+-- | The formats the server can make documents in: all of them where it has
+-- a TeX engine, and all except the PDFs where it has not.
 availableFormats :: IO [ExportFormat]
 availableFormats = do
   tex <- isJust <$> texEngine
   pure [f | f <- [minBound .. maxBound], tex || not (needsTeX f)]
 
--- | A page as a document, for someone who may read it; a presentation only
--- of a deck. The key says whose export it is, for the one at a time.
+-- | Export a page as a document, for someone who may read it; only a deck
+-- as a presentation. The key identifies whose export it is, for the limit
+-- of one at a time.
 exportPage :: Exports -> Text -> Storage -> Who -> PageId -> ExportFormat -> IO (Either ApiError Exported)
 exportPage exports key storage who pid format = oneAtATime exports key . requiringTeX format $ do
   loaded <- runSqliteWiki storage who $ runExceptT $ do
@@ -179,12 +182,13 @@ exportPage exports key storage who pid format = oneAtATime exports key . requiri
               written <- writeDocument format bag False doc
               pure (Exported (exportFileName page.title format) format <$> written)
 
--- | A space's pages as one document, for someone who may view the space.
+-- | Export a space's pages as one document, for someone who may view the
+-- space.
 exportSpace :: Exports -> Text -> Storage -> Who -> SpaceId -> ExportFormat -> IO (Either ApiError Exported)
 exportSpace exports key storage who sid format = oneAtATime exports key . requiringTeX format $ do
   loaded <- runSqliteWiki storage who $ runExceptT $ do
-    -- The pages first: they say whether the space is there and may be
-    -- read, as the API's own listing does.
+    -- The pages first: fetching them says whether the space exists and
+    -- may be read, as the API's own listing does.
     pages <- ExceptT (listPages sid)
     spaces <- lift listSpaces
     space <- maybe (throwError NotFound) pure (find (\s -> s.id == sid) spaces)
@@ -214,7 +218,7 @@ exportSpace exports key storage who sid format = oneAtATime exports key . requir
               written <- writeDocument format bag True doc
               pure (Exported (exportFileName space.name format) format <$> written)
 
--- | The format checked before anything is read: a PDF needs a TeX engine.
+-- | Check the format before anything is read: a PDF needs a TeX engine.
 requiringTeX :: ExportFormat -> IO (Either ApiError a) -> IO (Either ApiError a)
 requiringTeX format go
   | needsTeX format =
@@ -223,7 +227,8 @@ requiringTeX format go
         Just _ -> go
   | otherwise = go
 
--- | One export at a time for a key, and none longer than 'exportTimeout'.
+-- | Allow one export at a time per key, and none longer than
+-- 'exportTimeout'.
 oneAtATime :: Exports -> Text -> IO (Either ApiError a) -> IO (Either ApiError a)
 oneAtATime (Exports busy) key go = do
   taken <- atomically $ do
@@ -266,8 +271,8 @@ placeOf publicUrl spaces pages page inDocument idPrefix stored =
 builtinMacros :: Text
 builtinMacros = $(makeRelativeToProject "../web/src/katex-macros.tex" >>= embedStringFile)
 
--- | What KaTeX has of its own that a page may use and LaTeX has not, as
--- macros: the built-in ones leave them out for that reason.
+-- | KaTeX's own commands that a page may use and LaTeX lacks, defined as
+-- macros: the built-in macros leave them out for that reason.
 katexOwn :: Text
 katexOwn =
   T.unlines
@@ -281,8 +286,8 @@ katexOwn =
     , "\\newcommand{\\braket}[1]{\\left\\langle #1 \\right\\rangle}"
     ]
 
--- | The images of some pages, from the blob store, in a media bag at their
--- 'mediaPath'; and which attachments are in it.
+-- | The images of some pages, from the blob store, in a media bag at
+-- their 'mediaPath'; and which attachments are in it.
 mediaOf :: Storage -> [Page] -> IO (MediaBag, AttachmentId -> Bool)
 mediaOf storage pages = do
   found <- fmap catMaybes . for [a | p <- pages, a <- p.attachments, attachmentKind a == MediaImage] $ \a -> case a.source of
@@ -294,15 +299,15 @@ mediaOf storage pages = do
       ids = Set.fromList [a.id | (a, _) <- found]
   pure (bag, (`Set.member` ids))
 
--- | A page's document dated.
+-- | A page's document, with a date.
 withDate :: UTCTime -> P.Pandoc -> P.Pandoc
 withDate now (P.Pandoc (P.Meta meta) bs) =
   P.Pandoc (P.Meta (Map.insert "date" (P.MetaInlines (B.toList (B.text (T.strip (toS (formatTime defaultTimeLocale "%e %B %Y" now)))))) meta)) bs
 
--- | A deck's look in Beamer: its aspect ratio, and a theme near the wiki's.
--- The wiki's @beamer@ look, a title bar and a footer with the title and
--- the slide's number, is Beamer's Madrid; @light@ is Beamer's plain
--- default; @dark@ is the default, light on dark.
+-- | A deck's look in Beamer: its aspect ratio, and a theme close to the
+-- wiki's. The wiki's @beamer@ look, a title bar and a footer with the
+-- title and the slide number, is Beamer's Madrid; @light@ is Beamer's plain
+-- default; @dark@ is the default theme, light on dark.
 beamerLook :: DeckOptions -> [(Text, P.MetaValue)]
 beamerLook o =
   [ ("aspectratio", P.MetaString (case o.aspect of Wide -> "169"; Standard -> "43"))
@@ -323,19 +328,21 @@ beamerLook o =
           )
         ]
 
--- | A document written in a format, its images taken from the media bag;
--- with a table of contents when asked. What pandoc or TeX could not make is
--- refused with their reason.
+-- | Write a document in a format, with its images from the media bag, and
+-- with a table of contents when asked. What pandoc or TeX could not make
+-- is refused with their reason.
 writeDocument :: ExportFormat -> MediaBag -> Bool -> P.Pandoc -> IO (Either ApiError ByteString)
 writeDocument format bag toc doc = do
   tex <- texEngine
   result <- runIO $ do
-    -- What pandoc would warn of (a formula texmath cannot convert, which
-    -- it then writes as TeX) is no failure, and not the server's to log.
+    -- What pandoc would warn about (a formula texmath cannot convert,
+    -- which it then writes as TeX) is not a failure, and not the server's
+    -- to log.
     setVerbosity ERROR
     setMediaBag bag
     write tex (withPreamble doc)
-  -- Forced here, inside the caller's timeout, rather than when it is sent.
+  -- Forced here, inside the caller's timeout, rather than when it is
+  -- sent.
   case result of
     Left e -> pure (Left (failed e))
     Right (Left why) -> pure (Left (ApiError.Invalid why))
@@ -380,10 +387,10 @@ writeDocument format bag toc doc = do
 
 -- | What a document's LaTeX needs in its preamble: the TikZ packages its
 -- pictures load, and mhchem where a formula writes chemistry (@\\ce@,
--- @\\pu@), which KaTeX has built in and LaTeX has not. LaTeX's mhchem has
--- no @\\pu@ (a quantity with its unit is KaTeX's own addition), so one is
--- defined beside it, setting the quantity as text, which keeps the space
--- between the number and its unit. Other formats do not read it.
+-- @\\pu@), which KaTeX has built in and LaTeX lacks. LaTeX's mhchem has no
+-- @\\pu@ (a quantity with its unit is KaTeX's own addition), so one is
+-- defined beside it, typesetting the quantity as text, which keeps the
+-- space between the number and its unit. Other formats ignore it.
 withPreamble :: P.Pandoc -> P.Pandoc
 withPreamble (P.Pandoc (P.Meta meta) bs) = case tikzPreamble bs <> chemistry of
   [] -> P.Pandoc (P.Meta meta) bs
@@ -401,8 +408,8 @@ withPreamble (P.Pandoc (P.Meta meta) bs) = case tikzPreamble bs <> chemistry of
       P.Math _ tex | any (`T.isInfixOf` tex) commands -> [()]
       _ -> []
 
--- | What of TeX's log says what went wrong: its errors (the lines that
--- start with @!@ and the two after each), or its end.
+-- | The part of TeX's log that says what went wrong: its errors (the
+-- lines that start with @!@ and the two after each), or its end.
 texError :: Text -> Text
 texError logged = case errorLines (T.lines logged) of
   [] -> T.unlines (reverse (take 8 (reverse (T.lines logged))))

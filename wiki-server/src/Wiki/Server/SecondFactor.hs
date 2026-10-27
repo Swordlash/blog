@@ -1,34 +1,35 @@
--- | A second factor at sign-in (WP4.11 of docs/PLAN.md): a code from an
+-- | The second factor at sign-in (WP4.11 of docs/PLAN.md): a code from an
 -- authenticator application ("Wiki.Server.Totp"), asked for after the
--- password, or after a provider's sign-in, of a user who has turned it on.
+-- password, or after a provider's sign-in, from a user who has turned it
+-- on.
 --
 -- = Turning it on and off
 --
--- A user asks for a secret ('enrol'), which is kept but not yet asked for;
--- one code computed with it ('confirm') shows that their application has
--- it, and turns it on, with ten recovery codes, shown that once and kept as
--- hashes. They turn it off with a code ('remove'), so that a browser left
--- signed in does not let a passer-by take it away; an administrator turns it
--- off without one (the administration's @removeSecondFactor@, which the
--- storage checks, and the console's), for a user who has lost both their application and their
--- recovery codes.
+-- A user requests a secret ('enrol'), which is stored but not yet asked
+-- for. One code computed with it ('confirm') proves that their application
+-- has it, and turns it on, with ten recovery codes, shown once and stored
+-- as hashes. They turn it off with a code ('remove'), so that a browser
+-- left signed in does not let a passer-by remove it. An administrator
+-- turns it off without a code (the administration's @removeSecondFactor@,
+-- which the storage checks, and the console's), for a user who has lost
+-- both their application and their recovery codes.
 --
 -- = Codes
 --
--- 'checkCode' takes either a code of the application, within a step of now
--- either way and later than the last one taken (so each is taken once), or
--- an unused recovery code, which is then used up.
+-- 'checkCode' accepts either a code from the application, within one time
+-- step of now either way and later than the last one accepted (so each is
+-- accepted once), or an unused recovery code, which is then used up.
 --
--- = Sign-ins half done
+-- = Half-finished sign-ins
 --
--- When the password (or the provider) is right and a code is wanted, the
--- server keeps the sign-in half done, in memory ('PendingSignIns'): the
--- user, and how many wrong codes it has had, under a random id that a
--- cookie of its own carries ('pendingCookie'), for 'pendingLifetime'. The
--- code ends it ('finishPending'); 'maxWrongCodes' wrong ones end it too,
--- beside the limit on failed sign-ins the server counts them against. A
--- restart forgets them, which costs whoever was half way the password
--- again.
+-- When the password (or the provider) is right and a code is needed, the
+-- server holds the half-finished sign-in in memory ('PendingSignIns'): the
+-- user, and how many wrong codes it has had, under a random id that its
+-- own cookie carries ('pendingCookie'), for 'pendingLifetime'. The right
+-- code completes it ('finishPending'); 'maxWrongCodes' wrong ones end it
+-- too, besides counting against the limit on failed sign-ins. A restart
+-- forgets them, which costs whoever was halfway through entering their
+-- password again.
 module Wiki.Server.SecondFactor
   ( -- * Turning it on and off
     secondFactorState
@@ -95,9 +96,9 @@ stateOf c u = do
       , asksPassword = maybe False ((/= (0 :: Int)) . fromOnly) (head withPassword)
       }
 
--- | Begin a second factor: a new secret, kept for the user but not asked
--- for until 'confirm'. One begun before and not confirmed is replaced; one
--- turned on is a 'Conflict'.
+-- | Start setting up a second factor: a new secret, stored for the user
+-- but not asked for until 'confirm'. One started before and not confirmed
+-- is replaced; one already on is a 'Conflict'.
 enrol :: Storage -> UTCTime -> UserId -> IO (Either WikiError Secret)
 enrol st now u = do
   secret <- newSecret
@@ -113,17 +114,17 @@ enrol st now u = do
             (u.text, secretText secret, Stamp now)
           pure (Right secret)
 
--- | Why a code was not taken.
+-- | Why a code was not accepted.
 data CodeRefusal
-  = -- | It is not a code of theirs now (nor an unused recovery code).
+  = -- | It is not a current code of theirs (nor an unused recovery code).
     WrongCode
-  | -- | Anything else: nothing to confirm or remove ('NotFound'), one turned
-    -- on already ('Conflict').
+  | -- | Any other failure: nothing to confirm or remove ('NotFound'), or a
+    -- second factor already on ('Conflict').
     CodeRefused WikiError
   deriving stock (Eq, Show)
 
--- | Turn the second factor begun on, with a code of the application's: the
--- recovery codes, in clear this once.
+-- | Turn on the second factor that was started, with a code from the
+-- application. The result is the recovery codes, in clear text this once.
 confirm :: Storage -> UTCTime -> UserId -> Text -> IO (Either CodeRefusal [Text])
 confirm st now u typed = do
   codes <- newRecoveryCodes
@@ -143,8 +144,8 @@ confirm st now u typed = do
           | otherwise -> pure (Left WrongCode)
         _ -> pure (Left (CodeRefused NotFound))
 
--- | Turn a user's second factor off, with a code of theirs: whether they
--- have one then (they do not).
+-- | Turn a user's second factor off, with one of their codes. The result
+-- is their second factor's state afterwards (off).
 remove :: Storage -> UTCTime -> UserId -> Text -> IO (Either CodeRefusal SecondFactorState)
 remove st now u typed = withDatabase st $ \c ->
   immediately c $
@@ -160,13 +161,14 @@ remove st now u typed = withDatabase st $ \c ->
 --------------------------------------------------------------------------------
 -- Codes
 
--- | Whether a code typed is one of a user's who has a second factor: a code
--- of their application's now, later than the last taken, or an unused
--- recovery code; taken, either way, so that it is not taken again.
+-- | Whether a typed code is valid for a user who has a second factor: a
+-- current code from their application, later than the last accepted, or
+-- an unused recovery code. Either way it is used up, so that it is not
+-- accepted again.
 checkCode :: Storage -> UTCTime -> UserId -> Text -> IO Bool
 checkCode st now u typed = withDatabase st $ \c -> immediately c (bool (Left ()) (Right ()) <$> codeOf c now u typed) <&> isRight
 
--- | 'checkCode' in a transaction under way.
+-- | 'checkCode' in a running transaction.
 codeOf :: Connection -> UTCTime -> UserId -> Text -> IO Bool
 codeOf c now u typed =
   query c "SELECT secret, last_counter FROM totp WHERE user_id = ? AND enabled_at IS NOT NULL" (Only u.text) >>= \case
@@ -189,7 +191,7 @@ data PendingSignIn = PendingSignIn
   , login :: Text
   -- ^ What the limit on failed sign-ins counts its wrong codes against.
   , next :: Text
-  -- ^ Where a provider's sign-in goes on to once it is done.
+  -- ^ Where a provider's sign-in continues to once it is done.
   , expires :: UTCTime
   , wrong :: Int
   -- ^ How many wrong codes it has had.
@@ -210,11 +212,12 @@ pendingLifetime = 5 * 60
 maxWrongCodes :: Int
 maxWrongCodes = 5
 
--- | The most sign-ins kept waiting; past it the oldest go.
+-- | The most sign-ins held waiting; beyond it the oldest are dropped.
 maxPending :: Int
 maxPending = 10000
 
--- | Keep a sign-in waiting for its code: the id its cookie is to carry.
+-- | Hold a sign-in waiting for its code. The result is the id its cookie
+-- is to carry.
 holdSignIn :: PendingSignIns -> UTCTime -> UserId -> Text -> Text -> IO Text
 holdSignIn (PendingSignIns ref) now user login next = do
   token <- newToken
@@ -235,12 +238,12 @@ pendingSignIn (PendingSignIns ref) now token =
   where
     key = tokenHash token
 
--- | Count a wrong code against a sign-in, which ends at the last one.
+-- | Count a wrong code against a sign-in, which ends at the last allowed.
 wrongCode :: PendingSignIns -> Text -> IO ()
 wrongCode (PendingSignIns ref) token =
   atomicModifyIORef' ref $ \m -> (Map.update (\p -> if p.wrong + 1 >= maxWrongCodes then Nothing else Just p {wrong = p.wrong + 1}) (tokenHash token) m, ())
 
--- | End a sign-in that has had its code.
+-- | End a sign-in that has received its code.
 finishPending :: PendingSignIns -> Text -> IO ()
 finishPending (PendingSignIns ref) token = atomicModifyIORef' ref (\m -> (Map.delete (tokenHash token) m, ()))
 
@@ -248,17 +251,17 @@ finishPending (PendingSignIns ref) token = atomicModifyIORef' ref (\m -> (Map.de
 pendingCookieName :: Text
 pendingCookieName = "wiki_pending"
 
--- | The @Set-Cookie@ value that gives a browser a waiting sign-in's id, for
--- as long as it waits, or (empty) makes it forget it: for the whole of the
--- wiki's place, since a password's sign-in ends at the API and a
--- provider's at its own page, and as strict as the session's own cookie.
+-- | The @Set-Cookie@ value that gives a browser a waiting sign-in's id,
+-- for as long as it waits, or (when empty) deletes it. It covers the
+-- wiki's whole path, since a password sign-in ends at the API and a
+-- provider's at its own page, and it is as strict as the session cookie.
 pendingCookie :: CookieSettings -> Text -> Text
 pendingCookie s value =
   T.intercalate "; " $
     [pendingCookieName <> "=" <> value, "Path=" <> s.path, "Max-Age=" <> (if T.null value then "0" else show (truncate pendingLifetime :: Int)), "HttpOnly", "SameSite=Strict"]
       <> ["Secure" | s.secure]
 
--- | The waiting sign-in's id a request's cookies carry, if any.
+-- | The id of a waiting sign-in, from a request's cookies, if any.
 requestPending :: Request -> Maybe Text
 requestPending request =
   head

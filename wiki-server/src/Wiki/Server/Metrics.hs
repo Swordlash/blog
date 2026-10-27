@@ -1,20 +1,20 @@
 -- | The server's metrics, in the Prometheus text format (version 0.0.4),
--- for @GET \/metrics@ on the admin listener (WP4.10 of docs/PLAN.md):
--- written by hand, since the format is a few lines of text and a client
--- library would bring more than it saves.
+-- for @GET \/metrics@ on the admin listener (WP4.10 of docs/PLAN.md). They
+-- are written by hand, since the format is a few lines of text and a
+-- client library would add more than it saves.
 --
--- What is counted as requests are answered ('observe'): how many, by
+-- As requests are answered ('observe'), the server counts how many, by
 -- listener, route pattern, method and status class
 -- (@wiki_http_requests_total@), and how long they took, by listener and
--- route (@wiki_http_request_duration_seconds@, a histogram). A route is
--- the pattern the request matched, @\/api\/v1\/pages\/:page@, never its
--- address ("Wiki.Server.Routes"), so that ids do not make a series each and
--- no secret of an address (an invitation's) is ever a label. What the
--- server has (its pages, users, sizes, the age of its newest backup) is
--- read when the metrics are asked for, as gauges ('Sample').
+-- route (@wiki_http_request_duration_seconds@, a histogram). A route is the
+-- pattern the request matched, @\/api\/v1\/pages\/:page@, never its address
+-- ("Wiki.Server.Routes"), so that ids do not each create a series and no
+-- secret in an address (an invitation's) is ever a label. What the server
+-- holds (its pages, users, sizes, the age of its newest backup) is read
+-- when the metrics are requested, as gauges ('Sample').
 --
--- The rendering is pure ('renderMetrics'), so that its lines are tested as
--- they are written.
+-- The rendering is pure ('renderMetrics'), so that its lines are tested
+-- exactly as they are written.
 module Wiki.Server.Metrics
   ( -- * Counting
     Metrics
@@ -54,7 +54,7 @@ data RequestKey = RequestKey
   }
   deriving stock (Eq, Ord, Show)
 
--- | How long requests took: how many fell in each bucket (each count in
+-- | How long requests took: how many fell in each bucket (each counted in
 -- the first bucket it fits, not yet cumulative), their sum and their
 -- number.
 data Histogram = Histogram
@@ -69,7 +69,7 @@ data Histogram = Histogram
 data Kind = Counter | Gauge
   deriving stock (Eq, Show)
 
--- | A value read when the metrics are asked for.
+-- | A value read when the metrics are requested.
 data Sample = Sample
   { name :: Text
   , help :: Text
@@ -108,15 +108,15 @@ buckets =
   , (10, "10")
   ]
 
--- | A status's class, as requests are counted by: @2xx@, @4xx@, …; the
+-- | A status's class, by which requests are counted: @2xx@, @4xx@, …; the
 -- live channel's upgrade is @1xx@.
 statusClass :: Int -> Text
 statusClass s = show (s `div` 100) <> "xx"
 
 -- | Count a request a listener answered: for a route, with a method, its
--- status and how long it took, in seconds. A request whose time is not its
--- answer's (the live channel's, open for as long as the tab is) is counted
--- but not timed: 'Nothing'.
+-- status and how long it took, in seconds. A request whose duration is not
+-- its response time (the live channel's, open as long as the tab is) is
+-- counted but not timed: 'Nothing'.
 observe :: Metrics -> Text -> Text -> Text -> Int -> Maybe Double -> IO ()
 observe (Metrics ref) listener route method status took =
   atomicModifyIORef' ref $ \s ->
@@ -177,7 +177,8 @@ renderMetrics s samples =
       '\n' -> "\\n"
       c -> T.singleton c
 
--- | Samples of one name together, in the order the first of each came.
+-- | Samples of one name together, in the order of each name's first
+-- sample.
 groupedBy :: (Eq k) => (a -> k) -> [a] -> [[a]]
 groupedBy key = \case
   [] -> []

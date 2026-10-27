@@ -1,21 +1,21 @@
 -- | A public blog's feeds, and the sitemap of the public pages (WP4.14 of
--- docs/PLAN.md): the addresses a feed reader and a search engine read the
--- wiki by, served beside its pages.
+-- docs/PLAN.md): the addresses feed readers and search engines read the
+-- wiki through, served beside its pages.
 --
 -- * @\/s\/\<space>\/feed.xml@ (Atom, RFC 4287) and @\/s\/\<space>\/feed.rss@
 --   (RSS 2.0): the newest 'feedSize' posts of a space shown as a blog
---   ("Wiki.Core.Blog"), each whole, as the wiki renders it (through the
---   allowlist of "Wiki.Core.Markdown.Html", never the Markdown's own
---   HTML), with its links and attachments under the wiki's public address
+--   ("Wiki.Core.Blog"), each in full, as the wiki renders it (through the
+--   allowlist of "Wiki.Core.Markdown.Html", never Markdown's own HTML),
+--   with its links and attachments under the wiki's public address
 --   ("Wiki.Server.Address").
 -- * @\/sitemap.xml@: every public space and page, with when it last
 --   changed, at most 'maxSitemapUrls' of them (the sitemap protocol's
 --   limit for one file).
 --
--- They are what an anonymous reader may see and nothing else, whoever asks
--- ('Wiki.Core.Permission.publicTo'): a feed of a space that is private, or
--- not shown as a blog, or not there, is a 404, as are both in a closed wiki,
--- which has nothing public.
+-- They contain only what an anonymous reader may see, whoever asks
+-- ('Wiki.Core.Permission.publicTo'). The feed of a space that is private,
+-- not shown as a blog, or does not exist is a 404, and so are both in a
+-- closed wiki, which has nothing public.
 module Wiki.Server.Feed
   ( -- * Serving them
     FeedKind (..)
@@ -79,9 +79,9 @@ maxSitemapUrls = 50000
 --------------------------------------------------------------------------------
 -- Serving
 
--- | A blog's feed, for the space at the path the request names below
--- @s\/@ (its segments, as the router writes them), to a listener serving
--- the wiki at this place.
+-- | A blog's feed, for the space at the path the request names under
+-- @s\/@ (its segments, as the router writes them), on a listener serving
+-- the wiki at this path.
 feedApplication :: Storage -> Text -> FeedKind -> [Text] -> Application
 feedApplication storage mount kind segments request respond = do
   base <- publicAddress storage mount request
@@ -97,8 +97,8 @@ feedApplication storage mount kind segments request respond = do
           ]
           (BSL.fromStrict (encodeUtf8 xml))
 
--- | The sitemap of the public pages, for a listener serving the wiki at
--- this place.
+-- | The sitemap of the public pages, on a listener serving the wiki at
+-- this path.
 sitemapApplication :: Storage -> Text -> Application
 sitemapApplication storage mount request respond = do
   base <- publicAddress storage mount request
@@ -164,8 +164,8 @@ sitemap storage base =
   ifM (not <$> open storage) (pure Nothing) $ do
     urls <- runSqliteWiki storage Anonymous $ do
       spaces <- listSpaces
-      -- A space listed for its name only (an ancestor of a public one)
-      -- refuses its pages, and is left out.
+      -- A space listed only for its name (an ancestor of a public one)
+      -- refuses access to its pages, and is left out.
       fmap concat . for spaces $ \s ->
         listPages s.id <&> \case
           Left _ -> []
@@ -179,11 +179,11 @@ sitemap storage base =
 --------------------------------------------------------------------------------
 -- A post as HTML
 
--- | A post's body as the wiki renders it, as markup: through the
--- renderer the pages are rendered by, so through its allowlist, with its
--- links to pages and attachments under the wiki's public address (a feed
--- is read away from the wiki) and its formulas, diagrams and code as the
--- text the islands start from, since a feed reader runs no script.
+-- | A post's body as the wiki renders it, as markup: through the renderer
+-- the pages use, so through its allowlist, with its links to pages and
+-- attachments under the wiki's public address (a feed is read away from
+-- the wiki), and its formulas, diagrams and code as the plain text the
+-- islands start from, since a feed reader runs no script.
 postHtml :: Text -> [Space] -> Space -> [Page] -> Page -> IO Text
 postHtml base spaces space pages p = case Md.parseMarkdown p.body of
   Left _ -> pure ("<pre>" <> xmlText p.body <> "</pre>")
@@ -213,13 +213,13 @@ postHtml base spaces space pages p = case Md.parseMarkdown p.body of
 --------------------------------------------------------------------------------
 -- Writing feeds
 
--- | What a feed says of itself.
+-- | What a feed says about itself.
 data FeedHead = FeedHead
   { title :: Text
   , description :: Text
   , address :: Text
-  -- ^ The blog's own address (its space's), with its slash: the feeds are
-  -- under it.
+  -- ^ The blog's own address (its space's), ending in a slash: the feeds
+  -- are under it.
   , updated :: UTCTime
   -- ^ When a post last changed.
   }
@@ -229,7 +229,7 @@ data FeedEntry = FeedEntry
   { title :: Text
   , url :: Text
   , published :: UTCTime
-  -- ^ When it was made: its first version.
+  -- ^ When it was created: its first version.
   , updated :: UTCTime
   , author :: Maybe Text
   -- ^ Its first version's author's display name; never an address.
@@ -239,8 +239,8 @@ data FeedEntry = FeedEntry
   -- ^ All of it, as markup ('postHtml').
   }
 
--- | An Atom feed (RFC 4287). The feed has an author, the blog, since a
--- post may have none known.
+-- | An Atom feed (RFC 4287). The feed's author is the blog, since a post
+-- may have no known author.
 atomFeed :: FeedHead -> [FeedEntry] -> Text
 atomFeed h entries =
   T.unlines $
@@ -275,7 +275,7 @@ atomFeed h entries =
 
 -- | An RSS 2.0 feed. An author's name goes in Dublin Core's @creator@,
 -- since RSS's own @author@ is an e-mail address, which the wiki does not
--- give out; the post's HTML in @description@, as RSS readers expect it.
+-- give out; the post's HTML goes in @description@, as RSS readers expect.
 rssFeed :: FeedHead -> [FeedEntry] -> Text
 rssFeed h entries =
   T.unlines $
@@ -304,7 +304,7 @@ rssFeed h entries =
            , "    </item>"
            ]
 
--- | An address of the sitemap, and when what is there last changed.
+-- | An address in the sitemap, and when its content last changed.
 data SitemapUrl = SitemapUrl
   { loc :: Text
   , lastmod :: UTCTime
@@ -328,10 +328,9 @@ rfc3339 = toS . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
 rfc822 :: UTCTime -> Text
 rfc822 = toS . formatTime defaultTimeLocale "%a, %d %b %Y %H:%M:%S +0000"
 
--- | Text as it is written in XML, in an element or an attribute's value:
--- escaped, and without the characters XML 1.0 cannot hold at all (control
--- characters a page's text may have), which would make the whole feed one
--- a reader refuses.
+-- | Text escaped for XML, in an element or an attribute value, without
+-- the characters XML 1.0 cannot contain at all (control characters a
+-- page's text may have), which would make a reader refuse the whole feed.
 xmlText :: Text -> Text
 xmlText = T.concatMap $ \case
   '&' -> "&amp;"

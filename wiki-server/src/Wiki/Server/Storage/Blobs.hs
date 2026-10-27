@@ -1,18 +1,19 @@
--- | Attachments' bytes on disk, each file named by the SHA-256 of what is in
--- it.
+-- | The blob store: attachments' bytes on disk, each file named by the
+-- SHA-256 of its contents.
 --
--- Under a content hash, a file is written once and never changed: two
--- attachments of the same bytes (an image attached to two pages, an upload
--- made again) share one file, and a file that is there is the right one, so
--- writing it again is skipped. A blob is @\<dir\>/\<first two hex
--- digits\>/\<the 64 hex digits\>@, so that no directory holds every file.
+-- With a content hash as its name, a file is written once and never
+-- changed. Two attachments with the same bytes (an image attached to two
+-- pages, an upload made again) share one file, and a file that exists is
+-- the right one, so writing it again is skipped. A blob is stored at
+-- @\<dir\>/\<first two hex digits\>/\<the 64 hex digits\>@, so that no
+-- directory holds every file.
 --
 -- Files are never deleted while the wiki runs, because the database is
 -- backed up without them: a backup taken before an attachment was deleted
--- still names its file, and restoring it must find the file there. So
+-- still refers to its file, and restoring it must find the file there. So
 -- 'collectBlobs', which deletes the files nothing refers to, is given what
--- the database and every backup kept refer to, and runs when the storage is
--- opened, before anything else can write.
+-- the database and every kept backup refer to, and runs when the storage
+-- is opened, before anything else can write.
 module Wiki.Server.Storage.Blobs
   ( blobOf
   , storeBlob
@@ -35,7 +36,7 @@ import System.FilePath ((</>))
 import System.IO (hClose, openBinaryTempFile)
 import Wiki.Core.Id (BlobId (..))
 
--- | The blob some bytes are: their SHA-256, in lowercase hex.
+-- | The blob id of some bytes: their SHA-256, in lowercase hex.
 blobOf :: ByteString -> BlobId
 blobOf = BlobId . decodeUtf8 . BSL.toStrict . toLazyByteString . byteStringHex . SHA256.hash
 
@@ -47,9 +48,10 @@ blobFile dir (BlobId h)
   | T.length h == 64 && T.all isHexDigit h && T.toLower h == h = Just (dir </> T.unpack (T.take 2 h) </> T.unpack h)
   | otherwise = Nothing
 
--- | Keep these bytes, unless they are kept already, and say which blob they
--- are. The file is written beside its place and moved there whole, so that
--- a file under a hash always holds every byte of it.
+-- | Store these bytes, unless they are stored already. The result is
+-- their blob id. The file is written next to its final place and then
+-- moved there in one step, so that a file under a hash always holds all
+-- of it.
 storeBlob :: FilePath -> ByteString -> IO BlobId
 storeBlob dir bytes = do
   let blob = blobOf bytes
@@ -61,13 +63,13 @@ storeBlob dir bytes = do
     renameFile temporary file
   pure blob
 
--- | A blob's bytes, if they are kept.
+-- | A blob's bytes, if they are stored.
 readBlob :: FilePath -> BlobId -> IO (Maybe ByteString)
 readBlob dir blob = case blobFile dir blob of
   Nothing -> pure Nothing
   Just file -> ifM (doesFileExist file) (Just <$> BS.readFile file) (pure Nothing)
 
--- | Every blob there is a file of.
+-- | Every blob that has a file.
 storedBlobs :: FilePath -> IO (Set BlobId)
 storedBlobs dir =
   ifM
@@ -79,14 +81,14 @@ storedBlobs dir =
     )
     (pure mempty)
 
--- | Delete the files of every blob not among these, and what a write that
--- never finished left behind; what is given back is the blobs deleted.
+-- | Delete the files of every blob not among these, and what an
+-- unfinished write left behind. The result is the blobs deleted.
 collectBlobs :: FilePath -> Set BlobId -> IO [BlobId]
 collectBlobs dir keep = do
   stored <- storedBlobs dir
   let gone = Set.toList (stored `Set.difference` keep)
   for_ gone $ \blob -> traverse_ removeFile (blobFile dir blob)
-  -- Files a write was interrupted in the middle of: nothing is writing now.
+  -- Files of a write that was interrupted: nothing is writing now.
   whenM (doesDirectoryExist dir) $ do
     shards <- filterM (doesDirectoryExist . (dir </>)) =<< listDirectory dir
     for_ shards $ \s -> do

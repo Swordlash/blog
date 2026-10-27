@@ -1,71 +1,71 @@
--- | The server's addresses that sign in with a provider (WP3.6 of
--- docs/PLAN.md, "Wiki.Api.Auth"), on the public listener, below the place
--- it serves the wiki at:
+-- | The server's routes for signing in with a provider (WP3.6 of
+-- docs/PLAN.md, "Wiki.Api.Auth"), on the public listener, under the path
+-- the wiki is served at:
 --
 -- > GET  auth/<provider>/start?next=<path>[&link=1 | &invite=<secret>]
 -- > GET  auth/<provider>/callback?code=…&state=…
 -- > POST auth/<provider>/callback          (a form, from Apple)
--- > POST auth/<provider>/second-factor     (a form, of this module's page)
+-- > POST auth/<provider>/second-factor     (a form, from this module's page)
 --
--- @start@ remembers what the round trip is for ("Wiki.Server.Oidc"'s
--- 'Pending': to sign in, to connect the provider's account to the user
--- signed in, or to make an invitation's account) and sends the browser to
--- the provider; the provider sends it back to @callback@, which has the
--- provider say who signed in ('Wiki.Server.Oidc.claimsFor') and the
--- storage decide what that comes to ('Wiki.Server.Accounts.landWith').
+-- @start@ records what the round trip is for ("Wiki.Server.Oidc"'s
+-- 'Pending': to sign in, to connect the provider's account to the
+-- signed-in user, or to create an invitation's account) and sends the
+-- browser to the provider. The provider sends it back to @callback@, which
+-- has the provider confirm who signed in ('Wiki.Server.Oidc.claimsFor')
+-- and the storage decide the result ('Wiki.Server.Accounts.landWith').
 --
--- They are not the API's, and are answered before what a closed wiki
--- keeps from someone who has not signed in ("Wiki.Server.App"): a closed
--- wiki is signed in to through them. They answer with pages, not JSON, and
--- are not held to the API's check for requests from other sites
--- ('Wiki.Server.Session.sameOrigin'), since the callback is such a
--- request: the provider's page sends the browser to it.
+-- These routes are not part of the API, and are answered before the check
+-- that keeps a closed wiki from someone not signed in ("Wiki.Server.App"):
+-- people sign in to a closed wiki through them. They answer with HTML
+-- pages, not JSON, and are exempt from the API's check against requests
+-- from other sites ('Wiki.Server.Session.sameOrigin'), since the callback
+-- is such a request: the provider's page sends the browser to it.
 --
 -- = Cookies across sites
 --
--- The session's cookie is @SameSite=Strict@ (decision 20), which a browser
--- does not send with a request another site's page made, the provider's
--- redirect to the callback included, nor with the redirects that follow
--- it. So the callback never answers with a redirect: it sets the session's
--- cookie and answers with a page of its own that goes on to where the
--- person was ('next', through @\<meta http-equiv=refresh>@, with a link
--- for a browser that does not follow it), a navigation this site's page
--- makes, which carries the cookie. For the same reason the callback cannot
--- see who is signed in: a round trip to connect an account remembers the
--- user at @start@, which this site's own link reached.
+-- The session cookie is @SameSite=Strict@ (decision 20 of the plan), and a
+-- browser does not send it with a request made by another site's page,
+-- including the provider's redirect to the callback, nor with the
+-- redirects that follow. So the callback never answers with a redirect. It
+-- sets the session cookie and answers with its own page, which continues
+-- to where the person was ('next', through @\<meta http-equiv=refresh>@,
+-- with a link for a browser that does not follow it): a navigation this
+-- site's page makes, which carries the cookie. For the same reason the
+-- callback cannot see who is signed in, so a round trip to connect an
+-- account records the user at @start@, which this site's own link reached.
 --
--- A round trip is bound to the browser that started it: @start@ gives it
--- a cookie of its own with the round trip's state ('flowCookieName',
+-- A round trip is bound to the browser that started it. @start@ gives the
+-- browser its own cookie with the round trip's state ('flowCookieName',
 -- @SameSite=Lax@, which a browser sends when another site sends it here
--- with a link or a redirect), and the callback takes the state only with
+-- with a link or a redirect), and the callback accepts the state only with
 -- that cookie. Otherwise someone could start a round trip, sign in at the
--- provider as themself, and have another's browser end it, signing that
--- person into their account. Apple's answer comes as a form posted from
--- its site, with which a browser sends no such cookie; so that answer is
--- turned into an address of the callback, which a page of this site goes
--- to, with the cookie.
+-- provider as themself, and have another person's browser finish it,
+-- signing that person into the attacker's account. Apple's answer comes as
+-- a form posted from Apple's site, with which a browser sends no such
+-- cookie. So that answer is turned into a callback address, which a page
+-- of this site navigates to, with the cookie.
 --
 -- = A second factor
 --
 -- A user who has a second factor (WP4.11 of docs/PLAN.md,
 -- "Wiki.Server.SecondFactor") is not signed in by their provider's account
--- alone, as they are not by their password alone: the callback keeps the
+-- alone, just as not by their password alone. The callback holds the
 -- sign-in waiting, gives the browser the cookie that names it, and answers
--- a page of its own with a form for the code, which it posts to
--- @second-factor@; the right code signs them in and goes on to where they
--- were. Wrong codes count against their login as failed sign-ins do.
+-- with its own page holding a form for the code, which posts to
+-- @second-factor@. The right code signs them in and continues to where they
+-- were. Wrong codes count against their login, as failed sign-ins do.
 --
 -- = What it costs
 --
--- Signing in with an identity someone has costs the server little, and is
--- not limited beyond what the provider does. What does cost (an account
--- made, an exchange of a code that failed) is counted with the limit on
--- making accounts ('Env.registrations'), which refuses a callback from an
--- address that has had its share.
+-- Signing in with an existing identity costs the server little, and is
+-- limited only by what the provider does. What does cost (an account
+-- created, a failed code exchange) is counted against the limit on
+-- creating accounts ('Env.registrations'), which refuses a callback from
+-- an address that has used up its share.
 --
 -- Nothing secret is written to the log or a page: the state, the code and
 -- the invitation's secret are in the addresses' queries, which the log
--- leaves out ("Wiki.Server.Log"), and the provider's answers stay in
+-- leaves out ("Wiki.Server.Log"), and the provider's responses stay inside
 -- "Wiki.Server.Oidc".
 module Wiki.Server.Auth
   ( authApplication
@@ -103,8 +103,8 @@ import Wiki.Server.Storage (Who (..), withDatabase)
 flowCookieName :: Text
 flowCookieName = "wiki_oidc"
 
--- | The addresses below @auth\/@ of a listener that serves the wiki at this
--- place, as someone: the provider's name, and what follows it.
+-- | The routes under @auth\/@ of a listener that serves the wiki at this
+-- path, as the given 'Caller': the provider's name, and what follows it.
 authApplication :: Logger -> Env -> Caller -> Text -> Text -> [Text] -> Application
 authApplication logger env caller mount name rest request respond = do
   -- The providers as the administration has them now: one added a moment
@@ -116,7 +116,8 @@ authApplication logger env caller mount name rest request respond = do
     (Just p, Just signing, ["callback"])
       | readOnly -> callback logger env signing mount p (queryOf (rawQueryString request)) request respond
       | requestMethod request == methodPost -> do
-          -- Apple's form: on to the callback's address, from this site.
+          -- Apple's form: continue to the callback's address, from this
+          -- site.
           body <- strictRequestBody request
           let form = parseQueryText (toS body)
               params = [(k, v) | (k, Just v) <- form, k `elem` ["code", "state", "error", "error_description", "user"]]
@@ -133,7 +134,7 @@ authApplication logger env caller mount name rest request respond = do
 queryOf :: ByteString -> [(Text, Text)]
 queryOf raw = [(k, v) | (k, Just v) <- parseQueryText (BC.dropWhile (== '?') raw)]
 
--- | Begin a round trip: remember it, and send the browser to the provider.
+-- | Start a round trip: record it, and send the browser to the provider.
 start :: Logger -> Env -> Caller -> Signing -> Text -> Provider -> Application
 start logger env caller signing mount p request respond = do
   let params = queryOf (rawQueryString request)
@@ -163,7 +164,7 @@ start logger env caller signing mount p request respond = do
               ]
               ""
 
--- | End a round trip, as the provider sent the browser back with these
+-- | Finish a round trip, as the provider sent the browser back with these
 -- parameters.
 callback :: Logger -> Env -> Signing -> Text -> Provider -> [(Text, Text)] -> Application
 callback logger env signing mount p params request respond = do
@@ -203,7 +204,8 @@ callback logger env signing mount p params request respond = do
                     refused status title why flow.next
                   Right (SignedInAs user token made) -> do
                     when made count
-                    -- In place of the session the browser had, if it sent it.
+                    -- Replacing the session the browser had, if it sent
+                    -- one.
                     traverse_ (endSession env.storage) signing.token
                     logged (if made then "made" else "signed-in") [("user", user.id.text)]
                     respond $
@@ -222,8 +224,8 @@ callback logger env signing mount p params request respond = do
           logged "unknown" []
           refused status400 "Cannot sign in" "This sign-in has expired, or was not started in this browser: start it again." mount
 
--- | End a provider's sign-in that waits for a second factor, with the code
--- its page's form posts.
+-- | Finish a provider sign-in that waits for a second factor, with the
+-- code its page's form posts.
 secondStep :: Logger -> Env -> Signing -> Text -> Provider -> Application
 secondStep logger env signing mount p request respond = do
   now <- getCurrentTime
@@ -265,8 +267,8 @@ secondStep logger env signing mount p request respond = do
                 _ -> expired
     _ -> expired
 
--- | The page that asks for a second factor's code, saying why the last one
--- was not taken, if it was not.
+-- | The page that asks for a second factor's code, saying why the last
+-- code was not accepted, if it was not.
 codeForm :: Text -> Provider -> Maybe Text -> Text
 codeForm mount p told =
   frame
@@ -286,7 +288,8 @@ codeForm mount p told =
         ]
     )
 
--- | Why landing was refused, for a person to read, with the page's status.
+-- | Why a provider sign-in was refused, in words for a person to read,
+-- with the page's status.
 refusalText :: Provider -> Refusal -> (Status, Text, Text)
 refusalText p = \case
   DisabledAccount -> (status403, "Account disabled", "The account your " <> p.label <> " account signs in to is disabled: ask one of the wiki's administrators.")
@@ -296,8 +299,8 @@ refusalText p = \case
   ClosedWiki -> (status403, "Members only", "This wiki is open to its members only, and your " <> p.label <> " account is not one of theirs. To become a member, ask one of its administrators for an invitation.")
   UnusableInvitation -> (status404, "Invitation unusable", "This invitation cannot be used: it has been used already, revoked, or it has expired. Ask whoever invited you for a new one.")
 
--- | The application's path to go back to, if it is one of this listener's
--- (below its place, not another host's): otherwise the listener's place.
+-- | The application's path to return to, if it is one of this listener's
+-- (under its path, not another host's); otherwise the listener's path.
 safeNext :: Text -> Maybe Text -> Text
 safeNext mount = \case
   Just n
@@ -307,8 +310,8 @@ safeNext mount = \case
         n
   _ -> mount
 
--- | The round trip's cookie: for the addresses below @auth\/@ only,
--- lasting as long as a round trip may, or (empty) forgotten.
+-- | The round trip's cookie: only for the routes under @auth\/@, lasting
+-- as long as a round trip may, or (when empty) deleting it.
 flowCookie :: CookieSettings -> Text -> Text -> Text
 flowCookie s mount value =
   T.intercalate "; " $
@@ -332,8 +335,8 @@ flowCookieOf request =
 --------------------------------------------------------------------------------
 -- Pages
 
--- | A page of this module's, never kept by a cache, and sending no
--- @Referer@ on (the callback's address carries the provider's code).
+-- | A page of this module, never stored by a cache, and sending no
+-- @Referer@ onwards (the callback's address carries the provider's code).
 page :: Status -> [Header] -> Text -> Response
 page status hs html =
   responseLBS
@@ -341,12 +344,12 @@ page status hs html =
     ([(hContentType, "text/html; charset=utf-8"), (hCacheControl, "no-store"), ("Referrer-Policy", "no-referrer")] <> hs)
     (toS (encodeUtf8 html))
 
--- | A page that goes on to an address of this site at once.
+-- | A page that immediately continues to an address of this site.
 onwards :: Text -> Text -> Text -> Text
 onwards title says target =
   frame title ("<meta http-equiv=\"refresh\" content=\"0; url=" <> escape target <> "\">") ("<p>" <> escape says <> "</p><p><a href=\"" <> escape target <> "\">Continue</a></p>")
 
--- | A page that says why signing in did not work, with the way back.
+-- | A page that says why signing in failed, with a link back.
 problem :: Text -> Text -> Text -> Text
 problem title why back =
   frame title "" ("<h1>" <> escape title <> "</h1><p role=\"alert\">" <> escape why <> "</p><p><a href=\"" <> escape back <> "\">Back to the wiki</a></p>")
@@ -366,7 +369,7 @@ frame title extraHead body =
     , "</main></body></html>"
     ]
 
--- | Text as HTML writes it, in an element or an attribute.
+-- | Text escaped as HTML, in an element or an attribute.
 escape :: Text -> Text
 escape = T.concatMap $ \case
   '&' -> "&amp;"

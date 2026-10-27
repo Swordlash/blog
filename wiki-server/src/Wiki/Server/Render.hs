@@ -1,41 +1,42 @@
--- | The pages the server renders: the application at the route a request
--- names, as the request's principal sees it, written into the build's
--- template with what it read, for the program to start from (WP2.6 of
--- docs/PLAN.md).
+-- | The server's prerender: the application rendered at the route a
+-- request names, as the user who sent the request sees it, written into
+-- the build's template together with the responses it read, for the
+-- program to start from (WP2.6 of docs/PLAN.md).
 --
--- The render is the application's own ("Wiki.App.Static.renderServed"):
--- the shell and its views over the backend over HTTP
--- ("Wiki.App.Backend.Http"), whose requests this answers with the API's
--- application in the same process ('inProcess'), as the listener's
--- principal. So a page shows exactly what the program shows at that route
--- once it has loaded it, to that reader: a public space's page complete for
--- anyone, readable without JavaScript and by a crawler, and a private
--- space's nothing but that it is private. What the render read, which is
--- the API's answers, goes into the page as JSON ('Halogen.Static.embed',
--- "Wiki.App.Backend.Http.Preload"), and the program's backend starts with
--- it, so that its first render is this page, which it adopts with nothing
--- to repair and nothing to fetch.
+-- The rendering is the application's own ("Wiki.App.Static.renderServed"):
+-- the shell and its views over the HTTP backend ("Wiki.App.Backend.Http"),
+-- whose requests this module answers with the API's application in the
+-- same process ('inProcess'), as the listener's caller. So a page shows
+-- exactly what the program shows at that route once it has loaded, to
+-- that reader: a public space's page complete for anyone, readable
+-- without JavaScript and by a crawler, and a private space's page showing
+-- only that it is private. The responses the prerender read go into the
+-- page as JSON ('Halogen.Static.embed', "Wiki.App.Backend.Http.Preload"),
+-- and the program's backend starts with them, so that its first render
+-- matches this page, which it adopts with nothing to repair and nothing to
+-- fetch.
 --
 -- The page's address is read as the program reads it: the request's path
--- and query, as sent, under the listener's place, through the
--- application's router; and the page's links are written under that place,
--- which is the page's @\<base href>@ too, so the admin listener's pages
--- link below @\/admin\/@.
+-- and query, as sent, under the listener's path, through the
+-- application's router. The page's links are written under that path,
+-- which is also the page's @\<base href>@, so the admin listener's pages
+-- link under @\/admin\/@.
 --
--- A route that is none of the application's is rendered as its "Not found"
--- page, with a 404; a space or a page that is not there gives a 404 too,
--- and one the reader may not see a 403, as the API would, each with the
--- page that says so. In a closed wiki, someone who has not signed in is
--- shown the way to sign in at every route, with a 401, but for an
--- invitation's page, which is for them; an invitation that cannot be used
--- is a 404.
+-- A route that is not one of the application's is rendered as its "Not
+-- found" page, with a 404. A space or a page that does not exist also
+-- gives a 404, and one the reader may not see a 403, as the API would,
+-- each with the page that says so. In a closed wiki, someone who has not
+-- signed in is shown the way to sign in at every route, with a 401,
+-- except on an invitation's page, which is meant for them; an invitation
+-- that cannot be used is a 404.
 --
--- A render that fails (the storage failing under it, an exception, a
--- render that does not finish in 'renderTimeout') is logged and gives no
--- page, and the caller sends the build's own page instead
--- ("Wiki.Server.Static"): never a 500. So does one in which the API could
--- not answer something, since that page would show the failure, and the
--- program, which does not keep failures, would show it otherwise.
+-- A prerender that fails (the storage failing under it, an exception, a
+-- prerender that does not finish within 'renderTimeout') is logged and
+-- produces no page, and the caller sends the build's own page instead
+-- ("Wiki.Server.Static"): never a 500. The same happens when the API
+-- could not answer some request, since that page would show the failure,
+-- and the program, which does not cache failures, would show something
+-- else.
 module Wiki.Server.Render
   ( renderPage
   , inProcess
@@ -78,14 +79,14 @@ import Wiki.Server.Log (Level (..), Logger, logWith, redactedPath)
 import Wiki.Server.Static (withBaseHref)
 import Wiki.Server.Storage (Who)
 
--- | How long a page's render may take before the build's page is sent
--- instead: a render takes milliseconds, so this is for one that is stuck.
+-- | How long a page's prerender may take before the build's page is sent
+-- instead: a prerender takes milliseconds, so this is for one that hangs.
 renderTimeout :: Int
 renderTimeout = 10_000_000
 
--- | The page for a request, rendered into the build's template for a
--- listener that serves the wiki at this place, as this principal; or why
--- there is none, which has been logged.
+-- | The page for a request, prerendered into the build's template for a
+-- listener that serves the wiki at this path, as this caller; or why there
+-- is none (already logged).
 renderPage :: Logger -> Env -> Who -> Text -> Text -> Request -> IO (Either Text (Status, Text))
 renderPage logger env who mount template request = do
   started <- getCurrentTime
@@ -118,10 +119,11 @@ renderPage logger env who mount template request = do
       logWith logger Error [("event", "render"), ("route", show at), ("error", why), ("ms", toS ms)]
   pure result
 
--- | What a page the server renders knows of where it is, for what it says
--- of itself in its head ("Wiki.App.Head"): its addresses under the wiki's
--- public address ("Wiki.Server.Address"), its attachments' and its space's
--- image there, and that a public blog has feeds ("Wiki.Server.Feed").
+-- | What a page the server prerenders knows about where it is, for the
+-- tags in its head ("Wiki.App.Head"): its addresses under the wiki's
+-- public address ("Wiki.Server.Address"), the URLs of its attachments and
+-- its space's icon image there, and whether a public blog has feeds
+-- ("Wiki.Server.Feed").
 siteFor :: Env -> Text -> Request -> IO Site
 siteFor env mount request = do
   base <- publicAddress env.storage mount request
@@ -138,29 +140,29 @@ siteFor env mount request = do
           u -> Just (absolute u)
       }
 
--- | Catch what the render threw, but not what was thrown at it: the
--- timeout's, above all.
+-- | Catch what the prerender threw, but not what was thrown at it: above
+-- all, the timeout's exception.
 tryNotAsync :: IO a -> IO (Either SomeException a)
 tryNotAsync action =
   try action >>= \case
     Left e | Just (_ :: SomeAsyncException) <- fromException e -> throwIO e
     other -> pure other
 
--- | The route a request's path and query (as sent, percent-encoded) name
--- below a listener's place, as the program's router reads its address;
--- 'Unknown' for an address that is none of the application's.
+-- | The route that a request's path and query (as sent, percent-encoded)
+-- name under a listener's path, as the program's router reads its
+-- address; 'Unknown' for an address that is not one of the application's.
 routeOf :: Text -> ByteString -> IO Route
 routeOf mount raw = do
   router <- runMemDOM (Router.newRouter mount Unknown route)
   pure (fromMaybe Unknown (routeOfHref router (decodeUtf8With lenientDecode raw)))
 
--- | The status a page goes out with: a 404 for an address that is none of
--- the application's, and for the space or the page it names that is not
--- there; a 403 for one the reader may not see; otherwise a 200.
+-- | The status a page is sent with: a 404 for an address that is not one
+-- of the application's, and for a space or page it names that does not
+-- exist; a 403 for one the reader may not see; otherwise a 200.
 statusOf :: Route -> Cache -> Status
 statusOf at c = case at of
   Invite token -> refusal (Map.lookup token c.invitationAt)
-  -- A mailed link's page is the same to anyone, in a closed wiki too; its
+  -- A mailed link's page is the same for anyone, in a closed wiki too; its
   -- secret is checked when its form is sent.
   ResetPassword _ -> status200
   VerifyEmail _ -> status200
@@ -200,17 +202,17 @@ statusOf at c = case at of
 
 -- | The page with the preload written into it, just before the end of its
 -- body: outside the application's mount point, which the program adopts
--- whole.
+-- in full.
 withPreload :: Cache -> Text -> Either Text Text
 withPreload cache page = case T.breakOnEnd "</body>" page of
   ("", _) -> Left "the page has no </body>"
   (through, after) ->
     Right (T.dropEnd (T.length "</body>") through <> embed preloadId (encodePreload cache) <> "\n  </body>" <> after)
 
--- | Requests answered by the API's application, as someone, in this
--- process: the bytes a browser's @fetch@ would carry, but the sockets. A
--- request's address is relative to the application's base, as the
--- browser's are to the page's.
+-- | Requests answered by the API's application, as the given user, in this
+-- process: the same bytes a browser's @fetch@ would carry, without the
+-- sockets. A request's address is relative to the application's base, as
+-- the browser's are relative to the page's.
 inProcess :: Env -> Who -> Transport
 inProcess env who = Transport $ \r -> do
   let headers = r.headers <> [("Content-Type", mediaType) | Body mediaType _ <- [r.body]]

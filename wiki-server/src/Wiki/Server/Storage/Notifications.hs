@@ -1,18 +1,18 @@
--- | Notifications, watches and how users are told, as the database keeps
--- them (migration @0011-notifications.sql@, WP4.13 of docs/PLAN.md): read
--- and written row by row for "Wiki.Server.Storage"'s transactions, which
--- run the rules of "Wiki.Core.Notification" first, and for the thread that
--- mails them ("Wiki.Server.Notifier").
+-- | Notifications, watches and notification choices as the database
+-- stores them (migration @0011-notifications.sql@, WP4.13 of
+-- docs/PLAN.md): read and written row by row, for "Wiki.Server.Storage"'s
+-- transactions, which apply the rules of "Wiki.Core.Notification" first,
+-- and for the thread that mails notifications ("Wiki.Server.Notifier").
 --
 -- = The unsubscribe link
 --
--- A notification's mail carries a link that turns its reader's mail off
+-- A notification mail carries a link that turns its reader's mail off
 -- without signing in. Its secret is the user's id and an HMAC-SHA-256 of
--- it under a key of the wiki's own, made at random the first time one is
--- needed and kept in the @settings@ table: so the link is the same in
--- every mail, needs no row of its own, says nothing a reader could change
--- into another user's, and does that one thing (the MAC is of the
--- purpose's name and the id, and nothing else takes it).
+-- it under a key of the wiki's own, generated at random the first time one
+-- is needed and stored in the @settings@ table. So the link is the same in
+-- every mail, needs no row of its own, cannot be altered into another
+-- user's link, and allows only that one action (the MAC covers the
+-- purpose's name and the id, and nothing else accepts it).
 module Wiki.Server.Storage.Notifications
   ( -- * Who is told
     Telling (..)
@@ -64,13 +64,13 @@ import Wiki.Server.Storage.Rows (Stamp (..), VersionRow (..), loadVersions, stam
 --------------------------------------------------------------------------------
 -- Who is told
 
--- | A user who may sign in, as the rules of who is told want them.
+-- | A user who may sign in, in the form the notification rules take.
 data Telling = Telling
   { user :: User
   , watchOwn :: Bool
   , marks :: Mark
   , mailing :: Bool
-  -- ^ Whether a notification of theirs waits to be mailed: they have a
+  -- ^ Whether their notifications are queued for mail: they have a
   -- verified address, and mail is not off for them.
   }
 
@@ -89,7 +89,7 @@ loadTelling c = do
     | (i, login, displayName, own, verified, mail :: Maybe Text) <- users
     ]
 
--- | Who made a page: the author of its first version, if anyone known.
+-- | Who created a page: the author of its first version, if known.
 pageMaker :: Connection -> PageId -> IO (Maybe UserId)
 pageMaker c page = (>>= \v -> v.author) . head . sortOn (\v -> v.updatedAt) <$> loadVersions c page
 
@@ -117,29 +117,30 @@ storeMark c u t w = case t of
     execute c "DELETE FROM watches WHERE user_id = ? AND space_id = ?" (u.text, s.text)
     execute c "INSERT INTO watches (user_id, space_id, watching) VALUES (?, ?, ?)" (u.text, s.text, fromEnum w)
 
--- | How a user is told, as they chose, and whether their address is
--- verified.
+-- | How a user wants to be notified, as they chose, and whether their
+-- address is verified.
 data Choices = Choices
   { mail :: Maybe MailMode
   , watchOwn :: Bool
   , verified :: Bool
   }
 
--- | A user's choices; 'Nothing' for one who is not there.
+-- | A user's choices; 'Nothing' for a user who does not exist.
 loadChoices :: Connection -> UserId -> IO (Maybe Choices)
 loadChoices c u =
   head
     . map (\(mail, own, verified) -> Choices {mail = mail >>= readMailMode, watchOwn = own /= (0 :: Int), verified = verified /= (0 :: Int)})
     <$> query c "SELECT notification_mail, watch_own, email_verified_at IS NOT NULL FROM users WHERE id = ?" (Only u.text)
 
--- | Turn a user's mail off, and with it what waits to be mailed.
+-- | Turn a user's mail off, and remove their notifications from the mail
+-- queue.
 mailOff :: Connection -> UserId -> IO ()
 mailOff c u = do
   execute c "UPDATE users SET notification_mail = 'off' WHERE id = ?" (Only u.text)
   execute c "UPDATE notifications SET mail = 0 WHERE user_id = ? AND mail = 1" (Only u.text)
 
--- | Keep a user's choices. Their notifications that wait to be mailed
--- stop waiting when they turn mail off.
+-- | Store a user's choices. Turning mail off also removes their queued
+-- notifications from the mail queue.
 storeChoices :: Connection -> UserId -> MailMode -> Bool -> IO ()
 storeChoices c u mail own = do
   execute c "UPDATE users SET notification_mail = ?, watch_own = ? WHERE id = ?" (mailModeName mail, fromEnum own, u.text)
@@ -158,8 +159,8 @@ kindName = \case
 readKind :: Text -> Maybe Kind
 readKind t = find ((== t) . kindName) [minBound .. maxBound]
 
--- | A notification for a user, the newest of theirs, waiting to be mailed
--- or not.
+-- | Add a notification for a user, as their newest, queued for mail or
+-- not.
 insertNotification :: Connection -> UserId -> Notification -> Bool -> IO ()
 insertNotification c u n mail =
   execute
@@ -190,7 +191,7 @@ notificationRow = do
       <$> readKind kind
 
 -- | A user's notifications, the newest first, without where their pages
--- are, which the caller finds.
+-- are now, which the caller looks up.
 loadNotifications :: Connection -> UserId -> IO [Notification]
 loadNotifications c u =
   catMaybes <$> queryWith notificationRow c (notificationColumns <> "WHERE user_id = ? ORDER BY seq DESC") (Only u.text)
@@ -204,8 +205,8 @@ markNotificationsRead c u now m
 --------------------------------------------------------------------------------
 -- Mail
 
--- | A user's notifications waiting to be mailed, the oldest first, with
--- what mailing them needs.
+-- | A user's notifications queued for mail, the oldest first, with what
+-- mailing them needs.
 data Pending = Pending
   { user :: User
   , email :: Maybe Text
@@ -214,18 +215,18 @@ data Pending = Pending
   , notifications :: [Notification]
   }
 
--- | Every user who may sign in with notifications waiting to be mailed.
+-- | Every user who may sign in and has notifications queued for mail.
 loadPending :: Connection -> IO [Pending]
 loadPending c = do
-  -- A user who may not sign in is mailed nothing, then or later.
+  -- A user who may not sign in is mailed nothing, now or later.
   execute_ c "UPDATE notifications SET mail = 0 WHERE mail = 1 AND user_id IN (SELECT id FROM users WHERE disabled = 1)"
   users <- query_ c "SELECT id, login, display_name, email, email_verified_at IS NOT NULL, notification_mail FROM users WHERE id IN (SELECT user_id FROM notifications WHERE mail = 1)"
   for users $ \(i, login, displayName, email, verified, mail :: Maybe Text) -> do
     ns <- catMaybes <$> queryWith notificationRow c (notificationColumns <> "WHERE user_id = ? AND mail = 1 ORDER BY seq") (Only i)
     pure Pending {user = User {id = UserId i, login, displayName}, email, verified = verified /= (0 :: Int), mail = mail >>= readMailMode, notifications = ns}
 
--- | These notifications no longer wait to be mailed: they were, or will
--- not be.
+-- | Remove these notifications from the mail queue: they were mailed, or
+-- will not be.
 clearPending :: Connection -> [NotificationId] -> IO ()
 clearPending c ids = for_ ids $ \i -> execute c "UPDATE notifications SET mail = 0 WHERE id = ?" (Only i.text)
 
@@ -250,8 +251,8 @@ storeLastDigest :: Connection -> Day -> IO ()
 storeLastDigest c day =
   execute c "INSERT INTO settings (key, value) VALUES ('notification-digest', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value" (Only (show day :: Text))
 
--- | The key the unsubscribe links are signed with: made the first time,
--- and kept.
+-- | The key the unsubscribe links are signed with: generated the first
+-- time, and stored.
 unsubscribeKey :: Connection -> IO ByteString
 unsubscribeKey c = do
   fresh <- getRandomBytes 32 :: IO ByteString
@@ -269,8 +270,8 @@ mac key u = decodeUtf8 (convertToBase Base16 (hmac key (encodeUtf8 ("unsubscribe
 unsubscribeToken :: Connection -> UserId -> IO Text
 unsubscribeToken c u = (\key -> u.text <> "." <> mac key u) <$> unsubscribeKey c
 
--- | Turn off the mail of the user an unsubscribe link's secret names:
--- whether it named one.
+-- | Turn off the mail of the user an unsubscribe link's secret names. The
+-- result is whether it named one.
 unsubscribeUser :: Connection -> Text -> IO Bool
 unsubscribeUser c token = case T.breakOnEnd "." token of
   (withDot, given)

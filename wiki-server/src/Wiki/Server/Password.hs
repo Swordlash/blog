@@ -1,5 +1,5 @@
--- | Passwords, kept as argon2id hashes (decision 8 of docs/PLAN.md), and the
--- random ids of sessions.
+-- | Passwords, stored as argon2id hashes (decision 8 of docs/PLAN.md), and
+-- the random ids of sessions.
 --
 -- A hash is written in the PHC string format that argon2's reference
 -- implementation, libsodium and most others write:
@@ -8,18 +8,18 @@
 --
 -- with the salt and the hash in unpadded base64. The parameters a password
 -- was hashed with are in its string, so that 'verifyPassword' checks it
--- against those, and the parameters for new hashes ('parameters') can be
--- raised later without making anyone's password stop working.
+-- with those, and the parameters for new hashes ('parameters') can be
+-- raised later without breaking anyone's password.
 --
 -- The parameters are OWASP's first recommendation for argon2id (its
 -- Password Storage Cheat Sheet): 19 MiB of memory, two passes, one lane.
--- That costs a few tens of milliseconds a sign-in on an ordinary machine
--- and the memory makes guessing on graphics cards expensive; together with
--- the limit on attempts ("Wiki.Server.Limiter") it is plenty for a wiki's
--- passwords. One lane, because crypton computes lanes one after another,
--- so more would cost time and buy nothing. The hashing is crypton's, whose
--- C is compiled into the program: there is no system library to install
--- (the owner's machine has none).
+-- That costs a few tens of milliseconds per sign-in on an ordinary
+-- machine, and the memory makes guessing on graphics cards expensive;
+-- together with the limit on attempts ("Wiki.Server.Limiter") it is plenty
+-- for a wiki's passwords. One lane, because crypton computes lanes one
+-- after another, so more lanes would cost time and gain nothing. The
+-- hashing is crypton's, whose C code is compiled into the program: there
+-- is no system library to install (the owner's machine has none).
 module Wiki.Server.Password
   ( -- * Hashes
     hashPassword
@@ -30,8 +30,8 @@ module Wiki.Server.Password
 
     -- * Rules
 
-  -- What a password must be is the same for every backend, and so
-  -- "Wiki.Core.User"'s.
+  -- The rules for a valid password are the same for every backend, so
+  -- they live in "Wiki.Core.User".
   , checkPassword
 
     -- * Session ids
@@ -64,14 +64,14 @@ data Parameters = Parameters
 parameters :: Parameters
 parameters = Parameters {memory = 19 * 1024, iterations = 2, parallelism = 1}
 
--- | A password's hash, with a salt of its own, as a PHC string.
+-- | A password's hash, with its own salt, as a PHC string.
 hashPassword :: Text -> IO Text
 hashPassword password = do
   salt <- getRandomBytes 16
   pure (hashWith parameters salt password)
 
 -- | A password's hash with these parameters and this salt (at least eight
--- bytes): the tests' way to a known hash.
+-- bytes): how the tests get a known hash.
 hashWith :: Parameters -> ByteString -> Text -> Text
 hashWith p salt password =
   T.intercalate
@@ -84,10 +84,10 @@ hashWith p salt password =
     , base64 (derive p salt (encodeUtf8 password))
     ]
 
--- | Whether a password is the one a PHC string was made from. A string this
--- module would not have written (another algorithm, a broken one) matches
--- no password. The comparison of the hashes takes as long whatever they
--- hold.
+-- | Whether a password is the one a PHC string was made from. A string
+-- this module would not have written (another algorithm, a malformed one)
+-- matches no password. The comparison of the hashes takes the same time
+-- whatever they contain.
 verifyPassword :: Text -> Text -> Bool
 verifyPassword phc password = case T.splitOn "$" phc of
   ["", "argon2id", "v=19", params, salt64, hash64]
@@ -99,9 +99,9 @@ verifyPassword phc password = case T.splitOn "$" phc of
         constEq expected (deriveLength (BS.length expected) p salt (encodeUtf8 password))
   _ -> False
 
--- | The parameters of a PHC string's @m=…,t=…,p=…@, kept within what a
--- server can afford: a string asking for more than a gibibyte or a hundred
--- passes is not one this server wrote.
+-- | The parameters of a PHC string's @m=…,t=…,p=…@, within what a server
+-- can afford: a string asking for more than a gibibyte or a hundred passes
+-- was not written by this server.
 readParameters :: Text -> Maybe Parameters
 readParameters t = case map (T.breakOn "=") (T.splitOn "," t) of
   [("m", m), ("t", i), ("p", l)] -> do
@@ -121,8 +121,8 @@ deriveLength :: Int -> Parameters -> ByteString -> ByteString -> ByteString
 deriveLength size p salt password =
   case Argon2.hash options password salt size of
     CryptoPassed out -> out
-    -- Only a salt or an output too short, or parameters argon2 refuses,
-    -- fail, and both are checked before: no hash matches then.
+    -- Only a salt or an output that is too short, or parameters argon2
+    -- refuses, fail, and both are checked before: no hash matches then.
     CryptoFailed _ -> ""
   where
     options =
@@ -143,19 +143,19 @@ unbase64 t = convertFromBase Base64 (encodeUtf8 (padded t))
   where
     padded s = s <> T.replicate ((4 - T.length s `mod` 4) `mod` 4) "="
 
--- | A new session id: 32 random bytes, as the cookie carries them (base64
--- for URLs, unpadded, which a cookie's value may hold as it is).
+-- | A new session id: 32 random bytes, as the cookie carries them
+-- (URL-safe base64, unpadded, which a cookie value may contain as it is).
 newToken :: IO Text
 newToken = decodeUtf8 . convertToBase Base64URLUnpadded <$> (getRandomBytes 32 :: IO ByteString)
 
--- | A new id for something its owner names but that grants nothing (a
--- session as its user ends it from the account panel): 16 random bytes in
--- hex, unrelated to any secret.
+-- | A new id for something its owner refers to but that grants nothing
+-- (a session, when its user ends it from the account panel): 16 random
+-- bytes in hex, unrelated to any secret.
 newPublicId :: IO Text
 newPublicId = decodeUtf8 . convertToBase @ByteString Base16 <$> (getRandomBytes 16 :: IO ByteString)
 
--- | What the database keeps of a session id: its SHA-256, in hex. A
--- database that leaks signs nobody in, and the id is random and long
--- enough that a hash with no salt and no cost is enough.
+-- | What the database stores of a session id: its SHA-256, in hex. A
+-- leaked database signs nobody in, and the id is random and long enough
+-- that a hash without salt or cost is enough.
 tokenHash :: Text -> Text
 tokenHash = decodeUtf8 . convertToBase @ByteString Base16 . SHA256.hash . encodeUtf8

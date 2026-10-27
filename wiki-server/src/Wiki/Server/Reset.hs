@@ -1,34 +1,34 @@
--- | A user's e-mail address, and the password reset it receives (WP4.11 of
+-- | A user's e-mail address, and the password reset sent to it (WP4.11 of
 -- docs/PLAN.md).
 --
--- An address is given by its user ('setEmail') or, for a new user, by the
+-- An address is set by its user ('setEmail') or, for a new user, by the
 -- administration, and is trusted only once a link mailed to it has been
--- followed ('verifyEmail'): the link verifies the address it was sent to,
--- once, within 'verificationLifetime', and only while it is still the
--- user's. Changing the address unverifies it.
+-- followed ('verifyEmail'). The link verifies the address it was sent to,
+-- once, within 'verificationLifetime', and only while the address is still
+-- the user's. Changing the address makes it unverified.
 --
--- Someone who has forgotten their password asks for a reset with their
+-- Someone who has forgotten their password requests a reset with their
 -- login or a verified address ('requestReset'). Only a user who is not
 -- disabled and has a verified address is mailed a link, and at most
--- 'resetsPerHour' an hour, so that nobody fills a mailbox with them; who
--- asked is never told which of that happened (the server's API answers
--- alike, "Wiki.Server.Api"). The link sets a new password once, within
--- 'resetLifetime', and ends every session the user had
--- ('resetPassword'): whoever took the account over is signed out. It does
--- not sign anyone in: a user with a second factor still needs it.
+-- 'resetsPerHour' links an hour, so that nobody can flood a mailbox with
+-- them. The requester is never told which of these happened (the server's
+-- API always gives the same answer, "Wiki.Server.Api"). The link sets a new
+-- password once, within 'resetLifetime', and ends every session the user
+-- had ('resetPassword'), so whoever took the account over is signed out.
+-- It does not sign anyone in: a user with a second factor still needs it.
 --
--- A user who has no password to set, who signs in with a provider the
--- server has (WP5.6 of docs/PLAN.md), is mailed no link, and a link mailed
--- before they connected one sets none.
+-- A user who has no password to set, because they sign in with one of the
+-- server's providers (WP5.6 of docs/PLAN.md), is mailed no link, and a
+-- link mailed before they connected the provider sets none.
 --
--- An administrator may have a user mailed the same link: the storage keeps
--- it ('Wiki.Server.Storage.passwordLinkFor', with the administration's own
--- checks), and one that could not be mailed is forgotten here
--- ('forgetReset').
+-- An administrator may have the same link mailed to a user. The storage
+-- stores it ('Wiki.Server.Storage.passwordLinkFor', with the
+-- administration's own checks), and a link that could not be mailed is
+-- deleted here ('forgetReset').
 --
--- The secrets the links carry are kept as their SHA-256, as an invitation's
--- are. Here they are only made and checked: what mails them is the
--- server's ("Wiki.Server.Api", "Wiki.Server.Mail").
+-- The links' secrets are stored as their SHA-256 hashes, as an
+-- invitation's are. Here they are only created and checked; the server
+-- mails them ("Wiki.Server.Api", "Wiki.Server.Mail").
 module Wiki.Server.Reset
   ( -- * An e-mail address
     emailOf
@@ -62,17 +62,18 @@ import Wiki.Server.Storage.Rows (Stamp (..), deleteSessionsOf, insertResetToken,
 -- An e-mail address
 
 -- | A user's address, if they have one, and whether it is verified;
--- 'Nothing' for a user who is not there.
+-- 'Nothing' for a user who does not exist.
 emailOf :: Storage -> UserId -> IO (Maybe (Maybe Text, Bool))
 emailOf st u = withDatabase st $ \c ->
   head
     . map (\(e, v) -> (e, v /= (0 :: Int)))
     <$> query c "SELECT email, email_verified_at IS NOT NULL FROM users WHERE id = ?" (Only u.text)
 
--- | Give a user an address, or none (blank): the address, and the secret of
--- a link that verifies it, to mail there, unless it is none. An address that
--- is not one is 'Invalid'. Giving the address the user has already keeps it
--- as it is, verified or not, and makes another link if it is not verified.
+-- | Set a user's address, or none (blank). The result is the address and
+-- the secret of a verification link to mail there, unless the address is
+-- none. An invalid address is 'Invalid'. Setting the address the user
+-- already has keeps it as it is, verified or not, and makes another link if
+-- it is not verified.
 setEmail :: Storage -> UTCTime -> UserId -> Text -> IO (Either WikiError (Maybe (Text, Text)))
 setEmail st now u raw
   | T.null (T.strip raw) = withDatabase st $ \c -> immediately c $ do
@@ -99,7 +100,7 @@ setEmail st now u raw
   where
     userThere c who = not . null <$> (query c "SELECT 1 FROM users WHERE id = ?" (Only who.text) :: IO [Only Int])
 
--- | A link that verifies a user's address as it is now, if they have one
+-- | A verification link for a user's current address, if they have one
 -- that is not verified: the address and the link's secret, to mail there.
 startVerification :: Storage -> UTCTime -> UserId -> IO (Maybe (Text, Text))
 startVerification st now u = do
@@ -109,7 +110,8 @@ startVerification st now u = do
       [Only address] -> Just . (address,) <$> verificationLink c now u address token
       _ -> pure Nothing
 
--- | Keep a new link for an address, in place of the user's earlier ones.
+-- | Store a new verification link for an address, replacing the user's
+-- earlier ones.
 verificationLink :: Connection -> UTCTime -> UserId -> Text -> Text -> IO Text
 verificationLink c now u address token = do
   execute c "DELETE FROM email_verifications WHERE user_id = ? OR expires_at <= ?" (u.text, Stamp now)
@@ -119,9 +121,10 @@ verificationLink c now u address token = do
     (tokenHash token, u.text, address, Stamp now, Stamp (addUTCTime verificationLifetime now))
   pure token
 
--- | Follow a link that verifies an address: the user's address is verified
--- if it is still the one the link was mailed to. 'NotFound' for a link
--- that is used, has expired, or whose address is no longer the user's.
+-- | Follow a link that verifies an address: the user's address is
+-- verified if it is still the one the link was mailed to. 'NotFound' for a
+-- link that was used, has expired, or whose address is no longer the
+-- user's.
 verifyEmail :: Storage -> UTCTime -> MailToken -> IO (Either WikiError ())
 verifyEmail st now token = withDatabase st $ \c -> immediately c $ do
   let key = tokenHash token.text
@@ -136,7 +139,7 @@ verifyEmail st now token = withDatabase st $ \c -> immediately c $ do
 --------------------------------------------------------------------------------
 -- A password reset
 
--- | A reset's link to mail: to whom, and its secret.
+-- | A reset link to mail: to whom, and its secret.
 data ResetMail = ResetMail
   { user :: UserId
   , email :: Text
@@ -144,24 +147,24 @@ data ResetMail = ResetMail
   , expiresAt :: UTCTime
   }
 
--- | How many reset links an account is mailed in an hour, at most.
+-- | The most reset links an account is mailed in an hour.
 resetsPerHour :: Int
 resetsPerHour = 3
 
--- | How long a reset's row is kept after it is made, used or not: long
+-- | How long a reset's row is kept after it is created, used or not: long
 -- enough to count the mails of the last hour.
 keptFor :: NominalDiffTime
 keptFor = 60 * 60
 
--- | Links to mail for a reset asked for with this login or address: one for
--- each user who has it as their login, or as their verified address, who
--- is not disabled, has a verified address, has a password to set, and has
--- not been mailed 'resetsPerHour' in the last hour. Often none, which is
--- never said.
+-- | The links to mail for a reset requested with this login or address:
+-- one for each user who has it as their login or verified address, who is
+-- not disabled, has a verified address, has a password to set, and has not
+-- been mailed 'resetsPerHour' links in the last hour. Often there are none,
+-- which is never revealed.
 requestReset :: Storage -> UTCTime -> Text -> IO [ResetMail]
 requestReset st now raw = do
   let named = T.strip raw
-  -- Read before the connection is taken, which reading them may take.
+  -- Read before the connection is taken, since reading them may take it.
   configured <- providerNames <$> readServerSettings st
   if T.null named
     then pure []
@@ -180,7 +183,7 @@ requestReset st now raw = do
           then pure Nothing
           else Just <$> resetMail c now u address
 
--- | A reset's link for a user, kept, to mail to their address. The caller
+-- | A stored reset link for a user, to mail to their address. The caller
 -- holds the connection and has checked that the user may have one.
 resetMail :: Connection -> UTCTime -> UserId -> Text -> IO ResetMail
 resetMail c now u address = do
@@ -189,17 +192,17 @@ resetMail c now u address = do
   insertResetToken c u (tokenHash token) now expiresAt
   pure ResetMail {user = u, email = address, token, expiresAt}
 
--- | Forget a reset's link that could not be mailed, so that it neither
+-- | Delete a reset link that could not be mailed, so that it neither
 -- works nor counts against the user's links.
 forgetReset :: Storage -> Text -> IO ()
 forgetReset st token = withDatabase st $ \c -> execute c "DELETE FROM reset_tokens WHERE token_hash = ?" (Only (tokenHash token))
 
--- | Set a new password with a reset's link: once, before it expires, and
--- for a user who is not disabled; every session of theirs ends, and every
+-- | Set a new password with a reset link: once, before it expires, and for
+-- a user who is not disabled. Every session of the user ends, and every
 -- other link mailed to them stops working. 'NotFound' for a link that does
--- not work, 'Invalid' for a password that cannot be one (checked first,
--- which uses nothing up), and for a user who has no password to set, who
--- signs in with a provider the server has (the link stays unused).
+-- not work; 'Invalid' for an invalid password (checked first, which uses
+-- nothing up), and for a user who has no password to set because they sign
+-- in with one of the server's providers (the link stays unused).
 resetPassword :: Storage -> UTCTime -> MailToken -> Text -> IO (Either WikiError ())
 resetPassword st now token new = case checkPassword new of
   Left why -> pure (Left (Invalid why))
@@ -231,7 +234,7 @@ resetPassword st now token new = case checkPassword new of
               _ -> pure (Left NotFound)
       _ -> pure (Left NotFound)
 
--- | Why a reset's link sets no password for a user who signs in with a
+-- | Why a reset link sets no password for a user who signs in with a
 -- provider.
 noPasswordHere :: Text
 noPasswordHere = "This account signs in with a provider and has no password to set: sign in there."

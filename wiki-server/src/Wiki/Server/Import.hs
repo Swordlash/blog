@@ -1,44 +1,46 @@
--- | Bringing an archive ("Wiki.Core.Export") into a wiki that has content
--- already, by merging: the server's side of the two-step import of
--- "Wiki.Api.Import", whose Haddock and docs/api.md describe it as a client
--- sees it.
+-- | Import by merging: bringing an archive ("Wiki.Core.Export") into a
+-- wiki that already has content. This is the server's side of the
+-- two-step import of "Wiki.Api.Import", whose Haddock and docs/api.md
+-- describe it as a client sees it.
 --
 -- The archive's spaces and pages are matched with the server's by path,
 -- never by id (the archive's ids are another wiki's):
 --
--- * A space of the archive at a path where the server has none is made,
---   with a new id, the archive's name, slug and settings, and its pages.
--- * A space at a path where the server has one is merged into it: the
---   server's keeps its id, name and settings, but for its math macros, its
---   description, its icon and its home page, each of which it takes from
---   the archive when it has none of its own (the plan's "settings stay the
+-- * A space of the archive at a path where the server has none is
+--   created, with a new id, the archive's name, slug and settings, and its
+--   pages.
+-- * A space at a path where the server has one is merged into it. The
+--   server's space keeps its id, name and settings, except its math macros,
+--   description, icon and home page: it takes each of those from the
+--   archive when it has none of its own (the plan's "settings stay the
 --   server's unless the server's is empty": being private and listing
---   children by name are choices, not the absence of one). The home page is
---   the page the archive's became, if it was brought in or kept.
--- * A page at a path where the server's space has none is made under the
---   page its archive parent became, with the archive's title, body, times
---   and attachments.
+--   children by name are choices, not the absence of one). The home page
+--   is the page the archive's home page became, if it was imported or
+--   kept.
+-- * A page at a path where the server's space has none is created under
+--   the page its archive parent became, with the archive's title, body,
+--   times and attachments.
 -- * A page at a path where the server has one is a conflict, resolved as
---   chosen, 'KeepServer' unless chosen otherwise: the server's page stays as
---   it is (the archive's pages under it are still brought in, under it), or
---   takes the archive's title, body and attachments as a new version of
---   itself, keeping its id, slug and place.
--- * What is new goes after what the server has among its siblings, in the
---   archive's order.
--- * Attachments' bytes are kept under their content hash, as an upload's
---   are, so bytes the server has already are not stored twice.
+--   chosen, by default 'KeepServer'. Either the server's page stays as it
+--   is (the archive's pages under it are still imported, under it), or it
+--   takes the archive's title, body and attachments as a new version,
+--   keeping its id, slug and position.
+-- * New items go after the server's existing items among their siblings,
+--   in the archive's order.
+-- * Attachments' bytes are stored under their content hash, as an
+--   upload's are, so bytes the server already has are not stored twice.
 -- * The archive's users, groups and grants are not imported: the server's
---   people are its own. A space made by an import has no grants, as one the
---   administrator makes has none.
--- * The archive's audit log is merged into the server's: each of its
---   entries that the server does not have (by its id) is brought in, as it
---   was written, so that importing an export of this server's own puts
---   back its log and importing it twice brings nothing twice. The import
---   itself is then recorded, as whoever applied it, with what it did.
+--   people are its own. A space created by an import has no grants, as one
+--   the administrator creates has none.
+-- * The archive's audit log is merged into the server's. Each of its
+--   entries that the server does not have (by its id) is imported as it
+--   was written, so that importing an export of this server puts back its
+--   log, and importing it twice imports nothing twice. The import itself
+--   is then recorded, as done by whoever applied it, with what it did.
 --
--- The plan is pure ('matchArchive', 'toPlan') and is worked out again when
--- the import is applied, inside the transaction that applies it, against
--- the wiki as it is then.
+-- The plan is pure ('matchArchive', 'toPlan'), and is worked out again
+-- when the import is applied, inside the transaction that applies it,
+-- against the wiki as it is then.
 module Wiki.Server.Import
   ( -- * Reading an upload
     readUpload
@@ -80,7 +82,7 @@ import Wiki.Server.Storage.Blobs (blobOf, storeBlob)
 import Wiki.Server.Storage.Layout (attachmentsDir)
 import Wiki.Server.Storage.Rows
 
--- | The archive an upload holds: a zip file of an export, checked whole;
+-- | The archive an upload holds: a zip file of an export, checked in full;
 -- or why it is not one this program reads.
 readUpload :: ByteString -> Either Text Archive
 readUpload bytes = unzipFiles bytes >>= readArchive
@@ -98,8 +100,8 @@ data SpaceMatch = SpaceMatch
   }
   deriving stock (Eq, Show)
 
--- | One of the archive's pages, with what the server has at its path in the
--- same space.
+-- | One of the archive's pages, with what the server has at its path in
+-- the same space.
 data PageMatch = PageMatch
   { archived :: Page
   , path :: [Slug]
@@ -107,8 +109,8 @@ data PageMatch = PageMatch
   }
   deriving stock (Eq, Show)
 
--- | Match an archive with a wiki's spaces and the pages of each (asked for
--- only of the spaces the archive has a match for): every space of the
+-- | Match an archive with a wiki's spaces and the pages of each (fetched
+-- only for the spaces the archive has a match for): every space of the
 -- archive, each before its subspaces, with its pages.
 matchArchive :: [Space] -> (SpaceId -> [Page]) -> Archive -> [SpaceMatch]
 matchArchive serverSpaces serverPages a =
@@ -154,9 +156,9 @@ toPlan a matches =
         ]
     }
 
--- | Whether an archive's page and a server's have the same title, body and
--- attachments (by name, media type and content), so that either choice
--- gives the same page.
+-- | Whether an archive's page and a server's page have the same title,
+-- body and attachments (by name, media type and content), so that either
+-- choice gives the same page.
 sameContent :: Archive -> Page -> Page -> Bool
 sameContent a ours theirs =
   ours.title == theirs.title
@@ -173,16 +175,17 @@ sameContent a ours theirs =
       )
 
 -- | Whether the choices leave a space out: it, or a space above it, was
--- left unchecked.
+-- unchecked.
 spaceSkipped :: ImportChoices -> [Slug] -> Bool
 spaceSkipped choices path = any (`isPrefixOf` path) (filter (not . null) choices.skipSpaces)
 
--- | Whether the choices leave a page out: it, or a page above it, was left
+-- | Whether the choices leave a page out: it, or a page above it, was
 -- unchecked.
 pageSkipped :: ImportChoices -> [Slug] -> [Slug] -> Bool
 pageSkipped choices space path = any (\r -> r.space == space && not (null r.page) && r.page `isPrefixOf` path) choices.skipPages
 
--- | How a conflict is resolved: as chosen, or the server's page kept.
+-- | How a conflict is resolved: as chosen, or by keeping the server's
+-- page.
 resolutionOf :: ImportChoices -> [Slug] -> [Slug] -> Resolution
 resolutionOf choices space path =
   maybe KeepServer (\c -> c.resolution) (find (\c -> c.page == PageRef {space, page = path}) choices.conflicts)
@@ -206,20 +209,21 @@ matchIn c a = do
   pages <- Map.fromList <$> for [s | m <- wanted, Just s <- [m.server]] (\s -> (s.id,) <$> loadPages c s.id)
   pure (matchArchive spaces (\sid -> Map.findWithDefault [] sid pages) a)
 
--- | What applying an import has done so far, and where the archive's spaces
--- and pages went.
+-- | What applying an import has done so far, and where the archive's
+-- spaces and pages went.
 data Progress = Progress
   { summary :: ImportSummary
   , spaceIds :: Map SpaceId SpaceId
-  -- ^ Each space of the archive imported, and the server's space it is now.
+  -- ^ Each imported space of the archive, and the server's space it now
+  -- is.
   , pageIds :: Map PageId PageId
-  -- ^ Each page of the archive imported or kept, and the server's page it
-  -- is now.
+  -- ^ Each imported or kept page of the archive, and the server's page it
+  -- now is.
   }
 
--- | Import an archive as chosen, in one transaction, as someone asking
--- from an address (which the audit log records): either all of it is in
--- the storage afterwards, or (it threw) none of it.
+-- | Import an archive with these choices, in one transaction, as someone
+-- asking from an address (which the audit log records): either all of it
+-- is in the storage afterwards, or (if it threw) none of it.
 applyImport :: Storage -> Actor -> Text -> Archive -> ImportChoices -> IO ImportSummary
 applyImport st actor address a choices = withDatabase st $ \c -> do
   execute_ c "BEGIN IMMEDIATE"
@@ -293,12 +297,12 @@ importSpace c blobs a choices progress m
       fillProfile c blobs a m target done
       pure done
 
--- | A space's description, icon and home page from the archive's, where
--- the server's space has none of its own (one the import made has none
--- yet): the home page is the page the archive's became, and an image is
--- kept under its hash, as an attachment's bytes are. A space the archive
--- shows as a blog is shown as one (a flag has no "none of its own" to
--- keep: a space already shown as a blog stays one).
+-- | Fill a space's description, icon and home page from the archive's,
+-- where the server's space has none of its own (a space the import created
+-- has none yet). The home page is the page the archive's became, and an
+-- image is stored under its hash, as an attachment's bytes are. A space the
+-- archive shows as a blog is shown as one (a flag has no "none of its own"
+-- to keep: a space already shown as a blog stays one).
 fillProfile :: Connection -> FilePath -> Archive -> SpaceMatch -> SpaceId -> Progress -> IO ()
 fillProfile c blobs a m target progress =
   Map.lookup target
@@ -379,8 +383,9 @@ importPage c blobs a choices spacePath target progress pm
             (\s -> s {pagesCreated = s.pagesCreated + 1, attachments = s.attachments + n})
         )
 
--- | Attach an archive's attachments to a page, in their order, each with a
--- new id and its bytes kept under their hash; how many there were.
+-- | Attach an archive's attachments to a page, in order, each with a new
+-- id and its bytes stored under their hash. The result is how many there
+-- were.
 attach :: Connection -> FilePath -> Archive -> PageId -> [Attachment] -> IO Int
 attach c blobs a page xs = do
   for_ (zip [0 ..] xs) $ \(ordinal, x) -> do

@@ -1,13 +1,15 @@
--- | The mail the server sends: an invitation's link, to the address it was
--- made for (WP3.5 of docs/PLAN.md), and a test mail, through the SMTP
--- server the administration has set (WP4.4, "Wiki.Api.ServerSettings").
+-- | The mail the server sends: an invitation's link, to the address it
+-- was made for (WP3.5 of docs/PLAN.md), a password reset's and an address
+-- verification's links (WP4.11), notifications (WP4.13), and a test mail.
+-- It goes through the SMTP server the administration has set (WP4.4,
+-- "Wiki.Api.ServerSettings").
 --
--- Whoever reads an invitation's mail can make an account with it, so its
--- text never goes anywhere but to the mail server: a 'Message' shows no
--- body, and a failure is told in words of this module's own, never in the
--- mail library's, some of which quote the command that failed (the whole
--- mail, for the one that sends it). The password of the SMTP account is
--- the administration's, kept by the storage, and is never shown either.
+-- Whoever reads an invitation's mail can create an account with it, so its
+-- text never goes anywhere except to the mail server. A 'Message' shows no
+-- body, and a failure is reported in this module's own words, never in the
+-- mail library's, some of which quote the failed command (the whole mail,
+-- for the command that sends it). The SMTP account's password is set by
+-- the administration, stored by the storage, and never shown either.
 --
 -- A server without SMTP mails nothing: the administration is given the
 -- link to pass on itself ("Wiki.Server.Api").
@@ -60,7 +62,8 @@ data Mailer = Mailer
   -- ^ The wiki's address as its readers reach it, ending in a slash
   -- (@https:\/\/wiki.example.org\/@): the start of every link in a mail.
   , deliver :: Message -> IO (Either Text ())
-  -- ^ Send a message: 'Left' says, for a person, why it was not sent.
+  -- ^ Send a message. A 'Left' says, in words for a person, why it was not
+  -- sent.
   }
 
 -- | A mail to send.
@@ -71,17 +74,18 @@ data Message = Message
   }
   deriving stock (Eq)
 
--- | Without its body, which may carry a link that lets its reader in.
+-- | Shows a message without its body, which may carry a link that lets
+-- its reader in.
 instance Show Message where
   showsPrec _ m rest = "Message {to = " <> show m.to <> ", subject = " <> show m.subject <> ", body = <hidden>}" <> rest
 
--- | The link of an invitation: its page in the application, below the
+-- | The link of an invitation: its page in the application, under the
 -- wiki's address.
 inviteLink :: Text -> Text -> Text
 inviteLink publicUrl token = publicUrl <> "invite/" <> token <> "/"
 
--- | The mail that invites someone, with the link that makes their account
--- and when it stops doing so.
+-- | The mail that invites someone, with the link that creates their
+-- account and when the link expires.
 invitationMessage :: Text -> Text -> Text -> UTCTime -> Message
 invitationMessage publicUrl email token expiresAt =
   Message
@@ -109,8 +113,8 @@ resetLink publicUrl token = publicUrl <> "reset-password/" <> token <> "/"
 verificationLink :: Text -> Text -> Text
 verificationLink publicUrl token = publicUrl <> "verify-email/" <> token <> "/"
 
--- | The mail with a password reset's link (WP4.11 of docs/PLAN.md), to a
--- user's verified address, for their login.
+-- | The mail with a password reset link (WP4.11 of docs/PLAN.md), sent to
+-- a user's verified address, for their login.
 resetMessage :: Text -> Text -> Text -> Text -> UTCTime -> Message
 resetMessage publicUrl email login token expiresAt =
   Message
@@ -131,7 +135,7 @@ resetMessage publicUrl email login token expiresAt =
           ]
     }
 
--- | The mail that verifies an address given for a user's account.
+-- | The mail that verifies an address set for a user's account.
 verificationMessage :: Text -> Text -> Text -> Text -> Message
 verificationMessage publicUrl email login token =
   Message
@@ -151,15 +155,15 @@ verificationMessage publicUrl email login token =
     }
 
 -- | The link that turns a user's notification mail off: its page in the
--- application, which asks before it does.
+-- application, which asks for confirmation first.
 unsubscribeLink :: Text -> Text -> Text
 unsubscribeLink publicUrl token = publicUrl <> "unsubscribe/" <> token <> "/"
 
 -- | The mail of a user's notifications ("Wiki.Core.Notification"): one
--- mailed at once, or a day's digest, grouped by page, the page with the
--- latest first, each with a link to it (made by the function given, from
--- where the page is, below the wiki's address), and the link that turns
--- the mail off.
+-- mailed at once, or a daily digest, grouped by page, the page with the
+-- latest notification first. Each has a link to its page (made by the
+-- given function, from where the page is, under the wiki's address), and
+-- the mail ends with the link that turns the mail off.
 notificationMessage
   :: Text
   -- ^ The wiki's address.
@@ -168,9 +172,9 @@ notificationMessage
   -> Text
   -- ^ The secret of the user's unsubscribe link.
   -> Bool
-  -- ^ Whether it is the day's digest.
+  -- ^ Whether it is the daily digest.
   -> (PageLocation -> Text)
-  -- ^ A page's path, below the wiki's address.
+  -- ^ A page's path, under the wiki's address.
   -> [DigestGroup]
   -> Message
 notificationMessage publicUrl email token isDigest pathOf groups =
@@ -226,34 +230,34 @@ data Smtp = Smtp
   , port :: Word16
   , security :: Security
   , user :: Maybe Text
-  -- ^ The account to sign in to the server as (@AUTH LOGIN@), if it asks
-  -- for one; its password is kept apart.
+  -- ^ The account to sign in to the server as (@AUTH LOGIN@), if it
+  -- requires one; its password is stored separately.
   , from :: Text
   -- ^ The sender, @wiki\@example.org@ or @Wiki \<wiki\@example.org>@.
   }
   deriving stock (Eq, Show)
 
 -- | How long sending one mail may take, in microseconds, before it is
--- given up: thirty seconds.
+-- abandoned: thirty seconds.
 mailTimeout :: Int
 mailTimeout = 30_000_000
 
--- | A mailer over an SMTP server, signing in with this password if the
--- server is given a user.
+-- | A mailer over an SMTP server, signing in with this password if a user
+-- is set for the server.
 smtpMailer :: Smtp -> Maybe Text -> Text -> Mailer
 smtpMailer smtp password publicUrl = Mailer {publicUrl, deliver = smtpSend smtp password}
 
 -- | How a message is sent through an SMTP server, with a password: over
--- the network ('smtpSend'), or, for the tests, wherever they keep it.
+-- the network ('smtpSend'), or, in the tests, wherever they collect it.
 type SendMail = Smtp -> Maybe Text -> Message -> IO (Either Text ())
 
--- | The SMTP server of the mail settings kept, and its password.
+-- | The SMTP server of the stored mail settings, and its password.
 smtpOf :: MailSettingsOf (Maybe k) -> (k -> Text) -> (Smtp, Maybe Text)
 smtpOf m reveal = (Smtp {host = m.host, port = m.port, security = m.security, user = m.user, from = m.from}, reveal <$> m.password)
 
--- | The mailer of the server's settings as they are now, sending through
--- this: none without a mail server, or without the wiki's address its
--- links start with.
+-- | The mailer for the server's current settings, sending through this
+-- function: none without a mail server, or without the wiki's address for
+-- its links to start with.
 mailerFrom :: SendMail -> Kept -> Maybe Mailer
 mailerFrom send s = do
   publicUrl <- s.publicUrl
@@ -261,7 +265,7 @@ mailerFrom send s = do
   let (smtp, password) = smtpOf m revealed
   pure Mailer {publicUrl, deliver = send smtp password}
 
--- | The mail that says the mail server works.
+-- | The mail that confirms the mail server works.
 testMessage :: Text -> Text -> Message
 testMessage publicUrl recipient =
   Message
@@ -277,7 +281,7 @@ testMessage publicUrl recipient =
     }
 
 -- | Send a message over SMTP: over the network, with a time limit, and a
--- failure said in this module's own words.
+-- failure reported in this module's own words.
 smtpSend :: SendMail
 smtpSend smtp password m = do
   outcome <- timeout mailTimeout (try (bracket connect closeQuietly converse))
@@ -299,7 +303,7 @@ smtpSend smtp password m = do
     converse c = runExceptT $ do
       for_ smtp.user $ \u ->
         -- The library fails with its own words when the server refuses,
-        -- which name nothing secret.
+        -- and they contain nothing secret.
         void (liftIO (sendCommand c (AUTH LOGIN (toS u) (toS (fromMaybe "" password)))))
       rendered <- liftIO (renderMail' (simpleMail sender [address m.to] [] [] m.subject [plainPart (TL.fromStrict m.body)]))
       expect "MAIL FROM" 250 =<< liftIO (sendCommand c (MAIL (encodeUtf8 sender.addressEmail)))
@@ -309,15 +313,15 @@ smtpSend smtp password m = do
     expect what wanted (code, reply)
       | code == wanted = pass
       | otherwise = throwError ("the mail server answered " <> what <> " with " <> show code <> " " <> T.strip (decodeUtf8With lenientDecode (BC.takeWhile (/= '\n') reply)))
-    -- Only what cannot carry the mail: the library's own refusals (a
-    -- reply it did not expect to a command that is not the mail's), and
-    -- the network's.
+    -- Only failures that cannot contain the mail: the library's own
+    -- refusals (an unexpected reply to a command that is not the mail's),
+    -- and the network's.
     failure :: SomeException -> Text
     failure e = case fromException e of
       Just (io :: IOException) -> T.takeWhile (/= '\n') (show io)
       Nothing -> "the connection failed"
 
--- | @Name \<address>@ or a bare address, as an address of mime-mail's.
+-- | @Name \<address>@ or a bare address, as mime-mail's 'Address'.
 address :: Text -> Address
 address t = case T.breakOn "<" t of
   (name, rest)

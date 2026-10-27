@@ -1,15 +1,16 @@
 -- | The route a request is for, as a pattern: what the server's metrics
--- count requests by and its log and its errors name them by (WP4.10 of
--- docs/PLAN.md). A pattern names the route and not the address: the API's
--- @\/api\/v1\/spaces\/:space\/name@ for every space's, so that ids do not
--- make a series each, and a secret that is part of an address (an
--- invitation's, a password reset's) is never part of its pattern.
+-- count requests by, and what its log and its error list name them by
+-- (WP4.10 of docs/PLAN.md). A pattern names the route, not the address:
+-- the API's @\/api\/v1\/spaces\/:space\/name@ for every space's, so that
+-- ids do not each create a metrics series, and a secret that is part of an
+-- address (an invitation's, a password reset's) is never part of its
+-- pattern.
 --
 -- The API's patterns are read from its own router, as servant builds it
--- from the API's type ('apiStructure'), so that a route added to the API is
--- counted under its own pattern with nothing to keep in step. The rest of
--- what a listener serves has a handful: the live channel, signing in with
--- a provider, the application's files and its pages.
+-- from the API's type ('apiStructure'), so that a route added to the API
+-- is counted under its own pattern with nothing to keep in sync. The rest
+-- of what a listener serves has a handful: the live channel, signing in
+-- with a provider, the application's files and its pages.
 module Wiki.Server.Routes
   ( routePattern
   , apiPattern
@@ -24,7 +25,7 @@ import Servant.Server.Internal (CaptureHint (..), RouteResult (..), RouterStruct
 import Wiki.Api (api)
 import Wiki.Server.Api (errorFormatters, uploadOptions)
 
--- | The route of a request to a listener that serves the wiki below these
+-- | The route of a request to a listener that serves the wiki under these
 -- segments of its address, by the segments of the request's path.
 routePattern :: [Text] -> [Text] -> Text
 routePattern mounted segments = case segments of
@@ -37,15 +38,15 @@ routePattern mounted segments = case segments of
         "auth" : _ : [step] | step `elem` ["start", "callback", "second-factor"] -> "/auth/:provider/" <> step
         "auth" : _ -> "/auth/unmatched"
         rest
-          -- A file of the build: its program, its styles, its pictures.
+          -- A file of the build: its program, its styles, its images.
           | maybe False (T.elem '.') (lastMay rest) -> "/static"
-          -- A page of the application, which the server renders.
+          -- A page of the application, which the server prerenders.
           | otherwise -> "/page"
     | otherwise -> "/unmatched"
 
--- | The pattern of an address of the API (its segments from @api@ on), as
--- its router would route it whatever the method; 'Nothing' for one that no
--- route of the API has. A capture is @:name@, a capture of the rest of the
+-- | The pattern of an API address (its segments from @api@ on), as its
+-- router would route it for any method; 'Nothing' for an address no API
+-- route has. A capture is written @:name@, a capture of the rest of the
 -- path @:name*@, and what a raw route takes after it @*@.
 apiPattern :: [Text] -> Maybe [Text]
 apiPattern = go apiStructure
@@ -63,10 +64,10 @@ apiPattern = go apiStructure
       RawRouterStructure -> Just ["*" | not (null segments)]
       ChoiceStructure former latter -> go former segments <|> go latter segments
     named hints = maybe "param" (\h -> h.captureName) (head hints)
-    -- A capture of every segment left has a list's type.
+    -- A capture of all remaining segments has a list type.
     capturesAll hints = any (\h -> "[" `T.isPrefixOf` show h.captureType) hints
 
--- | The API's router, without its handlers: what servant's own layout of
--- an API is drawn from.
+-- | The API's router, without its handlers: the structure servant's own
+-- layout of an API is drawn from.
 apiStructure :: RouterStructure
 apiStructure = routerStructure (route api (errorFormatters :. uploadOptions 0 :. EmptyContext) (emptyDelayed (FailFatal err501)))

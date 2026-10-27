@@ -1,25 +1,27 @@
 {-# LANGUAGE ApplicativeDo #-}
 
--- | What a server is started with: its command line, read into
--- 'ServeOptions', and the rules a configuration must keep before anything
+-- | The server's start-up options: its command line, parsed into
+-- 'ServeOptions', and the rules a configuration must meet before anything
 -- listens.
 --
--- One of those rules is about who the server takes a request's sender for
--- (decision 11 of docs/PLAN.md). The admin listener serves everyone who
+-- One of those rules concerns who the server takes a request's sender for
+-- (decision 11 of docs/PLAN.md). The admin listener treats everyone who
 -- reaches it as the administrator, without a login, so it listens on the
 -- loopback interface only, where reaching it means being on the machine,
--- unless @--admin-listen-unsafe@ says the operator knows better (a
+-- unless @--admin-listen-unsafe@ says the operator knows better (in a
 -- container, whose loopback is its own). The public listener serves
--- whoever has signed in there, and anyone else as an anonymous reader.
+-- whoever has signed in there as that user, and anyone else as an
+-- anonymous reader.
 --
--- The wiki's public address, the mail server and the providers people
--- sign in with are not options: they are set in the administration's
--- "Server" section (WP4.4 of docs/PLAN.md, "Wiki.Api.ServerSettings"),
--- which the admin listener serves before anyone can sign in, and kept in
--- the database with their secrets, so that changing them takes no restart
--- and no secret is in a process list, a shell's history or a unit file.
--- The options of earlier versions that named them (@--smtp-host@ and the
--- rest, @--public-url@, @--oidc@) are refused, saying where they went.
+-- The wiki's public address, the mail server and the sign-in providers are
+-- not options. They are set in the administration's "Server" section
+-- (WP4.4 of docs/PLAN.md, "Wiki.Api.ServerSettings"), which the admin
+-- listener serves before anyone can sign in, and stored in the database
+-- with their secrets. So changing them needs no restart, and no secret
+-- appears in a process list, a shell's history or a unit file. The options
+-- of earlier versions that set them (@--smtp-host@ and the rest,
+-- @--public-url@, @--oidc@) are refused, with a message saying where they
+-- went.
 module Wiki.Server.Options
   ( -- * Options
     ServeOptions (..)
@@ -53,10 +55,10 @@ data Listen = Listen
   }
   deriving stock (Eq, Show)
 
--- | @HOST:PORT@, with an IPv6 address in brackets: @127.0.0.1:8081@,
+-- | Parse @HOST:PORT@, with an IPv6 address in brackets: @127.0.0.1:8081@,
 -- @[::1]:8081@. The host must be a numeric address, not a name: a name may
--- resolve to more than one address, or to another one tomorrow, and the
--- loopback rule is about the address the socket is bound to.
+-- resolve to more than one address, or to a different one tomorrow, and
+-- the loopback rule is about the address the socket is bound to.
 parseListen :: Text -> Either Text Listen
 parseListen t = do
   (h, p) <- case T.stripPrefix "[" t of
@@ -75,13 +77,13 @@ parseListen t = do
       | n >= 0 && n <= 65535 = Just (fromIntegral n)
       | otherwise = Nothing
 
--- | An address as it is written on the command line.
+-- | An address as written on the command line.
 renderListen :: Listen -> Text
 renderListen l
   | ":" `T.isInfixOf` l.host = "[" <> l.host <> "]:" <> show l.port
   | otherwise = l.host <> ":" <> show l.port
 
--- | The socket address a numeric host is, without asking a resolver.
+-- | The socket address of a numeric host, without asking a resolver.
 numericAddress :: Text -> Maybe Socket.SockAddr
 numericAddress h = case parseIPv4 h of
   Just a -> Just (Socket.SockAddrInet 0 a)
@@ -148,7 +150,7 @@ data ServeOptions = ServeOptions
   , adminListenUnsafe :: Bool
   -- ^ Allow an admin listener on an address that is not loopback.
   , secureCookies :: Bool
-  -- ^ The session's cookie is @Secure@: the browser reaches the public
+  -- ^ The session cookie is @Secure@: the browser reaches the public
   -- listener over HTTPS (through a proxy in front of it), and sends the
   -- cookie over nothing else.
   , basePath :: Text
@@ -161,12 +163,12 @@ data ServeOptions = ServeOptions
   , rclone :: FilePath
   -- ^ The @rclone@ program the backups are copied off the machine with,
   -- when the administration sets an rclone remote ("Wiki.Server.Backups"):
-  -- its name, found on the path, or its path. Whether there are backups
-  -- at all is the administration's to say, not an option's.
+  -- its name, looked up on the path, or its path. Whether there are backups
+  -- at all is set in the administration, not by an option.
   }
   deriving stock (Eq, Show)
 
--- | The options of a server with nothing but a data directory given.
+-- | The options of a server given only a data directory.
 defaultServeOptions :: FilePath -> ServeOptions
 defaultServeOptions dataDir =
   ServeOptions
@@ -182,7 +184,7 @@ defaultServeOptions dataDir =
     }
 
 -- | 512 MiB: an archive holds every attachment of the wiki, each up to 50
--- MB, and is read into memory twice over (the upload and its files).
+-- MB, and is held in memory twice over (the upload and its files).
 defaultMaxImportSize :: Int
 defaultMaxImportSize = 512 * 1024 * 1024
 
@@ -200,7 +202,7 @@ serveOptions = do
   rclone <- strOption (long "rclone" <> metavar "PATH" <> value "rclone" <> showDefault <> help "The rclone program, for backups the administration copies to an rclone remote")
   maxImportMb <- option auto (long "max-import-size" <> metavar "MB" <> value (defaultMaxImportSize `div` (1024 * 1024)) <> showDefault <> help "The largest archive an import takes, in MiB")
   -- The options of earlier versions that the administration's "Server"
-  -- section replaces: refused, with where they went, rather than left to
+  -- section replaced: refused, with where they went, rather than left to
   -- optparse's "Invalid option", so that an old unit file says why it no
   -- longer starts.
   _ <- many (option gone (mconcat (map long removedOptions) <> internal))
@@ -225,13 +227,13 @@ serveOptions = do
 removedOptions :: [[Char]]
 removedOptions = ["smtp-host", "smtp-port", "smtp-security", "smtp-user", "smtp-from", "public-url", "oidc"]
 
--- | What an option of 'removedOptions' is told.
+-- | The message a removed option ('removedOptions') gets.
 removedMessage :: Text
 removedMessage =
   "the wiki's public address, its mail server and its sign-in providers are no longer options: set them in the administration's Server section, on the admin listener (http://127.0.0.1:8081/admin/admin/ by default), where they take effect at once"
 
--- | A base path as the server uses it: with a slash at each end, @\/@ for
--- the root; or why it is not one.
+-- | A base path in the form the server uses: with a slash at each end, @\/@
+-- for the root; or why it is not valid.
 normaliseBasePath :: Text -> Either Text Text
 normaliseBasePath p
   | not ("/" `T.isPrefixOf` p) = Left ("--base-path must start with /: " <> p)
@@ -241,7 +243,7 @@ normaliseBasePath p
   where
     segments = filter (not . T.null) (T.splitOn "/" p)
 
--- | The options as the server runs them, or every reason they cannot be.
+-- | The options as the server runs them, or every reason they are invalid.
 checkOptions :: ServeOptions -> Either [Text] ServeOptions
 checkOptions o =
   case (errors, normaliseBasePath o.basePath) of

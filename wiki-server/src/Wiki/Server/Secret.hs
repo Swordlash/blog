@@ -1,12 +1,14 @@
--- | The server's settings as the storage keeps them (WP4.4 of
+-- | The server's settings as the storage stores them (WP4.4 of
 -- docs/PLAN.md, "Wiki.Api.ServerSettings"): with their secrets, the mail
 -- account's password and the providers' client secrets, which the server
--- needs in clear to use, and which never go back out through the API.
+-- needs in clear text to use, and which never go back out through the
+-- API.
 --
--- They are kept in the database, beside the password and session hashes it
--- holds already, and are exactly as safe as its file (the data directory is
--- the operator's alone). A 'Secret' shows nothing of itself, so that no
--- 'Show' of the settings, in a log or a failed test, carries one.
+-- They are stored in the database, beside the password and session hashes
+-- it already holds, and are exactly as safe as its file (the data
+-- directory belongs to the operator alone). A 'Secret' shows nothing of
+-- itself, so that no 'Show' of the settings, in a log or a failed test,
+-- contains one.
 module Wiki.Server.Secret
   ( Secret (..)
   , revealed
@@ -30,9 +32,9 @@ instance Show Secret where
 revealed :: Secret -> Text
 revealed (Secret t) = t
 
--- | The settings as kept: each secret, or none.
+-- | The settings as stored: each secret, or none.
 type Kept = ServerSettingsOf (Maybe Secret)
 
--- | The settings as the API answers them: whether each secret is set.
+-- | The settings as the API returns them: only whether each secret is set.
 hideSecrets :: Kept -> ServerSettings
 hideSecrets = fmap (secretState :: Maybe Secret -> SecretState)

@@ -1,6 +1,6 @@
--- | Where a data directory keeps what: the server's whole state is one
--- directory, given on its command line, so that deploying it, backing it up
--- and moving it are about one path.
+-- | The layout of a data directory. The server's whole state is one
+-- directory, given on its command line, so that deploying it, backing it
+-- up and moving it all concern one path.
 --
 -- > <data>/wiki.sqlite                    the database (with -wal and -shm beside it)
 -- > <data>/attachments/<ab>/<abcd…>       attachments' bytes, by content hash

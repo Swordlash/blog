@@ -1,23 +1,24 @@
 {-# LANGUAGE TemplateHaskell #-}
 -- The migrations are embedded from a directory ('embedDir'), and GHC only
 -- knows the files it found there when it last compiled this module: a file
--- added later would not make it compile again, and the program would carry
--- the schema without it. cabal does see the new file (the package's
--- extra-source-files has the directory) and builds the package again, so
--- this module is compiled whenever the package is, which is cheap; the
--- modules that use it are compiled again only if what it exports changed.
+-- added later would not trigger a recompilation, and the program would
+-- carry the schema without it. cabal does see the new file (the package's
+-- extra-source-files lists the directory) and rebuilds the package, so this
+-- module is recompiled whenever the package is, which is cheap; the
+-- modules that use it are recompiled only if its exports changed.
 {-# OPTIONS_GHC -fforce-recomp #-}
 
--- | The database's schema, as numbered SQL files applied in order.
+-- | The database's schema migrations: numbered SQL files applied in order.
 --
--- Each file of @wiki-server/migrations@ is named @NNNN-what-it-does.sql@ and
--- is one step from the schema before it to the next; the files are embedded
--- into the program when it is compiled, so the binary that is deployed
--- carries the schema it needs. A database records the steps it has had in
--- @schema_version@, one row per step, and 'migrate' applies the ones it has
--- not, in order and all in one transaction: a database is at one version or
--- the next, never half-way, and a step that fails leaves it as it was. A
--- step once released is never edited: a change to the schema is a new file.
+-- Each file of @wiki-server/migrations@ is named @NNNN-what-it-does.sql@
+-- and is one step from the previous schema to the next. The files are
+-- embedded into the program when it is compiled, so the deployed binary
+-- carries the schema it needs. A database records the steps applied to it
+-- in @schema_version@, one row per step, and 'migrate' applies the missing
+-- ones, in order and in one transaction: a database is at one version or
+-- the next, never halfway, and a step that fails leaves it unchanged. A
+-- step once released is never edited: a change to the schema is a new
+-- file.
 module Wiki.Server.Storage.Migrate
   ( Migration (..)
   , migrations
@@ -48,8 +49,8 @@ data Migration = Migration
   }
   deriving stock (Eq, Show)
 
--- | Every step this program knows, in order, from the files it was compiled
--- with.
+-- | Every step this program knows, in order, from the files it was
+-- compiled with.
 migrations :: [Migration]
 migrations =
   sortOn
@@ -62,14 +63,14 @@ migrations =
   where
     number file = readMaybe (takeWhile isDigit (takeBaseName file))
 
--- | Bring a database up to this program's schema; what is given back is the
--- versions it applied, none for a database that was up to date already.
+-- | Migrate a database to this program's schema. The result is the
+-- versions applied, none for a database that was already up to date.
 migrate :: Connection -> IO [Int]
 migrate = applyMigrations migrations
 
 -- | Apply the steps a database has not had yet, in one transaction. A
--- database at a version this program does not know (one a newer program has
--- migrated) is refused with an exception that says so, and left alone.
+-- database at a version this program does not know (one a newer program
+-- has migrated) is refused with an exception that says so, and left alone.
 applyMigrations :: [Migration] -> Connection -> IO [Int]
 applyMigrations steps c = withImmediateTransaction c $ do
   execute_ c "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL)"
@@ -84,8 +85,9 @@ applyMigrations steps c = withImmediateTransaction c $ do
     execute c "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)" (m.version, Stamp now)
   pure (map (\m -> m.version) pending)
 
--- | A database at a version of the schema this program does not know: a
--- newer program has migrated it, and this one cannot tell what it holds.
+-- | The error for a database at a schema version this program does not
+-- know: a newer program has migrated it, and this one cannot tell what it
+-- holds.
 data SchemaTooNew = SchemaTooNew
   { found :: Int
   , known :: Int
@@ -96,7 +98,7 @@ instance Exception SchemaTooNew where
   displayException e =
     "The database is at version " <> show e.found <> " of the schema, newer than this program's " <> show e.known <> ": a newer wiki-server has written it."
 
--- | The version a database is at: the last step it has had, 0 for none.
+-- | A database's schema version: the last step applied to it, 0 for none.
 schemaVersion :: Connection -> IO Int
 schemaVersion c = do
   tables <- query_ c "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'"

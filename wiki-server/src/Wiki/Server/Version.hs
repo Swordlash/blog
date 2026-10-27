@@ -1,5 +1,5 @@
--- | Which program this is, as the server says it: in its log, its status
--- and an export's manifest, and to @wiki-server --version@.
+-- | The program's name and version, as the server reports it: in its log,
+-- its status and an export's manifest, and to @wiki-server --version@.
 module Wiki.Server.Version
   ( serverVersion
   )

@@ -1,28 +1,28 @@
--- | The session's cookie, and the check that keeps other sites' pages from
+-- | The session cookie, and the check that stops other sites' pages from
 -- using it (decision 20 of docs/PLAN.md).
 --
 -- The cookie carries the session's random id and nothing else
--- ("Wiki.Server.Accounts" keeps the rest). It is @HttpOnly@, so that no
--- script reads it, a script of the wiki's own included; @SameSite=Strict@,
--- so that a browser sends it only with requests the wiki's own pages make;
--- its @Path@ is where the wiki is served, so that another application on
--- the same host never sees it; and @Secure@ only when the server is told
--- it is reached over HTTPS (@--secure-cookies@), since a browser never
--- sends a secure cookie over plain HTTP, which is how the owner serves it
--- on a private network, and signing in would then silently not last. It
--- lasts as long as a session that is not used ('Wiki.Server.Accounts.idleTime'),
--- and is sent again each time the session's end moves on.
+-- ("Wiki.Server.Accounts" stores the rest). It is @HttpOnly@, so that no
+-- script reads it, not even the wiki's own. It is @SameSite=Strict@, so
+-- that a browser sends it only with requests the wiki's own pages make.
+-- Its @Path@ is where the wiki is served, so that another application on
+-- the same host never sees it. It is @Secure@ only when the server is told
+-- it is reached over HTTPS (@--secure-cookies@): a browser never sends a
+-- secure cookie over plain HTTP, which is how the owner serves the wiki on
+-- a private network, and signing in would then silently not stick. It
+-- lasts as long as an unused session ('Wiki.Server.Accounts.idleTime'),
+-- and is sent again each time the session's end is moved later.
 --
--- 'sameOrigin' refuses any request that changes something unless it carries
--- the header the application's own requests carry
--- ('Wiki.Api.requestMarker'): a page of another site can make a browser
--- send a form here, with the cookie if the browser is lax about
--- @SameSite@, but not a header of its choosing, which needs the server's
--- consent first (CORS), never given. Where the browser says where the
--- request came from (@Sec-Fetch-Site@, which browsers send to HTTPS origins
--- and to the machine itself), it must say this origin too. The check is
--- made on both listeners: the admin listener needs no cookie at all, so a
--- page that could post to it would act as the operator.
+-- 'sameOrigin' refuses any request that changes something unless it
+-- carries the header the application's own requests carry
+-- ('Wiki.Api.requestMarker'). Another site's page can make a browser send
+-- a form here, with the cookie if the browser is lax about @SameSite@, but
+-- not with a header of its choosing, which needs the server's consent
+-- first (CORS), never given. Where the browser says where the request came
+-- from (@Sec-Fetch-Site@, which browsers send to HTTPS origins and to the
+-- machine itself), it must also say this origin. The check is made on both
+-- listeners: the admin listener needs no cookie at all, so a page that
+-- could post to it would act as the operator.
 module Wiki.Server.Session
   ( -- * The cookie
     CookieSettings (..)
@@ -64,7 +64,7 @@ cookieName = "wiki_session"
 sessionCookie :: CookieSettings -> Text -> Text
 sessionCookie s token = cookie s token (Just (truncate (nominalDiffTimeToSeconds idleTime)))
 
--- | The @Set-Cookie@ value that makes the browser forget the session's id.
+-- | The @Set-Cookie@ value that makes the browser delete the session id.
 clearCookie :: CookieSettings -> Text
 clearCookie s = cookie s "" (Just 0)
 
@@ -76,10 +76,10 @@ cookie s value maxAge =
       <> ["HttpOnly", "SameSite=Strict"]
       <> ["Secure" | s.secure]
 
--- | The session id a request's cookies carry, if it carries one that could
--- be one (an id 'Wiki.Server.Password.newToken' makes: 43 characters of
--- base64 for URLs). Something else in its place is reported as an empty
--- id, which is no session's, so that the cookie is cleared.
+-- | The session id a request's cookies carry, if it has one that looks
+-- valid (as 'Wiki.Server.Password.newToken' makes them: 43 characters of
+-- URL-safe base64). Anything else in its place is reported as an empty id,
+-- which matches no session, so that the cookie is cleared.
 requestToken :: Request -> Maybe Text
 requestToken request =
   head

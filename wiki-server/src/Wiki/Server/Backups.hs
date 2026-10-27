@@ -1,28 +1,29 @@
 {-# LANGUAGE MultiWayIf #-}
 
--- | The backups the server makes by itself (WP4.9 of docs/PLAN.md,
--- "Wiki.Api.Backups"), once an administrator has turned them on in the
--- administration; until then, none. No systemd timer and no option: a
--- thread of the server ('runScheduler') reads the settings the
--- administration keeps in the database, and backs up when they say a
--- backup is due ('Wiki.Api.Backups.nextBackup') or when an administrator
--- asks ('requestBackup').
+-- | The server's own backups (WP4.9 of docs/PLAN.md, "Wiki.Api.Backups"),
+-- once an administrator has turned them on in the administration; until
+-- then, none. There is no systemd timer and no option. A thread of the
+-- server ('runScheduler') reads the settings the administration stores in
+-- the database, and backs up when they say a backup is due
+-- ('Wiki.Api.Backups.nextBackup') or when an administrator asks
+-- ('requestBackup').
 --
--- A backup is the deploy's ("Wiki.Server.Storage.Backup"): the database
--- copied with @VACUUM INTO@ into @data\/backups\/\<time>.sqlite@, the
--- storage's connection held for the copy alone, so that requests wait for
--- no more than that; then, with nothing held, the copy checked with
--- @PRAGMA integrity_check@ (and deleted if it fails), the old backups
--- pruned to the retention, and, if a destination is set, the new one and
--- the attachments' files copied off the machine ('copyOffSite'). What it
--- came to is kept as the last backup, which the administration shows.
+-- A backup is the same as the deploy's ("Wiki.Server.Storage.Backup"):
+-- the database copied with @VACUUM INTO@ into
+-- @data\/backups\/\<time>.sqlite@, with the storage's connection held only
+-- for the copy, so that requests wait no longer than that. Then, with
+-- nothing held, the copy is checked with @PRAGMA integrity_check@ (and
+-- deleted if it fails), the old backups are deleted according to the
+-- retention rules, and, if a destination is set, the new backup and the
+-- attachment files are copied off the machine ('copyOffSite'). The result
+-- is stored as the last backup, which the administration shows.
 --
--- The thread survives what goes wrong: a failed backup is a backup that
--- failed, kept as such and logged, and an error of the thread's own (the
--- database unreadable for a moment) is logged and tried again a minute
--- later. It waits a minute at most between looks, so a change of the
--- clock costs no more than that, and it is woken at once by a change of
--- the settings ('settingsChanged') and by "Back up now".
+-- The thread survives failures. A failed backup is recorded as failed and
+-- logged, and an error of the thread's own (the database unreadable for a
+-- moment) is logged and retried a minute later. It waits at most a minute
+-- between checks, so a change of the clock costs no more than that, and it
+-- is woken at once by a change of the settings ('settingsChanged') and by
+-- "Back up now".
 module Wiki.Server.Backups
   ( BackupService
   , newBackupService
@@ -56,25 +57,25 @@ import Wiki.Server.Storage (Storage, Who, copyDatabase, readBackupSettings, read
 import Wiki.Server.Storage.Backup (KeptBackups, checkedBackup, copyBlobs, pruneRetained)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir)
 
--- | The thread that backs the server up, and what it is doing.
+-- | The backup thread, and its current state.
 data BackupService = BackupService
   { storage :: Storage
   , logger :: Logger
   , rclone :: FilePath
-  -- ^ The @rclone@ program: its name, found on the path, or its path.
+  -- ^ The @rclone@ program: its name, looked up on the path, or its path.
   , doing :: TVar Doing
   }
 
--- | What the thread is doing, and what it has been asked.
+-- | What the thread is doing, and what it has been asked to do.
 data Doing = Doing
   { requested :: Bool
-  -- ^ An administrator has asked for a backup that has not started.
+  -- ^ An administrator has requested a backup that has not started.
   , running :: Bool
   , finished :: Int
-  -- ^ How many backups it has made or tried since the server started,
-  -- which whoever asked for one waits to see go up.
+  -- ^ How many backups it has made or tried since the server started;
+  -- whoever requested one waits for this to go up.
   , changes :: Int
-  -- ^ How many times the settings have changed, which wakes it.
+  -- ^ How many times the settings have changed, which wakes the thread.
   }
 
 -- | The service for a storage, which backs up nothing until its thread
@@ -84,9 +85,9 @@ newBackupService logger rclone storage = do
   doing <- newTVarIO Doing {requested = False, running = False, finished = 0, changes = 0}
   pure BackupService {storage, logger, rclone, doing}
 
--- | The backups as the server answers them: as the storage keeps them, as
--- someone may read them (an administrator), with whether one is under way
--- and when the next is due while they are on.
+-- | The backups as the server reports them: as the storage records them,
+-- for someone who may read them (an administrator), with whether one is
+-- running and, while backups are on, when the next is due.
 currentBackups :: BackupService -> Who -> IO (Either WikiError Backups)
 currentBackups svc who =
   readBackups svc.storage who >>= \case
@@ -107,9 +108,10 @@ currentBackups svc who =
               }
         )
 
--- | Ask for a backup now, as someone (an administrator), while backups are
--- on: the backups once it is made, or after twenty seconds with it under
--- way. A backup asked for while one is under way is that one.
+-- | Request a backup now, as an administrator, while backups are on. The
+-- result is the backups' state once it is made, or after twenty seconds
+-- with it still running. A request while a backup is running waits for
+-- that one.
 requestBackup :: BackupService -> Who -> IO (Either WikiError Backups)
 requestBackup svc who =
   currentBackups svc who >>= \case
@@ -128,13 +130,13 @@ requestBackup svc who =
             check (late || doing.finished > before)
           currentBackups svc who
 
--- | Tell the thread that the settings have changed: it looks at them at
+-- | Tell the thread that the settings have changed: it reads them at
 -- once, rather than within the minute.
 settingsChanged :: BackupService -> IO ()
 settingsChanged svc = atomically (modifyTVar' svc.doing (\d -> d {changes = d.changes + 1}))
 
 -- | The thread: until it is cancelled (the server stopping), back up when
--- a backup is due or asked for, and otherwise wait.
+-- a backup is due or requested, and otherwise wait.
 runScheduler :: BackupService -> IO ()
 runScheduler svc = do
   orSay "backup-cleanup" (removeLeftovers (storageDataDir svc.storage))
@@ -149,8 +151,8 @@ runScheduler svc = do
   where
     orSay event act = trying act >>= either (\e -> logWith svc.logger Warning [("event", event), ("error", show e)]) pure
 
--- | One look: a backup if one is due or asked for, otherwise a wait until
--- the next is due (a minute at most), or until the thread is woken.
+-- | One iteration: a backup if one is due or requested, otherwise a wait
+-- until the next is due (a minute at most), or until the thread is woken.
 step :: BackupService -> Int -> IO ()
 step svc seen = do
   settings <- readBackupSettings svc.storage
@@ -163,7 +165,7 @@ step svc seen = do
     | settings.enabled && due <= now -> backUp svc OnSchedule settings
     | otherwise -> sleepOrWake svc seen (if settings.enabled then min 60 (realToFrac (diffUTCTime due now)) else 60)
 
--- | Wait so many seconds, or until a backup is asked for or the settings
+-- | Wait so many seconds, or until a backup is requested or the settings
 -- change.
 sleepOrWake :: BackupService -> Int -> Double -> IO ()
 sleepOrWake svc seen seconds = do
@@ -173,7 +175,7 @@ sleepOrWake svc seen seconds = do
     late <- readTVar timer
     check (late || doing.requested || doing.changes /= seen)
 
--- | Make a backup, and keep what it came to.
+-- | Make a backup, and store its result.
 backUp :: BackupService -> Trigger -> KeptBackups -> IO ()
 backUp svc trigger settings = do
   atomically (modifyTVar' svc.doing (\d -> d {requested = False, running = True}))
@@ -207,18 +209,18 @@ backUp svc trigger settings = do
 --------------------------------------------------------------------------------
 -- Copies off the machine
 
--- | Copy a backup just made, and the attachments' files, to a destination
--- off the machine: what it came to. The destination is laid out as a data
--- directory is, @backups\/\<time>.sqlite@ and @attachments\/@, so that
--- @wiki-server restore@ takes a copy from there as it takes one from the
--- data directory. Nothing is ever deleted there: what the destination
--- keeps, and for how long, is its own business (a server that has gone
--- wrong cannot then take the copies with it).
+-- | Copy a backup just made, and the attachment files, to a destination
+-- off the machine. The result is the outcome. The destination is laid out
+-- like a data directory, @backups\/\<time>.sqlite@ and @attachments\/@, so
+-- that @wiki-server restore@ takes a copy from there as it takes one from
+-- the data directory. Nothing is ever deleted there: what the destination
+-- keeps, and for how long, is up to it (so a server that has gone wrong
+-- cannot destroy the copies).
 --
 -- An attachment's file never changes, so only those the destination lacks
--- are copied. A directory must be there already: a disk that is not
--- mounted leaves only an empty mount point, and a copy into it would
--- quietly fill the machine's own disk.
+-- are copied. A directory destination must already exist: a disk that is
+-- not mounted leaves only an empty mount point, and a copy into it would
+-- silently fill the machine's own disk.
 copyOffSite :: FilePath -> FilePath -> FilePath -> DestinationOf (Maybe Secret) -> IO OffSite
 copyOffSite rclone dataDir file destination = do
   result <- trying $ case destination of
@@ -244,9 +246,9 @@ copyOffSite rclone dataDir file destination = do
       present <- doesDirectoryExist blobs
       let runs = rcloneArgs configFile remote file (if present then Just blobs else Nothing)
       foldlM (\problem args -> maybe (runRclone rclone args) (pure . Just) problem) Nothing runs
-    -- The configuration in a file only this user may read, in a
-    -- directory only this user may enter, deleted as soon as it has been
-    -- used.
+    -- The configuration is written to a file only this user may read, in
+    -- a directory only this user may enter, and deleted as soon as it has
+    -- been used.
     withConfig :: Maybe Secret -> (Maybe FilePath -> IO a) -> IO a
     withConfig = \case
       Nothing -> ($ Nothing)
@@ -258,10 +260,10 @@ copyOffSite rclone dataDir file destination = do
           writeFile f (revealed secret)
           use (Just f)
 
--- | The arguments of each run of @rclone@ that copies a backup, and the
--- attachments' files if there are any: the backup to
+-- | The arguments of each @rclone@ run that copies a backup, and the
+-- attachment files if there are any: the backup to
 -- @\<remote>\/backups\/\<name>@, the files to @\<remote>\/attachments@,
--- skipping those there already (@copy@, never @sync@, which would delete).
+-- skipping those already there (@copy@, never @sync@, which would delete).
 rcloneArgs :: Maybe FilePath -> Text -> FilePath -> Maybe FilePath -> [[[Char]]]
 rcloneArgs configFile remote file blobs =
   [ withConfig ["copyto", file, toS (remotePath remote ("backups/" <> toS (takeFileName file)))]
@@ -277,8 +279,9 @@ remotePath remote path
   | any (`T.isSuffixOf` remote) [":", "/"] = remote <> path
   | otherwise = remote <> "/" <> path
 
--- | Run @rclone@ once: nothing if it did what it was asked, or why not. An
--- hour at most; @rclone@ not installed is a failure like another.
+-- | Run @rclone@ once. The result is nothing if it succeeded, or why not.
+-- An hour at most; @rclone@ not being installed is a failure like any
+-- other.
 runRclone :: FilePath -> [[Char]] -> IO (Maybe Text)
 runRclone rclone args =
   try (timeout (3600 * 1_000_000) (readCreateProcessWithExitCode (proc rclone args) "")) <&> \case
@@ -287,15 +290,15 @@ runRclone rclone args =
     Right (Just (ExitSuccess, _, _)) -> Nothing
     Right (Just (ExitFailure code, _, err)) -> Just ("rclone failed (exit " <> show code <> "): " <> T.takeEnd 500 (T.strip (toS err)))
 
--- | Delete what a backup that was cut short left: the directories its
--- @rclone@ configuration was written to.
+-- | Delete what an interrupted backup left: the directories its @rclone@
+-- configuration was written to.
 removeLeftovers :: FilePath -> IO ()
 removeLeftovers dataDir = do
   entries <- listDirectory dataDir
   for_ [e | e <- entries, ".rclone-" `isPrefixOf` e] $ \e -> removeDirectoryRecursive (dataDir </> e)
 
--- | Run something, and give back what it threw (but not what was thrown to
--- the thread to stop it, which goes on).
+-- | Run something, and return what it threw (except what was thrown to
+-- the thread to stop it, which propagates).
 trying :: IO a -> IO (Either SomeException a)
 trying act =
   try act >>= \case

@@ -1,4 +1,4 @@
--- | Pages' comments as the database keeps them (migration
+-- | Pages' comments as the database stores them (migration
 -- @0006-comments.sql@): reading a page's threads with their comments, and
 -- writing them, row by row, for "Wiki.Server.Storage"'s transactions,
 -- which check the rules first.
@@ -25,9 +25,9 @@ import Wiki.Core.Version (Author)
 import Wiki.Server.Storage.Rows (Stamp (..), stamp)
 
 -- | Every thread of a page, in the order they were opened, each with its
--- comments in the order they were made, their authors named by the
--- function given (from their id and the name the users' table has for
--- them, if any).
+-- comments in the order they were made, their authors named by the given
+-- function (from their id and the name the users table has for them, if
+-- any).
 loadThreads :: (UserId -> Maybe Text -> Author) -> Connection -> PageId -> IO [Thread]
 loadThreads named c page = do
   threads <-
@@ -74,8 +74,8 @@ commentRow named = do
   editedAt <- fmap (\(Stamp t) -> t) <$> field
   pure Comment {id, thread, author, body, createdAt, editedAt}
 
--- | A thread, last among its page's, without its comments, which are
--- written each by 'insertComment'.
+-- | Add a thread, last among its page's, without its comments, which are
+-- each added by 'insertComment'.
 insertThread :: Connection -> CommentThreadId -> PageId -> Maybe Anchor -> UTCTime -> IO ()
 insertThread c tid page anchor at = do
   next <- nextSeq c "SELECT coalesce(max(seq) + 1, 0) FROM threads WHERE page_id = ?" page.text
@@ -84,7 +84,7 @@ insertThread c tid page anchor at = do
     "INSERT INTO threads (id, page_id, quote, prefix, suffix, resolved, created_at, seq) VALUES (?, ?, ?, ?, ?, 0, ?, ?)"
     (tid.text, page.text, (\a -> a.exact) <$> anchor, (\a -> a.prefix) <$> anchor, (\a -> a.suffix) <$> anchor, Stamp at, next)
 
--- | A comment, last in its thread.
+-- | Add a comment, last in its thread.
 insertComment :: Connection -> CommentId -> CommentThreadId -> UserId -> Text -> UTCTime -> IO ()
 insertComment c cid tid author body at = do
   next <- nextSeq c "SELECT coalesce(max(seq) + 1, 0) FROM comments WHERE thread_id = ?" tid.text
@@ -93,18 +93,19 @@ insertComment c cid tid author body at = do
     "INSERT INTO comments (id, thread_id, author, body, created_at, edited_at, seq) VALUES (?, ?, ?, ?, ?, NULL, ?)"
     (cid.text, tid.text, author.text, body, Stamp at, next)
 
--- | The place after the last of a page's threads, or a thread's comments.
+-- | The position after the last of a page's threads, or of a thread's
+-- comments.
 nextSeq :: Connection -> Query -> Text -> IO Int
 nextSeq c q key = maybe 0 fromOnly . head <$> query c q (Only key)
 
--- | A comment's new Markdown, edited at this time.
+-- | Set a comment's new Markdown, edited at this time.
 updateCommentBody :: Connection -> CommentId -> Text -> UTCTime -> IO ()
 updateCommentBody c cid body at = execute c "UPDATE comments SET body = ?, edited_at = ? WHERE id = ?" (body, Stamp at, cid.text)
 
 deleteCommentRow :: Connection -> CommentId -> IO ()
 deleteCommentRow c cid = execute c "DELETE FROM comments WHERE id = ?" (Only cid.text)
 
--- | A thread, and its comments with it.
+-- | Delete a thread, and its comments with it.
 deleteThreadRow :: Connection -> CommentThreadId -> IO ()
 deleteThreadRow c tid = execute c "DELETE FROM threads WHERE id = ?" (Only tid.text)
 

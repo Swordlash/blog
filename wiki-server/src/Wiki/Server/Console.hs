@@ -1,11 +1,11 @@
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE MultiWayIf #-}
 
--- | @wiki-server users …@: the wiki's users from the machine it runs on
--- (decision 11 of docs/PLAN.md and its addition of 2026-10-25), so that the
--- first administrator is made before there is a panel to make one with,
--- and an installation whose administrators are all locked out is recovered
--- without a browser.
+-- | The console commands @wiki-server users …@: managing the wiki's users
+-- from the machine it runs on (decision 11 of docs/PLAN.md and its
+-- addition of 2026-10-25). They create the first administrator before
+-- there is a panel to do it with, and recover an installation whose
+-- administrators are all locked out, without a browser.
 --
 -- > wiki-server users list     --data DIR
 -- > wiki-server users add      --data DIR LOGIN [--display-name NAME] [--admin] [--no-password]
@@ -14,27 +14,27 @@
 -- > wiki-server users disable  --data DIR LOGIN (--on | --off)
 -- > wiki-server users second-factor-remove --data DIR LOGIN
 --
--- Each runs on the data directory, as @backup@ does, and may while the
--- server runs on it: the database waits for the server's writes rather
--- than fail, and nothing else in the directory is touched
+-- Each runs on the data directory, as @backup@ does, and may do so while
+-- the server runs on it: the database waits for the server's writes
+-- instead of failing, and nothing else in the directory is touched
 -- ('Wiki.Server.Storage.withStorageAside'). Being able to read and write
 -- the data directory is the credential, as being able to reach the admin
 -- listener is.
 --
 -- A password is never an argument, where it would stay in the shell's
--- history and show in the list of processes: it is asked for on the
--- terminal, twice and not echoed, or read as the first line of standard
--- input when that is not a terminal (@printf '%s\\n' "$pw" | wiki-server
--- users add …@).
+-- history and show in the process list. It is asked for on the terminal,
+-- twice and not echoed, or read as the first line of standard input when
+-- that is not a terminal (@printf '%s\\n' "$pw" | wiki-server users add
+-- …@).
 --
--- @wiki-server restore@ is the console's too ('restoreParser',
--- 'Wiki.Server.Storage.Backup.restore'): it puts a backup back as a data
+-- @wiki-server restore@ is also a console command ('restoreParser',
+-- 'Wiki.Server.Storage.Backup.restore'): it restores a backup as a data
 -- directory's database, into a directory no server has open.
 --
--- @wiki-server oidc check@ is the console's too ('runOidcCheck'): it asks
--- the providers the administration has set (WP3.6, WP4.4) how to sign in,
--- before anyone tries, and prints the redirect URI to register with each,
--- reading them from the data directory as the server does.
+-- @wiki-server oidc check@ is also a console command ('runOidcCheck'): it
+-- asks the providers the administration has set (WP3.6, WP4.4) how to sign
+-- in, before anyone tries, and prints the redirect URI to register with
+-- each, reading them from the data directory as the server does.
 module Wiki.Server.Console
   ( -- * Commands
     Users (..)
@@ -72,7 +72,7 @@ import Wiki.Server.Storage (Storage, Who (..), readServerSettings, runSqliteWiki
 import Wiki.Server.Storage.Audit (consoleAddress)
 import Wiki.Server.Storage.Backup (Restore (..))
 
--- | A command, on a data directory.
+-- | A @wiki-server users@ command, on a data directory.
 data Users = Users
   { dataDir :: FilePath
   , command :: UsersCommand
@@ -82,7 +82,7 @@ data Users = Users
 data UsersCommand
   = -- | Every user, with what they may do.
     ListUsers
-  | -- | Make a user: their login, their display name (their login if not
+  | -- | Create a user: their login, their display name (the login if not
     -- given), whether they are an administrator, and whether they sign in
     -- with a password (asked for) or cannot sign in until given one.
     AddUser Text (Maybe Text) Bool Bool
@@ -92,7 +92,7 @@ data UsersCommand
     SetUserAdministrator Text Bool
   | -- | Disable a user's login, which signs them out, or enable it.
     SetUserDisabled Text Bool
-  | -- | Take a user's second factor away (WP4.11 of docs/PLAN.md), for one
+  | -- | Remove a user's second factor (WP4.11 of docs/PLAN.md), for someone
     -- who has lost it and whose administrators cannot sign in either.
     RemoveSecondFactor Text
   deriving stock (Eq, Show)
@@ -121,8 +121,8 @@ usersParser =
       flag' True (long "on" <> help ("Make them " <> what))
         <|> flag' False (long "off" <> help ("Make them not " <> what))
 
--- | Run a command, with this way of reading a password: the lines to show,
--- or why it could not be done.
+-- | Run a command, with this way of reading a password. The result is the
+-- lines to show, or why it could not be done.
 runUsers :: (Text -> IO (Either Text Text)) -> Users -> IO (Either Text [Text])
 runUsers askPassword u = withStorageAside u.dataDir $ \st -> runExceptT $ case u.command of
   ListUsers -> do
@@ -154,7 +154,7 @@ runUsers askPassword u = withStorageAside u.dataDir $ \st -> runExceptT $ case u
     pure [describe a.user <> (if yes then " cannot sign in any more; their sessions have ended." else " can sign in again.")]
   RemoveSecondFactor login -> do
     a <- found st login
-    -- The user is there: what is not found is their second factor.
+    -- The user exists: what is missing is their second factor.
     _ <- withExceptT (const (describe a.user <> " has no second factor.")) (ExceptT (runSqliteWikiFrom st Administrator consoleAddress (removeSecondFactor a.user.id)))
     pure [describe a.user <> " signs in with their password alone now."]
   where
@@ -167,7 +167,7 @@ runUsers askPassword u = withStorageAside u.dataDir $ \st -> runExceptT $ case u
       Invalid why -> why
       Unreachable why -> why
 
--- | A user by login, or that there is none.
+-- | A user by login, or an error saying there is none.
 found :: Storage -> Text -> ExceptT Text IO Account
 found st login = maybe (throwError ("There is no user with the login " <> login <> ".")) pure =<< liftIO (accountByLogin st login)
 
@@ -196,8 +196,8 @@ listing accounts = row heading : map (row . cells) accounts
     adminWidth = width (\(_, _, x, _) -> x)
     row (l, n, x, s) = T.stripEnd (T.justifyLeft loginWidth ' ' l <> "  " <> T.justifyLeft nameWidth ' ' n <> "  " <> T.justifyLeft adminWidth ' ' x <> "  " <> s)
 
--- | A user's password: asked for twice on the terminal, without echoing
--- it, or, when standard input is not a terminal, its first line.
+-- | Read a user's password: asked for twice on the terminal, without
+-- echoing it, or, when standard input is not a terminal, its first line.
 readPassword :: Text -> IO (Either Text Text)
 readPassword login = do
   terminal <- hIsTerminalDevice stdin
@@ -224,10 +224,10 @@ readPassword login = do
 --------------------------------------------------------------------------------
 -- Providers
 
--- | @wiki-server oidc check --data DIR [NAME]@: the providers as the
--- administration has set them, asked how to sign in (discovery), with the
--- redirect URI each must have registered, and whether its secret is set.
--- Nothing is signed in, and no secret is shown.
+-- | @wiki-server oidc check --data DIR [NAME]@: ask the providers the
+-- administration has set how to sign in (discovery), and show the redirect
+-- URI each must have registered, and whether its secret is set. Nobody is
+-- signed in, and no secret is shown.
 data OidcCheck = OidcCheck
   { dataDir :: FilePath
   , only :: Maybe Text
@@ -249,8 +249,8 @@ oidcCheckParser =
         )
     )
 
--- | Check the providers: the lines to show, and whether every provider
--- checked can be signed in with.
+-- | Check the providers. The result is the lines to show, and whether
+-- every provider checked can be used to sign in.
 runOidcCheck :: OidcCheck -> IO (Bool, [Text])
 runOidcCheck c = do
   kept <- withStorageAside c.dataDir readServerSettings
