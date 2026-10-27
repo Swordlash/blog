@@ -133,15 +133,33 @@ promptSpec = describe "the page's context" $ do
     let long = T.replicate (bodyCap + 10) "a"
         context = pageContext "Long" long Nothing
     context `shouldBe` Whole "Long" (T.take bodyCap long) (Just (bodyCap + 10))
-    userTurn context "Shorten it." `shouldSatisfy` T.isInfixOf ("Only the first " <> show bodyCap <> " of its " <> show (bodyCap + 10) <> " characters")
+    userTurn [] context "Shorten it." `shouldSatisfy` T.isInfixOf ("Only the first " <> show bodyCap <> " of its " <> show (bodyCap + 10) <> " characters")
 
   it "puts the title, the page's text and the request in a message" $ do
-    let turn = userTurn (pageContext "Hello" page (Just (spanOf "Third."))) "Fix it."
+    let turn = userTurn [] (pageContext "Hello" page (Just (spanOf "Third."))) "Fix it."
     turn `shouldSatisfy` T.isPrefixOf "The page is titled \"Hello\"."
     turn `shouldSatisfy` T.isInfixOf "<selection>\nThird.\n</selection>"
     turn `shouldSatisfy` T.isInfixOf "line 8"
     turn `shouldSatisfy` T.isSuffixOf "<request>\nFix it.\n</request>"
-    userTurn (pageContext "Hello" page Nothing) "Hi" `shouldSatisfy` T.isInfixOf ("<page>\n" <> page <> "\n</page>")
+    userTurn [] (pageContext "Hello" page Nothing) "Hi" `shouldSatisfy` T.isInfixOf ("<page>\n" <> page <> "\n</page>")
+
+  it "says which of the model's changes the user rejected or undid since its last message" $ do
+    let context = pageContext "Hello" page Nothing
+        thanks = "Inserted \8220## Thanks\8221 at the end"
+        turn = userTurn [(thanks, Rejected), ("Replaced \8220a\8221 with \8220b\8221", Accepted), ("Removed \8220c\8221", Undone)] context "And now?"
+    turn `shouldSatisfy` T.isInfixOf ("Since your last message, the user decided on your changes")
+    turn `shouldSatisfy` T.isInfixOf ("- Rejected (what it replaced is back): " <> thanks)
+    turn `shouldSatisfy` T.isInfixOf "- Accepted: Replaced \8220a\8221 with \8220b\8221"
+    turn `shouldSatisfy` T.isInfixOf "- Undone by the user: Removed \8220c\8221"
+    -- Before the page, after the title.
+    fst (T.breakOn "Since your last message" turn) `shouldSatisfy` T.isPrefixOf "The page is titled"
+    snd (T.breakOn "Since your last message" turn) `shouldSatisfy` T.isInfixOf "<page>"
+
+  it "says nothing of decisions when there were none, or only acceptances" $ do
+    let context = pageContext "Hello" page Nothing
+    userTurn [] context "Hi" `shouldNotSatisfy` T.isInfixOf "Since your last message"
+    userTurn [("Replaced \8220a\8221 with \8220b\8221", Accepted)] context "Hi" `shouldNotSatisfy` T.isInfixOf "Since your last message"
+    userTurn [] context "Hi" `shouldBe` userTurn [("x", Accepted)] context "Hi"
 
   it "has a shortcut for each of the plan's actions" $ do
     map shortcutLabel shortcuts `shouldBe` ["Improve", "Fix grammar", "Shorten", "Expand", "Summarise", "Continue", "Translate"]

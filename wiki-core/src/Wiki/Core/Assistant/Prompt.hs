@@ -16,6 +16,8 @@
 --    turn, whole (the browser's side keeps it, as the provider gave it,
 --    for the editing session), each message of the user's with the page's
 --    context of that moment in front of it ('userTurn'): the page's title,
+--    what the user decided of the model's changes since its last message
+--    ('Outcome'),
 --    and the selection with a paragraph each side, or the page's Markdown
 --    cut to 'bodyCap'.
 --
@@ -34,6 +36,7 @@ module Wiki.Core.Assistant.Prompt
   , pageContext
   , bodyCap
   , contextCap
+  , Outcome (..)
   , userTurn
 
     -- * Shortcuts
@@ -143,16 +146,47 @@ paragraphAfter post
     separator = T.take (T.length fromBreak - T.length rest) fromBreak
     next = fst (T.breakOn "\n\n" rest)
 
--- | A message of the user's as the model gets it: the page's context, then
--- the message, each part in a tag of its own so that the page's text is
--- never mistaken for what the user asks.
-userTurn :: PageContext -> Text -> Text
-userTurn context message =
+-- | What became of a change the model made, by the time the user writes
+-- again.
+data Outcome
+  = -- | Accepted: its text stays.
+    Accepted
+  | -- | Rejected: what it replaced is back.
+    Rejected
+  | -- | Gone otherwise: undone, or its text edited away, by the user.
+    Undone
+  deriving stock (Eq, Show)
+
+-- | A message of the user's as the model gets it: the page's title, what
+-- the user decided of the model's changes since its last message, the
+-- page's context, then the message, each part in a tag of its own so that
+-- the page's text is never mistaken for what the user asks.
+--
+-- The model was told that each of its edits was applied, and would
+-- otherwise find the page without the ones the user threw away and wonder
+-- why (or insist they be put back). So the changes rejected or undone since
+-- its last message are named (by 'Wiki.Core.Assistant.Edit.describeEdit'),
+-- with the ones accepted beside them; changes that were only accepted need
+-- no word, since the page shows them as the model left them.
+userTurn :: [(Text, Outcome)] -> PageContext -> Text -> Text
+userTurn decided context message =
   T.intercalate "\n\n" $
     ("The page is titled \"" <> context.title <> "\".")
-      : page
+      : decisions
+        <> page
         <> [tagged "request" message]
   where
+    decisions
+      | any ((/= Accepted) . snd) decided =
+          [ T.intercalate "\n" $
+              "Since your last message, the user decided on your changes; the page below is as they left it, so do not put back what they rejected unless they ask:"
+                : ["- " <> outcomeWord o <> ": " <> what | (what, o) <- decided]
+          ]
+      | otherwise = []
+    outcomeWord = \case
+      Accepted -> "Accepted"
+      Rejected -> "Rejected (what it replaced is back)"
+      Undone -> "Undone by the user"
     page = case context of
       Selected {lineRange, before, selected, after} ->
         [ "The user has selected " <> chipLabel lineRange <> " of the page, and means this text unless they say otherwise:"

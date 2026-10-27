@@ -277,10 +277,11 @@ trackedChanges host = liftIO $ do
 
 -- | The assistant's edit, made in the text as it is now and tracked as the
 -- change of the id given, taking in the changes it touches
--- ("Wiki.Core.Assistant.Edit"); or why it cannot be made. Its input event
--- brings the change into the work before this returns, as a toolbar
--- command's does. To be run in 'Halogen.liftEffect'.
-proposeEdit :: (MonadIO m) => Element -> Int -> Edit -> m (Either Refusal Replacement)
+-- ("Wiki.Core.Assistant.Edit"): where it went, and the ids of the changes
+-- it took in; or why it cannot be made. Its input event brings the change
+-- into the work before this returns, as a toolbar command's does. To be
+-- run in 'Halogen.liftEffect'.
+proposeEdit :: (MonadIO m) => Element -> Int -> Edit -> m (Either Refusal (Replacement, [Int]))
 proposeEdit host i change = liftIO $ do
   text <- fromJSText <$> js_value host
   case plan change text of
@@ -289,17 +290,20 @@ proposeEdit host i change = liftIO $ do
       pending <- trackedChanges host
       let (_, taken) = propose i r text pending
       js_propose host r.from r.to (toJSText r.text) i (jsonText taken)
-      pure (Right r)
+      pure (Right (r, taken))
 
 -- | Accept or reject the change of the id given, or all of them: rejecting
 -- puts back what each replaced, as one edit the undo takes back; accepting
--- only stops tracking them. To be run in 'Halogen.liftEffect'.
-settleChanges :: (MonadIO m) => Element -> Decision -> Maybe Int -> m ()
+-- only stops tracking them. The ids of the changes settled. To be run in
+-- 'Halogen.liftEffect'.
+settleChanges :: (MonadIO m) => Element -> Decision -> Maybe Int -> m [Int]
 settleChanges host d which = liftIO $ do
   pending <- trackedChanges host
   let chosen = maybe pending (\i -> filter (\c -> c.id == i) pending) which
+      ids = map (\c -> c.id) chosen
   unless (null chosen) $
-    js_settle host (jsonText (map (\c -> c.id) chosen)) (jsonText [object ["from" .= r.from, "to" .= r.to, "text" .= r.text] | r <- settle d chosen])
+    js_settle host (jsonText ids) (jsonText [object ["from" .= r.from, "to" .= r.to, "text" .= r.text] | r <- settle d chosen])
+  pure ids
 
 -- | A change as @jsbits/editor.js@ gives it.
 newtype Tracked = Tracked Change

@@ -225,7 +225,7 @@ data ErrorKind
   | -- | The model declined to answer (Anthropic's @refusal@).
     Declined
   | -- | The request was refused as malformed (400, 422).
-    Rejected
+    BadRequest
   | -- | Anything else.
     Failed
   deriving stock (Eq, Show, Enum, Bounded)
@@ -251,7 +251,7 @@ instance FromJSON AssistantError where
         "overloaded" -> pure Overloaded
         "connection" -> pure Unreachable
         "refusal" -> pure Declined
-        "bad_request" -> pure Rejected
+        "bad_request" -> pure BadRequest
         _ -> pure Failed
 
 -- | What the panel and the settings say of an error: what it means, then
@@ -270,7 +270,7 @@ errorText key e =
       Overloaded -> "The provider is overloaded or failing; try again in a while."
       Unreachable -> "The provider could not be reached."
       Declined -> "The model declined to answer."
-      Rejected -> "The provider refused the request."
+      BadRequest -> "The provider refused the request."
       Failed -> "The request failed."
 
 -- | A message with the key taken out: the key itself, wherever it appears,

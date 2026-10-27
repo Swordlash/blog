@@ -19,7 +19,10 @@ embeds it when the package is compiled, through the link
 instructions, the two tools (`replace` and `insert`, each field required for
 OpenAI's strict mode), and with each message of the user's the page's context:
 the selection with a paragraph each side, or the page cut to `bodyCap`
-characters. `Wiki.Core.Assistant.Edit` reads a tool call as an `Edit`, finds
+characters, and, when the user rejected or undid any of the model's changes
+since its last message, which were rejected, undone and accepted
+(`userTurn`'s `Outcome`s), so that the model does not look for an edit the
+user threw away. `Wiki.Core.Assistant.Edit` reads a tool call as an `Edit`, finds
 where it goes (a quote must occur exactly once in the page, or the model is
 told why not, `answer`) and keeps the tracked changes an edit makes:
 `propose` takes in the changes an edit overlaps, `settle` gives what

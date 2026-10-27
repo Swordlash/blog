@@ -80,8 +80,8 @@ spec m = do
     press "Control+z"
     eventually $ markdown ui >>= (`shouldSatisfy` T.isInfixOf "This is the first post of a blog")
 
-  it "rejects a change from the change itself, putting back what it replaced" $ runPage $ do
-    script [[replace "## Why a wiki" "## Why this is a wiki", text "Retitled."]]
+  it "rejects a change from the change itself, putting back what it replaced, and tells the model so" $ runPage $ do
+    script [[replace "## Why a wiki" "## Why this is a wiki", text "Retitled."], [text "Noted."]]
     ui <- openAssistant m
     send ui "Change the heading."
     eventually $ find ui ".cm-wiki-inserted" >>= (`shouldHaveText` "## Why this is a wiki")
@@ -89,6 +89,16 @@ spec m = do
     eventually $ length <$> findAll ui ".cm-wiki-inserted" `shouldReturn` 0
     markdown ui >>= (`shouldSatisfy` T.isInfixOf "\n## Why a wiki\n")
     markdown ui >>= (`shouldNotSatisfy'` T.isInfixOf "Why this is")
+    -- The model is told, with the next message, that the user threw its
+    -- change away, so that it does not look for it.
+    eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Retitled.")
+    send ui "And now?"
+    eventually $ length <$> requests `shouldReturn` 2
+    [before, after] <- requests
+    fromMaybe "" (fieldText ["user"] before) `shouldNotSatisfy'` T.isInfixOf "Since your last message"
+    let told = fromMaybe "" (fieldText ["user"] after)
+    told `shouldSatisfy` T.isInfixOf "Since your last message, the user decided on your changes"
+    told `shouldSatisfy` T.isInfixOf "- Rejected (what it replaced is back): Replaced \8220## Why a wiki\8221 with \8220## Why this is a wiki\8221"
 
   it "makes two edits in one turn, one an insertion at the end, and Reject all takes both back" $ runPage $ do
     script [[replace "spaces in other spaces" "spaces inside other spaces", insert "end" "after" "\n\nThat is all.\n", text "Two changes."]]

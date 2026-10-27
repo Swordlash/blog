@@ -409,6 +409,9 @@ data State = State
   -- ^ What is selected in the text, as CodeMirror last told.
   , pendingChanges :: Int
   -- ^ How many of the assistant's changes are left to decide.
+  , decisions :: Map Int Decision
+  -- ^ What the author decided of each of the assistant's changes, by its
+  -- id: the panel tells the model of it with the next message.
   }
 
 -- | Where a save leaves the editor.
@@ -533,6 +536,7 @@ component =
               , hostElement = Nothing
               , selection = Nothing
               , pendingChanges = 0
+              , decisions = mempty
               }
       , render
       , eval =
@@ -797,6 +801,7 @@ component =
         , body = work.body
         , selection = st.selection
         , pending = st.pendingChanges
+        , decisions = st.decisions
         }
 
     previewPane :: State -> Work -> Maybe (H.ComponentHTML Action Slots m)
@@ -1182,9 +1187,10 @@ component =
             H.tell "assistant" () Assistant.Hide
           False -> modify (\st -> st {assistantOpen = True, assistantMounted = True, menu = Nothing})
       FromAssistant Assistant.Closed -> modify (\st -> st {assistantOpen = False})
+      FromAssistant (Assistant.DecideAll d) -> decide d Nothing
       Selected selection -> modify (\st -> st {selection})
       ChangesLeft n -> modify (\st -> st {pendingChanges = n})
-      Decide d i -> gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (settleChanges host d (Just i)))
+      Decide d i -> decide d (Just i)
       DiscardOffered -> do
         withPage (void . discardDraft)
         modify (\st -> st {hasDraft = False, found = Nothing})
@@ -1250,6 +1256,17 @@ component =
           modify (\s -> s {hostElement = found, pendingChanges = 0, selection = Nothing})
           traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody)) found
         _ -> pass
+
+    -- Accept or reject one of the assistant's changes, or all of them, and
+    -- remember what was decided.
+    decide :: Decision -> Maybe Int -> H.HalogenM State Action Slots ViewOutput m ()
+    decide d which =
+      gets (\st -> st.hostElement)
+        >>= traverse_
+          ( \host -> do
+              settled <- H.liftEffect (settleChanges host d which)
+              modify (\st -> st {decisions = foldr (`Map.insert` d) st.decisions settled})
+          )
 
     -- A toolbar command on the text; its input event, handled before this
     -- returns, brings the change into the work. A save on its way does not
@@ -1435,8 +1452,7 @@ component =
               syncGuard
               -- What is saved is the text with the assistant's changes in
               -- it: they are accepted.
-              whenM (gets (\s -> s.pendingChanges > 0)) $
-                gets (\s -> s.hostElement) >>= traverse_ (\host -> H.liftEffect (settleChanges host Accept Nothing))
+              whenM (gets (\s -> s.pendingChanges > 0)) $ decide Accept Nothing
               case after of
                 Close -> H.raise (Changed (Just (leaving st.input)))
                 Stay -> do

@@ -31,7 +31,9 @@ and the conversation kept for the editing session. The model edits the page
 through two tools, and each edit is a tracked change in CodeMirror, on green
 with what it replaced struck through in red, accepted or rejected with the
 control after it or all at once in the panel; a save with changes left
-accepts them, which the editor says beside Save. Settings are a page of the
+accepts them, which the editor says beside Save. The next message tells the
+model which of its changes the author rejected or undid (and accepted)
+since its last turn: the editor remembers each decision by the change's id. Settings are a page of the
 user's own, `/assistant/` (`AssistantSettings`), reached from the account
 panel and the demo's user menu: a key per provider, kept in this browser's
 IndexedDB database `wiki-assistant` under the user's id and never sent to the

@@ -45,6 +45,7 @@ where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (Value)
+import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
 import Data.Text qualified as T
 import Halogen qualified as H
@@ -58,7 +59,7 @@ import Web.DOM.Internal.Types (Element)
 import Web.Event.Event (Event, EventType (..))
 import Wiki.App.Assistant (Heard (..), MonadAssistant (..), Opening (..), Talk, sendsMessage)
 import Wiki.App.Backend (Session (..))
-import Wiki.App.Editor.Browser (currentText, focusElement, proposeEdit, settleChanges)
+import Wiki.App.Editor.Browser (currentText, focusElement, proposeEdit, trackedChanges)
 import Wiki.App.Route (Route (AssistantSettings))
 import Wiki.App.View.Common (Context (..), attr)
 import Wiki.Core.Assistant
@@ -73,9 +74,10 @@ import Wiki.Core.Assistant
   , ready
   , settingsOf
   )
-import Wiki.Core.Assistant.Edit (Decision (..), Refusal (..), answer, describeEdit, parseEdit)
+import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Refusal (..), answer, describeEdit, parseEdit)
 import Wiki.Core.Assistant.Prompt
-  ( PageContext (..)
+  ( Outcome (..)
+  , PageContext (..)
   , Shortcut (..)
   , Span (..)
   , anthropicRequest
@@ -102,13 +104,16 @@ data Input = Input
   , body :: Text
   , selection :: Maybe Span
   , pending :: Int
+  , decisions :: Map Int Decision
+  -- ^ What the author decided of the assistant's changes, by id.
   }
 
 -- | The panel was closed: the model's turn, if one is running, stops.
 data Query a = Hide a
 
--- | The panel's own close button.
-data Output = Closed
+-- | The panel's own close button; and "Accept all" or "Reject all", which
+-- the editor carries out, as it does a decision on one change.
+data Output = Closed | DecideAll Decision
 
 -- | A message of the conversation.
 data Entry
@@ -142,6 +147,11 @@ data State = State
   -- ^ A selection the user detached, which is not sent until another is
   -- made.
   , nextChange :: Int
+  , made :: Map Int Text
+  -- ^ The changes the model made that it has not been told the fate of,
+  -- by id, as they were described.
+  , absorbed :: [Int]
+  -- ^ Changes a later change of the model's took in, which need no word.
   , listener :: Maybe (HS.Listener IO Heard)
   , field :: H.RefLabel
   }
@@ -156,7 +166,7 @@ data Action
   | Stop
   | Detach
   | FromTalk Heard
-  | DecideAll Decision
+  | Decided Decision
   | Close
   | Followed (Follow Route)
 
@@ -177,6 +187,8 @@ component =
               , talking = False
               , detached = Nothing
               , nextChange = 1
+              , made = mempty
+              , absorbed = []
               , listener = Nothing
               , field
               }
@@ -206,8 +218,8 @@ component =
           {% if st.input.pending > 0 %}
             <div class="assistant-changes" role="status">
               <span class="assistant-pending">{{ changesWord st.input.pending }} to accept or reject</span>
-              <button type="button" class="assistant-accept-all" onClick={{ const (DecideAll Accept) }}>Accept all</button>
-              <button type="button" class="assistant-reject-all" onClick={{ const (DecideAll Reject) }}>Reject all</button>
+              <button type="button" class="assistant-accept-all" onClick={{ const (Decided Accept) }}>Accept all</button>
+              <button type="button" class="assistant-reject-all" onClick={{ const (Decided Reject) }}>Reject all</button>
             </div>
           {% end %}
           <div class="assistant-log">
@@ -356,7 +368,7 @@ component =
       Stop -> stop
       Detach -> modify (\st -> st {detached = st.input.selection})
       FromTalk heard -> hear heard
-      DecideAll d -> gets (\st -> st.input.host) >>= traverse_ (\host -> H.liftEffect (settleChanges host d Nothing))
+      Decided d -> H.raise (DecideAll d)
       Close -> do
         stop
         H.raise Closed
@@ -376,6 +388,7 @@ component =
           Left why -> addEntry (Trouble why)
           Right r -> do
             body <- H.liftEffect (currentText host)
+            decided <- outcomes host
             let context = pageContext st.input.title body (attached st)
                 (chip, cut) = case context of
                   Selected {lineRange} -> (Just (chipLabel lineRange), Nothing)
@@ -390,7 +403,7 @@ component =
                 , using = Just r
                 , detached = Nothing
                 }
-            H.liftEffect (sayTo talk (userTurn context text))
+            H.liftEffect (sayTo talk (userTurn decided context text))
         (Just (Left why), _) -> addEntry (Trouble why)
         _ -> pass
 
@@ -428,9 +441,32 @@ component =
           Just host ->
             H.liftEffect (proposeEdit host st.nextChange e) >>= \case
               Left why -> pure (NotMade (describeEdit e) (refusalWords why), answer (Left why :: Either Refusal ()), False)
-              Right r -> do
-                modify (\s -> s {nextChange = s.nextChange + 1})
+              Right (r, taken) -> do
+                modify $ \s ->
+                  s
+                    { nextChange = s.nextChange + 1
+                    , made = Map.insert s.nextChange (describeEdit e) s.made
+                    , absorbed = taken <> s.absorbed
+                    }
                 pure (Made (describeEdit e), answer (Right r), True)
+
+    -- What became of the model's changes since it was last told: those
+    -- decided, or gone without a decision (undone, or edited away), each
+    -- told once; those still pending wait, and those a later change took
+    -- in need no word.
+    outcomes :: Element -> H.HalogenM State Action Empty Output m [(Text, Outcome)]
+    outcomes host = do
+      pending <- map (\c -> c.id) <$> H.liftEffect (trackedChanges host)
+      st <- get
+      let gone = Map.filterWithKey (\i _ -> i `notElem` pending) st.made
+          outcome i = case Map.lookup i st.input.decisions of
+            Just Accept -> Just Accepted
+            Just Reject -> Just Rejected
+            Nothing
+              | i `elem` st.absorbed -> Nothing
+              | otherwise -> Just Undone
+      modify (\s -> s {made = Map.difference s.made gone})
+      pure [(what, o) | (i, what) <- Map.toList gone, Just o <- [outcome i]]
 
     finish :: Ending -> H.HalogenM State Action Empty Output m ()
     finish ending = do
