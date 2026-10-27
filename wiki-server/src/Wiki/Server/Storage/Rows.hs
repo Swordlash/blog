@@ -61,6 +61,12 @@ module Wiki.Server.Storage.Rows
   , refreshIdentity
   , deleteIdentity
   , loadIdentityProviders
+  , noPasswordToSet
+  , providerNames
+
+    -- * Password resets
+  , insertResetToken
+  , resetsSince
 
     -- * Writes
   , insertUser
@@ -105,7 +111,7 @@ import Database.SQLite.Simple.FromField (FieldParser, FromField (..), ResultErro
 import Database.SQLite.Simple.FromRow (RowParser, field, fieldWith)
 import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
-import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..))
+import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), providerOnly)
 import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Security (AccountEmail (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
@@ -766,6 +772,32 @@ loadIdentityProviders :: Connection -> IO (Map UserId [Text])
 loadIdentityProviders c = do
   rows <- query_ c "SELECT user_id, provider FROM identities ORDER BY provider"
   pure (Map.fromListWith (flip (<>)) [(UserId u, [p]) | (u, p) <- rows])
+
+-- | The names of the providers the server's settings sign people in with.
+providerNames :: Kept -> [Text]
+providerNames kept = map (\p -> p.name) kept.providers
+
+-- | Whether a user has no password to set (WP5.6 of docs/PLAN.md,
+-- 'Wiki.Api.Account.providerOnly'): they have none, and an identity at one
+-- of these providers, the ones the server's settings have.
+noPasswordToSet :: Connection -> [Text] -> UserId -> IO Bool
+noPasswordToSet c configured u = do
+  hashed :: [Only Int] <- query c "SELECT password_hash IS NOT NULL FROM users WHERE id = ?" (Only u.text)
+  providers <- map fromOnly <$> query c "SELECT provider FROM identities WHERE user_id = ?" (Only u.text)
+  pure (providerOnly configured (any ((/= 0) . fromOnly) hashed) providers)
+
+--------------------------------------------------------------------------------
+-- Password resets
+
+-- | Keep a reset's link for a user (migrations/0008-account-hygiene.sql):
+-- the hash of its secret, when it was made, and when it expires.
+insertResetToken :: Connection -> UserId -> Text -> UTCTime -> UTCTime -> IO ()
+insertResetToken c u secretHash made expires =
+  execute c "INSERT INTO reset_tokens (token_hash, user_id, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, NULL)" (secretHash, u.text, Stamp made, Stamp expires)
+
+-- | How many reset links a user has been given since a time, used or not.
+resetsSince :: Connection -> UserId -> UTCTime -> IO Int
+resetsSince c u since = maybe 0 fromOnly . head <$> query c "SELECT count(*) FROM reset_tokens WHERE user_id = ? AND created_at > ?" (u.text, Stamp since)
 
 --------------------------------------------------------------------------------
 -- Whom the wiki lets in

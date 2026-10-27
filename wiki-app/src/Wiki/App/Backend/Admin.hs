@@ -46,7 +46,12 @@
 -- the login; a password follows 'Wiki.Core.User.checkPassword' ('Invalid'
 -- otherwise). A new password, and disabling a login, end the user's
 -- sessions; a disabled user cannot sign in, stays in the 'directory', and
--- keeps their pages and grants. The demo's backend has no passwords and
+-- keeps their pages and grants. A user who signs in with a provider the
+-- server has and has no password has none to set (WP5.6 of docs/PLAN.md):
+-- 'setPassword' refuses them. Where the backend sends mail, an
+-- administrator mails a user who has a verified address the link that
+-- "Forgot your password?" mails ('sendPasswordLink') rather than typing a
+-- password for them. The demo's backend has no passwords and
 -- keeps only whether a user has one, which it checks as the server does,
 -- so that its administration behaves alike; a disabled user is nobody
 -- there, and is not offered to switch to.
@@ -155,9 +160,21 @@ class (Monad m) => MonadAdmin m where
   createUser = lift . createUser
 
   -- | Give a user a new password, ending their sessions: their account.
+  -- 'Invalid' for a user who has no password to set, who signs in with a
+  -- provider the server has ('Wiki.Api.Admin.Directory.providerOnly').
   setPassword :: UserId -> Text -> m (Either WikiError Account)
   default setPassword :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Text -> m (Either WikiError Account)
   setPassword u = lift . setPassword u
+
+  -- | Mail a user the link to choose a new password that "Forgot your
+  -- password?" mails them (WP5.6 of docs/PLAN.md), to their verified
+  -- address. 'Invalid', with the reason, where nothing is mailed: the
+  -- backend sends no mail (the demo, and the storage under a server, whose
+  -- API mails), the user has no verified address, is disabled, or has no
+  -- password to set; or a link was mailed to them less than a minute ago.
+  sendPasswordLink :: UserId -> m (Either WikiError ())
+  default sendPasswordLink :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> m (Either WikiError ())
+  sendPasswordLink = lift . sendPasswordLink
 
   -- | Disable a user's login, ending their sessions, or enable it again:
   -- their account.

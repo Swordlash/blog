@@ -88,6 +88,10 @@ module Wiki.Server.Storage
   , editorOf
   , threadsThen
 
+    -- * Accounts
+  , PasswordLink (..)
+  , passwordLinkFor
+
     -- * Whole wikis
   , importArchive
   , exportArchive
@@ -109,12 +113,12 @@ import Data.UUID.Types qualified as UUID
 import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, open, query, query_, withConnection)
 import Protolude
 import System.Directory (createDirectoryIfMissing)
-import Wiki.Api.Account (Account (..), NewAccount (..))
+import Wiki.Api.Account (Account (..), NewAccount (..), providerOnly)
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark)
-import Wiki.Api.Security (MailToken (..))
+import Wiki.Api.Security (MailToken (..), resetLifetime)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkServerSettings, kindName, secretState, securityName)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -678,14 +682,21 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
                 record "user.create" (userSubject account.user) [("login", login), ("name", name)]
                 pure account
   setPassword u password =
-    run Reads (requireAdministrator >> findUser u) >>= \case
+    run Reads (requireAdministrator >> findUser u >>= requirePasswordToSet) >>= \case
       Left e -> pure (Left e)
       Right _ -> case checkPassword password of
         Left why -> pure (Left (Invalid why))
         Right p -> do
           phc <- liftIO (hashPassword p)
           -- The password is no detail of the log's: that it changed is.
-          run Writes $ changeAccountTx "user.password" [] u $ \c -> updatePasswordHash c u phc >> deleteSessionsOf c u
+          run Writes $ do
+            requireAdministrator
+            findUser u >>= requirePasswordToSet
+            changeAccountTx "user.password" [] u $ \c -> updatePasswordHash c u phc >> deleteSessionsOf c u
+
+  -- Mailing takes the server, which the storage is not: its API mails the
+  -- link, which 'passwordLinkFor' makes.
+  sendPasswordLink u = run Reads (requireAdministrator >> findUser u >> failWith (Invalid "Only the server's API sends mail."))
   setDisabled u disabled =
     run Writes $ changeAccountTx (if disabled then "user.disable" else "user.enable") [] u $ \c -> do
       updateDisabled c u disabled
@@ -1607,6 +1618,14 @@ directoryTx = do
       , disabled
       , withPassword
       , identities = Map.restrictKeys identities ids
+      , -- By the providers the server has now, as 'requirePasswordToSet'
+        -- refuses them.
+        providerOnly =
+          Set.fromList
+            [ u
+            | u <- Set.toList ids
+            , providerOnly (providerNames server) (u `Set.member` withPassword) (Map.findWithDefault [] u identities)
+            ]
       , secondFactor = Set.intersection secondFactor ids
       , emails = Map.restrictKeys emails ids
       , -- As the server's mailer is made ("Wiki.Server.Mail"'s 'mailerFrom').
@@ -1640,6 +1659,55 @@ changeAccountTx action detail u change = do
   db change
   record action (userSubject user) detail
   db (`loadAccount` u) >>= maybe (failWith NotFound) pure
+
+-- | Refuse a password to a user who has none to set (WP5.6 of
+-- docs/PLAN.md): one who signs in with a provider the server has, and has
+-- no password.
+requirePasswordToSet :: User -> Tx ()
+requirePasswordToSet user = do
+  configured <- asks (\x -> providerNames x.server)
+  none <- db (\c -> noPasswordToSet c configured user.id)
+  when none (invalid (user.displayName <> " signs in with a provider, and has no password to set."))
+
+-- | A link to choose a password that an administrator has a user mailed:
+-- to whom, at which address, and until when it works. Its secret is the
+-- caller's, who made it.
+data PasswordLink = PasswordLink
+  { user :: User
+  , email :: Text
+  , expiresAt :: UTCTime
+  }
+
+-- | Keep the link to choose a password that an administrator has a user
+-- mailed (WP5.6 of docs/PLAN.md), with this secret: the link "Forgot your
+-- password?" mails ("Wiki.Server.Reset"), working as long and as often,
+-- and recorded in the audit log. Checked in this order: whoever asks
+-- administers the wiki ('Forbidden'), the user is there ('NotFound'), then
+-- 'Invalid' with the reason: they have a password to set, the server sends
+-- mail (the caller says whether), their login is enabled, and their
+-- address is verified. The limits of "Forgot your password?" do not apply,
+-- but a user given a link less than a minute ago is given none
+-- ('Nothing'), so that a button clicked twice mails once.
+passwordLinkFor :: (MonadIO m) => Bool -> UTCTime -> Text -> UserId -> SqliteWiki m (Either WikiError (Maybe PasswordLink))
+passwordLinkFor mailing at token u = run Writes $ do
+  requireAdministrator
+  user <- findUser u
+  requirePasswordToSet user
+  unless mailing (invalid "The server sends no mail: set up its mail in the Server section, or type a password for them.")
+  account <- db (`loadAccount` u) >>= maybe (failWith NotFound) pure
+  when account.disabled (invalid (user.displayName <> "'s login is disabled: enable it first, or type a password for them."))
+  verified <- db (\c -> query c "SELECT email FROM users WHERE id = ? AND email IS NOT NULL AND email_verified_at IS NOT NULL" (Only u.text))
+  case verified of
+    [Only email] -> do
+      recent <- db (\c -> resetsSince c u (addUTCTime (-60) at))
+      if recent > 0
+        then pure Nothing
+        else do
+          let expiresAt = addUTCTime resetLifetime at
+          db (\c -> insertResetToken c u (tokenHash token) at expiresAt)
+          record "user.password-link" (userSubject user) []
+          pure (Just PasswordLink {user, email, expiresAt})
+    _ -> invalid (user.displayName <> " has no verified address: type a password for them.")
 
 -- | A group's name, checked: not blank, and no other group's but for case.
 groupNameTx :: Maybe GroupId -> Text -> Tx Text

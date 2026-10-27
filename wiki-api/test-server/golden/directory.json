@@ -36,6 +36,9 @@
       "u2"
     ]
   },
+  "providerOnly": [
+    "u2"
+  ],
   "secondFactor": [
     "u1"
   ],

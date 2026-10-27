@@ -104,6 +104,7 @@ actionText a = Map.findWithDefault a a actions
         , ("user.administrator", "Changed whether a user is an administrator")
         , ("user.create-spaces", "Changed whether a user creates spaces")
         , ("user.password", "Gave a user a new password")
+        , ("user.password-link", "Mailed a user a link to choose a password")
         , ("user.disable", "Disabled a user's login")
         , ("user.enable", "Enabled a user's login")
         , ("user.second-factor-remove", "Removed a user's second factor")

@@ -26,7 +26,10 @@
 --
 -- A user signed in changes their own password ('PasswordChange', WP3.7 of
 -- docs/PLAN.md), saying the one they have, if they have one: a user who
--- signs in only with a provider's account sets one without.
+-- has none and no provider to sign in with (theirs was disconnected, or
+-- removed from the server) sets one without. A user who signs in with a
+-- provider and has no password has none to set ('providerOnly', WP5.6 of
+-- docs/PLAN.md): the provider is their way in.
 module Wiki.Api.Account
   ( -- * Signing in
     Credentials (..)
@@ -50,6 +53,7 @@ module Wiki.Api.Account
   , signsInSomehow
   , withoutIdentity
   , mayDisconnect
+  , providerOnly
   )
 where
 
@@ -179,6 +183,23 @@ withoutIdentity provider m = m {identities = filter (\i -> i.provider /= provide
 -- not leave them without a way to sign in.
 mayDisconnect :: Text -> SignInMethods -> Bool
 mayDisconnect provider = signsInSomehow . withoutIdentity provider
+
+-- | Whether an account has no password to set (WP5.6 of docs/PLAN.md): it
+-- has none, and it signs in with one of the providers the server has, by
+-- their names. Its owner signs in there, and neither they nor an
+-- administrator give it a password, nor does a reset's link. An account
+-- whose providers are all gone (disconnected, or removed from the server's
+-- settings) is not one: it has no way in, and may be given a password as
+-- any other.
+providerOnly
+  :: [Text]
+  -- ^ The providers the server signs in with, by name.
+  -> Bool
+  -- ^ Whether the account has a password.
+  -> [Text]
+  -- ^ The providers it has an account at, by name.
+  -> Bool
+providerOnly configured hasPassword providers = not hasPassword && any (`elem` configured) providers
 
 -- | The secret an invitation's link carries (@\/invite\/\<token>\/@):
 -- random, single use, and kept by the server only as a hash, as a session

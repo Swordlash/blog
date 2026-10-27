@@ -233,6 +233,7 @@ stubs =
           , removeMember = \g u -> if (g, u) == (GroupId "g1", UserId "u2") then pure NoContent else refuse NotFound
           , createUser = \new -> pure Account {user = User {id = UserId "new", login = new.login, displayName = new.displayName}, hasPassword = True, disabled = False}
           , setPassword = \u _ -> pure Account {user = adaAs u, hasPassword = True, disabled = False}
+          , sendPasswordLink = \u -> if u == UserId "u1" then pure NoContent else refuse (Invalid "No verified address.")
           , setDisabled = \u body -> pure Account {user = adaAs u, hasPassword = True, disabled = body.disabled}
           , settings = pure Sample.settings
           , setSettings = pure
@@ -604,6 +605,12 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (links.admin.setPassword (UserId "u7")) NewPassword {password = "y"}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = False}
       answers (sendJson methodPut (links.admin.setDisabled (UserId "u7")) AccountDisabled {disabled = True}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = True}
       links.admin.setDisabled (UserId "u7") `shouldBe` "api/v1/admin/users/u7/disabled"
+
+    it "mails a user the link to choose a password, at password-link, answering with nothing" $ do
+      links.admin.sendPasswordLink (UserId "u1") `shouldBe` "api/v1/admin/users/u1/password-link"
+      r <- request methodPost (links.admin.sendPasswordLink (UserId "u1")) [] ""
+      (status r, simpleBody r) `shouldBe` (204, "")
+      answers (request methodPost (links.admin.sendPasswordLink (UserId "u2")) [] "") 400 (Invalid "No verified address.")
 
   describe "the server's settings" $ do
     it "reads them, and writes a change, at server" $ do

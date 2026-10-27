@@ -76,6 +76,7 @@ module Wiki.App.Backend.Mem.State
   , setCreateSpacesIn
   , createUserIn
   , setPasswordIn
+  , sendPasswordLinkIn
   , setDisabledIn
   , createGroupIn
   , renameGroupIn
@@ -1164,8 +1165,10 @@ directoryIn st = do
       , A.creators = Set.fromList [u | GlobalGrant (SubjectUser u) CreateSpaces <- st.grants.global, Map.member u st.users]
       , A.disabled = Set.intersection st.disabled (Map.keysSet st.users)
       , A.withPassword = Set.intersection st.passwords (Map.keysSet st.users)
-      , -- The demo signs in with no provider.
+      , -- The demo signs in with no provider, so every user may be given
+        -- a password.
         A.identities = mempty
+      , A.providerOnly = mempty
       , -- Nor with a second factor, nor any mail: the demo sends none.
         A.secondFactor = mempty
       , A.emails = mempty
@@ -1221,6 +1224,14 @@ setPasswordIn uid password st = do
   _ <- first Invalid (checkPassword password)
   let st1 = st {passwords = Set.insert uid st.passwords}
   pure (st1, accountIn st1 u)
+
+-- | Mail a user the link to choose a password: the demo sends no mail,
+-- which it says once the user is found, as a server that sends none does.
+sendPasswordLinkIn :: UserId -> MemState -> Either WikiError ()
+sendPasswordLinkIn u st = do
+  requireAdministrator st
+  _ <- findUser st u
+  Left (Invalid "The demo sends no mail: type a password for them.")
 
 -- | A user's login disabled, which makes them nobody if they are the one
 -- switched to, or enabled again.

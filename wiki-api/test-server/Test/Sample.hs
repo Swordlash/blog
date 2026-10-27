@@ -296,7 +296,8 @@ activity =
 
 -- | The wiki's people, as the administration reads them: two users, one of
 -- them an administrator who may create spaces, the other disabled and
--- without a password, and a group with the other in it.
+-- without a password, signing in with providers instead, and a group with
+-- the other in it.
 directory :: Directory
 directory =
   Directory
@@ -309,6 +310,7 @@ directory =
     , disabled = Set.fromList [UserId "u2"]
     , withPassword = Set.fromList [UserId "u1"]
     , identities = Map.fromList [(UserId "u2", ["github", "google"])]
+    , providerOnly = Set.fromList [UserId "u2"]
     , secondFactor = Set.fromList [UserId "u1"]
     , emails = Map.fromList [(UserId "u1", AccountEmail {email = "ada@example.org", verified = True}), (UserId "u2", AccountEmail {email = "edgar@example.org", verified = False})]
     , mailing = True

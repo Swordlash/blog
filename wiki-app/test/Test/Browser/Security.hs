@@ -282,6 +282,7 @@ administration m = describe "the administration's accounts" $ do
           , disabled = d.disabled
           , withPassword = d.withPassword
           , identities = d.identities
+          , providerOnly = d.providerOnly
           , secondFactor = Set.singleton (UserId "user-editor")
           , emails = Map.fromList [(UserId "user-editor", AccountEmail {email = "edgar@example.org", verified = False})]
           , mailing = True

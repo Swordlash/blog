@@ -121,6 +121,7 @@ import Wiki.Server.Log (ErrorRing, Level (..), Logger, logWith, recentErrors)
 import Wiki.Server.Mail (Mailer (..), SendMail, invitationMessage, mailerFrom, resetMessage, testMessage, verificationMessage)
 import Wiki.Server.Metrics (Metrics)
 import Wiki.Server.Oidc (Endpoints (..), Flows, Provider, ProviderCache, endpointsOf, freshProvider, optionOf, providersFor, signInProvider)
+import Wiki.Server.Password (newToken)
 import Wiki.Server.Reset qualified as Reset
 import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
 import Wiki.Server.SecondFactor qualified as SecondFactor
@@ -524,6 +525,7 @@ handlers env caller =
                   _ -> pass
               pure made
           , setPassword = \u body -> wiki (setPassword u body.password)
+          , sendPasswordLink = mailPasswordLink
           , setDisabled = \u body -> wiki (setDisabled u body.disabled)
           , settings = wiki wikiSettings
           , setSettings = wiki . setWikiSettings
@@ -728,6 +730,34 @@ handlers env caller =
         Just m -> do
           login <- maybe "" (\(a :: Account) -> a.user.login) <$> Accounts.accountOf env.storage u
           leftToMaybe <$> m.deliver (verificationMessage m.publicUrl address login token)
+    -- An administrator has a user mailed the link to choose a password
+    -- that a reset mails (WP5.6 of docs/PLAN.md): the storage checks who
+    -- may and keeps the link, and it is mailed here, at once, so that the
+    -- panel can say it was. One that could not be mailed is forgotten, and
+    -- the answer says why. Neither of the reset's limits applies; one link
+    -- a minute does.
+    mailPasswordLink :: UserId -> Handler NoContent
+    mailPasswordLink u = do
+      now <- liftIO getCurrentTime
+      mailer <- liftIO (currentMailer env)
+      token <- liftIO newToken
+      wiki (passwordLinkFor (isJust mailer) now token u) >>= \case
+        Nothing ->
+          throwError
+            (apiError (ApiError.TooManyRequests "A link was mailed to them less than a minute ago: give it a moment to arrive."))
+              { errHeaders = [jsonHeader, ("Retry-After", "60")]
+              }
+        Just made -> case mailer of
+          Nothing -> refuse (ApiError.Invalid "The server sends no mail.")
+          Just m ->
+            liftIO (m.deliver (resetMessage m.publicUrl made.email made.user.login token made.expiresAt)) >>= \case
+              Right () -> do
+                liftIO (logWith env.logger Info [("event", "password-link"), ("user", u.text), ("outcome", "mailed")])
+                pure NoContent
+              Left why -> do
+                liftIO (Reset.forgetReset env.storage token)
+                liftIO (logWith env.logger Warning [("event", "password-link"), ("user", u.text), ("outcome", "failed"), ("error", why)])
+                refuse (ApiError.Invalid ("The link could not be mailed: " <> why))
     -- Ask for a password reset: limited by the address asking, refused alike
     -- for every login where the server sends no mail, and otherwise answered
     -- at once and alike, the looking up and the mailing done after.

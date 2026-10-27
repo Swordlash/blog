@@ -116,8 +116,9 @@ reading = describe "directory" $ do
     d.administrators `shouldBe` Set.singleton adminId
     d.creators `shouldBe` Set.singleton editorId
     (d.disabled, d.withPassword) `shouldBe` (mempty, mempty)
-    -- No one signs in with a provider in a wiki that has just been made.
-    d.identities `shouldBe` mempty
+    -- No one signs in with a provider in a wiki that has just been made,
+    -- so everyone may be given a password.
+    (d.identities, d.providerOnly) `shouldBe` (mempty, mempty)
     map (\g -> g.name) d.groups `shouldBe` ["writers"]
     Map.elems d.membership `shouldBe` [Set.singleton editorId]
     Map.keys d.membership `shouldBe` map (\g -> g.id) d.groups
@@ -148,6 +149,8 @@ refusing = describe "refusals" $
       run who (createUser NewAccount {login = "", displayName = "", password = "", email = Nothing}) >>= (`shouldFailWith` Forbidden)
       run who (setPassword readerId "a good password") >>= (`shouldFailWith` Forbidden)
       run who (setPassword nobody "") >>= (`shouldFailWith` Forbidden)
+      run who (sendPasswordLink readerId) >>= (`shouldFailWith` Forbidden)
+      run who (sendPasswordLink nobody) >>= (`shouldFailWith` Forbidden)
       run who (setDisabled readerId True) >>= (`shouldFailWith` Forbidden)
       run who (unlinkUserIdentity readerId "github") >>= (`shouldFailWith` Forbidden)
       run who (unlinkUserIdentity nobody "github") >>= (`shouldFailWith` Forbidden)
@@ -225,7 +228,7 @@ creators = describe "setCreateSpaces" $ do
 -- Accounts
 
 accounts :: (MonadWiki m, MonadAdmin m) => SpecWith (Fixture m)
-accounts = describe "createUser, setPassword and setDisabled" $ do
+accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" $ do
   it "make a user with a password, listed by login, their login the name if none is given" $ \(Fixture run) -> do
     made <- run admin (createUser NewAccount {login = " bea ", displayName = "", password = "bea's password", email = Nothing}) >>= ok
     (made.user.login, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("bea", "bea", True, False)
@@ -253,6 +256,17 @@ accounts = describe "createUser, setPassword and setDisabled" $ do
     (account.user.login, account.hasPassword) `shouldBe` ("reader", True)
     (\d -> d.withPassword) <$> directoryNow run `shouldReturn` Set.singleton readerId
     run admin (setPassword (UserId "user-nobody") "a good password") >>= (`shouldFailWith` NotFound)
+
+  -- A wiki that has just been made sends no mail (the demo never does, and
+  -- the server only once its mail is set): a link is refused with the
+  -- reason, after the user is found. What a server that mails does with
+  -- one is the server's tests' (wiki-server's Test.Server.Hygiene).
+  it "mail no link to choose a password where nothing is mailed, saying why, and find nobody for an id that is none" $ \(Fixture run) -> do
+    readerId <- idOf run reader
+    run admin (sendPasswordLink readerId) >>= shouldBeInvalid
+    run admin (sendPasswordLink (UserId "user-nobody")) >>= (`shouldFailWith` NotFound)
+    -- Nothing was changed.
+    (\d -> d.withPassword) <$> directoryNow run `shouldReturn` mempty
 
   it "disable a login, whose user is then nobody, and enable it again" $ \(Fixture run) -> do
     readerId <- idOf run reader

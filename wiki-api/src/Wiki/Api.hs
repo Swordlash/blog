@@ -348,7 +348,16 @@ data AdminApi mode = AdminApi
   -- 'Wiki.Api.Error.Conflict'.
   , setPassword :: mode :- "users" :> Capture "user" UserId :> "password" :> ReqBody '[JSON] NewPassword :> Put '[JSON] Account
   -- ^ @setPassword@: give a user a new password, which ends their
-  -- sessions.
+  -- sessions. A user who has no password to set (who signs in with a
+  -- provider the server has, 'Wiki.Api.Account.providerOnly') is
+  -- 'Wiki.Api.Error.Invalid'.
+  , sendPasswordLink :: mode :- "users" :> Capture "user" UserId :> "password-link" :> PostNoContent
+  -- ^ @sendPasswordLink@: mail a user the link to choose a new password
+  -- that "Forgot your password?" mails ("Wiki.Api.Security"), to their
+  -- verified address (WP5.6 of docs/PLAN.md). Where the server sends no
+  -- mail, or the user has no verified address, is disabled or has no
+  -- password to set, 'Wiki.Api.Error.Invalid' with the reason; a second
+  -- link within a minute of the last, 'Wiki.Api.Error.TooManyRequests'.
   , setDisabled :: mode :- "users" :> Capture "user" UserId :> "disabled" :> ReqBody '[JSON] AccountDisabled :> Put '[JSON] Account
   -- ^ @setDisabled@: disable a user's login, which ends their sessions, or
   -- enable it again.

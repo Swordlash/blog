@@ -65,11 +65,12 @@
 --
 -- = One's own password
 --
--- A user signed in changes their password, or sets one if they sign in
--- only with a provider's account ('changePassword', WP3.7 of
--- docs/PLAN.md). The one they have must be given and right: a session is
--- not enough, so that whoever finds a browser left signed in cannot take
--- the account from its owner. Their other sessions end, as when an
+-- A user signed in changes their password, or sets one if they have none
+-- and no provider the server has to sign in with ('changePassword', WP3.7
+-- of docs/PLAN.md): one who signs in with such a provider has no password
+-- to set (WP5.6), and is refused. The one they have must be given and
+-- right: a session is not enough, so that whoever finds a browser left
+-- signed in cannot take the account from its owner. Their other sessions end, as when an
 -- administrator sets a password, but not the one they change it from,
 -- which the caller names by the id its cookie carries.
 module Wiki.Server.Accounts
@@ -139,9 +140,9 @@ import Wiki.Core.Audit (Actor (..), Subject (..))
 import Wiki.Core.Id (InvitationId (..), UserId (..))
 import Wiki.Core.User (User (..), checkLogin)
 import Wiki.Server.Password (checkPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
-import Wiki.Server.Storage (Storage, readSettings, settingsWith, withDatabase)
+import Wiki.Server.Storage (Storage, readServerSettings, readSettings, settingsWith, withDatabase)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
-import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accountFromRow, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, pendingInvitation, refreshIdentity, selectAccounts, totpEnabled, updateDisabled, updatePasswordHash)
+import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accountFromRow, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, noPasswordToSet, pendingInvitation, providerNames, refreshIdentity, selectAccounts, totpEnabled, updateDisabled, updatePasswordHash)
 
 --------------------------------------------------------------------------------
 -- Accounts
@@ -512,14 +513,21 @@ data PasswordRefusal
   deriving stock (Eq, Show)
 
 -- | A user changes their own password, giving the one they have, if they
--- have one ('WrongCurrent' if it is not right): how they sign in then.
+-- have one ('WrongCurrent' if it is not right): how they sign in then. A
+-- user without one who signs in with a provider the server has is refused
+-- ('Invalid'): they have no password to set.
 -- Every session of theirs ends but the one whose id this is (the cookie's
 -- of the request), if any. The new password is checked before anything is
 -- hashed, and hashed before the connection is taken.
 changePassword :: Storage -> UserId -> Maybe Text -> Maybe Text -> Text -> IO (Either PasswordRefusal SignInMethods)
 changePassword st u keep current new = runExceptT $ do
   password <- either (throwError . PasswordRefused . Invalid) pure (checkPassword new)
+  -- Read before the connection is taken, which reading them may take.
+  configured <- liftIO (providerNames <$> readServerSettings st)
   before <- liftIO (withDatabase st (`passwordHashOf` u)) >>= maybe (throwError (PasswordRefused NotFound)) pure
+  none <- liftIO (withDatabase st (\c -> noPasswordToSet c configured u))
+  when none $
+    throwError (PasswordRefused (Invalid "You sign in with a provider, and have no password to set: sign in there."))
   for_ before $ \phc ->
     unless (maybe False (verifyPassword phc) current) (throwError WrongCurrent)
   phc <- liftIO (hashPassword password)

@@ -473,6 +473,9 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   setCreateSpaces u createSpaces = write_ (withJson "PUT" (links.admin.setCreateSpaces u) CreateSpacesFlag {createSpaces})
   createUser new = write (withJson "POST" links.admin.createUser new)
   setPassword u password = write (withJson "PUT" (links.admin.setPassword u) NewPassword {password})
+
+  -- A mail sent changes nothing the cache keeps.
+  sendPasswordLink u = answerNothing <$> call (R.post (links.admin.sendPasswordLink u))
   setDisabled u disabled = write (withJson "PUT" (links.admin.setDisabled u) AccountDisabled {disabled})
   createGroup name = write (withJson "POST" links.admin.createGroup GroupName {name})
   renameGroup g name = write (withJson "PUT" (links.admin.renameGroup g) GroupName {name})

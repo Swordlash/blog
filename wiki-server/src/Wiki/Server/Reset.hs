@@ -17,6 +17,15 @@
 -- ('resetPassword'): whoever took the account over is signed out. It does
 -- not sign anyone in: a user with a second factor still needs it.
 --
+-- A user who has no password to set, who signs in with a provider the
+-- server has (WP5.6 of docs/PLAN.md), is mailed no link, and a link mailed
+-- before they connected one sets none.
+--
+-- An administrator may have a user mailed the same link: the storage keeps
+-- it ('Wiki.Server.Storage.passwordLinkFor', with the administration's own
+-- checks), and one that could not be mailed is forgotten here
+-- ('forgetReset').
+--
 -- The secrets the links carry are kept as their SHA-256, as an invitation's
 -- are. Here they are only made and checked: what mails them is the
 -- server's ("Wiki.Server.Api", "Wiki.Server.Mail").
@@ -30,6 +39,7 @@ module Wiki.Server.Reset
     -- * A password reset
   , ResetMail (..)
   , requestReset
+  , forgetReset
   , resetPassword
   , resetsPerHour
   )
@@ -45,8 +55,8 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Accounts (immediately)
 import Wiki.Server.Password (checkPassword, hashPassword, newToken, tokenHash)
-import Wiki.Server.Storage (Storage, withDatabase)
-import Wiki.Server.Storage.Rows (Stamp (..), deleteSessionsOf, updatePasswordHash)
+import Wiki.Server.Storage (Storage, readServerSettings, withDatabase)
+import Wiki.Server.Storage.Rows (Stamp (..), deleteSessionsOf, insertResetToken, noPasswordToSet, providerNames, resetsSince, updatePasswordHash)
 
 --------------------------------------------------------------------------------
 -- An e-mail address
@@ -145,11 +155,14 @@ keptFor = 60 * 60
 
 -- | Links to mail for a reset asked for with this login or address: one for
 -- each user who has it as their login, or as their verified address, who
--- is not disabled, has a verified address, and has not been mailed
--- 'resetsPerHour' in the last hour. Often none, which is never said.
+-- is not disabled, has a verified address, has a password to set, and has
+-- not been mailed 'resetsPerHour' in the last hour. Often none, which is
+-- never said.
 requestReset :: Storage -> UTCTime -> Text -> IO [ResetMail]
 requestReset st now raw = do
   let named = T.strip raw
+  -- Read before the connection is taken, which reading them may take.
+  configured <- providerNames <$> readServerSettings st
   if T.null named
     then pure []
     else withDatabase st $ \c -> do
@@ -160,24 +173,38 @@ requestReset st now raw = do
           "SELECT id, email FROM users WHERE disabled = 0 AND email IS NOT NULL AND email_verified_at IS NOT NULL AND (login = ? COLLATE NOCASE OR email = ? COLLATE NOCASE)"
           (named, named)
       fmap catMaybes . for found $ \(uid, address) -> do
-        recent <- query c "SELECT count(*) FROM reset_tokens WHERE user_id = ? AND created_at > ?" (uid, Stamp (addUTCTime (negate keptFor) now))
-        if maybe 0 fromOnly (head recent) >= resetsPerHour
+        let u = UserId uid
+        recent <- resetsSince c u (addUTCTime (negate keptFor) now)
+        none <- noPasswordToSet c configured u
+        if recent >= resetsPerHour || none
           then pure Nothing
-          else do
-            token <- newToken
-            let expiresAt = addUTCTime resetLifetime now
-            execute c "INSERT INTO reset_tokens (token_hash, user_id, created_at, expires_at, used_at) VALUES (?, ?, ?, ?, NULL)" (tokenHash token, uid, Stamp now, Stamp expiresAt)
-            pure (Just ResetMail {user = UserId uid, email = address, token, expiresAt})
+          else Just <$> resetMail c now u address
+
+-- | A reset's link for a user, kept, to mail to their address. The caller
+-- holds the connection and has checked that the user may have one.
+resetMail :: Connection -> UTCTime -> UserId -> Text -> IO ResetMail
+resetMail c now u address = do
+  token <- newToken
+  let expiresAt = addUTCTime resetLifetime now
+  insertResetToken c u (tokenHash token) now expiresAt
+  pure ResetMail {user = u, email = address, token, expiresAt}
+
+-- | Forget a reset's link that could not be mailed, so that it neither
+-- works nor counts against the user's links.
+forgetReset :: Storage -> Text -> IO ()
+forgetReset st token = withDatabase st $ \c -> execute c "DELETE FROM reset_tokens WHERE token_hash = ?" (Only (tokenHash token))
 
 -- | Set a new password with a reset's link: once, before it expires, and
 -- for a user who is not disabled; every session of theirs ends, and every
 -- other link mailed to them stops working. 'NotFound' for a link that does
 -- not work, 'Invalid' for a password that cannot be one (checked first,
--- which uses nothing up).
+-- which uses nothing up), and for a user who has no password to set, who
+-- signs in with a provider the server has (the link stays unused).
 resetPassword :: Storage -> UTCTime -> MailToken -> Text -> IO (Either WikiError ())
 resetPassword st now token new = case checkPassword new of
   Left why -> pure (Left (Invalid why))
   Right password -> do
+    configured <- providerNames <$> readServerSettings st
     let key = tokenHash token.text
         usable c =
           query
@@ -194,9 +221,17 @@ resetPassword st now token new = case checkPassword new of
             usable c >>= \case
               [Only uid] -> do
                 let u = UserId uid
-                updatePasswordHash c u phc
-                deleteSessionsOf c u
-                execute c "UPDATE reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL" (Stamp now, uid)
-                pure (Right ())
+                noPasswordToSet c configured u >>= \case
+                  True -> pure (Left (Invalid noPasswordHere))
+                  False -> do
+                    updatePasswordHash c u phc
+                    deleteSessionsOf c u
+                    execute c "UPDATE reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL" (Stamp now, uid)
+                    pure (Right ())
               _ -> pure (Left NotFound)
       _ -> pure (Left NotFound)
+
+-- | Why a reset's link sets no password for a user who signs in with a
+-- provider.
+noPasswordHere :: Text
+noPasswordHere = "This account signs in with a provider and has no password to set: sign in there."

@@ -120,6 +120,13 @@ data Directory = Directory
   -- ^ The providers each user may sign in with instead of a password
   -- (WP3.6 of docs/PLAN.md), by the names the server's configuration gives
   -- them; a user with none may be left out.
+  , providerOnly :: Set UserId
+  -- ^ The users who have no password to set (WP5.6 of docs/PLAN.md,
+  -- 'Wiki.Api.Account.providerOnly'): they have none, and sign in with a
+  -- provider the server has. A user whose providers are all gone, removed
+  -- from the server or disconnected, is not here: they have no way in, and
+  -- may be given a password. Said by the server, so that the panel does not
+  -- work it out from names it may not know.
   , secondFactor :: Set UserId
   -- ^ The users who have a second factor (WP4.11 of docs/PLAN.md), which
   -- an administrator may take away from one who has lost it.
