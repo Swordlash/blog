@@ -1,20 +1,21 @@
--- | What the application asks of wherever the wiki is kept.
+-- | The backend interface: 'MonadWiki' is every read and write the
+-- application makes on the wiki, whatever stores it.
 --
 -- Components never know which backend they run on: they are polymorphic in
 -- their monad and ask for @'MonadWiki' m@. There are two implementations in
 -- the browser, the in-memory one of the serverless demo
 -- ("Wiki.App.Backend.Mem") and one over the server's HTTP API
--- ("Wiki.App.Backend.Http"); the server keeps the wiki in its own, over
--- SQLite.
+-- ("Wiki.App.Backend.Http"). The server has a third, over SQLite.
 -- All of them pass the same contract tests ("Wiki.App.Backend.Contract", the
--- library @wiki-app:contract@), which is what this module's prose promises.
+-- library @wiki-app:contract@), which check what this module's
+-- documentation promises.
 --
 -- = Errors
 --
 -- Every method that can fail returns @'Either' 'WikiError'@ and never
 -- throws for a reason in 'WikiError': a component shows what went wrong
--- rather than dying of it. The errors are told apart in this order, and the
--- first that applies is the one returned:
+-- rather than dying of it. When more than one error applies, the first in
+-- this order is returned:
 --
 -- 1. 'NotFound': an id or a path names nothing.
 -- 2. 'Forbidden': it names something the current user may not see, or may
@@ -26,13 +27,14 @@
 -- 4. 'Conflict': the request was right when it was made, but the wiki has
 --    changed since (a save based on an older version of the page).
 --
--- A backend that keeps the wiki elsewhere (over HTTP) can fail to ask at
--- all: the network is down, the server does not answer in time, or it
--- breaks. That is 'Unreachable', which no rule decides and which may well
--- not happen again: a component offers to try again. The four reads that
--- cannot be refused, and so have no @Either@ ('session', 'listSpaces',
--- 'pageCounts', 'searchPages'), throw it instead, and whoever shows what they read
--- catches it with 'attempt' ("Loading" below).
+-- A backend that keeps the wiki elsewhere (over HTTP) can fail to reach
+-- it at all: the network is down, the server does not answer in time, or
+-- it breaks. That is 'Unreachable'. No rule causes it, and a retry may
+-- well work, so a component offers to try again. Four reads cannot be
+-- refused, so they return no @Either@ ('session', 'listSpaces',
+-- 'pageCounts', 'searchPages'). They throw 'Unreachable' instead, and the
+-- component that shows their result catches it with 'attempt' (see
+-- "Loading" below).
 --
 -- = Permissions
 --
@@ -76,42 +78,43 @@
 -- own pages. 'createSpace' makes the space with one, titled "Home", from a
 -- template ('Wiki.Core.Space.homeBody'), whose first version is its
 -- creator's; its administrator may choose any other of its pages later
--- ('setSpaceProfile'), or none. A space keeps no home page that is not
--- one of its own: deleting the page, or moving it to another space, leaves
--- the space without one.
+-- ('setSpaceProfile'), or none. A space's home page is always one of its
+-- own pages: deleting the page, or moving it to another space, leaves the
+-- space without a home page.
 --
 -- = Loading
 --
--- The in-memory backend answers at once; one over HTTP waits for the
--- network, except for what it has seen already and keeps. A component
--- loads what it shows in its initial state when the backend can answer at
--- once ('atOnce'), so that its first render is the page a prerender shows,
--- and otherwise renders that it is loading and loads in its initializer, as
--- a fiber, so that the tree's loop never waits on the network (decision 18
--- of the plan). That is 'MonadLoad', a class of its own beside this one
--- because its methods take a program of the backend's rather than return
--- one, which a monad transformer cannot lift: it is asked of the
--- component's own monad, in an initial state or through
--- 'Halogen.Query.HalogenM.lift', never of 'HalogenM'.
+-- The in-memory backend answers at once. The HTTP backend waits for the
+-- network, except for answers it has cached
+-- ("Wiki.App.Backend.Http.Cache"). When the backend can answer at once
+-- ('atOnce'), a component loads its data in its initial state, so that its
+-- first render is the page a prerender shows. Otherwise it renders a
+-- loading state and fetches in its initializer, on a fiber, so that the
+-- tree's loop never waits on the network (decision 18 of the plan).
+-- 'MonadLoad' provides this. It is a separate class from 'MonadWiki'
+-- because its methods take a backend program as an argument instead of
+-- returning one, and a monad transformer cannot lift such a method. So a
+-- component uses it in its own monad, in an initial state or through
+-- 'Halogen.Query.HalogenM.lift', never in 'HalogenM'.
 --
 -- = Order
 --
 -- A space lists its subspaces in one order and its pages in another, each
 -- chosen by whoever administers it: by name (natural order, the default),
 -- by date, newest or oldest first, or by hand ("Wiki.Core.Order"). The
--- lists of the class come in those orders, each parent followed by its
--- children, so that a client can show one as it comes; and since the
--- order is a function of what the list holds, a client ordering again with
--- "Wiki.Core.Order" gets the same. The top-level spaces have no parent to
--- choose for them and are listed by name.
+-- class's methods return lists in those orders, each parent followed by
+-- its children, so that a client can show a list as it is. The order
+-- depends only on what the list holds, so a client that sorts again with
+-- "Wiki.Core.Order" gets the same order. The top-level spaces have no
+-- parent to choose for them and are listed by name.
 --
--- By hand, each child has a position among its siblings. A new child, and
--- one moved in from elsewhere, goes last; a child is moved up, down, to
--- the top or to the bottom ('shiftPage', 'shiftSpace'), which gives its
--- siblings new positions in the order they then have; a deletion leaves
--- the others as they are. A space switched to by hand keeps the order it
--- showed: its children are given the positions of that order. Moving a
--- child among its siblings changes no address.
+-- In the order by hand, each child has a position among its siblings. A
+-- new child, and one moved in from elsewhere, goes last. Moving a child up,
+-- down, to the top or to the bottom ('shiftPage', 'shiftSpace') renumbers
+-- its siblings in their new order. A deletion leaves the other positions
+-- as they are. When a space switches to the order by hand, its children
+-- keep the order they were shown in: they are given positions in that
+-- order. Moving a child among its siblings changes no address.
 --
 -- = Addresses
 --
@@ -184,18 +187,19 @@ data WikiError
     Unreachable Text
   deriving stock (Eq, Show)
 
--- | 'Unreachable', thrown by the reads that have no @Either@ to return it
--- in ('session', 'listSpaces', 'pageCounts', 'searchPages'), for 'attempt'
--- to catch.
+-- | So that the reads that return no @Either@ ('session', 'listSpaces',
+-- 'pageCounts', 'searchPages') can throw 'Unreachable', and 'attempt' can
+-- catch it.
 instance Exception WikiError
 
--- | Throw that the backend could not be asked, from a read that has no
--- @Either@ to say so in.
+-- | Throw 'Unreachable', from a read that returns no @Either@ to report
+-- it in.
 unreachable :: (MonadIO m) => Text -> m a
 unreachable = liftIO . throwIO . Unreachable
 
--- | Who the current user is, as the client needs it to run the permission
--- rules itself and hide what it cannot do.
+-- | 'Session' describes the current user: who they are, their groups and
+-- their grants. The client uses it to run the permission rules itself and
+-- hide what the user cannot do.
 data Session = Session
   { user :: Maybe User
   -- ^ 'Nothing' for someone who is not signed in.
@@ -207,18 +211,19 @@ data Session = Session
   -- would not count them anyway and they are nobody else's business. Nobody
   -- who is not signed in holds a grant: what they see is the public spaces.
   , standing :: Standing
-  -- ^ How they came to be who they are: whether they may sign in, or sign
-  -- out, over a backend where people do.
+  -- ^ How the user is signed in, which says whether they may sign in or
+  -- sign out, on a backend where people sign in.
   , providers :: [SignInProvider]
-  -- ^ The providers one may sign in with instead of a password, over a
+  -- ^ The providers one may sign in with instead of a password, on a
   -- backend that has any (a server whose configuration names them, WP3.6
-  -- of docs/PLAN.md): part of the session so that the page a server
-  -- renders and the program's first render offer the same.
+  -- of docs/PLAN.md). They are part of the session so that the page the
+  -- server prerenders and the program's first render offer the same ones.
   , exports :: [ExportFormat]
-  -- ^ The documents the backend exports pages and spaces as
-  -- ("Wiki.Api.Export"), which the page and the space offer: none in the
-  -- demo, which has no pandoc; on a server, the PDFs only where it found a
-  -- TeX engine. Part of the session for the same reason as 'providers'.
+  -- ^ The document formats the backend can export pages and spaces to
+  -- ("Wiki.Api.Export"), which the page and space views offer. The demo has
+  -- none, because it has no pandoc. A server offers the PDF formats only if
+  -- it found a TeX engine. Part of the session for the same reason as
+  -- 'providers'.
   }
   deriving stock (Eq, Show)
 
@@ -226,10 +231,10 @@ data Session = Session
 anonymous :: Session
 anonymous = anonymousIn Open
 
--- | The session of someone who is not signed in, in a wiki of this access:
--- they hold no grant, and their grants say whom the wiki is open to
--- ("Wiki.Core.Access"), so that the application knows before anyone signs
--- in whether there is anything to show them.
+-- | The session of someone who is not signed in, in a wiki with this
+-- access setting. They hold no grant, and their grants record whom the
+-- wiki is open to ("Wiki.Core.Access"), so that the application knows
+-- before anyone signs in whether there is anything to show them.
 anonymousIn :: Access -> Session
 anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {global = [], spaces = [], access}, standing = NotSignedIn, providers = [], exports = []}
 
@@ -238,7 +243,8 @@ anonymousIn access = Session {user = Nothing, groups = mempty, grants = Grants {
 shutOut :: Session -> Bool
 shutOut s = s.grants.access == Closed && isNothing s.user
 
--- | The current user as the rules of "Wiki.Core.Permission" want them.
+-- | The current user in the form the rules of "Wiki.Core.Permission" take,
+-- or 'Nothing' when nobody is signed in.
 sessionPrincipal :: Session -> Maybe Principal
 sessionPrincipal s = (\u -> Principal {user = u.id, groups = s.groups}) <$> s.user
 
@@ -250,15 +256,17 @@ currentUser = (\s -> s.user) <$> session
 maxAttachmentSize :: Natural
 maxAttachmentSize = 50 * 1024 * 1024
 
--- | The wiki, as the application sees it.
+-- | 'MonadWiki' is the backend interface: every read and write the
+-- application makes on the wiki.
 --
--- The methods have lifted defaults, so that a monad transformer over a
--- backend is a backend ('HalogenM' is one, so a component's handlers call
--- these directly). A call waits for the backend in whatever way the backend
--- waits; in a component that is on the component's own fiber, as with any
--- other @lift@.
+-- Every method has a default that lifts it through a monad transformer, so
+-- a transformer over a backend is a backend too. 'HalogenM' is such a
+-- transformer, so a component's handlers call these methods directly. A
+-- call waits for the backend in whatever way that backend waits; in a
+-- component, it waits on the component's own fiber, as any other @lift@
+-- does.
 class (Monad m) => MonadWiki m where
-  -- | Who is asking.
+  -- | The session of the current user.
   session :: m Session
   default session :: (MonadTrans t, m ~ t n, MonadWiki n) => m Session
   session = lift session
@@ -270,8 +278,8 @@ class (Monad m) => MonadWiki m where
   -- down: the client can build every path and breadcrumb from it with
   -- "Wiki.Core.Path". An ancestor that the user may not view itself (because
   -- the grant they have is on a subspace of it) is listed for its name and
-  -- slug only: 'getSpace' and 'listPages' refuse it, and the rules say so to
-  -- the client beforehand.
+  -- slug only: 'getSpace' and 'listPages' refuse it, and the client can
+  -- tell this in advance from the permission rules.
   --
   -- The whole tree, rather than one level at a time, because a wiki has tens
   -- of spaces rather than thousands and the sidebar shows all of them.
@@ -287,11 +295,11 @@ class (Monad m) => MonadWiki m where
   default getSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => [Slug] -> m (Either WikiError Space)
   getSpace = lift . getSpace
 
-  -- | A new private space, at the top level or as a subspace of another, with
-  -- this name and a slug made from it, last among its siblings, listing its
-  -- children by name, with no description and the default icon, and one
-  -- page, its home page (see "Home pages" above). Its creator is granted
-  -- 'Wiki.Core.Permission.AdministerSpace' on it.
+  -- | Create a private space, at the top level or as a subspace of
+  -- another, with this name and a slug made from it. It goes last among its
+  -- siblings, lists its children by name, has no description and the
+  -- default icon, and has one page, its home page (see "Home pages" above).
+  -- Its creator is granted 'Wiki.Core.Permission.AdministerSpace' on it.
   createSpace :: Maybe SpaceId -> Text -> m (Either WikiError Space)
   default createSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => Maybe SpaceId -> Text -> m (Either WikiError Space)
   createSpace p = lift . createSpace p
@@ -308,9 +316,9 @@ class (Monad m) => MonadWiki m where
 
   -- | Give a space its math macros ('Wiki.Core.Space.mathMacros'), which
   -- its subspaces inherit; the empty text for none. Blank lines at either
-  -- end are dropped. The text is kept as it is: whether KaTeX can read it is
-  -- for the browser to say as it is edited, and a block it cannot read never
-  -- stops a page from being drawn.
+  -- end are dropped. The text is stored as it is. The browser checks
+  -- whether KaTeX can parse it while it is edited, and a block KaTeX cannot
+  -- parse never stops a page from rendering.
   setSpaceMathMacros :: SpaceId -> Text -> m (Either WikiError Space)
   default setSpaceMathMacros :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Text -> m (Either WikiError Space)
   setSpaceMathMacros s = lift . setSpaceMathMacros s
@@ -319,22 +327,22 @@ class (Monad m) => MonadWiki m where
   -- colour, the image it has, or the default) and its home page (one of
   -- its pages, or none), checked as 'Wiki.Core.Space.checkProfile' checks
   -- them; what does not pass is 'Invalid'. An image is uploaded with
-  -- 'uploadSpaceIcon', and one the space had and the profile does not keep
-  -- is let go.
+  -- 'uploadSpaceIcon'. An image the space had, which the new profile does
+  -- not keep, is removed from the space.
   setSpaceProfile :: SpaceId -> SpaceProfile -> m (Either WikiError Space)
   default setSpaceProfile :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> SpaceProfile -> m (Either WikiError Space)
   setSpaceProfile s = lift . setSpaceProfile s
 
-  -- | Picture a space with an image: its media type and its bytes, checked
+  -- | Set a space's icon to an image: its media type and its bytes, checked
   -- as 'Wiki.Core.Space.checkIconUpload' checks them ('Invalid' if they do
-  -- not pass). The bytes are kept as an attachment's are, and an image the
-  -- space had before is let go.
+  -- not pass). The bytes are stored as an attachment's are, and the image
+  -- replaces any image the space had before.
   uploadSpaceIcon :: SpaceId -> Text -> ByteString -> m (Either WikiError Space)
   default uploadSpaceIcon :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Text -> ByteString -> m (Either WikiError Space)
   uploadSpaceIcon s t = lift . uploadSpaceIcon s t
 
-  -- | Where a browser fetches the image a space is pictured with, as
-  -- 'attachmentUrl' says for an attachment's: an object URL in the demo
+  -- | The URL a browser fetches a space's icon image from, as
+  -- 'attachmentUrl' gives an attachment's: an object URL in the demo
   -- (a @data:@ URL natively), the server's address for it over HTTP. The
   -- empty text for a space whose icon is no image, or one whose bytes the
   -- backend does not have.
@@ -342,9 +350,9 @@ class (Monad m) => MonadWiki m where
   default spaceIconUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => Space -> m Text
   spaceIconUrl = lift . spaceIconUrl
 
-  -- | How many pages each space has that the current user may view, by
-  -- space: what the directory of spaces says of each. A space they may
-  -- not view (an ancestor listed for its name) is left out.
+  -- | The number of pages in each space the current user may view, by
+  -- space, which the directory of spaces shows. A space they may not view
+  -- (an ancestor listed only for its name) is left out.
   pageCounts :: m (Map SpaceId Int)
   default pageCounts :: (MonadTrans t, m ~ t n, MonadWiki n) => m (Map SpaceId Int)
   pageCounts = lift pageCounts
@@ -374,16 +382,17 @@ class (Monad m) => MonadWiki m where
   spaceAccess = lift . spaceAccess
 
   -- | Give a user or a group a permission on a space, which its subspaces
-  -- inherit, or take it away (a grant on an ancestor is that ancestor's to
-  -- take). A grant given twice, or taken from someone who does not have it,
-  -- changes nothing and succeeds. Giving it to a user or group that is not
-  -- there is 'Invalid' (the address names the space, which is what is
-  -- found or not), checked after the permission, as the arguments are.
+  -- inherit, or take it away (a grant on an ancestor can only be taken
+  -- away on that ancestor). A grant given twice, or taken from someone who
+  -- does not have it, changes nothing and succeeds. Giving it to a user or
+  -- group that does not exist is 'Invalid', not 'NotFound': the request's
+  -- address names the space, and only the space can be not found. Like the
+  -- other arguments, this is checked after the permission.
   --
-  -- Whoever administers the space may take the permission from themself:
-  -- the backend allows it, and the space's view does not offer it (see
-  -- 'Wiki.Core.Permission.keepsAdministering'), as the administration does
-  -- not offer the global administer.
+  -- An administrator of the space may take the permission away from
+  -- themself. The backend allows it, but the space's view does not offer it
+  -- (see 'Wiki.Core.Permission.keepsAdministering'), just as the
+  -- administration does not offer taking away one's own global administer.
   setSpaceGrant :: SpaceId -> Subject -> SpacePermission -> Bool -> m (Either WikiError ())
   default setSpaceGrant :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Subject -> SpacePermission -> Bool -> m (Either WikiError ())
   setSpaceGrant s who p = lift . setSpaceGrant s who p
@@ -399,9 +408,9 @@ class (Monad m) => MonadWiki m where
 
   -- | Move a subspace up, down, to the top or to the bottom of its parent's
   -- list. Its parent has to list its subspaces 'ByHand', and a top-level
-  -- space has no parent to: either is 'Invalid'. A move past the end of the
-  -- list (up from the top) changes nothing and succeeds. What is given back
-  -- is the space with its new position.
+  -- space has no parent; both cases are 'Invalid'. A move past the end of
+  -- the list (up from the top) changes nothing and succeeds. The result is
+  -- the space with its new position.
   shiftSpace :: SpaceId -> Shift -> m (Either WikiError Space)
   default shiftSpace :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> Shift -> m (Either WikiError Space)
   shiftSpace s = lift . shiftSpace s
@@ -421,7 +430,7 @@ class (Monad m) => MonadWiki m where
   default listPages :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError [Page])
   listPages = lift . listPages
 
-  -- | What each page of a space is listed with as a post of a blog
+  -- | The details each page of a space is listed with as a blog post
   -- ("Wiki.Core.Blog"): who wrote it (the author of its first version) and
   -- how many comments it has, by page, for every page of the space, whether
   -- the space is shown as a blog or not. Refused as 'listPages' is.
@@ -496,11 +505,12 @@ class (Monad m) => MonadWiki m where
   default deleteAttachment :: (MonadTrans t, m ~ t n, MonadWiki n) => AttachmentId -> m (Either WikiError ())
   deleteAttachment = lift . deleteAttachment
 
-  -- | Where a browser fetches an attachment from: its URL for one that lives
-  -- on the web; for one whose bytes the backend keeps, an address the
-  -- backend serves them at (an object URL in the demo, a server path over
-  -- HTTP). Natively the in-memory backend gives a @data:@ URL. An attachment
-  -- the backend does not know gives the empty text.
+  -- | The URL a browser fetches an attachment from. An attachment that
+  -- lives on the web has its own URL. For one whose bytes the backend
+  -- stores, it is an address the backend serves them at (an object URL in
+  -- the demo, a server path over HTTP). Natively the in-memory backend gives
+  -- a @data:@ URL. An attachment the backend does not know gives the empty
+  -- text.
   attachmentUrl :: Attachment -> m Text
   default attachmentUrl :: (MonadTrans t, m ~ t n, MonadWiki n) => Attachment -> m Text
   attachmentUrl = lift . attachmentUrl
@@ -555,18 +565,20 @@ class (Monad m) => MonadWiki m where
 
   -- | A page's history ("Wiki.Core.Version"): every version of it, the
   -- latest first, which is the page as it is now. A page has a version for
-  -- each save and one for when it was made; one that came in whole (from an
-  -- import, or kept from before versions were) starts from that. Moving a
-  -- page, and its attachments, make no version: a version is a title and a
-  -- body. The versions go with the page when it is deleted.
+  -- each save and one for when it was made. A page that was imported, or
+  -- that existed before versions were kept, starts its history with the
+  -- state it came in with. Moving a page and changing its attachments make
+  -- no version: a version is a title and a body. The versions are deleted
+  -- with the page.
   listVersions :: PageId -> m (Either WikiError [VersionInfo])
   default listVersions :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> m (Either WikiError [VersionInfo])
   listVersions = lift . listVersions
 
-  -- | One version of a page, by its @updatedAt@ then. A page that is not
-  -- there is 'NotFound', one the user may not view 'Forbidden', and only
-  -- then a time that is no version of it 'NotFound', so that whoever may
-  -- not see a page learns nothing of its history.
+  -- | One version of a page, by the page's @updatedAt@ at that version.
+  -- The checks come in this order: a page that is not there is
+  -- 'NotFound', one the user may not view 'Forbidden', and only then a
+  -- time that is no version of it 'NotFound'. So whoever may not see a
+  -- page learns nothing of its history.
   getVersion :: PageId -> UTCTime -> m (Either WikiError Version)
   default getVersion :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> UTCTime -> m (Either WikiError Version)
   getVersion p = lift . getVersion p
@@ -577,7 +589,8 @@ class (Monad m) => MonadWiki m where
   -- the version to restore, the third the @updatedAt@ of the page as the
   -- restorer saw it, checked as a save's is: a page saved since is a
   -- 'Conflict'. Like any save it discards the restorer's draft of the page.
-  -- The errors come as 'getVersion''s, with 'Edit' in place of 'View'.
+  -- The errors are those of 'getVersion', with 'Edit' needed in place of
+  -- 'View'.
   restoreVersion :: PageId -> UTCTime -> UTCTime -> m (Either WikiError Page)
   default restoreVersion :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> UTCTime -> UTCTime -> m (Either WikiError Page)
   restoreVersion p v = lift . restoreVersion p v
@@ -585,20 +598,22 @@ class (Monad m) => MonadWiki m where
 -- | A component's handlers reach the backend through its monad.
 instance (MonadWiki m) => MonadWiki (HalogenM st act slots output m)
 
--- | How a backend answers: at once, or after a wait that may fail. See
--- "Loading" in the module's Haddock.
+-- | 'MonadLoad' tells whether the backend can answer at once, and runs
+-- reads that may fail to reach it. See "Loading" in the module's Haddock.
 --
--- There is deliberately no instance for 'HalogenM': both methods run a
--- program of the backend's own, which a component reaches through
--- 'Halogen.Query.HalogenM.lift' (@H.lift (attempt fetchWorld)@), on a
--- worker, so that the loop goes on meanwhile.
+-- There is deliberately no instance for 'HalogenM'. Both methods take a
+-- backend program as an argument, so a component calls them through
+-- 'Halogen.Query.HalogenM.lift' (@H.lift (attempt fetchWorld)@), which runs
+-- them on a worker thread while the loop goes on.
 class (MonadWiki m) => MonadLoad m where
-  -- | What these reads give, if the backend can answer all of them without
-  -- waiting: the in-memory backend always can, one over HTTP for what it
-  -- has seen and kept since the wiki last changed. 'Nothing' means the
-  -- reads would wait; nothing is asked of the network then.
+  -- | The result of these reads, if the backend can answer all of them
+  -- without waiting. The in-memory backend always can; the HTTP backend can
+  -- for answers it has cached since the wiki last changed. 'Nothing' means
+  -- the reads would have to wait, and then nothing is sent over the
+  -- network.
   atOnce :: m a -> m (Maybe a)
 
-  -- | Run a program, with 'Unreachable' thrown by 'session', 'listSpaces'
-  -- or 'searchPages' given back as the error rather than thrown on.
+  -- | Run a program, and return an 'Unreachable' thrown by 'session',
+  -- 'listSpaces' or 'searchPages' as a 'Left' instead of letting it
+  -- propagate.
   attempt :: m a -> m (Either WikiError a)
