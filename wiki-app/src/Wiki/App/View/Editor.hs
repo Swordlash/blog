@@ -143,8 +143,9 @@
 --
 -- = The writing assistant
 --
--- A bar of the providers' buttons at the text's left edge (Claude's and
--- ChatGPT's, above the text on a narrow screen) opens the writing
+-- The providers' buttons, round bubbles floating at the top right of the
+-- text (Claude's and ChatGPT's, each growing into a pill with its label
+-- on hover or focus), open the writing
 -- assistant's panel ("Wiki.App.View.Assistant", WP4.19 of docs/PLAN.md)
 -- with that provider, or closes it if it is open with it; the panel says
 -- which provider it asks, and its button is marked. The panel is beside the
@@ -793,7 +794,9 @@ component =
 
     -- The providers' buttons: each opens the assistant with its provider, or
     -- closes it if it is open with it. The scripted provider's is there
-    -- only where a test installed it.
+    -- only where a test installed it. They are the first of the text's
+    -- children, a row of no height that the style sheet keeps under the
+    -- toolbar, the bubbles hanging from it over the text's right edge.
     providerBar :: State -> H.ComponentHTML Action Slots m
     providerBar st =
       [hh|
@@ -820,7 +823,7 @@ component =
           aria-label={{ label }}
           aria-pressed={{ ariaBool (st.assistantOpen && st.assistantProvider == Just p) }}
           onClick={{ const (OpenWith p) }}
-        >{{ face }}</button>
+        >{{ face }}<span class="editor-provider-label" aria-hidden="true">{{ label }}</span></button>
       |]
 
     -- The assistant's panel, once it has been opened, hidden while it is

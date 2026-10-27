@@ -4803,64 +4803,120 @@ a.mention {
   display: none;
 }
 
-/* The providers' buttons, which open the assistant: a row above the text
-   on a narrow screen, a column at its left edge on a wide one. */
+/* The providers' buttons, which open the assistant: round bubbles floating
+   at the top right of the text, over its right edge, stacked, with a soft
+   shadow. Their row is a sticky one of no height at the top of the text,
+   just under the sticky toolbar, so that they stay in view as the text
+   scrolls and take no room of it; the bubbles hang from it. On hover or
+   focus a bubble grows to the left into a pill with its label. */
 .editor-providers {
+  position: relative;
+  z-index: 3;
+  height: 0;
   display: flex;
-  gap: 0.4rem;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.75rem;
+  padding: 0.75rem 0.75rem 0 0;
 }
 
 @media (min-width: 961px) {
-  .editor-source {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 0.5rem;
-    row-gap: 0.3rem;
-    align-items: start;
-  }
-
-  .editor-source > * {
-    grid-column: 2;
-  }
-
-  .editor-source > .editor-providers {
-    grid-column: 1;
-    grid-row: 1 / span 3;
-    flex-direction: column;
+  .editor-providers {
     position: sticky;
-    top: 0.5rem;
+    top: calc(var(--header-height) + 3.25rem);
+  }
+
+  /* The text's lines keep clear of the bubbles. */
+  .editor-cm .cm-editor .cm-content {
+    padding-right: 5rem;
   }
 }
 
 .editor-provider {
+  --bubble: 64px;
+  --logo: 32px;
+  /* Its own size, whatever the row of no height it hangs from leaves it. */
+  flex: none;
   display: inline-flex;
+  flex-direction: row-reverse;
   align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
+  justify-content: flex-start;
+  min-width: var(--bubble);
+  max-width: var(--bubble);
+  height: var(--bubble);
+  /* The logo centred in the circle: the bubble less the logo and the
+     border, on each side. */
+  padding: 0 calc((var(--bubble) - var(--logo) - 2px) / 2);
+  overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 999px;
   background: var(--background);
   color: var(--text);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
+  white-space: nowrap;
+  transition:
+    max-width 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
 }
 
-.editor-provider:hover {
-  background: var(--surface);
+.editor-provider-label {
+  margin-right: 0.6rem;
+  font-size: 1rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.editor-provider:hover,
+.editor-provider:focus-visible {
+  max-width: 20rem;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.24);
+}
+
+.editor-provider:hover .editor-provider-label,
+.editor-provider:focus-visible .editor-provider-label {
+  opacity: 1;
 }
 
 .editor-provider[aria-pressed="true"] {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent);
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 6px 20px rgb(0 0 0 / 0.24);
 }
 
 .editor-provider-logo {
-  width: 24px;
-  height: 24px;
+  flex: none;
+  width: var(--logo);
+  height: var(--logo);
 }
 
 .editor-provider-text {
+  flex: none;
+  width: var(--logo);
+  font-size: 1.25rem;
   font-weight: 700;
+  text-align: center;
+}
+
+@media (max-width: 960px) {
+  .editor-provider {
+    --bubble: 56px;
+    --logo: 28px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-provider,
+  .editor-provider-label {
+    transition: none;
+  }
+
+  .editor-provider:hover,
+  .editor-provider:focus-visible {
+    transform: none;
+  }
 }
 
 .editor-pending-note {
