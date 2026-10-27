@@ -26,12 +26,20 @@
 -- A provider can be checked ("Check"): the server asks it how to sign in,
 -- as it is saved or, from its form, as typed, and says where it found its
 -- endpoints or why it could not. Each provider shows the redirect URI to
--- register with it, below the wiki's public address. A test mail goes to
+-- register with it, below the wiki's public address. Its form says under
+-- each field what goes there and where it comes from, in the README's
+-- words ('providerHints'), and what to do with the redirect URI
+-- ('providerRedirect'). A test mail goes to
 -- an address typed, through the mail server as saved. The demo keeps the
 -- settings for the tab's life and does neither, which it says.
 module Wiki.App.View.Server
   ( Input (..)
   , component
+
+    -- * The provider form's help
+  , ProviderHints (..)
+  , providerHints
+  , providerRedirect
   )
 where
 
@@ -417,6 +425,7 @@ component =
             <span>Name, in its addresses</span>
             <input type="text" name="name" autocomplete="off" required pattern={{ "[a-z][a-z0-9\\-]*" :: Text }} placeholder="google" readonly={{ isJust (editedName st) }} value={{ form.typedName }} onValueInput={{ TypedName }}>
           </label>
+          <p class="field-hint server-provider-hint-name">{{ hints.name }}</p>
           <label class="field">
             <span>Kind</span>
             <select name="kind" onValueChange={{ ChoseKind }}>
@@ -425,16 +434,20 @@ component =
               {% end %}
             </select>
           </label>
+          <p class="field-hint server-provider-hint-kind">{{ hints.kind }}</p>
           <label class="field">
             <span>Client id</span>
             <input type="text" name="client-id" autocomplete="off" required value={{ form.typedClientId }} onValueInput={{ TypedClientId }}>
           </label>
+          <p class="field-hint server-provider-hint-client-id">{{ hints.clientId }}</p>
           <label class="field">
             <span>{{ issuerLabel form.chosenKind }}</span>
             <input type="url" name="issuer" autocomplete="off" required={{ form.chosenKind == Generic }} value={{ form.typedIssuer }} onValueInput={{ TypedIssuer }}>
           </label>
+          <p class="field-hint server-provider-hint-address">{{ hints.address }}</p>
           {{ secretField "Client secret" "secret" form.secretSet form.replacingSecret False form.typedSecret TypedSecret ReplaceSecret Nothing }}
-          <p class="server-provider-redirect">Redirect URI to register: {{ redirectText settings (T.strip form.typedName) }}</p>
+          <p class="field-hint server-provider-hint-secret">{{ hints.secret }}</p>
+          {{ providerRedirect settings.publicUrl (T.strip form.typedName) }}
           <div class="actions">
             <button type="submit" class="primary" disabled={{ st.busy }}>Save</button>
             <button type="button" class="server-provider-form-check" disabled={{ st.busy || T.null (T.strip form.typedName) }} onClick={{ const CheckForm }}>Check</button>
@@ -445,6 +458,8 @@ component =
           {% end %}
         </form>
       |]
+      where
+        hints = providerHints form.chosenKind
 
     checkedView :: Checked -> H.ComponentHTML Action Slots m
     checkedView = \case
@@ -731,6 +746,71 @@ issuerLabel = \case
   Generic -> "Issuer (its discovery is below it)"
   GitHub -> "Address, for GitHub Enterprise (left empty, github.com)"
   _ -> "Address in place of its own (left empty, its own)"
+
+-- | What the provider form's hints say, under each of its fields, for the
+-- kind chosen: in the README's words (its "Signing in with Google, GitHub,
+-- Apple or another provider"), what the field is, and where its value
+-- comes from when the wiki is registered with the provider.
+data ProviderHints = ProviderHints
+  { name :: Text
+  , kind :: Text
+  , clientId :: Text
+  , address :: Text
+  -- ^ The fourth field's: an OpenID Connect provider's issuer, a GitHub
+  -- Enterprise server, or a proxy in place of Google's or Apple's own.
+  , secret :: Text
+  }
+
+providerHints :: ProviderKind -> ProviderHints
+providerHints k =
+  ProviderHints
+    { name =
+        "A name you choose, in lower-case letters, digits and dashes: it goes into the redirect URI"
+          <> case k of
+            Generic -> ", and onto the sign-in button with a capital letter."
+            _ -> ", and the sign-in button says “Sign in with " <> kindText k <> "”."
+    , kind = "The kind decides whether the wiki knows the provider's addresses: it knows Google's, Apple's and GitHub's, and finds any other provider's from its issuer."
+    , clientId = case k of
+        Google -> "From registering the wiki with Google: Google Cloud console, APIs & Services, Credentials, “Create credentials”, an OAuth client ID of type “Web application”."
+        GitHub -> "From registering the wiki with GitHub: Settings, Developer settings, OAuth Apps, “New OAuth App”; the client ID is on the app's page."
+        Apple -> "From registering the wiki with Apple: the Services ID, with “Sign in with Apple” enabled, from Certificates, Identifiers & Profiles."
+        Generic -> "From registering the wiki with the provider as a confidential client, with the scopes openid, email and profile."
+    , address = case k of
+        Generic -> "The address under which the provider serves /.well-known/openid-configuration, such as a Keycloak realm's."
+        GitHub -> "A GitHub Enterprise server's address; empty for github.com."
+        _ -> "Empty, unless a proxy stands in for " <> kindText k <> "'s own addresses."
+    , secret = case k of
+        Google -> "Shown beside the client ID in the Google Cloud console, once the OAuth consent screen is configured."
+        GitHub -> "Made on the app's page, with “Generate a new client secret”."
+        Apple -> "A JWT you sign with a “Sign in with Apple” key, valid for at most six months: make a new one before it expires."
+        Generic -> "The confidential client's secret, from the same registration."
+    }
+
+-- | The redirect URI the provider form says to register, given the wiki's
+-- public address and the name typed: none until both are there, and then
+-- the URI, with what to do with it.
+providerRedirect :: Maybe Text -> Text -> HH.HTML w i
+providerRedirect publicUrl name = case publicUrl of
+  Nothing ->
+    [hh|
+      <div class="server-provider-redirect-to">
+        <p class="field-hint">The wiki's public address must be set first, above: the redirect URI to register starts with it.</p>
+      </div>
+    |]
+  Just url
+    | T.null name ->
+        [hh|
+          <div class="server-provider-redirect-to">
+            <p class="field-hint">Type the name above and the redirect URI to register appears here.</p>
+          </div>
+        |]
+    | otherwise ->
+        [hh|
+          <div class="server-provider-redirect-to">
+            <p>Redirect URI to register: <code class="server-provider-redirect">{{ redirectUri url name }}</code></p>
+            <p class="field-hint">Register it with the provider as its redirect (callback) URI; Google's “Authorized JavaScript origins” may stay empty.</p>
+          </div>
+        |]
 
 -- | A provider's redirect URI, once the wiki has a public address.
 redirectText :: ServerSettings -> Text -> Text

@@ -2,8 +2,9 @@
 -- (WP4.4 of docs/PLAN.md, "Wiki.App.View.Server"): the public address, the
 -- mail server and the providers set from their forms over the demo's wiki,
 -- each secret typed once and never shown again, "Check" and the test
--- mail, which the demo says it cannot do; and over the backend over HTTP,
--- a provider checked by the server and a change saved that keeps the
+-- mail, which the demo says it cannot do; the provider form's hints and its
+-- redirect URI in each of its states (WP5.5); and over the backend over
+-- HTTP, a provider checked by the server and a change saved that keeps the
 -- secrets it does not touch.
 module Test.Browser.Server (spec) where
 
@@ -115,6 +116,43 @@ demo m = describe "over the demo's wiki" $ do
     find ui (row <> ".server-provider-secret") >>= (`shouldHaveText` "set")
     find ui (row <> ".server-provider-remove") >>= click
     eventually (length <$> findAll ui ".server-provider" `shouldReturn` 0)
+    unmount ui
+
+  it "explains each field of a provider, and the redirect URI to register as it can be known" $ runPage $ do
+    ui <- start m (Just "user-admin") Admin
+    let hint field = find ui (".server-provider-form .server-provider-hint-" <> field)
+        redirect = find ui ".server-provider-form .server-provider-redirect-to"
+    -- No public address yet: no redirect URI either, and the form says so.
+    find ui ".server-provider-add" >>= click
+    redirect >>= (`shouldContainText` "The wiki's public address must be set first")
+    find ui ".server-provider-form input[name=name]" >>= (`typeText` "google")
+    redirect >>= (`shouldContainText` "must be set first")
+    -- The hints, Google's first, then the others' as the kind changes.
+    hint "name" >>= (`shouldContainText` "lower-case letters, digits and dashes")
+    hint "name" >>= (`shouldContainText` "Sign in with Google")
+    hint "kind" >>= (`shouldContainText` "whether the wiki knows the provider's addresses")
+    hint "client-id" >>= (`shouldContainText` "Google Cloud console")
+    hint "address" >>= (`shouldContainText` "unless a proxy stands in for Google")
+    hint "secret" >>= (`shouldContainText` "OAuth consent screen")
+    choose ui ".server-provider-form select[name=kind]" 2
+    hint "client-id" >>= (`shouldContainText` "OAuth Apps")
+    hint "address" >>= (`shouldContainText` "empty for github.com")
+    hint "secret" >>= (`shouldContainText` "Generate a new client secret")
+    choose ui ".server-provider-form select[name=kind]" 3
+    hint "name" >>= (`shouldContainText` "onto the sign-in button")
+    hint "client-id" >>= (`shouldContainText` "confidential client")
+    hint "address" >>= (`shouldContainText` "/.well-known/openid-configuration")
+    find ui ".server-provider-form .server-cancel" >>= click
+    -- With the address: the name asked for, then the URI and what to do
+    -- with it.
+    setAddress ui "https://wiki.example.org/"
+    find ui ".server-provider-add" >>= click
+    redirect >>= (`shouldContainText` "Type the name above and the redirect URI to register appears here.")
+    find ui ".server-provider-form input[name=name]" >>= (`typeText` "google")
+    redirect >>= (`shouldContainText` "Redirect URI to register: https://wiki.example.org/auth/google/callback")
+    redirect >>= (`shouldContainText` "Register it with the provider as its redirect (callback) URI")
+    find ui ".server-provider-form .server-provider-redirect" >>= (`shouldHaveText` "https://wiki.example.org/auth/google/callback")
+    find ui ".server-provider-form .server-cancel" >>= click
     unmount ui
 
   it "says why settings cannot be, and keeps the form open" $ runPage $ do

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The administration's "Add a provider" explains itself (WP5.5): under each
+field a hint in the README's words says what it is and, for the client id,
+the secret and the fourth field, where it comes from for the kind chosen;
+the line on the redirect URI says what is missing while it cannot be known
+(the public address, then the name) and, once it can, how to register it.
+
 TikZ pictures are drawn behind a proxy that refuses gzip downloads (WP5.5):
 the page serves TikZJax's TeX, its format and its TeX files
 (`tikzjax/tex.wasm.gz`, `core.dump.gz`, `tex_files/*.gz` as published) as

@@ -16,6 +16,7 @@ import Test.Link qualified as Link
 import Test.Manifest qualified as Manifest
 import Test.Readme qualified as Readme
 import Test.Route qualified as Route
+import Test.Server qualified as Server
 import Test.Shell qualified as Shell
 
 main :: IO ()
@@ -29,6 +30,7 @@ main = hspec $ do
   Route.spec
   Link.spec
   Shell.spec
+  Server.spec
   Blog.spec
   Hydrate.spec
   Import.spec
