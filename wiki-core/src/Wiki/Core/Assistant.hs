@@ -26,6 +26,7 @@ module Wiki.Core.Assistant
   , Settings (..)
   , ProviderSettings (..)
   , defaultSettings
+  , blankSettings
   , settingsOf
   , withKey
   , withModel
@@ -141,6 +142,13 @@ data Settings = Settings
 -- | Nothing set yet: Anthropic, with its default model and no key.
 defaultSettings :: Settings
 defaultSettings = Settings {provider = Anthropic, byProvider = mempty}
+
+-- | Whether settings hold nothing but what nothing set holds: no key, the
+-- first provider, every model its default. Such settings need not be kept.
+blankSettings :: Settings -> Bool
+blankSettings s = s.provider == Anthropic && all blank (Map.toList s.byProvider)
+  where
+    blank (p, ps) = isNothing ps.key && ps.model == defaultModel p
 
 -- | A provider's settings, its defaults where nothing was set.
 settingsOf :: Provider -> Settings -> ProviderSettings

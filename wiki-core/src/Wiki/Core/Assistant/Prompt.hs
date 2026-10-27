@@ -87,7 +87,7 @@ data PageContext
   deriving stock (Eq, Show)
 
 -- | How much of a page goes with a message when nothing is selected: about
--- six thousand tokens, enough for most pages and little beside the
+-- seven thousand tokens, enough for most pages and little beside the
 -- reference. The panel says so when a page is longer.
 bodyCap :: Int
 bodyCap = 24_000
@@ -271,7 +271,7 @@ maxTokens = 32_000
 -- | A request to Anthropic's Messages API, without its messages, which the
 -- browser's side adds: the model, the tools, and the system prompt, the
 -- reference first, both blocks marked for caching (the reference alone is
--- some six thousand tokens, over every model's minimum). No @thinking@:
+-- some seven thousand tokens, over every model's minimum). No @thinking@:
 -- the current models think as they see fit, and some refuse it turned off.
 anthropicRequest :: Text -> Value
 anthropicRequest model =
@@ -289,7 +289,10 @@ anthropicRequest model =
 -- so that every request starts alike and its prefix is cached), the tools,
 -- and nothing kept by OpenAI (@store@ false): the conversation is sent
 -- whole each time, with the model's reasoning as it was handed back
--- (encrypted, as OpenAI keeps none of it).
+-- (encrypted, as OpenAI keeps none of it). Reasoning is asked to be brief
+-- (effort "low", which every model offered takes) and no limit is set on
+-- the answer's length: a reasoning model given a small budget spends it
+-- all on reasoning and answers nothing.
 openAiRequest :: Text -> Value
 openAiRequest model =
   object
@@ -298,4 +301,5 @@ openAiRequest model =
     , "tools" .= openAiTools
     , "store" .= False
     , "include" .= ["reasoning.encrypted_content" :: Text]
+    , "reasoning" .= object ["effort" .= ("low" :: Text)]
     ]

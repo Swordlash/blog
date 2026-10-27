@@ -57,6 +57,13 @@ settingsSpec = describe "settings" $ do
     ready (chooseProvider OpenAI s) `shouldSatisfy` isLeft
     ready (chooseProvider Scripted defaultSettings) `shouldBe` Right (Ready Scripted "scripted" "")
 
+  it "are blank with nothing but defaults in them" $ do
+    blankSettings defaultSettings `shouldBe` True
+    blankSettings (withKey Anthropic Nothing (withKey Anthropic (Just "k") defaultSettings)) `shouldBe` True
+    blankSettings (withKey Anthropic (Just "k") defaultSettings) `shouldBe` False
+    blankSettings (chooseProvider OpenAI defaultSettings) `shouldBe` False
+    blankSettings (withModel OpenAI "gpt-6-luna" defaultSettings) `shouldBe` False
+
   it "go to JSON and back" $ do
     let s = chooseProvider OpenAI (withModel OpenAI "custom-model" (withKey OpenAI (Just "sk-o") (withKey Anthropic (Just "sk-a") defaultSettings)))
     decode (encode s) `shouldBe` Just s
@@ -175,6 +182,8 @@ requestSpec = describe "the requests" $ do
         text `shouldSatisfy` T.isSuffixOf instructions
       other -> expectationFailure ("no instructions: " <> show other)
     field "store" request `shouldBe` Just (Bool False)
+    field "reasoning" request `shouldBe` Just (object ["effort" .= ("low" :: Text)])
+    field "max_output_tokens" request `shouldBe` Nothing
     field "tools" request `shouldBe` Just openAiTools
     encode (openAiRequest "gpt-6.1-sol") `shouldBe` encode request
 

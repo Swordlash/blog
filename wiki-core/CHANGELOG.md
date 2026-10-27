@@ -5,6 +5,27 @@
 The audit log names `user.password-link` (WP5.6): "Mailed a user a link to
 choose a password".
 
+The writing assistant's pure part (WP4.19). `Wiki.Core.Assistant` has the
+providers (Anthropic, OpenAI, and the scripted one tests install), the models
+offered for each (one list, read from the providers' own pages, the newest
+general models first), the `Settings` a user keeps (a key and a model per
+provider, the provider chosen; JSON as the browser keeps it, blank settings
+not kept at all) and what an error says (`errorText`, with the key and
+anything like a key taken out by `redact`). `Wiki.Core.Assistant.Prompt`
+assembles what a model is sent: the authors' Markdown reference,
+`docs/markdown.md`, first and marked for caching (`Wiki.Core.Assistant.Reference`
+embeds it when the package is compiled, through the link
+`reference/markdown.md`, so the prompt follows the reference), the
+instructions, the two tools (`replace` and `insert`, each field required for
+OpenAI's strict mode), and with each message of the user's the page's context:
+the selection with a paragraph each side, or the page cut to `bodyCap`
+characters. `Wiki.Core.Assistant.Edit` reads a tool call as an `Edit`, finds
+where it goes (a quote must occur exactly once in the page, or the model is
+told why not, `answer`) and keeps the tracked changes an edit makes:
+`propose` takes in the changes an edit overlaps, `settle` gives what
+accepting or rejecting changes writes, and `track` is the model of what the
+editor does, which the tests check them against.
+
 Licensed under the MIT licence (WP5.1), where it was proprietary: the
 package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
 
