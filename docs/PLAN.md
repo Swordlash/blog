@@ -3347,6 +3347,19 @@ Amended by the planning session after each work package's report.
   twice per module because the wasm project builds `shared: True` for TH (33 s of `.dyn_o`).
   Next on compile time, when the owner says so: WP5.13, `Shell`'s slots and the `.dyn_o`
   question, measured the same way.
+- **WP5.12 merged** (2026-10-28, PR #93, `main` at `264cf19`). Every source module of
+  `wiki-core`, `wiki-api`, `wiki-app` (`src`, `app`, `contract`) and `wiki-server` (`src`,
+  `app`) has its comments and haddocks rewritten to the rule of 2026-10-27; 175 files,
+  no code line changed (checked with a diff filter on the merge). The first five modules
+  went out alone, the owner answered twelve of their sentences with questions, and the
+  rewrite folded the answers in before going on. Comments found wrong against the code
+  were corrected to what the code does (`BlobId`/`Attachment` and blobs, `Export`,
+  `Search`, `Mail`'s list, `App`, a mangled "chooseProvider"). Two comments are left as
+  found because the code or the comment needs a decision: `Cache`'s module comment says
+  choosing a watch changes nothing else, but `setWatching` empties every cached watch
+  first; `Backend.attempt`'s list of reads that throw has three entries where the module
+  comment has four. The test suites' comments are not rewritten. Reduced gate (comments
+  only): native build with no warnings, fourmolu; CI green on the head.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
