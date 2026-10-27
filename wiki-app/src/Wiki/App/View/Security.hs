@@ -24,6 +24,12 @@
 -- @asksPassword@), so that a browser left signed in does not give the
 -- account away: each opens a form with its field first.
 --
+-- What the second factor and the address are said to do depends on whether
+-- the user has a password (the states' @asksPassword@): one who has none
+-- signs in with a provider's account, which a second factor follows as a
+-- password is, and has no password to reset (WP5.6 of docs/PLAN.md);
+-- 'factorOffText' and 'addressText' say it.
+--
 -- In the demo there is one session, this browser's, and the second factor
 -- and the e-mail are shown disabled with a note, since only a server has
 -- them ('securityAvailable').
@@ -33,6 +39,8 @@
 module Wiki.App.View.Security
   ( component
   , qrRuns
+  , factorOffText
+  , addressText
   )
 where
 
@@ -242,7 +250,7 @@ component =
             | otherwise ->
                 [hh|
                   <div>
-                    <p class="second-factor-off">Off: your password alone signs you in.</p>
+                    <p class="second-factor-off">{{ factorOffText f.asksPassword }}</p>
                     {% if st.askingPassword %}
                       <form class="totp-password-form" aria-label="Set up a second factor" {{ HE.preventingDefault (HE.onSubmit (const SubmitTotpPassword)) }}>
                         {{ passwordInput st }}
@@ -356,11 +364,7 @@ component =
         |]
       where
         current :: EmailState -> Text
-        current e = case e.email of
-          Nothing -> "None: a forgotten password can then only be reset by an administrator."
-          Just address
-            | e.verified -> address <> ", verified: a forgotten password can be reset by mail."
-            | otherwise -> address <> ", not verified yet: follow the link mailed to it."
+        current = addressText
         unavailableNote :: Text
         unavailableNote
           | st.available = "This wiki sends no mail, so an address cannot be verified yet: ask an administrator to set up its mail server."
@@ -531,3 +535,25 @@ qrCode rows =
     quiet = 4 :: Int
     outer = length rows + 2 * quiet
     box = "0 0 " <> show outer <> " " <> show outer
+
+-- | What a second factor that is off means, for a user with a password or
+-- without one. One without signs in with a provider's account, which asks
+-- for a code once a second factor is on, as a password does
+-- ("Wiki.Server.Auth").
+factorOffText :: Bool -> Text
+factorOffText hasPassword
+  | hasPassword = "Off: your password alone signs you in."
+  | otherwise = "Off: signing in with your provider's account asks for no code."
+
+-- | What a user's address is for, as it is now. Only a user with a
+-- password has one to forget: a user without signs in with a provider's
+-- account, and is mailed no link to set one (WP5.6 of docs/PLAN.md).
+addressText :: EmailState -> Text
+addressText e = case e.email of
+  Nothing
+    | e.asksPassword -> "None: a forgotten password can then only be reset by an administrator."
+    | otherwise -> "None: you sign in with your provider's account, and have no password to reset."
+  Just address
+    | not e.verified -> address <> ", not verified yet: follow the link mailed to it."
+    | e.asksPassword -> address <> ", verified: a forgotten password can be reset by mail."
+    | otherwise -> address <> ", verified: the wiki's mail to you goes there."
