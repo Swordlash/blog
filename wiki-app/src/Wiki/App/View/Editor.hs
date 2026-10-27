@@ -1,176 +1,177 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The editor: a page's title, a toolbar, the Markdown, and its attachments
--- below; the page as it will read on demand.
+-- | The editor: a page's title, a toolbar, the Markdown, and the page's
+-- attachments below, with a preview of the rendered page on demand.
 --
--- It edits a page that exists: a new page is made first, with its title,
--- by "Wiki.App.View.NewPage", which then opens the editor on it, so that
--- files can be attached to it from the start. The editor holds what is
--- written until it is saved: 'savePage' against the version the edit
--- started from, so that a save over someone else's newer one is refused as
--- a 'Conflict' and shown in place (see below), with the work kept. "Save" (and Ctrl+S,
--- and Enter in the title) saves and stays: the version saved is then the
--- one the next save is made against, and a "Saved" notice shows in a
--- corner for a few seconds ('savedNoticeTime'), announced to screen
--- readers. "Save and close" saves and tells the shell, which goes to the
--- page.
+-- It edits a page that exists. A new page is created first, with its
+-- title, by "Wiki.App.View.NewPage", which then opens the editor on it, so
+-- that files can be attached to it from the start. The editor holds the
+-- text until it is saved with 'savePage', against the version the edit
+-- started from. So a save over someone else's newer save is refused as a
+-- 'Conflict' and shown in place (see below), with the work kept. "Save"
+-- (and Ctrl+S, and Enter in the title) saves and stays in the editor: the
+-- version saved is then the one the next save is made against, and a
+-- "Saved" notice shows in a corner for a few seconds ('savedNoticeTime'),
+-- announced to screen readers. "Save and close" saves and tells the shell,
+-- which navigates to the page.
 --
--- What is written is kept as the author's draft too ("Wiki.Core.Draft"),
+-- The text is also saved as the author's draft ("Wiki.Core.Draft"),
 -- 'draftDelay' after the typing stops, so that a closed tab or a crash
--- loses little; a quiet "Draft saved" beside the buttons says it was. A
--- save of the page discards the draft. Cancel with unsaved changes or a
--- draft asks whether to keep the draft. Opening the editor on a page with a
--- draft of the version it is now takes the draft up and says so, with a
--- button to discard it and go back to the page as saved; a draft of an
+-- loses little; a quiet "Draft saved" beside the buttons confirms it.
+-- Saving the page discards the draft. Cancel, with unsaved changes or a
+-- draft, asks whether to keep the draft. Opening the editor on a page that
+-- has a draft of its current version loads the draft and says so, with a
+-- button to discard it and go back to the page as saved. A draft of an
 -- older version (someone has saved since) is only offered, since saving it
--- would put back what that save changed.
+-- would undo that save's changes.
 --
--- The Markdown is shown alone by default, at every width (decision 10 as
--- amended). "Show preview" ('ShowPreview') replaces the editing view with
--- the draft rendered ("Wiki.App.View.Preview"), with "Back to editing" and
--- Save and Cancel still there: a change of the editor's state, not a route,
--- since the draft is not in the address. The title and the text stay
--- mounted while hidden, so that their text, the selection, the undo stack
--- and the scroll are where they were on the way back. A "Side by side
--- preview" checkbox brings back the two panes on a wide screen; the choice
--- is kept per browser in local storage, read in 'Initialize', after the
--- first render, so that the first render is the same in the browser as
--- where nothing is stored (a prerender).
+-- The Markdown is shown alone by default, at every width (decision 10 of
+-- the plan, as amended). "Show preview" ('ShowPreview') replaces the
+-- editing view with the rendered draft ("Wiki.App.View.Preview"), with
+-- "Back to editing", Save and Cancel still there. This is a change of the
+-- editor's state, not a route, since the draft is not in the address. The
+-- title and the text stay mounted while hidden, so that their text, the
+-- selection, the undo history and the scroll position are unchanged on the
+-- way back. A "Side by side preview" checkbox brings back the two panes on
+-- a wide screen. The choice is stored per browser in local storage, and
+-- read in 'Initialize', after the first render, so that the first render
+-- is the same in the browser as where nothing is stored (a prerender).
 --
--- The preview is mounted the first time it is shown and kept from then on,
--- hidden while the Markdown is shown alone: drawing a page's diagrams again
--- each time the preview is shown would cost more than keeping them. It
--- follows the draft only while it can be seen beside the Markdown, about
--- 'previewDelay' after the typing stops (each change forks a wait, killing
--- the one before, and the wait that is not killed hands the draft on);
--- shown on its own, it takes the draft as it is at once. It is a child
+-- The preview is mounted the first time it is shown and kept from then
+-- on, hidden while the Markdown is shown alone: drawing a page's diagrams
+-- again each time the preview is shown would cost more than keeping them.
+-- It follows the draft only while it is visible beside the Markdown, about
+-- 'previewDelay' after the typing stops (each change forks a wait and
+-- kills the previous one; the wait that is not killed passes the draft
+-- on). Shown alone, it takes the current draft at once. It is a child
 -- component, so a keystroke re-renders the textarea and nothing of the
--- preview; its islands keep their slots, keyed by their source, and only one
--- whose source changed is drawn again.
+-- preview. Its islands keep their slots, keyed by their source, so only an
+-- island whose source changed is drawn again.
 --
--- The Markdown is edited in CodeMirror, which shows it as it will look
--- while it is typed (emphasis in italics, strong in bold, headings larger,
--- their markers dimmed, code on its own background; @web/src/editor.js@),
--- and does nothing else: the toolbar, the keys, the drops, the preview and
--- the drafts are all this component's. It is rendered as a textarea with the
--- Markdown, which a page rendered ahead shows and which is typed into until
--- the page has loaded CodeMirror, and beside it an element this component
--- never looks into (like an island's), where CodeMirror is put in the
--- textarea's place, with its text, selection, focus and scroll, in one go;
--- the style sheet hides the textarea once that element is not empty, so the
--- page does not move. A reader's page never loads CodeMirror: it is fetched
--- the first time an editor is opened ('attachEditor'). It tells of each
--- change by an event of its own on its element, with the whole text, as the
--- textarea did by its input event.
+-- The Markdown is edited in CodeMirror, which styles it while it is typed
+-- (emphasis in italics, strong in bold, headings larger with their markers
+-- dimmed, code on its own background; @web/src/editor.js@), and does
+-- nothing else: the toolbar, the keys, the drops, the preview and the
+-- drafts all belong to this component. The component renders a textarea
+-- with the Markdown, which a prerendered page shows and which takes typing
+-- until the page has loaded CodeMirror. Beside it is an element this
+-- component never looks into (like an island's), where CodeMirror replaces
+-- the textarea, taking over its text, selection, focus and scroll in one
+-- step. The stylesheet hides the textarea once that element is not empty,
+-- so the page does not move. A reader's page never loads CodeMirror: it is
+-- fetched the first time an editor is opened ('attachEditor'). CodeMirror
+-- reports each change with an event of its own on its element, carrying
+-- the whole text, as the textarea did with its input event.
 --
--- The toolbar's commands are pure ("Wiki.Core.Markdown.Edit"): a button or
--- a shortcut reads the text and the selection, applies the command, and
--- writes the change back as an edit the undo takes back in one step, which
--- tells the component of the change as typing would, so the draft and the
--- preview learn of it as of any other keystroke ("Wiki.App.Editor.Browser"). Its palette
--- of colours writes classes, never a @style@, which a page may not have.
--- The keys the editor answers to are decided in the keydown's listener,
--- which keeps the browser from acting on them (Ctrl+K and Ctrl+E have
--- defaults of their own) while the event is dispatched, whatever the
--- component is busy with; so are a drag's and a drop's, and a drop's files
--- are taken there, as the browser empties the drop once it has been
--- dispatched. A paste's files are taken in its listener in the same way, and
--- the browser kept from putting in anything of its own for them (a file's
--- name, which a file manager copies beside the file, or an image); a paste
--- that brings no file makes no action and is the editor's, CodeMirror's or
--- the textarea's, which puts the text in as it puts in a key's. A paste of
--- both files and text is the files'.
+-- The toolbar's commands are pure functions ("Wiki.Core.Markdown.Edit"). A
+-- button or a shortcut reads the text and the selection, applies the
+-- command, and writes the change back as one edit that undo reverts in one
+-- step. The edit fires an input event as typing would, so the draft and
+-- the preview receive it like any keystroke ("Wiki.App.Editor.Browser").
+-- The toolbar's colour palette writes classes, never a @style@ attribute,
+-- which a page may not have. The editor's keys are recognised in the
+-- keydown's listener, which stops the browser's own action for them
+-- (Ctrl+K and Ctrl+E have defaults of their own) while the event is
+-- dispatched, whatever the component is busy with. Drag and drop events
+-- are handled the same way, and a drop's files are taken there, because
+-- the browser empties the drop once it has been dispatched. A paste's
+-- files are also taken in its listener, and the browser is stopped from
+-- inserting anything of its own for them (a file's name, which a file
+-- manager copies beside the file, or an image). A paste without files
+-- makes no action: CodeMirror or the textarea inserts the text, as it does
+-- for a key. A paste of both files and text inserts the files.
 --
--- Files dropped onto the editor or pasted into it, or chosen with its file
--- input, are read
--- into bytes in the browser ("Wiki.App.Editor.Browser"), uploaded to the
--- page ('uploadAttachment'), and referred to at the text's cursor
--- ('Wiki.Core.Markdown.attachmentReference').
+-- Files dropped onto the editor, pasted into it, or chosen with its file
+-- input are read into bytes in the browser ("Wiki.App.Editor.Browser"),
+-- uploaded to the page ('uploadAttachment'), and referenced at the text's
+-- cursor ('Wiki.Core.Markdown.attachmentReference').
 --
--- The title and the textarea are not controlled: the component never sets
--- their text while the reader types, only when it loads the page (the first
--- time, again after a conflict, and when a draft is taken up or let go).
--- Halogen writes a rendered @value@ back
--- to its element on every patch where the two differ, and a render can come
--- between a key and the handling of its input event (the preview's turn to
--- follow the draft re-renders the editor around the textarea), which would
--- put the text back as it was before that key and lose it. So the title is
--- rendered as the input's @value@ attribute, the Markdown as the textarea's
--- content, both what was loaded ('loadedTitle', 'loadedBody') and so the
--- same on every render, and both
--- keyed by how many times the page has been loaded ('loads'), so that a
--- reload makes new elements with the new text. The draft follows the
--- elements through their input events, and 'insertAtCursor' changes the
--- text the way typing does. CodeMirror's element is not keyed by the load:
--- a reload puts a new CodeMirror in it, with the new text and no undo of
--- the old ('attachEditor'). It is the element the component holds by ref,
--- and the textarea is found beside it, rather than held by a ref of its
--- own: a keyed element replaced takes its ref with it, after the new one
--- has set it.
+-- The title input and the textarea are uncontrolled: the component never
+-- sets their text while the reader types, only when it loads the page (the
+-- first time, again after a conflict, and when a draft is loaded or
+-- discarded). The reason: Halogen writes a rendered @value@ back to its
+-- element on every patch where the two differ, and a render can happen
+-- between a key press and the handling of its input event (the preview
+-- following the draft re-renders the editor around the textarea). That
+-- would put the text back as it was before the key, losing it. So the
+-- title is rendered as the input's @value@ attribute and the Markdown as
+-- the textarea's content, both from what was loaded ('loadedTitle',
+-- 'loadedBody'), and so the same on every render. Both are keyed by how
+-- many times the page has been loaded ('loads'), so that a reload creates
+-- new elements with the new text. The draft follows the elements through
+-- their input events, and 'insertAtCursor' changes the text as typing
+-- does. CodeMirror's element is not keyed by the load: a reload puts a new
+-- CodeMirror in it, with the new text and no undo history of the old
+-- ('attachEditor'). The component holds that element by ref, and finds the
+-- textarea beside it rather than holding it by a ref of its own: a keyed
+-- element that is replaced takes its ref with it, after the new one has
+-- set it.
 --
--- Leaving with unsaved changes is guarded twice: the shell asks this
+-- Leaving with unsaved changes is guarded twice. The shell asks this
 -- component ('IsDirty') before it follows a route away, and the browser
 -- warns before a reload or a close while the work differs from what was
--- saved ('guardUnload'). Leaving by Cancel, having said what becomes of the
--- draft, is not asked about again.
+-- saved ('guardUnload'). Leaving by Cancel, after answering what becomes
+-- of the draft, is not asked about again.
 --
 -- = Others editing, and saves meanwhile
 --
--- Over a backend with a live channel ("Wiki.App.Live"; WP4.12 of
--- docs/PLAN.md), the editor watches its page and says that this tab edits
--- it, once it knows who else does: if nobody, at once; if someone, it
--- first asks above the work ("Edgar Editor is editing this page. Open the
--- editor anyway?"), and says so once the author goes on (or simply starts
--- typing). From then on it names whoever else edits the page, and it says
--- it no longer edits it when it goes away; the server forgets it anyway
--- when the tab closes, with its connection. A save of the page by someone
--- else meanwhile is said above the work, and changes nothing in it.
+-- On a backend with a live channel ("Wiki.App.Live"; WP4.12 of
+-- docs/PLAN.md), the editor watches its page and announces that this tab
+-- is editing it, once it knows who else is. If nobody is, it announces at
+-- once. If someone is, it first asks above the work ("Edgar Editor is
+-- editing this page. Open the editor anyway?"), and announces once the
+-- author continues (or simply starts typing). From then on it names
+-- whoever else is editing the page, and when it goes away it announces
+-- that it no longer is; the server also forgets it when the tab closes,
+-- with its connection. A save of the page by someone else meanwhile is
+-- reported above the work, and changes nothing in it.
 --
 -- A save refused because the page was saved since the edit began (a
--- 'Conflict') opens the conflict view: the page as now saved is read, and
--- beside the author's text (two columns on a wide screen, one under the
--- other on a narrow one) is that version compared with the author's text
--- ("Wiki.App.View.Diff"), with three ways out. "Keep mine" saves the
--- author's text over it. "Take theirs" puts it in the editor in place of
--- the author's text, which goes with its draft. "Merge by hand" leaves the
--- author's text in the editor, shows beside it what the other save changed
--- in the version the edit began from, and makes the next save one over
--- the version now saved. Until the author chooses, the text is in the
--- editor and kept as their draft, so nothing is lost without a choice. The
--- demo, whose wiki lives in one tab, has no channel and so no presence,
--- but the same conflict view, which a save over a change made in the same
--- tab (a version restored, a rename) meets.
+-- 'Conflict') opens the conflict view. The editor fetches the page as now
+-- saved, and shows beside the author's text (two columns on a wide screen,
+-- one under the other on a narrow one) that version compared with the
+-- author's text ("Wiki.App.View.Diff"), with three ways out. "Keep mine"
+-- saves the author's text over it. "Take theirs" puts it in the editor in
+-- place of the author's text, whose draft is discarded. "Merge by hand"
+-- leaves the author's text in the editor, shows beside it what the other
+-- save changed relative to the version the edit began from, and makes the
+-- next save one over the version now saved. Until the author chooses, the
+-- text stays in the editor and is saved as their draft, so nothing is lost
+-- without a choice. The demo, whose wiki lives in one tab, has no channel
+-- and so no presence, but has the same conflict view, which a save meets
+-- after a change made in the same tab (a version restored, a rename).
 --
 -- = The writing assistant
 --
 -- The providers' buttons, round bubbles floating at the top right of the
 -- text (Claude's and ChatGPT's, each growing into a pill with its label
--- on hover or focus), open the writing
--- assistant's panel ("Wiki.App.View.Assistant", WP4.19 of docs/PLAN.md)
--- with that provider, or closes it if it is open with it; the panel says
--- which provider it asks, and its button is marked. A provider has a
--- bubble once the user has a key for it; a user with none has one bubble,
--- "Assistant", which opens the panel to say where keys go. The editor
--- reads the user's assistant settings when it opens, and asks each
--- provider with a key for its list of models: the list offered in the
--- panel, and the proof that the provider can be reached from here. One
--- that cannot (a network that blocks it) keeps its bubble, dimmed, saying
--- so, and the panel offers to try again. The editor keeps the settings
--- for the panel, which changes them through it. The panel is beside the
--- Markdown (under the attachments on a narrow screen): a chat with a model
--- that edits the page through its tools, each edit a tracked change in
--- CodeMirror that the author accepts or rejects, on the change itself or
--- all at once in the panel. The editor tells the panel what is selected
--- and how many changes are left, as CodeMirror tells it (its
--- @wiki-selection@ and @wiki-changes@ events), and settles a change
--- decided on the change itself (@wiki-decide@). The changes' text is in
--- the work like any other (the draft and the preview have it); a save
--- with changes left accepts them, which the editor says beside Save. The
--- panel is mounted the first time it is opened and kept, with its
--- conversation, until the editor goes; closing it stops the model's turn.
+-- on hover or focus), open the writing assistant's panel
+-- ("Wiki.App.View.Assistant", WP4.19 of docs/PLAN.md) with that provider,
+-- or close it if it is open with that provider. The panel names the
+-- provider it uses, and that provider's button is marked. A provider has a
+-- bubble once the user has an API key for it; a user with no key has one
+-- bubble, "Assistant", which opens the panel to say where keys go. The
+-- editor reads the user's assistant settings when it opens, and asks each
+-- provider with a key for its list of models: that list is what the panel
+-- offers, and also proof that the provider can be reached from here. A
+-- provider that cannot be reached (a network that blocks it) keeps its
+-- bubble, dimmed, with a note, and the panel offers to try again. The
+-- editor holds the settings for the panel, which changes them through it.
+-- The panel is beside the Markdown (under the attachments on a narrow
+-- screen). It is a chat with a model that edits the page through its
+-- tools; each edit is a tracked change in CodeMirror that the author
+-- accepts or rejects, on the change itself or all at once in the panel.
+-- The editor tells the panel what is selected and how many changes are
+-- undecided, as CodeMirror reports them (its @wiki-selection@ and
+-- @wiki-changes@ events), and applies a decision made on the change itself
+-- (@wiki-decide@). The changes' text is part of the work like any other
+-- text (the draft and the preview include it). A save with undecided
+-- changes accepts them, which the editor says beside Save. The panel is
+-- mounted the first time it is opened and kept, with its conversation,
+-- until the editor goes away; closing it stops the model's current turn.
 --
--- (The editor's own record of what is being written is 'Work'; a draft is
--- the backend's copy of it, kept for the author.)
+-- (The editor's own record of the text being written is 'Work'; a draft
+-- is the backend's copy of it, saved for the author.)
 module Wiki.App.View.Editor
   ( Input (..)
   , Query (..)
@@ -278,27 +279,27 @@ import Wiki.Core.Markdown.Edit
   , textColours
   )
 import Wiki.Core.Page (Page)
--- Qualified, so that its fields (read with a dot) are not confused with the
--- work's of the same names.
+-- Qualified, so that its fields (read with a dot) are not confused with
+-- the work's fields of the same names.
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.User (User (id))
 import Wiki.Core.Version (Author (..), Version (author))
 
--- | The space the shell has loaded, with its pages, and the path of the
--- page to edit there.
+-- | The editor's input: the space the shell has loaded, with its pages,
+-- and the path of the page to edit there.
 data Input = Input
   { context :: Context
   , space :: Space
   , pages :: [Page]
   , path :: [Slug]
   , feed :: Maybe Feed
-  -- ^ The tab's live channel, over a backend that has one.
+  -- ^ The tab's live channel, on a backend that has one.
   }
 
--- | Whether the work has changes that are not saved: what the shell asks
--- before it leaves the editor.
+-- | Whether the work has unsaved changes: the shell asks this before it
+-- leaves the editor.
 data Query a = IsDirty (Bool -> a)
 
 type Slots =
@@ -306,21 +307,21 @@ type Slots =
     .+ ("time" .== H.Slot (Const Void) Void Int)
     .+ ("assistant" .== H.Slot Assistant.Query Assistant.Output ())
 
--- | What is being written, and what it started from.
+-- | 'Work': the text being written, and the page it started from.
 data Work = Work
   { page :: Page
-  -- ^ The page as last loaded or saved: its 'updatedAt' is the version the
-  -- next save is made against.
+  -- ^ The page as last loaded or saved: its 'updatedAt' is the version
+  -- the next save is made against.
   , title :: Text
   , body :: Text
   , savedTitle :: Text
   , savedBody :: Text
-  -- ^ The title and body as loaded or last saved, which the work is
-  -- compared with to know whether it has changed.
+  -- ^ The title and body as loaded or last saved, compared with the work
+  -- to tell whether it has changed.
   , loadedTitle :: Text
   , loadedBody :: Text
-  -- ^ What the title's input and the textarea were made with: the page's,
-  -- or a draft's taken up in its place.
+  -- ^ The text the title input and the textarea were created with: the
+  -- page's, or a draft's loaded in its place.
   , shownTitle :: Text
   , shownBody :: Text
   -- ^ What the preview shows: the work as it was when the typing stopped.
@@ -330,33 +331,33 @@ data Work = Work
 
 data Loaded = Loading | Failed WikiError | Ready Work
 
--- | What the editor shows: the Markdown (beside the preview, if the reader
--- asked for both), or the preview alone.
+-- | What the editor shows: the Markdown (beside the preview, if the
+-- reader chose both), or the preview alone.
 data Mode = Editing | Previewing
   deriving stock (Eq)
 
 -- | What the editor found of the author's draft when it opened the page,
--- said above the work until it is dealt with.
+-- shown above the work until the author acts on it.
 data Found
-  = -- | A draft of the page as it is, taken up in place of it: when it was
-    -- saved.
+  = -- | A draft of the page's current version, loaded in its place: the
+    -- time the draft was saved.
     Restored UTCTime
   | -- | A draft of an older version, only offered: the draft, when it was
     -- saved, and when the page was saved since.
     Offered D.Draft UTCTime UTCTime
 
--- | What the quiet line beside the buttons says of the draft.
+-- | What the quiet line beside the buttons says about the draft.
 data DraftNews = NoNews | DraftSaved | DraftFailed Text
   deriving stock (Eq)
 
--- | Whether the server has been told that this tab edits the page.
+-- | Whether the server has been told that this tab is editing the page.
 data Presence
-  = -- | Not yet: who else edits it has not been heard (or there is no
-    -- channel, and nothing to tell).
+  = -- | Not yet: who else is editing has not been received yet (or there is
+    -- no channel, and nothing to announce).
     Unsaid
-  | -- | Others edit it: the author is asked first.
+  | -- | Others are editing it: the author is asked first.
     Asking
-  | -- | Told.
+  | -- | Announced.
     Said
   deriving stock (Eq)
 
@@ -366,42 +367,42 @@ data Clash = Clash
   -- ^ The page as now saved.
   , theirUrls :: Map AttachmentId Text
   , by :: Maybe Author
-  -- ^ Who saved it, as its history says.
+  -- ^ Who saved it, as its history names them.
   , after :: After
-  -- ^ Where the save that was refused was to leave the editor.
+  -- ^ Where the refused save was to leave the editor.
   , way :: Way
   }
 
--- | Where the author is with a conflict.
+-- | Where the author is in resolving a conflict.
 data Way
   = -- | Choosing among the three ways out: their version compared with the
     -- author's text as it was then (its title, and the diff).
     Choosing Text Diff
-  | -- | Merging by hand: what their save changed in the version the edit
-    -- began from (that version's title, and the diff).
+  | -- | Merging by hand: what their save changed relative to the version
+    -- the edit began from (that version's title, and the diff).
     Merging Text Diff
 
 data State = State
   { input :: Input
   , loaded :: Loaded
   , pending :: Maybe H.ForkId
-  -- ^ The wait before the preview follows the work, if one is running.
+  -- ^ The running wait before the preview follows the work, if any.
   , autosave :: Maybe H.ForkId
-  -- ^ The wait before the work is kept as a draft, if one is running.
+  -- ^ The running wait before the work is saved as a draft, if any.
   , edits :: Int
-  -- ^ How many changes have been made: the autosave's wait goes on until
-  -- this has stopped changing for 'draftDelay'.
+  -- ^ How many changes have been made: the autosave's wait continues
+  -- until this has stopped changing for 'draftDelay'.
   , found :: Maybe Found
   , hasDraft :: Bool
-  -- ^ Whether the backend holds a draft of the author's of this page.
+  -- ^ Whether the backend holds a draft of this page by the author.
   , draftNews :: DraftNews
   , notice :: Maybe H.ForkId
-  -- ^ The "Saved" notice is shown, until this wait takes it away.
+  -- ^ The "Saved" notice is shown until this wait removes it.
   , askingCancel :: Bool
   -- ^ Whether Cancel is asking what becomes of the draft.
   , closing :: Bool
-  -- ^ Leaving by Cancel, having said what becomes of the draft: there is
-  -- nothing more to ask about.
+  -- ^ Leaving by Cancel, after answering what becomes of the draft: there
+  -- is nothing more to ask.
   , problem :: Maybe WikiError
   , saving :: Bool
   , uploading :: Int
@@ -412,45 +413,46 @@ data State = State
   , sideBySide :: Bool
   -- ^ Whether the preview is shown beside the Markdown on a wide screen.
   , previewMounted :: Bool
-  -- ^ Whether the preview has been shown yet: it is mounted then, and kept.
+  -- ^ Whether the preview has been shown yet: it is then mounted, and
+  -- kept.
   , menu :: Maybe Menu
   -- ^ Which of the toolbar's menus is open, if one is.
   , host :: H.RefLabel
-  -- ^ Where CodeMirror goes, in the textarea's place; the text is reached
-  -- through it ("Wiki.App.Editor.Browser").
+  -- ^ The element where CodeMirror goes, in the textarea's place; the
+  -- text is reached through it ("Wiki.App.Editor.Browser").
   , fileInput :: H.RefLabel
   , backButton :: H.RefLabel
   , loads :: Int
-  -- ^ How many times the page has been loaded: the key of the title and the
-  -- textarea, which a reload replaces.
+  -- ^ How many times the page has been loaded: the key of the title input
+  -- and the textarea, which a reload replaces.
   , watching :: Maybe PageId
-  -- ^ The page the live channel listens for.
+  -- ^ The page the live channel is watching.
   , presence :: Presence
   , others :: [Author]
-  -- ^ Who else edits the page, as last heard.
+  -- ^ Who else is editing the page, as last received.
   , changedSince :: Maybe UTCTime
   -- ^ When someone else saved the page since the edit began, if they did.
   , conflict :: Maybe Clash
   , assistantOpen :: Bool
   -- ^ Whether the writing assistant's panel is shown.
   , assistantMounted :: Bool
-  -- ^ Whether it has been shown yet: it is mounted then, and kept.
+  -- ^ Whether the panel has been shown yet: it is then mounted, and kept.
   , hostElement :: Maybe Element
-  -- ^ CodeMirror's host, once the text is loaded: the panel edits through
-  -- it.
+  -- ^ CodeMirror's host element, once the text is loaded: the panel edits
+  -- through it.
   , selection :: Maybe Span
-  -- ^ What is selected in the text, as CodeMirror last told.
+  -- ^ What is selected in the text, as CodeMirror last reported.
   , pendingChanges :: Int
-  -- ^ How many of the assistant's changes are left to decide.
+  -- ^ How many of the assistant's changes are undecided.
   , decisions :: Map Int Decision
-  -- ^ What the author decided of each of the assistant's changes, by its
-  -- id: the panel tells the model of it with the next message.
+  -- ^ What the author decided about each of the assistant's changes, by
+  -- its id: the panel tells the model with the next message.
   , assistantSettings :: Maybe (Either Text Settings)
-  -- ^ The user's settings for the assistant, once read (or why they could
-  -- not be): which providers have a key and which cannot be reached, for
-  -- the bubbles, and the panel's.
+  -- ^ The user's assistant settings, once read (or why they could not
+  -- be): which providers have a key and which cannot be reached, for the
+  -- bubbles, and the panel's settings.
   , assistantProblem :: Maybe Text
-  -- ^ Why a change of the settings could not be kept, if it could not.
+  -- ^ Why a change of the settings could not be saved, if it could not.
   , checking :: Set Provider
   -- ^ The providers being asked for their list of models.
   , scripted :: Bool
@@ -508,21 +510,22 @@ data Action
   | ChangesLeft Int
   | Decide Decision Int
 
--- | Where the browser keeps whether the preview goes beside the Markdown.
+-- | The local storage key for whether the preview goes beside the
+-- Markdown.
 sideBySideKey :: Text
 sideBySideKey = "editor-side-by-side"
 
--- | How long the typing has to stop for before the preview follows: long
--- enough not to re-render a long page on every keystroke, short enough to
--- feel live.
+-- | How long the typing must stop before the preview follows: long enough
+-- not to re-render a long page on every keystroke, short enough to feel
+-- live.
 previewDelay :: Int
 previewDelay = 200_000
 
--- | How long the typing has to stop for before the work is kept as a
--- draft: long enough that a draft is not written on every pause between
--- words, short enough that little is lost with a closed tab. The wait
--- starts again while the typing goes on, so a draft is written between
--- one and two of these after the last change.
+-- | How long the typing must stop before the work is saved as a draft:
+-- long enough that a draft is not written at every pause between words,
+-- short enough that a closed tab loses little. The wait restarts while the
+-- typing continues, so a draft is written between one and two of these
+-- after the last change.
 draftDelay :: Int
 draftDelay = 2_000_000
 
@@ -541,10 +544,10 @@ component =
           host <- H.newRefLabel "editor-host"
           fileInput <- H.newRefLabel "editor-files"
           backButton <- H.newRefLabel "editor-back"
-          -- Loaded at once rather than in 'Initialize', so that the first
-          -- render is the editor a page rendered ahead would show (see
-          -- "Wiki.App.Shell"), over a backend that can ('atOnce');
-          -- otherwise in 'Initialize'.
+          -- Loaded at once rather than in 'Initialize', when the backend
+          -- can ('atOnce'), so that the first render is the editor a
+          -- prerendered page shows (see "Wiki.App.Shell"); otherwise
+          -- loaded in 'Initialize'.
           Fetched loaded found hasDraft <- fromMaybe (Fetched Loading Nothing False) <$> atOnce (fetchWork input)
           pure
             State
@@ -619,14 +622,15 @@ component =
     signInHint :: H.ComponentHTML Action Slots m
     signInHint = [hh|<p class="error sign-in-hint" role="alert">You are not signed in. To edit pages, choose who you are at the top right.</p>|]
 
-    -- The form holds both views, the Markdown's and the preview's, and
-    -- the style sheet shows one of them (or both side by side) by the
-    -- form's classes, so that what is hidden stays mounted. What comes and
-    -- goes above them (a draft found, Cancel's question, an error) is in a
-    -- holder of its own that is always there: an element that came or went
-    -- among the form's children would move the ones after it, and Halogen,
-    -- which matches unkeyed children by their place, would make the
-    -- Markdown's anew, with CodeMirror's text and undo gone.
+    -- The form holds both views, the Markdown's and the preview's, and the
+    -- stylesheet shows one of them (or both side by side) through the
+    -- form's classes, so that what is hidden stays mounted. What appears
+    -- and disappears above them (a draft found, Cancel's question, an
+    -- error) is in its own holder element, which is always there. An
+    -- element appearing or disappearing among the form's children would
+    -- shift the ones after it, and Halogen, which matches unkeyed children
+    -- by position, would recreate the Markdown's view, losing CodeMirror's
+    -- text and undo history.
     editing :: State -> Work -> H.ComponentHTML Action Slots m
     editing st work =
       [hh|
@@ -678,8 +682,8 @@ component =
         </form>
       |]
 
-    -- Cancel goes to the page; with work unsaved, or a draft kept, it asks
-    -- first what becomes of the draft ('cancelQuestion').
+    -- Cancel navigates to the page. With unsaved work, or a saved draft, it
+    -- first asks what becomes of the draft ('cancelQuestion').
     cancelButton :: State -> H.ComponentHTML Action Slots m
     cancelButton st
       | isDirty st || st.hasDraft = [hh|<button type="button" class="editor-cancel" onClick={{ const AskCancel }}>Cancel</button>|]
@@ -699,13 +703,13 @@ component =
             |]
       | otherwise = Nothing
 
-    -- A moment, which the reader's browser writes in their zone: the
-    -- page this is rendered into ahead of the program does not know it.
+    -- A moment in time, which the reader's browser writes in their time
+    -- zone: the prerendered page does not know that zone.
     time :: Int -> UTCTime -> H.ComponentHTML Action Slots m
     time key at = HH.slot_ "time" key Islands.component (Islands.LocalTime at)
 
-    -- Who else edits the page: asked about before the author starts, and
-    -- named afterwards.
+    -- Who else is editing the page: asked about before the author starts,
+    -- and named afterwards.
     presenceView :: State -> Maybe (H.ComponentHTML Action Slots m)
     presenceView st = case st.presence of
       Asking ->
@@ -763,7 +767,8 @@ component =
           |]
 
     -- Their version beside the author's text: compared with it while the
-    -- author chooses, and what it changed while they merge by hand.
+    -- author chooses, and showing what it changed while they merge by
+    -- hand.
     conflictPane :: State -> Maybe (H.ComponentHTML Action Slots m)
     conflictPane st =
       st.conflict <&> \c ->
@@ -803,24 +808,25 @@ component =
           |]
 
     -- A drop's files, taken in its listener and forced there: once the
-    -- browser has dispatched the drop, it has none.
+    -- browser has dispatched the drop, the drop has no files.
     dropped :: Event -> Maybe Action
     dropped ev = Just $! Dropped (droppedFiles ev)
 
     -- A paste's files, taken as a drop's are. A paste without files makes
-    -- no action, so its default is left alone: the text goes in as the
-    -- editor puts it in. CodeMirror leaves a paste with files to this
-    -- listener (@web/src/editor.js@), and both it and the textarea are
-    -- among the panes, so the paste comes here whichever has the focus.
+    -- no action, so its default is not prevented: the text is inserted by
+    -- the editor itself. CodeMirror leaves a paste with files to this
+    -- listener (@web/src/editor.js@), and both CodeMirror and the textarea
+    -- are inside the panes, so the paste arrives here whichever has the
+    -- focus.
     pasted :: Event -> Maybe Action
     pasted ev = case pastedFiles ev of
       Just files -> Just $! Pasted files
       Nothing -> Nothing
 
-    -- The keys the editor answers to, decided in the keydown's listener,
-    -- which keeps the browser from acting on them; any other key makes no
-    -- action and is the browser's. Escape is the editor's only while a
-    -- menu is open, to close it.
+    -- The keys the editor handles, recognised in the keydown's listener,
+    -- which stops the browser's own action for them. Any other key makes no
+    -- action and is left to the browser. Escape belongs to the editor only
+    -- while a menu is open, to close it.
     keyAction :: State -> Event -> Maybe Action
     keyAction st ev = case editorKey ev of
       Just EscapeKey | isJust st.menu -> Just CloseMenu
@@ -828,15 +834,16 @@ component =
       Just key -> Just (Key key)
       Nothing -> Nothing
 
-    -- The providers' buttons: each opens the assistant with its provider, or
-    -- closes it if it is open with it. A provider has one once the user
-    -- has a key for it (OpenAI's API at another address needs none); the
-    -- scripted provider's is there only where a test installed it. With
-    -- none, one button, "Assistant", opens the panel, which says where the
-    -- keys go. Before the settings are read (and in a page rendered ahead,
-    -- which has none) there are none. They are the first of the text's
-    -- children, a row of no height that the style sheet keeps under the
-    -- toolbar, the bubbles hanging from it over the text's right edge.
+    -- The providers' buttons: each opens the assistant with its provider,
+    -- or closes it if it is open with that provider. A provider gets a
+    -- button once the user has a key for it (OpenAI's API at another
+    -- address needs none). The scripted provider's button is there only
+    -- where a test installed it. With no provider, one button, "Assistant",
+    -- opens the panel, which says where the keys go. Before the settings
+    -- are read (and in a prerendered page, which has none) there are no
+    -- buttons. They are the text's first children, a row of zero height
+    -- that the stylesheet keeps under the toolbar, with the bubbles hanging
+    -- from it over the text's right edge.
     providerBar :: State -> H.ComponentHTML Action Slots m
     providerBar st =
       [hh|
@@ -854,7 +861,7 @@ component =
             [] -> [neutralBubble st]
             shown -> map (providerButton st s) shown
 
-    -- The one bubble of a user without a key.
+    -- The single bubble shown to a user without a key.
     neutralBubble :: State -> H.ComponentHTML Action Slots m
     neutralBubble st =
       [hh|
@@ -869,9 +876,9 @@ component =
         >{{ chatGlyph }}<span class="editor-provider-label" aria-hidden="true">Assistant</span></button>
       |]
 
-    -- A provider's bubble: dimmed, and saying why, when the provider could
-    -- not be reached the last time it was asked; it still opens the panel,
-    -- which offers to try again.
+    -- A provider's bubble: dimmed, with the reason, when the provider
+    -- could not be reached the last time it was asked. It still opens the
+    -- panel, which offers to try again.
     providerButton :: State -> Settings -> Provider -> H.ComponentHTML Action Slots m
     providerButton st s p =
       [hh|
@@ -889,8 +896,8 @@ component =
         ps = settingsOf p s
         blocked = ps.unreachable
         cannotReach = "Cannot reach " <> serviceName p ps <> " from this network"
-        -- Another service than OpenAI's own is named by its address, and
-        -- has no logo of OpenAI's.
+        -- A service other than OpenAI's own is named by its address, and
+        -- does not get OpenAI's logo.
         (label, face) = case p of
           Anthropic -> ("Chat with Claude", logo claudePath (Just claudeColour))
           OpenAI
@@ -899,7 +906,7 @@ component =
           Scripted -> ("Chat with the scripted provider", [hh|<span class="editor-provider-text" aria-hidden="true">S</span>|])
 
     -- The assistant's panel, once it has been opened, hidden while it is
-    -- closed so that its conversation stays.
+    -- closed so that its conversation is kept.
     assistantPane :: State -> Work -> Maybe (H.ComponentHTML Action Slots m)
     assistantPane st work
       | st.assistantMounted =
@@ -937,9 +944,9 @@ component =
             |]
       | otherwise = Nothing
 
-    -- The toolbar: its commands in groups, then the preview's controls.
-    -- It changes with little of the state ('Bar'), so it is rendered and
-    -- diffed again only when that changes, not on every keystroke.
+    -- The toolbar: its commands in groups, then the preview's controls. It
+    -- depends on little of the state ('Bar'), so it is rendered and diffed
+    -- again only when that changes, not on every keystroke.
     toolbar :: Bar -> H.ComponentHTML Action Slots m
     toolbar = HH.memoized (==) toolbarOf
 
@@ -985,10 +992,10 @@ component =
         </div>
       |]
 
-    -- The palette: a row of text colours and a row of highlights, each
-    -- swatch showing its colour with the class it writes (so the palette
-    -- and the page cannot differ), and at the end of each row the entry
-    -- that takes the colour away.
+    -- The palette: a row of text colours and a row of highlights. Each
+    -- swatch shows its colour with the class it writes (so the palette and
+    -- the page cannot differ), and each row ends with the entry that
+    -- removes the colour.
     colourMenu :: Bar -> H.ComponentHTML Action Slots m
     colourMenu bar =
       [hh|
@@ -1016,9 +1023,9 @@ component =
       |]
 
     -- The title's input, keyed by the load (see the module's comment). Its
-    -- text is the @value@ attribute, what the input starts with, rather than
-    -- the property, which a quote's @value={{ … }}@ would set: so it is
-    -- written as an attribute among the others.
+    -- text is the @value@ attribute, which the input starts with, rather
+    -- than the property, which a quasi-quoted @value={{ … }}@ would set, so
+    -- it is written as an attribute among the others.
     titleField :: State -> Work -> H.ComponentHTML Action Slots m
     titleField st work =
       HH.keyed
@@ -1032,17 +1039,17 @@ component =
           )
         ]
 
-    -- The Markdown's textarea, keyed by the load like the title, with the
-    -- text it starts with as its content rather than its value (see the
-    -- module's comment), and before it the element CodeMirror takes its
-    -- place in, which has no children here, so that no render touches what
-    -- CodeMirror puts there, and which stays across loads. Neither a keyed
-    -- element nor a textarea with content can be written in a quote.
+    -- The Markdown's textarea, keyed by the load like the title, with its
+    -- starting text as its content rather than its value (see the module's
+    -- comment). Before it is the element CodeMirror takes its place in,
+    -- which has no children here, so that no render touches what CodeMirror
+    -- puts there, and which stays across loads. Neither a keyed element nor
+    -- a textarea with content can be written in a quasi-quote.
     --
-    -- The text is not made read-only while a save is on its way: what is
-    -- typed meanwhile is the author's, unsaved after the save and kept as
-    -- a draft ('save'), where a read-only editor refused it without a word
-    -- (a Ctrl+S followed at once by more typing lost that typing).
+    -- The text is not made read-only while a save is in progress: what is
+    -- typed meanwhile is the author's, still unsaved after the save and kept
+    -- as a draft ('save'). A read-only editor used to refuse it silently (a
+    -- Ctrl+S followed at once by more typing lost that typing).
     source :: State -> Work -> H.ComponentHTML Action Slots m
     source st work =
       HH.keyed
@@ -1130,19 +1137,19 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
-      -- After the first render, which is therefore the same whatever the
-      -- browser remembers.
+      -- After the first render, so that render is the same whatever the
+      -- browser has stored.
       Initialize -> do
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})
-        -- After the first render too, which a page rendered ahead shows.
+      -- Also after the first render, which a prerendered page shows.
         scripted <- H.liftEffect scriptedInstalled
         when scripted $ modify (\st -> st {scripted})
-        -- The assistant's settings, and whether each provider with a key can
-        -- be reached, in a fork: the page loads meanwhile.
+        -- The assistant's settings, and whether each provider with a key
+        -- can be reached, in a fork: the page loads meanwhile.
         whenM (H.liftEffect assistantHere) $ void (H.fork loadAssistant)
-        -- Who else edits the page, and its saves, are heard of from now on.
+        -- From now on, receive who else edits the page, and its saves.
         gets (\st -> st.input.feed) >>= traverse_ (\f -> void (H.subscribe (FromLive <$> f.heard)))
         -- The page was loaded with the initial state, or is loaded now.
         gets (\st -> st.loaded) >>= \case
@@ -1155,18 +1162,18 @@ component =
       Retry -> do
         modify (\st -> st {loaded = Loading})
         loadWork
-      -- The waits are killed with the component; the browser's warning and
-      -- CodeMirror are not, so they are let go here.
+      -- The waits are killed with the component. The browser's warning and
+      -- CodeMirror are not, so they are removed here.
       Finalize -> do
         H.liftEffect (guardUnload False)
         gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . detachEditor)
-        -- Nobody edits the page here any more.
+        -- This tab no longer edits the page.
         st <- get
         for_ ((,) <$> st.input.feed <*> st.watching) $ \(f, page) -> H.liftEffect . liftIO $ do
           when (st.presence == Said) (f.stopEditing page)
           f.unwatch page
-      -- The work is the editor's own: a reload of the wiki around it (after
-      -- a change elsewhere, or someone else signing in) leaves it alone.
+      -- The work belongs to the editor: a reload of the wiki around it
+      -- (after a change elsewhere, or someone signing in) leaves it alone.
       Receive input -> modify (\st -> st {input})
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       TypedTitle t -> edit (\w -> w {title = t})
@@ -1182,7 +1189,7 @@ component =
         EscapeKey -> closeMenu
       Submit -> save Stay
       SaveAndClose -> save Close
-      -- The work is let go: so is its draft.
+      -- The work is discarded, and so is its draft.
       Reload -> do
         cancelPreview
         stopAutosave
@@ -1191,16 +1198,16 @@ component =
         modify (\st -> st {hasDraft = False, found = Nothing, draftNews = NoNews})
         load
       Picked ev -> H.liftEffect (chosenFiles ev >>= pickedFiles) >>= upload
-      -- The listener has let the files be dropped here, by preventing the
-      -- drag's default.
+      -- The listener has allowed the files to be dropped here, by
+      -- preventing the drag's default.
       DragOver -> unlessM (gets (\st -> st.dropping)) $ modify (\st -> st {dropping = True})
       DragLeave -> modify (\st -> st {dropping = False})
-      -- The listener has kept the browser from opening the file in place
-      -- of the page, and taken its files.
+      -- The listener has stopped the browser from opening the file in
+      -- place of the page, and taken its files.
       Dropped files -> do
         modify (\st -> st {dropping = False})
         H.liftEffect (pickedFiles files) >>= upload
-      -- The listener has kept the browser from putting in a name or an
+      -- The listener has stopped the browser from inserting a name or an
       -- image of its own, and taken the files.
       Pasted files -> H.liftEffect (pickedFiles files) >>= upload
       Insert a -> insert (attachmentReference a.name a.mediaType)
@@ -1218,8 +1225,8 @@ component =
         H.liftEffect (Storage.setItem LocalStorage sideBySideKey wanted)
       AskCancel -> modify (\st -> st {askingCancel = True})
       GoOnEditing -> modify (\st -> st {askingCancel = False})
-      -- The work as it is now, not as the last wait for the typing to stop
-      -- found it, is the draft.
+      -- The draft is the work as it is now, not as the last typing pause
+      -- found it.
       KeepDraftAndLeave -> do
         stopAutosave
         kept <- storeDraft True
@@ -1234,7 +1241,7 @@ component =
         modify (\st -> st {hasDraft = False, found = Nothing, draftNews = NoNews})
         load
       -- The offered draft's text in place of the page's; it is saved over
-      -- the page as it is now, which is what the author has just chosen.
+      -- the page as it is now, which the author has just chosen.
       TakeUpOffered ->
         gets (\st -> st.found) >>= \case
           Just (Offered draft _ _) -> do
@@ -1254,9 +1261,9 @@ component =
         here <- gets (\st -> st.watching)
         case heard of
           Live.Heard page (Event.Editing editors) | Just page == here -> heardEditors editors
-          -- Someone else's save: said, until the next save (the tab's own
-          -- is told too, while it is on its way or once it is the version
-          -- edited, and is not newer than that).
+          -- Someone else's save: reported until the next save. (The tab's
+          -- own save is reported too, while it is in progress or once it is
+          -- the version edited, and is then not newer than that.)
           Live.Heard page (PageChanged at) | Just page == here -> do
             st <- get
             case st.loaded of
@@ -1275,8 +1282,8 @@ component =
             modify (\st -> st {conflict = Nothing})
             modifyWork (rebase c)
             save c.after
-      -- Their version in place of the author's text, which goes, draft and
-      -- all, as Reload's does.
+      -- Their version replaces the author's text, which is discarded with
+      -- its draft, as on Reload.
       TakeTheirs ->
         gets (\st -> st.conflict) >>= \case
           Nothing -> pass
@@ -1297,8 +1304,8 @@ component =
                 }
             syncGuard
             takeOver
-      -- The author's text stays, now an edit of their version, with what
-      -- that changed beside it; the draft follows, against it.
+      -- The author's text stays, now as an edit of their version, with
+      -- what their save changed beside it; the draft follows, against it.
       MergeByHand ->
         gets (\st -> (st.conflict, st.loaded)) >>= \case
           (Just c, Ready w) -> do
@@ -1321,8 +1328,8 @@ component =
             modify (\s -> s {assistantOpen = True, assistantMounted = True, menu = Nothing})
             H.tell "assistant" () (Assistant.UseProvider p)
             unless (current == Just p) $ changeAssistant (chooseProvider p)
-            -- A list more than a day old, or a provider that could not be
-            -- reached, is asked again.
+            -- A model list more than a day old, or a provider that could
+            -- not be reached, is asked again.
             now <- liftIO getCurrentTime
             gets (\st' -> st'.assistantSettings) >>= \case
               Just (Right s) | listStale now (settingsOf p s) || (settingsOf p s).unreachable -> checkProvider p
@@ -1345,13 +1352,13 @@ component =
       DiscardOffered -> do
         withPage (void . discardDraft)
         modify (\st -> st {hasDraft = False, found = Nothing})
-        -- What was typed meanwhile can be kept now.
+        -- What was typed meanwhile can be saved as a draft now.
         whenM (gets isDirty) scheduleAutosave
 
-    -- Listen for who else edits the page, once it is loaded, and say that
-    -- this tab does as soon as that is known: at once if the channel has
-    -- heard it already (another view of this tab watches the page too),
-    -- otherwise when it hears.
+    -- Watch the page for who else is editing it, once it is loaded, and
+    -- announce that this tab is as soon as that is known: at once if the
+    -- channel has received it already (another view in this tab watches
+    -- the page too), otherwise when it arrives.
     watchPage :: H.HalogenM State Action Slots ViewOutput m ()
     watchPage = do
       st <- get
@@ -1364,9 +1371,9 @@ component =
           traverse_ heardEditors known
         _ -> pass
 
-    -- Who else edits the page, as heard: before this tab has said that it
-    -- does, nobody means say so, and somebody means ask the author first,
-    -- unless they have begun typing already.
+    -- Who else is editing the page, as received. Before this tab has
+    -- announced itself, nobody means announce now, and somebody means ask
+    -- the author first, unless they have started typing already.
     heardEditors :: [Author] -> H.HalogenM State Action Slots ViewOutput m ()
     heardEditors editors = do
       modify (\st -> st {others = editors})
@@ -1376,7 +1383,7 @@ component =
           then announce
           else modify (\s -> s {presence = Asking})
 
-    -- Tell the server that this tab edits the page.
+    -- Tell the server that this tab is editing the page.
     announce :: H.HalogenM State Action Slots ViewOutput m ()
     announce = do
       st <- get
@@ -1384,8 +1391,8 @@ component =
         H.liftEffect (liftIO (f.startEditing page))
         modify (\s -> s {presence = Said})
 
-    -- Leave for the page, as Cancel does, without the shell asking about
-    -- the work again: what becomes of it has been said.
+    -- Navigate to the page, as Cancel does, without the shell asking about
+    -- the work again: the author has said what becomes of it.
     leave :: H.HalogenM State Action Slots ViewOutput m ()
     leave = do
       modify (\st -> st {closing = True, askingCancel = False})
@@ -1393,11 +1400,12 @@ component =
       st <- get
       Router.navigate st.input.context.router (leaving st.input)
 
-    -- CodeMirror in place of the textarea rendered last, with the text it
-    -- was made with; it comes once the page has loaded it, so this returns
-    -- at once.
+    -- Put CodeMirror in place of the textarea rendered last, with the text
+    -- it was created with. CodeMirror arrives once the page has loaded it,
+    -- so this returns at once.
     --
-    -- A new CodeMirror has none of the assistant's changes, nor a selection.
+    -- A new CodeMirror has none of the assistant's changes, and no
+    -- selection.
     takeOver :: H.HalogenM State Action Slots ViewOutput m ()
     takeOver = do
       st <- get
@@ -1408,8 +1416,8 @@ component =
           traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody)) found
         _ -> pass
 
-    -- The user's assistant settings, read; then each provider that can be
-    -- asked is asked for its list of models.
+    -- Read the user's assistant settings, then ask each provider that can
+    -- be asked for its list of models.
     loadAssistant :: H.HalogenM State Action Slots ViewOutput m ()
     loadAssistant =
       gets me >>= \case
@@ -1421,9 +1429,9 @@ component =
           for_ (rightToMaybe settings) $ \s ->
             traverse_ checkProvider [p | p <- providers scripted, usable p (settingsOf p s)]
 
-    -- The assistant's settings changed: at once in what the bubbles and the
-    -- panel show, then as kept, the change made to them as they are kept
-    -- now (a check of a provider may have changed them meanwhile).
+    -- Change the assistant's settings: at once in what the bubbles and the
+    -- panel show, then in the stored settings, applying the change to them
+    -- as they are now (a provider check may have changed them meanwhile).
     changeAssistant :: (Settings -> Settings) -> H.HalogenM State Action Slots ViewOutput m ()
     changeAssistant f = do
       modify (\st -> st {assistantSettings = fmap f <$> st.assistantSettings})
@@ -1435,12 +1443,12 @@ component =
                 Left why -> modify (\st -> st {assistantProblem = Just why})
           )
 
-    -- Ask a provider for its list of models, in a fork: the list the panel
-    -- offers, and whether the provider can be reached from here at all.
-    -- Any answer, a refusal of the key included, says that it can; no
-    -- answer (a network that blocks it) that it cannot. What is learnt is
-    -- kept only if the key and the address are still those it was asked
-    -- with.
+    -- Ask a provider for its list of models, in a fork: that is the list
+    -- the panel offers, and whether the provider can be reached from here
+    -- at all. Any response, even a refusal of the key, means it can be
+    -- reached; no response (a network that blocks it) means it cannot. The
+    -- result is kept only if the key and the address are still those it
+    -- was asked with.
     checkProvider :: Provider -> H.HalogenM State Action Slots ViewOutput m ()
     checkProvider p = do
       st <- get
@@ -1472,9 +1480,9 @@ component =
               modify (\st -> st {decisions = foldr (`Map.insert` d) st.decisions settled})
           )
 
-    -- A toolbar command on the text; its input event, handled before this
-    -- returns, brings the change into the work. A save on its way does not
-    -- stop it, as it does not stop typing.
+    -- Run a toolbar command on the text. Its input event, handled before
+    -- this returns, brings the change into the work. A save in progress
+    -- does not block it, just as it does not block typing.
     run :: Command -> H.HalogenM State Action Slots ViewOutput m ()
     run command = do
       closeMenu
@@ -1485,31 +1493,31 @@ component =
     closeMenu :: H.HalogenM State Action Slots ViewOutput m ()
     closeMenu = whenM (gets (\st -> isJust st.menu)) $ modify (\st -> st {menu = Nothing})
 
-    -- The work rendered on its own, as it is now, with the focus on the
-    -- way back.
+    -- Show the work rendered on its own, as it is now, with the focus on
+    -- the button back.
     showPreview :: H.HalogenM State Action Slots ViewOutput m ()
     showPreview = do
       catchUp
       modify (\st -> st {mode = Previewing, previewMounted = True, menu = Nothing})
       gets (\st -> st.backButton) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
 
-    -- Back to the Markdown, which kept its text, selection and scroll while
-    -- hidden; the focus goes back to it (to CodeMirror, once it is there),
-    -- at its selection.
+    -- Back to the Markdown, which kept its text, selection and scroll
+    -- position while hidden. The focus returns to it (to CodeMirror, once
+    -- it is there), at its selection.
     backToEditing :: H.HalogenM State Action Slots ViewOutput m ()
     backToEditing = do
       modify (\st -> st {mode = Editing})
       gets (\st -> st.host) >>= H.getRef >>= traverse_ (H.liftEffect . focusText)
 
-    -- The preview shows the work as it is now, without waiting for the
+    -- Make the preview show the work as it is now, without waiting for the
     -- typing to stop.
     catchUp :: H.HalogenM State Action Slots ViewOutput m ()
     catchUp = do
       cancelPreview
       modifyWork (\w -> w {shownTitle = w.title, shownBody = w.body})
 
-    -- The page and the author's draft of it, as the initial state would
-    -- have had them: what the editor opens with over a backend that waits.
+    -- Load the page and the author's draft of it, as the initial state
+    -- would have: what the editor opens with on a backend that waits.
     loadWork :: H.HalogenM State Action Slots ViewOutput m ()
     loadWork = do
       input <- gets (\st -> st.input)
@@ -1520,7 +1528,7 @@ component =
       H.raise Loaded
       watchPage
 
-    -- The page as it is now.
+    -- Load the page as it is now.
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
@@ -1531,25 +1539,25 @@ component =
       H.raise Loaded
       watchPage
 
-    -- A change typed: into the work, counted for the autosave's wait, in
-    -- one change of the state, since each is a render and this is every
-    -- keystroke.
+    -- Apply a typed change to the work and count it for the autosave's
+    -- wait, in one state change, since each state change is a render and
+    -- this runs on every keystroke.
     edit :: (Work -> Work) -> H.HalogenM State Action Slots ViewOutput m ()
     edit f = do
       modify $ \st -> case st.loaded of
         Ready w -> st {loaded = Ready (f w), edits = st.edits + 1, draftNews = NoNews}
         _ -> st
       syncGuard
-      -- Typing is going on, past the question about the others editing.
+      -- Typing has started, past the question about others editing.
       whenM (gets (\st -> st.presence == Asking)) announce
       scheduleAutosave
-      -- Only a preview that can be seen beside the Markdown follows the
-      -- typing; one shown on its own catches up when it is shown.
+      -- Only a preview visible beside the Markdown follows the typing; one
+      -- shown on its own catches up when it is shown.
       gets (\st -> st.sideBySide) >>= \case
         True -> schedulePreview
         False -> cancelPreview
 
-    -- Hand the work to the preview once the typing has stopped for
+    -- Pass the work to the preview once the typing has stopped for
     -- 'previewDelay': a wait of its own, which the next change kills.
     schedulePreview :: H.HalogenM State Action Slots ViewOutput m ()
     schedulePreview = do
@@ -1565,13 +1573,13 @@ component =
       gets (\st -> st.pending) >>= traverse_ H.kill
       modify (\st -> st {pending = Nothing})
 
-    -- Keep the work as a draft once the typing has stopped for
-    -- 'draftDelay'. Rather than a wait per keystroke, killed by the next as
-    -- the preview's is, one wait runs while there are changes to keep,
-    -- and starts again for as long as it finds more changes at its end
-    -- than at its start; so a keystroke costs no fork. It is still running
-    -- while it writes the draft, so that a save, which stops it, never has
-    -- a draft written after it.
+    -- Save the work as a draft once the typing has stopped for
+    -- 'draftDelay'. Instead of one wait per keystroke, each killed by the
+    -- next as the preview's is, one wait runs while there are changes to
+    -- save, and restarts as long as it finds more changes at its end than
+    -- at its start; so a keystroke costs no fork. The wait is still running
+    -- while it writes the draft, so that a save, which stops it, never has a
+    -- draft written after it.
     scheduleAutosave :: H.HalogenM State Action Slots ViewOutput m ()
     scheduleAutosave =
       whenM (gets (\st -> isNothing st.autosave)) $ do
@@ -1587,7 +1595,8 @@ component =
         then autosaveAfterQuiet
         else do
           void (storeDraft False)
-          -- Typed while the draft was being written: that too is to keep.
+          -- Typed while the draft was being written: that also needs
+          -- saving.
           now <- gets (\st -> st.edits)
           if now /= quiet then autosaveAfterQuiet else modify (\st -> st {autosave = Nothing})
 
@@ -1596,15 +1605,16 @@ component =
       gets (\st -> st.autosave) >>= traverse_ H.kill
       modify (\st -> st {autosave = Nothing})
 
-    -- Keep the work as the author's draft, or, if it has come back to what
-    -- is saved, let go of the draft there was (unless told to keep it);
-    -- and say whether that was done. A failure is said quietly beside the buttons: the work is
-    -- still in the editor, and the next change tries again.
+    -- Save the work as the author's draft, or, if it is back to what is
+    -- saved, discard the existing draft (unless told to keep it); the
+    -- result says whether that was done. A failure is reported quietly
+    -- beside the buttons: the work is still in the editor, and the next
+    -- change tries again.
     --
     -- While an older draft is offered, the autosave leaves it alone, since
-    -- writing the work would replace it before the author has said what
-    -- becomes of it; told to keep the work, as Cancel's question does, it
-    -- does replace it.
+    -- writing the work would replace it before the author has decided what
+    -- becomes of it. When told to keep the work, as Cancel's question does,
+    -- it does replace it.
     storeDraft :: Bool -> H.HalogenM State Action Slots ViewOutput m Bool
     storeDraft told = do
       st <- get
@@ -1627,8 +1637,8 @@ component =
       st <- get
       case st.loaded of
         Ready w | not st.saving -> do
-          -- No draft is written after this save, which discards the one
-          -- there is.
+          -- No draft is written after this save, which discards the
+          -- existing one.
           stopAutosave
           modify (\s -> s {saving = True, problem = Nothing})
           result <- savePage w.page.id w.page.updatedAt w.title w.body
@@ -1637,7 +1647,7 @@ component =
             Left (Conflict why) -> conflicted why after
             Left e -> do
               modify (\s -> s {problem = Just e})
-              -- Still unsaved: still worth a draft.
+          -- Still unsaved: still worth a draft.
               scheduleAutosave
             Right saved -> do
               -- Saved: the next save is made against this version, and
@@ -1654,8 +1664,8 @@ component =
                   , changedSince = Nothing
                   }
               syncGuard
-              -- What is saved is the text with the assistant's changes in
-              -- it: they are accepted.
+              -- What is saved is the text including the assistant's
+              -- changes, so they are accepted.
               whenM (gets (\s -> s.pendingChanges > 0)) $ decide Accept Nothing
               case after of
                 Close -> H.raise (Changed (Just (leaving st.input)))
@@ -1667,10 +1677,10 @@ component =
                   H.raise (Changed Nothing)
         _ -> pass
 
-    -- A save refused for someone else's: their version, read now, beside
-    -- the author's text, which is kept as a draft at once. If their
-    -- version cannot be read, the refusal is said as it is, with the text
-    -- still there.
+    -- Handle a save refused because of someone else's save: fetch their
+    -- version and show it beside the author's text, which is saved as a
+    -- draft at once. If their version cannot be fetched, the refusal is
+    -- shown as it is, with the text still there.
     conflicted :: Text -> After -> H.HalogenM State Action Slots ViewOutput m ()
     conflicted why after = do
       input <- gets (\st -> st.input)
@@ -1707,7 +1717,8 @@ component =
           modify (\st -> st {problem = Just (Invalid (file.name <> " is " <> fileSize file.size <> ": an attachment can be at most " <> fileSize maxAttachmentSize <> "."))})
       | otherwise = do
           modify (\st -> st {uploading = st.uploading + 1})
-          -- Reading the file waits for the browser, off the component's loop.
+          -- Reading the file waits for the browser, off the component's
+          -- loop.
           bytesRead <- liftIO (try (readPickedFile file))
           result <- case bytesRead of
             Left (e :: SomeException) -> pure (Left (Invalid ("The browser could not read " <> file.name <> ": " <> show e)))
@@ -1726,14 +1737,14 @@ component =
                   }
               insert (attachmentReference a.name a.mediaType)
 
-    -- Text in at the text's cursor; the input event that puts it in the
+    -- Insert text at the text's cursor. The input event that puts it in the
     -- work is handled before this returns, like a keystroke.
     insert :: Text -> H.HalogenM State Action Slots ViewOutput m ()
     insert text = do
       ref <- gets (\st -> st.host)
       H.getRef ref >>= traverse_ (\host -> H.liftEffect (insertAtCursor host text))
 
-    -- Something to do with the page's id, once the page is loaded.
+    -- Run something with the page's id, once the page is loaded.
     withPage :: (PageId -> H.HalogenM State Action Slots ViewOutput m ()) -> H.HalogenM State Action Slots ViewOutput m ()
     withPage f =
       gets (\st -> st.loaded) >>= \case
@@ -1748,21 +1759,23 @@ component =
     syncGuard :: H.HalogenM State Action Slots ViewOutput m ()
     syncGuard = gets asksToLeave >>= H.liftEffect . guardUnload
 
--- | The page as the editor opens it, what it found of the author's draft
--- of it, and whether there is one: the fields of 'State' of those names.
+-- | What the editor opens with: the page, what it found of the author's
+-- draft of it, and whether there is one (the 'State' fields of those
+-- names).
 data Fetched = Fetched Loaded (Maybe Found) Bool
 
--- | The page the input names, as it is now, with the author's draft of it
--- taken up if it is of this version and offered if it is of an older one;
--- or why it cannot be edited.
+-- | Fetch the page the input names, as it is now, loading the author's
+-- draft of it if the draft is of this version and offering it if it is of
+-- an older one; or the reason it cannot be edited.
 fetchWork :: (MonadWiki n) => Input -> n Fetched
 fetchWork input =
   fetchPage input >>= \case
     Left e -> pure (Fetched (Failed e) Nothing False)
     Right (page, urls) -> do
       let work = workOf page urls
-      -- A draft that cannot be read (the author may not edit the page, for
-      -- one) is none: the editor says why it cannot edit, if it cannot.
+      -- A draft that cannot be read (because the author may not edit the
+      -- page, say) counts as none: the editor says why it cannot edit, if
+      -- it cannot.
       getDraft page.id >>= \case
         Right (Just draft)
           | draft.base == page.updatedAt ->
@@ -1771,7 +1784,7 @@ fetchWork input =
               pure (Fetched (Ready work) (Just (Offered draft draft.savedAt page.updatedAt)) True)
         _ -> pure (Fetched (Ready work) Nothing False)
 
--- | The page the input names, with where each of its attachments is.
+-- | The page the input names, with the URL of each of its attachments.
 fetchPage :: (MonadWiki n) => Input -> n (Either WikiError (Page, Map AttachmentId Text))
 fetchPage input =
   getPage input.space.id input.path >>= \case
@@ -1780,7 +1793,7 @@ fetchPage input =
       urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) page.attachments
       pure (Right (page, urls))
 
--- | The page as it is saved, to edit.
+-- | The page as it is saved, as work to edit.
 workOf :: Page -> Map AttachmentId Text -> Work
 workOf page urls =
   Work
@@ -1797,8 +1810,8 @@ workOf page urls =
     , urls
     }
 
--- | A draft's text in place of the work's, in new elements; what is saved
--- stays the page's, so that the draft counts as unsaved.
+-- | A draft's text in place of the work's, in new elements. What counts as
+-- saved stays the page's, so that the draft counts as unsaved.
 takeUp :: D.Draft -> Work -> Work
 takeUp draft w =
   w
@@ -1811,8 +1824,8 @@ takeUp draft w =
     }
 
 -- | The work as an edit of the version a conflict found saved: the next
--- save is made against it, and is compared with it, its attachments taken
--- (the author's uploads are among them, made to the page as they were).
+-- save is made against that version and compared with it, with its
+-- attachments (the author's uploads are among them, made to the page).
 rebase :: Clash -> Work -> Work
 rebase c w =
   w
@@ -1823,8 +1836,8 @@ rebase c w =
     , urls = c.theirUrls
     }
 
--- | Who is reading, by id: whom the live channel's names are compared
--- with.
+-- | The id of the user reading, which the live channel's editor names are
+-- compared with.
 me :: State -> Maybe UserId
 me st = (\u -> u.id) <$> st.input.context.session.user
 
@@ -1843,8 +1856,8 @@ isDirty st = case st.loaded of
   Ready w -> changed w
   _ -> False
 
--- | Whether leaving should be asked about: unsaved work, unless the author
--- has said what becomes of it.
+-- | Whether leaving should be asked about: there is unsaved work, and the
+-- author has not said what becomes of it.
 asksToLeave :: State -> Bool
 asksToLeave st = not st.closing && isDirty st
 
@@ -1853,11 +1866,11 @@ headingOf st = case st.loaded of
   Ready w -> "Editing " <> w.savedTitle
   _ -> "Editing a page"
 
--- | Where Cancel, and Save and close, go: the page.
+-- | Where Cancel, and Save and close, navigate to: the page.
 leaving :: Input -> Route
 leaving input = Page (spacePathOf input.context.spaces input.space.id) input.path
 
--- | Where the work is read, for its links: where the page is.
+-- | The place the work's links are resolved from: where the page is.
 placeOf :: Input -> Work -> Body.Place
 placeOf input work =
   Body.Place
@@ -1867,18 +1880,18 @@ placeOf input work =
     , Body.path = input.path
     , Body.attachments = work.attachments
     , Body.urls = work.urls
-    , -- The preview asks whom the work mentions itself.
+    , -- The preview looks up the people the work mentions itself.
       Body.people = mempty
     }
 
--- | What a line beside the buttons says of the draft.
+-- | What the line beside the buttons says about the draft.
 draftStatus :: DraftNews -> Text
 draftStatus = \case
   NoNews -> ""
   DraftSaved -> "Draft saved"
   DraftFailed why -> "Draft not saved: " <> why
 
--- | What the toolbar shows depends on.
+-- | The part of the state the toolbar depends on.
 data Bar = Bar
   { menuOpen :: Maybe Menu
   , twoPanes :: Bool
@@ -1889,12 +1902,12 @@ data Bar = Bar
 data Menu = HtmlMenu | ColourMenu
   deriving stock (Eq)
 
--- | A toolbar button: the command it runs, what it is called, the shortcut
--- that runs it too, and its icon (an SVG path in a 16 by 16 box, drawn as
--- a line in the text's colour by the style sheet).
+-- | A toolbar button: the command it runs, its name, the shortcut that
+-- also runs it, and its icon (an SVG path in a 16 by 16 box, drawn as a
+-- line in the text's colour by the stylesheet).
 data Tool = Tool {command :: Command, label :: Text, shortcut :: Maybe Text, icon :: Text}
 
--- | What a button's title says: its name, and its shortcut.
+-- | A button's title: its name, and its shortcut.
 toolTitle :: Tool -> Text
 toolTitle tool = tool.label <> maybe "" (\k -> " (" <> k <> ")") tool.shortcut
 
@@ -1927,7 +1940,8 @@ blockTools =
 tableTool :: Tool
 tableTool = Tool Table "Table" Nothing "M1.5 2.5h13v11h-13zM1.5 6h13M6 2.5v11M10.5 2.5v11"
 
--- | What a line beside Save says of the assistant's changes left.
+-- | What the line beside Save says about the assistant's undecided
+-- changes.
 pendingNote :: Int -> Text
 pendingNote 1 = "Saving accepts the suggested change."
 pendingNote n = "Saving accepts the " <> show n <> " suggested changes."
@@ -1943,21 +1957,21 @@ previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
 htmlTags :: [HtmlTag]
 htmlTags = [minBound .. maxBound]
 
--- | A provider's logo: one SVG path in a 24 by 24 box, in its colour, or
--- the text's.
+-- | A provider's logo: one SVG path in a 24 by 24 box, in its colour, or in
+-- the text's colour.
 logo :: Text -> Maybe Text -> HH.HTML w i
 logo d colour = [hh|<svg class="editor-provider-logo" viewBox="0 0 24 24" aria-hidden="true"><path {{ attr "d" d }} {{ attr "fill" (fromMaybe "currentColor" colour) }}></path></svg>|]
 
 -- | A speech bubble, for the assistant without a provider, and for a
--- service other than OpenAI's own that speaks its API.
+-- service other than OpenAI's own that implements its API.
 chatGlyph :: HH.HTML w i
 chatGlyph =
   [hh|<svg class="editor-provider-logo editor-provider-glyph" viewBox="0 0 24 24" aria-hidden="true"><path {{ attr "d" "M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" }}></path></svg>|]
 
--- | A provider's name in the page's attributes.
+-- | A provider's name, as written in the page's attributes.
 providerName :: Provider -> Text
 providerName = providerKey
 
--- | An icon: one SVG path, drawn by the style sheet.
+-- | An icon: one SVG path, drawn by the stylesheet.
 icon :: Text -> HH.HTML w i
 icon d = [hh|<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path {{ attr "d" d }}></path></svg>|]

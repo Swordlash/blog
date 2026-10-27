@@ -1,14 +1,16 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | A page, read: its Markdown rendered as "Wiki.App.View.Body" renders it
--- (with its links resolved and its islands drawn), its attachments, and what
--- the current user may do to it: read its source and its history, and
--- present it as slides if it is written as a deck ("Wiki.Core.Slides"),
--- and export it as a document ("Wiki.App.View.Export"), which anyone who
--- may read the page may, and, for someone who may edit it, edit it, add a page under
--- it, rename, move or delete it; and, for someone who may administer its
--- space, make it the page the space opens at ("Set as home page"). The URLs of its attachments are asked of the backend
--- ('attachmentUrl') once per load. A post of a space shown as a blog
+-- | The page view: a page as a reader sees it. It shows the page's
+-- Markdown rendered by "Wiki.App.View.Body" (with its links resolved and
+-- its islands drawn), its attachments, and the actions the current user
+-- may take. Anyone who may read the page may read its source and its
+-- history, present it as slides if it is written as a deck
+-- ("Wiki.Core.Slides"), and export it as a document
+-- ("Wiki.App.View.Export"). Someone who may edit it may also edit it, add
+-- a page under it, and rename, move or delete it. Someone who may
+-- administer its space may make it the page the space opens at ("Set as
+-- home page"). The URLs of its attachments are fetched from the backend
+-- ('attachmentUrl') once per load. A post in a space shown as a blog
 -- ("Wiki.Core.Blog") says when it was posted, and links to the posts
 -- before and after it.
 --
@@ -16,49 +18,50 @@
 --
 -- A page with enough headings ('Wiki.Core.Markdown.Toc.contentsPanel')
 -- shows a "Contents" panel (WP4.15 of docs/PLAN.md): the list of its
--- headings, made from the parsed page as it is loaded, so that the server
--- and the prerender render it as the program does. It sits beside the text
--- on a wide window, with the comments' panel under it when that is open,
--- and above the text on a narrow one; it folds (a @\<details>@ whose state
--- this browser keeps), and the section being read is marked in it by
--- @jsbits/toc.js@, without the program. A page that places the list itself
--- with @[[toc]]@ shows no panel. The address's fragment, if it names a
--- heading, is scrolled to once the page is first shown.
+-- headings, made from the parsed page when it is loaded, so that the
+-- server and the prerender render it as the program does. It sits beside
+-- the text on a wide window, with the comments panel under it when that
+-- is open, and above the text on a narrow one. It can be folded (a
+-- @\<details>@ whose state this browser remembers), and @jsbits/toc.js@
+-- highlights the section being read in it, without the program. A page
+-- that places the list itself with @[[toc]]@ shows no panel. If the
+-- address's fragment names a heading, the page scrolls to it once it is
+-- first shown.
 --
--- Whoever may edit the page may make it one of its space's templates, or
--- an ordinary page again ("Use as template", one button that stays pressed);
--- a template says so above its text. The page the space opens at cannot be
--- one.
+-- Someone who may edit the page may make it one of its space's templates,
+-- or an ordinary page again ("Use as template", a toggle button). A
+-- template says so above its text. The page the space opens at cannot be a
+-- template.
 --
 -- = Comments
 --
--- The page's comments (WP4.5 of docs/PLAN.md) are loaded with it, by
--- themselves, so that a page found among what has been read shows at once
--- while its comments load: its inline threads, whose quotes are marked in
--- the page ("Wiki.Core.Anchor") and listed in a panel beside it
--- ("Wiki.App.View.Comments"), opened by "Comments (n)" among the actions
--- or by a click on a quote, and its threads about the whole page, under
--- it. Text selected in the page by someone who may comment gets a
--- "Comment" button beside it, which opens a thread about it in the panel.
--- The panel starts closed, so a page the server or the prerender renders
--- is the program's first render, quotes marked and page threads shown.
+-- The page's comments (WP4.5 of docs/PLAN.md) are loaded with it, but
+-- separately, so that a page found in the cache shows at once while its
+-- comments load. Its inline threads have their quotes highlighted in the
+-- page ("Wiki.Core.Anchor") and are listed in a panel beside it
+-- ("Wiki.App.View.Comments"), opened by "Comments (n)" among the actions or
+-- by a click on a quote. Its threads about the whole page are under it.
+-- Text selected in the page by someone who may comment gets a "Comment"
+-- button beside it, which opens a thread about it in the panel. The panel
+-- starts closed, so a page the server or the prerender renders matches the
+-- program's first render, with quotes highlighted and page threads shown.
 --
--- Over a backend with a live channel ("Wiki.App.Live"), the page is
--- watched while it is shown, and what happens to its comments elsewhere is
--- folded into what is shown, as the view's own writes are. The server's
--- answer to each subscription (the first, and one after the channel
--- opened anew) carries the page's threads, which replace what is shown:
--- whatever changed since they were read is caught up with.
+-- On a backend with a live channel ("Wiki.App.Live"), the page is watched
+-- while it is shown, and changes to its comments made elsewhere are
+-- applied to what is shown, like the view's own writes. The server's
+-- answer to each subscription (the first, and each one after the channel
+-- reopens) carries the page's threads, which replace what is shown, so
+-- whatever changed since they were read is caught up.
 --
 -- = Who edits it, and its saves
 --
--- Over the same channel (WP4.12 of docs/PLAN.md) the view hears who has
+-- Over the same channel (WP4.12 of docs/PLAN.md) the view learns who has
 -- the page's editor open, and says so in the action bar ("Edgar Editor is
--- editing this page."), and hears of each save of the page, after which
--- it shows the page as saved: at once, unless the reader is in the middle
--- of something the new version would take away (text selected, a quote
--- being commented on, a rename or a move half typed), in which case the
--- bar says the page has changed, with a button to show it.
+-- editing this page."). It also learns of each save of the page, and then
+-- shows the page as saved: at once, unless the reader is in the middle of
+-- something the new version would discard (text selected, a quote being
+-- commented on, a rename or a move half typed). In that case the bar says
+-- the page has changed, with a button to show it.
 module Wiki.App.View.Page
   ( Input (..)
   , Slots
@@ -117,15 +120,15 @@ import Wiki.Core.Template (placeholderNames)
 import Wiki.Core.User (User (id))
 import Wiki.Core.Version (Author)
 
--- | The page at a path in a space the shell has loaded, with the space's
--- pages (for the links between them).
+-- | The page view's input: the page at a path in a space the shell has
+-- loaded, with the space's pages (for the links between them).
 data Input = Input
   { context :: Context
   , space :: Space
   , pages :: [Page]
   , path :: [Slug]
   , feed :: Maybe Feed
-  -- ^ The tab's live channel, over a backend that has one.
+  -- ^ The tab's live channel, on a backend that has one.
   }
 
 type Slots = Body.IslandSlots .+ ("comments" .== H.Slot (Const Void) CommentsView.Output CommentsView.Placement) .+ ("watch" .== H.Slot (Const Void) Void ())
@@ -139,10 +142,10 @@ data Threads
 data Loaded
   = Loading
   | Failed WikiError
-  | -- | The page, where each of its attachments is fetched from, whether
-    -- it is written as slides, and what its "Contents" panel lists, if it
-    -- shows one ("Wiki.Core.Markdown.Toc"): worked out once, as it is
-    -- loaded, rather than at each render.
+  | -- | The page, the URL of each of its attachments, whether it is
+    -- written as slides, and what its "Contents" panel lists, if it shows
+    -- one ("Wiki.Core.Markdown.Toc"): worked out once, when it is loaded,
+    -- rather than at each render.
     Ready Page (Map AttachmentId Text) Bool (Maybe [Md.Entry])
 
 data Mode
@@ -168,17 +171,17 @@ data State = State
   , quoting :: Maybe Anchor
   -- ^ A quote being commented on, in a new thread in the panel.
   , watching :: Maybe PageId
-  -- ^ The page the live channel is listening for.
+  -- ^ The page the live channel is watching.
   , editors :: [Author]
   -- ^ Who has the page's editor open, as the live channel last said.
   , changed :: Bool
   -- ^ Whether the page has been saved since it was loaded, while the
-  -- reader was busy with it: the bar offers the new version.
+  -- reader was busy with it: the bar then offers the new version.
   , text :: H.RefLabel
-  -- ^ The element the article is in, with the panel beside it: whose
-  -- selection is read, and where the button to comment on it goes.
+  -- ^ The element the article is in, with the panel beside it: its
+  -- selection is read, and the button to comment goes there.
   , people :: Body.People
-  -- ^ Whom the page and its comments mention.
+  -- ^ The people the page and its comments mention.
   }
 
 data Action
@@ -260,12 +263,12 @@ component =
           </div>
         |]
         where
-          -- Several computed parts in a row are one hole: on lines of their
-          -- own, each line break between them would be a space.
+          -- Several computed parts in a row are one hole: on lines of
+          -- their own, each line break between them would be a space.
           parts =
-            -- Its own class too: the bar stays under the header while the
-            -- page scrolls (web/style.css), so that a long page is edited
-            -- without scrolling back up to it.
+            -- It has its own class too: the bar stays under the header
+            -- while the page scrolls (web/style.css), so that a long page
+            -- can be edited without scrolling back up to it.
             [hh|<div class="actions page-actions">{{ actions input page deck (commentsToggle st) }}{{ [HH.slot_ "watch" () WatchView.component WatchView.Input {context = input.context, target = WatchPage page.id} | notified input.context] }}{{ liveNote st }}</div>|]
               : toList (form input page mode)
                 <> toList (errorView <$> problem)
@@ -276,8 +279,8 @@ component =
                 <> attachments page urls
                 <> [commentsOf st place text page CommentsView.Below]
           place = placeOf input page urls st.people.found
-          -- Rendered once: the article shows it, its quotes marked, and
-          -- its text is where they are looked for.
+          -- Rendered once: the article shows it with its quotes
+          -- highlighted, and its text is where the quotes are looked for.
           rendered = Body.rendered place page.body
           text = either (const "") renderedText rendered
 
@@ -301,33 +304,34 @@ component =
       | otherwise = [viewSource, history] <> present <> export <> [comments] <> setHome
       where
         spacePath = spacePathOf input.context.spaces input.space.id
-        -- For every reader: the source is theirs to read as the page is.
+        -- For every reader: the source may be read by anyone who may read
+        -- the page.
         viewSource = Router.link input.context.router Followed (PageSource spacePath input.path) [HP.class_ "button"] [HH.text "View source"]
-        -- And so is its history.
+        -- The same for its history.
         history = Router.link input.context.router Followed (PageHistory spacePath input.path Nothing AgainstPrevious) [HP.class_ "button"] [HH.text "History"]
-        -- And to present it, if it is written as slides: any page can be
-        -- shown so, by its address, but only a deck is offered.
+        -- Also presenting it, if it is written as slides: any page can be
+        -- shown as slides by its address, but only a deck offers it.
         present = [Router.link input.context.router Followed (PageSlides spacePath input.path 1) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
-        -- And to take it away as a document, over a backend that makes
-        -- them: a deck as a presentation too.
+        -- Also exporting it as a document, on a backend that makes them:
+        -- a deck as a presentation too.
         export = exportMenu (pageFormats deck input.context.session.exports) (pageExportUrl page.id) page.title
-        -- The page the space opens at, for whoever administers the space:
-        -- offered for every page but the one it is.
+        -- Make it the page the space opens at, for an administrator of the
+        -- space: offered on every page except the current home page.
         setHome =
           [ [hh|<button type="button" class="set-home" onClick={{ const SetAsHome }}>Set as home page</button>|]
           | mayAdminister input.context input.space.id
           , input.space.homePage /= Just page.id
           , not page.template
           ]
-        -- One of the space's templates, which "New page" offers, or not
-        -- any more: for whoever may edit it, for every page but the one
-        -- the space opens at.
+        -- Make it one of the space's templates, which "New page" offers,
+        -- or an ordinary page again: for someone who may edit it, on every
+        -- page except the space's home page.
         useAsTemplate =
           [ [hh|<button type="button" class="use-as-template" aria-pressed={{ ariaBool page.template }} onClick={{ const (SetTemplate (not page.template)) }}>Use as template</button>|]
           | input.space.homePage /= Just page.id
           ]
 
-    -- What a template is, said on it, since it is not in the tree.
+    -- A note on a template saying what it is, since it is not in the tree.
     templateNote :: Page -> Maybe (H.ComponentHTML Action Slots m)
     templateNote page =
       guard page.template
@@ -404,8 +408,8 @@ component =
         </form>
       |]
 
-    -- The page's text, its quotes marked, with what is selected in it and
-    -- the panel of inline threads beside it.
+    -- The page's text, its quotes highlighted, with the current selection
+    -- and the panel of inline threads beside it.
     textAndPanel
       :: State
       -> Body.Place
@@ -455,7 +459,7 @@ component =
         position s = "top: " <> px s.top <> "; left: " <> px s.left
         px x = show (round x :: Int) <> "px"
 
-    -- The comments' component in one of its places.
+    -- The comments component in one of its places.
     commentsOf :: State -> Body.Place -> Text -> Page -> CommentsView.Placement -> H.ComponentHTML Action Slots m
     commentsOf st place text page placement =
       HH.slot
@@ -477,9 +481,10 @@ component =
           }
         FromComments
 
-    -- What the live channel says of the page, at the end of the action
-    -- bar, when there is something to say: who is editing it, and that it
-    -- has been saved since it was shown, if it was not shown again at once.
+    -- What the live channel reports about the page, at the end of the
+    -- action bar, when there is something to report: who is editing it,
+    -- and that it was saved since it was shown, if it was not reloaded at
+    -- once.
     liveNote :: State -> Maybe (H.ComponentHTML Action Slots m)
     liveNote st
       | null st.editors && not st.changed = Nothing
@@ -494,8 +499,8 @@ component =
       where
         me = (\u -> u.id) <$> st.input.context.session.user
 
-    -- "Comments (n)": the inline threads not resolved, which opens the
-    -- panel of them.
+    -- "Comments (n)", counting the unresolved inline threads, which opens
+    -- their panel.
     commentsToggle :: State -> H.ComponentHTML Action Slots m
     commentsToggle st =
       [hh|
@@ -529,17 +534,17 @@ component =
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
       -- The page was loaded with the initial state, and the shell is told;
-      -- or it is loaded now. Its comments are heard of from now on, and
-      -- loaded if they were not with it.
+      -- or it is loaded now. From now on its comments' events are
+      -- received, and the comments are loaded if they were not with it.
       Initialize -> do
         gets (\st -> st.input.feed) >>= traverse_ (\f -> void (H.subscribe (Heard <$> f.heard)))
         gets (\st -> st.loaded) >>= \case
           Loading -> load >> H.liftEffect revealFragment
           _ -> do
             H.raise Loaded
-            -- The heading the address names, if it names one, once the
-            -- page is shown: the browser scrolls to it in a page it was
-            -- sent, but not in one the program shows itself.
+            -- Scroll to the heading the address names, if any, once the
+            -- page is shown: the browser does this for a page it loaded, but
+            -- not for one the program renders itself.
             H.liftEffect revealFragment
             watch
             resolvePeople
@@ -558,8 +563,8 @@ component =
           unwatchAll
           modify (\st -> st {loaded = Loading, threads = ThreadsLoading, panelOpen = False, focused = Nothing, selected = Nothing, quoting = Nothing, editors = []})
         when (elsewhere || old.context.revision /= input.context.revision) $ do
-          -- Whom mentions name is asked again: who is asking may be someone
-          -- else now.
+          -- The people mentioned are looked up again: the current user may
+          -- be someone else now.
           modify (\st -> st {mode = Viewing, problem = Nothing, changed = False, people = Body.noPeople})
           load
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
@@ -615,8 +620,8 @@ component =
         here <- gets (\st -> st.watching)
         case heard of
           Live.Heard page (Editing editors) | Just page == here -> modify (\st -> st {editors})
-          -- Saved, by anyone (this tab's own save is told too, and is the
-          -- version shown already): shown at once if the reader is not
+          -- Saved, by anyone (this tab's own save is reported too, and is
+          -- the version shown already): shown at once if the reader is not
           -- busy with the page, otherwise offered.
           Live.Heard page (PageChanged at) | Just page == here -> withPage $ \shown ->
             when (at > shown.updatedAt) $
@@ -625,9 +630,9 @@ component =
                 False -> H.raise (Changed Nothing)
           Live.Heard page event | Just page == here -> modify (\st -> st {threads = applied event st.threads}) >> resolvePeople
           -- The server's answer to the subscription: the threads as they
-          -- are now, whatever was shown, and what changed since the page
-          -- was read (or the channel was lost) with them. A thread focused
-          -- that is gone is not focused any more.
+          -- are now, replacing what was shown, including whatever changed
+          -- since the page was read (or the channel was lost). A focused
+          -- thread that no longer exists is unfocused.
           Live.Replaced page threads | Just page == here -> do
             modify $ \st ->
               st
@@ -655,7 +660,7 @@ component =
       ClickedQuote tid -> do
         modify (\st -> st {panelOpen = True, focused = Just tid})
         reveal ("#" <> CommentsView.threadElementId tid)
-      -- The shell reloads what it shows, the page and its tree among it.
+      -- The shell reloads what it shows, including the page and its tree.
       ShowChanged -> H.raise (Changed Nothing)
       SetAsHome -> withPage $ \page -> do
         space <- gets (\st -> st.input.space)
@@ -671,7 +676,7 @@ component =
     load = do
       input <- gets (\st -> st.input)
       loaded <- fetch input
-      -- Only if the page asked for is still the one to show: another
+      -- Only if the requested page is still the one to show: another
       -- navigation may have overtaken this load.
       now <- gets (\st -> st.input)
       when (now.space.id == input.space.id && now.path == input.path) $ do
@@ -681,7 +686,7 @@ component =
         watch
         loadThreads
 
-    -- The page's comments, read (again).
+    -- Fetch the page's comments (again).
     loadThreads :: H.HalogenM State Action Slots ViewOutput m ()
     loadThreads = withPage $ \page -> do
       threads <- threadsOf <$> listThreads page.id
@@ -689,8 +694,8 @@ component =
       withPage $ \now -> when (now.id == page.id) (modify (\st -> st {threads}))
       resolvePeople
 
-    -- Ask whom the page and its comments mention, of the logins not asked
-    -- about yet.
+    -- Look up the people the page and its comments mention, for the
+    -- logins not looked up yet.
     resolvePeople :: H.HalogenM State Action Slots ViewOutput m ()
     resolvePeople = do
       st <- get
@@ -700,7 +705,7 @@ component =
           Right found -> modify (\s -> s {people = Body.answered logins found s.people})
           Left _ -> pass
 
-    -- Listen for what happens to the page shown, and to nothing else.
+    -- Watch the page shown, and nothing else.
     watch :: H.HalogenM State Action Slots ViewOutput m ()
     watch = do
       st <- get
@@ -732,8 +737,8 @@ component =
         modify (\st -> st {mode = Viewing, problem = Nothing})
         H.raise (Changed (next a))
 
--- | The page the input names, with where each of its attachments is fetched
--- from, or why it cannot be shown.
+-- | Fetch the page the input names, with the URL of each of its
+-- attachments, or the reason it cannot be shown.
 fetch :: (MonadWiki n) => Input -> n Loaded
 fetch input =
   getPage input.space.id input.path >>= \case
@@ -751,8 +756,8 @@ targetSpaces ctx page =
   , mayMovePage (principalOf ctx) (grantsOf ctx) (chainOf ctx page.space) (chainOf ctx s.id)
   ]
 
--- | The pages of the target space a page may be put under: in its own space,
--- not itself or one of the pages under it.
+-- | The pages of the target space a page may be put under: in its own
+-- space, not itself nor one of the pages under it.
 allowedParents :: Page -> Maybe SpaceId -> [Page] -> [PageId]
 allowedParents page target ps
   | target == Just page.space = [p.id | p <- ps, p.id /= page.id, page.id `notElem` ancestorsOf p]
@@ -771,7 +776,7 @@ spaceName ctx s = mconcat (intersperse " / " (map (\c -> c.name) (chainOf ctx s.
 day :: UTCTime -> Text
 day = toS . formatTime defaultTimeLocale "%-d %B %Y"
 
--- | A load's answer as the threads it shows.
+-- | The threads a fetch's result shows.
 threadsOf :: Either WikiError [Thread] -> Threads
 threadsOf = either ThreadsFailed ThreadsReady
 
@@ -781,7 +786,8 @@ applied event = \case
   ThreadsReady ts -> ThreadsReady (applyEvent event ts)
   other -> other
 
--- | Where the page is, for its links and its comments'.
+-- | The place the page's links, and its comments' links, are resolved
+-- from: where the page is.
 placeOf :: Input -> Page -> Map AttachmentId Text -> Map Text Author -> Body.Place
 placeOf input page urls people =
   Body.Place {context = input.context, space = input.space, pages = input.pages, path = input.path, attachments = page.attachments, urls, people}
@@ -792,9 +798,9 @@ bodiesOf loaded threads = case loaded of
   Ready page _ _ _ -> page.body : [c.body | ThreadsReady ts <- [threads], t <- ts, c <- t.comments]
   _ -> []
 
--- | Whether the reader is busy with the page as it is shown: something
--- selected in it, a quote being commented on, a rename or a move begun.
--- A new version of the page would take that away.
+-- | Whether the reader is busy with the page as shown: something selected
+-- in it, a quote being commented on, or a rename or a move begun. A new
+-- version of the page would discard that.
 busy :: State -> Bool
 busy st = isJust st.selected || isJust st.quoting || not viewing
   where
@@ -810,8 +816,8 @@ mayCommentHere st = mayComment (principalOf st.input.context) (grantsOf st.input
 locatedIn :: Text -> [Thread] -> [(Thread, Located)]
 locatedIn text ts = [(t, maybe Orphaned (locate text) t.anchor) | t <- ts, isInline t]
 
--- | The quotes to mark in the page's text: those of the inline threads not
--- resolved, found.
+-- | The quotes to highlight in the page's text: those of the unresolved
+-- inline threads that are found.
 markings :: State -> Text -> [Marking]
 markings st text = case st.threads of
   ThreadsReady ts ->
@@ -822,8 +828,8 @@ markings st text = case st.threads of
   _ -> []
 
 -- | The threads one place shows: beside the page, the inline ones in the
--- order of their quotes in it, those it no longer has last; under it,
--- those about the whole page, in the order they were opened.
+-- order of their quotes in it, with those whose quote is gone last; under
+-- it, those about the whole page, in the order they were opened.
 shownIn :: Text -> CommentsView.Placement -> [Thread] -> [CommentsView.Shown]
 shownIn text placement ts = case placement of
   CommentsView.Beside -> map (uncurry CommentsView.Shown) (sortOn (position . snd) (locatedIn text ts))
