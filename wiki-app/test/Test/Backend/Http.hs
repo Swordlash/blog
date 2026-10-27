@@ -467,5 +467,13 @@ preload = describe "what a page it is rendered into carries" $ do
   it "writes a refusal as the API's error" $
     encodePreload cache `shouldSatisfy` T.isInfixOf "{\"error\":{\"error\":\"Forbidden\"},\"path\":[\"team\"]}"
 
+  it "reads a payload written before the later reads were carried as without them" $
+    decodePreload "{\"session\":null,\"spaces\":null,\"spacesAt\":[],\"pages\":[],\"pagesAt\":[],\"drafts\":[],\"searches\":[],\"versionLists\":[],\"versions\":[]}"
+      `shouldBe` Right emptyCache
+
+  it "writes what is not kept as nothing, and nothing as null" $
+    encodePreload (withSpaceAt (slugs "away") (Left (Unreachable "offline")) emptyCache)
+      `shouldBe` "{\"activity\":null,\"backups\":null,\"directory\":null,\"drafts\":[],\"invitations\":null,\"invitationsAt\":null,\"notices\":null,\"pageCounts\":null,\"pages\":[],\"pagesAt\":[],\"people\":null,\"postDetails\":null,\"searches\":[],\"server\":null,\"session\":null,\"settings\":null,\"spaces\":null,\"spacesAt\":[],\"status\":null,\"threads\":null,\"versionLists\":[],\"versions\":[],\"watches\":null}"
+
   it "says why a payload cannot be read" $
     decodePreload "{\"spaces\": 3}" `shouldSatisfy` isLeft

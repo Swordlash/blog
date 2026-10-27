@@ -10,9 +10,10 @@
 -- test's (the built pages, in a browser).
 module Test.Server.Render (spec) where
 
-import Data.Aeson (FromJSON, eitherDecodeStrict')
+import Data.Aeson (FromJSON)
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (readIORef)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Database.SQLite.Simple (execute_, withConnection)
 import Network.HTTP.Types (Header)
@@ -22,9 +23,11 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
-import Wiki.Api.Error (errorStatus)
 import Wiki.Api.Links (links, searchUrl)
+import Wiki.App.Backend (WikiError (..))
+import Wiki.App.Backend.Http.Cache (Cache (..))
 import Wiki.App.Backend.Http.Preload
+import Wiki.App.Backend.Http.Request (sessionInfo)
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
@@ -55,14 +58,14 @@ pageAs :: Running -> [Header] -> Text -> Text -> IO (Int, Text)
 pageAs r hs root path = (\reply -> (reply.status, bodyText reply)) <$> getUrlWith r (root <> path) hs
 
 -- | What a page carries for the program, as its script holds it.
-preloadIn :: (HasCallStack) => Text -> IO Preload
+preloadIn :: (HasCallStack) => Text -> IO Cache
 preloadIn html = do
   let opening = "<script type=\"application/json\" id=\"" <> preloadId <> "\">"
   carried <- case T.breakOn opening html of
     (_, rest) | not (T.null rest) -> pure (fst (T.breakOn "</script>" (T.drop (T.length opening) rest)))
     _ -> assertFailure "the page carries no preload"
   when (T.any (== '<') carried) $ assertFailure "the preload has a < in it"
-  either (\e -> assertFailure ("the preload is not one: " <> e)) pure (eitherDecodeStrict' (encodeUtf8 carried))
+  either (\e -> assertFailure ("the preload is not one: " <> toS e)) pure (decodePreload carried)
 
 -- | The application's part of a page, which is what a reader without the
 -- program sees: what is inside its mount point.
@@ -166,7 +169,7 @@ administrator = describe "for an administrator signed in" $ do
     appIn html `shouldSatisfy` T.isInfixOf "<textarea"
     appIn html `shouldSatisfy` T.isInfixOf "Editing Hello, world"
     preload <- preloadIn html
-    map (\d -> d.draft) preload.drafts `shouldBe` [Gave Nothing]
+    Map.elems preload.drafts `shouldBe` [Right Nothing]
 
 adminListener :: Spec
 adminListener = describe "on the admin listener" $ do
@@ -202,24 +205,27 @@ preloads = describe "what a page carries for the program" $ do
           api address = ok200 (getUrl r (r.public <> "/" <> address))
           refusedAs :: Text -> Int -> IO ()
           refusedAs address code = (.status) <$> getUrl r (r.public <> "/" <> address) `shouldReturn` code
-          answers :: (FromJSON a, Eq a, Show a) => Text -> Answer a -> IO ()
+          -- Only these two refusals are kept ('Wiki.App.Backend.Http.Cache.kept').
+          answers :: (FromJSON a, Eq a, Show a) => Text -> Either WikiError a -> IO ()
           answers address = \case
-            Gave a -> api address `shouldReturn` a
-            Refused e -> refusedAs address (errorStatus e)
-      for_ p.session $ \s -> api links.session `shouldReturn` s
+            Right a -> api address `shouldReturn` a
+            Left NotFound -> refusedAs address 404
+            Left Forbidden -> refusedAs address 403
+            Left e -> assertFailure ("a refusal the preload does not keep: " <> show e)
+      for_ p.session $ \s -> api links.session `shouldReturn` sessionInfo s
       for_ p.spaces $ \ss -> api links.spaces.list `shouldReturn` ss
-      for_ p.spacesAt $ \s -> answers (links.spaces.atPath s.path) s.space
-      for_ p.pages $ \s -> answers (links.spaces.listPages s.space) s.pages
-      for_ p.pagesAt $ \x -> answers (links.spaces.pageAt x.space x.path) x.page
-      for_ p.drafts $ \d -> answers (links.pages.draft d.page) d.draft
-      for_ p.searches $ \s -> api (searchUrl s.query) `shouldReturn` s.hits
+      for_ (Map.toList p.spaceAt) $ \(at, s) -> answers (links.spaces.atPath at) s
+      for_ (Map.toList p.pages) $ \(space, ps) -> answers (links.spaces.listPages space) ps
+      for_ (Map.toList p.pageAt) $ \((space, at), x) -> answers (links.spaces.pageAt space at) x
+      for_ (Map.toList p.drafts) $ \(pageId, d) -> answers (links.pages.draft pageId) d
+      for_ p.searches $ \(query, hits) -> api (searchUrl query) `shouldReturn` hits
 
   it "holds what the route shows, and no page twice" $ withDemoRunning identity $ \r -> do
     (_, html) <- page r r.public "/s/docs/p/tour/"
     p <- preloadIn html
-    (isJust p.session, map (\s -> s.path) p.spacesAt, length p.pages) `shouldBe` (True, [slugs "docs"], 1)
+    (isJust p.session, Map.keys p.spaceAt, Map.size p.pages) `shouldBe` (True, [slugs "docs"], 1)
     -- The page is in its space's list, so not carried again by itself.
-    p.pagesAt `shouldBe` []
+    Map.keys p.pageAt `shouldBe` []
 
 addresses :: Spec
 addresses = describe "a request's address" $ do

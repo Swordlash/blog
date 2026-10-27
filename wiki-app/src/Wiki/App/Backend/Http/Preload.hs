@@ -20,30 +20,19 @@
 -- ("Wiki.Api.Error"). A page of a space a view reads by itself is left out
 -- when the space's list of pages, which holds it, is there, since the
 -- backend finds it in the list ('cachedPage'): a page is not carried twice.
+--
+-- The cache is written and read here directly, field by field, rather
+-- than through a record that mirrors it (WP5.9 of docs/PLAN.md). The
+-- mirror, a record of twenty-three fields with derived instances, a record
+-- for each kind of answer and the two functions between them and the
+-- cache, was two thirds of what GHC spent on the module: 4.9 GB of
+-- allocation natively and 5.6 GB on WebAssembly, against 1.5 GB for each
+-- now, for the same bytes in the page.
 module Wiki.App.Backend.Http.Preload
   ( -- * The payload
-    Preload (..)
-  , SpaceAt (..)
-  , SpacePages (..)
-  , PageAt (..)
-  , DraftOf (..)
-  , SearchOf (..)
-  , VersionsOf (..)
-  , VersionOf (..)
-  , DirectoryOf (..)
-  , SettingsOf (..)
-  , InvitationsOf (..)
-  , InvitationAt (..)
-  , ServerOf (..)
-  , BackupsOf (..)
-  , ThreadsOf (..)
-  , PostDetailsOf (..)
-  , NoticesOf (..)
-  , WatchOf (..)
-  , Answer (..)
-  , preloadId
-  , toPreload
-  , fromPreload
+    preloadId
+  , preloadJSON
+  , parsePreload
 
     -- * In the page
   , encodePreload
@@ -52,424 +41,152 @@ module Wiki.App.Backend.Http.Preload
   )
 where
 
-import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
+import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
 import Data.Aeson.Key (Key)
-import Data.Aeson.Types (Pair, Parser, Value)
+import Data.Aeson.Types (Object, Pair, Parser, parseEither)
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime)
 import Halogen.IO.Util (readEmbedded)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude
-import Wiki.Api.Account (InvitationInfo, InvitationToken)
-import Wiki.Api.Activity (Activity)
-import Wiki.Api.Admin (Directory, Invitations, ServerStatus, WikiSettings)
-import Wiki.Api.Backups (Backups)
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
-import Wiki.Api.Notifications (Notifications)
-import Wiki.Api.ServerSettings (ServerSettings)
-import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, kept)
 import Wiki.App.Backend.Http.Request (fromApiError, fromSessionInfo, sessionInfo)
-import Wiki.Core.Blog (PostDetails)
-import Wiki.Core.Comment (Thread)
-import Wiki.Core.Draft (Draft)
-import Wiki.Core.Id (PageId, SpaceId)
-import Wiki.Core.Notification (Watch, WatchTarget (..))
-import Wiki.Core.Page (Page)
-import Wiki.Core.Search (SearchHit, SearchQuery)
-import Wiki.Core.Slug (Slug)
-import Wiki.Core.Space (Space)
-import Wiki.Core.Version (Author, Version, VersionInfo)
+import Wiki.Core.Notification (WatchTarget (..))
 
 -- | The id of the page's script that holds the payload.
 preloadId :: Text
 preloadId = "wiki-preload"
 
--- | What the server's render read, read by read.
-data Preload = Preload
-  { session :: Maybe SessionInfo
-  -- ^ Who is asking ('Wiki.App.Backend.session').
-  , spaces :: Maybe [Space]
-  -- ^ The tree of spaces ('Wiki.App.Backend.listSpaces').
-  , pageCounts :: Maybe (Map SpaceId Int)
-  -- ^ How many pages each space has ('Wiki.App.Backend.pageCounts'), for
-  -- the directory of spaces; a payload written before it had this field
-  -- reads as without it.
-  , spacesAt :: [SpaceAt]
-  , pages :: [SpacePages]
-  , pagesAt :: [PageAt]
-  , drafts :: [DraftOf]
-  , searches :: [SearchOf]
-  , versionLists :: [VersionsOf]
-  , versions :: [VersionOf]
-  , directory :: Maybe DirectoryOf
-  -- ^ The administration's people ('Wiki.App.Backend.Admin.directory'),
-  -- for a page of the administration rendered for an administrator; a
-  -- payload written before it had this field reads as without it.
-  , settings :: Maybe SettingsOf
-  -- ^ The wiki's settings ('Wiki.App.Backend.Admin.wikiSettings'), as the
-  -- directory.
-  , invitations :: Maybe InvitationsOf
-  -- ^ The invitations ('Wiki.App.Backend.Admin.invitations'), as the
-  -- directory.
-  , invitationsAt :: Maybe [InvitationAt]
-  -- ^ An invitation as its link shows it ('Wiki.App.Account.invitationFor'),
-  -- for the page of that link.
-  , server :: Maybe ServerOf
-  -- ^ The server's own settings ('Wiki.App.Backend.Admin.serverSettings'),
-  -- as the directory: whether each secret is set, never a secret.
-  , backups :: Maybe BackupsOf
-  -- ^ The backups ('Wiki.App.Backend.Admin.backups'), as the directory;
-  -- a payload written before there were any reads as without them.
-  , activity :: Maybe ActivityOf
-  -- ^ The first page of the audit log ('Wiki.App.Backend.Admin.activity'),
-  -- as the directory; a payload written before there was one reads as
-  -- without it.
-  , status :: Maybe StatusOf
-  -- ^ The server's status ('Wiki.App.Backend.Admin.serverStatus'), as the
-  -- directory.
-  , postDetails :: Maybe [PostDetailsOf]
-  -- ^ What a blog's posts are listed with ('Wiki.App.Backend.postDetails'),
-  -- for the blog's home; a payload written before there were any reads as
-  -- without them.
-  , threads :: Maybe [ThreadsOf]
-  -- ^ A page's comments ('Wiki.App.Backend.Comments.listThreads'), for the
-  -- page they are on; a payload written before there were any reads as
-  -- without them.
-  , people :: Maybe (Map Text (Maybe Author))
-  -- ^ Who the logins mentioned are
-  -- ('Wiki.App.Backend.Notifications.mentionable'), @null@ for a login
-  -- that is nobody's; and as each of the next two, a payload written
-  -- before there were any reads as without them.
-  , notices :: Maybe NoticesOf
-  -- ^ The user's notifications ('Wiki.App.Backend.Notifications.notifications').
-  , watches :: Maybe [WatchOf]
-  -- ^ Whether the user watches a page or a space
-  -- ('Wiki.App.Backend.Notifications.watching').
-  }
-  deriving stock (Eq, Show, Generic)
-
-instance ToJSON Preload
-
-instance FromJSON Preload
-
--- | A space by its path ('Wiki.App.Backend.getSpace').
-data SpaceAt = SpaceAt {path :: [Slug], space :: Answer Space}
-  deriving stock (Eq, Show)
-
--- | A space's pages ('Wiki.App.Backend.listPages').
-data SpacePages = SpacePages {space :: SpaceId, pages :: Answer [Page]}
-  deriving stock (Eq, Show)
-
--- | What a space's pages are listed with as posts
--- ('Wiki.App.Backend.postDetails').
-data PostDetailsOf = PostDetailsOf {space :: SpaceId, details :: Answer (Map PageId PostDetails)}
-  deriving stock (Eq, Show)
-
--- | A page by its space and its path ('Wiki.App.Backend.getPage').
-data PageAt = PageAt {space :: SpaceId, path :: [Slug], page :: Answer Page}
-  deriving stock (Eq, Show)
-
--- | The signed-in user's draft of a page, or that they have none
--- ('Wiki.App.Backend.getDraft').
-data DraftOf = DraftOf {page :: PageId, draft :: Answer (Maybe Draft)}
-  deriving stock (Eq, Show)
-
--- | A search's hits ('Wiki.App.Backend.searchPages').
-data SearchOf = SearchOf {query :: SearchQuery, hits :: [SearchHit]}
-  deriving stock (Eq, Show, Generic)
-
-instance ToJSON SearchOf
-
-instance FromJSON SearchOf
-
--- | A page's history ('Wiki.App.Backend.listVersions').
-data VersionsOf = VersionsOf {page :: PageId, versions :: Answer [VersionInfo]}
-  deriving stock (Eq, Show)
-
--- | One version of a page ('Wiki.App.Backend.getVersion').
-data VersionOf = VersionOf {page :: PageId, updatedAt :: UTCTime, version :: Answer Version}
-  deriving stock (Eq, Show)
-
--- | The wiki's people, as the administration reads them
--- ('Wiki.App.Backend.Admin.directory').
-newtype DirectoryOf = DirectoryOf {directory :: Answer Directory}
-  deriving stock (Eq, Show)
-
--- | The wiki's settings ('Wiki.App.Backend.Admin.wikiSettings').
-newtype SettingsOf = SettingsOf {settings :: Answer WikiSettings}
-  deriving stock (Eq, Show)
-
--- | The invitations ('Wiki.App.Backend.Admin.invitations').
-newtype InvitationsOf = InvitationsOf {invitations :: Answer Invitations}
-  deriving stock (Eq, Show)
-
--- | The server's own settings ('Wiki.App.Backend.Admin.serverSettings').
-newtype ServerOf = ServerOf {server :: Answer ServerSettings}
-  deriving stock (Eq, Show)
-
--- | The backups ('Wiki.App.Backend.Admin.backups').
-newtype BackupsOf = BackupsOf {backups :: Answer Backups}
-  deriving stock (Eq, Show)
-
--- | The first page of the audit log ('Wiki.App.Backend.Admin.activity').
-newtype ActivityOf = ActivityOf {activity :: Answer Activity}
-  deriving stock (Eq, Show)
-
--- | The server's status ('Wiki.App.Backend.Admin.serverStatus').
-newtype StatusOf = StatusOf {status :: Answer ServerStatus}
-  deriving stock (Eq, Show)
-
--- | An invitation by its link's secret ('Wiki.App.Account.invitationFor').
-data InvitationAt = InvitationAt {token :: InvitationToken, invitation :: Answer InvitationInfo}
-  deriving stock (Eq, Show)
-
--- | A page's threads ('Wiki.App.Backend.Comments.listThreads').
-data ThreadsOf = ThreadsOf {page :: PageId, threads :: Answer [Thread]}
-  deriving stock (Eq, Show)
-
--- | The user's notifications ('Wiki.App.Backend.Notifications.notifications').
-newtype NoticesOf = NoticesOf {notifications :: Answer Notifications}
-  deriving stock (Eq, Show)
-
--- | Whether the user watches a page or a space, by the one it is: a
--- @page@ or a @space@ field.
-data WatchOf = WatchOf {target :: WatchTarget, watch :: Answer Watch}
-  deriving stock (Eq, Show)
-
--- | What a read gave, or the API's refusal: written as the read's own field
--- (@space@, @pages@, …) or as @error@, the API's error body.
-data Answer a = Gave a | Refused ApiError
-  deriving stock (Eq, Show)
-
-answerFields :: (ToJSON a) => Key -> Answer a -> [Pair]
-answerFields field = \case
-  Gave a -> [field .= a]
-  Refused e -> ["error" .= e]
-
-parseAnswer :: (FromJSON a) => Key -> Value -> Parser (Answer a)
-parseAnswer field = withObject "an answer" $ \o ->
-  o .:? "error" >>= \case
-    Just e -> pure (Refused e)
-    Nothing -> Gave <$> o .: field
-
-instance ToJSON SpaceAt where
-  toJSON s = object (("path" .= s.path) : answerFields "space" s.space)
-
-instance FromJSON SpaceAt where
-  parseJSON v = withObject "SpaceAt" (\o -> SpaceAt <$> o .: "path" <*> parseAnswer "space" v) v
-
-instance ToJSON SpacePages where
-  toJSON s = object (("space" .= s.space) : answerFields "pages" s.pages)
-
-instance FromJSON SpacePages where
-  parseJSON v = withObject "SpacePages" (\o -> SpacePages <$> o .: "space" <*> parseAnswer "pages" v) v
-
-instance ToJSON PostDetailsOf where
-  toJSON d = object (("space" .= d.space) : answerFields "details" d.details)
-
-instance FromJSON PostDetailsOf where
-  parseJSON v = withObject "PostDetailsOf" (\o -> PostDetailsOf <$> o .: "space" <*> parseAnswer "details" v) v
-
-instance ToJSON PageAt where
-  toJSON p = object (["space" .= p.space, "path" .= p.path] <> answerFields "page" p.page)
-
-instance FromJSON PageAt where
-  parseJSON v = withObject "PageAt" (\o -> PageAt <$> o .: "space" <*> o .: "path" <*> parseAnswer "page" v) v
-
-instance ToJSON DraftOf where
-  toJSON d = object (("page" .= d.page) : answerFields "draft" d.draft)
-
-instance FromJSON DraftOf where
-  parseJSON v = withObject "DraftOf" (\o -> DraftOf <$> o .: "page" <*> parseAnswer "draft" v) v
-
-instance ToJSON VersionsOf where
-  toJSON v = object (("page" .= v.page) : answerFields "versions" v.versions)
-
-instance FromJSON VersionsOf where
-  parseJSON v = withObject "VersionsOf" (\o -> VersionsOf <$> o .: "page" <*> parseAnswer "versions" v) v
-
-instance ToJSON VersionOf where
-  toJSON v = object (["page" .= v.page, "updatedAt" .= v.updatedAt] <> answerFields "version" v.version)
-
-instance FromJSON VersionOf where
-  parseJSON v = withObject "VersionOf" (\o -> VersionOf <$> o .: "page" <*> o .: "updatedAt" <*> parseAnswer "version" v) v
-
-instance ToJSON DirectoryOf where
-  toJSON d = object (answerFields "directory" d.directory)
-
-instance FromJSON DirectoryOf where
-  parseJSON v = DirectoryOf <$> parseAnswer "directory" v
-
-instance ToJSON SettingsOf where
-  toJSON s = object (answerFields "settings" s.settings)
-
-instance FromJSON SettingsOf where
-  parseJSON v = SettingsOf <$> parseAnswer "settings" v
-
-instance ToJSON InvitationsOf where
-  toJSON i = object (answerFields "invitations" i.invitations)
-
-instance FromJSON InvitationsOf where
-  parseJSON v = InvitationsOf <$> parseAnswer "invitations" v
-
-instance ToJSON ServerOf where
-  toJSON s = object (answerFields "server" s.server)
-
-instance FromJSON ServerOf where
-  parseJSON v = ServerOf <$> parseAnswer "server" v
-
-instance ToJSON BackupsOf where
-  toJSON b = object (answerFields "backups" b.backups)
-
-instance FromJSON BackupsOf where
-  parseJSON v = BackupsOf <$> parseAnswer "backups" v
-
-instance ToJSON ActivityOf where
-  toJSON a = object (answerFields "activity" a.activity)
-
-instance FromJSON ActivityOf where
-  parseJSON v = ActivityOf <$> parseAnswer "activity" v
-
-instance ToJSON StatusOf where
-  toJSON a = object (answerFields "status" a.status)
-
-instance FromJSON StatusOf where
-  parseJSON v = StatusOf <$> parseAnswer "status" v
-
-instance ToJSON InvitationAt where
-  toJSON i = object (("token" .= i.token) : answerFields "invitation" i.invitation)
-
-instance FromJSON InvitationAt where
-  parseJSON v = withObject "InvitationAt" (\o -> InvitationAt <$> o .: "token" <*> parseAnswer "invitation" v) v
-
-instance ToJSON ThreadsOf where
-  toJSON t = object (("page" .= t.page) : answerFields "threads" t.threads)
-
-instance FromJSON ThreadsOf where
-  parseJSON v = withObject "ThreadsOf" (\o -> ThreadsOf <$> o .: "page" <*> parseAnswer "threads" v) v
-
-instance ToJSON NoticesOf where
-  toJSON n = object (answerFields "notifications" n.notifications)
-
-instance FromJSON NoticesOf where
-  parseJSON v = NoticesOf <$> parseAnswer "notifications" v
-
-instance ToJSON WatchOf where
-  toJSON w = object (target : answerFields "watch" w.watch)
-    where
-      target = case w.target of
-        WatchPage p -> "page" .= p
-        WatchSpace s -> "space" .= s
-
-instance FromJSON WatchOf where
-  parseJSON v = withObject "WatchOf" (\o -> WatchOf <$> target o <*> parseAnswer "watch" v) v
-    where
-      target o =
-        o .:? "page" >>= \case
-          Just p -> pure (WatchPage p)
-          Nothing -> WatchSpace <$> o .: "space"
-
 -- | What the backend kept, as the page carries it: every answer it would
 -- give at once, and no page twice.
-toPreload :: Cache -> Preload
-toPreload c =
-  Preload
-    { session = sessionInfo <$> c.session
-    , spaces = c.spaces
-    , pageCounts = c.pageCounts
-    , spacesAt = [SpaceAt {path, space = toAnswer s} | (path, s) <- Map.toList c.spaceAt, kept s]
-    , pages = [SpacePages {space, pages = toAnswer ps} | (space, ps) <- Map.toList c.pages, kept ps]
-    , pagesAt =
-        [ PageAt {space, path, page = toAnswer p}
-        | ((space, path), p) <- Map.toList c.pageAt
-        , kept p
-        , -- Found in its space's list as it is.
-        cachedPage space path c {pageAt = mempty} /= Just p
-        ]
-    , drafts = [DraftOf {page, draft = toAnswer d} | (page, d) <- Map.toList c.drafts, kept d]
-    , searches = [SearchOf {query, hits} | (query, hits) <- c.searches]
-    , versionLists = [VersionsOf {page, versions = toAnswer vs} | (page, vs) <- Map.toList c.versionLists, kept vs]
-    , versions = [VersionOf {page, updatedAt, version = toAnswer v} | ((page, updatedAt), v) <- Map.toList c.versions, kept v]
-    , directory = DirectoryOf . toAnswer <$> mfilter kept c.directory
-    , settings = SettingsOf . toAnswer <$> mfilter kept c.settings
-    , invitations = InvitationsOf . toAnswer <$> mfilter kept c.invitations
-    , invitationsAt = case [InvitationAt {token, invitation = toAnswer i} | (token, i) <- Map.toList c.invitationAt, kept i] of
-        [] -> Nothing
-        found -> Just found
-    , server = ServerOf . toAnswer <$> mfilter kept c.server
-    , backups = BackupsOf . toAnswer <$> mfilter kept c.backups
-    , activity = ActivityOf . toAnswer <$> mfilter kept c.activity
-    , status = StatusOf . toAnswer <$> mfilter kept c.status
-    , postDetails = case [PostDetailsOf {space, details = toAnswer d} | (space, d) <- Map.toList c.postDetails, kept d] of
-        [] -> Nothing
-        found -> Just found
-    , threads = case [ThreadsOf {page, threads = toAnswer ts} | (page, ts) <- Map.toList c.threads, kept ts] of
-        [] -> Nothing
-        found -> Just found
-    , people = if Map.null c.people then Nothing else Just c.people
-    , notices = NoticesOf . toAnswer <$> mfilter kept c.notices
-    , watches = case [WatchOf {target, watch = toAnswer w} | (target, w) <- Map.toList c.watches, kept w] of
-        [] -> Nothing
-        found -> Just found
-    }
+--
+-- An object with a field per read: the session as the API gives it
+-- (@session@, or @null@); the reads without arguments as their answers
+-- (@spaces@, @pageCounts@, or @null@ for one not made); the reads by
+-- arguments as lists of objects, each with the read's arguments and its
+-- answer or @error@ (@spacesAt@, @pages@, @pagesAt@, @drafts@, @searches@,
+-- @versionLists@, @versions@ always, and @invitationsAt@, @postDetails@,
+-- @threads@, @watches@ as @null@ when empty, since they came later); the
+-- administration's reads as an object with their answer or @error@, or
+-- @null@; and @people@, by login, or @null@ when empty. A payload written
+-- before a field there was reads as without it.
+preloadJSON :: Cache -> Value
+preloadJSON c =
+  object
+    [ "session" .= (sessionInfo <$> c.session)
+    , "spaces" .= c.spaces
+    , "pageCounts" .= c.pageCounts
+    , "spacesAt" .= answers "space" (\path -> ["path" .= path]) c.spaceAt
+    , "pages" .= answers "pages" (\space -> ["space" .= space]) c.pages
+    , "pagesAt" .= answers "page" (\(space, path) -> ["space" .= space, "path" .= path]) (Map.filterWithKey apart c.pageAt)
+    , "drafts" .= answers "draft" (\page -> ["page" .= page]) c.drafts
+    , "searches" .= [object ["query" .= query, "hits" .= hits] | (query, hits) <- c.searches]
+    , "versionLists" .= answers "versions" (\page -> ["page" .= page]) c.versionLists
+    , "versions" .= answers "version" (\(page, updatedAt) -> ["page" .= page, "updatedAt" .= updatedAt]) c.versions
+    , "directory" .= answer "directory" c.directory
+    , "settings" .= answer "settings" c.settings
+    , "invitations" .= answer "invitations" c.invitations
+    , "invitationsAt" .= orNull (answers "invitation" (\token -> ["token" .= token]) c.invitationAt)
+    , "server" .= answer "server" c.server
+    , "backups" .= answer "backups" c.backups
+    , "activity" .= answer "activity" c.activity
+    , "status" .= answer "status" c.status
+    , "postDetails" .= orNull (answers "details" (\space -> ["space" .= space]) c.postDetails)
+    , "threads" .= orNull (answers "threads" (\page -> ["page" .= page]) c.threads)
+    , "people" .= if Map.null c.people then Nothing else Just c.people
+    , "notices" .= answer "notifications" c.notices
+    , "watches" .= orNull (answers "watch" watchTarget c.watches)
+    ]
+  where
+    -- A page its space's list holds as it is is found there.
+    apart (space, path) p = cachedPage space path c {pageAt = mempty} /= Just p
+    orNull = \case
+      [] -> Nothing
+      found -> Just found
+    watchTarget = \case
+      WatchPage p -> ["page" .= p]
+      WatchSpace s -> ["space" .= s]
 
--- | The backend's cache as the page's payload says.
-fromPreload :: Preload -> Cache
-fromPreload p =
-  emptyCache
-    { session = fromSessionInfo <$> p.session
-    , spaces = p.spaces
-    , pageCounts = p.pageCounts
-    , spaceAt = Map.fromList [(s.path, fromAnswer s.space) | s <- p.spacesAt]
-    , pages = Map.fromList [(s.space, fromAnswer s.pages) | s <- p.pages]
-    , pageAt = Map.fromList [((x.space, x.path), fromAnswer x.page) | x <- p.pagesAt]
-    , drafts = Map.fromList [(d.page, fromAnswer d.draft) | d <- p.drafts]
-    , searches = [(s.query, s.hits) | s <- p.searches]
-    , versionLists = Map.fromList [(v.page, fromAnswer v.versions) | v <- p.versionLists]
-    , versions = Map.fromList [((v.page, v.updatedAt), fromAnswer v.version) | v <- p.versions]
-    , directory = (\d -> fromAnswer d.directory) <$> p.directory
-    , settings = (\s -> fromAnswer s.settings) <$> p.settings
-    , invitations = (\i -> fromAnswer i.invitations) <$> p.invitations
-    , invitationAt = Map.fromList [(i.token, fromAnswer i.invitation) | i <- fold p.invitationsAt]
-    , server = (\s -> fromAnswer s.server) <$> p.server
-    , backups = (\b -> fromAnswer b.backups) <$> p.backups
-    , activity = (\a -> fromAnswer a.activity) <$> p.activity
-    , status = (\a -> fromAnswer a.status) <$> p.status
-    , postDetails = Map.fromList [(d.space, fromAnswer d.details) | d <- fold p.postDetails]
-    , threads = Map.fromList [(t.page, fromAnswer t.threads) | t <- fold p.threads]
-    , people = fold p.people
-    , notices = (\n -> fromAnswer n.notifications) <$> p.notices
-    , watches = Map.fromList [(w.target, fromAnswer w.watch) | w <- fold p.watches]
-    }
+-- | Each answer kept, as an object of its read's arguments and the answer.
+answers :: (ToJSON a) => Key -> (k -> [Pair]) -> Map k (Either WikiError a) -> [Value]
+answers field arguments m = [object (arguments k <> answerFields field a) | (k, a) <- Map.toList m, kept a]
+
+-- | A read without arguments, as an object of its answer, if it is kept.
+answer :: (ToJSON a) => Key -> Maybe (Either WikiError a) -> Maybe Value
+answer field = fmap (object . answerFields field) . mfilter kept
+
+-- | An answer as its read's own field, or a refusal as @error@, the API's
+-- error body.
+answerFields :: (ToJSON a) => Key -> Either WikiError a -> [Pair]
+answerFields field = \case
+  Right a -> [field .= a]
+  Left e -> ["error" .= refusal e]
 
 -- | Only what 'kept' keeps is ever written, which is an answer or a
 -- refusal of the API's.
-toAnswer :: Either WikiError a -> Answer a
-toAnswer = \case
-  Right a -> Gave a
-  Left NotFound -> Refused ApiError.NotFound
-  Left Forbidden -> Refused ApiError.Forbidden
-  Left (Conflict t) -> Refused (ApiError.Conflict t)
-  Left (Invalid t) -> Refused (ApiError.Invalid t)
+refusal :: WikiError -> ApiError
+refusal = \case
+  NotFound -> ApiError.NotFound
+  Forbidden -> ApiError.Forbidden
+  Conflict t -> ApiError.Conflict t
+  Invalid t -> ApiError.Invalid t
   -- Never kept, so never here; said as the nearest refusal rather than
   -- not at all.
-  Left (Unreachable t) -> Refused (ApiError.Invalid t)
+  Unreachable t -> ApiError.Invalid t
 
-fromAnswer :: Answer a -> Either WikiError a
-fromAnswer = \case
-  Gave a -> Right a
-  Refused e -> Left (fromApiError e)
+-- | The backend's cache as the page's payload says ('preloadJSON').
+parsePreload :: Value -> Parser Cache
+parsePreload = withObject "the page's payload" $ \o -> do
+  session <- fmap fromSessionInfo <$> o .:? "session"
+  spaces <- o .:? "spaces"
+  pageCounts <- o .:? "pageCounts"
+  spaceAt <- byArguments "space" (.: "path") =<< o .: "spacesAt"
+  pages <- byArguments "pages" (.: "space") =<< o .: "pages"
+  pageAt <- byArguments "page" (\e -> (,) <$> e .: "space" <*> e .: "path") =<< o .: "pagesAt"
+  drafts <- byArguments "draft" (.: "page") =<< o .: "drafts"
+  searches <- traverse (withObject "a search" (\e -> (,) <$> e .: "query" <*> e .: "hits")) =<< o .: "searches"
+  versionLists <- byArguments "versions" (.: "page") =<< o .: "versionLists"
+  versions <- byArguments "version" (\e -> (,) <$> e .: "page" <*> e .: "updatedAt") =<< o .: "versions"
+  directory <- traverse (withObject "an answer" (answerIn "directory")) =<< o .:? "directory"
+  settings <- traverse (withObject "an answer" (answerIn "settings")) =<< o .:? "settings"
+  invitations <- traverse (withObject "an answer" (answerIn "invitations")) =<< o .:? "invitations"
+  invitationAt <- byArguments "invitation" (.: "token") . fold =<< o .:? "invitationsAt"
+  server <- traverse (withObject "an answer" (answerIn "server")) =<< o .:? "server"
+  backups <- traverse (withObject "an answer" (answerIn "backups")) =<< o .:? "backups"
+  activity <- traverse (withObject "an answer" (answerIn "activity")) =<< o .:? "activity"
+  status <- traverse (withObject "an answer" (answerIn "status")) =<< o .:? "status"
+  postDetails <- byArguments "details" (.: "space") . fold =<< o .:? "postDetails"
+  threads <- byArguments "threads" (.: "page") . fold =<< o .:? "threads"
+  people <- fold <$> o .:? "people"
+  notices <- traverse (withObject "an answer" (answerIn "notifications")) =<< o .:? "notices"
+  watches <- byArguments "watch" watchTarget . fold =<< o .:? "watches"
+  pure Cache {..}
+  where
+    watchTarget e =
+      e .:? "page" >>= \case
+        Just p -> pure (WatchPage p)
+        Nothing -> WatchSpace <$> e .: "space"
+
+-- | Answers by their read's arguments, from the objects 'answers' writes.
+byArguments :: (Ord k, FromJSON a) => Key -> (Object -> Parser k) -> [Value] -> Parser (Map k (Either WikiError a))
+byArguments field arguments = fmap Map.fromList . traverse (withObject "an answer" (\e -> (,) <$> arguments e <*> answerIn field e))
+
+-- | An answer in its read's own field, or the refusal in @error@.
+answerIn :: (FromJSON a) => Key -> Object -> Parser (Either WikiError a)
+answerIn field o =
+  o .:? "error" >>= \case
+    Just e -> pure (Left (fromApiError e))
+    Nothing -> Right <$> o .: field
 
 -- | The payload as the JSON text the page carries.
 encodePreload :: Cache -> Text
-encodePreload = decodeUtf8 . toS . encode . toPreload
+encodePreload = decodeUtf8 . toS . encode . preloadJSON
 
 -- | The cache a payload holds, or why it cannot be read.
 decodePreload :: Text -> Either Text Cache
-decodePreload = bimap toS fromPreload . eitherDecodeStrict' . encodeUtf8
+decodePreload = first toS . (parseEither parsePreload <=< eitherDecodeStrict') . encodeUtf8
 
 -- | What the page the program runs in carries: the cache to start the
 -- backend with ('Wiki.App.Backend.Http.newHttpEnvWith'). A page without a

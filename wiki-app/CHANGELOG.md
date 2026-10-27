@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The page's payload is written from and read into the backend's cache
+directly (WP5.9): `Wiki.App.Backend.Http.Preload` no longer has the
+`Preload` record, a record per kind of answer, `Answer`, `toPreload` or
+`fromPreload`; `preloadJSON` and `parsePreload` are the payload as a JSON
+value, beside `encodePreload` and `decodePreload` as before. A page carries
+the same bytes, and the module compiles in a third of what it cost.
+
 Every form of the administration is one column (WP5.5): the public address,
 the mail server and its test, a provider, the backups, an invitation and a
 new user each put a label above its field, every field as wide as the form
