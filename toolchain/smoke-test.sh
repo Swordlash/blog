@@ -12,7 +12,8 @@
 #
 # Before them, toolchain/test-assistant.mjs: the writing assistant's
 # providers over the real SDKs, against a fetch that answers as the
-# providers' APIs do (it needs no build).
+# providers' APIs do (it needs no build), and toolchain/test-tikz-letters.mjs:
+# the error a TikZ picture shows for a letter TikZJax's fonts lack.
 #
 # The second needs wiki-server and wiki-app-prerender built natively, which
 # this builds first (quickly, when npm run build-native has).
@@ -24,5 +25,6 @@ if [ -r "$HOME/.wiki-toolchain/env" ]; then
 fi
 cabal build -v0 --builddir=dist-newstyle/native wiki-server:exe:wiki-server wiki-app:exe:wiki-app-prerender
 node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON toolchain/test-assistant.mjs
+node toolchain/test-tikz-letters.mjs
 node toolchain/smoke-test.mjs "$@"
 node toolchain/smoke-test-server.mjs "$@"

@@ -353,6 +353,19 @@ the page's text colour, so it shows on a dark page too; other colours
 stay as you chose them. A picture TeX cannot draw shows its source with
 TeX's error under it, and the line TeX names is the fence's.
 
+Text in a picture is set in TeX's Computer Modern fonts. They have the
+letters of Polish (`ą ć ę ł ń ó ś ź ż` and their capitals) and German
+(`ä ö ü ß`), the accented letters of French, Spanish, Portuguese, Italian,
+Dutch, Danish, Norwegian, Swedish, Finnish, Czech, Slovak and Hungarian,
+and dashes and quotation marks (`– — ‘ ’ “ ”`). Type them as they are, or
+as LaTeX writes them (`\'o`, `\"u`, `\k{a}`, `\l`). The fonts have no euro
+sign (`€`), degree sign (`°`) or pound sign (`£`), nor the other signs
+LaTeX takes from its TS1 fonts (`§ ¶ © µ ± × · ½`): a picture with one
+shows the error "The fonts TeX has here cannot draw '€'", with the line it
+is on. Write a degree as `$^\circ$`, and `±` or `×` as `$\pm$` or
+`$\times$`. Guillemets (`« »`) and the low quotation mark (`„`) are not
+there either, and TeX's own error says so.
+
 What TeX has, besides TikZ itself and nearly every TikZ library
 (`arrows.meta`, `calc`, `positioning`, `decorations.*`, `shapes.*`,
 `patterns`, `shadows`, `automata`, `graphs`, `matrix`, `trees`, `3d`,

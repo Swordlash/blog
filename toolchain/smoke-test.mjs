@@ -75,6 +75,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize, relative, resolve, sep } from "node:path";
 import { chromium } from "playwright";
+import { drawable } from "../web/src/tikz-letters.mjs";
 
 const started = Date.now();
 const root = resolve(process.argv[2] ?? "dist-newstyle/wasm/public/app");
@@ -464,6 +465,53 @@ try {
     "TeX's fonts loading",
   );
   console.log("ok: a page's islands are drawn: KaTeX, Mermaid, TikZ, highlight.js");
+  // Letters beyond ASCII in pictures, through the real TikZJax: every letter
+  // web/src/tikz-letters.mjs lists as drawable, in a node and in a pgfplots
+  // label, drawn with no error. The SVG holds the glyphs that were missing
+  // before web/src/tikz-patch.mjs: the stroke of "ł" (U+F0C3) and the
+  // umlaut (U+F0C4). A letter the fonts do not have (the euro sign: TeX
+  // looks for a TS1 font TikZJax lacks) and a glyph dvi2html cannot find
+  // after TeX has finished each give the readable error, and a picture after
+  // them is drawn again.
+  const allLetters = [...drawable].join("");
+  const pictures = await visitor.evaluate(
+    async ([letters]) => {
+      const tikz = await import(new URL("islands/tikz.js", document.baseURI).href);
+      const glyphs = (result) => (result?.svg ? [...result.svg.querySelectorAll("text")].map((t) => t.textContent).join("") : null);
+      const draw = async (preamble, picture) => {
+        const result = await tikz.draw(preamble, picture);
+        return { error: result?.error ?? null, glyphs: glyphs(result) };
+      };
+      const plots = String.raw`\usepackage{pgfplots}\pgfplotsset{compat=1.18}`;
+      return {
+        node: await draw("", String.raw`\begin{tikzpicture}\node[text width=8cm] {${letters}};\end{tikzpicture}`),
+        plot: await draw(
+          plots,
+          String.raw`\begin{tikzpicture}\begin{axis}[ylabel={payoff (zł) ${letters}}]\addplot {x};\end{axis}\end{tikzpicture}`,
+        ),
+        euro: await draw("", "\\begin{tikzpicture}\\draw (0,0) -- (1,0);\n\\node {5 €};\n\\end{tikzpicture}"),
+        glyph: await draw("", String.raw`\begin{tikzpicture}\node {\font\x=cmtex10\x\char2};\end{tikzpicture}`),
+        after: await draw("", String.raw`\begin{tikzpicture}\node {Łódź};\end{tikzpicture}`),
+      };
+    },
+    [allLetters],
+  );
+  for (const name of ["node", "plot", "after"]) {
+    assert.equal(pictures[name].error, null, `the picture of letters (${name}) failed`);
+    assert.ok(pictures[name].glyphs.includes("\uf0c3"), `the picture of letters (${name}) has no stroke of "ł"`);
+  }
+  assert.ok(pictures.node.glyphs.includes("\uf0c4"), "the picture of letters has no umlaut");
+  assert.equal(
+    pictures.euro.error?.split("\n")[0],
+    "! The fonts TeX has here cannot draw '€' (line 2).",
+    "the euro sign's error",
+  );
+  assert.equal(
+    pictures.glyph.error?.split("\n")[0],
+    "! The fonts TeX has here cannot draw a character of this picture (Cannot read properties of undefined (reading 'toString')).",
+    "a missing glyph's error",
+  );
+  console.log(`ok: TikZ draws ${drawable.size} letters beyond ASCII, in a node and a plot's label, and names one it cannot draw`);
   // The Mathematics page sets every formula with the macros it uses: the
   // built-in ones, Docs' own, the page's \dist, and mhchem's \ce. KaTeX
   // shows a macro it does not know in red, and what it cannot parse in a

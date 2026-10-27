@@ -20,12 +20,16 @@
 //   picture(svg): SVGSVGElement
 //
 // `draw` runs TeX on `preamble` before \begin{document} and `picture` after
-// it. Pictures are drawn one at a time, since the worker keeps one TeX's
-// state in globals, and in the order asked for; a picture whose turn comes
+// it. Before `preamble` go the `letters` of web/src/tikz-letters.mjs: TeX
+// that lets a picture hold letters TikZJax's fonts lack. Pictures are drawn
+// one at a time, since the worker keeps one TeX's state in globals, and in
+// the order asked for; a picture whose turn comes
 // when `wanted()` says it is no longer wanted (an author typed on) is not
 // drawn, and resolves to null. A picture drawn once is kept, so a page that
 // shows it again, or a preview whose author typed elsewhere, does not run
 // TeX again. `picture` makes a copy of a drawing to put in the page.
+
+import { fontError, letters } from "./tikz-letters.mjs";
 
 // TikZJax's files, beside this module's directory (islands/).
 const base = new URL("../tikzjax/", import.meta.url);
@@ -238,7 +242,7 @@ const run = async (preamble, source) => {
     // errors are; the other fields are those of TikZJax's loader's data-
     // attributes.
     const markup = await Promise.race([
-      current.call("texify", source, { addToPreamble: preamble, showConsole: "true" }),
+      current.call("texify", source, { addToPreamble: letters + preamble, showConsole: "true" }),
       timedOut,
     ]);
     // TeX can go on after an error and still write a page; what it drew is
@@ -247,11 +251,24 @@ const run = async (preamble, source) => {
     const error = texError(current.transcript);
     return error ? { error, final: true } : { svg: sanitize(markup), final: true };
   } catch (failure) {
-    // A run that failed (TeX stopped without a page, or never stopped)
-    // leaves the worker's TeX in the middle of its job.
+    const message = String(failure?.message ?? failure);
+    // TeX wrote its page and dvi2html failed to turn it into SVG
+    // (web/src/tikz-patch.mjs marks its errors): the page has a character
+    // the fonts here cannot draw. TeX has cleared up after itself by then,
+    // so the worker is kept. The error is as final as TeX's own.
+    if (message.startsWith("dvi2html: ")) {
+      return { error: texError(current.transcript) ?? fontError(source, message.slice("dvi2html: ".length)), final: true };
+    }
+    // A run that failed otherwise (TeX stopped without a page, or never
+    // stopped) leaves the worker's TeX in the middle of its job.
     stopWorker(current);
     const error = texError(current.transcript);
-    return error ? { error, final: true } : { error: String(failure?.message ?? failure), final: false };
+    if (error) return { error, final: true };
+    // TeX asked for the metrics of a font TikZJax does not have, and the
+    // worker threw inside TeX: a character such as the euro sign, which
+    // LaTeX takes from its TS1 fonts. This too is the same every time.
+    if (/^Could not find font \S+$/.test(message)) return { error: fontError(source, message), final: true };
+    return { error: message, final: false };
   } finally {
     clearTimeout(timer);
   }

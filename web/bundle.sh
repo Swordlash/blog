@@ -24,8 +24,9 @@
 #                    SDKs, which it imports the first time the assistant
 #                    is used;
 #   tikzjax/         TikZJax's worker and TeX (from npm's @drgrice1/tikzjax,
-#                    as published), which tikz.js runs, with the worker that
-#                    starts it (web/src/tikz-worker.js);
+#                    its worker patched by web/src/tikz-patch.mjs), which
+#                    tikz.js runs, with the worker that starts it
+#                    (web/src/tikz-worker.js);
 #   islands.css      KaTeX's stylesheet and the islands' own (web/src/islands.css);
 #   fonts/           KaTeX's fonts, where islands.css's url()s point;
 #   wasi-shim.js     @bjorn3/browser_wasi_shim, which web/index.js starts the
@@ -89,7 +90,7 @@ npx esbuild web/src/assistant.js \
   --alias:standardwebhooks=./web/src/no-webhooks.js \
   --metafile="$meta/assistant.json" --outfile="$out_dir/islands/assistant.js"
 
-# TikZJax's files, copied as they are published: run-tex.js is its worker
+# TikZJax's files, copied from its npm package: run-tex.js is its worker
 # (TeX's WebAssembly runtime and dvi2html), tex.wasm.gz and core.dump.gz are
 # TeX and the LaTeX format with TikZ loaded (6 MB, fetched by the first
 # picture of a page and then from the browser's cache), tex_files/ the
@@ -104,12 +105,19 @@ npx esbuild web/src/assistant.js \
 # tex_files/*.bin), served as application/octet-stream; run-tex.js inflates
 # either with pako, and web/src/tikz-worker.js asks for the .bin names where
 # run-tex.js asks for the .gz ones.
+#
+# run-tex.js itself is patched in three places (web/src/tikz-patch.mjs says
+# where and why): dvi2html, inside it, cannot draw "ł", "Ł" or the umlauts
+# without the first two, and the third marks its errors so that tikz.js can
+# report them as a character the fonts lack. The script stops the build if
+# a new version of TikZJax no longer has the code it patches.
 tikzjax=node_modules/@drgrice1/tikzjax/dist
 rm -rf "$out_dir/tikzjax"
 mkdir -p "$out_dir/tikzjax"
 cp -R "$tikzjax/run-tex.js" "$tikzjax/tex.wasm.gz" "$tikzjax/core.dump.gz" \
   "$tikzjax/tex_files" "$tikzjax/fonts" "$tikzjax/fonts.css" "$out_dir/tikzjax/"
 node web/src/tikz-files.mjs "$out_dir/tikzjax"
+node web/src/tikz-patch.mjs "$out_dir/tikzjax/run-tex.js"
 cp web/src/tikz-worker.js "$out_dir/tikzjax/worker.js"
 # TikZJax is free software under the GPL, and conveying it (as the demo on
 # GitHub Pages does) means conveying the licence's text and saying where its
@@ -124,7 +132,10 @@ cp web/licenses/BaKoMa-LICENCE.txt "$out_dir/tikzjax/fonts/LICENCE.txt"
 printf '%s\n' \
   "TikZJax $(node -p 'require("./node_modules/@drgrice1/tikzjax/package.json").version'), from npm's @drgrice1/tikzjax, unmodified" \
   'but for its gzip files (tex.wasm.gz, core.dump.gz, tex_files/*.gz), served as zlib streams' \
-  'of the same bytes under .bin names (tex.wasm.bin, core.dump.bin, tex_files/*.bin).' \
+  'of the same bytes under .bin names (tex.wasm.bin, core.dump.bin, tex_files/*.bin), and three' \
+  'changes to dvi2html in run-tex.js: it reads the metrics of the last character of a font,' \
+  'its table of glyphs has code 32 of the Computer Modern text fonts, and its errors start with' \
+  '"dvi2html: ". Source of the changes: web/src/tikz-patch.mjs in https://github.com/Swordlash/blog' \
   'Licence: GPL-3.0-or-later, whose text is LICENSE.txt. Source: https://github.com/drgrice1/tikzjax' \
   '' \
   'fonts/ holds the BaKoMa Computer Modern fonts, Copyright (C) 1994, 1995 Basil K. Malyshev,' \

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+TikZ pictures draw Polish and German letters (WP5.10): `ł` and `Ł`, which
+failed with "Cannot read properties of undefined (reading 'toString')",
+the umlauts, which failed with "Could not find font metric for 127", and
+`ą ę Ą Ę`, which failed with "Command \k unavailable in encoding OT1". The
+web bundle patches dvi2html in TikZJax's worker (`tikzjax/run-tex.js`,
+by `web/src/tikz-patch.mjs`, which stops the build if a new TikZJax no
+longer has the code it patches; `tikzjax/NOTICE.txt` says what changed),
+and the island defines an ogonek, drawn by TikZ, before each picture. A
+character the fonts do not have, such as `€` or `°`, gives an error in TeX's
+shape that names it and its line, instead of a JavaScript error.
+
 The page's payload is written from and read into the backend's cache
 directly (WP5.9): `Wiki.App.Backend.Http.Preload` no longer has the
 `Preload` record, a record per kind of answer, `Answer`, `toPreload` or
