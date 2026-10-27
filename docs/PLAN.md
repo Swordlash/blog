@@ -3194,7 +3194,7 @@ Amended by the planning session after each work package's report.
   middleware writes after the response (passes 8 of 8 here, where it failed 2 of 3 full
   runs before); `smoke-test-server.mjs`'s address check after creating a space goes
   through its `eventually`. The three small to-dos of the previous entry are closed.
-- **WP4.19 started** (2026-10-27) on `wp4.19-assistant` from `main` `0e4e2d8`, alone; the
+- **WP4.19 started** (2026-10-27) on `wp4.19-assistant` from `main` `1a5c489`, alone; the
   owner lifted the shelving of decision 21 with API keys for both providers.
 - **WP4.19 reshaped and extended** (2026-10-27, PR #89 open on `wp4.19-assistant`, from
   `main` `1a5c489`). The owner reshaped it the same day into a chat whose model edits the page
@@ -3223,6 +3223,16 @@ Amended by the planning session after each work package's report.
   panel's two lines about a password reworded for provider accounts in the same PR. WP3.7's
   note that an identity-only account sets its first password with `current = null` no longer
   holds. Next: #89, then WP5.7 and WP5.8 one at a time.
+- **WP4.19 merged** (2026-10-27, PR #89, `main` at `14b9797`, 12 commits, rebased onto
+  `2ebdd31`). The last round, bubbles, fetched model lists, an unreachable provider dimmed and
+  the OpenAI-compatible base URL, was tested live at that head on both providers (the lists
+  fetched and grouped, `gpt-5-mini` chosen from "All models"; the model acknowledged a
+  rejected section from the "Rejected" line). A harness bug found on the way: the test
+  markup serialiser's literal U+00A0 was turned into `p` by the wasm embedding, so every
+  `p` in prerendered test markup became `&nbsp;`; written as an escape now, and jsbits stay
+  ASCII. Not tried live: a blocked network and a base URL other than OpenAI's (scripted
+  tests cover both). The owner's keys stay in the session's scratchpad for later packages,
+  never in the repository. Next: WP5.7 alone, then WP5.8.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
