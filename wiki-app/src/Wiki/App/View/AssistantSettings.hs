@@ -1,39 +1,42 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The writing assistant's settings, a page of the signed-in user's own
--- ("Assistant" in the account menu; WP4.19 of docs/PLAN.md): an API key
--- per provider, the provider the assistant asks, and the model to use:
--- one of the provider's own list, fetched with the key when it is kept or
--- tested and with "Refresh the list", grouped into the recommended ones
--- and all the others ("Wiki.Core.Assistant"'s
--- 'Wiki.Core.Assistant.modelChoices'; the short list the wiki has until
--- there is a key), or any other typed in.
+-- | The assistant settings page: the writing assistant's settings, a page
+-- of the signed-in user's own ("Assistant" in the account menu; WP4.19 of
+-- docs/PLAN.md). It holds an API key per provider, the provider the
+-- assistant uses, and the model to use. The model is one from the
+-- provider's own list, or any other id typed in. The list is fetched with
+-- the key when the key is saved or tested and on "Refresh the list", and
+-- grouped into the recommended models and all the others
+-- ('Wiki.Core.Assistant.modelChoices'). Until there is a key, the list is
+-- the wiki's short list.
 --
--- The assistant is bring-your-own-key (decision 21): a key is the user's,
--- billed by its provider, and stays in this browser, kept under the user's
--- id ("Wiki.App.Assistant"); it goes to its provider only, from the
--- browser, never to the wiki's server. The page says so, and that every
--- request sends the wiki's Markdown reference, which the providers cache
--- where they can. "Test the key" makes the smallest request there is (the
--- model looked up, which costs nothing) and says what the provider
--- answered. "Forget" takes the key away. A key is never shown again once
--- kept, only that there is one.
+-- The assistant is bring-your-own-key (decision 21). A key belongs to the
+-- user and is billed by its provider. It stays in this browser, stored
+-- under the user's id ("Wiki.App.Assistant"), and the browser sends it
+-- only to its provider, never to the wiki's server. The page says so, and
+-- also that every request sends the wiki's Markdown reference, which the
+-- providers cache where they can. "Test the key" makes the smallest
+-- possible request (looking up the model, which is free) and shows the
+-- provider's response. "Forget" deletes the key. Once saved, a key is
+-- never shown again; the page only shows that one is set.
 --
--- Over plain HTTP (anywhere but the machine's own address) the page warns
--- that it is not secure: the key still travels to the provider over TLS,
--- but anyone who can change this page on its way could read what is typed
--- into it.
+-- Over plain HTTP (anywhere except the local machine's address) the page
+-- warns that it is not secure. The key is still sent to the provider over
+-- TLS, but anyone who can modify this page in transit could read what is
+-- typed into it.
 --
--- OpenAI's settings take another address for its API ("Base URL"), for
--- any service that speaks it: GitHub Models, OpenRouter, a server on this
--- machine (Ollama, LM Studio), which needs no key. One over plain HTTP to
--- another machine gets the same warning: the key would cross the network
--- readable. A provider that could not be reached the last time it was
--- asked (a network that blocks it) is said to be so.
+-- OpenAI's settings accept another base URL for its API ("Base URL"), for
+-- any service that implements the API: GitHub Models, OpenRouter, or a
+-- server on this machine (Ollama, LM Studio), which needs no key. A base
+-- URL over plain HTTP to another machine gets the same warning: the key
+-- would cross the network unencrypted. A provider that could not be
+-- reached on the last attempt (because a network blocks it) is marked as
+-- unreachable.
 --
--- Everything is read in the initializer, in the browser: a page rendered
--- ahead (the prerender, the server), which has none of it, says that the
--- settings are being read, and the program adopts that as it is.
+-- Everything is read in the initializer, in the browser. A page rendered
+-- ahead of the program (by the prerender or the server), which has no
+-- access to the settings, says that the settings are being read, and the
+-- program adopts that page unchanged.
 module Wiki.App.View.AssistantSettings
   ( Input (..)
   , component
@@ -86,10 +89,10 @@ import Wiki.Core.User (User (id))
 
 newtype Input = Input {context :: Context}
 
--- | What "Test the key" found.
+-- | 'Check': the result of "Test the key".
 data Check = Checking | Works | Fails Text
 
--- | What fetching a provider's list of models came to.
+-- | 'Listing': the state of fetching a provider's model list.
 data Listing = Listing | Fetched Int | NotFetched Text
 
 data State = State
@@ -100,11 +103,11 @@ data State = State
   , scripted :: Bool
   , typedKeys :: Map Provider Text
   , typedModels :: Map Provider Text
-  -- ^ A model typed in the "Another" field, kept while another is chosen.
+  -- ^ A model typed in the "Another" field, kept while another model is chosen.
   , checks :: Map Provider Check
   , listings :: Map Provider Listing
   , otherModels :: Set Provider
-  -- ^ The providers for which "Other…" is chosen, which shows its field.
+  -- ^ The providers for which "Other…" is chosen, which shows its text field.
   , problem :: Maybe Text
   , busy :: Bool
   }
@@ -163,8 +166,8 @@ component =
       where
         body = case (st.user, st.settings) of
           (Nothing, _) -> [hh|<p class="sign-in-hint">Sign in to set the assistant up: its settings are kept in this browser for each user.</p>|]
-          -- What a page rendered ahead shows too: the settings are this
-          -- browser's, which no server has.
+          -- A page rendered ahead of the program shows this too: the
+          -- settings belong to this browser, and no server has them.
           (_, Nothing) -> [hh|<p class="loading">Reading the settings this browser keeps for you…</p>|]
           (_, Just (Left why)) -> [hh|<p class="error" role="alert">{{ why }}</p>|]
           (_, Just (Right s)) -> settingsView st s
@@ -314,8 +317,8 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()
     handleAction = \case
-      -- Rendered ahead of the program, the page stays as it was first
-      -- rendered, which the program adopts.
+      -- On a page rendered ahead of the program, the page stays as first
+      -- rendered, and the program adopts it.
       Initialize -> whenM (H.liftEffect assistantHere) $ do
         secure <- H.liftEffect secureContext
         scripted <- H.liftEffect scriptedInstalled
@@ -324,7 +327,7 @@ component =
       Receive input -> do
         before <- gets (\st -> st.user)
         modify (\st -> st {input, user = userOf input})
-        -- Someone else signed in: their settings, not the last one's.
+        -- Another user signed in: load their settings, not the previous user's.
         here <- H.liftEffect assistantHere
         when (here && userOf input /= before) $ do
           modify (\st -> st {settings = Nothing, typedKeys = mempty, typedModels = mempty, checks = mempty, listings = mempty, otherModels = mempty, problem = Nothing})
@@ -334,14 +337,14 @@ component =
         typed <- gets (\st -> Map.findWithDefault "" p st.typedKeys)
         unless (T.null (T.strip typed)) $ do
           change (withKey p (Just typed))
-          -- The key is not kept in the page once it is kept in the browser.
+          -- Once the browser stores the key, the page's state no longer holds it.
           modify (\st -> st {typedKeys = Map.delete p st.typedKeys, checks = Map.delete p st.checks})
           fetchModels p
       Forget p -> do
         change (withKey p Nothing)
         modify (\st -> st {checks = Map.delete p st.checks, listings = Map.delete p st.listings})
       Choose p -> change (chooseProvider p)
-      -- "Other…": its field, and the model typed there last, if one was.
+      -- "Other…": show its field, with the model typed there last, if any.
       ChooseModel p "" -> do
         modify (\st -> st {otherModels = Set.insert p st.otherModels})
         typed <- gets (\st -> Map.findWithDefault "" p st.typedModels)
@@ -362,8 +365,8 @@ component =
             modify (\st -> st {checks = Map.insert p Checking st.checks})
             result <- lift (checkKey r)
             modify (\st -> st {checks = Map.insert p (maybe Works (Fails . errorText (Just r.key)) result) st.checks})
-            -- Whether the provider answered at all; and once the key is
-            -- known to work, its list too.
+            -- Record whether the provider responded at all; and once the
+            -- key is known to work, fetch its model list too.
             for_ result (\e -> change (withReached p (e.kind /= Unreachable)))
             when (isNothing result) (fetchModels p)
           _ -> pass
@@ -371,13 +374,13 @@ component =
       TypedBaseUrl p url -> do
         change (withBaseUrl p url)
         modify (\st -> st {checks = Map.delete p st.checks, listings = Map.delete p st.listings})
-        -- The other service's own list, if it can be asked.
+        -- Fetch the other service's own list, if it can be reached.
         gets (\st -> st.settings) >>= \case
           Just (Right s) | usable p (settingsOf p s) && isJust (baseUrlOf p (settingsOf p s)) -> fetchModels p
           _ -> pass
 
-    -- Fetch a provider's list of models with its key, and keep it: which
-    -- says too whether the provider can be reached from here.
+    -- Fetch a provider's model list with its key, and store it. The fetch
+    -- also tells whether the provider can be reached from here.
     fetchModels :: Provider -> H.HalogenM State Action Empty output m ()
     fetchModels p =
       gets (\st -> st.settings) >>= \case
@@ -400,11 +403,11 @@ component =
         >>= traverse_
           ( \user -> do
               settings <- lift (assistantSettings user)
-              -- Only if the same user is still asking.
+              -- Only if the same user is still signed in.
               whenM (gets (\st -> st.user == Just user)) $ modify (\st -> st {settings = Just settings})
           )
 
-    -- Change the settings, and keep them at once.
+    -- Change the settings, and store them immediately.
     change :: (Settings -> Settings) -> H.HalogenM State Action Empty output m ()
     change f =
       gets (\st -> (st.user, st.settings)) >>= \case

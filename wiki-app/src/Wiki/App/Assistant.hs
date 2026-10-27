@@ -1,37 +1,38 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | What the writing assistant (WP4.19 of docs/PLAN.md) takes from the
--- monad a component runs in: the user's settings, kept in this browser,
--- and a chat with a provider.
+-- | 'MonadAssistant': what the writing assistant (WP4.19 of docs/PLAN.md)
+-- needs from the monad a component runs in. That is the user's settings,
+-- stored in this browser, and chats with a provider.
 --
--- The settings (a key per provider, the provider chosen and each one's
--- model: "Wiki.Core.Assistant") are kept in this browser's IndexedDB, in a
--- database of their own ('assistantDatabase'), under the user's id, so that
--- another user of the same browser has settings of their own and sees no
--- one else's key. They are never sent to the wiki's server (there is no API
--- for them) and never logged; "Forget" takes a key away. They outlive
--- signing out of the wiki: they are this browser's and this user's, and
--- whoever signs in as the user again finds them, as a password manager
--- would; "Forget" is how they go.
+-- The settings (a key per provider, the chosen provider and each
+-- provider's model: "Wiki.Core.Assistant") are stored in this browser's
+-- IndexedDB, in a separate database ('assistantDatabase'), under the
+-- user's id. So another user of the same browser has their own settings
+-- and cannot see anyone else's key. The settings are never sent to the
+-- wiki's server (there is no API for them) and never logged. They are not
+-- deleted when the user signs out of the wiki: they belong to this
+-- browser and this user, and the user finds them again on signing in, as
+-- with a password manager. "Forget" is the way to delete a key.
 --
 -- A chat is one conversation with a provider ('openTalk'), which the
--- browser's side keeps for the editing session: each message sent
--- ('sayTo') runs one turn of the model's, which is heard of as it happens
--- ('Heard'): its text as it streams, each tool call, which the turn waits
--- on until it is answered ('answerCall'), and how the turn ended. A turn
--- can be stopped ('stopTalk'). The providers are Anthropic's and OpenAI's
--- SDKs, called from the browser with the user's key
--- (@web/src/assistant.js@, fetched the first time the assistant is used),
--- or the scripted provider a test installs ('scriptedInstalled'); see
--- @jsbits/assistant.js@.
+-- browser-side code keeps for the editing session. Each message sent
+-- ('sayTo') runs one turn of the model, whose events are reported as they
+-- happen ('Heard'): its text as it streams, each tool call, which the turn
+-- waits on until it is answered ('answerCall'), and how the turn ended. A
+-- turn can be stopped ('stopTalk'). The providers are reached through
+-- Anthropic's and OpenAI's SDKs, called from the browser with the user's
+-- key (@web/src/assistant.js@, fetched the first time the assistant is
+-- used), or through the scripted provider a test installs
+-- ('scriptedInstalled'); see @jsbits/assistant.js@.
 --
--- The provider's list of models is fetched with the key ('listModels'),
--- for the model pickers ("Wiki.Core.Assistant"'s 'Wiki.Core.Assistant.groupModels').
+-- The provider's model list is fetched with the key ('listModels'), for
+-- the model pickers ('Wiki.Core.Assistant.groupModels').
 --
 -- In a browser ('BrowserDOM') all of this is real. In the in-memory
--- document the prerender and the native tests use ('MemDOM') the settings
--- are kept in its in-memory IndexedDB, as the browser's would be, and
--- there is no provider: a chat's every turn fails, saying so.
+-- document that the prerender and the native tests use ('MemDOM'), the
+-- settings are stored in its in-memory IndexedDB, as the browser would
+-- store them, and there is no provider: every turn of a chat fails with a
+-- message saying so.
 module Wiki.App.Assistant
   ( -- * The class
     MonadAssistant (..)
@@ -65,10 +66,10 @@ import Web.Storage.IndexedDB qualified as IDB
 import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Listed, Ready (..), Settings, blankSettings, defaultSettings, providerKey)
 import Wiki.Core.Id (UserId (..))
 
--- The chat's bindings return at once: a turn tells of itself through the
--- callback. "Test the key" and the list of models wait for the provider's
--- answer, so they are safe imports, whose result is a thunk on wasm until
--- it is forced.
+-- The chat's bindings return immediately: a turn reports its events
+-- through the callback. "Test the key" and the model list wait for the
+-- provider's response, so they are safe imports, whose result on wasm is
+-- a thunk until it is forced.
 $( browserJS
      ["jsbits/assistant.js"]
      [ ("js_open", "wiki_assistant_open", Unsafe, [t|JSText -> Callback -> IO Int|])
@@ -85,25 +86,26 @@ $( browserJS
      ]
  )
 
--- | A chat, open: its number on the browser's side, the callback its
--- events come back through, which closing it lets go of, and where they go.
+-- | 'Talk': an open chat. It holds the chat's number in the browser-side
+-- code, the callback its events come back through, which closing the chat
+-- frees, and the handler the events go to.
 data Talk = Talk
   { chat :: Int
   , callback :: Maybe Callback
   , heard :: Heard -> IO ()
   }
 
--- | What a chat is opened with: the provider, the model and the key to ask
--- with, and the request without its conversation
+-- | 'Opening': what a chat is opened with. The provider, the model and the
+-- key to use, and the request without its conversation
 -- ("Wiki.Core.Assistant.Prompt").
 data Opening = Opening
   { ready :: Ready
   , request :: Value
   }
 
--- | What is heard of a turn of the model's.
+-- | 'Heard': an event of one turn of the model.
 data Heard
-  = -- | Text it wrote, as it streams.
+  = -- | Text the model wrote, as it streams.
     HeardText Text
   | -- | A tool call, by its number in the chat: the tool's name and its
     -- input. The turn waits for 'answerCall'.
@@ -127,37 +129,37 @@ instance FromJSON Heard where
       other -> pure (HeardFailed (AssistantError Failed Nothing ("An event of a kind not known: " <> other)))
 
 -- | Whether a keydown in the message box sends the message: Enter, but not
--- with Shift (a new line) nor in the middle of composing a character.
--- Pure, so that the keydown's listener decides, and keeps Enter from
--- putting in a new line.
+-- with Shift (a new line) nor while a character is being composed. It is
+-- pure, so that the keydown listener can decide synchronously, and prevent
+-- Enter from inserting a new line.
 sendsMessage :: Event -> Bool
 sendsMessage = js_send_key
 
 -- | The writing assistant, in the monad a component runs in.
 --
 -- The settings' methods and 'checkKey' wait (on IndexedDB, on the
--- provider), so a component calls them with @lift@; the others return at
--- once, and are called with 'Halogen.liftEffect'.
+-- provider), so a component calls them with @lift@. The others return
+-- immediately, and are called with 'Halogen.liftEffect'.
 --
--- An application monad over one that has an instance gets the methods
--- lifted, so @instance MonadAssistant App@ is enough for a transformer
--- stack.
+-- A monad transformer over a monad with an instance gets the methods
+-- lifted, so @instance MonadAssistant App@ is enough for an application's
+-- transformer stack.
 class (Monad m) => MonadAssistant m where
-  -- | Whether there is a browser here to keep the settings in and reach the
-  -- providers from. A page rendered ahead of the program (the prerender,
-  -- the server) has none, and leaves what the assistant shows as it is
-  -- first rendered ("Loading…"), which the program then adopts as it is.
+  -- | Whether a browser is present to store the settings in and reach the
+  -- providers from. A page rendered ahead of the program (by the prerender
+  -- or the server) has none, and leaves the assistant's views as first
+  -- rendered ("Loading…"), which the program then adopts unchanged.
   assistantHere :: m Bool
   default assistantHere :: (MonadTrans t, MonadAssistant n, m ~ t n) => m Bool
   assistantHere = lift assistantHere
 
-  -- | A user's settings, or why they cannot be read (a browser that keeps
-  -- nothing, in some private windows).
+  -- | A user's settings, or why they cannot be read (a browser that stores
+  -- nothing, as in some private windows).
   assistantSettings :: UserId -> m (Either Text Settings)
   default assistantSettings :: (MonadTrans t, MonadAssistant n, m ~ t n) => UserId -> m (Either Text Settings)
   assistantSettings = lift . assistantSettings
 
-  -- | Keep a user's settings, replacing what was kept.
+  -- | Store a user's settings, replacing the stored ones.
   keepAssistantSettings :: UserId -> Settings -> m (Either Text ())
   default keepAssistantSettings :: (MonadTrans t, MonadAssistant n, m ~ t n) => UserId -> Settings -> m (Either Text ())
   keepAssistantSettings user = lift . keepAssistantSettings user
@@ -168,65 +170,64 @@ class (Monad m) => MonadAssistant m where
   scriptedInstalled = lift scriptedInstalled
 
   -- | Whether the page is a secure context: served over HTTPS, or from the
-  -- machine's own address.
+  -- local machine's address.
   secureContext :: m Bool
   default secureContext :: (MonadTrans t, MonadAssistant n, m ~ t n) => m Bool
   secureContext = lift secureContext
 
-  -- | Start fetching what the providers need, so that it is there by the
-  -- first message.
+  -- | Start fetching the code the providers need, so that it is loaded by
+  -- the first message.
   prepareAssistant :: m ()
   default prepareAssistant :: (MonadTrans t, MonadAssistant n, m ~ t n) => m ()
   prepareAssistant = lift prepareAssistant
 
-  -- | Open a chat, whose turns are heard of through the function given.
+  -- | Open a chat, whose turn events are passed to the given function.
   openTalk :: Opening -> (Heard -> IO ()) -> m Talk
   default openTalk :: (MonadTrans t, MonadAssistant n, m ~ t n) => Opening -> (Heard -> IO ()) -> m Talk
   openTalk opening = lift . openTalk opening
 
-  -- | Send a message of the user's (as "Wiki.Core.Assistant.Prompt"'s
-  -- 'Wiki.Core.Assistant.Prompt.userTurn' makes it) with the request as it
-  -- is now (the model and the effort chosen may have changed since the
-  -- chat was opened), which runs one turn of the model's, unless one is
-  -- running.
+  -- | Send a user message (as 'Wiki.Core.Assistant.Prompt.userTurn' builds
+  -- it) with the current request (the chosen model and effort may have
+  -- changed since the chat was opened). This runs one turn of the model,
+  -- unless a turn is already running.
   sayTo :: Talk -> Value -> Text -> m ()
   default sayTo :: (MonadTrans t, MonadAssistant n, m ~ t n) => Talk -> Value -> Text -> m ()
   sayTo talk request = lift . sayTo talk request
 
-  -- | Answer a tool call: what the model is told, and whether the edit was
-  -- made.
+  -- | Answer a tool call: the result the model receives, and whether the
+  -- edit was made.
   answerCall :: Talk -> Int -> Text -> Bool -> m ()
   default answerCall :: (MonadTrans t, MonadAssistant n, m ~ t n) => Talk -> Int -> Text -> Bool -> m ()
   answerCall talk call text ok = lift (answerCall talk call text ok)
 
-  -- | Stop the turn that is running, if one is.
+  -- | Stop the running turn, if any.
   stopTalk :: Talk -> m ()
   default stopTalk :: (MonadTrans t, MonadAssistant n, m ~ t n) => Talk -> m ()
   stopTalk = lift . stopTalk
 
-  -- | Close a chat: its turn stopped, and nothing more heard.
+  -- | Close a chat: its turn is stopped, and no more events arrive.
   closeTalk :: Talk -> m ()
   default closeTalk :: (MonadTrans t, MonadAssistant n, m ~ t n) => Talk -> m ()
   closeTalk = lift . closeTalk
 
-  -- | "Test the key": the smallest request there is, the model looked up
-  -- with the key, which costs nothing; what went wrong, if anything.
+  -- | "Test the key": the smallest possible request, looking up the model
+  -- with the key, which is free. The result is the error, if any.
   checkKey :: Ready -> m (Maybe AssistantError)
   default checkKey :: (MonadTrans t, MonadAssistant n, m ~ t n) => Ready -> m (Maybe AssistantError)
   checkKey = lift . checkKey
 
-  -- | The provider's models, every one its list has, fetched with the key
-  -- (the scripted provider's from its script); or what went wrong. Any
-  -- answer, a refusal included, says that the provider can be reached;
-  -- an error of the kind 'Unreachable', that it cannot.
+  -- | The provider's models, every one in its list, fetched with the key
+  -- (the scripted provider's come from its script); or the error. Any
+  -- response, including a refusal, shows that the provider can be reached;
+  -- an error of kind 'Unreachable' shows that it cannot.
   listModels :: Ready -> m (Either AssistantError [Listed])
   default listModels :: (MonadTrans t, MonadAssistant n, m ~ t n) => Ready -> m (Either AssistantError [Listed])
   listModels = lift . listModels
 
 instance (MonadAssistant m) => MonadAssistant (ReaderT r m)
 
--- | The browser's. Natively the bindings are inert stubs: nothing runs
--- 'BrowserDOM' there, but code written against it still type-checks.
+-- | The browser's instance. Natively the bindings are inert stubs: nothing
+-- runs 'BrowserDOM' there, but code written against it still type-checks.
 instance MonadAssistant BrowserDOM where
   assistantHere = pure inBrowser
   assistantSettings = settingsIn
@@ -255,9 +256,10 @@ instance MonadAssistant BrowserDOM where
     answer <- evaluate . fromJSText =<< js_models (toJSText (json (endpointJSON r [])))
     pure (listedOf answer)
 
--- | The in-memory document's: settings kept as the browser's are, in its
--- in-memory IndexedDB (which the native tests read and write), and no
--- provider; and, being no browser, no assistant shown ('assistantHere').
+-- | The in-memory document's instance: settings stored as in the browser,
+-- in its in-memory IndexedDB (which the native tests read and write), and
+-- no provider. Since it is not a browser, no assistant is shown
+-- ('assistantHere').
 instance MonadAssistant MemDOM where
   assistantHere = pure False
   assistantSettings = settingsIn
@@ -273,33 +275,34 @@ instance MonadAssistant MemDOM where
   checkKey _ = pure (Just (AssistantError Unreachable Nothing "There is no browser here to reach a provider from."))
   listModels _ = pure (Left (AssistantError Unreachable Nothing "There is no browser here to reach a provider from."))
 
--- | The database the assistant's settings are kept in, apart from the
--- demo's wiki: one store, @settings@, keyed by the user's id, each value a
+-- | The database the assistant's settings are stored in, separate from the
+-- demo's wiki: one store, @settings@, keyed by user id, each value a
 -- user's 'Settings' as JSON.
 assistantDatabase :: Database
 assistantDatabase = Database {name = "wiki-assistant", version = 1, stores = ["settings"]}
 
--- | A user's settings as kept in a database: the defaults if nothing is
--- kept (or what is kept cannot be read, as after a change of format).
+-- | A user's settings as stored in a database: the defaults if nothing is
+-- stored (or the stored value cannot be decoded, as after a format change).
 readSettings :: (MonadIndexedDB m) => Database -> UserId -> m Settings
 readSettings db user =
   IDB.get db "settings" user.text <&> \case
     Just bytes -> fromRight defaultSettings (eitherDecodeStrict bytes)
     Nothing -> defaultSettings
 
--- | Change a user's settings as they are kept now, and keep them: what is
--- kept is read again first, so that a change made elsewhere since this
--- one's were read (the editor asking a provider for its list while the
--- panel changes the model) is not lost. The settings as they are then.
+-- | Change a user's stored settings, and store the result. The stored
+-- settings are read again first, so that a change made elsewhere since
+-- this caller read them (the editor fetching a provider's model list while
+-- the panel changes the model) is not lost. The result is the settings
+-- after the change.
 updateAssistantSettings :: (MonadAssistant m) => UserId -> (Settings -> Settings) -> m (Either Text Settings)
 updateAssistantSettings user f =
   assistantSettings user >>= \case
     Left why -> pure (Left why)
     Right s -> let new = f s in (new <$) <$> keepAssistantSettings user new
 
--- | Keep a user's settings in a database. Settings with nothing in them
--- (no key, nothing chosen) are not kept at all: what "Forget" leaves of the
--- last key is nothing.
+-- | Store a user's settings in a database. Settings with nothing set (no
+-- key, nothing chosen) are deleted instead, so that "Forget" on the last
+-- key leaves nothing stored.
 writeSettings :: (MonadIndexedDB m) => Database -> UserId -> Settings -> m ()
 writeSettings db user settings
   | blankSettings settings = IDB.delete db "settings" user.text
@@ -311,13 +314,13 @@ settingsIn user = failingAs (readSettings assistantDatabase user)
 keepIn :: (MonadIndexedDB m, MonadUnliftIO m) => UserId -> Settings -> m (Either Text ())
 keepIn user settings = failingAs (writeSettings assistantDatabase user settings)
 
--- | An IndexedDB failure, said to the user.
+-- | An IndexedDB failure, as a message to the user.
 failingAs :: (MonadUnliftIO m) => m a -> m (Either Text a)
 failingAs action =
   withRunInIO (\run -> try (run action)) <&> first (\(IndexedDBError _ failure) -> "This browser could not keep the assistant's settings (" <> show failure <> ").")
 
--- | The browser's answer to a list of models: @{models: [...]}@, or
--- @{error: {kind, status, message}}@.
+-- | Decode the browser's response to a model list request: @{models:
+-- [...]}@, or @{error: {kind, status, message}}@.
 listedOf :: Text -> Either AssistantError [Listed]
 listedOf answer =
   case eitherDecodeStrict (encodeUtf8 answer) >>= parseEither (withObject "Models" (\o -> (Right <$> o .: "models") <|> (Left <$> o .: "error"))) of
@@ -330,9 +333,9 @@ heardOf text = either (\why -> HeardFailed (AssistantError Failed Nothing ("An e
 openingJSON :: Opening -> Value
 openingJSON o = endpointJSON o.ready ["model" .= o.ready.model, "request" .= o.request]
 
--- | Whom the browser's side asks: the provider, the key (empty for a
--- server that takes none) and the address of another service, if any;
--- with what else it needs.
+-- | What the browser-side code needs to reach a provider: the provider,
+-- the key (empty for a server that needs none) and the base URL of another
+-- service, if any; with the given extra fields.
 endpointJSON :: Ready -> [Pair] -> Value
 endpointJSON r more = object (["provider" .= providerKey r.provider, "key" .= r.key, "baseUrl" .= r.baseUrl] <> more)
 

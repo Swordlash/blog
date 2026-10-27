@@ -1,52 +1,54 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The writing assistant's panel in the editor (WP4.19 of docs/PLAN.md):
--- a chat with a model that edits the page, as code editors have them.
+-- | The assistant panel: the writing assistant's panel in the editor
+-- (WP4.19 of docs/PLAN.md), a chat with a model that edits the page, as
+-- in code editors.
 --
--- The panel is a list of messages, the user's and the model's (streamed
--- as they come), under it a row of shortcuts that fill the message in
--- (improve, fix grammar, shorten, expand, summarise, continue, translate),
--- and the message box, with the provider's model and effort under it
--- (kept per provider with the user's settings, and taking effect from the
--- next message), and Send, or Stop while the model is at work. Enter
--- sends, Shift+Enter starts a new line. The editor's buttons open it with
--- a provider ('UseProvider'); another provider than the conversation's
--- starts a new conversation.
+-- The panel shows a list of messages, the user's and the model's (the
+-- model's streamed as they arrive). Below it is a row of shortcuts that
+-- fill in the message (improve, fix grammar, shorten, expand, summarise,
+-- continue, translate), then the message box, then the provider's model
+-- and effort (stored per provider in the user's settings, and effective
+-- from the next message), and Send, or Stop while the model is working.
+-- Enter sends, Shift+Enter starts a new line. The editor's buttons open
+-- the panel with a provider ('UseProvider'); a provider other than the
+-- conversation's starts a new conversation.
 --
--- What goes with a message: when the editor has a selection, it is
--- attached, shown as a chip ("lines 12–20") with a button to detach it,
--- and the model gets it with a paragraph around it; otherwise it gets the
--- page, its first 'bodyCap' characters, which the panel says when a page
--- is longer ("Wiki.Core.Assistant.Prompt"). The conversation lasts as
--- long as the editor (it is kept nowhere), and goes whole with each
--- message.
+-- What is sent with a message: when the editor has a selection, the
+-- selection is attached, shown as a chip ("lines 12–20") with a button to
+-- detach it, and the model receives it with a paragraph around it.
+-- Otherwise the model receives the page, its first 'bodyCap' characters,
+-- and the panel says so when a page is longer
+-- ("Wiki.Core.Assistant.Prompt"). The conversation lasts as long as the
+-- editor (it is not stored anywhere), and is sent whole with each message.
 --
 -- The model edits the page itself, through its tools, and the author
--- decides: each edit is made in the editor at once as a tracked change
--- ("Wiki.App.Editor.Browser", "Wiki.Core.Assistant.Edit"), shown with what
--- it replaced, and the tool answers the model that it was made, or why not
--- (its text not found, or found twice), and the model goes on. The changes
--- are accepted or rejected one by one on the change itself, or all at once
--- here. Nothing is written into the page that the author cannot reject, and
--- the page's Markdown is never saved by the assistant: what the author
--- saves is theirs (a save with changes still pending accepts them, which
--- the editor says beside Save).
+-- decides. Each edit is made in the editor immediately as a tracked change
+-- ("Wiki.App.Editor.Browser", "Wiki.Core.Assistant.Edit"), shown with the
+-- text it replaced. The tool tells the model that the edit was made, or
+-- why not (its text was not found, or found twice), and the model goes
+-- on. The author accepts or rejects the changes one by one on the change
+-- itself, or all at once in the panel. Nothing is written into the page
+-- that the author cannot reject, and the assistant never saves the page's
+-- Markdown: only the author saves (a save with changes still pending
+-- accepts them, as the editor says next to Save).
 --
--- Stop ends the model's turn, its request with it; the changes made by
--- then stay, to decide. Closing the panel stops the turn too; the panel
--- stays mounted, with its conversation, until the editor goes.
+-- Stop ends the model's turn, and its request; the changes made so far
+-- stay, for the author to decide. Closing the panel also stops the turn.
+-- The panel stays mounted, with its conversation, until the editor is
+-- closed.
 --
--- The user's settings are the editor's, which reads them, keeps them as
--- the panel changes them ('ChangeSettings'), and asks each provider with a key
--- for its list of models when it opens. Without a key for the provider
--- chosen, the panel says where to add one. The models it offers are the
--- provider's own list, grouped into the recommended ones and all the
--- others ("Wiki.Core.Assistant"'s 'Wiki.Core.Assistant.modelChoices'), or
--- the short one the wiki has until there is a list. A provider that could
--- not be reached the last time it was asked (a network that blocks it)
--- is said to be so, with "Try again" ('Retry'); a message that gets an
--- answer says that it can be reached again, one that gets none that it
--- cannot ('Reached').
+-- The user's settings belong to the editor, which reads them, stores them
+-- when the panel changes them ('ChangeSettings'), and fetches the model
+-- list of each provider with a key when it opens. Without a key for the
+-- chosen provider, the panel says where to add one. The models offered
+-- are the provider's own list, grouped into the recommended models and
+-- all the others ('Wiki.Core.Assistant.modelChoices'), or the wiki's
+-- short list until a list is fetched. A provider that could not be
+-- reached on the last attempt (because a network blocks it) is marked as
+-- unreachable, with "Try again" ('Retry'). A message that gets a response
+-- marks the provider as reachable again, and one that gets none marks it
+-- as unreachable ('Reached').
 module Wiki.App.View.Assistant
   ( Input (..)
   , Query (..)
@@ -114,17 +116,17 @@ import Wiki.Core.Assistant.Prompt
   , userTurn
   )
 
--- | What the editor tells the panel: where the page's text is, its title
--- and Markdown now, what is selected in it, and how many of the
--- assistant's changes are left to decide.
+-- | 'Input': what the editor passes to the panel. Where the page's text
+-- is, its current title and Markdown, the selection in it, and the number
+-- of the assistant's changes still to decide.
 data Input = Input
   { context :: Context
   , settings :: Maybe (Either Text Settings)
   -- ^ The user's settings, once the editor has read them.
   , problem :: Maybe Text
-  -- ^ Why a change of them could not be kept, if it could not.
+  -- ^ Why storing a change of the settings failed, if it did.
   , checking :: Set Provider
-  -- ^ The providers the editor is asking for their list of models.
+  -- ^ The providers whose model lists the editor is fetching.
   , host :: Maybe Element
   -- ^ CodeMirror's host: the editor's text ("Wiki.App.Editor.Browser").
   , title :: Text
@@ -132,23 +134,24 @@ data Input = Input
   , selection :: Maybe Span
   , pending :: Int
   , decisions :: Map Int Decision
-  -- ^ What the author decided of the assistant's changes, by id.
+  -- ^ The author's decision on each of the assistant's changes, by id.
   }
 
--- | The panel was closed: the model's turn, if one is running, stops. Or
--- it was opened with a provider (the editor's buttons for each), which
--- the editor makes the one the assistant asks: if the conversation was
--- with another, it ends, and a new one starts with the next message
--- (a conversation cannot go from one provider to another: Anthropic's
--- thinking blocks mean nothing to OpenAI). The changes made by then stay,
--- to decide: they are the editor's, not the conversation's.
+-- | 'Query': the panel was closed ('Hide'), and the model's running turn,
+-- if any, stops. Or it was opened with a provider ('UseProvider', from
+-- the editor's button for each provider), which the editor makes the
+-- assistant's provider. If the conversation was with another provider, it
+-- ends, and a new one starts with the next message (a conversation cannot
+-- move between providers: Anthropic's thinking blocks mean nothing to
+-- OpenAI). The changes made so far stay, for the author to decide: they
+-- belong to the editor, not to the conversation.
 data Query a = Hide a | UseProvider Provider a
 
--- | The panel's own close button; "Accept all" or "Reject all", which the
--- editor carries out, as it does a decision on one change; a change of the
--- settings (a model, an effort), which the editor keeps; "Try again" for a
--- provider that could not be reached; and whether a message reached its
--- provider.
+-- | 'Output': the panel's own close button; "Accept all" or "Reject all",
+-- which the editor carries out, as it does a decision on one change; a
+-- change of the settings (a model, an effort), which the editor stores;
+-- "Try again" for a provider that could not be reached; and whether a
+-- message reached its provider.
 data Output
   = Closed
   | DecideAll Decision
@@ -156,17 +159,17 @@ data Output
   | Retry Provider
   | Reached Provider Bool
 
--- | A message of the conversation.
+-- | 'Entry': a message of the conversation.
 data Entry
-  = -- | The user's: the message, the lines of the selection attached, if
-    -- one was, and the page's length when it was cut to send it.
+  = -- | The user's message: its text, the lines of the attached selection,
+    -- if any, and the page's length when the page was cut to send it.
     FromUser Text (Maybe Text) (Maybe Int)
-  | -- | The model's: its text, the edits it made or tried, and whether it
-    -- is still at it.
+  | -- | The model's message: its text, the edits it made or attempted, and
+    -- whether it is still working.
     FromModel Text [Note] Ending
-  | -- | What went wrong.
+  | -- | An error.
     Trouble Text
-  | -- | What the panel says of the conversation itself.
+  | -- | A note from the panel about the conversation itself.
     Notice Text
 
 data Note = Made Text | NotMade Text Text
@@ -181,21 +184,21 @@ data State = State
   , talk :: Maybe Talk
   -- ^ The chat, once the first message has opened it.
   , using :: Maybe Ready
-  -- ^ What the chat asks with: kept for its errors, from which the key is
-  -- taken out.
+  -- ^ The settings the chat uses, kept for its error messages, from which
+  -- the key is removed.
   , talking :: Bool
   , detached :: Maybe Span
-  -- ^ A selection the user detached, which is not sent until another is
-  -- made.
+  -- ^ A selection the user detached, which is not sent until another
+  -- selection is made.
   , nextChange :: Int
   , made :: Map Int Text
-  -- ^ The changes the model made that it has not been told the fate of,
-  -- by id, as they were described.
+  -- ^ The model's changes whose outcome the model has not been told yet,
+  -- by id, with their descriptions.
   , absorbed :: [Int]
-  -- ^ Changes a later change of the model's took in, which need no word.
+  -- ^ Changes absorbed by a later change of the model, which need no mention.
   , listener :: Maybe (HS.Listener IO Heard)
   , otherModel :: Bool
-  -- ^ Whether "Other…" is chosen for the model, which shows its field.
+  -- ^ Whether "Other…" is chosen for the model, which shows its text field.
   , field :: H.RefLabel
   }
 
@@ -308,11 +311,11 @@ component =
         </section>
       |]
 
-    -- The model and the effort of the provider the assistant asks, under the
-    -- message: the provider's own, kept in its settings (the settings page
-    -- shows the same model), taking effect from the next message. The
-    -- models are grouped: the recommended ones, all the others the provider
-    -- has for a chat, and "Other…", any id typed in.
+    -- The model and effort of the assistant's provider, below the message
+    -- box: the provider's own, stored in its settings (the settings page
+    -- shows the same model), effective from the next message. The models
+    -- are grouped: the recommended ones, all the provider's other chat
+    -- models, and "Other…", for any id typed in.
     choicesView :: State -> Maybe (H.ComponentHTML Action Empty m)
     choicesView st = case st.input.settings of
       Just (Right s) ->
@@ -360,7 +363,7 @@ component =
               |]
       _ -> Nothing
 
-    -- Enter sends; any other key is the message box's.
+    -- Enter sends; any other key goes to the message box.
     sendKey :: Event -> Maybe Action
     sendKey ev = if sendsMessage ev then Just Send else Nothing
 
@@ -368,7 +371,7 @@ component =
     usingLine st = case st.input.settings of
       Just (Right s) ->
         let ps = settingsOf s.provider s
-            -- Another service than OpenAI's own is named by its address.
+            -- A service other than OpenAI is named by its URL's host.
             service = if isJust (baseUrlOf s.provider ps) then serviceName s.provider ps else providerLabel s.provider
          in modelLabel s.provider ps (chosenModel s.provider ps) <> " \183 " <> service
       _ -> ""
@@ -399,8 +402,8 @@ component =
             |]
         Right _ -> Nothing
 
-    -- What goes with the next message: the selection, with the way to
-    -- leave it out, or the page.
+    -- What is sent with the next message: the selection, with a button to
+    -- detach it, or the page.
     scopeView :: State -> H.ComponentHTML Action Empty m
     scopeView st = case attached st of
       Just sp ->
@@ -495,19 +498,19 @@ component =
       TryAgain p -> H.raise (Retry p)
 
     -- The provider the editor's button asked for (which the editor makes
-    -- the one the assistant asks): if the conversation was with another,
-    -- it ends, and a new one starts with the next message.
+    -- the assistant's provider). If the conversation was with another
+    -- provider, it ends, and a new one starts with the next message.
     useProvider :: Provider -> H.HalogenM State Action Empty Output m ()
     useProvider p = do
       st <- get
       for_ st.using $ \r -> when (r.provider /= p) $ do
-        -- The chat closed stops its turn, and is heard of no more.
+        -- Closing the chat stops its turn, and no more events arrive.
         for_ st.talk (H.liftEffect . closeTalk)
         when st.talking (finish Stopped)
         modify (\s' -> s' {talk = Nothing, using = Nothing, otherModel = False})
         addEntry (Notice ("The conversation with " <> providerLabel r.provider <> " ended. The next message starts a new one with " <> providerLabel p <> "."))
 
-    -- Change the user's settings: the editor keeps them.
+    -- Change the user's settings; the editor stores them.
     changeSettings :: (Settings -> Settings) -> H.HalogenM State Action Empty Output m ()
     changeSettings = H.raise . ChangeSettings
 
@@ -544,8 +547,8 @@ component =
         (Just (Left why), _) -> addEntry (Trouble why)
         _ -> pass
 
-    -- The chat, opened with what the settings say, its turns heard of by
-    -- the panel.
+    -- The chat, opened with the settings' provider, model and key, its
+    -- turn events handled by the panel.
     open :: Ready -> H.HalogenM State Action Empty Output m Talk
     open r = do
       tell <- gets (\st -> maybe (const pass) HS.notify st.listener)
@@ -566,12 +569,12 @@ component =
         finish Ended
         key <- gets (\st -> (\r -> r.key) <$> st.using)
         addEntry (Trouble (errorText key e))
-        -- Any answer, a refusal included, is from the provider; none is
-        -- that it cannot be reached.
+        -- Any response, including a refusal, comes from the provider; no
+        -- response means it cannot be reached.
         reached (e.kind /= Unreachable)
 
-    -- Whether the provider of the conversation was reached, told to the
-    -- editor when it changes what is known.
+    -- Report to the editor whether the conversation's provider was
+    -- reached, when that changes what is known.
     reached :: Bool -> H.HalogenM State Action Empty Output m ()
     reached yes = do
       st <- get
@@ -579,9 +582,9 @@ component =
         Just (Right s) | (settingsOf r.provider s).unreachable == yes -> H.raise (Reached r.provider yes)
         _ -> pass
 
-    -- A tool call's edit, made in the editor as a tracked change: what the
-    -- conversation says of it, what the model is told, and whether it was
-    -- made.
+    -- A tool call's edit, made in the editor as a tracked change. The
+    -- result is the conversation's note on it, the tool result for the
+    -- model, and whether the edit was made.
     edit :: Text -> Value -> H.HalogenM State Action Empty Output m (Note, Text, Bool)
     edit name input = case parseEdit name input of
       Left why -> pure (NotMade ("A call of " <> name) (refusalWords why), answer (Left why :: Either Refusal ()), False)
@@ -601,10 +604,10 @@ component =
                     }
                 pure (Made (describeEdit e), answer (Right r), True)
 
-    -- What became of the model's changes since it was last told: those
-    -- decided, or gone without a decision (undone, or edited away), each
-    -- told once; those still pending wait, and those a later change took
-    -- in need no word.
+    -- The outcomes of the model's changes since it was last told: changes
+    -- decided, or removed without a decision (undone, or edited away),
+    -- each reported once. Pending changes wait, and changes absorbed by a
+    -- later change need no mention.
     outcomes :: Element -> H.HalogenM State Action Empty Output m [(Text, Outcome)]
     outcomes host = do
       pending <- map (\c -> c.id) <$> H.liftEffect (trackedChanges host)
@@ -624,7 +627,7 @@ component =
       modifyModel (\text notes _ -> FromModel text notes ending)
       modify (\st -> st {talking = False})
 
-    -- The model's last message, changed, if the last entry is one.
+    -- Modify the model's last message, if the last entry is one.
     modifyModel :: (Text -> [Note] -> Ending -> Entry) -> H.HalogenM State Action Empty Output m ()
     modifyModel f = modify $ \st -> case unsnoc st.entries of
       Just (before, FromModel text notes ending) -> st {entries = before <> [f text notes ending]}
@@ -633,19 +636,19 @@ component =
     addEntry :: Entry -> H.HalogenM State Action Empty Output m ()
     addEntry e = modify (\st -> st {entries = st.entries <> [e]})
 
--- | The selection that goes with the next message, unless it was detached.
+-- | The selection sent with the next message, unless it was detached.
 attached :: State -> Maybe Span
 attached st = mfilter (\sp -> Just sp /= st.detached && sp.to > sp.from) st.input.selection
 
 -- | The request a chat is opened with, by provider. The scripted provider
--- is sent Anthropic's, which its tests read.
+-- receives Anthropic's request, which its tests read.
 requestFor :: Ready -> Value
 requestFor r = case r.provider of
   OpenAI -> openAiRequest r.model r.effort
   Anthropic -> anthropicRequest r.model r.effort
   Scripted -> anthropicRequest r.model r.effort
 
--- | Why an edit was not made, for the conversation.
+-- | Why an edit was not made, as text for the conversation.
 refusalWords :: Refusal -> Text
 refusalWords = \case
   NotFound _ -> "the page has no such text"

@@ -1,26 +1,28 @@
--- | How the writing assistant changes a page, as pure functions: the edits
--- a model asks for through its two tools, where each one goes in the page
--- as it is now, and the changes the author then accepts or rejects.
+-- | Assistant edits: how the writing assistant changes a page, as pure
+-- functions. The edits a model requests through its two tools, where each
+-- edit goes in the current page, and the changes the author then accepts
+-- or rejects.
 --
--- A model edits by quoting: 'Replace' names text the page has, and the text
--- to put in its place; 'Insert' names text to put before or after a quote,
--- or at the page's start or end. A quote must occur exactly once in the
--- page, so that there is no doubt where the edit goes; one that does not
--- occur, or occurs more than once, is refused, and the refusal goes back to
--- the model as its tool's answer ('answer'), which tells it what to do
--- instead (quote more of the text around it). Offsets count characters
--- (code points), as 'Text' does; the browser's side converts them to the
--- UTF-16 units CodeMirror counts.
+-- A model edits by quoting. 'Replace' names text in the page, and the
+-- text to put in its place. 'Insert' names text to put before or after a
+-- quote, or at the page's start or end. A quote must occur exactly once in
+-- the page, so that the edit's place is unambiguous. A quote that does not
+-- occur, or occurs more than once, is refused, and the refusal is sent
+-- back to the model as its tool's result ('answer'), which tells it what
+-- to do instead (quote more of the surrounding text). Offsets count
+-- characters (code points), as 'Text' does; the browser-side code converts
+-- them to the UTF-16 units CodeMirror counts.
 --
--- An edit made is a tracked change ('Change'): the new text is in the page
--- (so the preview, the draft and a save see it), and what it replaced is
--- kept beside it until the author decides. Accepting a change forgets what
--- it replaced; rejecting it puts that back ('settle'). CodeMirror keeps the
--- changes, moving them as the author types around them, and hands them
--- here when a decision is made. A change never overlaps another: an edit
--- that touches a change not yet decided takes it in ('propose'), so that
--- rejecting the new one goes back to the text before it, the earlier
--- change's text included, as accepted.
+-- An edit made is a tracked change ('Change'). The new text is in the page
+-- (so the preview, the draft and a save include it), and the text it
+-- replaced is kept beside it until the author decides. Accepting a change
+-- discards the replaced text; rejecting it restores that text ('settle').
+-- CodeMirror stores the changes, moves them as the author types around
+-- them, and passes them to this module when a decision is made. Changes
+-- never overlap: an edit that touches an undecided change absorbs it
+-- ('propose'), so that rejecting the new change restores the text as it
+-- was before the new edit, including the earlier change's text, which
+-- counts as accepted.
 module Wiki.Core.Assistant.Edit
   ( -- * Edits
     Edit (..)
@@ -29,7 +31,7 @@ module Wiki.Core.Assistant.Edit
   , parseEdit
   , describeEdit
 
-    -- * Where an edit goes
+    -- * Edit placement
   , Replacement (..)
   , Refusal (..)
   , plan
@@ -52,23 +54,23 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.Text qualified as T
 import Protolude
 
--- | An edit a model asks for.
+-- | 'Edit': an edit a model requests.
 data Edit
-  = -- | Put @new@ in the place of @old@, which the page has exactly once.
+  = -- | Put @new@ in place of @old@, which occurs in the page exactly once.
     Replace {old :: Text, new :: Text}
   | -- | Put text before or after an anchor.
     Insert {anchor :: Anchor, place :: Place, text :: Text}
   deriving stock (Eq, Show)
 
--- | Where an insertion is made relative to.
+-- | 'Anchor': the position an insertion is made relative to.
 data Anchor = AtStart | AtEnd | AtText Text
   deriving stock (Eq, Show)
 
 data Place = Before | After
   deriving stock (Eq, Show)
 
--- | A tool call's edit, from the tool's name and its input; or why it is no
--- edit, which goes back to the model as its answer.
+-- | A tool call's edit, from the tool's name and its input; or why it is
+-- not a valid edit, which is sent back to the model as the tool's result.
 parseEdit :: Text -> Value -> Either Refusal Edit
 parseEdit name input = case name of
   "replace" -> parsed $ withObject "replace" $ \o -> Replace <$> o .: "old_text" <*> o .: "new_text"
@@ -93,7 +95,7 @@ parseEdit name input = case name of
       other -> fail ("\"where\" is \"before\" or \"after\", not " <> show other)
 
 -- | An edit in a few words, for the conversation: what was replaced with
--- what, or what was put where, each quote cut short.
+-- what, or what was inserted where, each quote shortened.
 describeEdit :: Edit -> Text
 describeEdit = \case
   Replace old new
@@ -110,8 +112,8 @@ describeEdit = \case
       let flat = T.unwords (T.words t)
        in "\8220" <> (if T.length flat > 60 then T.take 57 flat <> "\8230" else flat) <> "\8221"
 
--- | Text in place of a part of the page: the characters from @from@ up to
--- @to@ (not included) give way to @text@.
+-- | 'Replacement': text in place of a part of the page. The characters
+-- from @from@ up to @to@ (not included) are replaced by @text@.
 data Replacement = Replacement
   { from :: Int
   , to :: Int
@@ -119,21 +121,21 @@ data Replacement = Replacement
   }
   deriving stock (Eq, Show)
 
--- | Why an edit was not made.
+-- | 'Refusal': why an edit was not made.
 data Refusal
   = -- | The quote is not in the page.
     NotFound Text
-  | -- | The quote is in the page this many times.
+  | -- | The quote occurs in the page this many times.
     FoundMany Text Int
-  | -- | A replacement of nothing, which is an insertion.
+  | -- | A replacement of empty text, which would be an insertion.
     EmptyQuote
-  | -- | The model called a tool there is none of.
+  | -- | The model called a tool that does not exist.
     UnknownTool Text
-  | -- | The tool's input was not what it takes.
+  | -- | The tool's input did not have the expected form.
     Malformed Text
   deriving stock (Eq, Show)
 
--- | Where an edit goes in the page as it is now, or why it cannot.
+-- | Where an edit goes in the current page, or why it cannot be placed.
 plan :: Edit -> Text -> Either Refusal Replacement
 plan edit page = case edit of
   Replace old new
@@ -153,7 +155,7 @@ plan edit page = case edit of
       [] -> Left (NotFound quote)
       several -> Left (FoundMany quote (length several))
 
--- | Where a quote starts in the page, each place it does (not overlapping).
+-- | The offsets where a quote starts in the page, every occurrence (not overlapping).
 occurrences :: Text -> Text -> [Int]
 occurrences quote page
   | T.null quote = []
@@ -165,8 +167,8 @@ occurrences quote page
         let at = offset + T.length before
          in at : go (at + T.length quote) (T.drop (T.length quote) found)
 
--- | The tool's answer to the model: that the edit was made, or why not and
--- what to do instead.
+-- | The tool's result for the model: that the edit was made, or why not
+-- and what to do instead.
 answer :: Either Refusal a -> Text
 answer = \case
   Right _ -> "Applied. The user will accept or reject the change."
@@ -180,8 +182,9 @@ answer = \case
 apply :: Replacement -> Text -> Text
 apply r page = T.take r.from page <> r.text <> T.drop r.to page
 
--- | A change not yet accepted or rejected: the characters from @from@ up to
--- @to@ are the text the edit put in, and @removed@ what was there before.
+-- | 'Change': a change not yet accepted or rejected. The characters from
+-- @from@ up to @to@ are the text the edit inserted, and @removed@ is the
+-- text that was there before.
 data Change = Change
   { id :: Int
   , from :: Int
@@ -190,10 +193,10 @@ data Change = Change
   }
   deriving stock (Eq, Show)
 
--- | The change a replacement makes to the page as it was, by its id, with
--- the changes not yet decided that it takes in: those it overlaps, which
--- stop being tracked (as if accepted), so that the new change's removed
--- text is all that rejecting it has to put back.
+-- | The change a replacement makes to the page as it was, with its id, and
+-- the undecided changes it absorbs: those it overlaps. They stop being
+-- tracked (as if accepted), so that rejecting the new change only has to
+-- restore its own removed text.
 propose :: Int -> Replacement -> Text -> [Change] -> (Change, [Int])
 propose i r page pending =
   ( Change {id = i, from = r.from, to = r.from + T.length r.text, removed = T.take (r.to - r.from) (T.drop r.from page)}
@@ -201,19 +204,20 @@ propose i r page pending =
   )
   where
     overlaps c
-      -- An insertion: inside a change's text, not at either end of it.
+      -- An insertion absorbs a change it falls inside, not at either end.
       | r.from == r.to = c.from < r.from && r.from < c.to
-      -- A deletion's change holds no text, only a place: one in the part
-      -- replaced, or at either end of it, is taken in, so that two removals
-      -- one after the other are one change.
+      -- A deletion's change holds no text, only a position. One in the
+      -- replaced part, or at either end of it, is absorbed, so that two
+      -- consecutive removals become one change.
       | c.from == c.to = r.from <= c.from && c.from <= r.to
       | otherwise = r.from < c.to && c.from < r.to
 
 -- | An edit made and tracked, as the editor does it: the page with the
--- replacement made, and the changes with the new one, those it took in
--- gone, and those after it moved along with the text. CodeMirror does the
--- same (@web/src/editor.js@), and moves the changes as the author types
--- too; this is its model, which the tests check 'settle' against.
+-- replacement made, and the changes with the new one added, the absorbed
+-- ones removed, and those after it shifted with the text. CodeMirror does
+-- the same (@web/src/editor.js@), and also moves the changes as the author
+-- types; this function is the model of it that the tests check 'settle'
+-- against.
 track :: Int -> Replacement -> Text -> [Change] -> (Text, [Change])
 track i r page pending = (apply r page, change : map moved (filter ((`notElem` taken) . (\c -> c.id)) pending))
   where
@@ -226,11 +230,12 @@ track i r page pending = (apply r page, change : map moved (filter ((`notElem` t
 data Decision = Accept | Reject
   deriving stock (Eq, Show)
 
--- | What to write to settle these changes: nothing to accept them (their
--- text is in the page already), and to reject them what each replaced, put
--- back in its place. The replacements are given from the last in the page
--- to the first (of two at one place, the one with text first), so that
--- each, made in turn, finds its place where it was: changes never overlap.
+-- | The replacements that settle these changes. Accepting needs none (the
+-- text is already in the page); rejecting needs each change's replaced
+-- text restored in its place. The replacements are ordered from the last
+-- in the page to the first (of two at the same position, the one with
+-- text first), so that each one, applied in turn, still finds its
+-- position: changes never overlap.
 settle :: Decision -> [Change] -> [Replacement]
 settle Accept _ = []
 settle Reject changes = [Replacement c.from c.to c.removed | c <- sortOn (\c -> Down (c.from, c.to)) changes]

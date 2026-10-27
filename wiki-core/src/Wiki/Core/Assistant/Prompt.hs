@@ -1,31 +1,31 @@
--- | What the writing assistant sends a model, as pure functions: the
--- system prompt, the two tools, the page's context with each message, and
--- the requests each provider's SDK is given.
+-- | Assistant prompts: what the writing assistant sends a model, as pure
+-- functions. The system prompt, the two tools, the page's context with
+-- each message, and the request each provider's SDK receives.
 --
--- A request is, in this order:
+-- A request contains, in this order:
 --
 -- 1. The wiki's Markdown reference ('markdownReference', @docs/markdown.md@),
---    first and the same in every request, so that the provider can cache
---    it: Anthropic's prompt caching is asked for with @cache_control@ on
---    its block, OpenAI caches a prompt's longest prefix it has seen by
---    itself. The tools come before it in Anthropic's order and after it in
---    OpenAI's, and are as unchanging.
+--    first and identical in every request, so that the provider can cache
+--    it. Anthropic's prompt caching is requested with @cache_control@ on
+--    its block; OpenAI caches the longest prompt prefix it has seen
+--    without being asked. The tools come before the reference in
+--    Anthropic's order and after it in OpenAI's, and never change either.
 -- 2. The instructions ('instructions'): what the model is doing and how it
---    edits. Unchanging too, and cached with the reference.
--- 3. The conversation: the user's messages and the model's answers, in
---    turn, whole (the browser's side keeps it, as the provider gave it,
---    for the editing session), each message of the user's with the page's
---    context of that moment in front of it ('userTurn'): the page's title,
---    what the user decided of the model's changes since its last message
---    ('Outcome'),
---    and the selection with a paragraph each side, or the page's Markdown
---    cut to 'bodyCap'.
+--    edits. They never change, and are cached with the reference.
+-- 3. The conversation: the user's messages and the model's responses, in
+--    order and complete (the browser-side code stores it, as the provider
+--    returned it, for the editing session). Each user message is preceded
+--    by the page's context at that moment ('userTurn'): the page's title,
+--    the user's decisions on the model's changes since the user's last
+--    message ('Outcome'), and the selection with a paragraph on each side,
+--    or the page's Markdown cut to 'bodyCap'.
 --
 -- The page's context goes with each message rather than in the system
--- prompt, which stays as it was: a model that thinks binds its thinking to
--- the system prompt and every message before it, and Anthropic refuses a
--- conversation whose earlier part has changed under it (its "preserved
--- thinking" check); and an unchanged prefix is what the caches match.
+-- prompt, which stays unchanged. A model that thinks binds its thinking to
+-- the system prompt and every earlier message, and Anthropic refuses a
+-- conversation whose earlier part has changed (its "preserved thinking"
+-- check). Also, the caches match on an unchanged prefix. Attachments and
+-- other pages are never sent.
 -- Attachments and other pages are never sent.
 module Wiki.Core.Assistant.Prompt
   ( -- * The page's context
@@ -61,7 +61,7 @@ import Data.Text qualified as T
 import Protolude
 import Wiki.Core.Assistant.Reference (markdownReference)
 
--- | Characters of the page, from @from@ up to @to@ (not included).
+-- | 'Span': characters of the page, from @from@ up to @to@ (not included).
 data Span = Span {from :: Int, to :: Int}
   deriving stock (Eq, Show)
 
@@ -73,15 +73,15 @@ lineSpan page s = (lineAt s.from, lineAt (max s.from (if s.to > s.from then s.to
   where
     lineAt at = 1 + T.count "\n" (T.take at page)
 
--- | What the selection's chip says: the lines it is on.
+-- | The label of the selection's chip: the lines the selection is on.
 chipLabel :: (Int, Int) -> Text
 chipLabel (a, b)
   | a == b = "line " <> show a
   | otherwise = "lines " <> show a <> "\8211" <> show b
 
--- | What a message tells the model of the page.
+-- | 'PageContext': what a message tells the model about the page.
 data PageContext
-  = -- | The page's title, the lines selected, what is selected, and the
+  = -- | The page's title, the selected lines, the selected text, and the
     -- text around it.
     Selected {title :: Text, lineRange :: (Int, Int), before :: Text, selected :: Text, after :: Text}
   | -- | The page's title and its Markdown, and the page's length when only
@@ -89,20 +89,20 @@ data PageContext
     Whole {title :: Text, body :: Text, cutFrom :: Maybe Int}
   deriving stock (Eq, Show)
 
--- | How much of a page goes with a message when nothing is selected: about
--- seven thousand tokens, enough for most pages and little beside the
--- reference. The panel says so when a page is longer.
+-- | The number of characters of a page sent with a message when nothing is
+-- selected: about seven thousand tokens, enough for most pages and small
+-- next to the reference. The panel says so when a page is longer.
 bodyCap :: Int
 bodyCap = 24_000
 
--- | At most how much of the text on each side of a selection goes with it.
+-- | The maximum number of characters sent on each side of a selection.
 contextCap :: Int
 contextCap = 2_000
 
--- | The page's context for a message: the selection, if a non-empty one is
--- attached, with the rest of its paragraph and the paragraph before it,
--- and the rest of its paragraph and the paragraph after it; otherwise the
--- page.
+-- | The page's context for a message. If a non-empty selection is
+-- attached: the selection, the rest of its paragraph and the paragraph
+-- before it, and the rest of its paragraph and the paragraph after it.
+-- Otherwise: the page.
 pageContext :: Text -> Text -> Maybe Span -> PageContext
 pageContext title page = \case
   Just s
@@ -121,9 +121,9 @@ pageContext title page = \case
       , cutFrom = if T.length page > bodyCap then Just (T.length page) else Nothing
       }
 
--- | The end of a text, back to the start of its last paragraph but one:
--- the paragraph a selection starts in, up to the selection, and the one
--- before it, with what separates them.
+-- | The end of a text, starting at the second-to-last paragraph: the
+-- paragraph a selection starts in, up to the selection, and the paragraph
+-- before it, with the separator between them.
 paragraphBefore :: Text -> Text
 paragraphBefore pre
   | T.null upToCurrent = current
@@ -134,8 +134,8 @@ paragraphBefore pre
     separator = T.drop (T.length trimmed) upToCurrent
     previous = snd (T.breakOnEnd "\n\n" trimmed)
 
--- | The start of a text, to the end of its second paragraph: the rest of
--- the paragraph a selection ends in, and the one after it.
+-- | The start of a text, up to the end of its second paragraph: the rest
+-- of the paragraph a selection ends in, and the paragraph after it.
 paragraphAfter :: Text -> Text
 paragraphAfter post
   | T.null fromBreak = current
@@ -146,28 +146,29 @@ paragraphAfter post
     separator = T.take (T.length fromBreak - T.length rest) fromBreak
     next = fst (T.breakOn "\n\n" rest)
 
--- | What became of a change the model made, by the time the user writes
--- again.
+-- | 'Outcome': what happened to a change the model made, by the time the
+-- user sends another message.
 data Outcome
   = -- | Accepted: its text stays.
     Accepted
   | -- | Rejected: what it replaced is back.
     Rejected
-  | -- | Gone otherwise: undone, or its text edited away, by the user.
+  | -- | Removed in another way: undone, or its text edited away, by the user.
     Undone
   deriving stock (Eq, Show)
 
--- | A message of the user's as the model gets it: the page's title, what
--- the user decided of the model's changes since its last message, the
--- page's context, then the message, each part in a tag of its own so that
--- the page's text is never mistaken for what the user asks.
+-- | A user message as the model receives it: the page's title, the user's
+-- decisions on the model's changes since the user's last message, the
+-- page's context, then the message. Each part is in its own tag, so that
+-- the page's text is never mistaken for the user's request.
 --
--- The model was told that each of its edits was applied, and would
--- otherwise find the page without the ones the user threw away and wonder
--- why (or insist they be put back). So the changes rejected or undone since
--- its last message are named (by 'Wiki.Core.Assistant.Edit.describeEdit'),
--- with the ones accepted beside them; changes that were only accepted need
--- no word, since the page shows them as the model left them.
+-- The model was told that each of its edits was applied. Without this
+-- information it would find the page without the edits the user
+-- discarded, and be confused (or insist on adding them back). So the
+-- changes rejected or undone since its last message are listed (with
+-- 'Wiki.Core.Assistant.Edit.describeEdit'), together with the accepted
+-- ones. When all changes were accepted, nothing is said, since the page
+-- shows them as the model left them.
 userTurn :: [(Text, Outcome)] -> PageContext -> Text -> Text
 userTurn decided context message =
   T.intercalate "\n\n" $
@@ -203,8 +204,8 @@ userTurn decided context message =
              ]
     tagged name text = "<" <> name <> ">\n" <> text <> "\n</" <> name <> ">"
 
--- | The ready-made requests above the panel's input, which fill it in; the
--- user may add to them before sending.
+-- | 'Shortcut': the ready-made requests above the panel's input, which
+-- fill in the input. The user may add to them before sending.
 data Shortcut = Improve | FixGrammar | Shorten | Expand | Summarise | ContinueWriting | Translate
   deriving stock (Eq, Show, Enum, Bounded)
 
@@ -221,8 +222,8 @@ shortcutLabel = \case
   ContinueWriting -> "Continue"
   Translate -> "Translate"
 
--- | The text a shortcut puts in the input. Translate's ends where the
--- language is to be typed.
+-- | The text a shortcut puts in the input. Translate's text ends where the
+-- user types the language.
 shortcutText :: Shortcut -> Text
 shortcutText = \case
   Improve -> "Improve the writing: clearer, livelier, the same meaning."
@@ -246,9 +247,10 @@ instructions =
     , "In the conversation, say briefly what you changed, or answer the user's question; when they only ask something, answer without editing."
     ]
 
--- | The tools, as each provider's API takes them: the same two, with the
--- same inputs, every field required (OpenAI's strict mode asks for that,
--- so @where@ is given with "start" and "end" too, where it means nothing).
+-- | The tools, in the form each provider's API takes them: the same two,
+-- with the same inputs, every field required (OpenAI's strict mode
+-- requires that, so @where@ is also given with "start" and "end", where it
+-- has no meaning).
 toolSpecs :: [(Text, Text, Value)]
 toolSpecs =
   [
@@ -297,19 +299,20 @@ openAiTools =
 toJSONList :: [Value] -> Value
 toJSONList = toJSON
 
--- | The most a model may write in one answer, thinking included: a page's
--- worth of edits, with room to think first.
+-- | The maximum number of tokens a model may write in one response,
+-- including thinking: a page's worth of edits, with room to think first.
 maxTokens :: Int
 maxTokens = 32_000
 
 -- | A request to Anthropic's Messages API, without its messages, which the
--- browser's side adds: the model, the tools, and the system prompt, the
--- reference first, both blocks marked for caching (the reference alone is
--- some seven thousand tokens, over every model's minimum), and the effort
--- chosen in the panel. No @thinking@: the Claude 5 models think adaptively,
--- as much as the effort asks, and refuse it turned off or given a budget.
--- A change of effort between messages invalidates Anthropic's cache of
--- the conversation, not of the system prompt before it.
+-- browser-side code adds. It holds the model, the tools, and the system
+-- prompt, with the reference first and both blocks marked for caching
+-- (the reference alone is about seven thousand tokens, above every
+-- model's minimum), and the effort chosen in the panel. It has no
+-- @thinking@ field: the Claude 5 models think adaptively, as much as the
+-- effort asks, and refuse a request that turns thinking off or gives it a
+-- budget. A change of effort between messages invalidates Anthropic's
+-- cache of the conversation, but not of the system prompt before it.
 anthropicRequest :: Text -> Text -> Value
 anthropicRequest model effort =
   object
@@ -323,14 +326,15 @@ anthropicRequest model effort =
     cached text = object ["type" .= ("text" :: Text), "text" .= text, "cache_control" .= object ["type" .= ("ephemeral" :: Text)]]
 
 -- | A request to OpenAI's Responses API, without its input, which the
--- browser's side adds: the model, the instructions (the reference first,
--- so that every request starts alike and its prefix is cached), the tools,
--- and nothing kept by OpenAI (@store@ false): the conversation is sent
--- whole each time, with the model's reasoning as it was handed back
--- (encrypted, as OpenAI keeps none of it). Reasoning is as brief as the
--- effort chosen in the panel asks ("low" by default), and no limit is set
--- on the answer's length: a reasoning model given a small budget spends it
--- all on reasoning and answers nothing.
+-- browser-side code adds. It holds the model, the instructions (the
+-- reference first, so that every request starts the same and its prefix
+-- is cached), the tools, and asks OpenAI to store nothing (@store@
+-- false). So the whole conversation is sent each time, with the model's
+-- reasoning as OpenAI returned it (encrypted, since OpenAI stores none of
+-- it). Reasoning is as brief as the effort chosen in the panel asks ("low"
+-- by default), and no limit is set on the response's length: a reasoning
+-- model given a small budget spends it all on reasoning and responds with
+-- nothing.
 openAiRequest :: Text -> Text -> Value
 openAiRequest model effort =
   object
