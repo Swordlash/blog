@@ -53,6 +53,29 @@ them away. `MonadAssistant` (`Wiki.App.Assistant`) is required by
 and OpenAI's SDKs in `islands/assistant.js`, fetched the first time the
 panel is used. `SignIn.Input` gains the `router`.
 
+The models offered are the provider's own: the editor asks each provider
+with a key for its list (`GET /v1/models`, `listModels`) when it opens, as do
+keeping or testing a key and "Refresh the list" on the settings page, and the
+list is kept with the settings, with when; the pickers group it into
+Recommended, All models and Other…, the first recommended one the default,
+and offer the wiki's short list until there is one. The same request says
+whether the provider can be reached: one that cannot (a network that blocks
+it) keeps its bubble, dimmed, titled "Cannot reach Anthropic from this
+network", and the panel says so with "Try again"; a message that gets an
+answer clears it. A provider has a bubble only once the user has a key for
+it; a user with none has one bubble, "Assistant", which opens the panel at
+its set-up. OpenAI's settings take a Base URL, for any service that speaks
+its API (GitHub Models, OpenRouter, Ollama or LM Studio on this machine,
+which need no key: an empty key sends no Authorization header); its list is
+all its models, and plain HTTP to another machine is warned against. The
+settings are the editor's, which the panel changes through it
+(`Assistant.Output`'s `ChangeSettings`, `Retry`, `Reached`; `Assistant.Input`
+gains `settings`, `problem` and `checking`; `Using` is gone), each change made
+to the settings as they are kept (`updateAssistantSettings`).
+`MonadAssistant` gains `listModels`, and `Ready` its `baseUrl`. On a page
+where a test installed the scripted provider, its script answers for every
+provider, so that no test reaches a real one.
+
 No password for accounts that sign in with a provider; the administrator
 mails password links (WP5.6). The menu under a user's name offers no "Set a
 password…" to one who has no password and signs in with a provider the

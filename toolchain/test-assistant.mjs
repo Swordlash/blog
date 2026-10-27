@@ -4,14 +4,15 @@
 // page relies on the SDKs for: the requests they make from what the
 // application assembled (the headers a browser needs, the conversation
 // sent whole each turn, append-only), the stream read as it comes, the tool
-// loop going on with the tools' answers, a stop, and the SDKs' typed errors
-// read as the application's kinds. The browser tests use the scripted
+// loop going on with the tools' answers, a stop, the SDKs' typed errors
+// read as the application's kinds, and the providers' lists of models,
+// every page of them, in the one shape the application reads. The browser tests use the scripted
 // provider instead (wiki-app/jsbits/assistant.js); a real provider cannot
 // be reached from here.
 //
 //   node toolchain/test-assistant.mjs
 import assert from "node:assert/strict";
-import { checkKey, describeError, startChat } from "../web/src/assistant.js";
+import { checkKey, describeError, listModels, startChat } from "../web/src/assistant.js";
 
 let failures = 0;
 const test = async (name, body) => {
@@ -278,6 +279,69 @@ await test("Test the key: the model looked up, which costs nothing", async () =>
   const error = await checkKey("openai", "sk-open", "nope", { fetch: o.fetch, maxRetries: 0 }).then(() => null, (e) => e);
   assert.equal(describeError(error).kind, "not_found");
   assert.match(o.requests[0].url, /\/v1\/models\/nope$/);
+});
+
+await test("The models: Anthropic's every page, with their names and times", async () => {
+  const model = (id, name, at) => ({ type: "model", id, display_name: name, created_at: at });
+  const a = fakeFetch([
+    json(200, {
+      data: [model("claude-haiku-5-5", "Claude Haiku 5.5", "2026-10-01T00:00:00Z"), model("claude-opus-5-5", "Claude Opus 5.5", "2026-09-01T00:00:00Z")],
+      has_more: true,
+      first_id: "claude-haiku-5-5",
+      last_id: "claude-opus-5-5",
+    }),
+    json(200, { data: [model("claude-haiku-4-5-20251001", "Claude Haiku 4.5", "2025-10-01T00:00:00Z")], has_more: false, first_id: "claude-haiku-4-5-20251001", last_id: "claude-haiku-4-5-20251001" }),
+  ]);
+  const listed = await listModels("anthropic", "sk-ant", { fetch: a.fetch, maxRetries: 0 });
+  assert.deepEqual(listed, [
+    { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", created: Date.UTC(2026, 9, 1) / 1000 },
+    { id: "claude-opus-5-5", label: "Claude Opus 5.5", created: Date.UTC(2026, 8, 1) / 1000 },
+    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", created: Date.UTC(2025, 9, 1) / 1000 },
+  ]);
+  assert.equal(a.requests.length, 2);
+  assert.match(a.requests[0].url, /\/v1\/models\?limit=1000$/);
+  assert.match(a.requests[1].url, /after_id=claude-opus-5-5/);
+  assert.equal(a.requests[0].headers.get("authorization"), "Bearer sk-ant");
+});
+
+await test("The models: OpenAI's, without names, and its errors typed", async () => {
+  const o = fakeFetch([
+    json(200, {
+      object: "list",
+      data: [
+        { id: "gpt-6.1-sol", object: "model", created: 1790000000, owned_by: "system" },
+        { id: "whisper-1", object: "model", created: 1677532384, owned_by: "openai-internal" },
+      ],
+    }),
+  ]);
+  const listed = await listModels("openai", "sk-open", { fetch: o.fetch, maxRetries: 0 });
+  assert.deepEqual(listed, [
+    { id: "gpt-6.1-sol", label: null, created: 1790000000 },
+    { id: "whisper-1", label: null, created: 1677532384 },
+  ]);
+  assert.match(o.requests[0].url, /\/v1\/models$/);
+  const refused = fakeFetch([json(401, { error: { message: "Incorrect API key provided", type: "invalid_request_error" } })]);
+  const error = await listModels("openai", "sk-bad", { fetch: refused.fetch, maxRetries: 0 }).then(() => null, (e) => e);
+  assert.equal(describeError(error).kind, "authentication");
+});
+
+await test("OpenAI's API elsewhere: the base URL reaches the client, and an empty key sends no Authorization", async () => {
+  const o = fakeFetch([json(200, { object: "list", data: [{ id: "llama4:8b", object: "model", created: 1790000000, owned_by: "library" }] }), openAiResponse(["Hi."], [{ type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Hi.", annotations: [] }] }])]);
+  const options = { fetch: o.fetch, maxRetries: 0, baseURL: "http://localhost:11434/v1" };
+  assert.deepEqual(await listModels("openai", "", options), [{ id: "llama4:8b", label: null, created: 1790000000 }]);
+  assert.equal(o.requests[0].url, "http://localhost:11434/v1/models");
+  assert.equal(o.requests[0].headers.has("authorization"), false);
+  const chat = startChat("openai", "", { ...openAiRequest, model: "llama4:8b" }, options);
+  const said = [];
+  await chat.send("Hello", { text: (t) => said.push(t), tool: async () => ({ text: "", ok: false }) }, new AbortController().signal);
+  assert.equal(o.requests[1].url, "http://localhost:11434/v1/responses");
+  assert.equal(o.requests[1].headers.has("authorization"), false);
+  assert.equal(said.join(""), "Hi.");
+  // With a key, it is sent there as a bearer token (GitHub Models' tokens are).
+  const g = fakeFetch([json(200, { object: "list", data: [] })]);
+  await listModels("openai", "ghp_token", { fetch: g.fetch, maxRetries: 0, baseURL: "https://models.github.ai/inference" });
+  assert.equal(g.requests[0].url, "https://models.github.ai/inference/models");
+  assert.equal(g.requests[0].headers.get("authorization"), "Bearer ghp_token");
 });
 
 if (failures > 0) {

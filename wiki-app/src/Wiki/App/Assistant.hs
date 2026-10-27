@@ -25,6 +25,9 @@
 -- or the scripted provider a test installs ('scriptedInstalled'); see
 -- @jsbits/assistant.js@.
 --
+-- The provider's list of models is fetched with the key ('listModels'),
+-- for the model pickers ("Wiki.Core.Assistant"'s 'Wiki.Core.Assistant.groupModels').
+--
 -- In a browser ('BrowserDOM') all of this is real. In the in-memory
 -- document the prerender and the native tests use ('MemDOM') the settings
 -- are kept in its in-memory IndexedDB, as the browser's would be, and
@@ -38,6 +41,7 @@ module Wiki.App.Assistant
   , sendsMessage
 
     -- * Settings
+  , updateAssistantSettings
   , assistantDatabase
   , readSettings
   , writeSettings
@@ -47,6 +51,7 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Monad.Trans.Class (MonadTrans)
 import Data.Aeson (FromJSON (..), Value (Object), eitherDecodeStrict, encode, object, withObject, (.:), (.=))
+import Data.Aeson.Types (Pair, parseEither)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
 import Data.Type.Equality (type (~))
@@ -57,12 +62,13 @@ import Protolude
 import Web.Event.Event (Event (..))
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
-import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Ready (..), Settings, blankSettings, defaultSettings, providerKey)
+import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Listed, Ready (..), Settings, blankSettings, defaultSettings, providerKey)
 import Wiki.Core.Id (UserId (..))
 
 -- The chat's bindings return at once: a turn tells of itself through the
--- callback. "Test the key" waits for the provider's answer, so it is a
--- safe import, whose result is a thunk on wasm until it is forced.
+-- callback. "Test the key" and the list of models wait for the provider's
+-- answer, so they are safe imports, whose result is a thunk on wasm until
+-- it is forced.
 $( browserJS
      ["jsbits/assistant.js"]
      [ ("js_open", "wiki_assistant_open", Unsafe, [t|JSText -> Callback -> IO Int|])
@@ -71,6 +77,7 @@ $( browserJS
      , ("js_stop", "wiki_assistant_stop", Unsafe, [t|Int -> IO ()|])
      , ("js_close", "wiki_assistant_close", Unsafe, [t|Int -> IO ()|])
      , ("js_check", "wiki_assistant_check", Safe, [t|JSText -> IO JSText|])
+     , ("js_models", "wiki_assistant_models", Safe, [t|JSText -> IO JSText|])
      , ("js_scripted", "wiki_assistant_scripted", Unsafe, [t|IO Bool|])
      , ("js_secure", "wiki_assistant_secure", Unsafe, [t|IO Bool|])
      , ("js_prepare", "wiki_assistant_prepare", Unsafe, [t|IO ()|])
@@ -208,6 +215,14 @@ class (Monad m) => MonadAssistant m where
   default checkKey :: (MonadTrans t, MonadAssistant n, m ~ t n) => Ready -> m (Maybe AssistantError)
   checkKey = lift . checkKey
 
+  -- | The provider's models, every one its list has, fetched with the key
+  -- (the scripted provider's from its script); or what went wrong. Any
+  -- answer, a refusal included, says that the provider can be reached;
+  -- an error of the kind 'Unreachable', that it cannot.
+  listModels :: Ready -> m (Either AssistantError [Listed])
+  default listModels :: (MonadTrans t, MonadAssistant n, m ~ t n) => Ready -> m (Either AssistantError [Listed])
+  listModels = lift . listModels
+
 instance (MonadAssistant m) => MonadAssistant (ReaderT r m)
 
 -- | The browser's. Natively the bindings are inert stubs: nothing runs
@@ -231,11 +246,14 @@ instance MonadAssistant BrowserDOM where
     traverse_ freeCallback talk.callback
   checkKey r = liftIO $ do
     -- On wasm a safe import's result waits for its promise only when forced.
-    answer <- evaluate . fromJSText =<< js_check (toJSText (json (object ["provider" .= providerKey r.provider, "model" .= r.model, "key" .= r.key])))
+    answer <- evaluate . fromJSText =<< js_check (toJSText (json (endpointJSON r ["model" .= r.model])))
     pure $
       if T.null answer
         then Nothing
         else Just (either (\why -> AssistantError Failed Nothing (toS why)) identity (eitherDecodeStrict (encodeUtf8 answer)))
+  listModels r = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_models (toJSText (json (endpointJSON r [])))
+    pure (listedOf answer)
 
 -- | The in-memory document's: settings kept as the browser's are, in its
 -- in-memory IndexedDB (which the native tests read and write), and no
@@ -253,6 +271,7 @@ instance MonadAssistant MemDOM where
   stopTalk _ = pass
   closeTalk _ = pass
   checkKey _ = pure (Just (AssistantError Unreachable Nothing "There is no browser here to reach a provider from."))
+  listModels _ = pure (Left (AssistantError Unreachable Nothing "There is no browser here to reach a provider from."))
 
 -- | The database the assistant's settings are kept in, apart from the
 -- demo's wiki: one store, @settings@, keyed by the user's id, each value a
@@ -267,6 +286,16 @@ readSettings db user =
   IDB.get db "settings" user.text <&> \case
     Just bytes -> fromRight defaultSettings (eitherDecodeStrict bytes)
     Nothing -> defaultSettings
+
+-- | Change a user's settings as they are kept now, and keep them: what is
+-- kept is read again first, so that a change made elsewhere since this
+-- one's were read (the editor asking a provider for its list while the
+-- panel changes the model) is not lost. The settings as they are then.
+updateAssistantSettings :: (MonadAssistant m) => UserId -> (Settings -> Settings) -> m (Either Text Settings)
+updateAssistantSettings user f =
+  assistantSettings user >>= \case
+    Left why -> pure (Left why)
+    Right s -> let new = f s in (new <$) <$> keepAssistantSettings user new
 
 -- | Keep a user's settings in a database. Settings with nothing in them
 -- (no key, nothing chosen) are not kept at all: what "Forget" leaves of the
@@ -287,11 +316,25 @@ failingAs :: (MonadUnliftIO m) => m a -> m (Either Text a)
 failingAs action =
   withRunInIO (\run -> try (run action)) <&> first (\(IndexedDBError _ failure) -> "This browser could not keep the assistant's settings (" <> show failure <> ").")
 
+-- | The browser's answer to a list of models: @{models: [...]}@, or
+-- @{error: {kind, status, message}}@.
+listedOf :: Text -> Either AssistantError [Listed]
+listedOf answer =
+  case eitherDecodeStrict (encodeUtf8 answer) >>= parseEither (withObject "Models" (\o -> (Right <$> o .: "models") <|> (Left <$> o .: "error"))) of
+    Left why -> Left (AssistantError Failed Nothing ("A list of models that could not be read: " <> toS why))
+    Right listed -> listed
+
 heardOf :: Text -> Heard
 heardOf text = either (\why -> HeardFailed (AssistantError Failed Nothing ("An event that could not be read: " <> toS why))) identity (eitherDecodeStrict (encodeUtf8 text))
 
 openingJSON :: Opening -> Value
-openingJSON o = object ["provider" .= providerKey o.ready.provider, "model" .= o.ready.model, "key" .= o.ready.key, "request" .= o.request]
+openingJSON o = endpointJSON o.ready ["model" .= o.ready.model, "request" .= o.request]
+
+-- | Whom the browser's side asks: the provider, the key (empty for a
+-- server that takes none) and the address of another service, if any;
+-- with what else it needs.
+endpointJSON :: Ready -> [Pair] -> Value
+endpointJSON r more = object (["provider" .= providerKey r.provider, "key" .= r.key, "baseUrl" .= r.baseUrl] <> more)
 
 json :: Value -> Text
 json = decodeUtf8 . BSL.toStrict . encode

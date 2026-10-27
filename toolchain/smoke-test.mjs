@@ -1239,7 +1239,13 @@ try {
   {
     const writer = await newPage();
     await writer.addInitScript(() => {
+      const model = (id, label, created) => ({ id, label, created });
       globalThis.wikiAssistantScript = {
+        // The providers' lists of models, as the script answers for them.
+        lists: {
+          scripted: [model("claude-opus-5-5", "Claude Opus 5.5", 300), model("claude-sonnet-5-5", "Claude Sonnet 5.5", 250), model("claude-opus-4-8", "Claude Opus 4.8", 200)],
+          anthropic: [model("claude-opus-5-5", "Claude Opus 5.5", 300), model("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 100)],
+        },
         turns: [
           [
             { text: "Retitled. " },
@@ -1267,17 +1273,34 @@ try {
     await writer.locator("#app input[name='assistant-provider'][value='scripted']").check();
     await writer.locator("#app .assistant-provider-settings[data-provider='scripted'] .assistant-test").click();
     await writer.locator("#app .assistant-check-works").waitFor({ timeout });
+    // A key for Claude, kept, its list of models fetched with it (from the
+    // script, which answers for every provider on this page).
+    const claude = writer.locator("#app .assistant-provider-settings[data-provider='anthropic']");
+    await claude.locator(".assistant-key").fill("sk-ant-smoke");
+    await claude.locator(".assistant-key-form button[type='submit']").click();
+    await claude.locator(".assistant-listed", { hasText: "2 models fetched" }).waitFor({ timeout });
     // The editor's panel: a message, the model's edit a tracked change in
     // the text, accepted.
     await writer.goto(url("/s/blog/p/hello-world/edit/"));
     await writer.locator(editorText).waitFor({ timeout });
-    // The providers' buttons beside the text, with their logos; the
-    // scripted provider's is there as the page has its script.
+    // The providers' bubbles over the text, with their logos: Claude's,
+    // which has a key, not ChatGPT's, which has none; the scripted
+    // provider's is there as the page has its script.
+    await writer.locator("#app .editor-provider[data-provider='anthropic']").waitFor({ timeout });
     assert.equal(await writer.locator("#app .editor-provider[data-provider='anthropic']").getAttribute("title"), "Chat with Claude");
-    assert.equal(await writer.locator("#app .editor-provider[data-provider='openai']").getAttribute("title"), "Chat with ChatGPT");
-    assert.equal(await writer.locator("#app .editor-provider[data-provider='openai'] svg path").count(), 1, "ChatGPT's button has no logo");
+    assert.equal(await writer.locator("#app .editor-provider[data-provider='anthropic'] svg path").count(), 1, "Claude's bubble has no logo");
+    assert.equal(await writer.locator("#app .editor-provider[data-provider='openai']").count(), 0, "ChatGPT has a bubble without a key");
     await writer.locator("#app .editor-provider[data-provider='scripted']").click();
     await writer.locator("#app .assistant-using", { hasText: "Scripted" }).waitFor({ timeout });
+    // Its models, as its list has them, grouped.
+    await writer.locator("#app .assistant-model-choice optgroup[label='All models']").waitFor({ state: "attached", timeout });
+    assert.deepEqual(
+      await writer.locator("#app .assistant-model-choice optgroup").evaluateAll((groups) => groups.map((g) => [g.label, [...g.children].map((o) => o.textContent)])),
+      [
+        ["Recommended", ["Claude Opus 5.5", "Claude Sonnet 5.5"]],
+        ["All models", ["Claude Opus 4.8"]],
+      ],
+    );
     // The effort under the message, which goes with it.
     await writer.locator("#app .assistant-effort").selectOption("medium");
     await writer.locator("#app .assistant-input").fill("Retitle the second heading.");
@@ -1294,7 +1317,7 @@ try {
       "the effort chosen did not go with the message",
     );
     await writer.context().close();
-    console.log("ok: the assistant's settings, its providers' buttons and its panel, with the scripted provider: the effort chosen sent, an edit tracked in the text and accepted; the providers' island loads");
+    console.log("ok: the assistant's settings, a key kept with its list of models, its providers' bubbles and its panel, with the scripted provider: its models grouped, the effort chosen sent, an edit tracked in the text and accepted; the providers' island loads");
   }
 } catch (error) {
   // What the page reported is usually why it did not get there.

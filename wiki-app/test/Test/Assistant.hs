@@ -1,17 +1,35 @@
 -- | The writing assistant's settings as this browser keeps them
 -- ("Wiki.App.Assistant"), over the in-memory IndexedDB the native tests
 -- have, which behaves as the browser's: each user's apart, under their id,
--- in a database of the assistant's own, a key forgotten on request, and
--- nothing kept once nothing is set.
+-- in a database of the assistant's own, a key forgotten on request,
+-- nothing kept once nothing is set, a provider's list of models and
+-- address kept with the rest, and a change made to them as they are kept.
 module Test.Assistant (spec) where
 
+import Data.Time (UTCTime (..), fromGregorian)
 import Halogen.VDom.DOM.Monad (MemDOM, runMemDOM)
 import Protolude
 import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
-import Wiki.App.Assistant (MonadAssistant (..), assistantDatabase, readSettings, writeSettings)
-import Wiki.Core.Assistant (Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withKey, withModel)
+import Wiki.App.Assistant (MonadAssistant (..), assistantDatabase, readSettings, updateAssistantSettings, writeSettings)
+import Wiki.Core.Assistant
+  ( AssistantError (..)
+  , ErrorKind (..)
+  , Listed (..)
+  , Provider (..)
+  , ProviderSettings (..)
+  , Settings (..)
+  , chooseProvider
+  , defaultSettings
+  , readyFor
+  , settingsOf
+  , withBaseUrl
+  , withKey
+  , withModel
+  , withModels
+  , withReached
+  )
 import Wiki.Core.Id (UserId (..))
 
 spec :: Spec
@@ -55,6 +73,27 @@ spec = describe "Wiki.App.Assistant's settings" $ do
     fresh
     run (IDB.put db "settings" alice.text "not settings")
     run (readSettings db alice) `shouldReturn` defaultSettings
+
+  it "keeps a provider's list of models, its address and whether it was reached" $ do
+    fresh
+    let at = UTCTime (fromGregorian 2026 10 27) 0
+        s = withReached Anthropic False (withModels OpenAI [Listed "llama4:8b" Nothing (Just 20)] at (withBaseUrl OpenAI "http://localhost:11434/v1" withKeys))
+    run (writeSettings db alice s)
+    run (readSettings db alice) `shouldReturn` s
+
+  it "changes the settings as they are kept now, not as they were read" $ do
+    run (IDB.deleteDatabase assistantDatabase.name)
+    run (keepAssistantSettings alice withKeys) `shouldReturn` Right ()
+    -- Kept since by someone else: a provider found unreachable.
+    run (keepAssistantSettings alice (withReached OpenAI False withKeys)) `shouldReturn` Right ()
+    run (updateAssistantSettings alice (withModel OpenAI "gpt-6-luna"))
+      `shouldReturn` Right (withModel OpenAI "gpt-6-luna" (withReached OpenAI False withKeys))
+    run (assistantSettings alice) `shouldReturn` Right (withModel OpenAI "gpt-6-luna" (withReached OpenAI False withKeys))
+
+  it "reaches no provider in the in-memory document" $
+    case readyFor Anthropic withKeys of
+      Left why -> expectationFailure (toS why)
+      Right r -> (either (\e -> Just e.kind) (const Nothing) <$> run (listModels r)) `shouldReturn` Just Unreachable
 
   it "is the class's, in a database of the assistant's own" $ do
     run (IDB.deleteDatabase assistantDatabase.name)

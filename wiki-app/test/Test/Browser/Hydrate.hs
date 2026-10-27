@@ -30,10 +30,15 @@ $( browserJS
  )
 
 -- | Every element of the shell, but what is inside an island, which its
--- library fills after the shell has adopted it, and inside the element
--- CodeMirror takes the editor's textarea's place in.
+-- library fills after the shell has adopted it, inside the element
+-- CodeMirror takes the editor's textarea's place in, and the assistant's
+-- bubbles in the editor, which come with the settings this browser keeps
+-- for the user, read once the program has started (a page rendered ahead
+-- has none, and @jsbits/test-markup.js@ leaves them out of the one
+-- 'prerendered' takes from a program here; the program adopting it may
+-- have read them by the time its elements are counted).
 adoptable :: Text
-adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-tikz *, .wiki-code *, .editor-cm *)"
+adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-tikz *, .wiki-code *, .editor-cm *, .editor-providers *)"
 
 -- | A container holding the shell's HTML at a route, as someone, as a page
 -- rendered ahead of the program holds it.

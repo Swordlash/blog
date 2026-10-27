@@ -148,7 +148,15 @@
 -- on hover or focus), open the writing
 -- assistant's panel ("Wiki.App.View.Assistant", WP4.19 of docs/PLAN.md)
 -- with that provider, or closes it if it is open with it; the panel says
--- which provider it asks, and its button is marked. The panel is beside the
+-- which provider it asks, and its button is marked. A provider has a
+-- bubble once the user has a key for it; a user with none has one bubble,
+-- "Assistant", which opens the panel to say where keys go. The editor
+-- reads the user's assistant settings when it opens, and asks each
+-- provider with a key for its list of models: the list offered in the
+-- panel, and the proof that the provider can be reached from here. One
+-- that cannot (a network that blocks it) keeps its bubble, dimmed, saying
+-- so, and the panel offers to try again. The editor keeps the settings
+-- for the panel, which changes them through it. The panel is beside the
 -- Markdown (under the attachments on a narrow screen): a chat with a model
 -- that edits the page through its tools, each edit a tracked change in
 -- CodeMirror that the author accepts or rejects, on the change itself or
@@ -177,7 +185,8 @@ import Control.Monad.UUID (MonadUUID)
 import DOM.HTML.Indexed qualified as I
 import Data.Map.Strict qualified as Map
 import Data.Row (type (.+), type (.==))
-import Data.Time (UTCTime)
+import Data.Set qualified as Set
+import Data.Time (UTCTime, getCurrentTime)
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
@@ -193,7 +202,7 @@ import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Events (PageEvent (PageChanged))
 import Wiki.Api.Events qualified as Event
-import Wiki.App.Assistant (MonadAssistant (scriptedInstalled))
+import Wiki.App.Assistant (MonadAssistant (..), updateAssistantSettings)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser
@@ -231,7 +240,25 @@ import Wiki.App.View.Common
 import Wiki.App.View.Diff (diffView, titleChange)
 import Wiki.App.View.Preview qualified as Preview
 import Wiki.App.View.ProviderIcons (claudeColour, claudePath, openAiPath)
-import Wiki.Core.Assistant (Provider (..), providerKey)
+import Wiki.Core.Assistant
+  ( AssistantError (kind)
+  , Provider (..)
+  , ProviderSettings (..)
+  , Ready (baseUrl, key)
+  , Settings (..)
+  , baseUrlOf
+  , chooseProvider
+  , listStale
+  , providerKey
+  , providers
+  , readyFor
+  , serviceName
+  , settingsOf
+  , usable
+  , withModels
+  , withReached
+  )
+import Wiki.Core.Assistant qualified as Assistant (ErrorKind (Unreachable))
 import Wiki.Core.Assistant.Edit (Decision (..))
 import Wiki.Core.Assistant.Prompt (Span)
 import Wiki.Core.Attachment (Attachment (..))
@@ -418,8 +445,14 @@ data State = State
   , decisions :: Map Int Decision
   -- ^ What the author decided of each of the assistant's changes, by its
   -- id: the panel tells the model of it with the next message.
-  , assistantProvider :: Maybe Provider
-  -- ^ The provider the panel asks, as it last said.
+  , assistantSettings :: Maybe (Either Text Settings)
+  -- ^ The user's settings for the assistant, once read (or why they could
+  -- not be): which providers have a key and which cannot be reached, for
+  -- the bubbles, and the panel's.
+  , assistantProblem :: Maybe Text
+  -- ^ Why a change of the settings could not be kept, if it could not.
+  , checking :: Set Provider
+  -- ^ The providers being asked for their list of models.
   , scripted :: Bool
   -- ^ Whether a test installed the scripted provider, which gets a button
   -- of its own.
@@ -469,6 +502,7 @@ data Action
   | MergeByHand
   | HideTheirs
   | OpenWith Provider
+  | OpenAssistant
   | FromAssistant Assistant.Output
   | Selected (Maybe Span)
   | ChangesLeft Int
@@ -548,7 +582,9 @@ component =
               , selection = Nothing
               , pendingChanges = 0
               , decisions = mempty
-              , assistantProvider = Nothing
+              , assistantSettings = Nothing
+              , assistantProblem = Nothing
+              , checking = mempty
               , scripted = False
               }
       , render
@@ -793,38 +829,74 @@ component =
       Nothing -> Nothing
 
     -- The providers' buttons: each opens the assistant with its provider, or
-    -- closes it if it is open with it. The scripted provider's is there
-    -- only where a test installed it. They are the first of the text's
+    -- closes it if it is open with it. A provider has one once the user
+    -- has a key for it (OpenAI's API at another address needs none); the
+    -- scripted provider's is there only where a test installed it. With
+    -- none, one button, "Assistant", opens the panel, which says where the
+    -- keys go. Before the settings are read (and in a page rendered ahead,
+    -- which has none) there are none. They are the first of the text's
     -- children, a row of no height that the style sheet keeps under the
     -- toolbar, the bubbles hanging from it over the text's right edge.
     providerBar :: State -> H.ComponentHTML Action Slots m
     providerBar st =
       [hh|
         <nav class="editor-providers" aria-label="Writing assistant">
-          {{ providerButton st Anthropic "Chat with Claude" (logo claudePath (Just claudeColour)) }}
-          {{ providerButton st OpenAI "Chat with ChatGPT" (logo openAiPath Nothing) }}
-          {% if st.scripted %}
-            {{ providerButton st Scripted "Chat with the scripted provider" scriptedFace }}
+          {% for b in bubbles %}
+            {{ b }}
           {% end %}
         </nav>
       |]
+      where
+        bubbles = case st.assistantSettings of
+          Nothing -> []
+          Just (Left _) -> [neutralBubble st]
+          Just (Right s) -> case [p | p <- providers st.scripted, usable p (settingsOf p s)] of
+            [] -> [neutralBubble st]
+            shown -> map (providerButton st s) shown
 
-    scriptedFace :: H.ComponentHTML Action Slots m
-    scriptedFace = [hh|<span class="editor-provider-text" aria-hidden="true">S</span>|]
-
-    providerButton :: State -> Provider -> Text -> H.ComponentHTML Action Slots m -> H.ComponentHTML Action Slots m
-    providerButton st p label face =
+    -- The one bubble of a user without a key.
+    neutralBubble :: State -> H.ComponentHTML Action Slots m
+    neutralBubble st =
       [hh|
         <button
           type="button"
           class="editor-provider"
+          data-provider="assistant"
+          title="Assistant"
+          aria-label="Assistant"
+          aria-pressed={{ ariaBool st.assistantOpen }}
+          onClick={{ const OpenAssistant }}
+        >{{ chatGlyph }}<span class="editor-provider-label" aria-hidden="true">Assistant</span></button>
+      |]
+
+    -- A provider's bubble: dimmed, and saying why, when the provider could
+    -- not be reached the last time it was asked; it still opens the panel,
+    -- which offers to try again.
+    providerButton :: State -> Settings -> Provider -> H.ComponentHTML Action Slots m
+    providerButton st s p =
+      [hh|
+        <button
+          type="button"
+          class="editor-provider{% if blocked %} unreachable{% end %}"
           {{ attr "data-provider" (providerName p) }}
-          title={{ label }}
-          aria-label={{ label }}
-          aria-pressed={{ ariaBool (st.assistantOpen && st.assistantProvider == Just p) }}
+          title={{ if blocked then cannotReach else label }}
+          aria-label={{ if blocked then label <> " (" <> cannotReach <> ")" else label }}
+          aria-pressed={{ ariaBool (st.assistantOpen && s.provider == p) }}
           onClick={{ const (OpenWith p) }}
         >{{ face }}<span class="editor-provider-label" aria-hidden="true">{{ label }}</span></button>
       |]
+      where
+        ps = settingsOf p s
+        blocked = ps.unreachable
+        cannotReach = "Cannot reach " <> serviceName p ps <> " from this network"
+        -- Another service than OpenAI's own is named by its address, and
+        -- has no logo of OpenAI's.
+        (label, face) = case p of
+          Anthropic -> ("Chat with Claude", logo claudePath (Just claudeColour))
+          OpenAI
+            | isJust (baseUrlOf p ps) -> ("Chat through " <> serviceName p ps, chatGlyph)
+            | otherwise -> ("Chat with ChatGPT", logo openAiPath Nothing)
+          Scripted -> ("Chat with the scripted provider", [hh|<span class="editor-provider-text" aria-hidden="true">S</span>|])
 
     -- The assistant's panel, once it has been opened, hidden while it is
     -- closed so that its conversation stays.
@@ -843,6 +915,9 @@ component =
     assistantInput st work =
       Assistant.Input
         { context = st.input.context
+        , settings = st.assistantSettings
+        , problem = st.assistantProblem
+        , checking = st.checking
         , host = st.hostElement
         , title = work.title
         , body = work.body
@@ -1064,6 +1139,9 @@ component =
         -- After the first render too, which a page rendered ahead shows.
         scripted <- H.liftEffect scriptedInstalled
         when scripted $ modify (\st -> st {scripted})
+        -- The assistant's settings, and whether each provider with a key can
+        -- be reached, in a fork: the page loads meanwhile.
+        whenM (H.liftEffect assistantHere) $ void (H.fork loadAssistant)
         -- Who else edits the page, and its saves, are heard of from now on.
         gets (\st -> st.input.feed) >>= traverse_ (\f -> void (H.subscribe (FromLive <$> f.heard)))
         -- The page was loaded with the initial state, or is loaded now.
@@ -1232,17 +1310,34 @@ component =
       HideTheirs -> modify (\st -> st {conflict = Nothing})
       OpenWith p -> do
         st <- get
-        if st.assistantOpen && st.assistantProvider == Just p
+        let current = (\s -> s.provider) <$> (rightToMaybe =<< st.assistantSettings)
+        if st.assistantOpen && current == Just p
           then do
             modify (\s -> s {assistantOpen = False})
             H.tell "assistant" () Assistant.Hide
           else do
             -- Mounted by this change's render, if it was not, before it is
             -- told the provider.
-            modify (\s -> s {assistantOpen = True, assistantMounted = True, assistantProvider = Just p, menu = Nothing})
+            modify (\s -> s {assistantOpen = True, assistantMounted = True, menu = Nothing})
             H.tell "assistant" () (Assistant.UseProvider p)
+            unless (current == Just p) $ changeAssistant (chooseProvider p)
+            -- A list more than a day old, or a provider that could not be
+            -- reached, is asked again.
+            now <- liftIO getCurrentTime
+            gets (\st' -> st'.assistantSettings) >>= \case
+              Just (Right s) | listStale now (settingsOf p s) || (settingsOf p s).unreachable -> checkProvider p
+              _ -> pass
+      OpenAssistant -> do
+        open <- gets (\st -> st.assistantOpen)
+        if open
+          then do
+            modify (\s -> s {assistantOpen = False})
+            H.tell "assistant" () Assistant.Hide
+          else modify (\s -> s {assistantOpen = True, assistantMounted = True, menu = Nothing})
       FromAssistant Assistant.Closed -> modify (\st -> st {assistantOpen = False})
-      FromAssistant (Assistant.Using p) -> modify (\st -> st {assistantProvider = Just p})
+      FromAssistant (Assistant.ChangeSettings f) -> changeAssistant f
+      FromAssistant (Assistant.Retry p) -> checkProvider p
+      FromAssistant (Assistant.Reached p reached) -> changeAssistant (withReached p reached)
       FromAssistant (Assistant.DecideAll d) -> decide d Nothing
       Selected selection -> modify (\st -> st {selection})
       ChangesLeft n -> modify (\st -> st {pendingChanges = n})
@@ -1311,6 +1406,59 @@ component =
           found <- H.getRef st.host
           modify (\s -> s {hostElement = found, pendingChanges = 0, selection = Nothing})
           traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody)) found
+        _ -> pass
+
+    -- The user's assistant settings, read; then each provider that can be
+    -- asked is asked for its list of models.
+    loadAssistant :: H.HalogenM State Action Slots ViewOutput m ()
+    loadAssistant =
+      gets me >>= \case
+        Nothing -> modify (\st -> st {assistantSettings = Just (Left "Sign in to use the assistant: its settings are kept for each user.")})
+        Just user -> do
+          settings <- lift (assistantSettings user)
+          modify (\st -> st {assistantSettings = Just settings})
+          scripted <- gets (\st -> st.scripted)
+          for_ (rightToMaybe settings) $ \s ->
+            traverse_ checkProvider [p | p <- providers scripted, usable p (settingsOf p s)]
+
+    -- The assistant's settings changed: at once in what the bubbles and the
+    -- panel show, then as kept, the change made to them as they are kept
+    -- now (a check of a provider may have changed them meanwhile).
+    changeAssistant :: (Settings -> Settings) -> H.HalogenM State Action Slots ViewOutput m ()
+    changeAssistant f = do
+      modify (\st -> st {assistantSettings = fmap f <$> st.assistantSettings})
+      gets me
+        >>= traverse_
+          ( \user ->
+              lift (updateAssistantSettings user f) >>= \case
+                Right s -> modify (\st -> st {assistantSettings = Just (Right s), assistantProblem = Nothing})
+                Left why -> modify (\st -> st {assistantProblem = Just why})
+          )
+
+    -- Ask a provider for its list of models, in a fork: the list the panel
+    -- offers, and whether the provider can be reached from here at all.
+    -- Any answer, a refusal of the key included, says that it can; no
+    -- answer (a network that blocks it) that it cannot. What is learnt is
+    -- kept only if the key and the address are still those it was asked
+    -- with.
+    checkProvider :: Provider -> H.HalogenM State Action Slots ViewOutput m ()
+    checkProvider p = do
+      st <- get
+      case rightToMaybe =<< st.assistantSettings of
+        Just s
+          | Right r <- readyFor p s
+          , not (Set.member p st.checking) -> do
+              modify (\st' -> st' {checking = Set.insert p st'.checking})
+              void . H.fork $ do
+                now <- liftIO getCurrentTime
+                result <- lift (listModels r)
+                modify (\st' -> st' {checking = Set.delete p st'.checking})
+                changeAssistant $ \s' ->
+                  if either (const False) (\r' -> r'.key == r.key && r'.baseUrl == r.baseUrl) (readyFor p s')
+                    then case result of
+                      Right listed -> withModels p listed now s'
+                      Left e -> withReached p (e.kind /= Assistant.Unreachable) s'
+                    else s'
         _ -> pass
 
     -- Accept or reject one of the assistant's changes, or all of them, and
@@ -1799,6 +1947,12 @@ htmlTags = [minBound .. maxBound]
 -- the text's.
 logo :: Text -> Maybe Text -> HH.HTML w i
 logo d colour = [hh|<svg class="editor-provider-logo" viewBox="0 0 24 24" aria-hidden="true"><path {{ attr "d" d }} {{ attr "fill" (fromMaybe "currentColor" colour) }}></path></svg>|]
+
+-- | A speech bubble, for the assistant without a provider, and for a
+-- service other than OpenAI's own that speaks its API.
+chatGlyph :: HH.HTML w i
+chatGlyph =
+  [hh|<svg class="editor-provider-logo editor-provider-glyph" viewBox="0 0 24 24" aria-hidden="true"><path {{ attr "d" "M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" }}></path></svg>|]
 
 -- | A provider's name in the page's attributes.
 providerName :: Provider -> Text

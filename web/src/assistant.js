@@ -21,6 +21,11 @@
 //     is kept by the chat for the next message.
 //   checkKey(provider, key, model): the smallest request there is, which
 //     costs nothing: the model, looked up with the key.
+//   listModels(provider, key): the provider's models (GET /v1/models, every
+//     page of it), as [{id, label, created}]: the name the provider shows
+//     it by, or null (OpenAI gives none), and when it was made, in seconds
+//     since 1970, or null. The application groups them
+//     (Wiki.Core.Assistant.groupModels).
 //   describeError(error): what went wrong, by the SDK's typed errors, as
 //     {kind, status, message}.
 //
@@ -29,7 +34,9 @@
 // with the wiki's Markdown reference first, the tools. The key is sent to
 // its provider only, by the SDK, over HTTPS; nothing here logs (the SDKs'
 // own logging is turned off) or keeps it. `options` are the SDK client's
-// own, for the tests (a fetch of their own); the page passes none.
+// own: the page passes the address of another service than the provider's
+// own, if it is asked at one ({baseURL}: any that speaks OpenAI's API),
+// and the tests a fetch of their own.
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
@@ -37,8 +44,13 @@ import OpenAI from "openai";
 // ended: a page's worth of edits, and a guard against a model that loops.
 const maxRounds = 24;
 
+// An empty key is a server's that takes none (OpenAI's API on this
+// machine: Ollama, LM Studio): the SDK will not make a client without a
+// key, so it gets one that is never sent, its Authorization header taken
+// away, as the SDK allows.
 const clientOptions = (key, options) => ({
-  apiKey: key,
+  apiKey: key === "" ? "none" : key,
+  ...(key === "" ? { defaultHeaders: { Authorization: null } } : {}),
   // The SDKs refuse to run in a browser without it, since a key in a page
   // can be read by whoever has the page: here the key is the user's own,
   // typed by them into their own browser. Anthropic's SDK sends the
@@ -154,6 +166,26 @@ export async function checkKey(provider, key, model, options = {}) {
   if (provider === "anthropic") await new Anthropic(clientOptions(key, options)).models.retrieve(model);
   else if (provider === "openai") await new OpenAI(clientOptions(key, options)).models.retrieve(model);
   else throw Object.assign(new Error(`There is no provider called ${provider}.`), { wikiKind: "failed" });
+}
+
+export async function listModels(provider, key, options = {}) {
+  const listed = [];
+  if (provider === "anthropic") {
+    // Anthropic's pages are of 20 by default, of up to 1000.
+    for await (const model of new Anthropic(clientOptions(key, options)).models.list({ limit: 1000 })) {
+      const created = Date.parse(model.created_at);
+      listed.push({
+        id: String(model.id),
+        label: typeof model.display_name === "string" && model.display_name !== "" ? model.display_name : null,
+        created: Number.isFinite(created) ? Math.floor(created / 1000) : null,
+      });
+    }
+  } else if (provider === "openai") {
+    for await (const model of new OpenAI(clientOptions(key, options)).models.list()) {
+      listed.push({ id: String(model.id), label: null, created: Number.isFinite(model.created) ? model.created : null });
+    }
+  } else throw Object.assign(new Error(`There is no provider called ${provider}.`), { wikiKind: "failed" });
+  return listed;
 }
 
 // The provider's own message, without the status and the JSON the SDKs

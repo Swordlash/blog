@@ -4826,6 +4826,11 @@ a.mention {
     top: calc(var(--header-height) + 3.25rem);
   }
 
+  /* Beside the open panel the toolbar wraps onto a second row. */
+  .editor-form.assisting .editor-providers {
+    top: calc(var(--header-height) + 5.75rem);
+  }
+
   /* The text's lines keep clear of the bubbles. */
   .editor-cm .cm-editor .cm-content {
     padding-right: 5rem;
@@ -4857,7 +4862,8 @@ a.mention {
   transition:
     max-width 0.15s ease,
     box-shadow 0.15s ease,
-    transform 0.15s ease;
+    transform 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .editor-provider-label {
@@ -4890,6 +4896,27 @@ a.mention {
   flex: none;
   width: var(--logo);
   height: var(--logo);
+}
+
+/* The speech bubble of the assistant without a provider, and of a service
+   other than OpenAI's own: drawn, not filled. */
+.editor-provider-glyph {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+/* A provider that could not be reached from here: still there, and still
+   opening the panel (which says why and offers to try again), but dimmed;
+   its title says why. */
+.editor-provider.unreachable {
+  opacity: 0.5;
+}
+
+.editor-provider.unreachable:hover,
+.editor-provider.unreachable:focus-visible {
+  opacity: 0.8;
 }
 
 .editor-provider-text {
@@ -5222,16 +5249,42 @@ a.mention {
   font-weight: 600;
 }
 
-.assistant-model code {
-  font-size: 0.8rem;
-  color: var(--muted);
+.assistant-model-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
 
-.assistant-other-model .assistant-model-name {
+.assistant-model-row select {
+  min-width: 0;
+  max-width: 100%;
+  font: inherit;
+}
+
+.assistant-model .assistant-model-name {
+  display: block;
   width: 16rem;
+  max-width: 100%;
+  margin-top: 0.4rem;
 }
 
-.assistant-insecure {
+.assistant-base-url-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.5rem 0 0;
+}
+
+.assistant-base-url {
+  width: 24rem;
+  max-width: 100%;
+  font: inherit;
+}
+
+.assistant-insecure,
+.assistant-insecure-base-url,
+.assistant-provider-settings .assistant-unreachable {
   padding: 0.5rem 0.75rem;
   border-left: 4px solid var(--warning);
   background: var(--surface);

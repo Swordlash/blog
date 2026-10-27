@@ -2,9 +2,11 @@
 // Wiki.App.Assistant (WP4.19 of docs/PLAN.md). It drives a chat with a
 // provider for the editor's assistant panel (Wiki.App.View.Assistant):
 //
-// - a chat is opened with its provider, model, key and request (the
-//   request without its conversation, as Wiki.Core.Assistant.Prompt
-//   assembles it) and one Haskell callback, and is known by a number;
+// - a chat is opened with its provider, model, key, the address of
+//   another service than the provider's own if it is asked at one
+//   (baseUrl: OpenAI's API elsewhere), and request (the request without
+//   its conversation, as Wiki.Core.Assistant.Prompt assembles it) and one
+//   Haskell callback, and is known by a number;
 // - each message is sent with the request as it is now (a model or an effort
 //   chosen since the chat began applies from the next message), and runs
 //   one turn of the model's, whose events go to the
@@ -21,13 +23,20 @@
 // for the scripted one, which is here: a page whose tests installed a
 // script as globalThis.wikiAssistantScript before the program started
 // (wiki-app's browser tests, and the demo's smoke test) may choose it; no
-// page served to anyone has one. Its script is {turns: [[step, ...], ...]},
+// page served to anyone has one. On such a page the script answers for
+// every provider, so that a test reaches none: what the application sends
+// a provider (its model, its key, its address) is recorded, and the
+// answers are the script's. Its script is {turns: [[step, ...], ...]},
 // a list of steps for each message in turn: {text} streams text, {tool,
 // input} calls a tool and waits for its answer, {error: {kind, status,
 // message}} ends the turn with that error, {hold: true} waits until the
 // turn is stopped, and {wait} (milliseconds, after any step) paces it. It
 // keeps what it was sent in script.requests and its tools' answers in
-// script.answers, for the tests to read.
+// script.answers, for the tests to read. A provider's list of models is
+// script.lists[provider], [{id, label, created}, ...], or {error: {kind,
+// status, message}} to fail (kind "connection": no way to the provider);
+// without one, the scripted provider has the one model "scripted" and the
+// others none. script.check, an error, refuses "Test the key".
 //
 // The key is handed to the island, which hands it to the SDK; nothing here
 // logs it or keeps it beyond the chat.
@@ -75,13 +84,26 @@ function wikiAssistantAnswerWaiting(chat, text) {
   chat.calls.clear();
 }
 
+// Whether a test installed a script, which then answers for every provider.
+function wikiAssistantScriptedPage() {
+  return typeof globalThis.wikiAssistantScript === "object" && globalThis.wikiAssistantScript !== null;
+}
+
+// A script's error, thrown as a provider's would be described.
+function wikiAssistantScriptError(error) {
+  return Object.assign(new Error(String(error.message ?? "")), {
+    wikiKind: String(error.kind ?? "failed"),
+    wikiStatus: typeof error.status === "number" ? error.status : null,
+  });
+}
+
 // The scripted provider, for the tests (see above).
 function wikiAssistantScripted(config) {
   const script = globalThis.wikiAssistantScript;
   return {
     async send(user, handlers, signal, request) {
       if (!Array.isArray(script.requests)) script.requests = [];
-      script.requests.push({ provider: config.provider, model: config.model, request, user });
+      script.requests.push({ provider: config.provider, model: config.model, key: config.key, baseUrl: config.baseUrl ?? null, request, user });
       const steps = script.turns?.shift() ?? [{ text: "The script has nothing more to say." }];
       for (const step of steps) {
         if (signal.aborted) return;
@@ -91,10 +113,7 @@ function wikiAssistantScripted(config) {
           if (!Array.isArray(script.answers)) script.answers = [];
           script.answers.push({ tool: step.tool, input: step.input, text: answer.text, ok: answer.ok });
         } else if (step.error !== undefined) {
-          throw Object.assign(new Error(String(step.error.message ?? "")), {
-            wikiKind: String(step.error.kind ?? "failed"),
-            wikiStatus: typeof step.error.status === "number" ? step.error.status : null,
-          });
+          throw wikiAssistantScriptError(step.error);
         } else if (step.hold) {
           await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
         }
@@ -125,7 +144,13 @@ async function wikiAssistantDescribe(error) {
   }
 }
 
-// Open a chat: `config` is JSON {provider, model, key, request}, `callback`
+// What the island's SDK clients are made with besides the key: the address
+// of another service, if the provider is asked at one.
+function wikiAssistantOptions(baseUrl) {
+  return typeof baseUrl === "string" && baseUrl !== "" ? { baseURL: baseUrl } : {};
+}
+
+// Open a chat: `config` is JSON {provider, model, key, baseUrl, request}, `callback`
 // the Haskell function its events go to. Its number.
 function wiki_assistant_open(config, callback) {
   const id = ++wikiAssistantNextChat;
@@ -153,11 +178,11 @@ function wiki_assistant_send(id, user, request) {
   const controller = new AbortController();
   chat.controller = controller;
   if (chat.made === null) {
-    const { provider, model, key, request } = chat.config;
+    const { provider, model, key, baseUrl, request } = chat.config;
     chat.made =
-      provider === "scripted"
-        ? Promise.resolve(wikiAssistantScripted({ provider, model, request }))
-        : wikiAssistantIsland().then((island) => island.startChat(provider, key, request));
+      provider === "scripted" || wikiAssistantScriptedPage()
+        ? Promise.resolve(wikiAssistantScripted({ provider, model, key, baseUrl, request }))
+        : wikiAssistantIsland().then((island) => island.startChat(provider, key, request, wikiAssistantOptions(baseUrl)));
     chat.made.catch(() => {
       chat.made = null;
     });
@@ -209,31 +234,44 @@ function wiki_assistant_close(id) {
   wikiAssistantChats.delete(id);
 }
 
-// "Test the key": `config` is JSON {provider, model, key}. The empty string
-// if the provider accepts the key and has the model, or the error as JSON.
+// "Test the key": `config` is JSON {provider, model, key, baseUrl}. The
+// empty string if the provider accepts the key and has the model, or the
+// error as JSON.
 async function wiki_assistant_check(config) {
-  const { provider, model, key } = JSON.parse(config);
+  const { provider, model, key, baseUrl } = JSON.parse(config);
   try {
-    if (provider === "scripted") {
+    if (provider === "scripted" || wikiAssistantScriptedPage()) {
       const refusal = globalThis.wikiAssistantScript?.check;
-      if (refusal) {
-        throw Object.assign(new Error(String(refusal.message ?? "")), {
-          wikiKind: String(refusal.kind ?? "failed"),
-          wikiStatus: typeof refusal.status === "number" ? refusal.status : null,
-        });
-      }
+      if (refusal) throw wikiAssistantScriptError(refusal);
       return "";
     }
-    await (await wikiAssistantIsland()).checkKey(provider, key, model);
+    await (await wikiAssistantIsland()).checkKey(provider, key, model, wikiAssistantOptions(baseUrl));
     return "";
   } catch (error) {
     return JSON.stringify(await wikiAssistantDescribe(error));
   }
 }
 
+// The provider's models: `config` is JSON {provider, key, baseUrl}. JSON
+// {models: [{id, label, created}, ...]}, or {error: {kind, status,
+// message}}.
+async function wiki_assistant_models(config) {
+  const { provider, key, baseUrl } = JSON.parse(config);
+  try {
+    if (provider === "scripted" || wikiAssistantScriptedPage()) {
+      const listed = globalThis.wikiAssistantScript?.lists?.[provider];
+      if (listed !== undefined && !Array.isArray(listed)) throw wikiAssistantScriptError(listed.error ?? {});
+      return JSON.stringify({ models: listed ?? (provider === "scripted" ? [{ id: "scripted", label: "Its script", created: null }] : []) });
+    }
+    return JSON.stringify({ models: await (await wikiAssistantIsland()).listModels(provider, key, wikiAssistantOptions(baseUrl)) });
+  } catch (error) {
+    return JSON.stringify({ error: await wikiAssistantDescribe(error) });
+  }
+}
+
 // Whether a test installed the scripted provider.
 function wiki_assistant_scripted() {
-  return typeof globalThis.wikiAssistantScript === "object" && globalThis.wikiAssistantScript !== null;
+  return wikiAssistantScriptedPage();
 }
 
 // Whether the page is a secure context (HTTPS, or the machine's own

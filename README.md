@@ -391,9 +391,11 @@ It is [these seven slides](https://swordlash.github.io/blog/s/docs/p/markdown-gu
   pasted in as attachments, drafts kept a few seconds after the typing stops,
   and a conflict shown in place when someone else saved first.
 - **A writing assistant** in the editor, with your own API key for Anthropic's
-  Claude or OpenAI: a chat beside the Markdown, whose model edits the page
-  through tools, each edit shown as a change you accept or reject. The key stays
-  in your browser and goes to its provider only; every request sends
+  Claude or OpenAI, or any service that speaks OpenAI's API (GitHub Models,
+  OpenRouter, Ollama on your own machine): a chat beside the Markdown, whose
+  model edits the page through tools, each edit shown as a change you accept or
+  reject, with the models the provider lists for your key. The key stays in
+  your browser and goes to its provider only; every request sends
   [docs/markdown.md](docs/markdown.md) first, cached by the provider, so the
   model writes this wiki's Markdown.
 - **Slides** made of any page, presented, printed and exported

@@ -40,3 +40,12 @@ function wiki_test_choose(selector, value) {
   select.dispatchEvent(new Event("change", { bubbles: true }));
   return true;
 }
+
+// The providers' lists of models the script answers with, changed while
+// the rest of the script stays (what it was sent, its turns).
+function wiki_test_assistant_lists(json) {
+  const script = globalThis.wikiAssistantScript;
+  if (typeof script !== "object" || script === null) return false;
+  script.lists = JSON.parse(json);
+  return true;
+}

@@ -7,10 +7,17 @@ choose a password".
 
 The writing assistant's pure part (WP4.19). `Wiki.Core.Assistant` has the
 providers (Anthropic, OpenAI, and the scripted one tests install), the models
-offered for each (one list, read from the providers' own pages, the newest
-general models first), the `Settings` a user keeps (a key, a model and an effort per
-provider, the provider chosen; JSON as the browser keeps it, blank settings
-not kept at all) and what an error says (`errorText`, with the key and
+offered for each (`modelChoices`: the provider's own list as fetched with the
+key, grouped by `groupModels` into the recommended ones and all the others,
+Anthropic's by family and OpenAI's chat models by generation, another
+service's unfiltered; without a list, the short one `models`, read from the
+providers' own pages, which also names the ids it knows), the `Settings` a
+user keeps (a key, a model, an effort, OpenAI's other address `baseUrl`, the
+list fetched with when, and whether the provider was last unreachable, per
+provider, and the provider chosen; JSON as the browser keeps it, each field
+added since read as its default when absent, blank settings not kept at all;
+`insecureUrl` says which addresses are plain HTTP to another machine) and
+what an error says (`errorText`, with the key and
 anything like a key taken out by `redact`). `Wiki.Core.Assistant.Prompt`
 assembles what a model is sent: the authors' Markdown reference,
 `docs/markdown.md`, first and marked for caching (`Wiki.Core.Assistant.Reference`

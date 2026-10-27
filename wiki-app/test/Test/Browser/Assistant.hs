@@ -8,9 +8,14 @@
 -- end, and Reject all; an edit whose text is not in the page, refused with
 -- the tool's answer and followed by the model's text; a turn stopped, by
 -- Stop and by closing the panel; an error shown without anything like a
--- key in it; and the settings page: keys kept per user, forgotten, and
--- tested. The providers themselves cannot be reached from here: they are
--- tested over their SDKs by toolchain/test-assistant.mjs.
+-- key in it; the models offered, the provider's own list grouped; a
+-- bubble per provider with a key, or one without any; a provider that
+-- cannot be reached, said so and tried again; OpenAI's API at another
+-- address without a key; and the settings page: keys kept per user,
+-- forgotten, and tested, and the list of models fetched with a key. The
+-- providers themselves cannot be reached from here (the script answers
+-- for all of them on a test's page): they are tested over their SDKs by
+-- toolchain/test-assistant.mjs.
 module Test.Browser.Assistant (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -30,7 +35,7 @@ import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Assistant (Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withKey)
+import Wiki.Core.Assistant (Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withKey)
 import Wiki.Core.Id (UserId (..))
 
 $( browserJS
@@ -41,6 +46,7 @@ $( browserJS
      , ("js_answers", "wiki_test_assistant_answers", Unsafe, [t|IO JSText|])
      , ("js_select", "wiki_test_editor_select", Unsafe, [t|Int -> Int -> IO Bool|])
      , ("js_choose", "wiki_test_choose", Unsafe, [t|JSText -> JSText -> IO Bool|])
+     , ("js_lists", "wiki_test_assistant_lists", Unsafe, [t|JSText -> IO Bool|])
      ]
  )
 
@@ -160,18 +166,19 @@ spec m = do
     eventually $ findAll ui ".assistant-message.from-model .assistant-text" >>= traverse textContent >>= (`shouldBe` ["Thinking it over", "Again."])
 
   it "opens with a provider from its button, and switching starts a new conversation with the changes kept" $ runPage $ do
-    script [[replace "## Why a wiki" "## Why", text "Retitled."]]
-    ui <- openAssistant m
+    script [[replace "## Why a wiki" "## Why", text "Retitled."], [text "Claude here."]]
+    keep m (UserId "user-editor") (withKey Anthropic (Just "sk-ant-test") (chooseProvider Scripted defaultSettings))
+    ui <- openAssistantKept m
     find ui scriptedButton >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    -- A bubble for each provider with a key: Claude's, not ChatGPT's.
     find ui ".editor-provider[data-provider='anthropic']" >>= (`getAttribute` "title") >>= (`shouldBe` Just "Chat with Claude")
-    find ui ".editor-provider[data-provider='openai']" >>= (`getAttribute` "title") >>= (`shouldBe` Just "Chat with ChatGPT")
+    length <$> findAll ui ".editor-provider[data-provider='openai']" `shouldReturn` 0
     send ui "Retitle it."
     eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Retitled.")
-    -- Claude, which has no key here: the panel stays, its conversation
-    -- ends, and it says where the key goes; the change is still to decide.
+    -- Claude: the panel stays, its conversation ends; the change is still
+    -- to decide.
     find ui ".editor-provider[data-provider='anthropic']" >>= click
     eventually $ find ui ".assistant-notice" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The next message starts a new one with Anthropic (Claude).")
-    find ui ".assistant-setup" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "There is no API key for Anthropic (Claude)")
     find ui ".editor-provider[data-provider='anthropic']" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
     find ui scriptedButton >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "false")
     eventually $ (\s -> s.provider) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Anthropic)
@@ -180,6 +187,12 @@ spec m = do
     -- Claude's models and efforts are offered under the message.
     findAll ui ".assistant-effort option" >>= traverse textContent >>= (`shouldBe` ["low", "medium", "high", "xhigh", "max"])
     find ui ".assistant-model-choice" >>= (`getProperty` "value") >>= (`shouldBe` "claude-opus-5-5")
+    -- The next message goes to Claude, with its key.
+    send ui "Hello?"
+    eventually $ length <$> requests `shouldReturn` 2
+    [_, toClaude] <- requests
+    fieldText ["provider"] toClaude `shouldBe` Just "anthropic"
+    fieldText ["key"] toClaude `shouldBe` Just "sk-ant-test"
 
   it "shows a provider's error as it gave it, without anything like a key" $ runPage $ do
     script [[failing "authentication" 401 "invalid x-api-key: sk-ant-api03-abcdefgh1234"]]
@@ -192,8 +205,82 @@ spec m = do
     _ <- find ui ".assistant-send"
     pass
 
+  it "offers the provider's own models, grouped, the first recommended the default, and asks the one chosen" $ runPage $ do
+    scriptWith [[text "Hello."]] (object ["scripted" .= scriptedModels])
+    ui <- openAssistant m
+    -- Asked for when the editor opened, and kept.
+    eventually $ findAll ui ".assistant-model-choice optgroup" >>= traverse (`getAttribute` "label") >>= (`shouldBe` [Just "Recommended", Just "All models"])
+    findAll ui ".assistant-model-choice optgroup[label='Recommended'] option" >>= traverse textContent >>= (`shouldBe` ["Claude Opus 5.5", "Claude Sonnet 5.5"])
+    findAll ui ".assistant-model-choice optgroup[label='All models'] option" >>= traverse textContent >>= (`shouldBe` ["Claude Opus 4.8", "Claude Haiku 4.5"])
+    find ui ".assistant-model-choice" >>= (`getProperty` "value") >>= (`shouldBe` "claude-opus-5-5")
+    eventually $ (\s -> isJust (settingsOf Scripted s).fetched) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` True)
+    _ <- unsafeIOToPageM (js_choose (toJSText ".assistant-model-choice") (toJSText "claude-opus-4-8"))
+    eventually $ (\s -> (settingsOf Scripted s).model) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just "claude-opus-4-8")
+    send ui "Hello?"
+    eventually $ length <$> requests `shouldReturn` 1
+    [request] <- requests
+    fieldText ["request", "model"] request `shouldBe` Just "claude-opus-4-8"
+
+  it "shows one Assistant bubble to a user without a key, which opens the panel to say where keys go" $ runPage $ do
+    unsafeIOToPageM js_forget
+    keep m (UserId "user-editor") defaultSettings
+    (ui, _) <- startWith m (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    _ <- editorText ui
+    bubble <- eventually $ find ui ".editor-provider[data-provider='assistant']"
+    getAttribute bubble "title" >>= (`shouldBe` Just "Assistant")
+    length <$> findAll ui ".editor-provider" `shouldReturn` 1
+    click bubble
+    eventually $ find ui ".assistant-setup" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "There is no API key for Anthropic (Claude)")
+    find ui ".assistant-setup a" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Open the assistant's settings")
+
+  it "dims a provider that cannot be reached, says so in the panel, and tries again" $ runPage $ do
+    let blocked = object ["error" .= object ["kind" .= ("connection" :: Text), "message" .= ("Failed to fetch" :: Text)]]
+    scriptWith [[failing "connection" 0 "Failed to fetch"], [text "Back."]] (object ["anthropic" .= blocked])
+    keep m (UserId "user-editor") (withKey Anthropic (Just "sk-ant-test") defaultSettings)
+    (ui, _) <- startWith m (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    _ <- editorText ui
+    let claude = ".editor-provider[data-provider='anthropic']"
+    eventually $ find ui claude >>= (`getAttribute` "class") >>= (`shouldBe` Just "editor-provider unreachable")
+    find ui claude >>= (`getAttribute` "title") >>= (`shouldBe` Just "Cannot reach Anthropic from this network")
+    eventually $ (\s -> (settingsOf Anthropic s).unreachable) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` True)
+    -- It still opens, and the panel says why, with a way to try again,
+    -- which finds it now.
+    find ui claude >>= click
+    find ui ".assistant-unreachable" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Cannot reach Anthropic from this network.")
+    setLists (object ["anthropic" .= scriptedModels])
+    -- Once the check the opening made is over.
+    eventually $ find ui ".assistant-try-again" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing)
+    find ui ".assistant-try-again" >>= click
+    eventually $ length <$> findAll ui ".assistant-unreachable" `shouldReturn` 0
+    find ui claude >>= (`getAttribute` "class") >>= (`shouldBe` Just "editor-provider")
+    -- A message that gets no answer says it again; one that gets one, not.
+    send ui "Hello?"
+    eventually $ find ui ".assistant-error" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "could not be reached")
+    eventually $ find ui claude >>= (`getAttribute` "class") >>= (`shouldBe` Just "editor-provider unreachable")
+    send ui "Again?"
+    eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Back.")
+    eventually $ find ui claude >>= (`getAttribute` "class") >>= (`shouldBe` Just "editor-provider")
+
+  it "asks OpenAI's API at another address, without a key" $ runPage $ do
+    scriptWith [[text "From the local server."]] (object ["openai" .= [object ["id" .= ("llama4:8b" :: Text), "created" .= (20 :: Int)], object ["id" .= ("nomic-embed-text" :: Text), "created" .= (10 :: Int)]]])
+    keep m (UserId "user-editor") (chooseProvider OpenAI (withBaseUrl OpenAI "http://localhost:11434/v1" defaultSettings))
+    (ui, _) <- startWith m (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    _ <- editorText ui
+    onMachine <- eventually $ find ui ".editor-provider[data-provider='openai']"
+    getAttribute onMachine "title" >>= (`shouldBe` Just "Chat through localhost:11434")
+    click onMachine
+    -- Its own models, every one, none of OpenAI's names.
+    eventually $ findAll ui ".assistant-model-choice optgroup[label='All models'] option" >>= traverse textContent >>= (`shouldBe` ["llama4:8b", "nomic-embed-text"])
+    send ui "Hello?"
+    eventually $ length <$> requests `shouldReturn` 1
+    [request] <- requests
+    fieldText ["provider"] request `shouldBe` Just "openai"
+    fieldText ["baseUrl"] request `shouldBe` Just "http://localhost:11434/v1"
+    fieldText ["key"] request `shouldBe` Just ""
+    fieldText ["model"] request `shouldBe` Just "llama4:8b"
+
   it "keeps a key for each user, forgets it, and tests it" $ runPage $ do
-    script []
+    scriptWith [] (object ["anthropic" .= take 2 scriptedModels])
     keep m (UserId "user-editor") (withKey Anthropic Nothing defaultSettings)
     keep m (UserId "user-admin") (withKey Anthropic Nothing defaultSettings)
     (ui, _) <- startWith m (Just "user-editor") AssistantSettings
@@ -206,6 +293,13 @@ spec m = do
     findIn anthropic ".assistant-key" >>= (`typeText` "sk-ant-test-key")
     findIn anthropic ".assistant-key-form button" >>= click
     eventually $ findIn anthropic ".assistant-key-kept" >>= (`shouldHaveText` "A key is kept for Anthropic (Claude) in this browser.")
+    -- Its list of models, fetched with it, and fetched again on request.
+    eventually $ findIn anthropic ".assistant-listed" >>= (`shouldHaveText` "2 models fetched from Anthropic (Claude), 2 of them offered for a chat.")
+    findAllIn anthropic ".assistant-model-choice optgroup[label='Recommended'] option" >>= traverse textContent >>= (`shouldBe` ["Claude Opus 5.5", "Claude Sonnet 5.5"])
+    setLists (object ["anthropic" .= scriptedModels])
+    findIn anthropic ".assistant-refresh" >>= click
+    eventually $ findIn anthropic ".assistant-listed" >>= (`shouldHaveText` "4 models fetched from Anthropic (Claude), 4 of them offered for a chat.")
+    findAllIn anthropic ".assistant-model-choice optgroup[label='All models'] option" >>= traverse textContent >>= (`shouldBe` ["Claude Opus 4.8", "Claude Haiku 4.5"])
     -- Kept under the user's id, and only theirs.
     eventually $ (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just "sk-ant-test-key")
     (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-admin") >>= (`shouldBe` Nothing)
@@ -215,6 +309,7 @@ spec m = do
     findIn anthropic ".assistant-forget" >>= click
     eventually $ findIn anthropic ".assistant-key" >>= (`getProperty` "value") >>= (`shouldBe` "")
     eventually $ (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
+    (\s -> (settingsOf Anthropic s).fetched) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
     -- The scripted provider, chosen and tested: its script refuses, then
     -- accepts.
     find ui "input[name='assistant-provider'][value='scripted']" >>= click
@@ -231,6 +326,14 @@ openAssistantWith
   => PageM s (Mounted s Shell.Query Void m, Text)
 openAssistantWith m = do
   keep m (UserId "user-editor") (chooseProvider Scripted defaultSettings)
+  openAssistantKeptWith m
+
+-- | The same with the settings kept as they are.
+openAssistantKeptWith
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  => PageM s (Mounted s Shell.Query Void m, Text)
+openAssistantKeptWith m = do
   (ui, _) <- startWith m (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
   _ <- editorText ui
   original <- markdown ui
@@ -244,6 +347,12 @@ openAssistant
   ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => PageM s (Mounted s Shell.Query Void m)
 openAssistant m = fst <$> openAssistantWith m
+
+openAssistantKept
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  => PageM s (Mounted s Shell.Query Void m)
+openAssistantKept m = fst <$> openAssistantKeptWith m
 
 -- | The scripted provider's button, which a test's page has.
 scriptedButton :: Text
@@ -263,9 +372,31 @@ settingsFor m user = unsafeIOToPageM (either (const defaultSettings) identity <$
 
 -- | Install the scripted provider's script: the steps of each turn.
 script :: [[Value]] -> PageM s ()
-script turns = unsafeIOToPageM $ do
+script turns = scriptWith turns (object [])
+
+-- | The same, with the providers' lists of models, by provider.
+scriptWith :: [[Value]] -> Value -> PageM s ()
+scriptWith turns lists = unsafeIOToPageM $ do
   js_forget
-  js_script (toJSText (decodeUtf8 (BSL.toStrict (encode (object ["turns" .= turns])))))
+  js_script (toJSText (decodeUtf8 (BSL.toStrict (encode (object ["turns" .= turns, "lists" .= lists])))))
+
+-- | The providers' lists of models changed, the rest of the script kept.
+setLists :: Value -> PageM s ()
+setLists lists = void (unsafeIOToPageM (js_lists (toJSText (decodeUtf8 (BSL.toStrict (encode lists))))))
+
+-- | A provider's list of models, as Anthropic's names them, newest first:
+-- two recommended (Opus and Sonnet, newest of their families without a
+-- date) and two others.
+scriptedModels :: [Value]
+scriptedModels =
+  [ object ["id" .= i, "label" .= l, "created" .= t]
+  | (i, l, t) <-
+      [ ("claude-opus-5-5" :: Text, "Claude Opus 5.5" :: Text, 300 :: Int)
+      , ("claude-sonnet-5-5", "Claude Sonnet 5.5", 250)
+      , ("claude-opus-4-8", "Claude Opus 4.8", 200)
+      , ("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 100)
+      ]
+  ]
 
 -- | What the scripted provider was sent, and what its tools were answered.
 requests, answers :: PageM s [Value]
