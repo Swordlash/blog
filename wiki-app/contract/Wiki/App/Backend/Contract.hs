@@ -1,12 +1,14 @@
--- | What every 'MonadWiki' backend does, as tests: the laws the class's
--- Haddock states, checked against the demo's content
--- ("Wiki.App.Demo") as each of its users sees it.
+-- | The contract tests of 'MonadWiki': what every backend does, as tests
+-- of the rules the class's Haddock states, checked against the demo's
+-- content ("Wiki.App.Demo") as each of its users sees it.
 --
--- The spec is written once and run against each backend, given a 'Fixture'
--- that starts it with the demo's content and signs in as each user: the
--- in-memory one (@Test.Backend.Mem@ in @wiki-app-test@), the server's SQLite
--- storage (@Test.Storage.Contract@ in @wiki-server-test@), and the one over
--- HTTP against the server's API (@Test.Server.Http@ there). It is a library of its own, @wiki-app:contract@, for that.
+-- The spec is written once and run against each backend, given a
+-- 'Fixture' that starts the backend with the demo's content and signs in
+-- as each user. It runs against the in-memory backend (@Test.Backend.Mem@
+-- in @wiki-app-test@), the server's SQLite storage
+-- (@Test.Storage.Contract@ in @wiki-server-test@), and the HTTP backend
+-- against the server's API (@Test.Server.Http@ there). That is why it is a
+-- library of its own, @wiki-app:contract@.
 module Wiki.App.Backend.Contract
   ( spec
   , Fixture (..)
@@ -43,11 +45,11 @@ import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 data As = Anonymous | As Text
   deriving stock (Eq, Show)
 
--- | Run a program against the backend, as someone.
+-- | Run a program against the backend, as the given user.
 type Run m = forall a. As -> m a -> IO a
 
 -- | A backend with the demo's content in it, the same for every example
--- that runs against it: each example is given a fresh one.
+-- that runs against it: each example gets a fresh one.
 newtype Fixture m = Fixture (Run m)
 
 admin, editor, reader :: As
@@ -55,10 +57,10 @@ admin = As "admin"
 editor = As "editor"
 reader = As "reader"
 
--- | The contract, for a backend made afresh for each example: the action
--- given runs an example with a fixture it makes for it, and lets go of
+-- | The contract, for a backend made afresh for each example. The action
+-- given runs an example with a fixture it makes for it, and releases
 -- whatever the fixture holds (a database, a directory) once the example is
--- done, as hspec's 'around' wants.
+-- done, as hspec's 'around' expects.
 spec :: forall m -> (MonadWiki m) => (ActionWith (Fixture m) -> IO ()) -> Spec
 spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   sessions
@@ -105,7 +107,7 @@ pageAt run who s p = do
   space <- spaceAt run admin s
   run who (getPage space.id (path p)) >>= ok
 
--- | What a request for a page gives.
+-- | The result of requesting a page.
 getPageAt :: (MonadWiki m) => Run m -> As -> Text -> Text -> IO (Either WikiError Page)
 getPageAt run who s p = do
   space <- spaceAt run admin s
@@ -147,8 +149,8 @@ sessions :: (MonadWiki m) => SpecWith (Fixture m)
 sessions = describe "session" $ do
   it "is nobody's when nobody is signed in" $ \(Fixture run) -> do
     s <- run Anonymous session
-    -- What the backend exports in is its own, not the asker's: a server
-    -- makes documents for nobody signed in as for anyone else.
+    -- The export formats are the backend's own, not the user's: a server
+    -- makes documents for someone not signed in as for anyone else.
     s {exports = []} `shouldBe` anonymous
     run Anonymous currentUser `shouldReturn` Nothing
 
@@ -380,7 +382,8 @@ spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
     run editor (createPage projects.id Nothing "Mine" "") >>= (`shouldFailWith` Forbidden)
     run admin (setSpaceGrant team.id (SubjectUser editorId) Edit True) >>= ok
     void (run editor (createPage projects.id Nothing "Mine" "") >>= ok)
-    -- Their session has the grants, which is what the client hides by.
+    -- Their session has the grants, which the client uses to hide what
+    -- they cannot do.
     held <- run editor session
     sort [g.permission | g <- held.grants.spaces, g.space == team.id] `shouldBe` [View, Edit]
     run admin (setSpaceGrant team.id (SubjectUser editorId) Edit False) >>= ok
@@ -411,8 +414,8 @@ spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
     run reader (spaceAccess team.id) >>= (`shouldFailWith` Forbidden)
     run admin (spaceAccess (SpaceId "no-such-space")) >>= (`shouldFailWith` NotFound)
     run admin (setSpaceGrant (SpaceId "no-such-space") (SubjectUser editorId) View True) >>= (`shouldFailWith` NotFound)
-    -- Granted to administer the blog, the editor may grant on it, and take
-    -- that from themself.
+    -- Granted administration of the blog, the editor may grant on it, and
+    -- take that grant away from themself.
     run admin (setSpaceGrant blog.id (SubjectUser editorId) AdministerSpace True) >>= ok
     run editor (setSpaceGrant blog.id (SubjectUser readerId) Edit True) >>= ok
     void (run editor (spaceAccess blog.id) >>= ok)
@@ -423,7 +426,8 @@ spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
     blog <- spaceAt run admin "blog"
     run admin (setSpaceGrant blog.id (SubjectUser (UserId "user-nobody")) View True) >>= shouldBeInvalid
     run admin (setSpaceGrant blog.id (SubjectGroup (GroupId "group-nothing")) View True) >>= shouldBeInvalid
-    -- Taking one away from nobody changes nothing.
+    -- Taking a grant away from someone who does not have it changes
+    -- nothing.
     run admin (setSpaceGrant blog.id (SubjectUser (UserId "user-nobody")) View False) >>= ok
 
 mathMacros :: (MonadWiki m) => SpecWith (Fixture m)
@@ -1003,7 +1007,7 @@ templates = describe "setPageTemplate" $ do
     docs <- spaceAt run admin "docs"
     listed <- run Anonymous (listPages docs.id) >>= ok
     [p.title | p <- listed, p.template] `shouldBe` ["Diagrams"]
-    -- No version is kept: it is not a save.
+    -- No version is recorded: it is not a save.
     run admin (listVersions diagrams.id) >>= ok >>= (`shouldSatisfy` ((== 1) . length))
     again <- run admin (setPageTemplate diagrams.id True) >>= ok
     again.template `shouldBe` True
@@ -1100,7 +1104,7 @@ drafts = describe "getDraft, saveDraft and discardDraft" $ do
     _ <- run admin (saveDraft hello.id hello.updatedAt "Hello" "The admin's") >>= ok
     _ <- run editor (savePage hello.id hello.updatedAt "Hello" "The editor's") >>= ok
     run editor (getDraft hello.id) `shouldReturn` Right Nothing
-    -- The admin's is still there, from a version saved over since.
+    -- The admin's draft is still there, from a version saved over since.
     (fmap (fmap (\d -> (d.body, d.base))) <$> run admin (getDraft hello.id)) `shouldReturn` Right (Just ("The admin's", hello.updatedAt))
 
   it "stay with a page that is moved, and go with one that is deleted" $ \(Fixture run) -> do
@@ -1112,7 +1116,7 @@ drafts = describe "getDraft, saveDraft and discardDraft" $ do
     run editor (getDraft hello.id) `shouldReturn` Right (Just d)
     _ <- run editor (deletePage notes.id) >>= ok
     run editor (getDraft hello.id) >>= (`shouldFailWith` NotFound)
-    -- A page made again gets a new id, and no draft.
+    -- A page created again gets a new id, and no draft.
     again <- run editor (createPage blog.id Nothing "Hello, world" "") >>= ok
     run editor (getDraft again.id) `shouldReturn` Right Nothing
 
@@ -1137,11 +1141,11 @@ drafts = describe "getDraft, saveDraft and discardDraft" $ do
 --------------------------------------------------------------------------------
 -- History
 
--- | A page's history as someone sees it, which must be there to see.
+-- | A page's history as someone sees it, which must exist.
 versionsOf :: (HasCallStack, MonadWiki m) => Run m -> As -> PageId -> IO [VersionInfo]
 versionsOf run who p = run who (listVersions p) >>= ok
 
--- | Who someone is, as a history names them.
+-- | Someone, as a history names them.
 authorAs :: (HasCallStack, MonadWiki m) => Run m -> As -> IO Author
 authorAs run who =
   run who currentUser >>= \case
@@ -1215,8 +1219,8 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
     wiki <- pageAt run admin "team/projects" "the-wiki"
     tour <- pageAt run admin "docs" "tour"
     hello <- pageAt run admin "blog" "hello-world"
-    -- Whoever may not view the page learns nothing of its history, not
-    -- even whether a time is one of its versions.
+    -- Someone who may not view the page learns nothing of its history,
+    -- not even whether a time is one of its versions.
     run Anonymous (listVersions handbook.id) >>= (`shouldFailWith` Forbidden)
     run Anonymous (getVersion handbook.id handbook.updatedAt) >>= (`shouldFailWith` Forbidden)
     run Anonymous (getVersion handbook.id hello.updatedAt) >>= (`shouldFailWith` Forbidden)
@@ -1389,7 +1393,7 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
     seen <- spaceAt run Anonymous "blog"
     seen.icon `shouldBe` s.icon
     run Anonymous (spaceIconUrl seen) >>= (`shouldSatisfy` (not . T.null))
-    -- Kept as it is when the profile names it, let go when it does not.
+    -- Kept when the profile names it, removed when it does not.
     kept <- run admin (setSpaceProfile blog.id (profile "Posts." s.icon s.homePage)) >>= ok
     kept.icon `shouldBe` s.icon
     dropped <- run admin (setSpaceProfile blog.id (profile "Posts." (Just (IconEmoji "✍️")) s.homePage)) >>= ok
@@ -1416,7 +1420,7 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
     _ <- run admin (movePage tour.id blog.id Nothing) >>= ok
     (\x -> x.homePage) <$> spaceAt run admin "docs" `shouldReturn` Nothing
     _ <- run admin (setSpaceProfile docs.id (profile "" Nothing (Just guide.id))) >>= ok
-    -- A page under the home page moved away takes nothing with it.
+    -- Moving away a page under the home page takes nothing with it.
     diagrams <- pageAt run admin "docs" "markdown-guide/diagrams"
     _ <- run admin (movePage diagrams.id blog.id Nothing) >>= ok
     (\x -> x.homePage) <$> spaceAt run admin "docs" `shouldReturn` Just guide.id
@@ -1442,7 +1446,7 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
           pure (sort [(x.name, n) | x <- spaces, Just n <- [Map.lookup x.id counts]])
     countsOf Anonymous `shouldReturn` [("Blog", 2), ("Docs", 5)]
     countsOf admin `shouldReturn` [("Blog", 2), ("Docs", 5), ("Projects", 1), ("Team", 2)]
-    -- Team is listed to the reader for its name only.
+    -- Team is listed to the reader only for its name.
     countsOf reader `shouldReturn` [("Blog", 2), ("Docs", 5), ("Projects", 1)]
     s <- run editor (createSpace Nothing "Mine") >>= ok
     counts <- run editor pageCounts
@@ -1457,7 +1461,7 @@ posting = describe "postDetails" $ do
     blog <- spaceAt run admin "blog"
     made <- run editor (createPage blog.id Nothing "A new post" "Its *first* paragraph.") >>= ok
     under <- run admin (createPage blog.id (Just made.id) "Notes" "Under it.") >>= ok
-    -- Saved since by someone else: the first author is still the maker.
+    -- Saved since by someone else: the first author is still the creator.
     _ <- run admin (savePage made.id made.updatedAt "A new post" "Changed.") >>= ok
     pages <- run Anonymous (listPages blog.id) >>= ok
     details <- run Anonymous (postDetails blog.id) >>= ok
@@ -1477,8 +1481,8 @@ posting = describe "postDetails" $ do
 --------------------------------------------------------------------------------
 -- Errors are values
 
--- | Every method, asked about what is not there or by someone who may not,
--- returns its error rather than throwing it.
+-- | Every method, asked about something that does not exist or by someone
+-- who may not, returns its error rather than throwing it.
 neverThrown :: (MonadWiki m) => SpecWith (Fixture m)
 neverThrown = describe "errors" $ do
   it "are returned, never thrown" $ \(Fixture run) -> do

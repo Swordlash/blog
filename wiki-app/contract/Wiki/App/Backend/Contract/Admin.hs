@@ -1,15 +1,15 @@
--- | What every 'MonadAdmin' backend does, as tests: the laws of
--- "Wiki.App.Backend.Admin", checked against the demo's content
--- ("Wiki.App.Demo"), whose @admin@ holds the global administer, whose
--- @editor@ is in the group @writers@ (which may edit the blog), and whose
--- @reader@ is in no group.
+-- | The contract tests of 'MonadAdmin': what every administration backend
+-- does, as tests of the rules of "Wiki.App.Backend.Admin", checked against
+-- the demo's content ("Wiki.App.Demo"). There, @admin@ holds the global
+-- administer, @editor@ is in the group @writers@ (which may edit the blog),
+-- and @reader@ is in no group.
 --
--- Run, as the backend's contract is ("Wiki.App.Backend.Contract", whose
--- 'Fixture' it takes), against the in-memory backend, the server's SQLite
--- storage, and the backend over HTTP against the server's API. Whoever
--- holds the global administer here is one of the wiki's users, granted it;
--- the server's operator, who holds it without being one, is the server's
--- own tests'.
+-- Like the backend's contract ("Wiki.App.Backend.Contract", whose
+-- 'Fixture' it takes), it runs against the in-memory backend, the server's
+-- SQLite storage, and the HTTP backend against the server's API. Here,
+-- whoever holds the global administer is one of the wiki's users, granted
+-- it. The server's operator, who holds it without being a user, is
+-- covered by the server's own tests.
 module Wiki.App.Backend.Contract.Admin (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -37,8 +37,8 @@ admin = As "admin"
 editor = As "editor"
 reader = As "reader"
 
--- | The contract, for a backend made afresh for each example, as
--- "Wiki.App.Backend.Contract"'s.
+-- | The contract, for a backend made afresh for each example, as in
+-- "Wiki.App.Backend.Contract".
 spec :: forall m -> (MonadWiki m, MonadAdmin m) => (ActionWith (Fixture m) -> IO ()) -> Spec
 spec _ withFixture = around withFixture $ describe "MonadAdmin contract" $ do
   reading
@@ -116,8 +116,8 @@ reading = describe "directory" $ do
     d.administrators `shouldBe` Set.singleton adminId
     d.creators `shouldBe` Set.singleton editorId
     (d.disabled, d.withPassword) `shouldBe` (mempty, mempty)
-    -- No one signs in with a provider in a wiki that has just been made,
-    -- so everyone may be given a password.
+    -- Nobody signs in with a provider in a newly made wiki, so everyone may
+    -- be given a password.
     (d.identities, d.providerOnly) `shouldBe` (mempty, mempty)
     map (\g -> g.name) d.groups `shouldBe` ["writers"]
     Map.elems d.membership `shouldBe` [Set.singleton editorId]
@@ -170,7 +170,7 @@ administrators = describe "setAdministrator" $ do
     run admin (setAdministrator editorId True) >>= ok
     (\d -> d.administrators) <$> directoryNow run `shouldReturn` Set.fromList [adminId, editorId]
     isAdministrator run editor `shouldReturn` True
-    -- They may administer the wiki now themselves.
+    -- They may now administer the wiki themselves.
     void (run editor directory >>= ok)
     run admin (setAdministrator editorId False) >>= ok
     (\d -> d.administrators) <$> directoryNow run `shouldReturn` Set.singleton adminId
@@ -257,10 +257,10 @@ accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" 
     (\d -> d.withPassword) <$> directoryNow run `shouldReturn` Set.singleton readerId
     run admin (setPassword (UserId "user-nobody") "a good password") >>= (`shouldFailWith` NotFound)
 
-  -- A wiki that has just been made sends no mail (the demo never does, and
-  -- the server only once its mail is set): a link is refused with the
-  -- reason, after the user is found. What a server that mails does with
-  -- one is the server's tests' (wiki-server's Test.Server.Hygiene).
+  -- A newly made wiki sends no mail (the demo never does, and the server
+  -- only once its mail server is set): a link is refused with the reason,
+  -- after the user is found. What a server that sends mail does with a link
+  -- is covered by the server's tests (wiki-server's Test.Server.Hygiene).
   it "mail no link to choose a password where nothing is mailed, saying why, and find nobody for an id that is none" $ \(Fixture run) -> do
     readerId <- idOf run reader
     run admin (sendPasswordLink readerId) >>= shouldBeInvalid
@@ -274,8 +274,8 @@ accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" 
     account <- run admin (setDisabled readerId True) >>= ok
     account.disabled `shouldBe` True
     (\d -> d.disabled) <$> directoryNow run `shouldReturn` Set.singleton readerId
-    -- Still in the directory, but signed in as nobody, and seeing what
-    -- nobody sees.
+    -- Still in the directory, but they count as nobody signed in, and see
+    -- what nobody sees.
     map (\u -> u.login) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
     (\s -> s.user) <$> run reader session `shouldReturn` Nothing
     run reader (listPages projects.id) >>= (`shouldFailWith` Forbidden)
@@ -431,7 +431,7 @@ closedWiki = WikiSettings {access = Closed, newAccountsCreateSpaces = False}
 --------------------------------------------------------------------------------
 -- The server's own settings
 
--- | Settings with an address, a mail server with these password and user,
+-- | Settings with an address, a mail server with this password and user,
 -- and a provider with this secret.
 serverWith :: Maybe Text -> Maybe Text -> Maybe Text -> ServerSettingsChange
 serverWith user password secret =
@@ -471,9 +471,9 @@ serverSide = describe "serverSettings and setServerSettings" $ do
     run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings)
 
 -- | The backups (WP4.9 of docs/PLAN.md): off until an administrator turns
--- them on, and nobody else's business. Their settings, kept and checked,
--- and a backup made are the server's, whose tests say so; the demo makes
--- none.
+-- them on, and visible to administrators only. Their stored and checked
+-- settings, and a backup being made, are covered by the server's tests;
+-- the demo makes none.
 backingUp :: (MonadAdmin m) => SpecWith (Fixture m)
 backingUp = describe "backups, setBackupSettings and backUpNow" $
   it "are off at first, with none made, and refused to whoever does not administer the wiki" $ \(Fixture run) -> do
@@ -487,7 +487,7 @@ backingUp = describe "backups, setBackupSettings and backUpNow" $
 
 -- | The audit log and the server's status (WP4.10 of docs/PLAN.md): what
 -- each backend has of them differs (the demo keeps no log and has no
--- server), but only whoever administers the wiki reads either.
+-- server), but only an administrator of the wiki reads either.
 observing :: (MonadAdmin m) => SpecWith (Fixture m)
 observing = describe "activity and serverStatus" $
   it "are refused to whoever does not administer the wiki" $ \(Fixture run) -> do

@@ -1,14 +1,15 @@
--- | What every 'MonadNotifications' backend does, as tests: the laws of
--- "Wiki.App.Backend.Notifications" (the rules of
--- "Wiki.Core.Notification"), checked against the demo's content
--- ("Wiki.App.Demo"): its @admin@ holds the global administer; its
--- @editor@ may edit the public blog; its @reader@ may only read it, and
--- may read nothing of the team's but its projects. The demo's pages were
--- made by nobody known, so a page someone made is made in the examples.
+-- | The contract tests of 'MonadNotifications': what every notifications
+-- backend does, as tests of the rules of "Wiki.App.Backend.Notifications"
+-- (themselves the rules of "Wiki.Core.Notification"), checked against the
+-- demo's content ("Wiki.App.Demo"). Its @admin@ holds the global
+-- administer; its @editor@ may edit the public blog; its @reader@ may only
+-- read it, and of the team's spaces may read only its projects. The demo's
+-- pages were created by nobody known, so the examples create the pages
+-- that need a known creator.
 --
--- Run, as the backend's contract is ("Wiki.App.Backend.Contract", whose
--- 'Fixture' it takes), against the in-memory backend, the server's SQLite
--- storage, and the backend over HTTP against the server's API.
+-- Like the backend's contract ("Wiki.App.Backend.Contract", whose
+-- 'Fixture' it takes), it runs against the in-memory backend, the server's
+-- SQLite storage, and the HTTP backend against the server's API.
 module Wiki.App.Backend.Contract.Notifications (spec) where
 
 import Data.Map.Strict qualified as Map
@@ -35,8 +36,8 @@ admin = As "admin"
 editor = As "editor"
 reader = As "reader"
 
--- | The contract, for a backend made afresh for each example, as
--- "Wiki.App.Backend.Contract"'s.
+-- | The contract, for a backend made afresh for each example, as in
+-- "Wiki.App.Backend.Contract".
 spec :: forall m -> (MonadWiki m, MonadComments m, MonadNotifications m) => (ActionWith (Fixture m) -> IO ()) -> Spec
 spec _ withFixture = around withFixture $ describe "MonadNotifications contract" $ do
   mentioning
@@ -76,14 +77,14 @@ saveAs run who page body = do
   p <- maybe (assertFailure "no such page") pure (find (\x -> x.id == page.id) pages)
   run who (savePage p.id p.updatedAt p.title body) >>= ok
 
--- | Someone's notifications: what kind, by whom, about which page.
+-- | Someone's notifications: their kind, by whom, and about which page.
 toldOf :: (HasCallStack, MonadNotifications m) => Run m -> As -> IO [(Kind, Text, PageId)]
 toldOf run who = map (\n -> (n.kind, n.actor.name, n.page)) . (\ns -> ns.items) <$> (run who notifications >>= ok)
 
 nameOf :: (HasCallStack, MonadWiki m) => Run m -> As -> IO Text
 nameOf run who = run who currentUser >>= maybe (assertFailure ("nobody is signed in as " <> show who)) (pure . (\u -> u.displayName))
 
--- | A page the editor makes on the blog: theirs.
+-- | A page the editor creates on the blog, so that they are its creator.
 editorsPage :: (HasCallStack, MonadWiki m) => Run m -> IO Page
 editorsPage run = do
   blog <- spaceAt run "blog"
@@ -151,7 +152,7 @@ telling = describe "who is told" $ do
     toldOf run editor `shouldReturn` [(Commented, readerName, plans.id)]
     _ <- saveAs run admin plans "What comes after."
     toldOf run editor `shouldReturn` [(Changed, adminName, plans.id), (Commented, readerName, plans.id)]
-    -- Their own save tells them nothing.
+    -- Their own save notifies them of nothing.
     _ <- saveAs run editor plans "What comes after that."
     length <$> toldOf run editor `shouldReturn` 2
 

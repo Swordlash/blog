@@ -1,14 +1,14 @@
--- | What every 'MonadComments' backend does, as tests: the laws of
--- "Wiki.App.Backend.Comments", checked against the demo's content
--- ("Wiki.App.Demo"), on the public blog's "Notes on Haskell" (which has no
--- comments), and the private team's handbook. The demo's @admin@ holds the
--- global administer, and so administers every space; its @editor@ may edit
--- the blog; its @reader@ may only read it, and may read nothing of the
--- team's but its projects.
+-- | The contract tests of 'MonadComments': what every comments backend
+-- does, as tests of the rules of "Wiki.App.Backend.Comments", checked
+-- against the demo's content ("Wiki.App.Demo"), on the public blog's
+-- "Notes on Haskell" (which has no comments) and the private team's
+-- handbook. The demo's @admin@ holds the global administer, and so
+-- administers every space; its @editor@ may edit the blog; its @reader@
+-- may only read it, and of the team's spaces may read only its projects.
 --
--- Run, as the backend's contract is ("Wiki.App.Backend.Contract", whose
--- 'Fixture' it takes), against the in-memory backend, the server's SQLite
--- storage, and the backend over HTTP against the server's API.
+-- Like the backend's contract ("Wiki.App.Backend.Contract", whose
+-- 'Fixture' it takes), it runs against the in-memory backend, the server's
+-- SQLite storage, and the HTTP backend against the server's API.
 module Wiki.App.Backend.Contract.Comments (spec) where
 
 import Data.Text qualified as T
@@ -32,8 +32,8 @@ admin = As "admin"
 editor = As "editor"
 reader = As "reader"
 
--- | The contract, for a backend made afresh for each example, as
--- "Wiki.App.Backend.Contract"'s.
+-- | The contract, for a backend made afresh for each example, as in
+-- "Wiki.App.Backend.Contract".
 spec :: forall m -> (MonadWiki m, MonadComments m) => (ActionWith (Fixture m) -> IO ()) -> Spec
 spec _ withFixture = around withFixture $ describe "MonadComments contract" $ do
   reading
