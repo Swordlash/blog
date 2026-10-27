@@ -1,16 +1,20 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- | The administration's section on the server itself, in a browser
 -- (WP4.4 of docs/PLAN.md, "Wiki.App.View.Server"): the public address, the
 -- mail server and the providers set from their forms over the demo's wiki,
 -- each secret typed once and never shown again, "Check" and the test
 -- mail, which the demo says it cannot do; the provider form's hints and its
--- redirect URI in each of its states (WP5.5); and over the backend over
--- HTTP, a provider checked by the server and a change saved that keeps the
+-- redirect URI in each of its states (WP5.5); every form of the
+-- administration in one column (WP5.5); and over the backend over HTTP, a
+-- provider checked by the server and a change saved that keeps the
 -- secrets it does not touch.
-module Test.Browser.Server (spec) where
+module Test.Browser.Server (spec, oneColumn) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (eitherDecodeStrict')
 import Data.Text qualified as T
+import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
@@ -21,10 +25,24 @@ import Wiki.Api.ServerSettings
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
+-- How the page lays a form out (test/jsbits/test-layout.js).
+$( browserJS
+     ["jsbits/test-layout.js"]
+     [("js_one_column", "wiki_test_one_column", Unsafe, [t|JSText -> IO JSText|])]
+ )
+
 spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   demo m
   overHttp m
+
+-- | That the element a selector finds, a form or the fields of one, is laid
+-- out in one column by the page's style sheet: each child under the one
+-- before, every field as wide as the form (wiki_test_one_column).
+oneColumn :: Text -> PageM s ()
+oneColumn selector = do
+  how <- unsafeIOToPageM (fromJSText <$> js_one_column (toJSText selector))
+  (selector, how) `shouldBe` (selector, "")
 
 -- | The section's public address set, as typed.
 setAddress :: Mounted s q o m -> Text -> PageM s ()
@@ -152,6 +170,38 @@ demo m = describe "over the demo's wiki" $ do
     redirect >>= (`shouldContainText` "Redirect URI to register: https://wiki.example.org/auth/google/callback")
     redirect >>= (`shouldContainText` "Register it with the provider as its redirect (callback) URI")
     find ui ".server-provider-form .server-provider-redirect" >>= (`shouldHaveText` "https://wiki.example.org/auth/google/callback")
+    find ui ".server-provider-form .server-cancel" >>= click
+    unmount ui
+
+  it "lays every form of the administration out in one column" $ runPage $ do
+    ui <- start m (Just "user-admin") Admin
+    -- The Users section's new user, and the invitations of a closed wiki.
+    oneColumn ".user-create-fields"
+    find ui ".access-choice input[value=closed]" >>= click
+    _ <- find ui ".invite-form"
+    oneColumn ".invite-form"
+    find ui ".access-choice input[value=open]" >>= click
+    -- The Server section's: the public address, the mail server and its
+    -- test, a provider.
+    find ui ".server-url-edit" >>= click
+    _ <- find ui ".server-url-form"
+    oneColumn ".server-url-form"
+    find ui ".server-url-form .server-cancel" >>= click
+    -- A mail server is saved only once the address is set.
+    setAddress ui "https://wiki.example.org/"
+    find ui ".server-mail-edit" >>= click
+    _ <- find ui ".server-mail-form"
+    oneColumn ".server-mail-form"
+    find ui ".server-mail-form input[name=host]" >>= (`typeText` "mail.example.org")
+    find ui ".server-mail-form input[name=from]" >>= (`typeText` "wiki@example.org")
+    find ui ".server-mail-form button[type=submit]" >>= click
+    _ <- eventually (find ui ".server-mail-test")
+    oneColumn ".server-mail-test"
+    find ui ".server-mail-remove" >>= click
+    _ <- eventually (find ui ".server-mail-none")
+    find ui ".server-provider-add" >>= click
+    _ <- find ui ".server-provider-form"
+    oneColumn ".server-provider-form"
     find ui ".server-provider-form .server-cancel" >>= click
     unmount ui
 

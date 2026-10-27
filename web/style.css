@@ -3200,12 +3200,19 @@ body:has(.slides-view) {
   font-size: 1rem;
 }
 
+/* One column, as every form of the administration: each label above its
+   field, the fields as wide as the form, which stops at a width a line of
+   text reads well at (the server's forms below share it). */
 .user-create-fields {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.5rem 1rem;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 30rem;
   margin-bottom: 0.6rem;
+}
+
+.user-create-fields .field {
+  flex: none;
 }
 
 .check {
@@ -3376,14 +3383,14 @@ body:has(.slides-view) {
 
 .invite-form {
   display: flex;
-  flex-wrap: wrap;
-  align-items: end;
+  flex-direction: column;
   gap: 0.6rem;
+  max-width: 30rem;
   margin-bottom: 0.8rem;
 }
 
 .invite-form .field {
-  flex: 1 1 16rem;
+  flex: none;
 }
 
 .invitation-made {
@@ -3428,7 +3435,10 @@ table.invitations td {
 
 /* The administration's section on the server itself (Wiki.App.View.Server):
    the public address, the mail server and the providers, each a part with
-   its own heading; one form at a time replaces what it edits. */
+   its own heading; one form at a time replaces what it edits. Each form is
+   one column, as the administration's others are: a label above its field,
+   a hint under it, every field the form's width up to 30rem, and the
+   buttons in a row under the last. */
 .server-part {
   margin-top: 1.2rem;
 }
@@ -3471,9 +3481,9 @@ table.invitations td {
 .server-provider-form,
 .server-mail-test {
   display: flex;
-  flex-wrap: wrap;
-  align-items: end;
+  flex-direction: column;
   gap: 0.6rem;
+  max-width: 30rem;
   margin: 0.4rem 0 0.8rem;
 }
 
@@ -3481,15 +3491,7 @@ table.invitations td {
 .server-url-form .field,
 .server-provider-form .field,
 .server-mail-test .field {
-  flex: 1 1 14rem;
-}
-
-.server-mail-form .actions,
-.server-url-form .actions,
-.server-provider-form .actions,
-.server-mail-test .actions,
-.server-provider-form .server-provider-redirect {
-  flex-basis: 100%;
+  flex: none;
 }
 
 /* The backups (Wiki.App.View.Backups): what they are set to do and what
@@ -3529,21 +3531,14 @@ table.invitations td {
 
 .backups-form {
   display: flex;
-  flex-wrap: wrap;
-  align-items: end;
+  flex-direction: column;
   gap: 0.6rem;
+  max-width: 30rem;
   margin: 0.4rem 0 0.8rem;
 }
 
 .backups-form .field {
-  flex: 1 1 14rem;
-}
-
-.backups-form .field-check,
-.backups-form .backups-config,
-.backups-form .admin-note,
-.backups-form .actions {
-  flex-basis: 100%;
+  flex: none;
 }
 
 .backups-form .field-check {
@@ -3558,15 +3553,17 @@ table.invitations td {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* A secret that is set: its state and the ways to change it, never it. */
-.server-secret {
-  display: flex;
+/* A secret that is set: its state and the ways to change it, never it, in
+   a row under its label. (A secret being typed is a field like the others,
+   its input as wide as the form.) */
+div.server-secret {
+  flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
 }
 
-.server-secret > span:first-child {
+div.server-secret > span:first-child {
   flex-basis: 100%;
 }
 
@@ -3595,6 +3592,11 @@ table.invitations td {
 .server-provider-redirect {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.server-provider-redirect-to p {
+  margin: 0 0 0.3rem;
 }
 
 .server-provider-checked,

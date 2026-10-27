@@ -14,6 +14,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Http (Asked (..), answerWith, asked, serveDemo, serverStarts, serverStops, startServer)
 import Test.Browser.Mount (start)
+import Test.Browser.Server (oneColumn)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AdminApi (..), WikiApi (..))
@@ -76,6 +77,8 @@ overHttp m = describe "over HTTP" $
       choose ui ".backups-form select[name=destination]" 2
       find ui ".backups-form input[name=remote]" >>= (`typeText` "b2:wiki")
       find ui ".backups-form textarea[name=config]" >>= (`typeText` config)
+      -- In one column, as every form of the administration (WP5.5).
+      oneColumn ".backups-form"
       find ui ".backups-form button[type=submit]" >>= click
       eventually $ do
         puts <- filter (\r -> r.method == "PUT") <$> asked

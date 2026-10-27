@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Every form of the administration is one column (WP5.5): the public address,
+the mail server and its test, a provider, the backups, an invitation and a
+new user each put a label above its field, every field as wide as the form
+up to 30rem, and the buttons under the last, where they wrapped two or three
+fields to a row before.
+
 The administration's "Add a provider" explains itself (WP5.5): under each
 field a hint in the README's words says what it is and, for the client id,
 the secret and the fourth field, where it comes from for the kind chosen;

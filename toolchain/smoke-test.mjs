@@ -44,7 +44,8 @@
 //    the administration's among them. On the way, a page saved twice more
 //    has its history opened, a version's diff read and the version
 //    restored.
-// 3. The same page in a dark scheme and at a phone's width, a page shown
+// 3. The same page in a dark scheme and at a phone's width (the
+//    administration's forms too, each one column), a page shown
 //    as slides (moved through, reloaded, printed), and a page's source
 //    copied to the clipboard.
 // 4. The demo as an application (WP4.17): its manifest and icons, its
@@ -1054,8 +1055,24 @@ try {
   await load(phone, "/s/docs/p/tour/source/");
   await phone.locator("#app .source-text").waitFor({ timeout });
   assert.ok(await fits(), "a page's source is wider than a phone");
+  // The administration's forms are one column at any width (WP5.5): on a
+  // phone too, each field under the one before, and none wider than it.
+  await load(phone, "/admin/");
+  await phone.locator("#app .user-create-fields").waitFor({ timeout });
+  await phone.locator("#app .server-provider-add").tap();
+  await phone.locator("#app .server-provider-form").waitFor({ timeout });
+  assert.ok(await fits(), "the administration is wider than a phone");
+  const besides = await phone.evaluate(() =>
+    [".user-create-fields", ".server-provider-form"].flatMap((selector) => {
+      const shown = [...document.querySelector(`#app ${selector}`).children].filter((c) => c.getClientRects().length > 0);
+      return shown.slice(1).flatMap((child, i) =>
+        child.getBoundingClientRect().top < shown[i].getBoundingClientRect().bottom - 0.5 ? [`${selector}: ${child.className}`] : [],
+      );
+    }),
+  );
+  assert.deepEqual(besides, [], "fields of the administration's forms side by side on a phone");
   await phone.context().close();
-  console.log("ok: a page, the editor and a page's source fit a phone's width");
+  console.log("ok: a page, the editor, a page's source and the administration's forms fit a phone's width");
 
   // A page presented as slides: moved through by the keys with the slide in
   // the address, which a reload comes back to; printed, one slide to a page.
