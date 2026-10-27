@@ -1,7 +1,8 @@
--- | The wiki's records as the database's rows: how each column is written
--- and read, and the reads and writes of whole records that the storage's
+-- | The wiki's records as database rows: how each column is written and
+-- read, and the reads and writes of whole records that the storage's
 -- operations ("Wiki.Server.Storage") are made of. Nothing here checks a
--- permission or a rule: these run inside a transaction that has.
+-- permission or a rule: these run inside a transaction that has already
+-- checked them.
 module Wiki.Server.Storage.Rows
   ( -- * Columns
     Stamp (..)
@@ -133,10 +134,10 @@ import Wiki.Server.Secret (Kept, Secret (..), revealed)
 -- Columns
 
 -- | A time as a column: ISO 8601 text in UTC with every digit of the
--- fraction of a second there is. Not sqlite-simple's own 'UTCTime' columns,
--- because a save is checked against the time it started from by equality,
--- so a time must come back exactly as it went in, which nothing but every
--- digit promises.
+-- fraction of a second. Not sqlite-simple's own 'UTCTime' columns: a save
+-- is checked against the time it started from by equality, so a time must
+-- come back exactly as it went in, which only writing every digit
+-- guarantees.
 newtype Stamp = Stamp UTCTime
 
 instance ToField Stamp where
@@ -152,14 +153,15 @@ instance FromField Stamp where
 stamp :: RowParser UTCTime
 stamp = (\(Stamp t) -> t) <$> field
 
--- | A slug column, read back through 'mkSlug', so that a slug read is one.
+-- | A slug column, read back through 'mkSlug', so that what is read is a
+-- valid slug.
 slugField :: RowParser Slug
 slugField = fieldWith parse
   where
     parse :: FieldParser Slug
     parse f = fromField f >>= \t -> either (\e -> returnError ConversionFailed f ("not a slug: " <> show e)) pure (mkSlug t)
 
--- | The words for an order, which the export format writes too.
+-- | The word for an order, which the export format also writes.
 orderText :: ChildOrder -> Text
 orderText = \case
   ByName -> "name"
@@ -167,7 +169,8 @@ orderText = \case
   OldestFirst -> "oldest-first"
   ByHand -> "by-hand"
 
--- | An order from its word; the schema's check keeps it one of them.
+-- | An order from its word; the schema's check guarantees it is one of
+-- them.
 readOrder :: Text -> ChildOrder
 readOrder t = fromMaybe ByName (find (\o -> orderText o == t) [minBound .. maxBound])
 
@@ -190,8 +193,8 @@ subjectColumns = \case
   SubjectUser u -> ("user", u.text)
   SubjectGroup g -> ("group", g.text)
 
--- | A subject from its two columns; 'Nothing' for a kind the schema's check
--- does not let in.
+-- | A subject from its two columns; 'Nothing' for a kind the schema's
+-- check does not allow.
 subjectFrom :: Text -> Text -> Maybe Subject
 subjectFrom kind i = case kind of
   "user" -> Just (SubjectUser (UserId i))
@@ -201,10 +204,10 @@ subjectFrom kind i = case kind of
 --------------------------------------------------------------------------------
 -- Pages without their text
 
--- | A page's place in its space's tree, without its title's version, body
--- or attachments: what finding a page by its path, giving a slug, a
--- position or a subtree needs, read without the text of every page of a
--- space.
+-- | A page's place in its space's tree, without its title, body or
+-- attachments: what finding a page by its path, choosing a slug or a
+-- position, or finding a subtree needs, read without the text of every
+-- page of a space.
 data PageNode = PageNode
   { id :: PageId
   , space :: SpaceId
@@ -214,8 +217,8 @@ data PageNode = PageNode
   , createdAt :: UTCTime
   , position :: Int
   , template :: Bool
-  -- ^ Whether it is one of its space's templates: what a search that does
-  -- not ask for them leaves out.
+  -- ^ Whether it is one of its space's templates, which a search that
+  -- does not ask for templates leaves out.
   }
 
 instance TreeNode PageNode where
@@ -259,7 +262,7 @@ pageNode c pid = head <$> queryWith nodeRow c (sql ("SELECT " <> nodeColumns <> 
 --------------------------------------------------------------------------------
 -- Reads
 
--- | A query put together from pieces of text.
+-- | A query built from pieces of text.
 sql :: Text -> Query
 sql = Query
 
@@ -279,16 +282,16 @@ spaceRow = do
   subspaceOrder <- orderField
   pageOrder <- orderField
   homePage <- fmap PageId <$> field
-  -- An icon that does not read (one a later program wrote) is the
-  -- default, as the export reads it.
+  -- An icon that does not parse (one written by a later program) is read
+  -- as the default, as the export reads it.
   icon <- (>>= decodeStrict' . encodeUtf8) <$> (field :: RowParser (Maybe Text))
   description <- field
   blog <- field
   pure Space {id, parent, name, slug, public, mathMacros, createdAt, position, subspaceOrder, pageOrder, homePage, icon, description, blog}
 
--- | Every space, by id: a wiki has tens of them, and every permission is a
--- question about a space's chain of ancestors, so each operation reads them
--- all.
+-- | Every space, by id. A wiki has tens of them, and every permission is
+-- a question about a space's chain of ancestors, so each operation reads
+-- them all.
 loadSpaces :: Connection -> IO (Map SpaceId Space)
 loadSpaces c = Map.fromList . map (\s -> (s.id, s)) <$> queryWith_ spaceRow c (sql ("SELECT " <> spaceColumns <> " FROM spaces"))
 
@@ -311,9 +314,9 @@ loadGrants c = do
           , Just subject <- [subjectFrom kind i]
           , Just permission <- [find (\x -> spaceText x == p) [minBound .. maxBound]]
           ]
-      , -- The wiki's setting, which the storage reads with the grants
-        -- where it is asked about (Wiki.Server.Storage), is not a row of
-        -- theirs.
+      , -- The wiki's access setting, which the storage adds to the grants
+        -- where it is needed (Wiki.Server.Storage), is not stored in the
+        -- grants' rows.
         access = Open
       }
 
@@ -388,7 +391,7 @@ attachmentRow = do
   let source = maybe (SourceBlob (BlobId (fromMaybe "" blob))) SourceUrl url
   pure (page, Attachment {id, name, mediaType, size, source})
 
--- | Pages with their attachments, each page's in their order.
+-- | Pages with their attachments, each page's attachments in order.
 withAttachments :: [[Attachment] -> Page] -> [(PageId, Attachment)] -> [Page]
 withAttachments rows attached = [p (Map.findWithDefault [] (p []).id byPage) | p <- rows]
   where
@@ -436,7 +439,7 @@ loadDraft c page author = head <$> queryWith row c "SELECT title, body, base, sa
       pure Draft {page, author, title, body, base, savedAt}
 
 -- | A version of a page as its row has it, with the display name of its
--- author if they are one of the users.
+-- author if the author is a user.
 data VersionRow = VersionRow
   { updatedAt :: UTCTime
   , title :: Text
@@ -445,10 +448,10 @@ data VersionRow = VersionRow
   , authorName :: Maybe Text
   }
 
--- | Every version of a page, in no particular order: the times are text,
--- whose order is not the times' (a time without a fraction sorts after one
--- with), so the caller orders them. Without their bodies, which a history's
--- list does not show.
+-- | Every version of a page, in no particular order: the times are stored
+-- as text, whose order is not the times' order (a time without a fraction
+-- sorts after one with), so the caller orders them. Without their bodies,
+-- which a history's list does not show.
 loadVersions :: Connection -> PageId -> IO [VersionRow]
 loadVersions c page =
   queryWith
@@ -458,8 +461,8 @@ loadVersions c page =
     (Only page.text)
 
 -- | Every version of every page of a space, without their bodies, by
--- page: what the first author of each is read from. In no particular
--- order, as 'loadVersions'.
+-- page: what each page's first author is read from. In no particular
+-- order, as for 'loadVersions'.
 loadSpaceVersions :: Connection -> SpaceId -> IO [(PageId, VersionRow)]
 loadSpaceVersions c space =
   queryWith
@@ -523,19 +526,20 @@ insertMember c g u = execute c "INSERT OR IGNORE INTO group_members (group_id, u
 deleteMember :: Connection -> GroupId -> UserId -> IO ()
 deleteMember c g u = execute c "DELETE FROM group_members WHERE group_id = ? AND user_id = ?" (g.text, u.text)
 
--- | Give a group another name.
+-- | Rename a group.
 renameGroupRow :: Connection -> GroupId -> Text -> IO ()
 renameGroupRow c g name = execute c "UPDATE groups SET name = ? WHERE id = ?" (name, g.text)
 
--- | Delete a group: its members go with it (a foreign key), and so must
--- the grants to it, which name it in a column that is no foreign key.
+-- | Delete a group. Its memberships are deleted with it (by a foreign
+-- key), and so must the grants to it be, which name it in a column that is
+-- not a foreign key.
 deleteGroupRows :: Connection -> GroupId -> IO ()
 deleteGroupRows c g = do
   execute c "DELETE FROM global_grants WHERE subject_kind = 'group' AND subject_id = ?" (Only g.text)
   execute c "DELETE FROM space_grants WHERE subject_kind = 'group' AND subject_id = ?" (Only g.text)
   execute c "DELETE FROM groups WHERE id = ?" (Only g.text)
 
--- | Take back a global grant, if it was given.
+-- | Remove a global grant, if it exists.
 deleteGlobalGrant :: Connection -> GlobalGrant -> IO ()
 deleteGlobalGrant c g =
   let (kind, i) = subjectColumns g.subject
@@ -546,7 +550,8 @@ deleteSpaceGrant c g =
   let (kind, i) = subjectColumns g.subject
    in execute c "DELETE FROM space_grants WHERE space_id = ? AND subject_kind = ? AND subject_id = ? AND permission = ?" (g.space.text, kind, i, spaceText g.permission)
 
--- | Give these grants, in their order; one already given is left as it is.
+-- | Add these grants, in order; a grant that already exists is left as it
+-- is.
 insertGrants :: Connection -> Grants -> IO ()
 insertGrants c grants = do
   for_ grants.global $ \g ->
@@ -581,7 +586,7 @@ spaceValues s =
 insertSpace :: Connection -> Space -> IO ()
 insertSpace c s = execute c (sql ("INSERT INTO spaces (" <> spaceColumns <> ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) (spaceValues s)
 
--- | Write a space over the one with its id: every column of it.
+-- | Overwrite the space with this id: every column of it.
 updateSpace :: Connection -> Space -> IO ()
 updateSpace c s =
   execute
@@ -589,8 +594,8 @@ updateSpace c s =
     "UPDATE spaces SET parent = ?, name = ?, slug = ?, public = ?, math_macros = ?, created_at = ?, position = ?, subspace_order = ?, page_order = ?, home_page = ?, icon = ?, description = ?, blog = ? WHERE id = ?"
     (drop 1 (spaceValues s) <> [toField s.id.text])
 
--- | Add a page, without its attachments, with the text the search compares
--- queries with prepared from its body.
+-- | Add a page, without its attachments, with its search text prepared
+-- from its body.
 insertPage :: Connection -> Page -> IO ()
 insertPage c p =
   execute
@@ -609,8 +614,8 @@ insertPage c p =
     , toField (bodyText p.body)
     ]
 
--- | Keep a version of a page: its title and body as of its @updatedAt@, and
--- who saved it, if anyone is known to have.
+-- | Store a version of a page: its title and body as of its @updatedAt@,
+-- and who saved it, if known.
 insertVersion :: Connection -> Page -> Maybe UserId -> IO ()
 insertVersion c p author =
   execute
@@ -618,7 +623,8 @@ insertVersion c p author =
     "INSERT INTO page_versions (page_id, updated_at, title, body, author) VALUES (?, ?, ?, ?, ?)"
     (p.id.text, Stamp p.updatedAt, p.title, p.body, fmap (\u -> u.text) author)
 
--- | Attach an attachment to a page, at a place among the page's.
+-- | Attach an attachment to a page, at a position among the page's
+-- attachments.
 insertAttachment :: Connection -> PageId -> Int -> Attachment -> IO ()
 insertAttachment c page ordinal a =
   execute
@@ -653,7 +659,8 @@ accountFromRow (uid, login, displayName, phc, disabled) =
     , disabled = disabled /= 0
     }
 
--- | A query of accounts' rows, from the users, with the rest given.
+-- | A query of account rows, from the users table, with the rest of the
+-- query given.
 selectAccounts :: Text -> Query
 selectAccounts rest = Query ("SELECT id, login, display_name, password_hash, disabled FROM users " <> rest)
 
@@ -670,9 +677,9 @@ loadAccountFlags c = do
     , Set.fromList [UserId u | (u, _, hashed) <- rows, hashed /= (0 :: Int)]
     )
 
--- | A new user with a login no other user has, whatever its case, or a
--- 'Left' with the login that is taken; the login and the password's hash
--- are as they are to be kept.
+-- | Add a user with a login no other user has, ignoring case, or return a
+-- 'Left' with the login that is taken. The login and the password hash are
+-- stored as given.
 insertAccount :: Connection -> UserId -> Text -> Text -> Maybe Text -> IO (Either Text Account)
 insertAccount c u login displayName phc = do
   taken <- query c "SELECT count(*) FROM users WHERE login = ? COLLATE NOCASE" (Only login)
@@ -682,11 +689,11 @@ insertAccount c u login displayName phc = do
       execute c "INSERT INTO users (id, login, display_name, password_hash, disabled) VALUES (?, ?, ?, ?, 0)" (u.text, login, displayName, phc)
       maybe (Left login) Right <$> loadAccount c u
 
--- | A user's password, as its hash, in place of the one they had.
+-- | Replace a user's password hash.
 updatePasswordHash :: Connection -> UserId -> Text -> IO ()
 updatePasswordHash c u phc = execute c "UPDATE users SET password_hash = ? WHERE id = ?" (phc, u.text)
 
--- | Whether a user is disabled.
+-- | Set whether a user is disabled.
 updateDisabled :: Connection -> UserId -> Bool -> IO ()
 updateDisabled c u disabled = execute c "UPDATE users SET disabled = ? WHERE id = ?" (fromEnum disabled, u.text)
 
@@ -694,13 +701,13 @@ updateDisabled c u disabled = execute c "UPDATE users SET disabled = ? WHERE id 
 deleteSessionsOf :: Connection -> UserId -> IO ()
 deleteSessionsOf c u = execute c "DELETE FROM sessions WHERE user_id = ?" (Only u.text)
 
--- | Whether a user has a second factor that signing in asks for: one that
--- they have confirmed (migrations/0008-account-hygiene.sql).
+-- | Whether a user has a second factor that signing in asks for: one they
+-- have confirmed (migrations/0008-account-hygiene.sql).
 totpEnabled :: Connection -> UserId -> IO Bool
 totpEnabled c u = not . null <$> (query c "SELECT 1 FROM totp WHERE user_id = ? AND enabled_at IS NOT NULL" (Only u.text) :: IO [Only Int])
 
--- | Take a user's second factor away, begun or on, with its recovery
--- codes: whether they had one on.
+-- | Remove a user's second factor, started or on, with its recovery codes.
+-- The result is whether they had one on.
 deleteSecondFactor :: Connection -> UserId -> IO Bool
 deleteSecondFactor c u = do
   had <- totpEnabled c u
@@ -729,7 +736,7 @@ data IdentityRow = IdentityRow
   , identity :: LinkedIdentity
   }
 
--- | The identity a provider's account is, if it is anyone's.
+-- | The identity row of a provider's account, if it belongs to anyone.
 identityOf :: Connection -> Text -> Text -> IO (Maybe IdentityRow)
 identityOf c provider subject =
   head
@@ -747,7 +754,7 @@ identityRow (provider, subject, uid, email, name, Stamp linkedAt) =
   IdentityRow {provider, subject, user = UserId uid, identity = LinkedIdentity {provider, email, name, linkedAt}}
 
 -- | Connect a provider's account to a user. The caller has made sure that
--- it is no one's, and that the user has none at that provider.
+-- it belongs to nobody, and that the user has none at that provider.
 insertIdentity :: Connection -> UTCTime -> UserId -> Text -> Text -> Maybe Text -> Maybe Text -> IO ()
 insertIdentity c now u provider subject email name =
   execute
@@ -755,13 +762,14 @@ insertIdentity c now u provider subject email name =
     "INSERT INTO identities (provider, subject, user_id, email, display_name, linked_at) VALUES (?, ?, ?, ?, ?, ?)"
     (provider, subject, u.text, email, name, Stamp now)
 
--- | What a provider says of an account now, kept for the next time it is
--- shown.
+-- | Store what a provider now says about an account, for the next time it
+-- is shown.
 refreshIdentity :: Connection -> Text -> Text -> Maybe Text -> Maybe Text -> IO ()
 refreshIdentity c provider subject email name =
   execute c "UPDATE identities SET email = ?, display_name = ? WHERE provider = ? AND subject = ?" (email, name, provider, subject)
 
--- | Disconnect a user's account at a provider: whether they had one.
+-- | Disconnect a user's account at a provider. The result is whether they
+-- had one.
 deleteIdentity :: Connection -> UserId -> Text -> IO Bool
 deleteIdentity c u provider = do
   execute c "DELETE FROM identities WHERE user_id = ? AND provider = ?" (u.text, provider)
@@ -773,13 +781,13 @@ loadIdentityProviders c = do
   rows <- query_ c "SELECT user_id, provider FROM identities ORDER BY provider"
   pure (Map.fromListWith (flip (<>)) [(UserId u, [p]) | (u, p) <- rows])
 
--- | The names of the providers the server's settings sign people in with.
+-- | The names of the providers in the server's settings.
 providerNames :: Kept -> [Text]
 providerNames kept = map (\p -> p.name) kept.providers
 
 -- | Whether a user has no password to set (WP5.6 of docs/PLAN.md,
 -- 'Wiki.Api.Account.providerOnly'): they have none, and an identity at one
--- of these providers, the ones the server's settings have.
+-- of these providers, the ones in the server's settings.
 noPasswordToSet :: Connection -> [Text] -> UserId -> IO Bool
 noPasswordToSet c configured u = do
   hashed :: [Only Int] <- query c "SELECT password_hash IS NOT NULL FROM users WHERE id = ?" (Only u.text)
@@ -789,7 +797,7 @@ noPasswordToSet c configured u = do
 --------------------------------------------------------------------------------
 -- Password resets
 
--- | Keep a reset's link for a user (migrations/0008-account-hygiene.sql):
+-- | Store a reset link for a user (migrations/0008-account-hygiene.sql):
 -- the hash of its secret, when it was made, and when it expires.
 insertResetToken :: Connection -> UserId -> Text -> UTCTime -> UTCTime -> IO ()
 insertResetToken c u secretHash made expires =
@@ -802,9 +810,9 @@ resetsSince c u since = maybe 0 fromOnly . head <$> query c "SELECT count(*) FRO
 --------------------------------------------------------------------------------
 -- Whom the wiki lets in
 
--- | The wiki's settings, each from its row, or its default for one that
--- has none (migrations/0003-settings.sql), or a value this program does
--- not know.
+-- | The wiki's settings, each from its row, or its default for a setting
+-- that has no row (migrations/0003-settings.sql) or a value this program
+-- does not know.
 loadSettings :: Connection -> IO WikiSettings
 loadSettings c = do
   rows :: [(Text, Text)] <- query_ c "SELECT key, value FROM settings"
@@ -815,14 +823,14 @@ loadSettings c = do
       , newAccountsCreateSpaces = maybe defaultSettings.newAccountsCreateSpaces (== "1") (valueOf "new-accounts-create-spaces")
       }
 
--- | Keep the wiki's settings, each in its row.
+-- | Store the wiki's settings, each in its row.
 storeSettings :: Connection -> WikiSettings -> IO ()
 storeSettings c s =
   for_ [("access", accessName s.access), ("new-accounts-create-spaces", if s.newAccountsCreateSpaces then "1" else "0")] $ \(key, value :: Text) ->
     execute c "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value" (key :: Text, value)
 
--- | Every invitation, the latest first, as at a time (which decides which
--- have expired).
+-- | Every invitation, the latest first, as of a given time (which decides
+-- which have expired).
 loadInvitations :: Connection -> UTCTime -> IO [Invitation]
 loadInvitations c now = do
   rows <- query_ c "SELECT id, email, created_at, expires_at FROM invitations"
@@ -834,21 +842,21 @@ loadInvitations c now = do
         ]
     )
 
--- | Keep an invitation, under the hash of its link's secret, in place of
--- any its address had.
+-- | Store an invitation, under the hash of its link's secret, replacing
+-- any invitation for the same address.
 insertInvitation :: Connection -> Invitation -> Text -> IO ()
 insertInvitation c i secretHash = do
   execute c "DELETE FROM invitations WHERE email = ? COLLATE NOCASE" (Only i.email)
   execute c "INSERT INTO invitations (id, email, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)" (i.id.text, i.email, secretHash, Stamp i.createdAt, Stamp i.expiresAt)
 
--- | Delete an invitation: whether there was one.
+-- | Delete an invitation. The result is whether there was one.
 deleteInvitation :: Connection -> InvitationId -> IO Bool
 deleteInvitation c i = do
   execute c "DELETE FROM invitations WHERE id = ?" (Only i.text)
   (> 0) <$> changes c
 
 -- | The invitation whose link's secret has this hash, if it may be used at
--- this time (it has not expired): its id, and whom it is for.
+-- this time (it has not expired): its id, and who it is for.
 pendingInvitation :: Connection -> UTCTime -> Text -> IO (Maybe (InvitationId, InvitationInfo))
 pendingInvitation c now secretHash = do
   rows <- query c "SELECT id, email, expires_at FROM invitations WHERE token_hash = ?" (Only secretHash)
@@ -856,7 +864,7 @@ pendingInvitation c now secretHash = do
     [(i, email, Stamp expiresAt)] | expiresAt > now -> Just (InvitationId i, InvitationInfo {email, expiresAt})
     _ -> Nothing
 
--- | Grant a user the global create-spaces themself.
+-- | Grant a user the global create-spaces directly.
 grantCreateSpaces :: Connection -> UserId -> IO ()
 grantCreateSpaces c u = execute c "INSERT OR IGNORE INTO global_grants (subject_kind, subject_id, permission) VALUES ('user', ?, ?)" (u.text, globalText CreateSpaces)
 
@@ -865,7 +873,7 @@ grantCreateSpaces c u = execute c "INSERT OR IGNORE INTO global_grants (subject_
 
 -- | The server's settings (migrations/0005-server-settings.sql): none
 -- where nothing is set. A provider of a kind this program does not know
--- is left out, and a mail server without its host is none.
+-- is left out, and a mail server without a host counts as none.
 loadServerSettings :: Connection -> IO Kept
 loadServerSettings c = do
   rows :: [(Text, Text)] <- query_ c "SELECT key, value FROM settings WHERE key = 'public-url' OR key LIKE 'mail-%'"
@@ -892,7 +900,7 @@ loadServerSettings c = do
           ]
       }
 
--- | Keep the server's settings, in place of those kept before.
+-- | Store the server's settings, replacing those stored before.
 storeServerSettings :: Connection -> Kept -> IO ()
 storeServerSettings c s = do
   execute_' "DELETE FROM settings WHERE key = 'public-url' OR key LIKE 'mail-%'"

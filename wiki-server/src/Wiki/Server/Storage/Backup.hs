@@ -1,29 +1,31 @@
--- | Copies of the database set aside, as the deploy script takes one before
--- it starts a new server (decision 15 of docs/PLAN.md).
+-- | Database backups: copies of the database set aside, such as the one
+-- the deploy script takes before it starts a new server (decision 15 of
+-- docs/PLAN.md).
 --
--- A copy is made with SQLite's own @VACUUM INTO@, never by copying the file:
--- the server may be running and writing, and @VACUUM INTO@ reads one
+-- A copy is made with SQLite's own @VACUUM INTO@, never by copying the
+-- file. The server may be running and writing, and @VACUUM INTO@ reads one
 -- consistent state of the database through SQLite (the database is in WAL
--- mode, so it waits for no writer and holds none up) into a new file that is
--- a database on its own, without the WAL beside it. The copies go into
--- @\<data\>/backups/\<time\>.sqlite@, named by the time in UTC so that their
--- names sort as their times do, and only the last few are kept.
+-- mode, so it waits for no writer and blocks none) into a new file that
+-- is a complete database, with no WAL file beside it. The copies go into
+-- @\<data\>/backups/\<time\>.sqlite@, named by the time in UTC so that
+-- their names sort in time order, and only the last few are kept.
 --
--- Attachments are not copied: their files never change, and none is deleted
--- while a backup kept still names it ("Wiki.Server.Storage.Blobs"), so a
--- backup restored in place of the database finds every file it refers to.
+-- Attachments are not copied: their files never change, and none is
+-- deleted while a kept backup still refers to it
+-- ("Wiki.Server.Storage.Blobs"). So a backup restored in place of the
+-- database finds every file it refers to.
 --
 -- The server also backs itself up, once an administrator has turned that
--- on (WP4.9 of docs/PLAN.md, "Wiki.Server.Backups"): what it is set to do
--- and what it last did are rows of the @settings@ table, kept here
--- ('loadBackupSettings', 'loadLastBackup'), and each backup it makes is
--- checked ('checkedBackup') and the old ones pruned by its retention
--- ('pruneRetained').
+-- on (WP4.9 of docs/PLAN.md, "Wiki.Server.Backups"). Its backup settings
+-- and the result of its last backup are rows of the @settings@ table,
+-- read and written here ('loadBackupSettings', 'loadLastBackup'). Each
+-- backup it makes is checked ('checkedBackup'), and old ones are deleted
+-- by its retention rules ('pruneRetained').
 --
--- A backup is put back with 'restore' (@wiki-server restore@), into a data
--- directory no server has open: a server holds the directory's lock file
--- while it runs ('lockDataDir'), which the operating system lets go when
--- the process ends, however it ends.
+-- A backup is restored with 'restore' (@wiki-server restore@), into a data
+-- directory no server has open: a running server holds the directory's
+-- lock file ('lockDataDir'), which the operating system releases when the
+-- process ends, however it ends.
 module Wiki.Server.Storage.Backup
   ( -- * Backups
     backup
@@ -78,15 +80,15 @@ import Wiki.Server.Storage.Blobs (blobFile, storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
 import Wiki.Server.Storage.Migrate (Migration (..), migrations, schemaVersion)
 
--- | How many backups are kept unless asked otherwise: a week of daily
--- deploys and a few more.
+-- | How many backups are kept unless configured otherwise: a week of
+-- daily deploys and a few more.
 defaultKeep :: Int
 defaultKeep = 10
 
--- | Back up the database of a data directory into its backups, and delete
--- all but the last @keep@ of them (never the one just made). What is given
--- back is the new backup's path, or 'Nothing' when there is no database to
--- back up yet (the first deploy).
+-- | Back up a data directory's database into its backups, and delete all
+-- but the last @keep@ of them (never the one just made). The result is the
+-- new backup's path, or 'Nothing' when there is no database to back up yet
+-- (the first deploy).
 backup :: FilePath -> Int -> IO (Maybe FilePath)
 backup dataDir keep =
   ifM
@@ -111,8 +113,8 @@ backupInto c target = execute c "VACUUM INTO ?" (Only (T.pack target))
 backupTime :: FilePath -> Maybe UTCTime
 backupTime file = T.stripSuffix "Z.sqlite" (T.pack (takeFileName file)) >>= parseTimeM False defaultTimeLocale "%Y%m%dT%H%M%S%Q" . T.unpack
 
--- | A backup's name for a time, a millisecond later if one has that name
--- already: @20261024T153000.123Z.sqlite@.
+-- | A backup's file name for a time, a millisecond later if that name
+-- exists already: @20261024T153000.123Z.sqlite@.
 freshName :: FilePath -> UTCTime -> IO FilePath
 freshName dir t = do
   let millis = diffTimeToPicoseconds (utctDayTime t) `div` 1000000000 `mod` 1000
@@ -121,7 +123,7 @@ freshName dir t = do
   ifM (doesFileExist file) (freshName dir (addUTCTime 0.001 t)) (pure file)
 
 -- | The backups in a directory, oldest first: the files named as 'backup'
--- names them, and nothing else that is there.
+-- names them, and nothing else in it.
 backupFiles :: FilePath -> IO [FilePath]
 backupFiles dir =
   ifM
@@ -133,8 +135,8 @@ backupFiles dir =
       Just stem -> T.length stem == 19 && T.all (\ch -> isDigit ch || ch == 'T' || ch == '.') stem
       Nothing -> False
 
--- | Delete all but the newest @keep@ backups in a directory; what is given
--- back is the files deleted.
+-- | Delete all but the newest @keep@ backups in a directory. The result is
+-- the files deleted.
 pruneBackups :: FilePath -> Int -> IO [FilePath]
 pruneBackups dir keep = do
   files <- backupFiles dir
@@ -145,14 +147,14 @@ pruneBackups dir keep = do
 --------------------------------------------------------------------------------
 -- Backups the server makes
 
--- | The settings as kept: the @rclone@ configuration, if any, in clear, as
--- the server's other secrets are ("Wiki.Server.Secret").
+-- | The backup settings as stored: the @rclone@ configuration, if any, in
+-- clear text, like the server's other secrets ("Wiki.Server.Secret").
 type KeptBackups = BackupSettingsOf (Maybe Secret)
 
--- | The settings, each from its row of the @settings@ table, or its default
--- ('defaultBackupSettings': off) for one that has none or that this
--- program cannot read. The rows, all absent until the administration
--- writes them:
+-- | The backup settings, each from its row of the @settings@ table, or its
+-- default ('defaultBackupSettings': off) for a setting that has no row or
+-- that this program cannot read. The rows, all absent until the
+-- administration writes them:
 --
 -- > backup-enabled         1 | 0
 -- > backup-schedule        daily 03:00 | every 6
@@ -183,8 +185,8 @@ loadBackupSettings c = do
       ["every", n] -> EveryHours <$> readMaybe n
       _ -> Nothing
 
--- | Keep the settings, in place of those kept before (the last backup's
--- row is left as it is).
+-- | Store the backup settings, replacing those stored before (the last
+-- backup's row is left as it is).
 storeBackupSettings :: Connection -> KeptBackups -> IO ()
 storeBackupSettings c s = do
   execute_ c "DELETE FROM settings WHERE key LIKE 'backup-%' AND key <> 'backup-last'"
@@ -213,17 +215,17 @@ loadLastBackup c = do
   rows :: [Only Text] <- query_ c "SELECT value FROM settings WHERE key = 'backup-last'"
   pure (head rows >>= \(Only t) -> decodeStrict' (encodeUtf8 t))
 
--- | Keep the last backup made or tried, in place of the one before.
+-- | Store the last backup made or tried, replacing the one before.
 storeLastBackup :: Connection -> BackupRecord -> IO ()
 storeLastBackup c r =
   execute c "INSERT INTO settings (key, value) VALUES ('backup-last', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value" (Only (decodeUtf8 (toS (encode r)) :: Text))
 
--- | Make a backup in a directory of backups, named for a time, by an action
--- that writes the copy into the file it is given ('backupInto' on an open
--- connection), and check it: its path and size, or why there is none. A
--- copy that fails its check, or that could not be finished, is deleted:
--- a backup that cannot be restored must not be counted as one, nor be
--- kept in place of a good one.
+-- | Make a backup in a directory of backups, named for a time, with an
+-- action that writes the copy into the file it is given ('backupInto' on
+-- an open connection), and check it. The result is its path and size, or
+-- why there is none. A copy that fails its check, or could not be
+-- finished, is deleted: a backup that cannot be restored must not count
+-- as one, nor be kept in place of a good one.
 checkedBackup :: (FilePath -> IO ()) -> FilePath -> UTCTime -> IO (Either Text (FilePath, Integer))
 checkedBackup copy dir t = do
   createDirectoryIfMissing True dir
@@ -241,8 +243,8 @@ checkedBackup copy dir t = do
           discard
           pure (Left ("The copy failed SQLite's integrity check, and was deleted: " <> T.intercalate "; " (take 5 problems)))
 
--- | What SQLite's @PRAGMA integrity_check@ finds wrong with a database, none
--- if it finds it sound, or that it cannot be opened as one.
+-- | The problems SQLite's @PRAGMA integrity_check@ finds in a database:
+-- none if it is sound, or that it cannot be opened as a database.
 integrityProblems :: FilePath -> IO [Text]
 integrityProblems file =
   try @SomeException (withConnection file (\c -> query_ c "PRAGMA integrity_check")) <&> \case
@@ -251,9 +253,9 @@ integrityProblems file =
     Right rows -> map fromOnly rows
 
 -- | Delete the backups in a directory that a retention does not keep
--- ('Wiki.Api.Backups.retained'), never this one: what is given back is
--- the files deleted. A file named as a backup is but whose time cannot be
--- read is left alone.
+-- ('Wiki.Api.Backups.retained'), never this one. The result is the files
+-- deleted. A file named like a backup but whose time cannot be read is
+-- left alone.
 pruneRetained :: FilePath -> Retention -> FilePath -> IO [FilePath]
 pruneRetained dir r newest = do
   files <- backupFiles dir
@@ -266,9 +268,9 @@ pruneRetained dir r newest = do
 --------------------------------------------------------------------------------
 -- What a database refers to
 
--- | The attachments' files a database refers to: its attachments', and the
--- images its spaces are pictured with. A backup taken before spaces had
--- icons has no column for them, and refers to no image.
+-- | The attachment files a database refers to: its attachments', and its
+-- spaces' icon images. A backup taken before spaces had icons has no
+-- column for them, and refers to no image.
 referencedBlobs :: Connection -> IO (Set BlobId)
 referencedBlobs d = do
   attached <- map (BlobId . fromOnly) <$> query_ d "SELECT DISTINCT blob FROM attachments WHERE blob IS NOT NULL"
@@ -281,11 +283,12 @@ referencedBlobs d = do
 -- | The lock a server holds on its data directory while it runs.
 newtype DataLock = DataLock Handle
 
--- | Take a data directory's lock (@\<data>/wiki.lock@), or say that
+-- | Take a data directory's lock (@\<data>/wiki.lock@), or report that
 -- something else holds it. The lock is the operating system's (@flock@),
--- held by the open file: it goes with the process however that ends, so a
--- server that crashed leaves nothing to clean up. Within one process the
--- file cannot be opened twice for writing, which says the same.
+-- held by the open file: it is released with the process however that
+-- ends, so a server that crashed leaves nothing to clean up. Within one
+-- process the file cannot be opened twice for writing, which has the same
+-- effect.
 lockDataDir :: FilePath -> IO (Either Text DataLock)
 lockDataDir dataDir = do
   createDirectoryIfMissing True dataDir
@@ -300,7 +303,7 @@ lockDataDir dataDir = do
         True -> pure (Right (DataLock h))
         False -> hClose h $> Left held
 
--- | Let a data directory's lock go.
+-- | Release a data directory's lock.
 unlockDataDir :: DataLock -> IO ()
 unlockDataDir (DataLock h) = hUnlock h `finally` hClose h
 
@@ -310,30 +313,30 @@ unlockDataDir (DataLock h) = hUnlock h `finally` hClose h
 -- | @wiki-server restore BACKUP --data DIR [--attachments DIR]@.
 data Restore = Restore
   { backupFile :: FilePath
-  -- ^ The backup to put back: one of @data\/backups@, or one copied off
+  -- ^ The backup to restore: one from @data\/backups@, or one copied off
   -- the machine.
   , dataDir :: FilePath
-  -- ^ The data directory to put it into, which no server may have open; a
-  -- new one is made.
+  -- ^ The data directory to restore it into, which no server may have
+  -- open; a new one is created.
   , attachments :: Maybe FilePath
-  -- ^ A copy of the attachments' files (an off-site copy's
-  -- @attachments@), to bring into the data directory's those it lacks.
+  -- ^ A copy of the attachment files (an off-site copy's @attachments@),
+  -- from which the data directory gets the files it lacks.
   }
   deriving stock (Eq, Show)
 
--- | Put a backup back as a data directory's database: the lines to show,
--- or why nothing was done.
+-- | Restore a backup as a data directory's database. The result is the
+-- lines to show, or why nothing was done.
 --
 -- The backup is checked first (a sound SQLite database, of a wiki, at a
--- version of the schema this program knows), and the directory's lock is
--- taken, so that a server running on it, or one started meanwhile, is
--- refused. The database it replaces is not deleted: it is moved, with its
--- @-wal@ and @-shm@, into @replaced\/\<time>\/@ beside it, as it is, so
--- that a restore by mistake can itself be undone, even of a database too
--- damaged to be read. The backup is copied in (it is not moved: it stays
--- among the backups), and the server brings it up to its schema when it
--- next starts. Attachments' files the restored database refers to and
--- the directory lacks are named, so that the operator knows to bring them.
+-- schema version this program knows), and the directory's lock is taken,
+-- so that a server running on it, or one started meanwhile, is refused.
+-- The database it replaces is not deleted: it is moved as it is, with its
+-- @-wal@ and @-shm@ files, into @replaced\/\<time>\/@ beside it, so that a
+-- restore made by mistake can itself be undone, even for a database too
+-- damaged to read. The backup is copied in (not moved: it stays among the
+-- backups), and the server migrates it to its schema when it next starts.
+-- The attachment files the restored database refers to and the directory
+-- lacks are listed, so that the operator knows to bring them.
 restore :: Restore -> IO (Either Text [Text])
 restore r = runExceptT $ do
   present <- liftIO (doesFileExist r.backupFile)
@@ -379,9 +382,10 @@ restore r = runExceptT $ do
     finally' body after = ExceptT (runExceptT body `finally` after)
 
 -- | Copy into a directory of blobs the files of another that it lacks (a
--- blob's file never changes, so one that is there is the right one): how
--- many were copied. Each is written beside its place and moved there, so
--- that an interrupted copy leaves no half of a file under a hash.
+-- blob's file never changes, so one that is there is the right one). The
+-- result is how many were copied. Each is written next to its final place
+-- and then moved there, so that an interrupted copy leaves no partial file
+-- under a hash.
 copyBlobs :: FilePath -> FilePath -> IO Int
 copyBlobs into copies = do
   blobs <- Set.toList <$> storedBlobs copies
@@ -393,7 +397,7 @@ copyBlobs into copies = do
         ( do
             let shard = into </> T.unpack (T.take 2 b.text)
                 -- Named as "Wiki.Server.Storage.Blobs" names a file it is
-                -- writing, so that one left behind is collected.
+                -- writing, so that one left behind is cleaned up.
                 incoming = shard </> ("incoming-" <> T.unpack b.text)
             createDirectoryIfMissing True shard
             copyFile source incoming

@@ -1,50 +1,51 @@
 -- | Signing in with an account at a provider (WP3.6 of docs/PLAN.md): the
--- providers the configuration names, and the server's half of the round
--- trip through their pages, OpenID Connect's authorization code flow with
--- PKCE and a nonce, driven by the server ("Wiki.Server.Auth" has the
--- routes; the browser only goes to the provider and comes back).
+-- providers the settings name, and the server's side of the round trip
+-- through their pages. That round trip is OpenID Connect's authorization
+-- code flow with PKCE and a nonce, driven by the server
+-- ("Wiki.Server.Auth" has the routes; the browser only goes to the
+-- provider and comes back).
 --
 -- = Providers
 --
 -- A provider is set up in the administration's "Server" section (WP4.4,
--- "Wiki.Api.ServerSettings"): a name, a kind, the client's id, an issuer,
--- and the client's secret, which the storage keeps and the API never gives
--- back. The server reads them per request ('providersFor'), so a provider
--- added, changed or removed signs people in, or no longer does, from the
--- next request on. Its kind says how the server talks to it:
+-- "Wiki.Api.ServerSettings"): a name, a kind, the client id, an issuer,
+-- and the client secret, which the storage keeps and the API never
+-- returns. The server reads them per request ('providersFor'), so a
+-- provider added, changed or removed takes effect from the next request.
+-- Its kind says how the server talks to it:
 --
 -- * @google@: OpenID Connect at @https:\/\/accounts.google.com@, found by
 --   discovery.
 -- * @apple@: OpenID Connect at @https:\/\/appleid.apple.com@. The secret is
 --   the JWT the operator signs with Apple's key (Apple's client secret is
---   one; it lasts at most six months); the answer comes back as a form
---   posted to the callback (@response_mode=form_post@, which Apple wants
---   when the name and e-mail address are asked for), and the person's name
---   only the first time they sign in, in that form.
--- * @oidc@: any OpenID Connect provider, at the issuer given, found by
+--   such a JWT, and lasts at most six months). The answer comes back as a
+--   form posted to the callback (@response_mode=form_post@, which Apple
+--   requires when the name and e-mail address are requested), and the
+--   person's name comes only the first time they sign in, in that form.
+-- * @oidc@: any OpenID Connect provider, at the given issuer, found by
 --   discovery (@\<issuer>\/.well-known\/openid-configuration@).
 -- * @github@: GitHub's OAuth apps, which are OAuth 2 without OpenID
---   Connect: fixed addresses (those of a GitHub Enterprise server at the
---   address given instead), and the user's id, login, name and verified
---   e-mail address read from its API.
+--   Connect: fixed addresses (or those of a GitHub Enterprise server at the
+--   given address), and the user's id, login, name and verified e-mail
+--   address read from GitHub's API.
 --
--- The address given replaces the kind's own for any kind, which is how
--- the tests point one at a provider of their own.
+-- For any kind, a given address replaces the kind's own, which is how the
+-- tests point a provider at one of their own.
 --
 -- = Trusting what the provider says
 --
 -- The ID token comes from the provider's token endpoint, over TLS, in
--- answer to the server's own request with its client's secret, so the
--- server knows whom it came from without checking its signature, as
--- OpenID Connect Core (3.1.3.7, item 6) allows for a token received that
--- way; its claims are checked all the same ('checkClaims'): the issuer,
--- the audience (this client), the expiry, and the nonce of this round
--- trip. No JOSE library is needed for that. An e-mail address is kept only
--- if the provider says it has verified it.
+-- response to the server's own request with its client secret. So the
+-- server knows who it came from without checking its signature, as OpenID
+-- Connect Core (3.1.3.7, item 6) allows for a token received that way. Its
+-- claims are checked all the same ('checkClaims'): the issuer, the
+-- audience (this client), the expiry, and the nonce of this round trip. No
+-- JOSE library is needed for that. An e-mail address is kept only if the
+-- provider says it has verified it.
 --
--- Nothing secret is ever written into a log or a page: the codes, tokens
--- and secrets of the round trip stay in this module's requests, and its
--- failures are told in its own words, never an HTTP library's, which would
+-- Nothing secret is ever written into a log or a page. The codes, tokens
+-- and secrets of the round trip stay inside this module's requests, and
+-- its errors are worded here, never by an HTTP library, whose exceptions
 -- quote the request.
 module Wiki.Server.Oidc
   ( -- * Providers
@@ -114,7 +115,7 @@ import Wiki.Server.Secret (Kept, Secret, revealed)
 --------------------------------------------------------------------------------
 -- Providers
 
--- | A provider as the server talks to it, but for its secret: as the
+-- | A provider as the server talks to it, without its secret: as the
 -- administration set it.
 data OidcOption = OidcOption
   { name :: Text
@@ -123,12 +124,12 @@ data OidcOption = OidcOption
   , clientId :: Text
   -- ^ The client's id the provider gave when it was registered there.
   , issuer :: Maybe Text
-  -- ^ For @oidc@, the issuer; for another kind, an address in place of
-  -- its own (a GitHub Enterprise server's, say).
+  -- ^ For @oidc@, the issuer; for another kind, an address that replaces
+  -- the kind's own (a GitHub Enterprise server's, say).
   }
   deriving stock (Eq, Ord, Show)
 
--- | A provider's settings, but for its secret.
+-- | A provider's settings, without its secret.
 optionOf :: ProviderSettingsOf s -> OidcOption
 optionOf p = OidcOption {name = p.name, kind = p.kind, clientId = p.clientId, issuer = p.issuer}
 
@@ -140,19 +141,19 @@ data Provider = Provider
   , label :: Text
   -- ^ How the wiki's pages name it: "Sign in with Google".
   , publicUrl :: Text
-  -- ^ The wiki's address, ending in a slash, which the redirect URI is
-  -- below.
+  -- ^ The wiki's address, ending in a slash, under which the redirect URI
+  -- is.
   , manager :: Manager
   , discovered :: IORef (Maybe Endpoints)
-  -- ^ What discovery found, once it has (on the first sign-in, so that a
-  -- server starts while a provider cannot be reached).
+  -- ^ What discovery found, once it has run (on the first sign-in, so that
+  -- a server can start while a provider cannot be reached).
   }
 
 instance Show Provider where
   showsPrec _ p rest = "Provider {option = " <> show p.option <> ", secret = <hidden>, label = " <> show p.label <> "}" <> rest
 
--- | A provider, with its secret, below the wiki's public address, talked
--- to through this manager.
+-- | A provider, with its secret, under the wiki's public address, reached
+-- through this connection manager.
 newProvider :: Manager -> Text -> OidcOption -> Text -> IO Provider
 newProvider manager publicUrl option secret = do
   discovered <- newIORef Nothing
@@ -165,12 +166,12 @@ signInProvider p = SignInProvider {name = p.option.name, label = p.label}
 --------------------------------------------------------------------------------
 -- The providers as set
 
--- | The providers the server has talked to, by everything that makes one
--- (its settings, its secret, the wiki's address), each with what its
--- discovery found: so that a provider is asked how to sign in once, and
--- asked again as soon as any of its settings changes, which makes it
--- another. They share one manager of TLS connections, made when the first
--- is.
+-- | The providers the server has talked to, keyed by everything that
+-- defines one (its settings, its secret, the wiki's address), each with
+-- what its discovery found. So a provider is asked how to sign in once,
+-- and asked again as soon as any of its settings changes, since that makes
+-- it a different key. They share one manager of TLS connections, created
+-- with the first.
 data ProviderCache = ProviderCache
   { manager :: MVar (Maybe Manager)
   , made :: MVar (Map (OidcOption, Secret, Text) Provider)
@@ -179,15 +180,15 @@ data ProviderCache = ProviderCache
 newProviderCache :: IO ProviderCache
 newProviderCache = ProviderCache <$> newMVar Nothing <*> newMVar mempty
 
--- | The manager, made the first time it is wanted.
+-- | The connection manager, created the first time it is needed.
 managerOf :: ProviderCache -> IO Manager
 managerOf cache = modifyMVar cache.manager $ \case
   Just m -> pure (Just m, m)
   Nothing -> newTlsManager <&> \m -> (Just m, m)
 
--- | The providers people may sign in with, as the settings are now: those
--- with a secret, once the wiki has an address to send them back to. Those
--- the settings no longer have are forgotten.
+-- | The providers people may sign in with, from the current settings:
+-- those with a secret, once the wiki has an address to send people back
+-- to. Providers the settings no longer have are dropped.
 providersFor :: ProviderCache -> Kept -> IO [Provider]
 providersFor cache s = case s.publicUrl of
   Nothing -> pure []
@@ -202,8 +203,8 @@ providersFor cache s = case s.publicUrl of
             maybe (newProvider manager url option (revealed secret)) pure (Map.lookup key known)
           pure (Map.fromList (zip wanted providers), providers)
 
--- | A provider as given, that has asked nothing yet: what checking one
--- asks afresh.
+-- | A provider as given, that has asked nothing yet: what checking a
+-- provider uses, to ask afresh.
 freshProvider :: ProviderCache -> Text -> OidcOption -> Text -> IO Provider
 freshProvider cache url option secret = do
   manager <- managerOf cache
@@ -212,26 +213,26 @@ freshProvider cache url option secret = do
 --------------------------------------------------------------------------------
 -- The round trip
 
--- | Where a provider is asked what.
+-- | A provider's endpoints: where it is asked what.
 data Endpoints = Endpoints
   { issuer :: Text
-  -- ^ What its ID tokens say issued them; for GitHub, which issues none,
-  -- its address.
+  -- ^ What its ID tokens name as their issuer; for GitHub, which issues
+  -- none, its address.
   , authorization :: Text
   , token :: Text
   , userinfo :: Maybe Text
   -- ^ For an OpenID Connect provider, its user info, if it has one; for
   -- GitHub, its API.
   , secretInForm :: Bool
-  -- ^ Whether the client's secret goes in the token request's form
-  -- (@client_secret_post@), as GitHub, Google and Apple take it, or in its
-  -- @Authorization@ header (@client_secret_basic@), which a provider whose
-  -- discovery document does not say that it takes the form wants (the
-  -- default of OpenID Connect Discovery).
+  -- ^ Whether the client secret goes in the token request's form
+  -- (@client_secret_post@), as GitHub, Google and Apple accept it, or in
+  -- its @Authorization@ header (@client_secret_basic@). A provider whose
+  -- discovery document does not say it accepts the form gets the header
+  -- (the default of OpenID Connect Discovery).
   }
   deriving stock (Eq, Show)
 
--- | The kind's own address, or the one configured in its place.
+-- | The kind's own address, or the configured one that replaces it.
 baseOf :: OidcOption -> Text
 baseOf o = T.dropWhileEnd (== '/') $ fromMaybe own o.issuer
   where
@@ -242,8 +243,8 @@ baseOf o = T.dropWhileEnd (== '/') $ fromMaybe own o.issuer
       Generic -> ""
 
 -- | A provider's endpoints: GitHub's fixed ones, or what discovery finds,
--- asked once and kept. 'Left' says why they could not be found, for a
--- person to read.
+-- asked once and kept. A 'Left' says why they could not be found, in words
+-- for a person to read.
 endpointsOf :: Provider -> IO (Either Text Endpoints)
 endpointsOf p = case p.option.kind of
   GitHub ->
@@ -274,10 +275,10 @@ endpointsOf p = case p.option.kind of
         <*> o .:? "userinfo_endpoint"
         <*> pure (maybe False ("client_secret_post" `elem`) methods)
 
--- | The secrets of one round trip: its state (what the provider sends back
--- to say which round trip it ends), its nonce (which the ID token must
--- carry) and its PKCE verifier (which the token endpoint wants with the
--- code). Each is 32 random bytes in base64 for URLs.
+-- | The secrets of one round trip: its state (which the provider sends
+-- back, to say which round trip it ends), its nonce (which the ID token
+-- must carry) and its PKCE verifier (which the token endpoint needs with
+-- the code). Each is 32 random bytes in URL-safe base64.
 data Secrets = Secrets
   { state :: Text
   , nonce :: Text
@@ -290,13 +291,13 @@ instance Show Secrets where
 newSecrets :: IO Secrets
 newSecrets = Secrets <$> newToken <*> newToken <*> newToken
 
--- | The PKCE challenge of a verifier: its SHA-256, in base64 for URLs
+-- | The PKCE challenge of a verifier: its SHA-256, in URL-safe base64
 -- (@S256@).
 challengeOf :: Text -> Text
 challengeOf verifier = decodeUtf8 (convertToBase Base64URLUnpadded (SHA256.hash (encodeUtf8 verifier)))
 
--- | Whether the kind takes PKCE. Apple does not say it does, and might
--- refuse a token request with a verifier it does not know; the state and
+-- | Whether the kind supports PKCE. Apple does not say it does, and might
+-- refuse a token request with a verifier it does not expect; the state and
 -- the nonce protect its round trip.
 withPkce :: ProviderKind -> Bool
 withPkce = (/= Apple)
@@ -326,14 +327,14 @@ data Answer = Answer
   { code :: Text
   , user :: Maybe Text
   -- ^ Apple's @user@ field, a JSON object with the person's name, sent
-  -- the first time they sign in only.
+  -- only the first time they sign in.
   }
 
 instance Show Answer where
   showsPrec _ _ rest = "Answer <hidden>" <> rest
 
 -- | Who the provider says signed in, once the code is exchanged at its
--- token endpoint and what it answered is checked; or why not, for a
+-- token endpoint and the response is checked; or why not, in words for a
 -- person to read.
 claimsFor :: Provider -> Secrets -> Answer -> IO (Either Text Claimed)
 claimsFor p s answer = runExceptT $ do
@@ -348,7 +349,7 @@ claimsFor p s answer = runExceptT $ do
       idToken <- maybe (throwError (p.label <> " gave no ID token.")) pure tokens.idToken
       claims <- either (\why -> throwError (p.label <> "'s ID token cannot be read: " <> why)) pure (decodeIdToken idToken)
       either (\why -> throwError (p.label <> "'s ID token " <> why)) pure (checkClaims (acceptedIssuers kind e) p.option.clientId s.nonce now claims)
-      -- What the token does not say, the user info may.
+      -- What the token does not say, the user info endpoint may.
       extra <- case (e.userinfo, tokens.accessToken) of
         (Just url, Just access)
           | isNothing claims.email || isNothing claims.name ->
@@ -377,8 +378,8 @@ claimsFor p s answer = runExceptT $ do
         }
     joinedName c = mfilter (not . T.null) (Just (T.unwords (catMaybes [c.givenName, c.familyName])))
 
--- | The issuers whose ID tokens are taken: the discovered one, and for
--- Google its name without the scheme, which its tokens may carry too.
+-- | The issuers whose ID tokens are accepted: the discovered one, and for
+-- Google its name without the scheme, which its tokens may also carry.
 acceptedIssuers :: ProviderKind -> Endpoints -> [Text]
 acceptedIssuers kind e = e.issuer : ["accounts.google.com" | kind == Google]
 
@@ -391,7 +392,7 @@ appleNameOf raw = do
     (,) <$> n .:? "firstName" <*> n .:? "lastName"
   mfilter (not . T.null) (Just (T.unwords (catMaybes [first', last'])))
 
--- | What a token endpoint answered.
+-- | A token endpoint's response.
 data Tokens = Tokens
   { idToken :: Maybe Text
   , accessToken :: Maybe Text
@@ -426,8 +427,8 @@ exchange p e s code = do
         | status /= 200 -> Left (p.label <> "'s token endpoint answered with status " <> show status <> ".")
         | otherwise -> Right Tokens {idToken = field "id_token", accessToken = field "access_token"}
 
--- | Who a GitHub access token is: its user, and their primary e-mail
--- address if it is verified.
+-- | The user a GitHub access token belongs to: their account, and their
+-- primary e-mail address if it is verified.
 gitHubUser :: Provider -> Endpoints -> Text -> IO (Either Text Claimed)
 gitHubUser p e access = runExceptT $ do
   api <- maybe (throwError "GitHub's API has no address.") pure e.userinfo
@@ -438,7 +439,7 @@ gitHubUser p e access = runExceptT $ do
       withObject "user" $ \o -> do
         uid :: Integer <- o .: "id"
         (uid,,) <$> o .:? "login" <*> o .:? "name"
-  -- Without the user:email scope there is no list, and no address.
+  -- Without the user:email scope there is no list, and so no address.
   emails <- liftIO (fetchJson p hs (api <> "/user/emails"))
   let primary = do
         listed <- rightToMaybe emails
@@ -451,7 +452,7 @@ gitHubUser p e access = runExceptT $ do
           ]
   pure Claimed {provider = p.option.name, subject = show uid, email = primary, name = mfilter (not . T.null) name, login}
 
--- | A GET whose answer is JSON.
+-- | A GET whose response is JSON.
 fetchJson :: Provider -> [(HeaderName, ByteString)] -> Text -> IO (Either Text Value)
 fetchJson p hs url = do
   answered <- request p "GET" url ((hAccept, "application/json") : hs) ""
@@ -461,9 +462,9 @@ fetchJson p hs url = do
     first (const "it answered with something that is not JSON") (eitherDecode body)
 
 -- | A request to a provider, with the server's name as the user agent
--- (GitHub's API refuses a request without one) and a time limit: the
--- status and the body, or why there are none, in words of this module's
--- own (an HTTP library's exception quotes its request, secrets and all).
+-- (GitHub's API refuses a request without one) and a time limit. The
+-- result is the status and the body, or why there is none, worded by this
+-- module (an HTTP library's exception quotes its request, secrets and all).
 request :: Provider -> ByteString -> Text -> [(HeaderName, ByteString)] -> LByteString -> IO (Either Text (Int, LByteString))
 request p method url hs body = do
   outcome <- try $ do
@@ -486,7 +487,7 @@ request p method url hs body = do
 --------------------------------------------------------------------------------
 -- ID tokens
 
--- | The claims of an ID token the server looks at.
+-- | The claims of an ID token that the server checks.
 data IdClaims = IdClaims
   { iss :: Text
   , sub :: Text
@@ -504,7 +505,7 @@ data IdClaims = IdClaims
   }
   deriving stock (Eq, Show)
 
--- | User info has the same claims, but for those only an ID token has.
+-- | User info has the same claims, except those only an ID token has.
 instance FromJSON IdClaims where
   parseJSON = withObject "claims" claimsOf
 
@@ -552,9 +553,9 @@ decodeIdToken t = case T.splitOn "." t of
 clockSkew :: NominalDiffTime
 clockSkew = 60
 
--- | Whether an ID token's claims are those of this round trip: issued by
--- one of these issuers, for this client, not expired, with this nonce.
--- 'Left' finishes "The ID token …", for a person to read.
+-- | Whether an ID token's claims belong to this round trip: issued by one
+-- of these issuers, for this client, not expired, with this nonce. A
+-- 'Left' completes the sentence "The ID token …", for a person to read.
 checkClaims :: [Text] -> Text -> Text -> UTCTime -> IdClaims -> Either Text ()
 checkClaims issuers clientId nonce now c
   | c.iss `notElem` issuers = Left ("was issued by " <> c.iss <> ", not by the provider.")
@@ -568,21 +569,21 @@ checkClaims issuers clientId nonce now c
 --------------------------------------------------------------------------------
 -- Pending round trips
 
--- | A round trip under way: what it is for, its secrets, and where to go
--- once done. Kept in memory for 'flowLifetime', by the hash of its state:
--- a server restarted meanwhile has forgotten it, and the person signs in
--- again.
+-- | A round trip in progress: what it is for, its secrets, and where to
+-- go once it is done. Kept in memory for 'flowLifetime', under the hash of
+-- its state: a server restarted meanwhile has forgotten it, and the person
+-- signs in again.
 data Pending = Pending
   { provider :: Text
   , secrets :: Secrets
   , intent :: Intent
   , next :: Text
-  -- ^ The application's path to go to once done.
+  -- ^ The application's path to go to once it is done.
   , expires :: UTCTime
   }
   deriving stock (Show)
 
--- | The round trips under way.
+-- | The round trips in progress.
 newtype Flows = Flows (IORef (Map Text Pending))
 
 newFlows :: IO Flows
@@ -594,19 +595,19 @@ newFlows = Flows <$> newIORef mempty
 flowLifetime :: NominalDiffTime
 flowLifetime = 10 * 60
 
--- | The most round trips kept at once: beyond it, the oldest go.
+-- | The most round trips kept at once: beyond it, the oldest are dropped.
 maxFlows :: Int
 maxFlows = 10000
 
--- | Keep a round trip, dropping those that have expired.
+-- | Store a round trip, dropping those that have expired.
 remember :: Flows -> UTCTime -> Pending -> IO ()
 remember (Flows ref) now p = atomicModifyIORef' ref $ \m ->
   let live = Map.filter (\x -> x.expires > now) m
       bounded = if Map.size live >= maxFlows then Map.fromList (drop (Map.size live - maxFlows + 1) (sortOn (\(_, x) -> x.expires) (Map.toList live))) else live
    in (Map.insert (tokenHash p.secrets.state) p bounded, ())
 
--- | The round trip a state names, if it has not expired, forgotten as it
--- is taken: a state ends one round trip once.
+-- | Take the round trip a state names, if it has not expired, removing
+-- it: a state ends one round trip only once.
 takePending :: Flows -> UTCTime -> Text -> IO (Maybe Pending)
 takePending (Flows ref) now given = atomicModifyIORef' ref $ \m ->
   let key = tokenHash given

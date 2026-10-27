@@ -1,78 +1,80 @@
--- | Users' accounts and sessions, as the server keeps them: who may sign
--- in, with what password, and who has (decisions 8, 11 and 20 of
--- docs/PLAN.md).
+-- | Users' accounts and sessions, as the server stores them: who may sign
+-- in, with which password, and who is signed in (decisions 8, 11 and 20
+-- of docs/PLAN.md).
 --
--- The operations here are the console's (@wiki-server users …@,
--- "Wiki.Server.Console") and the administration API's ("Wiki.Server.Api")
--- alike, so that a user made either way is the same user; who may call
--- them is the caller's business (the console is whoever can read the data
--- directory, the API checks for an administrator). Each is one transaction
--- on the storage's connection, except that a password is hashed before the
--- connection is taken, since hashing one takes tens of milliseconds
--- ("Wiki.Server.Password") that the rest of the server should not wait
--- for.
+-- The console (@wiki-server users …@, "Wiki.Server.Console") and the
+-- administration API ("Wiki.Server.Api") both use these operations, so a
+-- user created either way is the same kind of user. Who may call them is
+-- the caller's responsibility: the console is whoever can read the data
+-- directory, and the API checks for an administrator. Each operation is
+-- one transaction on the storage's connection, except that a password is
+-- hashed before the connection is taken, since hashing takes tens of
+-- milliseconds ("Wiki.Server.Password") that the rest of the server should
+-- not wait for.
 --
 -- What the console does ('createAccount', 'setPassword', 'setDisabled',
--- 'setAdministrator') is recorded in the audit log as the operator's,
--- from the console (WP4.10 of docs/PLAN.md), as the administration's own
--- writes are by "Wiki.Server.Storage"; so is an account someone makes
--- themself, by registering or with an invitation, as theirs.
+-- 'setAdministrator') is recorded in the audit log as done by the
+-- operator, from the console (WP4.10 of docs/PLAN.md), as
+-- "Wiki.Server.Storage" records the administration's own writes. An
+-- account someone creates for themself, by registering or with an
+-- invitation, is recorded as done by them.
 --
 -- = Sessions
 --
--- Signing in makes a session: a random id, which the cookie carries
--- ("Wiki.Server.Session") and of which the database keeps only a hash.
--- A session ends when its user signs out, when they are disabled or given a
--- new password, and when it has not been used for 'idleTime'; each use
--- moves its end on, at most once every 'refreshEvery', so that a session
--- in use does not cost a write per request. When and from where it was last
--- used is written at most once every 'seenEvery', for the account panel,
--- which lists a user's sessions and ends any of them (WP4.11 of
--- docs/PLAN.md): by an id of the session's own, never the secret its
--- cookie carries.
+-- Signing in creates a session: a random id, which the cookie carries
+-- ("Wiki.Server.Session"); the database stores only a hash of it. A
+-- session ends when its user signs out, when the user is disabled or given
+-- a new password, and when it has not been used for 'idleTime'. Each use
+-- moves its end later, at most once every 'refreshEvery', so that a
+-- session in use does not cost a write per request. When and from where
+-- it was last used is written at most once every 'seenEvery', for the
+-- account panel. The panel lists a user's sessions and ends any of them
+-- (WP4.11 of docs/PLAN.md), by a separate id of the session, never by the
+-- secret its cookie carries.
 --
--- A user who has a second factor ("Wiki.Server.SecondFactor") is not given
--- a session by the right password alone: 'signIn' says that a code is
--- wanted, and the session is begun once it is given.
+-- A user who has a second factor ("Wiki.Server.SecondFactor") does not get
+-- a session for the right password alone: 'signIn' reports that a code is
+-- needed, and the session starts once the code is given.
 --
--- = Accounts people make themselves
+-- = Accounts people create themselves
 --
--- In an open wiki anyone may make themself an account ('register'); in
--- any wiki, someone invited may, with the invitation's secret
+-- In an open wiki anyone may create their own account ('register'). In
+-- any wiki, an invited person may, with the invitation's secret
 -- ('acceptInvitation', WP3.5 of docs/PLAN.md), which is then used up. The
--- account holds no grant, unless the wiki's settings give a new account
--- the global create-spaces, and its maker is signed in as it at once.
--- The secret is checked before the password is hashed, so that a link
--- that lets nobody in costs the server nothing.
+-- account holds no grant, unless the wiki's settings give new accounts the
+-- global create-spaces, and its creator is signed in as it at once. The
+-- secret is checked before the password is hashed, so that a link that
+-- lets nobody in costs the server nothing.
 --
 -- = Signing in with a provider
 --
 -- A user may sign in with an account at a provider instead of a password,
--- or beside one (WP3.6 of docs/PLAN.md): an identity, the provider's
--- account by the subject the provider knows it by ("Wiki.Server.Oidc" has
--- the provider say who it is). 'landWith' decides what that comes to, in
--- one transaction, by the same rules as the rest: the user whose identity
--- it is is signed in, unless they are disabled; one that is no one's is
--- connected to the user signed in who asked for that, or makes an account
--- in an open wiki, or with an invitation in any wiki, which it uses up;
--- otherwise a closed wiki refuses it. An account made so has no password,
--- and a login made from what the provider said ('loginCandidates').
+-- or as well as one (WP3.6 of docs/PLAN.md). Such an account is an
+-- identity: the provider's account, by the subject id the provider gives
+-- it ("Wiki.Server.Oidc" has the provider confirm who it is). 'landWith'
+-- decides the result, in one transaction, by the same rules as the rest.
+-- If the identity belongs to a user, that user is signed in, unless they
+-- are disabled. If it belongs to nobody, it is connected to the signed-in
+-- user who asked for that; or it creates an account in an open wiki, or
+-- with an invitation in any wiki, which it uses up; otherwise a closed
+-- wiki refuses it. An account created this way has no password, and a
+-- login made from what the provider said ('loginCandidates').
 --
--- A user may disconnect their identities ('unlinkIdentity'), but not the
--- last way they have in: an identity they cannot do without, having no
--- password and no other. The administration may (its own operation,
--- "Wiki.Server.Storage").
+-- A user may disconnect their identities ('unlinkIdentity'), but not
+-- their last way to sign in: an identity they cannot do without, because
+-- they have no password and no other identity. The administration may (its
+-- own operation, in "Wiki.Server.Storage").
 --
 -- = One's own password
 --
--- A user signed in changes their password, or sets one if they have none
--- and no provider the server has to sign in with ('changePassword', WP3.7
--- of docs/PLAN.md): one who signs in with such a provider has no password
--- to set (WP5.6), and is refused. The one they have must be given and
--- right: a session is not enough, so that whoever finds a browser left
--- signed in cannot take the account from its owner. Their other sessions end, as when an
--- administrator sets a password, but not the one they change it from,
--- which the caller names by the id its cookie carries.
+-- A signed-in user changes their password, or sets one if they have none
+-- and no server provider to sign in with ('changePassword', WP3.7 of
+-- docs/PLAN.md). A user who signs in with such a provider has no password
+-- to set (WP5.6), and is refused. The current password must be given and
+-- be correct: a session is not enough, so that someone who finds a browser
+-- left signed in cannot take over the account. The user's other sessions
+-- end, as when an administrator sets a password, but not the one they
+-- change it from, which the caller names by the id its cookie carries.
 module Wiki.Server.Accounts
   ( -- * Accounts
     accountOf
@@ -151,14 +153,14 @@ import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accou
 accountOf :: Storage -> UserId -> IO (Maybe Account)
 accountOf st u = withDatabase st (`loadAccount` u)
 
--- | A user's account, by login, which is compared as SQLite compares
--- without case (ASCII letters): what someone types to sign in.
+-- | A user's account, by login, compared as SQLite compares text ignoring
+-- case (ASCII letters only): what someone types to sign in.
 accountByLogin :: Storage -> Text -> IO (Maybe Account)
 accountByLogin st login = withDatabase st $ \c ->
   fmap accountFromRow . head <$> query c (selectAccounts "WHERE login = ? COLLATE NOCASE") (Only (T.strip login))
 
--- | Every user's account, by login, with whether they are an administrator
--- (hold the global @administer@ themselves).
+-- | Every user's account, by login, with whether they are an
+-- administrator (hold the global @administer@ themselves).
 listAccounts :: Storage -> IO [(Account, Bool)]
 listAccounts st = withDatabase st $ \c -> do
   rows <-
@@ -172,10 +174,10 @@ listAccounts st = withDatabase st $ \c -> do
       )
   pure [(accountFromRow (uid, login, name, phc, disabled), admin /= (0 :: Int)) | (uid, login, name, phc, disabled, admin) <- rows]
 
--- | Make a user, who signs in with this password, or (with none) cannot
--- sign in until they are given one. Their display name is their login if
--- it is blank. A login another user has, whatever its case, is a
--- 'Conflict'; one or a password that cannot be one is 'Invalid'.
+-- | Create a user, who signs in with this password, or (with none) cannot
+-- sign in until they are given one. A blank display name becomes the
+-- login. A login another user has, in any case, is a 'Conflict'; an
+-- invalid login or password is 'Invalid'.
 createAccount :: Storage -> Text -> Text -> Maybe Text -> IO (Either WikiError Account)
 createAccount st rawLogin rawName password = runExceptT $ do
   login <- either (throwError . Invalid) pure (checkLogin rawLogin)
@@ -211,16 +213,16 @@ setDisabled st u disabled = changeAccount st u (if disabled then "user.disable" 
   when disabled (deleteSessionsOf c u)
 
 -- | Make a user an administrator (the global @administer@, granted to
--- them), or take it away. What their groups are granted is not changed.
+-- them directly), or take it away. Their groups' grants are not changed.
 setAdministrator :: Storage -> UserId -> Bool -> IO (Either WikiError Account)
 setAdministrator st u administrator = changeAccount st u "user.administrator" [("administrator", if administrator then "yes" else "no")] $ \c ->
   if administrator
     then execute c "INSERT OR IGNORE INTO global_grants (subject_kind, subject_id, permission) VALUES ('user', ?, 'administer')" (Only u.text)
     else execute c "DELETE FROM global_grants WHERE subject_kind = 'user' AND subject_id = ? AND permission = 'administer'" (Only u.text)
 
--- | Change a user who is there, from the console, in one transaction with
--- its row in the audit log, and give back their account as it then is;
--- 'NotFound' for a user who is not.
+-- | Change an existing user, from the console, in one transaction with
+-- its audit log row, and return their account afterwards; 'NotFound' for a
+-- user who does not exist.
 changeAccount :: Storage -> UserId -> Text -> [(Text, Text)] -> (Connection -> IO ()) -> IO (Either WikiError Account)
 changeAccount st u action detail change = withDatabase st $ \c -> immediately c $ do
   loadAccount c u >>= \case
@@ -236,8 +238,8 @@ fromConsole c action u detail =
   insertAudit c Recorded {actor = operator, action, subject = Subject {kind = "user", id = Just u.id.text, name = u.login}, detail, address = consoleAddress}
 
 -- | Run something in a transaction that holds the write lock from its
--- start: committed if it gives a 'Right', rolled back if it gives a 'Left'
--- or throws.
+-- start: committed if it returns a 'Right', rolled back if it returns a
+-- 'Left' or throws.
 immediately :: Connection -> IO (Either e a) -> IO (Either e a)
 immediately c body = do
   execute_ c "BEGIN IMMEDIATE"
@@ -250,31 +252,33 @@ immediately c body = do
 --------------------------------------------------------------------------------
 -- Accounts people make themselves
 
--- | Make oneself an account, in an open wiki, from a network address: the
--- user made, and the id of the session they are signed in with. A closed
--- wiki refuses it ('Forbidden') before anything is checked, then the
--- account is checked as 'createAccount' checks one ('Invalid', 'Conflict').
+-- | Create one's own account, in an open wiki, from a network address.
+-- The result is the user created, and the id of the session they are
+-- signed in with. A closed wiki refuses it ('Forbidden') before anything
+-- is checked; then the account is checked as 'createAccount' checks one
+-- ('Invalid', 'Conflict').
 register :: Storage -> UTCTime -> Text -> NewAccount -> IO (Either WikiError (User, Text))
 register st now address new = runExceptT $ do
   open <- liftIO (takesNewAccounts . (\s -> s.access) <$> readSettings st)
   unless open (throwError Forbidden)
   made <- prepared new
   ExceptT . withDatabase st $ \c -> immediately c $ do
-    -- Closed meanwhile, while the password was hashed.
+    -- The wiki may have been closed while the password was hashed.
     settings <- settingsWith st c
     if takesNewAccounts settings.access
       then makeAccount c now address settings made >>= recordMade c address "user.register" []
       else pure (Left Forbidden)
 
--- | Whom an invitation is for, if it can be used now.
+-- | Who an invitation is for, if it can be used now.
 invitationFor :: Storage -> UTCTime -> InvitationToken -> IO (Maybe InvitationInfo)
 invitationFor st now token = withDatabase st $ \c -> fmap snd <$> pendingInvitation c now (tokenHash token.text)
 
--- | Make the account an invitation invites to, open wiki or closed, and use
--- the invitation up: the user made, and the id of the session they are
--- signed in with. An invitation that cannot be used (it has been used,
--- revoked, or has expired) is 'NotFound', before the account is checked;
--- a login taken leaves the invitation as it was, to try another.
+-- | Create the account an invitation is for, in an open or closed wiki,
+-- and use up the invitation. The result is the user created, and the id of
+-- the session they are signed in with. An invitation that cannot be used
+-- (used, revoked, or expired) is 'NotFound', checked before the account. A
+-- login that is taken leaves the invitation unused, so another can be
+-- tried.
 acceptInvitation :: Storage -> UTCTime -> Text -> InvitationToken -> NewAccount -> IO (Either WikiError (User, Text))
 acceptInvitation st now address token new = runExceptT $ do
   let secret = tokenHash token.text
@@ -292,16 +296,16 @@ acceptInvitation st now address token new = runExceptT $ do
           when (isRight made') (void (deleteInvitation c i))
           recordMade c address "invitation.accept" [("invitation", i.text)] made'
 
--- | Record that someone made themself an account, as themself, from where
--- they asked, in the transaction that made it.
+-- | Record in the audit log that someone created their own account, as
+-- done by them, from their address, in the transaction that created it.
 recordMade :: Connection -> Text -> Text -> [(Text, Text)] -> Either e (User, Text) -> IO (Either e (User, Text))
 recordMade c address action detail made = do
   for_ made $ \(u, _) ->
     insertAudit c Recorded {actor = Actor {id = u.id, login = u.login}, action, subject = Subject {kind = "user", id = Just u.id.text, name = u.login}, detail, address}
   pure made
 
--- | An account to make, checked, with its password hashed: its id, login,
--- display name and the password's hash.
+-- | An account to create, checked, with its password hashed: its id,
+-- login, display name and the password's hash.
 prepared :: NewAccount -> ExceptT WikiError IO (UserId, Text, Text, Maybe Text)
 prepared new = do
   (login, password) <- either (throwError . Invalid) pure ((,) <$> checkLogin new.login <*> checkPassword new.password)
@@ -312,10 +316,10 @@ prepared new = do
         n -> n
   pure (UserId uid, login, name, Just phc)
 
--- | Make a checked account, in a transaction under way, with the grant the
--- wiki's settings give a new one, and sign its maker in, at their network
--- address. One without a password signs in another way: with a provider's
--- account.
+-- | Create a checked account, in a running transaction, with the grant the
+-- wiki's settings give new accounts, and sign its creator in, from their
+-- network address. An account without a password signs in another way:
+-- with a provider's account.
 makeAccount :: Connection -> UTCTime -> Text -> WikiSettings -> (UserId, Text, Text, Maybe Text) -> IO (Either WikiError (User, Text))
 makeAccount c now address settings (uid, login, name, phc) =
   insertAccount c uid login name phc >>= \case
@@ -328,71 +332,71 @@ makeAccount c now address settings (uid, login, name, phc) =
 --------------------------------------------------------------------------------
 -- Signing in with a provider
 
--- | What a provider said of one of its accounts, once the server has
--- checked that the provider said it ("Wiki.Server.Oidc").
+-- | What a provider said about one of its accounts, once the server has
+-- verified that the provider said it ("Wiki.Server.Oidc").
 data Claimed = Claimed
   { provider :: Text
   -- ^ The provider, by the name the configuration gives it.
   , subject :: Text
-  -- ^ Who the account is at the provider, for good.
+  -- ^ The account's permanent id at the provider.
   , email :: Maybe Text
   -- ^ Its e-mail address, only if the provider verified it.
   , name :: Maybe Text
-  -- ^ The person's name, as they gave it there.
+  -- ^ The person's name, as they gave it at the provider.
   , login :: Maybe Text
-  -- ^ What they are called there, if anything (a GitHub login, an OpenID
-  -- Connect @preferred_username@): the first choice of a login here.
+  -- ^ Their user name at the provider, if any (a GitHub login, an OpenID
+  -- Connect @preferred_username@): the first choice for a login here.
   }
   deriving stock (Eq, Show)
 
--- | What signing in with a provider was asked for.
+-- | What signing in with a provider was requested for.
 data Intent
   = -- | To sign in: as the user whose identity it is, or as a new account
-    -- where the wiki takes one.
+    -- where the wiki accepts one.
     SignInOnly
   | -- | To connect it to this user, who was signed in when they asked.
     LinkTo UserId
-  | -- | To make the account this invitation invites to.
+  | -- | To create the account this invitation is for.
     Invited InvitationToken
   deriving stock (Eq, Show)
 
--- | What it came to.
+-- | The result of signing in with a provider.
 data Landing
-  = -- | Signed in as this user, whose new session's id this is; and
-    -- whether the account was made just now.
+  = -- | Signed in as this user, with this new session id; and whether the
+    -- account was created just now.
     SignedInAs User Text Bool
-  | -- | The identity is this user's now (or already was).
+  | -- | The identity now belongs to this user (or already did).
     Linked User
-  | -- | The identity is this user's, who has a second factor: they are
-    -- signed in once they give a code ("Wiki.Server.SecondFactor").
+  | -- | The identity belongs to this user, who has a second factor: they
+    -- are signed in once they give a code ("Wiki.Server.SecondFactor").
     SecondFactorFor User
   deriving stock (Eq, Show)
 
--- | Why it came to nothing.
+-- | Why signing in with a provider failed.
 data Refusal
-  = -- | The identity is a disabled user's.
+  = -- | The identity belongs to a disabled user.
     DisabledAccount
-  | -- | Connecting it was asked for, but it is another user's.
+  | -- | Connecting it was requested, but it belongs to another user.
     AnotherUsers
-  | -- | Connecting it was asked for, but the user has an identity at that
-    -- provider already.
+  | -- | Connecting it was requested, but the user already has an identity
+    -- at that provider.
     HasOneThere
-  | -- | Connecting it was asked for by a user who is gone, or disabled,
-    -- since.
+  | -- | Connecting it was requested by a user who has since been deleted
+    -- or disabled.
     NoOneToLink
-  | -- | It is no one's, and the wiki is closed.
+  | -- | It belongs to nobody, and the wiki is closed.
     ClosedWiki
-  | -- | It was to make an invitation's account, and the invitation cannot
-    -- be used (used, revoked or expired).
+  | -- | It was to create an invitation's account, and the invitation
+    -- cannot be used (used, revoked or expired).
     UnusableInvitation
   deriving stock (Eq, Show)
 
--- | Sign in with a provider's account, connect it, or make an account with
--- it, as asked and as the wiki's rules allow, in one transaction (see the
--- module's Haddock), from a network address. What the provider says of the
--- account now is kept with the identity. A user who has a second factor is
--- not signed in by their identity alone, as they are not by their password
--- alone: the answer says that a code is wanted.
+-- | Sign in with a provider's account, connect it, or create an account
+-- with it, as requested and as the wiki's rules allow, in one transaction
+-- (see the module's Haddock), from a network address. What the provider
+-- now says about the account is stored with the identity. A user who has
+-- a second factor is not signed in by their identity alone, just as not by
+-- their password alone: the result says that a code is needed.
 landWith :: Storage -> UTCTime -> Text -> Intent -> Claimed -> IO (Either Refusal Landing)
 landWith st now address intent claimed = withDatabase st $ \c ->
   immediately c $
@@ -434,11 +438,11 @@ landWith st now address intent claimed = withDatabase st $ \c ->
             then Right <$> newAccount c []
             else pure (Left ClosedWiki)
   where
-    -- A user who may sign in: there, and not disabled.
+    -- A user who may sign in: exists, and is not disabled.
     active c u = mfilter (\a -> not a.disabled) <$> loadAccount c u
-    -- An account for the identity, with the first login of its candidates
-    -- no one has, and no password: recorded in the audit log as made by its
-    -- owner, with the provider, as one made with a password is.
+    -- An account for the identity, with the first of its candidate logins
+    -- that nobody has, and no password; recorded in the audit log as
+    -- created by its owner, with the provider, like one with a password.
     newAccount c detail = do
       settings <- settingsWith st c
       uid <- UserId . UUID.toText <$> generateV4
@@ -447,7 +451,8 @@ landWith st now address intent claimed = withDatabase st $ \c ->
             makeAccount c now address settings (uid, login, fromMaybe login (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
           go = \case
             [] -> do
-              -- A hundred taken: one with a random end, which nobody has.
+              -- A hundred are taken: use one with a random suffix, which
+              -- nobody has.
               suffix <- T.take 8 . T.filter (/= '-') . UUID.toText <$> generateV4
               made (fromMaybe "user" (head tries) <> "-" <> suffix)
             l : rest -> made l >>= either (const (go rest)) (pure . Right)
@@ -458,16 +463,18 @@ landWith st now address intent claimed = withDatabase st $ \c ->
           _ <- recordMade c address "user.register" (("provider", claimed.provider) : detail) (Right (user, token) :: Either () (User, Text))
           pure (SignedInAs user token True)
 
--- | The logins to try for an account made with a provider's account, the
--- first that no one has to be taken: what the person is called there,
--- else their e-mail address's local part, else their name, made into
--- something a login can be (lower case, letters, digits, dots and
--- underscores, with dashes between words, at most 40 characters), else
--- @user@; then the same with @-2@, @-3@ and so on after it.
+-- | The logins to try for an account created with a provider's account;
+-- the first that nobody has is taken. The base is the person's user name
+-- at the provider, else their e-mail address's local part, else their
+-- name, turned into something a login can be (lower case, letters, digits,
+-- dots and underscores, with dashes between words, at most 40
+-- characters), else @user@; then the same with @-2@, @-3@ and so on after
+-- it.
 loginCandidates :: Claimed -> [Text]
 loginCandidates claimed = base : [base <> "-" <> show n | n <- [2 :: Int ..]]
   where
-    -- A login that is an address (Microsoft's are) gives its local part.
+    -- A login that is an e-mail address (Microsoft's are) gives its local
+    -- part.
     base = fromMaybe "user" (find (not . T.null) (map loginOf (catMaybes [localPart <$> claimed.login, localPart <$> claimed.email, claimed.name])))
     localPart = T.takeWhile (/= '@')
     loginOf = T.take 40 . T.intercalate "-" . filter (not . T.null) . T.split (not . allowed) . T.toLower
@@ -485,9 +492,9 @@ methodsOf c u =
       theirs <- identitiesOf c u
       pure (Right SignInMethods {password = a.hasPassword, identities = map (\i -> i.identity) theirs})
 
--- | A user disconnects their identity at a provider: how they sign in
--- then. 'NotFound' if they have none there, 'Conflict' if it is the last
--- way they have in.
+-- | A user disconnects their identity at a provider. The result is how
+-- they sign in afterwards. 'NotFound' if they have none there, 'Conflict'
+-- if it is their last way to sign in.
 unlinkIdentity :: Storage -> UserId -> Text -> IO (Either WikiError SignInMethods)
 unlinkIdentity st u provider = withDatabase st $ \c -> immediately c $ runExceptT $ do
   before <- ExceptT (methodsOf c u)
@@ -503,26 +510,26 @@ unlinkIdentity st u provider = withDatabase st $ \c -> immediately c $ runExcept
 
 -- | Why a user's change of their own password was refused.
 data PasswordRefusal
-  = -- | They have a password, and the one they gave as it is not it (or
-    -- they gave none).
+  = -- | They have a password, and the one they gave as the current one is
+    -- wrong (or they gave none).
     WrongCurrent
-  | -- | Anything else: the new one cannot be a password ('Invalid'), the
-    -- user is gone ('NotFound'), or the password was changed meanwhile by
-    -- someone else ('Conflict').
+  | -- | Any other failure: the new password is not valid ('Invalid'), the
+    -- user no longer exists ('NotFound'), or someone else changed the
+    -- password meanwhile ('Conflict').
     PasswordRefused WikiError
   deriving stock (Eq, Show)
 
--- | A user changes their own password, giving the one they have, if they
--- have one ('WrongCurrent' if it is not right): how they sign in then. A
--- user without one who signs in with a provider the server has is refused
--- ('Invalid'): they have no password to set.
--- Every session of theirs ends but the one whose id this is (the cookie's
--- of the request), if any. The new password is checked before anything is
--- hashed, and hashed before the connection is taken.
+-- | A user changes their own password, giving their current one if they
+-- have one ('WrongCurrent' if it is wrong). The result is how they sign in
+-- afterwards. A user without a password who signs in with a server
+-- provider is refused ('Invalid'): they have no password to set. Every
+-- session of theirs ends except the one with this id (from the request's
+-- cookie), if any. The new password is checked before anything is hashed,
+-- and hashed before the connection is taken.
 changePassword :: Storage -> UserId -> Maybe Text -> Maybe Text -> Text -> IO (Either PasswordRefusal SignInMethods)
 changePassword st u keep current new = runExceptT $ do
   password <- either (throwError . PasswordRefused . Invalid) pure (checkPassword new)
-  -- Read before the connection is taken, which reading them may take.
+  -- Read before the connection is taken, since reading them may take it.
   configured <- liftIO (providerNames <$> readServerSettings st)
   before <- liftIO (withDatabase st (`passwordHashOf` u)) >>= maybe (throwError (PasswordRefused NotFound)) pure
   none <- liftIO (withDatabase st (\c -> noPasswordToSet c configured u))
@@ -542,58 +549,57 @@ changePassword st u keep current new = runExceptT $ do
           Nothing -> deleteSessionsOf c u
         first PasswordRefused <$> methodsOf c u
 
--- | Whether a password given is the current one of a user, for what a
--- session alone may not do (WP4.11 of docs/PLAN.md): 'Just True' for the
--- right one, and for a user who has none (who signs in only with a
--- provider's account, and gives none); 'Nothing' for a user who is not
--- there.
+-- | Whether a given password is a user's current one, for what a session
+-- alone may not do (WP4.11 of docs/PLAN.md). 'Just True' for the right
+-- one, and for a user who has none (who signs in only with a provider's
+-- account, and gives none); 'Nothing' for a user who does not exist.
 currentPasswordIs :: Storage -> UserId -> Maybe Text -> IO (Maybe Bool)
 currentPasswordIs st u given =
   fmap (maybe True (\phc -> maybe False (verifyPassword phc) given)) <$> withDatabase st (`passwordHashOf` u)
 
--- | A user's password's hash, if they are there: 'Nothing' for a user who
--- is not, @Just Nothing@ for one without a password.
+-- | A user's password hash, if they exist: 'Nothing' for a user who does
+-- not, @Just Nothing@ for one without a password.
 passwordHashOf :: Connection -> UserId -> IO (Maybe (Maybe Text))
 passwordHashOf c u = head . map fromOnly <$> query c "SELECT password_hash FROM users WHERE id = ?" (Only u.text)
 
 --------------------------------------------------------------------------------
 -- Sessions
 
--- | How long a session that is not used lasts: two weeks, so that someone
--- who reads the wiki now and then stays signed in, and a session left on a
--- machine that is not used any more ends by itself.
+-- | How long an unused session lasts: two weeks, so that someone who reads
+-- the wiki now and then stays signed in, and a session left on a machine
+-- no longer used ends by itself.
 idleTime :: NominalDiffTime
 idleTime = 14 * 24 * 60 * 60
 
--- | How long after its end was last moved on a use moves it on again (and
--- the cookie is sent again to last as long): an hour.
+-- | How long after its end was last moved later a use moves it again (and
+-- the cookie is sent again with the new lifetime): an hour.
 refreshEvery :: NominalDiffTime
 refreshEvery = 60 * 60
 
--- | How long after its last recorded use a session's use is recorded again,
--- with the address it came from, for the account panel's "last seen": a
--- minute, so that a session in use costs at most a write a minute.
+-- | How long after its last recorded use a session's use is recorded
+-- again, with the address it came from, for the account panel's "last
+-- seen": a minute, so that a session in use costs at most a write a minute.
 seenEvery :: NominalDiffTime
 seenEvery = 60
 
 -- | Why signing in failed.
 data SignInFailure
   = -- | No user has that login and password, or their account cannot sign
-    -- in (it has no password, or it is disabled); which, the answer does
-    -- not say.
+    -- in (it has no password, or it is disabled); the answer does not say
+    -- which.
     NoSuchAccount
-  | -- | The password is not one the server takes (too long).
+  | -- | The password is not one the server accepts (too long).
     BadPassword
   | -- | The login and password are right, and the user has a second
     -- factor: no session until they give a code.
     SecondFactorWanted User
   deriving stock (Eq, Show)
 
--- | Sign in with a login and a password, from a network address: the user,
--- and the id of their new session for the cookie. An unknown login costs
--- the same hashing as a known one, so that how long the answer takes does
--- not tell whether a login exists. Sessions that have ended by themselves
--- are deleted on the way.
+-- | Sign in with a login and a password, from a network address. The
+-- result is the user, and the id of their new session for the cookie. An
+-- unknown login costs the same hashing as a known one, so that the time
+-- the answer takes does not reveal whether a login exists. Sessions that
+-- have ended by themselves are deleted along the way.
 signIn :: Storage -> UTCTime -> Text -> Text -> Text -> IO (Either SignInFailure (User, Text))
 signIn st now address login password
   | T.length password > 1024 = pure (Left BadPassword)
@@ -612,9 +618,9 @@ signIn st now address login password
               False -> Right . (user,) <$> startSession c now user.id address
         _ -> pure (Left NoSuchAccount)
 
--- | A new session for a user, from now and from a network address: the id
--- its cookie is to carry. Sessions that have ended by themselves are
--- deleted on the way.
+-- | Create a new session for a user, from now and from a network address.
+-- The result is the id its cookie is to carry. Sessions that have ended by
+-- themselves are deleted along the way.
 startSession :: Connection -> UTCTime -> UserId -> Text -> IO Text
 startSession c now u address = do
   token <- newToken
@@ -626,8 +632,9 @@ startSession c now u address = do
     (tokenHash token, u.text, Stamp now, Stamp now, Stamp (addUTCTime idleTime now), publicId, address)
   pure token
 
--- | A hash of no one's password, to check a password against when the
--- login is no user's or has none, so that the answer takes as long.
+-- | A hash of nobody's password, to check a password against when the
+-- login belongs to no user or has no password, so that the answer takes as
+-- long.
 unknownHash :: Text
 unknownHash = "$argon2id$v=19$m=19456,t=2,p=1$bm8gc3VjaCB1c2Vy$7J1aqbF9XWbPBHCGdFP2N5tTqYlUvlEkB5qe2PAU4p0"
 
@@ -635,16 +642,16 @@ unknownHash = "$argon2id$v=19$m=19456,t=2,p=1$bm8gc3VjaCB1c2Vy$7J1aqbF9XWbPBHCGd
 data Resolved = Resolved
   { user :: UserId
   , refreshed :: Bool
-  -- ^ Whether its end was moved on by this use, and the cookie should be
-  -- sent again to last as long.
+  -- ^ Whether this use moved its end later, so that the cookie should be
+  -- sent again with the new lifetime.
   }
   deriving stock (Eq, Show)
 
--- | The session a cookie's id names, if it has not ended, as used now from
--- a network address: one that has (idle too long, its user disabled) is
--- deleted, and is no one's. Its use is recorded at most every 'seenEvery',
--- and its end moved on at most every 'refreshEvery' (when it was last
--- moved on is its end less 'idleTime').
+-- | The session a cookie's id names, if it has not ended, used now from a
+-- network address. A session that has ended (idle too long, its user
+-- disabled) is deleted, and belongs to nobody. Its use is recorded at most
+-- every 'seenEvery', and its end moved later at most every 'refreshEvery'
+-- (the last such move is its end minus 'idleTime').
 resolveSession :: Storage -> UTCTime -> Text -> Text -> IO (Maybe Resolved)
 resolveSession st now address token = withDatabase st $ \c -> do
   let key = tokenHash token
@@ -675,8 +682,8 @@ endSession st token = withDatabase st $ \c -> execute c "DELETE FROM sessions WH
 -- One's own sessions
 
 -- | A user's sessions that have not ended, the most recently used first,
--- the one whose id this is (the cookie's of the request, if any) marked as
--- the current one.
+-- with the one with this id (from the request's cookie, if any) marked as
+-- current.
 listSessions :: Storage -> UTCTime -> UserId -> Maybe Text -> IO [SessionSummary]
 listSessions st now u token = withDatabase st (\c -> sessionsOf c now u token)
 
@@ -693,9 +700,9 @@ sessionsOf c now u token = do
     , expires > now
     ]
 
--- | End one of a user's sessions, by its id: their sessions then.
--- 'NotFound' for a session that is not theirs (or has ended), 'Invalid'
--- for the one asking, which signs out instead.
+-- | End one of a user's sessions, by its id. The result is their sessions
+-- afterwards. 'NotFound' for a session that is not theirs (or has ended),
+-- 'Invalid' for the current one, which should sign out instead.
 endSessionOf :: Storage -> UTCTime -> UserId -> Maybe Text -> SessionRef -> IO (Either WikiError [SessionSummary])
 endSessionOf st now u token ref = withDatabase st $ \c -> immediately c $ do
   theirs <- sessionsOf c now u token
@@ -707,8 +714,8 @@ endSessionOf st now u token ref = withDatabase st $ \c -> immediately c $ do
           execute c "DELETE FROM sessions WHERE user_id = ? AND public_id = ?" (u.text, ref.text)
           Right <$> sessionsOf c now u token
 
--- | End every session of a user's but the one whose id this is (the one
--- asking): their sessions then.
+-- | End every session of a user's except the one with this id (the
+-- current one). The result is their sessions afterwards.
 endOtherSessions :: Storage -> UTCTime -> UserId -> Maybe Text -> IO [SessionSummary]
 endOtherSessions st now u token = withDatabase st $ \c -> do
   case token of
