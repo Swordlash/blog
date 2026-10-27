@@ -28,4 +28,17 @@ self.fetch = (resource, options) => {
   return fetchOnOrigin(resource, options);
 };
 
+// TeX reads a font's metrics (its TFM file) through run-tex.js, which throws
+// "Could not find font <name>" for a font TikZJax does not have, such as
+// tcrm1000, where LaTeX finds the euro sign. When TeX has fetched a file
+// before that, the throw happens in a callback run-tex.js does not wait for,
+// so it becomes an unhandled rejection. The worker library in run-tex.js
+// passes every unhandled rejection to the page as an "uncaughtError"
+// message, and web/src/tikz.js shows this one as an error under the picture.
+// Without preventDefault the browser would also report it on the page's
+// console as an uncaught error. Other rejections are left to be reported.
+self.addEventListener("unhandledrejection", (event) => {
+  if (/^Could not find font \S+$/.test(event.reason?.message ?? "")) event.preventDefault();
+});
+
 importScripts("run-tex.js");
