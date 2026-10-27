@@ -10,8 +10,11 @@
 -- runs in the transaction the storage began with the other, and sees what
 -- the other wrote. That needs persistent-sqlite's internals (the handle's
 -- constructor, outside the PVP), and one SQLite in the program: both
--- packages carry its source, and the static link keeps one copy (the first
--- found, direct-sqlite's), which both bindings then call.
+-- packages carry its source, and the static link keeps one copy, which both
+-- bindings then call. Which one is the link's choice: in the server and its
+-- tests, persistent-sqlite's (3.43.1), not direct-sqlite's (3.45.0) that
+-- the server had before. Both built with their systemlib flag would make it
+-- the system's SQLite, chosen, at the cost of a library the binary needs.
 module Wiki.Server.Storage.Sql
   ( Sql
   , Db (..)
