@@ -1,13 +1,15 @@
--- | A page's Markdown tree ("Wiki.Core.Markdown.Ast") as Halogen HTML.
+-- | The Markdown renderer: it turns a page's Markdown tree
+-- ("Wiki.Core.Markdown.Ast") into Halogen HTML.
 --
 -- The HTML is built element by element, never from an HTML string: the
--- author's text is always text. Raw HTML in the source is read in Haskell
--- and what an allowlist admits of it is built as elements too
--- ("Wiki.Core.Markdown.Html"; 'renderRawHtml'); tags among the text hold
--- the Markdown between them. Links and embeds are resolved through the
--- 'Options' the caller passes, the links and sources of raw HTML as well,
--- and only a URL whose scheme is harmless is written
--- ("Wiki.Core.Markdown.Link"); an external link gets @rel=\"noopener\"@.
+-- author's text is always text. Raw HTML in the source is parsed in
+-- Haskell, and the parts an allowlist accepts are built as elements too
+-- ("Wiki.Core.Markdown.Html"; 'renderRawHtml'). An HTML tag in the text
+-- contains the Markdown up to its end tag. Links and embeds, including the
+-- links and sources in raw HTML, are resolved through the 'Options' the
+-- caller passes. A URL is written only if its scheme is harmless
+-- ("Wiki.Core.Markdown.Link"), and an external link gets
+-- @rel=\"noopener\"@.
 --
 -- __Islands.__ Code, math, Mermaid diagrams and TikZ pictures are drawn by
 -- JavaScript libraries into elements Halogen does not look inside. The
@@ -20,18 +22,19 @@
 -- the slot's index: Halogen tells two children apart by their slot address,
 -- and a document can hold the same formula twice.
 --
--- __Macros.__ A formula is handed the formulas before it in the document
--- that define macros ("Wiki.Core.Math"), in their order: a page's
--- definitions hold in every formula after them, as in a LaTeX document,
--- and what a formula is set with depends on the page alone, not on the
--- order its island is drawn in.
+-- __Macros.__ Each formula receives the earlier formulas in the document
+-- that define macros ("Wiki.Core.Math"), in order. So a page's macro
+-- definitions apply to every formula after them, as in a LaTeX document,
+-- and how a formula is typeset depends on the page alone, not on the
+-- order in which the islands are drawn.
 --
 -- __Embeds.__ @![caption](destination)@ shows what the destination resolves
--- to by its media type: an attachment by the type the wiki knows for it, or
--- failing that its name's extension; a URL by its extension. Images become
--- @\<img>@, videos @\<video controls>@, audio @\<audio controls>@, and an
--- attachment of any other type a download link. A URL of an unknown type is
--- an image, as in plain Markdown. An embedded page is a link to it.
+-- to, according to its media type: for an attachment, the type the wiki
+-- has for it, or else its name's extension; for a URL, its extension.
+-- Images become @\<img>@, videos @\<video controls>@, audio
+-- @\<audio controls>@, and an attachment of any other type a download
+-- link. A URL of an unknown type is an image, as in plain Markdown. An
+-- embedded page is a link to it.
 --
 -- __Layout.__ Headings carry their @id@, and end with an empty link to
 -- it, @\<a class=\"heading-anchor\">@, which the stylesheet shows as a @#@
@@ -73,13 +76,15 @@ import Wiki.Core.Markdown.Link
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
 import Wiki.Core.Math (Macros (..), definesMacros)
 
--- | What the renderer leaves to its caller.
+-- | 'Options' are the parts of rendering that the caller decides: how
+-- islands are drawn, and how links and mentions are resolved.
 --
 -- @w@ and @i@ are those of the 'HH.HTML' it makes, so a caller that renders
 -- islands as child components instantiates them with its component's slots
 -- and actions (@HH.ComponentHTML action slots m@ is
--- @HH.HTML (ComponentSlot slots m action) action@). @page@ is the wiki's name
--- for a page, which 'resolveLink' finds and 'pageHref' makes a link to.
+-- @HH.HTML (ComponentSlot slots m action) action@). @page@ is the caller's
+-- type for a page: 'resolveLink' returns it, and 'pageHref' makes a link
+-- to it.
 data Options page w i = Options
   { codeBlock :: IslandKey -> Maybe Text -> Text -> HH.HTML w i
   -- ^ A code block: its language, if it has one, and its code.
@@ -107,7 +112,7 @@ data Options page w i = Options
   -- where nothing shows it (a feed, read without the stylesheet).
   }
 
--- | Whom a mention names, as its link shows them.
+-- | The user a mention names, as its link shows them.
 data MentionTarget = MentionTarget
   { href :: Text
   , name :: Text
@@ -115,23 +120,25 @@ data MentionTarget = MentionTarget
   }
   deriving stock (Eq, Show)
 
--- | Which island this is: its source, and how many islands with the same
--- source, of any kind, come before it in the document. No two islands of a document have
--- the same key, and an island keeps its key when the document changes
--- anywhere but in an island with the same source before it, so a child
--- component in a slot indexed by it survives edits elsewhere.
+-- | 'IslandKey' identifies an island in a document: its source, and how
+-- many islands with the same source, of any kind, come before it. No two
+-- islands of a document have the same key. An island keeps its key when
+-- the document changes anywhere but in an island with the same source
+-- before it, so a child component in a slot indexed by the key survives
+-- edits elsewhere.
 data IslandKey = IslandKey
   { source :: Text
   , occurrence :: Int
   }
   deriving stock (Eq, Ord, Show)
 
--- | Islands as the libraries that fill them expect their elements, filled
--- with the source as text, so that the page reads without them; links as
--- written ('defaultResolveLink'), mentions as text. @page@ is 'Text' only to have a type:
--- nothing resolves to a page until a caller's 'resolveLink' does, and a
--- record update that sets both 'resolveLink' and 'pageHref' picks the
--- caller's own type.
+-- | The default 'Options'. Each island is the element its library
+-- expects, holding the source as text, so that the page is readable
+-- without the library. Links are used as written ('defaultResolveLink'),
+-- and mentions are plain text. @page@ is 'Text' only so that it has a
+-- type: nothing resolves to a page until a caller's 'resolveLink' does,
+-- and a record update that sets both 'resolveLink' and 'pageHref' gives
+-- @page@ the caller's own type.
 defaultOptions :: Options Text w i
 defaultOptions =
   Options
@@ -243,10 +250,11 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
       middle <- inlinePieces False xs
       pure (fromPieces (before <> middle <> after))
 
-    -- A sequence of inlines, and whether it is a link's text (where a
-    -- link is shown as its text, since a link cannot hold one). Raw HTML
-    -- among them is read with the Markdown between it, so that a tag holds
-    -- what is written up to its end tag ("Wiki.Core.Markdown.Html").
+    -- Render a sequence of inlines. The flag says whether they are a
+    -- link's text; there a nested link is shown as its text, since a link
+    -- cannot contain a link. Raw HTML among them is parsed together with
+    -- the Markdown around it, so that a tag contains what is written up to
+    -- its end tag ("Wiki.Core.Markdown.Html").
     inlinePieces :: Bool -> [Inline] -> R [Piece w i]
     inlinePieces inLink xs
       | any isRawHtml xs = htmlPieces inLink (Html.parseFragments context (map fragment xs))
@@ -350,8 +358,8 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
       let n = M.findWithDefault 0 src c.islands
        in (IslandKey src n, c {islands = M.insert src (n + 1) c.islands})
 
-    -- A formula's key, and the formulas before it that define macros;
-    -- then it is one of them, if it defines any.
+    -- A formula's key, and the earlier formulas that define macros.
+    -- Afterwards the formula is added to those, if it defines any.
     formula :: Text -> R (IslandKey, Macros)
     formula tex = do
       k <- island tex
@@ -366,9 +374,9 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
           ident = "fnref-" <> show n <> (if seen == 0 then "" else "-" <> show (seen + 1))
        in (ident, c {footnoteRefs = M.insert n (seen + 1) c.footnoteRefs})
 
--- | What rendering keeps count of as it goes: islands by source, for their
--- keys, references to each footnote, for their ids, and the formulas so far
--- that define macros, the latest first.
+-- | The counters rendering keeps as it goes: islands by source (for their
+-- keys), references to each footnote (for their ids), and the formulas so
+-- far that define macros, the latest first.
 data Counts = Counts
   { islands :: Map Text Int
   , footnoteRefs :: Map Int Int
@@ -465,9 +473,9 @@ idAndClasses attrs own =
 titleProp :: (HasType "title" Text r) => Text -> [HP.IProp r i]
 titleProp title = [HP.title title | not (T.null title)]
 
--- | A raw block of HTML: what the allowlist keeps of it
--- ("Wiki.Core.Markdown.Html"), with its links and sources resolved as the
--- Markdown's are, through the options. Nothing for a comment.
+-- | Render a raw block of HTML: the parts the allowlist keeps
+-- ("Wiki.Core.Markdown.Html"), with links and sources resolved through
+-- the options, as the Markdown's are. An HTML comment renders as nothing.
 renderRawHtml :: forall page w i. Options page w i -> Text -> [HH.HTML w i]
 renderRawHtml opts raw = fromPieces (concatMap pieces (Html.parseHtml raw))
   where
@@ -476,12 +484,13 @@ renderRawHtml opts raw = fromPieces (concatMap pieces (Html.parseHtml raw))
       Html.Element name attrs children -> [PNode (htmlElement opts name attrs (fromPieces (concatMap pieces children)))]
       Html.TextNode t -> [PText t]
 
--- | An element the allowlist kept, with its attributes. A URL is resolved
--- as a Markdown link's or embed's is ('resolveLink'), except that a
--- relative address is an attachment's too: a source is looked up as one
--- first (a page cannot be shown in an @img@), a link if it names no page.
--- The resolved URL is written only if its scheme is harmless; otherwise the
--- attribute goes, and an @a@ that leads nowhere gets the class
+-- | Render an element the allowlist kept, with its attributes. A URL is
+-- resolved as a Markdown link's or embed's is ('resolveLink'), except that
+-- a relative address may also name an attachment. A source is looked up as
+-- an attachment first, since a page cannot be shown in an @img@. A link is
+-- looked up as an attachment only if it names no page. The resolved URL is
+-- written only if its scheme is harmless; otherwise the attribute is
+-- dropped, and an @a@ that leads nowhere gets the class
 -- @link-unresolved@, as a Markdown link would show it. A link to an
 -- attachment downloads it, and one that leaves the wiki gets
 -- @rel=\"noopener\"@, as in Markdown.
@@ -511,8 +520,8 @@ htmlElement opts name attrs = HH.element (HH.ElemName name) (concatMap prop attr
       External url | safeSrc url -> [attr key url]
       Attachment ref | safeSrc ref.url -> [attr key ref.url]
       _ -> []
-    -- A path, resolved as an attachment's name before (a source) or after
-    -- (a link) it is resolved as what the wiki makes of it.
+    -- Resolve a path as an attachment's name, and through 'resolveLink':
+    -- the attachment first for a source, 'resolveLink' first for a link.
     relativeFirst asAttachment dest = case classifyDestination dest of
       ToPath path
         | asAttachment -> unlessResolved (opts.resolveLink ("attachment:" <> path)) (opts.resolveLink dest)
