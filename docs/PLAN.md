@@ -208,7 +208,11 @@ confirms it against reality and the plan is amended if it does not hold.
     tools run locally, through a loopback redirect, with a waitlist for remotely hosted
     applications; a wiki hosted on a server would apply there. The assistant returns to the
     plan when a provider lets a web application use its user's subscription, or the owner
-    accepts API billing.
+    accepts API billing. **Picked up on 2026-10-27**: the owner accepts API keys for both
+    providers ("Zrób integrację po stronie klienta jednak Claude i OpenAI po api keys");
+    nothing about the subscriptions has changed (OpenAI's "Sign in with ChatGPT" is still for
+    locally run open-source tools, a hosted web application stays on its waitlist), so it
+    is bring-your-own-key as decided, as WP4.19.
 22. **Whoever administers a space sees the wiki's users and groups** (2026-10-25, from
     WP3.4). `spaceAccess` gives a space's administrator the grants on the space and its
     ancestors and every user and group, so that they can choose whom to grant to, as
@@ -1064,6 +1068,46 @@ must be in before it is.
   name (WP5.2's). Tests: the smoke test still passes with any demo page added; the
   screenshot script runs under `npm run screenshots` and is checked by CI only in that it
   parses (`node --check`). No migration.
+- **WP4.19 The writing assistant, bring-your-own-key** (the owner, 2026-10-27; decision
+  21). In the editor, an "Assistant" entry in the toolbar opens a side panel (beside the
+  preview, under the attachments on narrow screens) with actions on the selection, or on
+  the whole body when nothing is selected: improve the writing, fix grammar and spelling,
+  shorten, expand, summarise, continue writing, translate (a language typed), and a free
+  instruction typed by the user; the answer streams into the panel as it arrives, and the
+  user then clicks "Replace selection", "Insert below" or "Copy"; nothing is written into
+  the page without that click, and the page's Markdown is never changed by the assistant
+  on its own. The prompt tells the model it is editing a page of this wiki written in
+  the wiki's Markdown (GitHub's extensions, `$…$` math, `mermaid`, `tikz` and `math`
+  fences, alerts, `[[toc]]`, wiki links), asks for the same Markdown and nothing around
+  it, and sends the page's title, the selection with a little context around it (or the
+  body, cut to a cap, which the panel says), never attachments nor other pages; the
+  assembly is pure and tested natively. Providers: Anthropic (Claude) and OpenAI, through
+  their official JavaScript SDKs (`@anthropic-ai/sdk`, `openai`), bundled by
+  `web/bundle.sh` as an island of its own (`islands/assistant.js`, fetched the first time
+  the panel opens, as the editor's own code is), with streaming, retries and typed errors
+  from the SDKs; the Haskell side sees a `MonadAssistant` class (a provider, a model, a
+  streaming completion delivering chunks, cancellation) with a `BrowserDOM` instance over
+  a `browserJS` binding in `wiki-app/jsbits/assistant.js` and a scripted instance for
+  tests (a fake provider that replays an answer, usable from the browser tests too). The
+  user's settings ("Assistant" in the account menu, a page of its own): one API key per
+  provider, the provider and the model to use (a short list per provider, with the
+  newest general models first, and a free field), a "Test the key" button that makes the
+  smallest request, and a line that the key is billed by the provider and stays in this
+  browser; the keys live in this browser's IndexedDB under the user's id (another user on
+  the same browser does not see them), are never sent to the wiki's server (no API, no
+  migration), never logged, and are removed by "Forget" or by signing out of the wiki
+  (your call to keep them across sign-outs, say which). Direct browser calls: Anthropic's
+  `dangerouslyAllowBrowser`, OpenAI's the same, over HTTPS, so the demo on Pages and the
+  HTTPS deploy work; a plain-HTTP deploy shows a warning in the settings (the key would
+  travel to the provider over TLS anyway, but the wiki's own page is not secure). Errors
+  are shown in the panel as the provider gives them (an invalid key, a rate limit, a
+  model that is not there, the network) without the key in them. Tests: the prompt's
+  assembly and the cap natively; the settings' storage over the contract (keys per user,
+  forgotten on request); browser tests for the panel with the fake provider (an action
+  on a selection streams and "Replace selection" writes it; "Insert below"; an error
+  shown; the panel closed cancels the stream); the smoke test opens the settings and the
+  panel in the demo; `licenses.txt` gains the SDKs. The hydration tests stay at zero
+  repairs (the panel is client-side only). No migration, no server change.
 - **WP5.4 Run on whichever runner is free** (the owner, 2026-10-26, once the hosted path
   worked and the minutes proved free for a public repository: "niech sobie chodzi na self
   hosted albo ubuntu latest, które jest wolne"). GitHub has no "first available" across a
@@ -3103,6 +3147,8 @@ Amended by the planning session after each work package's report.
   middleware writes after the response (passes 8 of 8 here, where it failed 2 of 3 full
   runs before); `smoke-test-server.mjs`'s address check after creating a space goes
   through its `eventually`. The three small to-dos of the previous entry are closed.
+- **WP4.19 started** (2026-10-27) on `wp4.19-assistant` from `main` `0e4e2d8`, alone; the
+  owner lifted the shelving of decision 21 with API keys for both providers.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
