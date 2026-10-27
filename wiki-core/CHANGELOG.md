@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+JSON instances by Template Haskell (WP5.9). `Wiki.Core.Json` derives aeson
+instances with `Data.Aeson.TH`, with the splices' own `toEncoding` left out
+(`deriveValueJSON`, `deriveValueToJSON`), so that a value is written as the
+text of its `Value`, keys sorted, as the `Generic`-derived instances wrote
+it; every record of the package derives its instances that way, from the
+same options, and the JSON is byte for byte what it was. The types no
+longer have `Generic` instances: nothing needed them.
+
 The audit log names `user.password-link` (WP5.6): "Mailed a user a link to
 choose a password".
 

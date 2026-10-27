@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+JSON instances by Template Haskell (WP5.9), through `Wiki.Core.Json`: every
+body's JSON is byte for byte what it was, and the golden test now checks
+that each is written as the text of its `Value`. `Generic` is left only on
+the servant route records, which `NamedRoutes` needs.
+
 No password for accounts that sign in with a provider; password links
 mailed by the administration (WP5.6). `Wiki.Api.Account.providerOnly` is the
 rule (no password, and an account at a provider the server has);

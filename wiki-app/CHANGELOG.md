@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+`Wiki.App.Backend.Http.Preload` compiles in a third of what it cost (WP5.9):
+its two derived JSON instances are written by hand as its others are, its
+records no longer derive `Eq` and `Show` (`Answer` still does), and the
+module is compiled without optimisation. The page carries the same bytes.
+
 Every form of the administration is one column (WP5.5): the public address,
 the mail server and its test, a provider, the backups, an invitation and a
 new user each put a label above its field, every field as wide as the form
