@@ -3233,6 +3233,28 @@ Amended by the planning session after each work package's report.
   ASCII. Not tried live: a blocked network and a base URL other than OpenAI's (scripted
   tests cover both). The owner's keys stay in the session's scratchpad for later packages,
   never in the repository. Next: WP5.7 alone, then WP5.8.
+- **WP5.7 closed without merging** (2026-10-27, PR #92, the owner: "zostajemy przy
+  sqlite-simple na razie"; decision 7 stands). The spike ported users, groups, grants,
+  identities, sessions and the second factor (36 statements) to persistent entities and
+  esqueleto over one connection shared with sqlite-simple, with PostgreSQL migrations as twin
+  files, a throwaway local PostgreSQL for tests (`toolchain/with-postgres.sh`) and a service
+  container in CI; the gate was green. Against it: about twice the code for the ported part
+  (208 → 436 code lines, plus 313 lines of PostgreSQL migrations), persistent-sqlite internals
+  outside the PVP to share the connection, `veryUnsafeCoerceSqlExprValue` for a grant's
+  subject (a user's or a group's id), `INSERT OR IGNORE` as two statements, `COLLATE NOCASE` as
+  `lower_` (which folds every letter on PostgreSQL), and the static link leaving the whole
+  server on persistent-sqlite's SQLite 3.43.1 rather than direct-sqlite's 3.45.0. If
+  PostgreSQL ever becomes a goal, the port is done in one go (and `rel8` is then the better
+  fit); the branch `wp5.7-persistent-spike` stays on origin as the reference. On the way the
+  agent found `toolchain/test-bootstrap.sh` failing on `main` since WP4.19 (its fixture lacked
+  the SDKs); fixed on `main` by the planning session.
+- **WP5.9 started** (2026-10-27, the owner: `Http.Preload` compiles far too slowly because of
+  aeson's Generic instances; use `deriveJSON` everywhere and drop `Generic`) on
+  `wp5.9-aeson-th` from `main` `7eea2c5`: every Generic-derived JSON instance (78 empty
+  instances, ~116 `genericToJSON`/`genericParseJSON`/`deriving anyclass`) to `Data.Aeson.TH`
+  with the same `Options`, the 92 golden files unchanged as the proof, `Generic` kept only
+  where another class needs it, compile times of `Preload`, `wiki-api` and `wiki-core` before
+  and after in the report.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
