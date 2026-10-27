@@ -37,7 +37,14 @@
 -- kept, and shown and toggled again if they stop being an administrator.
 --
 -- A password is typed into a form of its own, in place, and never shown
--- back: the field is emptied once it is saved.
+-- back: the field is emptied once it is saved. Where the server sends mail
+-- and the user has a verified address, no password is typed for them: the
+-- panel mails them, once asked whether to, the link that "Forgot your
+-- password?" mails (WP5.6 of docs/PLAN.md), with which they choose one
+-- themselves; the panel types one only where that cannot be, and says why
+-- under the button. A user who signs in with a provider the server has and
+-- has no password has none to set, and is offered neither
+-- ('passwordControl').
 --
 -- Deleting a group asks first, in place, as deleting a space does.
 --
@@ -57,6 +64,12 @@
 module Wiki.App.View.Admin
   ( Input (..)
   , component
+
+    -- * A user's password
+  , PasswordControl (..)
+  , NoLink (..)
+  , passwordControl
+  , noLinkText
   )
 where
 
@@ -70,7 +83,7 @@ import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Admin (Directory (..))
-import Wiki.Api.Security (AccountEmail (..))
+import Wiki.Api.Security (AccountEmail (..), resetLifetime)
 import Wiki.App.Backend (MonadLoad (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Common
@@ -112,6 +125,9 @@ data State = State
   , newUser :: NewUser
   , settingPassword :: Maybe (UserId, Text)
   -- ^ The user whose new password is being typed, and what is typed.
+  , confirmingLink :: Maybe UserId
+  -- ^ The user whom the panel asks whether to mail a link to choose a
+  -- password.
   , usersTold :: Maybe Text
   -- ^ What the last change to an account did, said once it is done.
   , editing :: Editing
@@ -142,6 +158,9 @@ data Action
   | TypedNewPassword Text
   | SavePassword
   | CancelPassword
+  | AskLink UserId
+  | MailLink User Text
+  | CancelLink
   | SetDisabled User Bool
   | Unlink User Text
   | RemoveSecondFactor User
@@ -172,6 +191,7 @@ component =
               , loaded
               , newUser = noNewUser
               , settingPassword = Nothing
+              , confirmingLink = Nothing
               , usersTold = Nothing
               , editing = Idle
               , newGroup = ""
@@ -306,9 +326,7 @@ component =
                 {{ button "Cancel" CancelPassword }}
               </form>
             {% else %}
-              <button type="button" class="password-ask" disabled={{ st.busy }} onClick={{ const (AskPassword u.id) }}>
-                {{ if hasPassword then "Reset password…" else "Set password…" :: Text }}
-              </button>
+              {{ passwordView }}
               <button
                 type="button"
                 class="disable-toggle"
@@ -346,6 +364,7 @@ component =
               Grants {global = [GlobalGrant {subject = SubjectUser u.id, permission = Administer}], spaces = [], access = Open}
         disabled = u.id `Set.member` d.disabled
         hasPassword = u.id `Set.member` d.withPassword
+        providerOnly = u.id `Set.member` d.providerOnly
         secondFactor = u.id `Set.member` d.secondFactor
         email = Map.lookup u.id d.emails
         yourself = Just u.id == ((\me -> me.id) <$> st.input.context.session.user)
@@ -360,8 +379,42 @@ component =
           | disabled = "Disabled"
           | hasPassword && null providers = "Signs in with a password"
           | hasPassword = "Signs in with a password and " <> others
-          | not (null providers) = "Signs in with " <> others
+          | providerOnly = "Signs in with " <> others
+          | not (null providers) = "No way in: the server no longer signs in with " <> others
           | otherwise = "No password yet"
+        -- The password's button: a link to mail, asked about first, or a
+        -- password to type, with why no link; or none.
+        passwordView :: Maybe (H.ComponentHTML Action Empty m)
+        passwordView = case passwordControl d u.id of
+          NoPasswordControl -> Nothing
+          SendLink address
+            | st.confirmingLink == Just u.id ->
+                Just
+                  [hh|
+                  <div class="confirm password-link-confirm" role="alertdialog">
+                    <p>
+                      {{ "Mail " <> u.displayName <> " a link to choose a new password, at " <> address <> "?" }}
+                      {{ " It works once, for " <> show (round (resetLifetime / 60) :: Int) <> " minutes, and signs them out everywhere when it is used." :: Text }}
+                    </p>
+                    <button type="button" class="primary password-link-send" disabled={{ st.busy }} onClick={{ const (MailLink u address) }}>Send the link</button>
+                    {{ button "Cancel" CancelLink }}
+                  </div>
+                |]
+            | otherwise ->
+                Just
+                  [hh|
+                  <button type="button" class="password-link-ask" disabled={{ st.busy }} onClick={{ const (AskLink u.id) }}>Send a password link…</button>
+                |]
+          TypePassword why ->
+            Just
+              [hh|
+              <span class="password-control">
+                <button type="button" class="password-ask" disabled={{ st.busy }} onClick={{ const (AskPassword u.id) }}>
+                  {{ if hasPassword then "Reset password…" else "Set password…" :: Text }}
+                </button>
+                <span class="admin-note password-hint">{{ noLinkText why }}</span>
+              </span>
+            |]
 
     newUserForm :: State -> Directory -> H.ComponentHTML Action Empty m
     newUserForm st d =
@@ -550,7 +603,21 @@ component =
                       )
                 }
             H.raise (Changed Nothing)
-      AskPassword u -> modify (\st -> st {settingPassword = Just (u, ""), usersProblem = Nothing, usersTold = Nothing})
+      AskPassword u -> modify (\st -> st {settingPassword = Just (u, ""), confirmingLink = Nothing, usersProblem = Nothing, usersTold = Nothing})
+      AskLink u -> modify (\st -> st {confirmingLink = Just u, settingPassword = Nothing, usersProblem = Nothing, usersTold = Nothing})
+      CancelLink -> modify (\st -> st {confirmingLink = Nothing})
+      -- A mail changes nothing the directory shows: it is not read again.
+      MailLink u address -> do
+        modify (\st -> st {busy = True, usersProblem = Nothing, usersTold = Nothing})
+        sendPasswordLink u.id >>= \case
+          Left e -> modify (\st -> st {busy = False, usersProblem = Just e})
+          Right () ->
+            modify $ \st ->
+              st
+                { busy = False
+                , confirmingLink = Nothing
+                , usersTold = Just ("A link to choose a new password was mailed to " <> u.displayName <> ", at " <> address <> ".")
+                }
       TypedNewPassword t -> modify $ \st -> st {settingPassword = (\(u, _) -> (u, t)) <$> st.settingPassword}
       CancelPassword -> modify (\st -> st {settingPassword = Nothing})
       SavePassword ->
@@ -637,6 +704,50 @@ component =
 
 yesNo :: Bool -> Text
 yesNo b = if b then "Yes" else "No"
+
+-- | What the account column offers for a user's password (WP5.6 of
+-- docs/PLAN.md).
+data PasswordControl
+  = -- | Nothing: they sign in with a provider the server has, and have no
+    -- password to set.
+    NoPasswordControl
+  | -- | "Send a password link…": mail the link to choose one that "Forgot
+    -- your password?" mails, to this verified address.
+    SendLink Text
+  | -- | "Set password…" or "Reset password…": type one for them, since no
+    -- link can be mailed, for this reason.
+    TypePassword NoLink
+  deriving stock (Eq, Show)
+
+-- | Why no link to choose a password can be mailed to a user.
+data NoLink
+  = -- | The server sends no mail.
+    NoMail
+  | -- | Their login is disabled, which a link does not work for.
+    LoginDisabled
+  | -- | They have no address, or have not verified the one they have.
+    NoVerifiedAddress
+  deriving stock (Eq, Show)
+
+-- | What the panel offers for a user's password, by what the directory
+-- says of them: none to a user who has no password to set, a link to mail
+-- where the server sends mail and the user has a verified address and may
+-- sign in, and a password to type otherwise.
+passwordControl :: Directory -> UserId -> PasswordControl
+passwordControl d u
+  | u `Set.member` d.providerOnly = NoPasswordControl
+  | not d.mailing = TypePassword NoMail
+  | u `Set.member` d.disabled = TypePassword LoginDisabled
+  | otherwise = case Map.lookup u d.emails of
+      Just e | e.verified -> SendLink e.email
+      _ -> TypePassword NoVerifiedAddress
+
+-- | Why no link is mailed, in the words under the button.
+noLinkText :: NoLink -> Text
+noLinkText = \case
+  NoMail -> "The server sends no mail: type a password for them"
+  LoginDisabled -> "Their login is disabled: type a password for them"
+  NoVerifiedAddress -> "No verified address: type a password for them"
 
 -- | A user as the list of whom to add names them.
 userLabel :: User -> Text

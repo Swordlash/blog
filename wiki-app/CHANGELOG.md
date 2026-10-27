@@ -22,6 +22,19 @@ zlib streams of the same bytes named `.bin`, sent as
 those names. No `.gz` file ships under `tikzjax/` any more; a deployment
 serving the page from its own server needs nothing new.
 
+No password for accounts that sign in with a provider; the administrator
+mails password links (WP5.6). The menu under a user's name offers no "Set a
+password…" to one who has no password and signs in with a provider the
+server has (`View.SignIn.passwordOffer`). The administration's Users table
+shows no password button for such a user; where the server sends mail and
+the user has a verified address, "Send a password link…" asks, then mails
+them the reset's link; otherwise "Set password…"/"Reset password…" stays,
+with why under it ("The server sends no mail…", "No verified address…", or
+a disabled login) (`View.Admin.passwordControl`). `MonadAdmin` gains
+`sendPasswordLink`: over HTTP the new endpoint; the demo refuses it, sending
+no mail. A user whose providers are all gone from the server reads "No way
+in" in the table.
+
 The demo's Diagrams page has a TikZ picture whose fence starts with
 `\usetikzlibrary` (WP5.3), so that the README's example of one links to a
 page where it is drawn. The test suite checks the README against the demo:

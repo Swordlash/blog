@@ -128,6 +128,9 @@ spec m = do
     ui <- start m (Just "user-admin") Admin
     find ui ".user-row[data-login=reader] .account-state" >>= (`shouldHaveText` "No password yet")
     find ui ".user-row[data-login=reader] .password-ask" >>= (`shouldHaveText` "Set password…")
+    -- The demo sends no mail, which the button says.
+    find ui ".user-row[data-login=reader] .password-hint" >>= (`shouldHaveText` "The server sends no mail: type a password for them")
+    length <$> findAll ui ".password-link-ask" `shouldReturn` 0
     find ui ".user-row[data-login=reader] .password-ask" >>= click
     find ui ".user-row[data-login=reader] .password-new" >>= (`typeText` "short")
     clickButton ui ".user-row[data-login=reader] .password-form button" "Save password"

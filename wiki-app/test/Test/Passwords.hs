@@ -1,0 +1,101 @@
+-- | What the views offer for a password (WP5.6 of docs/PLAN.md), as the
+-- views decide it: the administration's button in a user's row
+-- ("Wiki.App.View.Admin"), which mails a link where it can, types a
+-- password where it cannot and says why, and offers nothing to a user who
+-- signs in with a provider and has no password to set; and the button in
+-- the menu under a signed-in user's name ("Wiki.App.View.SignIn"), which
+-- offers no "Set a password…" to such a user. That the views render what
+-- these say is the browser suite's (@Test.Browser.Admin@,
+-- @Test.Browser.Providers@).
+module Test.Passwords (spec) where
+
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
+import Data.Time (UTCTime (..), fromGregorian)
+import Protolude
+import Test.Hspec
+import Wiki.Api.Account (LinkedIdentity (..), SignInMethods (..))
+import Wiki.Api.Admin (Directory (..))
+import Wiki.Api.Security (AccountEmail (..))
+import Wiki.App.View.Admin (NoLink (..), PasswordControl (..), passwordControl)
+import Wiki.App.View.SignIn (passwordOffer)
+import Wiki.Core.Id (UserId (..))
+import Wiki.Core.User (SignInProvider (..), User (..))
+
+spec :: Spec
+spec = describe "what the views offer for a password" $ do
+  adminRow
+  ownMenu
+
+-- | Ada has a password and a verified address; Bea a password and an
+-- address she has not verified; Cy no address; Dee signs in with Google,
+-- which the server has, and has no password; Eve has no password and an
+-- account at a provider the server no longer has; Fay is disabled, with a
+-- verified address.
+people :: Directory
+people =
+  Directory
+    { users = [person "ada", person "bea", person "cy", person "dee", person "eve", person "fay"]
+    , administrators = mempty
+    , creators = mempty
+    , disabled = Set.fromList [uid "fay"]
+    , withPassword = Set.fromList (map uid ["ada", "bea", "cy", "fay"])
+    , identities = Map.fromList [(uid "dee", ["google"]), (uid "eve", ["gone"])]
+    , providerOnly = Set.fromList [uid "dee"]
+    , secondFactor = mempty
+    , emails =
+        Map.fromList
+          [ (uid "ada", AccountEmail {email = "ada@example.org", verified = True})
+          , (uid "bea", AccountEmail {email = "bea@example.org", verified = False})
+          , (uid "dee", AccountEmail {email = "dee@example.org", verified = True})
+          , (uid "eve", AccountEmail {email = "eve@example.org", verified = True})
+          , (uid "fay", AccountEmail {email = "fay@example.org", verified = True})
+          ]
+    , mailing = True
+    , groups = []
+    , membership = mempty
+    }
+  where
+    person login = User {id = uid login, login, displayName = login}
+
+uid :: Text -> UserId
+uid login = UserId ("user-" <> login)
+
+adminRow :: Spec
+adminRow = describe "the administration's button in a user's row" $ do
+  it "mails a link to a verified address where the server sends mail" $
+    passwordControl people (uid "ada") `shouldBe` SendLink "ada@example.org"
+
+  it "types a password where there is no verified address, and says so" $ do
+    passwordControl people (uid "bea") `shouldBe` TypePassword NoVerifiedAddress
+    passwordControl people (uid "cy") `shouldBe` TypePassword NoVerifiedAddress
+
+  it "types one for everyone where the server sends no mail, and says so" $
+    for_ ["ada", "bea", "cy", "eve", "fay"] $ \login ->
+      (login, passwordControl people {mailing = False} (uid login)) `shouldBe` (login, TypePassword NoMail)
+
+  it "offers nothing to a user who signs in with a provider the server has, and has no password" $ do
+    passwordControl people (uid "dee") `shouldBe` NoPasswordControl
+    passwordControl people {mailing = False} (uid "dee") `shouldBe` NoPasswordControl
+
+  it "treats a user whose provider is gone as any other, who has no way in" $
+    passwordControl people (uid "eve") `shouldBe` SendLink "eve@example.org"
+
+  it "types a password for a disabled user, whom a link does not work for" $
+    passwordControl people (uid "fay") `shouldBe` TypePassword LoginDisabled
+
+ownMenu :: Spec
+ownMenu = describe "the button in the menu under a user's name" $ do
+  let google = SignInProvider {name = "google", label = "Google"}
+      at provider = LinkedIdentity {provider, email = Nothing, name = Nothing, linkedAt = UTCTime (fromGregorian 2026 10 27) 0}
+  it "changes the password of a user who has one, with a provider or without" $ do
+    passwordOffer [google] SignInMethods {password = True, identities = []} `shouldBe` Just "Change password…"
+    passwordOffer [google] SignInMethods {password = True, identities = [at "google"]} `shouldBe` Just "Change password…"
+
+  it "sets none for a user who signs in with a provider the server has, and has no password" $
+    passwordOffer [google] SignInMethods {password = False, identities = [at "google"]} `shouldBe` Nothing
+
+  it "sets one for a user with no password and no provider the server has: no way in otherwise" $ do
+    passwordOffer [google] SignInMethods {password = False, identities = []} `shouldBe` Just "Set a password…"
+    passwordOffer [google] SignInMethods {password = False, identities = [at "gone"]} `shouldBe` Just "Set a password…"
+    passwordOffer [] SignInMethods {password = False, identities = [at "google"]} `shouldBe` Just "Set a password…"

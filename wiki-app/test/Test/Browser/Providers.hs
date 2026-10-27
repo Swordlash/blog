@@ -14,6 +14,7 @@ module Test.Browser.Providers (spec) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
@@ -23,6 +24,7 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..))
+import Wiki.Api.Security (AccountEmail (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend (Session (..), session)
 import Wiki.App.Backend.Admin (MonadAdmin (directory))
@@ -142,6 +144,8 @@ ownPanel m = describe "the panel of how a user signs in" $ do
     find ui ".identity .identity-email" >>= (`shouldHaveText` "rita@example.org")
     only <- find ui ".identity-disconnect"
     getAttribute only "disabled" `shouldReturn` Just ""
+    -- She signs in with Google, which the server has: no password to set.
+    length <$> findAll ui ".password-change-toggle" `shouldReturn` 0
     connect <- find ui ".identity-connect"
     textContent connect `shouldReturn` "Connect GitHub"
     hrefOf connect >>= (`shouldSatisfy` \h -> "auth/hub/start?" `T.isPrefixOf` h && "&link=1" `T.isSuffixOf` h)
@@ -187,14 +191,12 @@ ownPanel m = describe "the panel of how a user signs in" $ do
     serverStops
 
 administration :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
-administration m = describe "the administration's accounts" $
+administration m = describe "the administration's accounts" $ do
   it "say who signs in with which provider, and disconnect one" $
     runPage $ do
       serverStarts
       serveDemo
-      (me, people) <- unsafeIOToPageM $ do
-        wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
-        runMemWiki wiki ((,) <$> session <*> directory)
+      (me, people) <- demoPeople
       answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
       for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (withIdentities d)
       answerWith "DELETE" "api/v1/admin/users/user-editor/identities/hub" 204 ()
@@ -208,8 +210,56 @@ administration m = describe "the administration's accounts" $
         map (\r -> r.url) gone `shouldBe` ["api/v1/admin/users/user-editor/identities/hub"]
       unmount ui
       serverStops
+
+  it "offer no password to a user who signs in with a provider, mail a link to a verified address, and type one otherwise, saying why" $
+    runPage $ do
+      serverStarts
+      serveDemo
+      (me, people) <- demoPeople
+      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
+      for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (mailingTo True (withIdentities d))
+      answerWith "POST" "api/v1/admin/users/user-reader/password-link" 204 ()
+      ui <- startServer m Admin
+      -- Edgar signs in with GitHub and has no password: nothing to set.
+      _ <- find ui ".user-row[data-login=editor] .identity-unlink"
+      length <$> findAll ui ".user-row[data-login=editor] .password-ask" `shouldReturn` 0
+      length <$> findAll ui ".user-row[data-login=editor] .password-link-ask" `shouldReturn` 0
+      -- The administrator has no verified address: a password is typed.
+      find ui ".user-row[data-login=admin] .password-ask" >>= (`shouldHaveText` "Set password…")
+      find ui ".user-row[data-login=admin] .password-hint" >>= (`shouldHaveText` "No verified address: type a password for them")
+      -- Rita has one: a link is mailed there, once asked whether to.
+      length <$> findAll ui ".user-row[data-login=reader] .password-ask" `shouldReturn` 0
+      find ui ".user-row[data-login=reader] .password-link-ask" >>= (`shouldHaveText` "Send a password link…")
+      find ui ".user-row[data-login=reader] .password-link-ask" >>= click
+      find ui ".user-row[data-login=reader] .password-link-confirm" >>= (`shouldContainText` "rita@example.org")
+      find ui ".user-row[data-login=reader] .password-link-send" >>= click
+      find ui ".admin-told" >>= (`shouldContainText` "mailed to Rita Reader, at rita@example.org")
+      sent <- filter (\r -> r.method == "POST") <$> asked
+      map (\r -> r.url) sent `shouldBe` ["api/v1/admin/users/user-reader/password-link"]
+      length <$> findAll ui ".password-link-confirm" `shouldReturn` 0
+      unmount ui
+      serverStops
+
+  it "type a password for everyone where the server sends no mail, saying why" $
+    runPage $ do
+      serverStarts
+      serveDemo
+      (me, people) <- demoPeople
+      answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = named, exports = []}
+      for_ people $ \d -> answerWith "GET" "api/v1/admin/directory" 200 (mailingTo False (withIdentities d))
+      ui <- startServer m Admin
+      find ui ".user-row[data-login=reader] .password-ask" >>= (`shouldHaveText` "Set password…")
+      find ui ".user-row[data-login=reader] .password-hint" >>= (`shouldHaveText` "The server sends no mail: type a password for them")
+      length <$> findAll ui ".password-link-ask" `shouldReturn` 0
+      unmount ui
+      serverStops
   where
-    withIdentities d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = Map.fromList [(UserId "user-editor", ["hub"])], secondFactor = d.secondFactor, emails = d.emails, mailing = d.mailing, groups = d.groups, membership = d.membership}
+    demoPeople = unsafeIOToPageM $ do
+      wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
+      runMemWiki wiki ((,) <$> session <*> directory)
+    withIdentities d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = Map.fromList [(UserId "user-editor", ["hub"])], providerOnly = Set.singleton (UserId "user-editor"), secondFactor = d.secondFactor, emails = d.emails, mailing = d.mailing, groups = d.groups, membership = d.membership}
+    -- Rita has a verified address, and the server mails or not.
+    mailingTo mailing d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = d.identities, providerOnly = d.providerOnly, secondFactor = d.secondFactor, emails = Map.fromList [(UserId "user-reader", AccountEmail {email = "rita@example.org", verified = True})], mailing, groups = d.groups, membership = d.membership}
 
 shouldContainText :: Element s -> Text -> PageM s ()
 shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)

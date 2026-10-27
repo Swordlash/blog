@@ -20,9 +20,11 @@
 --
 -- A user signed in has their name as a button, whatever the server signs
 -- in with, that opens how they sign in: their password, if any, with a
--- form to change it (or to set one, for a user who signs in only with a
--- provider's account: WP3.7 of docs/PLAN.md), which asks for the one they
--- have, the new one and the new one again; the providers' accounts they
+-- form to change it (or to set one, for a user who has none and whose
+-- providers are gone: WP3.7 of docs/PLAN.md), which asks for the one they
+-- have, the new one and the new one again; none for a user who has no
+-- password and signs in with a provider the server has, who has none to set
+-- (WP5.6, 'passwordOffer'); the providers' accounts they
 -- sign in with, each of which they may disconnect unless it is their last
 -- way in; and a link to connect each provider they have no account of
 -- yet. The server's operator has no account, and no such button.
@@ -57,6 +59,7 @@ module Wiki.App.View.SignIn
   , Query (..)
   , Output (..)
   , component
+  , passwordOffer
   )
 where
 
@@ -68,7 +71,7 @@ import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Account (LinkedIdentity (..), NewAccount (..), PasswordChange (..), SignInMethods (..), mayDisconnect)
+import Wiki.Api.Account (LinkedIdentity (..), NewAccount (..), PasswordChange (..), SignInMethods (..), mayDisconnect, providerOnly)
 import Wiki.Api.Auth (Purpose (..), startUrl)
 import Wiki.Api.Security (resetLifetime)
 import Wiki.App.Account (Accounts (..), SignInError (..), accountErrorText, codeErrorText, passwordErrorText, signInErrorText)
@@ -409,9 +412,11 @@ component =
                 {% if st.changingPassword %}
                   {{ passwordForm st m }}
                 {% else %}
-                  <button type="button" class="password-change-toggle" disabled={{ st.busy }} onClick={{ const AskPassword }}>
-                    {{ if m.password then "Change password…" else "Set a password…" :: Text }}
-                  </button>
+                  {% for offered in maybeToList (passwordOffer providers m) %}
+                    <button type="button" class="password-change-toggle" disabled={{ st.busy }} onClick={{ const AskPassword }}>
+                      {{ offered }}
+                    </button>
+                  {% end %}
                 {% end %}
                 <div class="sign-in-told">
                   {% for t in maybeToList st.passwordTold %}
@@ -638,3 +643,15 @@ component =
 
     close :: H.HalogenM (State m) Action Slots Output m ()
     close = modify (\st -> st {open = False, step = AtPassword, registering = False, notice = Nothing, problem = Nothing, typedPassword = "", typedCode = "", resetTold = Nothing})
+
+-- | The button that opens the form for one's own password, if there is
+-- one: "Change password…" for a user who has a password, "Set a
+-- password…" for one who has none and no provider the server has to sign
+-- in with (theirs was disconnected or removed from the server), and none
+-- for one who signs in with such a provider, who has no password to set
+-- (WP5.6 of docs/PLAN.md). The server refuses that one alike.
+passwordOffer :: [SignInProvider] -> SignInMethods -> Maybe Text
+passwordOffer providers m
+  | m.password = Just "Change password…"
+  | providerOnly (map (\p -> p.name) providers) m.password (map (\i -> i.provider) m.identities) = Nothing
+  | otherwise = Just "Set a password…"
