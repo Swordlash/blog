@@ -42,8 +42,9 @@ import Wiki.Core.User (User (..))
 import Wiki.Server.Accounts (Resolved (..), createAccount, resolveSession, seenEvery, signIn)
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
-import Wiki.Server.Storage (PasswordLink (..), Storage, Who (..), defaultConfig, passwordLinkFor, runSqliteWiki, withDatabase, withStorage)
+import Wiki.Server.Storage (PasswordLink (..), Storage, Who (..), defaultConfig, passwordLinkFor, runSqliteWiki, withDatabase, withDb, withStorage)
 import Wiki.Server.Storage.Rows (insertIdentity)
+import Wiki.Server.Storage.Sql (runSql)
 import Wiki.Server.Totp (codeAt, secretFromText)
 
 spec :: Spec
@@ -479,7 +480,7 @@ storageRules = describe "the storage's rules" $ do
     pat <- createAccount st "pat" "Pat" Nothing >>= either (panic . show) pure
     Right (Just (_, token)) <- setEmail st now pat.user.id "pat@example.org"
     verifyEmail st now (MailToken token) `shouldReturn` Right ()
-    withDatabase st $ \c -> insertIdentity c now pat.user.id "acme" "pat-1" Nothing Nothing
+    withDb st $ \d -> runSql d (insertIdentity now pat.user.id "acme" "pat-1" Nothing Nothing)
     -- The server has no such provider: Pat has no way in, and may reset.
     [early] <- requestReset st now "pat"
     _ <- runSqliteWiki st Administrator (setServerSettings withAcme) >>= either (panic . show) pure

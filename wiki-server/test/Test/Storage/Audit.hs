@@ -38,6 +38,7 @@ import Wiki.Server.Import (applyImport)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Audit (loadAuditLog, operator)
 import Wiki.Server.Storage.Rows (Stamp (..), insertIdentity)
+import Wiki.Server.Storage.Sql (Db (..), runSql)
 
 spec :: Spec
 spec = describe "the audit log" $ do
@@ -138,9 +139,9 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     enabled <- recordsOne st (as st "admin" (setDisabled rita.id False))
     summary enabled `shouldBe` ("user.enable", "user", "reader", [])
     now <- getCurrentTime
-    withDatabase st $ \c -> do
-      execute c "INSERT INTO totp (user_id, secret, created_at, enabled_at) VALUES (?, 'JBSWY3DPEHPK3PXP', ?, ?)" (rita.id.text, Stamp now, Stamp now)
-      insertIdentity c now rita.id "github" "1234" Nothing Nothing
+    withDb st $ \d -> do
+      execute d.conn "INSERT INTO totp (user_id, secret, created_at, enabled_at) VALUES (?, 'JBSWY3DPEHPK3PXP', ?, ?)" (rita.id.text, Stamp now, Stamp now)
+      runSql d (insertIdentity now rita.id "github" "1234" Nothing Nothing)
     factor <- recordsOne st (as st "admin" (removeSecondFactor rita.id))
     summary factor `shouldBe` ("user.second-factor-remove", "user", "reader", [])
     unlinked <- recordsOne st (as st "admin" (unlinkUserIdentity rita.id "github"))

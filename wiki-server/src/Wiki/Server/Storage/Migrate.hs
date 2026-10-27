@@ -18,11 +18,19 @@
 -- not, in order and all in one transaction: a database is at one version or
 -- the next, never half-way, and a step that fails leaves it as it was. A
 -- step once released is never edited: a change to the schema is a new file.
+--
+-- PostgreSQL has a branch of its own (WP5.7 of docs/PLAN.md, a spike):
+-- @migrations/postgresql@ holds, for every step, a file of the same name
+-- that makes the same schema in PostgreSQL's SQL ('postgresMigrations'),
+-- applied by 'migrateSql' through persistent. The two lists are numbered
+-- alike, and a step is written in both or in neither.
 module Wiki.Server.Storage.Migrate
   ( Migration (..)
   , migrations
+  , postgresMigrations
   , migrate
   , applyMigrations
+  , migrateSql
   , schemaVersion
   , SchemaTooNew (..)
   )
@@ -31,11 +39,12 @@ where
 import Data.FileEmbed (embedDir, makeRelativeToProject)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
+import Database.Persist.Sql (PersistValue (..), Single (..), rawExecute, rawSql, toPersistValue)
 import Database.SQLite.Simple (Connection (..), Only (..), execute, execute_, query_, withImmediateTransaction)
 import Database.SQLite3 qualified as SQLite
 import Protolude
-import System.FilePath (takeBaseName, takeExtension)
-import Wiki.Server.Storage.Rows (Stamp (..))
+import System.FilePath (splitDirectories, takeBaseName, takeExtension)
+import Wiki.Server.Storage.Rows (Sql, Stamp (..))
 
 -- | One step of the schema.
 data Migration = Migration
@@ -49,18 +58,33 @@ data Migration = Migration
   deriving stock (Eq, Show)
 
 -- | Every step this program knows, in order, from the files it was compiled
--- with.
+-- with: SQLite's, those at the top of the directory.
 migrations :: [Migration]
-migrations =
+migrations = stepsIn []
+
+-- | Every step in PostgreSQL's SQL, in order: the files of
+-- @migrations/postgresql@.
+postgresMigrations :: [Migration]
+postgresMigrations = stepsIn ["postgresql"]
+
+-- | The steps in a directory under @migrations@, from the files the program
+-- was compiled with ('embedDir' embeds the subdirectories' too).
+stepsIn :: [FilePath] -> [Migration]
+stepsIn dir =
   sortOn
     (\m -> m.version)
-    [ Migration {version, name = T.pack file, statements = decodeUtf8 contents}
-    | (file, contents) <- $(makeRelativeToProject "migrations" >>= embedDir)
+    [ Migration {version, name = T.pack (takeBaseName file <> ".sql"), statements = decodeUtf8 contents}
+    | (file, contents) <- embedded
     , takeExtension file == ".sql"
+    , take (length dir) (splitDirectories file) == dir
+    , length (splitDirectories file) == length dir + 1
     , let version = fromMaybe (panic ("a migration not named NNNN-….sql: " <> T.pack file)) (number file)
     ]
   where
     number file = readMaybe (takeWhile isDigit (takeBaseName file))
+
+embedded :: [(FilePath, ByteString)]
+embedded = $(makeRelativeToProject "migrations" >>= embedDir)
 
 -- | Bring a database up to this program's schema; what is given back is the
 -- versions it applied, none for a database that was up to date already.
@@ -82,6 +106,26 @@ applyMigrations steps c = withImmediateTransaction c $ do
     SQLite.exec c.connectionHandle m.statements
     now <- getCurrentTime
     execute c "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)" (m.version, Stamp now)
+  pure (map (\m -> m.version) pending)
+
+-- | 'applyMigrations' through persistent, for PostgreSQL: the steps a
+-- database has not had yet, in the transaction the caller runs it in
+-- ('Database.Persist.Sql.runSqlConn'), which on PostgreSQL holds the
+-- tables' changes too. Each step is sent whole, as one string of
+-- statements; postgresql-simple would take a question mark in it for a
+-- parameter, so the files have none (a test says so).
+migrateSql :: [Migration] -> Sql [Int]
+migrateSql steps = do
+  rawExecute "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL)" []
+  current <- maybe 0 unSingle . head <$> rawSql "SELECT coalesce(max(version), 0) FROM schema_version" []
+  let known = maybe 0 (\m -> m.version) (lastMay steps)
+  when (current > known) $
+    liftIO (throwIO SchemaTooNew {found = current, known})
+  let pending = filter (\m -> m.version > current) steps
+  for_ pending $ \m -> do
+    rawExecute m.statements []
+    now <- liftIO getCurrentTime
+    rawExecute "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)" [PersistInt64 (fromIntegral m.version), toPersistValue (Stamp now)]
   pure (map (\m -> m.version) pending)
 
 -- | A database at a version of the schema this program does not know: a

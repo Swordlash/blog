@@ -129,48 +129,40 @@ import Control.Monad.UUID (MonadUUID (..))
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID.Types qualified as UUID
-import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query, query_)
+import Database.SQLite.Simple (Connection, Only (..), execute, execute_, query)
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), NewAccount (..), SignInMethods (..), signsInSomehow, withoutIdentity)
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Security (SessionRef (..), SessionSummary (..))
 import Wiki.App.Backend (WikiError (..))
-import Wiki.Core.Access (takesNewAccounts)
+import Wiki.Core.Access (Access (..), takesNewAccounts)
 import Wiki.Core.Audit (Actor (..), Subject (..))
 import Wiki.Core.Id (InvitationId (..), UserId (..))
+import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
+import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.User (User (..), checkLogin)
 import Wiki.Server.Password (checkPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
-import Wiki.Server.Storage (Storage, readServerSettings, readSettings, settingsWith, withDatabase)
+import Wiki.Server.Storage (Storage, readServerSettings, readSettings, settingsWith, withDatabase, withDb)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
-import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accountFromRow, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, noPasswordToSet, pendingInvitation, providerNames, refreshIdentity, selectAccounts, totpEnabled, updateDisabled, updatePasswordHash)
+import Wiki.Server.Storage.Rows (IdentityRow (..), Sql, Stamp (..), deleteGlobalGrant, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertGrants, insertIdentity, loadAccount, loadAccountByLogin, loadAccountList, loadPasswordHash, noPasswordToSet, pendingInvitation, providerNames, refreshIdentity, totpEnabled, updateDisabled, updatePasswordHash)
+import Wiki.Server.Storage.Sql (Db (..), runSql)
 
 --------------------------------------------------------------------------------
 -- Accounts
 
 -- | A user's account, by id.
 accountOf :: Storage -> UserId -> IO (Maybe Account)
-accountOf st u = withDatabase st (`loadAccount` u)
+accountOf st u = withDb st (\d -> runSql d (loadAccount u))
 
 -- | A user's account, by login, which is compared as SQLite compares
 -- without case (ASCII letters): what someone types to sign in.
 accountByLogin :: Storage -> Text -> IO (Maybe Account)
-accountByLogin st login = withDatabase st $ \c ->
-  fmap accountFromRow . head <$> query c (selectAccounts "WHERE login = ? COLLATE NOCASE") (Only (T.strip login))
+accountByLogin st login = withDb st $ \d -> fmap fst <$> runSql d (loadAccountByLogin (T.strip login))
 
 -- | Every user's account, by login, with whether they are an administrator
 -- (hold the global @administer@ themselves).
 listAccounts :: Storage -> IO [(Account, Bool)]
-listAccounts st = withDatabase st $ \c -> do
-  rows <-
-    query_
-      c
-      ( Query . T.unwords $
-          [ "SELECT id, login, display_name, password_hash, disabled,"
-          , "EXISTS (SELECT 1 FROM global_grants g WHERE g.subject_kind = 'user' AND g.subject_id = users.id AND g.permission = 'administer')"
-          , "FROM users ORDER BY login COLLATE NOCASE"
-          ]
-      )
-  pure [(accountFromRow (uid, login, name, phc, disabled), admin /= (0 :: Int)) | (uid, login, name, phc, disabled, admin) <- rows]
+listAccounts st = withDb st (\d -> runSql d loadAccountList)
 
 -- | Make a user, who signs in with this password, or (with none) cannot
 -- sign in until they are given one. Their display name is their login if
@@ -184,12 +176,12 @@ createAccount st rawLogin rawName password = runExceptT $ do
   let name = case T.strip rawName of
         "" -> login
         n -> n
-  ExceptT . withDatabase st $ \c ->
-    immediately c $
-      insertAccount c (UserId uid) login name phc >>= \case
+  ExceptT . withDb st $ \d ->
+    immediately d.conn $
+      runSql d (insertAccount (UserId uid) login name phc) >>= \case
         Left t -> pure (Left (taken t))
         Right account -> do
-          fromConsole c "user.create" account.user [("login", login), ("name", name)]
+          fromConsole d.conn "user.create" account.user [("login", login), ("name", name)]
           pure (Right account)
   where
     taken login = Conflict ("There is a user with the login " <> login <> " already.")
@@ -200,35 +192,38 @@ setPassword st u password = case checkPassword password of
   Left why -> pure (Left (Invalid why))
   Right p -> do
     phc <- hashPassword p
-    changeAccount st u "user.password" [] $ \c -> do
-      updatePasswordHash c u phc
-      deleteSessionsOf c u
+    changeAccount st u "user.password" [] $ do
+      updatePasswordHash u phc
+      deleteSessionsOf u
 
 -- | Disable a user's login, which ends their sessions, or enable it again.
 setDisabled :: Storage -> UserId -> Bool -> IO (Either WikiError Account)
-setDisabled st u disabled = changeAccount st u (if disabled then "user.disable" else "user.enable") [] $ \c -> do
-  updateDisabled c u disabled
-  when disabled (deleteSessionsOf c u)
+setDisabled st u disabled = changeAccount st u (if disabled then "user.disable" else "user.enable") [] $ do
+  updateDisabled u disabled
+  when disabled (deleteSessionsOf u)
 
 -- | Make a user an administrator (the global @administer@, granted to
 -- them), or take it away. What their groups are granted is not changed.
 setAdministrator :: Storage -> UserId -> Bool -> IO (Either WikiError Account)
-setAdministrator st u administrator = changeAccount st u "user.administrator" [("administrator", if administrator then "yes" else "no")] $ \c ->
-  if administrator
-    then execute c "INSERT OR IGNORE INTO global_grants (subject_kind, subject_id, permission) VALUES ('user', ?, 'administer')" (Only u.text)
-    else execute c "DELETE FROM global_grants WHERE subject_kind = 'user' AND subject_id = ? AND permission = 'administer'" (Only u.text)
+setAdministrator st u administrator =
+  changeAccount st u "user.administrator" [("administrator", if administrator then "yes" else "no")] $
+    if administrator
+      then insertGrants Grants {global = [grant], spaces = [], access = Open}
+      else deleteGlobalGrant grant
+  where
+    grant = GlobalGrant {subject = Permission.SubjectUser u, permission = Administer}
 
 -- | Change a user who is there, from the console, in one transaction with
 -- its row in the audit log, and give back their account as it then is;
 -- 'NotFound' for a user who is not.
-changeAccount :: Storage -> UserId -> Text -> [(Text, Text)] -> (Connection -> IO ()) -> IO (Either WikiError Account)
-changeAccount st u action detail change = withDatabase st $ \c -> immediately c $ do
-  loadAccount c u >>= \case
+changeAccount :: Storage -> UserId -> Text -> [(Text, Text)] -> Sql () -> IO (Either WikiError Account)
+changeAccount st u action detail change = withDb st $ \d -> immediately d.conn $ do
+  runSql d (loadAccount u) >>= \case
     Nothing -> pure (Left NotFound)
     Just a -> do
-      change c
-      fromConsole c action a.user detail
-      maybe (Left NotFound) Right <$> loadAccount c u
+      runSql d change
+      fromConsole d.conn action a.user detail
+      maybe (Left NotFound) Right <$> runSql d (loadAccount u)
 
 -- | Record what the console did to a user.
 fromConsole :: Connection -> Text -> User -> [(Text, Text)] -> IO ()
@@ -259,11 +254,11 @@ register st now address new = runExceptT $ do
   open <- liftIO (takesNewAccounts . (\s -> s.access) <$> readSettings st)
   unless open (throwError Forbidden)
   made <- prepared new
-  ExceptT . withDatabase st $ \c -> immediately c $ do
+  ExceptT . withDb st $ \d -> immediately d.conn $ do
     -- Closed meanwhile, while the password was hashed.
-    settings <- settingsWith st c
+    settings <- settingsWith st d.conn
     if takesNewAccounts settings.access
-      then makeAccount c now address settings made >>= recordMade c address "user.register" []
+      then makeAccount d now address settings made >>= recordMade d.conn address "user.register" []
       else pure (Left Forbidden)
 
 -- | Whom an invitation is for, if it can be used now.
@@ -281,16 +276,16 @@ acceptInvitation st now address token new = runExceptT $ do
   pending <- liftIO (withDatabase st (\c -> pendingInvitation c now secret))
   when (isNothing pending) (throwError NotFound)
   made <- prepared new
-  ExceptT . withDatabase st $ \c ->
-    immediately c $
-      pendingInvitation c now secret >>= \case
+  ExceptT . withDb st $ \d ->
+    immediately d.conn $
+      pendingInvitation d.conn now secret >>= \case
         -- Used or revoked meanwhile.
         Nothing -> pure (Left NotFound)
         Just (i, _) -> do
-          settings <- settingsWith st c
-          made' <- makeAccount c now address settings made
-          when (isRight made') (void (deleteInvitation c i))
-          recordMade c address "invitation.accept" [("invitation", i.text)] made'
+          settings <- settingsWith st d.conn
+          made' <- makeAccount d now address settings made
+          when (isRight made') (void (deleteInvitation d.conn i))
+          recordMade d.conn address "invitation.accept" [("invitation", i.text)] made'
 
 -- | Record that someone made themself an account, as themself, from where
 -- they asked, in the transaction that made it.
@@ -316,13 +311,13 @@ prepared new = do
 -- wiki's settings give a new one, and sign its maker in, at their network
 -- address. One without a password signs in another way: with a provider's
 -- account.
-makeAccount :: Connection -> UTCTime -> Text -> WikiSettings -> (UserId, Text, Text, Maybe Text) -> IO (Either WikiError (User, Text))
-makeAccount c now address settings (uid, login, name, phc) =
-  insertAccount c uid login name phc >>= \case
+makeAccount :: Db -> UTCTime -> Text -> WikiSettings -> (UserId, Text, Text, Maybe Text) -> IO (Either WikiError (User, Text))
+makeAccount d now address settings (uid, login, name, phc) =
+  runSql d (insertAccount uid login name phc) >>= \case
     Left taken -> pure (Left (Conflict ("There is a user with the login " <> taken <> " already.")))
     Right account -> do
-      when settings.newAccountsCreateSpaces (grantCreateSpaces c uid)
-      token <- startSession c now uid address
+      when settings.newAccountsCreateSpaces (runSql d (grantCreateSpaces uid))
+      token <- startSession d.conn now uid address
       pure (Right (account.user, token))
 
 --------------------------------------------------------------------------------
@@ -394,57 +389,57 @@ data Refusal
 -- not signed in by their identity alone, as they are not by their password
 -- alone: the answer says that a code is wanted.
 landWith :: Storage -> UTCTime -> Text -> Intent -> Claimed -> IO (Either Refusal Landing)
-landWith st now address intent claimed = withDatabase st $ \c ->
-  immediately c $
-    identityOf c claimed.provider claimed.subject >>= \case
+landWith st now address intent claimed = withDb st $ \d ->
+  immediately d.conn $
+    runSql d (identityOf claimed.provider claimed.subject) >>= \case
       Just found -> do
-        refreshIdentity c claimed.provider claimed.subject claimed.email claimed.name
+        runSql d (refreshIdentity claimed.provider claimed.subject claimed.email claimed.name)
         case intent of
           LinkTo me
             | found.user /= me -> pure (Left AnotherUsers)
-            | otherwise -> maybe (Left NoOneToLink) (Right . Linked . (\a -> a.user)) <$> active c me
+            | otherwise -> maybe (Left NoOneToLink) (Right . Linked . (\a -> a.user)) <$> active d me
           _ ->
-            active c found.user >>= \case
+            active d found.user >>= \case
               Nothing -> pure (Left DisabledAccount)
               Just a ->
-                totpEnabled c a.user.id >>= \case
+                runSql d (totpEnabled a.user.id) >>= \case
                   True -> pure (Right (SecondFactorFor a.user))
-                  False -> Right . (\token -> SignedInAs a.user token False) <$> startSession c now a.user.id address
+                  False -> Right . (\token -> SignedInAs a.user token False) <$> startSession d.conn now a.user.id address
       Nothing -> case intent of
         LinkTo me ->
-          active c me >>= \case
+          active d me >>= \case
             Nothing -> pure (Left NoOneToLink)
             Just a -> do
-              theirs <- identitiesOf c me
+              theirs <- runSql d (identitiesOf me)
               if any (\i -> i.provider == claimed.provider) theirs
                 then pure (Left HasOneThere)
                 else do
-                  insertIdentity c now me claimed.provider claimed.subject claimed.email claimed.name
+                  runSql d (insertIdentity now me claimed.provider claimed.subject claimed.email claimed.name)
                   pure (Right (Linked a.user))
         Invited token ->
-          pendingInvitation c now (tokenHash token.text) >>= \case
+          pendingInvitation d.conn now (tokenHash token.text) >>= \case
             Nothing -> pure (Left UnusableInvitation)
             Just (i, _) -> do
-              made <- newAccount c [("invitation", i.text)]
-              void (deleteInvitation c i)
+              made <- newAccount d [("invitation", i.text)]
+              void (deleteInvitation d.conn i)
               pure (Right made)
         SignInOnly -> do
-          settings <- settingsWith st c
+          settings <- settingsWith st d.conn
           if takesNewAccounts settings.access
-            then Right <$> newAccount c []
+            then Right <$> newAccount d []
             else pure (Left ClosedWiki)
   where
     -- A user who may sign in: there, and not disabled.
-    active c u = mfilter (\a -> not a.disabled) <$> loadAccount c u
+    active d u = mfilter (\a -> not a.disabled) <$> runSql d (loadAccount u)
     -- An account for the identity, with the first login of its candidates
     -- no one has, and no password: recorded in the audit log as made by its
     -- owner, with the provider, as one made with a password is.
-    newAccount c detail = do
-      settings <- settingsWith st c
+    newAccount d detail = do
+      settings <- settingsWith st d.conn
       uid <- UserId . UUID.toText <$> generateV4
       let tries = take 100 (loginCandidates claimed)
           made login =
-            makeAccount c now address settings (uid, login, fromMaybe login (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
+            makeAccount d now address settings (uid, login, fromMaybe login (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
           go = \case
             [] -> do
               -- A hundred taken: one with a random end, which nobody has.
@@ -454,8 +449,8 @@ landWith st now address intent claimed = withDatabase st $ \c ->
       go tries >>= \case
         Left e -> panic ("no login could be made for an identity: " <> show e)
         Right (user, token) -> do
-          insertIdentity c now user.id claimed.provider claimed.subject claimed.email claimed.name
-          _ <- recordMade c address "user.register" (("provider", claimed.provider) : detail) (Right (user, token) :: Either () (User, Text))
+          runSql d (insertIdentity now user.id claimed.provider claimed.subject claimed.email claimed.name)
+          _ <- recordMade d.conn address "user.register" (("provider", claimed.provider) : detail) (Right (user, token) :: Either () (User, Text))
           pure (SignedInAs user token True)
 
 -- | The logins to try for an account made with a provider's account, the
@@ -475,27 +470,27 @@ loginCandidates claimed = base : [base <> "-" <> show n | n <- [2 :: Int ..]]
 
 -- | How a user signs in: whether with a password, and their identities.
 signInMethods :: Storage -> UserId -> IO (Either WikiError SignInMethods)
-signInMethods st u = withDatabase st (`methodsOf` u)
+signInMethods st u = withDb st (`methodsOf` u)
 
-methodsOf :: Connection -> UserId -> IO (Either WikiError SignInMethods)
-methodsOf c u =
-  loadAccount c u >>= \case
+methodsOf :: Db -> UserId -> IO (Either WikiError SignInMethods)
+methodsOf d u =
+  runSql d (loadAccount u) >>= \case
     Nothing -> pure (Left NotFound)
     Just a -> do
-      theirs <- identitiesOf c u
+      theirs <- runSql d (identitiesOf u)
       pure (Right SignInMethods {password = a.hasPassword, identities = map (\i -> i.identity) theirs})
 
 -- | A user disconnects their identity at a provider: how they sign in
 -- then. 'NotFound' if they have none there, 'Conflict' if it is the last
 -- way they have in.
 unlinkIdentity :: Storage -> UserId -> Text -> IO (Either WikiError SignInMethods)
-unlinkIdentity st u provider = withDatabase st $ \c -> immediately c $ runExceptT $ do
-  before <- ExceptT (methodsOf c u)
+unlinkIdentity st u provider = withDb st $ \d -> immediately d.conn $ runExceptT $ do
+  before <- ExceptT (methodsOf d u)
   unless (any (\i -> i.provider == provider) before.identities) (throwError NotFound)
   let after = withoutIdentity provider before
   unless (signsInSomehow after) $
     throwError (Conflict "This is the only way you have to sign in: connect another account first, or ask an administrator for a password.")
-  _ <- liftIO (deleteIdentity c u provider)
+  _ <- liftIO (runSql d (deleteIdentity u provider))
   pure after
 
 --------------------------------------------------------------------------------
@@ -524,23 +519,23 @@ changePassword st u keep current new = runExceptT $ do
   password <- either (throwError . PasswordRefused . Invalid) pure (checkPassword new)
   -- Read before the connection is taken, which reading them may take.
   configured <- liftIO (providerNames <$> readServerSettings st)
-  before <- liftIO (withDatabase st (`passwordHashOf` u)) >>= maybe (throwError (PasswordRefused NotFound)) pure
-  none <- liftIO (withDatabase st (\c -> noPasswordToSet c configured u))
+  before <- liftIO (withDb st (\d -> runSql d (loadPasswordHash u))) >>= maybe (throwError (PasswordRefused NotFound)) pure
+  none <- liftIO (withDb st (\d -> runSql d (noPasswordToSet configured u)))
   when none $
     throwError (PasswordRefused (Invalid "You sign in with a provider, and have no password to set: sign in there."))
   for_ before $ \phc ->
     unless (maybe False (verifyPassword phc) current) (throwError WrongCurrent)
   phc <- liftIO (hashPassword password)
-  ExceptT . withDatabase st $ \c -> immediately c $ do
-    now <- passwordHashOf c u
+  ExceptT . withDb st $ \d -> immediately d.conn $ do
+    now <- runSql d (loadPasswordHash u)
     if now /= Just before
       then pure (Left (PasswordRefused (Conflict "Your password was changed meanwhile: sign in again with the new one.")))
       else do
-        updatePasswordHash c u phc
+        runSql d (updatePasswordHash u phc)
         case keep of
-          Just token -> execute c "DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?" (u.text, tokenHash token)
-          Nothing -> deleteSessionsOf c u
-        first PasswordRefused <$> methodsOf c u
+          Just token -> execute d.conn "DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?" (u.text, tokenHash token)
+          Nothing -> runSql d (deleteSessionsOf u)
+        first PasswordRefused <$> methodsOf d u
 
 -- | Whether a password given is the current one of a user, for what a
 -- session alone may not do (WP4.11 of docs/PLAN.md): 'Just True' for the
@@ -549,12 +544,7 @@ changePassword st u keep current new = runExceptT $ do
 -- there.
 currentPasswordIs :: Storage -> UserId -> Maybe Text -> IO (Maybe Bool)
 currentPasswordIs st u given =
-  fmap (maybe True (\phc -> maybe False (verifyPassword phc) given)) <$> withDatabase st (`passwordHashOf` u)
-
--- | A user's password's hash, if they are there: 'Nothing' for a user who
--- is not, @Just Nothing@ for one without a password.
-passwordHashOf :: Connection -> UserId -> IO (Maybe (Maybe Text))
-passwordHashOf c u = head . map fromOnly <$> query c "SELECT password_hash FROM users WHERE id = ?" (Only u.text)
+  fmap (maybe True (\phc -> maybe False (verifyPassword phc) given)) <$> withDb st (\d -> runSql d (loadPasswordHash u))
 
 --------------------------------------------------------------------------------
 -- Sessions
@@ -598,18 +588,15 @@ signIn :: Storage -> UTCTime -> Text -> Text -> Text -> IO (Either SignInFailure
 signIn st now address login password
   | T.length password > 1024 = pure (Left BadPassword)
   | otherwise = do
-      found <- withDatabase st $ \c ->
-        head <$> query c (selectAccounts "WHERE login = ? COLLATE NOCASE") (Only (T.strip login))
-      let hashOf :: AccountRow -> Maybe Text
-          hashOf (_, _, _, phc, _) = phc
-          matches = verifyPassword (fromMaybe unknownHash (found >>= hashOf)) password
+      found <- withDb st $ \d -> runSql d (loadAccountByLogin (T.strip login))
+      let matches = verifyPassword (fromMaybe unknownHash (found >>= snd)) password
       case found of
-        Just row@(_, _, _, Just _, 0) | matches -> do
-          let user = (accountFromRow row).user
-          withDatabase st $ \c ->
-            totpEnabled c user.id >>= \case
+        Just (account, Just _) | not account.disabled && matches -> do
+          let user = account.user
+          withDb st $ \d ->
+            runSql d (totpEnabled user.id) >>= \case
               True -> pure (Left (SecondFactorWanted user))
-              False -> Right . (user,) <$> startSession c now user.id address
+              False -> Right . (user,) <$> startSession d.conn now user.id address
         _ -> pure (Left NoSuchAccount)
 
 -- | A new session for a user, from now and from a network address: the id
@@ -710,8 +697,8 @@ endSessionOf st now u token ref = withDatabase st $ \c -> immediately c $ do
 -- | End every session of a user's but the one whose id this is (the one
 -- asking): their sessions then.
 endOtherSessions :: Storage -> UTCTime -> UserId -> Maybe Text -> IO [SessionSummary]
-endOtherSessions st now u token = withDatabase st $ \c -> do
+endOtherSessions st now u token = withDb st $ \d -> do
   case token of
-    Just t -> execute c "DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?" (u.text, tokenHash t)
-    Nothing -> deleteSessionsOf c u
-  sessionsOf c now u token
+    Just t -> execute d.conn "DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?" (u.text, tokenHash t)
+    Nothing -> runSql d (deleteSessionsOf u)
+  sessionsOf d.conn now u token

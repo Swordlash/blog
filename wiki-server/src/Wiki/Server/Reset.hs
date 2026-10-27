@@ -55,8 +55,9 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Accounts (immediately)
 import Wiki.Server.Password (checkPassword, hashPassword, newToken, tokenHash)
-import Wiki.Server.Storage (Storage, readServerSettings, withDatabase)
+import Wiki.Server.Storage (Storage, readServerSettings, withDatabase, withDb)
 import Wiki.Server.Storage.Rows (Stamp (..), deleteSessionsOf, insertResetToken, noPasswordToSet, providerNames, resetsSince, updatePasswordHash)
+import Wiki.Server.Storage.Sql (Db (..), runSql)
 
 --------------------------------------------------------------------------------
 -- An e-mail address
@@ -165,7 +166,8 @@ requestReset st now raw = do
   configured <- providerNames <$> readServerSettings st
   if T.null named
     then pure []
-    else withDatabase st $ \c -> do
+    else withDb st $ \d -> do
+      let c = d.conn
       execute c "DELETE FROM reset_tokens WHERE created_at <= ?" (Only (Stamp (addUTCTime (negate keptFor) now)))
       found <-
         query
@@ -175,7 +177,7 @@ requestReset st now raw = do
       fmap catMaybes . for found $ \(uid, address) -> do
         let u = UserId uid
         recent <- resetsSince c u (addUTCTime (negate keptFor) now)
-        none <- noPasswordToSet c configured u
+        none <- runSql d (noPasswordToSet configured u)
         if recent >= resetsPerHour || none
           then pure Nothing
           else Just <$> resetMail c now u address
@@ -216,17 +218,16 @@ resetPassword st now token new = case checkPassword new of
       [Only (_ :: Text)] -> do
         -- Hashed before the connection is taken, as every password is.
         phc <- hashPassword password
-        withDatabase st $ \c ->
-          immediately c $
-            usable c >>= \case
+        withDb st $ \d ->
+          immediately d.conn $
+            usable d.conn >>= \case
               [Only uid] -> do
                 let u = UserId uid
-                noPasswordToSet c configured u >>= \case
+                runSql d (noPasswordToSet configured u) >>= \case
                   True -> pure (Left (Invalid noPasswordHere))
                   False -> do
-                    updatePasswordHash c u phc
-                    deleteSessionsOf c u
-                    execute c "UPDATE reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL" (Stamp now, uid)
+                    runSql d (updatePasswordHash u phc >> deleteSessionsOf u)
+                    execute d.conn "UPDATE reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL" (Stamp now, uid)
                     pure (Right ())
               _ -> pure (Left NotFound)
       _ -> pure (Left NotFound)

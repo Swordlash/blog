@@ -29,6 +29,7 @@ import Test.Storage.Audit qualified as Audit
 import Test.Storage.Backup qualified as Backup
 import Test.Storage.Contract qualified as Contract
 import Test.Storage.Migrate qualified as Migrate
+import Test.Storage.Persistent qualified as Persistent
 
 main :: IO ()
 main = hspec $ do
@@ -36,6 +37,7 @@ main = hspec $ do
   Http.spec
   Storage.spec
   Migrate.spec
+  Persistent.spec
   Backup.spec
   StorageAccounts.spec
   Options.spec

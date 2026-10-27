@@ -12,6 +12,7 @@ extra-doc-files:    CHANGELOG.md
 -- Embedded into the library at compile time (Wiki.Server.Storage.Migrate), so
 -- that the binary carries its schema with it.
 extra-source-files: migrations/*.sql
+                    migrations/postgresql/*.sql
                     test/schemas/*.rng
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built
@@ -99,10 +100,12 @@ library
         Wiki.Server.Storage.Backup
         Wiki.Server.Storage.Blobs
         Wiki.Server.Storage.Comments
+        Wiki.Server.Storage.Entities
         Wiki.Server.Storage.Notifications
         Wiki.Server.Storage.Layout
         Wiki.Server.Storage.Migrate
         Wiki.Server.Storage.Rows
+        Wiki.Server.Storage.Sql
         Wiki.Server.Totp
     other-modules:
         Paths_wiki_server
@@ -119,6 +122,7 @@ library
         cryptohash-sha256,
         direct-sqlite,
         directory,
+        esqueleto,
         file-embed,
         filepath,
         haskell-halogen-core,
@@ -131,6 +135,8 @@ library
         optparse-applicative,
         pandoc,
         pandoc-types,
+        persistent,
+        persistent-sqlite,
         process,
         protolude,
         qrcode-core >= 0.9.11 && < 0.10,
@@ -223,6 +229,7 @@ test-suite wiki-server-test
         Test.Storage.Contract
         Test.Storage.Fixture
         Test.Storage.Migrate
+        Test.Storage.Persistent
     build-depends:
         HUnit,
         aeson,
@@ -240,6 +247,9 @@ test-suite wiki-server-test
         network,
         optparse-applicative,
         pandoc-types,
+        persistent,
+        persistent-postgresql,
+        postgresql-simple,
         process,
         protolude,
         ram,

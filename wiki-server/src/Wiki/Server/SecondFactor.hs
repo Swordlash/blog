@@ -71,8 +71,9 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Accounts (immediately)
 import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Session (CookieSettings (..))
-import Wiki.Server.Storage (Storage, withDatabase)
+import Wiki.Server.Storage (Storage, withDatabase, withDb)
 import Wiki.Server.Storage.Rows (Stamp (..), deleteSecondFactor, totpEnabled)
+import Wiki.Server.Storage.Sql (Db (..), runSql)
 import Wiki.Server.Totp (Secret, matchingCounter, newRecoveryCodes, newSecret, recoveryKey, secretFromText, secretText)
 
 --------------------------------------------------------------------------------
@@ -81,11 +82,12 @@ import Wiki.Server.Totp (Secret, matchingCounter, newRecoveryCodes, newSecret, r
 -- | Whether a user has a second factor, and how many recovery codes they
 -- have left.
 secondFactorState :: Storage -> UserId -> IO SecondFactorState
-secondFactorState st u = withDatabase st (`stateOf` u)
+secondFactorState st u = withDb st (`stateOf` u)
 
-stateOf :: Connection -> UserId -> IO SecondFactorState
-stateOf c u = do
-  enabled <- totpEnabled c u
+stateOf :: Db -> UserId -> IO SecondFactorState
+stateOf d u = do
+  let c = d.conn
+  enabled <- runSql d (totpEnabled u)
   left <- query c "SELECT count(*) FROM recovery_codes WHERE user_id = ? AND used_at IS NULL" (Only u.text)
   withPassword <- query c "SELECT password_hash IS NOT NULL FROM users WHERE id = ?" (Only u.text)
   pure
@@ -101,14 +103,14 @@ stateOf c u = do
 enrol :: Storage -> UTCTime -> UserId -> IO (Either WikiError Secret)
 enrol st now u = do
   secret <- newSecret
-  withDatabase st $ \c ->
-    immediately c $
-      totpEnabled c u >>= \case
+  withDb st $ \d ->
+    immediately d.conn $
+      runSql d (totpEnabled u) >>= \case
         True -> pure (Left (Conflict "You have a second factor already: remove it first to set up another."))
         False -> do
-          execute c "DELETE FROM recovery_codes WHERE user_id = ?" (Only u.text)
+          execute d.conn "DELETE FROM recovery_codes WHERE user_id = ?" (Only u.text)
           execute
-            c
+            d.conn
             "INSERT INTO totp (user_id, secret, created_at, enabled_at, last_counter) VALUES (?, ?, ?, NULL, NULL) ON CONFLICT (user_id) DO UPDATE SET secret = excluded.secret, created_at = excluded.created_at, enabled_at = NULL, last_counter = NULL"
             (u.text, secretText secret, Stamp now)
           pure (Right secret)
@@ -146,16 +148,16 @@ confirm st now u typed = do
 -- | Turn a user's second factor off, with a code of theirs: whether they
 -- have one then (they do not).
 remove :: Storage -> UTCTime -> UserId -> Text -> IO (Either CodeRefusal SecondFactorState)
-remove st now u typed = withDatabase st $ \c ->
-  immediately c $
-    totpEnabled c u >>= \case
+remove st now u typed = withDb st $ \d ->
+  immediately d.conn $
+    runSql d (totpEnabled u) >>= \case
       False -> pure (Left (CodeRefused NotFound))
       True ->
-        codeOf c now u typed >>= \case
+        codeOf d.conn now u typed >>= \case
           False -> pure (Left WrongCode)
           True -> do
-            void (deleteSecondFactor c u)
-            Right <$> stateOf c u
+            void (runSql d (deleteSecondFactor u))
+            Right <$> stateOf d u
 
 --------------------------------------------------------------------------------
 -- Codes

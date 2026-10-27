@@ -1,10 +1,19 @@
+{-# LANGUAGE BlockArguments #-}
+
 -- | The wiki's records as the database's rows: how each column is written
 -- and read, and the reads and writes of whole records that the storage's
 -- operations ("Wiki.Server.Storage") are made of. Nothing here checks a
 -- permission or a rule: these run inside a transaction that has.
+--
+-- The users, their accounts and identities, the groups and the grants are
+-- read and written through persistent and esqueleto ('Sql', over the
+-- entities of "Wiki.Server.Storage.Entities"), so that they run alike on
+-- SQLite and PostgreSQL (WP5.7 of docs/PLAN.md, a spike); the rest is
+-- sqlite-simple's, on the same connection ("Wiki.Server.Storage.Sql").
 module Wiki.Server.Storage.Rows
   ( -- * Columns
     Stamp (..)
+  , Sql
   , stamp
   , orderText
   , readOrder
@@ -39,10 +48,10 @@ module Wiki.Server.Storage.Rows
   , loadSearchRows
 
     -- * Accounts
-  , AccountRow
-  , accountFromRow
-  , selectAccounts
   , loadAccount
+  , loadAccountByLogin
+  , loadAccountList
+  , loadPasswordHash
   , loadAccountFlags
   , insertAccount
   , updatePasswordHash
@@ -105,12 +114,40 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
+import Database.Esqueleto.Experimental
+  ( Entity (..)
+  , SqlExpr
+  , Value (..)
+  , asc
+  , delete
+  , deleteCount
+  , exists
+  , from
+  , isNothing_
+  , just
+  , leftJoin
+  , limit
+  , lower_
+  , not_
+  , on
+  , orderBy
+  , select
+  , table
+  , val
+  , where_
+  , (&&.)
+  , (:&) (..)
+  , (==.)
+  , (?.)
+  , (^.)
+  )
+import Database.Esqueleto.Internal.Internal (veryUnsafeCoerceSqlExprValue)
+import Database.Persist qualified as P
 import Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData, changes, execute, query, queryWith, queryWith_, query_)
 import Database.SQLite.Simple.FromField (FieldParser, FromField (..), ResultError (..), returnError)
 import Database.SQLite.Simple.FromRow (RowParser, field, fieldWith)
 import Database.SQLite.Simple.ToField (ToField (..))
-import Protolude
+import Protolude hiding (from, on)
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), providerOnly)
 import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Security (AccountEmail (..))
@@ -128,25 +165,11 @@ import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), Membership, User (..))
 import Wiki.Server.Secret (Kept, Secret (..), revealed)
+import Wiki.Server.Storage.Entities
+import Wiki.Server.Storage.Sql (Sql)
 
 --------------------------------------------------------------------------------
 -- Columns
-
--- | A time as a column: ISO 8601 text in UTC with every digit of the
--- fraction of a second there is. Not sqlite-simple's own 'UTCTime' columns,
--- because a save is checked against the time it started from by equality,
--- so a time must come back exactly as it went in, which nothing but every
--- digit promises.
-newtype Stamp = Stamp UTCTime
-
-instance ToField Stamp where
-  toField (Stamp t) = toField (T.pack (iso8601Show t))
-
-instance FromField Stamp where
-  fromField f =
-    fromField f >>= \t -> case iso8601ParseM (T.unpack t) of
-      Just time -> pure (Stamp time)
-      Nothing -> returnError ConversionFailed f ("not a time: " <> T.unpack t)
 
 -- | A time column's time.
 stamp :: RowParser UTCTime
@@ -293,23 +316,29 @@ loadSpaces :: Connection -> IO (Map SpaceId Space)
 loadSpaces c = Map.fromList . map (\s -> (s.id, s)) <$> queryWith_ spaceRow c (sql ("SELECT " <> spaceColumns <> " FROM spaces"))
 
 -- | Every grant, global and on spaces, in the order they were given.
-loadGrants :: Connection -> IO Grants
-loadGrants c = do
-  globals <- query_ c "SELECT subject_kind, subject_id, permission FROM global_grants ORDER BY rowid"
-  spaceGrants <- query_ c "SELECT space_id, subject_kind, subject_id, permission FROM space_grants ORDER BY rowid"
+loadGrants :: Sql Grants
+loadGrants = do
+  globals <- select do
+    g <- from (table @GlobalGrantRow)
+    orderBy [asc (g ^. GlobalGrantRowId)]
+    pure g
+  spaceGrants <- select do
+    g <- from (table @SpaceGrantRow)
+    orderBy [asc (g ^. SpaceGrantRowId)]
+    pure g
   pure
     Grants
       { global =
           [ GlobalGrant {subject, permission}
-          | (kind, i, p) <- globals
-          , Just subject <- [subjectFrom kind i]
-          , Just permission <- [find (\x -> globalText x == p) [minBound .. maxBound]]
+          | Entity _ g <- globals
+          , Just subject <- [subjectFrom g.subjectKind g.subjectId]
+          , Just permission <- [find (\x -> globalText x == g.permission) [minBound .. maxBound]]
           ]
       , spaces =
-          [ SpaceGrant {space = SpaceId s, subject, permission}
-          | (s, kind, i, p) <- spaceGrants
-          , Just subject <- [subjectFrom kind i]
-          , Just permission <- [find (\x -> spaceText x == p) [minBound .. maxBound]]
+          [ SpaceGrant {space = SpaceId g.spaceId, subject, permission}
+          | Entity _ g <- spaceGrants
+          , Just subject <- [subjectFrom g.subjectKind g.subjectId]
+          , Just permission <- [find (\x -> spaceText x == g.permission) [minBound .. maxBound]]
           ]
       , -- The wiki's setting, which the storage reads with the grants
         -- where it is asked about (Wiki.Server.Storage), is not a row of
@@ -317,42 +346,59 @@ loadGrants c = do
         access = Open
       }
 
-userRow :: RowParser User
-userRow = do
-  id <- UserId <$> field
-  login <- field
-  displayName <- field
-  pure User {id, login, displayName}
+-- | A user's row's key.
+userKey :: UserId -> Key UserRow
+userKey u = UserRowKey u.text
+
+-- | A user from their row.
+userOf :: Entity UserRow -> User
+userOf (Entity (UserRowKey id) r) = User {id = UserId id, login = r.login, displayName = r.displayName}
 
 -- | A user by id.
-loadUser :: Connection -> UserId -> IO (Maybe User)
-loadUser c u = head <$> queryWith userRow c "SELECT id, login, display_name FROM users WHERE id = ?" (Only u.text)
+loadUser :: UserId -> Sql (Maybe User)
+loadUser u = fmap userOf <$> P.getEntity (userKey u)
 
 -- | A user by id who may act: not one whose login is disabled.
-loadActiveUser :: Connection -> UserId -> IO (Maybe User)
-loadActiveUser c u = head <$> queryWith userRow c "SELECT id, login, display_name FROM users WHERE id = ? AND disabled = 0" (Only u.text)
+loadActiveUser :: UserId -> Sql (Maybe User)
+loadActiveUser u =
+  fmap userOf . head <$> select do
+    r <- from (table @UserRow)
+    where_ (r ^. UserRowId ==. val (userKey u) &&. not_ (r ^. UserRowDisabled))
+    pure r
 
 -- | A user by login.
-loadUserByLogin :: Connection -> Text -> IO (Maybe User)
-loadUserByLogin c login = head <$> queryWith userRow c "SELECT id, login, display_name FROM users WHERE login = ?" (Only login)
+loadUserByLogin :: Text -> Sql (Maybe User)
+loadUserByLogin login = fmap userOf <$> P.getBy (UniqueLogin login)
 
 -- | Every user, by id.
-loadUsers :: Connection -> IO [User]
-loadUsers c = queryWith_ userRow c "SELECT id, login, display_name FROM users ORDER BY id"
+loadUsers :: Sql [User]
+loadUsers =
+  map userOf <$> select do
+    r <- from (table @UserRow)
+    orderBy [asc (r ^. UserRowId)]
+    pure r
 
 -- | The groups a user is in.
-loadGroupsOf :: Connection -> UserId -> IO (Set GroupId)
-loadGroupsOf c u = Set.fromList . map (GroupId . fromOnly) <$> query c "SELECT group_id FROM group_members WHERE user_id = ?" (Only u.text)
+loadGroupsOf :: UserId -> Sql (Set GroupId)
+loadGroupsOf u =
+  Set.fromList . map (\(Value (GroupRowKey g)) -> GroupId g) <$> select do
+    m <- from (table @GroupMemberRow)
+    where_ (m ^. GroupMemberRowUserId ==. val (userKey u))
+    pure (m ^. GroupMemberRowGroupId)
 
 -- | Every group, by id.
-loadGroups :: Connection -> IO [Group]
-loadGroups c = map (\(i, name) -> Group {id = GroupId i, name}) <$> query_ c "SELECT id, name FROM groups ORDER BY id"
+loadGroups :: Sql [Group]
+loadGroups =
+  map (\(Entity (GroupRowKey id) g) -> Group {id = GroupId id, name = g.name}) <$> select do
+    g <- from (table @GroupRow)
+    orderBy [asc (g ^. GroupRowId)]
+    pure g
 
 -- | Every group's members.
-loadMembership :: Connection -> IO Membership
-loadMembership c = do
-  rows <- query_ c "SELECT group_id, user_id FROM group_members"
-  pure (Map.fromListWith (<>) [(GroupId g, Set.singleton (UserId u)) | (g, u) <- rows])
+loadMembership :: Sql Membership
+loadMembership = do
+  rows <- select (from (table @GroupMemberRow))
+  pure (Map.fromListWith (<>) [(GroupId g, Set.singleton (UserId u)) | Entity _ GroupMemberRow {groupId = GroupRowKey g, userId = UserRowKey u} <- rows])
 
 pageColumns :: Text
 pageColumns = "id, space_id, parent, title, slug, body, created_at, updated_at, position, template"
@@ -507,57 +553,78 @@ loadSearchRows c = queryWith_ row c (sql ("SELECT " <> nodeColumns <> ", search_
 --------------------------------------------------------------------------------
 -- Writes
 
--- | Add a user.
-insertUser :: Connection -> User -> IO ()
-insertUser c u = execute c "INSERT INTO users (id, login, display_name) VALUES (?, ?, ?)" (u.id.text, u.login, u.displayName)
+-- | Add a user, with no password.
+insertUser :: User -> Sql ()
+insertUser u = P.insertKey (userKey u.id) (newUser u Nothing)
+
+-- | A new user's row, with the hash of their password if they have one. An
+-- entity is written whole, so the schema's defaults for the other columns
+-- (migrations/0002, 0008 and 0011) are said again here.
+newUser :: User -> Maybe Text -> UserRow
+newUser u phc =
+  UserRow
+    { login = u.login
+    , displayName = u.displayName
+    , passwordHash = phc
+    , disabled = False
+    , email = Nothing
+    , emailVerifiedAt = Nothing
+    , notificationMail = Nothing
+    , watchOwn = True
+    }
 
 -- | Add a group.
-insertGroup :: Connection -> Group -> IO ()
-insertGroup c g = execute c "INSERT INTO groups (id, name) VALUES (?, ?)" (g.id.text, g.name)
+insertGroup :: Group -> Sql ()
+insertGroup g = P.insertKey (GroupRowKey g.id.text) GroupRow {name = g.name}
 
--- | Put a user in a group.
-insertMember :: Connection -> GroupId -> UserId -> IO ()
-insertMember c g u = execute c "INSERT OR IGNORE INTO group_members (group_id, user_id) VALUES (?, ?)" (g.text, u.text)
+-- | Put a user in a group, if they are not in it.
+insertMember :: GroupId -> UserId -> Sql ()
+insertMember g u = do
+  let key = GroupMemberRowKey (GroupRowKey g.text) (userKey u)
+  there <- P.get key
+  when (isNothing there) (P.insertKey key GroupMemberRow {groupId = GroupRowKey g.text, userId = userKey u})
 
 -- | Take a user out of a group.
-deleteMember :: Connection -> GroupId -> UserId -> IO ()
-deleteMember c g u = execute c "DELETE FROM group_members WHERE group_id = ? AND user_id = ?" (g.text, u.text)
+deleteMember :: GroupId -> UserId -> Sql ()
+deleteMember g u = P.delete (GroupMemberRowKey (GroupRowKey g.text) (userKey u))
 
 -- | Give a group another name.
-renameGroupRow :: Connection -> GroupId -> Text -> IO ()
-renameGroupRow c g name = execute c "UPDATE groups SET name = ? WHERE id = ?" (name, g.text)
+renameGroupRow :: GroupId -> Text -> Sql ()
+renameGroupRow g name = P.update (GroupRowKey g.text) [GroupRowName P.=. name]
 
 -- | Delete a group: its members go with it (a foreign key), and so must
 -- the grants to it, which name it in a column that is no foreign key.
-deleteGroupRows :: Connection -> GroupId -> IO ()
-deleteGroupRows c g = do
-  execute c "DELETE FROM global_grants WHERE subject_kind = 'group' AND subject_id = ?" (Only g.text)
-  execute c "DELETE FROM space_grants WHERE subject_kind = 'group' AND subject_id = ?" (Only g.text)
-  execute c "DELETE FROM groups WHERE id = ?" (Only g.text)
+deleteGroupRows :: GroupId -> Sql ()
+deleteGroupRows g = do
+  delete do
+    r <- from (table @GlobalGrantRow)
+    where_ (r ^. GlobalGrantRowSubjectKind ==. val "group" &&. r ^. GlobalGrantRowSubjectId ==. val g.text)
+  delete do
+    r <- from (table @SpaceGrantRow)
+    where_ (r ^. SpaceGrantRowSubjectKind ==. val "group" &&. r ^. SpaceGrantRowSubjectId ==. val g.text)
+  P.delete (GroupRowKey g.text)
 
 -- | Take back a global grant, if it was given.
-deleteGlobalGrant :: Connection -> GlobalGrant -> IO ()
-deleteGlobalGrant c g =
+deleteGlobalGrant :: GlobalGrant -> Sql ()
+deleteGlobalGrant g =
   let (kind, i) = subjectColumns g.subject
-   in execute c "DELETE FROM global_grants WHERE subject_kind = ? AND subject_id = ? AND permission = ?" (kind, i, globalText g.permission)
+   in P.deleteBy (UniqueGlobalGrant kind i (globalText g.permission))
 
-deleteSpaceGrant :: Connection -> SpaceGrant -> IO ()
-deleteSpaceGrant c g =
+deleteSpaceGrant :: SpaceGrant -> Sql ()
+deleteSpaceGrant g =
   let (kind, i) = subjectColumns g.subject
-   in execute c "DELETE FROM space_grants WHERE space_id = ? AND subject_kind = ? AND subject_id = ? AND permission = ?" (g.space.text, kind, i, spaceText g.permission)
+   in P.deleteBy (UniqueSpaceGrant g.space.text kind i (spaceText g.permission))
 
--- | Give these grants, in their order; one already given is left as it is.
-insertGrants :: Connection -> Grants -> IO ()
-insertGrants c grants = do
+-- | Give these grants, in their order; one already given is left as it is
+-- (and keeps its place).
+insertGrants :: Grants -> Sql ()
+insertGrants grants = do
   for_ grants.global $ \g ->
     let (kind, i) = subjectColumns g.subject
-     in execute c "INSERT OR IGNORE INTO global_grants (subject_kind, subject_id, permission) VALUES (?, ?, ?)" (kind, i, globalText g.permission)
+     in void (P.insertUnique GlobalGrantRow {subjectKind = kind, subjectId = i, permission = globalText g.permission})
   for_ grants.spaces $ \g ->
     let (kind, i) = subjectColumns g.subject
-     in execute
-          c
-          "INSERT OR IGNORE INTO space_grants (space_id, subject_kind, subject_id, permission) VALUES (?, ?, ?, ?)"
-          (g.space.text, kind, i, spaceText g.permission)
+     in void (P.insertUnique SpaceGrantRow {spaceId = g.space.text, subjectKind = kind, subjectId = i, permission = spaceText g.permission})
 
 spaceValues :: Space -> [SQLData]
 spaceValues s =
@@ -641,82 +708,133 @@ insertAttachment c page ordinal a =
 --------------------------------------------------------------------------------
 -- Accounts
 
--- | A user's account as its row has it: id, login, display name, the hash
--- of their password if they have one, and whether they are disabled.
-type AccountRow = (Text, Text, Text, Maybe Text, Int)
-
-accountFromRow :: AccountRow -> Account
-accountFromRow (uid, login, displayName, phc, disabled) =
-  Account
-    { user = User {id = UserId uid, login, displayName}
-    , hasPassword = isJust phc
-    , disabled = disabled /= 0
-    }
-
--- | A query of accounts' rows, from the users, with the rest given.
-selectAccounts :: Text -> Query
-selectAccounts rest = Query ("SELECT id, login, display_name, password_hash, disabled FROM users " <> rest)
+-- | A user's account from their row.
+accountOf :: Entity UserRow -> Account
+accountOf e@(Entity _ r) = Account {user = userOf e, hasPassword = isJust r.passwordHash, disabled = r.disabled}
 
 -- | A user's account, by id.
-loadAccount :: Connection -> UserId -> IO (Maybe Account)
-loadAccount c u = fmap accountFromRow . head <$> query c (selectAccounts "WHERE id = ?") (Only u.text)
+loadAccount :: UserId -> Sql (Maybe Account)
+loadAccount u = fmap accountOf <$> P.getEntity (userKey u)
+
+-- | Logins compared without case: SQLite's @lower@ folds ASCII letters
+-- only, as the @COLLATE NOCASE@ this replaced did; PostgreSQL's folds every
+-- letter its locale knows.
+sameLogin :: SqlExpr (Value Text) -> Text -> SqlExpr (Value Bool)
+sameLogin column login = lower_ column ==. lower_ (val login)
+
+-- | A user's account, by login compared without case, with the hash of
+-- their password if they have one: what someone types to sign in.
+loadAccountByLogin :: Text -> Sql (Maybe (Account, Maybe Text))
+loadAccountByLogin login =
+  fmap (\e@(Entity _ r) -> (accountOf e, r.passwordHash)) . head <$> select do
+    r <- from (table @UserRow)
+    where_ (r ^. UserRowLogin `sameLogin` login)
+    pure r
+
+-- | Every user's account, by login compared without case, with whether they
+-- are an administrator (hold the global @administer@ themselves).
+loadAccountList :: Sql [(Account, Bool)]
+loadAccountList =
+  map (\(e, Value admin) -> (accountOf e, admin)) <$> select do
+    r <- from (table @UserRow)
+    orderBy [asc (lower_ (r ^. UserRowLogin))]
+    let administrator = exists do
+          g <- from (table @GlobalGrantRow)
+          where_
+            ( g ^. GlobalGrantRowSubjectKind ==. val "user"
+                &&. g ^. GlobalGrantRowSubjectId ==. unKey (r ^. UserRowId)
+                &&. g ^. GlobalGrantRowPermission ==. val (globalText Administer)
+            )
+    pure (r, administrator)
+  where
+    -- A user's key as the text a grant names them by. A grant's subject is
+    -- a user's id or a group's, by its kind, which no foreign key and so no
+    -- type of esqueleto's says; the key is text in the database, and the
+    -- comparison is made there, with esqueleto's own escape hatch.
+    unKey :: SqlExpr (Value (Key UserRow)) -> SqlExpr (Value Text)
+    unKey = veryUnsafeCoerceSqlExprValue
 
 -- | The users who are disabled, and those who have a password.
-loadAccountFlags :: Connection -> IO (Set UserId, Set UserId)
-loadAccountFlags c = do
-  rows <- query_ c "SELECT id, disabled, password_hash IS NOT NULL FROM users"
+loadAccountFlags :: Sql (Set UserId, Set UserId)
+loadAccountFlags = do
+  rows <- select do
+    r <- from (table @UserRow)
+    pure (r ^. UserRowId, r ^. UserRowDisabled, not_ (isNothing_ (r ^. UserRowPasswordHash)))
   pure
-    ( Set.fromList [UserId u | (u, disabled, _) <- rows, disabled /= (0 :: Int)]
-    , Set.fromList [UserId u | (u, _, hashed) <- rows, hashed /= (0 :: Int)]
+    ( Set.fromList [UserId u | (Value (UserRowKey u), Value True, _) <- rows]
+    , Set.fromList [UserId u | (Value (UserRowKey u), _, Value True) <- rows]
     )
+
+-- | A user's password's hash, if they are there: 'Nothing' for a user who
+-- is not, @Just Nothing@ for one without a password.
+loadPasswordHash :: UserId -> Sql (Maybe (Maybe Text))
+loadPasswordHash u = fmap (\r -> r.passwordHash) <$> P.get (userKey u)
 
 -- | A new user with a login no other user has, whatever its case, or a
 -- 'Left' with the login that is taken; the login and the password's hash
 -- are as they are to be kept.
-insertAccount :: Connection -> UserId -> Text -> Text -> Maybe Text -> IO (Either Text Account)
-insertAccount c u login displayName phc = do
-  taken <- query c "SELECT count(*) FROM users WHERE login = ? COLLATE NOCASE" (Only login)
-  if taken /= [Only (0 :: Int)]
+insertAccount :: UserId -> Text -> Text -> Maybe Text -> Sql (Either Text Account)
+insertAccount u login displayName phc = do
+  taken <- select do
+    r <- from (table @UserRow)
+    where_ (r ^. UserRowLogin `sameLogin` login)
+    limit 1
+    pure (r ^. UserRowId)
+  if not (null taken)
     then pure (Left login)
     else do
-      execute c "INSERT INTO users (id, login, display_name, password_hash, disabled) VALUES (?, ?, ?, ?, 0)" (u.text, login, displayName, phc)
-      maybe (Left login) Right <$> loadAccount c u
+      P.insertKey (userKey u) (newUser User {id = u, login, displayName} phc)
+      maybe (Left login) Right <$> loadAccount u
 
 -- | A user's password, as its hash, in place of the one they had.
-updatePasswordHash :: Connection -> UserId -> Text -> IO ()
-updatePasswordHash c u phc = execute c "UPDATE users SET password_hash = ? WHERE id = ?" (phc, u.text)
+updatePasswordHash :: UserId -> Text -> Sql ()
+updatePasswordHash u phc = P.update (userKey u) [UserRowPasswordHash P.=. Just phc]
 
 -- | Whether a user is disabled.
-updateDisabled :: Connection -> UserId -> Bool -> IO ()
-updateDisabled c u disabled = execute c "UPDATE users SET disabled = ? WHERE id = ?" (fromEnum disabled, u.text)
+updateDisabled :: UserId -> Bool -> Sql ()
+updateDisabled u disabled = P.update (userKey u) [UserRowDisabled P.=. disabled]
 
 -- | End every session of a user.
-deleteSessionsOf :: Connection -> UserId -> IO ()
-deleteSessionsOf c u = execute c "DELETE FROM sessions WHERE user_id = ?" (Only u.text)
+deleteSessionsOf :: UserId -> Sql ()
+deleteSessionsOf u = P.deleteWhere [SessionRowUserId P.==. userKey u]
 
 -- | Whether a user has a second factor that signing in asks for: one that
 -- they have confirmed (migrations/0008-account-hygiene.sql).
-totpEnabled :: Connection -> UserId -> IO Bool
-totpEnabled c u = not . null <$> (query c "SELECT 1 FROM totp WHERE user_id = ? AND enabled_at IS NOT NULL" (Only u.text) :: IO [Only Int])
+totpEnabled :: UserId -> Sql Bool
+totpEnabled u =
+  not . null <$> select do
+    t <- from (table @TotpRow)
+    where_ (t ^. TotpRowUserId ==. val (userKey u) &&. not_ (isNothing_ (t ^. TotpRowEnabledAt)))
+    pure (t ^. TotpRowUserId)
 
 -- | Take a user's second factor away, begun or on, with its recovery
 -- codes: whether they had one on.
-deleteSecondFactor :: Connection -> UserId -> IO Bool
-deleteSecondFactor c u = do
-  had <- totpEnabled c u
-  execute c "DELETE FROM totp WHERE user_id = ?" (Only u.text)
-  execute c "DELETE FROM recovery_codes WHERE user_id = ?" (Only u.text)
+deleteSecondFactor :: UserId -> Sql Bool
+deleteSecondFactor u = do
+  had <- totpEnabled u
+  P.deleteWhere [TotpRowUserId P.==. userKey u]
+  P.deleteWhere [RecoveryCodeRowUserId P.==. userKey u]
   pure had
 
 -- | The users who have a second factor.
-loadSecondFactorUsers :: Connection -> IO (Set UserId)
-loadSecondFactorUsers c = Set.fromList . map (UserId . fromOnly) <$> query_ c "SELECT user_id FROM totp WHERE enabled_at IS NOT NULL"
+loadSecondFactorUsers :: Sql (Set UserId)
+loadSecondFactorUsers =
+  Set.fromList . map (\(Value (UserRowKey u)) -> UserId u) <$> select do
+    t <- from (table @TotpRow)
+    where_ (not_ (isNothing_ (t ^. TotpRowEnabledAt)))
+    pure (t ^. TotpRowUserId)
 
 -- | The e-mail addresses users have given, and whether each is verified.
-loadEmails :: Connection -> IO (Map UserId AccountEmail)
-loadEmails c = do
-  rows <- query_ c "SELECT id, email, email_verified_at IS NOT NULL FROM users WHERE email IS NOT NULL"
-  pure (Map.fromList [(UserId u, AccountEmail {email, verified = verified /= (0 :: Int)}) | (u, email, verified) <- rows])
+loadEmails :: Sql (Map UserId AccountEmail)
+loadEmails = do
+  rows <- P.selectList [UserRowEmail P.!=. Nothing] []
+  pure
+    ( Map.fromList
+        [ (UserId u, AccountEmail {email, verified = isJust r.emailVerifiedAt})
+        | Entity (UserRowKey u) r <- rows
+        , Just email <- [r.email]
+        ]
+    )
 
 --------------------------------------------------------------------------------
 -- Identities
@@ -730,48 +848,56 @@ data IdentityRow = IdentityRow
   }
 
 -- | The identity a provider's account is, if it is anyone's.
-identityOf :: Connection -> Text -> Text -> IO (Maybe IdentityRow)
-identityOf c provider subject =
-  head
-    . map identityRow
-    <$> query c "SELECT provider, subject, user_id, email, display_name, linked_at FROM identities WHERE provider = ? AND subject = ?" (provider, subject)
+identityOf :: Text -> Text -> Sql (Maybe IdentityRow)
+identityOf provider subject = fmap identityRow <$> P.get (IdentityEntityKey provider subject)
 
 -- | A user's identities, by provider.
-identitiesOf :: Connection -> UserId -> IO [IdentityRow]
-identitiesOf c u =
-  map identityRow
-    <$> query c "SELECT provider, subject, user_id, email, display_name, linked_at FROM identities WHERE user_id = ? ORDER BY provider" (Only u.text)
+identitiesOf :: UserId -> Sql [IdentityRow]
+identitiesOf u =
+  map (\(Entity _ i) -> identityRow i) <$> select do
+    i <- from (table @IdentityEntity)
+    where_ (i ^. IdentityEntityUserId ==. val (userKey u))
+    orderBy [asc (i ^. IdentityEntityProvider)]
+    pure i
 
-identityRow :: (Text, Text, Text, Maybe Text, Maybe Text, Stamp) -> IdentityRow
-identityRow (provider, subject, uid, email, name, Stamp linkedAt) =
-  IdentityRow {provider, subject, user = UserId uid, identity = LinkedIdentity {provider, email, name, linkedAt}}
+identityRow :: IdentityEntity -> IdentityRow
+identityRow i =
+  let Stamp linkedAt = i.linkedAt
+      UserRowKey u = i.userId
+   in IdentityRow
+        { provider = i.provider
+        , subject = i.subject
+        , user = UserId u
+        , identity = LinkedIdentity {provider = i.provider, email = i.email, name = i.displayName, linkedAt}
+        }
 
 -- | Connect a provider's account to a user. The caller has made sure that
 -- it is no one's, and that the user has none at that provider.
-insertIdentity :: Connection -> UTCTime -> UserId -> Text -> Text -> Maybe Text -> Maybe Text -> IO ()
-insertIdentity c now u provider subject email name =
-  execute
-    c
-    "INSERT INTO identities (provider, subject, user_id, email, display_name, linked_at) VALUES (?, ?, ?, ?, ?, ?)"
-    (provider, subject, u.text, email, name, Stamp now)
+insertIdentity :: UTCTime -> UserId -> Text -> Text -> Maybe Text -> Maybe Text -> Sql ()
+insertIdentity now u provider subject email name =
+  P.insert_ IdentityEntity {provider, subject, userId = userKey u, email, displayName = name, linkedAt = Stamp now}
 
 -- | What a provider says of an account now, kept for the next time it is
 -- shown.
-refreshIdentity :: Connection -> Text -> Text -> Maybe Text -> Maybe Text -> IO ()
-refreshIdentity c provider subject email name =
-  execute c "UPDATE identities SET email = ?, display_name = ? WHERE provider = ? AND subject = ?" (email, name, provider, subject)
+refreshIdentity :: Text -> Text -> Maybe Text -> Maybe Text -> Sql ()
+refreshIdentity provider subject email name =
+  P.update (IdentityEntityKey provider subject) [IdentityEntityEmail P.=. email, IdentityEntityDisplayName P.=. name]
 
 -- | Disconnect a user's account at a provider: whether they had one.
-deleteIdentity :: Connection -> UserId -> Text -> IO Bool
-deleteIdentity c u provider = do
-  execute c "DELETE FROM identities WHERE user_id = ? AND provider = ?" (u.text, provider)
-  (> 0) <$> changes c
+deleteIdentity :: UserId -> Text -> Sql Bool
+deleteIdentity u provider =
+  fmap (> 0) . deleteCount $ do
+    i <- from (table @IdentityEntity)
+    where_ (i ^. IdentityEntityUserId ==. val (userKey u) &&. i ^. IdentityEntityProvider ==. val provider)
 
 -- | The providers each user has an identity at, by user.
-loadIdentityProviders :: Connection -> IO (Map UserId [Text])
-loadIdentityProviders c = do
-  rows <- query_ c "SELECT user_id, provider FROM identities ORDER BY provider"
-  pure (Map.fromListWith (flip (<>)) [(UserId u, [p]) | (u, p) <- rows])
+loadIdentityProviders :: Sql (Map UserId [Text])
+loadIdentityProviders = do
+  rows <- select do
+    i <- from (table @IdentityEntity)
+    orderBy [asc (i ^. IdentityEntityProvider)]
+    pure (i ^. IdentityEntityUserId, i ^. IdentityEntityProvider)
+  pure (Map.fromListWith (flip (<>)) [(UserId u, [p]) | (Value (UserRowKey u), Value p) <- rows])
 
 -- | The names of the providers the server's settings sign people in with.
 providerNames :: Kept -> [Text]
@@ -779,12 +905,19 @@ providerNames kept = map (\p -> p.name) kept.providers
 
 -- | Whether a user has no password to set (WP5.6 of docs/PLAN.md,
 -- 'Wiki.Api.Account.providerOnly'): they have none, and an identity at one
--- of these providers, the ones the server's settings have.
-noPasswordToSet :: Connection -> [Text] -> UserId -> IO Bool
-noPasswordToSet c configured u = do
-  hashed :: [Only Int] <- query c "SELECT password_hash IS NOT NULL FROM users WHERE id = ?" (Only u.text)
-  providers <- map fromOnly <$> query c "SELECT provider FROM identities WHERE user_id = ?" (Only u.text)
-  pure (providerOnly configured (any ((/= 0) . fromOnly) hashed) providers)
+-- of these providers, the ones the server's settings have. One read: the
+-- user with each of their identities, or with none.
+noPasswordToSet :: [Text] -> UserId -> Sql Bool
+noPasswordToSet configured u = do
+  rows <- select do
+    (r :& i) <-
+      from $
+        table @UserRow
+          `leftJoin` table @IdentityEntity
+            `on` (\(r :& i) -> just (r ^. UserRowId) ==. i ?. IdentityEntityUserId)
+    where_ (r ^. UserRowId ==. val (userKey u))
+    pure (r ^. UserRowPasswordHash, i ?. IdentityEntityProvider)
+  pure (providerOnly configured (any (\(Value phc, _) -> isJust phc) rows) [p | (_, Value (Just p)) <- rows])
 
 --------------------------------------------------------------------------------
 -- Password resets
@@ -857,8 +990,8 @@ pendingInvitation c now secretHash = do
     _ -> Nothing
 
 -- | Grant a user the global create-spaces themself.
-grantCreateSpaces :: Connection -> UserId -> IO ()
-grantCreateSpaces c u = execute c "INSERT OR IGNORE INTO global_grants (subject_kind, subject_id, permission) VALUES ('user', ?, ?)" (u.text, globalText CreateSpaces)
+grantCreateSpaces :: UserId -> Sql ()
+grantCreateSpaces u = insertGrants Grants {global = [GlobalGrant {subject = SubjectUser u, permission = CreateSpaces}], spaces = [], access = Open}
 
 --------------------------------------------------------------------------------
 -- The server's own settings

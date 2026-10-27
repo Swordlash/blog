@@ -53,6 +53,7 @@ module Wiki.Server.Storage
   , withStorage
   , withStorageAside
   , withDatabase
+  , withDb
   , storageDataDir
   , DataDirInUse (..)
 
@@ -172,6 +173,7 @@ import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
 import Wiki.Server.Storage.Migrate (migrate, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Rows
+import Wiki.Server.Storage.Sql (Db (..), closeDb, openDb, runSql)
 
 --------------------------------------------------------------------------------
 -- The storage
@@ -179,7 +181,9 @@ import Wiki.Server.Storage.Rows
 -- | An open storage: the database's connection, and the directory it and
 -- the attachments are in.
 data Storage = Storage
-  { connection :: MVar Connection
+  { connection :: MVar Db
+  -- ^ The connection, as sqlite-simple and as persistent speak it
+  -- ("Wiki.Server.Storage.Sql").
   , dataDir :: FilePath
   , config :: Config
   , settings :: IORef (Maybe WikiSettings)
@@ -260,7 +264,8 @@ openWith collect config dataDir = do
     execute_ c "PRAGMA foreign_keys = ON"
     _ <- migrate c
     when collect (collectGarbage c dataDir)
-  connection <- newMVar c
+  d <- openDb c `onException` (close c >> traverse_ unlockDataDir lock)
+  connection <- newMVar d
   settings <- newIORef Nothing
   serverKept <- newIORef Nothing
   pure Storage {connection, dataDir, config, settings, serverKept, lock}
@@ -275,7 +280,7 @@ instance Exception DataDirInUse where
 
 -- | Close the storage's database, and let its directory's lock go.
 closeStorage :: Storage -> IO ()
-closeStorage st = withMVar st.connection close `finally` traverse_ unlockDataDir st.lock
+closeStorage st = withMVar st.connection closeDb `finally` traverse_ unlockDataDir st.lock
 
 -- | Run something with the storage open, and close it afterwards.
 withStorage :: Config -> FilePath -> (Storage -> IO a) -> IO a
@@ -284,7 +289,12 @@ withStorage config dir = bracket (openStorage config dir) closeStorage
 -- | The database itself, for what the interface does not do: the tests'
 -- look inside, and maintenance. Nothing else runs on it meanwhile.
 withDatabase :: Storage -> (Connection -> IO a) -> IO a
-withDatabase st = withMVar st.connection
+withDatabase st f = withMVar st.connection (\d -> f d.conn)
+
+-- | The database as both libraries speak it ("Wiki.Server.Storage.Sql"),
+-- for what reads or writes the users, groups or grants beside the rest.
+withDb :: Storage -> (Db -> IO a) -> IO a
+withDb st = withMVar st.connection
 
 -- | The data directory a storage was opened in.
 storageDataDir :: Storage -> FilePath
@@ -293,7 +303,7 @@ storageDataDir st = st.dataDir
 -- | The wiki's settings as they are now: from memory, once they have been
 -- read.
 readSettings :: Storage -> IO WikiSettings
-readSettings st = readIORef st.settings >>= maybe (withMVar st.connection (settingsWith st)) pure
+readSettings st = readIORef st.settings >>= maybe (withDatabase st (settingsWith st)) pure
 
 -- | The wiki's settings, for someone who holds the storage's connection
 -- (inside 'withDatabase'): read from it the first time, and kept.
@@ -309,7 +319,7 @@ settingsWith st c =
 -- | The server's own settings as they are now, with their secrets: from
 -- memory, once they have been read.
 readServerSettings :: Storage -> IO Kept
-readServerSettings st = readIORef st.serverKept >>= maybe (withMVar st.connection (serverSettingsWith st)) pure
+readServerSettings st = readIORef st.serverKept >>= maybe (withDatabase st (serverSettingsWith st)) pure
 
 -- | The server's own settings, for someone who holds the connection.
 serverSettingsWith :: Storage -> Connection -> IO Kept
@@ -362,7 +372,7 @@ administratorUser = User {id = administratorId, login = "administrator", display
 
 -- | The user with a login.
 userByLogin :: Storage -> Text -> IO (Maybe User)
-userByLogin st login = withDatabase st (`loadUserByLogin` login)
+userByLogin st login = withDb st (\d -> runSql d (loadUserByLogin login))
 
 --------------------------------------------------------------------------------
 -- Transactions
@@ -371,6 +381,9 @@ userByLogin st login = withDatabase st (`loadUserByLogin` login)
 -- grant as the transaction began, and who is asking.
 data Ctx = Ctx
   { conn :: Connection
+  , backend :: Db
+  -- ^ The same connection, for the users, groups and grants' reads and
+  -- writes ('sql').
   , blobs :: FilePath
   , spaces :: Map SpaceId Space
   , grants :: Grants
@@ -420,9 +433,10 @@ transactThen st who = transactThenFrom st who ""
 
 -- | 'transactThen', for a request from an address.
 transactThenFrom :: Storage -> Who -> Text -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
-transactThenFrom st who address mode (Tx body) committed = withMVar st.connection $ \c -> do
+transactThenFrom st who address mode (Tx body) committed = withDb st $ \d -> do
+  let c = d.conn
   execute_ c (case mode of Reads -> "BEGIN"; Writes -> "BEGIN IMMEDIATE")
-  ctx <- context st c who address `onException` execute_ c "ROLLBACK"
+  ctx <- context st d who address `onException` execute_ c "ROLLBACK"
   result <- runExceptT (runReaderT body ctx) `onException` execute_ c "ROLLBACK"
   case result of
     Left _ -> execute_ c "ROLLBACK"
@@ -435,22 +449,23 @@ transactThenFrom st who address mode (Tx body) committed = withMVar st.connectio
 
 -- | What an operation starts from: the grants with whom the wiki is open
 -- to, which the rules take from them.
-context :: Storage -> Connection -> Who -> Text -> IO Ctx
-context st c who address = do
+context :: Storage -> Db -> Who -> Text -> IO Ctx
+context st d who address = do
+  let c = d.conn
   spaces <- loadSpaces c
-  rows <- loadGrants c
+  rows <- runSql d loadGrants
   wiki <- settingsWith st c
   server <- serverSettingsWith st c
   told <- newIORef []
   let stored = Grants {global = rows.global, spaces = rows.spaces, access = wiki.access}
-  let ctx grants principal user author creator = Ctx {conn = c, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator, wiki, server, address, told}
+  let ctx grants principal user author creator = Ctx {conn = c, backend = d, blobs = attachmentsDir st.dataDir, spaces, grants, principal, user, author, creator, wiki, server, address, told}
   case who of
     Anonymous -> pure (ctx stored Nothing Nothing Nothing Nothing)
     AsUser u ->
-      loadActiveUser c u >>= \case
+      runSql d (loadActiveUser u) >>= \case
         Nothing -> pure (ctx stored Nothing Nothing Nothing Nothing)
         Just found -> do
-          groups <- loadGroupsOf c u
+          groups <- runSql d (loadGroupsOf u)
           pure (ctx stored (Just Principal {user = u, groups}) (Just found) (Just u) (Just u))
     Administrator ->
       pure
@@ -465,6 +480,10 @@ context st c who address = do
 -- | Something done with the connection.
 db :: (Connection -> IO a) -> Tx a
 db f = asks (\x -> x.conn) >>= liftIO . f
+
+-- | A read or write of the users, groups or grants, in the transaction.
+sql :: Sql a -> Tx a
+sql q = asks (\x -> x.backend) >>= \d -> liftIO (runSql d q)
 
 failWith :: WikiError -> Tx a
 failWith = throwError
@@ -595,7 +614,7 @@ actorOf :: Storage -> Who -> IO Actor
 actorOf st who = case who of
   Anonymous -> pure Actor {id = UserId "~anonymous", login = "anonymous"}
   Administrator -> pure Actor {id = administratorId, login = administratorUser.login}
-  AsUser u -> maybe Actor {id = u, login = u.text} (\found -> Actor {id = found.id, login = found.login}) <$> withDatabase st (`loadUser` u)
+  AsUser u -> maybe Actor {id = u, login = u.text} (\found -> Actor {id = found.id, login = found.login}) <$> withDb st (\d -> runSql d (loadUser u))
 
 run :: (MonadIO m) => Mode -> Tx a -> SqliteWiki m (Either WikiError a)
 run mode tx = SqliteWiki $ do
@@ -676,7 +695,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
                 n -> n
           run Writes $ do
             requireAdministrator
-            db (\c -> insertAccount c (UserId uid) login name (Just phc)) >>= \case
+            sql (insertAccount (UserId uid) login name (Just phc)) >>= \case
               Left taken -> failWith (Conflict ("There is a user with the login " <> taken <> " already."))
               Right account -> do
                 record "user.create" (userSubject account.user) [("login", login), ("name", name)]
@@ -692,15 +711,15 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
           run Writes $ do
             requireAdministrator
             findUser u >>= requirePasswordToSet
-            changeAccountTx "user.password" [] u $ \c -> updatePasswordHash c u phc >> deleteSessionsOf c u
+            changeAccountTx "user.password" [] u (updatePasswordHash u phc >> deleteSessionsOf u)
 
   -- Mailing takes the server, which the storage is not: its API mails the
   -- link, which 'passwordLinkFor' makes.
   sendPasswordLink u = run Reads (requireAdministrator >> findUser u >> failWith (Invalid "Only the server's API sends mail."))
   setDisabled u disabled =
-    run Writes $ changeAccountTx (if disabled then "user.disable" else "user.enable") [] u $ \c -> do
-      updateDisabled c u disabled
-      when disabled (deleteSessionsOf c u)
+    run Writes $ changeAccountTx (if disabled then "user.disable" else "user.enable") [] u $ do
+      updateDisabled u disabled
+      when disabled (deleteSessionsOf u)
   createGroup = run Writes . createGroupTx
   renameGroup g = run Writes . renameGroupTx g
   deleteGroup = run Writes . deleteGroupTx
@@ -1044,7 +1063,7 @@ createSpaceTx parent name = do
           }
   db (`insertSpace` space)
   for_ ctx.creator $ \u ->
-    db $ \c -> insertGrants c Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open}
+    sql $ insertGrants Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open}
   -- Its home page, made as a page its maker made would be, and then named
   -- as the space's, which it has to exist to be.
   j <- newId
@@ -1129,9 +1148,9 @@ spaceAccessTx sid = do
   requireAdminister c
   -- The wiki's own grants, as they are kept: not the context's, which has
   -- the operator's grant of everything in it.
-  stored <- db loadGrants
-  users <- db loadUsers
-  groups <- db loadGroups
+  stored <- sql loadGrants
+  users <- sql loadUsers
+  groups <- sql loadGroups
   pure
     SpaceAccess
       { grants = [g | s <- reverse c, g <- stored.spaces, g.space == s.id]
@@ -1145,17 +1164,17 @@ setSpaceGrantTx sid subject permission granted = do
   (_, c) <- findSpace sid
   requireAdminister c
   when granted $ case subject of
-    SubjectUser u -> db (`loadUser` u) >>= maybe (invalid "There is no such user.") (const pass)
-    SubjectGroup g -> db loadGroups >>= maybe (invalid "There is no such group.") (const pass) . find (\x -> x.id == g)
+    SubjectUser u -> sql (loadUser u) >>= maybe (invalid "There is no such user.") (const pass)
+    SubjectGroup g -> sql loadGroups >>= maybe (invalid "There is no such group.") (const pass) . find (\x -> x.id == g)
   let grant = SpaceGrant {space = sid, subject, permission}
-  db $ \conn ->
+  sql $
     if granted
-      then insertGrants conn Grants {global = [], spaces = [grant], access = Open}
-      else deleteSpaceGrant conn grant
+      then insertGrants Grants {global = [], spaces = [grant], access = Open}
+      else deleteSpaceGrant grant
   (sp, _) <- findSpace sid
   grantee <- case subject of
-    SubjectUser u -> maybe ("user " <> u.text) (\x -> "user " <> x.login) <$> db (`loadUser` u)
-    SubjectGroup g -> maybe ("group " <> g.text) (\x -> "group " <> x.name) . find (\x -> x.id == g) <$> db loadGroups
+    SubjectUser u -> maybe ("user " <> u.text) (\x -> "user " <> x.login) <$> sql (loadUser u)
+    SubjectGroup g -> maybe ("group " <> g.text) (\x -> "group " <> x.name) . find (\x -> x.id == g) <$> sql loadGroups
   record (if granted then "space.grant" else "space.revoke") (spaceSubject sp) [("to", grantee), ("permission", permissionText permission)]
 
 -- | A permission on a space, as the log writes it.
@@ -1590,23 +1609,23 @@ requireAdministrator = ask >>= \x -> require (hasGlobalPermission x.principal x.
 
 -- | A user by id; the administrator, who is no user, is not found.
 findUser :: UserId -> Tx User
-findUser u = db (`loadUser` u) >>= maybe (failWith NotFound) pure
+findUser u = sql (loadUser u) >>= maybe (failWith NotFound) pure
 
 -- | A group by id.
 findGroup :: GroupId -> Tx Group
-findGroup g = db loadGroups >>= maybe (failWith NotFound) pure . find (\x -> x.id == g)
+findGroup g = sql loadGroups >>= maybe (failWith NotFound) pure . find (\x -> x.id == g)
 
 directoryTx :: Tx Directory
 directoryTx = do
   requireAdministrator
-  users <- db loadUsers
-  groups <- db loadGroups
-  membership <- db loadMembership
-  stored <- db loadGrants
-  (disabled, withPassword) <- db loadAccountFlags
-  identities <- db loadIdentityProviders
-  secondFactor <- db loadSecondFactorUsers
-  emails <- db loadEmails
+  users <- sql loadUsers
+  groups <- sql loadGroups
+  membership <- sql loadMembership
+  stored <- sql loadGrants
+  (disabled, withPassword) <- sql loadAccountFlags
+  identities <- sql loadIdentityProviders
+  secondFactor <- sql loadSecondFactorUsers
+  emails <- sql loadEmails
   server <- asks (\x -> x.server)
   let ids = Set.fromList (map (\u -> u.id) users)
       holding p = Set.fromList [u | GlobalGrant (SubjectUser u) p' <- stored.global, p' == p, u `Set.member` ids]
@@ -1642,23 +1661,23 @@ setGlobalGrantTx permission u granted = do
   requireAdministrator
   user <- findUser u
   let grant = GlobalGrant {subject = SubjectUser u, permission}
-  db $ \c ->
+  sql $
     if granted
-      then insertGrants c Grants {global = [grant], spaces = [], access = Open}
-      else deleteGlobalGrant c grant
+      then insertGrants Grants {global = [grant], spaces = [], access = Open}
+      else deleteGlobalGrant grant
   case permission of
     Administer -> record "user.administrator" (userSubject user) [("administrator", yesNo granted)]
     CreateSpaces -> record "user.create-spaces" (userSubject user) [("creates spaces", yesNo granted)]
 
 -- | Change the account of a user who is there, as an administrator, and
 -- give it back as it then is.
-changeAccountTx :: Text -> [(Text, Text)] -> UserId -> (Connection -> IO ()) -> Tx Account
+changeAccountTx :: Text -> [(Text, Text)] -> UserId -> Sql () -> Tx Account
 changeAccountTx action detail u change = do
   requireAdministrator
   user <- findUser u
-  db change
+  sql change
   record action (userSubject user) detail
-  db (`loadAccount` u) >>= maybe (failWith NotFound) pure
+  sql (loadAccount u) >>= maybe (failWith NotFound) pure
 
 -- | Refuse a password to a user who has none to set (WP5.6 of
 -- docs/PLAN.md): one who signs in with a provider the server has, and has
@@ -1666,7 +1685,7 @@ changeAccountTx action detail u change = do
 requirePasswordToSet :: User -> Tx ()
 requirePasswordToSet user = do
   configured <- asks (\x -> providerNames x.server)
-  none <- db (\c -> noPasswordToSet c configured user.id)
+  none <- sql (noPasswordToSet configured user.id)
   when none (invalid (user.displayName <> " signs in with a provider, and has no password to set."))
 
 -- | A link to choose a password that an administrator has a user mailed:
@@ -1694,7 +1713,7 @@ passwordLinkFor mailing at token u = run Writes $ do
   user <- findUser u
   requirePasswordToSet user
   unless mailing (invalid "The server sends no mail: set up its mail in the Server section, or type a password for them.")
-  account <- db (`loadAccount` u) >>= maybe (failWith NotFound) pure
+  account <- sql (loadAccount u) >>= maybe (failWith NotFound) pure
   when account.disabled (invalid (user.displayName <> "'s login is disabled: enable it first, or type a password for them."))
   verified <- db (\c -> query c "SELECT email FROM users WHERE id = ? AND email IS NOT NULL AND email_verified_at IS NOT NULL" (Only u.text))
   case verified of
@@ -1713,7 +1732,7 @@ passwordLinkFor mailing at token u = run Writes $ do
 groupNameTx :: Maybe GroupId -> Text -> Tx Text
 groupNameTx self name = do
   n <- nonBlank "A group's name" name
-  groups <- db loadGroups
+  groups <- sql loadGroups
   for_ (head [g | g <- groups, Just g.id /= self, T.toCaseFold g.name == T.toCaseFold n]) $ \g ->
     invalid ("There is a group called " <> g.name <> " already.")
   pure n
@@ -1723,7 +1742,7 @@ createGroupTx name = do
   requireAdministrator
   n <- groupNameTx Nothing name
   g <- (\i -> Group {id = GroupId i, name = n}) <$> newId
-  db (`insertGroup` g)
+  sql (insertGroup g)
   record "group.create" (groupSubject g.id n) []
   pure g
 
@@ -1732,7 +1751,7 @@ renameGroupTx gid name = do
   requireAdministrator
   old <- findGroup gid
   n <- groupNameTx (Just gid) name
-  db (\c -> renameGroupRow c gid n)
+  sql (renameGroupRow gid n)
   record "group.rename" (groupSubject gid n) [("was", old.name)]
   pure Group {id = gid, name = n}
 
@@ -1740,7 +1759,7 @@ deleteGroupTx :: GroupId -> Tx ()
 deleteGroupTx gid = do
   requireAdministrator
   g <- findGroup gid
-  db (`deleteGroupRows` gid)
+  sql (deleteGroupRows gid)
   record "group.delete" (groupSubject gid g.name) []
 
 -- | Put a user in a group, or take them out; either is done once.
@@ -1749,7 +1768,7 @@ setMemberTx member gid u = do
   requireAdministrator
   g <- findGroup gid
   user <- findUser u
-  db (\c -> (if member then insertMember else deleteMember) c gid u)
+  sql ((if member then insertMember else deleteMember) gid u)
   record (if member then "group.member-add" else "group.member-remove") (groupSubject gid g.name) [("user", user.login)]
 
 --------------------------------------------------------------------------------
@@ -1859,9 +1878,9 @@ unlinkUserIdentityTx :: UserId -> Text -> Tx ()
 unlinkUserIdentityTx u provider = do
   requireAdministrator
   user <- findUser u
-  gone <- db (\c -> deleteIdentity c u provider)
+  gone <- sql (deleteIdentity u provider)
   unless gone (failWith NotFound)
-  db (`deleteSessionsOf` u)
+  sql (deleteSessionsOf u)
   record "user.identity-remove" (userSubject user) [("provider", provider)]
 
 -- | An administrator takes a user's second factor away, for one who has
@@ -1870,7 +1889,7 @@ removeSecondFactorTx :: UserId -> Tx ()
 removeSecondFactorTx u = do
   requireAdministrator
   user <- findUser u
-  had <- db (`deleteSecondFactor` u)
+  had <- sql (deleteSecondFactor u)
   unless had (failWith NotFound)
   record "user.second-factor-remove" (userSubject user) []
 
@@ -2010,8 +2029,8 @@ tellTx :: PageId -> SpaceId -> Text -> Maybe CommentThreadId -> Text -> Occasion
 tellTx pid sid title thread excerpt occasion logins = do
   ctx <- ask
   for_ ctx.author $ \actor -> do
-    stored <- db loadGrants
-    membership <- db loadMembership
+    stored <- sql loadGrants
+    membership <- sql loadMembership
     telling <- db Notifications.loadTelling
     maker <- db (`Notifications.pageMaker` pid)
     nodes <- db (`pageNodes` sid)
@@ -2169,7 +2188,8 @@ instance (MonadIO m) => MonadNotifications (SqliteWiki m) where
 -- in it already is refused, and left as it was: bringing one wiki into
 -- another is a merge, which is the import's of docs/PLAN.md's WP2.8.
 importArchive :: Storage -> Archive -> IO (Either Text ())
-importArchive st a = withDatabase st $ \c -> do
+importArchive st a = withDb st $ \d -> do
+  let c = d.conn
   execute_ c "BEGIN IMMEDIATE"
   flip onException (execute_ c "ROLLBACK") $ do
     counts <- for ["users", "groups", "spaces"] $ \table -> query_ c ("SELECT count(*) FROM " <> table)
@@ -2183,10 +2203,11 @@ importArchive st a = withDatabase st $ \c -> do
         -- Spaces and pages are given in any order, a child before its
         -- parent too: the foreign keys are checked at the commit.
         execute_ c "PRAGMA defer_foreign_keys = ON"
-        traverse_ (insertUser c) a.users
-        traverse_ (insertGroup c) a.groups
-        for_ (Map.toList a.membership) $ \(g, members) -> traverse_ (insertMember c g) (Set.toList members)
-        insertGrants c a.grants
+        runSql d $ do
+          traverse_ insertUser a.users
+          traverse_ insertGroup a.groups
+          for_ (Map.toList a.membership) $ \(g, members) -> traverse_ (insertMember g) (Set.toList members)
+          insertGrants a.grants
         hashes <- traverse (storeBlob (attachmentsDir st.dataDir)) a.blobs
         for_ a.spaces $ \sp ->
           insertSpace c $ case sp.icon of
@@ -2212,14 +2233,15 @@ exportArchive :: Storage -> Text -> IO (Either Text Archive)
 exportArchive st app = do
   createdAt <- getCurrentTime
   (users, groups, membership, grants, spaces, pages, audit) <-
-    withDatabase st $ \c -> do
+    withDb st $ \d -> do
+      let c = d.conn
       execute_ c "BEGIN"
       records <-
         (,,,,,,)
-          <$> loadUsers c
-          <*> loadGroups c
-          <*> loadMembership c
-          <*> loadGrants c
+          <$> runSql d loadUsers
+          <*> runSql d loadGroups
+          <*> runSql d loadMembership
+          <*> runSql d loadGrants
           <*> (Map.elems <$> loadSpaces c)
           <*> loadAllPages c
           <*> loadAuditLog c

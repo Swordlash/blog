@@ -50,6 +50,12 @@ source-repository-package
 -- Arbitrary instances.
 -- qrcode-core's containers bound lags behind GHC 9.14's (the server draws a
 -- second factor's QR code with it, Wiki.Server.Totp).
+-- persistent's aeson and template-haskell bounds, and postgresql-simple's
+-- aeson, base, template-haskell and containers bounds, lag behind GHC 9.14's
+-- and the aeson everything else here is built with (WP5.7 of docs/PLAN.md:
+-- the users, groups and grants through persistent, and the server's tests on
+-- PostgreSQL through persistent-postgresql, over postgresql-simple). Both
+-- build and pass the tests with them.
 allow-newer:
   protolude:*,
   servant:QuickCheck,
@@ -64,7 +70,13 @@ allow-newer:
   cborg:containers,
   pandoc:crypton,
   pandoc-types:QuickCheck,
-  qrcode-core:containers
+  qrcode-core:containers,
+  persistent:aeson,
+  persistent:template-haskell,
+  postgresql-simple:aeson,
+  postgresql-simple:base,
+  postgresql-simple:template-haskell,
+  postgresql-simple:containers
 
 -- A test suite's dependencies are optional goals unless this says otherwise:
 -- rather than report that it cannot satisfy them, the solver is free to hand
