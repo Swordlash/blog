@@ -26,17 +26,28 @@ on:
           - self-hosted
           - hosted
         default: self-hosted
+  # Once a week, on the hosted runners whatever the owner's machine is doing
+  # (plan sends a scheduled run there): GitHub evicts a cache nobody has
+  # read for seven days, and the hosted caches on main (the cabal stores,
+  # the wasm toolchain, Chromium) are read only by runs that go hosted, a
+  # fork's or a bot's pull request or a busy week. The run reads them, and
+  # saves them again, so a pull request that lands on the hosted runners
+  # never starts from an empty store (the wasm store takes three quarters
+  # of an hour to build there).
+  schedule:
+    - cron: '17 3 * * 1'
 
 # A new push to a branch (or to a pull request's branch) cancels the run still
 # going for the previous one: only the newest commit's result matters. The
 # branch is named with its repository, so that a fork's pull request from a
 # branch named like one of ours neither cancels our run nor is cancelled by
-# it. A run by hand has a group of its own, its run's id: it names the same
-# ref as a push to main (refs/heads/main), and in a shared group a
-# fast-forward of main cancelled a run by hand still going (one on the
-# hosted runners, say) and a run by hand cancelled the push's.
+# it. A run by hand, and the weekly run, have a group of their own, their
+# run's id: they name the same ref as a push to main (refs/heads/main), and
+# in a shared group a fast-forward of main cancelled a run by hand still
+# going (one on the hosted runners, say) and a run by hand cancelled the
+# push's.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || format('{0}-{1}', github.event.pull_request.head.repo.full_name || github.repository, github.head_ref || github.ref) }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && github.run_id || format('{0}-{1}', github.event.pull_request.head.repo.full_name || github.repository, github.head_ref || github.ref) }}
   cancel-in-progress: true
 
 permissions:
@@ -152,14 +163,15 @@ jobs:
     # For every event, on a push too (the deploy needs a runner even when
     # the build jobs skip). TRUSTED is the trust rule (see the top): false
     # for a pull request from a fork, anything a bot started, and a run by
-    # hand asking for the hosted runners. The script prints its answer and
-    # why in one line, in the log and in the run's summary.
+    # hand asking for the hosted runners. The weekly run asks for them too:
+    # it is there to keep the hosted caches alive. The script prints its
+    # answer and why in one line, in the log and in the run's summary.
     - name: Pick the runner
       id: pick
       env:
         GH_TOKEN: ${{ github.token }}
-        TRUSTED: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted') && 'false' || 'true' }}
-        RUNNER_INPUT: ${{ inputs.runner }}
+        TRUSTED: ${{ ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) || endsWith(github.actor, '[bot]') || inputs.runner == 'hosted' || github.event_name == 'schedule') && 'false' || 'true' }}
+        RUNNER_INPUT: ${{ github.event_name == 'schedule' && 'hosted' || inputs.runner }}
       run: sh toolchain/ci-pick-runner.sh >> "$GITHUB_OUTPUT"
 
   native:

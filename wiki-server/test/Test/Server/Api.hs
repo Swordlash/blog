@@ -76,13 +76,24 @@ whoIsAsking = describe "who is asking" $ do
 
   it "logs each request with its listener, principal, route, status and time, but not its query" $ withRunning $ \r -> do
     _ <- getUrl r (onPublic r (searchUrl (searchQuery "secret words")))
-    logged <- readIORef r.logged
-    case filter ("path=/api/v1/search" `T.isInfixOf`) logged of
+    -- The line is written once the response has been sent, which the client
+    -- can see before the server gets to it: wait for it, a little at a time.
+    logged <- eventually (filter ("path=/api/v1/search" `T.isInfixOf`) <$> readIORef r.logged)
+    case logged of
       [line] -> do
         line `shouldSatisfy` T.isInfixOf "listener=public principal=anonymous"
         line `shouldSatisfy` T.isInfixOf "method=GET path=/api/v1/search route=/api/v1/search status=200 ms="
         line `shouldNotSatisfy` T.isInfixOf "secret"
       other -> expectationFailure ("expected one line, got " <> show other)
+
+-- | Wait, a little at a time, for a list to have something in it, and give
+-- it: a log line written after the answer. Gives the last, empty, reading
+-- when it never comes, so the test says what it expected.
+eventually :: IO [a] -> IO [a]
+eventually read = go (100 :: Int)
+  where
+    go 0 = read
+    go n = read >>= \found -> if null found then threadDelay 50_000 >> go (n - 1) else pure found
 
 -- | A space made by the administrator, public or not, with a page in it.
 withSpace :: Running -> Bool -> IO (Space, Page)

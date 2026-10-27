@@ -554,7 +554,8 @@ try {
   // It opens at its home page, made with it, in a sidebar of its own.
   await page.locator("#app .sidebar-space-name", { hasText: "Smoke space" }).waitFor({ timeout });
   await page.locator("#app .page-view .page-title", { hasText: "Home" }).waitFor({ timeout });
-  assert.equal(here(page), "/s/smoke-space/");
+  // The router changes the address a moment after the view renders.
+  await eventually(() => assert.equal(here(page), "/s/smoke-space/"), "the new space's address");
   // A page, from its title, from the space's list of pages.
   await page.locator("#app .space-pages-link").click();
   await page.locator("#app .space-view h1", { hasText: "Smoke space" }).waitFor({ timeout });
