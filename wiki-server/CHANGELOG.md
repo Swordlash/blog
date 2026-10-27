@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+A spike, not merged unless the owner decides so (WP5.7): the users, their
+accounts and identities, the groups and the grants are read and written
+through persistent and esqueleto, on the same SQLite connection as the rest,
+and the same code is tested on PostgreSQL. Nothing a user sees changes. The
+schema is the same; PostgreSQL gets its own branch of the migrations
+(`migrations/postgresql/`). Building the server's tests now needs
+PostgreSQL's client library (`libpq-dev`), which `toolchain/bootstrap.sh`
+installs; `sh toolchain/with-postgres.sh <command>` runs a command beside a
+throwaway PostgreSQL server, whose tests are pending without one.
+
 The static files' server sends a `.bin` file as `application/octet-stream`,
 named so explicitly (WP5.5): TikZJax's compressed files are now zlib streams
 named `.bin` rather than gzip files named `.gz`, since a corporate proxy may

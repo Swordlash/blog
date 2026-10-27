@@ -493,21 +493,23 @@ as_root() {
 }
 
 # Debian packages: a C toolchain (GHC links with it), GMP's development files
-# (native programs link libgmp), and what ghc-wasm-meta's setup.sh runs.
+# (native programs link libgmp), PostgreSQL's client library and its
+# pg_config (the server's tests reach PostgreSQL through persistent-postgresql,
+# whose postgresql-libpq links libpq), and what ghc-wasm-meta's setup.sh runs.
 system_packages() {
   missing=
   if command -v dpkg-query >/dev/null 2>&1; then
-    for pkg in build-essential curl git jq unzip xz-utils zstd libgmp-dev; do
+    for pkg in build-essential curl git jq unzip xz-utils zstd libgmp-dev libpq-dev; do
       if ! dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
         missing="$missing $pkg"
       fi
     done
   else
-    for cmd in cc make curl git jq unzip xz unzstd; do
+    for cmd in cc make curl git jq unzip xz unzstd pg_config; do
       command -v "$cmd" >/dev/null 2>&1 || missing="$missing $cmd"
     done
     if [ -n "$missing" ]; then
-      say "missing commands:$missing (and GHC needs GMP's development files); install them and run this again"
+      say "missing commands:$missing (and GHC needs GMP's development files, the server's tests PostgreSQL's libpq); install them and run this again"
       exit 1
     fi
     return 0

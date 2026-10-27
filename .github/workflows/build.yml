@@ -180,6 +180,26 @@ jobs:
     # The runner plan picked; see the top.
     runs-on: ${{ needs.plan.outputs.runner }}
 
+    # PostgreSQL, for the server's tests of what runs on it as on SQLite (the
+    # users, groups and grants through persistent, WP5.7 of docs/PLAN.md):
+    # a service container on the hosted runners, which have Docker, named to
+    # the tests by WIKI_TEST_POSTGRES (the Test step). The owner's machine
+    # gets none (an empty image starts nothing): there the Test step starts a
+    # server of its own if PostgreSQL is installed (toolchain/with-postgres.sh),
+    # and otherwise those tests are pending.
+    services:
+      postgres:
+        image: ${{ needs.plan.outputs.runner == 'ubuntu-latest' && 'postgres:16' || '' }}
+        env:
+          POSTGRES_PASSWORD: wiki
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
@@ -218,6 +238,15 @@ jobs:
 
     - name: Update Cabal package index
       run: cabal update
+
+    # The server's tests link PostgreSQL's client library (postgresql-libpq,
+    # under persistent-postgresql), whose build asks pg_config. The owner's
+    # machine has it from toolchain/bootstrap.sh.
+    - name: Install PostgreSQL's client library (hosted)
+      if: runner.environment == 'github-hosted'
+      run: |
+        dpkg-query -W -f '${Status}' libpq-dev 2>/dev/null | grep -q 'install ok installed' \
+          || { sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev; }
 
     # As haskell-halogen's workflow does, and for its reasons: the store is
     # additive and partitioned by compiler, so it is carried forward from run
@@ -258,8 +287,18 @@ jobs:
     - name: Build
       run: npm run build-native
 
+    # With the service container's PostgreSQL where there is one, else with
+    # a server of the run's own where PostgreSQL is installed, else without
+    # (the tests on PostgreSQL are then pending).
     - name: Test
-      run: npm run test-native
+      env:
+        WIKI_TEST_POSTGRES: ${{ needs.plan.outputs.runner == 'ubuntu-latest' && 'host=localhost port=5432 user=postgres password=wiki dbname=postgres' || '' }}
+      run: |
+        if [ -z "$WIKI_TEST_POSTGRES" ] && sh toolchain/with-postgres.sh true 2>/dev/null; then
+          sh toolchain/with-postgres.sh npm run test-native
+        else
+          npm run test-native
+        fi
 
     # The deploy scripts against fakes of systemd, ufw, sudo, tailscale (and
     # its serve) and curl, in a temporary home: nothing on the runner is

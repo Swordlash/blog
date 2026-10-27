@@ -72,7 +72,7 @@ onSqlite action = withSystemTempDirectory "wiki-persistent-test" $ \dir -> do
 -- where no server is named.
 onPostgres :: Fresh
 onPostgres action =
-  lookupEnv "WIKI_TEST_POSTGRES" >>= \case
+  (mfilter (not . null) <$> lookupEnv "WIKI_TEST_POSTGRES") >>= \case
     Nothing -> pendingWith "no PostgreSQL server: WIKI_TEST_POSTGRES names none (sh toolchain/with-postgres.sh starts one)"
     Just server -> do
       -- A name no other run's schema has: the time, to its last digit.
