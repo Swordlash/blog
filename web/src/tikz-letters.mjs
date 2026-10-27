@@ -24,10 +24,10 @@
 // font has one. It is set under the right end of the letter, as the T1
 // encoding sets its ogonek glyph, and it is sized in em, so it follows the
 // letter's size. `reset cm` keeps the picture's own scaling and rotation off
-// it: the node the letter is in already applies them, and `draw=none` an
-// author's `every path` style that draws. All on one line:
-// web/src/tikz.js counts the lines of TeX's input, and this goes on the
-// first one.
+// the hook, because the node the letter is in already applies them.
+// `draw=none` keeps an author's `every path` style from stroking the hook.
+// The TeX is all on one line: web/src/tikz.js counts the lines of TeX's
+// input, and this goes on the first one.
 export const letters = [
   String.raw`\makeatletter`,
   String.raw`\newcommand\wiki@ogonek{\tikz[reset cm,baseline=0pt,x=1em,y=1em]{`,
