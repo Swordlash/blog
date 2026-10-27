@@ -1,45 +1,49 @@
--- | The API's handlers ("Wiki.Api"), over the storage: each endpoint asks
--- the storage what the application would ask any backend ('MonadWiki'), as
--- the principal of the request, and the administration's endpoints what the
--- panel would ask any backend ('MonadAdmin'), and answers with what it gets
--- back or with its refusal as an 'ApiError'.
+-- | The server's HTTP handlers for the API ("Wiki.Api"). Each endpoint
+-- makes the same call on the storage that the application makes on any
+-- backend ('MonadWiki'), as the user who sent the request. The
+-- administration's endpoints make the calls the administration panel
+-- makes ('MonadAdmin'). An endpoint answers with the result, or with the
+-- refusal as an 'ApiError'.
 --
--- A handler never knows which listener it serves: it is given who is asking
--- ('Caller'), whom the listener found for the request ("Wiki.Server.App"),
--- and the storage's rules do the rest. What only an administrator may do
--- (export, import, the server's status) is checked here, by the same
--- grants the application shows: whoever holds the global 'Administer',
--- which the operator of the admin listener always does. The rest of the
--- administration, users' accounts included, is the storage's to check
--- ('MonadAdmin').
+-- A handler does not know which listener it serves. It is given the
+-- 'Caller', whom the listener identified for the request
+-- ("Wiki.Server.App"), and the storage's permission rules do the rest.
+-- Three things only an administrator may do are checked here: export,
+-- import and the server's status. The check uses the same grants the
+-- application shows: the caller must hold the global 'Administer', which
+-- the operator of the admin listener always does. The storage checks the
+-- rest of the administration, users' accounts included ('MonadAdmin').
 --
--- Signing in and out are the one thing that depends on more than who is
--- asking: they are for a listener that finds people by their sessions, and
--- need the request's address (for the limit on attempts) and the cookie's
--- settings, which the caller carries ('Signing'). So do making oneself an
--- account and accepting an invitation, which sign their maker in.
+-- Signing in and out need more than the caller's identity. They only
+-- exist on a listener that identifies people by their sessions, and they
+-- need the request's address (for the limit on attempts) and the cookie
+-- settings. The 'Caller' carries both, in its 'Signing'. Creating one's own
+-- account and accepting an invitation need the same, because both sign
+-- the new user in.
 --
--- An invitation is made by the storage, and mailed here, by the server's
--- 'Mailer' if it has one: then its secret is not given back, since only
--- the person invited is to have it. Without a mailer, or when the mail
--- could not be sent, the answer carries it, for the panel to show the
--- link to pass on.
+-- The storage creates an invitation, and this module mails it with the
+-- server's 'Mailer', if the server has one. A mailed invitation's secret
+-- is not returned, since only the invited person should have it. Without
+-- a mailer, or when the mail could not be sent, the answer carries the
+-- secret, so that the panel can show the link for the administrator to
+-- pass on.
 --
--- A user's account is kept safe here too (WP4.11 of docs/PLAN.md,
--- "Wiki.Api.Security"): their sessions, a second factor, which makes signing
--- in a step longer ('SecondFactorRequired' and a cookie of the sign-in half
--- done, "Wiki.Server.SecondFactor"), an e-mail address verified by a mailed
--- link, and a password reset by mail ("Wiki.Server.Reset"). Wrong codes are
--- counted as failed sign-ins of the user's login. A reset is answered alike
--- whatever it names: what it names is looked up, and mailed, on a thread of
--- its own after the answer, so that neither the answer nor the time it
--- takes tells who has an account.
+-- This module also handles account security (WP4.11 of docs/PLAN.md,
+-- "Wiki.Api.Security"): a user's sessions; a second factor, which adds a
+-- step to signing in ('SecondFactorRequired', with a cookie for the
+-- half-finished sign-in, "Wiki.Server.SecondFactor"); an e-mail address
+-- verified through a mailed link; and a password reset by mail
+-- ("Wiki.Server.Reset"). A wrong code counts as a failed sign-in for the
+-- user's login. Every reset request gets the same answer, whatever login
+-- it names. The login is looked up, and the mail sent, on a separate
+-- thread after the answer, so that neither the answer nor its timing
+-- reveals who has an account.
 --
--- The mailer and the providers people sign in with are made from the
--- server's settings as they are at each request ('currentMailer',
--- 'currentProviders'), which the administration changes (WP4.4 of
--- docs/PLAN.md): the storage keeps the settings, and here a provider is
--- asked how to sign in and a test mail sent, which take the network.
+-- The mailer and the sign-in providers are built from the server's
+-- settings at each request ('currentMailer', 'currentProviders'), because
+-- the administration can change those settings (WP4.4 of docs/PLAN.md).
+-- The storage keeps the settings. This module does what needs the
+-- network: asking a provider how to sign in, and sending a test mail.
 module Wiki.Server.Api
   ( -- * The handlers
     Env (..)
@@ -143,22 +147,23 @@ data Env = Env
   , limiter :: Limiter
   -- ^ The failed attempts to sign in ("Wiki.Server.Limiter").
   , registrations :: Limiter
-  -- ^ The attempts to make oneself an account, with an invitation or
-  -- without, every one counted, since even one that succeeds makes the
-  -- server hash a password.
+  -- ^ Attempts to create one's own account, with or without an
+  -- invitation. Every attempt is counted, because even a successful one
+  -- makes the server hash a password.
   , sendMail :: SendMail
-  -- ^ How mail goes out through the mail server set ('smtpSend', but in
-  -- the tests).
+  -- ^ How mail is sent through the configured mail server ('smtpSend',
+  -- except in the tests).
   , providerCache :: ProviderCache
-  -- ^ The providers people sign in with, as the settings make them, and
-  -- what asking each how to sign in found ("Wiki.Server.Oidc").
+  -- ^ The sign-in providers built from the settings, and what each
+  -- provider answered about how to sign in ("Wiki.Server.Oidc").
   , flows :: Flows
-  -- ^ The round trips through their pages under way.
+  -- ^ The sign-ins through a provider's pages that are under way.
   , events :: Hub
   -- ^ The live channel's connections ("Wiki.Server.Events"), which the
-  -- storage tells of every change to a page's comments.
+  -- storage notifies of every change to a page's comments.
   , exports :: Exports
-  -- ^ The exports being made ("Wiki.Server.Export"), one a person.
+  -- ^ The exports in progress ("Wiki.Server.Export"), at most one per
+  -- person.
   , backups :: BackupService
   -- ^ The thread that backs the server up ("Wiki.Server.Backups").
   , resets :: Limiter
@@ -167,7 +172,7 @@ data Env = Env
   , pending :: PendingSignIns
   -- ^ The sign-ins waiting for a second factor's code.
   , logger :: Logger
-  -- ^ Where what happens after an answer is told: a reset's mail that
+  -- ^ Where events after an answer are logged, such as a reset mail that
   -- could not be sent.
   , errors :: ErrorRing
   -- ^ The last errors the logger has logged ("Wiki.Server.Log"), which
@@ -176,47 +181,49 @@ data Env = Env
   -- ^ The requests counted ("Wiki.Server.Metrics").
   }
 
--- | Who is asking, as the listener found them for a request.
+-- | 'Caller' is who sent a request, as the listener identified them.
 data Caller = Caller
   { who :: Who
   , address :: Text
-  -- ^ Where the request came from: what the audit log records of a write
-  -- of the administration's.
+  -- ^ The address the request came from, which the audit log records for
+  -- an administration write.
   , signing :: Maybe Signing
-  -- ^ How they sign in and out, on a listener where people do: the public
-  -- one.
+  -- ^ What signing in and out need, on the listener where people sign in:
+  -- the public one.
   }
 
 -- | What signing in and out need to know of a request.
 data Signing = Signing
   { address :: Text
-  -- ^ Where the request came from, which attempts are counted for.
+  -- ^ The address the request came from; sign-in attempts are counted per
+  -- address.
   , token :: Maybe Text
   -- ^ The session id its cookie carried, if any: the session that signing
   -- out (or in again) ends.
   , pending :: Maybe Text
-  -- ^ The id of a sign-in waiting for its second factor that its cookie
-  -- carried, if any ("Wiki.Server.SecondFactor").
+  -- ^ The id of a sign-in waiting for its second factor, from the
+  -- request's cookie, if any ("Wiki.Server.SecondFactor").
   , cookies :: CookieSettings
   }
 
--- | Someone who does not sign in or out: the principal of a page the
--- server renders, whose requests are its own.
+-- | A 'Caller' that does not sign in or out: the user a page is rendered
+-- for on the server. The server sends that page's API requests to itself,
+-- so they have no address and no cookie.
 callerAs :: Who -> Caller
 callerAs who = Caller {who, address = "", signing = Nothing}
 
--- | The API as a WAI application, answering as someone: every refusal, the
--- routing's own included, as an 'ApiError'.
+-- | The API as a WAI application, answering as the given 'Caller'. Every
+-- refusal, including the routing's own, is an 'ApiError'.
 --
--- It is two servant applications of the same API in one, which differ only
--- in the largest file a form may carry: the import's, whose archive holds a
--- whole wiki, and everything else's, whose one form is an attachment of at
--- most 'maxAttachmentSize'. A form over its limit is refused while it is
--- read, with a 413, before any of it is held in memory beyond the limit.
+-- It combines two servant applications of the same API, which differ only
+-- in the largest file a form may carry. The import's form carries an
+-- archive of a whole wiki. Every other form carries one attachment of at
+-- most 'maxAttachmentSize'. A form over its limit is refused with a 413
+-- while it is read, before more than the limit is held in memory.
 --
--- Its answers depend on who asks, so they are for that browser alone and
--- revalidated every time ('private'), and say that they vary with the
--- cookie.
+-- Its answers depend on who asks, so they are marked as private to that
+-- browser and revalidated every time (see 'privately'), and as varying
+-- with the cookie.
 apiApplication :: Env -> Caller -> Application
 apiApplication env caller = jsonErrors . privately $ \request ->
   if take 1 (drop 2 (pathInfo request)) == ["import"]
@@ -227,9 +234,9 @@ apiApplication env caller = jsonErrors . privately $ \request ->
     imports = serveWith (fromIntegral env.maxImportSize)
     others = serveWith (fromIntegral maxAttachmentSize)
 
--- | The multipart options of a server whose forms carry files of at most so
--- many bytes: one file a form, and its text parts (an import's choices, a
--- list of what to skip that may be long) up to 16 MiB.
+-- | The multipart options for forms whose file is at most this many bytes:
+-- one file per form, and text parts up to 16 MiB (an import's choices
+-- include a list of what to skip, which may be long).
 uploadOptions :: Int64 -> MultipartOptions Mem
 uploadOptions limit =
   MultipartOptions
@@ -241,17 +248,19 @@ uploadOptions limit =
     , backendOptions = ()
     }
 
--- | An answer for one browser: @Cache-Control: private, no-cache@ unless
--- the handler said otherwise (an attachment's), and @Vary: Cookie@.
+-- | Mark every answer as meant for one browser: @Cache-Control: private,
+-- no-cache@, unless the handler set its own (an attachment's does), and
+-- @Vary: Cookie@.
 privately :: Middleware
 privately app request respond = app request $ \response ->
   let hs = responseHeaders response
       cache = [(hCacheControl, "private, no-cache") | isNothing (lookup hCacheControl hs)]
    in respond (mapResponseHeaders (<> (cache <> [(hVary, "Cookie")])) response)
 
--- | Servant's own refusals, as the handlers' are: a body, a capture, a
--- parameter or a header that does not parse is 'ApiError.Invalid' with
--- servant's reason, and an address no endpoint has is 'ApiError.NotFound'.
+-- | Servant's own refusals, in the same form as the handlers': a body, a
+-- capture, a parameter or a header that does not parse is
+-- 'ApiError.Invalid' with servant's reason, and an address no endpoint has
+-- is 'ApiError.NotFound'.
 errorFormatters :: ErrorFormatters
 errorFormatters =
   defaultErrorFormatters
@@ -261,11 +270,11 @@ errorFormatters =
     , notFoundErrorFormatter = const (apiError ApiError.NotFound)
     }
 
--- | Any refusal the API's application answers without an 'ApiError' body
--- (a method an address does not take, a body of a type it does not, which
--- servant answers without asking the formatters) is given the body of the
--- error its status means ('errorForStatus'), with its reason, so that a
--- client reads every 4xx the same way.
+-- | Give an 'ApiError' body to every refusal that has none, so that a
+-- client reads every 4xx the same way. Servant answers some refusals
+-- without asking the formatters (a method an address does not take, a
+-- body of a type it does not accept). Such a refusal gets the body of the
+-- error its status means ('errorForStatus'), with its reason.
 jsonErrors :: Middleware
 jsonErrors app request respond = app request $ \response ->
   let Status code reason = responseStatus response
@@ -277,9 +286,9 @@ jsonErrors app request respond = app request $ \response ->
 jsonHeader :: Header
 jsonHeader = (hContentType, "application/json")
 
--- | The error a refusal of the backend is over HTTP: the same, by name.
--- A backend that could not be reached refused nothing, so that has no
--- 'ApiError' ('Nothing'): it is a failure of the server ('wikiError').
+-- | The 'ApiError' for a backend's refusal: the error of the same name.
+-- 'Unreachable' is not a refusal, so it has no 'ApiError' ('Nothing'): it
+-- is a failure of the server ('wikiError').
 toApiError :: WikiError -> Maybe ApiError
 toApiError = \case
   NotFound -> Just ApiError.NotFound
@@ -288,11 +297,10 @@ toApiError = \case
   Invalid t -> Just (ApiError.Invalid t)
   Unreachable _ -> Nothing
 
--- | A backend's error as servant answers it: its refusal, or, for one that
--- could not reach where it keeps the wiki, a 503, the failure of a server
--- that may well answer if asked again. The storage is on this machine and
--- never gives that; were it ever to, a client reads a 5xx as 'Unreachable'
--- too.
+-- | The servant answer for a backend's error: the refusal, or, for
+-- 'Unreachable', a 503, which says the server failed but may well answer
+-- a retry. The storage is on this machine and never returns 'Unreachable';
+-- if it ever did, a client reads a 5xx as 'Unreachable' too.
 wikiError :: WikiError -> ServerError
 wikiError e = maybe err503 {errBody = "The wiki could not be reached: " <> BSL.fromStrict (encodeUtf8 (show e))} apiError (toApiError e)
 
@@ -310,7 +318,7 @@ refuse = throwError . apiError
 refusal :: ApiError -> Response
 refusal e = responseLBS (toEnum (errorStatus e)) [jsonHeader] (encode e)
 
--- | The handlers, as someone.
+-- | The handlers, answering as the given 'Caller'.
 handlers :: Env -> Caller -> WikiApi AsServer
 handlers env caller =
   WikiApi
@@ -328,8 +336,9 @@ handlers env caller =
           Allowed ->
             liftIO (Accounts.signIn env.storage now s.address credentials.login credentials.password) >>= \case
               Left (Accounts.SecondFactorWanted user) -> do
-                -- Right so far, but not signed in: the code is to come,
-                -- with the cookie that names this sign-in.
+                -- The password was right, but the user is not signed in
+                -- yet: the second factor's code comes next, with the
+                -- cookie that names this sign-in.
                 held <- liftIO (holdSignIn env.pending now user.id user.login "")
                 throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies held))]}
               Left _ -> do
@@ -341,7 +350,8 @@ handlers env caller =
     , signOut = do
         s <- signingHere
         liftIO (traverse_ (endSession env.storage) s.token)
-        -- Who they are now: nobody, in the wiki as it is open or closed.
+        -- Their session now: a reader who has not signed in, in the wiki
+        -- as it is open or closed.
         nobody <- liftIO (runSqliteWiki env.storage Anonymous session)
         addHeader (clearCookie s.cookies) <$> sessionInfo nobody
     , secondFactor = \body -> do
@@ -420,9 +430,10 @@ handlers env caller =
               mailer <- liftIO (currentMailer env)
               when (isNothing mailer && not (T.null (T.strip body.email))) $
                 refuse (ApiError.Invalid "This wiki does not send mail yet, so an address could not be verified: ask an administrator to set up its mail server.")
-              -- Another address, or none, would let whoever has the session
-              -- have the password reset: the password is asked for. The
-              -- same address again (its link sent again) changes nothing.
+              -- A different address, or none, would let whoever holds the
+              -- session reset the password, so the current password is
+              -- required. The same address again (to send its link again)
+              -- changes nothing.
               (before, _) <- liftIO (Reset.emailOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) pure
               let same = (T.toCaseFold <$> before) == Just (T.toCaseFold (T.strip body.email))
                   nothingThere = isNothing before && T.null (T.strip body.email)
@@ -586,22 +597,24 @@ handlers env caller =
       providers <- liftIO (currentProviders env)
       exports <- liftIO availableFormats
       pure SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = map signInProvider providers, exports}
-    -- The user signed in, for what only a user signed in has: refused to
-    -- someone who is not, and to the operator, who signs in with nothing.
+    -- The signed-in user, for what only a signed-in user has. Refused to
+    -- someone who has not signed in, and to the operator, who never signs
+    -- in.
     signedInUser = case who of
       AsUser u -> pure u
       Anonymous -> refuse ApiError.Unauthenticated
       Administrator -> refuse (ApiError.Invalid "Nobody signs in here: everyone who reaches this address is the administrator.")
-    -- What signs in and out where nobody does (the admin listener, where
-    -- everyone is the administrator already) is refused, saying so.
+    -- Signing in or out where nobody signs in (the admin listener, where
+    -- everyone is the administrator already) is refused, with a message
+    -- that says why.
     signingHere = maybe (refuse (ApiError.Invalid "Nobody signs in here: everyone who reaches this address is the administrator.")) pure caller.signing
     ask' :: SqliteWiki IO a -> Handler a
     ask' = liftIO . runSqliteWikiFrom env.storage who caller.address
     wiki :: SqliteWiki IO (Either WikiError a) -> Handler a
     wiki program = ask' program >>= either (throwError . wikiError) pure
-    -- An export, as a file to download, made for whoever is asking with
-    -- one at a time each: a user by their id, the operator as one, and
-    -- someone not signed in by the address they ask from.
+    -- An export, as a file to download. Each caller may run one export at
+    -- a time, and callers are told apart by a key: a user by their id, the
+    -- operator as one caller, and someone not signed in by their address.
     exporting :: Request -> (Response -> IO b) -> (Text -> IO (Either ApiError Exported)) -> IO b
     exporting request respond make
       | requestMethod request `notElem` [methodGet, methodHead] =
@@ -611,21 +624,21 @@ handlers env caller =
       AsUser u -> "user:" <> u.text
       Administrator -> "operator"
       Anonymous -> "address:" <> maybe "" (\s -> s.address) caller.signing
-    -- Whoever holds the global administer, as the rules see them.
+    -- Refuse a caller who does not hold the global administer.
     administrator = do
       s <- ask' session
       unless (any (\g -> g.permission == Administer) s.grants.global) (refuse ApiError.Forbidden)
     notAnArchive reason = ApiError.Invalid ("This is not an archive this server can read: " <> reason)
     clampLimit q = q {limit = max 0 (min 200 q.limit)}
-    -- Signed in as a user just now, in place of the session the browser
-    -- had, if any.
+    -- Answer a sign-in that just succeeded: end the browser's previous
+    -- session, if any, and set the cookie of the new one.
     startedAs :: Signing -> User -> Text -> Handler (WithCookie SessionInfo)
     startedAs s user token = do
       liftIO (traverse_ (endSession env.storage) s.token)
       signedIn <- liftIO (runSqliteWiki env.storage (AsUser user.id) session)
       addHeader (sessionCookie s.cookies token) <$> sessionInfo signedIn
-    -- Making oneself an account, by a way that signs one in, at most so
-    -- often from one address: every attempt counts.
+    -- Create one's own account and sign in, limited per address: every
+    -- attempt counts toward the limit.
     making :: (UTCTime -> IO (Either WikiError (User, Text))) -> Handler (WithCookie SessionInfo)
     making attempt = do
       s <- signingHere
@@ -639,11 +652,11 @@ handlers env caller =
         Allowed -> do
           liftIO (Limiter.failed env.registrations now registering s.address)
           liftIO (attempt now) >>= either (throwError . wikiError) (uncurry (startedAs s))
-    -- A user changes their own password. A wrong current one counts as a
-    -- failed sign-in of their login from the request's address, so that a
-    -- session found in a browser left signed in gives no more guesses at
-    -- the password than the sign-in form does; a right one forgets them,
-    -- as signing in does.
+    -- A user changes their own password. A wrong current password counts
+    -- as a failed sign-in for their login from the request's address. So
+    -- someone who finds a browser left signed in gets no more guesses at
+    -- the password than the sign-in form gives. A right one clears the
+    -- failed attempts, as signing in does.
     ownPassword :: PasswordChange -> Handler SignInMethods
     ownPassword change = do
       u <- signedInUser
@@ -668,9 +681,9 @@ handlers env caller =
     -- The login of the user signed in.
     loginOf :: UserId -> Handler Text
     loginOf u = liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) (\(a :: Account) -> pure a.user.login)
-    -- Something that takes a guess at a code of the user's login, from the
-    -- request's address, as the limit on failed sign-ins allows: refused
-    -- while there have been too many wrong guesses.
+    -- Run a guess at a code or password for a login, from the request's
+    -- address, under the limit on failed sign-ins: refused while there
+    -- have been too many wrong guesses.
     limitedFor :: Text -> Signing -> Handler a -> Handler a
     limitedFor login s attempt = do
       now <- liftIO getCurrentTime
@@ -681,9 +694,9 @@ handlers env caller =
               { errHeaders = [jsonHeader, ("Retry-After", show seconds)]
               }
         Allowed -> attempt
-    -- A code of the user signed in, given to change their second factor: a
-    -- wrong one counted as a failed sign-in, and answered 401 as one is; a
-    -- right one forgets them.
+    -- Check a code the signed-in user gives to change their second factor.
+    -- A wrong code counts as a failed sign-in and is answered 401, as one
+    -- is. A right code clears the failed attempts.
     withCode :: (UserId -> UTCTime -> IO (Either CodeRefusal a)) -> Handler a
     withCode act = do
       u <- signedInUser
@@ -699,8 +712,9 @@ handlers env caller =
           Right a -> do
             liftIO (Limiter.succeeded env.limiter login s.address)
             pure a
-    -- The current password of the user signed in, given to do what a
-    -- session alone may not: counted as a sign-in's is when wrong.
+    -- Check the signed-in user's current password, which some changes
+    -- need besides the session. A wrong password counts as a failed
+    -- sign-in.
     reauthenticated :: UserId -> Maybe Text -> Handler ()
     reauthenticated u given = do
       s <- signingHere
@@ -713,16 +727,16 @@ handlers env caller =
             liftIO (Limiter.failed env.limiter now login s.address)
             refuse ApiError.Unauthenticated
           Nothing -> refuse ApiError.Unauthenticated
-    -- A user's address as they see it, with why its link could not be
-    -- sent just now, if it could not.
+    -- A user's e-mail address as they see it, with the reason its
+    -- verification link could not be sent just now, if it could not.
     emailStateOf :: UserId -> Maybe Text -> Handler EmailState
     emailStateOf u mailError = do
       mailing <- isJust <$> liftIO (currentMailer env)
       (email, verified) <- liftIO (Reset.emailOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) pure
       asksPassword <- maybe False (\(a :: Account) -> a.hasPassword) <$> liftIO (Accounts.accountOf env.storage u)
       pure EmailState {email, verified, mailing, mailError, asksPassword}
-    -- Mail the link that verifies a user's address: why not, if it was not
-    -- sent.
+    -- Mail the link that verifies a user's address. The result is the
+    -- reason it was not sent, if it was not.
     mailVerification :: UserId -> (Text, Text) -> IO (Maybe Text)
     mailVerification u (address, token) =
       currentMailer env >>= \case
@@ -730,12 +744,12 @@ handlers env caller =
         Just m -> do
           login <- maybe "" (\(a :: Account) -> a.user.login) <$> Accounts.accountOf env.storage u
           leftToMaybe <$> m.deliver (verificationMessage m.publicUrl address login token)
-    -- An administrator has a user mailed the link to choose a password
-    -- that a reset mails (WP5.6 of docs/PLAN.md): the storage checks who
-    -- may and keeps the link, and it is mailed here, at once, so that the
-    -- panel can say it was. One that could not be mailed is forgotten, and
-    -- the answer says why. Neither of the reset's limits applies; one link
-    -- a minute does.
+    -- An administrator has a user mailed a link to choose a password, the
+    -- same link a reset mails (WP5.6 of docs/PLAN.md). The storage checks
+    -- permissions and stores the link. It is mailed here at once, so that
+    -- the panel can say it was sent. A link that could not be mailed is
+    -- deleted, and the answer says why. The reset's limits do not apply; a
+    -- limit of one link a minute does.
     mailPasswordLink :: UserId -> Handler NoContent
     mailPasswordLink u = do
       now <- liftIO getCurrentTime
@@ -758,9 +772,10 @@ handlers env caller =
                 liftIO (Reset.forgetReset env.storage token)
                 liftIO (logWith env.logger Warning [("event", "password-link"), ("user", u.text), ("outcome", "failed"), ("error", why)])
                 refuse (ApiError.Invalid ("The link could not be mailed: " <> why))
-    -- Ask for a password reset: limited by the address asking, refused alike
-    -- for every login where the server sends no mail, and otherwise answered
-    -- at once and alike, the looking up and the mailing done after.
+    -- Ask for a password reset, limited per address. Where the server sends
+    -- no mail, the request is refused the same way for every login.
+    -- Otherwise it is answered at once, the same way for every login, and
+    -- the lookup and the mailing happen afterwards.
     requestingReset :: ResetRequest -> Handler NoContent
     requestingReset body = do
       s <- signingHere
@@ -788,8 +803,8 @@ handlers env caller =
     invitationDetails token = do
       now <- liftIO getCurrentTime
       liftIO (Accounts.invitationFor env.storage now token) >>= maybe (refuse ApiError.NotFound) pure
-    -- An invitation just made, mailed if the server mails them: then its
-    -- secret is no longer given back.
+    -- Mail an invitation just made, if the server sends mail. A mailed
+    -- invitation's secret is then no longer returned.
     mailed :: Invited -> IO Invited
     mailed made =
       currentMailer env >>= \mailer -> case (mailer, made.token) of
@@ -800,8 +815,8 @@ handlers env caller =
             Left why -> Invited {invitation = i, token = Just token, mailError = Just why}
         _ -> pure made
 
--- | The mailer of the server's settings as they are now, if they set a
--- mail server.
+-- | The mailer for the server's current settings, if they set a mail
+-- server.
 currentMailer :: Env -> IO (Maybe Mailer)
 currentMailer env = mailerFrom env.sendMail <$> readServerSettings env.storage
 
@@ -809,9 +824,10 @@ currentMailer env = mailerFrom env.sendMail <$> readServerSettings env.storage
 currentProviders :: Env -> IO [Provider]
 currentProviders env = readServerSettings env.storage >>= providersFor env.providerCache
 
--- | Ask a provider how to sign in: the one of that name as set, or as
--- given (with the secret set for that name, if none is given), afresh.
--- A provider that cannot be set up so is not asked, and says why.
+-- | Ask a provider, afresh, how to sign in with it. The provider is the
+-- one stored under that name, or the one given (with the stored secret for
+-- that name, if the given one has none). A provider that cannot be set up
+-- with those settings is not asked, and the result says why.
 checkingProvider :: Env -> Text -> Maybe ProviderChange -> IO (Either ApiError ProviderCheck)
 checkingProvider env name given = do
   kept <- readServerSettings env.storage
@@ -840,13 +856,13 @@ sendingTestMail env body = case checkEmail body.to of
       Nothing -> pure (Left (ApiError.Invalid "This wiki has no mail server yet, or no public address: set them first."))
       Just m -> Right . MailTestResult . leftToMaybe <$> m.deliver (testMessage m.publicUrl recipient)
 
--- | What the limit on making accounts counts attempts as: a login of no
--- one's (none starts with @~@), so that the address's count is the one
--- that matters.
+-- | The login under which the limit on account creation counts attempts.
+-- No real login starts with @~@, so only the count per address matters.
 registering :: Text
 registering = "~accounts"
 
--- | What the limit on password resets counts requests as, likewise.
+-- | The login under which the limit on password resets counts requests,
+-- for the same reason as 'registering'.
 resetting :: Text
 resetting = "~resets"
 
@@ -861,10 +877,11 @@ waitText seconds
   | seconds < 60 = show seconds <> (if seconds == 1 then " second" else " seconds")
   | otherwise = let m = (seconds + 59) `div` 60 in show m <> (if m == 1 then " minute" else " minutes")
 
--- | A document exported, to download: under its name, as the attachment
--- it is, with its media type, never guessed at, and, since it is what a
--- page's author wrote served from the wiki's own origin, sandboxed should a
--- browser show it rather than save it (an HTML export above all).
+-- | The response for an exported document: a download under its file
+-- name, with its media type and no type sniffing. The document holds what
+-- a page's author wrote, served from the wiki's own origin, so it is
+-- sandboxed in case a browser shows it instead of saving it (an HTML
+-- export above all).
 exportedResponse :: Exported -> Response
 exportedResponse e =
   responseLBS
@@ -876,18 +893,18 @@ exportedResponse e =
     ]
     (BSL.fromStrict e.bytes)
 
--- | An attachment's bytes, at its address: streamed from its file, with its
--- media type, a range of it when a range is asked for (Warp answers that
+-- | Serve an attachment's bytes at its URL: streamed from its file, with
+-- its media type, a byte range when one is requested (Warp handles ranges
 -- for a file), and revalidated by its content hash.
 --
 -- An attachment is whatever someone uploaded, served from the wiki's own
--- origin, so it is served as data and never as a page of the wiki: the
--- browser is told not to guess another type than the one given
--- (@nosniff@), only images, video, audio and plain text are shown in the
--- browser rather than downloaded (an HTML file or an SVG opened by itself
--- would run its scripts with the wiki's cookies), and even those are
--- sandboxed by their @Content-Security-Policy@. A page's @\<img>@ and
--- @\<video>@ show them all the same.
+-- origin, so it is served as data and never as a page of the wiki. The
+-- browser is told not to guess a type other than the one given
+-- (@nosniff@). Only images, video, audio and plain text are shown in the
+-- browser; everything else is downloaded, because an HTML file or an SVG
+-- opened by itself would run its scripts with the wiki's cookies. Even the
+-- shown types are sandboxed by their @Content-Security-Policy@. A page's
+-- @\<img>@ and @\<video>@ elements still display them.
 attachmentContent :: Env -> Who -> AttachmentId -> Text -> Request -> (Response -> IO a) -> IO a
 attachmentContent env who aid name request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
@@ -916,10 +933,11 @@ attachmentContent env who aid name request respond
                 else respond (responseFile status200 headers file Nothing)
         Right _ -> respond (refusal ApiError.NotFound)
 
--- | The image a space is pictured with, at its address: from its file, with
--- its media type, revalidated by its content hash, and served as an
--- attachment's bytes are (see 'attachmentContent'): only images a browser
--- shows by themselves are ever icons ('Wiki.Core.Space.iconMediaTypes').
+-- | Serve a space's icon image at its URL: from its file, with its media
+-- type, revalidated by its content hash, and with the same protections as
+-- an attachment's bytes (see 'attachmentContent'). Only image types a
+-- browser shows by themselves can be icons
+-- ('Wiki.Core.Space.iconMediaTypes').
 iconContent :: Env -> Who -> SpaceId -> BlobId -> Request -> (Response -> IO a) -> IO a
 iconContent env who sid blob request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
@@ -945,7 +963,8 @@ iconContent env who sid blob request respond
                 then respond (responseLBS status304 headers "")
                 else respond (responseFile status200 headers file Nothing)
 
--- | A media type that can go in a header as it is, or bytes of no type.
+-- | The media type, if it can go in a header as it is; otherwise
+-- @application/octet-stream@.
 safeMediaType :: Text -> Text
 safeMediaType t
   | not (T.null t) && T.all (\c -> isAscii c && isPrint c) t && "/" `T.isInfixOf` t = t
@@ -962,7 +981,7 @@ disposition a = how <> "; filename=\"" <> encodeUtf8 ascii <> "\"; filename*=UTF
     how = if shown then "inline" else "attachment"
     ascii = T.map (\c -> if isAscii c && isPrint c && c `notElem` ['"', '\\'] then c else '_') a.name
 
--- | What the operator sees of the server.
+-- | The server's status, as the administration shows it.
 statusOfServer :: Env -> IO ServerStatus
 statusOfServer env = do
   counts <- withDatabase env.storage $ \c ->
