@@ -1,26 +1,28 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Backups the server makes by itself (WP4.9 of docs/PLAN.md), set in a
--- "Backups" part of the administration's "Server" section and nowhere
--- else: no option and no environment variable turns them on, and a server
--- nobody has set them up on makes none.
+-- | Automatic backups (WP4.9 of docs/PLAN.md), set in a "Backups" part of
+-- the administration's "Server" section and nowhere else. No command-line
+-- option or environment variable turns them on, and a server where nobody
+-- has set them up makes none.
 --
--- Once on, the server copies its database aside on a schedule ('Schedule':
--- every day at a time, or every so many hours) and when an administrator
--- asks ("Back up now"), as the deploy does before it starts a new server:
--- with SQLite's @VACUUM INTO@ into @data\/backups\/\<time>.sqlite@, checked
--- with @PRAGMA integrity_check@. The backups are pruned to a number of days
--- and weeks ('Retention', 'retained'), and the newest, with the
--- attachments' files, is copied off the machine if a destination is set
--- ('Destination'): a directory (a disk mounted there) or an @rclone@ remote,
--- whose configuration is a secret written once and never read back, as the
--- mail account's password is ("Wiki.Api.ServerSettings").
+-- Once backups are on, the server copies its database on a schedule
+-- ('Schedule': every day at a set time, or every so many hours) and when
+-- an administrator clicks "Back up now", as the deploy does before it
+-- starts a new server. The copy is made with SQLite's @VACUUM INTO@ into
+-- @data\/backups\/\<time>.sqlite@, and checked with
+-- @PRAGMA integrity_check@. Old backups are pruned to a number of days and
+-- weeks ('Retention', 'retained'). If a destination is set
+-- ('Destination'), the newest backup and the attachments' files are copied
+-- off the machine: to a directory (where a disk is mounted) or to an
+-- @rclone@ remote. The @rclone@ configuration is a secret that can be
+-- written but is never read back, like the mail account's password
+-- ("Wiki.Api.ServerSettings").
 --
--- So the settings are one type with that secret as its parameter, as the
--- server's other settings are: 'BackupSettings' as they are read (whether
--- it is set), 'BackupSettingsChange' as they are written ('Nothing' keeps
+-- So the settings are one type with that secret's type as its parameter,
+-- like the server's other settings: 'BackupSettings' in responses (whether
+-- the secret is set), 'BackupSettingsChange' in requests ('Nothing' keeps
 -- it, an empty text clears it, any other text replaces it), and, on the
--- server, as they are kept, with the secret itself.
+-- server, the stored settings, with the secret itself.
 module Wiki.Api.Backups
   ( -- * The settings
     BackupSettingsOf (..)
@@ -34,13 +36,13 @@ module Wiki.Api.Backups
   , checkBackupSettings
   , destinationText
 
-    -- * What the server says of them
+    -- * The server's backup state
   , Backups (..)
   , BackupRecord (..)
   , Trigger (..)
   , OffSite (..)
 
-    -- * When, and which are kept
+    -- * Scheduling and retention
   , nextBackup
   , retained
   , scheduleText
@@ -61,17 +63,17 @@ import Wiki.Api.ServerSettings (SecretState)
 --------------------------------------------------------------------------------
 -- The settings
 
--- | How the server backs itself up, with the @rclone@ configuration as an
--- @s@.
+-- | 'BackupSettingsOf': how the server backs itself up, with the @rclone@
+-- configuration of type @s@.
 data BackupSettingsOf s = BackupSettings
   { enabled :: Bool
-  -- ^ Whether the server backs up by itself at all: off until an
-  -- administrator turns it on.
+  -- ^ Whether the server makes automatic backups at all: off until an
+  -- administrator turns them on.
   , schedule :: Schedule
   , keep :: Retention
   , destination :: Maybe (DestinationOf s)
-  -- ^ Where the newest backup and the attachments' files are copied after
-  -- each backup, off the machine; none, if not set.
+  -- ^ Where the newest backup and the attachments' files are copied off
+  -- the machine after each backup; 'Nothing' if not set.
   }
   deriving stock (Eq, Show, Generic, Functor)
 
@@ -79,16 +81,16 @@ instance (ToJSON s) => ToJSON (BackupSettingsOf s)
 
 instance (FromJSON s) => FromJSON (BackupSettingsOf s)
 
--- | As the API answers them.
+-- | The settings as API responses carry them.
 type BackupSettings = BackupSettingsOf SecretState
 
--- | As the API is sent them: the @rclone@ configuration kept, replaced or
--- cleared.
+-- | The settings as API requests carry them: the @rclone@ configuration
+-- kept, replaced or cleared.
 type BackupSettingsChange = BackupSettingsOf (Maybe Text)
 
--- | When the server backs up. Times are in UTC, as the backups' names are,
--- so that a schedule means the same whatever the machine's time zone and
--- whatever the clocks do in spring and autumn.
+-- | 'Schedule': when the server makes backups. Times are in UTC, as the
+-- backups' names are, so that a schedule means the same whatever the
+-- machine's time zone and whatever daylight saving time does.
 data Schedule
   = -- | Every day at this hour and minute (UTC).
     DailyAt Int Int
@@ -111,9 +113,9 @@ instance FromJSON Schedule where
         [h, m] | Just hour <- readMaybe h, Just minute <- readMaybe m -> pure (DailyAt hour minute)
         _ -> fail ("not a time of day, HH:MM: " <> toS t)
 
--- | How many backups are kept: the newest of each of the last so many days
--- that have one, and of each of the last so many weeks (ISO weeks,
--- Monday to Sunday). The newest backup is always kept.
+-- | 'Retention': which backups are kept. The newest backup of each of the
+-- last so many days that have one, and of each of the last so many weeks
+-- (ISO weeks, Monday to Sunday). The newest backup is always kept.
 data Retention = Retention
   { daily :: Int
   , weekly :: Int
@@ -121,17 +123,17 @@ data Retention = Retention
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Where the backups are copied off the machine.
+-- | 'DestinationOf': where the backups are copied off the machine.
 data DestinationOf s
-  = -- | A directory on this machine that is another disk (or a network
-    -- share) mounted there: it must be there already, so that a disk that
-    -- is not mounted is a failure rather than a copy onto the machine's
+  = -- | A directory on this machine where another disk (or a network
+    -- share) is mounted. The directory must already exist, so that an
+    -- unmounted disk is a failure rather than a copy onto the machine's
     -- own disk under the mount point.
     ToDirectory Text
   | -- | An @rclone@ remote and path (@b2:my-bucket\/wiki@), and the
-    -- configuration @rclone@ is run with (the text of an @rclone.conf@):
-    -- without one, @rclone@'s own configuration of the server's user is
-    -- used.
+    -- configuration @rclone@ runs with (the text of an @rclone.conf@).
+    -- Without a configuration, the @rclone@ configuration of the server's
+    -- system user is used.
     ToRclone Text s
   deriving stock (Eq, Show, Functor)
 
@@ -145,11 +147,12 @@ instance (ToJSON s) => ToJSON (DestinationOf s) where
 instance (FromJSON s) => FromJSON (DestinationOf s) where
   parseJSON = withObject "a destination" $ \o ->
     (ToDirectory <$> o .: "directory")
-      -- A change may leave the configuration out, which keeps it.
+      -- A change may leave out the configuration, which keeps it.
       <|> (ToRclone <$> o .: "rclone" <*> (maybe (parseJSON Null) parseJSON =<< o .:? "config"))
 
--- | A server nobody has set backups up on: off, and, once turned on,
--- every day at 03:00 UTC, keeping a week of days and four weeks.
+-- | The backup settings of a server where nobody has set them up: off,
+-- and, once turned on, every day at 03:00 UTC, keeping seven days and four
+-- weeks.
 defaultBackupSettings :: BackupSettingsOf s
 defaultBackupSettings =
   BackupSettings
@@ -159,10 +162,11 @@ defaultBackupSettings =
     , destination = Nothing
     }
 
--- | The settings kept, with the configuration kept as @k@ (made from the
--- text sent by the function given), once a change is written over them:
--- left out, the configuration of an @rclone@ destination kept before is
--- kept; empty, it is cleared; given, it replaces it.
+-- | The stored settings, with the configuration of type @k@ (made from the
+-- sent text by the given function), after a change is applied to them. If
+-- the change leaves the configuration out, the stored configuration of an
+-- @rclone@ destination is kept; if it is empty, it is cleared; otherwise
+-- it replaces the stored one.
 applyBackupChange :: (Text -> k) -> BackupSettingsOf (Maybe k) -> BackupSettingsChange -> BackupSettingsOf (Maybe k)
 applyBackupChange keep' old new =
   BackupSettings
@@ -184,8 +188,8 @@ applyBackupChange keep' old new =
         | T.null t -> Nothing
         | otherwise -> Just (keep' t)
 
--- | The settings as they are kept, or the first reason they cannot be:
--- every text trimmed.
+-- | The settings as they are stored, or the first reason they are
+-- invalid: every text trimmed.
 checkBackupSettings :: BackupSettingsOf s -> Either Text (BackupSettingsOf s)
 checkBackupSettings s = do
   case s.schedule of
@@ -220,55 +224,55 @@ destinationText = \case
   ToRclone remote _ -> remote
 
 --------------------------------------------------------------------------------
--- What the server says
+-- The server's backup state
 
--- | @GET \/api\/v1\/admin\/server\/backups@: the settings, the last backup
--- made, and what is under way.
+-- | 'Backups': the response to @GET \/api\/v1\/admin\/server\/backups@.
+-- The settings, the last backup made, and any backup in progress.
 data Backups = Backups
   { available :: Bool
-  -- ^ Whether this backend makes backups at all: a server does; the demo,
-  -- whose wiki is in the browser, does not, and shows the section
+  -- ^ Whether this backend makes backups at all. A server does. The demo,
+  -- whose wiki is stored in the browser, does not, and shows the section
   -- disabled.
   , settings :: BackupSettings
   , last :: Maybe BackupRecord
-  -- ^ The last backup made or tried, by schedule or by hand.
+  -- ^ The last backup made or attempted, by schedule or by hand.
   , running :: Bool
-  -- ^ Whether one is being made now.
+  -- ^ Whether a backup is being made now.
   , next :: Maybe UTCTime
-  -- ^ When the next is due, while they are on.
+  -- ^ When the next backup is due, while backups are on.
   , kept :: Int
-  -- ^ How many backups the data directory holds, the deploy's included.
+  -- ^ The number of backups in the data directory, including the deploy's.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A backup made, or tried.
+-- | 'BackupRecord': a backup made, or attempted.
 data BackupRecord = BackupRecord
   { startedAt :: UTCTime
   , finishedAt :: UTCTime
   , trigger :: Trigger
   , file :: Maybe Text
-  -- ^ The backup's name in @data\/backups@, if one was made and kept.
+  -- ^ The backup's file name in @data\/backups@, if one was made and kept.
   , size :: Maybe Integer
   -- ^ Its size in bytes.
   , failure :: Maybe Text
-  -- ^ Why no backup was made, or why the one made was let go (it failed
-  -- its integrity check).
+  -- ^ Why no backup was made, or why the backup made was deleted (it
+  -- failed its integrity check).
   , offSite :: Maybe OffSite
-  -- ^ How copying it off the machine went, when there is somewhere to.
+  -- ^ The result of copying it off the machine, when a destination is set.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | What made a backup.
+-- | 'Trigger': what started a backup.
 data Trigger = OnSchedule | Manual
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A copy off the machine.
+-- | 'OffSite': a copy off the machine.
 data OffSite = OffSite
   { to :: Text
-  -- ^ Where to, as 'destinationText' says.
+  -- ^ The destination, as 'destinationText' describes it.
   , problem :: Maybe Text
   -- ^ Why it failed, if it did.
   }
@@ -276,16 +280,18 @@ data OffSite = OffSite
   deriving anyclass (FromJSON, ToJSON)
 
 --------------------------------------------------------------------------------
--- When, and which are kept
+-- Scheduling and retention
 
--- | When the next backup is due, by a schedule, after the last one made or
--- tried (if any), as it is now: a time not after now means one is due now.
+-- | When the next backup is due, given a schedule, the time of the last
+-- backup made or attempted (if any), and the current time. A time not
+-- after the current time means a backup is due now.
 --
--- Every so many hours counts from the last backup, and the first is due at
--- once. Every day at a time is due at the latest such time not after now
--- that no backup has followed: so the first is made as soon as backups are
--- turned on, a backup missed while the server was stopped is made when it
--- starts again, and one made by hand after that time counts for the day.
+-- An hourly schedule counts from the last backup, and the first backup is
+-- due immediately. A daily schedule is due at the latest scheduled time
+-- not after now that no backup has followed. So the first backup is made
+-- as soon as backups are turned on, a backup missed while the server was
+-- stopped is made when it starts again, and a backup made by hand after
+-- the scheduled time counts for that day.
 nextBackup :: Schedule -> Maybe UTCTime -> UTCTime -> UTCTime
 nextBackup schedule lastAt now = case schedule of
   EveryHours n -> maybe now (addUTCTime (fromIntegral (n * 3600))) lastAt
@@ -297,7 +303,7 @@ nextBackup schedule lastAt now = case schedule of
           Just l | l >= slot -> addUTCTime 86400 slot
           _ -> slot
 
--- | Which backups a retention keeps, of those made at these times: the
+-- | The backups a retention keeps, among backups made at these times: the
 -- newest of all, and the newest of each of the last @daily@ days and of
 -- each of the last @weekly@ weeks that have one (in UTC).
 retained :: Retention -> [UTCTime] -> Set UTCTime
@@ -308,7 +314,7 @@ retained r times = Set.fromList (take 1 newest <> newestOf r.daily utctDay <> ne
     newestOf :: (Ord k) => Int -> (UTCTime -> k) -> [UTCTime]
     newestOf n key = take n (map snd (firstOfEach [(key t, t) | t <- newest]))
 
--- | The first of each run of the same key.
+-- | The first element of each run of the same key.
 firstOfEach :: (Eq k) => [(k, a)] -> [(k, a)]
 firstOfEach = \case
   (k, a) : rest -> (k, a) : firstOfEach (dropWhile ((== k) . fst) rest)

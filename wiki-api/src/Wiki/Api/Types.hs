@@ -1,17 +1,17 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | The bodies of the API's requests, and the one response of its own: who
--- is asking.
+-- | Request types of the API: the request bodies, and the one response
+-- type of the API's own, the current session.
 --
--- Responses are otherwise the domain's own types ("Wiki.Core.Space",
+-- Other responses are the domain's own types ("Wiki.Core.Space",
 -- "Wiki.Core.Page", "Wiki.Core.Attachment", "Wiki.Core.Draft",
--- "Wiki.Core.Search"), whose JSON is already shared with the browser. A
--- request body is a small record per endpoint, named for what it carries,
--- so that each endpoint's JSON is an object whose fields name its
--- arguments: @{\"name\": \"Team\"}@ rather than a bare string, which leaves
--- room to add a field later without breaking a client. Each is plain data
--- with aeson instances derived from its 'Generic' representation, so the
--- JSON's field names are the record's, as in "Wiki.Api.Info".
+-- "Wiki.Core.Search"), whose JSON the browser already shares. A request
+-- body is a small record per endpoint, named after what it carries, so
+-- that each endpoint's JSON is an object whose fields name its arguments:
+-- @{\"name\": \"Team\"}@ rather than a bare string, which leaves room to
+-- add a field later without breaking a client. Each is plain data with
+-- aeson instances derived from its 'Generic' representation, so the JSON
+-- field names are the record's, as in "Wiki.Api.Info".
 module Wiki.Api.Types
   ( -- * Who is asking
     SessionInfo (..)
@@ -31,7 +31,7 @@ module Wiki.Api.Types
   , PageMove (..)
   , PageTemplate (..)
 
-    -- * Either
+    -- * Spaces and pages
   , ShiftBy (..)
 
     -- * Drafts
@@ -48,58 +48,58 @@ import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Permission (Grants, SpacePermission, Subject)
 import Wiki.Core.User (SignInProvider, Standing, User)
 
--- | The answer to @GET \/api\/v1\/session@: who the current user is, with
--- what the client needs to run the permission rules itself and hide what
--- they cannot do. Field for field @wiki-app@'s @Session@, which
--- @MonadWiki@'s @session@ returns.
+-- | 'SessionInfo': the response to @GET \/api\/v1\/session@. It says who
+-- the current user is, with what the client needs to run the permission
+-- rules itself and hide the actions the user cannot take. It has the same
+-- fields as @wiki-app@'s @Session@, which @MonadWiki@'s @session@ returns.
 data SessionInfo = SessionInfo
   { user :: Maybe User
-  -- ^ 'Nothing' for someone who is not signed in.
+  -- ^ 'Nothing' for a visitor who is not signed in.
   , groups :: Set GroupId
   -- ^ The groups the user is in.
   , grants :: Grants
   -- ^ The grants given to the user or to one of their groups, and no
   -- others.
   , standing :: Standing
-  -- ^ Whether they signed in (and may sign out), have not (and may sign
+  -- ^ Whether they are signed in (and may sign out), are not (and may sign
   -- in), or are the server's operator (and need neither).
   , providers :: [SignInProvider]
-  -- ^ The providers one may sign in with instead of a password (WP3.6 of
-  -- docs/PLAN.md), in the order the server's configuration names them:
-  -- what the forms that sign in and make accounts offer. A wiki that
-  -- names none has none.
+  -- ^ The providers a user may sign in with instead of a password (WP3.6
+  -- of docs/PLAN.md), in the order of the server's configuration: the
+  -- options of the sign-in and sign-up forms. Empty if the configuration
+  -- has none.
   , exports :: [ExportFormat]
-  -- ^ The documents the server exports pages and spaces as
-  -- ("Wiki.Api.Export"): the PDFs only where it has a TeX engine.
+  -- ^ The document formats the server exports pages and spaces in
+  -- ("Wiki.Api.Export"): the PDF formats only when it has a TeX engine.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A space to make: @createSpace@.
+-- | 'NewSpace': a space to create, @createSpace@.
 data NewSpace = NewSpace
   { parent :: Maybe SpaceId
-  -- ^ The space to make it a subspace of, or 'Nothing' for the top level.
+  -- ^ The space to create it in as a subspace, or 'Nothing' for the top level.
   , name :: Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A space's new name: @renameSpace@.
+-- | 'SpaceName': a space's new name, @renameSpace@.
 newtype SpaceName = SpaceName {name :: Text}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Whether a space is readable by everyone: @setSpacePublic@.
+-- | 'SpacePublic': whether everyone may read a space, @setSpacePublic@.
 newtype SpacePublic = SpacePublic {public :: Bool}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A space's math macros, the empty text for none: @setSpaceMathMacros@.
+-- | 'SpaceMathMacros': a space's math macros, empty for none, @setSpaceMathMacros@.
 newtype SpaceMathMacros = SpaceMathMacros {mathMacros :: Text}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | The order a space lists its subspaces or its pages in: @setSpaceOrder@.
+-- | 'SpaceOrder': the order a space lists its subspaces or its pages in, @setSpaceOrder@.
 data SpaceOrder = SpaceOrder
   { children :: Children
   , order :: ChildOrder
@@ -107,7 +107,7 @@ data SpaceOrder = SpaceOrder
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Where to move a space: @moveSpace@.
+-- | 'SpaceMove': where to move a space, @moveSpace@.
 newtype SpaceMove = SpaceMove
   { parent :: Maybe SpaceId
   -- ^ Its new parent, or 'Nothing' for the top level.
@@ -115,25 +115,25 @@ newtype SpaceMove = SpaceMove
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A permission on a space to give someone or take from them:
--- @setSpaceGrant@. A grant given twice, or taken from someone who does not
--- have it, changes nothing.
+-- | 'SpaceGrantChange': a permission on a space to grant to a user or a
+-- group, or to remove, @setSpaceGrant@. Granting a permission twice, or
+-- removing one that was not granted, changes nothing.
 data SpaceGrantChange = SpaceGrantChange
   { subject :: Subject
-  -- ^ Whom: @{\"tag\": \"SubjectUser\", \"contents\": \<user id>}@ or
-  -- @{\"tag\": \"SubjectGroup\", \"contents\": \<group id>}@.
+  -- ^ The user or group: @{\"tag\": \"SubjectUser\", \"contents\": \<user
+  -- id>}@ or @{\"tag\": \"SubjectGroup\", \"contents\": \<group id>}@.
   , permission :: SpacePermission
   -- ^ @\"View\"@, @\"Edit\"@ or @\"AdministerSpace\"@.
   , granted :: Bool
-  -- ^ Whether they are to have it.
+  -- ^ Whether they should have it.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A page to make: @createPage@.
+-- | 'NewPage': a page to create, @createPage@.
 data NewPage = NewPage
   { parent :: Maybe PageId
-  -- ^ The page of the same space to put it under, or 'Nothing' for the
+  -- ^ The page of the same space to create it under, or 'Nothing' for the
   -- space's top level.
   , title :: Text
   , body :: Text
@@ -141,8 +141,9 @@ data NewPage = NewPage
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A page's new title and body: @savePage@. The version the edit started
--- from is not here but in the request's @If-Match@ ("Wiki.Api.Version").
+-- | 'PageEdit': a page's new title and body, @savePage@. The version the
+-- edit started from is not in the body but in the request's @If-Match@
+-- header ("Wiki.Api.Version").
 data PageEdit = PageEdit
   { title :: Text
   , body :: Text
@@ -150,31 +151,31 @@ data PageEdit = PageEdit
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Where to move a page: @movePage@.
+-- | 'PageMove': where to move a page, @movePage@.
 data PageMove = PageMove
   { space :: SpaceId
-  -- ^ The space it goes to, which may be another one.
+  -- ^ The space to move it to, which may be a different space.
   , parent :: Maybe PageId
-  -- ^ The page of that space to put it under, or 'Nothing' for its top
-  -- level.
+  -- ^ The page of that space to put it under, or 'Nothing' for the
+  -- space's top level.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Whether a page is one of its space's templates: @setPageTemplate@.
+-- | 'PageTemplate': whether a page is one of its space's templates, @setPageTemplate@.
 newtype PageTemplate = PageTemplate {template :: Bool}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Which way to move a child among its siblings: @shiftSpace@ and
--- @shiftPage@.
+-- | 'ShiftBy': which way to move a child among its siblings, @shiftSpace@
+-- and @shiftPage@.
 newtype ShiftBy = ShiftBy {shift :: Shift}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | The signed-in user's unsaved work on a page: @saveDraft@. Unlike a
--- save's, the version the work started from is part of what is kept, so it
--- is in the body.
+-- | 'DraftEdit': the signed-in user's unsaved work on a page, @saveDraft@.
+-- Unlike for a page save, the version the work started from is stored
+-- with the draft, so it is in the body.
 data DraftEdit = DraftEdit
   { base :: UTCTime
   -- ^ The page's @updatedAt@ when the work started.

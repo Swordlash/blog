@@ -1,17 +1,18 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Mentions, watching and notifications over HTTP (WP4.13 of
--- docs/PLAN.md), at @notifications…@, each operation one of
--- @MonadNotifications@'s (@wiki-app@'s "Wiki.App.Backend.Notifications"),
--- with its request and response bodies. The rules are
--- "Wiki.Core.Notification"'s.
+-- | Notifications API (WP4.13 of docs/PLAN.md): mentions, watching and
+-- notifications over HTTP, at @notifications…@. Each endpoint implements
+-- an operation of @MonadNotifications@ (@wiki-app@'s
+-- "Wiki.App.Backend.Notifications"), with its request and response
+-- bodies. The rules are in "Wiki.Core.Notification".
 --
--- Everything here is the signed-in user's own: someone not signed in is
--- refused ('Wiki.Api.Error.Forbidden'), but for the logins a document
--- mentions ('NotificationsApi' @people@), which they are told nothing of,
--- and the link a notification's mail carries to turn the mail off
+-- Everything here belongs to the signed-in user. A visitor who is not
+-- signed in is refused ('Wiki.Api.Error.Forbidden'), except for two
+-- endpoints. The first resolves the logins a document mentions
+-- ('NotificationsApi' @people@), and tells such a visitor nothing. The
+-- second is the link in a notification mail that turns the mail off
 -- (@unsubscribe@, at the API's top level, since it works without signing
--- in, in a closed wiki too).
+-- in, even in a closed wiki).
 module Wiki.Api.Notifications
   ( NotificationsApi (..)
   , Notifications (..)
@@ -29,20 +30,21 @@ import Wiki.Core.Id
 import Wiki.Core.Notification (MailMode, Notification, Watch)
 import Wiki.Core.Version (Author)
 
--- | Below @notifications@.
+-- | 'NotificationsApi': the endpoints under @notifications@.
 data NotificationsApi mode = NotificationsApi
   { list :: mode :- Get '[JSON] Notifications
-  -- ^ @notifications@: the latest, the newest first, and how many are
-  -- unread.
+  -- ^ @notifications@: the latest notifications, newest first, and the
+  -- number of unread ones.
   , markRead :: mode :- "read" :> ReqBody '[JSON] ReadMark :> Post '[JSON] Notifications
-  -- ^ @markRead@: some, or all, marked read; the list as it then is.
+  -- ^ @markRead@: mark some, or all, as read; the response is the list after the change.
   , settings :: mode :- "settings" :> Get '[JSON] NotificationSettings
   -- ^ @notificationSettings@.
   , setSettings :: mode :- "settings" :> ReqBody '[JSON] NotificationSettingsChange :> Put '[JSON] NotificationSettings
   -- ^ @setNotificationSettings@.
   , people :: mode :- "people" :> QueryParams "login" Text :> Get '[JSON] (Map Text Author)
-  -- ^ @mentionable@: of these logins, those of the wiki's users, each
-  -- named as a comment's author is; nothing for someone not signed in.
+  -- ^ @mentionable@: the given logins that belong to the wiki's users,
+  -- each named like a comment's author; empty for a visitor who is not
+  -- signed in.
   , pageWatch :: mode :- "watches" :> "pages" :> Capture "page" PageId :> Get '[JSON] Watch
   -- ^ @watching@ a page.
   , setPageWatch :: mode :- "watches" :> "pages" :> Capture "page" PageId :> ReqBody '[JSON] Watching :> Put '[JSON] Watch
@@ -54,9 +56,9 @@ data NotificationsApi mode = NotificationsApi
   }
   deriving stock (Generic)
 
--- | The latest of the user's notifications, the newest first (at most
--- 'Wiki.Core.Notification.maxListed'), and how many of all they have are
--- unread.
+-- | 'Notifications': the user's latest notifications, newest first (at
+-- most 'Wiki.Core.Notification.maxListed'), and the number of unread ones
+-- among all their notifications.
 data Notifications = Notifications
   { unread :: Int
   , items :: [Notification]
@@ -64,7 +66,7 @@ data Notifications = Notifications
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Which notifications to mark read: these, or ('everything') all.
+-- | 'ReadMark': which notifications to mark as read: these, or all ('everything').
 data ReadMark = ReadMark
   { ids :: [NotificationId]
   , everything :: Bool
@@ -72,10 +74,11 @@ data ReadMark = ReadMark
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | How the user is told: how they are mailed (as chosen, or by default:
--- at once with a verified address, otherwise not), whether they watch
--- what they make and the threads they are in, and what mail needs that
--- only the server can give: a verified address, and a mail server.
+-- | 'NotificationSettings': how the user is notified. It holds their mail
+-- setting (as chosen, or the default: immediately if they have a verified
+-- address, otherwise none), whether they automatically watch the pages
+-- they create and the threads they take part in, and what only the server
+-- can say mail needs: a verified address, and a mail server.
 data NotificationSettings = NotificationSettings
   { mail :: MailMode
   , watchOwn :: Bool
@@ -85,7 +88,7 @@ data NotificationSettings = NotificationSettings
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | What the user chooses of 'NotificationSettings'.
+-- | 'NotificationSettingsChange': the parts of 'NotificationSettings' the user chooses.
 data NotificationSettingsChange = NotificationSettingsChange
   { mail :: MailMode
   , watchOwn :: Bool
@@ -93,7 +96,7 @@ data NotificationSettingsChange = NotificationSettingsChange
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Whether to watch a page or a space.
+-- | 'Watching': whether to watch a page or a space.
 newtype Watching = Watching {watching :: Bool}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

@@ -1,17 +1,18 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Exporting a page or a space as a document (WP4.16 of docs/PLAN.md):
--- the formats, as the API names them in its addresses
+-- | Export formats (WP4.16 of docs/PLAN.md): the document formats a page
+-- or a space can be exported in, as the API names them in its paths
 -- (@pages\/\<id>\/export\/\<format>@, @spaces\/\<id>\/export\/\<format>@)
 -- and as the application offers them.
 --
--- The server makes every format with pandoc, linked into it as a library,
--- so most need nothing installed beside it. The two PDFs are the
--- exception: pandoc writes LaTeX and a TeX engine, @xelatex@, makes the PDF
--- of it, so a server offers them only where it finds one ('needsTeX'). A
--- backend says which formats it offers in the session
--- (@Wiki.App.Backend.Session@'s @exports@), so that the application shows
--- only what it can have: the demo, which has no pandoc, offers none.
+-- The server produces every format with pandoc, linked into it as a
+-- library, so most formats need nothing else installed. The two PDF
+-- formats are the exception: pandoc writes LaTeX and a TeX engine,
+-- @xelatex@, turns it into a PDF, so a server offers them only where it
+-- finds one ('needsTeX'). A backend reports the formats it offers in the
+-- session (@Wiki.App.Backend.Session@'s @exports@), so that the
+-- application shows only those. The demo, which has no pandoc, offers
+-- none.
 module Wiki.Api.Export
   ( ExportFormat (..)
   , formatName
@@ -32,12 +33,12 @@ import Protolude
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import Wiki.Core.Slug (slugText, slugify)
 
--- | A document a page or a space is exported as.
+-- | 'ExportFormat': a document format a page or a space is exported in.
 data ExportFormat
   = -- | A Word document, its formulas as Word's own equations.
     Docx
-  | -- | One web page with everything it shows inside it, its images
-    -- included, and its formulas as MathML.
+  | -- | One self-contained web page, with its images embedded and its
+    -- formulas as MathML.
     Html
   | -- | An e-book.
     Epub
@@ -52,7 +53,7 @@ data ExportFormat
   deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Its name in an address, @docx@, @beamer-pdf@.
+-- | Its name in a path, such as @docx@ or @beamer-pdf@.
 formatName :: ExportFormat -> Text
 formatName = \case
   Docx -> "docx"
@@ -63,7 +64,7 @@ formatName = \case
   BeamerTex -> "beamer-tex"
   BeamerPdf -> "beamer-pdf"
 
--- | What a menu calls it.
+-- | Its label in a menu.
 formatLabel :: ExportFormat -> Text
 formatLabel = \case
   Docx -> "Word (.docx)"
@@ -74,7 +75,7 @@ formatLabel = \case
   BeamerTex -> "Beamer source (.tex)"
   BeamerPdf -> "Beamer PDF"
 
--- | The extension of its file, without the dot.
+-- | Its file extension, without the dot.
 formatExtension :: ExportFormat -> Text
 formatExtension = \case
   Docx -> "docx"
@@ -85,7 +86,7 @@ formatExtension = \case
   BeamerTex -> "tex"
   BeamerPdf -> "pdf"
 
--- | The media type its file is served as.
+-- | The media type its file is served with.
 formatMediaType :: ExportFormat -> Text
 formatMediaType = \case
   Docx -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -96,15 +97,15 @@ formatMediaType = \case
   BeamerTex -> "application/x-tex; charset=utf-8"
   BeamerPdf -> "application/pdf"
 
--- | Whether it is typeset by a TeX engine, which the server must have.
+-- | Whether a TeX engine typesets it, which the server must have.
 needsTeX :: ExportFormat -> Bool
 needsTeX = \case
   Pdf -> True
   BeamerPdf -> True
   _ -> False
 
--- | Whether it is a presentation, which only a page written as a deck
--- ("Wiki.Core.Slides") is exported as.
+-- | Whether it is a presentation format, which only a page written as a
+-- deck ("Wiki.Core.Slides") is exported in.
 forDecks :: ExportFormat -> Bool
 forDecks = \case
   Pptx -> True
@@ -112,18 +113,18 @@ forDecks = \case
   BeamerPdf -> True
   _ -> False
 
--- | The formats a page is offered in, of those a backend makes: the
--- presentations only for a deck.
+-- | The formats a page is offered in, among those a backend produces: the
+-- presentation formats only for a deck.
 pageFormats :: Bool -> [ExportFormat] -> [ExportFormat]
 pageFormats deck = filter (\f -> deck || not (forDecks f))
 
--- | The formats a space is offered in, of those a backend makes: one
+-- | The formats a space is offered in, among those a backend produces: one
 -- document of all its pages, never a presentation.
 spaceFormats :: [ExportFormat] -> [ExportFormat]
 spaceFormats = filter (not . forDecks)
 
--- | The name an export's file is saved under: its title, as a slug (so
--- plain ASCII a header can carry as it is), and the format's extension.
+-- | The file name an export is saved as: its title as a slug (so plain
+-- ASCII that a header can carry unescaped), and the format's extension.
 exportFileName :: Text -> ExportFormat -> Text
 exportFileName title format = base <> "." <> formatExtension format
   where

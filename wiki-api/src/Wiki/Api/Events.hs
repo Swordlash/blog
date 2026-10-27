@@ -1,49 +1,51 @@
 -- | The live channel (decision 23 of docs/PLAN.md): one WebSocket per
--- browser tab, at @api\/v1\/events@, on which the tab says which pages it
--- shows and which it edits, and the server tells it what happens to them.
+-- browser tab, at @api\/v1\/events@. On it the tab says which pages it
+-- shows and which it edits, and the server sends it the changes to those
+-- pages.
 --
--- The server authenticates the connection by the session cookie the
--- upgrade request carries, as any request, and obeys the closed wiki's
--- rule before it upgrades (a closed wiki refuses someone not signed in a
--- 401). After that, messages are JSON text, one object each:
+-- The server authenticates the connection by the session cookie of the
+-- upgrade request, like any request, and applies the closed wiki's rule
+-- before it upgrades (a closed wiki refuses a visitor who is not signed in
+-- with 401). After that, every message is JSON text, one object each:
 --
--- * the tab: @{"subscribe": "\<page>"}@ to hear about a page,
---   @{"unsubscribe": "\<page>"}@ to stop, @{"editing": "\<page>"}@ when
---   it opens the page's editor and @{"stopped": "\<page>"}@ when it closes
---   it ('ClientMessage');
--- * the server: @{"subscribed": "\<page>", "threads": […], "editing": […]}@
---   or @{"refused": "\<page>"}@ in answer (a page that is not there, or
---   that the connection's user may not read, is refused),
---   @{"page": "\<page>", "event": …}@ for each thing that happens to a page
---   subscribed to, and @{"notification": …}@ for each notification made for
---   the connection's user, whatever page it is about and whether or not
---   the tab subscribed to anything (WP4.13: "Wiki.Core.Notification")
+-- * from the tab: @{"subscribe": "\<page>"}@ to receive a page's changes,
+--   @{"unsubscribe": "\<page>"}@ to stop, @{"editing": "\<page>"}@ when it
+--   opens the page's editor and @{"stopped": "\<page>"}@ when it closes
+--   the editor ('ClientMessage');
+-- * from the server: @{"subscribed": "\<page>", "threads": […], "editing":
+--   […]}@ or @{"refused": "\<page>"}@ in response (a page that does not
+--   exist, or that the connection's user may not read, is refused),
+--   @{"page": "\<page>", "event": …}@ for each change to a subscribed page,
+--   and @{"notification": …}@ for each notification created for the
+--   connection's user, whatever page it is about and whether or not the
+--   tab has subscribed to anything (WP4.13: "Wiki.Core.Notification")
 --   ('ServerMessage').
 --
--- An event is a 'PageEvent', an object with a @type@ and what it carries.
--- The type is open: a client that does not know a type ignores it
--- ('Unknown'), so that a newer server's events cost an older tab nothing.
+-- An event is a 'PageEvent', an object with a @type@ and its data. The set
+-- of types is open: a client ignores a type it does not know ('Unknown'),
+-- so that a newer server's events do not break an older tab.
 --
--- The answer to a subscription carries the page's threads as they are when
--- it is made, read as the connection's user may read them (what
--- @GET pages\/\<page>\/threads@ gives them), and who else is editing the
--- page then; every event told after it happened after that read: a tab
--- that takes the answer for what the page has, and folds in what it is told
--- afterwards, misses nothing between the page's first read and its
--- subscription. Nothing else is replayed: a tab that loses its connection
--- connects again, subscribes again and says again which pages it edits,
--- and the answers are what it missed.
+-- The response to a subscription carries the page's threads at the time
+-- of the subscription, filtered as the connection's user may read them
+-- (as @GET pages\/\<page>\/threads@ returns them), and the users editing
+-- the page at that time. Every event sent afterwards happened after that
+-- read. So a tab that takes the response as the page's current state, and
+-- applies the events it receives afterwards, misses nothing between its
+-- first fetch of the page and its subscription. Nothing else is replayed:
+-- a tab that loses its connection reconnects, subscribes again and sends
+-- again which pages it edits, and the responses contain what it missed.
 --
 -- = Who is editing
 --
--- Someone editing a page is known by their connection (WP4.12 of the
--- plan): the server keeps, for each connection, the pages it said it
--- edits, until it says it stopped or the connection ends, which a closed
--- tab, a lost network and a stopping server all come to. Nothing of it is
--- written down. Whenever that changes for a page, every connection
--- subscribed to the page is told who else edits it ('Editing'): everyone
--- editing it on another connection, each person once, so that a tab never
--- hears of itself but does hear of its user in another tab.
+-- The server identifies a user editing a page by their connection (WP4.12
+-- of the plan). For each connection it keeps the pages the connection said
+-- it edits, until the connection says it stopped or the connection ends
+-- (because the tab was closed, the network was lost or the server is
+-- stopping). None of this is stored on disk. Whenever the list of editors
+-- of a page changes, every connection subscribed to the page receives the
+-- other editors ('Editing'): everyone editing it on another connection,
+-- each user once. So a tab is never listed to itself, but its own user,
+-- editing in another tab, is listed.
 module Wiki.Api.Events
   ( -- * Events
     PageEvent (..)
@@ -65,31 +67,31 @@ import Wiki.Core.Id
 import Wiki.Core.Notification (Notification)
 import Wiki.Core.Version (Author)
 
--- | Something that happened to a page.
+-- | 'PageEvent': a change to a page.
 data PageEvent
-  = -- | A thread was opened, with its first comment.
+  = -- | A thread was started, with its first comment.
     ThreadOpened Thread
   | -- | A reply was added to a thread.
     CommentAdded Comment
   | -- | A comment was edited.
     CommentEdited Comment
-  | -- | A comment was deleted (the first one of a thread is the thread, and
-    -- is 'ThreadDeleted').
+  | -- | A comment was deleted (deleting the first comment of a thread
+    -- deletes the thread, and is 'ThreadDeleted').
     CommentDeleted CommentThreadId CommentId
   | -- | A thread was resolved, or reopened.
     ThreadResolved CommentThreadId Bool
   | -- | A thread was deleted, with its comments.
     ThreadDeleted CommentThreadId
-  | -- | Who edits the page now, besides the tab told: told whenever that
-    -- changes. Each is named as a comment's author is, by their id and
-    -- display name, and never by their login, since a page's readers may
-    -- be anyone.
+  | -- | The users now editing the page, besides the receiving tab, sent
+    -- whenever that list changes. Each is named like a comment's author,
+    -- by id and display name, and never by login, since a page's readers
+    -- may be anyone.
     Editing [Author]
-  | -- | The page was saved: the time of its new version, which a tab
-    -- showing an older one reads it again for.
+  | -- | The page was saved: the time of its new version. A tab showing an
+    -- older version fetches the page again.
     PageChanged UTCTime
   | -- | An event of a type this program does not know, from a newer
-    -- server: it changes nothing here.
+    -- server. It changes nothing.
     Unknown Text
   deriving stock (Eq, Show)
 
@@ -118,10 +120,10 @@ instance FromJSON PageEvent where
       "page-changed" -> PageChanged <$> o .: "updatedAt"
       other -> pure (Unknown other)
 
--- | A page's threads after an event: what the application folds into the
--- threads it shows, its own writes' results and what the server tells it
--- alike. An event it has applied already changes nothing more, so that a
--- write the tab made and then hears of from the server counts once.
+-- | A page's threads after an event. The application applies events to the
+-- threads it shows, both the results of its own writes and the events the
+-- server sends. An event already applied changes nothing, so that a write
+-- the tab made, and then receives from the server, counts once.
 applyEvent :: PageEvent -> [Thread] -> [Thread]
 applyEvent = \case
   ThreadOpened t -> withThread t
@@ -134,14 +136,14 @@ applyEvent = \case
   PageChanged _ -> identity
   Unknown _ -> identity
 
--- | What a tab says.
+-- | 'ClientMessage': a message from a tab.
 data ClientMessage
   = Subscribe PageId
   | Unsubscribe PageId
-  | -- | The tab has opened the page's editor: whoever is subscribed to the
-    -- page is told. Ignored from someone who may not edit the page.
+  | -- | The tab has opened the page's editor, and the page's subscribers
+    -- are told. Ignored from a user who may not edit the page.
     StartEditing PageId
-  | -- | The tab has closed it.
+  | -- | The tab has closed the page's editor.
     StopEditing PageId
   deriving stock (Eq, Show)
 
@@ -166,15 +168,15 @@ instance FromJSON ClientMessage where
       [message] -> pure message
       _ -> parseFail "a message is one of {\"subscribe\": page}, {\"unsubscribe\": page}, {\"editing\": page} or {\"stopped\": page}"
 
--- | What the server says.
+-- | 'ServerMessage': a message from the server.
 data ServerMessage
-  = -- | The tab now hears about this page, whose threads are these, and
-    -- which these edit besides the tab (as 'Editing' says).
+  = -- | The tab now receives this page's changes. The page's threads are
+    -- these, and these users edit it besides the tab (as in 'Editing').
     Subscribed PageId [Thread] [Author]
-  | -- | The tab may not hear about this page: it is not there, or the
-    -- connection's user may not read it.
+  | -- | The tab may not receive this page's changes: the page does not
+    -- exist, or the connection's user may not read it.
     Refused PageId
-  | -- | Something happened to a page the tab hears about.
+  | -- | A change to a page the tab is subscribed to.
     Event PageId PageEvent
   | -- | The connection's user has a new notification.
     Notified Notification
@@ -196,14 +198,14 @@ instance FromJSON ServerMessage where
         page <- o .:? "page"
         notification <- o .:? "notification"
         case (subscribed, refused, page, notification) of
-          -- A server from before presence says nothing of who edits.
+          -- A server older than the presence feature sends no editors.
           (Just p, _, _, _) -> Subscribed p <$> o .: "threads" <*> o .:? "editing" .!= []
           (_, Just p, _, _) -> pure (Refused p)
           (_, _, Just p, _) -> Event p <$> (o .: "event" :: Parser PageEvent)
           (_, _, _, Just n) -> pure (Notified n)
           _ -> parseFail ("not a message of the server's: " <> toS (show (v :: Value) :: Text))
 
--- | The channel's address, below @api\/v1\/@, as servant's are relative to
--- the page's @\<base href>@.
+-- | The channel's path, relative to @api\/v1\/@, since servant's links are
+-- relative to the page's @\<base href>@.
 eventsPath :: Text
 eventsPath = "api/v1/events"

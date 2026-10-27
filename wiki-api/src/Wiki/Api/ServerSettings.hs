@@ -1,29 +1,30 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | The server's own settings (WP4.4 of docs/PLAN.md): the wiki's public
--- address, the mail server invitations go through, and the providers
--- people sign in with. They are set in the administration's "Server"
--- section and nowhere else (the owner's decision of 2026-10-25): the
--- loopback admin listener of decision 11 is how the first ones are set,
--- before anyone can sign in, so the server needs no option for them.
+-- | Server settings (WP4.4 of docs/PLAN.md): the wiki's public address,
+-- the mail server that sends invitations and other mail, and the sign-in
+-- providers. They are set in the administration's "Server" section and
+-- nowhere else (the owner's decision of 2026-10-25). Before anyone can
+-- sign in, the first settings are set through the loopback admin listener
+-- of decision 11, so the server needs no command-line option for them.
 --
 -- = Secrets
 --
--- The mail account's password and each provider's client secret are
--- written once and never read back. What the API answers carries only
--- whether one is set ('SecretState'); what it is sent carries, for each, a
--- 'Maybe Text': 'Nothing' (or the field left out) keeps the secret as it
--- is, an empty text clears it, and any other text replaces it. So the
--- settings are one type with the secret as its parameter
--- ('ServerSettingsOf'): 'ServerSettings' as they are read,
--- 'ServerSettingsChange' as they are written, and, on the server and in
--- the demo, the settings as kept, with the secrets themselves.
+-- The mail account's password and each provider's client secret can be
+-- written but are never read back. A response carries only whether each
+-- secret is set ('SecretState'). A request carries a 'Maybe Text' for each
+-- secret: 'Nothing' (or a missing field) keeps the secret unchanged, an
+-- empty text clears it, and any other text replaces it. So the settings
+-- are one type with the secret's type as its parameter
+-- ('ServerSettingsOf'): 'ServerSettings' in responses,
+-- 'ServerSettingsChange' in requests, and, on the server and in the demo,
+-- the stored settings, with the secrets themselves.
 --
--- A provider is known by its name, which is in its redirect URI
--- ('redirectUri') and in the wiki's record of who signs in with it: a
--- change that keeps the name keeps the provider's secret unless it gives a
--- new one; a provider left out of a change is removed, with its secret.
--- Leaving the mail server out ('Nothing') removes it with its password.
+-- A provider is identified by its name, which is part of its redirect URI
+-- ('redirectUri') and of the wiki's record of who signs in with it. A
+-- change that keeps a provider's name keeps its secret, unless the change
+-- carries a new one. A provider missing from a change is removed, with its
+-- secret. A change without a mail server ('Nothing') removes the mail
+-- server and its password.
 module Wiki.Api.ServerSettings
   ( -- * The settings
     ServerSettingsOf (..)
@@ -85,41 +86,41 @@ import Wiki.Api.Auth (callbackPath)
 --------------------------------------------------------------------------------
 -- The settings
 
--- | The server's settings, with each secret as an @s@.
+-- | 'ServerSettingsOf': the server's settings, with each secret of type @s@.
 data ServerSettingsOf s = ServerSettings
   { publicUrl :: Maybe Text
   -- ^ The wiki's address as its readers reach it, ending in a slash
-  -- (@https:\/\/wiki.example.org\/@): where mailed links and the
-  -- providers' redirect URIs start. The server cannot know it by itself
-  -- behind a proxy.
+  -- (@https:\/\/wiki.example.org\/@): the start of links sent by mail and
+  -- of the providers' redirect URIs. Behind a proxy the server cannot find
+  -- it out by itself.
   , mail :: Maybe (MailSettingsOf s)
-  -- ^ The mail server invitations go through; without one the
-  -- administration shows an invitation's link to pass on.
+  -- ^ The mail server invitations are sent through. Without one, the
+  -- administration shows an invitation's link for the administrator to
+  -- pass on.
   , providers :: [ProviderSettingsOf s]
-  -- ^ The providers people may sign in with, in the order their buttons
-  -- show.
+  -- ^ The providers users may sign in with, in the order of their buttons.
   }
   deriving stock (Eq, Show, Generic, Functor)
 
--- | As the API answers them.
+-- | The settings as API responses carry them.
 type ServerSettings = ServerSettingsOf SecretState
 
--- | As the API is sent them: each secret kept, replaced or cleared.
+-- | The settings as API requests carry them: each secret kept, replaced or cleared.
 type ServerSettingsChange = ServerSettingsOf (Maybe Text)
 
 instance (ToJSON s) => ToJSON (ServerSettingsOf s)
 
 instance (FromJSON s) => FromJSON (ServerSettingsOf s)
 
--- | A mail server, over SMTP.
+-- | 'MailSettingsOf': a mail server, reached over SMTP.
 data MailSettingsOf s = MailSettings
   { host :: Text
   , port :: Word16
   , security :: Security
   , user :: Maybe Text
-  -- ^ The account to sign in to it as, if it wants one.
+  -- ^ The account to sign in to the mail server with, if it requires one.
   , password :: s
-  -- ^ That account's password.
+  -- ^ The password of that account.
   , from :: Text
   -- ^ The sender: @wiki\@example.org@, or @Wiki \<wiki\@example.org>@.
   }
@@ -133,20 +134,20 @@ instance (ToJSON s) => ToJSON (MailSettingsOf s)
 
 instance (FromJSON s) => FromJSON (MailSettingsOf s)
 
--- | A provider to sign in with.
+-- | 'ProviderSettingsOf': a sign-in provider.
 data ProviderSettingsOf s = ProviderSettings
   { name :: Text
-  -- ^ Its name in the wiki's addresses (@auth\/\<name>\/…@): lower-case
+  -- ^ Its name in the wiki's addresses (@auth\/\<name>\/…@): lowercase
   -- letters, digits and dashes.
   , kind :: ProviderKind
   , clientId :: Text
-  -- ^ The client's id the provider gave when the wiki was registered
-  -- there.
+  -- ^ The client id the provider issued when the wiki was registered with
+  -- it.
   , issuer :: Maybe Text
-  -- ^ For @oidc@, the issuer; for another kind, an address in place of
-  -- its own (a GitHub Enterprise server's, say).
+  -- ^ For @oidc@, the issuer; for another kind, an address that replaces
+  -- the provider's default one (a GitHub Enterprise server's, for example).
   , secret :: s
-  -- ^ The client's secret.
+  -- ^ The client secret.
   }
   deriving stock (Eq, Show, Generic, Functor)
 
@@ -158,15 +159,16 @@ instance (ToJSON s) => ToJSON (ProviderSettingsOf s)
 
 instance (FromJSON s) => FromJSON (ProviderSettingsOf s)
 
--- | A server nobody has set up: no address, no mail, no provider. So a
--- wiki made before there were these settings goes on as it was.
+-- | The settings of a server nobody has configured: no address, no mail
+-- server, no provider. A wiki created before these settings existed keeps
+-- working as before.
 noServerSettings :: ServerSettingsOf s
 noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = []}
 
 --------------------------------------------------------------------------------
 -- Secrets
 
--- | Whether a secret is set, which is all that is ever said of one.
+-- | 'SecretState': whether a secret is set, the only thing ever said about a secret.
 data SecretState = Set | NotSet
   deriving stock (Eq, Show, Enum, Bounded)
 
@@ -181,14 +183,14 @@ instance FromJSON SecretState where
     "not-set" -> pure NotSet
     other -> fail ("not set or not-set: " <> toS other)
 
--- | Whether a secret kept is there.
+-- | Whether a stored secret is set.
 secretState :: Maybe k -> SecretState
 secretState = maybe NotSet (const Set)
 
--- | The settings kept, with secrets kept as @k@ (made from the text sent
--- by the function given), once a change is written over them: each
--- secret the change leaves out kept from the mail server or the provider
--- of the same name, each empty one cleared, each other one replaced.
+-- | The stored settings, with secrets of type @k@ (made from the sent text
+-- by the given function), after a change is applied to them. A secret the
+-- change leaves out is kept from the mail server, or from the provider
+-- with the same name; an empty one is cleared; any other one is replaced.
 applyChange :: (Text -> k) -> ServerSettingsOf (Maybe k) -> ServerSettingsChange -> ServerSettingsOf (Maybe k)
 applyChange keep old new =
   ServerSettings
@@ -204,41 +206,41 @@ applyChange keep old new =
         | T.null t -> Nothing
         | otherwise -> Just (keep t)
 
--- | A provider as checked before it is saved: the values given, with the
--- secret kept for its name if none is given.
+-- | A provider as it is checked before it is saved: the given values,
+-- with the stored secret for its name if the change gives none.
 providerWith :: (Text -> k) -> ServerSettingsOf (Maybe k) -> ProviderChange -> ProviderSettingsOf (Maybe k)
 providerWith keep kept p = case (applyChange keep kept noServerSettings {providers = [p]}).providers of
   [resolved] -> resolved
   _ -> withSecret Nothing p
 
--- | A provider with another secret, or another name.
+-- | A provider with a different secret, which may be of a different type.
 withSecret :: t -> ProviderSettingsOf s -> ProviderSettingsOf t
 withSecret secret p = ProviderSettings {name = p.name, kind = p.kind, clientId = p.clientId, issuer = p.issuer, secret}
 
 named :: Text -> ProviderSettingsOf s -> ProviderSettingsOf s
 named name p = ProviderSettings {name, kind = p.kind, clientId = p.clientId, issuer = p.issuer, secret = p.secret}
 
--- | A mail server with another password.
+-- | A mail server with a different password.
 withPassword :: t -> MailSettingsOf s -> MailSettingsOf t
 withPassword password m = MailSettings {host = m.host, port = m.port, security = m.security, user = m.user, password, from = m.from}
 
 --------------------------------------------------------------------------------
 -- Mail
 
--- | How the connection to the mail server is protected.
+-- | 'Security': how the connection to the mail server is protected.
 data Security
   = -- | TLS from the start (SMTPS, port 465).
     ImplicitTls
   | -- | A plain connection that the client upgrades with @STARTTLS@ before
-    -- it says anything else (submission, port 587).
+    -- sending anything else (submission, port 587).
     StartTls
   | -- | No TLS at all: only for a mail server on the same machine or the
     -- same private network, never across the internet, since the password
-    -- and the mail would cross it in the clear.
+    -- and the mail would be sent unencrypted.
     Plain
   deriving stock (Eq, Show, Enum, Bounded)
 
--- | As the API writes it: @tls@, @starttls@ or @plain@.
+-- | Its name in the API: @tls@, @starttls@ or @plain@.
 securityName :: Security -> Text
 securityName = \case
   ImplicitTls -> "tls"
@@ -254,25 +256,25 @@ instance ToJSON Security where
 instance FromJSON Security where
   parseJSON = withText "tls, starttls or plain" $ \t -> maybe (fail ("not tls, starttls or plain: " <> toS t)) pure (readSecurity t)
 
--- | What a port implies: implicit TLS on 465, @STARTTLS@ on any other.
+-- | The security a port implies: implicit TLS on 465, @STARTTLS@ on any other.
 securityFor :: Word16 -> Security
 securityFor = \case
   465 -> ImplicitTls
   _ -> StartTls
 
--- | Submission's port.
+-- | The submission port.
 defaultMailPort :: Word16
 defaultMailPort = 587
 
 --------------------------------------------------------------------------------
 -- Providers
 
--- | How the server talks to a provider ("Wiki.Server.Oidc" says more).
+-- | 'ProviderKind': how the server talks to a provider ("Wiki.Server.Oidc" has the details).
 data ProviderKind = Google | Apple | GitHub | Generic
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
--- | As the API writes it: @google@, @apple@, @github@ or @oidc@ (any
--- OpenID Connect provider, at its issuer).
+-- | Its name in the API: @google@, @apple@, @github@ or @oidc@ (any OpenID
+-- Connect provider, at its issuer).
 kindName :: ProviderKind -> Text
 kindName = \case
   Google -> "google"
@@ -289,8 +291,8 @@ instance ToJSON ProviderKind where
 instance FromJSON ProviderKind where
   parseJSON = withText "google, apple, github or oidc" $ \t -> maybe (fail ("not google, apple, github or oidc: " <> toS t)) pure (readKind t)
 
--- | How the wiki's pages name a provider ("Sign in with Google"): its
--- kind's own name, or, for @oidc@, its name with a capital.
+-- | The name the wiki's pages show for a provider ("Sign in with Google"):
+-- its kind's name, or, for @oidc@, its own name capitalised.
 providerLabel :: ProviderKind -> Text -> Text
 providerLabel kind name = case kind of
   Google -> "Google"
@@ -300,18 +302,18 @@ providerLabel kind name = case kind of
     Just (c, rest) -> T.cons (toUpper c) rest
     Nothing -> name
 
--- | Where a provider sends the browser back to, which is registered with
--- it: @\<public-url>auth\/\<name>\/callback@.
+-- | The URL a provider redirects the browser back to, which is registered
+-- with the provider: @\<public-url>auth\/\<name>\/callback@.
 redirectUri :: Text -> Text -> Text
 redirectUri publicUrl name = publicUrl <> callbackPath name
 
 --------------------------------------------------------------------------------
 -- Checks
 
--- | The settings as they are kept, or the first reason they cannot be:
--- the address normalised and every text trimmed, a blank one left out.
--- The function given says whether a secret is set, which a provider needs,
--- and so does a mail server's user.
+-- | The settings as they are stored, or the first reason they are invalid:
+-- the address normalised and every text trimmed, a blank text left out.
+-- The given function says whether a secret is set; a provider needs one,
+-- and so does a mail server that has a user.
 checkServerSettings :: (s -> Bool) -> ServerSettingsOf s -> Either Text (ServerSettingsOf s)
 checkServerSettings isSet s = do
   publicUrl <- traverse checkPublicUrl (blankless s.publicUrl)
@@ -344,7 +346,7 @@ checkServerSettings isSet s = do
     blankless = mfilter (not . T.null) . fmap T.strip
 
 -- | The wiki's address as the server uses it: @http@ or @https@, with a
--- host, and a slash at its end; or why it is not one.
+-- host, and a slash at the end; or why it is invalid.
 checkPublicUrl :: Text -> Either Text Text
 checkPublicUrl raw
   | not (any (`T.isPrefixOf` u) ["http://", "https://"]) = Left ("The wiki's public address starts with http:// or https://: " <> u)
@@ -354,7 +356,7 @@ checkPublicUrl raw
   where
     u = T.strip raw
 
--- | Why a provider cannot be set up so, if it cannot.
+-- | The reasons a provider's settings are invalid; empty if they are valid.
 providerProblems :: ProviderSettingsOf s -> [Text]
 providerProblems p =
   [ "A provider's name is lower-case letters, digits and dashes, starting with a letter, at most 32 characters: " <> p.name
@@ -373,8 +375,8 @@ providerProblems p =
         && maybe False (isAsciiLower . fst) (T.uncons n)
         && T.all (\c -> isAsciiLower c || isDigit c || c == '-') n
 
--- | Whether an address may be talked to with secrets: over TLS, or on
--- this machine.
+-- | Whether secrets may be sent to an address: over TLS, or on this
+-- machine.
 secureAddress :: Text -> Bool
 secureAddress a =
   "https://" `T.isPrefixOf` a
@@ -383,8 +385,8 @@ secureAddress a =
 --------------------------------------------------------------------------------
 -- Checking a provider
 
--- | What asking a provider how to sign in found: the answer to @POST
--- \/api\/v1\/admin\/server\/providers\/\<name>\/check@.
+-- | 'ProviderCheck': the result of a provider's discovery, the response to
+-- @POST \/api\/v1\/admin\/server\/providers\/\<name>\/check@.
 data ProviderCheck = ProviderCheck
   { redirectUri :: Maybe Text
   -- ^ The redirect URI to register with the provider, once the wiki has a
@@ -392,14 +394,14 @@ data ProviderCheck = ProviderCheck
   , clientSecret :: SecretState
   -- ^ Whether its client secret is set.
   , discovered :: Maybe Discovered
-  -- ^ Its endpoints, if it could be asked.
+  -- ^ Its endpoints, if discovery succeeded.
   , problem :: Maybe Text
-  -- ^ Why it could not be, for a person to read.
+  -- ^ Why discovery failed, for a person to read.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Where a provider is asked what.
+-- | 'Discovered': the endpoints discovery found.
 data Discovered = Discovered
   { issuer :: Text
   , authorization :: Text
@@ -412,8 +414,8 @@ data Discovered = Discovered
 --------------------------------------------------------------------------------
 -- A test mail
 
--- | The body of @POST \/api\/v1\/admin\/server\/mail\/test@: whom to send
--- a test mail to, through the mail server as set.
+-- | The body of @POST \/api\/v1\/admin\/server\/mail\/test@: the address to
+-- send a test mail to, through the configured mail server.
 newtype MailTest = MailTest {to :: Text}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)

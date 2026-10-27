@@ -1,44 +1,47 @@
 -- | The wiki's HTTP API, as a servant type: every operation of @MonadWiki@
--- (@wiki-app@'s backend interface), under @\/api\/v1@, plus what the server
--- alone does (export, import, its own description).
+-- (@wiki-app@'s backend interface), under @\/api\/v1@, plus the operations
+-- only the server has (export, import, the server's description).
 --
--- The server serves this type (@wiki-server@), and the browser's backend over
--- HTTP builds its requests' addresses from it ("Wiki.Api.Links"), so the two
--- cannot disagree about a path, a parameter or a header. The type builds on
--- every target, the browser's WebAssembly included: servant's core and
--- servant-multipart's API types are pure Haskell, and only the server's
--- side of them (servant-server, servant-multipart) is native.
+-- The server serves this type (@wiki-server@), and the HTTP backend in the
+-- browser builds its request URLs from it ("Wiki.Api.Links"), so the two
+-- cannot disagree about a path, a parameter or a header. The type compiles
+-- for every target, including WebAssembly in the browser: servant's core
+-- and servant-multipart's API types are pure Haskell, and only their
+-- server side (servant-server, servant-multipart) is native.
 --
 -- The API is a record of routes per resource ('SpacesApi', 'PagesApi',
--- 'AttachmentsApi', 'ArchiveApi', 'AdminApi', a page's comments'
--- 'CommentsApi', and the user's 'NotificationsApi'), each field one endpoint named for the
--- @MonadWiki@ method it carries, gathered in 'WikiApi', with signing in
--- and out beside the session's own read. docs/api.md lists
--- every endpoint with its method, path, body, response and errors.
+-- 'AttachmentsApi', 'ArchiveApi', 'AdminApi', a page's 'CommentsApi', and
+-- the user's 'NotificationsApi'). Each field is one endpoint, named after
+-- the @MonadWiki@ method it implements. 'WikiApi' collects them, together
+-- with signing in and out and reading the session. docs/api.md lists every
+-- endpoint with its method, path, body, response and errors.
 --
 -- = Conventions
 --
 -- * Bodies are JSON ("Wiki.Api.Types" for requests, the domain's types for
 --   responses), except an attachment's file and an archive, which are
---   multipart forms ("Wiki.Api.Upload") or bytes.
--- * A refusal is a status and an 'Wiki.Api.Error.ApiError' body, from any
---   endpoint: 404, 403, 409 or 400, as "Wiki.Api.Error" says. Such errors
---   are not listed in the types, as servant has no place for them.
+--   multipart forms ("Wiki.Api.Upload") or raw bytes.
+-- * Any endpoint may refuse a request with an error status and an
+--   'Wiki.Api.Error.ApiError' body: 404, 403, 409 or 400, as
+--   "Wiki.Api.Error" describes. These errors are not in the types, because
+--   servant's types have no place for them.
 -- * Spaces and pages are addressed by id, except where @MonadWiki@ looks
 --   them up by path: @…\/at\/\<slug>\/\<slug>…@.
--- * A page's responses carry its version as their @ETag@, and a save sends
---   it back as @If-Match@ ("Wiki.Api.Version").
--- * Making something answers 201 with what was made; deleting answers 204.
--- * Who is asking is the server's to say, per request: the session the
---   request's cookie names on the public listener, the operator on the
---   admin listener. Every request that changes something must carry the
---   header of 'requestMarker', which a page of another site
---   cannot make a browser send here, and is refused with a 403 otherwise.
--- * A closed wiki ("Wiki.Core.Access") answers someone who has not signed
---   in with 'Wiki.Api.Error.Unauthenticated' (401) everywhere but 'info',
---   'session' (to read it, sign in and out), 'register' (which refuses
---   them itself), 'invitations' and the links mailed to someone
---   ('passwordReset', 'emailVerification', 'unsubscribe').
+-- * A response with a page carries the page's version as its @ETag@, and a
+--   save sends the version back as @If-Match@ ("Wiki.Api.Version").
+-- * Creating something responds 201 with the created record; deleting
+--   responds 204.
+-- * The server decides who makes each request: the user of the session
+--   named by the request's cookie on the public listener, the operator on
+--   the admin listener. Every request that changes something must carry
+--   the header 'requestMarker', which a page of another site cannot make a
+--   browser send. A request without it is refused with 403.
+-- * A closed wiki ("Wiki.Core.Access") responds to a visitor who is not
+--   signed in with 'Wiki.Api.Error.Unauthenticated' (401) on every endpoint
+--   except 'info', 'session' (to read the session, sign in and sign out),
+--   'register' (which refuses by itself), 'invitations' and the endpoints
+--   of links sent by mail ('passwordReset', 'emailVerification',
+--   'unsubscribe').
 module Wiki.Api
   ( -- * The API
     Api
@@ -107,40 +110,40 @@ type Api = "api" :> "v1" :> NamedRoutes WikiApi
 api :: Proxy Api
 api = Proxy
 
--- | The API's resources.
+-- | 'WikiApi': the API's resources.
 data WikiApi mode = WikiApi
   { info :: mode :- "info" :> Get '[JSON] ServerInfo
-  -- ^ What the server says about itself.
+  -- ^ The server's description of itself.
   , session :: mode :- "session" :> Get '[JSON] SessionInfo
-  -- ^ Who is asking: @session@.
+  -- ^ The current user, if any: @session@.
   , signIn :: mode :- "session" :> ReqBody '[JSON] Credentials :> Post '[JSON] (WithCookie SessionInfo)
-  -- ^ Sign in ("Wiki.Api.Account"): the session the user now has, and the
-  -- cookie that carries it. A login and password that do not match are
-  -- 'Wiki.Api.Error.Unauthenticated', too many failed attempts
+  -- ^ Sign in ("Wiki.Api.Account"). The response is the user's new session
+  -- and the cookie that carries it. A login and password that do not
+  -- match are 'Wiki.Api.Error.Unauthenticated', too many failed attempts
   -- 'Wiki.Api.Error.TooManyRequests'.
   , signOut :: mode :- "session" :> Delete '[JSON] (WithCookie SessionInfo)
-  -- ^ Sign out: the session ends, its cookie is cleared, and the answer is
-  -- who the asker is now, nobody.
+  -- ^ Sign out: the session ends and its cookie is cleared. The response
+  -- is the new session state, with no user.
   , secondFactor :: mode :- "session" :> "second-factor" :> ReqBody '[JSON] OneTimeCode :> Post '[JSON] (WithCookie SessionInfo)
-  -- ^ End a sign-in that 'signIn' answered with
-  -- 'Wiki.Api.Error.SecondFactorRequired' ("Wiki.Api.Security"): with a
-  -- code of the user's authenticator application or one of their recovery
-  -- codes, and the cookie that answer set, the session the user now has,
-  -- as 'signIn' answers. A wrong code is
-  -- 'Wiki.Api.Error.Unauthenticated', counted as a failed sign-in; a
-  -- sign-in that has expired or was never begun in this browser
+  -- ^ Complete a sign-in that 'signIn' answered with
+  -- 'Wiki.Api.Error.SecondFactorRequired' ("Wiki.Api.Security"). The
+  -- request carries a code from the user's authenticator application or
+  -- one of their recovery codes, and the cookie that 'signIn' response
+  -- set. The response is the user's new session, as for 'signIn'. A wrong
+  -- code is 'Wiki.Api.Error.Unauthenticated', counted as a failed sign-in;
+  -- a sign-in that has expired or was never started in this browser is
   -- 'Wiki.Api.Error.Invalid'.
   , passwordReset :: mode :- "password-reset" :> NamedRoutes PasswordResetApi
   , emailVerification :: mode :- "email-verification" :> Capture "token" MailToken :> PostNoContent
-  -- ^ Follow a link that verifies an e-mail address: the address it was
-  -- mailed to is the user's verified address from now on, if it is still
-  -- theirs. One that has been used, has expired, or whose address is no
-  -- longer the user's is 'Wiki.Api.Error.NotFound'.
+  -- ^ Follow a link that verifies an e-mail address: the address the link
+  -- was sent to becomes the user's verified address, if it is still the
+  -- user's address. A link that has been used or has expired, or whose
+  -- address is no longer the user's, is 'Wiki.Api.Error.NotFound'.
   , register :: mode :- "accounts" :> ReqBody '[JSON] NewAccount :> Post '[JSON] (WithCookie SessionInfo)
-  -- ^ Make oneself an account, in an open wiki, and be signed in as it, as
-  -- 'signIn' answers. A closed wiki refuses with
+  -- ^ Create an account for oneself, in an open wiki, and sign in with it;
+  -- the response is as for 'signIn'. A closed wiki refuses with
   -- 'Wiki.Api.Error.Forbidden', a login another user has is
-  -- 'Wiki.Api.Error.Conflict', and too many attempts from one address
+  -- 'Wiki.Api.Error.Conflict', and too many attempts from one address are
   -- 'Wiki.Api.Error.TooManyRequests'.
   , invitations :: mode :- "invitations" :> NamedRoutes InvitationsApi
   , account :: mode :- "account" :> NamedRoutes AccountApi
@@ -157,36 +160,36 @@ data WikiApi mode = WikiApi
           :> QueryFlag "templates"
           :> Get '[JSON] [SearchHit]
   -- ^ @searchPages@. The parameters are those of the application's own
-  -- search address (@\/search\/?q=…&space=…&only@), and @templates@ for a
-  -- search of the spaces' templates too, except that @space@ is
-  -- the space's id rather than its path, since that is what a
-  -- 'Wiki.Core.Search.SearchQuery' holds. "Wiki.Api.Links" makes the
-  -- address from a query, and 'Wiki.Api.Links.searchQueryOf' the query from
-  -- the parameters, so that both sides fill in what is missing alike.
+  -- search address (@\/search\/?q=…&space=…&only@), plus @templates@ to
+  -- include the spaces' templates, except that @space@ is the space's id
+  -- rather than its path, since a 'Wiki.Core.Search.SearchQuery' holds the
+  -- id. "Wiki.Api.Links" builds the address from a query, and
+  -- 'Wiki.Api.Links.searchQueryOf' builds the query from the parameters,
+  -- so that both sides fill in missing parameters the same way.
   , archive :: mode :- NamedRoutes ArchiveApi
   , admin :: mode :- "admin" :> NamedRoutes AdminApi
   , comments :: mode :- "pages" :> Capture "page" PageId :> "threads" :> NamedRoutes CommentsApi
-  -- ^ A page's comments ("Wiki.Api.Comments"), whose operations are
-  -- @MonadComments@'s. The live channel that tells a tab of them as they
-  -- happen is no servant route: the server upgrades @events@ to a
-  -- WebSocket itself ("Wiki.Api.Events").
+  -- ^ A page's comments ("Wiki.Api.Comments"), with the operations of
+  -- @MonadComments@. The live channel that sends comment changes to a tab
+  -- as they happen is not a servant route: the server upgrades @events@ to
+  -- a WebSocket itself ("Wiki.Api.Events").
   , notifications :: mode :- "notifications" :> NamedRoutes NotificationsApi
-  -- ^ The signed-in user's notifications, what they watch and how they are
-  -- told ("Wiki.Api.Notifications").
+  -- ^ The signed-in user's notifications, the pages they watch, and how
+  -- they are notified ("Wiki.Api.Notifications").
   , unsubscribe :: mode :- "unsubscribe" :> Capture "token" MailToken :> PostNoContent
-  -- ^ Follow the link a notification's mail carries: the mail of the user
-  -- it names is turned off, without signing in. A link that is not one
-  -- is 'Wiki.Api.Error.NotFound'.
+  -- ^ Follow the unsubscribe link in a notification mail: notification
+  -- mail is turned off for the user the link names, without signing in. An
+  -- invalid link is 'Wiki.Api.Error.NotFound'.
   }
   deriving stock (Generic)
 
--- | Spaces, and the pages of each.
+-- | 'SpacesApi': spaces, and the pages of each.
 data SpacesApi mode = SpacesApi
   { list :: mode :- Get '[JSON] [Space]
   -- ^ @listSpaces@.
   , pageCounts :: mode :- "page-counts" :> Get '[JSON] (Map SpaceId Int)
-  -- ^ @pageCounts@: how many pages each space the asker may view has, as
-  -- an object keyed by the space's id.
+  -- ^ @pageCounts@: the number of pages in each space the requester may
+  -- view, as an object keyed by space id.
   , atPath :: mode :- "at" :> CaptureAll "path" Slug :> Get '[JSON] Space
   -- ^ @getSpace@: the space at a path of slugs from the top level.
   , create :: mode :- ReqBody '[JSON] NewSpace :> PostCreated '[JSON] Space
@@ -200,15 +203,15 @@ data SpacesApi mode = SpacesApi
   , setProfile :: mode :- Capture "space" SpaceId :> "profile" :> ReqBody '[JSON] SpaceProfile :> Put '[JSON] Space
   -- ^ @setSpaceProfile@: its description, icon and home page.
   , uploadIcon :: mode :- Capture "space" SpaceId :> "icon" :> MultipartForm Mem AttachmentUpload :> Post '[JSON] Space
-  -- ^ @uploadSpaceIcon@: an image for its icon, as a form's file part as
-  -- an attachment's is ("Wiki.Api.Upload"); the part's file name is not
-  -- looked at.
+  -- ^ @uploadSpaceIcon@: an image for the space's icon, as a form's file
+  -- part, as for an attachment ("Wiki.Api.Upload"). The part's file name
+  -- is ignored.
   , icon :: mode :- Capture "space" SpaceId :> "icon" :> Capture "blob" BlobId :> RawM
-  -- ^ The image a space is pictured with, at the address @spaceIconUrl@
-  -- gives ("Wiki.Api.Links.spaceIconUrl"): the blob is the image's, so
-  -- that a new image is at a new address, and one that is not the space's
-  -- is 'Wiki.Api.Error.NotFound'. Served as an attachment is (see
-  -- 'AttachmentsApi'), to whoever may view the space.
+  -- ^ The image of a space's icon, at the URL @spaceIconUrl@ returns
+  -- ("Wiki.Api.Links.spaceIconUrl"). The URL contains the image's blob id,
+  -- so that a new image has a new URL; a blob id that is not the space's
+  -- icon is 'Wiki.Api.Error.NotFound'. Served like an attachment (see
+  -- 'AttachmentsApi'), to anyone who may view the space.
   , setOrder :: mode :- Capture "space" SpaceId :> "order" :> ReqBody '[JSON] SpaceOrder :> Put '[JSON] Space
   -- ^ @setSpaceOrder@.
   , move :: mode :- Capture "space" SpaceId :> "move" :> ReqBody '[JSON] SpaceMove :> Post '[JSON] Space
@@ -218,30 +221,31 @@ data SpacesApi mode = SpacesApi
   , delete :: mode :- Capture "space" SpaceId :> DeleteNoContent
   -- ^ @deleteSpace@.
   , access :: mode :- Capture "space" SpaceId :> "grants" :> Get '[JSON] SpaceAccess
-  -- ^ @spaceAccess@: the grants on the space and its ancestors, and whom a
-  -- grant may be given to, for whoever administers the space.
+  -- ^ @spaceAccess@: the grants on the space and its ancestors, and the
+  -- users and groups a grant may be given to, for an administrator of the
+  -- space.
   , setGrant :: mode :- Capture "space" SpaceId :> "grants" :> ReqBody '[JSON] SpaceGrantChange :> PutNoContent
   -- ^ @setSpaceGrant@: give a user or a group a permission on the space,
-  -- or take it away.
+  -- or remove it.
   , listPages :: mode :- Capture "space" SpaceId :> "pages" :> Get '[JSON] [Page]
   -- ^ @listPages@.
   , postDetails :: mode :- Capture "space" SpaceId :> "post-details" :> Get '[JSON] (Map PageId PostDetails)
-  -- ^ @postDetails@: what each page of the space is listed with as a post
-  -- of a blog (its first author and its count of comments), as an object
-  -- keyed by the page's id.
+  -- ^ @postDetails@: the details each page of the space is listed with as
+  -- a blog post (its first author and its number of comments), as an
+  -- object keyed by page id.
   , pageAt :: mode :- Capture "space" SpaceId :> "pages" :> "at" :> CaptureAll "path" Slug :> Get '[JSON] (Versioned Page)
   -- ^ @getPage@: the page at a path of slugs from the space's top level.
   , createPage :: mode :- Capture "space" SpaceId :> "pages" :> ReqBody '[JSON] NewPage :> PostCreated '[JSON] (Versioned Page)
   -- ^ @createPage@.
   , export :: mode :- Capture "space" SpaceId :> "export" :> Capture "format" ExportFormat :> RawM
   -- ^ The space's pages as one document ("Wiki.Api.Export"), in the
-  -- space's order, after a title page and a table of contents, to whoever
-  -- may view the space. Raw, as a page's export is (see 'PagesApi').
+  -- space's order, after a title page and a table of contents, for anyone
+  -- who may view the space. Raw, like a page's export (see 'PagesApi').
   }
   deriving stock (Generic)
 
--- | Pages, by id, with their attachments' uploads, their drafts and their
--- histories.
+-- | 'PagesApi': pages, by id, with their attachment uploads, their drafts
+-- and their histories.
 data PagesApi mode = PagesApi
   { save :: mode :- Capture "page" PageId :> IfMatch :> ReqBody '[JSON] PageEdit :> Put '[JSON] (Versioned Page)
   -- ^ @savePage@, against the version in @If-Match@.
@@ -263,281 +267,292 @@ data PagesApi mode = PagesApi
   , discardDraft :: mode :- Capture "page" PageId :> "draft" :> DeleteNoContent
   -- ^ @discardDraft@.
   , versions :: mode :- Capture "page" PageId :> "versions" :> Get '[JSON] [VersionInfo]
-  -- ^ @listVersions@: the page's history, the latest first.
+  -- ^ @listVersions@: the page's history, latest first.
   , version :: mode :- Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> Get '[JSON] Version
   -- ^ @getVersion@: one version, by its time.
   , restore :: mode :- Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> "restore" :> IfMatch :> Post '[JSON] (Versioned Page)
   -- ^ @restoreVersion@: save that version's title and body as the page's
-  -- latest, against the version in @If-Match@, as a save is.
+  -- latest version, against the version in @If-Match@, like a save.
   , export :: mode :- Capture "page" PageId :> "export" :> Capture "format" ExportFormat :> RawM
-  -- ^ The page as a document ("Wiki.Api.Export"), to whoever may read it,
-  -- downloaded (@Content-Disposition: attachment@) under its title.
-  -- Raw, because the response's media type is the format's, which
-  -- servant's types cannot make depend on a capture. A format the server
-  -- cannot make (a PDF without a TeX engine, a presentation of a page that
-  -- is no deck) is 'Wiki.Api.Error.Invalid', and so is a document pandoc
-  -- or TeX could not make, with their reason; an export asked for while
-  -- the same person's last is still being made is
+  -- ^ The page as a document ("Wiki.Api.Export"), for anyone who may read
+  -- it, as a download (@Content-Disposition: attachment@) named after its
+  -- title. Raw, because the response's media type is the format's, and
+  -- servant's types cannot make it depend on a capture. A format the
+  -- server cannot produce (a PDF without a TeX engine, a presentation of a
+  -- page that is not a deck) is 'Wiki.Api.Error.Invalid', and so is a
+  -- document pandoc or TeX failed to produce, with the reason. An export
+  -- requested while the same user's previous export is still running is
   -- 'Wiki.Api.Error.TooManyRequests'.
   }
   deriving stock (Generic)
 
--- | Attachments, by id.
+-- | 'AttachmentsApi': attachments, by id.
 data AttachmentsApi mode = AttachmentsApi
   { delete :: mode :- Capture "attachment" AttachmentId :> DeleteNoContent
   -- ^ @deleteAttachment@.
   , content :: mode :- Capture "attachment" AttachmentId :> Capture "name" Text :> RawM
-  -- ^ An attachment's bytes, at the address @attachmentUrl@ gives
-  -- ("Wiki.Api.Links.attachmentUrl"). The name is the attachment's, so that
-  -- the address ends in the file's name; one that is not the attachment's
-  -- is 'Wiki.Api.Error.NotFound'.
+  -- ^ An attachment's bytes, at the URL @attachmentUrl@ returns
+  -- ("Wiki.Api.Links.attachmentUrl"). The name is the attachment's, so
+  -- that the URL ends in the file's name; a different name is
+  -- 'Wiki.Api.Error.NotFound'.
   --
-  -- Raw rather than a typed response, because what servant's types cannot
-  -- say is what this endpoint is for: the response's @Content-Type@ is the
-  -- attachment's own media type, the file is streamed from disk rather than
-  -- read into memory, and a request for a range of it (which a @\<video>@
-  -- makes to seek) gets that range. The server answers @GET@ and @HEAD@.
+  -- Raw rather than a typed response, because this endpoint needs what
+  -- servant's types cannot express: the response's @Content-Type@ is the
+  -- attachment's own media type, the file is streamed from disk rather
+  -- than read into memory, and a request for a byte range (which a
+  -- @\<video>@ makes to seek) gets that range. The server responds to
+  -- @GET@ and @HEAD@.
   }
   deriving stock (Generic)
 
--- | A whole wiki as an archive ("Wiki.Core.Export"), out and in.
+-- | 'ArchiveApi': a whole wiki as an archive ("Wiki.Core.Export"), exported and imported.
 data ArchiveApi mode = ArchiveApi
   { export :: mode :- "export" :> Get '[Zip] (Headers '[Disposition] LByteString)
-  -- ^ The wiki as a zip file, to download ('exportDisposition').
+  -- ^ The wiki as a zip file, as a download ('exportDisposition').
   , importPreview :: mode :- "import" :> "preview" :> MultipartForm Mem ArchiveUpload :> Post '[JSON] ImportPlan
-  -- ^ What importing an archive would do ("Wiki.Api.Import").
+  -- ^ A preview of what importing an archive would do ("Wiki.Api.Import").
   , importApply :: mode :- "import" :> "apply" :> MultipartForm Mem ImportApply :> Post '[JSON] ImportSummary
-  -- ^ Import an archive, as chosen.
+  -- ^ Import an archive, with the choices made after the preview.
   }
   deriving stock (Generic)
 
--- | What only an administrator may ask ("Wiki.Api.Admin"): whoever holds
--- the global administer, which the operator on the server's admin listener
--- always does. Anyone else is refused ('Wiki.Api.Error.Forbidden') before
--- anything they named is looked for.
+-- | 'AdminApi': the endpoints only an administrator may call
+-- ("Wiki.Api.Admin"), that is a user with the global administer
+-- permission. The operator on the server's admin listener always has it.
+-- Anyone else is refused ('Wiki.Api.Error.Forbidden') before any record
+-- named in the request is looked up.
 data AdminApi mode = AdminApi
   { status :: mode :- "status" :> Get '[JSON] ServerStatus
-  -- ^ The server's version, data directory and counts, its schema's
+  -- ^ The server's version, data directory and counts, its schema
   -- version, the newest backup, and the last errors it logged.
   , activity :: mode :- "activity" :> QueryParam "actor" UserId :> QueryParam "offset" Int :> Get '[JSON] Activity
-  -- ^ @activity@: a page of the audit log ("Wiki.Api.Activity"), the
-  -- newest first, from @offset@ on (0 if missing), of one actor's entries
-  -- or everyone's.
+  -- ^ @activity@: a page of the audit log ("Wiki.Api.Activity"), newest
+  -- first, starting at @offset@ (0 if missing), with one actor's entries or
+  -- everyone's.
   , directory :: mode :- "directory" :> Get '[JSON] Directory
-  -- ^ @directory@: the users, who of them is an administrator, the groups
+  -- ^ @directory@: the users, which of them are administrators, the groups
   -- and their members.
   , setAdministrator :: mode :- "users" :> Capture "user" UserId :> "administrator" :> ReqBody '[JSON] AdministratorFlag :> PutNoContent
-  -- ^ @setAdministrator@: grant a user the global administer, or take it
-  -- away, their own included.
+  -- ^ @setAdministrator@: grant a user the global administer permission,
+  -- or remove it, including the caller's own.
   , setCreateSpaces :: mode :- "users" :> Capture "user" UserId :> "create-spaces" :> ReqBody '[JSON] CreateSpacesFlag :> PutNoContent
-  -- ^ @setCreateSpaces@: grant a user the global create-spaces, or take it
-  -- away.
+  -- ^ @setCreateSpaces@: grant a user the global create-spaces permission,
+  -- or remove it.
   , createGroup :: mode :- "groups" :> ReqBody '[JSON] GroupName :> PostCreated '[JSON] Group
   -- ^ @createGroup@.
   , renameGroup :: mode :- "groups" :> Capture "group" GroupId :> "name" :> ReqBody '[JSON] GroupName :> Put '[JSON] Group
   -- ^ @renameGroup@.
   , deleteGroup :: mode :- "groups" :> Capture "group" GroupId :> DeleteNoContent
-  -- ^ @deleteGroup@, with its members' membership and the grants to it.
+  -- ^ @deleteGroup@, together with its memberships and the grants to it.
   , addMember :: mode :- "groups" :> Capture "group" GroupId :> "members" :> Capture "user" UserId :> PutNoContent
   -- ^ @addMember@.
   , removeMember :: mode :- "groups" :> Capture "group" GroupId :> "members" :> Capture "user" UserId :> DeleteNoContent
   -- ^ @removeMember@.
   , createUser :: mode :- "users" :> ReqBody '[JSON] NewAccount :> PostCreated '[JSON] Account
-  -- ^ @createUser@: make a user who signs in with a password
+  -- ^ @createUser@: create a user who signs in with a password
   -- ("Wiki.Api.Account"). A login another user has is
   -- 'Wiki.Api.Error.Conflict'.
   , setPassword :: mode :- "users" :> Capture "user" UserId :> "password" :> ReqBody '[JSON] NewPassword :> Put '[JSON] Account
   -- ^ @setPassword@: give a user a new password, which ends their
-  -- sessions. A user who has no password to set (who signs in with a
-  -- provider the server has, 'Wiki.Api.Account.providerOnly') is
+  -- sessions. A user who cannot have a password (who signs in only with a
+  -- sign-in provider, 'Wiki.Api.Account.providerOnly') is
   -- 'Wiki.Api.Error.Invalid'.
   , sendPasswordLink :: mode :- "users" :> Capture "user" UserId :> "password-link" :> PostNoContent
-  -- ^ @sendPasswordLink@: mail a user the link to choose a new password
-  -- that "Forgot your password?" mails ("Wiki.Api.Security"), to their
-  -- verified address (WP5.6 of docs/PLAN.md). Where the server sends no
-  -- mail, or the user has no verified address, is disabled or has no
-  -- password to set, 'Wiki.Api.Error.Invalid' with the reason; a second
-  -- link within a minute of the last, 'Wiki.Api.Error.TooManyRequests'.
+  -- ^ @sendPasswordLink@: send a user, at their verified address, the same
+  -- link to choose a new password that "Forgot your password?" sends
+  -- ("Wiki.Api.Security", WP5.6 of docs/PLAN.md). When the server sends no
+  -- mail, or the user has no verified address, is disabled or cannot have
+  -- a password, the response is 'Wiki.Api.Error.Invalid' with the reason;
+  -- a second link within a minute of the last is
+  -- 'Wiki.Api.Error.TooManyRequests'.
   , setDisabled :: mode :- "users" :> Capture "user" UserId :> "disabled" :> ReqBody '[JSON] AccountDisabled :> Put '[JSON] Account
-  -- ^ @setDisabled@: disable a user's login, which ends their sessions, or
-  -- enable it again.
+  -- ^ @setDisabled@: disable a user's account, which ends their sessions,
+  -- or enable it again.
   , settings :: mode :- "settings" :> Get '[JSON] WikiSettings
-  -- ^ @wikiSettings@: whom the wiki lets in, and what a new account may do.
+  -- ^ @wikiSettings@: who the wiki lets in, and what a new account may do.
   , setSettings :: mode :- "settings" :> ReqBody '[JSON] WikiSettings :> Put '[JSON] WikiSettings
-  -- ^ @setWikiSettings@: change them; the answer is the settings as they
-  -- then are.
+  -- ^ @setWikiSettings@: change the settings; the response is the settings
+  -- after the change.
   , invitations :: mode :- "invitations" :> Get '[JSON] Invitations
-  -- ^ @invitations@: those not yet used, and whether the server mails them.
+  -- ^ @invitations@: the unused invitations, and whether the server sends them by mail.
   , invite :: mode :- "invitations" :> ReqBody '[JSON] NewInvitation :> PostCreated '[JSON] Invited
-  -- ^ @invite@: invite an e-mail address; the server mails the link if it
-  -- can, and otherwise the answer carries it.
+  -- ^ @invite@: invite an e-mail address. The server sends the link by
+  -- mail if it can; otherwise the response contains the link.
   , revokeInvitation :: mode :- "invitations" :> Capture "invitation" InvitationId :> DeleteNoContent
-  -- ^ @revokeInvitation@: its link no longer makes an account.
+  -- ^ @revokeInvitation@: the invitation's link can no longer create an account.
   , removeSecondFactor :: mode :- "users" :> Capture "user" UserId :> "second-factor" :> DeleteNoContent
   -- ^ @removeSecondFactor@: the user signs in with their password alone
-  -- again (WP4.11 of docs/PLAN.md), for one who has lost their
-  -- authenticator and their recovery codes. One without a second factor is
-  -- 'Wiki.Api.Error.NotFound'.
+  -- again (WP4.11 of docs/PLAN.md). This is for a user who has lost their
+  -- authenticator and their recovery codes. A user without a second
+  -- factor is 'Wiki.Api.Error.NotFound'.
   , unlinkIdentity :: mode :- "users" :> Capture "user" UserId :> "identities" :> Capture "provider" Text :> DeleteNoContent
-  -- ^ @unlinkUserIdentity@: the user no longer signs in with that
+  -- ^ @unlinkUserIdentity@: the user can no longer sign in with that
   -- provider's account (WP3.6 of docs/PLAN.md), and their sessions end.
-  -- Allowed even when it was their last way in: an administrator may be
-  -- taking away an account that should never have been connected, and
-  -- gives them a password after. One they do not have is
-  -- 'Wiki.Api.Error.NotFound'.
+  -- Allowed even when it was their last way to sign in: an administrator
+  -- may be removing an account that should never have been connected, and
+  -- then gives the user a password. A provider the user has no identity
+  -- with is 'Wiki.Api.Error.NotFound'.
   , -- The server's own settings (WP4.4 of docs/PLAN.md,
     -- "Wiki.Api.ServerSettings"): its public address, its mail server and
-    -- the providers people sign in with, whose secrets are written and
-    -- never read back.
+    -- the sign-in providers. Their secrets can be written but are never
+    -- returned.
     server :: mode :- "server" :> Get '[JSON] ServerSettings
-  -- ^ @serverSettings@: the settings, each secret as whether it is set.
+  -- ^ @serverSettings@: the settings, with each secret shown only as whether it is set.
   , setServer :: mode :- "server" :> ReqBody '[JSON] ServerSettingsChange :> Put '[JSON] ServerSettings
-  -- ^ @setServerSettings@: replace them, each secret kept, replaced or
-  -- cleared; the answer is the settings as they then are. They take effect
-  -- with the next request.
+  -- ^ @setServerSettings@: replace the settings, each secret kept,
+  -- replaced or cleared; the response is the settings after the change.
+  -- They take effect from the next request.
   , checkProvider :: mode :- "server" :> "providers" :> Capture "provider" Text :> "check" :> ReqBody '[JSON] (Maybe ProviderChange) :> Post '[JSON] ProviderCheck
-  -- ^ @checkProvider@: ask a provider how to sign in (discovery), as it is
-  -- set, or, given in the body, as it would be.
+  -- ^ @checkProvider@: run a sign-in provider's discovery, with the
+  -- provider's current settings or with the settings in the body.
   , testMail :: mode :- "server" :> "mail" :> "test" :> ReqBody '[JSON] MailTest :> Post '[JSON] MailTestResult
-  -- ^ @sendTestMail@: send a mail to an address through the mail server
-  -- as it is set.
-  , -- The backups the server makes by itself (WP4.9 of docs/PLAN.md,
+  -- ^ @sendTestMail@: send a mail to an address through the configured
+  -- mail server.
+  , -- The server's automatic backups (WP4.9 of docs/PLAN.md,
     -- "Wiki.Api.Backups"), off until they are turned on here.
     backups :: mode :- "server" :> "backups" :> Get '[JSON] Backups
-  -- ^ @backups@: the settings (the rclone configuration as whether it is
-  -- set), the last backup made or tried, and what is under way.
+  -- ^ @backups@: the settings (with the rclone configuration shown only as
+  -- whether it is set), the last backup made or attempted, and any backup
+  -- in progress.
   , setBackups :: mode :- "server" :> "backups" :> ReqBody '[JSON] BackupSettingsChange :> Put '[JSON] Backups
   -- ^ @setBackupSettings@: replace the settings, the configuration kept,
-  -- replaced or cleared; they take effect at once.
+  -- replaced or cleared; they take effect immediately.
   , backUpNow :: mode :- "server" :> "backups" :> "run" :> Post '[JSON] Backups
-  -- ^ @backUpNow@: make a backup now, while they are on; the answer comes
-  -- once it is made, or after a while with it still under way.
+  -- ^ @backUpNow@: make a backup now, if backups are on. The response
+  -- comes when the backup is done, or after a timeout with the backup
+  -- still in progress.
   }
   deriving stock (Generic)
 
--- | An invitation, by the secret its link carries: what the person invited
--- does with it.
+-- | 'InvitationsApi': an invitation, addressed by the secret token in its
+-- link, as the invited person uses it.
 data InvitationsApi mode = InvitationsApi
   { details :: mode :- Capture "token" InvitationToken :> Get '[JSON] InvitationInfo
-  -- ^ Whom it is for, if it may still be used: one that has been used,
-  -- revoked or has expired is 'Wiki.Api.Error.NotFound'.
+  -- ^ The address it was sent to and when it expires, if it can still be
+  -- used. One that has been used, revoked or has expired is
+  -- 'Wiki.Api.Error.NotFound'.
   , accept :: mode :- Capture "token" InvitationToken :> ReqBody '[JSON] NewAccount :> Post '[JSON] (WithCookie SessionInfo)
-  -- ^ Make the account it invites to, with the login, name and password
-  -- chosen, and be signed in as it: the invitation is used up. As
-  -- 'register', but in a wiki open or closed.
+  -- ^ Create the account the invitation is for, with the chosen login,
+  -- name and password, and sign in with it. The invitation is then used
+  -- up. Like 'register', but in an open or a closed wiki.
   }
   deriving stock (Generic)
 
--- | The account of whoever is asking, signed in (WP3.6 of docs/PLAN.md):
--- the providers' accounts they sign in with, and their password (WP3.7).
--- Signing in with one, and
--- connecting one, are not here but at the server's own addresses
--- (@auth\/\<provider>\/start@, "Wiki.Api.Auth"), which the browser goes to
--- rather than fetches. Someone not signed in is refused with
--- 'Wiki.Api.Error.Unauthenticated', the server's operator, who signs in
--- with nothing, with 'Wiki.Api.Error.Invalid'.
+-- | 'AccountApi': the signed-in user's own account (WP3.6 of
+-- docs/PLAN.md): the sign-in providers' identities they sign in with, and
+-- their password (WP3.7). Signing in with a provider, and connecting one,
+-- are not here but at the server's own addresses
+-- (@auth\/\<provider>\/start@, "Wiki.Api.Auth"), which the browser
+-- navigates to rather than fetches. A visitor who is not signed in is
+-- refused with 'Wiki.Api.Error.Unauthenticated', and the server's
+-- operator, who has no account, with 'Wiki.Api.Error.Invalid'.
 data AccountApi mode = AccountApi
   { identities :: mode :- "identities" :> Get '[JSON] SignInMethods
-  -- ^ Whether they have a password, and their identities.
+  -- ^ Whether the user has a password, and their identities.
   , unlinkIdentity :: mode :- "identities" :> Capture "provider" Text :> Delete '[JSON] SignInMethods
-  -- ^ Disconnect the identity of a provider: how they sign in then. One
-  -- that would leave them no way to sign in (no password, no other
-  -- identity) is 'Wiki.Api.Error.Conflict', one they do not have
-  -- 'Wiki.Api.Error.NotFound'.
+  -- ^ Disconnect a provider's identity. The response is the user's sign-in
+  -- methods after the change. Disconnecting the last way to sign in (no
+  -- password, no other identity) is 'Wiki.Api.Error.Conflict', and a
+  -- provider the user has no identity with is 'Wiki.Api.Error.NotFound'.
   , changePassword :: mode :- "password" :> ReqBody '[JSON] PasswordChange :> Put '[JSON] SignInMethods
-  -- ^ Change their password, or set one if they have none: how they sign
-  -- in then. The current one, where they have one, must be given and
-  -- right, or it is 'Wiki.Api.Error.Unauthenticated', and wrong ones are
-  -- counted as failed sign-ins of their login from that address
-  -- ('Wiki.Api.Error.TooManyRequests' when there have been too many). A
-  -- new one that cannot be a password is 'Wiki.Api.Error.Invalid'. Their
-  -- other sessions end; the one asking stays.
+  -- ^ Change the user's password, or set one if they have none. The
+  -- response is their sign-in methods after the change. Where they have a
+  -- password, the request must carry the correct current one, or it is
+  -- 'Wiki.Api.Error.Unauthenticated'. Wrong passwords are counted as failed
+  -- sign-ins of their login from that address
+  -- ('Wiki.Api.Error.TooManyRequests' when there have been too many). An
+  -- invalid new password is 'Wiki.Api.Error.Invalid'. Their other sessions
+  -- end; the current session stays.
   , sessions :: mode :- "sessions" :> Get '[JSON] [SessionSummary]
-  -- ^ Their sessions, the one asking marked, most recently used first
-  -- (WP4.11 of docs/PLAN.md, "Wiki.Api.Security").
+  -- ^ The user's sessions, with the current one marked, most recently used
+  -- first (WP4.11 of docs/PLAN.md, "Wiki.Api.Security").
   , endSession :: mode :- "sessions" :> Capture "session" SessionRef :> Delete '[JSON] [SessionSummary]
-  -- ^ End one of their sessions other than the one asking (which signs out
-  -- with 'signOut'): their sessions then. One they do not have is
-  -- 'Wiki.Api.Error.NotFound', the one asking 'Wiki.Api.Error.Invalid'.
+  -- ^ End one of the user's sessions other than the current one (which
+  -- ends with 'signOut'). The response is their remaining sessions. A
+  -- session they do not have is 'Wiki.Api.Error.NotFound', the current
+  -- session 'Wiki.Api.Error.Invalid'.
   , endOtherSessions :: mode :- "sessions" :> Delete '[JSON] [SessionSummary]
-  -- ^ End every one of their sessions but the one asking: "Sign out
-  -- everywhere". Their sessions then, that one alone.
+  -- ^ End every session of the user except the current one: "Sign out
+  -- everywhere". The response is their remaining sessions, the current one
+  -- only.
   , secondFactorState :: mode :- "second-factor" :> Get '[JSON] SecondFactorState
-  -- ^ Whether they have a second factor.
+  -- ^ Whether the user has a second factor.
   , enrolTotp :: mode :- "second-factor" :> "totp" :> ReqBody '[JSON] CurrentPassword :> Post '[JSON] TotpEnrolment
-  -- ^ Begin a second factor, with their current password where they have
-  -- one (a wrong one is 'Wiki.Api.Error.Unauthenticated', counted): a new
-  -- secret for an authenticator application, not asked for at sign-in until
-  -- it is confirmed. One who has a second factor already is
-  -- 'Wiki.Api.Error.Conflict'.
+  -- ^ Start setting up a second factor, with the user's current password
+  -- where they have one (a wrong password is
+  -- 'Wiki.Api.Error.Unauthenticated', counted as a failed sign-in). The
+  -- response is a new secret for an authenticator application; sign-in
+  -- does not ask for a code until it is confirmed. A user who already has
+  -- a second factor is 'Wiki.Api.Error.Conflict'.
   , confirmTotp :: mode :- "second-factor" :> "totp" :> ReqBody '[JSON] OneTimeCode :> Put '[JSON] RecoveryCodes
-  -- ^ Confirm it with a code the application shows: it is asked for at
-  -- every sign-in from now on, and the answer is the recovery codes, shown
-  -- this once. A wrong code is 'Wiki.Api.Error.Unauthenticated', counted as
-  -- a failed sign-in.
+  -- ^ Confirm the second factor with a code the application shows. From
+  -- then on every sign-in asks for a code, and the response is the
+  -- recovery codes, shown only this once. A wrong code is
+  -- 'Wiki.Api.Error.Unauthenticated', counted as a failed sign-in.
   , removeSecondFactor :: mode :- "second-factor" :> "remove" :> ReqBody '[JSON] OneTimeCode :> Post '[JSON] SecondFactorState
-  -- ^ Take the second factor away, with a code or a recovery code (a wrong
-  -- one is 'Wiki.Api.Error.Unauthenticated', counted): they sign in with
-  -- their password alone again.
+  -- ^ Remove the second factor, with a code or a recovery code (a wrong
+  -- code is 'Wiki.Api.Error.Unauthenticated', counted as a failed
+  -- sign-in). The user then signs in with their password alone again.
   , email :: mode :- "email" :> Get '[JSON] EmailState
-  -- ^ Their e-mail address, whether it is verified, and whether the server
-  -- sends mail.
+  -- ^ The user's e-mail address, whether it is verified, and whether the
+  -- server sends mail.
   , setEmail :: mode :- "email" :> ReqBody '[JSON] EmailChange :> Put '[JSON] EmailState
-  -- ^ Give an e-mail address, or none: a new one is not verified until the
-  -- link mailed to it is followed. Another address, or none, takes their
-  -- current password where they have one (a wrong one is
-  -- 'Wiki.Api.Error.Unauthenticated', counted). Without a mail server it is
-  -- 'Wiki.Api.Error.Invalid'.
+  -- ^ Set the user's e-mail address, or remove it. A new address is not
+  -- verified until the user follows the link sent to it. Changing or
+  -- removing the address needs the current password where the user has
+  -- one (a wrong password is 'Wiki.Api.Error.Unauthenticated', counted as
+  -- a failed sign-in). Without a mail server it is 'Wiki.Api.Error.Invalid'.
   }
   deriving stock (Generic)
 
--- | A password reset by mail ("Wiki.Api.Security"), for someone who is not
--- signed in.
+-- | 'PasswordResetApi': a password reset by mail ("Wiki.Api.Security"),
+-- for a user who is not signed in.
 data PasswordResetApi mode = PasswordResetApi
   { request :: mode :- ReqBody '[JSON] ResetRequest :> PostNoContent
-  -- ^ Ask for a reset's link, by login or e-mail address: answered alike
-  -- whether or not it names anyone, and mailed only to a user's verified
-  -- address. Too many from one address are
-  -- 'Wiki.Api.Error.TooManyRequests'; a server that sends no mail
-  -- 'Wiki.Api.Error.Invalid', for every login alike.
+  -- ^ Request a reset link, by login or e-mail address. The response is the
+  -- same whether or not the request names a user, and the link is sent
+  -- only to a user's verified address. Too many requests from one address
+  -- are 'Wiki.Api.Error.TooManyRequests'; a server that sends no mail
+  -- responds 'Wiki.Api.Error.Invalid', for every login alike.
   , reset :: mode :- Capture "token" MailToken :> ReqBody '[JSON] NewPasswordByMail :> PostNoContent
-  -- ^ Set a new password with a reset's link, which ends every session the
-  -- user had: they sign in with it after. A link that has been used or has
-  -- expired is 'Wiki.Api.Error.NotFound'; a password that cannot be one
-  -- 'Wiki.Api.Error.Invalid'.
+  -- ^ Set a new password with a reset link, which ends every session the
+  -- user had; they then sign in with the new password. A link that has
+  -- been used or has expired is 'Wiki.Api.Error.NotFound'; an invalid
+  -- password is 'Wiki.Api.Error.Invalid'.
   }
   deriving stock (Generic)
 
--- | A response that sets or clears the session's cookie: the whole
--- @Set-Cookie@ header's value, which the server writes and the browser
--- keeps, unread by the application.
+-- | 'WithCookie': a response that sets or clears the session cookie. The
+-- value is the whole @Set-Cookie@ header, which the server writes and the
+-- browser stores; the application never reads it.
 type WithCookie a = Headers '[Header "Set-Cookie" Text] a
 
--- | The header the application's own requests carry, as its name and value:
--- the server refuses a request that changes something without it.
+-- | The header the application's own requests carry, as its name and
+-- value. The server refuses a request that changes something without it.
 --
--- It is how the server tells its application's requests from those a page
--- of another site makes a browser send with the wiki's cookie (a form
--- posted at it, a link followed, an image loaded): such a page can
--- send a form, but not a header of its own choosing, since a browser asks
--- the server first (CORS) and this server never says yes. Browsers say
--- where a request comes from themselves (@Sec-Fetch-Site@), but only to an
--- origin served over HTTPS or on the machine itself, and the wiki is
--- served over plain HTTP on a private network too (decision 20).
+-- The server uses it to tell its application's requests from requests a
+-- page of another site makes a browser send with the wiki's cookie (a
+-- form posted to the wiki, a link followed, an image loaded). Such a page
+-- can send a form, but not a header of its own choosing, because a
+-- browser asks the server first (CORS) and this server always refuses.
+-- Browsers do report a request's origin themselves (@Sec-Fetch-Site@),
+-- but only to an origin served over HTTPS or on the local machine, and
+-- the wiki may also be served over plain HTTP on a private network
+-- (decision 20).
 requestMarker :: (Text, Text)
 requestMarker = ("X-Wiki-Request", "1")
 
--- | A response that carries a page's version as its @ETag@.
+-- | 'Versioned': a response that carries a page's version as its @ETag@.
 type Versioned a = Headers '[Header "ETag" PageVersion] a
 
--- | The version a save was made against, which a save must send.
+-- | 'IfMatch': the version a save was made against, which a save must send.
 type IfMatch = Header' '[Required, Strict] "If-Match" PageVersion
 
 -- | A page, with its version.
 versioned :: Page -> Versioned Page
 versioned p = addHeader (pageVersion p) p
 
--- | The header that makes a browser save a response as a file.
+-- | 'Disposition': the header that makes a browser save a response as a file.
 type Disposition = Header "Content-Disposition" Text
 
 -- | The @Content-Disposition@ of an export made at this time: a file named

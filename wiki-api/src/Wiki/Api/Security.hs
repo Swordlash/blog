@@ -1,55 +1,58 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Keeping an account safe (WP4.11 of docs/PLAN.md): the sessions a user
--- has and may end, a second factor at sign-in, an e-mail address checked
--- by a mailed link, and a password reset by mail.
+-- | Account security (WP4.11 of docs/PLAN.md): a user's sessions, which
+-- they can end, a second factor at sign-in, an e-mail address verified by
+-- a link sent to it, and a password reset by mail.
 --
 -- = Sessions
 --
--- A user sees their sessions ('SessionSummary': when each began, when and
--- from where it was last used, which is the one asking) and ends any of
--- them, or all but the one asking. A session is named here by an id of its
--- own ('SessionRef'), never by the secret its cookie carries.
+-- A user sees their sessions ('SessionSummary': when each started, when
+-- and from which address it was last used, and which one is the current
+-- session) and can end any of them, or all except the current one. A
+-- session is identified here by an id of its own ('SessionRef'), never by
+-- the secret in its cookie.
 --
 -- = A second factor
 --
 -- A user may add a second factor to their password: a code from an
--- authenticator application (TOTP, RFC 6238). They ask for a secret
+-- authenticator application (TOTP, RFC 6238). They request a secret
 -- ('TotpEnrolment', shown as a QR code and as text), type one code the
--- application then shows ('OneTimeCode'), and are given recovery codes
--- ('RecoveryCodes'), once, each of which signs them in once in place of a
--- code. From then on signing in with the password is answered with
--- 'Wiki.Api.Error.SecondFactorRequired' and a short-lived cookie, and a code
--- sent to @session\/second-factor@ ends it. Taking the second factor away
--- takes a code (or a recovery code) too; an administrator may take it
--- away from a user who has lost both.
+-- application then shows ('OneTimeCode'), and receive recovery codes
+-- ('RecoveryCodes'), shown once. Each recovery code can replace a code
+-- for one sign-in. From then on, signing in with the password gets the
+-- response 'Wiki.Api.Error.SecondFactorRequired' and a short-lived
+-- cookie, and a code sent to @session\/second-factor@ completes the
+-- sign-in. Removing the second factor also needs a code (or a recovery
+-- code); an administrator may remove it for a user who has lost both.
 --
 -- = An e-mail address
 --
--- A user may give an e-mail address ('EmailChange'), which the server
--- trusts only once a link it mails there has been followed ('MailToken'):
--- only a verified address is sent a password reset.
+-- A user may set an e-mail address ('EmailChange'). The server trusts the
+-- address only after the user follows a link sent to it ('MailToken').
+-- Only a verified address receives a password reset.
 --
--- = A session is not enough
+-- = Sensitive changes need the password
 --
--- Whoever finds a browser left signed in must not be able to take the
--- account from its owner, as WP3.7 has it for a new password: an address
--- that receives the reset, and a second factor the owner does not have,
--- would each do that. So giving another address (or none), and beginning a
--- second factor, take the user's current password where they have one
--- ('CurrentPassword', the @password@ of 'EmailChange'); a wrong one counts
--- as a failed sign-in. The states say whether it is asked
--- (@asksPassword@). Sending the link again for the address one has changes
--- nothing, and asks nothing.
+-- Someone who finds a browser left signed in must not be able to take the
+-- account from its owner, as WP3.7 requires for a new password. A new
+-- address, which would receive the reset, or a second factor the owner
+-- does not have, would each allow that. So changing or removing the
+-- address, and starting a second factor, need the user's current password
+-- where they have one ('CurrentPassword', the @password@ of
+-- 'EmailChange'); a wrong password counts as a failed sign-in. The state
+-- responses say whether the password is needed (@asksPassword@). Sending
+-- the verification link again for the current address changes nothing,
+-- and needs no password.
 --
 -- = A password reset
 --
--- Someone who has forgotten their password asks for a reset with their
--- login or their verified address ('ResetRequest'). The answer is the same
--- whether or not that names anyone, so that it does not tell who has an
--- account; if it names a user with a verified address, a link is mailed
--- there, which sets a new password once ('NewPasswordByMail') within
--- 'resetLifetime' and ends every session the user had.
+-- A user who has forgotten their password requests a reset with their
+-- login or their verified address ('ResetRequest'). The response is the
+-- same whether or not the request names a user, so that it does not
+-- reveal who has an account. If it names a user with a verified address,
+-- a link is sent there. The link sets a new password once
+-- ('NewPasswordByMail'), within 'resetLifetime', and ends every session
+-- the user had.
 module Wiki.Api.Security
   ( -- * Sessions
     SessionRef (..)
@@ -85,21 +88,21 @@ import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 --------------------------------------------------------------------------------
 -- Sessions
 
--- | A session, as its user names it to end it: an id of its own, random,
--- that signs nobody in.
+-- | 'SessionRef': the id a user ends a session by. It is random, and does
+-- not sign anyone in.
 newtype SessionRef = SessionRef {text :: Text}
   deriving stock (Eq, Ord, Show, Generic)
   deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
 
--- | One of a user's sessions: @GET \/api\/v1\/account\/sessions@.
+-- | 'SessionSummary': one of a user's sessions, @GET \/api\/v1\/account\/sessions@.
 data SessionSummary = SessionSummary
   { id :: SessionRef
   , createdAt :: UTCTime
-  -- ^ When it was signed in.
+  -- ^ When the user signed in with it.
   , lastSeenAt :: UTCTime
-  -- ^ When it was last used, to the minute or so.
+  -- ^ When it was last used, to within about a minute.
   , address :: Text
-  -- ^ The network address it was last used from; empty if not known.
+  -- ^ The network address it was last used from; empty if unknown.
   , current :: Bool
   -- ^ Whether it is the session the request was made with.
   }
@@ -109,30 +112,30 @@ data SessionSummary = SessionSummary
 --------------------------------------------------------------------------------
 -- A second factor
 
--- | Whether a user has a second factor: @GET
+-- | 'SecondFactorState': whether a user has a second factor, @GET
 -- \/api\/v1\/account\/second-factor@.
 data SecondFactorState = SecondFactorState
   { enabled :: Bool
   , recoveryCodesLeft :: Int
-  -- ^ How many of their recovery codes have not been used.
+  -- ^ The number of their recovery codes not yet used.
   , asksPassword :: Bool
-  -- ^ Whether beginning one takes their current password: they have one.
+  -- ^ Whether starting a second factor needs their current password, that is whether they have one.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A new secret to give an authenticator application: @POST
--- \/api\/v1\/account\/second-factor\/totp@. It is not asked for at sign-in
--- until a code computed with it confirms that the application has it.
+-- | 'TotpEnrolment': a new secret for an authenticator application, @POST
+-- \/api\/v1\/account\/second-factor\/totp@. Sign-in does not ask for a code
+-- until a code computed with the secret confirms that the application has it.
 data TotpEnrolment = TotpEnrolment
   { secret :: Text
   -- ^ The secret in base32, to type into an application.
   , uri :: Text
-  -- ^ The @otpauth:\/\/@ address with the secret, for a camera.
+  -- ^ The @otpauth:\/\/@ URI with the secret, for a phone's camera.
   , qr :: [Text]
-  -- ^ That address as a QR code: its modules row by row, @1@ dark and @0@
-  -- light, without the quiet zone; what the panel draws, as an @\<svg>@ of
-  -- its own. Empty if the address would not fit in one.
+  -- ^ That URI as a QR code: its modules row by row, @1@ dark and @0@
+  -- light, without the quiet zone. The panel draws it as an @\<svg>@ of
+  -- its own. Empty if the URI does not fit in a QR code.
   }
   deriving stock (Eq, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -140,8 +143,9 @@ data TotpEnrolment = TotpEnrolment
 instance Show TotpEnrolment where
   showsPrec _ _ rest = "TotpEnrolment <hidden>" <> rest
 
--- | The password of the user asking, where they have one, given to do what
--- a session alone may not: @POST \/api\/v1\/account\/second-factor\/totp@.
+-- | 'CurrentPassword': the requesting user's password, where they have
+-- one, for an action a session alone does not allow: @POST
+-- \/api\/v1\/account\/second-factor\/totp@.
 newtype CurrentPassword = CurrentPassword {password :: Maybe Text}
   deriving stock (Eq, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -149,8 +153,9 @@ newtype CurrentPassword = CurrentPassword {password :: Maybe Text}
 instance Show CurrentPassword where
   showsPrec _ c rest = "CurrentPassword {password = " <> maybe "Nothing" (const "Just <hidden>") c.password <> "}" <> rest
 
--- | A code from an authenticator application, or a recovery code: what
--- confirms a second factor, signs in with one and takes one away.
+-- | 'OneTimeCode': a code from an authenticator application, or a recovery
+-- code. It confirms a second factor, completes a sign-in, and removes a
+-- second factor.
 newtype OneTimeCode = OneTimeCode {code :: Text}
   deriving stock (Eq, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -158,8 +163,8 @@ newtype OneTimeCode = OneTimeCode {code :: Text}
 instance Show OneTimeCode where
   showsPrec _ _ rest = "OneTimeCode <hidden>" <> rest
 
--- | The recovery codes of a second factor just turned on: shown this once,
--- and kept by the server only as hashes.
+-- | 'RecoveryCodes': the recovery codes of a second factor just turned on.
+-- They are shown only this once, and the server stores only their hashes.
 newtype RecoveryCodes = RecoveryCodes {codes :: [Text]}
   deriving stock (Eq, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -170,28 +175,28 @@ instance Show RecoveryCodes where
 --------------------------------------------------------------------------------
 -- An e-mail address
 
--- | A user's e-mail address as they see it: @GET \/api\/v1\/account\/email@.
+-- | 'EmailState': a user's e-mail address as they see it, @GET \/api\/v1\/account\/email@.
 data EmailState = EmailState
   { email :: Maybe Text
   , verified :: Bool
-  -- ^ Whether a link mailed to it has been followed since it was set.
+  -- ^ Whether the user has followed a link sent to it since it was set.
   , mailing :: Bool
-  -- ^ Whether the server can send mail at all; without it, no address can
-  -- be verified, and nothing is sent.
+  -- ^ Whether the server can send mail at all. Without mail, no address
+  -- can be verified, and nothing is sent.
   , mailError :: Maybe Text
-  -- ^ Why the link to verify it could not be sent, just now.
+  -- ^ Why sending the verification link failed, in this response only.
   , asksPassword :: Bool
-  -- ^ Whether giving another address, or none, takes their current
-  -- password: they have one.
+  -- ^ Whether changing or removing the address needs their current
+  -- password, that is whether they have one.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A user's new e-mail address, or none (blank): @PUT
+-- | 'EmailChange': a user's new e-mail address, or none (blank), @PUT
 -- \/api\/v1\/account\/email@. A new address is not verified, and a link to
--- verify it is mailed to it; giving the same address again mails another.
--- Another address, or none, takes their current password, where they have
--- one.
+-- verify it is sent to it; setting the same address again sends another
+-- link. Changing or removing the address needs the current password,
+-- where the user has one.
 data EmailChange = EmailChange
   { email :: Text
   , password :: Maybe Text
@@ -202,7 +207,7 @@ data EmailChange = EmailChange
 instance Show EmailChange where
   showsPrec _ c rest = "EmailChange {email = " <> show c.email <> ", password = " <> maybe "Nothing" (const "Just <hidden>") c.password <> "}" <> rest
 
--- | A user's address, as the administration sees it.
+-- | 'AccountEmail': a user's address, as the administration sees it.
 data AccountEmail = AccountEmail
   { email :: Text
   , verified :: Bool
@@ -213,9 +218,10 @@ data AccountEmail = AccountEmail
 --------------------------------------------------------------------------------
 -- Links by mail
 
--- | The secret a mailed link carries (@\/reset-password\/\<secret>\/@,
--- @\/verify-email\/\<secret>\/@): random, single use, and kept by the server
--- only as a hash. Never written where a 'Show' would put it.
+-- | 'MailToken': the secret in a link sent by mail
+-- (@\/reset-password\/\<secret>\/@, @\/verify-email\/\<secret>\/@). It is
+-- random, single-use, and stored by the server only as a hash. Its 'Show'
+-- instance never prints it.
 newtype MailToken = MailToken {text :: Text}
   deriving stock (Eq, Ord, Generic)
   deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
@@ -223,13 +229,13 @@ newtype MailToken = MailToken {text :: Text}
 instance Show MailToken where
   showsPrec _ _ rest = "MailToken <hidden>" <> rest
 
--- | Ask for a password reset: @POST \/api\/v1\/password-reset@, with a
--- login or an e-mail address.
+-- | 'ResetRequest': request a password reset, @POST
+-- \/api\/v1\/password-reset@, with a login or an e-mail address.
 newtype ResetRequest = ResetRequest {login :: Text}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | The new password a reset's link sets: @POST
+-- | 'NewPasswordByMail': the new password a reset link sets, @POST
 -- \/api\/v1\/password-reset\/\<secret>@.
 newtype NewPasswordByMail = NewPasswordByMail {password :: Text}
   deriving stock (Eq, Generic)
@@ -238,12 +244,12 @@ newtype NewPasswordByMail = NewPasswordByMail {password :: Text}
 instance Show NewPasswordByMail where
   showsPrec _ _ rest = "NewPasswordByMail {password = <hidden>}" <> rest
 
--- | How long a reset's link works: thirty minutes, as long as reading one's
--- mail takes, and short enough that a link left in a mailbox is soon no
--- way in.
+-- | How long a reset link is valid: thirty minutes, enough time to read
+-- one's mail, and short enough that a link left in a mailbox soon stops
+-- working.
 resetLifetime :: NominalDiffTime
 resetLifetime = 30 * 60
 
--- | How long a link that verifies an address works: a day.
+-- | How long a link that verifies an address is valid: a day.
 verificationLifetime :: NominalDiffTime
 verificationLifetime = 24 * 60 * 60
