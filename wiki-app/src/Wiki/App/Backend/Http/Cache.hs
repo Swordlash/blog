@@ -1,35 +1,60 @@
--- | 'Cache' is the HTTP backend's cache of API answers. It holds the
--- answers the program has already fetched (pages, spaces, the directory,
--- …), one entry per record, in the shape the server sent them. A view
--- whose data was fetched already renders at once instead of fetching
--- again. This is decision 18 of the plan: a view renders from the cache
--- when it can, and otherwise renders "Loading" and fetches in its
--- initializer. Entries are dropped when the wiki changes, so that nothing
--- stale is shown.
+-- | 'Cache' is the cache of API responses kept by the HTTP backend, the
+-- one that talks to @wiki-server@ over its API.
+--
+-- The application talks to the wiki through 'Wiki.App.Backend.MonadWiki'
+-- ("Wiki.App.Backend"), which has several implementations. The HTTP
+-- backend ("Wiki.App.Backend.Http") talks to @wiki-server@ over its API.
+-- The in-memory backend ("Wiki.App.Backend.Mem") keeps the wiki in the
+-- browser, for the demo, and saves it in IndexedDB. The tests have their
+-- own. Only the HTTP backend waits for the network, so only it has a
+-- cache.
+--
+-- 'Cache' holds the responses (the JSON bodies the API returns to a read)
+-- that the program has already fetched: pages, spaces, the
+-- administration's directory of users, and so on, one entry per record,
+-- in the shape the server sent them. A view whose data was fetched already
+-- renders from the cache at once, instead of rendering a loading state and
+-- fetching the same data again. This is decision 18 of the plan: a view
+-- renders from the cache when it can, and otherwise renders "Loading" and
+-- fetches in its initializer. Entries are dropped when the wiki changes,
+-- so that nothing stale is shown.
+--
+-- There is one cache per browser tab. It belongs to one wiki (the server
+-- the page was loaded from) and to one signed-in user: signing in or out
+-- empties it. It lives as long as the page. It holds at most what this tab
+-- has read since this client's last write, because a write empties it
+-- (the exceptions, drafts and comments, are below). Nothing else limits
+-- its size: a tab that only reads for a long time keeps everything it has
+-- read.
 --
 -- Any write this client makes empties the whole cache ('afterWrite'). The
 -- rule is coarse on purpose, because a write can change much more than the
 -- record it names. Moving a space changes the path of everything under it.
 -- Creating a space grants its creator a permission, which changes the
--- session. Saving a page discards the saver's draft. Saving a draft is the
--- exception: it changes that draft and nothing else, and it happens every
--- few seconds while someone types, so the new draft replaces the cached
--- one instead.
+-- session. Saving a page discards the saver's draft. This does not defeat
+-- the cache's purpose. The cache is for moving between views that only
+-- read, which is most of what a tab does. Writes are rare by comparison,
+-- and after one, the next views fetch their data once and are cached
+-- again.
 --
--- The cache lives as long as the page in the browser. A change someone
--- else makes on the server is not seen until this client writes, or the
--- page is reloaded. The exception is a page save reported by the live
--- channel: 'afterEvent' then drops the cached pages, and the other entries
--- a save changes.
+-- Saving a draft is the first exception: it changes that draft and nothing
+-- else, and it happens every few seconds while someone types, so the new
+-- draft replaces the cached one instead.
+--
+-- A change someone else makes on the server is not seen until this client
+-- writes, or the page is reloaded. The exception is a page save reported
+-- by the live channel ("Wiki.App.Live"): 'afterEvent' then drops the
+-- cached pages, and the other entries a save changes.
 --
 -- Refusals are cached too. 'NotFound' (the space is not there) and
 -- 'Forbidden' (the reader may not see it) are what the view shows. The
--- server may prerender a page with such a refusal in it
--- ("Wiki.App.Backend.Http.Preload"), and the program renders the same page
--- only if it has the refusal without a fetch. Both refusals depend on the
--- wiki's content and permissions, so they can go stale like any answer,
--- and are dropped with the rest. 'Unreachable' is never cached: a retry
--- may well work.
+-- server may prerender an error page for such a refusal
+-- ("Wiki.App.Backend.Http.Preload"). The program renders the same error
+-- page only if that error is already in the cache (the prerender put it
+-- there); otherwise it would render a loading state and fetch. Both
+-- refusals depend on the wiki's content and permissions, so they can go
+-- stale like any response, and are dropped with the rest. 'Unreachable'
+-- is never cached: a retry may well work.
 --
 -- A page's comment threads ("Wiki.Core.Comment") are cached by page, and
 -- writing a comment is the second exception to emptying the cache. A
@@ -60,7 +85,8 @@
 --
 -- A notification received over the live channel is added at the front of
 -- the cached ones ('withNotice'). Marking notifications read, or choosing
--- a watch, puts the server's answer in the cache and changes nothing else.
+-- a watch, puts the server's response in the cache and changes nothing
+-- else.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
   , emptyCache
@@ -125,8 +151,10 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
 import Wiki.Core.Version (Author, Version, VersionInfo)
 
--- | The cached answers, one field per backend read. A field holds what the
--- read returned, or the refusal it returned (see 'kept').
+-- | The cached responses, one field for each of 'Wiki.App.Backend.MonadWiki''s
+-- read methods ('Wiki.App.Backend.getPage', 'Wiki.App.Backend.listPages',
+-- …) and of the other backend classes' reads. A field holds what the read
+-- returned, or the refusal it returned (see 'kept').
 data Cache = Cache
   { session :: Maybe Session
   , spaces :: Maybe [Space]
@@ -150,9 +178,10 @@ data Cache = Cache
   , versionLists :: Map PageId (Either WikiError [VersionInfo])
   -- ^ 'Wiki.App.Backend.listVersions', by page.
   , versions :: Map (PageId, UTCTime) (Either WikiError Version)
-  -- ^ 'Wiki.App.Backend.getVersion', by page and time. A version never
-  -- changes, but it is deleted with its page, so these entries are dropped
-  -- with the rest.
+  -- ^ 'Wiki.App.Backend.getVersion', by page and time. Only the versions
+  -- this tab has opened are cached; the server keeps every saved version
+  -- of every page ("Wiki.Core.Version"). A version never changes, but it
+  -- is deleted with its page, so these entries are dropped with the rest.
   , directory :: Maybe (Either WikiError Directory)
   -- ^ 'Wiki.App.Backend.Admin.directory'.
   , settings :: Maybe (Either WikiError WikiSettings)
@@ -166,9 +195,10 @@ data Cache = Cache
   , backups :: Maybe (Either WikiError Backups)
   -- ^ 'Wiki.App.Backend.Admin.backups'.
   , activity :: Maybe (Either WikiError Activity)
-  -- ^ 'Wiki.App.Backend.Admin.activity', first page only: the page the
-  -- server prerendered the administration with. It answers one read only
-  -- (the backend's 'once'), and is then removed.
+  -- ^ 'Wiki.App.Backend.Admin.activity': the first page of the audit log,
+  -- as the server put it into the prerendered administration page. It is
+  -- used for one read only (the backend's 'once') and then removed, so
+  -- that the next read fetches the log as it is now.
   , status :: Maybe (Either WikiError ServerStatus)
   -- ^ 'Wiki.App.Backend.Admin.serverStatus', cached and removed in the
   -- same way as 'activity'.
@@ -212,7 +242,7 @@ emptyCache =
     , watches = mempty
     }
 
--- | Whether an answer is cached. A successful answer is, and so are the
+-- | Whether a response is cached. A successful one is, and so are the
 -- refusals that the wiki's content or permissions decide ('NotFound',
 -- 'Forbidden'). 'Unreachable' is not cached, and neither is a refusal of
 -- the request itself.
@@ -236,8 +266,8 @@ cachedPage sid path c =
 cachedSearch :: SearchQuery -> Cache -> Maybe [SearchHit]
 cachedSearch q c = snd <$> find ((== q) . fst) c.searches
 
--- | The cache with a read's answer added. There is one such function per
--- read.
+-- | The cache with a read's response added. There is one such function
+-- per read.
 withSession :: Session -> Cache -> Cache
 withSession s c = c {session = Just s}
 
@@ -259,9 +289,10 @@ withPostDetails sid d c = c {postDetails = Map.insert sid d c.postDetails}
 withPageAt :: SpaceId -> [Slug] -> Either WikiError Page -> Cache -> Cache
 withPageAt sid path p c = c {pageAt = Map.insert (sid, path) p c.pageAt}
 
--- | Set the signed-in user's cached draft of a page. @Just (Right
--- Nothing)@ means they have no draft, and @Just (Left e)@ that the read
--- was refused. 'Nothing' removes the entry: the draft is not known.
+-- | Set what the cache knows of the signed-in user's draft of a page. The
+-- value says one of four things: the user has this draft; the user has no
+-- draft; the read was refused (with the error); or the draft is not
+-- known, which removes the entry so that the next read fetches it.
 withDraft :: PageId -> Maybe (Either WikiError (Maybe Draft)) -> Cache -> Cache
 withDraft pid d c = c {drafts = Map.alter (const d) pid c.drafts}
 
@@ -300,12 +331,12 @@ withActivity a c = c {activity = Just a}
 withStatus :: Either WikiError ServerStatus -> Cache -> Cache
 withStatus st c = c {status = Just st}
 
--- | Remove the cached first page of the audit log, once it has answered
--- a read.
+-- | Remove the cached first page of the audit log, once it has been used
+-- for a read.
 forgetActivity :: Cache -> Cache
 forgetActivity c = c {activity = Nothing}
 
--- | Remove the cached server status, once it has answered a read.
+-- | Remove the cached server status, once it has been used for a read.
 forgetStatus :: Cache -> Cache
 forgetStatus c = c {status = Nothing}
 
