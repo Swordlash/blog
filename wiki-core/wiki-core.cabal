@@ -9,8 +9,13 @@ maintainer:         mateusz.goslinowski@gmail.com
 category:           Web
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
--- The built-in templates (Wiki.Core.Template), embedded when it is compiled.
+-- The built-in templates (Wiki.Core.Template), and the authors' reference
+-- for the wiki's Markdown, which the writing assistant sends to a model
+-- (Wiki.Core.Assistant.Reference), embedded when it is compiled. The
+-- reference is docs/markdown.md, reached through a symbolic link in the
+-- package, since cabal takes no file outside it.
 extra-source-files: templates/*.md
+                    reference/markdown.md
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built
 -- with (cabal.project makes them errors) and the extensions its code assumes.
@@ -56,6 +61,10 @@ library
   exposed-modules:
       Wiki.Core.Access
       Wiki.Core.Anchor
+      Wiki.Core.Assistant
+      Wiki.Core.Assistant.Edit
+      Wiki.Core.Assistant.Prompt
+      Wiki.Core.Assistant.Reference
       Wiki.Core.Attachment
       Wiki.Core.Audit
       Wiki.Core.Blog
@@ -122,6 +131,7 @@ test-suite wiki-core-test
   main-is:          Test.hs
   other-modules:
       Test.Anchor
+      Test.Assistant
       Test.Attachment
       Test.Blog
       Test.Comment

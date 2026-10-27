@@ -2,6 +2,7 @@ module Main (main) where
 
 import Protolude
 import Test.Anchor qualified as Anchor
+import Test.Assistant qualified as Assistant
 import Test.Attachment qualified as Attachment
 import Test.Blog qualified as Blog
 import Test.Comment qualified as Comment
@@ -53,3 +54,4 @@ main = hspec $ do
   Blog.spec
   Toc.spec
   Template.spec
+  Assistant.spec
