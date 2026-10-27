@@ -1251,6 +1251,7 @@ try {
     });
     await writer.goto(url("/"));
     await writer.locator("#app .directory h1", { hasText: "Spaces" }).waitFor({ timeout });
+    await eventually(async () => assert.ok(await programStarted(writer), "no listener yet"), "the program starting");
     // The settings, from the user menu: the demo starts as admin.
     await writer.locator("#app .user-switcher-toggle").click();
     await writer.locator("#app .user-menu .assistant-settings-entry").click();
