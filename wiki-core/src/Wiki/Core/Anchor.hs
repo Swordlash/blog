@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Where an inline comment is on a page: a quote of the page's text, found
 -- again however the page changes around it, and marked where it is found.
@@ -62,7 +62,6 @@ module Wiki.Core.Anchor
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Core (HTML (..))
@@ -71,6 +70,7 @@ import Halogen.VDom.DOM.Prop (Prop (..))
 import Halogen.VDom.Types (ElemName (..), VDom (..), runGraft)
 import Protolude
 import Wiki.Core.Id (CommentThreadId (..))
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 -- | A quote of a page's rendered text: the text itself, exactly, and up to
 -- 'contextLength' characters of the text just before it and just after
@@ -80,8 +80,9 @@ data Anchor = Anchor
   , prefix :: Text
   , suffix :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Anchor
 
 -- | How much context an anchor keeps on each side: enough to tell one
 -- occurrence of a phrase from another, little enough that an edit nearby

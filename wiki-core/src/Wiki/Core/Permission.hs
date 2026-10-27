@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Who may do what: the permission model, as data and pure rules.
 --
@@ -59,11 +59,11 @@ module Wiki.Core.Permission
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Set qualified as Set
 import Protolude
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Path (ancestry)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group, Membership, User, groupsOf)
@@ -75,8 +75,9 @@ data GlobalPermission
     Administer
   | -- | Creating spaces.
     CreateSpaces
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+deriveValueJSON defaultOptions ''GlobalPermission
 
 -- | What can be granted on a space, and so on its subspaces and pages.
 data SpacePermission
@@ -86,8 +87,9 @@ data SpacePermission
     Edit
   | -- | Changing its grants, deleting it and moving it; implies 'Edit'.
     AdministerSpace
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+deriveValueJSON defaultOptions ''SpacePermission
 
 -- | Whether holding the first global permission means holding the second.
 globalImplies :: GlobalPermission -> GlobalPermission -> Bool
@@ -105,16 +107,18 @@ data Subject
   = SubjectUser UserId
   | -- | Every member of the group, as membership is at the time of asking.
     SubjectGroup GroupId
-  deriving stock (Eq, Ord, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show)
+
+deriveValueJSON defaultOptions ''Subject
 
 -- | A global permission given to someone.
 data GlobalGrant = GlobalGrant
   { subject :: Subject
   , permission :: GlobalPermission
   }
-  deriving stock (Eq, Ord, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show)
+
+deriveValueJSON defaultOptions ''GlobalGrant
 
 -- | A permission on a space given to someone; it holds in the space's
 -- subspaces too.
@@ -123,8 +127,9 @@ data SpaceGrant = SpaceGrant
   , subject :: Subject
   , permission :: SpacePermission
   }
-  deriving stock (Eq, Ord, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show)
+
+deriveValueJSON defaultOptions ''SpaceGrant
 
 -- | The grants the rules look at. The space grants may be all of the wiki's
 -- or only those of the spaces asked about: a rule only counts the grants of
@@ -140,8 +145,9 @@ data Grants = Grants
   , spaces :: [SpaceGrant]
   , access :: Access
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Grants
 
 -- | Both grants, in a wiki that is closed if either says so: adding grants
 -- never opens a wiki that was closed.
@@ -167,8 +173,9 @@ data SpaceAccess = SpaceAccess
   , groups :: [Group]
   -- ^ Every group, by name.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SpaceAccess
 
 -- | A signed-in user, as the rules see them: who they are and which groups
 -- they are in. Someone who is not signed in is 'Nothing' where a rule asks
@@ -177,8 +184,9 @@ data Principal = Principal
   { user :: UserId
   , groups :: Set GroupId
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Principal
 
 -- | A user with the groups the membership puts them in.
 principal :: Membership -> UserId -> Principal

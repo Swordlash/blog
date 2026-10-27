@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Files attached to a page: images, video, audio and anything else.
 --
@@ -17,11 +17,11 @@ module Wiki.Core.Attachment
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 -- | One file attached to a page.
 data Attachment = Attachment
@@ -35,8 +35,7 @@ data Attachment = Attachment
   -- ^ In bytes.
   , source :: Source
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Where an attachment's bytes are.
 data Source
@@ -45,8 +44,12 @@ data Source
     SourceUrl Text
   | -- | In the server's blob store, which serves it at an address of its own.
     SourceBlob BlobId
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Source
+
+-- Below 'Source', which 'Attachment' holds ("Wiki.Core.Json" says why).
+deriveValueJSON defaultOptions ''Attachment
 
 -- | What a page shows an attachment as.
 data MediaKind
@@ -58,8 +61,9 @@ data MediaKind
     MediaAudio
   | -- | A link to the file.
     MediaOther
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+deriveValueJSON defaultOptions ''MediaKind
 
 -- | The kind of a media type, by its top-level type: @image\/…@, @video\/…@,
 -- @audio\/…@, and anything else, including a type that does not parse. Case

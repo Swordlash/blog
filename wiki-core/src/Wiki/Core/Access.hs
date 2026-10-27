@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Whom the wiki lets in (WP3.5 of docs/PLAN.md): an open wiki, where
 -- anyone may read the public spaces and make themself an account, or a
@@ -17,8 +17,8 @@ module Wiki.Core.Access
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Protolude
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 -- | Whom the wiki lets in.
 data Access
@@ -27,8 +27,9 @@ data Access
   | -- | Only those who have signed in see anything at all, public spaces
     -- included, and accounts are made by invitation.
     Closed
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+deriveValueJSON defaultOptions ''Access
 
 -- | The setting as the server keeps it, and as a person types it on the
 -- console: @open@ or @closed@.

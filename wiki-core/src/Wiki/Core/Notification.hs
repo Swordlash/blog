@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Mentions, watching and notifications (WP4.13 of docs/PLAN.md): who is
 -- told of what happens to a page, as pure rules over plain data, which
@@ -83,6 +83,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Markdown.Ast (Block, mentions, parseMarkdown, plainText)
 import Wiki.Core.Markdown.Ast qualified as Md
 import Wiki.Core.Permission (Grants, Principal (..), canView)
@@ -104,7 +105,7 @@ data Kind
     Commented
   | -- | Someone saved a page they watch.
     Changed
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 instance ToJSON Kind where
   toJSON = toJSON . kindName
@@ -125,8 +126,9 @@ data PageLocation = PageLocation
   { space :: [Slug]
   , page :: [Slug]
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''PageLocation
 
 -- | Something someone is told of.
 data Notification = Notification
@@ -148,8 +150,9 @@ data Notification = Notification
   -- ^ Where the page is now, if the backend knows: a notification is read
   -- with it, since a page may move after it.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Notification
 
 -- | A notification with where its page is now.
 withLocation :: Maybe PageLocation -> Notification -> Notification
@@ -181,8 +184,7 @@ data Watch = Watch
   { watching :: Bool
   , reason :: WatchReason
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Why someone watches something or does not.
 data WatchReason
@@ -194,8 +196,12 @@ data WatchReason
     OwnPage
   | -- | Nobody chose anything: not watched.
     Unchosen
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''WatchReason
+
+-- Below 'WatchReason', which 'Watch' holds ("Wiki.Core.Json" says why).
+deriveValueJSON defaultOptions ''Watch
 
 -- | Whether someone watches a page: their mark on it, else the nearest of
 -- its spaces' (the chain from the top level down, its own space last),
@@ -237,7 +243,7 @@ fromSpaces marks chain = head [Watch w (FromSpace s.id) | s <- reverse chain, Ju
 -- | How someone wants their notifications mailed: not at all, each as it
 -- comes, or once a day, all of the day's together.
 data MailMode = MailOff | MailAtOnce | MailDaily
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 instance ToJSON MailMode where
   toJSON = toJSON . mailModeName

@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Users, groups and who is in which group. Nothing secret lives here:
 -- password hashes and sessions are the server's (@wiki-server@).
@@ -18,12 +18,12 @@ module Wiki.Core.User
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Protolude
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 -- | Someone who can sign in.
 data User = User
@@ -33,8 +33,9 @@ data User = User
   , displayName :: Text
   -- ^ What pages show them as.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''User
 
 -- | How whoever is asking came to be who they are, which decides whether
 -- they may sign in or out: someone nobody has signed in as may sign in,
@@ -49,8 +50,9 @@ data Standing
   | -- | The server's operator, who is the administrator by where they ask
     -- from: the server's loopback admin listener.
     Operator
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Standing
 
 -- | A provider people may sign in with instead of a password (OpenID
 -- Connect, WP3.6 of docs/PLAN.md), as the application shows it: the name
@@ -62,16 +64,18 @@ data SignInProvider = SignInProvider
   { name :: Text
   , label :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SignInProvider
 
 -- | A set of users that permissions can be granted to at once.
 data Group = Group
   { id :: GroupId
   , name :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Group
 
 -- | The members of each group, as the backend stores them. In JSON, an
 -- object keyed by group id.

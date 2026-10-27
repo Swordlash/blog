@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | A page's history: every save of a page is a version of it, kept for as
 -- long as the page is.
@@ -27,10 +27,10 @@ module Wiki.Core.Version
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 -- | Who saved a version, as a reader of the history sees them.
 data Author = Author
@@ -39,8 +39,9 @@ data Author = Author
   -- ^ Their display name; for someone who is no longer one of the wiki's
   -- users, their id, which is all that is left of them.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Author
 
 -- | One version of a page as its history lists it: when, by whom, and under
 -- what title. The body is fetched by itself, since a history lists many
@@ -54,8 +55,9 @@ data VersionInfo = VersionInfo
   -- ^ 'Nothing' when nobody is known to have saved it: a page that came
   -- in whole, as an import does.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''VersionInfo
 
 -- | One version of a page, whole.
 data Version = Version
@@ -66,8 +68,9 @@ data Version = Version
   -- ^ The Markdown as it was saved.
   , author :: Maybe Author
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Version
 
 -- | What a history lists of a version.
 versionInfo :: Version -> VersionInfo

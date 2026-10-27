@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Searching pages by their title and their text: the query, the hits, and
 -- the matcher the in-memory backend runs over the pages a user may view.
@@ -63,6 +63,7 @@ import Data.Text qualified as T
 import Data.Text.Unsafe qualified as U
 import Protolude
 import Wiki.Core.Id (PageId, SpaceId)
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Markdown.Ast (Block (..), Footnote (..), ListItem (..), parseMarkdown, plainText)
 import Wiki.Core.Markdown.Html (htmlText, parseHtml)
 import Wiki.Core.Page (Page (..))
@@ -86,8 +87,7 @@ data SearchQuery = SearchQuery
   -- the start of a page rather than a page to read, and its placeholders
   -- would be found by every search for a meeting.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | A query for these words in every space, for a list of the size a page of
 -- results shows, without the templates.
@@ -101,16 +101,14 @@ queryWords q = ordNub (T.words (foldText q.text))
 -- | Some text with the parts that matched the query marked, for a reader to
 -- see why it is there: a page's title, or a snippet of its text.
 newtype Snippet = Snippet [Piece]
-  deriving stock (Eq, Show, Generic)
-  deriving newtype (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | A piece of a 'Snippet': its text, and whether it is a match.
 data Piece = Piece
   { text :: Text
   , match :: Bool
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | A snippet's text, without its marks.
 snippetText :: Snippet -> Text
@@ -133,8 +131,7 @@ data SearchHit = SearchHit
   -- match in it, the query's words marked, with an ellipsis where it was
   -- cut; the start of the text when only the title matched.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | How long a snippet is, about: the characters of a page's text it shows
 -- (a cut is moved to the blank nearest it, so that no word is cut in two).
@@ -382,3 +379,15 @@ snippetOf ws f = Snippet (ellipsis (start > 0) <> pieces <> ellipsis (end < f.le
            in case T.breakOnEnd " " window of
                 ("", _) -> limit
                 (upToBlank, _) -> matchEnd + T.length upToBlank - 1
+
+-- The JSON instances, last, since declarations above name functions
+-- declared below them ("Wiki.Core.Json" says why that matters), each after
+-- those of the types it holds; a snippet's are its list of pieces'.
+deriveValueJSON defaultOptions ''SearchQuery
+deriveValueJSON defaultOptions ''Piece
+
+deriving newtype instance FromJSON Snippet
+
+deriving newtype instance ToJSON Snippet
+
+deriveValueJSON defaultOptions ''SearchHit

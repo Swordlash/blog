@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | The order a space lists its children in: its subspaces in one order,
 -- its pages (and the pages under each of them) in another, each chosen in
@@ -44,12 +44,12 @@ module Wiki.Core.Order
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Protolude
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Path (TreeNode (..), childrenOf)
 
 -- | How a space orders one kind of its children.
@@ -62,8 +62,9 @@ data ChildOrder
     OldestFirst
   | -- | By the positions they were put in by hand.
     ByHand
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+deriveValueJSON defaultOptions ''ChildOrder
 
 -- | Which of a space's children an order is for.
 data Children
@@ -71,8 +72,9 @@ data Children
     ChildSpaces
   | -- | Its pages, and the pages under each of them.
     ChildPages
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+deriveValueJSON defaultOptions ''Children
 
 -- | An order as a person reads it, in a menu or a sentence.
 orderName :: ChildOrder -> Text
@@ -185,8 +187,9 @@ data Shift
     ShiftToTop
   | -- | After all of them.
     ShiftToBottom
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+deriveValueJSON defaultOptions ''Shift
 
 -- | The siblings, in the order they are shown, with the one that has this
 -- id moved; unchanged if none has it, or if it cannot move that way (up

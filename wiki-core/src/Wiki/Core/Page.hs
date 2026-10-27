@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Pages: Markdown in a tree within a space.
 module Wiki.Core.Page
@@ -11,12 +11,12 @@ module Wiki.Core.Page
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Order (ChildOrder, Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Slug
@@ -52,8 +52,9 @@ data Page = Page
   -- tree, left out of a search that does not ask for templates, and
   -- offered as the start of a new page.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Page
 
 instance TreeNode Page where
   type NodeId Page = PageId

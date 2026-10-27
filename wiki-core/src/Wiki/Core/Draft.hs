@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Drafts: what someone has written in the editor and not yet saved, kept
 -- for them alone.
@@ -25,10 +25,10 @@ module Wiki.Core.Draft
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 -- | A user's unsaved work on a page.
 data Draft = Draft
@@ -43,5 +43,6 @@ data Draft = Draft
   , savedAt :: UTCTime
   -- ^ When the draft was last saved.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Draft

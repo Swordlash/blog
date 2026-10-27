@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | A space shown as a blog (WP4.14 of docs/PLAN.md): which of its pages
 -- are its posts, in what order, a page of them at a time, and the excerpt
@@ -41,10 +41,10 @@ module Wiki.Core.Blog
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
 import Protolude
 import Wiki.Core.Id (PageId)
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), ListItem (..), parseMarkdown)
 import Wiki.Core.Order (ChildOrder (..), childrenInOrder)
 import Wiki.Core.Page (Page (..))
@@ -111,8 +111,9 @@ data PostDetails = PostDetails
   { author :: Maybe Author
   , comments :: Int
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''PostDetails
 
 -- | The details of a page nothing is known of.
 noDetails :: PostDetails

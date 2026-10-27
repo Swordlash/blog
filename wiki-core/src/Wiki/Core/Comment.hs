@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Comments on a page, as Confluence has them (WP4.5 and decision 23 of
 -- docs/PLAN.md): threads, each opened by a comment and answered by
@@ -53,12 +53,12 @@ module Wiki.Core.Comment
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Permission (Grants, Principal (..), canAdministerSpace, canView)
 import Wiki.Core.Space (Space)
 import Wiki.Core.Version (Author (..))
@@ -78,8 +78,7 @@ data Thread = Thread
   -- ^ Its comments, the oldest first: the first opened it, the rest are
   -- replies. Never empty.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | A comment.
 data Comment = Comment
@@ -93,8 +92,12 @@ data Comment = Comment
   , editedAt :: Maybe UTCTime
   -- ^ When it was last edited, if it has been.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Comment
+
+-- Below 'Comment', which 'Thread' holds ("Wiki.Core.Json" says why).
+deriveValueJSON defaultOptions ''Thread
 
 -- | Whether a thread is about a quote of the page, rather than the page.
 isInline :: Thread -> Bool

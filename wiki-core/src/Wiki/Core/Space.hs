@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Spaces: the tree that holds the wiki's pages, and the unit permissions
 -- are granted on.
@@ -41,6 +41,7 @@ import Data.Time (UTCTime)
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Slug
@@ -87,8 +88,7 @@ data Space = Space
   -- posts, the newest first, under its home page if it has one, and a
   -- public one has feeds.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 instance TreeNode Space where
   type NodeId Space = SpaceId
@@ -149,7 +149,7 @@ data Icon
     -- blob it is), with its media type. Its address is the backend's to
     -- say ('Wiki.App.Backend.spaceIconUrl').
     IconImage BlobId Text
-  deriving stock (Eq, Show, Generic)
+  deriving stock (Eq, Show)
 
 -- | @{"emoji": "…"}@, @{"colour": "teal"}@ or @{"image": blob, "mediaType":
 -- "image/png"}@: an object with a field per kind, as the export's records
@@ -171,6 +171,9 @@ instance FromJSON Icon where
       (Nothing, Just c, Nothing) -> pure (IconColour c)
       (Nothing, Nothing, Just b) -> IconImage b <$> o .: "mediaType"
       _ -> fail "an icon is an emoji, a colour or an image"
+
+-- Below 'Icon', which 'Space' holds ("Wiki.Core.Json" says why).
+deriveValueJSON defaultOptions ''Space
 
 -- | The colours a space's icon may be, by the names the stylesheet gives
 -- them classes for (@space-icon-\<name>@), each readable with a white
@@ -240,8 +243,9 @@ data SpaceProfile = SpaceProfile
   , homePage :: Maybe PageId
   , blog :: Bool
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SpaceProfile
 
 -- | A space's profile as it is.
 profileOf :: Space -> SpaceProfile
