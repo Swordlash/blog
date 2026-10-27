@@ -1,23 +1,25 @@
--- | A whole wiki as one archive: what the demo exports and imports as a zip
--- file, and what the server of Phase 2 will import and export too, so that a
--- wiki moves between them as one file.
+-- | Export and import of a whole wiki as one archive: what the demo
+-- exports and imports as a zip file, and what the server imports and
+-- exports too, so that a wiki moves between them as one file.
 --
 -- = The archive
 --
--- An archive is a set of files, by path ('writeArchive' gives them, and
--- 'readArchive' takes them; the zip container around them is the caller's):
+-- An archive is a set of files, by path ('writeArchive' produces them,
+-- and 'readArchive' consumes them; the zip container is the caller's
+-- business):
 --
 -- * @manifest.json@: @{"format": "wiki-export", "formatVersion": 1,
---   "createdAt": …, "app": …}@, what the archive is, which version of this
---   format it is written in, when and by what.
+--   "createdAt": …, "app": …}@: what the archive is, which version of this
+--   format it is written in, when, and by which program.
 -- * @users.json@, @groups.json@ (each group with its @members@),
 --   @grants.json@ (@{"global": […], "spaces": […]}@), @spaces.json@,
 --   @pages.json@: a list of records each, in the order of their ids.
 -- * @attachments.json@: every attachment's record, with the page it is
---   attached to, in each page's order; one whose bytes the wiki keeps names
---   its file, @attachments/\<attachment id>/\<name>@, which holds the bytes.
--- * @icons/\<space id>@: the image a space is pictured with, for a space
---   whose icon is one (its record names the file, 'iconFile').
+--   attached to, in each page's order. One whose bytes the wiki stores
+--   names its file, @attachments/\<attachment id>/\<name>@, which holds the
+--   bytes.
+-- * @icons/\<space id>@: a space's icon image, for a space whose icon is an
+--   image (its record names the file, 'iconFile').
 -- * @audit.json@: the audit log ("Wiki.Core.Audit"), oldest first, written
 --   only when it has entries; an archive without it has none.
 --
@@ -25,8 +27,8 @@
 -- functions here rather than derived from the Haskell types, so that
 -- renaming a field in the code cannot change the format by accident. The
 -- same functions write the demo's records in the browser's IndexedDB
--- ("Wiki.App.Backend.Mem.Persist" in @wiki-app@), so a record kept and a
--- record exported are one format.
+-- ("Wiki.App.Backend.Mem.Persist" in @wiki-app@), so a saved record and an
+-- exported record have one format.
 --
 -- = Compatibility
 --
@@ -35,23 +37,23 @@
 -- * __Additions need no new version.__ A reader ignores the fields it does
 --   not know, and a field that may be missing has a default (a space is
 --   private and has no math macros, lists its children by name and was
---   made with its first page, a page has no parent and an empty body, a
---   child put by hand is at position 0, a group has no members, unless the
---   record says otherwise). So an older program reads a newer
---   archive of the same version, and a newer one an older archive.
+--   created with its first page; a page has no parent and an empty body; a
+--   child ordered by hand is at position 0; a group has no members; unless
+--   the record says otherwise). So an older program reads a newer archive
+--   of the same version, and a newer program an older archive.
 -- * __Anything else bumps 'formatVersion'__: a field removed or renamed, or
 --   one whose meaning changes. The reader then migrates an archive of every
---   older version to the current one, a version at a time ('migrations'),
---   before reading it, so every archive ever written keeps importing. An
---   archive of a version newer than this program knows is refused, with a
---   message that says so, never read in part.
+--   older version to the current one, one version at a time
+--   ('migrations'), before reading it, so every archive ever written can
+--   still be imported. An archive of a version newer than this program
+--   knows is refused, with a message that says so, never read in part.
 --
--- 'readArchive' checks the whole archive before it gives anything back:
--- every file is there and reads, every id is unique, everything a record
--- refers to is in the archive, the trees of spaces and pages have no cycles
--- and no two siblings share a slug, and every attachment's file is there
--- with as many bytes as its record says. What it refuses, it refuses with
--- the reason, naming the file and the record.
+-- 'readArchive' checks the whole archive before it returns anything: every
+-- file is there and parses, every id is unique, everything a record refers
+-- to is in the archive, the trees of spaces and pages have no cycles and no
+-- two siblings share a slug, and every attachment's file is there with as
+-- many bytes as its record says. A refusal comes with the reason, naming
+-- the file and the record.
 module Wiki.Core.Export
   ( -- * Archives
     Archive (..)
@@ -107,13 +109,14 @@ import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.User (Group (..), Membership, User (..))
 
--- | A whole wiki: its people, its grants, its spaces and pages (each page
+-- | A whole wiki: its users, its grants, its spaces and pages (each page
 -- with its attachments' records), and the bytes of the attachments it
--- keeps, by the blob each attachment names.
+-- stores, by the blob each attachment names.
 data Archive = Archive
   { createdAt :: UTCTime
   , app :: Text
-  -- ^ What wrote it, for a person to read: the program and its version.
+  -- ^ The program that wrote it, for a person to read: its name and
+  -- version.
   , users :: [User]
   , groups :: [Group]
   , membership :: Membership
@@ -122,7 +125,7 @@ data Archive = Archive
   , pages :: [Page]
   , blobs :: Map BlobId ByteString
   , audit :: [AuditEntry]
-  -- ^ The audit log, oldest first: who did what to the wiki's
+  -- ^ The audit log, oldest first: who did what in the wiki's
   -- administration (WP4.10 of docs/PLAN.md).
   }
   deriving stock (Eq, Show)
@@ -175,7 +178,7 @@ writeArchive a =
 attachmentFile :: Attachment -> Text
 attachmentFile x = "attachments/" <> x.id.text <> "/" <> x.name
 
--- | Where the image a space is pictured with is in an archive.
+-- | Where a space's icon image is in an archive.
 iconFile :: Space -> Text
 iconFile s = "icons/" <> s.id.text
 
@@ -183,7 +186,7 @@ iconFile s = "icons/" <> s.id.text
 encodeJson :: (ToJSON a) => a -> ByteString
 encodeJson = BSL.toStrict . encode
 
--- | A value read from JSON with a parser of this module's, or why not.
+-- | A value parsed from JSON with one of this module's parsers, or why not.
 decodeJson :: (Value -> Parser a) -> ByteString -> Either Text a
 decodeJson parse bytes = first toS (eitherDecodeStrict' bytes >>= parseEither parse)
 
@@ -198,15 +201,16 @@ type Files = Map Text Value
 recordFiles :: [Text]
 recordFiles = ["users.json", "groups.json", "grants.json", "spaces.json", "pages.json", "attachments.json"]
 
--- | How an archive of each older version becomes one of the next, by the
--- version it starts from: a function of its parsed JSON files. Version 1
--- is the first, so there are none yet. A change that bumps
--- 'currentVersion' adds the step from the version before, and every older
+-- | How an archive of each older version becomes one of the next version,
+-- by the version it starts from: a function of its parsed JSON files.
+-- Version 1 is the first, so there are none yet. A change that increments
+-- 'currentVersion' adds the step from the previous version, and every older
 -- archive then goes through each step after its own, in turn.
 migrations :: Map Int (Files -> Either Text Files)
 migrations = mempty
 
--- | The wiki an archive's files hold, checked whole, or why it is refused.
+-- | The wiki an archive's files hold, checked in full, or why it is
+-- refused.
 readArchive :: Map Text ByteString -> Either Text Archive
 readArchive entries = do
   manifestBytes <- note "It has no manifest.json, so it is not a wiki export." (Map.lookup "manifest.json" entries)
@@ -301,9 +305,9 @@ parseManifest = withObject "manifest" $ \o -> do
   unless (format == formatName) $ fail ("this is not a wiki export but " <> show (format :: Text))
   (,,) <$> o .: "formatVersion" <*> o .: "createdAt" <*> o .:? "app" .!= ""
 
--- | Whatever in an archive that reads does not fit together: duplicates,
+-- | Whatever in a parsed archive does not fit together: duplicates,
 -- references to nothing, cycles, siblings with one slug, an attachment's
--- name twice on a page, bytes with no file.
+-- name twice on a page, bytes without a file.
 checkArchive :: Archive -> [AttachmentRecord] -> Either Text ()
 checkArchive a attachments = do
   unique "users.json" "user" (map (\u -> u.id.text) a.users)
@@ -386,20 +390,20 @@ checkArchive a attachments = do
 -- missing for a top-level space, @public@ false if missing. The rest were
 -- added after version 1 was first written, as additive fields, so no new
 -- version: @mathMacros@ (the space's TeX macros) is the empty text if
--- missing; @createdAt@, if missing, is the time the reader is given for the
--- space (an archive's reader gives the time of the earliest page in it, or
--- the archive's own); @position@ (among its siblings, by hand) is 0 if
--- missing; @subspaceOrder@ and @pageOrder@ (@"name"@, @"newest-first"@,
+-- missing; @createdAt@, if missing, is the time the reader is given for
+-- the space (an archive's reader gives the time of the earliest page in
+-- it, or the archive's own); @position@ (among its siblings, by hand) is 0
+-- if missing; @subspaceOrder@ and @pageOrder@ (@"name"@, @"newest-first"@,
 -- @"oldest-first"@ or @"by-hand"@) are by name if missing, or if they name
--- an order this program does not know. Those that have a default are
--- written only when they are not it, so that the record of a space that
--- does not use them is what it was before they were added. So are
--- @homePage@ (the id of the page it opens at, one of its own; none if
--- missing), @icon@ (@{"emoji": …}@, @{"colour": …}@, or @{"image": blob,
--- "mediaType": …, "file": …}@ with the image's bytes in the archive's file
--- 'iconFile'; the default if missing, or of a kind this program does not
--- know), @description@ (empty if missing) and @blog@ (whether it is shown
--- as a blog, "Wiki.Core.Blog"; false if missing).
+-- an order this program does not know. Fields that have a default are
+-- written only when they differ from it, so that the record of a space
+-- that does not use them is what it was before they were added. The same
+-- goes for @homePage@ (the id of the page it opens at, one of its own;
+-- none if missing), @icon@ (@{"emoji": …}@, @{"colour": …}@, or
+-- @{"image": blob, "mediaType": …, "file": …}@ with the image's bytes in
+-- the archive's file 'iconFile'; the default if missing, or of a kind this
+-- program does not know), @description@ (empty if missing) and @blog@
+-- (whether it is shown as a blog, "Wiki.Core.Blog"; false if missing).
 encodeSpace :: Space -> Value
 encodeSpace s =
   object $
@@ -419,15 +423,15 @@ encodeSpace s =
       <> ["description" .= s.description | not (T.null s.description)]
       <> ["blog" .= True | s.blog]
 
--- | A space's icon as its record has it: an image names the file of the
--- archive its bytes are in.
+-- | A space's icon as its record writes it: an image names the archive
+-- file its bytes are in.
 encodeIcon :: Space -> Icon -> Value
 encodeIcon s icon = case (icon, toJSON icon) of
   (IconImage _ _, Object o) -> Object (KeyMap.insert "file" (toJSON (iconFile s)) o)
   (_, v) -> v
 
--- | A space read back. A record without a @createdAt@ (one written before
--- spaces had one) is given the time the function says for its id.
+-- | Parse a space. A record without a @createdAt@ (one written before
+-- spaces had one) gets the time the function gives for its id.
 parseSpace :: (SpaceId -> UTCTime) -> Value -> Parser Space
 parseSpace createdBefore = withObject "space" $ \o -> do
   id <- SpaceId <$> o .: "id"
@@ -454,29 +458,30 @@ orderText = \case
   OldestFirst -> "oldest-first"
   ByHand -> "by-hand"
 
--- | An order read back; one this program does not know (a later one's) is
--- by name, so that the archive still imports, as it would without the
--- field.
+-- | Parse an order. One this program does not know (a later one's) is
+-- read as by name, so that the archive still imports, as it would without
+-- the field.
 readOrder :: Text -> ChildOrder
 readOrder t = fromMaybe ByName (find (\o -> orderText o == t) [minBound .. maxBound])
 
--- | When a space read without a @createdAt@ is taken to have been made:
--- when the earliest of its pages was, or, if it has none, at the time
--- given. Not before it, as the space was made, but the nearest a record
--- written without the time tells.
+-- | When a space read without a @createdAt@ is taken to have been created:
+-- when the earliest of its pages was, or, if it has none, at the given
+-- time. That may be later than the real creation, but it is the nearest
+-- time a record without one gives.
 spaceCreatedDefault :: UTCTime -> [Page] -> SpaceId -> UTCTime
 spaceCreatedDefault fallback pages sid = Map.findWithDefault fallback sid earliest
   where
     earliest = Map.fromListWith min [(p.space, p.createdAt) | p <- pages]
 
 -- | @{"id", "space", "parent", "title", "slug", "body", "createdAt",
--- "updatedAt"}@, without the page's attachments, which are records of their
--- own ('encodeAttachment'): @parent@ is @null@ or missing for a top-level
--- page, @body@ empty if missing, @updatedAt@ the creation if missing.
--- @position@, among its siblings by hand, was added after version 1 was
--- first written (an additive field): 0 if missing, and written only when it
--- is not. @template@, whether the page is one of its space's templates, is
--- another (WP4.15): false if missing, and written only when true.
+-- "updatedAt"}@, without the page's attachments, which are records of
+-- their own ('encodeAttachment'): @parent@ is @null@ or missing for a
+-- top-level page, @body@ empty if missing, @updatedAt@ the creation time
+-- if missing. @position@, among its siblings by hand, was added after
+-- version 1 was first written (an additive field): 0 if missing, and
+-- written only when not 0. @template@, whether the page is one of its
+-- space's templates, is another (WP4.15): false if missing, and written
+-- only when true.
 encodePage :: Page -> Value
 encodePage p =
   object $
@@ -492,7 +497,7 @@ encodePage p =
       <> ["position" .= p.position | p.position /= 0]
       <> ["template" .= True | p.template]
 
--- | A page read back, with no attachments yet.
+-- | Parse a page, with no attachments yet.
 parsePage :: Value -> Parser Page
 parsePage = withObject "page" $ \o -> do
   id <- PageId <$> o .: "id"
@@ -507,9 +512,8 @@ parsePage = withObject "page" $ \o -> do
   template <- o .:? "template" .!= False
   pure Page {id, space, parent, title, slug, body, attachments = [], createdAt, updatedAt, position, template}
 
--- | An attachment's record as it was read: the page it is attached to, the
--- attachment, and the file of the archive its bytes are in, if it names
--- one.
+-- | An attachment's record as it was parsed: the page it is attached to,
+-- the attachment, and the archive file its bytes are in, if it names one.
 data AttachmentRecord = AttachmentRecord
   { page :: PageId
   , attachment :: Attachment
@@ -518,10 +522,9 @@ data AttachmentRecord = AttachmentRecord
   deriving stock (Eq, Show)
 
 -- | @{"id", "page", "name", "mediaType", "size"}@ and where the bytes are:
--- @"url"@ for a file on the web, or @"blob"@, the id the wiki keeps the
+-- @"url"@ for a file on the web, or @"blob"@, the id the wiki stores the
 -- bytes under, with @"file"@, where they are in an archive
--- ('attachmentFile'). A media type missing is
--- @application/octet-stream@.
+-- ('attachmentFile'). A missing media type is @application/octet-stream@.
 encodeAttachment :: PageId -> Attachment -> Value
 encodeAttachment page x =
   object $
@@ -548,8 +551,8 @@ parseAttachment = withObject "attachment" $ \o -> do
   source <- case (url, blob, file) of
     (Just u, Nothing, _) -> pure (SourceUrl u)
     (Nothing, Just b, _) -> pure (SourceBlob (BlobId b))
-    -- From a program that keeps bytes under no id of its own: the
-    -- attachment's stands for one.
+    -- From a program that stores bytes under no id of its own: the
+    -- attachment's id stands in for one.
     (Nothing, Nothing, Just _) -> pure (SourceBlob (BlobId ("blob-of-" <> id.text)))
     _ -> fail "an attachment has a url, or a file with its bytes"
   pure AttachmentRecord {page, attachment = Attachment {id, name, mediaType, size, source}, file}
@@ -577,9 +580,9 @@ parseGroup = withObject "group" $ \o -> do
   members <- o .:? "members" .!= []
   pure (Group {id, name}, Set.fromList (map UserId members))
 
--- | @{"global": […], "spaces": […]}@, a missing list empty. Whom the wiki
--- is open to is not in an archive: it is the setting of the server an
--- archive is imported into, and is read back as 'Open', the default.
+-- | @{"global": […], "spaces": […]}@, a missing list being empty. Whom
+-- the wiki is open to is not in an archive: it is a setting of the server
+-- the archive is imported into, and is read back as 'Open', the default.
 encodeGrants :: Grants -> Value
 encodeGrants g = object ["global" .= map encodeGlobalGrant g.global, "spaces" .= map encodeSpaceGrant g.spaces]
 

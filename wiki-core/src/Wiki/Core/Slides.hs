@@ -1,30 +1,31 @@
 -- | A page as a slide deck: the same Markdown, read as slides.
 --
--- A page is not written differently to be presented. Its parsed blocks
--- ("Wiki.Core.Markdown.Ast") are cut at each thematic break (@---@) at the
--- top level of the page into slides; a break inside a list, a quotation or a
--- box stays a rule on its slide. On each slide:
+-- A page needs no special writing to be presented. Its parsed blocks
+-- ("Wiki.Core.Markdown.Ast") are split into slides at each thematic break
+-- (@---@) at the top level of the page; a break inside a list, a quotation
+-- or a box stays a horizontal rule on its slide. On each slide:
 --
--- * the first heading at the slide's top level is its title, taken out of
+-- * the first heading at the slide's top level is its title, removed from
 --   its body (a slide whose title is a level-one heading is a title slide,
---   which a theme lays out as Beamer lays out a title page or a section's
+--   which a theme lays out as Beamer lays out a title page or a section
 --   page);
 -- * a fenced div with the class @notes@ (@::: notes@) holds the speaker's
---   notes, taken out of the body and shown to the speaker only;
--- * the footnotes it refers to are put at its end, rather than all at the
---   end of the last slide.
+--   notes, removed from the body and shown to the speaker only;
+-- * the footnotes the slide refers to are placed at its end, rather than
+--   all at the end of the last slide.
 --
--- How the deck looks is said once, anywhere in the page, by a fenced div
--- with the class @slides@ and attributes: @::: {.slides theme=dark
--- aspect=4:3}@ then @:::@ (themes: @beamer@, the default, @light@
--- and @dark@; aspects: @16:9@, the default, and @4:3@). It shows nothing, on the page or on a slide.
--- A page with neither a break nor such a div is one slide, and not a deck
--- ('isDeck'): it can still be presented, but nothing offers it.
+-- The deck's look is set once, anywhere in the page, by a fenced div with
+-- the class @slides@ and attributes: @::: {.slides theme=dark aspect=4:3}@
+-- then @:::@ (themes: @beamer@, the default, @light@ and @dark@; aspects:
+-- @16:9@, the default, and @4:3@). The div shows nothing, on the page or on
+-- a slide. A page with neither a break nor such a div is one slide, and
+-- not a deck ('isDeck'): it can still be presented, but no button offers
+-- it.
 --
--- Slides are rendered with the page's renderer, one document cut into
--- sections ('Wiki.Core.Markdown.Render.renderSections'), so a slide shows
--- everything a page does, and a formula on the fifth slide is set with the
--- macros the first one defined.
+-- Slides are rendered with the page's renderer, as one document split into
+-- sections ('Wiki.Core.Markdown.Render.renderSections'). So a slide shows
+-- everything a page does, and a formula on the fifth slide uses the macros
+-- the first slide defined.
 module Wiki.Core.Slides
   ( -- * Decks
     Deck (..)
@@ -55,16 +56,16 @@ import Protolude
 import Wiki.Core.Markdown.Ast
 import Wiki.Core.Markdown.Render (Options, renderSections)
 
--- | A page as slides, with how they are shown. There is always at least one
--- slide.
+-- | 'Deck': a page as slides, with its display options. There is always at
+-- least one slide.
 data Deck = Deck
   { options :: DeckOptions
   , slides :: [Slide]
   }
   deriving stock (Eq, Show)
 
--- | A slide: its title, if it has a heading, what it shows, and the
--- speaker's notes for it.
+-- | 'Slide': its title, if it has a heading, its body, and the speaker's
+-- notes for it.
 data Slide = Slide
   { title :: Maybe SlideTitle
   , body :: [Block]
@@ -72,8 +73,8 @@ data Slide = Slide
   }
   deriving stock (Eq, Show)
 
--- | The heading a slide is titled with, as it was written: its level, its
--- attributes (its @id@ among them) and its text.
+-- | 'SlideTitle': the heading a slide's title comes from, as written: its
+-- level, its attributes (including its @id@) and its text.
 data SlideTitle = SlideTitle
   { level :: Int
   , attributes :: Attributes
@@ -81,44 +82,44 @@ data SlideTitle = SlideTitle
   }
   deriving stock (Eq, Show)
 
--- | How a deck is shown: its theme and the shape of its slides.
+-- | 'DeckOptions': how a deck is shown, its theme and its slides' aspect ratio.
 data DeckOptions = DeckOptions
   { theme :: Theme
   , aspect :: Aspect
   }
   deriving stock (Eq, Show)
 
--- | The deck's look, a CSS class of the stylesheet's (@slides-theme-…@).
+-- | 'Theme': the deck's look, a CSS class in the stylesheet (@slides-theme-…@).
 data Theme
   = -- | Beamer's look: a title bar, and a footer with the page's title and
     -- the slide's number. The default.
     Beamer
   | -- | Dark on light, the title as a plain heading, a quiet footer.
     Light
-  | -- | Light on dark, as 'Light' is otherwise.
+  | -- | Light on dark, otherwise like 'Light'.
     Dark
   deriving stock (Eq, Show, Enum, Bounded)
 
--- | The shape of a slide, width to height.
+-- | 'Aspect': a slide's aspect ratio, width to height.
 data Aspect
-  = -- | 16:9, a screen's. The default.
+  = -- | 16:9, a screen's ratio. The default.
     Wide
-  | -- | 4:3, an older projector's, and Beamer's default.
+  | -- | 4:3, an older projector's ratio, and Beamer's default.
     Standard
   deriving stock (Eq, Show, Enum, Bounded)
 
 defaultDeckOptions :: DeckOptions
 defaultDeckOptions = DeckOptions {theme = Beamer, aspect = Wide}
 
--- | A theme's name, as the @theme@ attribute writes it and the stylesheet's
--- class ends.
+-- | A theme's name, as written in the @theme@ attribute and at the end of
+-- the stylesheet's class.
 themeName :: Theme -> Text
 themeName = \case
   Beamer -> "beamer"
   Light -> "light"
   Dark -> "dark"
 
--- | An aspect's name, as the @aspect@ attribute writes it.
+-- | An aspect's name, as written in the @aspect@ attribute.
 aspectName :: Aspect -> Text
 aspectName = \case
   Wide -> "16:9"
@@ -138,14 +139,14 @@ deckOf doc =
       Footnotes _ -> False
       Div attrs _ -> not (isOptions attrs)
       _ -> True
-    -- A page of nothing but breaks is still one slide, empty.
+    -- A page with nothing but breaks is still one slide, an empty one.
     nonEmpty' = \case
       [] -> [Slide Nothing [] []]
       ss -> ss
 
--- | Whether a page is written as a deck: cut into slides, or saying how its
--- slides look. Any page can be shown as slides; this is whether it is meant
--- to be.
+-- | Whether a page is written as a deck: split into slides, or setting its
+-- slides' look. Any page can be shown as slides; this says whether the
+-- page is meant to be.
 isDeck :: [Block] -> Bool
 isDeck doc = any isBreak doc || or [isOptions attrs | Div attrs _ <- doc]
   where
@@ -191,8 +192,8 @@ isNotes attrs = "notes" `elem` classes attrs
 isOptions :: Attributes -> Bool
 isOptions attrs = "slides" `elem` classes attrs
 
--- | The options a @slides@ div's attributes give; what they leave out, or
--- name wrongly, is the default.
+-- | The options a @slides@ div's attributes set. An option the attributes
+-- leave out, or set to an unknown value, gets the default.
 optionsOf :: Attributes -> DeckOptions
 optionsOf attrs =
   DeckOptions
@@ -203,8 +204,8 @@ optionsOf attrs =
     named :: (Enum a, Bounded a) => (a -> Text) -> Text -> Maybe a
     named name value = find (\a -> name a == T.toLower (T.strip value)) [minBound .. maxBound]
 
--- | Each footnote at the end of the first slide that refers to it, and
--- those no slide refers to at the end of the last.
+-- | Each footnote placed at the end of the first slide that refers to it,
+-- and the footnotes no slide refers to at the end of the last slide.
 withFootnotes :: [Footnote] -> [Slide] -> [Slide]
 withFootnotes [] slides = slides
 withFootnotes notes slides = case go IntSet.empty slides of
@@ -244,8 +245,8 @@ footnoteRefs = concatMap ofBlock
       Image _ _ _ xs -> ofInlines xs
       _ -> []
 
--- | A slide as HTML: its title (the heading), its body and its notes, each
--- to be put where the slide shows it.
+-- | 'RenderedSlide': a slide as HTML, its title (the heading), its body and
+-- its notes, each placed where the slide view shows it.
 data RenderedSlide w i = RenderedSlide
   { title :: [HH.HTML w i]
   , body :: [HH.HTML w i]

@@ -1,8 +1,9 @@
--- | The editor's toolbar, as pure functions: each command takes a page's
--- Markdown and the selection in it, and gives back the Markdown changed and
--- what to select afterwards. The browser only moves the text and the
--- selection in and out (decision 13: the toolbar writes Markdown for an
--- author who does not know it), so every command is tested here, natively.
+-- | The editor's toolbar commands, as pure functions: each command takes
+-- a page's Markdown and the selection in it, and returns the changed
+-- Markdown and what to select afterwards. The browser only passes the text
+-- and the selection in and out (decision 13: the toolbar writes Markdown
+-- for an author who does not know it), so every command is tested here,
+-- natively.
 --
 -- Commands come in four kinds.
 --
@@ -10,22 +11,22 @@
 --   'InlineMath', and 'Html' with a phrasing tag) wrap the selection in
 --   their markers. With nothing selected they insert a placeholder between
 --   the markers and select it, so that typing replaces it. On a selection
---   that is wrapped already, inside it (@**word**@ selected) or just around
---   it (@word@ selected in @**word**@), they take the markers away. Markers
---   go around the words, not the spaces at either end (@** word**@ is not
---   emphasis), and around each paragraph of a selection on its own, since
---   emphasis cannot cross a blank line.
+--   that is already wrapped, with the markers inside the selection
+--   (@**word**@ selected) or just outside it (@word@ selected in
+--   @**word**@), they remove the markers. Markers go around the words, not the spaces at either end
+--   (@** word**@ is not emphasis), and around each paragraph of a selection
+--   separately, since emphasis cannot span a blank line.
 --
 -- * Line ones ('BulletList', 'NumberedList', 'TaskList', 'Quote',
 --   'Heading') change the start of every line the selection touches, and
---   take their prefix away again when every line has it already. A list
+--   remove their prefix again when every line already has it. A list
 --   command turns a list of another kind into its own; 'Heading' cycles
 --   through levels one to three and back to none.
 --
--- * Block ones ('CodeBlock', 'DisplayMath', 'Mermaid', 'Tikz', 'Html' 'Details')
---   put fences around the lines the selection touches, or a template after
---   the cursor's line when nothing is selected; on lines fenced already they
---   take the fences away.
+-- * Block ones ('CodeBlock', 'DisplayMath', 'Mermaid', 'Tikz', 'Html'
+--   'Details') put fences around the lines the selection touches, or a
+--   template after the cursor's line when nothing is selected; on lines
+--   already fenced they remove the fences.
 --
 -- * Templates ('Table', 'HorizontalRule') go after the line the selection
 --   ends on.
@@ -33,20 +34,22 @@
 -- * Colours ('TextColour', 'Highlight') wrap the selection in an element
 --   whose class names a colour of the palette: @<span class="c-red">@ for
 --   the text's colour, @<mark class="h-yellow">@ for a highlight. A class,
---   not a @style@, which the HTML allowlist refuses ("Wiki.Core.Markdown.Html");
---   the style sheet gives each class its look in either theme. The words
---   selected end up in exactly the colour chosen: wrappers of the same kind
---   in or around them are taken away rather than nested, and where the
---   selection covers part of one, the part outside keeps its colour in a
---   wrapper of its own. Wrappers go around each line on its own, and
---   around the line's text after a list item's marker, a quote's @>@ or a
---   heading's @#@: a tag pair across a line break would take in the next
---   line's marker and break its list or quote, and an inline tag pair is
---   kept in its line (decision 13). See 'colour'.
+--   not a @style@, which the HTML allowlist refuses
+--   ("Wiki.Core.Markdown.Html"); the stylesheet styles each class in
+--   either theme. The selected words end up in exactly the chosen colour:
+--   wrappers of the same kind in or around them are removed rather than
+--   nested, and where the selection covers part of a wrapper, the part
+--   outside keeps its colour in a wrapper of its own. Wrappers go around
+--   each line separately, and around the line's text after a list item's
+--   marker, a quote's @>@ or a heading's @#@: a tag pair across a line
+--   break would take in the next line's marker and break its list or
+--   quote, and an inline tag pair stays within its line (decision 13). See
+--   'colour'.
 --
--- A block is kept apart from the text around it by a blank line, without
--- which it would not be one: a @---@ under a paragraph makes the paragraph a
--- heading, and text under a @<details>@ block would end up inside it.
+-- A block is separated from the text around it by a blank line, without
+-- which it would not be a block: a @---@ under a paragraph makes the
+-- paragraph a heading, and text under a @<details>@ block would end up
+-- inside it.
 --
 -- Offsets count characters (code points), as 'Text' does. A browser counts
 -- UTF-16 code units, so the browser side converts both ways
@@ -74,9 +77,9 @@ import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Protolude hiding (link, list, replace)
 
--- | What is selected, from 'start' to 'end', in characters from the start of
--- the text. Nothing is selected when the two are equal: then it is where the
--- cursor is.
+-- | 'Selection': what is selected, from 'start' to 'end', in characters
+-- from the start of the text. Nothing is selected when the two are equal;
+-- then it is the cursor's position.
 data Selection = Selection {start :: Int, end :: Int}
   deriving stock (Eq, Show)
 
@@ -104,8 +107,8 @@ data Command
   | -- | A TikZ picture: the body of a @tikzpicture@.
     Tikz
   | Link
-  | -- | An image by its address. (An attachment is uploaded instead, and its
-    -- reference put in by the editor.)
+  | -- | An image by its URL. (An attachment is uploaded instead, and the
+    -- editor inserts its reference.)
     Image
   | -- | A table of three columns.
     Table
@@ -134,9 +137,9 @@ htmlTagName = \case
   Small -> "small"
   Details -> "details"
 
--- | What the toolbar's menu calls it. @<mark>@ is "Mark" rather than
--- "Highlight", which is what the palette calls its row of highlights
--- ('Highlight'), so that the two are not taken for one another.
+-- | The toolbar menu's label for it. @<mark>@ is "Mark" rather than
+-- "Highlight", which is the palette's name for its row of highlights
+-- ('Highlight'), so that the two are not confused.
 htmlTagLabel :: HtmlTag -> Text
 htmlTagLabel = \case
   Mark -> "Mark"
@@ -148,26 +151,26 @@ htmlTagLabel = \case
   Details -> "Collapsible section"
 
 -- | A colour of the toolbar's palette. The text colours are 'textColours'
--- and the highlights 'highlightColours'; the style sheet has a look for
--- those, in the light theme and the dark one, and for no others.
+-- and the highlights 'highlightColours'; the stylesheet styles those, in
+-- the light theme and the dark one, and no others.
 data Colour = Red | Orange | Yellow | Green | Teal | Blue | Purple | Pink | Grey
   deriving stock (Eq, Show, Enum, Bounded)
 
--- | The colour's name, as its class has it.
+-- | The colour's name, as used in its class.
 colourName :: Colour -> Text
 colourName = T.toLower . show
 
--- | What the palette calls it.
+-- | The palette's label for it.
 colourLabel :: Colour -> Text
 colourLabel = show
 
--- | The colours text can be written in: none of them pale, so that each
--- reads on the page's background.
+-- | The colours text can be written in: none of them pale, so that each is
+-- readable on the page's background.
 textColours :: [Colour]
 textColours = [Red, Orange, Green, Teal, Blue, Purple, Pink, Grey]
 
 -- | The colours of a highlight: pale ones in the light theme, deep ones in
--- the dark, so that the text on them reads.
+-- the dark theme, so that the text on them is readable.
 highlightColours :: [Colour]
 highlightColours = [Yellow, Green, Blue, Pink, Purple]
 
@@ -179,8 +182,8 @@ textColourClass c = "c-" <> colourName c
 highlightClass :: Colour -> Text
 highlightClass c = "h-" <> colourName c
 
--- | Apply a command to the text with this selection: the text it makes, and
--- what is selected in it afterwards.
+-- | Apply a command to the text with this selection. The result is the
+-- new text, and what is selected in it afterwards.
 apply :: Command -> Text -> Selection -> (Text, Selection)
 apply command text selection = case command of
   Bold -> inline (wrapIn "**") "bold text"
@@ -240,7 +243,8 @@ tableTemplate =
 -- Replacing parts of the text
 
 -- | A change to one part of the text: at an offset, so many characters
--- replaced by a text. A command is a list of them, in order and apart.
+-- replaced by a text. A command is a list of them, in order and not
+-- overlapping.
 data Replacement = Replacement Int Int Text
 
 replace :: [Replacement] -> Text -> Text
@@ -251,12 +255,12 @@ replace reps text = go 0 reps
       Replacement pos len new : rest -> slice at pos <> new <> go (pos + len) rest
     slice a b = T.take (b - a) (T.drop a text)
 
--- | Which side of text put in at an offset the offset ends up on.
+-- | Which side of text inserted at an offset the offset ends up on.
 data Bias = Before | After
 
--- | Where an offset in the text ends up after the replacements: moved by
--- what was put in or taken out before it; inside a part that was replaced,
--- as far into the new text as it was into the old.
+-- | Where an offset in the text ends up after the replacements: shifted by
+-- what was inserted or removed before it; inside a replaced part, as far
+-- into the new text as it was into the old.
 moved :: Bias -> [Replacement] -> Int -> Int
 moved bias reps p = go 0 reps
   where
@@ -274,7 +278,7 @@ moved bias reps p = go 0 reps
 -- Inline commands
 
 -- | What an inline command puts around a text: the markers made for the
--- text, and the plain ones that are recognised and taken away.
+-- text, and the plain markers that are recognised and removed.
 data Markers = Markers {forText :: Text -> (Text, Text), plain :: (Text, Text)}
 
 -- | The same marker on both sides.
@@ -284,10 +288,10 @@ wrapIn marker = Markers (const (marker, marker)) (marker, marker)
 wrapIn' :: Text -> Text -> Markers
 wrapIn' open close = Markers (const (open, close)) (open, close)
 
--- | Backticks around code: more of them than the code has in a row, and,
--- where the code starts or ends with one, a space inside them on both sides
--- (CommonMark takes one space away only when there is one at each end).
--- Single backticks are the ones taken away.
+-- | Backticks around code: more of them than the longest run in the code,
+-- and, where the code starts or ends with a backtick, a space inside them
+-- on both sides (CommonMark removes one space only when there is one at
+-- each end). Single backticks are the ones removed.
 codeSpan :: Markers
 codeSpan = Markers forCode ("`", "`")
   where
@@ -298,7 +302,7 @@ codeSpan = Markers forCode ("`", "`")
        in (fence <> pad, pad <> fence)
 
 -- | Wrap the selection's paragraphs in the markers, or unwrap them; with
--- nothing selected, put in the placeholder wrapped and select it.
+-- nothing selected, insert the placeholder wrapped and select it.
 wrapInline :: Markers -> Text -> Text -> Selection -> (Text, Selection)
 wrapInline markers placeholder text sel@(Selection s e)
   | s == e || null spans =
@@ -329,7 +333,7 @@ wrapInline markers placeholder text sel@(Selection s e)
     -- The same words selected afterwards, without the markers.
     unwrapWith reps = (replace reps text, Selection (moved After reps firstStart) (moved Before reps lastEnd))
 
--- | The parts of the selection to wrap one by one: its runs of lines with
+-- | The parts of the selection to wrap separately: its runs of lines with
 -- no blank line between them, without the white space at either end. None
 -- when it is all white space.
 paragraphSpans :: Text -> Selection -> [(Int, Int)]
@@ -369,15 +373,15 @@ touched text (Selection s e) = filter (\l -> l.at <= e' && s <= l.at + T.length 
   where
     e' = if e > s && T.isSuffixOf "\n" (T.take e text) then e - 1 else e
 
--- | The lines a line command changes: those of the selection with something
--- on them, or all of them when none has.
+-- | The lines a line command changes: the selected lines that have
+-- something on them, or all of them when none has.
 targets :: [Line] -> [Line]
 targets ls = case filter (not . T.all isSpace . (\l -> l.line)) ls of
   [] -> ls
   nonBlank -> nonBlank
 
--- | The selection after line replacements: the same text selected, the
--- cursor after a prefix put in where it was.
+-- | The selection after line replacements: the same text selected, or the
+-- cursor after a prefix inserted where it was.
 afterLines :: Selection -> [Replacement] -> Selection
 afterLines (Selection s e) reps
   | s == e = cursor (moved After reps s)
@@ -386,8 +390,8 @@ afterLines (Selection s e) reps
 data ListKind = Bullet | Numbered | Task
   deriving stock (Eq)
 
--- | A line's indentation, and the list item marker after it, if any: its
--- kind and length.
+-- | A line's indentation, and the list item marker after it, if any: the
+-- marker's kind and length.
 listMarker :: Text -> (Int, Maybe (ListKind, Int))
 listMarker l = (T.length indent, marker)
   where
@@ -409,8 +413,8 @@ listMarker l = (T.length indent, marker)
       [c, ' '] | c `elem` ['-', '*', '+'] -> Just 2
       _ -> Nothing
 
--- | Make every line touched an item of a list of this kind, or, when each is
--- already, plain lines.
+-- | Make every touched line an item of a list of this kind, or, when each
+-- already is, plain lines.
 list :: ListKind -> Text -> Selection -> (Text, Selection)
 list kind text sel = (replace reps text, afterLines sel reps)
   where
@@ -428,7 +432,7 @@ list kind text sel = (replace reps text, afterLines sel reps)
       Task -> "- [ ] "
       Numbered -> show n <> ". "
 
--- | Quote every line touched, or, when each is already, none.
+-- | Quote every touched line, or, when each already is, unquote them.
 quote :: Text -> Selection -> (Text, Selection)
 quote text sel = (replace reps text, afterLines sel reps)
   where
@@ -438,7 +442,7 @@ quote text sel = (replace reps text, afterLines sel reps)
       | all quoted ls = [Replacement l.at (if T.isPrefixOf "> " l.line then 2 else 1) "" | l <- ls]
       | otherwise = [Replacement l.at 0 (if T.all isSpace l.line then ">" else "> ") | l <- ls, not (quoted l)]
 
--- | The next heading level for every line touched, after the first one's:
+-- | Set every touched line to the heading level after the first line's:
 -- none, one, two, three, then none again.
 heading :: Text -> Selection -> (Text, Selection)
 heading text sel = (replace reps text, afterLines sel reps)
@@ -458,9 +462,9 @@ heading text sel = (replace reps text, afterLines sel reps)
 
 -- Blocks
 
--- | What goes before and after a block put in between these two texts so
--- that it is a block of its own: a blank line on each side, unless the text
--- has one there already or ends there.
+-- | What goes before and after a block inserted between these two texts
+-- so that it is a separate block: a blank line on each side, unless the
+-- text already has one there or ends there.
 blockSeparators :: Text -> Text -> (Text, Text)
 blockSeparators before after = (pre, post)
   where
@@ -477,9 +481,9 @@ blockSeparators before after = (pre, post)
 endOfLine :: Text -> Selection -> Int
 endOfLine text (Selection _ e) = e + T.length (T.takeWhile (/= '\n') (T.drop e text))
 
--- | A block put in after the line the selection ends on; what is selected in
--- it afterwards, if anything (an offset into the block and a length), or the
--- cursor after it.
+-- | Insert a block after the line the selection ends on, and select part
+-- of it afterwards (an offset into the block and a length), if given, or
+-- put the cursor after it.
 template :: Text -> Maybe (Int, Int) -> Text -> Selection -> (Text, Selection)
 template block select text sel = (replace [Replacement at 0 new] text, selected)
   where
@@ -493,13 +497,13 @@ template block select text sel = (replace [Replacement at 0 new] text, selected)
 
 -- | Fences around lines: the opening line, the closing one, what goes
 -- between them when nothing is selected, and whether that is selected
--- afterwards (or else the cursor goes at the end of the opening line, where
--- a code block's language is written).
+-- afterwards (otherwise the cursor goes at the end of the opening line,
+-- where a code block's language is written).
 data Fence = Fence {open :: Text, close :: Text, placeholder :: Text, selectInside :: Bool}
 
--- | Fence the lines the selection touches, or unfence lines fenced already
--- (the selection's first and last, or those just around it); with nothing
--- selected, put in an empty block after the cursor's line.
+-- | Fence the lines the selection touches, or unfence lines already fenced
+-- (the selection's first and last lines, or those just around it); with
+-- nothing selected, insert an empty block after the cursor's line.
 fenced :: Fence -> Text -> Selection -> (Text, Selection)
 fenced fence text sel@(Selection s e)
   | s == e = case fence.selectInside of
@@ -521,7 +525,7 @@ fenced fence text sel@(Selection s e)
     block = fence.open <> "\n" <> fence.placeholder <> "\n" <> fence.close
     all' = allLines text
     index l = findIndex (\m -> m.at == l.at) all'
-    -- A fence line opens a block or closes one depending on how many came
+    -- Whether a fence line opens or closes a block depends on how many came
     -- before it: a closing @```@ looks like an opening one.
     marker = if T.isPrefixOf "```" fence.open then "```" else fence.open
     isFence l = T.isPrefixOf marker (T.strip l.line)
@@ -533,7 +537,7 @@ fenced fence text sel@(Selection s e)
     closes i = case lineAt i of
       Just l -> T.strip l.line == fence.close && odd (fencesBefore i)
       Nothing -> False
-    -- Take away the opening line and the closing one, selecting what was
+    -- Remove the opening line and the closing one, selecting what was
     -- between them.
     unfence i j = case (lineAt i, lineAt j) of
       (Just o, Just c)
@@ -554,10 +558,10 @@ fenced fence text sel@(Selection s e)
             | otherwise = cursor (begin + T.length fence.open)
        in (replace [Replacement lo (hi - lo) new] text, selected)
 
--- | A collapsible section: @<details>@ around the lines touched, with a
+-- | A collapsible section: @<details>@ around the touched lines, with a
 -- @<summary>@ to name it, which is selected. An HTML block ends at a blank
--- line, so the lines are put in without the blank ones among them. Lines
--- that are such a section already are unwrapped.
+-- line, so the lines are inserted without the blank ones among them.
+-- Lines that already are such a section are unwrapped.
 details :: Text -> Selection -> (Text, Selection)
 details text sel@(Selection s e)
   | s == e = template sectionTemplate (Just (T.length "<details>\n<summary>", T.length summary)) text sel
@@ -588,11 +592,11 @@ details text sel@(Selection s e)
 
 -- Links
 
--- | A link (or, with @!@ before it, an image): around the selection, which
--- becomes its text, with the address selected to be typed; around an
--- address selected, with a placeholder for the text selected; or, with
--- nothing selected, a placeholder for both, the text selected. A selection
--- that is a link's text already is unwrapped.
+-- | A link (or, with @!@ before it, an image). Around a selection, which
+-- becomes its text, with the URL selected to be typed; around a selected
+-- URL, with a placeholder for the text selected; or, with nothing
+-- selected, a placeholder for both, with the text selected. A selection
+-- that is already a link's text is unwrapped.
 link :: Text -> Text -> Text -> Selection -> (Text, Selection)
 link bang placeholder text (Selection s e)
   | s == e =
@@ -613,8 +617,8 @@ link bang placeholder text (Selection s e)
     opening = bang <> "["
     selected = T.take (e - s) (T.drop s text)
     isAddress t = not (T.any isSpace t) && any (`T.isPrefixOf` t) ["http://", "https://", "mailto:"]
-    -- How much follows the selection to the end of the link, if it is a
-    -- link's text: @](@, the address, @)@.
+    -- How many characters follow the selection up to the end of the link,
+    -- if it is a link's text: @](@, the URL, @)@.
     linkAround
       | T.isSuffixOf opening (T.take s text) && (bang /= "" || not (T.isSuffixOf "![" (T.take s text))) =
           let rest = T.drop e text
@@ -626,9 +630,10 @@ link bang placeholder text (Selection s e)
 -- Colours
 
 -- | A kind of colour wrapper: its element, the prefix of the classes that
--- name its colours, and whether the element with no class is one too. A
--- bare @<mark>@ is a highlight (the HTML menu's, in the default colour), so
--- choosing a colour for it gives it a class; a bare @<span>@ is no colour.
+-- name its colours, and whether the element without a class also counts
+-- as one. A bare @<mark>@ is a highlight (the HTML menu's, in the default
+-- colour), so choosing a colour for it gives it a class; a bare @<span>@
+-- has no colour.
 data Wrapper = Wrapper {element :: Text, prefix :: Text, bare :: Bool}
 
 textWrapper, highlightWrapper :: Wrapper
@@ -646,32 +651,32 @@ openTag w paint
 closeTag :: Wrapper -> Text
 closeTag w = "</" <> w.element <> ">"
 
--- | Put the words selected in this colour, or in none ('Nothing').
+-- | Put the selected words in this colour, or in none ('Nothing').
 --
 -- On each line the selection touches, the words selected on it (without
 -- the white space at either end, or a block's marker at the start of the
--- line, 'blockPrefix') end up in exactly the colour asked for. Every
--- wrapper of this kind the selection reaches into is taken apart: what of
--- its text is selected takes the new colour, and what is not keeps the old
--- one, in a wrapper of its own. So re-colouring a coloured word replaces
--- its class instead of nesting another wrapper in it, re-colouring part of
--- it splits it in two or three, and no colour takes the wrapper away.
--- Neighbouring text of one colour comes out in one wrapper. The text
--- outside the wrappers reached is left as it is.
+-- line, 'blockPrefix') end up in exactly the requested colour. Every
+-- wrapper of this kind the selection reaches into is split: its selected
+-- text takes the new colour, and the rest keeps the old one, in a wrapper
+-- of its own. So re-colouring a coloured word replaces its class instead of
+-- nesting another wrapper in it, re-colouring part of it splits it in two
+-- or three, and choosing no colour removes the wrapper. Adjacent text of
+-- one colour ends up in one wrapper. The text outside the wrappers reached
+-- is left as it is.
 --
 -- With nothing selected, the cursor inside a wrapper's text stands for all
--- of it, so that a colour can be changed or taken away without selecting
--- the word first. Anywhere else, a colour puts in a placeholder in its
--- wrapper and selects it, as the other inline commands do, and no colour
--- does nothing.
+-- of it, so that a colour can be changed or removed without selecting the
+-- word first. Anywhere else, a colour inserts a placeholder in its wrapper
+-- and selects it, as the other inline commands do, and no colour does
+-- nothing.
 --
 -- Only the wrappers this command writes are recognised (@<span
 -- class="c-…">@, or @<mark>@ with or without @class="h-…"@), each with its
 -- closing tag on the same line. Other elements on the line (the other
 -- kind's wrappers, @<b>@, a @<span>@ of another class) are kept whole: a
--- wrapper goes around one whose text is all in its colour, or inside it
--- otherwise, so that the elements stay nested. A tag that is not closed on
--- its line, or closes nothing, is text.
+-- wrapper goes around an element whose text is all in its colour, or
+-- inside it otherwise, so that the elements stay properly nested. A tag
+-- that is not closed on its line, or closes nothing, counts as text.
 colour :: Wrapper -> Maybe Paint -> Text -> Selection -> (Text, Selection)
 colour w wanted text sel@(Selection s e)
   | s == e = maybe placeholder (\(lo, hi) -> fromMaybe (text, sel) (paintRange lo hi)) wrapperAtCursor
@@ -698,7 +703,7 @@ colour w wanted text sel@(Selection s e)
           around = [inner | (_, inner@(lo, hi)) <- wrappersOf (readLine w l.line), lo <= at, at <= hi]
       (lo, hi) <- lastMay (sortOn fst around)
       pure (l.at + lo, l.at + hi)
-    -- Every line painted from lo to hi; nothing when no words are there.
+    -- Paint every line from lo to hi; nothing when there are no words.
     paintRange lo hi =
       let painted = [paintLine w wanted l.line (max lo l.at - l.at) (min hi (l.at + T.length l.line) - l.at) | l <- ls]
           newLines = map fst painted
@@ -709,9 +714,9 @@ colour w wanted text sel@(Selection s e)
             _ -> Nothing
 
 -- | A part of a line as this command reads it: a character, a tag that
--- opens an element (with, for a wrapper of the command's kind, its colour),
--- one that closes an element, or one that stands alone (@<br>@, @<img>@,
--- @<x/>@).
+-- opens an element (with, for a wrapper of the command's kind, its
+-- colour), a tag that closes an element, or a tag that stands alone
+-- (@<br>@, @<img>@, @<x/>@).
 data Piece = Piece {from :: Int, to :: Int, kind :: PieceKind}
 
 data PieceKind = Letter | Opening Text (Maybe Paint) | Closing Text | Lone
@@ -725,9 +730,9 @@ data Line' = Line'
   , paints :: [(Int, Maybe Paint)]
   }
 
--- | Read a line. An opening tag is closed by the next closing tag of its
--- name with every element opened after it closed already; a tag that is
--- not, opening or closing, is text.
+-- | Read a line. An opening tag is closed by the next closing tag with its
+-- name once every element opened after it has closed; a tag that is not
+-- matched, opening or closing, counts as text.
 readLine :: Wrapper -> Text -> Line'
 readLine w line = Line' {pieces = ps, pairs, paints = colours [] ps}
   where
@@ -755,8 +760,8 @@ readLine w line = Line' {pieces = ps, pairs, paints = colours [] ps}
           Closing _ | p.from `elem` closings -> colours (drop 1 stack) rest
           _ -> colours stack rest
 
--- | The wrappers of a line: the part of the line each takes, tags
--- included, and the part its text takes.
+-- | The wrappers of a line: the part of the line each covers, tags
+-- included, and the part its text covers.
 wrappersOf :: Line' -> [((Int, Int), (Int, Int))]
 wrappersOf l = [((p.from, c.to), (p.to, c.from)) | p@Piece {kind = Opening _ (Just _)} <- l.pieces, Just c <- [lookup p.from l.pairs]]
 
@@ -770,8 +775,8 @@ piecesOf w = go 0
         | T.null rest -> []
         | otherwise -> Piece at (at + 1) Letter : go (at + 1) (T.drop 1 rest)
 
--- | The tag at the start of the text, if there is one: its length and what
--- it is. Element names are read in any case, as in HTML.
+-- | The tag at the start of the text, if any: its length and its kind.
+-- Element names are read in any case, as in HTML.
 tagAt :: Wrapper -> Text -> Maybe (Int, PieceKind)
 tagAt w t
   | Just r <- T.stripPrefix "</" t
@@ -798,8 +803,9 @@ tagAt w t
       _ -> Nothing
     isAsciiLetter c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
     voidElements = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]
-    -- The colour the attributes give: a class of the wrapper's and nothing
-    -- else, or none at all where a bare element is a wrapper.
+    -- The colour the attributes give: one class of the wrapper's and
+    -- nothing else, or no attributes at all where a bare element is a
+    -- wrapper.
     paintOf attributes = case T.strip attributes of
       "" | w.bare -> Just ""
       a -> do
@@ -821,20 +827,20 @@ tagAt w t
           guard (not (T.any isSpace r'))
           pure r'
 
--- | What is written anew of a line: its text, and the elements other than
--- wrappers, with what is in them. The wrappers are taken out, to be put
--- back where the colours ask for them.
+-- | The tree of what is rewritten in a line: its text, and the elements
+-- other than wrappers, with their contents. The wrappers are removed, to be
+-- put back where the colours require them.
 data Node = Leaf Piece | Element Piece [Node] Piece
 
--- | One line painted from @a@ to @b@, offsets in the line: the line it
--- makes, and where the words painted are in it, if there were any.
+-- | Paint one line from @a@ to @b@, offsets in the line. The result is the
+-- new line, and where the painted words are in it, if there were any.
 --
--- The part of the line written anew is what the selection touches, with
--- the wrappers it reaches into, and every element with one tag in that
--- part and the other outside it, so that the part holds whole elements.
--- Its text is written with each run of one colour in one wrapper, inside
--- the other elements where an element's text is not all of one colour and
--- around them where it is, so the elements stay nested as they were.
+-- The part of the line rewritten is what the selection touches, plus the
+-- wrappers it reaches into, plus every element with one tag in that part
+-- and the other outside it, so that the part holds whole elements. Its
+-- text is written with each run of one colour in one wrapper: inside the
+-- other elements where an element's text is not all one colour, and around
+-- them where it is, so the elements stay nested as they were.
 paintLine :: Wrapper -> Maybe Paint -> Text -> Int -> Int -> (Text, Maybe (Int, Int))
 paintLine w wanted line a b = case (head chosen, lastMay chosen) of
   (Just firstLeaf, Just lastLeaf)
@@ -851,7 +857,8 @@ paintLine w wanted line a b = case (head chosen, lastMay chosen) of
     reached = [outer | (outer@(o, c), _) <- wrappersOf l, o < b, c > a]
     touched' = [(p.from, p.to) | p <- l.pieces, p.from < b, p.to > a]
     (lo, hi) = widen (foldr (min . fst) a (reached <> touched'), foldr (max . snd) b (reached <> touched'))
-    -- Take in each element with one tag in the part and the other out.
+    -- Include each element with one tag inside the part and the other
+    -- outside.
     widen (x, y) =
       let inside p = p.from >= x && p.to <= y
           crossing = [(o.from, c.to) | o <- l.pieces, Just c <- [lookup o.from l.pairs], inside o /= inside c]
@@ -889,16 +896,16 @@ paintLine w wanted line a b = case (head chosen, lastMay chosen) of
       _ -> False
     chosen = reverse (dropWhile blank (reverse (dropWhile blank [p | p <- region, isText p, p.from >= start, p.to <= b])))
     slice p = T.take (p.to - p.from) (T.drop p.from line)
-    -- The colour a node is all in, if it is all in one: an element with no
-    -- text in it takes its opening tag's.
+    -- The colour a node is entirely in, if any: an element with no text in
+    -- it takes its opening tag's colour.
     colourOf painted = \case
       Leaf p -> Just (painted p)
       Element o inner _ -> case map painted (concatMap leaves inner) of
         [] -> Just (painted o)
         c : cs -> if all (== c) cs then Just c else Nothing
-    -- The nodes from an offset, in a wrapper of the colour around them
-    -- ('Nothing' for none): their text, and where each piece of text is in
-    -- it, by where it was.
+    -- Write the nodes from an offset, in a wrapper of the colour around
+    -- them ('Nothing' for none). The result is their text, and where each
+    -- piece of text ended up, by where it was.
     emit painted around at nodes = foldl' step ("", [], at) (NE.groupBy sameColour nodes) & \(t, placed, _) -> (t, placed)
       where
         sameColour x y = isJust (colourOf painted x) && colourOf painted x == colourOf painted y

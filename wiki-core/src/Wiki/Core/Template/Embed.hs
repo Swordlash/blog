@@ -1,10 +1,11 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | A file of the package's, read when the package is compiled and kept as
--- text in the program: the built-in templates ("Wiki.Core.Template") are
--- Markdown files beside the code rather than strings in it, so that they
--- are written and read as the pages they become. A module of its own,
--- since a splice cannot use a function of the module it is in.
+-- | File embedding: a file of the package, read when the package is
+-- compiled and stored as text in the program. The built-in templates
+-- ("Wiki.Core.Template") are Markdown files next to the code rather than
+-- strings in it, so that they are written and read as the pages they
+-- become. This is a separate module because a Template Haskell splice
+-- cannot use a function defined in its own module.
 module Wiki.Core.Template.Embed
   ( embedText
   )
@@ -17,9 +18,9 @@ import Language.Haskell.TH.Syntax (addDependentFile, lift)
 import Protolude hiding (lift)
 
 -- | The text of a file, by its path from the package's directory, as an
--- expression of type 'Text'; the file is UTF-8, whatever the locale of
--- the machine that compiles it. A change to the file recompiles the module
--- that embeds it.
+-- expression of type 'Text'. The file is read as UTF-8, whatever the
+-- locale of the machine that compiles it. A change to the file recompiles
+-- the module that embeds it.
 embedText :: FilePath -> Q Exp
 embedText path = do
   addDependentFile path

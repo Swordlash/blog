@@ -1,19 +1,20 @@
--- | The wiki's audit log (WP4.10 of docs/PLAN.md): who did what to the
--- wiki's administration, when, to what, and from where. The server writes
--- one entry for each administration write, in the transaction of the
--- write; the administration's "Activity" lists them, newest first; and an
--- export of the wiki carries them ("Wiki.Core.Export"'s @audit.json@), so
--- that the log moves with the wiki.
+-- | The wiki's audit log (WP4.10 of docs/PLAN.md): who changed the wiki's
+-- administration, when, what they changed, and from which address. The
+-- server writes one entry for each administration write, in the write's
+-- transaction. The administration's "Activity" page lists the entries,
+-- newest first. An export of the wiki includes them ("Wiki.Core.Export"'s
+-- @audit.json@), so that the log moves with the wiki.
 --
--- An entry names everything it is about by name as well as by id, as they
--- were when it was written: the log is read long after, when the user who
--- acted, or the space that was deleted, may be gone, and when an import has
--- brought in entries of another wiki, whose ids mean nothing here.
+-- An entry stores every user, space or other subject by name as well as
+-- by id, as the names were when the entry was written. The log is read
+-- long afterwards, when the user who acted, or the space that was deleted,
+-- may no longer exist, and an import may have brought in entries from
+-- another wiki, whose ids mean nothing here.
 --
--- What a write changed is in the entry's 'detail', words for a person to
--- read, by field. A secret is never one of them: a password, a client
--- secret or a configuration that was changed is recorded as changed, not
--- as what it became.
+-- What a write changed is in the entry's 'detail': text for a person to
+-- read, by field. A secret is never stored there: a changed password,
+-- client secret or configuration is recorded as changed, without its new
+-- value.
 module Wiki.Core.Audit
   ( -- * Entries
     AuditEntry (..)
@@ -36,36 +37,37 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Id (UserId (..))
 
--- | One administration write.
+-- | 'AuditEntry': one administration write.
 data AuditEntry = AuditEntry
   { id :: Text
-  -- ^ Its own id: a UUID, which an import keeps, so that the same entry
-  -- brought in twice is there once.
+  -- ^ Its own id: a UUID, which an import keeps, so that importing the
+  -- same entry twice stores it once.
   , at :: UTCTime
   , actor :: Actor
   , action :: Text
   -- ^ What was done, as a dotted name: @space.delete@, @user.password@
-  -- ('actionText' puts it in words).
+  -- ('actionText' turns it into words).
   , subject :: Subject
   , detail :: Map Text Text
-  -- ^ What changed, by field, in words: never a secret.
+  -- ^ What changed, by field, as text: never a secret.
   , address :: Text
   -- ^ The network address the request came from, or @console@ for the
-  -- server's console; empty where it is not known.
+  -- server's console; empty when unknown.
   }
   deriving stock (Eq, Show)
 
--- | Who did it: a user by id and login, or the server's operator (the
--- admin listener's, and the console's), whose id is no user's.
+-- | 'Actor': who made the write. Either a user, by id and login, or the
+-- server's operator (on the admin listener or the console), whose id
+-- belongs to no user.
 data Actor = Actor
   { id :: UserId
   , login :: Text
   }
   deriving stock (Eq, Ord, Show)
 
--- | What it was done to: its kind (@space@, @page@, @user@, @group@,
--- @invitation@, @settings@, @wiki@), its id if it has one, and its name as
--- it was.
+-- | 'Subject': what the write changed. Its kind (@space@, @page@, @user@,
+-- @group@, @invitation@, @settings@, @wiki@), its id if it has one, and
+-- its name at the time.
 data Subject = Subject
   { kind :: Text
   , id :: Maybe Text
@@ -85,9 +87,9 @@ instance ToJSON Actor where
 instance FromJSON Actor where
   parseJSON = withObject "actor" $ \o -> Actor <$> (UserId <$> o .: "id") <*> o .: "login"
 
--- | An action in words, for the administration's list: the action's own
--- name for one this program does not know (one an archive brought from a
--- newer program).
+-- | An action in words, for the administration's list. An action this
+-- program does not know (one an archive brought from a newer version of
+-- the program) is shown as its dotted name.
 actionText :: Text -> Text
 actionText a = Map.findWithDefault a a actions
   where
@@ -125,9 +127,9 @@ actionText a = Map.findWithDefault a a actions
 
 -- | @{"id", "at", "actor": {"id", "login"}, "action", "subject": {"kind",
 -- "id", "name"}, "detail": {…}, "address"}@, written by hand as every
--- record of an archive is ("Wiki.Core.Export"): the subject's @id@ is
--- @null@ for what has none, @detail@ an object of texts (empty if
--- missing), @address@ empty if missing.
+-- record of an archive is ("Wiki.Core.Export"). The subject's @id@ is
+-- @null@ for a subject without one, @detail@ is an object of texts (empty
+-- if missing), and @address@ is empty if missing.
 encodeAuditEntry :: AuditEntry -> Value
 encodeAuditEntry e =
   object

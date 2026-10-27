@@ -1,24 +1,25 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | A space shown as a blog (WP4.14 of docs/PLAN.md): which of its pages
--- are its posts, in what order, a page of them at a time, and the excerpt
--- each is listed with.
+-- | Blog spaces: a space shown as a blog (WP4.14 of docs/PLAN.md). This
+-- module decides which of its pages are posts, in what order, how many
+-- per page of the list, and the excerpt each post is listed with.
 --
 -- A space whose administrator turned on "Show as a blog"
 -- ('Wiki.Core.Space.blog') opens at a list of its posts rather than at the
--- list of its pages. Its __posts__ are its top-level pages but its home
--- page, which is shown above the list instead: the pages under a post are
--- part of it (its attachments, its notes), not posts of their own, and are
--- not listed (the sidebar's tree still has them). The posts are listed the
--- newest first, by when each was made (its first version), whatever order
--- the space lists its pages in, since that is what a blog is; two made at
--- the same moment are taken in the space's total order by date, by title
--- then slug ("Wiki.Core.Order"), so the order is the same everywhere.
+-- list of its pages. Its __posts__ are its top-level pages except its home
+-- page, which is shown above the list instead. The pages under a post are
+-- part of the post (its attachments, its notes), not posts of their own,
+-- and are not listed (the sidebar's tree still shows them). Posts are
+-- listed newest first, by creation time (the time of the first version),
+-- whatever order the space lists its pages in, since that is what a blog
+-- does. Two posts created at the same moment are sorted as the space's
+-- total order by date sorts them, by title then slug ("Wiki.Core.Order"),
+-- so the order is the same everywhere.
 --
--- Each is listed with an __excerpt__: the text of its first paragraph,
--- without its markup, its images, its code and its footnote marks, cut at
--- 'maxExcerpt' characters on a word. The same text describes the page to
--- a link preview (@\<meta name="description">@).
+-- Each post is listed with an __excerpt__: the text of its first paragraph,
+-- without markup, images, code and footnote marks, cut at a word boundary
+-- to at most 'maxExcerpt' characters. The same text is the page's
+-- description for link previews (@\<meta name="description">@).
 module Wiki.Core.Blog
   ( -- * Posts
     posts
@@ -54,9 +55,9 @@ import Wiki.Core.Version (Author)
 --------------------------------------------------------------------------------
 -- Posts
 
--- | A space's posts, among its pages: its top-level pages but its home
--- page and its templates ('Wiki.Core.Page.template'), the newest first. Whether the space is shown as a blog is the
--- caller's to have asked.
+-- | A space's posts, among its pages: its top-level pages except its home
+-- page and its templates ('Wiki.Core.Page.template'), newest first. The
+-- caller checks whether the space is shown as a blog.
 posts :: Space -> [Page] -> [Page]
 posts space pages = filter (isPost space) (childrenInOrder NewestFirst pages Nothing)
 
@@ -64,12 +65,12 @@ posts space pages = filter (isPost space) (childrenInOrder NewestFirst pages Not
 isPost :: Space -> Page -> Bool
 isPost space p = p.space == space.id && isNothing p.parent && space.homePage /= Just p.id && not p.template
 
--- | The posts before and after one, in the order they are listed.
+-- | 'Neighbours': the posts listed before and after a post.
 data Neighbours = Neighbours
   { older :: Maybe Page
-  -- ^ The post made before it, listed after it: the previous post.
+  -- ^ The post created before it, listed after it: the previous post.
   , newer :: Maybe Page
-  -- ^ The post made after it, listed before it: the next post.
+  -- ^ The post created after it, listed before it: the next post.
   }
   deriving stock (Eq, Show)
 
@@ -83,18 +84,18 @@ neighbours space pages pid = case break (\p -> p.id == pid) (posts space pages) 
 --------------------------------------------------------------------------------
 -- Pages of posts
 
--- | How many posts a page of the list shows.
+-- | The number of posts on one page of the list.
 postsPerPage :: Int
 postsPerPage = 10
 
--- | How many pages of the list so many posts make: one at least, which
--- says there are none.
+-- | The number of list pages needed for this many posts: at least one,
+-- which shows that there are none.
 pageCount :: Int -> Int
 pageCount n = max 1 ((n + postsPerPage - 1) `div` postsPerPage)
 
--- | The posts on a page of the list, counted from 1. A page before the
--- first is the first, and one past the last the last, so that an address
--- with a stale or mistyped number still shows posts.
+-- | The posts on one page of the list, counted from 1. A page number before
+-- the first means the first, and one past the last means the last, so that
+-- an address with a stale or mistyped number still shows posts.
 onPage :: Int -> [a] -> (Int, [a])
 onPage n xs = (shown, take postsPerPage (drop ((shown - 1) * postsPerPage) xs))
   where
@@ -103,10 +104,10 @@ onPage n xs = (shown, take postsPerPage (drop ((shown - 1) * postsPerPage) xs))
 --------------------------------------------------------------------------------
 -- What a post is listed with
 
--- | What a post is listed with besides what its page says: who wrote it
--- (the author of its first version; 'Nothing' for a page that came in
--- whole, as an import's do) and how many comments it has, in every thread,
--- resolved or not.
+-- | 'PostDetails': the facts a post is listed with that its page does not
+-- hold. Who wrote it (the author of its first version; 'Nothing' for a
+-- page that was imported whole) and how many comments it has, in every
+-- thread, resolved or not.
 data PostDetails = PostDetails
   { author :: Maybe Author
   , comments :: Int
@@ -114,22 +115,22 @@ data PostDetails = PostDetails
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | The details of a page nothing is known of.
+-- | The details of a page with no known details.
 noDetails :: PostDetails
 noDetails = PostDetails {author = Nothing, comments = 0}
 
--- | The longest excerpt, in characters, the ellipsis included.
+-- | The longest excerpt, in characters, including the ellipsis.
 maxExcerpt :: Int
 maxExcerpt = 300
 
--- | A page's excerpt, from its Markdown: empty for one that cannot be read
--- or has no paragraph with text in it.
+-- | A page's excerpt, from its Markdown: empty for a page that cannot be
+-- parsed or has no paragraph with text in it.
 excerptOf :: Text -> Text
 excerptOf = either (const "") excerpt . parseMarkdown
 
--- | The excerpt of a parsed page: the text of the first of its top-level
--- paragraphs that has any, its white space made single spaces, cut on a
--- word to at most 'maxExcerpt' characters with an ellipsis.
+-- | The excerpt of a parsed page: the text of the first top-level paragraph
+-- that has text, with its white space collapsed to single spaces, cut at a
+-- word boundary to at most 'maxExcerpt' characters with an ellipsis.
 excerpt :: [Block] -> Text
 excerpt blocks = maybe "" cut (head [t | b <- blocks, Just t <- [paragraph b], not (T.null t)])
   where
@@ -141,16 +142,16 @@ excerpt blocks = maybe "" cut (head [t | b <- blocks, Just t <- [paragraph b], n
       | T.length t <= maxExcerpt = t
       | otherwise =
           let room = T.take (maxExcerpt - 1) t
-              -- On the last word that fits whole, unless the first word is
-              -- longer than the room: then wherever the room ends.
+              -- Cut after the last word that fits entirely, unless the
+              -- first word is longer than the space: then cut where the
+              -- space ends.
               onWord = case T.breakOnEnd " " room of
                 (kept, _) | not (T.null (T.strip kept)) -> T.stripEnd kept
                 _ -> room
            in onWord <> "…"
 
--- | The text of some inlines as a reader reads them in an excerpt: images,
--- code and footnote marks left out, links by their text, formulas as their
--- TeX.
+-- | The text of some inlines as an excerpt shows it: images, code and
+-- footnote marks left out, links as their text, formulas as their TeX.
 inlineText :: [Inline] -> Text
 inlineText = foldMap $ \case
   Str t -> t
@@ -168,8 +169,8 @@ inlineText = foldMap $ \case
   Mention l -> "@" <> l
   RawHtml _ -> ""
 
--- | The destination of a page's first image, as written: what a link
--- preview shows for the page, if anything.
+-- | The destination of a page's first image, as written: the image a link
+-- preview shows for the page, if any.
 firstImage :: [Block] -> Maybe Text
 firstImage = head . concatMap inBlock
   where

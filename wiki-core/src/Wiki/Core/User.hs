@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Users, groups and who is in which group. Nothing secret lives here:
--- password hashes and sessions are the server's (@wiki-server@).
+-- | Users, groups and group membership. Nothing secret is stored here:
+-- password hashes and sessions belong to the server (@wiki-server@).
 module Wiki.Core.User
   ( User (..)
   , Standing (..)
@@ -25,39 +25,39 @@ import Data.Text qualified as T
 import Protolude
 import Wiki.Core.Id
 
--- | Someone who can sign in.
+-- | 'User': an account that can sign in.
 data User = User
   { id :: UserId
   , login :: Text
-  -- ^ What they sign in with, unique.
+  -- ^ The name they sign in with; unique.
   , displayName :: Text
-  -- ^ What pages show them as.
+  -- ^ The name pages show for them.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | How whoever is asking came to be who they are, which decides whether
--- they may sign in or out: someone nobody has signed in as may sign in,
--- someone signed in may sign out, and the server's operator (on its
--- loopback admin listener) is the administrator without having signed
--- in, so neither applies.
+-- | 'Standing': how the current requester is identified, which decides
+-- whether they may sign in or out. A requester who is not signed in may
+-- sign in, and a signed-in user may sign out. The server's operator (on
+-- its loopback admin listener) is the administrator without signing in, so
+-- neither applies.
 data Standing
   = -- | Nobody has signed in.
     NotSignedIn
   | -- | A user who signed in, with a session.
     SignedIn
-  | -- | The server's operator, who is the administrator by where they ask
-    -- from: the server's loopback admin listener.
+  | -- | The server's operator, who is the administrator because of where
+    -- the request comes from: the server's loopback admin listener.
     Operator
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A provider people may sign in with instead of a password (OpenID
--- Connect, WP3.6 of docs/PLAN.md), as the application shows it: the name
--- the server's configuration gives it, which is also its place in the
--- addresses that sign in with it (@auth\/\<name>\/start@), and the label
--- of its button ("Sign in with GitHub"). Its client's secret, and
--- everything else of how the server talks to it, stay on the server.
+-- | 'SignInProvider': a provider users may sign in with instead of a
+-- password (OpenID Connect, WP3.6 of docs/PLAN.md), as the application
+-- shows it. It holds the name from the server's configuration, which is
+-- also its segment in the sign-in addresses (@auth\/\<name>\/start@), and
+-- the label of its button ("Sign in with GitHub"). The client secret, and
+-- all other settings for talking to the provider, stay on the server.
 data SignInProvider = SignInProvider
   { name :: Text
   , label :: Text
@@ -65,7 +65,7 @@ data SignInProvider = SignInProvider
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A set of users that permissions can be granted to at once.
+-- | 'Group': a set of users that permissions can be granted to together.
 data Group = Group
   { id :: GroupId
   , name :: Text
@@ -84,11 +84,12 @@ groupsOf membership user = Map.keysSet (Map.filter (Set.member user) membership)
 --------------------------------------------------------------------------------
 -- Accounts
 
--- | A login as it is kept, or why it cannot be one: without the blanks
--- around it, at most 64 characters, with no blank or control character
--- inside, and not starting with @~@, which names the server's own
--- principals (its operator is @~administrator@). Every backend makes users
--- by this rule, so that a login the demo takes the server takes too.
+-- | A login as it is stored, or why it is invalid. It is trimmed of white
+-- space, at most 64 characters, with no white space or control character
+-- inside, and does not start with @~@, which marks the server's own
+-- principals (its operator is @~administrator@). Every backend creates
+-- users with this rule, so that a login the demo accepts the server
+-- accepts too.
 checkLogin :: Text -> Either Text Text
 checkLogin raw
   | T.null login = Left "A login cannot be blank."
@@ -99,23 +100,23 @@ checkLogin raw
   where
     login = T.strip raw
 
--- | Why a password cannot be one, if it cannot: shorter than
+-- | The password, or why it is invalid: shorter than
 -- 'minimumPasswordLength' characters, or longer than
--- 'maximumPasswordLength'. The server hashes what passes; the demo, which
--- has no passwords, checks it all the same, so that its administration
--- refuses what the server's would.
+-- 'maximumPasswordLength'. The server hashes a valid password. The demo,
+-- which has no passwords, checks them all the same, so that its
+-- administration refuses what the server's would.
 checkPassword :: Text -> Either Text Text
 checkPassword p
   | T.length p < minimumPasswordLength = Left ("A password needs at least " <> show minimumPasswordLength <> " characters.")
   | T.length p > maximumPasswordLength = Left ("A password has at most " <> show maximumPasswordLength <> " characters.")
   | otherwise = Right p
 
--- | The shortest password a backend takes: NIST's minimum for a password
+-- | The shortest password a backend accepts: NIST's minimum for a password
 -- chosen by its user (SP 800-63B).
 minimumPasswordLength :: Int
 minimumPasswordLength = 8
 
--- | The longest: long enough for any passphrase, short enough that hashing
--- one is not a way to keep the server busy.
+-- | The longest password: long enough for any passphrase, short enough that
+-- hashing one cannot be used to keep the server busy.
 maximumPasswordLength :: Int
 maximumPasswordLength = 1024

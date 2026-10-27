@@ -1,8 +1,8 @@
--- | An archive's files as a zip file and back, natively, through
--- @zip-archive@: for the native tests, and for the server of Phase 2.
+-- | Zip archives, natively: an archive's files written as a zip file and
+-- read back, through @zip-archive@. The server and the native tests use it.
 --
--- The browser makes and reads the same zip files with fflate (see
--- @web/src/archive.js@): @zip-archive@ needs the C library zlib through
+-- The browser writes and reads the same zip files with fflate (see
+-- @web/src/archive.js@). @zip-archive@ needs the C library zlib through
 -- @digest@, which the WebAssembly toolchain does not have, so this module
 -- is built natively only.
 module Wiki.Core.Export.Zip
@@ -19,7 +19,7 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Protolude
 
--- | A zip file of these files, by path, each dated at the time given.
+-- | A zip file of these files, by path, each dated at the given time.
 zipFiles :: UTCTime -> [(Text, ByteString)] -> ByteString
 zipFiles time files =
   BSL.toStrict . fromArchive $
@@ -27,8 +27,8 @@ zipFiles time files =
   where
     seconds = floor (utcTimeToPOSIXSeconds time)
 
--- | The files a zip file holds, by path, but for directories' own
--- entries; or why it is not a zip file that can be read.
+-- | The files in a zip file, by path, without the entries for directories;
+-- or why the zip file cannot be read.
 unzipFiles :: ByteString -> Either Text (Map Text ByteString)
 unzipFiles bytes = do
   archive <- first toS (toArchiveOrFail (BSL.fromStrict bytes))

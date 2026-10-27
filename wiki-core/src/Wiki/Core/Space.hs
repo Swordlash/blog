@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Spaces: the tree that holds the wiki's pages, and the unit permissions
--- are granted on.
+-- | Spaces: the tree that holds the wiki's pages, and the unit that
+-- permissions are granted on.
 module Wiki.Core.Space
   ( Space (..)
   , positionSpace
@@ -49,36 +49,36 @@ import Wiki.Core.Slug
 data Space = Space
   { id :: SpaceId
   , name :: Text
-  -- ^ What the space is called where it is shown.
+  -- ^ The space's display name.
   , slug :: Slug
-  -- ^ Its segment of an address, unique among its siblings.
+  -- ^ Its address segment, unique among its siblings.
   , parent :: Maybe SpaceId
   -- ^ The space it is a subspace of, or 'Nothing' for a top-level space.
   , public :: Bool
   -- ^ Whether anyone may read it, signed in or not; its subspaces inherit
   -- that as they inherit any grant (see "Wiki.Core.Permission").
   , mathMacros :: Text
-  -- ^ TeX macros for the formulas of its pages and of its subspaces' pages,
-  -- as @\\newcommand@ lines (or any definitions KaTeX reads); empty for
-  -- none. A subspace's own come after its parent's, so that a macro it
-  -- defines again is its own ("Wiki.Core.Math").
+  -- ^ TeX macros for the formulas of its pages and of its subspaces'
+  -- pages, as @\\newcommand@ lines (or any definitions KaTeX reads); empty
+  -- for none. A subspace's own macros come after its parent's, so that a
+  -- macro it defines again takes precedence ("Wiki.Core.Math").
   , createdAt :: UTCTime
-  -- ^ Set by the backend when the space is made.
+  -- ^ Set by the backend when the space is created.
   , position :: Int
-  -- ^ Where it was put among its siblings by hand, for a parent that
+  -- ^ Its position among its siblings, set by hand, for a parent that
   -- orders its subspaces 'ByHand' ("Wiki.Core.Order").
   , subspaceOrder :: ChildOrder
   -- ^ The order its subspaces are listed in.
   , pageOrder :: ChildOrder
   -- ^ The order its pages are listed in, and the pages under each page.
   , homePage :: Maybe PageId
-  -- ^ The page the space opens at, one of its own; 'Nothing' for none, and
-  -- then the space opens at the list of its pages. A space made by
-  -- 'Wiki.App.Backend.createSpace' starts with one ('homeTitle').
+  -- ^ The page the space opens at, one of its own; 'Nothing' for none, in
+  -- which case the space opens at the list of its pages. A space created
+  -- by 'Wiki.App.Backend.createSpace' starts with one ('homeTitle').
   , icon :: Maybe Icon
-  -- ^ How it is pictured beside its name; 'Nothing' for the default, a
-  -- square of a colour picked from its id ('defaultColour') with its
-  -- name's first letter.
+  -- ^ The icon shown beside its name; 'Nothing' for the default, a square
+  -- of a colour picked from its id ('defaultColour') with its name's first
+  -- letter.
   , description :: Text
   -- ^ What it is for, in a sentence or two of plain text, shown in the
   -- directory of spaces; empty for none.
@@ -102,7 +102,7 @@ instance Sibling Space where
   siblingPosition s = s.position
 
 -- | The order the subspaces of a parent ('Nothing' for the top level) are
--- listed in, among the spaces given: the parent's 'subspaceOrder'. The
+-- listed in, among the given spaces: the parent's 'subspaceOrder'. The
 -- top-level spaces have no parent to choose one, and are listed by name.
 subspaceOrderOf :: [Space] -> Maybe SpaceId -> ChildOrder
 subspaceOrderOf spaces = \case
@@ -120,24 +120,24 @@ spaceTreeOrder :: [Space] -> [Space]
 spaceTreeOrder spaces = treeOrder (subspaceOrderOf spaces) spaces
 
 -- | The top-level space a space is in: itself at the top level, or the
--- top-level ancestor of a subspace, among the spaces given.
+-- top-level ancestor of a subspace, among the given spaces.
 topLevelOf :: [Space] -> SpaceId -> Maybe Space
 topLevelOf spaces sid = go (32 :: Int) sid
   where
     go 0 _ = Nothing
     go n i = find (\s -> s.id == i) spaces >>= \s -> maybe (Just s) (go (n - 1)) s.parent
 
--- | The space at another position among its siblings. (A function, since a
--- record update of @position@ cannot tell a space's from a page's where
--- both are in scope.)
+-- | The space at another position among its siblings. (A function, since
+-- a record update of @position@ cannot tell a space's field from a page's
+-- where both are in scope.)
 positionSpace :: Int -> Space -> Space
 positionSpace position s = s {position}
 
 --------------------------------------------------------------------------------
 -- Icons
 
--- | How a space is pictured beside its name: what its administrator chose
--- in its settings. A space with none chosen has a colour of its own
+-- | A space's icon beside its name, as its administrator chose it in its
+-- settings. A space with none chosen gets a colour of its own
 -- ('defaultColour').
 data Icon
   = -- | An emoji (or a few characters of text), shown as it is.
@@ -145,16 +145,16 @@ data Icon
   | -- | A square of one of 'iconColours', by name, with the first letter of
     -- the space's name in it ('iconLetter').
     IconColour Text
-  | -- | An image uploaded for it, kept as an attachment's bytes are (by the
-    -- blob it is), with its media type. Its address is the backend's to
-    -- say ('Wiki.App.Backend.spaceIconUrl').
+  | -- | An uploaded image, stored like an attachment's bytes (by its blob
+    -- id), with its media type. The backend gives its URL
+    -- ('Wiki.App.Backend.spaceIconUrl').
     IconImage BlobId Text
   deriving stock (Eq, Show, Generic)
 
 -- | @{"emoji": "…"}@, @{"colour": "teal"}@ or @{"image": blob, "mediaType":
 -- "image/png"}@: an object with a field per kind, as the export's records
 -- are written, rather than a derived encoding of the constructors, so that
--- renaming one cannot change the API or the archive.
+-- renaming a constructor cannot change the API or the archive format.
 instance ToJSON Icon where
   toJSON = \case
     IconEmoji e -> object ["emoji" .= e]
@@ -172,24 +172,24 @@ instance FromJSON Icon where
       (Nothing, Nothing, Just b) -> IconImage b <$> o .: "mediaType"
       _ -> fail "an icon is an emoji, a colour or an image"
 
--- | The colours a space's icon may be, by the names the stylesheet gives
--- them classes for (@space-icon-\<name>@), each readable with a white
--- letter on it in the light and the dark theme.
+-- | The colours a space's icon may have, by the names the stylesheet has
+-- classes for (@space-icon-\<name>@), each readable with a white letter
+-- on it in the light and the dark theme.
 iconColours :: [Text]
 iconColours = ["blue", "teal", "green", "olive", "orange", "red", "pink", "purple", "indigo", "slate"]
 
--- | A colour's name as a person reads it.
+-- | A colour's name, in words for a person to read.
 iconColourName :: Text -> Text
 iconColourName c = maybe c (\(h, t) -> T.cons (toUpper h) t) (T.uncons c)
 
--- | The colour of a space that has no icon chosen: one of 'iconColours',
--- picked from its id, so that it stays when the space is renamed and two
--- spaces side by side are likely to differ.
+-- | The colour of a space with no icon chosen: one of 'iconColours',
+-- picked from its id, so that it stays the same when the space is renamed
+-- and two spaces side by side are likely to differ.
 defaultColour :: SpaceId -> Text
 defaultColour sid = fromMaybe "blue" (atMay iconColours (sum (map ord (T.unpack sid.text)) `mod` length iconColours))
 
--- | The colour a space's icon square is: the one chosen, or its default.
--- An image or an emoji has none, but is given the default for whatever is
+-- | The colour of a space's icon square: the chosen one, or its default.
+-- An image or an emoji has none, but gets the default for whatever is
 -- drawn behind it.
 colourOf :: Space -> Text
 colourOf s = case s.icon of
@@ -203,9 +203,9 @@ iconLetter name = case T.find isAlphaNum name <|> fmap fst (T.uncons (T.strip na
   Just c -> T.toUpper (T.singleton c)
   Nothing -> "?"
 
--- | The kinds of image a space's icon may be: pictures a browser shows by
--- itself and that run nothing. Not SVG, which may carry scripts, and is
--- served from the wiki's own origin.
+-- | The image types a space's icon may have: images a browser shows by
+-- itself and that run nothing. Not SVG, which may carry scripts, and would
+-- be served from the wiki's own origin.
 iconMediaTypes :: [Text]
 iconMediaTypes = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]
 
@@ -214,8 +214,8 @@ iconMediaTypes = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/a
 maxIconSize :: Natural
 maxIconSize = 1024 * 1024
 
--- | An upload for a space's icon, checked: its media type, normalised, or
--- why it cannot be one.
+-- | Check an upload for a space's icon. The result is its media type,
+-- normalised, or why it cannot be an icon.
 checkIconUpload :: Text -> Natural -> Either Text Text
 checkIconUpload mediaType size
   | essence `notElem` iconMediaTypes = Left "A space's icon has to be a PNG, JPEG, GIF, WebP or AVIF image."
@@ -228,12 +228,12 @@ checkIconUpload mediaType size
 --------------------------------------------------------------------------------
 -- Profiles
 
--- | What a space's administrator sets in its settings besides its name, its
--- permissions and its orders: its description, its icon, its home page
--- and whether it is shown as a blog ('Wiki.App.Backend.setSpaceProfile').
--- An image is not set this way but uploaded
--- ('Wiki.App.Backend.uploadSpaceIcon'): a profile names one only to keep
--- the image the space has.
+-- | 'SpaceProfile': what a space's administrator sets in its settings
+-- besides its name, its permissions and its orders: its description, its
+-- icon, its home page and whether it is shown as a blog
+-- ('Wiki.App.Backend.setSpaceProfile'). An image is not set this way but
+-- uploaded ('Wiki.App.Backend.uploadSpaceIcon'): a profile names an image
+-- only to keep the one the space has.
 data SpaceProfile = SpaceProfile
   { description :: Text
   , icon :: Maybe Icon
@@ -243,13 +243,13 @@ data SpaceProfile = SpaceProfile
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A space's profile as it is.
+-- | A space's current profile.
 profileOf :: Space -> SpaceProfile
 profileOf s = SpaceProfile {description = s.description, icon = s.icon, homePage = s.homePage, blog = s.blog}
 
 -- | A space with another profile. (A function, since a record update of
--- @icon@, @description@, @homePage@ or @blog@ cannot tell a space's from a
--- profile's where both are in scope.)
+-- @icon@, @description@, @homePage@ or @blog@ cannot tell a space's field
+-- from a profile's where both are in scope.)
 withProfile :: SpaceProfile -> Space -> Space
 withProfile p s =
   Space
@@ -273,12 +273,11 @@ withProfile p s =
 maxDescriptionLength :: Int
 maxDescriptionLength = 500
 
--- | A profile for a space, checked against the space as it is and the ids
--- of its pages: the description trimmed and not too long, an emoji
--- trimmed and short, without spaces, a colour one of 'iconColours', an
--- image the one the space has already, and the home page one of its
--- pages. What is given back is the profile as the space keeps it, or why
--- it cannot.
+-- | Check a profile for a space, against the space as it is and the ids of
+-- its pages: the description trimmed and not too long, an emoji trimmed,
+-- short and without spaces, a colour one of 'iconColours', an image the
+-- one the space already has, and the home page one of its pages. The
+-- result is the profile as the space will store it, or why it is invalid.
 checkProfile :: Space -> [PageId] -> SpaceProfile -> Either Text SpaceProfile
 checkProfile space pages p = do
   let description = T.strip p.description
@@ -306,12 +305,12 @@ checkProfile space pages p = do
 --------------------------------------------------------------------------------
 -- Home pages
 
--- | The title of the home page a new space is made with.
+-- | The title of the home page a new space is created with.
 homeTitle :: Text
 homeTitle = "Home"
 
--- | The Markdown of the home page a new space of this name is made with: a
--- line that invites whoever made it to write.
+-- | The Markdown of the home page a new space with this name is created
+-- with: a line that invites its creator to write.
 homeBody :: Text -> Text
 homeBody name =
   T.unlines

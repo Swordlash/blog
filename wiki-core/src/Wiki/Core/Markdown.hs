@@ -18,7 +18,7 @@ import Wiki.Core.Markdown.Link
 import Wiki.Core.Markdown.Render
 import Wiki.Core.Markdown.Toc
 
--- | Parse a page's Markdown and render it, in one go: for a caller that has
--- no use for the tree.
+-- | Parse a page's Markdown and render it in one step, for a caller that
+-- does not need the parsed tree.
 renderMarkdown :: Options page w i -> Text -> Either ParseError [HH.HTML w i]
 renderMarkdown opts source = renderBlocks opts <$> parseMarkdown source

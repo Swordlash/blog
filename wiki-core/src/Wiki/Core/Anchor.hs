@@ -1,16 +1,17 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Where an inline comment is on a page: a quote of the page's text, found
--- again however the page changes around it, and marked where it is found.
+-- | Comment anchors: where an inline comment is on a page. An anchor is a
+-- quote of the page's text, found again however the page changes around
+-- it, and highlighted where it is found.
 --
 -- An inline thread ("Wiki.Core.Comment") does not point into the page's
 -- Markdown. A reader selects text in the rendered page, and mapping that
 -- selection back to offsets in the source is fragile (a word in bold is
 -- three characters further on in the source than on the page; a link's
 -- text is somewhere in the middle of its Markdown). Instead the thread
--- carries a /text quote selector/, as the W3C's Web Annotation model has
--- it ('Anchor'): the text quoted, exactly, with a few characters before and
--- after it as its context. Decision 23 of docs/PLAN.md.
+-- carries a /text quote selector/, as the W3C's Web Annotation model
+-- defines it ('Anchor'): the exact quoted text, with a few characters
+-- before and after it as its context. Decision 23 of docs/PLAN.md.
 --
 -- = The text
 --
@@ -25,23 +26,24 @@
 --
 -- = Finding a quote again
 --
--- 'locate' looks for the quote in the text as it is now. Found once, it is
--- there, wherever it moved: an edit elsewhere in the page changes nothing.
--- Found more than once, the context decides: the place whose text before
--- and after matches the anchor's prefix and suffix best, if one matches
--- better than every other. A quote the page no longer has, or has several
--- times with no context to tell them apart, is 'Orphaned': its thread is
--- kept, and shown without a highlight, with its quote.
+-- 'locate' looks for the quote in the current text. If it is found once,
+-- that is it, wherever it moved: an edit elsewhere in the page changes
+-- nothing. If it is found more than once, the context decides: the
+-- occurrence whose surrounding text best matches the anchor's prefix and
+-- suffix, if one matches better than every other. A quote the page no
+-- longer contains, or contains several times with no context to tell them
+-- apart, is 'Orphaned': its thread is kept, and shown with its quote but
+-- without a highlight.
 --
 -- = Marking it
 --
 -- 'highlight' wraps each quote found in @\<mark class="comment-mark"
 -- data-thread="…">@ elements, in the rendered document itself, as plain
--- Halogen HTML: a pure function of the document and the threads, so that
--- the page the server renders and the page the program renders are the
--- same, and no JavaScript ever touches the article. A mark is put around
--- part of one text node, never more, so a quote across two paragraphs is
--- two marks, and no mark crosses an element's boundary.
+-- Halogen HTML. It is a pure function of the document and the threads, so
+-- that the page the server prerenders and the page the program renders are
+-- the same, and no JavaScript ever touches the article. A mark covers part
+-- of one text node, never more, so a quote across two paragraphs gets two
+-- marks, and no mark crosses an element's boundary.
 module Wiki.Core.Anchor
   ( -- * Anchors
     Anchor (..)
@@ -102,9 +104,9 @@ anchorAt text r =
     , suffix = T.take contextLength (T.drop r.end text)
     }
 
--- | An anchor as it is kept: a quote with something to read in it, at most
--- 'maxQuoteLength' long, and its context cut to 'contextLength' on each
--- side (the side nearest the quote kept); or why it cannot be.
+-- | An anchor as it is stored: a quote with something to read in it, at
+-- most 'maxQuoteLength' long, and its context cut to 'contextLength' on
+-- each side (keeping the part nearest the quote); or why it is invalid.
 checkAnchor :: Anchor -> Either Text Anchor
 checkAnchor a
   | T.all isSpace a.exact = Left "A comment's quote cannot be blank."
@@ -123,9 +125,9 @@ data Range = Range
 data Located
   = -- | There, at this range of the text.
     Found Range
-  | -- | Nowhere, or nowhere in particular: the page no longer has the
-    -- quote, or has it more than once with no context to choose between
-    -- them.
+  | -- | Nowhere, or nowhere in particular: the page no longer contains the
+    -- quote, or contains it more than once with no context to choose
+    -- between them.
     Orphaned
   deriving stock (Eq, Show)
 
@@ -135,9 +137,9 @@ data Located
 -- Each occurrence is scored by how much of the anchor's context it has:
 -- the characters of the prefix that end the text before it, and of the
 -- suffix that start the text after it. A context shorter than
--- 'contextLength' was cut short by the start or the end of the text, so an
--- occurrence that is just as near the start (or the end) scores one more,
--- for the edge it shares. The occurrence that scores best wins, if it
+-- 'contextLength' was cut short by the start or the end of the text, so
+-- an occurrence that is just as near the start (or the end) scores one
+-- more, for the shared edge. The best-scoring occurrence wins, if it
 -- scores anything and no other scores as much.
 locate :: Text -> Anchor -> Located
 locate text a
@@ -151,9 +153,9 @@ locate text a
   where
     n = T.length a.exact
     found s = Found Range {start = s, end = s + n}
-    -- Every occurrence, those that overlap another included ("oteno" is
-    -- twice in "otenoteno"): 'T.breakOnAll' finds only those that do
-    -- not, and would take the second of two such for no occurrence at all.
+    -- Every occurrence, including those that overlap another ("oteno" is
+    -- twice in "otenoteno"): 'T.breakOnAll' finds only non-overlapping
+    -- ones, and would miss the second of two such occurrences.
     occurrences = startingAt 0 text
     startingAt offset rest = case T.breakOn a.exact rest of
       (before, match)
@@ -189,7 +191,7 @@ renderedText = T.concat . concatMap (\(HTML v) -> texts v)
       Widget _ -> []
       Grafted g -> texts (runGraft g)
 
--- | A quote to mark: its thread, where it was found in the document's
+-- | A quote to highlight: its thread, where it was found in the document's
 -- 'renderedText', and whether it is the thread the reader has chosen
 -- (marked @comment-mark-focused@ as well).
 data Marking = Marking
@@ -200,11 +202,11 @@ data Marking = Marking
   deriving stock (Eq, Show)
 
 -- | The document with each marking's text wrapped in marks (see "Marking
--- it" above): each text node cut where a marked range starts or ends, and
--- each piece of it in a range put in a @\<mark>@ of its own. Where ranges
--- overlap, a piece is marked once, for the thread whose quote starts
--- last (the innermost, as the reader sees it), and is focused if any of
--- them is.
+-- it" above): each text node is split where a marked range starts or ends,
+-- and each piece inside a range goes in a @\<mark>@ of its own. Where
+-- ranges overlap, a piece is marked once, for the thread whose quote
+-- starts last (the innermost, as the reader sees it), and is focused if
+-- any of them is.
 highlight :: forall w i. [Marking] -> [HH.HTML w i] -> [HH.HTML w i]
 highlight [] doc = doc
 highlight markings doc = map HTML (evalState (concat <$> traverse (walk . (\(HTML v) -> v)) doc) 0)
@@ -220,7 +222,7 @@ highlight markings doc = map HTML (evalState (concat <$> traverse (walk . (\(HTM
       Widget w -> pure [Widget w]
       Grafted g -> walk (runGraft g)
 
-    -- A keyed child that is cut in pieces keeps its key on the first.
+    -- A keyed child that is split into pieces keeps its key on the first.
     walkKeyed (key, child) = zipWith (\n v -> (if n == (0 :: Int) then key else key <> "~" <> show n, v)) [0 ..] <$> walk child
 
     -- The pieces of a text node that starts at this offset.

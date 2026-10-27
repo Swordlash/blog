@@ -1,20 +1,21 @@
--- | A @tikz@ fence as the TeX that draws it.
+-- | TikZ fences: the TeX document that draws a @tikz@ fence.
 --
--- An author writes either the body of a @tikzpicture@ (the commands alone)
+-- An author writes either the body of a @tikzpicture@ (the commands only),
 -- or the whole environment, @\\begin{tikzpicture}…\\end{tikzpicture}@, or a
--- @tikzcd@ diagram, which is a picture of its own. Lines at the top that
+-- @tikzcd@ diagram, which is a picture by itself. Lines at the top that
 -- load packages or libraries (@\\usepackage@, @\\usetikzlibrary@,
--- @\\usepgfplotslibrary@) belong before @\\begin{document}@, where LaTeX
--- wants them; the rest is the picture. A @tikzcd@ diagram or a pgfplots
--- axis loads its package by itself, so that the commonest pictures need no
+-- @\\usepgfplotslibrary@) go before @\\begin{document}@, where LaTeX
+-- expects them; the rest is the picture. A @tikzcd@ diagram or a pgfplots
+-- axis loads its own package, so that the most common pictures need no
 -- preamble.
 --
--- The browser draws it with TikZJax (@web/src/tikz.js@), whose TeX input is
--- the preamble and @\\begin{document}@ on its first line and the picture on
--- the lines after. The picture keeps the author's lines where they were (a
--- preamble line becomes an empty one, and the @\\begin{tikzpicture}@ that
--- wraps a body goes at the start of its first line), so the line TeX names
--- in an error is the author's, one further down.
+-- The browser draws the picture with TikZJax (@web/src/tikz.js@). Its TeX
+-- input is the preamble and @\\begin{document}@ on the first line, then the
+-- picture on the following lines. The picture keeps the author's lines in
+-- their positions (a preamble line becomes an empty line, and the
+-- @\\begin{tikzpicture}@ added around a body goes at the start of its first
+-- line), so the line number TeX gives in an error is the author's line
+-- number plus one.
 module Wiki.Core.Markdown.Tikz
   ( TikzDocument (..)
   , tikzDocument
@@ -25,14 +26,14 @@ import Data.List (span)
 import Data.Text qualified as T
 import Protolude
 
--- | What goes before @\\begin{document}@, and what after.
+-- | 'TikzDocument': the TeX before @\\begin{document}@, and the TeX after it.
 data TikzDocument = TikzDocument
   { preamble :: Text
   , picture :: Text
   }
   deriving stock (Eq, Show)
 
--- | The TeX that draws a @tikz@ fence's source.
+-- | The TeX document that draws a @tikz@ fence's source.
 tikzDocument :: Text -> TikzDocument
 tikzDocument source =
   TikzDocument

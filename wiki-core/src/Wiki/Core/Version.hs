@@ -1,24 +1,24 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | A page's history: every save of a page is a version of it, kept for as
--- long as the page is.
+-- | Page versions: a page's history. Every save of a page creates a
+-- version of it, kept as long as the page exists.
 --
--- A version is named by the page and the time it was saved at, which is the
--- page's @updatedAt@ as that version: every save makes it later, so no two
--- versions of a page share one, and it is the very time a save of the page
--- is checked against (and, over HTTP, the page's @ETag@). The page as it is
--- now is its latest version, so a page's history is never empty: it starts
--- with the page as it was made, or, for a page that came in whole (from an
--- export archive, or from before the history was kept), as it was then.
+-- A version is identified by the page and the time it was saved, which is
+-- the page's @updatedAt@ in that version. Every save makes @updatedAt@
+-- later, so no two versions of a page share one, and a save is checked
+-- against that same time (over HTTP, it is also the page's @ETag@). The
+-- current page is its latest version, so a page's history is never empty.
+-- It starts with the page as it was created, or, for a page that was
+-- imported whole (from an export archive, or from before history was
+-- kept), as it was then.
 --
--- The history is never rewritten. Going back to an earlier version is a
--- save of its title and body as a new version, which keeps everything in
--- between.
+-- The history is never rewritten. Restoring an earlier version saves its
+-- title and body as a new version, which keeps every version in between.
 --
 -- In JSON (the server's API) a version is an object with the record's
 -- field names. Versions are not part of an export (docs/export.md): an
--- archive is the wiki's content, and a page's history can be many times its
--- size.
+-- archive holds the wiki's content, and a page's history can be many
+-- times its size.
 module Wiki.Core.Version
   ( VersionInfo (..)
   , Version (..)
@@ -32,32 +32,32 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Id
 
--- | Who saved a version, as a reader of the history sees them.
+-- | 'Author': who saved a version, as the history shows them.
 data Author = Author
   { id :: UserId
   , name :: Text
-  -- ^ Their display name; for someone who is no longer one of the wiki's
-  -- users, their id, which is all that is left of them.
+  -- ^ Their display name; for a user who no longer exists in the wiki,
+  -- their id, which is the only thing left of them.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | One version of a page as its history lists it: when, by whom, and under
--- what title. The body is fetched by itself, since a history lists many
--- versions and shows one at a time.
+-- | 'VersionInfo': one version of a page as its history lists it: when it
+-- was saved, by whom, and under what title. The body is fetched
+-- separately, since a history lists many versions and shows one at a time.
 data VersionInfo = VersionInfo
   { page :: PageId
   , updatedAt :: UTCTime
-  -- ^ The page's @updatedAt@ as this version: its name among the page's.
+  -- ^ The page's @updatedAt@ in this version: the version's identifier.
   , title :: Text
   , author :: Maybe Author
-  -- ^ 'Nothing' when nobody is known to have saved it: a page that came
-  -- in whole, as an import does.
+  -- ^ 'Nothing' when nobody is known to have saved it: a page that was
+  -- imported whole.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | One version of a page, whole.
+-- | 'Version': one version of a page, with its body.
 data Version = Version
   { page :: PageId
   , updatedAt :: UTCTime
@@ -69,6 +69,6 @@ data Version = Version
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | What a history lists of a version.
+-- | The part of a version a history lists.
 versionInfo :: Version -> VersionInfo
 versionInfo v = VersionInfo {page = v.page, updatedAt = v.updatedAt, title = v.title, author = v.author}

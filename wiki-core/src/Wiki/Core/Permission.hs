@@ -1,25 +1,27 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Who may do what: the permission model, as data and pure rules.
+-- | The permission model, as data and pure rules: who may do what.
 --
--- There are two global permissions, 'Administer' (everything, everywhere) and
--- 'CreateSpaces', and three on a space, 'View', 'Edit' and 'AdministerSpace'
--- (its permissions, deleting it, moving it). Each is granted to a 'Subject',
--- a user or a group. A subspace inherits its parent's grants and may add its
--- own; it cannot take one away, so what someone may do in a space is what
--- they are granted on it or on any of its ancestors. A public space grants
--- 'View' to everyone, signed in or not, and since that is a grant like any
--- other, its subspaces are public too. There are no page-level permissions: a
--- page is as visible and as editable as its space.
+-- There are two global permissions, 'Administer' (everything,
+-- everywhere) and 'CreateSpaces', and three on a space, 'View', 'Edit'
+-- and 'AdministerSpace' (its permissions, deleting it, moving it). Each
+-- is granted to a 'Subject', a user or a group. A subspace inherits its
+-- parent's grants and may add its own; it cannot remove one, so what
+-- someone may do in a space is what they are granted on it or on any of
+-- its ancestors. A public space grants 'View' to everyone, signed in or
+-- not, and since that is a grant like any other, its subspaces are public
+-- too. There are no page-level permissions: a page is as visible and as
+-- editable as its space.
 --
--- Whom a public space is public to is the wiki's to say ("Wiki.Core.Access"),
--- and the rules take it with the grants ('Grants'): in an open wiki everyone,
--- in a closed one only those who have signed in, so that there someone who
--- has not sees nothing at all ('publicTo').
+-- The wiki decides whom a public space is public to ("Wiki.Core.Access"),
+-- and the rules receive that with the grants ('Grants'): in an open wiki
+-- everyone, in a closed one only those who have signed in, so that in a
+-- closed wiki someone who has not signed in sees nothing at all
+-- ('publicTo').
 --
--- The rules take everything they need as arguments and read no store, so the
--- server enforces them and the client uses the very same functions to hide
--- what the current user cannot do.
+-- The rules take everything they need as arguments and read no storage,
+-- so the server enforces them and the client uses the very same functions
+-- to hide what the current user cannot do.
 module Wiki.Core.Permission
   ( -- * Permissions
     GlobalPermission (..)
@@ -126,15 +128,16 @@ data SpaceGrant = SpaceGrant
   deriving stock (Eq, Ord, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | The grants the rules look at. The space grants may be all of the wiki's
--- or only those of the spaces asked about: a rule only counts the grants of
--- the spaces it is given.
+-- | The grants the rules look at. The space grants may be all of the
+-- wiki's, or only those of the spaces asked about: a rule only counts the
+-- grants of the spaces it is given.
 --
--- With them, whom the wiki's public spaces are public to ('access'): not a
--- grant to anyone, but what a space's being public grants, and so where the
--- rules find it. A backend sets it from the wiki's setting wherever it
--- reads the grants, and a session carries it to the client, which so knows
--- before anyone signs in whether the wiki is closed to them.
+-- With them comes whom the wiki's public spaces are public to ('access'):
+-- not a grant to anyone, but what a space's being public grants, and so
+-- where the rules look for it. A backend sets it from the wiki's setting
+-- wherever it reads the grants, and the session carries it to the client,
+-- which therefore knows before anyone signs in whether the wiki is closed
+-- to them.
 data Grants = Grants
   { global :: [GlobalGrant]
   , spaces :: [SpaceGrant]
@@ -143,8 +146,8 @@ data Grants = Grants
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Both grants, in a wiki that is closed if either says so: adding grants
--- never opens a wiki that was closed.
+-- | Both sets of grants combined, in a wiki that is closed if either says
+-- so: adding grants never opens a wiki that was closed.
 instance Semigroup Grants where
   a <> b = Grants {global = a.global <> b.global, spaces = a.spaces <> b.spaces, access = max a.access b.access}
 
@@ -152,12 +155,12 @@ instance Semigroup Grants where
 instance Monoid Grants where
   mempty = Grants {global = [], spaces = [], access = Open}
 
--- | Who may do what on a space, as whoever administers it sees it: the
--- grants on the space itself and on each of its ancestors, which it
+-- | Who may do what on a space, as an administrator of the space sees it:
+-- the grants on the space itself and on each of its ancestors, which it
 -- inherits (each grant names the space it is on), and the users and groups
 -- a grant may be given to, so that someone who administers a space but not
--- the wiki can choose among them. Global grants are not here: they are the
--- administration's.
+-- the wiki can choose among them. Global grants are not included: they
+-- belong to the administration.
 data SpaceAccess = SpaceAccess
   { grants :: [SpaceGrant]
   -- ^ The grants on the space and its ancestors, the space's own first,
@@ -185,23 +188,23 @@ principal :: Membership -> UserId -> Principal
 principal membership user = Principal {user, groups = groupsOf membership user}
 
 -- | Whether a grant to this subject is a grant to this principal: it names
--- them, or one of the groups they are in. A backend uses it to pick out the
--- grants that concern the current user, which is all the client is told.
+-- them, or one of their groups. A backend uses it to pick out the grants
+-- that apply to the current user, which is all the client is told.
 isFor :: Principal -> Subject -> Bool
 isFor p = \case
   SubjectUser u -> u == p.user
   SubjectGroup g -> g `Set.member` p.groups
 
--- | Whether a public space is public to someone, in a wiki of this access:
--- in an open wiki to everyone, in a closed one to those who have signed in
--- only. This is the rule that decides what a reader nobody has signed in
--- as may see: the public spaces of an open wiki, and nothing of a closed
--- one, since nothing else is ever granted to them.
+-- | Whether a public space is public to someone, in a wiki with this
+-- access setting: in an open wiki to everyone, in a closed one only to
+-- those who have signed in. This rule decides what a reader who has not
+-- signed in may see: the public spaces of an open wiki, and nothing of a
+-- closed one, since nothing else is ever granted to them.
 publicTo :: Access -> Maybe Principal -> Bool
 publicTo Open _ = True
 publicTo Closed who = isJust who
 
--- | Whether someone holds a global permission. Nobody who is not signed in
+-- | Whether someone holds a global permission. Someone not signed in never
 -- does.
 hasGlobalPermission :: Maybe Principal -> Grants -> GlobalPermission -> Bool
 hasGlobalPermission Nothing _ _ = False
@@ -211,9 +214,9 @@ hasGlobalPermission (Just p) grants wanted =
 -- | Everything someone may do in a space, given the chain of spaces from a
 -- top-level one down to it ('Wiki.Core.Path.ancestry' or
 -- 'Wiki.Core.Path.resolvePath' give it), closed under implication: holding
--- 'Edit' there means the set has 'View' too. The empty chain is no space,
--- where only 'Administer' gives anything. A public space in the chain gives
--- 'View' to whomever it is public to ('publicTo').
+-- 'Edit' there means the set also has 'View'. The empty chain means no
+-- space, where only 'Administer' gives anything. A public space in the
+-- chain gives 'View' to whoever it is public to ('publicTo').
 spacePermissions :: Maybe Principal -> Grants -> [Space] -> Set SpacePermission
 spacePermissions who grants chain
   | hasGlobalPermission who grants Administer = Set.fromList [minBound .. maxBound]
@@ -258,27 +261,28 @@ canAdministerSpace who grants chain = hasSpacePermission who grants chain Admini
 -- Rules for writes
 
 -- $writes
--- Which permissions, on which spaces, creating or moving a space takes, where
--- the rules above leave the combination open. The rest of what can be
--- written is one rule each: renaming, deleting and making a space public or
--- private, and choosing the order it lists its subspaces and pages in, is
--- 'canAdministerSpace' on it; everything done to pages and attachments is
--- 'canEdit' on their space, and so is moving a child of a space up or down
--- its list by hand (a page, or a subspace: 'canEdit' on the space whose
--- list it is, which for a subspace is its parent). The server enforces these and the
--- client hides what they forbid, so they live here rather than in either.
+-- Which permissions, on which spaces, creating or moving a space needs,
+-- where the rules above leave the combination open. Every other write is
+-- one rule each. Renaming, deleting and making a space public or private,
+-- and choosing the order it lists its subspaces and pages in, need
+-- 'canAdministerSpace' on it. Everything done to pages and attachments
+-- needs 'canEdit' on their space, and so does moving a child of a space up
+-- or down its list by hand (a page, or a subspace: 'canEdit' on the space
+-- whose list it is, which for a subspace is its parent). The server
+-- enforces these and the client hides what they forbid, so they live here
+-- rather than in either.
 
 -- | The chain of a space, from its top-level ancestor down to the space
--- itself, among the spaces given (a backend's @listSpaces@ gives enough for
--- every space it lists). Empty when the space or one of its ancestors is not
--- among them.
+-- itself, among the given spaces (a backend's @listSpaces@ gives enough
+-- for every space it lists). Empty when the space or one of its ancestors
+-- is not among them.
 spaceChain :: [Space] -> SpaceId -> [Space]
 spaceChain spaces sid = fromMaybe [] (ancestry (\i -> find (\s -> s.id == i) spaces) sid)
 
--- | Whether someone may create a space under a parent (given by its chain),
--- or at the top level ('Nothing'). The top level takes the global
--- 'CreateSpaces'; a subspace takes that or 'AdministerSpace' on the parent,
--- which has to be one they can see.
+-- | Whether someone may create a space under a parent (given by its
+-- chain), or at the top level ('Nothing'). The top level needs the global
+-- 'CreateSpaces'; a subspace needs that or 'AdministerSpace' on the
+-- parent, which must be visible to them.
 mayCreateSpace :: Maybe Principal -> Grants -> Maybe [Space] -> Bool
 mayCreateSpace who grants = \case
   Nothing -> canCreateSpaces who grants
@@ -287,9 +291,10 @@ mayCreateSpace who grants = \case
       && (canCreateSpaces who grants || canAdministerSpace who grants parent)
 
 -- | Whether someone may move the space at the end of the first chain under
--- the space at the end of the second, or to the top level ('Nothing'): they
--- administer the space, and they may put a space where it goes, which is
--- 'CreateSpaces' for the top level and 'AdministerSpace' on a new parent.
+-- the space at the end of the second, or to the top level ('Nothing'):
+-- they administer the space, and they may put a space at the destination,
+-- which needs 'CreateSpaces' for the top level and 'AdministerSpace' on a
+-- new parent.
 mayMoveSpace :: Maybe Principal -> Grants -> [Space] -> Maybe [Space] -> Bool
 mayMoveSpace who grants space destination =
   canAdministerSpace who grants space && case destination of
@@ -303,11 +308,12 @@ mayMovePage :: Maybe Principal -> Grants -> [Space] -> [Space] -> Bool
 mayMovePage who grants source target = canEdit who grants source && canEdit who grants target
 
 -- | Whether someone who may administer the space at the end of the chain
--- still would once this grant is revoked: what an administrator of a space
--- is not offered to take from themself, as the wiki's administrator is not
--- offered to give up the global 'Administer', since doing so by mistake
--- would lock them out of the very form that could undo it. Someone who
--- does not administer the space now is not kept from anything ('True').
+-- still would after this grant is revoked. An administrator of a space is
+-- not offered to revoke such a grant from themself, just as the wiki's
+-- administrator is not offered to give up the global 'Administer', since
+-- doing so by mistake would lock them out of the very form that could undo
+-- it. For someone who does not administer the space now, the result is
+-- 'True': nothing is withheld from them.
 keepsAdministering :: Maybe Principal -> Grants -> [Space] -> SpaceGrant -> Bool
 keepsAdministering who grants chain revoked =
   not (canAdministerSpace who grants chain) || canAdministerSpace who without chain

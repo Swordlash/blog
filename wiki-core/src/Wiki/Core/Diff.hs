@@ -1,28 +1,28 @@
--- | What changed between two versions of a page's Markdown: a diff of its
--- lines, and within a line that changed, of its words, so that a one-word
--- edit shows as that word rather than as a whole paragraph replaced (a
--- Markdown paragraph is often one long line).
+-- | Diffs between two versions of a page's Markdown: a diff of its lines,
+-- and within a changed line, of its words, so that a one-word edit shows as
+-- that word rather than as a whole paragraph replaced (a Markdown
+-- paragraph is often one long line).
 --
 -- Lines are compared whole, with Myers' algorithm (the shortest edit
--- script, as @diff@ and @git@ find it), after the lines both texts start
--- and end with are set aside, which is where most of a page is after an
--- edit. Where lines were taken out and others put in their place, the
--- first taken out is compared with the first put in, the second with the
--- second, and so on, word by word with the same algorithm; a pair with no
--- word in common is shown as two whole lines, since marking every word of
--- both would say nothing more.
+-- script, as @diff@ and @git@ find it), after setting aside the lines both
+-- texts start and end with, which is most of a page after an edit. Where
+-- lines were removed and others added in their place, the first removed
+-- line is compared with the first added one, the second with the second,
+-- and so on, word by word with the same algorithm. A pair with no word in
+-- common is shown as two whole lines, since marking every word of both
+-- would add nothing.
 --
--- Myers' algorithm takes time in proportion to the texts' length times the
--- number of lines that differ, and memory in proportion to the square of
--- that number; so it stops after 'maxLineEdits' lines of difference (and a
--- line's words after 'maxWordEdits'), and then the diff is every old line
--- taken out and every new one put in ('gaveUp'). Two versions of a 100 KB
--- page with a few edits in them are compared in milliseconds; two that
--- have nothing in common are given up on in a tenth of a second (natively;
--- a few times that in the browser).
+-- Myers' algorithm takes time proportional to the texts' length times the
+-- number of differing lines, and memory proportional to the square of that
+-- number. So it stops after 'maxLineEdits' differing lines (and within a
+-- line after 'maxWordEdits' words), and then the diff is every old line
+-- removed and every new one added ('gaveUp'). Two versions of a 100 KB
+-- page with a few edits are compared in milliseconds; two with nothing in
+-- common are given up on in a tenth of a second (natively; a few times
+-- that in the browser).
 --
--- Everything here is pure, and the view ("Wiki.App.View.History") renders
--- the result as Halogen HTML.
+-- Everything here is pure, and the history view ("Wiki.App.View.History")
+-- renders the result as Halogen HTML.
 module Wiki.Core.Diff
   ( -- * Diffs
     Diff (..)
@@ -54,16 +54,16 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Protolude
 
--- | How one text became another, line by line.
+-- | 'Diff': how one text became another, line by line.
 data Diff = Diff
   { rows :: [Line]
-  -- ^ Every line of both texts, in order: each old line kept or taken out,
-  -- each new one kept or put in, the ones taken out before the ones put in
-  -- their place.
+  -- ^ Every line of both texts, in order: each old line unchanged or
+  -- removed, each new one unchanged or added, with the removed lines
+  -- before the added ones that replace them.
   , gaveUp :: Bool
   -- ^ Whether the texts differ in too many lines to be compared within the
-  -- limits, so that 'rows' is the whole old text taken out and the whole
-  -- new one put in.
+  -- limits, so that 'rows' is the whole old text removed and the whole new
+  -- one added.
   }
   deriving stock (Eq, Show)
 
@@ -75,27 +75,27 @@ data LineKind = Unchanged | Removed | Added
 data Line = Line
   { kind :: LineKind
   , old :: Maybe Int
-  -- ^ Its number in the old text, from 1; 'Nothing' for a line put in.
+  -- ^ Its number in the old text, from 1; 'Nothing' for an added line.
   , new :: Maybe Int
-  -- ^ Its number in the new text; 'Nothing' for a line taken out.
+  -- ^ Its number in the new text; 'Nothing' for a removed line.
   , segments :: [Segment]
-  -- ^ Its text, in parts that changed and parts that did not. A line kept
-  -- is one unchanged part; one taken out or put in has its changed words
-  -- marked, or is changed whole. An empty line has no parts.
+  -- ^ Its text, in parts that changed and parts that did not. An unchanged
+  -- line is one unchanged part; a removed or added line has its changed
+  -- words marked, or is changed entirely. An empty line has no parts.
   }
   deriving stock (Eq, Show)
 
 -- | A part of a line.
 data Segment = Segment
   { changed :: Bool
-  -- ^ Whether this part is what was taken out of the old line (in a line
-  -- removed) or put into the new one (in a line added).
+  -- ^ Whether this part was removed from the old line (in a removed line)
+  -- or added to the new one (in an added line).
   , text :: Text
   }
   deriving stock (Eq, Show)
 
--- | The most lines two texts may differ in for 'diffText' to work out which:
--- beyond it, it gives up.
+-- | The most lines two texts may differ in for 'diffText' to work out
+-- which; beyond it, it gives up.
 maxLineEdits :: Int
 maxLineEdits = 1000
 
@@ -130,26 +130,26 @@ splitLines t
   where
     parts = T.splitOn "\n" t
 
--- | A line's text, its parts put together again.
+-- | A line's text, its parts joined again.
 lineText :: Line -> Text
 lineText l = mconcat (map (\s -> s.text) l.segments)
 
--- | The old text's lines, from the diff: those kept and those taken out.
+-- | The old text's lines, from the diff: the unchanged and removed ones.
 oldSide :: Diff -> [Text]
 oldSide d = [lineText l | l <- d.rows, l.kind /= Added]
 
--- | The new text's lines: those kept and those put in.
+-- | The new text's lines: the unchanged and added ones.
 newSide :: Diff -> [Text]
 newSide d = [lineText l | l <- d.rows, l.kind /= Removed]
 
--- | A part of a diff to show: lines, or a number of unchanged lines left
--- out between them.
+-- | A part of a diff to show: lines, or a count of unchanged lines left out
+-- between them.
 data Hunk = Shown [Line] | Hidden Int
   deriving stock (Eq, Show)
 
--- | The diff as it is shown: every line that changed, with this many
--- unchanged lines around it, and the rest of the unchanged lines left out,
--- counted. A diff with no change is all left out.
+-- | The diff as it is shown: every changed line, with this many unchanged
+-- lines around it; the other unchanged lines are left out and counted. A
+-- diff with no change is entirely left out.
 hunks :: Int -> [Line] -> [Hunk]
 hunks context ls = map gather (groupBy ((==) `on` fst) (zip near ls))
   where
@@ -166,10 +166,10 @@ hunks context ls = map gather (groupBy ((==) `on` fst) (zip near ls))
 --------------------------------------------------------------------------------
 -- Lines
 
--- | A line kept, taken out or put in, before its words are compared.
+-- | A line unchanged, removed or added, before its words are compared.
 data Raw = Kept Int Int Text | Gone Int Text | Come Int Text
 
--- | The lines, as the steps of the edit script take them from both texts.
+-- | The lines, as the edit script's steps take them from both texts.
 walk :: [Step] -> [(Int, Text)] -> [(Int, Text)] -> [Raw]
 walk steps olds news = case (steps, olds, news) of
   (Keep : rest, (o, t) : os, (n, _) : ns) -> Kept o n t : walk rest os ns
@@ -177,9 +177,9 @@ walk steps olds news = case (steps, olds, news) of
   (Insert : rest, _, (n, t) : ns) -> Come n t : walk rest olds ns
   _ -> []
 
--- | The diff's lines: in each run of changed lines, those taken out first,
--- then those put in, each compared word by word with the one in the same
--- place on the other side.
+-- | The diff's lines: in each run of changed lines, the removed ones
+-- first, then the added ones, each compared word by word with the one in
+-- the same position on the other side.
 arrange :: [Raw] -> [Line]
 arrange = \case
   [] -> []
@@ -201,10 +201,10 @@ arrange = \case
 whole :: Bool -> Text -> [Segment]
 whole changed t = [Segment {changed, text = t} | not (T.null t)]
 
--- | An old line and the new one in its place, word by word: the old
--- line's parts, with what was taken out marked, and the new one's, with
--- what was put in marked. Two lines with no word in common, or too many
--- differences, are changed whole.
+-- | An old line and the new one in its place, compared word by word: the
+-- old line's parts, with what was removed marked, and the new one's, with
+-- what was added marked. Two lines with no word in common, or too many
+-- differences, are changed entirely.
 compareLines :: (Int, Text) -> (Int, Text) -> ([Segment], [Segment])
 compareLines (_, before) (_, after) = case editScript maxWordEdits (intern olds news) of
   Just steps | sharesWords steps -> (segmentsOf Insert steps olds, segmentsOf Delete steps news)
@@ -212,11 +212,11 @@ compareLines (_, before) (_, after) = case editScript maxWordEdits (intern olds 
   where
     olds = tokens before
     news = tokens after
-    -- Whether a word (not a space alone) is kept.
+    -- Whether a word (not just a space) is unchanged.
     sharesWords steps = any (T.any (not . isSpace)) [t | (Keep, t) <- zip (filter (/= Insert) steps) olds]
 
--- | One side's parts: its tokens, in the steps that are not the other
--- side's, marked unless they are kept; neighbours alike merged.
+-- | One side's parts: its tokens, from the steps that are not the other
+-- side's, marked unless unchanged; adjacent parts of the same kind merged.
 segmentsOf :: Step -> [Step] -> [Text] -> [Segment]
 segmentsOf otherSide steps ts = merge (zipWith (\s t -> Segment {changed = s /= Keep, text = t}) (filter (/= otherSide) steps) ts)
   where
@@ -225,8 +225,8 @@ segmentsOf otherSide steps ts = merge (zipWith (\s t -> Segment {changed = s /= 
       a : rest -> a : merge rest
       [] -> []
 
--- | A line's words, the spaces between them, and each other character by
--- itself: what lines are compared in. Put together they are the line.
+-- | A line's words, the spaces between them, and every other character on
+-- its own: the units lines are compared in. Joined, they are the line.
 tokens :: Text -> [Text]
 tokens = T.groupBy (\a b -> kindOf a == kindOf b && kindOf a /= Other)
   where
@@ -241,8 +241,8 @@ data Token = Word | Space | Other
 --------------------------------------------------------------------------------
 -- Myers' algorithm
 
--- | A step of an edit script: an element kept, taken from the first
--- sequence, or put in from the second.
+-- | A step of an edit script: an element kept, removed from the first
+-- sequence, or added from the second.
 data Step = Keep | Delete | Insert
   deriving stock (Eq, Show)
 
@@ -255,9 +255,9 @@ intern as bs = (array (map number as), array (map number bs))
     number t = Map.findWithDefault 0 t numbers
     array xs = listArray (0, length xs - 1) xs
 
--- | The shortest edit script from one sequence to the other, if it takes at
--- most so many elements taken out and put in. The elements both start
--- and end with are set aside first.
+-- | The shortest edit script from one sequence to the other, if it needs
+-- at most this many removals and additions. The elements both sequences
+-- start and end with are set aside first.
 editScript :: Int -> (UArray Int Int, UArray Int Int) -> Maybe [Step]
 editScript limit (a, b) =
   (\middle -> replicate prefix Keep <> middle <> replicate suffix Keep)
@@ -272,8 +272,8 @@ editScript limit (a, b) =
 -- | Myers' greedy algorithm ("An O(ND) Difference Algorithm and Its
 -- Variations", 1986), over sequences of these lengths whose elements the
 -- function compares: for each number of differences @d@ in turn, the
--- furthest each diagonal @k = x - y@ reaches, kept for every @d@ so that the
--- path can be followed back from the end.
+-- furthest point each diagonal @k = x - y@ reaches, kept for every @d@ so
+-- that the path can be traced back from the end.
 myers :: Int -> Int -> Int -> (Int -> Int -> Bool) -> Maybe [Step]
 myers limit n m eq
   | n == 0 = Just (replicate m Insert)
@@ -306,7 +306,7 @@ myers limit n m eq
             | otherwise = x
       rounds 0 []
 
--- | The path to the end, followed back through the furthest points of each
+-- | The path to the end, traced back through the furthest points of each
 -- round, the last round first.
 backtrack :: Int -> Int -> [(Int, UArray Int Int)] -> [Step]
 backtrack = go []

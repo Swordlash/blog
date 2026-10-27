@@ -1,12 +1,12 @@
--- | A page's table of contents: its headings, nested by level, each a link
--- to the heading's @id@ ("Wiki.Core.Markdown.Ast" gives every heading one).
+-- | Tables of contents: a page's headings, nested by level, each a link to
+-- the heading's @id@ ("Wiki.Core.Markdown.Ast" gives every heading one).
 --
--- It is made from the parsed document, never read back from the rendered
--- page, so the page view's "Contents" panel, a @[[toc]]@ in the page, the
--- prerender and the server's render list the same headings with the same
--- links. The headings listed are those at the top level of the document:
--- one in a block quote, a list, a box or a footnote is part of that block
--- rather than a section of the page.
+-- The table is built from the parsed document, never read from the
+-- rendered page, so the page view's "Contents" panel, a @[[toc]]@ in the
+-- page, the prerender and the server's render list the same headings with
+-- the same links. Only headings at the top level of the document are
+-- listed: a heading in a block quote, a list, a box or a footnote is part
+-- of that block rather than a section of the page.
 module Wiki.Core.Markdown.Toc
   ( Entry (..)
   , tableOfContents
@@ -25,8 +25,9 @@ import Halogen.HTML.Properties qualified as HP
 import Protolude
 import Wiki.Core.Markdown.Ast (Block (..), attribute, plainText)
 
--- | A heading in the table of contents, with the headings of its section
--- (the deeper ones that follow it, up to the next of its level or above).
+-- | 'Entry': a heading in the table of contents, with the headings of its
+-- section (the deeper headings that follow it, up to the next heading of
+-- the same level or higher).
 data Entry = Entry
   { id :: Text
   -- ^ The heading's @id@, which the entry links to.
@@ -37,10 +38,10 @@ data Entry = Entry
   }
   deriving stock (Eq, Show)
 
--- | The headings of a document, nested: a heading holds the deeper ones
--- after it, so a level skipped (an @h4@ under an @h2@) nests one level, not
--- two, and a document that starts deeper than it goes on lists its first
--- headings side by side with the shallower ones after them.
+-- | The headings of a document, nested: a heading holds the deeper headings
+-- after it. So a skipped level (an @h4@ under an @h2@) nests one level, not
+-- two, and a document whose first headings are deeper than the later ones
+-- lists those first headings at the same level as the later ones.
 tableOfContents :: [Block] -> [Entry]
 tableOfContents doc = nest [(level, ident, plainText xs) | Heading level attrs xs <- doc, Just ident <- [attribute "id" attrs]]
   where
@@ -50,7 +51,7 @@ tableOfContents doc = nest [(level, ident, plainText xs) | Heading level attrs x
         let (inside, after) = span (\(l, _, _) -> l > level) rest
          in Entry {id = ident, level, text, below = nest inside} : nest after
 
--- | How many headings a table of contents lists, at every depth.
+-- | The number of headings in a table of contents, at every depth.
 entryCount :: [Entry] -> Int
 entryCount = sum . map (\e -> 1 + entryCount e.below)
 
@@ -59,15 +60,15 @@ entryCount = sum . map (\e -> 1 + entryCount e.below)
 hasContentsMarker :: [Block] -> Bool
 hasContentsMarker = elem TableOfContents
 
--- | The fewest headings a page has for the page view to show its "Contents"
--- panel: a page of one or two sections is read at a glance.
+-- | The minimum number of headings for the page view to show its
+-- "Contents" panel: a page of one or two sections is easy to scan.
 minimumHeadings :: Int
 minimumHeadings = 3
 
--- | What the page view's "Contents" panel lists, if it shows one: the table
--- of contents of a page with at least 'minimumHeadings' headings that does
--- not place it itself with @[[toc]]@ (then the list is in the page, and a
--- panel would say it twice).
+-- | The entries of the page view's "Contents" panel, if it shows one: the
+-- table of contents of a page that has at least 'minimumHeadings' headings
+-- and does not place the table itself with @[[toc]]@ (in that case the
+-- table is in the page, and a panel would repeat it).
 contentsPanel :: [Block] -> Maybe [Entry]
 contentsPanel doc
   | hasContentsMarker doc = Nothing
@@ -78,9 +79,9 @@ contentsPanel doc
 
 -- | The entries as a nested list of links to their headings,
 -- @\<ul class="toc-list">@, the same in the panel and in the page. A link
--- is a bare fragment (@#intro@): a click on it is followed by the
--- application (see "Wiki.App.Browser"), since the page's @\<base href>@
--- would send the browser elsewhere.
+-- is a bare fragment (@#intro@). The application handles a click on it
+-- (see "Wiki.App.Browser"), since with the page's @\<base href>@ the
+-- browser would follow it to another address.
 contentsList :: [Entry] -> HH.HTML w i
 contentsList entries =
   HH.ul
@@ -89,8 +90,8 @@ contentsList entries =
     | e <- entries
     ]
 
--- | The table of contents where @[[toc]]@ places it in a page: titled, as a
--- @\<nav class="toc">@. Nothing for a document with no headings.
+-- | The table of contents where @[[toc]]@ places it in a page: with a
+-- title, as a @\<nav class="toc">@. Empty for a document with no headings.
 contentsNav :: [Entry] -> [HH.HTML w i]
 contentsNav = \case
   [] -> []

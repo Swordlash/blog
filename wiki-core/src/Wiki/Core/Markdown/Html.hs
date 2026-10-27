@@ -1,61 +1,64 @@
--- | Raw HTML in a page, read the way a browser would read it and cut down to
--- what an allowlist admits.
+-- | The raw HTML allowlist: raw HTML in a page, parsed the way a browser
+-- would parse it, and reduced to what an allowlist accepts.
 --
 -- CommonMark lets an author write HTML in a page, as a block of its own or
--- as tags among the text, and hands it over as it is written ('RawHtml',
--- 'RawHtmlBlock'). A page is read by other people than its author, and the
+-- as tags in the text, and passes it on as written ('RawHtml',
+-- 'RawHtmlBlock'). A page is read by people other than its author, and the
 -- renderer is shared with the server, so that HTML is never given to the
--- browser as markup: it is tokenised here (by @tagsoup@, which is pure
--- Haskell and builds for wasm), built into a tree the way the HTML parser
--- would build it, and everything the allowlist does not name is dropped.
--- What is left is a tree of plain data ('Node'), which
--- "Wiki.Core.Markdown.Render" turns into Halogen elements; so a script, an
--- event handler or a @javascript:@ URL in a page never reaches the page.
+-- browser as markup. Instead it is tokenised here (by @tagsoup@, which is
+-- pure Haskell and builds for wasm), built into a tree the way the HTML
+-- parser would build it, and everything the allowlist does not name is
+-- dropped. What is left is a tree of plain data ('Node'), which
+-- "Wiki.Core.Markdown.Render" turns into Halogen elements. So a script, an
+-- event handler or a @javascript:@ URL in a page never reaches the
+-- browser.
 --
 -- __Elements__ ('allowedElements'): formatting (@b@, @i@, @em@, @strong@,
 -- @u@, @s@, @sub@, @sup@, @mark@, @small@, @abbr@, @kbd@, @code@, @span@,
 -- @br@), links (@a@), structure (@h1@ to @h6@, @div@, @p@, @details@,
--- @summary@, @blockquote@, @pre@, @hr@, @ul@, @ol@, @li@, @dl@, @dt@, @dd@, @table@,
--- @caption@, @thead@, @tbody@, @tfoot@, @tr@, @th@, @td@, @figure@,
--- @figcaption@) and media (@img@, @video@, @audio@, @source@). An element
--- that is not among them is dropped and its content kept, as for a @font@
--- whose text should still show, except the ones whose content is code or
--- something other than text ('droppedElements': @script@, @style@,
--- @iframe@, @svg@ and the like), which go with everything in them.
+-- @summary@, @blockquote@, @pre@, @hr@, @ul@, @ol@, @li@, @dl@, @dt@,
+-- @dd@, @table@, @caption@, @thead@, @tbody@, @tfoot@, @tr@, @th@, @td@,
+-- @figure@, @figcaption@) and media (@img@, @video@, @audio@, @source@).
+-- An element not among them is dropped and its content kept, as for a
+-- @font@ whose text should still show. The exception is elements whose
+-- content is code or something other than text ('droppedElements':
+-- @script@, @style@, @iframe@, @svg@ and the like), which are dropped with
+-- everything in them.
 --
 -- __Attributes__ ('allowedAttributes'): @class@, @id@ and @title@ on every
--- element, and on the elements they mean something on: @href@ (@a@), @src@
--- (@img@, @video@, @audio@, @source@), @alt@ (@img@), @width@ and @height@
--- (@img@, @video@; @width@ also on @table@, @th@, @td@), @colspan@ and
--- @rowspan@ (@th@, @td@), @open@ (@details@), @controls@ (@video@,
--- @audio@), @poster@ (@video@) and @start@ (@ol@). Numbers must be numbers,
--- and a URL must be relative or have one of the schemes 'urlAllowed'
--- admits. Names are read without regard to case, and of two attributes with
--- one name the first counts, as in a browser.
+-- element, and, on the elements where they mean something: @href@ (@a@),
+-- @src@ (@img@, @video@, @audio@, @source@), @alt@ (@img@), @width@ and
+-- @height@ (@img@, @video@; @width@ also on @table@, @th@, @td@),
+-- @colspan@ and @rowspan@ (@th@, @td@), @open@ (@details@), @controls@
+-- (@video@, @audio@), @poster@ (@video@) and @start@ (@ol@). Numbers must
+-- be numbers, and a URL must be relative or have one of the schemes
+-- 'urlAllowed' accepts. Names are read ignoring case, and of two
+-- attributes with the same name the first counts, as in a browser.
 --
--- __Where HTML is read.__ A raw block is read as one document
+-- __Where HTML is read.__ A raw block is parsed as one document
 -- ('parseHtml'), in which an element left open ends where the block ends.
--- Tags among the text of a paragraph (or a heading, a cell, a link's text)
--- are read together with the Markdown between them ('parseFragments'), so
--- that @\<kbd>Ctrl\<\/kbd>@ or @\<mark>a *b*\<\/mark>@ hold what is between
--- their tags: the Markdown is kept as it is, as content of the elements
--- around it. There only elements that may be in a paragraph count
--- ('phrasingElements'): a @div@ among the text is dropped and its content
--- kept, since a paragraph cannot hold one.
+-- Tags in the text of a paragraph (or a heading, a cell, a link's text)
+-- are parsed together with the Markdown between them ('parseFragments'),
+-- so that @\<kbd>Ctrl\<\/kbd>@ or @\<mark>a *b*\<\/mark>@ contain what is
+-- between their tags: the Markdown is kept as it is, as the content of the
+-- elements around it. There, only elements allowed in a paragraph count
+-- ('phrasingElements'): a @div@ in the text is dropped and its content
+-- kept, since a paragraph cannot contain one.
 --
 -- __As a browser would.__ The tree is built with the HTML parser's rules
--- that decide where an element ends when its end tag is missing: a block
--- ends an open @p@, an @li@ ends the @li@ before it, a @dt@ or @dd@ the one
--- before, an @a@ an open @a@, a row or a cell the one before it; a row
--- straight in a @table@ gets the @tbody@ the parser would give it, and a
--- cell the row; text or an element straight in a table, a section or a row
--- (where the parser would move it out in front of the table) is dropped; an
--- end tag closes the elements opened after its own, and one with nothing to
--- close is ignored; the newline that starts a @pre@ is dropped. So the tree
--- written out as markup (as the prerender does) reads back as the same
--- tree. What is simplified: formatting closed by a misnested end tag is not
--- reopened afterwards (the parser's \"adoption agency\"), and a @table@
--- inside a table but outside a cell is dropped rather than ending the first.
+-- for where an element ends when its end tag is missing. A block ends an
+-- open @p@; an @li@ ends the @li@ before it, a @dt@ or @dd@ the one
+-- before, an @a@ an open @a@, and a row or a cell the one before it. A row
+-- directly in a @table@ gets the @tbody@ the parser would add, and a cell
+-- the row. Text or an element directly in a table, a section or a row
+-- (which the parser would move out in front of the table) is dropped. An
+-- end tag closes the elements opened after its own, and one with nothing
+-- to close is ignored. The newline that starts a @pre@ is dropped. So the
+-- tree written out as markup (as the prerender does) parses back as the
+-- same tree. Two simplifications: formatting closed by a misnested end tag
+-- is not reopened afterwards (the parser's \"adoption agency\"), and a
+-- @table@ inside a table but outside a cell is dropped rather than ending
+-- the first table.
 module Wiki.Core.Markdown.Html
   ( -- * The tree
     Node (..)
@@ -83,12 +86,12 @@ import Protolude
 import Text.HTML.TagSoup (Tag (..), parseTags)
 import Wiki.Core.Markdown.Link (urlScheme)
 
--- | An attribute the allowlist admits: its name, lowercase, and its value.
--- A URL is kept as written, for the renderer to resolve as it resolves the
--- Markdown's links.
+-- | An attribute the allowlist accepts: its name, lowercase, and its
+-- value. A URL is kept as written, for the renderer to resolve as it
+-- resolves the Markdown's links.
 type Attribute = (Text, Text)
 
--- | HTML that the allowlist admits, with @a@ for whatever is between the
+-- | HTML that the allowlist accepts, with @a@ for whatever is between the
 -- tags that is not HTML (the Markdown among them).
 data Node a
   = -- | An allowed element: its name, lowercase, its allowed attributes in
@@ -109,19 +112,19 @@ data Fragment a
     Markdown a
   deriving stock (Eq, Show)
 
--- | Where the HTML is.
+-- | The context the HTML is in.
 data Context
   = -- | Where blocks go: a raw block, a list item, the page.
     Flow
-  | -- | Among the text of a paragraph, a heading or a cell: elements that
-    -- may be inside a paragraph only.
+  | -- | In the text of a paragraph, a heading or a cell: only elements
+    -- allowed inside a paragraph.
     Phrasing
   | -- | Among the text of a link: as 'Phrasing', and no @a@, since a link
     -- cannot be inside a link.
     PhrasingInLink
   deriving stock (Eq, Show)
 
--- | A raw block of HTML, read as one document. Blank text before its first
+-- | Parse a raw block of HTML as one document. Blank text before its first
 -- element and after its last (the newline CommonMark leaves at the end of
 -- a block) is left out, as it shows nothing between blocks.
 parseHtml :: Text -> [Node Void]
@@ -132,9 +135,9 @@ parseHtml raw = trim (parseFragments Flow [Markup raw])
       TextNode t -> T.all isSpace t
       _ -> False
 
--- | Markup and what is between it, read as one document: an element opened
--- in one piece of markup holds what follows until a later piece closes it,
--- or until the end.
+-- | Parse markup and what is between it as one document: an element opened
+-- in one piece of markup contains what follows until a later piece closes
+-- it, or until the end.
 parseFragments :: Context -> [Fragment a] -> [Node a]
 parseFragments context fragments = build context (concatMap tokens fragments)
   where
@@ -143,8 +146,8 @@ parseFragments context fragments = build context (concatMap tokens fragments)
       Markdown a -> [Other a]
 
 -- | The text of some nodes, as a reader sees it, with blocks on lines of
--- their own; what is not HTML gives nothing. For search, which reads a
--- page's text.
+-- their own; what is not HTML gives nothing. The search uses this to read
+-- a page's text.
 htmlText :: [Node a] -> Text
 htmlText = foldMap $ \case
   Element name _ children
@@ -193,14 +196,14 @@ phrasingElements =
 tableElements :: [Text]
 tableElements = ["table", "caption", "thead", "tbody", "tfoot", "tr", "th", "td"]
 
--- | The elements dropped with everything in them, rather than with their
--- content kept: code (@script@, @style@, @template@, @noscript@), other
+-- | The elements dropped with everything in them, instead of keeping their
+-- content: code (@script@, @style@, @template@, @noscript@), other
 -- documents and plugins (@iframe@, @object@, @embed@, @applet@,
 -- @frameset@), drawings and formulas (@svg@, @math@), form fields whose
 -- content is not text to read (@textarea@, @select@), and the elements the
 -- parser reads as raw text (@title@, @xmp@, @noembed@, @noframes@,
 -- @plaintext@). An end tag of the same name, if any, ends what is dropped;
--- an @embed@, which has neither end tag nor content, goes alone.
+-- an @embed@, which has neither end tag nor content, is dropped alone.
 droppedElements :: [Text]
 droppedElements =
   [ "script"
@@ -240,7 +243,7 @@ allowedAttributes element = ["class", "id", "title"] <> own
       "td" -> ["width", "colspan", "rowspan"]
       _ -> []
 
--- | What a URL is for.
+-- | What a URL is used for.
 data UrlUse
   = -- | A link's @href@.
     Href
@@ -248,18 +251,19 @@ data UrlUse
     Src
   deriving stock (Eq, Show)
 
--- | Whether a URL as written may be used: a relative one (a path, which the
--- wiki reads as a page or an attachment, or a fragment), or one with the
--- scheme @http@, @https@ or @attachment@ (the wiki's own, as in Markdown),
--- and for a link @mailto@ too. Never @javascript:@, @data:@ or anything
--- else. A URL that is used is resolved and checked again by the renderer.
+-- | Whether a URL as written may be used: a relative one (a path, which
+-- the wiki reads as a page or an attachment, or a fragment), or one with
+-- the scheme @http@, @https@ or @attachment@ (the wiki's own, as in
+-- Markdown), and for a link also @mailto@. Never @javascript:@, @data:@ or
+-- anything else. A URL that is used is resolved and checked again by the
+-- renderer.
 urlAllowed :: UrlUse -> Text -> Bool
 urlAllowed use url = case urlScheme url of
   Nothing -> True
   Just scheme -> scheme `elem` ["http", "https", "attachment"] || (use == Href && scheme == "mailto")
 
 -- | An attribute's value, if the attribute is one 'allowedAttributes'
--- admits with a value it admits, as it is kept.
+-- accepts with a value it accepts, in the form it is kept.
 attributeValue :: Text -> Text -> Maybe Text
 attributeValue name value = case name of
   "class" -> nonBlank
@@ -273,7 +277,7 @@ attributeValue name value = case name of
   "start" -> case T.stripPrefix "-" stripped of
     Just digits | isNumber' digits -> Just stripped
     _ -> number
-  -- Boolean attributes: being there is what counts.
+  -- Boolean attributes: their presence is what counts.
   "open" -> Just ""
   "controls" -> Just ""
   "href" -> url Href
@@ -288,7 +292,7 @@ attributeValue name value = case name of
     url use = if urlAllowed use value then Just (T.strip value) else Nothing
 
 -- | An element's attributes as kept: names lowercased, the first of each
--- name, then those the allowlist admits.
+-- name, then only those the allowlist accepts.
 keptAttributes :: Text -> [(Text, Text)] -> [Attribute]
 keptAttributes element attrs =
   [ (name, v)
@@ -310,7 +314,7 @@ keptAttributes element attrs =
 data Token a = Tag (Tag Text) | Other a
 
 -- | An element being built: its name, attributes and children so far, the
--- last first. The bottom of the stack is the document, named @""@.
+-- last child first. The bottom of the stack is the document, named @""@.
 data Open a = Open Text [Attribute] [Node a]
 
 data Builder a = Builder
@@ -340,7 +344,7 @@ build context = finish . foldl' step (Builder [Open "" [] []] Nothing)
 
     start :: Text -> [(Text, Text)] -> Builder a -> Builder a
     start name attrs b
-      -- An embed has no end tag, nor content: it goes alone.
+      -- An embed has neither end tag nor content: it is dropped alone.
       | name == "embed" = b
       | name `elem` droppedElements = b {skipping = Just (name, 0)}
       | not (allowedHere name) = b
@@ -358,17 +362,17 @@ build context = finish . foldl' step (Builder [Open "" [] []] Nothing)
       Phrasing -> name `elem` phrasingElements
       PhrasingInLink -> name `elem` phrasingElements && name /= "a"
 
--- | Text or content, where it may go: not empty, and not straight inside a
--- table, its sections or its rows.
+-- | Add text or content where it may go: not empty, and not directly
+-- inside a table, its sections or its rows.
 appendContent :: Node a -> [Open a] -> [Open a]
 appendContent node s = case node of
   TextNode "" -> s
   _ | inTableStructure s -> s
   _ -> append node s
 
--- | Add a child to the innermost element, as one text with the text
--- before it if both are text (a comment or a dropped element between them
--- leaves nothing to separate them).
+-- | Add a child to the innermost element, merged with the text before it
+-- if both are text (a comment or a dropped element between them leaves
+-- nothing to separate them).
 append :: Node a -> [Open a] -> [Open a]
 append node = \case
   Open n as cs : rest -> Open n as (merged cs) : rest
@@ -410,8 +414,8 @@ finishChildren name children = case (name, children) of
 names :: [Open a] -> [Text]
 names s = [n | Open n _ _ <- s]
 
--- | How many elements, from the innermost, to close to close the first one
--- that @wanted@ picks, without going past one that @stop@ picks or the
+-- | How many elements, from the innermost, must close to close the first
+-- one @wanted@ picks, without going past one that @stop@ picks or the
 -- document; 'Nothing' if there is none.
 depthOf :: (Text -> Bool) -> (Text -> Bool) -> [Open a] -> Maybe Int
 depthOf wanted stop = go 0 . names
@@ -432,9 +436,9 @@ closeIf wanted stop s = maybe s (\i -> closeN (i + 1) s) (depthOf wanted stop s)
 closeInside :: (Text -> Bool) -> (Text -> Bool) -> [Open a] -> Maybe [Open a]
 closeInside wanted stop s = (`closeN` s) <$> depthOf wanted stop s
 
--- | The stack an element starts on: the elements its start ends closed, and
--- the ones the parser would put around it opened; 'Nothing' when the parser
--- ignores it there.
+-- | The stack an element starts on: the elements its start closes closed,
+-- and the ones the parser would put around it opened; 'Nothing' when the
+-- parser ignores it there.
 prepare :: Text -> [Open a] -> Maybe [Open a]
 prepare name s0
   | name `elem` ["caption", "thead", "tbody", "tfoot"] = closeInside (== "table") never s0
@@ -466,13 +470,13 @@ prepare name s0
     closeA s
       | name == "a" = closeIf (== "a") (`elem` scopeBoundaries) s
       | otherwise = s
-    -- A heading started straight inside a heading ends it.
+    -- A heading started directly inside a heading ends it.
     closeHeading s
       | name `elem` headings, Just h <- top s, h `elem` headings = closeOne s
       | otherwise = s
 
--- | The stack after an end tag: the element it names closed with those
--- inside it, if it is open in reach; otherwise as it was.
+-- | The stack after an end tag: the element it names closed, with those
+-- inside it, if it is open within reach; otherwise unchanged.
 end :: Text -> [Open a] -> [Open a]
 end name s
   | name `elem` voidElements || name `notElem` allowedElements = s
@@ -495,9 +499,9 @@ closesParagraph =
   headings
     <> ["blockquote", "details", "div", "dl", "dd", "dt", "figcaption", "figure", "hr", "li", "ol", "p", "pre", "summary", "table", "ul"]
 
--- | Of the allowed elements, those the parser counts as special: an @li@,
--- @dt@ or @dd@ does not end one of its kind past them (except a @div@ or a
--- @p@).
+-- | The allowed elements the parser counts as special: an @li@, @dt@ or
+-- @dd@ does not end one of its kind beyond them (except beyond a @div@ or
+-- a @p@).
 specialElements :: [Text]
 specialElements =
   [ "blockquote"

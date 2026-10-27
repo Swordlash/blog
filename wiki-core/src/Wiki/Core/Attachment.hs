@@ -1,12 +1,12 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Files attached to a page: images, video, audio and anything else.
+-- | Attachments: files attached to a page, such as images, video and audio.
 --
--- A page's Markdown refers to its attachments by name (@![diagram](diagram.png)@),
--- and the renderer picks the element to show one with from its media type
--- ('mediaKind'). Where the bytes are is a 'Source': a URL in the serverless
--- demo, where nothing is stored, and a blob the server keeps once there is
--- one.
+-- A page's Markdown refers to its attachments by name
+-- (@![diagram](attachment:diagram.png)@), and the renderer picks the
+-- element that shows an attachment from its media type ('mediaKind'). The
+-- location of the bytes is a 'Source': a URL, or a blob stored by the
+-- backend (the server's blob store, or the in-memory backend's state).
 module Wiki.Core.Attachment
   ( Attachment (..)
   , Source (..)
@@ -23,7 +23,7 @@ import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Core.Id
 
--- | One file attached to a page.
+-- | 'Attachment': one file attached to a page.
 data Attachment = Attachment
   { id :: AttachmentId
   , name :: Text
@@ -32,23 +32,23 @@ data Attachment = Attachment
   , mediaType :: Text
   -- ^ The media (MIME) type, such as @image/png@, as the upload declared it.
   , size :: Natural
-  -- ^ In bytes.
+  -- ^ The size in bytes.
   , source :: Source
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Where an attachment's bytes are.
+-- | 'Source': where an attachment's bytes are.
 data Source
-  = -- | Anywhere on the web, or an object URL for a file uploaded into the
-    -- demo, which lives as long as the tab does.
+  = -- | A URL anywhere on the web, such as the demo's sample image
+    -- ("Wiki.App.Demo"). Uploads are always stored as blobs.
     SourceUrl Text
-  | -- | In the server's blob store, which serves it at an address of its own.
+  | -- | A blob stored by the backend, which serves it at a URL of its own.
     SourceBlob BlobId
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | What a page shows an attachment as.
+-- | 'MediaKind': the element a page shows an attachment as.
 data MediaKind
   = -- | An @\<img\>@.
     MediaImage
@@ -63,8 +63,7 @@ data MediaKind
 
 -- | The kind of a media type, by its top-level type: @image\/…@, @video\/…@,
 -- @audio\/…@, and anything else, including a type that does not parse. Case
--- and parameters (@; codecs=…@) do not matter, since browsers ignore them
--- too.
+-- and parameters (@; codecs=…@) are ignored, as browsers ignore them.
 mediaKind :: Text -> MediaKind
 mediaKind mediaType = case T.splitOn "/" essence of
   [top, sub] | not (T.null sub) -> case top of
@@ -80,6 +79,6 @@ mediaKind mediaType = case T.splitOn "/" essence of
 attachmentKind :: Attachment -> MediaKind
 attachmentKind a = mediaKind a.mediaType
 
--- | The attachment with this name, as a page's Markdown refers to it.
+-- | The attachment with this name, the name a page's Markdown refers to it by.
 findAttachment :: Text -> [Attachment] -> Maybe Attachment
 findAttachment n = find (\a -> a.name == n)

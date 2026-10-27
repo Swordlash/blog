@@ -1,13 +1,15 @@
--- | A page's Markdown as a tree of our own, parsed by @commonmark@.
+-- | The Markdown tree: a page's Markdown as a tree of the wiki's own
+-- types, parsed by @commonmark@.
 --
--- The tree is what the rest of the wiki works with: the renderer
--- ("Wiki.Core.Markdown.Render") turns it into Halogen HTML, and later
--- features (search, a table of contents, export) walk it. It says what the
--- author wrote and nothing about how it is shown: a link keeps its
--- destination as written, to be resolved when it is rendered; an embed
+-- The rest of the wiki works with this tree: the renderer
+-- ("Wiki.Core.Markdown.Render") turns it into Halogen HTML, and other
+-- features (search, a table of contents, export) walk it. It records what
+-- the author wrote and nothing about how it is shown. A link keeps its
+-- destination as written, to be resolved when it is rendered. An embed
 -- (@![caption](…)@) does not yet know whether it is an image, a video or a
--- download; a code block in a @mermaid@, @tikz@ or @math@ fence is already told apart
--- from other code, because what it is does not depend on the wiki.
+-- download. A code block in a @mermaid@, @tikz@ or @math@ fence is already
+-- distinguished from other code, because what it is does not depend on
+-- the wiki.
 --
 -- 'parseMarkdown' reads CommonMark with these extensions:
 --
@@ -16,27 +18,27 @@
 --   (@> [!NOTE]@);
 -- * heading identifiers made from the heading's text ('headingSlug'),
 --   unique in the document: a heading with an @id@ of its own keeps it,
---   and the others get theirs in document order, the second @Intro@
---   @intro-2@, the third @intro-3@, none taking an id written out in
---   braces anywhere in the page;
+--   and the others get theirs in document order (the second @Intro@ gets
+--   @intro-2@, the third @intro-3@), none taking an id written in braces
+--   anywhere in the page;
 -- * math, @$…$@ and @\\(…\\)@ inline, @$$…$$@ and @\\[…\\]@ display
 --   ("Wiki.Core.Markdown.TexMath"), and a @math@ fence;
 -- * attributes in braces after a heading, a fence's info string, a link,
 --   an image or inline code (@# Intro {#start}@, @![](a.png){width=300}@);
 -- * fenced divs (@::: warning@ … @:::@), for boxes styled by class;
 -- * wiki links, @[[page]]@ and @[[page|label]]@, read as ordinary links to
---   @page@, but for @[[toc]]@ as a paragraph of its own, which is where
---   the page's table of contents goes ('TableOfContents');
+--   @page@, except @[[toc]]@ alone in a paragraph, which marks where the
+--   page's table of contents goes ('TableOfContents');
 -- * mentions, @\@login@, in text outside code, links and embeds
 --   ("Wiki.Core.Markdown.Mention" says what counts as one).
 --
 -- Raw HTML in the source is kept as written, as 'RawHtml' (one tag or
 -- comment each, with the Markdown between them as ordinary inlines) and
--- 'RawHtmlBlock'. What of it reaches the page is decided by the allowlist
--- in "Wiki.Core.Markdown.Html", when it is rendered.
+-- 'RawHtmlBlock'. The allowlist in "Wiki.Core.Markdown.Html" decides what
+-- of it reaches the page, when it is rendered.
 --
--- Source positions are not kept: nothing needs them yet. Adding them means
--- giving 'Rangeable' a real instance and a field to the constructors.
+-- Source positions are not kept: nothing needs them yet. Adding them
+-- means giving 'Rangeable' a real instance and the constructors a field.
 module Wiki.Core.Markdown.Ast
   ( -- * The tree
     Block (..)
@@ -72,32 +74,32 @@ import Wiki.Core.Markdown.Mention (splitMentions)
 import Wiki.Core.Markdown.TexMath (texMathSpec)
 import Wiki.Core.Slug (freshName, headingSlug)
 
--- | Attributes from braces, @{#id .class key=value}@, in the order written.
--- Heading identifiers are among them, as @id@. Which of them reach the HTML
--- is the renderer's decision.
+-- | Attributes from braces, @{#id .class key=value}@, in the order
+-- written. Heading identifiers are among them, as @id@. The renderer
+-- decides which of them reach the HTML.
 type Attributes = [(Text, Text)]
 
 -- | A block of a page.
 data Block
-  = -- | A paragraph. It never holds display math: a paragraph with some is
-    -- split around it into paragraphs and 'MathBlock's, because a @p@
-    -- cannot hold the block a formula is shown in.
+  = -- | A paragraph. It never contains display math: a paragraph with some
+    -- is split around it into paragraphs and 'MathBlock's, because a @p@
+    -- cannot contain the block a formula is shown in.
     Para [Inline]
   | -- | Text not in a paragraph: an item of a tight list. Split around
-    -- display math as 'Para' is.
+    -- display math like 'Para'.
     Plain [Inline]
   | -- | A heading: its level (1 to 6), its attributes (with its @id@), its
     -- text.
     Heading Int Attributes [Inline]
   | ThematicBreak
   | BlockQuote [Block]
-  | -- | Fenced or indented code: attributes, the language (the first word of
-    -- the info string, or failing that the first class), the code.
+  | -- | Fenced or indented code: attributes, the language (the first word
+    -- of the info string, or else the first class), and the code.
     CodeBlock Attributes (Maybe Text) Text
   | -- | A @mermaid@ fence: the diagram's source.
     Mermaid Text
-  | -- | A @tikz@ fence: the picture's TeX, as written ("Wiki.Core.Markdown.Tikz"
-    -- reads it).
+  | -- | A @tikz@ fence: the picture's TeX, as written (read by
+    -- "Wiki.Core.Markdown.Tikz").
     Tikz Text
   | -- | Display math: a @math@ fence, or @$$…$$@ or @\\[…\\]@ in a
     -- paragraph. The TeX source, as written between the delimiters.
@@ -111,14 +113,14 @@ data Block
     Div Attributes [Block]
   | -- | A GitHub alert, @> [!NOTE]@ and friends.
     Alert AlertKind [Block]
-  | -- | The footnotes, in the order they were defined. Comes last in the
-    -- document, once, when it has any.
+  | -- | The footnotes, in the order they were defined. Comes once, last in
+    -- the document, when it has any.
     Footnotes [Footnote]
   | -- | A block of raw HTML, as written: rendered through the allowlist of
-    -- "Wiki.Core.Markdown.Html", read as one document.
+    -- "Wiki.Core.Markdown.Html", parsed as one document.
     RawHtmlBlock Text
-  | -- | @[[toc]]@ (or @[[TOC]]@) as a paragraph of its own: the page's table
-    -- of contents goes there ("Wiki.Core.Markdown.Toc").
+  | -- | @[[toc]]@ (or @[[TOC]]@) alone in a paragraph: where the page's
+    -- table of contents goes ("Wiki.Core.Markdown.Toc").
     TableOfContents
   deriving stock (Eq, Show)
 
@@ -150,13 +152,13 @@ data Inline
     FootnoteRef Int Text
   | -- | An emoji shortcode: the keyword (@tada@) and the emoji.
     Emoji Text Text
-  | -- | Raw HTML among the text, as written: a tag (opening or closing) or
-    -- a comment. Rendered through the allowlist of
-    -- "Wiki.Core.Markdown.Html", read with the inlines around it.
+  | -- | Raw HTML in the text, as written: a tag (opening or closing) or a
+    -- comment. Rendered through the allowlist of
+    -- "Wiki.Core.Markdown.Html", parsed together with the inlines around it.
     RawHtml Text
-  | -- | A mention, @\@login@: the login, without the @\@@. Whether it is a
-    -- user's is the renderer's to ask; one that is not, and one in a link,
-    -- shows as it is written.
+  | -- | A mention, @\@login@: the login, without the @\@@. The renderer
+    -- asks whether it belongs to a user; one that does not, and one in a
+    -- link, is shown as written.
     Mention Text
   deriving stock (Eq, Show)
 
@@ -183,7 +185,7 @@ data AlertKind = Note | Tip | Important | Warning | Caution
   deriving stock (Eq, Show)
 
 -- | Why a text is not Markdown. CommonMark gives every text a meaning, so
--- this is rare; it is kept rather than thrown away so that a failure shows.
+-- this is rare; it is kept rather than discarded so that a failure shows.
 newtype ParseError = ParseError Text
   deriving stock (Eq, Show)
 
@@ -194,19 +196,20 @@ parseMarkdown source =
     $ runIdentity
     $ CM.commonmarkWith syntax "markdown" terminated
   where
-    -- The pipe table extension does not take a last row that the end of the
-    -- text ends rather than a newline (commonmark-extensions 0.2.7.3), and
-    -- a text area's value usually has no newline at the end.
+    -- The pipe table extension does not accept a last row ended by the end
+    -- of the text rather than a newline (commonmark-extensions 0.2.7.3),
+    -- and a text area's value usually has no newline at the end.
     terminated
       | "\n" `T.isSuffixOf` source = source
       | otherwise = source <> "\n"
 
--- | GitHub's extensions (those of @gfmExtensions@) and ours, then the core
--- syntax, then pipe tables. An extension that changes what a core construct
--- means (a list item that is a task, a block quote that is an alert) has to
--- be tried before it; pipe tables, which take a paragraph's line as their
--- header, come after the core's blocks, as commonmark-extensions asks, so
--- that a line with a pipe in it that is something else stays that.
+-- | GitHub's extensions (those of @gfmExtensions@) and the wiki's own,
+-- then the core syntax, then pipe tables. An extension that changes what a
+-- core construct means (a list item that is a task, a block quote that is
+-- an alert) must be tried before the core. Pipe tables, which take a
+-- paragraph's line as their header, come after the core's blocks, as
+-- commonmark-extensions requires, so that a line with a pipe in it that is
+-- something else stays that.
 syntax :: CM.SyntaxSpec Identity Inlines Blocks
 syntax =
   CME.emojiSpec
@@ -224,7 +227,7 @@ syntax =
     <> CME.pipeTableSpec
 
 -- | The text of some inlines, without their markup: what a heading's
--- identifier is made from, and what an image's @alt@ is.
+-- identifier is made from, and an image's @alt@ text.
 plainText :: [Inline] -> Text
 plainText = foldMap $ \case
   Str t -> t
@@ -252,7 +255,7 @@ classes :: Attributes -> [Text]
 classes attrs = concatMap T.words [v | ("class", v) <- attrs]
 
 -- | The logins a document mentions, outside links (where a mention is
--- shown as text, since a link cannot hold one): whom it would notify.
+-- shown as text, since a link cannot contain a link): who it would notify.
 mentions :: [Block] -> Set Text
 mentions = foldMap block'
   where
@@ -278,14 +281,15 @@ mentions = foldMap block'
 -- Headings and the table of contents
 
 -- | The document with an @id@ on every heading: its own if it has one, and
--- otherwise one made from its text ('headingSlug'), in document order, free
--- of every id written in braces in the page and of the ids given to the
--- headings before it ('freshName'). One pass over the parsed tree, so that
--- whatever renders the tree, and whatever lists its headings, sees the same
--- ids.
+-- otherwise one made from its text ('headingSlug'), in document order,
+-- different from every id written in braces in the page and from the ids
+-- given to the headings before it ('freshName'). It is one pass over the
+-- parsed tree, so that whatever renders the tree, and whatever lists its
+-- headings, sees the same ids.
 --
--- This replaces commonmark-extensions' @autoIdentifiersSpec@, which made the
--- second @Intro@ @intro-1@ and did not stay clear of the ids written out.
+-- This replaces commonmark-extensions' @autoIdentifiersSpec@, which gave
+-- the second @Intro@ the id @intro-1@ and did not avoid the ids written
+-- out.
 withHeadingIds :: [Block] -> [Block]
 withHeadingIds doc = evalState (traverse assign doc) written
   where
@@ -315,9 +319,9 @@ withHeadingIds doc = evalState (traverse assign doc) written
       Footnotes notes -> Footnotes <$> traverse (\(Footnote n label bs) -> Footnote n label <$> traverse assign bs) notes
       other -> pure other
 
--- | A paragraph that is nothing but the wiki link @[[toc]]@ is where the
--- table of contents goes. Any other link to @toc@ stays a link, to a page
--- of that name.
+-- | A paragraph that is nothing but the wiki link @[[toc]]@ marks where
+-- the table of contents goes. Any other link to @toc@ stays a link, to a
+-- page of that name.
 contentsMarker :: Block -> Block
 contentsMarker = \case
   Para [Link attrs dest _ [Str label]]
@@ -330,9 +334,9 @@ contentsMarker = \case
 ----------------------------------------------------------------------
 -- Mentions
 
--- | A block with the mentions in its text made 'Mention's: in every text
--- but code's, a link's and an embed's (whose caption is an image's
--- description, not text of the page's).
+-- | A block with the mentions in its text turned into 'Mention's: in all
+-- text except code, links and embeds (whose caption is an image's
+-- description, not text of the page).
 withMentions :: Block -> Block
 withMentions = \case
   Para xs -> Para (mentioning xs)
@@ -426,7 +430,7 @@ instance CM.IsInline Inlines where
   image source title = inline . Image [] source title . inlines
   code = inline . Code []
 
-  -- The core syntax makes raw inlines of HTML only; the extensions that
+  -- The core syntax makes raw inlines only of HTML; the extensions that
   -- make other formats are not enabled.
   rawInline _ = inline . RawHtml
 
@@ -439,7 +443,7 @@ instance CM.IsBlock Inlines Blocks where
   heading level = block . Heading level [] . inlines
   rawBlock _ = block . RawHtmlBlock
 
-  -- A definition has done its work once the links that use it are parsed.
+  -- A definition has done its job once the links that use it are parsed.
   referenceLinkDefinition _ _ = mempty
   list kind _ = block . List (listKind kind) . map (ListItem Nothing . blocks)
 
@@ -495,9 +499,10 @@ listKind = \case
   CM.BulletList _ -> BulletList
   CM.OrderedList start _ _ -> OrderedList start
 
--- | A code block, or a Mermaid diagram, a TikZ picture or display math when
--- its language says so. The language is the first word of the info string; a fence
--- written with attributes alone (@```{.mermaid}@) gives it as a class.
+-- | A code block, or a Mermaid diagram, a TikZ picture or display math
+-- when its language says so. The language is the first word of the info
+-- string; a fence written with attributes alone (@```{.mermaid}@) gives it
+-- as a class.
 codeBlockWith :: Attributes -> Maybe Text -> Text -> Block
 codeBlockWith attrs info code = case info <|> head (classes attrs) of
   Just "mermaid" -> Mermaid code
@@ -505,10 +510,10 @@ codeBlockWith attrs info code = case info <|> head (classes attrs) of
   Just "math" -> MathBlock code
   lang -> CodeBlock attrs lang code
 
--- | A paragraph's inlines as blocks: the paragraph itself, or, when it holds
--- display math, the paragraphs around each formula and the formulas as
--- 'MathBlock's. The text next to a formula loses the white space that
--- separated it from the formula.
+-- | A paragraph's inlines as blocks: the paragraph itself, or, when it
+-- contains display math, the paragraphs around each formula and the
+-- formulas as 'MathBlock's. The text next to a formula loses the white
+-- space that separated it from the formula.
 splitDisplayMath :: ([Inline] -> Block) -> [Inline] -> Blocks
 splitDisplayMath para xs = case break isDisplayMath xs of
   (before, []) -> paragraphOf before

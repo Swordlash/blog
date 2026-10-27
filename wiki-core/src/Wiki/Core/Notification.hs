@@ -1,40 +1,41 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
--- | Mentions, watching and notifications (WP4.13 of docs/PLAN.md): who is
--- told of what happens to a page, as pure rules over plain data, which
--- every backend runs as it writes (the server in the save's or the
--- comment's own transaction, the demo in its store).
+-- | The notification rules (WP4.13 of docs/PLAN.md): mentions, watching,
+-- and who is notified of what happens to a page. They are pure rules over
+-- plain data, which every backend runs as it writes (the server in the
+-- save's or the comment's own transaction, the demo in its state).
 --
 -- = Watching
 --
 -- Someone watches a page, or a space (and with it its pages and its
--- subspaces'), by choice: the "Watch" bell on each sets a mark, watching
--- or not, which wins over anything that would otherwise decide
+-- subspaces'), by choice: the "Watch" button on each sets a mark,
+-- watching or not, which overrides anything that would otherwise decide
 -- ('Mark'). A page with no mark of its own is watched as the nearest of
--- its spaces with one says, from its own space up; and with none, it is
--- watched by whoever made it (the author of its first version), unless
--- they have turned that off ('Watcher' @watchOwn@). So a page made by
--- someone, or under a space they watch, can still be turned off for that
--- page alone.
+-- its spaces with a mark says, from its own space upwards. With no mark at
+-- all, it is watched by whoever created it (the author of its first
+-- version), unless they have turned that off ('Watcher' @watchOwn@). So a
+-- page someone created, or one in a space they watch, can still be turned
+-- off for that page alone.
 --
--- = Who is told
+-- = Who is notified
 --
 -- 'recipients' says, for something that happened ('Happened'), who is
--- told and as what ('Kind'), one notification each, the first that applies
--- of:
+-- notified and as what ('Kind'): one notification each, the first of
+-- these that applies:
 --
--- 1. 'Mentioned': the save or the comment mentions them where what it
---    replaced did not (a save does not tell again of a mention that was
---    there before);
+-- 1. 'Mentioned': the save or the comment mentions them where the text it
+--    replaced did not (a save does not notify again of a mention that was
+--    already there);
 -- 2. 'Replied': a comment in a thread they opened or replied in, unless
 --    they have turned off watching their own (as for their pages);
 -- 3. 'Commented': a comment on a page they watch;
 -- 4. 'Changed': a save of a page they watch.
 --
--- Nobody is told of their own doing, and nobody is told anything of a page
--- they may not read: the rules of "Wiki.Core.Permission" are asked for
--- each of them, as they are then. A backend asks again before it mails a
--- notification, since a grant may have been taken away since.
+-- Nobody is notified of their own action, and nobody is notified of
+-- anything on a page they may not read: the rules of
+-- "Wiki.Core.Permission" are checked for each of them, as they are at
+-- that moment. A backend checks again before it mails a notification,
+-- since a grant may have been removed since.
 module Wiki.Core.Notification
   ( -- * Notifications
     Notification (..)
@@ -93,8 +94,8 @@ import Wiki.Core.Version (Author (..))
 --------------------------------------------------------------------------------
 -- Notifications
 
--- | What someone is told of, in the order 'recipients' prefers them: of
--- two that apply to one person, the earlier is the one made.
+-- | What someone is notified of, in the order 'recipients' prefers them:
+-- of two that apply to one person, the earlier is the one created.
 data Kind
   = -- | They were mentioned in a page or a comment.
     Mentioned
@@ -128,7 +129,7 @@ data PageLocation = PageLocation
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Something someone is told of.
+-- | A notification: something someone is notified of.
 data Notification = Notification
   { id :: NotificationId
   , kind :: Kind
@@ -136,9 +137,9 @@ data Notification = Notification
   , thread :: Maybe CommentThreadId
   -- ^ The thread a comment was in, for a comment.
   , actor :: Author
-  -- ^ Who did it, named as they were then.
+  -- ^ Who did it, named as they were at the time.
   , title :: Text
-  -- ^ The page's title then.
+  -- ^ The page's title at the time.
   , excerpt :: Text
   -- ^ The start of the comment, for a comment; empty for a save.
   , createdAt :: UTCTime
@@ -146,7 +147,7 @@ data Notification = Notification
   -- ^ Whether its watcher has marked it read.
   , location :: Maybe PageLocation
   -- ^ Where the page is now, if the backend knows: a notification is read
-  -- with it, since a page may move after it.
+  -- with it, since a page may move after the notification is created.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -155,7 +156,8 @@ data Notification = Notification
 withLocation :: Maybe PageLocation -> Notification -> Notification
 withLocation location n = Notification {id = n.id, kind = n.kind, page = n.page, thread = n.thread, actor = n.actor, title = n.title, excerpt = n.excerpt, createdAt = n.createdAt, read = n.read, location}
 
--- | What a notification says, for a person to read: "Ada mentioned you".
+-- | What a notification says, in words for a person to read: "Ada
+-- mentioned you".
 notificationText :: Notification -> Text
 notificationText n = n.actor.name <> " " <> verb
   where
@@ -173,7 +175,7 @@ data WatchTarget = WatchPage PageId | WatchSpace SpaceId
   deriving stock (Eq, Ord, Show)
 
 -- | Someone's choices: a target they chose to watch ('True') or not to.
--- One with no mark is decided by what is around it.
+-- A target without a mark is decided by what is around it.
 type Mark = Map WatchTarget Bool
 
 -- | Whether someone watches a page or a space, and why.
@@ -186,25 +188,25 @@ data Watch = Watch
 
 -- | Why someone watches something or does not.
 data WatchReason
-  = -- | They chose so, for this page or space.
+  = -- | They chose this for this page or space.
     Chosen
-  | -- | They chose so for a space it is in, the nearest with a mark.
+  | -- | They chose this for a space it is in, the nearest with a mark.
     FromSpace SpaceId
-  | -- | They made the page, and watch their own.
+  | -- | They created the page, and watch their own pages.
     OwnPage
   | -- | Nobody chose anything: not watched.
     Unchosen
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | Whether someone watches a page: their mark on it, else the nearest of
--- its spaces' (the chain from the top level down, its own space last),
--- else whether they made it and watch their own.
+-- | Whether someone watches a page: their mark on it, else the mark of the
+-- nearest of its spaces (the chain from the top level down, its own space
+-- last), else whether they created it and watch their own pages.
 pageWatch
   :: Bool
   -- ^ Whether they watch their own pages.
   -> Maybe UserId
-  -- ^ Who made the page, if anyone known.
+  -- ^ Who created the page, if known.
   -> UserId
   -> Mark
   -> [Space]
@@ -219,7 +221,7 @@ pageWatch watchOwn maker u marks chain p = case Map.lookup (WatchPage p) marks o
       | otherwise -> Watch False Unchosen
 
 -- | Whether someone watches a space (the last of the chain): their mark on
--- it, else the nearest of its ancestors'.
+-- it, else the mark of the nearest of its ancestors.
 spaceWatch :: Mark -> [Space] -> Watch
 spaceWatch marks chain = case reverse chain of
   s : _
@@ -234,8 +236,8 @@ fromSpaces marks chain = head [Watch w (FromSpace s.id) | s <- reverse chain, Ju
 --------------------------------------------------------------------------------
 -- Mail
 
--- | How someone wants their notifications mailed: not at all, each as it
--- comes, or once a day, all of the day's together.
+-- | How someone wants their notifications mailed: never, each as it
+-- arrives, or once a day, all of the day's together.
 data MailMode = MailOff | MailAtOnce | MailDaily
   deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
 
@@ -255,7 +257,7 @@ readMailMode :: Text -> Maybe MailMode
 readMailMode t = lookup t [(mailModeName m, m) | m <- [minBound .. maxBound]]
 
 -- | How someone's notifications are mailed: as they chose, or, if they
--- have not, at once when they have a verified address and not at all
+-- have not chosen, at once when they have a verified address and never
 -- otherwise. Nobody without a verified address is mailed, whatever they
 -- chose.
 effectiveMailMode :: Bool -> Maybe MailMode -> MailMode
@@ -266,11 +268,12 @@ effectiveMailMode verified chosen
 --------------------------------------------------------------------------------
 -- Who is told
 
--- | One of the wiki's users, as the rules see them.
+-- | One of the wiki's users, in the form the notification rules take.
 data Watcher = Watcher
   { principal :: Principal
   , watchOwn :: Bool
-  -- ^ Whether they watch the pages they made and the threads they are in.
+  -- ^ Whether they watch the pages they created and the threads they take
+  -- part in.
   , marks :: Mark
   }
   deriving stock (Eq, Show)
@@ -280,7 +283,7 @@ data Occasion
   = -- | The page was saved.
     PageSaved
   | -- | A comment was made in a thread, opened or replied in by these
-    -- people (its commenters, the one who just did included).
+    -- people (its commenters, including the one who just commented).
     CommentedIn CommentThreadId [UserId]
   | -- | A comment of a thread was edited: only the mentions it adds count.
     EditedIn CommentThreadId
@@ -291,7 +294,7 @@ data Happened = Happened
   { actor :: UserId
   , page :: PageId
   , maker :: Maybe UserId
-  -- ^ Who made the page.
+  -- ^ Who created the page.
   , chain :: [Space]
   -- ^ Its space's chain, from the top level.
   , occasion :: Occasion
@@ -300,8 +303,8 @@ data Happened = Happened
   }
   deriving stock (Eq, Show)
 
--- | Who is told of what happened, and as what: one each, in the order of
--- their ids. See the module's Haddock.
+-- | Who is notified of what happened, and as what: one notification each,
+-- in the order of their ids. See the module's Haddock.
 recipients :: Grants -> [Watcher] -> Happened -> [(UserId, Kind)]
 recipients grants watchers a =
   sortOn
@@ -326,7 +329,7 @@ recipients grants watchers a =
         _ -> False
       Changed -> a.occasion == PageSaved && watched r
 
--- | The logins a Markdown text mentions; none if it cannot be read.
+-- | The logins a Markdown text mentions; none if it cannot be parsed.
 mentionedIn :: Text -> Set Text
 mentionedIn = either (const mempty) mentions . parseMarkdown
 
@@ -355,18 +358,18 @@ excerptOf body = cut (T.unwords (T.words (either (const body) (T.unwords . map b
 --------------------------------------------------------------------------------
 -- A digest
 
--- | What a digest says of one page: its notifications, the oldest first.
+-- | One page's part of a digest: its notifications, the oldest first.
 data DigestGroup = DigestGroup
   { page :: PageId
   , title :: Text
-  -- ^ The title of its latest notification's.
+  -- ^ The page's title, from its latest notification.
   , location :: Maybe PageLocation
   , items :: [Notification]
   }
   deriving stock (Eq, Show)
 
--- | Notifications as a digest mails them: one group per page, the page
--- with the latest notification first, each group's notifications the
+-- | Notifications grouped as a digest mails them: one group per page, the
+-- page with the latest notification first, each group's notifications the
 -- oldest first, as they happened.
 digest :: [Notification] -> [DigestGroup]
 digest ns =
@@ -379,7 +382,7 @@ digest ns =
     newest = maximum . map (\n -> (n.createdAt, n.id))
 
 -- | How long a notification is kept, in days, and how many a user keeps
--- at most: older ones, and more, are deleted.
+-- at most: older ones, and any beyond that number, are deleted.
 keptNotifications :: (Int, Int)
 keptNotifications = (90, 500)
 
