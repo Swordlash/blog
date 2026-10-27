@@ -3219,6 +3219,10 @@ Amended by the planning session after each work package's report.
   asked why the storage is hand-written SQL rather than `persistent`/`opaleye`/`rel8`: the
   two latter are PostgreSQL-only; the answer became WP5.7. WP5.8 came from the owner's look
   at the export.
+- **WP5.6 merged** (2026-10-27, PR #90, `main` at `7ee7dbe`), after the rebase; the account
+  panel's two lines about a password reworded for provider accounts in the same PR. WP3.7's
+  note that an identity-only account sets its first password with `current = null` no longer
+  holds. Next: #89, then WP5.7 and WP5.8 one at a time.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
