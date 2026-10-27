@@ -25,14 +25,29 @@
 //   the textarea's input event was;
 // - the host carries an object, wikiEditor, that the application's
 //   jsbits/editor.js reads the text and the selection from and writes
-//   through, rather than the textarea's own.
+//   through, rather than the textarea's own;
+// - each change of the selection is told by a "wiki-selection" event, whose
+//   detail is {from, to} in characters (code points, as Haskell counts), so
+//   that the writing assistant can offer to attach it to a message; a
+//   cursor that only moves, with nothing selected, says nothing new;
+// - the writing assistant's edits are tracked changes (propose): the new
+//   text is in the document, so the preview, the draft and a save see it,
+//   and is shown on a green ground, with what it replaced shown struck
+//   through in red before it and, after it, a control to accept or reject
+//   it, which tells the component by a "wiki-decide" event ({id, accept});
+//   the component settles changes (settle) as Wiki.Core.Assistant.Edit
+//   says, and a "wiki-changes" event, whose detail is how many changes are
+//   left, follows every change of that number. The changes follow the text
+//   as it is typed around them. Undoing an edit takes its change away with
+//   it, and redoing it brings both back; accepting is no edit, so an undo
+//   after it undoes the edit itself, as usual.
 //
 // The text is never normalised: the document's only line separator is
 // "\n", so a "\r" the page holds stays where it is and the text handed back
 // is the text given, byte for byte, as Markdown is the source of truth.
-import { EditorSelection, EditorState } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, keymap } from "@codemirror/view";
-import { history, historyKeymap, insertNewline, isolateHistory, standardKeymap } from "@codemirror/commands";
+import { EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Decoration, EditorView, ViewPlugin, WidgetType, keymap } from "@codemirror/view";
+import { history, historyKeymap, insertNewline, invertedEffects, isolateHistory, standardKeymap } from "@codemirror/commands";
 import { LanguageSupport, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 // The language alone, not markdown(): that brings HTML's, CSS's and
 // JavaScript's parsers for HTML in a page, list continuation on Enter and
@@ -147,6 +162,133 @@ const decorations = (codeTokens) =>
     { decorations: (plugin) => plugin.decorations },
   );
 
+// How many characters (code points) the first `units` UTF-16 units of a
+// text hold: what Haskell's Text counts.
+const characters = (text, units) => {
+  let count = 0;
+  for (let at = 0; at < units && at < text.length; at++) {
+    const code = text.charCodeAt(at);
+    if (code >= 0xd800 && code <= 0xdbff && at + 1 < units) at++;
+    count++;
+  }
+  return count;
+};
+
+// The writing assistant's tracked changes: {id, from, to, removed}, the
+// text from..to (UTF-16 units) being what an edit put in, and `removed`
+// what was there before it. They never overlap (Wiki.Core.Assistant.Edit
+// takes in the ones an edit touches).
+const addChange = StateEffect.define({
+  map: (change, mapping) => moved(change, mapping),
+});
+const dropChanges = StateEffect.define();
+
+// A change through an edit of the text: text typed at either end of it
+// stays outside it.
+const moved = (change, mapping) => {
+  const from = mapping.mapPos(change.from, 1);
+  return { ...change, from, to: Math.max(from, mapping.mapPos(change.to, -1)) };
+};
+
+class RemovedText extends WidgetType {
+  constructor(text) {
+    super();
+    this.text = text;
+  }
+  eq(other) {
+    return other.text === this.text;
+  }
+  toDOM() {
+    const removed = document.createElement("del");
+    removed.className = "cm-wiki-removed";
+    removed.textContent = this.text;
+    return removed;
+  }
+}
+
+// Accept and reject, after a change. The buttons tell the component, which
+// decides; a mousedown on them neither moves the cursor nor takes the focus
+// from the text.
+class ChangeControls extends WidgetType {
+  constructor(id, host) {
+    super();
+    this.id = id;
+    this.host = host;
+  }
+  eq(other) {
+    return other.id === this.id;
+  }
+  toDOM() {
+    const controls = document.createElement("span");
+    controls.className = "cm-wiki-change-controls";
+    controls.dataset.change = String(this.id);
+    for (const [accept, label, mark] of [
+      [true, "Accept this change", "\u2713"],
+      [false, "Reject this change", "\u2715"],
+    ]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = accept ? "cm-wiki-change-accept" : "cm-wiki-change-reject";
+      button.title = label;
+      button.setAttribute("aria-label", label);
+      button.textContent = mark;
+      button.addEventListener("mousedown", (event) => event.preventDefault());
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        this.host.dispatchEvent(new CustomEvent("wiki-decide", { detail: { id: this.id, accept } }));
+      });
+      controls.append(button);
+    }
+    return controls;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+const changeDecorations = (changes, host) =>
+  Decoration.set(
+    changes.flatMap((change) => [
+      ...(change.removed !== "" ? [Decoration.widget({ widget: new RemovedText(change.removed), side: -1 }).range(change.from)] : []),
+      ...(change.to > change.from ? [Decoration.mark({ class: "cm-wiki-inserted", attributes: { "data-change": String(change.id) } }).range(change.from, change.to)] : []),
+      Decoration.widget({ widget: new ChangeControls(change.id, host), side: 1 }).range(change.to),
+    ]),
+    true,
+  );
+
+// The field the changes are kept in, and what undo and redo do with them:
+// an edit undone takes its change away (and gives back those it took in),
+// and an edit that dropped changes (a rejection) gives them back undone.
+const tracking = (host) => {
+  const field = StateField.define({
+    create: () => [],
+    update(changes, tr) {
+      let next = tr.docChanged ? changes.map((change) => moved(change, tr.changes)) : changes;
+      for (const effect of tr.effects) {
+        if (effect.is(dropChanges)) next = next.filter((change) => !effect.value.includes(change.id));
+        else if (effect.is(addChange)) next = [...next.filter((change) => change.id !== effect.value.id), effect.value];
+      }
+      // A change whose text was all deleted and that replaced nothing is
+      // none.
+      return next.filter((change) => change.to > change.from || change.removed !== "");
+    },
+    provide: (f) => EditorView.decorations.from(f, (changes) => changeDecorations(changes, host)),
+  });
+  const inverted = invertedEffects.of((tr) => {
+    const effects = [];
+    for (const effect of tr.effects) {
+      if (effect.is(addChange)) effects.push(dropChanges.of([effect.value.id]));
+      else if (effect.is(dropChanges)) {
+        for (const change of tr.startState.field(field)) {
+          if (effect.value.includes(change.id)) effects.push(addChange.of(change));
+        }
+      }
+    }
+    return effects;
+  });
+  return { field, extensions: [field, inverted] };
+};
+
 // The editors attached, so that one whose host has left the page (the
 // editor closed without its finalizer reaching it) is let go of: a view
 // listens on the window, which would keep it alive.
@@ -171,6 +313,11 @@ export function attach(textarea, host, original, codeTokens) {
   const untouched = typed === String(original).replace(/\r\n?/g, "\n");
   const doc = untouched ? String(original) : typed;
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
+  const changes = tracking(host);
+  // The selection last told, in characters, as "from:to", and whether it
+  // was empty.
+  let toldSelection = "";
+  let toldEmpty = true;
 
   const state = EditorState.create({
     doc,
@@ -180,6 +327,7 @@ export function attach(textarea, host, original, codeTokens) {
       // Pasted text as a textarea takes it: with its line endings made "\n".
       EditorView.clipboardInputFilter.of((text) => text.replace(/\r\n?/g, "\n")),
       history(),
+      changes.extensions,
       // Enter is a line break and nothing more, as in the textarea; Tab and
       // the toolbar's shortcuts are the component's (the form's keydown).
       keymap.of([{ key: "Enter", run: insertNewline, shift: insertNewline }, ...historyKeymap, ...standardKeymap]),
@@ -201,8 +349,24 @@ export function attach(textarea, host, original, codeTokens) {
         paste: (event) => Boolean(event.clipboardData?.files?.length),
       }),
       EditorView.updateListener.of((update) => {
+        const text = update.docChanged || update.selectionSet ? update.state.doc.toString() : null;
         if (update.docChanged) {
-          host.dispatchEvent(new CustomEvent("wiki-input", { detail: update.state.doc.toString() }));
+          host.dispatchEvent(new CustomEvent("wiki-input", { detail: text }));
+        }
+        const before = update.startState.field(changes.field).length;
+        const after = update.state.field(changes.field).length;
+        if (before !== after) host.dispatchEvent(new CustomEvent("wiki-changes", { detail: after }));
+        if (text !== null) {
+          const { from, to } = update.state.selection.main;
+          const selected = { from: characters(text, from), to: characters(text, to) };
+          const said = `${selected.from}:${selected.to}`;
+          const empty = from === to;
+          // A cursor moved with nothing selected, after nothing selected,
+          // is nothing new.
+          const news = said !== toldSelection && !(empty && toldEmpty);
+          toldSelection = said;
+          toldEmpty = empty;
+          if (news) host.dispatchEvent(new CustomEvent("wiki-selection", { detail: selected }));
         }
       }),
     ],
@@ -236,6 +400,35 @@ export function attach(textarea, host, original, codeTokens) {
       view.focus();
     },
     focus: () => view.focus(),
+    // The tracked changes, as {id, from, to, removed}, in UTF-16 units.
+    changes: () => view.state.field(changes.field).map((change) => ({ ...change })),
+    // The assistant's edit: from..to replaced with `insert`, tracked as the
+    // change `id`, taking in the changes `absorbed` (the ones it touches),
+    // as one step of the undo, shown where it is.
+    propose: (from, to, insert, id, absorbed) => {
+      const removed = view.state.sliceDoc(from, to);
+      view.dispatch({
+        changes: { from, to, insert },
+        effects: [
+          dropChanges.of(absorbed),
+          addChange.of({ id, from, to: from + insert.length, removed }),
+          EditorView.scrollIntoView(from, { y: "nearest" }),
+        ],
+        annotations: isolateHistory.of("full"),
+        userEvent: "input.wiki.assistant",
+      });
+    },
+    // Changes decided: those of `ids` no longer tracked, and `replacements`
+    // ({from, to, insert}, in the text as it is) made, as one step of the
+    // undo when there are any. Accepting replaces nothing, and is no step
+    // of the undo at all.
+    settle: (ids, replacements) => {
+      view.dispatch(
+        replacements.length > 0
+          ? { changes: replacements, effects: dropChanges.of(ids), annotations: isolateHistory.of("full"), userEvent: "input.wiki.assistant" }
+          : { effects: dropChanges.of(ids), annotations: Transaction.addToHistory.of(false) },
+      );
+    },
     destroy: () => {
       editors.delete(editor);
       view.destroy();

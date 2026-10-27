@@ -16,9 +16,13 @@
 #   islands/         Mermaid, as ES modules split by diagram type, which
 #                    islands.js imports the first time it draws a diagram,
 #                    and tikz.js (web/src/tikz.js), which it imports the
-#                    first time it draws a TikZ picture, and editor.js
+#                    first time it draws a TikZ picture, editor.js
 #                    (web/src/editor.js), CodeMirror for the editor's text,
-#                    which it imports the first time the editor is opened;
+#                    which it imports the first time the editor is opened,
+#                    and assistant.js (web/src/assistant.js), the writing
+#                    assistant's providers with Anthropic's and OpenAI's
+#                    SDKs, which it imports the first time the assistant
+#                    is used;
 #   tikzjax/         TikZJax's worker and TeX (from npm's @drgrice1/tikzjax,
 #                    as published), which tikz.js runs, with the worker that
 #                    starts it (web/src/tikz-worker.js);
@@ -75,6 +79,15 @@ npx esbuild web/src/tikz.js \
 npx esbuild web/src/editor.js \
   --bundle --minify --format=esm --target=es2022 --log-level=warning \
   --metafile="$meta/editor.json" --outfile="$out_dir/islands/editor.js"
+
+# The writing assistant's providers, with Anthropic's and OpenAI's SDKs:
+# one file in islands/ again, fetched by the editor's assistant only. The
+# SDKs' webhook verification is a server's, and its package has no licence
+# file to convey (web/src/no-webhooks.js), so it is left out.
+npx esbuild web/src/assistant.js \
+  --bundle --minify --format=esm --target=es2022 --platform=browser --log-level=warning \
+  --alias:standardwebhooks=./web/src/no-webhooks.js \
+  --metafile="$meta/assistant.json" --outfile="$out_dir/islands/assistant.js"
 
 # TikZJax's files, copied as they are published: run-tex.js is its worker
 # (TeX's WebAssembly runtime and dvi2html), tex.wasm.gz and core.dump.gz are

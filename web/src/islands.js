@@ -14,6 +14,7 @@
 //   wikiIslands.renderTikz(element, source, preamble, picture): Promise<void>
 //   wikiIslands.highlight(element, language, code)
 //   wikiIslands.attachEditor(textarea, host, original)
+//   wikiIslands.assistant(): Promise<module>
 //
 // Each writes into the element it is given and nowhere else, replacing what
 // was there. None of them throws: a formula, a diagram or a language a library
@@ -28,7 +29,10 @@
 // attachEditor is not an island's: it puts CodeMirror in the editor
 // (editor.js, bundled into islands/editor.js and fetched the first time the
 // editor is opened, never by a reader's page), with highlight.js for its
-// fenced code, which is why it is here.
+// fenced code, which is why it is here. assistant is not one either: it
+// loads the writing assistant's providers (assistant.js, bundled into
+// islands/assistant.js with Anthropic's and OpenAI's SDKs) the first time
+// the editor's assistant is used, for wiki-app/jsbits/assistant.js.
 // The demo's export and import, which have nowhere better to be bundled.
 import "./archive.js";
 import katex from "katex";
@@ -120,6 +124,7 @@ const lazily = (path) => {
 const loadMermaid = lazily("islands/mermaid.js");
 const loadTikz = lazily("islands/tikz.js");
 const loadEditor = lazily("islands/editor.js");
+const loadAssistant = lazily("islands/assistant.js");
 
 // How many times each element has been asked to render. Mermaid renders
 // asynchronously, so a diagram can finish after the element was asked for
@@ -281,4 +286,12 @@ const attachEditor = (textarea, host, original) => {
     .catch((error) => console.error("The editor's formatting could not be loaded:", error));
 };
 
-globalThis.wikiIslands = Object.freeze({ renderMath, checkMacros, renderMermaid, renderTikz, highlight, attachEditor });
+globalThis.wikiIslands = Object.freeze({
+  renderMath,
+  checkMacros,
+  renderMermaid,
+  renderTikz,
+  highlight,
+  attachEditor,
+  assistant: loadAssistant,
+});
