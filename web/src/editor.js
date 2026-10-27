@@ -314,8 +314,8 @@ export function attach(textarea, host, original, codeTokens) {
   const doc = untouched ? String(original) : typed;
   const clamp = (at) => Math.min(Math.max(at, 0), doc.length);
   const changes = tracking(host);
-  // The selection last told, in characters, as "from:to", and whether it
-  // was empty.
+  // The selection last told, in characters, as "from:to" ("" for none),
+  // and whether it was empty.
   let toldSelection = "";
   let toldEmpty = true;
 
@@ -349,24 +349,26 @@ export function attach(textarea, host, original, codeTokens) {
         paste: (event) => Boolean(event.clipboardData?.files?.length),
       }),
       EditorView.updateListener.of((update) => {
-        const text = update.docChanged || update.selectionSet ? update.state.doc.toString() : null;
         if (update.docChanged) {
-          host.dispatchEvent(new CustomEvent("wiki-input", { detail: text }));
+          host.dispatchEvent(new CustomEvent("wiki-input", { detail: update.state.doc.toString() }));
         }
         const before = update.startState.field(changes.field).length;
         const after = update.state.field(changes.field).length;
         if (before !== after) host.dispatchEvent(new CustomEvent("wiki-changes", { detail: after }));
-        if (text !== null) {
+        if (update.docChanged || update.selectionSet) {
           const { from, to } = update.state.selection.main;
-          const selected = { from: characters(text, from), to: characters(text, to) };
-          const said = `${selected.from}:${selected.to}`;
           const empty = from === to;
           // A cursor moved with nothing selected, after nothing selected,
-          // is nothing new.
-          const news = said !== toldSelection && !(empty && toldEmpty);
-          toldSelection = said;
+          // is nothing new, and costs nothing to find out.
+          if (empty && toldEmpty) return;
+          const upTo = update.state.sliceDoc(0, to);
+          const said = empty ? "" : `${characters(upTo, from)}:${characters(upTo, to)}`;
           toldEmpty = empty;
-          if (news) host.dispatchEvent(new CustomEvent("wiki-selection", { detail: selected }));
+          if (said !== toldSelection) {
+            toldSelection = said;
+            const [start, end] = empty ? [0, 0] : said.split(":").map(Number);
+            host.dispatchEvent(new CustomEvent("wiki-selection", { detail: { from: start, to: end } }));
+          }
         }
       }),
     ],
