@@ -1,48 +1,53 @@
--- | The wiki kept by a server: the backend the application runs on when the
--- page it is served in says so (@Main.hs@), over the server's HTTP API
--- (@wiki-api@, docs/api.md).
+-- | The HTTP backend: the implementation of 'Wiki.App.Backend.MonadWiki'
+-- that talks to @wiki-server@ over its HTTP API (@wiki-api@,
+-- docs/api.md). The application uses it when the page it is served in
+-- says so (@Main.hs@); otherwise it uses the in-memory backend of the
+-- demo.
 --
 -- 'HttpWiki' adds what it needs to any base monad, as
--- 'Wiki.App.Backend.Mem.MemWiki' does: in the browser over
--- 'Halogen.VDom.DOM.Monad.BrowserDOM', whose DOM classes it derives so that
--- Halogen components run in it. Each method is one request
--- ("Wiki.App.Backend.Http.Request"), made through a 'Transport': the
+-- 'Wiki.App.Backend.Mem.MemWiki' does. In the browser that monad is
+-- 'Halogen.VDom.DOM.Monad.BrowserDOM', whose DOM classes 'HttpWiki'
+-- derives so that Halogen components run in it. Each method sends one
+-- request ("Wiki.App.Backend.Http.Request") through a 'Transport': the
 -- browser's @fetch@ ('browserTransport', over haskell-halogen-net's
--- "Halogen.Net.Fetch"), or, in the tests, a server's application called in
--- the same process. A refusal comes back as the
--- 'WikiError' of its name, and a request that got no answer, or a broken
--- one, as 'Unreachable'.
+-- "Halogen.Net.Fetch"), or, in the tests, the server's application called
+-- in the same process. A refusal comes back as the 'WikiError' of the same
+-- name. A request that got no response, or a broken one, comes back as
+-- 'Unreachable'.
 --
--- What it reads it keeps ("Wiki.App.Backend.Http.Cache"), so that a view
--- whose data has been seen shows it at once ('atOnce'); a write lets it go.
--- Reads made through 'atOnce' ask nothing of the network: one that the
--- cache cannot answer gives up the whole program, and the view loads in its
--- initializer instead (decision 18 of the plan). The program starts with
--- what the server rendered its page from ('newHttpEnvWith' and
--- "Wiki.App.Backend.Http.Preload"), so its first render is that page.
+-- The backend caches the responses to its reads
+-- ("Wiki.App.Backend.Http.Cache"), so that a view whose data was fetched
+-- already renders at once ('atOnce'); a write empties the cache. Reads
+-- made through 'atOnce' send nothing over the network: if the cache
+-- cannot answer one of them, 'atOnce' gives up on the whole program, and
+-- the view fetches in its initializer instead (decision 18 of the plan).
+-- The program starts with the data the server prerendered its page from
+-- ('newHttpEnvWith' and "Wiki.App.Backend.Http.Preload"), so that its
+-- first render matches that page.
 --
--- The server renders that page with this backend too, over a transport that
--- answers in its own process, without a wait worth the name
--- ('newImmediateHttpEnv'): there 'atOnce' asks the transport, so that the
--- application is rendered with everything a route shows, and what it read
--- is what the page carries for the program.
+-- The server prerenders that page with this backend too, over a transport
+-- that answers inside the server's own process, with no real wait
+-- ('newImmediateHttpEnv'). There 'atOnce' sends the requests to the
+-- transport, so that the application is rendered with everything a route
+-- shows, and the responses it read are the data the page carries for the
+-- program.
 --
--- Besides @MonadWiki@, it is the administration's backend
--- ("Wiki.App.Backend.Admin") over the API's @admin\/…@ endpoints, and it
--- imports another wiki into the server's, merging
--- it with what is there ('previewImport', 'applyImport'): the
--- administration's, which the demo, whose import replaces everything, has
--- no counterpart of. And it signs in and out ("Wiki.App.Account"), which
--- the demo, switching between its users, has none of either.
+-- Besides 'Wiki.App.Backend.MonadWiki', this is the administration's
+-- backend ("Wiki.App.Backend.Admin") over the API's @admin\/…@ endpoints.
+-- It also imports another wiki into the server's, merging it with what is
+-- there ('previewImport', 'applyImport'); the demo has no such import,
+-- since its import replaces everything. And it signs in and out
+-- ("Wiki.App.Account"), which the demo does not do either: it switches
+-- between its users instead.
 --
 -- = Sessions that end
 --
--- Who is asking is the server's to say, from the session the browser's
--- cookie carries, which can end while the page is open. A request refused
--- (401 or 403) while the backend has someone signed in makes it ask the
--- server who is asking now; if that is someone else, what it has read was
--- read as someone it no longer is, so it lets all of it go and tells the
--- shell ('sessionChanges').
+-- The server decides who is asking, from the session the browser's cookie
+-- carries, and that session can end while the page is open. When a request
+-- is refused (401 or 403) while someone is signed in, the backend asks the
+-- server who is asking now. If that is someone else, everything cached was
+-- read as a user who is no longer signed in, so the backend empties the
+-- cache and tells the shell ('sessionChanges').
 module Wiki.App.Backend.Http
   ( HttpWiki (..)
   , HttpEnv
@@ -118,13 +123,13 @@ import Wiki.Core.Id (PageId)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.User (Standing (..))
 
--- | How a request reaches the server: its answer, or why none came.
+-- | How a request reaches the server: the response, or why none came.
 newtype Transport = Transport (Request -> IO (Either Text Response))
 
--- | How long a request waits for its whole answer, in milliseconds, before
--- the wiki is taken to be out of reach: long enough for a slow network and
--- a large page, short enough that a reader is told rather than left
--- waiting.
+-- | How long a request waits for its whole response, in milliseconds,
+-- before the wiki is taken to be unreachable: long enough for a slow
+-- network and a large page, short enough that a reader is told rather than
+-- left waiting.
 requestTimeout :: Int
 requestTimeout = 30_000
 
@@ -133,41 +138,42 @@ requestTimeout = 30_000
 uploadTimeout :: Int
 uploadTimeout = 6 * 60_000
 
--- | How long a request may take, in milliseconds: an upload (a multipart
--- form) 'uploadTimeout', anything else 'requestTimeout'.
+-- | How long a request may take, in milliseconds: 'uploadTimeout' for an
+-- upload (a multipart form), 'requestTimeout' for anything else.
 timeLimit :: Request -> Int
 timeLimit r = case r.body of
   Body mediaType _ | "multipart/" `T.isPrefixOf` mediaType -> uploadTimeout
   _ -> requestTimeout
 
--- | The browser's @fetch@, against the page's @\<base href>@ (an address
--- relative to the page resolves against it), so that a wiki served below a
--- path finds its API below the same path, with 'timeLimit's limits.
--- Natively there is no network, and every request says so.
+-- | The browser's @fetch@, with 'timeLimit's limits. An address is
+-- resolved against the page's @\<base href>@, so that a wiki served below
+-- a path finds its API below the same path. Natively there is no network,
+-- and every request fails, saying so.
 browserTransport :: Transport
 browserTransport = fetchTransport timeLimit
 
 -- | The browser's @fetch@, through "Halogen.Net.Fetch", with a limit, in
--- milliseconds, on how long each request may take to answer in full.
+-- milliseconds, on how long each request may take to complete.
 --
--- The request is made as the wiki's own: on its origin, with its cookies
+-- The request is sent as the wiki's own: to its origin, with its cookies
 -- (@credentials: same-origin@), and with the headers 'Request' gives it,
--- the API's request marker among them. A failure of the network, a request
--- the browser refused, and no whole answer within the limit are all the
--- same to the application: no answer, and why ('fetchFailure',
+-- including the API's request marker. A network failure, a request the
+-- browser refused, and no complete response within the limit all mean the
+-- same to the application: no response, with the reason ('fetchFailure',
 -- 'noAnswerIn').
 --
--- The request and the wait for its body belong to the thread that calls
--- this, which is a component's worker: killing it, as the driver does when
--- the component goes away (a navigation while a view loads) or its fiber
--- is killed, aborts the request rather than leaving it to run to the end
--- unread. The limit is the same mechanism: 'timeout' kills the wait, and
--- the kill aborts the request.
+-- The request, and the wait for its body, run on the thread that calls
+-- this, which is a component's worker thread. Killing that thread aborts
+-- the request instead of leaving it to run unread. The driver kills it
+-- when the component goes away (a navigation while a view loads) or when
+-- the component's fiber is killed. The time limit works the same way:
+-- 'timeout' kills the wait, and the kill aborts the request.
 --
--- What @fetch@ answered from the browser's own cache would be no answer
--- from the server: the API's answers say @Cache-Control: private,
--- no-cache@ (the server's @privately@), so the browser asks the server
--- every time, and, with no validator on them, for the whole answer.
+-- A response @fetch@ took from the browser's own HTTP cache would not come
+-- from the server. So the API's responses say @Cache-Control: private,
+-- no-cache@ (the server's @privately@): the browser asks the server every
+-- time, and, since the responses carry no validator, for the whole
+-- response.
 fetchTransport :: (Request -> Int) -> Transport
 fetchTransport limit = Transport $ \r -> do
   let within = limit r
@@ -181,8 +187,8 @@ fetchTransport limit = Transport $ \r -> do
     Just (Right response) -> Right response
 
 -- | The request as @fetch@ is given it: the browser's defaults (CORS mode,
--- on a same-origin address), but for the wiki's cookies, which go with it,
--- and its body's media type, which goes as its @Content-Type@.
+-- on a same-origin address), except that the wiki's cookies are sent with
+-- it, and its body's media type is sent as its @Content-Type@.
 fetchRequest :: Request -> Fetch.Request
 fetchRequest r =
   (Fetch.request method r.url)
@@ -203,10 +209,10 @@ fetchRequest r =
       "OPTIONS" -> Fetch.OPTIONS
       other -> Fetch.OtherMethod other
 
--- | Why a request got no answer, as the application says it
--- ('Wiki.App.Backend.Unreachable'): a @TypeError@ is what @fetch@ rejects
--- with when the network or the server is down (or the browser refused the
--- request, which this application's requests never give it cause to).
+-- | The reason a request got no response, as the application shows it
+-- ('Wiki.App.Backend.Unreachable'). @fetch@ rejects with a @TypeError@
+-- when the network or the server is down, or when the browser refused the
+-- request (which this application's requests never give it cause to do).
 fetchFailure :: Fetch.JSError -> Text
 fetchFailure e = case e.name of
   "TypeError" -> "the network or the server is down"
@@ -215,39 +221,41 @@ fetchFailure e = case e.name of
   _ | T.null e.message -> e.name
   _ -> e.message
 
--- | That no whole answer came within a limit, in milliseconds.
+-- | The reason given when no complete response came within a limit, in
+-- milliseconds.
 noAnswerIn :: Int -> Text
 noAnswerIn ms
   | ms `mod` 1000 == 0 = "no answer in " <> show (ms `div` 1000) <> " seconds"
   | otherwise = "no answer in " <> show ms <> " milliseconds"
 
--- | A transport whose requests are never answered: what a page rendered
--- ahead of the program shows is the application before anything has been
+-- | A transport whose requests never get a response. A page prerendered
+-- before the program starts shows the application before anything has
 -- loaded, and the requests it makes are cancelled with it.
 silentTransport :: Transport
 silentTransport = Transport (const (forever (threadDelay maxBound)))
 
--- | Where requests go, and what has been read.
+-- | The HTTP backend's state: where requests go, and the cache.
 data HttpEnv = HttpEnv
   { transport :: Transport
   , cache :: IORef Cache
   , immediate :: Bool
-  -- ^ Whether the transport answers at once, so that 'atOnce' may ask it.
+  -- ^ Whether the transport answers at once (inside the same process), so
+  -- that 'atOnce' may send requests to it.
   , cacheOnly :: Bool
-  -- ^ Within 'atOnce': a read the cache cannot answer gives up.
+  -- ^ True inside 'atOnce': a read the cache cannot answer gives up.
   , changes :: Subscribe IO Session
-  -- ^ Where a session found to have changed by itself is announced.
+  -- ^ Where the backend announces that the session changed by itself.
   , feed :: Feed
-  -- ^ The tab's live channel ("Wiki.App.Live"), which keeps the threads
-  -- this has read up to date with what it hears.
+  -- ^ The tab's live channel ("Wiki.App.Live"), which keeps the cached
+  -- threads up to date with the events it receives.
   }
 
--- | A backend over this transport, with nothing read yet.
+-- | A backend over this transport, with an empty cache.
 newHttpEnv :: (MonadIO n) => Transport -> n HttpEnv
 newHttpEnv transport = newHttpEnvWith transport emptyCache
 
--- | A backend over this transport that has read this already: what the
--- server rendered the page with, which the program starts from.
+-- | A backend over this transport, with this cache to start from: the
+-- data the server prerendered the page with.
 newHttpEnvWith :: (MonadIO n) => Transport -> Cache -> n HttpEnv
 newHttpEnvWith transport start = liftIO $ do
   cache <- newIORef start
@@ -256,24 +264,25 @@ newHttpEnvWith transport start = liftIO $ do
   feed <- newFeed (\page event -> change (afterEvent page event)) (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads) (change . withNotice) (change forgetNotices)
   pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, changes, feed}
 
--- | A backend over a transport that answers at once, a server's
--- application in the same process: 'atOnce' asks it rather than give up,
--- so that every view loads in its initial state, as over the in-memory
--- backend. What the server renders its pages with
--- ("Wiki.App.Static.renderServed"); a browser's transport never is one.
+-- | A backend over a transport that answers at once: the server's
+-- application in the same process. 'atOnce' sends requests to it instead
+-- of giving up, so that every view loads in its initial state, as over the
+-- in-memory backend. The server prerenders its pages with this
+-- ("Wiki.App.Static.renderServed"); a browser's transport never answers at
+-- once.
 newImmediateHttpEnv :: (MonadIO n) => Transport -> n HttpEnv
 newImmediateHttpEnv transport = (\env -> env {immediate = True}) <$> newHttpEnv transport
 
--- | What the backend keeps of what it has read, for the tests.
+-- | The backend's cache, for the tests.
 cacheOf :: (MonadIO n) => HttpEnv -> n Cache
 cacheOf env = liftIO (readIORef env.cache)
 
--- | The backend over HTTP over a base monad.
+-- | The HTTP backend over a base monad.
 newtype HttpWiki m a = HttpWiki (ReaderT HttpEnv m a)
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadUnliftIO, PrimMonad)
 
--- As 'Wiki.App.Backend.Mem.MemWiki''s: through 'ReaderT', whose instances
--- run the reader in the DOM's callbacks.
+-- The same as 'Wiki.App.Backend.Mem.MemWiki''s: through 'ReaderT', whose
+-- instances run the reader inside the DOM's callbacks.
 deriving newtype instance (MonadDOM m) => MonadDOM (HttpWiki m)
 
 deriving newtype instance (MonadAttributes m) => MonadAttributes (HttpWiki m)
@@ -284,25 +293,26 @@ deriving newtype instance (MonadIslands m) => MonadIslands (HttpWiki m)
 
 deriving newtype instance (MonadAssistant m) => MonadAssistant (HttpWiki m)
 
--- The browser's own store, where the demo leaves its wiki: what the import
--- of "this browser's demo data" reads ("Wiki.App.Backend.Mem").
+-- The browser's own store, where the demo keeps its wiki: the import of
+-- "this browser's demo data" reads it ("Wiki.App.Backend.Mem").
 deriving newtype instance (MonadIndexedDB m) => MonadIndexedDB (HttpWiki m)
 
 instance (MonadUUID m) => MonadUUID (HttpWiki m) where
   generateV4 = HttpWiki (lift generateV4)
 
--- | Run a program against the server, with what this backend has read.
+-- | Run a program against the server, with this backend's cache.
 runHttpWiki :: HttpEnv -> HttpWiki m a -> m a
 runHttpWiki env (HttpWiki program) = runReaderT program env
 
--- | A read 'atOnce' could not answer from the cache.
+-- | The exception thrown when 'atOnce' meets a read the cache cannot
+-- answer.
 data NotCached = NotCached
   deriving stock (Show)
 
 instance Exception NotCached
 
--- | Ask the server; and if it refuses while someone is signed in, whether
--- they still are (see "Sessions that end").
+-- | Send a request. If the server refuses it while someone is signed in,
+-- also check whether they still are (see "Sessions that end").
 call :: (MonadIO m) => Request -> HttpWiki m (Either Text Response)
 call r = HttpWiki $ do
   env <- ask
@@ -320,7 +330,8 @@ call r = HttpWiki $ do
   pure answered
 
 -- | Ask the server who is asking, after a refusal made while someone was
--- signed in; if that has changed, let everything read go and say so.
+-- signed in. If that has changed, empty the cache and announce the new
+-- session.
 recheckSession :: HttpEnv -> Session -> IO ()
 recheckSession env before = do
   let Transport send = env.transport
@@ -331,8 +342,8 @@ recheckSession env before = do
       atomicModifyIORef' env.cache (const (withSession after emptyCache, ()))
       env.changes.listener.notify after
 
--- | Who is asking now, as signing in or out made them: everything read
--- before was read as someone else.
+-- | Start the cache over with the session that signing in or out
+-- returned: everything cached before was read as someone else.
 startOver :: (MonadIO m) => Session -> HttpWiki m ()
 startOver s = modifyCache (const (withSession s emptyCache))
 
@@ -342,8 +353,8 @@ readCache = HttpWiki (ask >>= \env -> liftIO (readIORef env.cache))
 modifyCache :: (MonadIO m) => (Cache -> Cache) -> HttpWiki m ()
 modifyCache f = HttpWiki (ask >>= \env -> liftIO (atomicModifyIORef' env.cache (\c -> (f c, ()))))
 
--- | A read: from the cache, or asked and then kept, if it is an answer to
--- keep ('kept').
+-- | A read: from the cache, or sent to the server and then cached, if the
+-- response is one to cache ('kept').
 cached
   :: (MonadIO m, FromJSON a)
   => (Cache -> Maybe (Either WikiError a))
@@ -358,12 +369,12 @@ cached look request keep =
       when (kept result) (modifyCache (keep result))
       pure result
 
--- | A read of what changes on the server by itself (the audit log, the
--- server's status): answered from what the page the server rendered
--- carries, once, so that the program's first render is that page; and
--- asked afresh every other time, so that a view opened again shows it as
--- it is now. Only the server's own render keeps what it read, for the page
--- to carry.
+-- | A read of something that changes on the server by itself (the audit
+-- log, the server's status). The first read uses the data the prerendered
+-- page carries, once, so that the program's first render matches that
+-- page. Every later read is sent to the server, so that a view opened
+-- again shows the current state. Only the server's own prerender caches
+-- the response, for the page to carry it.
 once
   :: (MonadIO m, FromJSON a)
   => (Cache -> Maybe (Either WikiError a))
@@ -380,7 +391,7 @@ once look forget request keep = do
       when (immediate && kept result) (modifyCache (keep result))
       pure result
 
--- | A read that cannot be refused: kept when it succeeds.
+-- | A read that cannot be refused: cached when it succeeds.
 cachedAlways
   :: (MonadIO m, FromJSON a)
   => (Cache -> Maybe a)
@@ -389,18 +400,18 @@ cachedAlways
   -> HttpWiki m (Either WikiError a)
 cachedAlways look request keep = cached (fmap Right . look) request (either (const identity) keep)
 
--- | A read that has no @Either@ to return a failure in: thrown, for
--- 'attempt' to catch.
+-- | A read that returns no @Either@: a failure is thrown, for 'attempt'
+-- to catch.
 orThrow :: (MonadIO m) => HttpWiki m (Either WikiError a) -> HttpWiki m a
 orThrow read = read >>= either (liftIO . throwIO) pure
 
--- | A write. Whatever it did, or may have done (an answer that did not
--- come does not say it was not made), what was read before may be out of
--- date.
+-- | A write. It empties the cache, whatever happened: after a write, or a
+-- write that may have happened (a response that did not come does not
+-- mean the write was not made), anything cached may be out of date.
 write :: (MonadIO m, FromJSON a) => Request -> HttpWiki m (Either WikiError a)
 write request = (answer <$> call request) <* modifyCache afterWrite
 
--- | A write that answers with nothing.
+-- | A write whose response has no body.
 write_ :: (MonadIO m) => Request -> HttpWiki m (Either WikiError ())
 write_ request = (answerNothing <$> call request) <* modifyCache afterWrite
 
@@ -424,8 +435,8 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   spaceIconUrl = pure . Links.spaceIconUrl
   pageCounts = orThrow (cachedAlways (\c -> c.pageCounts) (R.get links.spaces.pageCounts) withPageCounts)
 
-  -- Not kept: it is read when the space's permissions are opened, which
-  -- the server never renders, and read again after every change there.
+  -- Not cached: it is read when the space's permissions are opened, which
+  -- the server never prerenders, and read again after every change there.
   spaceAccess sid = answer <$> call (R.get (links.spaces.access sid))
   setSpaceGrant sid subject permission granted = write_ (withJson "PUT" (links.spaces.setGrant sid) SpaceGrantChange {subject, permission, granted})
   moveSpace sid parent = write (withJson "POST" (links.spaces.move sid) SpaceMove {parent})
@@ -445,8 +456,8 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   uploadAttachment pid name mediaType bytes = write (multipart (links.pages.upload pid) attachmentPart name mediaType bytes)
   deleteAttachment aid = write_ (R.delete (links.attachments.delete aid))
 
-  -- The server serves an attachment's bytes at an address of the API's,
-  -- which needs no request to know.
+  -- The server serves an attachment's bytes at an API address, which the
+  -- program can build without a request.
   attachmentUrl = pure . Links.attachmentUrl
   searchPages q = orThrow (cachedAlways (cachedSearch q) (R.get (searchUrl q)) (withSearch q))
   getDraft pid = cached (\c -> Map.lookup pid c.drafts) (R.get (links.pages.draft pid)) (withDraft pid . Just)
@@ -466,10 +477,10 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
     cached (\c -> Map.lookup (pid, at) c.versions) (R.get (links.pages.version pid (VersionTime at))) (withVersion pid at)
   restoreVersion pid at base = write (ifMatch base (R.post (links.pages.restore pid (VersionTime at))))
 
--- | The administration's, over the API's @admin\/…@ endpoints. The
--- directory is kept as any read is, so that the administration a server
--- rendered for an administrator is the program's first render too; the
--- writes let everything go, as every write does.
+-- | The administration's backend, over the API's @admin\/…@ endpoints. The
+-- directory is cached like any read, so that the administration page the
+-- server prerendered for an administrator is also the program's first
+-- render. The writes empty the cache, as every write does.
 instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   directory = cached (\c -> c.directory) (R.get links.admin.directory) withDirectory
   setAdministrator u administrator = write_ (withJson "PUT" (links.admin.setAdministrator u) AdministratorFlag {administrator})
@@ -477,7 +488,7 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   createUser new = write (withJson "POST" links.admin.createUser new)
   setPassword u password = write (withJson "PUT" (links.admin.setPassword u) NewPassword {password})
 
-  -- A mail sent changes nothing the cache keeps.
+  -- Sending a mail changes nothing in the cache.
   sendPasswordLink u = answerNothing <$> call (R.post (links.admin.sendPasswordLink u))
   setDisabled u disabled = write (withJson "PUT" (links.admin.setDisabled u) AccountDisabled {disabled})
   createGroup name = write (withJson "POST" links.admin.createGroup GroupName {name})
@@ -493,26 +504,27 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   unlinkUserIdentity u provider = write_ (R.delete (links.admin.unlinkIdentity u provider))
   removeSecondFactor u = write_ (R.delete (links.admin.removeSecondFactor u))
 
-  -- Kept as the wiki's settings are, so that the administration a server
-  -- rendered is the program's first render. Asking a provider and sending
-  -- a test mail change nothing, so the cache stays.
+  -- Cached like the wiki's settings, so that the administration page the
+  -- server prerendered is also the program's first render. Asking a
+  -- provider and sending a test mail change nothing, so the cache stays.
   serverSettings = cached (\c -> c.server) (R.get links.admin.server) withServerSettings
   setServerSettings new = write (withJson "PUT" links.admin.setServer new)
   checkProvider name given = answer <$> call (withJson "POST" (links.admin.checkProvider name) given)
   sendTestMail address = answer <$> call (withJson "POST" links.admin.testMail MailTest {to = address})
 
-  -- Kept as the server's settings are; a backup made changes what they
-  -- say, and is a write as a change of their settings is. A backup the
-  -- server makes on its schedule is seen when they are read again. An
-  -- answer that says one is under way does not answer again: the part that
-  -- shows them reads them until it is done.
+  -- Cached like the server's settings. Starting a backup changes what the
+  -- backups' status says, so it is a write, like a change of their
+  -- settings. A backup the server makes on its schedule is seen when the
+  -- status is read again. A cached response that says a backup is running
+  -- is not used again: the view that shows it reads the status until the
+  -- backup is done.
   backups = cached (\c -> mfilter (either (const True) (\b -> not b.running)) c.backups) (R.get links.admin.backups) withBackups
   setBackupSettings new = write (withJson "PUT" links.admin.setBackups new)
   backUpNow = write (R.post links.admin.backUpNow)
 
-  -- What changes by itself on the server: the first page of the log and
-  -- the status as the page the server rendered carries them, once, and
-  -- asked afresh after that.
+  -- Things that change on the server by itself: the first page of the
+  -- audit log and the status come from the prerendered page once, and are
+  -- fetched afresh after that ('once').
   activity q
     | q == firstPage = once (\c -> c.activity) forgetActivity (R.get (activityLink q)) withActivity
     | otherwise = answer <$> call (R.get (activityLink q))
@@ -520,11 +532,11 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
       activityLink a = links.admin.activity a.actor (mfilter (> 0) (Just a.offset))
   serverStatus = fmap Just <$> once (\c -> c.status) forgetStatus (R.get links.admin.status) withStatus
 
--- | A page's comments, over the API's @pages\/\<page>\/threads@. A
--- page's threads are kept as any read is, so that a page the server
--- rendered with its comments is the program's first render too; a write
--- folds what it did into them rather than letting everything go (see
--- "Wiki.App.Backend.Http.Cache").
+-- | A page's comments, over the API's @pages\/\<page>\/threads@. A page's
+-- threads are cached like any read, so that a page the server prerendered
+-- with its comments is also the program's first render. A comment write
+-- applies its result to the cached threads instead of emptying the cache
+-- (see "Wiki.App.Backend.Http.Cache").
 instance (MonadIO m) => MonadComments (HttpWiki m) where
   listThreads pid = cached (\c -> Map.lookup pid c.threads) (R.get (links.comments pid).list) (withThreads pid)
   openThread pid anchor body = commentWrite pid ThreadOpened (withJson "POST" (links.comments pid).open NewThread {anchor, body})
@@ -534,26 +546,28 @@ instance (MonadIO m) => MonadComments (HttpWiki m) where
   deleteThread pid tid = commentWrite_ pid (ThreadDeleted tid) (R.delete ((links.comments pid).delete tid))
   setResolved pid tid resolved = commentWrite pid (\t -> ThreadResolved t.id t.resolved) (withJson "PUT" ((links.comments pid).resolve tid) ThreadResolution {resolved})
 
--- | A write to a page's comments, folded into the page's threads kept.
+-- | A write to a page's comments, whose result is applied to the page's
+-- cached threads.
 commentWrite :: (MonadIO m, FromJSON a) => PageId -> (a -> PageEvent) -> Request -> HttpWiki m (Either WikiError a)
 commentWrite pid event request = do
   result <- answer <$> call request
   modifyCache (afterComment pid (event <$> result))
   pure result
 
--- | One that answers with nothing.
+-- | The same, for a write whose response has no body.
 commentWrite_ :: (MonadIO m) => PageId -> PageEvent -> Request -> HttpWiki m (Either WikiError ())
 commentWrite_ pid event request = do
   result <- answerNothing <$> call request
   modifyCache (afterComment pid (event <$ result))
   pure result
 
--- | Notifications, over the API's @notifications…@. What the bell shows,
--- whether a page or a space is watched and whom logins name are kept, so
--- that a page the server rendered with them is the program's first render
--- too; a mark read, a watch chosen and the settings change nothing else
--- read, so they put what they answered in place rather than let
--- everything go.
+-- | Notifications, over the API's @notifications…@ endpoints. The
+-- notifications the bell shows, whether a page or a space is watched, and
+-- which users logins belong to are cached, so that a page the server
+-- prerendered with them is also the program's first render. Marking
+-- notifications read, choosing a watch and changing the settings change
+-- nothing else that is cached, so each puts its response in the cache
+-- instead of emptying it.
 instance (MonadIO m) => MonadNotifications (HttpWiki m) where
   mentionable logins =
     cachedPeople logins <$> readCache >>= \case
@@ -563,8 +577,8 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
         case result of
           Right found -> modifyCache (withPeople logins found) $> found
           Left e@(Unreachable _) -> liftIO (throwIO e)
-          -- Refused (a server from before mentions): nobody, as far as this
-          -- page can tell.
+          -- Refused (by a server from before mentions existed): as far as
+          -- this page can tell, no login belongs to anyone.
           Left _ -> modifyCache (withPeople logins mempty) $> mempty
   notifications = cached (\c -> c.notices) (R.get links.notifications.list) withNotices
   markRead m = do
@@ -578,7 +592,7 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
         WatchSpace sid -> links.notifications.spaceWatch sid
 
   -- A space's watch changes how the pages under it are watched: every
-  -- watch kept goes, and the answer is put in its place.
+  -- cached watch is removed, and the response is cached in their place.
   setWatching target w = do
     let request = case target of
           WatchPage p -> withJson "PUT" (links.notifications.setPageWatch p) Watching {watching = w}
@@ -588,18 +602,19 @@ instance (MonadIO m) => MonadNotifications (HttpWiki m) where
     pure result
   notificationSettings = answer <$> call (R.get links.notifications.settings)
 
-  -- Whether one watches one's own changes how pages are watched.
+  -- Whether one watches one's own changes changes how pages are watched,
+  -- so every cached watch is removed.
   setNotificationSettings change = (answer <$> call (withJson "PUT" links.notifications.setSettings change)) <* modifyCache (\c -> c {watches = mempty})
   unsubscribe token = answerNothing <$> call (R.post (links.unsubscribe token))
 
 -- | The tab's live channel: one per backend, made with it, and opened when
--- a page is first watched.
+-- the first page is watched.
 instance (MonadIO m) => MonadLive (HttpWiki m) where
   liveFeed = HttpWiki (asks (\env -> env.feed))
 
--- | Signing in and out ("Wiki.App.Account"), each of which starts the
--- cache over with the session it answered with. Signing out also lets go
--- of the pages and answers the service worker kept for reading offline
+-- | Signing in and out ("Wiki.App.Account"). Each starts the cache over
+-- with the session the server returned. Signing out also deletes the
+-- pages and responses the service worker stored for reading offline
 -- ("Wiki.App.Offline"), which were read as the user who signed out.
 instance (MonadIO m) => MonadAccount (HttpWiki m) where
   signIn login password = signingIn (withJson "POST" links.signIn Credentials {login, password})
@@ -614,25 +629,26 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
   sessionChanges = HttpWiki (asks (\env -> env.changes.emitter))
   register new = signingIn (withJson "POST" links.register new)
 
-  -- Kept, so that the page of an invitation's link the server rendered is
-  -- the program's first render too.
+  -- Cached, so that the page of an invitation's link that the server
+  -- prerendered is also the program's first render.
   invitationFor token = cached (\c -> Map.lookup token c.invitationAt) (R.get (links.invitations.details token)) (withInvitationAt token)
   acceptInvitation token new = signingIn (withJson "POST" (links.invitations.accept token) (new :: NewAccount))
 
-  -- Read afresh each time they are shown: they change by a round trip
-  -- through a provider's pages, which this program does not see.
+  -- Fetched afresh each time they are shown: they change through a round
+  -- trip to a provider's pages, which this program does not see.
   identities = answer <$> call (R.get links.account.identities)
   unlinkIdentity provider = write (R.delete (links.account.unlinkIdentity provider))
 
-  -- Who is asking stays who they were, and what they may read with it:
-  -- nothing kept is let go.
+  -- The user stays the same, and so does what they may read: nothing
+  -- cached is removed.
   changePassword change = withPassword (withJson "PUT" links.account.changePassword change)
 
-  -- The end of a sign-in, as signing in is: the cookie of the sign-in
-  -- waiting goes with it, as the browser sends every cookie of the wiki's.
+  -- The end of a sign-in, like signing in. The cookie of the sign-in
+  -- waiting for its code is sent with it, since the browser sends every
+  -- cookie of the wiki's.
   confirmSecondFactor code = signingIn (withJson "POST" links.secondFactor OneTimeCode {code})
 
-  -- None of these change who is asking, or anything read.
+  -- None of these change who is asking, or anything cached.
   requestPasswordReset login =
     call (withJson "POST" links.passwordReset.request ResetRequest {login}) <&> \case
       Right r | r.status == 429 -> Left (TooManyAttempts (tooMany r))
@@ -640,9 +656,9 @@ instance (MonadIO m) => MonadAccount (HttpWiki m) where
   resetPassword token password = answerNothing <$> call (withJson "POST" (links.passwordReset.reset token) NewPasswordByMail {password})
   verifyEmail token = answerNothing <$> call (R.post (links.emailVerification token))
 
--- | The account's safety, over the API's @account\/…@ endpoints. Nothing is
--- kept: the panel reads them afresh each time it is opened, and none of
--- them changes what the wiki shows.
+-- | Account security, over the API's @account\/…@ endpoints. Nothing is
+-- cached: the security panel fetches it each time it is opened, and none
+-- of it changes what the wiki shows.
 instance (MonadIO m) => MonadSecurity (HttpWiki m) where
   securityAvailable = pure True
   ownSessions = answer <$> call (R.get links.account.sessions)
@@ -655,9 +671,9 @@ instance (MonadIO m) => MonadSecurity (HttpWiki m) where
   ownEmail = answer <$> call (R.get links.account.email)
   setOwnEmail email password = withPassword (withJson "PUT" links.account.setEmail EmailChange {email, password})
 
--- | A request that signs someone in, as signing in, making oneself an
--- account and accepting an invitation do: the session one then has, with
--- the cache started over as it; or why not.
+-- | A request that signs someone in (signing in, creating one's own
+-- account, accepting an invitation). The result is the new session, with
+-- the cache started over for it, or the reason it failed.
 signingIn :: (MonadIO m) => Request -> HttpWiki m (Either SignInError Session)
 signingIn request =
   withPassword request >>= \case
@@ -667,9 +683,9 @@ signingIn request =
       startOver s
       pure (Right s)
 
--- | A request that carries a password the server checks: its answer, or
--- why not, a password that is not right and too many attempts told apart
--- from the rest.
+-- | A request that carries a password the server checks. The result is
+-- the response, or the reason it failed, with a wrong password and too
+-- many attempts told apart from other failures.
 withPassword :: (MonadIO m, FromJSON a) => Request -> HttpWiki m (Either SignInError a)
 withPassword request = do
   answered <- call request
@@ -680,14 +696,14 @@ withPassword request = do
     Right r | r.status == 429 -> Left (TooManyAttempts (tooMany r))
     _ -> first SignInFailed (answer answered)
 
--- | What a 429 says of how long to wait.
+-- | The wait a 429 response asks for, in words.
 tooMany :: Response -> Text
 tooMany r = case eitherDecodeStrict' r.body of
   Right (ApiError.TooManyRequests why) -> why
   _ -> "Too many attempts: wait a while, then try again."
 
--- | What has been read answers at once; anything else would wait, unless
--- the transport answers at once itself ('newImmediateHttpEnv').
+-- | A cached response answers at once; anything else would wait, unless
+-- the transport itself answers at once ('newImmediateHttpEnv').
 instance (MonadUnliftIO m) => MonadLoad (HttpWiki m) where
   atOnce (HttpWiki program) = HttpWiki . ReaderT $ \env ->
     if env.immediate
@@ -697,22 +713,22 @@ instance (MonadUnliftIO m) => MonadLoad (HttpWiki m) where
   attempt (HttpWiki program) = HttpWiki . ReaderT $ \env ->
     withRunInIO $ \run -> try (run (runReaderT program env))
 
--- | What importing an archive (a zip file of "Wiki.Core.Export"'s) into the
--- server would do: its plan, which changes nothing ("Wiki.Api.Import").
--- The archive goes up as a form's file, which takes as long as an upload
--- may ('uploadTimeout').
+-- | What importing an archive (a zip file in "Wiki.Core.Export"'s format)
+-- into the server would do: its plan, which changes nothing
+-- ("Wiki.Api.Import"). The archive is uploaded as a form's file, which may
+-- take as long as an upload may ('uploadTimeout').
 previewImport :: (MonadIO m) => ByteString -> HttpWiki m (Either WikiError ImportPlan)
 previewImport zipped = answer <$> call (multipartForm links.archive.importPreview [archiveFile zipped])
 
--- | Import an archive into the server as chosen, in one transaction: what
--- it did, or why it did nothing. The server works the plan out again
--- against its content as it is now, so what it did is what to show. A
--- write: what was read before may be out of date.
+-- | Import an archive into the server with these choices, in one
+-- transaction. The result is what the import did, or why it did nothing.
+-- The server works the plan out again against its current content, so the
+-- result is what to show. It is a write, so it empties the cache.
 applyImport :: (MonadIO m) => ByteString -> ImportChoices -> HttpWiki m (Either WikiError ImportSummary)
 applyImport zipped choices =
   write (multipartForm links.archive.importApply [archiveFile zipped, TextPart {part = choicesPart, value = decodeUtf8 (toS (encode choices))}])
 
--- | An archive as the form's file; the server looks at neither its name
--- nor its media type.
+-- | An archive as the form's file; the server ignores the file's name and
+-- media type.
 archiveFile :: ByteString -> Part
 archiveFile zipped = FilePart {part = archivePart, name = "wiki.zip", mediaType = "application/zip", bytes = zipped}

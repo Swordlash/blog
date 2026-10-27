@@ -1,31 +1,33 @@
--- | What a page the server rendered carries for the program: the answers
--- the server's render read, as the backend over HTTP keeps them
+-- | The preload: the cached API responses that a page prerendered by the
+-- server carries for the program. They are the responses the server's
+-- prerender read, in the form the HTTP backend caches them
 -- ("Wiki.App.Backend.Http.Cache"), written into the page as JSON
--- ('Halogen.Static.embed', by 'preloadId') beside the application's HTML.
+-- ('Halogen.Static.embed', under 'preloadId') beside the application's
+-- HTML.
 --
--- The server renders a route's page with the application itself, over
+-- The server prerenders a route's page with the application itself, over
 -- 'Wiki.App.Backend.Http.HttpWiki' and the API in its own process
--- ("Wiki.App.Static.renderServed"), so what it read is exactly what the
--- views ask for at that route, and those are the API's answers to the
--- principal of the request. The program starts its backend with them
--- ('Wiki.App.Backend.Http.newHttpEnvWith', from 'embeddedCache'), so that
--- its first render, which loads through 'Wiki.App.Backend.atOnce', is the
--- page the server sent: 'Halogen.VDom.Driver.hydrateUI' adopts it with
--- nothing to repair and nothing is fetched again. (Decision 18 of the
--- plan.)
+-- ("Wiki.App.Static.renderServed"). So the responses it read are exactly
+-- what the views ask for at that route, as the API answers the user who
+-- sent the request. The program starts its backend with them
+-- ('Wiki.App.Backend.Http.newHttpEnvWith', from 'embeddedCache'). Its
+-- first render loads through 'Wiki.App.Backend.atOnce', so it matches the
+-- page the server sent: 'Halogen.VDom.Driver.hydrateUI' adopts that page
+-- with nothing to repair, and nothing is fetched again (decision 18 of the
+-- plan).
 --
--- The encoding is the API's own: each answer is the JSON the API gives
--- for that read ("Wiki.Api.Types", @wiki-core@'s records), under the
--- read's arguments, with named fields; a refusal is the API's error body
--- ("Wiki.Api.Error"). A page of a space a view reads by itself is left out
--- when the space's list of pages, which holds it, is there, since the
--- backend finds it in the list ('cachedPage'): a page is not carried twice.
+-- The encoding is the API's own. Each response is the JSON the API
+-- returns for that read ("Wiki.Api.Types", @wiki-core@'s records), stored
+-- with the read's arguments, with named fields. A refusal is the API's
+-- error body ("Wiki.Api.Error"). A page that a view read by itself is left
+-- out when the cached list of its space's pages contains it, since the
+-- backend finds it in the list ('cachedPage'): no page is carried twice.
 --
 -- The cache is written and read here directly, field by field, rather
--- than through a record that mirrors it (WP5.9 of docs/PLAN.md). The
--- mirror, a record of twenty-three fields with derived instances, a record
--- for each kind of answer and the two functions between them and the
--- cache, was two thirds of what GHC spent on the module: 4.9 GB of
+-- than through a record that mirrors it (WP5.9 of docs/PLAN.md). That
+-- mirror (a record of twenty-three fields with derived instances, a record
+-- for each kind of response, and the two functions between them and the
+-- cache) took two thirds of the work GHC spent on the module: 4.9 GB of
 -- allocation natively and 5.6 GB on WebAssembly, against 1.5 GB for each
 -- now, for the same bytes in the page.
 module Wiki.App.Backend.Http.Preload
@@ -55,23 +57,23 @@ import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, kept)
 import Wiki.App.Backend.Http.Request (fromApiError, fromSessionInfo, sessionInfo)
 import Wiki.Core.Notification (WatchTarget (..))
 
--- | The id of the page's script that holds the payload.
+-- | The id of the page's script element that holds the preload.
 preloadId :: Text
 preloadId = "wiki-preload"
 
--- | What the backend kept, as the page carries it: every answer it would
--- give at once, and no page twice.
+-- | The cache as the page carries it: every response it would answer at
+-- once with, and no page twice.
 --
--- An object with a field per read: the session as the API gives it
--- (@session@, or @null@); the reads without arguments as their answers
--- (@spaces@, @pageCounts@, or @null@ for one not made); the reads by
--- arguments as lists of objects, each with the read's arguments and its
--- answer or @error@ (@spacesAt@, @pages@, @pagesAt@, @drafts@, @searches@,
--- @versionLists@, @versions@ always, and @invitationsAt@, @postDetails@,
--- @threads@, @watches@ as @null@ when empty, since they came later); the
--- administration's reads as an object with their answer or @error@, or
--- @null@; and @people@, by login, or @null@ when empty. A payload written
--- before a field there was reads as without it.
+-- An object with a field per read. The session is as the API returns it
+-- (@session@, or @null@). The reads without arguments hold their response
+-- (@spaces@, @pageCounts@, or @null@ for a read not made). The reads with
+-- arguments are lists of objects, each with the read's arguments and its
+-- response or @error@: @spacesAt@, @pages@, @pagesAt@, @drafts@,
+-- @searches@, @versionLists@ and @versions@ always, and @invitationsAt@,
+-- @postDetails@, @threads@ and @watches@ as @null@ when empty, since they
+-- were added later. The administration's reads are an object with their
+-- response or @error@, or @null@. @people@ is by login, or @null@ when
+-- empty. A preload written before a field existed reads as without it.
 preloadJSON :: Cache -> Value
 preloadJSON c =
   object
@@ -100,7 +102,7 @@ preloadJSON c =
     , "watches" .= orNull (answers "watch" watchTarget c.watches)
     ]
   where
-    -- A page its space's list holds as it is is found there.
+    -- A page that its space's cached list holds unchanged is found there.
     apart (space, path) p = cachedPage space path c {pageAt = mempty} /= Just p
     orNull = \case
       [] -> Nothing
@@ -109,34 +111,36 @@ preloadJSON c =
       WatchPage p -> ["page" .= p]
       WatchSpace s -> ["space" .= s]
 
--- | Each answer kept, as an object of its read's arguments and the answer.
+-- | Each cached response, as an object of its read's arguments and the
+-- response.
 answers :: (ToJSON a) => Key -> (k -> [Pair]) -> Map k (Either WikiError a) -> [Value]
 answers field arguments m = [object (arguments k <> answerFields field a) | (k, a) <- Map.toList m, kept a]
 
--- | A read without arguments, as an object of its answer, if it is kept.
+-- | A read without arguments, as an object of its response, if it is
+-- cached.
 answer :: (ToJSON a) => Key -> Maybe (Either WikiError a) -> Maybe Value
 answer field = fmap (object . answerFields field) . mfilter kept
 
--- | An answer as its read's own field, or a refusal as @error@, the API's
--- error body.
+-- | A response in its read's own field, or a refusal in @error@, as the
+-- API's error body.
 answerFields :: (ToJSON a) => Key -> Either WikiError a -> [Pair]
 answerFields field = \case
   Right a -> [field .= a]
   Left e -> ["error" .= refusal e]
 
--- | Only what 'kept' keeps is ever written, which is an answer or a
--- refusal of the API's.
+-- | The API error for a cached refusal. Only what 'kept' accepts is ever
+-- written, which is a response or one of the API's refusals.
 refusal :: WikiError -> ApiError
 refusal = \case
   NotFound -> ApiError.NotFound
   Forbidden -> ApiError.Forbidden
   Conflict t -> ApiError.Conflict t
   Invalid t -> ApiError.Invalid t
-  -- Never kept, so never here; said as the nearest refusal rather than
-  -- not at all.
+  -- Never cached, so never written; mapped to the nearest refusal rather
+  -- than left out.
   Unreachable t -> ApiError.Invalid t
 
--- | The backend's cache as the page's payload says ('preloadJSON').
+-- | Parse the preload into the backend's cache ('preloadJSON' writes it).
 parsePreload :: Value -> Parser Cache
 parsePreload = withObject "the page's payload" $ \o -> do
   session <- fmap fromSessionInfo <$> o .:? "session"
@@ -169,30 +173,31 @@ parsePreload = withObject "the page's payload" $ \o -> do
         Just p -> pure (WatchPage p)
         Nothing -> WatchSpace <$> e .: "space"
 
--- | Answers by their read's arguments, from the objects 'answers' writes.
+-- | Responses by their read's arguments, from the objects 'answers'
+-- writes.
 byArguments :: (Ord k, FromJSON a) => Key -> (Object -> Parser k) -> [Value] -> Parser (Map k (Either WikiError a))
 byArguments field arguments = fmap Map.fromList . traverse (withObject "an answer" (\e -> (,) <$> arguments e <*> answerIn field e))
 
--- | An answer in its read's own field, or the refusal in @error@.
+-- | A response in its read's own field, or the refusal in @error@.
 answerIn :: (FromJSON a) => Key -> Object -> Parser (Either WikiError a)
 answerIn field o =
   o .:? "error" >>= \case
     Just e -> pure (Left (fromApiError e))
     Nothing -> Right <$> o .: field
 
--- | The payload as the JSON text the page carries.
+-- | The preload as the JSON text the page carries.
 encodePreload :: Cache -> Text
 encodePreload = decodeUtf8 . toS . encode . preloadJSON
 
--- | The cache a payload holds, or why it cannot be read.
+-- | The cache a preload holds, or the reason it cannot be read.
 decodePreload :: Text -> Either Text Cache
 decodePreload = first toS . (parseEither parsePreload <=< eitherDecodeStrict') . encodeUtf8
 
--- | What the page the program runs in carries: the cache to start the
+-- | The preload of the page the program runs in: the cache to start the
 -- backend with ('Wiki.App.Backend.Http.newHttpEnvWith'). A page without a
--- payload (the server's build page, which the server sends when it cannot
--- render one) starts with nothing read, and so does a payload that cannot
--- be read, which says why: it costs a fetch, not the page.
+-- preload (the build page the server sends when it cannot prerender one)
+-- starts with an empty cache. So does a preload that cannot be read, with
+-- the reason: that costs a fetch, not the page.
 embeddedCache :: (MonadBrowserDOM m) => m (Either Text Cache)
 embeddedCache =
   readEmbedded preloadId <&> \case

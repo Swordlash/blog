@@ -1,28 +1,31 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | The wiki kept in memory: the serverless demo's backend, and the one the
--- contract tests describe the class with.
+-- | The in-memory backend: the implementation of
+-- 'Wiki.App.Backend.MonadWiki' that keeps the whole wiki in memory. The
+-- serverless demo runs on it, and the contract tests are written against
+-- it.
 --
--- 'MemWiki' adds an 'IORef' with the whole wiki in it to any base monad, so
--- the same backend runs natively over 'IO' (in the tests) and in the browser
--- over 'Halogen.VDom.DOM.Monad.BrowserDOM', where it derives the DOM classes
--- so that Halogen components run in it. Every operation is one of the pure
--- functions of "Wiki.App.Backend.Mem.State", applied atomically to the
--- 'IORef'.
+-- 'MemWiki' adds an 'IORef' holding the whole wiki to any base monad. So
+-- the same backend runs natively over 'IO' (in the tests) and in the
+-- browser over 'Halogen.VDom.DOM.Monad.BrowserDOM', where it derives the
+-- DOM classes so that Halogen components run in it. Every operation is one
+-- of the pure functions of "Wiki.App.Backend.Mem.State", applied
+-- atomically to the 'IORef'.
 --
--- The demo keeps its wiki in the browser as well, in IndexedDB, so that a
--- reload finds the edits made before it: 'openMemWiki' reads the wiki back
--- (or writes the demo's content out, the first time), and a 'MemWiki' run
--- with the 'MemStore' it gives writes the records every successful write
--- changed, in one transaction, before the write returns. What is kept, and
--- how, is "Wiki.App.Backend.Mem.Persist". A wiki made with 'newMemWiki' and
--- run with 'runMemWiki' (the prerender, most tests) is kept nowhere else.
+-- The demo also saves its wiki in the browser, in IndexedDB, so that a
+-- reload finds the edits made before it. 'openMemWiki' loads the wiki
+-- from IndexedDB, or, the first time, saves the demo's content there. A
+-- 'MemWiki' run with the 'MemStore' that 'openMemWiki' returns saves the
+-- records each successful write changed, in one IndexedDB transaction,
+-- before the write returns. "Wiki.App.Backend.Mem.Persist" says what is
+-- saved and how. A wiki made with 'newMemWiki' and run with 'runMemWiki'
+-- (the prerender, most tests) is saved nowhere.
 --
--- There are no passwords: 'switchUser' says who is signed in, which is how
+-- There are no passwords: 'switchUser' sets who is signed in, which is how
 -- the demo shows the same wiki as different people. The administration's
--- accounts are kept as far as the demo can: whether a user has a password
--- (not the password), and whether their login is disabled, which makes
--- them nobody here.
+-- account data is stored as far as the demo can: whether a user has a
+-- password (not the password itself), and whether their login is
+-- disabled, which makes them count as nobody signed in.
 module Wiki.App.Backend.Mem
   ( MemWiki (..)
   , runMemWiki
@@ -78,10 +81,10 @@ import Wiki.Core.Id (BlobId, UserId)
 import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.User (User (..))
 
--- The browser's half of the attachments uploaded into the demo; see
+-- The browser's side of the attachments uploaded into the demo; see
 -- jsbits/object-url.js. Natively these are inert, and 'objectUrl' does not
--- call them. And a word on the console, which natively says nothing: there
--- the tests ask 'openMemWiki' what it found instead.
+-- call them. Also a message on the browser's console, which natively says
+-- nothing: there the tests check what 'openMemWiki' found instead.
 $( browserJS
      ["jsbits/object-url.js", "jsbits/console.js", "jsbits/databases.js"]
      [ ("js_object_url", "wiki_object_url", Unsafe, [t|JSText -> JSText -> IO JSText|])
@@ -95,23 +98,23 @@ $( browserJS
 newtype MemWiki m a = MemWiki (ReaderT MemEnv m a)
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadUnliftIO, PrimMonad)
 
--- | The wiki, and the store it is kept in besides memory, if any.
+-- | The wiki, and the IndexedDB store it is saved in, if any.
 data MemEnv = MemEnv
   { wiki :: IORef MemState
   , store :: Maybe MemStore
   }
 
--- The DOM classes come through 'ReaderT', whose instances run the reader in
--- the DOM's callbacks; so a component running in 'MemWiki' over the browser's
--- DOM still reaches the same wiki from an event handler.
+-- The DOM classes come through 'ReaderT', whose instances run the reader
+-- inside the DOM's callbacks. So a component running in 'MemWiki' over the
+-- browser's DOM still reaches the same wiki from an event handler.
 deriving newtype instance (MonadDOM m) => MonadDOM (MemWiki m)
 
 deriving newtype instance (MonadAttributes m) => MonadAttributes (MemWiki m)
 
 deriving newtype instance (MonadBrowserDOM m) => MonadBrowserDOM (MemWiki m)
 
--- What the application's components need of their monad besides the wiki:
--- the islands' libraries, and fresh ids for their refs.
+-- What the application's components need from their monad besides the
+-- wiki: the islands' JavaScript libraries, and fresh ids for their refs.
 deriving newtype instance (MonadIslands m) => MonadIslands (MemWiki m)
 
 deriving newtype instance (MonadAssistant m) => MonadAssistant (MemWiki m)
@@ -119,12 +122,12 @@ deriving newtype instance (MonadAssistant m) => MonadAssistant (MemWiki m)
 instance (MonadUUID m) => MonadUUID (MemWiki m) where
   generateV4 = MemWiki (lift generateV4)
 
--- | Run a program against the wiki in the 'IORef', kept nowhere else.
+-- | Run a program against the wiki in the 'IORef', saving nothing.
 runMemWiki :: IORef MemState -> MemWiki m a -> m a
 runMemWiki = runMemWikiWith Nothing
 
--- | Run a program against the wiki in the 'IORef', writing what it changes
--- through to the store, if there is one: the store 'openMemWiki' read the
+-- | Run a program against the wiki in the 'IORef', and save what it
+-- changes to the store, if there is one: the store 'openMemWiki' loaded the
 -- wiki from.
 runMemWikiWith :: Maybe MemStore -> IORef MemState -> MemWiki m a -> m a
 runMemWikiWith store wiki (MemWiki program) = runReaderT program MemEnv {wiki, store}
@@ -133,27 +136,27 @@ runMemWikiWith store wiki (MemWiki program) = runReaderT program MemEnv {wiki, s
 newMemWiki :: (MonadIO m) => MemState -> m (IORef MemState)
 newMemWiki = liftIO . newIORef
 
--- | Who is signed in from now on: one of the wiki's users, or nobody. An id
--- that is not one of the users' is nobody too.
+-- | Set who is signed in from now on: one of the wiki's users, or nobody.
+-- An id that belongs to no user means nobody.
 switchUser :: (MonadIO m) => Maybe UserId -> MemWiki m ()
 switchUser u = MemWiki $ do
   env <- ask
   liftIO (atomicModifyIORef' env.wiki (\st -> (st {current = u}, ())))
 
--- | Everyone who can be signed in, by login: what the demo's switcher
--- offers. A disabled user cannot be, and is left out.
+-- | Every user who can be signed in, by login: the list the demo's user
+-- switcher offers. A disabled user cannot be, and is left out.
 memUsers :: (MonadIO m) => MemWiki m [User]
 memUsers = (\st -> sortOn (\u -> u.login) [u | u <- Map.elems st.users, not (Set.member u.id st.disabled)]) <$> readState
 
 readState :: (MonadIO m) => MemWiki m MemState
 readState = MemWiki (ask >>= \env -> liftIO (readIORef env.wiki))
 
--- | A read: the store as it is now, through a pure function of it.
+-- | A read: a pure function applied to the wiki as it is now.
 query :: (MonadIO m) => (MemState -> a) -> MemWiki m a
 query f = f <$> readState
 
--- | A write, applied atomically: either the whole change or none of it; and
--- then, if it was made, kept.
+-- | A write, applied atomically: either the whole change or none of it.
+-- If the change was made, it is then saved.
 write :: (MonadIO m) => Write a -> MemWiki m (Either WikiError a)
 write f = MemWiki $ do
   env <- ask
@@ -161,7 +164,7 @@ write f = MemWiki $ do
     Left e -> (st, Left e)
     Right (st', a) -> (st', Right a)
 
--- | A write that takes the time it happens at.
+-- | A write that is given the time it happens at.
 writeAt :: (MonadIO m) => (UTCTime -> Write a) -> MemWiki m (Either WikiError a)
 writeAt f = liftIO getCurrentTime >>= write . f
 
@@ -210,9 +213,9 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
     SourceUrl url -> pure url
     SourceBlob blob -> blobUrl a.mediaType blob
 
--- | The address of bytes the store keeps, of a media type: an object URL,
--- made the first time it is asked for and kept; the empty text for bytes
--- the store does not have.
+-- | The URL of bytes the store holds, with a media type: an object URL,
+-- made the first time it is asked for and then remembered. The empty text
+-- for bytes the store does not have.
 blobUrl :: (MonadIO m) => Text -> BlobId -> MemWiki m Text
 blobUrl mediaType blob =
   readState >>= \st -> case (Map.lookup blob st.objectUrls, Map.lookup blob st.blobs) of
@@ -220,8 +223,8 @@ blobUrl mediaType blob =
     (Nothing, Nothing) -> pure ""
     (Nothing, Just bytes) -> do
       made <- liftIO (objectUrl mediaType (Base64.encode bytes))
-      -- Two calls at once can each make a URL; the one stored first
-      -- wins, and the other is let go so that its bytes are not kept.
+      -- Two calls at the same time can each make a URL. The one stored
+      -- first wins, and the other is revoked so that its bytes are freed.
       MemWiki $ do
         env <- ask
         liftIO $ do
@@ -233,9 +236,9 @@ blobUrl mediaType blob =
           when (kept /= made) (js_revoke_object_url (toJSText made))
           pure kept
 
--- | The administration's, on the same store: its writes are kept as every
--- other write is, the groups and the global grants being records of the
--- store already ("Wiki.App.Backend.Mem.Persist").
+-- | The administration's backend, on the same wiki. Its writes are saved
+-- like every other write: the groups and the global grants are already
+-- records of the store ("Wiki.App.Backend.Mem.Persist").
 instance (MonadIO m) => MonadAdmin (MemWiki m) where
   directory = query directoryIn
   setAdministrator u = write . setAdministratorIn u
@@ -253,8 +256,8 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   setWikiSettings = write . setWikiSettingsIn
   invitations = liftIO getCurrentTime >>= \now -> query (invitationsIn now)
 
-  -- The secret is as random as a server's, though the demo shows it only
-  -- to whoever made it, and no link of the demo's makes an account.
+  -- The secret is as random as a server's, although the demo shows it only
+  -- to the person who made it, and no link in the demo creates an account.
   invite email = do
     token <- liftIO (show <$> generateV4)
     writeAt (\now -> inviteIn now token email)
@@ -262,27 +265,28 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   unlinkUserIdentity u = query . unlinkUserIdentityIn u
   removeSecondFactor = query . removeSecondFactorIn
 
-  -- Kept for the tab's life, as the wiki's settings are; a provider is not
-  -- asked and no mail is sent, which take a server.
+  -- Stored for the tab's life, like the wiki's settings. No provider is
+  -- asked and no mail is sent: those need a server.
   serverSettings = query serverSettingsIn
   setServerSettings = write . setServerSettingsIn
   checkProvider name = query . checkProviderIn name
   sendTestMail = query . sendTestMailIn
 
-  -- None: the demo's wiki is in the browser, which the section says.
+  -- None: the demo's wiki is in the browser, and the backups section says
+  -- so.
   backups = query backupsIn
   setBackupSettings _ = query refuseBackupsIn
   backUpNow = query refuseBackupsIn
 
-  -- Neither: the demo keeps no audit log and has no server, which the
-  -- sections say.
+  -- Neither: the demo keeps no audit log and has no server, and the
+  -- sections say so.
   activity _ = query activityIn
   serverStatus = query serverStatusIn
 
--- | A page's comments, on the same store, kept as every other write is
--- (each page's threads a record of "Wiki.App.Backend.Mem.Persist"'s). The
--- demo has no live channel: what someone else comments is nobody else's
--- in a demo, which has one reader at a time.
+-- | A page's comments, on the same wiki, saved like every other write
+-- (each page's threads are a record of "Wiki.App.Backend.Mem.Persist").
+-- The demo has no live channel: it has one reader at a time, so nobody
+-- else's comments need to arrive.
 instance (MonadIO m) => MonadComments (MemWiki m) where
   listThreads = query . listThreadsIn
   openThread pid anchor = writeAt . openThreadIn pid anchor
@@ -292,10 +296,10 @@ instance (MonadIO m) => MonadComments (MemWiki m) where
   deleteThread pid = write . deleteThreadIn pid
   setResolved pid tid = write . setResolvedIn pid tid
 
--- | Notifications, on the same store, kept as every other write is (each
--- user's a record of "Wiki.App.Backend.Mem.Persist"'s): the bell and the
--- watches, with no mail and no live channel. One switches users to see
--- what another was told.
+-- | Notifications, on the same wiki, saved like every other write (each
+-- user's are a record of "Wiki.App.Backend.Mem.Persist"): the bell and the
+-- watches, with no mail and no live channel. To see what another user was
+-- notified of, switch to that user.
 instance (MonadIO m) => MonadNotifications (MemWiki m) where
   mentionable = query . mentionableIn
   notifications = query notificationsIn
@@ -306,8 +310,8 @@ instance (MonadIO m) => MonadNotifications (MemWiki m) where
   setNotificationSettings = write . setNotificationSettingsIn
   unsubscribe _ = pure (Left (Invalid "The demo sends no mail, so there is none to turn off."))
 
--- | Everything is in memory: every read answers at once, and nothing is
--- ever out of reach.
+-- | Everything is in memory: every read answers at once (synchronously,
+-- without waiting for a network), and the wiki is never unreachable.
 instance (MonadIO m) => MonadLoad (MemWiki m) where
   atOnce = fmap Just
   attempt = fmap Right
@@ -322,7 +326,7 @@ objectUrl mediaType base64
 --------------------------------------------------------------------------------
 -- Kept in the browser
 
--- | Where a wiki is kept besides memory: a database of
+-- | Where a wiki is saved besides memory: an IndexedDB database with
 -- "Wiki.App.Backend.Mem.Persist"'s stores, reached through the monad
 -- 'openMemWiki' was called in.
 data MemStore = MemStore
@@ -331,49 +335,50 @@ data MemStore = MemStore
   , wipe :: IO ()
   -- ^ 'IDB.deleteDatabase'.
   , kept :: IORef Records
-  -- ^ What the stores hold, as far as this program knows: what the next
-  -- write is worked out against, so that a write that failed is made again
-  -- with the next one.
+  -- ^ What the stores hold, as far as this program knows. The next write
+  -- is worked out against it, so that a write that failed to save is saved
+  -- again with the next one.
   , lock :: MVar ()
-  -- ^ Held from a change in memory until it is written out, so that the
-  -- stores get the changes in the order memory did.
+  -- ^ Held from a change in memory until the change is saved, so that the
+  -- stores get the changes in the same order as memory did.
   }
 
--- | A wiki read back from the browser, or written out to it.
+-- | A wiki loaded from the browser, or saved to it for the first time.
 data Opened = Opened
   { wiki :: IORef MemState
   , store :: Maybe MemStore
-  -- ^ For 'runMemWikiWith'; 'Nothing' when the wiki cannot be kept.
+  -- ^ For 'runMemWikiWith'; 'Nothing' when the wiki cannot be saved.
   , found :: Found
   }
 
--- | What 'openMemWiki' found, and so did.
+-- | What 'openMemWiki' found, and what it did about it.
 data Found
-  = -- | A wiki written out before, which it read back.
+  = -- | A wiki saved before, which it loaded.
     Restored
-  | -- | Nothing: it wrote the seed out.
+  | -- | Nothing: it saved the demo's content.
     Seeded
   | -- | Something it could not read (a record that does not decode, a
     -- database a newer version of the program has upgraded, or one without
-    -- a store this version keeps), and why: it deleted the database and
-    -- wrote the seed out.
+    -- a store this version needs), and why. It deleted the database and
+    -- saved the demo's content.
     Reseeded Text
-  | -- | No way to keep anything (no IndexedDB, or one that refuses), and
-    -- why: the wiki is the seed, kept in memory only.
+  | -- | No way to save anything (no IndexedDB, or one that refuses), and
+    -- why. The wiki is the demo's content, in memory only.
     NotKept Text
   deriving stock (Eq, Show)
 
--- | The wiki kept in this database, read back with the people and global
--- grants of the seed (see "Wiki.App.Backend.Mem.Persist"); or, the first
--- time, the seed itself, written out. Called before anything runs against
--- the wiki: it waits for IndexedDB, so not from 'Halogen.liftEffect'.
+-- | Load the wiki saved in this database, with the people and global
+-- grants of the demo's content (see "Wiki.App.Backend.Mem.Persist"); or,
+-- the first time, save the demo's content there. It is called before
+-- anything runs against the wiki. It waits for IndexedDB, so it must not
+-- be called from 'Halogen.liftEffect'.
 --
--- It never fails for want of a store. A database it cannot read is deleted
--- and the seed written out in its place: the demo's content is a demo's,
--- and a program that cannot read it can do nothing better with it. Without
--- a database at all the wiki is the seed, in memory, as before there was
--- one. Either way the demo starts with its own content, and says why on the
--- browser's console.
+-- It never fails for lack of a store. A database it cannot read is
+-- deleted and the demo's content saved in its place: the content is only
+-- demo content, and a program that cannot read it can do nothing better
+-- with it. Without any database, the wiki is the demo's content in memory,
+-- as before there was a database. Either way the demo starts with its own
+-- content, and says why on the browser's console.
 openMemWiki :: (MonadIndexedDB n, MonadUnliftIO n) => Database -> MemState -> n Opened
 openMemWiki db seed = withRunInIO $ \run -> do
   lock <- newMVar ()
@@ -381,7 +386,7 @@ openMemWiki db seed = withRunInIO $ \run -> do
       wipe = run (IDB.deleteDatabase db.name)
       writeAll = run . IDB.writeMany db
       storeHolding held = (\kept -> MemStore {writeAll, wipe, kept, lock}) <$> newIORef held
-      -- The seed's records over whatever the stores hold, in one
+      -- The demo's records written over whatever the stores hold, in one
       -- transaction, so that a reload never finds half of them.
       writeOut held = do
         store <- storeHolding held
@@ -395,12 +400,13 @@ openMemWiki db seed = withRunInIO $ \run -> do
   (start, (store, found)) <-
     tried readAll >>= \case
       Left e
-        -- Not the database this program keeps: one a newer version has
+        -- Not the database this program uses: one a newer version has
         -- upgraded, or one an older build made with fewer stores.
         | notOurs e.failure -> (seed,) <$> reseed (describe e)
         | otherwise -> pure (seed, (Nothing, NotKept (describe e)))
       Right held -> case restore held of
-        -- Signed in as the seed is, as the prerendered page shows it.
+        -- Signed in as the demo's content says, as the prerendered page
+        -- shows it.
         Stored restored -> (restored {current = seed.current},) . (,Restored) . Just <$> storeHolding held
         Unseeded -> (seed,) . either (\e -> (Nothing, NotKept (describe e))) ((,Seeded) . Just) <$> writeOut held
         Unreadable why -> (seed,) <$> reseed why
@@ -411,9 +417,9 @@ openMemWiki db seed = withRunInIO $ \run -> do
   wiki <- newIORef start
   pure Opened {wiki, store, found}
 
--- | Put the wiki back as the seed has it, who is signed in included, and,
--- if it is kept, delete the database and write the seed out again: the
--- demo's "Reset the demo content".
+-- | Put the wiki back to the demo's content, including who is signed in.
+-- If the wiki is saved, also delete the database and save the content
+-- again. This is the demo's "Reset the demo content".
 resetMemWiki :: (MonadIO m) => MemState -> MemWiki m ()
 resetMemWiki seed = MemWiki $ do
   env <- ask
@@ -435,10 +441,11 @@ memArchive app = do
   now <- liftIO getCurrentTime
   toArchive now app <$> readState
 
--- | Replace the whole wiki with what an archive holds, staying signed in as
--- the same user if the archive has them. If the wiki is kept, the database
--- gets the archive's records in one transaction first, and if that fails
--- nothing changes, in the database or in memory, and the reason is given.
+-- | Replace the whole wiki with an archive's content, staying signed in as
+-- the same user if the archive has them. If the wiki is saved, the
+-- database gets the archive's records in one transaction first. If that
+-- fails, nothing changes, in the database or in memory, and the result is
+-- the reason.
 importMemWiki :: (MonadIO m) => Archive -> MemWiki m (Either Text ())
 importMemWiki archive = MemWiki $ do
   env <- ask
@@ -460,25 +467,27 @@ importMemWiki archive = MemWiki $ do
 --------------------------------------------------------------------------------
 -- The demo's wiki, read from elsewhere
 
--- | Whether this browser keeps a database of this name in this origin,
--- found without opening it, which would make it (see jsbits/databases.js):
--- what the server's administration asks before it offers to import the
--- demo's data, which the demo leaves here when it was served from the same
--- address. Natively there is no browser, and nothing is found.
+-- | Whether this browser has a database of this name for this origin,
+-- found without opening it, since opening would create it (see
+-- jsbits/databases.js). The server's administration checks this before it
+-- offers to import the demo's data, which the demo leaves here when it was
+-- served from the same address. Natively there is no browser, and nothing
+-- is found.
 memWikiFound :: (MonadIO n) => Database -> n Bool
 memWikiFound db
   | inBrowser = liftIO (evaluate =<< js_database_exists (toJSText db.name))
   | otherwise = pure False
 
--- | The wiki kept in this database, only read: not seeded when it holds
--- none, nor deleted and seeded again when it cannot be read, as
--- 'openMemWiki' does for the demo, since what is read here is someone's
--- work, to be taken elsewhere; or why it cannot be read. Its drafts are
--- read too, though an export leaves them out.
+-- | Read the wiki saved in this database, or the reason it cannot be read.
+-- Unlike 'openMemWiki' for the demo, this changes nothing: an empty
+-- database gets no demo content, and an unreadable one is not deleted,
+-- because what is read here is someone's work, to be taken elsewhere. Its
+-- drafts are read too, although an export leaves them out.
 --
 -- It opens the database at this program's version, as the demo would on
--- its next visit, which adds a store a database written by an older demo
--- lacks and changes nothing else; a database a newer demo wrote is refused.
+-- its next visit. That adds a store a database written by an older demo
+-- lacks, and changes nothing else. A database a newer demo wrote is
+-- refused.
 readMemWiki :: (MonadIndexedDB n, MonadUnliftIO n) => Database -> n (Either Text MemState)
 readMemWiki db = withRunInIO $ \run ->
   tried (Map.fromList <$> for storeNames (\name -> (name,) <$> run (IDB.getAll db name))) <&> \case
@@ -488,28 +497,28 @@ readMemWiki db = withRunInIO $ \run ->
       Unseeded -> Left "it holds no wiki"
       Unreadable why -> Left why
 
--- | Whether the wiki is kept anywhere but in memory.
+-- | Whether the wiki is saved anywhere besides memory.
 memKept :: (Monad m) => MemWiki m Bool
 memKept = MemWiki (asks (\env -> isJust env.store))
 
--- | A change, and then, if it was made and the wiki is kept, whatever it
--- changed written out, before the change returns.
+-- | Run a change, and then, if it was made and the wiki is saved, save
+-- what it changed before the change returns.
 keeping :: MemEnv -> IO (Either e a) -> IO (Either e a)
 keeping env change = serially env $ do
   result <- change
   for_ env.store $ \store -> when (isRight result) (keep store =<< readIORef env.wiki)
   pure result
 
--- | One change at a time, while the wiki is kept, so that what is written
--- out follows memory.
+-- | Run one change at a time while the wiki is saved, so that what is
+-- saved follows memory in order.
 serially :: MemEnv -> IO a -> IO a
 serially env act = case env.store of
   Nothing -> act
   Just store -> withMVar store.lock (const act)
 
--- | Write out what differs between the wiki and what the stores hold. A
--- failure is said on the console and the change is kept in memory; the
--- next write tries again, since the stores are then still behind.
+-- | Save what differs between the wiki in memory and what the stores hold.
+-- A failure is reported on the console and the change stays in memory;
+-- the next write tries again, since the stores are then still behind.
 keep :: MemStore -> MemState -> IO ()
 keep store st = do
   before <- readIORef store.kept
@@ -521,8 +530,8 @@ keep store st = do
         Left e -> warn ("A change to the wiki could not be kept in this browser (" <> describe e <> "); it is tried again with the next one.")
         Right () -> writeIORef store.kept after
 
--- | Whether a failure to read says the database is not the one this
--- program keeps, rather than that there is no keeping anything.
+-- | Whether a failure to read means the database is not the one this
+-- program uses, rather than that nothing can be saved at all.
 notOurs :: IndexedDBFailure -> Bool
 notOurs = \case
   VersionTooLow -> True

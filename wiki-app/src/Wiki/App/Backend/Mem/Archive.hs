@@ -1,5 +1,6 @@
--- | The in-memory wiki as an export archive ("Wiki.Core.Export") and back:
--- what the demo's "Export the wiki" writes and "Import a wiki" reads.
+-- | Conversion between the in-memory wiki and an export archive
+-- ("Wiki.Core.Export"): what the demo's "Export the wiki" writes and
+-- "Import a wiki" reads.
 module Wiki.App.Backend.Mem.Archive
   ( toArchive
   , fromArchive
@@ -35,15 +36,15 @@ toArchive createdAt app st =
     , pages = Map.elems st.pages
     , blobs = st.blobs
     , -- The demo keeps no audit log (WP4.10 of docs/PLAN.md): its
-      -- administration is its one reader's, in this browser.
+      -- administration has one user, in this browser.
       audit = []
     }
 
 -- | The wiki an archive holds, with nobody signed in. Its ids are the
--- archive's, and the counter new ids are made from starts after the
--- largest of them ('nextCounter'). An archive has no history: each page's
--- starts with the page as it is in it ('completeVersions'), and the
--- archive's audit log is left out, as the demo keeps none.
+-- archive's, and the counter for new ids starts after the largest of them
+-- ('nextCounter'). An archive has no history: each page's history starts
+-- with the page as the archive has it ('completeVersions'). The archive's
+-- audit log is left out, since the demo keeps none.
 fromArchive :: Archive -> MemState
 fromArchive a =
   completeVersions (prepareSearch st {counter = nextCounter st})
@@ -58,13 +59,13 @@ fromArchive a =
         , pages = Map.fromList [(p.id, p) | p <- a.pages]
         , blobs = a.blobs
         , objectUrls = mempty
-        , -- An archive has no drafts: they are their authors' own, and the
-          -- pages they were written for are not these.
+        , -- An archive has no drafts: drafts belong to their authors, and
+          -- were written for other pages than these.
           drafts = mempty
         , versions = mempty
         , searchText = mempty
-        , -- Nor accounts: its users come with neither a disabled login
-          -- nor a password, as the server imports them.
+        , -- Nor account flags: its users come with neither a disabled
+          -- login nor a password, as the server imports them.
           disabled = mempty
         , passwords = mempty
         , -- Nor the wiki's settings, which are the demo's own, nor its
@@ -74,8 +75,9 @@ fromArchive a =
         , server = noServerSettings
         , -- Nor comments (docs/export.md).
           threads = mempty
-        , -- Nor notifications, watches or how anyone is told: they are
-          -- each user's own, and about pages of the wiki exported.
+        , -- Nor notifications, watches or notification choices: they
+          -- belong to each user, and are about the pages of the wiki that
+          -- was exported.
           notices = mempty
         , watches = mempty
         , choices = mempty
@@ -83,10 +85,10 @@ fromArchive a =
         , counter = 1
         }
 
--- | The number after the largest that ends one of the wiki's ids: the
--- in-memory wiki makes them as @space-7@, @page-8@, and a new one must not
--- be one an imported record has. Ids made some other way (a server's) end
--- in no number and do not count.
+-- | The number after the largest number that ends one of the wiki's ids.
+-- The in-memory wiki makes ids like @space-7@ and @page-8@, and a new id
+-- must not equal one an imported record has. Ids made some other way (a
+-- server's) end in no number and do not count.
 nextCounter :: MemState -> Natural
 nextCounter st = 1 + foldl' max 0 (mapMaybe numbered ids)
   where

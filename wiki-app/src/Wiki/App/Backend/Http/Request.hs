@@ -1,20 +1,21 @@
--- | The requests the backend over HTTP ("Wiki.App.Backend.Http") makes, and
--- what it makes of their answers, as plain data and pure functions: what
--- the native tests check, and what any transport (the browser's @fetch@, or
--- a server's application called in the same process) carries.
+-- | The requests the HTTP backend ("Wiki.App.Backend.Http") sends, and how
+-- it reads their responses, as plain data and pure functions. The native
+-- tests check them, and any transport carries them: the browser's
+-- @fetch@, or the server's application called in the same process.
 --
--- Every address is one of "Wiki.Api.Links"', relative to the page's
--- @\<base href>@, so the client cannot ask for a path the server does not
--- serve. A body is JSON, or, for an attachment or an archive to import, a
--- multipart form written here ('multipart', 'multipartForm'), so that a
--- request is bytes on every transport and the browser's half is one call
--- of @fetch@.
+-- Every address comes from "Wiki.Api.Links" and is relative to the
+-- page's @\<base href>@, so the client cannot request a path the server
+-- does not serve. A body is JSON, or, for an attachment or an archive to
+-- import, a multipart form written here ('multipart', 'multipartForm').
+-- So a request is plain bytes on every transport, and the browser's side
+-- is one call of @fetch@.
 --
--- An answer is read as @MonadWiki@ wants it ('answer'): a 2xx with the JSON
--- it should have; a refusal, from its 'ApiError' body or, without one, from
--- its status alone ('errorForStatus'), as the 'WikiError' of the same name;
--- and anything else (no answer, a 5xx, a 2xx whose body is not what the
--- API says, which a proxy or a captive portal gives) as 'Unreachable'.
+-- A response is read into the form 'Wiki.App.Backend.MonadWiki' returns
+-- ('answer'). A 2xx carries the JSON it should have. A refusal becomes the
+-- 'WikiError' of the same name, read from its 'ApiError' body or, without
+-- one, from its status alone ('errorForStatus'). Anything else becomes
+-- 'Unreachable': no response, a 5xx, or a 2xx whose body is not what the
+-- API says, which a proxy or a captive portal can return.
 module Wiki.App.Backend.Http.Request
   ( -- * Requests
     Request (..)
@@ -66,26 +67,27 @@ data Request = Request
   }
   deriving stock (Eq, Show)
 
--- | What a request carries: nothing, or bytes of a media type (which goes
--- out as its @Content-Type@).
+-- | A request's body: nothing, or bytes of a media type (which is sent as
+-- its @Content-Type@).
 data Body = NoBody | Body Text ByteString
   deriving stock (Eq, Show)
 
 -- | A @GET@ of an address.
 --
 -- Every request carries 'requestMarker', the header that tells the server
--- it is the application's own and not one a page of another site made the
--- browser send: the server refuses a write without it. It is set here
--- rather than by the browser's half, so that every transport sends it.
+-- the request comes from this application, and not from another site's
+-- page making the browser send it. The server refuses a write without it.
+-- It is set here rather than by the browser's side, so that every
+-- transport sends it.
 get :: Text -> Request
 get url = Request {method = "GET", url, headers = [requestMarker], body = NoBody}
 
--- | A @POST@ with nothing in its body: an action whose arguments are all in
--- its address and headers.
+-- | A @POST@ with an empty body: an action whose arguments are all in its
+-- address and headers.
 post :: Text -> Request
 post url = (get url) {method = "POST"}
 
--- | A @PUT@ without a body: one whose address says it all.
+-- | A @PUT@ without a body, for an action whose address says everything.
 put :: Text -> Request
 put url = (get url) {method = "PUT"}
 
@@ -97,14 +99,15 @@ delete url = (get url) {method = "DELETE"}
 withJson :: (ToJSON a) => Text -> Text -> a -> Request
 withJson method url value = Request {method, url, headers = [requestMarker], body = Body "application/json" (toS (encode value))}
 
--- | The request, made against a page's version: a save's @If-Match@, the
--- version written as the page's @ETag@ is ("Wiki.Api.Version").
+-- | Make the request conditional on a page's version: a save's
+-- @If-Match@, with the version written as the page's @ETag@
+-- ("Wiki.Api.Version").
 ifMatch :: UTCTime -> Request -> Request
 ifMatch base r = r {headers = ("If-Match", toUrlPiece (PageVersion base)) : r.headers}
 
 -- | A @POST@ of a multipart form (@multipart\/form-data@) with one file in
--- it: the part's name, the file's name, its media type and its bytes, as
--- the API's uploads want them ("Wiki.Api.Upload").
+-- it: the part's name, the file's name, its media type and its bytes, in
+-- the form the API's uploads expect ("Wiki.Api.Upload").
 multipart :: Text -> Text -> Text -> Text -> ByteString -> Request
 multipart url part name mediaType bytes = multipartForm url [FilePart {part, name, mediaType, bytes}]
 
@@ -113,21 +116,21 @@ data Part
   = -- | A file: the part's name, the file's name, its media type and its
     -- bytes.
     FilePart {part :: Text, name :: Text, mediaType :: Text, bytes :: ByteString}
-  | -- | A field that is not a file, by its name, with its value: what a
-    -- server reads as text rather than as a file, since it has no file
-    -- name (an import's choices, "Wiki.Api.Upload").
+  | -- | A field that is not a file, by its name, with its value. A server
+    -- reads it as text rather than as a file, since it has no file name
+    -- (an import's choices, "Wiki.Api.Upload").
     TextPart {part :: Text, value :: Text}
   deriving stock (Eq, Show)
 
 -- | A @POST@ of a multipart form (@multipart\/form-data@) with these parts,
 -- in this order.
 --
--- Written here rather than by the browser's @FormData@, so that the bytes
--- sent are the same on every transport and the tests see them. The boundary
--- is one no part contains; names go in quotes, with a quote or a backslash
--- in them escaped (an attachment's name has no control characters, which a
--- quoted string could not carry), and as UTF-8, which is what browsers send
--- and servers read.
+-- It is written here rather than by the browser's @FormData@, so that the
+-- bytes sent are the same on every transport and the tests can check
+-- them. The boundary is a string no part contains. Names go in quotes,
+-- with a quote or a backslash in them escaped (an attachment's name has no
+-- control characters, which a quoted string could not carry), and as
+-- UTF-8, which is what browsers send and servers read.
 multipartForm :: Text -> [Part] -> Request
 multipartForm url parts =
   Request
@@ -161,15 +164,15 @@ multipartForm url parts =
         ]
     quoted = encodeUtf8 . T.concatMap (\c -> if c == '"' || c == '\\' then T.pack ['\\', c] else T.singleton c)
 
--- | What came back: a status and the body's bytes.
+-- | A response: a status and the body's bytes.
 data Response = Response
   { status :: Int
   , body :: ByteString
   }
   deriving stock (Eq, Show)
 
--- | An answer that carries a value: the value, or why there is none. The
--- transport's 'Left' is that no answer came, and why.
+-- | Read a response that carries a value: the value, or the error. The
+-- transport's 'Left' means no response came, with the reason.
 answer :: (FromJSON a) => Either Text Response -> Either WikiError a
 answer = \case
   Left why -> Left (Unreachable why)
@@ -177,7 +180,8 @@ answer = \case
     | successful r -> first (\why -> Unreachable ("its answer was not one the wiki can read: " <> toS why)) (eitherDecodeStrict' r.body)
     | otherwise -> Left (failureOf r)
 
--- | An answer that carries nothing (a deletion's 204): whether it was done.
+-- | Read a response that carries nothing (a deletion's 204): whether the
+-- request succeeded.
 answerNothing :: Either Text Response -> Either WikiError ()
 answerNothing = \case
   Left why -> Left (Unreachable why)
@@ -188,33 +192,36 @@ answerNothing = \case
 successful :: Response -> Bool
 successful r = r.status >= 200 && r.status < 300
 
--- | What an answer that is not a success means: the refusal its body
--- names, or, without such a body, the one its status means; and for a
--- status that refuses nothing (a 5xx, above all), that the server failed.
+-- | The error a response that is not a success means: the refusal its
+-- body names, or, without such a body, the one its status means. A status
+-- that is no refusal (above all a 5xx) means the server failed.
 failureOf :: Response -> WikiError
 failureOf r = case eitherDecodeStrict' r.body of
   Right e -> fromApiError e
   Left _ -> maybe (Unreachable ("the server failed, with status " <> show r.status)) fromApiError (errorForStatus r.status reason)
   where
-    -- The body, if it is text a person can read: a proxy's page is not.
+    -- The body, if it is text a person can read; a proxy's HTML page is
+    -- not.
     reason = case decodeUtf8' r.body of
       Right t | not (T.null t), T.length t < 300, not ("<" `T.isPrefixOf` T.stripStart t) -> T.strip t
       _ -> "The request was refused (" <> show r.status <> ")."
 
--- | A refusal over HTTP as the backend's: the same, by name.
+-- | The backend's 'WikiError' for an API refusal: the one of the same
+-- name.
 fromApiError :: ApiError -> WikiError
 fromApiError = \case
   ApiError.NotFound -> NotFound
   ApiError.Forbidden -> Forbidden
   ApiError.Conflict t -> Conflict t
   ApiError.Invalid t -> Invalid t
-  -- Signing in's own, which a @MonadWiki@ request never gets from the
-  -- server; from a proxy in front of it, the nearest.
+  -- Signing in's own error, which the server never returns to a
+  -- 'Wiki.App.Backend.MonadWiki' request; if a proxy in front of it does,
+  -- the nearest error.
   ApiError.Unauthenticated -> Forbidden
   ApiError.SecondFactorRequired -> Forbidden
   ApiError.TooManyRequests t -> Invalid t
 
--- | The session as the API sends it, and back: field for field.
+-- | The session in the form the API sends it, and back: field for field.
 sessionInfo :: Session -> SessionInfo
 sessionInfo s = SessionInfo {user = s.user, groups = s.groups, grants = s.grants, standing = s.standing, providers = s.providers, exports = s.exports}
 

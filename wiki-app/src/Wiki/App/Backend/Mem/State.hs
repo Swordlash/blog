@@ -1,13 +1,13 @@
--- | The in-memory backend's store, and every operation of
+-- | The in-memory backend's data ('MemState'), and every operation of
 -- 'Wiki.App.Backend.MonadWiki' on it as a pure function: a read takes the
--- store, a write takes it and gives back the changed one.
--- "Wiki.App.Backend.Mem" keeps the store in an 'Data.IORef.IORef' and applies
--- a write atomically; "Wiki.App.Demo" builds its content with the unchecked
--- 'insertSpace' and friends.
+-- state, and a write takes it and returns the changed state.
+-- "Wiki.App.Backend.Mem" keeps the state in an 'Data.IORef.IORef' and
+-- applies a write atomically. "Wiki.App.Demo" builds the demo's content
+-- with the unchecked 'insertSpace' and similar functions.
 --
--- The checks happen in the order the class's Haddock promises: ids and paths
--- first ('NotFound'), then permissions ('Forbidden'), then the arguments
--- ('Invalid'), then the versions ('Conflict').
+-- The checks happen in the order the class's Haddock promises: ids and
+-- paths first ('NotFound'), then permissions ('Forbidden'), then the
+-- arguments ('Invalid'), then the versions ('Conflict').
 module Wiki.App.Backend.Mem.State
   ( -- * The store
     MemState (..)
@@ -191,8 +191,8 @@ import Wiki.Core.Permission
   , mayMoveSpace
   , principal
   )
--- Qualified, since the store has fields of the same names (grants, spaces,
--- groups) and a record update could not tell them apart.
+-- Qualified, since the state has fields with the same names (grants,
+-- spaces, groups) and a record update could not tell them apart.
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
@@ -213,55 +213,57 @@ data MemState = MemState
   -- ^ The bytes of attachments uploaded into the demo, which their
   -- 'SourceBlob' names.
   , objectUrls :: Map BlobId Text
-  -- ^ The URLs blobs have been given so far: a browser makes one per blob
-  -- and keeps its bytes for as long as it lives, so it is made once.
+  -- ^ The object URLs given to blobs so far. A browser holds a blob's
+  -- bytes for as long as its URL exists, so each blob gets one URL only.
   , drafts :: Map (PageId, UserId) Draft
   -- ^ Each user's draft of a page, by the page and the user.
   , versions :: Map PageId (Map UTCTime Saved)
-  -- ^ Every version of every page, by the page and its @updatedAt@ then,
-  -- the page as it is included ('completeVersions'): a version for the
-  -- page as it was made, and one for each save.
+  -- ^ Every version of every page, by the page and its @updatedAt@ at that
+  -- version. The current page is included ('completeVersions'): a version
+  -- for the page as it was created, and one for each save.
   , searchText :: Map PageId Prepared
-  -- ^ Each page's title and text as the search compares them, made when
-  -- the page is made or saved, or the wiki read back or imported, and
-  -- dropped with the page. It is made from the pages and never kept
-  -- anywhere else: neither the export nor IndexedDB has it, and a wiki read
-  -- from either makes it again ('prepareSearch').
+  -- ^ Each page's title and text in the form the search compares, made
+  -- when the page is created or saved, or when the wiki is loaded or
+  -- imported, and removed with the page. It is derived from the pages and
+  -- never saved: neither the export nor IndexedDB contains it, and a wiki
+  -- loaded from either derives it again ('prepareSearch').
   , disabled :: Set UserId
-  -- ^ The users whose login is disabled: nobody, if switched to.
+  -- ^ The users whose login is disabled: switching to one of them means
+  -- nobody is signed in.
   , passwords :: Set UserId
-  -- ^ The users given a password. The demo has no passwords and keeps
+  -- ^ The users who have a password. The demo has no passwords and stores
   -- none: only whether a user would have one on a server, which its
   -- administration shows.
   , newAccountsCreateSpaces :: Bool
-  -- ^ The wiki's second setting ('Wiki.Api.Admin.WikiSettings'); the first,
-  -- whom it is open to, is its grants' ('Wiki.Core.Permission.Grants').
+  -- ^ The wiki's second setting ('Wiki.Api.Admin.WikiSettings'). The
+  -- first, whom the wiki is open to, is stored in the grants
+  -- ('Wiki.Core.Permission.Grants').
   , invitations :: Map InvitationId Pending
-  -- ^ The invitations made and not revoked. The demo makes no account from
-  -- one, so none is ever used.
+  -- ^ The invitations made and not revoked. The demo creates no account
+  -- from an invitation, so none is ever used.
   , server :: ServerSettingsOf (Maybe Text)
   -- ^ The server's settings ("Wiki.Api.ServerSettings"), as the
   -- administration's "Server" section sets them, with their secrets, which
-  -- never leave the tab: the demo keeps them for the tab's life, as it
-  -- keeps the wiki's settings, and uses none of them.
+  -- never leave the tab. The demo stores them for the tab's life, like the
+  -- wiki's settings, and uses none of them.
   , notices :: Map UserId [Notification]
   -- ^ Each user's notifications ("Wiki.Core.Notification"), the newest
-  -- first, at most the second of 'keptNotifications'. Where each page is
-  -- is found when they are read.
+  -- first, at most the second number of 'keptNotifications'. Where each
+  -- notification's page is now is looked up when they are read.
   , watches :: Map UserId Mark
   -- ^ What each user chose to watch, or not.
   , choices :: Map UserId Choices
-  -- ^ How each user is told, where they have chosen.
+  -- ^ How each user wants to be notified, where they have chosen.
   , threads :: Map PageId [Thread]
   -- ^ Each page's comments ("Wiki.Core.Comment"), its threads in the order
-  -- they were opened. The authors' names are those they had when they
-  -- wrote, and are given as they are now when read ('listThreadsIn').
+  -- they were opened. The authors' names stored are those they had when
+  -- they wrote; reads return the current names ('listThreadsIn').
   , current :: Maybe UserId
-  -- ^ Who is signed in. A user who is not in 'users', or is disabled, is
-  -- nobody.
+  -- ^ Who is signed in. A user who is not in 'users', or is disabled,
+  -- counts as nobody.
   , counter :: Natural
-  -- ^ The number in the next id made, so that ids are the same from one run
-  -- to the next.
+  -- ^ The number in the next id made, so that ids are the same from one
+  -- run to the next.
   }
   deriving stock (Eq, Show)
 
@@ -293,9 +295,9 @@ emptyState =
     , counter = 1
     }
 
--- | A version of a page as the store keeps it, under the page and its
--- time: what was saved, and who saved it, by id ('Nothing' for a page that
--- came in whole).
+-- | A version of a page as the state stores it, under the page and its
+-- time: the title and body saved, and the id of who saved it ('Nothing'
+-- for a page that was imported or loaded without a history).
 data Saved = Saved
   { title :: Text
   , body :: Text
@@ -303,17 +305,17 @@ data Saved = Saved
   }
   deriving stock (Eq, Show)
 
--- | The page as it is now, as one of its versions, saved by someone or by
--- nobody known.
+-- | Record the page as it is now as one of its versions, saved by this
+-- user or by nobody known.
 recordVersion :: Maybe UserId -> Page -> MemState -> MemState
 recordVersion author p st =
   st {versions = Map.insertWith (<>) p.id (Map.singleton p.updatedAt Saved {title = p.title, body = p.body, author}) st.versions}
 
--- | Every page with its current version in its history: a wiki whose pages
--- came in whole (read back from a database written before there were
--- versions, or imported from an archive, which has none) starts each
--- page's history there, saved by nobody known. A version already kept is
--- left as it is, and so is the history of a page that is gone.
+-- | Give every page its current version in its history. Pages that were
+-- loaded without versions (from a database written before versions
+-- existed, or imported from an archive, which has none) start their
+-- history there, saved by nobody known. A version already stored is left
+-- as it is, and so is the history of a page that no longer exists.
 completeVersions :: MemState -> MemState
 completeVersions st = foldr (\p -> if has p then identity else recordVersion Nothing p) st (Map.elems st.pages)
   where
@@ -322,15 +324,16 @@ completeVersions st = foldr (\p -> if has p then identity else recordVersion Not
 -- | A page's title and text prepared for the search, and the version of
 -- the page they were made from.
 --
--- The text is made when it is first searched, not when the page is saved:
--- a wiki read back at the start prepares every page, and the first search
--- is soon enough to pay for that, while a reader who never searches never
--- does. Once made, it is kept with the page until the page changes.
+-- The text is made when the page is first searched, not when it is saved.
+-- A wiki loaded at the start prepares every page, and the first search is
+-- soon enough to pay for that, while a reader who never searches never
+-- pays. Once made, the text is stored with the page until the page
+-- changes.
 data Prepared = Prepared
   { version :: UTCTime
-  -- ^ The page's 'updatedAt' when it was prepared: a page's title and
-  -- body change only with a new version, so a page whose version is not
-  -- this one is prepared again rather than searched as it was.
+  -- ^ The page's 'updatedAt' when it was prepared. A page's title and body
+  -- change only with a new version, so a page whose version is not this
+  -- one is prepared again instead of being searched with stale text.
   , text :: ~Searchable
   }
   deriving stock (Eq, Show)
@@ -339,13 +342,13 @@ data Prepared = Prepared
 prepare :: Page -> Prepared
 prepare p = Prepared {version = p.updatedAt, text = searchable p.title p.body}
 
--- | Every page's text prepared again: for a wiki whose pages were put in
--- whole, read back from IndexedDB or imported from an archive.
+-- | Prepare every page's text again: for a wiki whose pages were put in
+-- whole, loaded from IndexedDB or imported from an archive.
 prepareSearch :: MemState -> MemState
 prepareSearch st = st {searchText = Map.map prepare st.pages}
 
--- | A page as the search sees it, from its prepared text if it has one
--- made from this version, and otherwise prepared on the spot.
+-- | A page in the form the search takes: from its prepared text if that
+-- was made from this version, and otherwise prepared on the spot.
 searchCandidate :: MemState -> Page -> [Slug] -> [Slug] -> Candidate
 searchCandidate st p spacePath pagePath = case Map.lookup p.id st.searchText of
   Just prepared
@@ -357,7 +360,7 @@ searchCandidate st p spacePath pagePath = case Map.lookup p.id st.searchText of
 newId :: Text -> MemState -> (Text, MemState)
 newId kind st = (kind <> "-" <> show st.counter, st {counter = st.counter + 1})
 
--- | The signed-in user, as the rules see them.
+-- | The signed-in user, in the form the permission rules take.
 currentPrincipal :: MemState -> Maybe Principal
 currentPrincipal st = do
   u <- st.current
@@ -389,9 +392,9 @@ grantSpace :: SpaceId -> Subject -> SpacePermission -> MemState -> MemState
 grantSpace space subject permission st =
   st {grants = st.grants <> Grants {P.global = [], P.spaces = [SpaceGrant {P.space = space, P.subject = subject, P.permission = permission}], P.access = Open}}
 
--- | Add a space with a slug made from its name and free among its siblings,
--- last among them, made at the time given, listing its children by name;
--- checking nothing else.
+-- | Add a space without checks, last among its siblings, created at the
+-- time given, listing its children by name, with a slug made from its name
+-- that no sibling uses.
 insertSpace :: Maybe SpaceId -> Text -> Bool -> UTCTime -> MemState -> (MemState, Space)
 insertSpace parent name public now st0 =
   let (i, st) = newId "space" st0
@@ -424,10 +427,10 @@ setMathMacros sid macros st = st {spaces = Map.adjust (\s -> s {mathMacros = mac
 setProfile :: SpaceId -> SpaceProfile -> MemState -> MemState
 setProfile sid p st = st {spaces = Map.adjust (withProfile p) sid st.spaces}
 
--- | Choose the order a space lists one kind of its children in, checking
--- nothing. Switched to 'ByHand' from another order, the children are first
--- given positions in the order they were shown in, so that the list stays
--- as it was until someone moves a child.
+-- | Choose the order a space lists one kind of its children in, without
+-- checks. When the order switches to 'ByHand' from another order, the
+-- children first get positions in the order they were shown in, so that
+-- the list stays as it was until someone moves a child.
 setOrder :: SpaceId -> Children -> ChildOrder -> MemState -> MemState
 setOrder sid kind order st = case Map.lookup sid st.spaces of
   Nothing -> st
@@ -441,7 +444,7 @@ setOrder sid kind order st = case Map.lookup sid st.spaces of
           ChildPages -> x {pageOrder = order}
      in st1 {spaces = Map.adjust chosen sid st1.spaces}
 
--- | Give a space's children of one kind the positions of the order they are
+-- | Give a space's children of one kind positions in the order they are
 -- shown in now: its subspaces, or each set of sibling pages in it.
 placeAsShown :: Space -> Children -> MemState -> MemState
 placeAsShown s kind st = case kind of
@@ -462,9 +465,9 @@ placePages siblings st = st {pages = Map.mapWithKey (\k p -> maybe p (`positionP
   where
     numbers = renumber (\p -> p.id) siblings
 
--- | Add a page with a slug made from its title and free among its siblings,
--- last among them, created and last updated at the time given, checking
--- nothing else.
+-- | Add a page without checks, last among its siblings, created and last
+-- updated at the time given, with a slug made from its title that no
+-- sibling uses.
 insertPage :: SpaceId -> Maybe PageId -> Text -> Text -> UTCTime -> MemState -> (MemState, Page)
 insertPage space parent title body now st0 =
   let (i, st) = newId "page" st0
@@ -491,8 +494,8 @@ insertPage space parent title body now st0 =
 fallbackSlug :: Text -> Slug
 fallbackSlug t = either (\e -> panic ("not a slug: " <> t <> ", " <> show e)) identity (mkSlug t)
 
--- | Attach bytes the store keeps to a page, replacing an attachment of the
--- same name, checking nothing else.
+-- | Attach bytes stored in the state to a page, replacing an attachment of
+-- the same name, without other checks.
 attachBytes :: PageId -> Text -> Text -> ByteString -> MemState -> (MemState, Attachment)
 attachBytes page name mediaType bytes st0 =
   let (b, st1) = newId "blob" st0
@@ -500,8 +503,8 @@ attachBytes page name mediaType bytes st0 =
       (st2, attachment) = attachSource page name mediaType (fromIntegral (BS.length bytes)) (SourceBlob blob) st1
    in (st2 {blobs = Map.insert blob bytes st2.blobs}, attachment)
 
--- | Attach a file on the web to a page, replacing an attachment of the same
--- name, checking nothing else.
+-- | Attach a file on the web to a page, replacing an attachment of the
+-- same name, without other checks.
 attachUrl :: PageId -> Text -> Text -> Natural -> Text -> MemState -> (MemState, Attachment)
 attachUrl page name mediaType size url = attachSource page name mediaType size (SourceUrl url)
 
@@ -520,20 +523,21 @@ attachSource page name mediaType size source st0 =
           }
    in (st2 {pages = Map.adjust attach page st2.pages}, attachment)
 
--- | Forget the bytes behind an attachment's source, if the store keeps them.
+-- | Delete the bytes behind an attachment's source, if the state stores
+-- them.
 dropSource :: Source -> MemState -> MemState
 dropSource = \case
   SourceBlob b -> \st -> st {blobs = Map.delete b st.blobs, objectUrls = Map.delete b st.objectUrls}
   SourceUrl _ -> identity
 
--- | Forget the bytes of the image a space is pictured with, if it is one.
+-- | Delete the bytes of a space's icon image, if its icon is one.
 dropIcon :: Space -> MemState -> MemState
 dropIcon s = case s.icon of
   Just (IconImage b _) -> dropSource (SourceBlob b)
   _ -> identity
 
--- | The spaces whose home page is one of these pages, without one: what is
--- left when the pages are deleted, or moved to another space.
+-- | Remove the home page of every space whose home page is one of these
+-- pages: for pages that are deleted, or moved to another space.
 clearHomes :: Set PageId -> MemState -> MemState
 clearHomes gone st = st {spaces = Map.map clear st.spaces}
   where
@@ -541,7 +545,7 @@ clearHomes gone st = st {spaces = Map.map clear st.spaces}
       | maybe False (`Set.member` gone) s.homePage = withProfile SpaceProfile {description = s.description, icon = s.icon, homePage = Nothing, blog = s.blog} s
       | otherwise = s
 
--- | Forget the bytes behind every attachment of these pages.
+-- | Delete the bytes behind every attachment of these pages.
 dropAttachments :: [Page] -> MemState -> MemState
 dropAttachments ps st = foldr dropSource st [a.source | p <- ps, a <- p.attachments]
 
@@ -594,9 +598,9 @@ nonBlank what t = case T.strip t of
   "" -> Left (Invalid (what <> " cannot be blank."))
   stripped -> Right stripped
 
--- | A space in another place in the tree, at a position there. Written out
--- in full because @parent@, @slug@ and @position@ are fields of pages too,
--- which a record update could not tell apart.
+-- | A space moved to another place in the tree, at a position there.
+-- Written out in full because @parent@, @slug@ and @position@ are fields
+-- of pages too, and a record update could not tell them apart.
 respace :: Maybe SpaceId -> Slug -> Int -> Space -> Space
 respace parent slug position s =
   Space
@@ -616,8 +620,8 @@ respace parent slug position s =
     , blog = s.blog
     }
 
--- | A page in another place, perhaps in another space, at a position
--- there; see 'respace'.
+-- | A page moved to another place, possibly in another space, at a
+-- position there; see 'respace'.
 repage :: SpaceId -> Maybe PageId -> Slug -> Int -> Page -> Page
 repage space parent slug position p =
   Page
@@ -637,7 +641,7 @@ repage space parent slug position p =
 --------------------------------------------------------------------------------
 -- Reads
 
--- | Who is signed in, with the grants that concern them.
+-- | Who is signed in, with the grants that apply to them.
 sessionOf :: MemState -> Session
 sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> currentPrincipal st of
   Nothing -> anonymousIn st.grants.access
@@ -651,11 +655,11 @@ sessionOf st = case (,) <$> (st.current >>= (`Map.lookup` st.users)) <*> current
             , P.spaces = filter (\g -> isFor p g.subject) st.grants.spaces
             , P.access = st.grants.access
             }
-      , -- Switched to, which is the demo's signing in.
+      , -- Switching users is the demo's signing in.
         B.standing = SignedIn
       , -- The demo signs in with no provider.
         B.providers = []
-      , -- Nor does it export: pandoc is the server's.
+      , -- Nor does it export: exporting needs pandoc, on the server.
         B.exports = []
       }
 
@@ -672,8 +676,8 @@ getSpaceIn path st = case resolvePath (findChild (Map.elems st.spaces)) path of
   Right c | Just s <- lastMay c -> requireView st c >> pure s
   _ -> Left NotFound
 
--- | How many pages each space the current user may view has, its templates
--- not counted.
+-- | The number of pages in each space the current user may view, not
+-- counting templates.
 pageCountsIn :: MemState -> Map SpaceId Int
 pageCountsIn st =
   Map.fromList
@@ -689,8 +693,9 @@ listPagesIn sid st = do
   requireView st c
   pure (pageTreeOrder s.pageOrder (pagesOf sid st))
 
--- | What each page of a space is listed with as a post: the author of its
--- first version, and how many comments it has in all its threads.
+-- | The details each page of a space is listed with as a blog post: the
+-- author of its first version, and how many comments it has in all its
+-- threads.
 postDetailsIn :: SpaceId -> MemState -> Either WikiError (Map PageId PostDetails)
 postDetailsIn sid st = do
   (_, c) <- findSpace st sid
@@ -712,8 +717,9 @@ getPageIn sid path st = do
     Right ps | Just p <- lastMay ps -> pure p
     _ -> Left NotFound
 
--- | The pages the current user may view that match a query, in the spaces it
--- asks for: the same visibility 'listPagesIn' checks, space by space.
+-- | The pages the current user may view that match a query, in the spaces
+-- it asks for, with the same visibility check as 'listPagesIn', space by
+-- space.
 searchPagesIn :: SearchQuery -> MemState -> [SearchHit]
 searchPagesIn q st =
   searchPlain
@@ -737,8 +743,8 @@ searchPagesIn q st =
 --------------------------------------------------------------------------------
 -- Writes
 
--- | A write: the changed store and what the caller is given, or why
--- nothing changed.
+-- | A write: the changed state and the result for the caller, or the
+-- reason nothing changed.
 type Write a = MemState -> Either WikiError (MemState, a)
 
 -- | Create a space, and grant its creator 'AdministerSpace' on it.
@@ -751,8 +757,8 @@ createSpaceIn parent name now st = do
       st2 = case who of
         Just p -> grantSpace made.id (SubjectUser p.user) AdministerSpace st1
         Nothing -> st1
-      -- Its home page, whose first version is its maker's, as a page they
-      -- made would be.
+      -- Its home page, whose first version is its creator's, as for a page
+      -- they created.
       (st3, home) = insertPage made.id Nothing homeTitle (homeBody n) now st2
       space = withProfile SpaceProfile {description = "", icon = Nothing, homePage = Just home.id, blog = False} made
   pure (recordVersion (currentUserId st) home st3 {spaces = Map.insert space.id space st3.spaces}, space)
@@ -793,19 +799,19 @@ renameSpaceIn sid name = adjustSpace sid $ \s -> do
 setSpacePublicIn :: SpaceId -> Bool -> Write Space
 setSpacePublicIn sid public = adjustSpace sid (\s -> pure s {public})
 
--- | Give a space new math macros: the text as it is, but for blank lines
--- at its ends, and nothing when it is blank. Whether KaTeX can read it is
--- not checked here: KaTeX runs in the browser, which checks a block as it
--- is edited, and a block it cannot read never stops a page from being
--- drawn ("Wiki.Core.Math").
+-- | Give a space new math macros: the text as it is, without blank lines
+-- at its ends, and nothing when it is blank. Whether KaTeX can parse it is
+-- not checked here: KaTeX runs in the browser, which checks a block while
+-- it is edited, and a block KaTeX cannot parse never stops a page from
+-- rendering ("Wiki.Core.Math").
 setSpaceMathMacrosIn :: SpaceId -> Text -> Write Space
 setSpaceMathMacrosIn sid macros = adjustSpace sid (\s -> pure s {mathMacros = trimLines macros})
   where
     trimLines = T.intercalate "\n" . reverse . dropWhile blank . reverse . dropWhile blank . T.lines
     blank = T.null . T.strip
 
--- | Give a space a profile, checked; an image it had and no longer keeps
--- is let go.
+-- | Give a space a profile, checked. An icon image the space had, which
+-- the new profile does not keep, is deleted.
 setSpaceProfileIn :: SpaceId -> SpaceProfile -> Write Space
 setSpaceProfileIn sid p st = do
   (s, c) <- findSpace st sid
@@ -815,8 +821,8 @@ setSpaceProfileIn sid p st = do
       st1 = if s'.icon == s.icon then st else dropIcon s st
   pure (st1 {spaces = Map.insert sid s' st1.spaces}, s')
 
--- | Picture a space with an image, kept as an uploaded attachment's bytes
--- are; the image it had before is let go.
+-- | Set a space's icon to an image, stored like an uploaded attachment's
+-- bytes. The image the space had before is deleted.
 uploadSpaceIconIn :: SpaceId -> Text -> ByteString -> Write Space
 uploadSpaceIconIn sid mediaType bytes st = do
   (s, c) <- findSpace st sid
@@ -958,8 +964,8 @@ createPageIn sid parent title body now st = do
     Left (Invalid "A page's parent has to be in the same space.")
   t <- nonBlank "A page's title" title
   let (st', page) = insertPage sid parent t body now st
-  -- Its first version is its maker's. A new page is a save too: whom it
-  -- mentions, and whoever watches its space, are told.
+  -- Its first version is its creator's. Creating a page counts as a save:
+  -- the people it mentions, and whoever watches its space, are notified.
   pure (tell now page Nothing "" PageSaved (newlyMentioned "" body) (recordVersion (currentUserId st) page st'), page)
 
 -- | Save a page's title and body, if nobody has saved it since the version
@@ -971,12 +977,12 @@ savePageIn pid base title body now st = do
   t <- nonBlank "A page's title" title
   when (p.updatedAt /= base) $
     Left (Conflict "The page has been saved by someone else since this edit began.")
-  -- Later than the version saved over even if the clock says otherwise (one
-  -- too coarse to tell two saves apart, or one set back), so that no two
-  -- versions of a page have the same time.
+  -- Later than the version saved over, even if the clock says otherwise
+  -- (one too coarse to tell two saves apart, or one set back), so that no
+  -- two versions of a page have the same time.
   let updatedAt = if now > p.updatedAt then now else addUTCTime 0.000001 p.updatedAt
       p' = p {title = t, body, updatedAt}
-      -- What was unsaved is saved now.
+      -- The draft's unsaved changes are now saved, so the draft goes.
       drafts = maybe identity (\u -> Map.delete (pid, u)) (currentUserId st) st.drafts
       saved = recordVersion (currentUserId st) p' st {pages = Map.insert pid p' st.pages, drafts, searchText = Map.insert pid (prepare p') st.searchText}
   pure (tell now p' Nothing "" PageSaved (newlyMentioned p.body body) saved, p')
@@ -1050,8 +1056,8 @@ uploadAttachmentIn pid name mediaType bytes st = do
       mt = if T.null declared then "application/octet-stream" else declared
   pure (attachBytes pid n mt bytes st)
 
--- | Remove an attachment from its page. What is given back is the object
--- URL its bytes had been given, if any, which the caller can now let go.
+-- | Remove an attachment from its page. The result is the object URL its
+-- bytes had been given, if any, which the caller can now revoke.
 deleteAttachmentIn :: AttachmentId -> Write (Maybe Text)
 deleteAttachmentIn aid st = do
   (p, a) <-
@@ -1071,8 +1077,8 @@ deleteAttachmentIn aid st = do
 currentUserId :: MemState -> Maybe UserId
 currentUserId st = (\p -> p.user) <$> currentPrincipal st
 
--- | A page someone signed in may edit, and who they are: what each of the
--- draft operations needs, checked in the class's order.
+-- | Check that someone signed in may edit a page, and return the page and
+-- the user: what each draft operation needs, checked in the class's order.
 draftable :: MemState -> PageId -> Either WikiError (Page, UserId)
 draftable st pid = do
   p <- findPage st pid
@@ -1086,7 +1092,8 @@ getDraftIn pid st = do
   (_, u) <- draftable st pid
   pure (Map.lookup (pid, u) st.drafts)
 
--- | Keep the signed-in user's draft of a page, in place of the one they had.
+-- | Store the signed-in user's draft of a page, replacing the one they
+-- had.
 saveDraftIn :: PageId -> UTCTime -> Text -> Text -> UTCTime -> Write Draft
 saveDraftIn pid base title body now st = do
   (_, u) <- draftable st pid
@@ -1106,7 +1113,7 @@ discardDraftIn pid st = do
 authorOf :: MemState -> UserId -> Author
 authorOf st u = Author {id = u, name = maybe u.text (\x -> x.displayName) (Map.lookup u st.users)}
 
--- | A page's version as the class gives it.
+-- | A page's version in the form the class returns it.
 versionOf :: MemState -> PageId -> UTCTime -> Saved -> Version
 versionOf st pid at v = Version {V.page = pid, V.updatedAt = at, V.title = v.title, V.body = v.body, V.author = authorOf st <$> v.author}
 
@@ -1117,8 +1124,8 @@ listVersionsIn pid st = do
   requireView st (chainOf st p.space)
   pure [versionInfo (versionOf st pid at v) | (at, v) <- Map.toDescList (Map.findWithDefault mempty pid st.versions)]
 
--- | A version of a page, once the page is found to be one the user may
--- view (or, for a restore, edit).
+-- | A version of a page, after checking that the user may view the page
+-- (or, for a restore, edit it).
 findVersion :: MemState -> PageId -> UTCTime -> Either WikiError Version
 findVersion st pid at =
   maybe (Left NotFound) (Right . versionOf st pid at) (Map.lookup pid st.versions >>= Map.lookup at)
@@ -1141,8 +1148,8 @@ restoreVersionIn pid at base now st = do
 --------------------------------------------------------------------------------
 -- Administration
 
--- | The current user holds the global administer: what everything the
--- administration does needs, checked before anything else.
+-- | Check that the current user holds the global administer: everything
+-- the administration does needs it, and it is checked before anything else.
 requireAdministrator :: MemState -> Either WikiError ()
 requireAdministrator st = require (hasGlobalPermission (currentPrincipal st) st.grants Administer)
 
@@ -1185,8 +1192,8 @@ setAdministratorIn = setGlobalGrant Administer
 setCreateSpacesIn :: UserId -> Bool -> Write ()
 setCreateSpacesIn = setGlobalGrant CreateSpaces
 
--- | Grant a user a global permission themself, or take it from them; a
--- grant they have already is left where it is.
+-- | Grant a global permission to a user directly, or take it away; a
+-- grant they already have is left as it is.
 setGlobalGrant :: GlobalPermission -> UserId -> Bool -> Write ()
 setGlobalGrant permission u granted st = do
   requireAdministrator st
@@ -1202,8 +1209,9 @@ setGlobalGrant permission u granted st = do
 accountIn :: MemState -> User -> Account
 accountIn st u = Account {Acc.user = u, Acc.hasPassword = Set.member u.id st.passwords, Acc.disabled = Set.member u.id st.disabled}
 
--- | A new user, who would sign in with the password given: the demo keeps
--- that they have one, not the password. Checked as the server checks it.
+-- | Create a user, who would sign in with the given password. The demo
+-- stores that they have a password, not the password. Checked as the
+-- server checks it.
 createUserIn :: NewAccount -> Write Account
 createUserIn new st = do
   requireAdministrator st
@@ -1216,7 +1224,7 @@ createUserIn new st = do
       st2 = (insertUser u st1) {passwords = Set.insert u.id st1.passwords}
   pure (st2, accountIn st2 u)
 
--- | A user given a new password, which the demo does not keep.
+-- | Give a user a new password, which the demo does not store.
 setPasswordIn :: UserId -> Text -> Write Account
 setPasswordIn uid password st = do
   requireAdministrator st
@@ -1225,16 +1233,16 @@ setPasswordIn uid password st = do
   let st1 = st {passwords = Set.insert uid st.passwords}
   pure (st1, accountIn st1 u)
 
--- | Mail a user the link to choose a password: the demo sends no mail,
--- which it says once the user is found, as a server that sends none does.
+-- | Mail a user the link to choose a password. The demo sends no mail, and
+-- says so once the user is found, as a server that sends no mail does.
 sendPasswordLinkIn :: UserId -> MemState -> Either WikiError ()
 sendPasswordLinkIn u st = do
   requireAdministrator st
   _ <- findUser st u
   Left (Invalid "The demo sends no mail: type a password for them.")
 
--- | A user's login disabled, which makes them nobody if they are the one
--- switched to, or enabled again.
+-- | Disable a user's login, or enable it again. A disabled user who is
+-- the one switched to counts as nobody signed in.
 setDisabledIn :: UserId -> Bool -> Write Account
 setDisabledIn uid off st = do
   requireAdministrator st
@@ -1242,7 +1250,8 @@ setDisabledIn uid off st = do
   let st1 = st {disabled = (if off then Set.insert else Set.delete) uid st.disabled}
   pure (st1, accountIn st1 u)
 
--- | A group's name, checked: not blank, and no other group's but for case.
+-- | A group's name, checked: not blank, and not another group's name,
+-- ignoring case.
 groupName :: MemState -> Maybe GroupId -> Text -> Either WikiError Text
 groupName st self name = do
   n <- nonBlank "A group's name" name
@@ -1250,7 +1259,7 @@ groupName st self name = do
   for_ (head taken) $ \g -> Left (Invalid ("There is a group called " <> g.name <> " already."))
   pure n
 
--- | A new group, with nobody in it.
+-- | Create a group with nobody in it.
 createGroupIn :: Text -> Write Group
 createGroupIn name st = do
   requireAdministrator st
@@ -1259,7 +1268,7 @@ createGroupIn name st = do
       g = Group {id = GroupId i, name = n}
   pure (insertGroup g [] st1, g)
 
--- | A group with another name.
+-- | Rename a group.
 renameGroupIn :: GroupId -> Text -> Write Group
 renameGroupIn gid name st = do
   requireAdministrator st
@@ -1268,7 +1277,7 @@ renameGroupIn gid name st = do
   let renamed = Group {id = gid, name = n}
   pure (st {groups = Map.insert gid renamed st.groups}, renamed)
 
--- | A group gone, with its membership and every grant to it.
+-- | Delete a group, with its membership and every grant to it.
 deleteGroupIn :: GroupId -> Write ()
 deleteGroupIn gid st = do
   requireAdministrator st
@@ -1282,15 +1291,15 @@ deleteGroupIn gid st = do
           }
   pure (st {groups = Map.delete gid st.groups, membership = Map.delete gid st.membership, grants}, ())
 
--- | A user put in a group, or taken out of it.
+-- | Put a user in a group, or take them out of it.
 setMember :: Bool -> GroupId -> UserId -> Write ()
 setMember member gid u st = do
   requireAdministrator st
   _ <- findGroup st gid
   _ <- findUser st u
   let change = if member then Set.insert u else Set.delete u
-  -- Every group keeps its entry, empty or not, as a group read back from
-  -- the browser has one.
+  -- Every group keeps its entry, empty or not, as a group loaded from the
+  -- browser has one.
   pure (st {membership = Map.alter (Just . change . fold) gid st.membership}, ())
 
 addMemberIn, removeMemberIn :: GroupId -> UserId -> Write ()
@@ -1300,8 +1309,8 @@ removeMemberIn = setMember False
 --------------------------------------------------------------------------------
 -- Whom the wiki lets in
 
--- | An invitation as the demo keeps it: neither it nor its secret leaves
--- the browser, so the secret is kept as it is.
+-- | An invitation as the demo stores it. Neither the invitation nor its
+-- secret leaves the browser, so the secret is stored as it is.
 data Pending = Pending
   { email :: Text
   , createdAt :: UTCTime
@@ -1316,15 +1325,15 @@ wikiSettingsIn st = do
   requireAdministrator st
   pure WikiSettings {A.access = st.grants.access, A.newAccountsCreateSpaces = st.newAccountsCreateSpaces}
 
--- | The wiki's settings changed.
+-- | Change the wiki's settings.
 setWikiSettingsIn :: WikiSettings -> Write WikiSettings
 setWikiSettingsIn new st = do
   requireAdministrator st
   let grants = Grants {P.global = st.grants.global, P.spaces = st.grants.spaces, P.access = new.access}
   pure (st {grants, newAccountsCreateSpaces = new.newAccountsCreateSpaces}, new)
 
--- | The invitations as an administrator lists them at a time: the latest
--- first, none mailed.
+-- | The invitations as an administrator lists them at a given time: the
+-- latest first, none of them mailed.
 invitationsIn :: UTCTime -> MemState -> Either WikiError Invitations
 invitationsIn now st = do
   requireAdministrator st
@@ -1334,8 +1343,8 @@ invitationsIn now st = do
 invitationOf :: UTCTime -> InvitationId -> Pending -> Invitation
 invitationOf now i p = Invitation {A.id = i, A.email = p.email, A.createdAt = p.createdAt, A.expiresAt = p.expiresAt, A.expired = p.expiresAt <= now}
 
--- | An invitation made at a time, with this secret for its link, in place
--- of any the address had.
+-- | Make an invitation at a given time, with this secret for its link,
+-- replacing any invitation the address had.
 inviteIn :: UTCTime -> Text -> Text -> Write Invited
 inviteIn now token raw st = do
   requireAdministrator st
@@ -1346,23 +1355,24 @@ inviteIn now token raw st = do
       st2 = st1 {invitations = Map.insert (InvitationId i) pending others}
   pure (st2, Invited {A.invitation = invitationOf now (InvitationId i) pending, A.token = Just token, A.mailError = Nothing})
 
--- | An invitation revoked.
+-- | Revoke an invitation.
 revokeInvitationIn :: InvitationId -> Write ()
 revokeInvitationIn i st = do
   requireAdministrator st
   unless (Map.member i st.invitations) (Left NotFound)
   pure (st {invitations = Map.delete i st.invitations}, ())
 
--- | Disconnect a user's account at a provider: the demo's users have none,
--- so there is never one to disconnect, once the user is found.
+-- | Disconnect a user's account at a provider. The demo's users have no
+-- such accounts, so once the user is found there is nothing to disconnect.
 unlinkUserIdentityIn :: UserId -> Text -> MemState -> Either WikiError ()
 unlinkUserIdentityIn u _ st = do
   requireAdministrator st
   _ <- findUser st u
   Left NotFound
 
--- | Take a user's second factor away: the demo's users have none (it is a
--- server's), so there is never one to take, once the user is found.
+-- | Remove a user's second factor. The demo's users have none (second
+-- factors are a server's), so once the user is found there is nothing to
+-- remove.
 removeSecondFactorIn :: UserId -> MemState -> Either WikiError ()
 removeSecondFactorIn u st = do
   requireAdministrator st
@@ -1372,22 +1382,23 @@ removeSecondFactorIn u st = do
 --------------------------------------------------------------------------------
 -- The server's own settings
 
--- | The server's settings, each secret as whether it is set.
+-- | The server's settings, with each secret shown only as whether it is
+-- set.
 serverSettingsIn :: MemState -> Either WikiError ServerSettings
 serverSettingsIn st = do
   requireAdministrator st
   pure (secretState <$> st.server)
 
--- | The server's settings with a change written over them, checked as a
--- server checks them.
+-- | Apply a change to the server's settings, checked as a server checks
+-- them.
 setServerSettingsIn :: ServerSettingsChange -> Write ServerSettings
 setServerSettingsIn change st = do
   requireAdministrator st
   new <- first Invalid (checkServerSettings isJust (applyChange identity st.server change))
   pure (st {server = new}, secretState <$> new)
 
--- | What checking a provider says in the demo: what a server would say
--- without asking it, and that the demo cannot ask.
+-- | What checking a provider returns in the demo: what a server would say
+-- without asking the provider, and that the demo cannot ask it.
 checkProviderIn :: Text -> Maybe ProviderChange -> MemState -> Either WikiError ProviderCheck
 checkProviderIn name given st = do
   requireAdministrator st
@@ -1411,17 +1422,17 @@ sendTestMailIn _ st = do
 --------------------------------------------------------------------------------
 -- Backups
 
--- | The demo's backups: none, and none to be made, since its wiki is in
--- the browser (exporting it keeps a copy); the section shows the settings
+-- | The demo's backups: none, and none can be made, since its wiki is in
+-- the browser (exporting it makes a copy). The section shows the settings
 -- a server starts with, disabled.
 backupsIn :: MemState -> Either WikiError Backups
 backupsIn st = do
   requireAdministrator st
   pure Backups {available = False, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
 
--- | The audit log, which the demo does not keep (WP4.10 of
--- docs/PLAN.md): its administration is its one reader's, in this browser,
--- and the section says so.
+-- | The audit log, which the demo does not keep (WP4.10 of docs/PLAN.md):
+-- its administration has one user, in this browser, and the section says
+-- so.
 activityIn :: MemState -> Either WikiError Activity
 activityIn st = do
   requireAdministrator st
@@ -1431,7 +1442,7 @@ activityIn st = do
 serverStatusIn :: MemState -> Either WikiError (Maybe ServerStatus)
 serverStatusIn st = requireAdministrator st $> Nothing
 
--- | What the demo says to setting backups up, or to making one.
+-- | The refusal the demo gives to setting backups up, or to making one.
 refuseBackupsIn :: MemState -> Either WikiError Backups
 refuseBackupsIn st = do
   requireAdministrator st
@@ -1439,14 +1450,14 @@ refuseBackupsIn st = do
 
 -- Comments
 
--- | A page's threads as the class gives them: their authors named as they
--- are now.
+-- | A thread in the form the class returns it: its authors named by their
+-- current names.
 withNames :: MemState -> Thread -> Thread
 withNames st t = t {C.comments = map (\c -> c {C.author = authorOf st c.author.id}) t.comments}
 
--- | A page the current user may read, with its space's chain and its
--- threads: what every operation on comments starts from, in the class's
--- order.
+-- | Check that the current user may read a page, and return its space's
+-- chain and its threads. Every comment operation starts with this, so its
+-- checks come in the class's order.
 readable :: MemState -> PageId -> Either WikiError ([Space], [Thread])
 readable st pid = do
   p <- findPage st pid
@@ -1454,15 +1465,16 @@ readable st pid = do
   requireView st c
   pure (c, Map.findWithDefault [] pid st.threads)
 
--- | A thread of a page, which must be on it.
+-- | A thread of a page, which must exist on that page.
 threadOf :: [Thread] -> CommentThreadId -> Either WikiError Thread
 threadOf ts tid = maybe (Left NotFound) Right (find (\t -> t.id == tid) ts)
 
--- | A comment of a thread, which must be in it.
+-- | A comment of a thread, which must exist in that thread.
 commentOf :: Thread -> CommentId -> Either WikiError Comment
 commentOf t cid = maybe (Left NotFound) Right (find (\c -> c.id == cid) t.comments)
 
--- | Someone signed in who may comment on the page of this chain: who.
+-- | The id of the signed-in user, if they may comment on the page of this
+-- chain.
 commenter :: MemState -> [Space] -> Either WikiError UserId
 commenter st c = do
   require (mayComment (currentPrincipal st) st.grants c)
@@ -1472,7 +1484,7 @@ commenter st c = do
 commentBody :: Text -> Either WikiError Text
 commentBody = first Invalid . checkCommentBody
 
--- | The page's threads changed, kept.
+-- | Change a page's stored threads.
 withThreads :: PageId -> ([Thread] -> [Thread]) -> MemState -> MemState
 withThreads pid f st = st {threads = Map.filter (not . null) (Map.alter (Just . f . fromMaybe []) pid st.threads)}
 
@@ -1518,8 +1530,8 @@ editCommentIn pid tid cid body now st = do
       updated x = if x.id == cid then edited else x
   pure (tellOfEdit now pid tid text (newlyMentioned old.body text) (withThreads pid (map (\x -> if x.id == tid then x {C.comments = map updated x.comments} else x)) st), edited)
 
--- | Delete a comment; the first of a thread takes the thread, if it has no
--- replies.
+-- | Delete a comment. Deleting the first comment of a thread deletes the
+-- thread, if it has no replies.
 deleteCommentIn :: PageId -> CommentThreadId -> CommentId -> Write ()
 deleteCommentIn pid tid cid st = do
   (c, ts) <- readable st pid
@@ -1549,7 +1561,7 @@ setResolvedIn pid tid resolved st = do
   let t' = t {C.resolved = resolved}
   pure (withThreads pid (map (\x -> if x.id == tid then t' else x)) st, withNames st t')
 
--- | Add a thread as it is, unchecked, last among its page's: for the
+-- | Add a thread without checks, last among its page's threads: for the
 -- demo's content.
 insertThread :: Thread -> MemState -> MemState
 insertThread t = withThreads t.page (<> [t])
@@ -1557,23 +1569,23 @@ insertThread t = withThreads t.page (<> [t])
 --------------------------------------------------------------------------------
 -- Notifications
 
--- | How a user is told: how they would be mailed (the demo mails nobody,
--- and keeps the choice all the same), and whether they watch what they make
--- and the threads they are in.
+-- | How a user wants to be notified: how they would be mailed (the demo
+-- mails nobody, but stores the choice all the same), and whether they
+-- watch what they create and the threads they take part in.
 data Choices = Choices
   { mail :: Maybe MailMode
   , watchOwn :: Bool
   }
   deriving stock (Eq, Show)
 
--- | What a user who has chosen nothing is told.
+-- | The notification choices of a user who has chosen nothing.
 defaultChoices :: Choices
 defaultChoices = Choices {mail = Nothing, watchOwn = True}
 
 choicesOf :: MemState -> UserId -> Choices
 choicesOf st u = Map.findWithDefault defaultChoices u st.choices
 
--- | Who made a page: the author of its first version, if anyone known.
+-- | Who created a page: the author of its first version, if known.
 makerOf :: MemState -> PageId -> Maybe UserId
 makerOf st pid = Map.lookup pid st.versions >>= Map.lookupMin >>= \(_, v) -> v.author
 
@@ -1581,9 +1593,9 @@ makerOf st pid = Map.lookup pid st.versions >>= Map.lookupMin >>= \(_, v) -> v.a
 activeUsers :: MemState -> [User]
 activeUsers st = [u | u <- Map.elems st.users, not (Set.member u.id st.disabled)]
 
--- | Tell whoever the rules of "Wiki.Core.Notification" say of what the
--- current user did to a page: each a notification, the newest first, the
--- oldest dropped past the most kept.
+-- | Notify the users that the rules of "Wiki.Core.Notification" name of
+-- what the current user did to a page. Each gets a notification, the
+-- newest first; the oldest are dropped beyond the most that are stored.
 tell :: UTCTime -> Page -> Maybe CommentThreadId -> Text -> Occasion -> Set Text -> MemState -> MemState
 tell now p thread excerpt occasion logins st = case currentUserId st of
   Nothing -> st
@@ -1621,36 +1633,37 @@ tell now p thread excerpt occasion logins st = case currentUserId st of
            in insertNotification u (made (i, k)) s'
      in foldl' add st (recipients st.grants watchers happened)
 
--- | Tell of a comment made in a thread, by these people so far.
+-- | Notify of a comment in a thread whose comments so far are by these
+-- users.
 tellOfComment :: UTCTime -> PageId -> CommentThreadId -> [UserId] -> Text -> Set Text -> MemState -> MemState
 tellOfComment now pid tid people body logins st = case Map.lookup pid st.pages of
   Just p -> tell now p (Just tid) (excerptOf body) (CommentedIn tid people) logins st
   Nothing -> st
 
--- | Tell of a comment edited: only whom it newly mentions.
+-- | Notify of an edited comment: only the people it newly mentions.
 tellOfEdit :: UTCTime -> PageId -> CommentThreadId -> Text -> Set Text -> MemState -> MemState
 tellOfEdit now pid tid body logins st = case Map.lookup pid st.pages of
   Just p -> tell now p (Just tid) (excerptOf body) (EditedIn tid) logins st
   Nothing -> st
 
--- | Give a user a notification, unchecked, the newest of theirs: for the
+-- | Give a user a notification without checks, as their newest: for the
 -- demo's content, and for 'tell'.
 insertNotification :: UserId -> Notification -> MemState -> MemState
 insertNotification u n st = st {notices = Map.insert u (take (snd keptNotifications) (n : Map.findWithDefault [] u st.notices)) st.notices}
 
--- | Of these logins, the users', as a mention names them: none for someone
--- not signed in.
+-- | The users with these logins, named as a mention names them; none for
+-- someone not signed in.
 mentionableIn :: [Text] -> MemState -> Map Text Author
 mentionableIn logins st = case currentUserId st of
   Nothing -> mempty
   Just _ -> Map.fromList [(u.login, authorOf st u.id) | u <- activeUsers st, u.login `elem` logins]
 
--- | Someone signed in: who.
+-- | The id of the signed-in user, or 'Forbidden' for nobody.
 signedIn :: MemState -> Either WikiError UserId
 signedIn st = maybe (Left Forbidden) Right (currentUserId st)
 
--- | The current user's notifications of pages they may still read, each
--- with where its page is now, the latest 'maxListed'.
+-- | The current user's notifications about pages they may still read,
+-- each with where its page is now, at most the latest 'maxListed'.
 notificationsIn :: MemState -> Either WikiError Notifications
 notificationsIn st = do
   u <- signedIn st
@@ -1693,8 +1706,8 @@ setWatchingIn target w st = do
   let st' = st {watches = Map.insertWith (<>) u (Map.singleton target w) st.watches}
   (st',) <$> watchingIn target st'
 
--- | How the current user is told. The demo has no verified address and
--- sends no mail.
+-- | How the current user wants to be notified. The demo has no verified
+-- address and sends no mail.
 notificationSettingsIn :: MemState -> Either WikiError NotificationSettings
 notificationSettingsIn st = do
   u <- signedIn st
