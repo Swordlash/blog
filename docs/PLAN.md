@@ -1180,6 +1180,30 @@ must be in before it is.
   `comments.json`, pages' subpages and spaces' subspaces nested), comments included (authors
   by login and name, matched by login on import), histories still out; import reads
   versions 1 and 2, the demo and the server through the same `Wiki.Core.Export`.
+- **WP5.10 Letters TikZJax's fonts lack** (the owner, 2026-10-27, from a page whose
+  `ylabel={payoff (zł)}` showed "Cannot read properties of undefined (reading 'toString')").
+  TikZJax draws with Computer Modern in OT1 only: `ó é ß –` work, `ł`/`\l` crash dvi2html on
+  a glyph missing from its OT1 table, `ą ę` (`\k`) are "unavailable in encoding OT1", `ü`
+  fails with "Could not find font metric for 127". So: a readable error that names the
+  letter instead of the crash; Polish letters and the German umlauts drawn (the OT1 glyph
+  table patched at bundle time for `ł Ł` and the accent at 127, an OT1 `\k` defined in the
+  preamble for the ogoneks, or whatever draws them), each letter checked by the smoke test
+  against the real TikZJax; `docs/markdown.md` says what letters a picture can hold.
+- **WP5.11 The chat's liveness, its close button, the default effort** (the owner,
+  2026-10-27): "Thinking…" with animated dots from Send to the first token, a status line
+  while a tool runs ("Editing the page…" with the change's note), a cursor on streamed text,
+  a time on each message and the answer's duration, a seconds counter when nothing has
+  arrived for a while, Anthropic's `thinking.display: "summarized"` shown under "Thinking…";
+  a labelled "Close" button in the panel's header instead of the ×, Esc in the message box
+  closes too; an "Effort" default per provider on the settings page (`medium` on both
+  providers, instead of today's `low`), the picker under the chat changing it for the
+  conversation only.
+- **WP5.12 Comments in plain English** (the owner, 2026-10-27, after reading `Cache`'s
+  haddock: "nie mam pojęcia co to znaczy"). The convention in `AGENTS.md` now says comments
+  are plain, direct English with the thing's name and ordinary words first; this package
+  rewrites the haddocks and comments that fail it, module by module, `wiki-app` and
+  `wiki-server` first, with no change to code; a first PR of a few modules for the owner
+  to judge the tone, then the rest.
 
 ## Delegation protocol
 

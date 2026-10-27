@@ -102,6 +102,14 @@ Those of haskell-halogen's `AGENTS.md` apply unchanged, in short:
 - Markdown is rendered to Halogen `HTML` values, never to an HTML string set through
   `innerHTML`. Mermaid, KaTeX and highlighting fill elements Halogen holds by ref and does not
   look inside.
-- Haddocks and comments explain why, in full sentences. Commit subjects are short imperative
-  sentences, optionally prefixed with the package (`wiki-core: …`); bodies say why.
+- Haddocks and comments are plain, direct English, written for someone who does not know
+  this code. The first sentence says what the thing is, in ordinary words and with its name
+  from the code (`Cache` is the HTTP backend's cache of API answers); the next ones say why
+  it exists and when it changes. Short sentences. Technical words rather than paraphrases
+  (cache, fetch, invalidated, render), no pronouns the reader has to resolve ("what it has
+  read", "as the reads return them", "let go"), no ornament. The test: a reader new to the
+  module understands each sentence on one reading. They still explain why rather than
+  restate the code, but a comment that explains why in riddles explains nothing. Commit
+  subjects are short imperative sentences, optionally prefixed with the package
+  (`wiki-core: …`); bodies say why, in the same plain English.
 - Each package keeps a `CHANGELOG.md` with an `Unreleased` section once it has users.
