@@ -290,4 +290,9 @@ mediaType file = Map.findWithDefault "application/octet-stream" (map toLower (ta
         , -- A file whose own name ends in .gz is data its reader inflates
           -- itself, so it goes out as it is, with no Content-Encoding.
           (".gz", "application/gzip")
+        , -- Opaque data, named so explicitly: TikZJax's compressed files,
+          -- the zlib streams under tikzjax/ that its worker inflates
+          -- itself, which web/bundle.sh names .bin rather than .gz because
+          -- a corporate proxy may refuse to download a gzip archive.
+          (".bin", "application/octet-stream")
         ]

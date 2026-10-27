@@ -82,7 +82,9 @@ const at = (path) => `${base}${path.replace(/^\//, "")}`;
 const local = (address) => (address.startsWith(base) ? `/${address.slice(base.length)}` : address);
 
 // instantiateStreaming refuses a .wasm served without its media type, so the
-// server has to get these right.
+// server has to get these right. A .gz goes out as application/gzip and a
+// .bin as application/octet-stream, as GitHub Pages sends them: TikZJax's
+// files are .bin (web/bundle.sh), since a proxy may refuse a gzip download.
 const types = {
   ".html": "text/html",
   ".js": "text/javascript",
@@ -94,6 +96,8 @@ const types = {
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".webmanifest": "application/manifest+json",
+  ".gz": "application/gzip",
+  ".bin": "application/octet-stream",
 };
 
 // A static server, as Pages is: a directory's address serves its index.html,
@@ -492,7 +496,7 @@ try {
   await cold.locator("#app .wiki-tikz > svg").first().waitFor({ timeout });
   const drawn = Date.now() - asked;
   const fetchedTikz = await eventually(async () => {
-    assert.ok([...tikzBytes.keys()].some((address) => address.endsWith("core.dump.gz")), "not yet");
+    assert.ok([...tikzBytes.keys()].some((address) => address.endsWith("core.dump.bin")), "not yet");
     return [...tikzBytes.values()].reduce((a, b) => a + b, 0);
   }, "TikZJax's files being counted");
   console.log(
@@ -514,6 +518,30 @@ try {
     assert.ok((await answer.text()).includes(says), `${path} does not say ${JSON.stringify(says)}`);
   }
   console.log("ok: TikZJax's licence and its fonts' are served beside them");
+  // TikZJax's compressed files are zlib streams named .bin, served as
+  // application/octet-stream, since a corporate proxy may refuse to download
+  // a gzip archive (web/src/tikz-files.mjs): no .gz ships under tikzjax/,
+  // so nothing there goes out as application/gzip. (The cold page above
+  // drew its picture from them, through the worker's renaming.)
+  {
+    const shipped = (await readdir(join(root, "tikzjax"), { recursive: true })).map((name) => name.split(sep).join("/"));
+    assert.deepEqual(
+      shipped.filter((name) => name.endsWith(".gz")),
+      [],
+      "gzip files ship under tikzjax/",
+    );
+    const bins = shipped.filter((name) => name.endsWith(".bin"));
+    for (const name of ["tex.wasm.bin", "core.dump.bin", "tex_files/tikzlibrarycalc.code.tex.bin"]) {
+      assert.ok(bins.includes(name), `tikzjax/${name} is not built`);
+    }
+    for (const name of shipped) {
+      const answer = await fetch(url(`/tikzjax/${name}`), { method: "HEAD" });
+      const type = answer.headers.get("content-type");
+      assert.notEqual(type, "application/gzip", `tikzjax/${name} is served as gzip`);
+      if (name.endsWith(".bin")) assert.equal(type, "application/octet-stream", `tikzjax/${name}'s type`);
+    }
+    console.log(`ok: TikZJax's ${bins.length} compressed files are .bin, served as application/octet-stream, and none as gzip`);
+  }
   // And the notices of what esbuild bundled into the page's scripts and
   // styles (web/src/licenses.mjs), each with its licence's text: the
   // libraries the README's licence section names, and Mermaid's own
@@ -545,7 +573,7 @@ try {
   // format is held back for a while, so that the picture is still being
   // drawn when the links are followed.
   const hurried = await newPage();
-  await hurried.route("**/tikzjax/core.dump.gz", async (route) => {
+  await hurried.route("**/tikzjax/core.dump.bin", async (route) => {
     await new Promise((later) => setTimeout(later, 5000));
     await route.continue();
   });

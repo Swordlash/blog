@@ -66,11 +66,14 @@ const types = {
   ".webm": "video/webm",
   ".pdf": "application/pdf",
   ".zip": "application/zip",
-  // A file whose own name ends in .gz is data its reader inflates itself
-  // (TikZJax's worker fetches tikzjax/core.dump.gz, tex.wasm.gz and
-  // tex_files/*.gz), so it goes out as it is, with no Content-Encoding, as
-  // GitHub Pages sends it.
+  // A file whose own name ends in .gz is data its reader inflates itself, so
+  // it goes out as it is, with no Content-Encoding, as GitHub Pages sends it.
   ".gz": "application/gzip",
+  // Opaque data, named so explicitly: TikZJax's compressed files
+  // (tikzjax/core.dump.bin, tex.wasm.bin and tex_files/*.bin, zlib streams
+  // its worker inflates itself), which web/bundle.sh names .bin rather than
+  // .gz because a corporate proxy may refuse to download a gzip archive.
+  ".bin": "application/octet-stream",
 };
 
 // The encodings the client accepts, from Accept-Encoding, leaving out those it

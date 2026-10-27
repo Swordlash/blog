@@ -1282,7 +1282,11 @@ highlight.js (with `web/src/islands.js`) into `islands.js`, which publishes
 imports the first time it draws a diagram; `web/src/tikz.js` into
 `islands/tikz.js`, which it imports the first time it draws a TikZ picture, with
 TikZJax's worker, TeX and fonts copied from npm's `@drgrice1/tikzjax` into
-`tikzjax/`; `web/src/editor.js`, CodeMirror for the editor's text, into
+`tikzjax/` (its gzip files, `tex.wasm.gz`, `core.dump.gz` and `tex_files/*.gz`,
+rewrapped by `web/src/tikz-files.mjs` as zlib streams named `.bin`, which every
+server here and GitHub Pages send as `application/octet-stream`, since a
+corporate proxy may refuse to download a gzip archive from a site it does not
+know; the worker `web/src/tikz-worker.js` asks for the `.bin` names); `web/src/editor.js`, CodeMirror for the editor's text, into
 `islands/editor.js`, which it imports the first time the editor opens, so that a
 reader's page never fetches it; and KaTeX's stylesheet and fonts into `islands.css` and `fonts/`. `build-wasm` runs it into the page it builds, and
 the browser suite's `wiki-app/test/web/bundle.sh` into the test page. npm 11
@@ -1387,7 +1391,9 @@ published. The repository's own code stays MIT either way.
 
 **TikZJax** is served as it is published on npm (`@drgrice1/tikzjax`),
 unmodified, as a worker and files of its own, which the page talks to by
-messages. `web/bundle.sh` writes beside it `tikzjax/NOTICE.txt`, saying where its
+messages; only its gzip files (`tex.wasm.gz`, `core.dump.gz`, `tex_files/*.gz`)
+are served as zlib streams of the same bytes, named `.bin`, so that a proxy
+refusing gzip downloads lets them through, which `NOTICE.txt` says. `web/bundle.sh` writes beside it `tikzjax/NOTICE.txt`, saying where its
 source is, and `tikzjax/LICENSE.txt`, the GPL's text, as conveying it (as the demo
 does) requires; neither its npm package nor its repository has a licence file,
 only `package.json`'s `GPL-3.0+`, so the text is the FSF's, kept in

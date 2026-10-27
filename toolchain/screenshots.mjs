@@ -46,6 +46,7 @@ const types = {
   ".png": "image/png",
   ".json": "application/json",
   ".gz": "application/gzip",
+  ".bin": "application/octet-stream",
   ".webmanifest": "application/manifest+json",
 };
 

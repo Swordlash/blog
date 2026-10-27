@@ -126,7 +126,7 @@ printf 'Prerendered %s with %s, for the %s.\n' "$public_dir/index.html" "$preren
 # that needs it, so they are summed up rather than listed.
 # The editor's CodeMirror (islands/editor.js) is fetched only by the editor.
 # TikZJax's files are fetched only by a page with a picture: its worker and
-# TeX (the .gz files are compressed already, and served as they are), and
+# TeX (the .bin files are zlib streams already, and served as they are), and
 # of tex_files/ and fonts/ only what a picture uses.
 node toolchain/compress.mjs --no-write \
   $(find "$public_dir" -maxdepth 1 -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' \) | sort) \
@@ -134,7 +134,7 @@ node toolchain/compress.mjs --no-write \
   "$public_dir/tikzjax/run-tex.js"
 printf '%s\t%s files, %s KiB\n' "$public_dir/islands/chunks/" \
   "$(find "$public_dir/islands/chunks" -type f | wc -l)" "$(du -sk "$public_dir/islands/chunks" | cut -f1)"
-for file in tex.wasm.gz core.dump.gz; do
+for file in tex.wasm.bin core.dump.bin; do
   printf '%s\t%s KiB\n' "$public_dir/tikzjax/$file" "$(du -k "$public_dir/tikzjax/$file" | cut -f1)"
 done
 for dir in tex_files fonts; do

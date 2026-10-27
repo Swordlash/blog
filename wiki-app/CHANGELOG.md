@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+TikZ pictures are drawn behind a proxy that refuses gzip downloads (WP5.5):
+the page serves TikZJax's TeX, its format and its TeX files
+(`tikzjax/tex.wasm.gz`, `core.dump.gz`, `tex_files/*.gz` as published) as
+zlib streams of the same bytes named `.bin`, sent as
+`application/octet-stream`, and the worker that starts TikZJax asks for
+those names. No `.gz` file ships under `tikzjax/` any more; a deployment
+serving the page from its own server needs nothing new.
+
 The demo's Diagrams page has a TikZ picture whose fence starts with
 `\usetikzlibrary` (WP5.3), so that the README's example of one links to a
 page where it is drawn. The test suite checks the README against the demo:

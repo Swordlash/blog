@@ -83,11 +83,20 @@ npx esbuild web/src/editor.js \
 # packages and TikZ libraries TeX may load, one file at a time, and fonts/
 # the Computer Modern fonts its SVG is set in. Its own loader (tikzjax.js),
 # the source maps and the TrueType copies of the fonts are not served.
+#
+# The .gz files do not ship as they are: a corporate proxy may refuse to
+# download a gzip archive from a site it does not know, and a reader behind
+# one then gets no picture at all. web/src/tikz-files.mjs rewraps each as a
+# zlib stream of the same bytes, named .bin (tex.wasm.bin, core.dump.bin,
+# tex_files/*.bin), served as application/octet-stream; run-tex.js inflates
+# either with pako, and web/src/tikz-worker.js asks for the .bin names where
+# run-tex.js asks for the .gz ones.
 tikzjax=node_modules/@drgrice1/tikzjax/dist
 rm -rf "$out_dir/tikzjax"
 mkdir -p "$out_dir/tikzjax"
 cp -R "$tikzjax/run-tex.js" "$tikzjax/tex.wasm.gz" "$tikzjax/core.dump.gz" \
   "$tikzjax/tex_files" "$tikzjax/fonts" "$tikzjax/fonts.css" "$out_dir/tikzjax/"
+node web/src/tikz-files.mjs "$out_dir/tikzjax"
 cp web/src/tikz-worker.js "$out_dir/tikzjax/worker.js"
 # TikZJax is free software under the GPL, and conveying it (as the demo on
 # GitHub Pages does) means conveying the licence's text and saying where its
@@ -100,7 +109,9 @@ cp web/src/tikz-worker.js "$out_dir/tikzjax/worker.js"
 cp web/licenses/GPL-3.0.txt "$out_dir/tikzjax/LICENSE.txt"
 cp web/licenses/BaKoMa-LICENCE.txt "$out_dir/tikzjax/fonts/LICENCE.txt"
 printf '%s\n' \
-  "TikZJax $(node -p 'require("./node_modules/@drgrice1/tikzjax/package.json").version'), from npm's @drgrice1/tikzjax, unmodified." \
+  "TikZJax $(node -p 'require("./node_modules/@drgrice1/tikzjax/package.json").version'), from npm's @drgrice1/tikzjax, unmodified" \
+  'but for its gzip files (tex.wasm.gz, core.dump.gz, tex_files/*.gz), served as zlib streams' \
+  'of the same bytes under .bin names (tex.wasm.bin, core.dump.bin, tex_files/*.bin).' \
   'Licence: GPL-3.0-or-later, whose text is LICENSE.txt. Source: https://github.com/drgrice1/tikzjax' \
   '' \
   'fonts/ holds the BaKoMa Computer Modern fonts, Copyright (C) 1994, 1995 Basil K. Malyshev,' \

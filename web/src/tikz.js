@@ -94,8 +94,9 @@ const startWorker = () => {
       thread.postMessage({ type: "run", uid, method, args });
     });
   // run-tex.js fetches tex.wasm.gz and core.dump.gz from the directory it
-  // is given and inflates them itself: they are served as gzip files, not
-  // with a Content-Encoding.
+  // is given and inflates them itself; the worker (web/src/tikz-worker.js)
+  // fetches them as tex.wasm.bin and core.dump.bin, the zlib streams
+  // web/bundle.sh serves in their place, with no Content-Encoding.
   started.loaded = ready.then(() => started.call("load", base.href.replace(/\/$/, "")));
   return started;
 };

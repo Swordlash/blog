@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The static files' server sends a `.bin` file as `application/octet-stream`,
+named so explicitly (WP5.5): TikZJax's compressed files are now zlib streams
+named `.bin` rather than gzip files named `.gz`, since a corporate proxy may
+refuse to download a gzip archive from a site it does not know. A `.gz` is
+still sent as `application/gzip`, as its own bytes.
+
 Licensed under the MIT licence (WP5.1), where it was proprietary: the
 package now ships `LICENSE` and says `license: MIT` in its `.cabal` file.
 A binary of `wiki-server` links pandoc, texmath and skylighting, which are

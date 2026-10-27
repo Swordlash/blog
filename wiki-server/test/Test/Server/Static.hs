@@ -57,8 +57,15 @@ publicListener = describe "on the public listener" $ do
     (header "Content-Type" gzipped, header "Content-Encoding" gzipped, gzipped.body) `shouldBe` (Just "text/javascript; charset=utf-8", Just "gzip", "gzip bytes")
 
   it "sends a file that is compressed itself as its own bytes, never its sibling" $ withRunning $ \r -> do
-    reply <- getUrlWith r (r.public <> "/tikzjax/core.dump.gz") [("Accept-Encoding", "gzip, br")]
-    (header "Content-Type" reply, header "Content-Encoding" reply, reply.body) `shouldBe` (Just "application/gzip", Nothing, "a dump, compressed")
+    reply <- getUrlWith r (r.public <> "/downloads/archive.gz") [("Accept-Encoding", "gzip, br")]
+    (header "Content-Type" reply, header "Content-Encoding" reply, reply.body) `shouldBe` (Just "application/gzip", Nothing, "an archive, compressed")
+
+  -- TikZJax's compressed files are zlib streams named .bin (web/bundle.sh),
+  -- since a corporate proxy may refuse a gzip download: they go out as
+  -- opaque bytes, never as gzip.
+  it "sends TikZJax's .bin files as application/octet-stream, as they are" $ withRunning $ \r -> do
+    reply <- getUrlWith r (r.public <> "/tikzjax/core.dump.bin") [("Accept-Encoding", "gzip, br")]
+    (header "Content-Type" reply, header "Content-Encoding" reply, reply.body) `shouldBe` (Just "application/octet-stream", Nothing, "a dump, as a zlib stream")
 
   it "answers HEAD without a body, and refuses other methods" $ withRunning $ \r -> do
     headed <- send r methodHead (r.public <> "/style.css") [] ""
