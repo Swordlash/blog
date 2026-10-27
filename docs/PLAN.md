@@ -1142,6 +1142,44 @@ must be in before it is.
   an API call; the dispatch input wins. `actionlint` clean; the README's CI section says
   the rule and that `plan` runs on the hosted runners for everyone. After WP5.2, whose
   workflow this builds on.
+- **WP5.5 Three small fixes from the owner's first days on a work laptop** (2026-10-27).
+  The administration's forms (public address, mail, mail test, sign-in provider, backups,
+  invitations, new user) in one column up to 30rem, scoped CSS, a browser check of the
+  layout; a `field-hint` under each field of "Add a provider" in the README's words, and the
+  redirect line in three states (no public address; "Type the name above and the redirect
+  URI to register appears here."; the URI with how to register it); and TikZJax past a
+  corporate proxy that returns 403 on `application/gzip`: `web/bundle.sh` rewrites every
+  `.gz` under `tikzjax/` (173 files: TeX, the core dump and the packages `run-tex.js`
+  fetches through the same pako loader) as a zlib stream named `.bin`, served as
+  `application/octet-stream`, and the worker maps the `.gz` requests to them; the smoke
+  test fails on any `.gz` shipped there.
+- **WP5.6 No password for provider accounts; the administrator sends password links** (the
+  owner, 2026-10-27, setting up Google sign-in). An account with no password that signs in
+  with a provider the server still has (`Wiki.Api.Account.providerOnly`, a server-filled
+  `Directory` field) has no password to set: not in its own menu, not in the Users table,
+  and the server refuses it on the user's and the administrator's endpoints and in the
+  public reset; an account whose last provider was disconnected or removed is "No way in"
+  and gets one like any other. The administrator's button becomes "Send a password link…"
+  (`POST admin/users/<id>/password-link`, 204; the same link, expiry and sign-out as "Forgot
+  your password?", one a minute per account, audited as `user.password-link`) where the
+  server sends mail and the address is verified; typing a password stays only otherwise,
+  with the reason under the button. The account panel's two lines about a password are
+  reworded for such accounts. `wiki-server users password` stays the operator's way in.
+- **WP5.7 Spike: `persistent` + `esqueleto` over SQLite and PostgreSQL** (the owner,
+  2026-10-27, proposed). Time-boxed: port the users, groups and grants part of
+  `Wiki.Server.Storage.Rows` to entities and esqueleto over `SqlBackend`, with
+  `persistent-sqlite` and `persistent-postgresql` both running the backend contract tests;
+  migrations stay hand-written and versioned, with a per-database branch where SQL differs
+  (the ~15 SQLite-only statements: `INSERT OR IGNORE/REPLACE`, `COLLATE NOCASE`, `rowid`,
+  the PRAGMAs and the backup API, which stay the SQLite backend's); search stays in
+  Haskell. The report says what the port costs in code, how joins read, what esqueleto
+  cannot say, and whether to go on. Not merged unless the owner decides so.
+- **WP5.8 The export as a tree** (the owner, 2026-10-27, proposed): format version 2 of
+  `docs/export.md`, a zip whose spaces, subspaces and pages are directories
+  (`spaces/<slug>/space.json`, `…/pages/<slug>/page.json` + `page.md`, `attachments/`,
+  `comments.json`, pages' subpages and spaces' subspaces nested), comments included (authors
+  by login and name, matched by login on import), histories still out; import reads
+  versions 1 and 2, the demo and the server through the same `Wiki.Core.Export`.
 
 ## Delegation protocol
 
@@ -3158,6 +3196,29 @@ Amended by the planning session after each work package's report.
   through its `eventually`. The three small to-dos of the previous entry are closed.
 - **WP4.19 started** (2026-10-27) on `wp4.19-assistant` from `main` `0e4e2d8`, alone; the
   owner lifted the shelving of decision 21 with API keys for both providers.
+- **WP4.19 reshaped and extended** (2026-10-27, PR #89 open on `wp4.19-assistant`, from
+  `main` `1a5c489`). The owner reshaped it the same day into a chat whose model edits the page
+  through `replace`/`insert` tools as tracked changes (above), then added in the PR: the next
+  message tells the model which changes the author rejected or undid; model and effort pickers
+  under the message (Anthropic `output_config.effort`, OpenAI `reasoning.effort`); the
+  providers chosen from round floating bubbles with their logos at the text's top right (the
+  OpenAI logo from simple-icons 15.22, the last release carrying it); the model lists fetched
+  from the providers' `/v1/models` and grouped (recommended, all, other), the built-in list a
+  fallback; a provider that cannot be reached dimmed with the reason; an OpenAI-compatible
+  base URL (Azure OpenAI, GitHub Models, OpenRouter, a local server). The planning session
+  drove the built demo against the real APIs with keys the owner lent (Haiku 5.5, gpt-5-mini):
+  the tool loop, tracked changes, Stop, the prefix cache (11,484 tokens read on every
+  Anthropic request after the first) all hold.
+- **WP5.5 merged** (2026-10-27, PR #91, `main` at `968bf50`). The agent noted a flaky test
+  outside its package: "counts a notification the live channel tells of, with no page shown"
+  (`/Mentions, watching and notifications/over the backend over HTTP/`) failed twice in its
+  environment with "no attempt finished within 2000 ms"; to be made robust.
+- **WP5.6 opened** (2026-10-27, PR #90 on `wp5.6-password-by-mail`), rebased onto `968bf50`
+  after WP5.5. Beyond the brief, the agent made the public reset skip provider-only accounts
+  and refuse their old links, and gave disabled logins their own hint. The owner, reviewing,
+  asked why the storage is hand-written SQL rather than `persistent`/`opaleye`/`rel8`: the
+  two latter are PostgreSQL-only; the answer became WP5.7. WP5.8 came from the owner's look
+  at the export.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
