@@ -1,54 +1,66 @@
--- | What the backend over HTTP keeps of what it has read, so that a view
--- whose data has been seen already shows it at once rather than after a
--- fetch (decision 18 of the plan): kept per entity, as the reads return
--- them, and let go when the wiki changes.
+-- | 'Cache' is the HTTP backend's cache of API answers. It holds the
+-- answers the program has already fetched (pages, spaces, the directory,
+-- …), one entry per record, in the shape the server sent them. A view
+-- whose data was fetched already renders at once instead of fetching
+-- again. This is decision 18 of the plan: a view renders from the cache
+-- when it can, and otherwise renders "Loading" and fetches in its
+-- initializer. Entries are dropped when the wiki changes, so that nothing
+-- stale is shown.
 --
--- The rule for letting go is the simplest that is right: any write the
--- client makes empties the cache, since a write can change much more than
--- what it names (a moved space moves every path under it; a new space
--- grants its creator a permission, which changes the session; a save
--- discards the saver's draft). A draft's own writes are the exception:
--- they change that draft and nothing else, and they are made every few
--- seconds while someone types, so they put the draft in its place instead.
+-- Any write this client makes empties the whole cache ('afterWrite'). The
+-- rule is coarse on purpose, because a write can change much more than the
+-- record it names. Moving a space changes the path of everything under it.
+-- Creating a space grants its creator a permission, which changes the
+-- session. Saving a page discards the saver's draft. Saving a draft is the
+-- exception: it changes that draft and nothing else, and it happens every
+-- few seconds while someone types, so the new draft replaces the cached
+-- one instead.
 --
--- What someone else changes on the server is not seen until this client
--- writes, or the page is loaded again: the cache lives as long as the page;
--- but for a save of a page the live channel tells of ('afterEvent'), which
--- lets go of the pages read, and of what a save changes with them.
+-- The cache lives as long as the page in the browser. A change someone
+-- else makes on the server is not seen until this client writes, or the
+-- page is reloaded. The exception is a page save reported by the live
+-- channel: 'afterEvent' then drops the cached pages, and the other entries
+-- a save changes.
 --
--- A refusal is an answer too, and is kept as one: that a space is not
--- there ('NotFound') or that the reader may not see it ('Forbidden') is
--- what the view shows, and a page the server rendered with that refusal in
--- it ("Wiki.App.Backend.Http.Preload") is rendered the same by the
--- program only if the program knows it at once. Those two are decided by
--- the wiki's content and rules, so they go stale as any answer does, and
--- are let go with the rest. 'Unreachable' is not an answer and is never
--- kept: trying again may well work.
+-- Refusals are cached too. 'NotFound' (the space is not there) and
+-- 'Forbidden' (the reader may not see it) are what the view shows. The
+-- server may prerender a page with such a refusal in it
+-- ("Wiki.App.Backend.Http.Preload"), and the program renders the same page
+-- only if it has the refusal without a fetch. Both refusals depend on the
+-- wiki's content and permissions, so they can go stale like any answer,
+-- and are dropped with the rest. 'Unreachable' is never cached: a retry
+-- may well work.
 --
--- A page's comments ("Wiki.Core.Comment") are kept by page, and their own
--- writes are the other exception: a comment changes its page's threads
--- and nothing else, so its result is folded into them
--- ('Wiki.Api.Events.applyEvent') rather than everything let go, which
--- would make the page itself load again. What happens to them elsewhere
--- comes over the live channel ("Wiki.App.Live"), which lets a page's
--- threads go when it hears of them, and when it stops listening for them
--- ('forgetThreads').
+-- A page's comment threads ("Wiki.Core.Comment") are cached by page, and
+-- writing a comment is the second exception to emptying the cache. A
+-- comment changes its page's threads and nothing else, so the write's
+-- result is applied to the cached threads ('Wiki.Api.Events.applyEvent').
+-- Emptying the cache would make the page itself load again. Comment
+-- changes made elsewhere arrive over the live channel ("Wiki.App.Live"),
+-- which updates the cached threads, and removes a page's threads
+-- ('forgetThreads') when it stops listening to that page.
 --
--- So is how many pages each space has, which the directory of spaces
--- shows, and what a blog's posts are listed with (their first authors and
--- their counts of comments, which a comment's write lets go). So are searches, by their query: the server renders the page of a
--- search's results with its hits, which the program then shows at once.
--- And so is the administration's directory of the wiki's people, which the
--- server renders the administration with, and its settings and invitations;
--- and an invitation as its link shows it to the person invited, by the
--- link's secret; and the server's own settings, without their secrets.
+-- The cache also holds:
 --
--- And so are what the bell shows (WP4.13 of docs/PLAN.md: the user's
--- notifications), whether the user watches a page or a space, and which of
--- the logins mentioned are users': the server renders the header and the
--- page with them. A notification heard of over the live channel is put
--- in front of those kept ('withNotice'); a mark read, or a watch chosen,
--- puts what it answered in place, and changes nothing else.
+-- * the number of pages in each space, which the directory of spaces
+--   shows;
+-- * the details a blog lists its posts with: each post's first author and
+--   its number of comments (a comment write drops them);
+-- * search results, by query: the server prerenders the search results
+--   page with its hits, and the program then shows them at once;
+-- * for the administration, which the server prerenders: the directory of
+--   the wiki's users and groups, the wiki's settings and invitations, and
+--   the server's own settings (without their secrets);
+-- * an invitation as its link shows it to the invited person, by the
+--   secret in the link;
+-- * the user's notifications, which the bell shows (WP4.13 of
+--   docs/PLAN.md), whether the user watches a page or a space, and which
+--   of the mentioned logins belong to users: the server prerenders the
+--   header and the page with them.
+--
+-- A notification received over the live channel is added at the front of
+-- the cached ones ('withNotice'). Marking notifications read, or choosing
+-- a watch, puts the server's answer in the cache and changes nothing else.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
   , emptyCache
@@ -113,8 +125,8 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
 import Wiki.Core.Version (Author, Version, VersionInfo)
 
--- | Each read's answer, as it came back: what it gave, or the refusal it
--- was (see 'kept').
+-- | The cached answers, one field per backend read. A field holds what the
+-- read returned, or the refusal it returned (see 'kept').
 data Cache = Cache
   { session :: Maybe Session
   , spaces :: Maybe [Space]
@@ -130,16 +142,17 @@ data Cache = Cache
   , pageAt :: Map (SpaceId, [Slug]) (Either WikiError Page)
   -- ^ 'Wiki.App.Backend.getPage', by space and path.
   , drafts :: Map PageId (Either WikiError (Maybe Draft))
-  -- ^ 'Wiki.App.Backend.getDraft', by page: the signed-in user's draft, or
-  -- that they have none.
+  -- ^ 'Wiki.App.Backend.getDraft', by page: the signed-in user's draft,
+  -- or 'Nothing' when they have none.
   , searches :: [(SearchQuery, [SearchHit])]
-  -- ^ 'Wiki.App.Backend.searchPages', by query, the latest first: a few
-  -- at most, since a write lets them go.
+  -- ^ 'Wiki.App.Backend.searchPages', by query, the latest first. The
+  -- list stays short because every write empties it.
   , versionLists :: Map PageId (Either WikiError [VersionInfo])
   -- ^ 'Wiki.App.Backend.listVersions', by page.
   , versions :: Map (PageId, UTCTime) (Either WikiError Version)
   -- ^ 'Wiki.App.Backend.getVersion', by page and time. A version never
-  -- changes, but it goes with its page, so these are let go with the rest.
+  -- changes, but it is deleted with its page, so these entries are dropped
+  -- with the rest.
   , directory :: Maybe (Either WikiError Directory)
   -- ^ 'Wiki.App.Backend.Admin.directory'.
   , settings :: Maybe (Either WikiError WikiSettings)
@@ -153,16 +166,17 @@ data Cache = Cache
   , backups :: Maybe (Either WikiError Backups)
   -- ^ 'Wiki.App.Backend.Admin.backups'.
   , activity :: Maybe (Either WikiError Activity)
-  -- ^ 'Wiki.App.Backend.Admin.activity', its first page only: what the
-  -- server rendered the administration with, answered once (the backend's
-  -- 'once').
+  -- ^ 'Wiki.App.Backend.Admin.activity', first page only: the page the
+  -- server prerendered the administration with. It answers one read only
+  -- (the backend's 'once'), and is then removed.
   , status :: Maybe (Either WikiError ServerStatus)
-  -- ^ 'Wiki.App.Backend.Admin.serverStatus', likewise.
+  -- ^ 'Wiki.App.Backend.Admin.serverStatus', cached and removed in the
+  -- same way as 'activity'.
   , threads :: Map PageId (Either WikiError [Thread])
   -- ^ 'Wiki.App.Backend.Comments.listThreads', by page.
   , people :: Map Text (Maybe Author)
-  -- ^ 'Wiki.App.Backend.Notifications.mentionable', by login: whom a
-  -- login is, or that it is nobody's.
+  -- ^ 'Wiki.App.Backend.Notifications.mentionable', by login: the user
+  -- with that login, or 'Nothing' when no user has it.
   , notices :: Maybe (Either WikiError Notifications)
   -- ^ 'Wiki.App.Backend.Notifications.notifications'.
   , watches :: Map WatchTarget (Either WikiError Watch)
@@ -198,9 +212,10 @@ emptyCache =
     , watches = mempty
     }
 
--- | Whether a read's answer is kept: what it gave, and a refusal the
--- wiki's content or rules decided ('NotFound', 'Forbidden'); not that the
--- server could not be asked, nor a refusal of how it was asked.
+-- | Whether an answer is cached. A successful answer is, and so are the
+-- refusals that the wiki's content or permissions decide ('NotFound',
+-- 'Forbidden'). 'Unreachable' is not cached, and neither is a refusal of
+-- the request itself.
 kept :: Either WikiError a -> Bool
 kept = \case
   Right _ -> True
@@ -208,9 +223,10 @@ kept = \case
   Left Forbidden -> True
   Left _ -> False
 
--- | The page at a path in a space, if it has been read: by itself, or with
--- every page of its space ('withPages'), which is how the space's view
--- has them, so that a page opened from there needs no fetch.
+-- | The cached page at a path in a space, if there is one. It comes from
+-- an earlier 'Wiki.App.Backend.getPage', or from the cached list of all
+-- the space's pages ('withPages'). The space's view fetches that list, so
+-- a page opened from the space's view needs no fetch.
 cachedPage :: SpaceId -> [Slug] -> Cache -> Maybe (Either WikiError Page)
 cachedPage sid path c =
   Map.lookup (sid, path) c.pageAt
@@ -220,7 +236,8 @@ cachedPage sid path c =
 cachedSearch :: SearchQuery -> Cache -> Maybe [SearchHit]
 cachedSearch q c = snd <$> find ((== q) . fst) c.searches
 
--- | The cache with what a read gave, one function per read.
+-- | The cache with a read's answer added. There is one such function per
+-- read.
 withSession :: Session -> Cache -> Cache
 withSession s c = c {session = Just s}
 
@@ -242,12 +259,14 @@ withPostDetails sid d c = c {postDetails = Map.insert sid d c.postDetails}
 withPageAt :: SpaceId -> [Slug] -> Either WikiError Page -> Cache -> Cache
 withPageAt sid path p c = c {pageAt = Map.insert (sid, path) p c.pageAt}
 
--- | The signed-in user's draft of a page as it now is ('Nothing' for
--- none), or why it cannot be read; or, given 'Nothing' at all, not known.
+-- | Set the signed-in user's cached draft of a page. @Just (Right
+-- Nothing)@ means they have no draft, and @Just (Left e)@ that the read
+-- was refused. 'Nothing' removes the entry: the draft is not known.
 withDraft :: PageId -> Maybe (Either WikiError (Maybe Draft)) -> Cache -> Cache
 withDraft pid d c = c {drafts = Map.alter (const d) pid c.drafts}
 
--- | The hits of a query, in place of any kept for it before.
+-- | Cache the hits of a query, replacing any hits cached for the same
+-- query.
 withSearch :: SearchQuery -> [SearchHit] -> Cache -> Cache
 withSearch q hits c = c {searches = (q, hits) : filter ((/= q) . fst) c.searches}
 
@@ -281,55 +300,60 @@ withActivity a c = c {activity = Just a}
 withStatus :: Either WikiError ServerStatus -> Cache -> Cache
 withStatus st c = c {status = Just st}
 
--- | The cache without the log's first page, once it has been answered.
+-- | Remove the cached first page of the audit log, once it has answered
+-- a read.
 forgetActivity :: Cache -> Cache
 forgetActivity c = c {activity = Nothing}
 
--- | The cache without the server's status, once it has been answered.
+-- | Remove the cached server status, once it has answered a read.
 forgetStatus :: Cache -> Cache
 forgetStatus c = c {status = Nothing}
 
 withThreads :: PageId -> Either WikiError [Thread] -> Cache -> Cache
 withThreads pid ts c = c {threads = Map.insert pid ts c.threads}
 
--- | Who these logins are, as asked for: each of them, whether or not it
--- is a user's.
+-- | Cache which of these logins belong to users. Every login asked about
+-- gets an entry, also one that belongs to no user.
 withPeople :: [Text] -> Map Text Author -> Cache -> Cache
 withPeople asked found c = c {people = Map.fromList [(l, Map.lookup l found) | l <- asked] <> c.people}
 
--- | Who these logins are, if all of them are known: those that are users'.
+-- | The users these logins belong to, if every login is cached. A login
+-- that belongs to no user is left out of the map.
 cachedPeople :: [Text] -> Cache -> Maybe (Map Text Author)
 cachedPeople logins c = Map.fromList . catMaybes <$> traverse (\l -> fmap (l,) <$> Map.lookup l c.people) logins
 
 withNotices :: Either WikiError Notifications -> Cache -> Cache
 withNotices n c = c {notices = Just n}
 
--- | A notification heard of, in front of those kept.
+-- | Add a notification received over the live channel at the front of the
+-- cached notifications.
 withNotice :: Notification -> Cache -> Cache
 withNotice n c = c {notices = fmap (\ns -> Notifications {unread = ns.unread + 1, items = n : ns.items}) <$> c.notices}
 
--- | The notifications let go: some may have been missed.
+-- | Remove the cached notifications, because some may have been missed.
 forgetNotices :: Cache -> Cache
 forgetNotices c = c {notices = Nothing}
 
 withWatch :: WatchTarget -> Either WikiError Watch -> Cache -> Cache
 withWatch t w c = c {watches = Map.insert t w c.watches}
 
--- | The cache after a write to a page's comments: what it did folded into
--- the page's threads, if they are kept; or, for a write whose outcome is
--- not known (it failed, or was refused), the page's threads let go. The
--- posts' details, which count comments, are let go either way.
+-- | The cache after a write to a page's comments. If the write succeeded,
+-- its event is applied to the page's cached threads, if any are cached.
+-- If it failed or was refused, its outcome is not known, so the page's
+-- threads are removed. The posts' details count comments, so they are
+-- removed in both cases.
 afterComment :: PageId -> Either WikiError PageEvent -> Cache -> Cache
 afterComment pid outcome c = case outcome of
   Right event -> c {threads = Map.adjust (fmap (applyEvent event)) pid c.threads, postDetails = mempty}
   Left _ -> forgetThreads pid c {postDetails = mempty}
 
--- | The cache after an event the live channel told of a page: a change to
--- its comments folded into its threads ('afterComment'), and a save of it
--- (by anyone, in any tab) letting go of every page read, with what a save
--- changes besides the page: its space's list of pages (titles), the
--- searches (its text) and its history. Who is asking, the spaces, the
--- drafts (another's save leaves this author's alone) and the threads stay.
+-- | The cache after the live channel reports an event on a page. A change
+-- to the page's comments is applied to its threads ('afterComment'). A
+-- save of the page, by anyone and in any tab, removes every cached page,
+-- and the other entries a save changes: the lists of pages (they show
+-- titles), the searches (they match the text) and the version lists. The
+-- session, the spaces, the drafts (someone else's save does not change
+-- this user's draft) and the threads stay.
 afterEvent :: PageId -> PageEvent -> Cache -> Cache
 afterEvent pid = \case
   PageChanged _ -> \c -> c {pageAt = mempty, pages = mempty, searches = [], versionLists = mempty}
