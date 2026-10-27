@@ -3094,6 +3094,15 @@ Amended by the planning session after each work package's report.
   found their pull request's run and redeployed the demo in under a minute (the first of
   the three was cancelled by the next push while its `tested` waited for the machine; the
   later deploys carried its change).
+- **The weekly hosted run and the two races, fixed** (2026-10-27, PR #88, `main` at
+  `f01470e`, by the planning session at the owner's word): `schedule` runs the workflow
+  on Mondays at 03:17 UTC on the hosted runners (`plan` treats a scheduled run as
+  untrusted and asks for hosted; it has a concurrency group of its own; `deploy` does not
+  run from it), so the hosted caches on `main` are read and saved again before GitHub's
+  seven-day eviction. `Test.Server.Api`'s request-log test waits for the line the
+  middleware writes after the response (passes 8 of 8 here, where it failed 2 of 3 full
+  runs before); `smoke-test-server.mjs`'s address check after creating a space goes
+  through its `eventually`. The three small to-dos of the previous entry are closed.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
