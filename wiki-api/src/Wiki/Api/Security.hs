@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Keeping an account safe (WP4.11 of docs/PLAN.md): the sessions a user
 -- has and may end, a second factor at sign-in, an e-mail address checked
@@ -81,6 +81,7 @@ import Data.Time (NominalDiffTime, UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 --------------------------------------------------------------------------------
 -- Sessions
@@ -88,7 +89,7 @@ import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 -- | A session, as its user names it to end it: an id of its own, random,
 -- that signs nobody in.
 newtype SessionRef = SessionRef {text :: Text}
-  deriving stock (Eq, Ord, Show, Generic)
+  deriving stock (Eq, Ord, Show)
   deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
 
 -- | One of a user's sessions: @GET \/api\/v1\/account\/sessions@.
@@ -103,8 +104,9 @@ data SessionSummary = SessionSummary
   , current :: Bool
   -- ^ Whether it is the session the request was made with.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SessionSummary
 
 --------------------------------------------------------------------------------
 -- A second factor
@@ -118,8 +120,9 @@ data SecondFactorState = SecondFactorState
   , asksPassword :: Bool
   -- ^ Whether beginning one takes their current password: they have one.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SecondFactorState
 
 -- | A new secret to give an authenticator application: @POST
 -- \/api\/v1\/account\/second-factor\/totp@. It is not asked for at sign-in
@@ -134,8 +137,9 @@ data TotpEnrolment = TotpEnrolment
   -- light, without the quiet zone; what the panel draws, as an @\<svg>@ of
   -- its own. Empty if the address would not fit in one.
   }
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''TotpEnrolment
 
 instance Show TotpEnrolment where
   showsPrec _ _ rest = "TotpEnrolment <hidden>" <> rest
@@ -143,8 +147,9 @@ instance Show TotpEnrolment where
 -- | The password of the user asking, where they have one, given to do what
 -- a session alone may not: @POST \/api\/v1\/account\/second-factor\/totp@.
 newtype CurrentPassword = CurrentPassword {password :: Maybe Text}
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''CurrentPassword
 
 instance Show CurrentPassword where
   showsPrec _ c rest = "CurrentPassword {password = " <> maybe "Nothing" (const "Just <hidden>") c.password <> "}" <> rest
@@ -152,8 +157,9 @@ instance Show CurrentPassword where
 -- | A code from an authenticator application, or a recovery code: what
 -- confirms a second factor, signs in with one and takes one away.
 newtype OneTimeCode = OneTimeCode {code :: Text}
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''OneTimeCode
 
 instance Show OneTimeCode where
   showsPrec _ _ rest = "OneTimeCode <hidden>" <> rest
@@ -161,8 +167,9 @@ instance Show OneTimeCode where
 -- | The recovery codes of a second factor just turned on: shown this once,
 -- and kept by the server only as hashes.
 newtype RecoveryCodes = RecoveryCodes {codes :: [Text]}
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''RecoveryCodes
 
 instance Show RecoveryCodes where
   showsPrec _ c rest = "RecoveryCodes <" <> show (length c.codes) <> " hidden>" <> rest
@@ -184,8 +191,9 @@ data EmailState = EmailState
   -- ^ Whether giving another address, or none, takes their current
   -- password: they have one.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''EmailState
 
 -- | A user's new e-mail address, or none (blank): @PUT
 -- \/api\/v1\/account\/email@. A new address is not verified, and a link to
@@ -196,8 +204,9 @@ data EmailChange = EmailChange
   { email :: Text
   , password :: Maybe Text
   }
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''EmailChange
 
 instance Show EmailChange where
   showsPrec _ c rest = "EmailChange {email = " <> show c.email <> ", password = " <> maybe "Nothing" (const "Just <hidden>") c.password <> "}" <> rest
@@ -207,8 +216,9 @@ data AccountEmail = AccountEmail
   { email :: Text
   , verified :: Bool
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''AccountEmail
 
 --------------------------------------------------------------------------------
 -- Links by mail
@@ -217,7 +227,7 @@ data AccountEmail = AccountEmail
 -- @\/verify-email\/\<secret>\/@): random, single use, and kept by the server
 -- only as a hash. Never written where a 'Show' would put it.
 newtype MailToken = MailToken {text :: Text}
-  deriving stock (Eq, Ord, Generic)
+  deriving stock (Eq, Ord)
   deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
 
 instance Show MailToken where
@@ -226,14 +236,16 @@ instance Show MailToken where
 -- | Ask for a password reset: @POST \/api\/v1\/password-reset@, with a
 -- login or an e-mail address.
 newtype ResetRequest = ResetRequest {login :: Text}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''ResetRequest
 
 -- | The new password a reset's link sets: @POST
 -- \/api\/v1\/password-reset\/\<secret>@.
 newtype NewPasswordByMail = NewPasswordByMail {password :: Text}
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''NewPasswordByMail
 
 instance Show NewPasswordByMail where
   showsPrec _ _ rest = "NewPasswordByMail {password = <hidden>}" <> rest

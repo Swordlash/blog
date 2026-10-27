@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | A page's comments over HTTP (WP4.5 of docs/PLAN.md): its threads, at
 -- @pages\/\<page>\/threads@, each operation one of @MonadComments@'s
@@ -16,12 +16,12 @@ module Wiki.Api.Comments
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Protolude
 import Servant.API
 import Wiki.Core.Anchor (Anchor)
 import Wiki.Core.Comment (Comment, Thread)
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 -- | A page's threads, below @pages\/\<page>\/threads@.
 data CommentsApi mode = CommentsApi
@@ -51,15 +51,19 @@ data NewThread = NewThread
   -- ^ The quote it is about; @null@ for a thread about the whole page.
   , body :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | A comment's Markdown, new or edited.
 newtype CommentText = CommentText {body :: Text}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Whether a thread is resolved.
 newtype ThreadResolution = ThreadResolution {resolved :: Bool}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+-- The JSON instances, last, since declarations above name types declared
+-- below them ("Wiki.Core.Json" says why that matters), each after those
+-- of the types it holds.
+deriveValueJSON defaultOptions ''NewThread
+deriveValueJSON defaultOptions ''CommentText
+deriveValueJSON defaultOptions ''ThreadResolution

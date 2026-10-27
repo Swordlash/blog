@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | The administration's "Activity" (WP4.10 of docs/PLAN.md): the audit
 -- log ("Wiki.Core.Audit"), newest first, a page at a time, filtered by who
@@ -12,10 +12,10 @@ module Wiki.Api.Activity
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Protolude
 import Wiki.Core.Audit (Actor, AuditEntry)
 import Wiki.Core.Id (UserId)
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 -- | Which entries to list: whose (everyone's for 'Nothing'), from how many
 -- of the newest on.
@@ -23,8 +23,9 @@ data ActivityQuery = ActivityQuery
   { actor :: Maybe UserId
   , offset :: Int
   }
-  deriving stock (Eq, Ord, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show)
+
+deriveValueJSON defaultOptions ''ActivityQuery
 
 -- | The newest entries, everyone's: what the section opens on.
 firstPage :: ActivityQuery
@@ -46,5 +47,6 @@ data Activity = Activity
   -- ^ Everyone the log has an entry of, by login: whom it can be filtered
   -- by.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Activity

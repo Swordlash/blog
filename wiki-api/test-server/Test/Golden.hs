@@ -4,12 +4,16 @@
 -- browser that still expects the old shape.
 --
 -- Each file is compared as JSON, not as text, both ways: what the value is
--- written as is the file, and the file reads as the value. To write the
+-- written as is the file, and the file reads as the value. And what a value
+-- is sent as is the text of its 'Value', keys sorted, as an instance with
+-- only a 'toJSON' writes it ("Wiki.Core.Json"): clients compare those
+-- bytes, and an instance derived by aeson's own splices would write its
+-- keys in another order. To write the
 -- files again after a deliberate change, run the suite with
 -- @WIKI_API_GOLDEN=accept@ and read the diff before committing it.
 module Test.Golden (spec) where
 
-import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeFileStrict', toJSON)
+import Data.Aeson (FromJSON, ToJSON, Value, eitherDecodeFileStrict', encode, toJSON)
 import Data.Aeson.Encode.Pretty (Config (..), Indent (..), defConfig, encodePretty')
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
@@ -45,6 +49,7 @@ golden name value = it name $ do
   when accept $ BSL.writeFile path (encodePretty' config value <> "\n")
   json <- either (panic . toS) identity <$> eitherDecodeFileStrict' path
   (json :: Value) `shouldBe` toJSON value
+  encode value `shouldBe` encode (toJSON value)
   eitherDecodeFileStrict' path `shouldReturn` Right value
   where
     config = defConfig {confIndent = Spaces 2, confCompare = compare}

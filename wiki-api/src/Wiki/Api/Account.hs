@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Accounts: signing in and out of the wiki over HTTP, and what the
 -- administration does to a user's account (decisions 8, 11 and 20 of
@@ -57,11 +57,12 @@ module Wiki.Api.Account
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON (..), defaultOptions, genericToJSON, omitNothingFields)
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
+import Wiki.Core.Json (Options (..), defaultOptions, deriveFromJSON, deriveValueJSON, deriveValueToJSON)
 import Wiki.Core.User (User)
 
 -- | What a user signs in with: @POST \/api\/v1\/session@.
@@ -69,8 +70,9 @@ data Credentials = Credentials
   { login :: Text
   , password :: Text
   }
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''Credentials
 
 instance Show Credentials where
   showsPrec _ c rest = "Credentials {login = " <> show c.login <> ", password = <hidden>}" <> rest
@@ -88,13 +90,12 @@ data NewAccount = NewAccount
   -- docs/PLAN.md); only the administration's "New user" gives one, and
   -- may leave it out, as it is left out of the JSON when there is none.
   }
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON)
+  deriving stock (Eq)
 
--- Through 'toJSON' alone, as the other bodies are written: their keys in
--- order.
-instance ToJSON NewAccount where
-  toJSON = genericToJSON defaultOptions {omitNothingFields = True}
+-- Written without the e-mail address when there is none, read with it or
+-- without.
+deriveValueToJSON defaultOptions {omitNothingFields = True} ''NewAccount
+deriveFromJSON defaultOptions ''NewAccount
 
 instance Show NewAccount where
   showsPrec _ a rest = "NewAccount {login = " <> show a.login <> ", displayName = " <> show a.displayName <> ", password = <hidden>, email = " <> show a.email <> "}" <> rest
@@ -103,8 +104,9 @@ instance Show NewAccount where
 -- Their sessions end with it, so that whoever knew the old one is signed
 -- out.
 newtype NewPassword = NewPassword {password :: Text}
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''NewPassword
 
 instance Show NewPassword where
   showsPrec _ _ rest = "NewPassword {password = <hidden>}" <> rest
@@ -119,8 +121,9 @@ data PasswordChange = PasswordChange
   -- signs in with a provider's account) leaves it out.
   , new :: Text
   }
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''PasswordChange
 
 instance Show PasswordChange where
   showsPrec _ c rest = "PasswordChange {current = " <> maybe "Nothing" (const "Just <hidden>") c.current <> ", new = <hidden>}" <> rest
@@ -129,8 +132,9 @@ instance Show PasswordChange where
 -- \/api\/v1\/admin\/users\/\<id>\/disabled@. A disabled user cannot sign in,
 -- and their sessions end at once; their pages, versions and grants stay.
 newtype AccountDisabled = AccountDisabled {disabled :: Bool}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''AccountDisabled
 
 -- | A user's account, as the administration sees it.
 data Account = Account
@@ -140,8 +144,9 @@ data Account = Account
   -- with an imported wiki has none until one is set.
   , disabled :: Bool
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Account
 
 -- | An account at a provider (OpenID Connect, WP3.6 of docs/PLAN.md) that
 -- signs a user in: the provider, by the name the server's configuration
@@ -156,8 +161,9 @@ data LinkedIdentity = LinkedIdentity
   -- ^ Their name there, if it said one.
   , linkedAt :: UTCTime
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''LinkedIdentity
 
 -- | How the user who is asking signs in: @GET \/api\/v1\/account\/identities@.
 data SignInMethods = SignInMethods
@@ -166,8 +172,9 @@ data SignInMethods = SignInMethods
   , identities :: [LinkedIdentity]
   -- ^ The providers' accounts they may sign in with, by provider.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SignInMethods
 
 -- | Whether a user could still sign in: with a password, or with one of
 -- their identities. Disconnecting an identity that would leave them with
@@ -206,7 +213,7 @@ providerOnly configured hasPassword providers = not hasPassword && any (`elem` c
 -- is. Whoever has it may make an account, so it is never written where a
 -- 'Show' would put it, a log above all.
 newtype InvitationToken = InvitationToken {text :: Text}
-  deriving stock (Eq, Ord, Generic)
+  deriving stock (Eq, Ord)
   deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
 
 instance Show InvitationToken where
@@ -220,5 +227,6 @@ data InvitationInfo = InvitationInfo
   -- ^ The address the invitation was sent to.
   , expiresAt :: UTCTime
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''InvitationInfo

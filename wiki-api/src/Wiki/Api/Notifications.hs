@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Mentions, watching and notifications over HTTP (WP4.13 of
 -- docs/PLAN.md), at @notifications…@, each operation one of
@@ -22,10 +22,10 @@ module Wiki.Api.Notifications
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Protolude
 import Servant.API
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Notification (MailMode, Notification, Watch)
 import Wiki.Core.Version (Author)
 
@@ -61,16 +61,14 @@ data Notifications = Notifications
   { unread :: Int
   , items :: [Notification]
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Which notifications to mark read: these, or ('everything') all.
 data ReadMark = ReadMark
   { ids :: [NotificationId]
   , everything :: Bool
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | How the user is told: how they are mailed (as chosen, or by default:
 -- at once with a verified address, otherwise not), whether they watch
@@ -82,18 +80,24 @@ data NotificationSettings = NotificationSettings
   , verifiedEmail :: Bool
   , mailing :: Bool
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | What the user chooses of 'NotificationSettings'.
 data NotificationSettingsChange = NotificationSettingsChange
   { mail :: MailMode
   , watchOwn :: Bool
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Whether to watch a page or a space.
 newtype Watching = Watching {watching :: Bool}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+-- The JSON instances, last, since declarations above name types declared
+-- below them ("Wiki.Core.Json" says why that matters), each after those
+-- of the types it holds.
+deriveValueJSON defaultOptions ''Notifications
+deriveValueJSON defaultOptions ''ReadMark
+deriveValueJSON defaultOptions ''NotificationSettings
+deriveValueJSON defaultOptions ''NotificationSettingsChange
+deriveValueJSON defaultOptions ''Watching

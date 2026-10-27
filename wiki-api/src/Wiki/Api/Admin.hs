@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | What the administration API speaks: the server's status, the wiki's
 -- people (its users, who of them administers it, its groups and their
@@ -38,7 +38,6 @@ module Wiki.Api.Admin
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime)
 import Protolude
@@ -46,6 +45,7 @@ import Text.Show (Show (showsPrec))
 import Wiki.Api.Security (AccountEmail)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (InvitationId, UserId)
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.User (Group, Membership, User)
 
 -- | The answer to @GET \/api\/v1\/admin\/status@.
@@ -75,8 +75,7 @@ data ServerStatus = ServerStatus
   -- ^ The last errors the server logged since it started, the newest
   -- first, twenty at most (WP4.10 of docs/PLAN.md): kept in memory only.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | An error the server logged: when, where (the route pattern of the
 -- request it answered, @\/api\/v1\/pages\/:page@, never the address with
@@ -87,8 +86,13 @@ data LoggedError = LoggedError
   , route :: Text
   , message :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''LoggedError
+
+-- Below 'LoggedError', which 'ServerStatus' holds ("Wiki.Core.Json" says
+-- why).
+deriveValueJSON defaultOptions ''ServerStatus
 
 -- | The answer to @GET \/api\/v1\/admin\/directory@: everyone the wiki
 -- has, as the administration shows them, in one answer, since the panel
@@ -142,26 +146,30 @@ data Directory = Directory
   -- ^ The members of each group, by the group's id; a group without
   -- members may be left out.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Directory
 
 -- | The body of @PUT \/api\/v1\/admin\/users\/\<id>\/administrator@:
 -- whether the user is to hold the global administer.
 newtype AdministratorFlag = AdministratorFlag {administrator :: Bool}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''AdministratorFlag
 
 -- | The body of @PUT \/api\/v1\/admin\/users\/\<id>\/create-spaces@:
 -- whether the user is to hold the global create-spaces.
 newtype CreateSpacesFlag = CreateSpacesFlag {createSpaces :: Bool}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''CreateSpacesFlag
 
 -- | The body of @POST \/api\/v1\/admin\/groups@ and of @PUT
 -- \/api\/v1\/admin\/groups\/\<id>\/name@: the group's name.
 newtype GroupName = GroupName {name :: Text}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''GroupName
 
 -- | The wiki's own settings: @GET@ and @PUT \/api\/v1\/admin\/settings@.
 data WikiSettings = WikiSettings
@@ -173,8 +181,9 @@ data WikiSettings = WikiSettings
   -- global create-spaces. Otherwise a new account holds no grant until an
   -- administrator gives it one.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''WikiSettings
 
 -- | A wiki's settings before anyone has changed them: open, and new
 -- accounts create no spaces. So a wiki made before there were settings
@@ -194,8 +203,9 @@ data Invitation = Invitation
   -- ^ Whether it had expired when it was listed: its link no longer makes
   -- an account, and it stays listed until it is revoked or made again.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Invitation
 
 -- | @GET \/api\/v1\/admin\/invitations@: the invitations not yet used, the
 -- latest first, and whether the server mails them (it has an SMTP server
@@ -204,15 +214,17 @@ data Invitations = Invitations
   { mailing :: Bool
   , invitations :: [Invitation]
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Invitations
 
 -- | @POST \/api\/v1\/admin\/invitations@: invite someone, by their e-mail
 -- address. An address that has an invitation already is given a new one,
 -- in its place.
 newtype NewInvitation = NewInvitation {email :: Text}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''NewInvitation
 
 -- | An invitation just made, and how it reaches the person invited.
 data Invited = Invited
@@ -225,8 +237,9 @@ data Invited = Invited
   , mailError :: Maybe Text
   -- ^ Why it could not be mailed, if it was to be.
   }
-  deriving stock (Eq, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq)
+
+deriveValueJSON defaultOptions ''Invited
 
 instance Show Invited where
   showsPrec _ i rest = "Invited {invitation = " <> show i.invitation <> ", token = " <> (if isJust i.token then "<hidden>" else "Nothing") <> ", mailError = " <> show i.mailError <> "}" <> rest

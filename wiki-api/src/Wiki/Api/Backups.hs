@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Backups the server makes by itself (WP4.9 of docs/PLAN.md), set in a
 -- "Backups" part of the administration's "Server" section and nowhere
@@ -57,6 +57,7 @@ import Data.Time.Calendar.WeekDate (toWeekDate)
 import Protolude
 import Text.Printf (printf)
 import Wiki.Api.ServerSettings (SecretState)
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 --------------------------------------------------------------------------------
 -- The settings
@@ -73,11 +74,7 @@ data BackupSettingsOf s = BackupSettings
   -- ^ Where the newest backup and the attachments' files are copied after
   -- each backup, off the machine; none, if not set.
   }
-  deriving stock (Eq, Show, Generic, Functor)
-
-instance (ToJSON s) => ToJSON (BackupSettingsOf s)
-
-instance (FromJSON s) => FromJSON (BackupSettingsOf s)
+  deriving stock (Eq, Show, Functor)
 
 -- | As the API answers them.
 type BackupSettings = BackupSettingsOf SecretState
@@ -118,8 +115,7 @@ data Retention = Retention
   { daily :: Int
   , weekly :: Int
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Where the backups are copied off the machine.
 data DestinationOf s
@@ -147,6 +143,14 @@ instance (FromJSON s) => FromJSON (DestinationOf s) where
     (ToDirectory <$> o .: "directory")
       -- A change may leave the configuration out, which keeps it.
       <|> (ToRclone <$> o .: "rclone" <*> (maybe (parseJSON Null) parseJSON =<< o .:? "config"))
+
+-- Below 'DestinationOf', since a splice above it would hide it from
+-- 'BackupSettingsOf', which holds it ("Wiki.Core.Json" says why).
+deriveValueJSON defaultOptions ''Retention
+
+-- Below 'Schedule', 'Retention' and 'DestinationOf', which it holds
+-- ("Wiki.Core.Json" says why).
+deriveValueJSON defaultOptions ''BackupSettingsOf
 
 -- | A server nobody has set backups up on: off, and, once turned on,
 -- every day at 03:00 UTC, keeping a week of days and four weeks.
@@ -239,8 +243,7 @@ data Backups = Backups
   , kept :: Int
   -- ^ How many backups the data directory holds, the deploy's included.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | A backup made, or tried.
 data BackupRecord = BackupRecord
@@ -257,13 +260,11 @@ data BackupRecord = BackupRecord
   , offSite :: Maybe OffSite
   -- ^ How copying it off the machine went, when there is somewhere to.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | What made a backup.
 data Trigger = OnSchedule | Manual
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | A copy off the machine.
 data OffSite = OffSite
@@ -272,8 +273,20 @@ data OffSite = OffSite
   , problem :: Maybe Text
   -- ^ Why it failed, if it did.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''OffSite
+
+-- Below 'OffSite', since a splice above it would hide it from
+-- 'BackupRecord', which holds it ("Wiki.Core.Json" says why).
+deriveValueJSON defaultOptions ''Trigger
+
+-- Below 'Trigger' and 'OffSite', which it holds ("Wiki.Core.Json" says
+-- why).
+deriveValueJSON defaultOptions ''BackupRecord
+
+-- Below 'BackupRecord', which it holds ("Wiki.Core.Json" says why).
+deriveValueJSON defaultOptions ''Backups
 
 --------------------------------------------------------------------------------
 -- When, and which are kept

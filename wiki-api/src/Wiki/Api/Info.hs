@@ -1,10 +1,10 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | What a server says about itself: the first type the client and the server
 -- share, and the pattern the rest of the API's types follow. Each is plain
--- data with aeson instances derived from its 'Generic' representation, so the
--- JSON's field names are the record's, and both sides read and write it with
--- the same code.
+-- data with aeson instances derived by Template Haskell ("Wiki.Core.Json"),
+-- so the JSON's field names are the record's, and both sides read and write
+-- it with the same code.
 module Wiki.Api.Info
   ( ServerInfo (..)
   , Health (..)
@@ -12,8 +12,8 @@ module Wiki.Api.Info
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Protolude
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 -- | The answer to @GET \/api\/v1\/info@.
 data ServerInfo = ServerInfo
@@ -22,8 +22,9 @@ data ServerInfo = ServerInfo
   , apiVersion :: Int
   -- ^ The version of the API the server speaks, 'apiVersion' for this one.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''ServerInfo
 
 -- | The API version these types describe, the @v1@ in its paths.
 apiVersion :: Int
@@ -43,5 +44,6 @@ data Health = Health
   -- ^ How long ago the newest backup in the data directory was made, in
   -- seconds; @null@ when there is none.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Health

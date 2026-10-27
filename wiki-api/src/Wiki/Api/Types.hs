@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | The bodies of the API's requests, and the one response of its own: who
 -- is asking.
@@ -10,8 +10,8 @@
 -- so that each endpoint's JSON is an object whose fields name its
 -- arguments: @{\"name\": \"Team\"}@ rather than a bare string, which leaves
 -- room to add a field later without breaking a client. Each is plain data
--- with aeson instances derived from its 'Generic' representation, so the
--- JSON's field names are the record's, as in "Wiki.Api.Info".
+-- with aeson instances derived by Template Haskell ("Wiki.Core.Json"), so
+-- the JSON's field names are the record's, as in "Wiki.Api.Info".
 module Wiki.Api.Types
   ( -- * Who is asking
     SessionInfo (..)
@@ -39,11 +39,11 @@ module Wiki.Api.Types
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Export (ExportFormat)
 import Wiki.Core.Id
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Order (ChildOrder, Children, Shift)
 import Wiki.Core.Permission (Grants, SpacePermission, Subject)
 import Wiki.Core.User (SignInProvider, Standing, User)
@@ -72,8 +72,9 @@ data SessionInfo = SessionInfo
   -- ^ The documents the server exports pages and spaces as
   -- ("Wiki.Api.Export"): the PDFs only where it has a TeX engine.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SessionInfo
 
 -- | A space to make: @createSpace@.
 data NewSpace = NewSpace
@@ -81,39 +82,45 @@ data NewSpace = NewSpace
   -- ^ The space to make it a subspace of, or 'Nothing' for the top level.
   , name :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''NewSpace
 
 -- | A space's new name: @renameSpace@.
 newtype SpaceName = SpaceName {name :: Text}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SpaceName
 
 -- | Whether a space is readable by everyone: @setSpacePublic@.
 newtype SpacePublic = SpacePublic {public :: Bool}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SpacePublic
 
 -- | A space's math macros, the empty text for none: @setSpaceMathMacros@.
 newtype SpaceMathMacros = SpaceMathMacros {mathMacros :: Text}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SpaceMathMacros
 
 -- | The order a space lists its subspaces or its pages in: @setSpaceOrder@.
 data SpaceOrder = SpaceOrder
   { children :: Children
   , order :: ChildOrder
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SpaceOrder
 
 -- | Where to move a space: @moveSpace@.
 newtype SpaceMove = SpaceMove
   { parent :: Maybe SpaceId
   -- ^ Its new parent, or 'Nothing' for the top level.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SpaceMove
 
 -- | A permission on a space to give someone or take from them:
 -- @setSpaceGrant@. A grant given twice, or taken from someone who does not
@@ -127,8 +134,9 @@ data SpaceGrantChange = SpaceGrantChange
   , granted :: Bool
   -- ^ Whether they are to have it.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''SpaceGrantChange
 
 -- | A page to make: @createPage@.
 data NewPage = NewPage
@@ -138,8 +146,9 @@ data NewPage = NewPage
   , title :: Text
   , body :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''NewPage
 
 -- | A page's new title and body: @savePage@. The version the edit started
 -- from is not here but in the request's @If-Match@ ("Wiki.Api.Version").
@@ -147,8 +156,9 @@ data PageEdit = PageEdit
   { title :: Text
   , body :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''PageEdit
 
 -- | Where to move a page: @movePage@.
 data PageMove = PageMove
@@ -158,19 +168,22 @@ data PageMove = PageMove
   -- ^ The page of that space to put it under, or 'Nothing' for its top
   -- level.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''PageMove
 
 -- | Whether a page is one of its space's templates: @setPageTemplate@.
 newtype PageTemplate = PageTemplate {template :: Bool}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''PageTemplate
 
 -- | Which way to move a child among its siblings: @shiftSpace@ and
 -- @shiftPage@.
 newtype ShiftBy = ShiftBy {shift :: Shift}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''ShiftBy
 
 -- | The signed-in user's unsaved work on a page: @saveDraft@. Unlike a
 -- save's, the version the work started from is part of what is kept, so it
@@ -181,5 +194,6 @@ data DraftEdit = DraftEdit
   , title :: Text
   , body :: Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''DraftEdit

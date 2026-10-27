@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | The server's own settings (WP4.4 of docs/PLAN.md): the wiki's public
 -- address, the mail server invitations go through, and the providers
@@ -81,6 +81,7 @@ import Data.Char (isAsciiLower)
 import Data.Text qualified as T
 import Protolude
 import Wiki.Api.Auth (callbackPath)
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 
 --------------------------------------------------------------------------------
 -- The settings
@@ -99,17 +100,13 @@ data ServerSettingsOf s = ServerSettings
   -- ^ The providers people may sign in with, in the order their buttons
   -- show.
   }
-  deriving stock (Eq, Show, Generic, Functor)
+  deriving stock (Eq, Show, Functor)
 
 -- | As the API answers them.
 type ServerSettings = ServerSettingsOf SecretState
 
 -- | As the API is sent them: each secret kept, replaced or cleared.
 type ServerSettingsChange = ServerSettingsOf (Maybe Text)
-
-instance (ToJSON s) => ToJSON (ServerSettingsOf s)
-
-instance (FromJSON s) => FromJSON (ServerSettingsOf s)
 
 -- | A mail server, over SMTP.
 data MailSettingsOf s = MailSettings
@@ -123,15 +120,11 @@ data MailSettingsOf s = MailSettings
   , from :: Text
   -- ^ The sender: @wiki\@example.org@, or @Wiki \<wiki\@example.org>@.
   }
-  deriving stock (Eq, Show, Generic, Functor)
+  deriving stock (Eq, Show, Functor)
 
 type MailSettings = MailSettingsOf SecretState
 
 type MailChange = MailSettingsOf (Maybe Text)
-
-instance (ToJSON s) => ToJSON (MailSettingsOf s)
-
-instance (FromJSON s) => FromJSON (MailSettingsOf s)
 
 -- | A provider to sign in with.
 data ProviderSettingsOf s = ProviderSettings
@@ -148,15 +141,11 @@ data ProviderSettingsOf s = ProviderSettings
   , secret :: s
   -- ^ The client's secret.
   }
-  deriving stock (Eq, Show, Generic, Functor)
+  deriving stock (Eq, Show, Functor)
 
 type ProviderSettings = ProviderSettingsOf SecretState
 
 type ProviderChange = ProviderSettingsOf (Maybe Text)
-
-instance (ToJSON s) => ToJSON (ProviderSettingsOf s)
-
-instance (FromJSON s) => FromJSON (ProviderSettingsOf s)
 
 -- | A server nobody has set up: no address, no mail, no provider. So a
 -- wiki made before there were these settings goes on as it was.
@@ -396,8 +385,7 @@ data ProviderCheck = ProviderCheck
   , problem :: Maybe Text
   -- ^ Why it could not be, for a person to read.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Where a provider is asked what.
 data Discovered = Discovered
@@ -406,8 +394,13 @@ data Discovered = Discovered
   , token :: Text
   , userinfo :: Maybe Text
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''Discovered
+
+-- Below 'Discovered', which 'ProviderCheck' holds ("Wiki.Core.Json" says
+-- why).
+deriveValueJSON defaultOptions ''ProviderCheck
 
 --------------------------------------------------------------------------------
 -- A test mail
@@ -415,10 +408,19 @@ data Discovered = Discovered
 -- | The body of @POST \/api\/v1\/admin\/server\/mail\/test@: whom to send
 -- a test mail to, through the mail server as set.
 newtype MailTest = MailTest {to :: Text}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''MailTest
 
 -- | Whether the test mail was sent: 'Nothing', or why not.
 newtype MailTestResult = MailTestResult {failure :: Maybe Text}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+deriveValueJSON defaultOptions ''MailTestResult
+
+-- The JSON instances, last, since declarations above name types declared
+-- below them ("Wiki.Core.Json" says why that matters), each after those
+-- of the types it holds.
+deriveValueJSON defaultOptions ''MailSettingsOf
+deriveValueJSON defaultOptions ''ProviderSettingsOf
+deriveValueJSON defaultOptions ''ServerSettingsOf

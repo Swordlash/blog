@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Exporting a page or a space as a document (WP4.16 of docs/PLAN.md):
 -- the formats, as the API names them in its addresses
@@ -26,10 +26,10 @@ module Wiki.Api.Export
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
 import Protolude
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Slug (slugText, slugify)
 
 -- | A document a page or a space is exported as.
@@ -49,8 +49,9 @@ data ExportFormat
     BeamerTex
   | -- | A deck as a Beamer presentation, typeset: needs @xelatex@.
     BeamerPdf
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
+deriveValueJSON defaultOptions ''ExportFormat
 
 -- | Its name in an address, @docx@, @beamer-pdf@.
 formatName :: ExportFormat -> Text

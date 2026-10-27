@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 -- | Bringing an archive into a wiki that has content already, in two steps.
 --
@@ -53,17 +53,16 @@ module Wiki.Api.Import
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (UTCTime)
 import Protolude
+import Wiki.Core.Json (defaultOptions, deriveValueJSON)
 import Wiki.Core.Slug (Slug)
 
 -- | What an import of an archive would do: its spaces, each before its
 -- subspaces (the order of the archive's tree, as @listSpaces@ gives a
 -- wiki's), each with its pages.
 newtype ImportPlan = ImportPlan {spaces :: [SpacePlan]}
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | One of the archive's spaces, as an import would treat it.
 data SpacePlan = SpacePlan
@@ -76,8 +75,7 @@ data SpacePlan = SpacePlan
   , pages :: [PagePlan]
   -- ^ Its pages, each before the pages under it, in the archive's order.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Whether a space is new to the server.
 data SpaceStatus
@@ -85,8 +83,7 @@ data SpaceStatus
     SpaceNew
   | -- | The server has a space at its path: the two are merged.
     SpaceMerged
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | One of the archive's pages, as an import would treat it.
 data PagePlan = PagePlan
@@ -100,8 +97,7 @@ data PagePlan = PagePlan
   -- ^ 'Nothing' for a page the server does not have, which is made; the
   -- server's page at the same path otherwise.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | The server's page at the path of an imported one, for the dialog to set
 -- beside it.
@@ -114,8 +110,7 @@ data PageConflict = PageConflict
   -- ^ Whether the two have the same title, body and attachments, so that
   -- either choice gives the same page and the dialog can say so.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | What the dialog's checkboxes and conflict choices say. Everything not
 -- left out is imported, and every conflict not chosen otherwise keeps the
@@ -132,8 +127,7 @@ data ImportChoices = ImportChoices
   , conflicts :: [ConflictChoice]
   -- ^ How conflicts are resolved; one not here keeps the server's page.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Import all of an archive, and keep the server's page wherever both
 -- have one.
@@ -145,16 +139,14 @@ data PageRef = PageRef
   { space :: [Slug]
   , page :: [Slug]
   }
-  deriving stock (Eq, Ord, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show)
 
 -- | How one conflict is resolved.
 data ConflictChoice = ConflictChoice
   { page :: PageRef
   , resolution :: Resolution
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
 
 -- | Which of two pages at the same path stays.
 data Resolution
@@ -163,8 +155,7 @@ data Resolution
   | -- | The imported page's title, body and attachments replace the
     -- server's; the page keeps its id and its place.
     TakeImported
-  deriving stock (Eq, Ord, Show, Enum, Bounded, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 -- | What an import did, to show once it is done.
 data ImportSummary = ImportSummary
@@ -180,5 +171,18 @@ data ImportSummary = ImportSummary
   , attachments :: Int
   -- ^ Attachments brought in with the pages created or replaced.
   }
-  deriving stock (Eq, Show, Generic)
-  deriving anyclass (FromJSON, ToJSON)
+  deriving stock (Eq, Show)
+
+-- The JSON instances, last, since declarations above name types declared
+-- below them ("Wiki.Core.Json" says why that matters), each after those
+-- of the types it holds.
+deriveValueJSON defaultOptions ''SpaceStatus
+deriveValueJSON defaultOptions ''PageConflict
+deriveValueJSON defaultOptions ''PagePlan
+deriveValueJSON defaultOptions ''SpacePlan
+deriveValueJSON defaultOptions ''ImportPlan
+deriveValueJSON defaultOptions ''PageRef
+deriveValueJSON defaultOptions ''Resolution
+deriveValueJSON defaultOptions ''ConflictChoice
+deriveValueJSON defaultOptions ''ImportChoices
+deriveValueJSON defaultOptions ''ImportSummary
