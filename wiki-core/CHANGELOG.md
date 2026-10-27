@@ -8,7 +8,7 @@ choose a password".
 The writing assistant's pure part (WP4.19). `Wiki.Core.Assistant` has the
 providers (Anthropic, OpenAI, and the scripted one tests install), the models
 offered for each (one list, read from the providers' own pages, the newest
-general models first), the `Settings` a user keeps (a key and a model per
+general models first), the `Settings` a user keeps (a key, a model and an effort per
 provider, the provider chosen; JSON as the browser keeps it, blank settings
 not kept at all) and what an error says (`errorText`, with the key and
 anything like a key taken out by `redact`). `Wiki.Core.Assistant.Prompt`

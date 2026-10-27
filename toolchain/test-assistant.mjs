@@ -120,12 +120,16 @@ await test("Anthropic: streams the text, runs the tool loop, and keeps the conve
   assert.equal(second.body.messages[1].role, "assistant");
   assert.deepEqual(second.body.messages[1].content.at(-1), { type: "tool_use", id: "tu_1", name: "replace", input: { old_text: "a", new_text: "b" } });
   assert.deepEqual(second.body.messages[2], { role: "user", content: [{ type: "tool_result", tool_use_id: "tu_1", content: "Applied." }] });
-  // The next message is sent after the whole conversation, unchanged.
-  await chat.send("More.", collect().handlers, new AbortController().signal);
+  // The next message is sent after the whole conversation, unchanged, with
+  // the request as it is now: another effort chosen since.
+  await chat.send("More.", collect().handlers, new AbortController().signal, { ...anthropicRequest, output_config: { effort: "high" } });
   const third = requests[2];
   assert.deepEqual(third.body.messages.slice(0, 3), second.body.messages);
   assert.equal(third.body.messages[3].role, "assistant");
   assert.deepEqual(third.body.messages[4], { role: "user", content: "More." });
+  assert.deepEqual(third.body.output_config, { effort: "high" });
+  assert.deepEqual(third.body.system, anthropicRequest.system);
+  assert.equal(third.body.thinking, undefined);
 });
 
 await test("Anthropic: a refused tool's answer is marked as an error", async () => {

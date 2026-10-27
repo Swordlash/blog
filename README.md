@@ -1392,6 +1392,7 @@ three, which only the server links:
 | the page | [highlight.js](https://highlightjs.org/) | BSD-3-Clause |
 | the page (the editor) | [CodeMirror](https://codemirror.net/) and `@lezer/highlight` | MIT |
 | the page (the editor's assistant) | [`@anthropic-ai/sdk`](https://github.com/anthropics/anthropic-sdk-typescript) and [`openai`](https://github.com/openai/openai-node), with `@opentelemetry/api`, which the first bundles | Apache-2.0 |
+| the page (the assistant's buttons) | the Claude and OpenAI logos as [simple-icons](https://simpleicons.org) draws them (16.36.0 and 15.22.0); the logos are trademarks of their owners, shown to name the provider | CC0-1.0 (the drawings) |
 | the page | [fflate](https://github.com/101arrowz/fflate) (the export's zip files) | MIT |
 | the page | [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim) (`wasi-shim.js`) | MIT or Apache-2.0 |
 | the page | [TikZJax](https://github.com/drgrice1/tikzjax) (`tikzjax/`) | GPL-3.0-or-later |

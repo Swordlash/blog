@@ -66,7 +66,7 @@ import Wiki.Core.Id (UserId (..))
 $( browserJS
      ["jsbits/assistant.js"]
      [ ("js_open", "wiki_assistant_open", Unsafe, [t|JSText -> Callback -> IO Int|])
-     , ("js_send", "wiki_assistant_send", Unsafe, [t|Int -> JSText -> IO ()|])
+     , ("js_send", "wiki_assistant_send", Unsafe, [t|Int -> JSText -> JSText -> IO ()|])
      , ("js_answer", "wiki_assistant_answer", Unsafe, [t|Int -> Int -> JSText -> Bool -> IO ()|])
      , ("js_stop", "wiki_assistant_stop", Unsafe, [t|Int -> IO ()|])
      , ("js_close", "wiki_assistant_close", Unsafe, [t|Int -> IO ()|])
@@ -178,11 +178,13 @@ class (Monad m) => MonadAssistant m where
   openTalk opening = lift . openTalk opening
 
   -- | Send a message of the user's (as "Wiki.Core.Assistant.Prompt"'s
-  -- 'Wiki.Core.Assistant.Prompt.userTurn' makes it), which runs one turn of
-  -- the model's, unless one is running.
-  sayTo :: Talk -> Text -> m ()
-  default sayTo :: (MonadTrans t, MonadAssistant n, m ~ t n) => Talk -> Text -> m ()
-  sayTo talk = lift . sayTo talk
+  -- 'Wiki.Core.Assistant.Prompt.userTurn' makes it) with the request as it
+  -- is now (the model and the effort chosen may have changed since the
+  -- chat was opened), which runs one turn of the model's, unless one is
+  -- running.
+  sayTo :: Talk -> Value -> Text -> m ()
+  default sayTo :: (MonadTrans t, MonadAssistant n, m ~ t n) => Talk -> Value -> Text -> m ()
+  sayTo talk request = lift . sayTo talk request
 
   -- | Answer a tool call: what the model is told, and whether the edit was
   -- made.
@@ -221,7 +223,7 @@ instance MonadAssistant BrowserDOM where
     callback <- mkSyncCallback (heard . heardOf . jsValText)
     chat <- js_open (toJSText (json (openingJSON opening))) callback
     pure Talk {chat, callback = Just callback, heard}
-  sayTo talk = liftIO . js_send talk.chat . toJSText
+  sayTo talk request user = liftIO (js_send talk.chat (toJSText user) (toJSText (json request)))
   answerCall talk call text ok = liftIO (js_answer talk.chat call (toJSText text) ok)
   stopTalk talk = liftIO (js_stop talk.chat)
   closeTalk talk = liftIO $ do
@@ -246,7 +248,7 @@ instance MonadAssistant MemDOM where
   secureContext = pure True
   prepareAssistant = pass
   openTalk _ heard = pure Talk {chat = 0, callback = Nothing, heard}
-  sayTo talk _ = liftIO (talk.heard (HeardFailed (AssistantError Unreachable Nothing "There is no browser here to reach a provider from.")))
+  sayTo talk _ _ = liftIO (talk.heard (HeardFailed (AssistantError Unreachable Nothing "There is no browser here to reach a provider from.")))
   answerCall _ _ _ _ = pass
   stopTalk _ = pass
   closeTalk _ = pass

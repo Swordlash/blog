@@ -268,7 +268,7 @@ component =
         gets (\st -> st.settings) >>= \case
           Just (Right s) | Just key <- if p == Scripted then Just "" else (settingsOf p s).key -> do
             modify (\st -> st {checks = Map.insert p Checking st.checks})
-            let r = Ready {provider = p, model = (settingsOf p s).model, key}
+            let r = Ready {provider = p, model = (settingsOf p s).model, key, effort = (settingsOf p s).effort}
             result <- lift (checkKey r)
             modify (\st -> st {checks = Map.insert p (maybe Works (Fails . errorText (Just key)) result) st.checks})
           _ -> pass

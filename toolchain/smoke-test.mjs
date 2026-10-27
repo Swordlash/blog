@@ -1271,8 +1271,15 @@ try {
     // the text, accepted.
     await writer.goto(url("/s/blog/p/hello-world/edit/"));
     await writer.locator(editorText).waitFor({ timeout });
-    await writer.locator("#app .editor-assistant-toggle").click();
+    // The providers' buttons beside the text, with their logos; the
+    // scripted provider's is there as the page has its script.
+    assert.equal(await writer.locator("#app .editor-provider[data-provider='anthropic']").getAttribute("title"), "Chat with Claude");
+    assert.equal(await writer.locator("#app .editor-provider[data-provider='openai']").getAttribute("title"), "Chat with ChatGPT");
+    assert.equal(await writer.locator("#app .editor-provider[data-provider='openai'] svg path").count(), 1, "ChatGPT's button has no logo");
+    await writer.locator("#app .editor-provider[data-provider='scripted']").click();
     await writer.locator("#app .assistant-using", { hasText: "Scripted" }).waitFor({ timeout });
+    // The effort under the message, which goes with it.
+    await writer.locator("#app .assistant-effort").selectOption("medium");
     await writer.locator("#app .assistant-input").fill("Retitle the second heading.");
     await writer.locator("#app .assistant-send").click();
     await writer.locator("#app .cm-wiki-inserted", { hasText: "## Why this is a wiki" }).waitFor({ timeout });
@@ -1281,8 +1288,13 @@ try {
     await writer.locator("#app .assistant-accept-all").click();
     await writer.locator("#app .cm-wiki-inserted").waitFor({ state: "detached", timeout });
     assert.match(await markdownIn(writer), /\n## Why this is a wiki\n/);
+    assert.equal(
+      await writer.evaluate(() => globalThis.wikiAssistantScript.requests[0].request.output_config.effort),
+      "medium",
+      "the effort chosen did not go with the message",
+    );
     await writer.context().close();
-    console.log("ok: the assistant's settings and its panel, with the scripted provider: an edit tracked in the text and accepted; the providers' island loads");
+    console.log("ok: the assistant's settings, its providers' buttons and its panel, with the scripted provider: the effort chosen sent, an edit tracked in the text and accepted; the providers' island loads");
   }
 } catch (error) {
   // What the page reported is usually why it did not get there.

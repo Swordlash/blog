@@ -9,7 +9,9 @@
 // through what this exports:
 //
 //   startChat(provider, key, request, options): a chat, whose
-//     send(user, handlers, signal) sends one message of the user's and
+//     send(user, handlers, signal, request) sends one message of the
+//     user's (with the request it gives, if it gives one: a model or an
+//     effort chosen since the chat began) and
 //     runs the model's turn to its end: the text it writes goes to
 //     handlers.text as it streams, and each tool call to
 //     handlers.tool(name, input), whose promise is the tool's answer
@@ -54,11 +56,11 @@ const anthropicChat = (key, request, options) => {
   const client = new Anthropic(clientOptions(key, options));
   const messages = [];
   return {
-    async send(user, handlers, signal) {
+    async send(user, handlers, signal, now = request) {
       const turn = [...messages, { role: "user", content: user }];
       try {
         for (let round = 0; round < maxRounds; round++) {
-          const stream = client.messages.stream({ ...request, messages: turn }, { signal });
+          const stream = client.messages.stream({ ...now, messages: turn }, { signal });
           stream.on("text", (delta) => handlers.text(delta));
           const message = await stream.finalMessage();
           if (message.stop_reason === "refusal") {
@@ -95,11 +97,11 @@ const openAiChat = (key, request, options) => {
   const client = new OpenAI(clientOptions(key, options));
   const input = [];
   return {
-    async send(user, handlers, signal) {
+    async send(user, handlers, signal, now = request) {
       const turn = [...input, { role: "user", content: user }];
       try {
         for (let round = 0; round < maxRounds; round++) {
-          const stream = await client.responses.create({ ...request, input: turn, stream: true }, { signal });
+          const stream = await client.responses.create({ ...now, input: turn, stream: true }, { signal });
           let response = null;
           for await (const event of stream) {
             if (event.type === "response.output_text.delta") handlers.text(event.delta);

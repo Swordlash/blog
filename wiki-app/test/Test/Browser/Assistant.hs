@@ -40,6 +40,7 @@ $( browserJS
      , ("js_requests", "wiki_test_assistant_requests", Unsafe, [t|IO JSText|])
      , ("js_answers", "wiki_test_assistant_answers", Unsafe, [t|IO JSText|])
      , ("js_select", "wiki_test_editor_select", Unsafe, [t|Int -> Int -> IO Bool|])
+     , ("js_choose", "wiki_test_choose", Unsafe, [t|JSText -> JSText -> IO Bool|])
      ]
  )
 
@@ -51,6 +52,10 @@ spec m = do
     _ <- unsafeIOToPageM (js_select 16 38)
     chip <- find ui ".assistant-scope .assistant-chip"
     chip `shouldHaveText` "line 3×"
+    -- The effort, chosen under the message, goes with it, and is kept.
+    find ui ".assistant-effort" >>= (`getProperty` "value") >>= (`shouldBe` "low")
+    _ <- unsafeIOToPageM (js_choose (toJSText ".assistant-effort") (toJSText "high"))
+    eventually $ (\s -> (settingsOf Scripted s).effort) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` "high")
     send ui "Make it sound newer."
     eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "I will make it the very first. Done.")
     find ui ".assistant-made" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Replaced")
@@ -65,6 +70,7 @@ spec m = do
     -- with the text around it, and the request.
     [request] <- requests
     fieldText ["request", "system", "0", "text"] request `shouldSatisfy` maybe False (T.isPrefixOf "# Writing pages")
+    fieldText ["request", "output_config", "effort"] request `shouldBe` Just "high"
     let user = fromMaybe "" (fieldText ["user"] request)
     user `shouldSatisfy` T.isInfixOf "<selection>\nThis is the first post\n</selection>"
     user `shouldSatisfy` T.isInfixOf "<before>\n# Hello, world\n\n\n</before>"
@@ -142,14 +148,38 @@ spec m = do
     ui <- openAssistant m
     send ui "Go on."
     eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Thinking it over")
-    find ui ".editor-assistant-toggle" >>= click
+    -- The provider's button again closes the panel; once more opens it.
+    find ui scriptedButton >>= click
     find ui ".editor-assistant" >>= shouldBeHidden
-    find ui ".editor-assistant-toggle" >>= click
+    find ui scriptedButton >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "false")
+    find ui scriptedButton >>= click
     eventually $ find ui ".assistant-stopped" >>= (`shouldHaveText` "Stopped.")
     -- The conversation goes on where it was.
     send ui "Once more."
     eventually $ length <$> findAll ui ".assistant-message.from-user" `shouldReturn` 2
     eventually $ findAll ui ".assistant-message.from-model .assistant-text" >>= traverse textContent >>= (`shouldBe` ["Thinking it over", "Again."])
+
+  it "opens with a provider from its button, and switching starts a new conversation with the changes kept" $ runPage $ do
+    script [[replace "## Why a wiki" "## Why", text "Retitled."]]
+    ui <- openAssistant m
+    find ui scriptedButton >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    find ui ".editor-provider[data-provider='anthropic']" >>= (`getAttribute` "title") >>= (`shouldBe` Just "Chat with Claude")
+    find ui ".editor-provider[data-provider='openai']" >>= (`getAttribute` "title") >>= (`shouldBe` Just "Chat with ChatGPT")
+    send ui "Retitle it."
+    eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Retitled.")
+    -- Claude, which has no key here: the panel stays, its conversation
+    -- ends, and it says where the key goes; the change is still to decide.
+    find ui ".editor-provider[data-provider='anthropic']" >>= click
+    eventually $ find ui ".assistant-notice" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The next message starts a new one with Anthropic (Claude).")
+    find ui ".assistant-setup" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "There is no API key for Anthropic (Claude)")
+    find ui ".editor-provider[data-provider='anthropic']" >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "true")
+    find ui scriptedButton >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "false")
+    eventually $ (\s -> s.provider) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Anthropic)
+    find ui ".cm-wiki-inserted" >>= (`shouldHaveText` "## Why")
+    find ui ".assistant-pending" >>= (`shouldHaveText` "1 suggested change to accept or reject")
+    -- Claude's models and efforts are offered under the message.
+    findAll ui ".assistant-effort option" >>= traverse textContent >>= (`shouldBe` ["low", "medium", "high", "xhigh", "max"])
+    find ui ".assistant-model-choice" >>= (`getProperty` "value") >>= (`shouldBe` "claude-opus-5-5")
 
   it "shows a provider's error as it gave it, without anything like a key" $ runPage $ do
     script [[failing "authentication" 401 "invalid x-api-key: sk-ant-api03-abcdefgh1234"]]
@@ -204,7 +234,7 @@ openAssistantWith m = do
   (ui, _) <- startWith m (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
   _ <- editorText ui
   original <- markdown ui
-  find ui ".editor-assistant-toggle" >>= click
+  find ui scriptedButton >>= click
   _ <- find ui ".assistant-input"
   eventually $ find ui ".assistant-using" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Scripted")
   pure (ui, original)
@@ -214,6 +244,10 @@ openAssistant
   ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => PageM s (Mounted s Shell.Query Void m)
 openAssistant m = fst <$> openAssistantWith m
+
+-- | The scripted provider's button, which a test's page has.
+scriptedButton :: Text
+scriptedButton = ".editor-provider[data-provider='scripted']"
 
 -- | Type a message, and send it.
 send :: Mounted s q o n -> Text -> PageM s ()

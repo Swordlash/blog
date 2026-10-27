@@ -112,6 +112,12 @@ const parts = [
   "LICENSE.txt and NOTICE.txt beside it, and its fonts' licence in",
   "tikzjax/fonts/LICENCE.txt.",
   "",
+  "The editor's buttons for the writing assistant show the Claude and OpenAI",
+  "logos as simple-icons draws them (https://simpleicons.org; Claude's from",
+  "simple-icons 16.36.0, OpenAI's from 15.22.0, the last release that had it),",
+  "drawings dedicated to the public domain under CC0-1.0. The logos are",
+  "trademarks of their owners, shown only to name the provider a button asks.",
+  "",
   `Packages: ${entries.map((e) => `${e.name} ${e.version}`).join(", ")}.`,
 ];
 for (const entry of entries) {

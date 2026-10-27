@@ -30,3 +30,13 @@ function wiki_test_editor_select(from, to) {
   editor.replace(from, from, "", from, to);
   return true;
 }
+
+// Choose an option of a select, as the author would: its value set, and its
+// change event, which is what the component listens for.
+function wiki_test_choose(selector, value) {
+  const select = document.querySelector(selector);
+  if (!(select instanceof HTMLSelectElement)) return false;
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  return true;
+}

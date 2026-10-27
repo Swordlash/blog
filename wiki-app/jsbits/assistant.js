@@ -5,7 +5,9 @@
 // - a chat is opened with its provider, model, key and request (the
 //   request without its conversation, as Wiki.Core.Assistant.Prompt
 //   assembles it) and one Haskell callback, and is known by a number;
-// - each message sent runs one turn of the model's, whose events go to the
+// - each message is sent with the request as it is now (a model or an effort
+//   chosen since the chat began applies from the next message), and runs
+//   one turn of the model's, whose events go to the
 //   callback as JSON, in order: {type: "text", text}, as the answer
 //   streams; {type: "tool", call, name, input}, a tool call, which the
 //   turn waits on until the application answers it (wiki_assistant_answer);
@@ -77,9 +79,9 @@ function wikiAssistantAnswerWaiting(chat, text) {
 function wikiAssistantScripted(config) {
   const script = globalThis.wikiAssistantScript;
   return {
-    async send(user, handlers, signal) {
+    async send(user, handlers, signal, request) {
       if (!Array.isArray(script.requests)) script.requests = [];
-      script.requests.push({ provider: config.provider, model: config.model, request: config.request, user });
+      script.requests.push({ provider: config.provider, model: config.model, request, user });
       const steps = script.turns?.shift() ?? [{ text: "The script has nothing more to say." }];
       for (const step of steps) {
         if (signal.aborted) return;
@@ -141,12 +143,13 @@ function wiki_assistant_open(config, callback) {
   return id;
 }
 
-// Send a message of the user's and run the model's turn, unless one is
-// running already. Returns at once; the turn tells of itself through the
-// callback.
-function wiki_assistant_send(id, user) {
+// Send a message of the user's, with the request as it is now (JSON), and
+// run the model's turn, unless one is running already. Returns at once; the
+// turn tells of itself through the callback.
+function wiki_assistant_send(id, user, request) {
   const chat = wikiAssistantChats.get(id);
   if (!chat || chat.controller !== null) return;
+  const now = JSON.parse(request);
   const controller = new AbortController();
   chat.controller = controller;
   if (chat.made === null) {
@@ -166,6 +169,7 @@ function wiki_assistant_send(id, user) {
         String(user),
         { text: (text) => wikiAssistantText(chat, text), tool: (name, input) => wikiAssistantAsk(chat, name, input) },
         controller.signal,
+        now,
       );
       chat.controller = null;
       wikiAssistantEmit(chat, controller.signal.aborted ? { type: "stopped" } : { type: "done" });

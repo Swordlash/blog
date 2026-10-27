@@ -6,8 +6,12 @@
 -- The panel is a list of messages, the user's and the model's (streamed
 -- as they come), under it a row of shortcuts that fill the message in
 -- (improve, fix grammar, shorten, expand, summarise, continue, translate),
--- and the message box with Send, or Stop while the model is at work.
--- Enter sends, Shift+Enter starts a new line.
+-- and the message box, with the provider's model and effort under it
+-- (kept per provider with the user's settings, and taking effect from the
+-- next message), and Send, or Stop while the model is at work. Enter
+-- sends, Shift+Enter starts a new line. The editor's buttons open it with
+-- a provider ('UseProvider'); another provider than the conversation's
+-- starts a new conversation.
 --
 -- What goes with a message: when the editor has a selection, it is
 -- attached, shown as a chip ("lines 12–20") with a button to detach it,
@@ -68,11 +72,15 @@ import Wiki.Core.Assistant
   , ProviderSettings (..)
   , Ready (..)
   , Settings (..)
+  , chooseProvider
+  , efforts
   , errorText
   , models
   , providerLabel
   , ready
   , settingsOf
+  , withEffort
+  , withModel
   )
 import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Refusal (..), answer, describeEdit, parseEdit)
 import Wiki.Core.Assistant.Prompt
@@ -108,12 +116,20 @@ data Input = Input
   -- ^ What the author decided of the assistant's changes, by id.
   }
 
--- | The panel was closed: the model's turn, if one is running, stops.
-data Query a = Hide a
+-- | The panel was closed: the model's turn, if one is running, stops. Or
+-- it was opened with a provider (the editor's buttons for each): the
+-- settings take it as the one the assistant asks, and if the conversation
+-- was with another, it ends, and a new one starts with the next message
+-- (a conversation cannot go from one provider to another: Anthropic's
+-- thinking blocks mean nothing to OpenAI). The changes made by then stay,
+-- to decide: they are the editor's, not the conversation's.
+data Query a = Hide a | UseProvider Provider a
 
--- | The panel's own close button; and "Accept all" or "Reject all", which
--- the editor carries out, as it does a decision on one change.
-data Output = Closed | DecideAll Decision
+-- | The panel's own close button; "Accept all" or "Reject all", which the
+-- editor carries out, as it does a decision on one change; and the
+-- provider the assistant asks, once the settings are read and whenever it
+-- changes, which the editor marks on its buttons.
+data Output = Closed | DecideAll Decision | Using Provider
 
 -- | A message of the conversation.
 data Entry
@@ -125,6 +141,8 @@ data Entry
     FromModel Text [Note] Ending
   | -- | What went wrong.
     Trouble Text
+  | -- | What the panel says of the conversation itself.
+    Notice Text
 
 data Note = Made Text | NotMade Text Text
 
@@ -153,6 +171,10 @@ data State = State
   , absorbed :: [Int]
   -- ^ Changes a later change of the model's took in, which need no word.
   , listener :: Maybe (HS.Listener IO Heard)
+  , wanted :: Maybe Provider
+  -- ^ A provider asked for before the settings were read.
+  , otherModel :: Bool
+  -- ^ Whether "Other…" is chosen for the model, which shows its field.
   , field :: H.RefLabel
   }
 
@@ -169,6 +191,9 @@ data Action
   | Decided Decision
   | Close
   | Followed (Follow Route)
+  | ChooseModel Text
+  | TypedModel Text
+  | ChooseEffort Text
 
 component :: forall m. (MonadAssistant m, MonadUUID m, MonadIO m) => H.Component Query Input Output m
 component =
@@ -190,6 +215,8 @@ component =
               , made = mempty
               , absorbed = []
               , listener = Nothing
+              , wanted = Nothing
+              , otherModel = False
               , field
               }
       , render
@@ -249,14 +276,53 @@ component =
               {{ HE.preventingDefault (HE.handler' (EventType "keydown") sendKey) }}
               ref={{ st.field }}
             ></textarea>
-            {% if st.talking %}
-              <button type="button" class="assistant-stop" onClick={{ const Stop }}>Stop</button>
-            {% else %}
-              <button type="button" class="primary assistant-send" disabled={{ T.null (T.strip st.message) }} onClick={{ const Send }}>Send</button>
-            {% end %}
+            {{ choicesView st }}
+            <div class="assistant-send-row">
+              {% if st.talking %}
+                <button type="button" class="assistant-stop" onClick={{ const Stop }}>Stop</button>
+              {% else %}
+                <button type="button" class="primary assistant-send" disabled={{ T.null (T.strip st.message) }} onClick={{ const Send }}>Send</button>
+              {% end %}
+            </div>
           </div>
         </section>
       |]
+
+    -- The model and the effort of the provider the assistant asks, under the
+    -- message: the provider's own, kept in its settings (the settings page
+    -- shows the same model), taking effect from the next message.
+    choicesView :: State -> Maybe (H.ComponentHTML Action Empty m)
+    choicesView st = case st.settings of
+      Just (Right s) ->
+        let ps = settingsOf s.provider s
+            listed = ps.model `elem` map (\m -> m.id) (models s.provider)
+            other = st.otherModel || not listed
+         in Just
+              [hh|
+                <div class="assistant-choices">
+                  <label class="assistant-choice">
+                    <span>Model</span>
+                    <select class="assistant-model-choice" disabled={{ st.talking }} onValueChange={{ ChooseModel }}>
+                      {% for m in models s.provider %}
+                        <option value={{ m.id }} selected={{ not other && ps.model == m.id }}>{{ m.label }}</option>
+                      {% end %}
+                      <option value="" selected={{ other }}>Other…</option>
+                    </select>
+                  </label>
+                  {% if other %}
+                    <input type="text" class="assistant-model-other" spellcheck="false" aria-label="The model's id" placeholder="A model's id" value={{ if listed then "" else ps.model }} disabled={{ st.talking }} onValueChange={{ TypedModel }}>
+                  {% end %}
+                  <label class="assistant-choice">
+                    <span>Effort</span>
+                    <select class="assistant-effort" disabled={{ st.talking }} onValueChange={{ ChooseEffort }}>
+                      {% for e in efforts s.provider %}
+                        <option value={{ e }} selected={{ ps.effort == e }}>{{ e }}</option>
+                      {% end %}
+                    </select>
+                  </label>
+                </div>
+              |]
+      _ -> Nothing
 
     -- Enter sends; any other key is the message box's.
     sendKey :: Event -> Maybe Action
@@ -335,6 +401,7 @@ component =
           </div>
         |]
       Trouble why -> [hh|<p class="error assistant-error" role="alert">{{ why }}</p>|]
+      Notice what -> [hh|<p class="assistant-notice" role="status">{{ what }}</p>|]
 
     noteView :: Note -> H.ComponentHTML Action Empty m
     noteView = \case
@@ -342,7 +409,14 @@ component =
       NotMade what why -> [hh|<li class="assistant-not-made">{{ what }}: not made, {{ why }}</li>|]
 
     handleQuery :: Query a -> H.HalogenM State Action Empty Output m (Maybe a)
-    handleQuery (Hide next) = stop $> Just next
+    handleQuery = \case
+      Hide next -> stop $> Just next
+      UseProvider p next -> do
+        gets (\st -> st.settings) >>= \case
+          Just (Right _) -> useProvider p
+          Just (Left _) -> pass
+          Nothing -> modify (\st -> st {wanted = Just p})
+        pure (Just next)
 
     handleAction :: Action -> H.HalogenM State Action Empty Output m ()
     handleAction = \case
@@ -356,6 +430,8 @@ component =
           Just user -> do
             settings <- lift (assistantSettings user)
             modify (\st -> st {settings = Just settings})
+            for_ (rightToMaybe settings) (\s -> H.raise (Using s.provider))
+            gets (\st -> st.wanted) >>= traverse_ (\p -> modify (\st -> st {wanted = Nothing}) *> useProvider p)
       Finalize -> gets (\st -> st.talk) >>= traverse_ (H.liftEffect . closeTalk)
       Receive input -> modify $ \st ->
         -- A detached selection stays detached until another is made.
@@ -373,6 +449,44 @@ component =
         stop
         H.raise Closed
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
+      ChooseModel "" -> modify (\st -> st {otherModel = True})
+      ChooseModel m -> do
+        modify (\st -> st {otherModel = False})
+        changeSettings (\s -> withModel s.provider m s)
+      TypedModel m -> unless (T.null (T.strip m)) $ changeSettings (\s -> withModel s.provider m s)
+      ChooseEffort e -> changeSettings (\s -> withEffort s.provider e s)
+
+    -- The provider the editor's button asked for: chosen in the settings,
+    -- and, if the conversation was with another, a new one from the next
+    -- message.
+    useProvider :: Provider -> H.HalogenM State Action Empty Output m ()
+    useProvider p =
+      gets (\st -> st.settings) >>= \case
+        Just (Right s) | s.provider /= p -> do
+          st <- get
+          -- The chat closed stops its turn, and is heard of no more.
+          for_ st.talk (H.liftEffect . closeTalk)
+          when st.talking (finish Stopped)
+          let hadConversation = not (null st.entries)
+          modify (\s' -> s' {talk = Nothing, using = Nothing, otherModel = False})
+          changeSettings (chooseProvider p)
+          when hadConversation $
+            addEntry (Notice ("The conversation with " <> providerLabel s.provider <> " ended. The next message starts a new one with " <> providerLabel p <> "."))
+          H.raise (Using p)
+        _ -> H.raise (Using p)
+
+    -- Change the user's settings, and keep them.
+    changeSettings :: (Settings -> Settings) -> H.HalogenM State Action Empty Output m ()
+    changeSettings f = do
+      st <- get
+      case (st.settings, (\u -> u.id) <$> st.input.context.session.user) of
+        (Just (Right s), Just user) -> do
+          let new = f s
+          modify (\s' -> s' {settings = Just (Right new)})
+          lift (keepAssistantSettings user new) >>= \case
+            Left why -> addEntry (Trouble why)
+            Right () -> pass
+        _ -> pass
 
     stop :: H.HalogenM State Action Empty Output m ()
     stop = do
@@ -403,7 +517,7 @@ component =
                 , using = Just r
                 , detached = Nothing
                 }
-            H.liftEffect (sayTo talk (userTurn decided context text))
+            H.liftEffect (sayTo talk (requestFor r) (userTurn decided context text))
         (Just (Left why), _) -> addEntry (Trouble why)
         _ -> pass
 
@@ -490,9 +604,9 @@ attached st = mfilter (\sp -> Just sp /= st.detached && sp.to > sp.from) st.inpu
 -- is sent Anthropic's, which its tests read.
 requestFor :: Ready -> Value
 requestFor r = case r.provider of
-  OpenAI -> openAiRequest r.model
-  Anthropic -> anthropicRequest r.model
-  Scripted -> anthropicRequest r.model
+  OpenAI -> openAiRequest r.model r.effort
+  Anthropic -> anthropicRequest r.model r.effort
+  Scripted -> anthropicRequest r.model r.effort
 
 -- | Why an edit was not made, for the conversation.
 refusalWords :: Refusal -> Text

@@ -53,9 +53,9 @@ settingsSpec = describe "settings" $ do
 
   it "are ready with the chosen provider's key, and say what is missing" $ do
     let s = withKey Anthropic (Just "sk-a") defaultSettings
-    ready s `shouldBe` Right (Ready Anthropic "claude-opus-5-5" "sk-a")
+    ready s `shouldBe` Right (Ready Anthropic "claude-opus-5-5" "sk-a" "low")
     ready (chooseProvider OpenAI s) `shouldSatisfy` isLeft
-    ready (chooseProvider Scripted defaultSettings) `shouldBe` Right (Ready Scripted "scripted" "")
+    ready (chooseProvider Scripted defaultSettings) `shouldBe` Right (Ready Scripted "scripted" "" "low")
 
   it "are blank with nothing but defaults in them" $ do
     blankSettings defaultSettings `shouldBe` True
@@ -64,8 +64,23 @@ settingsSpec = describe "settings" $ do
     blankSettings (chooseProvider OpenAI defaultSettings) `shouldBe` False
     blankSettings (withModel OpenAI "gpt-6-luna" defaultSettings) `shouldBe` False
 
+  it "keep an effort per provider, low by default, and only one the provider offers" $ do
+    (settingsOf Anthropic defaultSettings).effort `shouldBe` "low"
+    let s = withEffort OpenAI "minimal" (withEffort Anthropic "xhigh" defaultSettings)
+    (settingsOf Anthropic s).effort `shouldBe` "xhigh"
+    (settingsOf OpenAI s).effort `shouldBe` "minimal"
+    (settingsOf OpenAI (withEffort OpenAI "xhigh" s)).effort `shouldBe` "low"
+    efforts Anthropic `shouldBe` ["low", "medium", "high", "xhigh", "max"]
+    efforts OpenAI `shouldBe` ["minimal", "low", "medium", "high"]
+    (\r -> r.effort) <$> ready (withKey Anthropic (Just "k") s) `shouldBe` Right "xhigh"
+    blankSettings (withEffort Anthropic "max" defaultSettings) `shouldBe` False
+
+  it "read settings kept before there was an effort" $
+    decode "{\"provider\":\"openai\",\"openai\":{\"key\":\"sk-o\",\"model\":\"gpt-6-luna\"}}"
+      `shouldBe` Just (chooseProvider OpenAI (withModel OpenAI "gpt-6-luna" (withKey OpenAI (Just "sk-o") defaultSettings)))
+
   it "go to JSON and back" $ do
-    let s = chooseProvider OpenAI (withModel OpenAI "custom-model" (withKey OpenAI (Just "sk-o") (withKey Anthropic (Just "sk-a") defaultSettings)))
+    let s = chooseProvider OpenAI (withEffort OpenAI "high" (withModel OpenAI "custom-model" (withKey OpenAI (Just "sk-o") (withKey Anthropic (Just "sk-a") defaultSettings))))
     decode (encode s) `shouldBe` Just s
     decode (encode defaultSettings) `shouldBe` Just defaultSettings
 
@@ -180,7 +195,7 @@ requestSpec = describe "the requests" $ do
     markdownReference `shouldSatisfy` T.isInfixOf "[[toc]]"
 
   it "put the reference first in Anthropic's system prompt, marked for caching, and nothing that changes" $ do
-    let request = anthropicRequest "claude-opus-5-5"
+    let request = anthropicRequest "claude-opus-5-5" "low"
     field "model" request `shouldBe` Just (String "claude-opus-5-5")
     case field "system" request of
       Just (Array blocks) -> do
@@ -188,12 +203,15 @@ requestSpec = describe "the requests" $ do
       other -> expectationFailure ("no system blocks: " <> show other)
     field "tools" request `shouldBe` Just anthropicTools
     -- The same for every request with the same model: what is cached.
-    encode (anthropicRequest "claude-opus-5-5") `shouldBe` encode request
+    encode (anthropicRequest "claude-opus-5-5" "low") `shouldBe` encode request
     field "messages" request `shouldBe` Nothing
     field "thinking" request `shouldBe` Nothing
+    -- The effort, as Anthropic takes it, and no thinking budget.
+    field "output_config" request `shouldBe` Just (object ["effort" .= ("low" :: Text)])
+    field "output_config" (anthropicRequest "claude-opus-5-5" "max") `shouldBe` Just (object ["effort" .= ("max" :: Text)])
 
   it "start OpenAI's instructions with the reference, keep nothing at OpenAI, and change nothing" $ do
-    let request = openAiRequest "gpt-6.1-sol"
+    let request = openAiRequest "gpt-6.1-sol" "low"
     case field "instructions" request of
       Just (String text) -> do
         text `shouldSatisfy` T.isPrefixOf markdownReference
@@ -201,9 +219,10 @@ requestSpec = describe "the requests" $ do
       other -> expectationFailure ("no instructions: " <> show other)
     field "store" request `shouldBe` Just (Bool False)
     field "reasoning" request `shouldBe` Just (object ["effort" .= ("low" :: Text)])
+    field "reasoning" (openAiRequest "gpt-6.1-sol" "minimal") `shouldBe` Just (object ["effort" .= ("minimal" :: Text)])
     field "max_output_tokens" request `shouldBe` Nothing
     field "tools" request `shouldBe` Just openAiTools
-    encode (openAiRequest "gpt-6.1-sol") `shouldBe` encode request
+    encode (openAiRequest "gpt-6.1-sol" "low") `shouldBe` encode request
 
   it "offer the two tools, every field required, as OpenAI's strict mode wants" $ do
     let names = \case

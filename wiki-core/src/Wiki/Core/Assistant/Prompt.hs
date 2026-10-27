@@ -305,13 +305,17 @@ maxTokens = 32_000
 -- | A request to Anthropic's Messages API, without its messages, which the
 -- browser's side adds: the model, the tools, and the system prompt, the
 -- reference first, both blocks marked for caching (the reference alone is
--- some seven thousand tokens, over every model's minimum). No @thinking@:
--- the current models think as they see fit, and some refuse it turned off.
-anthropicRequest :: Text -> Value
-anthropicRequest model =
+-- some seven thousand tokens, over every model's minimum), and the effort
+-- chosen in the panel. No @thinking@: the Claude 5 models think adaptively,
+-- as much as the effort asks, and refuse it turned off or given a budget.
+-- A change of effort between messages invalidates Anthropic's cache of
+-- the conversation, not of the system prompt before it.
+anthropicRequest :: Text -> Text -> Value
+anthropicRequest model effort =
   object
     [ "model" .= model
     , "max_tokens" .= maxTokens
+    , "output_config" .= object ["effort" .= effort]
     , "system" .= toJSONList [cached markdownReference, cached instructions]
     , "tools" .= anthropicTools
     ]
@@ -323,17 +327,17 @@ anthropicRequest model =
 -- so that every request starts alike and its prefix is cached), the tools,
 -- and nothing kept by OpenAI (@store@ false): the conversation is sent
 -- whole each time, with the model's reasoning as it was handed back
--- (encrypted, as OpenAI keeps none of it). Reasoning is asked to be brief
--- (effort "low", which every model offered takes) and no limit is set on
--- the answer's length: a reasoning model given a small budget spends it
+-- (encrypted, as OpenAI keeps none of it). Reasoning is as brief as the
+-- effort chosen in the panel asks ("low" by default), and no limit is set
+-- on the answer's length: a reasoning model given a small budget spends it
 -- all on reasoning and answers nothing.
-openAiRequest :: Text -> Value
-openAiRequest model =
+openAiRequest :: Text -> Text -> Value
+openAiRequest model effort =
   object
     [ "model" .= model
     , "instructions" .= (markdownReference <> "\n\n" <> instructions)
     , "tools" .= openAiTools
     , "store" .= False
     , "include" .= ["reasoning.encrypted_content" :: Text]
-    , "reasoning" .= object ["effort" .= ("low" :: Text)]
+    , "reasoning" .= object ["effort" .= effort]
     ]

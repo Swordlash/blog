@@ -143,8 +143,11 @@
 --
 -- = The writing assistant
 --
--- "Assistant" in the toolbar opens the writing assistant's panel
--- ("Wiki.App.View.Assistant", WP4.19 of docs/PLAN.md) beside the
+-- A bar of the providers' buttons at the text's left edge (Claude's and
+-- ChatGPT's, above the text on a narrow screen) opens the writing
+-- assistant's panel ("Wiki.App.View.Assistant", WP4.19 of docs/PLAN.md)
+-- with that provider, or closes it if it is open with it; the panel says
+-- which provider it asks, and its button is marked. The panel is beside the
 -- Markdown (under the attachments on a narrow screen): a chat with a model
 -- that edits the page through its tools, each edit a tracked change in
 -- CodeMirror that the author accepts or rejects, on the change itself or
@@ -189,7 +192,7 @@ import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Events (PageEvent (PageChanged))
 import Wiki.Api.Events qualified as Event
-import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Assistant (MonadAssistant (scriptedInstalled))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser
@@ -226,6 +229,8 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Diff (diffView, titleChange)
 import Wiki.App.View.Preview qualified as Preview
+import Wiki.App.View.ProviderIcons (claudeColour, claudePath, openAiPath)
+import Wiki.Core.Assistant (Provider (..), providerKey)
 import Wiki.Core.Assistant.Edit (Decision (..))
 import Wiki.Core.Assistant.Prompt (Span)
 import Wiki.Core.Attachment (Attachment (..))
@@ -412,6 +417,11 @@ data State = State
   , decisions :: Map Int Decision
   -- ^ What the author decided of each of the assistant's changes, by its
   -- id: the panel tells the model of it with the next message.
+  , assistantProvider :: Maybe Provider
+  -- ^ The provider the panel asks, as it last said.
+  , scripted :: Bool
+  -- ^ Whether a test installed the scripted provider, which gets a button
+  -- of its own.
   }
 
 -- | Where a save leaves the editor.
@@ -457,7 +467,7 @@ data Action
   | TakeTheirs
   | MergeByHand
   | HideTheirs
-  | ToggleAssistant
+  | OpenWith Provider
   | FromAssistant Assistant.Output
   | Selected (Maybe Span)
   | ChangesLeft Int
@@ -537,6 +547,8 @@ component =
               , selection = Nothing
               , pendingChanges = 0
               , decisions = mempty
+              , assistantProvider = Nothing
+              , scripted = False
               }
       , render
       , eval =
@@ -611,7 +623,7 @@ component =
             {{ cancelQuestion st }}
             {{ problemView st }}
           </div>
-          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, assisting = st.assistantOpen} }}
+          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide} }}
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
@@ -779,6 +791,38 @@ component =
       Just key -> Just (Key key)
       Nothing -> Nothing
 
+    -- The providers' buttons: each opens the assistant with its provider, or
+    -- closes it if it is open with it. The scripted provider's is there
+    -- only where a test installed it.
+    providerBar :: State -> H.ComponentHTML Action Slots m
+    providerBar st =
+      [hh|
+        <nav class="editor-providers" aria-label="Writing assistant">
+          {{ providerButton st Anthropic "Chat with Claude" (logo claudePath (Just claudeColour)) }}
+          {{ providerButton st OpenAI "Chat with ChatGPT" (logo openAiPath Nothing) }}
+          {% if st.scripted %}
+            {{ providerButton st Scripted "Chat with the scripted provider" scriptedFace }}
+          {% end %}
+        </nav>
+      |]
+
+    scriptedFace :: H.ComponentHTML Action Slots m
+    scriptedFace = [hh|<span class="editor-provider-text" aria-hidden="true">S</span>|]
+
+    providerButton :: State -> Provider -> Text -> H.ComponentHTML Action Slots m -> H.ComponentHTML Action Slots m
+    providerButton st p label face =
+      [hh|
+        <button
+          type="button"
+          class="editor-provider"
+          {{ attr "data-provider" (providerName p) }}
+          title={{ label }}
+          aria-label={{ label }}
+          aria-pressed={{ ariaBool (st.assistantOpen && st.assistantProvider == Just p) }}
+          onClick={{ const (OpenWith p) }}
+        >{{ face }}</button>
+      |]
+
     -- The assistant's panel, once it has been opened, hidden while it is
     -- closed so that its conversation stays.
     assistantPane :: State -> Work -> Maybe (H.ComponentHTML Action Slots m)
@@ -830,7 +874,6 @@ component =
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ imageButton }}{{ toolButton tableTool }}</div>
           <div class="toolbar-group">{{ map toolButton blockTools }}{{ htmlMenu bar }}</div>
           <div class="toolbar-end">
-            <button type="button" class="editor-assistant-toggle" title="The writing assistant" aria-pressed={{ ariaBool bar.assisting }} onClick={{ const ToggleAssistant }}>{{ icon assistantIcon }}<span>Assistant</span></button>
             <label class="editor-side-by-side">
               <input type="checkbox" checked={{ bar.twoPanes }} {{ HE.onChecked SideBySide }}>
               Side by side preview
@@ -928,7 +971,8 @@ component =
         @I.HTMLdiv
         (HH.ElemName "div")
         [HP.class_ "editor-source"]
-        [
+        [ ("providers", providerBar st)
+        ,
           ( "cm"
           , [hh|
               <div
@@ -1014,6 +1058,9 @@ component =
         remembered <- H.liftEffect (Storage.getItem LocalStorage sideBySideKey)
         when (remembered == Just (Right True)) $
           modify (\st -> st {sideBySide = True, previewMounted = True})
+        -- After the first render too, which a page rendered ahead shows.
+        scripted <- H.liftEffect scriptedInstalled
+        when scripted $ modify (\st -> st {scripted})
         -- Who else edits the page, and its saves, are heard of from now on.
         gets (\st -> st.input.feed) >>= traverse_ (\f -> void (H.subscribe (FromLive <$> f.heard)))
         -- The page was loaded with the initial state, or is loaded now.
@@ -1180,13 +1227,19 @@ component =
             whenM (gets isDirty) scheduleAutosave
           _ -> pass
       HideTheirs -> modify (\st -> st {conflict = Nothing})
-      ToggleAssistant ->
-        gets (\st -> st.assistantOpen) >>= \case
-          True -> do
-            modify (\st -> st {assistantOpen = False})
+      OpenWith p -> do
+        st <- get
+        if st.assistantOpen && st.assistantProvider == Just p
+          then do
+            modify (\s -> s {assistantOpen = False})
             H.tell "assistant" () Assistant.Hide
-          False -> modify (\st -> st {assistantOpen = True, assistantMounted = True, menu = Nothing})
+          else do
+            -- Mounted by this change's render, if it was not, before it is
+            -- told the provider.
+            modify (\s -> s {assistantOpen = True, assistantMounted = True, assistantProvider = Just p, menu = Nothing})
+            H.tell "assistant" () (Assistant.UseProvider p)
       FromAssistant Assistant.Closed -> modify (\st -> st {assistantOpen = False})
+      FromAssistant (Assistant.Using p) -> modify (\st -> st {assistantProvider = Just p})
       FromAssistant (Assistant.DecideAll d) -> decide d Nothing
       Selected selection -> modify (\st -> st {selection})
       ChangesLeft n -> modify (\st -> st {pendingChanges = n})
@@ -1678,7 +1731,6 @@ draftStatus = \case
 data Bar = Bar
   { menuOpen :: Maybe Menu
   , twoPanes :: Bool
-  , assisting :: Bool
   }
   deriving stock (Eq)
 
@@ -1729,17 +1781,25 @@ pendingNote :: Int -> Text
 pendingNote 1 = "Saving accepts the suggested change."
 pendingNote n = "Saving accepts the " <> show n <> " suggested changes."
 
-imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, assistantIcon :: Text
+imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon :: Text
 imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
 htmlIcon = "M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11"
 colourIcon = "M4.5 11 8 2.5l3.5 8.5M5.7 8h4.6M2 14h12"
 noColourIcon = "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 1 0 0-11zM4.1 4.1l7.8 7.8"
 previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
-assistantIcon = "M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2zM5.5 6.5h5M5.5 8.5h3"
 
 -- | The HTML elements the toolbar's menu offers.
 htmlTags :: [HtmlTag]
 htmlTags = [minBound .. maxBound]
+
+-- | A provider's logo: one SVG path in a 24 by 24 box, in its colour, or
+-- the text's.
+logo :: Text -> Maybe Text -> HH.HTML w i
+logo d colour = [hh|<svg class="editor-provider-logo" viewBox="0 0 24 24" aria-hidden="true"><path {{ attr "d" d }} {{ attr "fill" (fromMaybe "currentColor" colour) }}></path></svg>|]
+
+-- | A provider's name in the page's attributes.
+providerName :: Provider -> Text
+providerName = providerKey
 
 -- | An icon: one SVG path, drawn by the style sheet.
 icon :: Text -> HH.HTML w i

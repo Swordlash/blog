@@ -4803,9 +4803,64 @@ a.mention {
   display: none;
 }
 
-.editor-assistant-toggle[aria-pressed="true"] {
+/* The providers' buttons, which open the assistant: a row above the text
+   on a narrow screen, a column at its left edge on a wide one. */
+.editor-providers {
+  display: flex;
+  gap: 0.4rem;
+}
+
+@media (min-width: 961px) {
+  .editor-source {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 0.5rem;
+    row-gap: 0.3rem;
+    align-items: start;
+  }
+
+  .editor-source > * {
+    grid-column: 2;
+  }
+
+  .editor-source > .editor-providers {
+    grid-column: 1;
+    grid-row: 1 / span 3;
+    flex-direction: column;
+    position: sticky;
+    top: 0.5rem;
+  }
+}
+
+.editor-provider {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--text);
+}
+
+.editor-provider:hover {
+  background: var(--surface);
+}
+
+.editor-provider[aria-pressed="true"] {
   border-color: var(--accent);
-  color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.editor-provider-logo {
+  width: 24px;
+  height: 24px;
+}
+
+.editor-provider-text {
+  font-weight: 700;
 }
 
 .editor-pending-note {
@@ -4982,15 +5037,52 @@ a.mention {
 
 .assistant-compose {
   display: flex;
+  flex-direction: column;
   gap: 0.4rem;
-  align-items: flex-end;
 }
 
 .assistant-input {
-  flex: 1 1 auto;
   min-height: 3.5rem;
   resize: vertical;
   font: inherit;
+}
+
+/* The model and the effort, a compact row under the message. */
+.assistant-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.assistant-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+}
+
+.assistant-choice select,
+.assistant-model-other {
+  font-size: 0.8rem;
+  padding: 0.1rem 0.25rem;
+}
+
+.assistant-model-other {
+  width: 11rem;
+}
+
+.assistant-send-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.assistant-notice {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
 }
 
 /* A tracked change in the editor's text: what the assistant put in, on

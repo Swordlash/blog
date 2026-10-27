@@ -21,6 +21,8 @@ module Wiki.Core.Assistant
   , Model (..)
   , models
   , defaultModel
+  , efforts
+  , defaultEffort
 
     -- * Settings
   , Settings (..)
@@ -30,6 +32,7 @@ module Wiki.Core.Assistant
   , settingsOf
   , withKey
   , withModel
+  , withEffort
   , chooseProvider
   , Ready (..)
   , ready
@@ -123,16 +126,33 @@ models = \case
 defaultModel :: Provider -> Text
 defaultModel p = maybe "" (\m -> m.id) (head (models p))
 
+-- | How hard a provider's models may be asked to think before answering,
+-- from the least: Anthropic's @output_config.effort@ (its Claude 5 models
+-- think adaptively, as much as the effort asks), OpenAI's
+-- @reasoning.effort@. The scripted provider is sent Anthropic's request.
+efforts :: Provider -> [Text]
+efforts = \case
+  Anthropic -> ["low", "medium", "high", "xhigh", "max"]
+  OpenAI -> ["minimal", "low", "medium", "high"]
+  Scripted -> efforts Anthropic
+
+-- | Low, on both providers: an edit of a page is quick work, and a model
+-- that thinks less answers sooner and costs less; the panel offers more.
+defaultEffort :: Text
+defaultEffort = "low"
+
 -- | What a user has set for one provider.
 data ProviderSettings = ProviderSettings
   { key :: Maybe Text
   -- ^ The API key, if one was given.
   , model :: Text
+  , effort :: Text
+  -- ^ How hard the model thinks ('efforts').
   }
   deriving stock (Eq, Show)
 
 -- | What a user has set: the provider the assistant asks, and each
--- provider's key and model.
+-- provider's key, model and effort.
 data Settings = Settings
   { provider :: Provider
   , byProvider :: Map Provider ProviderSettings
@@ -144,34 +164,50 @@ defaultSettings :: Settings
 defaultSettings = Settings {provider = Anthropic, byProvider = mempty}
 
 -- | Whether settings hold nothing but what nothing set holds: no key, the
--- first provider, every model its default. Such settings need not be kept.
+-- first provider, every model and effort its default. Such settings need
+-- not be kept.
 blankSettings :: Settings -> Bool
 blankSettings s = s.provider == Anthropic && all blank (Map.toList s.byProvider)
   where
-    blank (p, ps) = isNothing ps.key && ps.model == defaultModel p
+    blank (p, ps) = isNothing ps.key && ps.model == defaultModel p && ps.effort == defaultEffort
 
 -- | A provider's settings, its defaults where nothing was set.
 settingsOf :: Provider -> Settings -> ProviderSettings
-settingsOf p s = Map.findWithDefault (ProviderSettings Nothing (defaultModel p)) p s.byProvider
+settingsOf p s = Map.findWithDefault (ProviderSettings Nothing (defaultModel p) defaultEffort) p s.byProvider
 
 -- | A provider's key set, or taken away ("Forget"). A key is kept as it was
 -- pasted but for the spaces and line breaks around it, which a copy often
 -- brings and no key has.
 withKey :: Provider -> Maybe Text -> Settings -> Settings
-withKey p k s = s {byProvider = Map.insert p ProviderSettings {key = mfilter (not . T.null) (T.strip <$> k), model = (settingsOf p s).model} s.byProvider}
+withKey p k s = s {byProvider = Map.insert p ProviderSettings {key = mfilter (not . T.null) (T.strip <$> k), model = ps.model, effort = ps.effort} s.byProvider}
+  where
+    ps :: ProviderSettings
+    ps = settingsOf p s
 
 -- | A provider's model set; an empty one is its default.
 withModel :: Provider -> Text -> Settings -> Settings
-withModel p m s = s {byProvider = Map.insert p ProviderSettings {key = (settingsOf p s).key, model = if T.null (T.strip m) then defaultModel p else T.strip m} s.byProvider}
+withModel p m s = s {byProvider = Map.insert p ProviderSettings {key = ps.key, model = if T.null (T.strip m) then defaultModel p else T.strip m, effort = ps.effort} s.byProvider}
+  where
+    ps :: ProviderSettings
+    ps = settingsOf p s
+
+-- | A provider's effort set; one it does not offer is its default.
+withEffort :: Provider -> Text -> Settings -> Settings
+withEffort p e s = s {byProvider = Map.insert p ProviderSettings {key = ps.key, model = ps.model, effort = if e `elem` efforts p then e else defaultEffort} s.byProvider}
+  where
+    ps :: ProviderSettings
+    ps = settingsOf p s
 
 chooseProvider :: Provider -> Settings -> Settings
 chooseProvider p s = Settings {provider = p, byProvider = s.byProvider}
 
--- | What the assistant asks with: the provider, the model and the key.
+-- | What the assistant asks with: the provider, the model, the key and the
+-- effort.
 data Ready = Ready
   { provider :: Provider
   , model :: Text
   , key :: Text
+  , effort :: Text
   }
   deriving stock (Eq, Show)
 
@@ -179,9 +215,9 @@ data Ready = Ready
 -- to the user. The scripted provider needs no key.
 ready :: Settings -> Either Text Ready
 ready s = case s.provider of
-  Scripted -> Right (Ready Scripted chosen.model "")
+  Scripted -> Right (Ready Scripted chosen.model "" chosen.effort)
   p -> case chosen.key of
-    Just k -> Right (Ready p chosen.model k)
+    Just k -> Right (Ready p chosen.model k chosen.effort)
     Nothing -> Left ("There is no API key for " <> providerLabel p <> " yet: add one in the assistant's settings.")
   where
     chosen = settingsOf s.provider s
@@ -192,7 +228,7 @@ instance ToJSON Settings where
   toJSON s =
     object $
       ("provider" .= providerKey s.provider)
-        : [ Key.fromText (providerKey p) .= object ["key" .= ps.key, "model" .= ps.model]
+        : [ Key.fromText (providerKey p) .= object ["key" .= ps.key, "model" .= ps.model, "effort" .= ps.effort]
           | (p, ps) <- Map.toList s.byProvider
           ]
 
@@ -206,7 +242,8 @@ instance FromJSON Settings where
       providerFrom :: Text -> Parser Provider
       providerFrom k = maybe (fail ("no such provider: " <> toS k)) pure (providerFromKey k)
       providerSettings p = withObject "ProviderSettings" $ \o ->
-        ProviderSettings <$> o .:? "key" <*> (o .:? "model" .!= defaultModel p)
+        -- Settings kept before there was an effort read with the default.
+        ProviderSettings <$> o .:? "key" <*> (o .:? "model" .!= defaultModel p) <*> (o .:? "effort" .!= defaultEffort)
 
 -- | What went wrong with a request, as the provider's SDK typed it.
 data ErrorKind

@@ -22,9 +22,16 @@ zlib streams of the same bytes named `.bin`, sent as
 those names. No `.gz` file ships under `tikzjax/` any more; a deployment
 serving the page from its own server needs nothing new.
 
-The writing assistant, bring-your-own-key (WP4.19, decision 21). "Assistant"
-in the editor's toolbar opens a chat beside the Markdown
-(`Wiki.App.View.Assistant`): shortcuts that fill the message in (improve, fix
+The writing assistant, bring-your-own-key (WP4.19, decision 21). A bar of
+the providers' buttons at the text's left edge (Claude's and ChatGPT's, with
+their logos from simple-icons; above the text on a narrow screen) opens a
+chat beside the Markdown with that provider, or closes it if it is open with
+it; switching provider starts a new conversation, the changes made by then
+kept to decide (`Wiki.App.View.Assistant`). Under the message, the
+provider's model (its list, or "Other…") and its effort (Anthropic's
+`output_config.effort`, OpenAI's `reasoning.effort`, low by default), kept
+per provider with the settings and taking effect from the next message.
+The panel has shortcuts that fill the message in (improve, fix
 grammar, shorten, expand, summarise, continue, translate), the selection
 attached as a chip that can be detached, the model's answer streamed, Stop,
 and the conversation kept for the editing session. The model edits the page
