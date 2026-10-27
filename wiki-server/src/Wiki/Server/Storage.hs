@@ -1,48 +1,52 @@
--- | The wiki kept by the server: in an SQLite database, with attachments'
--- bytes on disk under their content hash, behind the application's own
--- interface, 'MonadWiki'.
+-- | The server's storage of the wiki: an SQLite database, plus the
+-- attachments' bytes in files on disk, named by their content hash. It
+-- implements the application's backend interface, 'MonadWiki'.
 --
 -- 'SqliteWiki' is a 'MonadWiki' like the demo's in-memory backend, and
--- passes the same contract ("Wiki.App.Backend.Contract"): the server's
--- handlers ask it what the application would ask any backend, and get the
--- same answers the demo gives, the same errors in the same order included.
--- Every operation does what "Wiki.App.Backend.Mem.State" does for the demo,
--- with the same functions of @wiki-core@ (the permission rules, the orders,
--- paths and slugs, the search), over the rows it reads instead of a map in
--- memory.
+-- passes the same contract tests ("Wiki.App.Backend.Contract"). The
+-- server's handlers call it as the application calls any backend, and get
+-- the same answers as from the demo, including the same errors in the same
+-- order. Every operation does what "Wiki.App.Backend.Mem.State" does for
+-- the demo, with the same @wiki-core@ functions (the permission rules, the
+-- orders, paths and slugs, the search), over database rows instead of a
+-- map in memory.
 --
 -- = Who is asking
 --
--- A program runs as someone ('Who'), given when it is run rather than kept
--- anywhere: a reader nobody has signed in ('Anonymous'), one of the wiki's
--- users ('AsUser'), or 'Administrator', the operator of the server (on its
--- loopback admin listener: decision 11 of docs/PLAN.md), who passes every
--- check. The server says who for each
--- request; nothing here knows about requests.
+-- Every program runs as a 'Who', passed in when it is run and not stored
+-- anywhere: a reader who has not signed in ('Anonymous'), one of the
+-- wiki's users ('AsUser'), or 'Administrator', the server's operator (on
+-- its loopback admin listener: decision 11 of docs/PLAN.md), who passes
+-- every check. The server decides the 'Who' for each request; this module
+-- knows nothing about requests.
 --
 -- = Transactions
 --
--- One connection, used by one operation at a time: each operation is one
--- transaction, which reads what it needs (every space and grant, since every
--- rule is about a space's ancestors; the pages it is about), checks what the
+-- The storage has one database connection, used by one operation at a
+-- time. Each operation is one transaction. It reads what it needs: every
+-- space and grant, since every permission rule looks at a space's
+-- ancestors, and the pages the operation is about. It then checks what the
 -- class's Haddock says it checks, in that order, and only then writes. An
--- operation that fails writes nothing, and one that throws (a full disk)
--- rolls back. The database is in WAL mode, so a backup taken by another
--- process meanwhile reads without waiting ("Wiki.Server.Storage.Backup").
+-- operation that fails writes nothing, and one that throws (on a full
+-- disk, say) is rolled back. The database is in WAL mode, so a backup
+-- taken by another process meanwhile reads without waiting
+-- ("Wiki.Server.Storage.Backup").
 --
 -- = The wiki's settings
 --
--- Whom the wiki lets in ("Wiki.Core.Access") is asked on every request
--- (the listener's gate, and every rule through the grants), so the storage
--- keeps the settings in memory once read ('readSettings'), and a change
--- made through it puts the new ones there before anything else can use the
--- connection. A change made by another process (none does) would be seen
--- at the next start.
+-- The wiki's settings include whom the wiki lets in ("Wiki.Core.Access"),
+-- which every request needs: the listener checks it, and every permission
+-- rule sees it through the grants. So the storage keeps the settings in
+-- memory after the first read ('readSettings'). A change made through the
+-- storage updates that copy before anything else can use the connection.
+-- A change made by another process would only be seen at the next start,
+-- but no other process makes one.
 --
--- So are the server's own settings ("Wiki.Server.Secret"): its public
--- address, its mail server and its providers, which the server reads on
--- every request that signs in or mails ('readServerSettings'), so that a
--- change in the administration takes effect with the next one.
+-- The server's own settings ("Wiki.Server.Secret") are kept in memory the
+-- same way: its public address, its mail server and its sign-in providers.
+-- The server reads them on every request that signs someone in or sends
+-- mail ('readServerSettings'), so a change in the administration takes
+-- effect with the next such request.
 module Wiki.Server.Storage
   ( -- * The storage
     Storage
@@ -183,39 +187,41 @@ data Storage = Storage
   , dataDir :: FilePath
   , config :: Config
   , settings :: IORef (Maybe WikiSettings)
-  -- ^ The wiki's settings, once read: filled and changed only by whoever
-  -- holds the connection, so that one read before a change is never put
-  -- there after it.
+  -- ^ The wiki's settings, after the first read. Only the holder of the
+  -- connection fills or changes this, so settings read before a change can
+  -- never overwrite the changed ones.
   , serverKept :: IORef (Maybe Kept)
   -- ^ The server's own settings, kept the same way.
   , lock :: Maybe DataLock
-  -- ^ The data directory's lock, held by a storage that may delete what
-  -- is in it ('openStorage'), not by one opened beside it.
+  -- ^ The data directory's lock. A storage opened with 'openStorage',
+  -- which may delete files in the directory, holds it. A storage opened
+  -- beside a running server ('withStorageAside') does not.
   }
 
 -- | What a storage is opened with besides its directory.
 data Config = Config
   { attachmentAddress :: Attachment -> Text
-  -- ^ Where a browser fetches the bytes of an attachment the storage keeps:
-  -- the server's route for them, which serves 'attachmentFile'.
+  -- ^ The URL a browser fetches a stored attachment's bytes from: the
+  -- server's route for them, which serves 'attachmentFile'.
   , iconAddress :: Space -> Text
-  -- ^ Where a browser fetches the image a space is pictured with, for a
-  -- space whose icon is one: the server's route for it, which serves
+  -- ^ The URL a browser fetches a space's icon image from, for a space
+  -- whose icon is an image: the server's route for it, which serves
   -- 'spaceIconFile'.
   , publish :: PageId -> PageEvent -> IO ()
-  -- ^ Who is told what happens to a page: the server's live channel
-  -- ("Wiki.Server.Events"), told of every change to its comments and of
-  -- every save of it. Called once the change is committed, before anyone
-  -- else may use the connection, so it must not wait.
+  -- ^ The callback that reports what happens to a page to the server's
+  -- live channel ("Wiki.Server.Events"): every change to the page's
+  -- comments, and every save of the page. It is called once the change is
+  -- committed, before anyone else may use the connection, so it must not
+  -- wait.
   , notify :: [(UserId, Notification)] -> IO ()
-  -- ^ Who is told of the notifications a write made
-  -- ("Wiki.Core.Notification"): the users' tabs over the live channel,
-  -- and the thread that mails them. Called as 'publish' is, and must not
-  -- wait either.
+  -- ^ The callback that receives the notifications a write made
+  -- ("Wiki.Core.Notification") and passes them to the users' tabs over the
+  -- live channel, and to the thread that mails them. It is called as
+  -- 'publish' is, and must not wait either.
   }
 
--- | Attachments at @\/api\/v1\/attachments\/\<id\>@, and nobody told of
--- anything.
+-- | A configuration with attachments at @\/api\/v1\/attachments\/\<id\>@,
+-- and callbacks that do nothing.
 defaultConfig :: Config
 defaultConfig =
   Config
@@ -226,24 +232,27 @@ defaultConfig =
     }
 
 -- | Open the storage in a data directory ("Wiki.Server.Storage.Layout"),
--- made if it is not there: the database is created or brought up to this
--- program's schema ("Wiki.Server.Storage.Migrate"), and the attachments'
--- files that neither it nor any backup refers to any more are deleted
--- ("Wiki.Server.Storage.Blobs" says why then). A database a newer program
--- has migrated is refused with an exception, and nothing is changed.
+-- creating the directory if needed. The database is created, or migrated
+-- to this program's schema ("Wiki.Server.Storage.Migrate"). Attachment
+-- files that neither the database nor any backup refers to are deleted
+-- ("Wiki.Server.Storage.Blobs" says why at this point). A database that a
+-- newer program has migrated is refused with an exception, and nothing is
+-- changed.
 --
 -- The storage holds the data directory's lock while it is open
--- ('Wiki.Server.Storage.Backup.lockDataDir'): a second storage on it (a
--- second server) is refused with 'DataDirInUse', as is a restore while it
--- is open, since either would change what this one reads under it.
+-- ('Wiki.Server.Storage.Backup.lockDataDir'). Opening a second storage on
+-- the directory (a second server) is refused with 'DataDirInUse', and so
+-- is a restore, since either would change the files under the open
+-- storage.
 openStorage :: Config -> FilePath -> IO Storage
 openStorage = openWith True
 
--- | Open the storage beside a server that may be running on it (the
--- console's @wiki-server users …@): migrated as 'openStorage' does, but
--- deleting no attachment's file, since the server may be writing one that
--- its database does not name yet. A write waits for the server's (up to
--- ten seconds) rather than fail at once.
+-- | Open the storage while a server may be running on the same directory
+-- (the console's @wiki-server users …@). The database is migrated as
+-- 'openStorage' does, but no attachment file is deleted, since the server
+-- may be writing one that its database does not name yet. A write waits up
+-- to ten seconds for the server's write to finish, instead of failing at
+-- once.
 withStorageAside :: FilePath -> (Storage -> IO a) -> IO a
 withStorageAside dir = bracket (openWith False defaultConfig dir) closeStorage
 
@@ -254,7 +263,8 @@ openWith collect config dataDir = do
   c <- open (databaseFile dataDir) `onException` traverse_ unlockDataDir lock
   flip onException (close c >> traverse_ unlockDataDir lock) $ do
     execute_ c "PRAGMA busy_timeout = 10000"
-    -- A pragma that answers with a row, which execute_ would refuse.
+    -- This pragma returns a row, and execute_ refuses a statement that
+    -- returns rows.
     _ <- query_ c "PRAGMA journal_mode = WAL" :: IO [Only Text]
     execute_ c "PRAGMA synchronous = NORMAL"
     execute_ c "PRAGMA foreign_keys = ON"
@@ -265,15 +275,15 @@ openWith collect config dataDir = do
   serverKept <- newIORef Nothing
   pure Storage {connection, dataDir, config, settings, serverKept, lock}
 
--- | A data directory another storage has open, or that is being restored
--- into: why it cannot be opened.
+-- | The error for a data directory that another storage has open, or that
+-- a restore is writing into.
 newtype DataDirInUse = DataDirInUse Text
   deriving stock (Show)
 
 instance Exception DataDirInUse where
   displayException (DataDirInUse why) = toS why
 
--- | Close the storage's database, and let its directory's lock go.
+-- | Close the storage's database, and release its directory's lock.
 closeStorage :: Storage -> IO ()
 closeStorage st = withMVar st.connection close `finally` traverse_ unlockDataDir st.lock
 
@@ -281,8 +291,9 @@ closeStorage st = withMVar st.connection close `finally` traverse_ unlockDataDir
 withStorage :: Config -> FilePath -> (Storage -> IO a) -> IO a
 withStorage config dir = bracket (openStorage config dir) closeStorage
 
--- | The database itself, for what the interface does not do: the tests'
--- look inside, and maintenance. Nothing else runs on it meanwhile.
+-- | Run something on the database connection directly, for what the
+-- interface does not do: tests that inspect the database, and
+-- maintenance. Nothing else uses the connection meanwhile.
 withDatabase :: Storage -> (Connection -> IO a) -> IO a
 withDatabase st = withMVar st.connection
 
@@ -295,8 +306,9 @@ storageDataDir st = st.dataDir
 readSettings :: Storage -> IO WikiSettings
 readSettings st = readIORef st.settings >>= maybe (withMVar st.connection (settingsWith st)) pure
 
--- | The wiki's settings, for someone who holds the storage's connection
--- (inside 'withDatabase'): read from it the first time, and kept.
+-- | The wiki's settings, for a caller that holds the storage's connection
+-- (inside 'withDatabase'). They are read from the database the first time
+-- and kept in memory.
 settingsWith :: Storage -> Connection -> IO WikiSettings
 settingsWith st c =
   readIORef st.settings >>= \case
@@ -324,7 +336,7 @@ serverSettingsWith st c =
 -- | Delete the attachments' files that nothing refers to: not the database,
 -- and not one of the backups kept, which a restore would bring back. A
 -- backup that cannot be read might refer to any of them, so then nothing is
--- deleted. The images spaces are pictured with are such files too.
+-- deleted. Space icon images are such files too.
 collectGarbage :: Connection -> FilePath -> IO ()
 collectGarbage c dataDir = do
   live <- referencedBlobs c
@@ -338,20 +350,22 @@ collectGarbage c dataDir = do
 
 -- | Who an operation is run as.
 data Who
-  = -- | Nobody who has signed in: they see the public spaces.
+  = -- | A reader who has not signed in: they see the public spaces.
     Anonymous
   | -- | One of the wiki's users, with what is granted to them and to their
-    -- groups. An id that is no user's, or a disabled user's, is nobody.
+    -- groups. An id that belongs to no user, or to a disabled user, is
+    -- treated as 'Anonymous'.
     AsUser UserId
   | -- | The server's operator, who passes every check, as a holder of the
-    -- global 'Administer' would. They are no user of the wiki, and are shown
-    -- to the application as 'administratorUser'.
+    -- global 'Administer' does. The operator is not a user of the wiki, and
+    -- the application sees them as 'administratorUser'.
     Administrator
   deriving stock (Eq, Show)
 
--- | The id the administrator has where one is needed: their drafts are kept
--- under it, and the versions they save name it. No user has it (users' ids
--- are UUIDs, or an imported wiki's @user-N@).
+-- | The user id of the operator ('Administrator'), where an id is needed:
+-- their drafts are stored under it, and the versions they save name it.
+-- No user has it (users' ids are UUIDs, or an imported wiki's
+-- @user-N@).
 administratorId :: UserId
 administratorId = UserId "~administrator"
 
@@ -374,7 +388,8 @@ data Ctx = Ctx
   , blobs :: FilePath
   , spaces :: Map SpaceId Space
   , grants :: Grants
-  -- ^ The wiki's, and for the administrator one more: 'Administer' for them.
+  -- ^ The wiki's grants, plus, for the administrator, a global
+  -- 'Administer' grant.
   , principal :: Maybe Principal
   -- ^ Who is asking, as the rules see them.
   , user :: Maybe User
@@ -382,8 +397,8 @@ data Ctx = Ctx
   , author :: Maybe UserId
   -- ^ The id their drafts and the versions they save are kept under.
   , creator :: Maybe UserId
-  -- ^ The user a space they create is granted to: nobody for the
-  -- administrator, who needs no grant.
+  -- ^ The user granted administration of a space this caller creates:
+  -- nobody for the administrator, who needs no grant.
   , wiki :: WikiSettings
   -- ^ The wiki's settings as the transaction began.
   , server :: Kept
@@ -392,7 +407,7 @@ data Ctx = Ctx
   -- ^ Where the request came from, as the audit log records it: a
   -- network address, @console@, or empty where it is not known.
   , told :: IORef [(UserId, Notification)]
-  -- ^ The notifications the transaction made, told once it commits.
+  -- ^ The notifications the transaction made, sent once it commits.
   }
 
 -- | An operation, in a transaction: what it finds wrong ends it with a
@@ -400,8 +415,8 @@ data Ctx = Ctx
 newtype Tx a = Tx (ReaderT Ctx (ExceptT WikiError IO) a)
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadReader Ctx, MonadError WikiError)
 
--- | Whether a transaction writes: one that does takes the database's write
--- lock as it begins, so that what it read is still so when it writes.
+-- | Whether a transaction writes. One that does takes the database's write
+-- lock as it begins, so that what it read is still true when it writes.
 data Mode = Reads | Writes
 
 -- | Run an operation as someone, in a transaction of its own: committed if
@@ -413,8 +428,8 @@ transact st who = transactFrom st who ""
 transactFrom :: Storage -> Who -> Text -> Mode -> Tx a -> IO (Either WikiError a)
 transactFrom st who address mode body = transactThenFrom st who address mode body (const pass)
 
--- | 'transact', and once the transaction has committed, and before anyone
--- else may use the connection, something done with what it gave.
+-- | 'transact', then an action on the result, run after the commit and
+-- before anyone else may use the connection.
 transactThen :: Storage -> Who -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
 transactThen st who = transactThenFrom st who ""
 
@@ -433,8 +448,8 @@ transactThenFrom st who address mode (Tx body) committed = withMVar st.connectio
       unless (null made) (st.config.notify (reverse made))
   pure result
 
--- | What an operation starts from: the grants with whom the wiki is open
--- to, which the rules take from them.
+-- | The context an operation starts from. Its grants include whom the wiki
+-- is open to, because the permission rules read that from the grants.
 context :: Storage -> Connection -> Who -> Text -> IO Ctx
 context st c who address = do
   spaces <- loadSpaces c
@@ -462,7 +477,7 @@ context st c who address = do
             Nothing
         )
 
--- | Something done with the connection.
+-- | Run an IO action on the transaction's connection.
 db :: (Connection -> IO a) -> Tx a
 db f = asks (\x -> x.conn) >>= liftIO . f
 
@@ -529,9 +544,9 @@ now = liftIO getCurrentTime
 fallbackSlug :: Text -> Slug
 fallbackSlug t = either (\e -> panic ("not a slug: " <> t <> ", " <> show e)) identity (mkSlug t)
 
--- | Record a write of the administration's in the audit log, in this
--- transaction, as whoever is asking, from where they ask (WP4.10 of
--- docs/PLAN.md): what was done, to what, and what changed, never a secret.
+-- | Record an administration write in the audit log (WP4.10 of
+-- docs/PLAN.md), in this transaction, with who asked and from which
+-- address: what was done, to what, and what changed, never a secret.
 record :: Text -> Audit.Subject -> [(Text, Text)] -> Tx ()
 record action subject detail = do
   ctx <- ask
@@ -540,7 +555,7 @@ record action subject detail = do
   where
     nobody = Actor {id = UserId "~anonymous", login = "anonymous"}
 
--- | What an entry names a space, a page, a user or a group as.
+-- | How an audit log entry names a space, a user, a group or settings.
 spaceSubject :: Space -> Audit.Subject
 spaceSubject sp = Audit.Subject {kind = "space", id = Just sp.id.text, name = sp.name}
 
@@ -563,9 +578,9 @@ yesNo b = if b then "yes" else "no"
 --------------------------------------------------------------------------------
 -- The wiki
 
--- | The wiki in a storage, as someone; over any base monad that does IO,
--- so that what runs in another monad (a component rendered on the server)
--- can run over it.
+-- | 'SqliteWiki' is the 'MonadWiki' backend over a storage, run as a
+-- 'Who'. It works over any base monad that does IO, so that a program in
+-- another monad (a component the server prerenders) can run over it.
 newtype SqliteWiki m a = SqliteWiki (ReaderT Env m a)
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadUnliftIO)
 
@@ -579,18 +594,19 @@ data Env = Env
 instance (MonadUUID m) => MonadUUID (SqliteWiki m) where
   generateV4 = SqliteWiki (lift generateV4)
 
--- | Run a program against the wiki in a storage, as someone, from where
--- nobody knows (what the server renders, which writes nothing).
+-- | Run a program against the wiki in a storage, as a 'Who', with no
+-- request address. This is for the server's prerender, which writes
+-- nothing, so the audit log needs no address.
 runSqliteWiki :: Storage -> Who -> SqliteWiki m a -> m a
 runSqliteWiki storage who = runSqliteWikiFrom storage who ""
 
--- | Run a program as someone asking from an address: what the audit log
--- records for each write of the administration's it makes.
+-- | Run a program as a 'Who' asking from an address. The audit log records
+-- the address for each administration write the program makes.
 runSqliteWikiFrom :: Storage -> Who -> Text -> SqliteWiki m a -> m a
 runSqliteWikiFrom storage who address (SqliteWiki program) = runReaderT program Env {storage, who, address}
 
--- | Someone as the audit log names them: a user by their login, the
--- operator as @administrator@, nobody as @anonymous@.
+-- | How the audit log names a 'Who': a user by their login, the operator
+-- as @administrator@, a reader who has not signed in as @anonymous@.
 actorOf :: Storage -> Who -> IO Actor
 actorOf st who = case who of
   Anonymous -> pure Actor {id = UserId "~anonymous", login = "anonymous"}
@@ -602,7 +618,7 @@ run mode tx = SqliteWiki $ do
   env <- ask
   liftIO (transactFrom env.storage env.who env.address mode tx)
 
--- | A read that cannot fail; the 'Left' it cannot give is the default.
+-- | A read that returns no @Either@: on an error, it returns the fallback.
 answer :: (MonadIO m) => a -> Tx a -> SqliteWiki m a
 answer fallback tx = fromRight fallback <$> run Reads tx
 
@@ -650,10 +666,10 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   getVersion pid = run Reads . getVersionTx pid
   restoreVersion pid at = saving . restoreVersionTx pid at
 
--- | The administration's, as the class's Haddock says
--- ("Wiki.App.Backend.Admin"): each operation one transaction that first
--- checks that whoever is asking holds the global administer, which the
--- administrator always does and a user does by a grant.
+-- | The administration operations, as the class's Haddock describes them
+-- ("Wiki.App.Backend.Admin"). Each operation is one transaction that
+-- first checks that the caller holds the global administer: the
+-- administrator always does, and a user does through a grant.
 instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   directory = run Reads directoryTx
   setAdministrator u = run Writes . setGlobalGrantTx Administer u
@@ -662,7 +678,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   -- A password is checked and hashed before the transaction that keeps
   -- it, since hashing takes tens of milliseconds the database should not
   -- wait for; and only for an administrator, so that nobody else can make
-  -- the server spend them. The transaction checks again.
+  -- the server spend that time. The transaction checks again.
   createUser new =
     run Reads requireAdministrator >>= \case
       Left e -> pure (Left e)
@@ -688,14 +704,15 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
         Left why -> pure (Left (Invalid why))
         Right p -> do
           phc <- liftIO (hashPassword p)
-          -- The password is no detail of the log's: that it changed is.
+          -- The audit log records that the password changed, never the
+          -- password.
           run Writes $ do
             requireAdministrator
             findUser u >>= requirePasswordToSet
             changeAccountTx "user.password" [] u $ \c -> updatePasswordHash c u phc >> deleteSessionsOf c u
 
-  -- Mailing takes the server, which the storage is not: its API mails the
-  -- link, which 'passwordLinkFor' makes.
+  -- Sending mail needs the server, not the storage: the server's API
+  -- mails the link that 'passwordLinkFor' makes.
   sendPasswordLink u = run Reads (requireAdministrator >> findUser u >> failWith (Invalid "Only the server's API sends mail."))
   setDisabled u disabled =
     run Writes $ changeAccountTx (if disabled then "user.disable" else "user.enable") [] u $ \c -> do
@@ -709,13 +726,13 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   wikiSettings = run Reads (requireAdministrator >> asks (\x -> x.wiki))
 
   -- The settings kept in memory are the new ones as soon as they are
-  -- committed, before the connection is let go.
+  -- committed, before the connection is released.
   setWikiSettings new = SqliteWiki $ do
     env <- ask
     liftIO (transactThenFrom env.storage env.who env.address Writes (setWikiSettingsTx new) (writeIORef env.storage.settings . Just))
 
-  -- The storage mails nothing: whether the server does, it says itself
-  -- ("Wiki.Server.Api").
+  -- The storage sends no mail. Whether the server does, the server's API
+  -- says itself ("Wiki.Server.Api").
   invitations = run Reads invitationsTx
   invite email = liftIO newToken >>= run Writes . inviteTx email
   revokeInvitation = run Writes . revokeInvitationTx
@@ -723,22 +740,22 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   removeSecondFactor = run Writes . removeSecondFactorTx
 
   -- The server's own settings: kept in memory as soon as they are
-  -- committed, as the wiki's are, and never given back with a secret.
+  -- committed, as the wiki's are, and never returned with their secrets.
   serverSettings = run Reads (requireAdministrator >> asks (\x -> hideSecrets x.server))
   setServerSettings change = SqliteWiki $ do
     env <- ask
     fmap hideSecrets <$> liftIO (transactThenFrom env.storage env.who env.address Writes (setServerSettingsTx change) (writeIORef env.storage.serverKept . Just))
 
-  -- Asking a provider and sending mail take the server, which the storage
-  -- is not: its API does both ("Wiki.Server.Api"), with what the storage
-  -- keeps ('readServerSettings').
+  -- Asking a provider and sending mail need the server, not the storage:
+  -- the server's API does both ("Wiki.Server.Api"), with the settings the
+  -- storage keeps ('readServerSettings').
   checkProvider _ _ = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API asks a provider."))
   sendTestMail _ = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API sends mail."))
 
-  -- The backups as the storage keeps them: their settings and the last
-  -- made. Whether one is under way, and when the next is due, are the
-  -- server's ("Wiki.Server.Backups"), and so is making one: its API
-  -- answers with both.
+  -- The backups as the storage records them: their settings and the last
+  -- backup made. Only the server knows whether a backup is running and
+  -- when the next is due ("Wiki.Server.Backups"), and only the server
+  -- makes one; its API answers with both.
   backups = SqliteWiki (ask >>= \env -> liftIO (readBackups env.storage env.who))
   setBackupSettings change = SqliteWiki $ do
     env <- ask
@@ -747,16 +764,17 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
       Right _ -> liftIO (readBackups env.storage env.who)
   backUpNow = run Reads (requireAdministrator >> failWith (Invalid "Only the server makes a backup."))
 
-  -- The audit log, as the storage keeps it; and the server's status, which
-  -- is the server's own (its errors, its connections): its API answers
-  -- that ("Wiki.Server.Api").
+  -- The audit log, as the storage keeps it. The server's status (its
+  -- errors, its connections) belongs to the server, and the server's API
+  -- answers for it ("Wiki.Server.Api").
   activity q = run Reads (requireAdministrator >> db (`loadActivity` q))
   serverStatus = run Reads (requireAdministrator >> failWith (Invalid "Only the server's API says how the server is."))
 
--- | The backups, as someone may read them (an administrator): their
--- settings with the configuration as whether it is set, the last made or
--- tried, and how many the data directory holds; none under way, and no
--- next one, which only the server knows ('Wiki.Server.Backups').
+-- | The backups, for an administrator: their settings (with only whether
+-- the configuration is set, not the configuration), the last backup made
+-- or tried, and how many backups the data directory holds. It always says
+-- that no backup is running and none is due next, since only the server
+-- knows those ('Wiki.Server.Backups').
 readBackups :: Storage -> Who -> IO (Either WikiError Backups)
 readBackups st who =
   transact st who Reads (requireAdministrator >> db (\c -> (,) <$> loadBackupSettings c <*> loadLastBackup c)) >>= \case
@@ -765,39 +783,40 @@ readBackups st who =
       kept <- length <$> backupFiles (backupsDir st.dataDir)
       pure (Right Backups {available = True, settings = secretState <$> settings, last = lastMade, running = False, next = Nothing, kept})
 
--- | The backups' settings, with the configuration, for the server that
--- makes them.
+-- | The backup settings, with the configuration itself, for the server
+-- that makes the backups.
 readBackupSettings :: Storage -> IO KeptBackups
 readBackupSettings st = withDatabase st loadBackupSettings
 
--- | The last backup made or tried, for the server that makes them.
+-- | The last backup made or tried, for the server that makes the backups.
 readLastBackup :: Storage -> IO (Maybe BackupRecord)
 readLastBackup st = withDatabase st loadLastBackup
 
--- | Keep what the last backup came to.
+-- | Store the outcome of the last backup.
 writeLastBackup :: Storage -> BackupRecord -> IO ()
 writeLastBackup st r = withDatabase st (`storeLastBackup` r)
 
--- | Write a copy of the database into a new file, holding the storage's
--- connection for the copy alone, as every operation holds it for its
+-- | Write a copy of the database into a new file. The copy holds the
+-- storage's connection while it runs, as every operation holds it for its
 -- transaction.
 copyDatabase :: Storage -> FilePath -> IO ()
 copyDatabase st target = withDatabase st (`backupInto` target)
 
--- | Whether someone may read a page that is there: what the live channel
--- asks before it tells them of the page ("Wiki.Server.Events").
+-- | Whether a 'Who' may read a page that exists. The live channel checks
+-- this before it sends them events about the page ("Wiki.Server.Events").
 mayReadPage :: Storage -> Who -> PageId -> IO Bool
 mayReadPage st who pid = isRight <$> transact st who Reads (findNode pid >>= chainOfPage >>= requireView)
 
--- | A user's notification with where its page is now, if they may still
--- read it: what the thread that mails them asks before it does
--- ("Wiki.Server.Notifier").
+-- | A user's notification, updated with where its page is now, if the user
+-- may still read the page. The thread that mails notifications checks this
+-- before it mails one ("Wiki.Server.Notifier").
 locatedFor :: Storage -> UserId -> Notification -> IO (Maybe Notification)
 locatedFor st u n = fromRight Nothing <$> transact st (AsUser u) Reads (locatedTx n)
 
--- | Someone as the live channel names whoever edits a page, if they may
--- edit it ('Nothing' if they may not, or it is not there, or they are
--- nobody signed in): what it asks before it tells anyone that they do.
+-- | The 'Author' the live channel shows for someone editing a page, if
+-- they may edit it ('Nothing' if they may not, if the page does not exist,
+-- or if they have not signed in). The live channel checks this before it
+-- tells anyone that this person is editing the page.
 editorOf :: Storage -> Who -> PageId -> IO (Maybe Author)
 editorOf st who pid =
   rightToMaybe
@@ -811,17 +830,17 @@ editorOf st who pid =
           asks (\x -> x.user) >>= maybe (failWith Forbidden) (\u -> pure Author {id = u.id, name = u.displayName})
       )
 
--- | A page's threads as someone may read them ('Left' if they may not, or
--- the page is not there), and something done with them before any write
--- can commit: what the live channel subscribes with ("Wiki.Server.Events"),
--- so that every change after the threads read is told after them, and
--- none between the two goes untold.
+-- | A page's threads, if the 'Who' may read them ('Left' if they may not,
+-- or the page does not exist), and an action run on them before any write
+-- can commit. The live channel subscribes with this ("Wiki.Server.Events"):
+-- every change after the read is sent after the threads, and no change can
+-- fall between the read and the subscription unsent.
 threadsThen :: Storage -> Who -> PageId -> ([Thread] -> IO ()) -> IO (Either WikiError [Thread])
 threadsThen st who pid = transactThen st who Reads (listThreadsTx pid)
 
--- | A page's comments, as the class's Haddock says
--- ("Wiki.App.Backend.Comments"): each operation one transaction, and each
--- write, once committed, told to whoever listens ('publish').
+-- | The comment operations, as the class's Haddock describes them
+-- ("Wiki.App.Backend.Comments"). Each operation is one transaction, and
+-- each write is reported through 'publish' once it is committed.
 instance (MonadIO m) => MonadComments (SqliteWiki m) where
   listThreads = run Reads . listThreadsTx
   openThread pid anchor = commenting . openThreadTx pid anchor
@@ -831,8 +850,8 @@ instance (MonadIO m) => MonadComments (SqliteWiki m) where
   deleteThread pid = commenting . deleteThreadTx pid
   setResolved pid tid = commenting . setResolvedTx pid tid
 
--- | A write to a page's comments, which says what happened to the page:
--- told once it is committed.
+-- | Run a write to a page's comments, which returns its event on the page,
+-- and publish that event once the write is committed.
 commenting :: (MonadIO m) => Tx (a, PageId, PageEvent) -> SqliteWiki m (Either WikiError a)
 commenting tx = SqliteWiki $ do
   env <- ask
@@ -840,16 +859,17 @@ commenting tx = SqliteWiki $ do
     fmap (\(a, _, _) -> a)
       <$> transactThen env.storage env.who Writes tx (\(_, page, event) -> env.storage.config.publish page event)
 
--- | A save of a page, which, once it is committed, is told to whoever
--- listens: a tab showing the page reads it again.
+-- | Run a save of a page, and publish it once it is committed, so that a
+-- tab showing the page fetches it again.
 saving :: (MonadIO m) => Tx Page -> SqliteWiki m (Either WikiError Page)
 saving tx = SqliteWiki $ do
   env <- ask
   liftIO (transactThen env.storage env.who Writes tx (\p -> env.storage.config.publish p.id (PageChanged p.updatedAt)))
 
--- | An attachment someone may view (they may view its page), and the file
--- its bytes are in when the storage keeps them; 'Nothing' for one that lives
--- on the web. What the server's route for an attachment's bytes serves.
+-- | An attachment, if the 'Who' may view its page, with the file its bytes
+-- are in when the storage holds them ('Nothing' for an attachment that
+-- lives on the web). The server's route for an attachment's bytes serves
+-- this.
 attachmentFile :: (MonadIO m) => AttachmentId -> SqliteWiki m (Either WikiError (Attachment, Maybe FilePath))
 attachmentFile aid = run Reads $ do
   (pid, a) <- db (`loadAttachment` aid) >>= maybe (failWith NotFound) pure
@@ -863,24 +883,25 @@ attachmentFile aid = run Reads $ do
         SourceUrl _ -> Nothing
     )
 
--- | A page someone may read, by its id: what an export of it reads
--- ("Wiki.Server.Export"), the rest (its space's pages, the spaces) being
--- what the application reads ('MonadWiki').
+-- | A page by its id, if the 'Who' may read it. An export reads the page
+-- with this ("Wiki.Server.Export"), and reads the rest (its space's pages,
+-- the spaces) through 'MonadWiki', as the application does.
 exportedPage :: (MonadIO m) => PageId -> SqliteWiki m (Either WikiError Page)
 exportedPage pid = run Reads $ do
   requireView =<< chainOfPage =<< findNode pid
   findPage pid
 
--- | The file a blob's bytes are in, if it names one: where an export reads
--- an image from. Whether the reader may see it is for the caller to have
--- checked, by the page that has it.
+-- | The file that holds a blob's bytes, if the blob id names one. An export
+-- reads images from it. This checks no permission: the caller must already
+-- have checked that the reader may see the page that has the blob.
 blobPath :: Storage -> BlobId -> Maybe FilePath
 blobPath st = blobFile (attachmentsDir st.dataDir)
 
--- | The image a space is pictured with, for someone who may view the
--- space, by the blob it is (the address names it, so that an image
--- replaced is at another): its media type and its file. What the server's
--- route for it serves; a blob that is not the space's image is 'NotFound'.
+-- | A space's icon image, if the 'Who' may view the space: its media type
+-- and its file. The image is looked up by its blob id, which is part of
+-- its URL, so a replaced image gets a new URL. The server's route for
+-- space icons serves this. A blob that is not the space's image is
+-- 'NotFound'.
 spaceIconFile :: (MonadIO m) => SpaceId -> BlobId -> SqliteWiki m (Either WikiError (Text, FilePath))
 spaceIconFile sid blob = run Reads $ do
   (s, c) <- findSpace sid
@@ -908,14 +929,14 @@ sessionTx = do
               , spaces = filter (\g -> isFor p g.subject) ctx.grants.spaces
               , access = ctx.grants.access
               }
-        , -- The administrator is the operator; anyone else named is a user
-          -- the server took the request for, which is whoever signed in.
+        , -- The administrator is the operator. Any other user is whoever
+          -- signed in, since the server runs the request as that user.
           standing = if u.id == administratorId then Operator else SignedIn
         , -- The server's configuration names them, not the storage: the
           -- API adds them ("Wiki.Server.Api").
           providers = []
-        , -- Nor what the server exports in: that is pandoc's and the
-          -- machine's, which the API adds too.
+        , -- Nor the export formats: they depend on pandoc and on the
+          -- machine, and the API adds them too.
           exports = []
         }
 
@@ -926,8 +947,8 @@ listSpacesTx = do
       listed = Set.fromList (map (\s -> s.id) (concat visible))
   pure (spaceTreeOrder (Map.elems (Map.restrictKeys ctx.spaces listed)))
 
--- | How many pages each space the asker may view has, its templates not
--- counted.
+-- | The number of pages in each space the caller may view, not counting
+-- templates.
 pageCountsTx :: Tx (Map SpaceId Int)
 pageCountsTx = do
   ctx <- ask
@@ -954,9 +975,10 @@ listPagesTx sid = do
   requireView c
   pageTreeOrder s.pageOrder <$> db (`loadPages` sid)
 
--- | What each page of a space is listed with as a post: the author of its
--- first version (the earliest, read as times rather than as the text they
--- are kept as), and how many comments it has.
+-- | The details each page of a space is listed with as a blog post: the
+-- author of its first version, and how many comments it has. The first
+-- version is the earliest, compared as times rather than as the text the
+-- times are stored as.
 postDetailsTx :: SpaceId -> Tx (Map PageId PostDetails)
 postDetailsTx sid = do
   (_, c) <- findSpace sid
@@ -981,10 +1003,10 @@ getPageTx sid path = do
     Right ps | Just p <- lastMay ps -> findPage p.id
     _ -> failWith NotFound
 
--- | The search, as the demo's: 'searchPlain' over the pages of the spaces
--- the query asks for that the user may view, each from the text prepared
--- when it was saved, folded as the matcher wants it (which, unlike parsing
--- the Markdown, is quick).
+-- | The search, the same as the demo's: 'searchPlain' over the pages the
+-- user may view in the spaces the query asks for. Each page is searched
+-- through the text prepared when it was saved, folded as the matcher
+-- wants it, which is quick, unlike parsing the Markdown.
 searchPagesTx :: SearchQuery -> Tx [SearchHit]
 searchPagesTx q = do
   ctx <- ask
@@ -1045,8 +1067,8 @@ createSpaceTx parent name = do
   db (`insertSpace` space)
   for_ ctx.creator $ \u ->
     db $ \c -> insertGrants c Grants {global = [], spaces = [SpaceGrant {space = space.id, subject = SubjectUser u, permission = AdministerSpace}], access = Open}
-  -- Its home page, made as a page its maker made would be, and then named
-  -- as the space's, which it has to exist to be.
+  -- Its home page, created as if the space's creator had created it, and
+  -- then set as the space's home page, which requires the page to exist.
   j <- newId
   let home =
         Page
@@ -1076,8 +1098,8 @@ setSpaceProfileTx sid p = do
   checked <- either invalid pure (checkProfile s (map (\n -> n.id) nodes) p)
   let s' = withProfile checked s
   db (`updateSpace` s')
-  -- Saved whole by the space's settings: a save that changed nothing is
-  -- no change to record.
+  -- The space's settings save the whole profile at once, so a save that
+  -- changed nothing is not recorded in the audit log.
   let changed = profileChanges nodes s s'
   unless (null changed) (record "space.profile" (spaceSubject s') changed)
   pure s'
@@ -1097,9 +1119,9 @@ profileChanges nodes old new =
       IconImage _ _ -> "an uploaded image"
     titleOf pid = maybe pid.text (\n -> n.title) (find (\n -> n.id == pid) nodes)
 
--- | Picture a space with an image, its bytes kept under their hash as an
--- attachment's are. The image it had before is left to the collection of
--- files nothing refers to ("Wiki.Server.Storage.Blobs").
+-- | Set a space's icon to an image, its bytes stored under their hash as
+-- an attachment's are. The previous image's file is left for the deletion
+-- of unreferenced files ("Wiki.Server.Storage.Blobs").
 uploadSpaceIconTx :: SpaceId -> Text -> ByteString -> Tx Space
 uploadSpaceIconTx sid mediaType bytes = do
   (s, c) <- findSpace sid
@@ -1109,7 +1131,8 @@ uploadSpaceIconTx sid mediaType bytes = do
   blob <- liftIO (storeBlob dir bytes)
   let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog} s
   db (`updateSpace` s')
-  -- Part of the profile, set apart only because it has bytes.
+  -- The icon is part of the profile; it has its own operation only
+  -- because it carries bytes.
   record "space.profile" (spaceSubject s') [("icon", "an uploaded image")]
   pure s'
 
@@ -1127,8 +1150,8 @@ spaceAccessTx :: SpaceId -> Tx SpaceAccess
 spaceAccessTx sid = do
   (_, c) <- findSpace sid
   requireAdminister c
-  -- The wiki's own grants, as they are kept: not the context's, which has
-  -- the operator's grant of everything in it.
+  -- The wiki's grants as stored, not the context's, which include the
+  -- operator's grant of everything.
   stored <- db loadGrants
   users <- db loadUsers
   groups <- db loadGroups
@@ -1226,7 +1249,7 @@ deleteSpaceTx sid = do
   requireAdminister c
   ctx <- ask
   let below = [sp | sp <- Map.elems ctx.spaces, sp.id /= sid, within sid (chainOf ctx sp.id)]
-  -- What goes with it, counted before it goes.
+  -- Count what is deleted with it, before deleting it.
   counts <- for (sid : map (\sp -> sp.id) below) $ \x -> db (\conn -> query conn "SELECT count(*) FROM pages WHERE space_id = ?" (Only x.text))
   db $ \x -> execute x "DELETE FROM spaces WHERE id = ?" (Only sid.text)
   record
@@ -1359,8 +1382,8 @@ createPageTx sid parent title body = do
           }
   author <- asks (\x -> x.author)
   db $ \x -> insertPage x page >> insertVersion x page author
-  -- A new page is a save too: whom it mentions, and whoever watches its
-  -- space, are told.
+  -- Creating a page counts as a save: the people it mentions, and whoever
+  -- watches its space, are notified.
   tellTx page.id sid page.title Nothing "" PageSaved (newlyMentioned "" body)
   pure page
 
@@ -1513,7 +1536,8 @@ deleteAttachmentTx aid = do
 --------------------------------------------------------------------------------
 -- Drafts
 
--- | A page someone signed in may edit, and the id their drafts are under.
+-- | Check that someone signed in may edit a page, and return the id their
+-- drafts are stored under.
 draftable :: PageId -> Tx UserId
 draftable pid = do
   p <- findNode pid
@@ -1583,8 +1607,8 @@ restoreVersionTx pid at base = do
 --------------------------------------------------------------------------------
 -- Administration
 
--- | Whoever is asking holds the global administer: checked before anything
--- an administration's operation is given is looked for.
+-- | Check that the caller holds the global administer. Administration
+-- operations check this before looking up anything they are given.
 requireAdministrator :: Tx ()
 requireAdministrator = ask >>= \x -> require (hasGlobalPermission x.principal x.grants Administer)
 
@@ -1634,9 +1658,9 @@ directoryTx = do
       , membership = Map.filter (not . Set.null) (Map.restrictKeys membership (Set.fromList (map (\g -> g.id) groups)))
       }
 
--- | Give a user a global permission themself, or take it from them: the
--- global administer, themself included (the admin listener can always give
--- it back), or create-spaces.
+-- | Grant a global permission to a user directly, or take it away: the
+-- global administer (also from oneself, since the admin listener can
+-- always give it back) or create-spaces.
 setGlobalGrantTx :: GlobalPermission -> UserId -> Bool -> Tx ()
 setGlobalGrantTx permission u granted = do
   requireAdministrator
@@ -1669,25 +1693,26 @@ requirePasswordToSet user = do
   none <- db (\c -> noPasswordToSet c configured user.id)
   when none (invalid (user.displayName <> " signs in with a provider, and has no password to set."))
 
--- | A link to choose a password that an administrator has a user mailed:
--- to whom, at which address, and until when it works. Its secret is the
--- caller's, who made it.
+-- | A link for choosing a password, which an administrator has mailed to
+-- a user: to whom, at which address, and until when it works. The link's
+-- secret is not in it: the caller made the secret and keeps it.
 data PasswordLink = PasswordLink
   { user :: User
   , email :: Text
   , expiresAt :: UTCTime
   }
 
--- | Keep the link to choose a password that an administrator has a user
--- mailed (WP5.6 of docs/PLAN.md), with this secret: the link "Forgot your
--- password?" mails ("Wiki.Server.Reset"), working as long and as often,
--- and recorded in the audit log. Checked in this order: whoever asks
--- administers the wiki ('Forbidden'), the user is there ('NotFound'), then
--- 'Invalid' with the reason: they have a password to set, the server sends
--- mail (the caller says whether), their login is enabled, and their
+-- | Store a link for choosing a password, with this secret, for an
+-- administrator to have mailed to a user (WP5.6 of docs/PLAN.md). It is
+-- the same kind of link that "Forgot your password?" mails
+-- ("Wiki.Server.Reset"): it works as long and as many times, and it is
+-- recorded in the audit log. The checks come in this order: the caller
+-- administers the wiki ('Forbidden'), the user exists ('NotFound'), then
+-- 'Invalid' with the reason: the user has a password to set, the server
+-- sends mail (the caller says whether), their login is enabled, and their
 -- address is verified. The limits of "Forgot your password?" do not apply,
--- but a user given a link less than a minute ago is given none
--- ('Nothing'), so that a button clicked twice mails once.
+-- but a user who was given a link less than a minute ago gets none
+-- ('Nothing'), so that a button clicked twice sends one mail.
 passwordLinkFor :: (MonadIO m) => Bool -> UTCTime -> Text -> UserId -> SqliteWiki m (Either WikiError (Maybe PasswordLink))
 passwordLinkFor mailing at token u = run Writes $ do
   requireAdministrator
@@ -1743,7 +1768,8 @@ deleteGroupTx gid = do
   db (`deleteGroupRows` gid)
   record "group.delete" (groupSubject gid g.name) []
 
--- | Put a user in a group, or take them out; either is done once.
+-- | Put a user in a group, or take them out; doing either twice changes
+-- nothing.
 setMemberTx :: Bool -> GroupId -> UserId -> Tx ()
 setMemberTx member gid u = do
   requireAdministrator
@@ -1854,7 +1880,8 @@ revokeInvitationTx i = do
 
 -- | An administrator disconnects a user's account at a provider, even
 -- their last way in (see 'MonadAdmin'), and ends the user's sessions, as
--- a new password does: one of them may have been begun with it.
+-- a new password does: one of them may have been started through that
+-- provider.
 unlinkUserIdentityTx :: UserId -> Text -> Tx ()
 unlinkUserIdentityTx u provider = do
   requireAdministrator
@@ -1884,8 +1911,9 @@ commentAuthor u name
   | u == administratorId = Author {id = u, name = administratorUser.displayName}
   | otherwise = Author {id = u, name = fromMaybe u.text name}
 
--- | A page the current user may read: its space's chain, and its threads.
--- What every operation on comments starts from, in the class's order.
+-- | Check that the current user may read a page, and return its space's
+-- chain and its threads. Every comment operation starts with this, so its
+-- checks come in the order the class's Haddock gives.
 discussion :: PageId -> Tx ([Space], [Thread])
 discussion pid = do
   p <- findNode pid
@@ -1914,8 +1942,8 @@ commenter c = do
 commentText :: Text -> Tx Text
 commentText = either invalid pure . checkCommentBody
 
--- | The page's threads, read again within the transaction: what a write
--- gives back.
+-- | A thread of the page, read again within the transaction: the result a
+-- write returns.
 threadNow :: PageId -> CommentThreadId -> Tx Thread
 threadNow pid tid = db (\x -> Comments.loadThreads commentAuthor x pid) >>= (`threadIn` tid)
 
@@ -1965,8 +1993,8 @@ editCommentTx pid tid cid body = do
   tellTx pid p.space p.title (Just tid) (excerptOf text) (EditedIn tid) (newlyMentioned old.body text)
   pure (edited, pid, CommentEdited edited)
 
--- | The first comment of a thread is the thread: it goes with it, if
--- nobody has replied.
+-- | Delete a comment. The first comment of a thread stands for the
+-- thread: deleting it deletes the thread, if nobody has replied.
 deleteCommentTx :: PageId -> CommentThreadId -> CommentId -> Tx ((), PageId, PageEvent)
 deleteCommentTx pid tid cid = do
   (c, ts) <- discussion pid
@@ -2001,11 +2029,11 @@ setResolvedTx pid tid resolved = do
 --------------------------------------------------------------------------------
 -- Notifications
 
--- | Tell whoever the rules of "Wiki.Core.Notification" say of what the
--- asker did to a page: a notification each, kept, waiting to be mailed
--- if the user is mailed, and told once the transaction commits. The
--- server's operator, who is no user, is told nothing, but what they do is
--- told.
+-- | Notify the users that the rules of "Wiki.Core.Notification" name of
+-- what the caller did to a page. Each gets a notification, which is
+-- stored, queued for mail if the user gets mail, and sent once the
+-- transaction commits. The server's operator is not a user, so they get
+-- no notifications, but others are notified of what the operator does.
 tellTx :: PageId -> SpaceId -> Text -> Maybe CommentThreadId -> Text -> Occasion -> Set Text -> Tx ()
 tellTx pid sid title thread excerpt occasion logins = do
   ctx <- ask
@@ -2038,7 +2066,8 @@ tellTx pid sid title thread excerpt occasion logins = do
       db (\c -> Notifications.insertNotification c u n (Set.member u mailed))
       liftIO (modifyIORef' ctx.told ((u, n) :))
 
--- | Tell of a comment made in a thread, by these people so far.
+-- | Notify of a comment in a thread whose comments so far are by these
+-- users.
 tellOfComment :: PageId -> CommentThreadId -> [UserId] -> Text -> Set Text -> Tx ()
 tellOfComment pid tid people body logins = do
   p <- findNode pid
@@ -2136,7 +2165,8 @@ setNotificationSettingsTx change = do
   db (\c -> Notifications.storeChoices c u change.mail change.watchOwn)
   notificationSettingsTx
 
--- | Of these logins, the users' who may sign in, for someone signed in.
+-- | The users with these logins who may sign in, for a caller who is
+-- signed in.
 mentionableTx :: [Text] -> Tx (Map Text Author)
 mentionableTx logins =
   asks (\x -> x.user) >>= \case
@@ -2145,8 +2175,9 @@ mentionableTx logins =
       telling <- db Notifications.loadTelling
       pure (Map.fromList [(t.user.login, Author {id = t.user.id, name = t.user.displayName}) | t <- telling, t.user.login `elem` logins])
 
--- | Mentions, watches and notifications, as the class's Haddock says
--- ("Wiki.App.Backend.Notifications"): each operation one transaction.
+-- | Mentions, watches and notifications, as the class's Haddock describes
+-- them ("Wiki.App.Backend.Notifications"). Each operation is one
+-- transaction.
 instance (MonadIO m) => MonadNotifications (SqliteWiki m) where
   mentionable = answer mempty . mentionableTx
   notifications = run Reads notificationsTx
@@ -2161,13 +2192,14 @@ instance (MonadIO m) => MonadNotifications (SqliteWiki m) where
 --------------------------------------------------------------------------------
 -- Whole wikis
 
--- | Put a whole wiki, an export archive ("Wiki.Core.Export", which
--- 'Wiki.Core.Export.readArchive' has checked), into a storage that has
--- none: its people, groups, grants, spaces and pages with their ids, each
--- page as its first version, and its attachments' bytes kept under their
--- hashes (so the blobs' ids are hashes from then on). A storage with a wiki
--- in it already is refused, and left as it was: bringing one wiki into
--- another is a merge, which is the import's of docs/PLAN.md's WP2.8.
+-- | Load a whole wiki from an export archive ("Wiki.Core.Export", already
+-- checked by 'Wiki.Core.Export.readArchive') into an empty storage: its
+-- people, groups, grants, spaces and pages with their ids, each page as
+-- its first version, and its attachments' bytes stored under their hashes
+-- (so the blobs' ids are hashes from then on). A storage that already
+-- holds a wiki is refused and left unchanged: bringing one wiki into
+-- another is a merge, which is the job of the import (WP2.8 of
+-- docs/PLAN.md).
 importArchive :: Storage -> Archive -> IO (Either Text ())
 importArchive st a = withDatabase st $ \c -> do
   execute_ c "BEGIN IMMEDIATE"
