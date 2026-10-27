@@ -101,6 +101,7 @@ import Wiki.Api.Types
 import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -280,6 +281,8 @@ deriving newtype instance (MonadAttributes m) => MonadAttributes (HttpWiki m)
 deriving newtype instance (MonadBrowserDOM m) => MonadBrowserDOM (HttpWiki m)
 
 deriving newtype instance (MonadIslands m) => MonadIslands (HttpWiki m)
+
+deriving newtype instance (MonadAssistant m) => MonadAssistant (HttpWiki m)
 
 -- The browser's own store, where the demo leaves its wiki: what the import
 -- of "this browser's demo data" reads ("Wiki.App.Backend.Mem").

@@ -5,6 +5,11 @@
 // which of the editor's keys was pressed; and the warning before a reload or
 // a close leaves unsaved changes behind.
 //
+// The writing assistant's edits go through here too: CodeMirror tracks
+// each as a change the author accepts or rejects (web/src/editor.js), and
+// tells of the selection, of how many changes are left and of a decision
+// made on one by events on the host, which these read.
+//
 // The editor's text is the textarea the component renders until CodeMirror
 // has taken its place (web/src/editor.js, through the page's islands.js), in
 // the element just before it, the host, which is what the component holds
@@ -206,7 +211,11 @@ function wiki_editor_key(event) {
   const plain = !(command || event.altKey || event.shiftKey);
   if (plain && key === "Escape") return "escape";
   const target = event.target;
-  const inText = target instanceof HTMLTextAreaElement || (target instanceof Element && target.closest(".cm-content") !== null);
+  // The page's text only: the assistant's message box is a textarea of the
+  // form too, where Tab and the shortcuts are its own.
+  const inText =
+    (target instanceof HTMLTextAreaElement && target.classList.contains("editor-text")) ||
+    (target instanceof Element && target.closest(".cm-content") !== null);
   if (!inText) return "";
   if (plain && key === "Tab") return "indent";
   if (command && !event.altKey && !event.shiftKey) {
@@ -252,4 +261,70 @@ function wiki_editor_guard_unload(dirty) {
     event.preventDefault();
     event.returnValue = "";
   });
+}
+
+// The selection a "wiki-selection" event tells of, as "from:to" in
+// characters, or "" when nothing is selected.
+function wiki_editor_selected(event) {
+  const from = Number(event.detail?.from ?? 0);
+  const to = Number(event.detail?.to ?? 0);
+  return to > from ? `${from}:${to}` : "";
+}
+
+// How many tracked changes a "wiki-changes" event says are left.
+function wiki_editor_change_count(event) {
+  return Number(event.detail ?? 0);
+}
+
+// The decision a "wiki-decide" event tells of: "accept:<id>" or
+// "reject:<id>".
+function wiki_editor_decided(event) {
+  return `${event.detail?.accept ? "accept" : "reject"}:${Number(event.detail?.id ?? 0)}`;
+}
+
+// The assistant's tracked changes, as JSON, in characters: [{id, from, to,
+// removed}]. None without CodeMirror.
+function wiki_editor_changes(host) {
+  const editor = host.wikiEditor;
+  if (!editor) return "[]";
+  const text = editor.text();
+  return JSON.stringify(
+    editor.changes().map((change) => ({
+      id: change.id,
+      from: wikiCharacters(text, change.from),
+      to: wikiCharacters(text, change.to),
+      removed: change.removed,
+    })),
+  );
+}
+
+// The assistant's edit, from..to (characters) replaced with `insert` and
+// tracked as the change `id`, taking in the changes of `absorbed` (a JSON
+// array of ids). Without CodeMirror the edit is made as typing would make
+// it, untracked: there is nothing to show it with.
+function wiki_editor_propose(host, from, to, insert, id, absorbed) {
+  const editor = host.wikiEditor;
+  if (editor) {
+    const text = editor.text();
+    editor.propose(wikiUnits(text, from), wikiUnits(text, to), insert, id, JSON.parse(absorbed));
+    return;
+  }
+  const textarea = wikiTextarea(host);
+  if (!textarea) return;
+  const text = textarea.value;
+  textarea.setRangeText(insert, wikiUnits(text, from), wikiUnits(text, to), "preserve");
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+// Changes decided: the ids of `ids` (a JSON array) no longer tracked, and
+// the replacements of `replacements` (JSON [{from, to, text}], characters
+// in the text as it is) made, in one step.
+function wiki_editor_settle(host, ids, replacements) {
+  const editor = host.wikiEditor;
+  if (!editor) return;
+  const text = editor.text();
+  editor.settle(
+    JSON.parse(ids),
+    JSON.parse(replacements).map((r) => ({ from: wikiUnits(text, r.from), to: wikiUnits(text, r.to), insert: r.text })),
+  );
 }

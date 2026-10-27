@@ -13,6 +13,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged)
 import Test.Hspec.Halogen
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Mem.State (MemState (..), grantSpace)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
@@ -21,7 +22,7 @@ import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (slugText)
 import Wiki.Core.Space qualified as S
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "is offered to whoever administers the space, and to nobody else" $ runPage $ do
     rita <- start m (Just "user-reader") (SpacePages (slugs ["team", "projects"]))

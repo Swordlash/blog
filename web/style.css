@@ -4771,3 +4771,324 @@ a.mention {
     display: block;
   }
 }
+
+/* ---- The writing assistant (WP4.19) ---------------------------------------- */
+
+/* The editor with the assistant open: the editing on the left, the panel
+   on the right, from the title down, on a wide screen; on a narrow one the
+   panel comes after the attachments, where it is in the page. */
+@media (min-width: 961px) {
+  .editor-form.assisting {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+    column-gap: 1rem;
+    align-items: start;
+  }
+
+  .editor-form.assisting > * {
+    grid-column: 1;
+  }
+
+  .editor-form.assisting > .editor-assistant-holder {
+    grid-column: 2;
+    grid-row: 1 / span 6;
+    position: sticky;
+    top: 0.5rem;
+  }
+}
+
+.editor-assistant-holder:empty,
+.editor-assistant[hidden],
+.editor-form.previewing .editor-assistant-holder {
+  display: none;
+}
+
+.editor-assistant-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.editor-pending-note {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: calc(100vh - 2rem);
+  margin-top: 1rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+@media (min-width: 961px) {
+  .assistant {
+    margin-top: 0;
+  }
+}
+
+.assistant-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.assistant-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.assistant-using {
+  flex: 1 1 auto;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.assistant-settings-link {
+  font-size: 0.85rem;
+}
+
+.assistant-close,
+.assistant-detach {
+  padding: 0 0.4rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.assistant-setup,
+.assistant-changes {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.assistant-changes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.assistant-pending {
+  flex: 1 1 auto;
+}
+
+/* The conversation, kept scrolled to its end as it grows: a column laid
+   out from the bottom up holds the messages, which read top down. */
+.assistant-log {
+  display: flex;
+  flex-direction: column-reverse;
+  min-height: 8rem;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.assistant-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.assistant-empty {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.assistant-message {
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.assistant-message.from-user {
+  align-self: flex-end;
+  max-width: 90%;
+  background: var(--code);
+}
+
+.assistant-message.from-model {
+  border: 1px solid var(--border);
+  background: var(--background);
+}
+
+.assistant-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.assistant-thinking,
+.assistant-stopped,
+.assistant-cut {
+  margin: 0.2rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.assistant-notes {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+}
+
+.assistant-made {
+  color: var(--tip);
+}
+
+.assistant-not-made {
+  color: var(--caution);
+}
+
+.assistant-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.assistant-shortcut {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.assistant-scope {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.assistant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0 0 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.assistant-message .assistant-chip {
+  margin-top: 0.2rem;
+  padding-right: 0.5rem;
+}
+
+.assistant-compose {
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-end;
+}
+
+.assistant-input {
+  flex: 1 1 auto;
+  min-height: 3.5rem;
+  resize: vertical;
+  font: inherit;
+}
+
+/* A tracked change in the editor's text: what the assistant put in, on
+   green, and what it replaced, struck through on red, before it, until
+   the author decides with the control after it. */
+.editor-cm .cm-wiki-inserted {
+  background: var(--diff-added);
+  border-bottom: 1px solid var(--tip);
+}
+
+.editor-cm .cm-wiki-removed {
+  background: var(--diff-removed);
+  color: var(--text);
+  text-decoration: line-through;
+  text-decoration-color: var(--caution);
+  white-space: pre-wrap;
+}
+
+.editor-cm .cm-wiki-change-controls {
+  display: inline-flex;
+  gap: 0.15rem;
+  margin: 0 0.2rem;
+  vertical-align: text-bottom;
+}
+
+.editor-cm .cm-wiki-change-controls button {
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  font-size: 0.75rem;
+  line-height: 1.3;
+  cursor: pointer;
+}
+
+.editor-cm .cm-wiki-change-accept {
+  color: var(--tip);
+}
+
+.editor-cm .cm-wiki-change-reject {
+  color: var(--caution);
+}
+
+/* The assistant's settings page. */
+.assistant-settings {
+  max-width: 46rem;
+}
+
+.assistant-provider-settings {
+  margin-top: 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-provider-settings h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.assistant-key-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.assistant-key-form .field {
+  flex: 1 1 18rem;
+}
+
+.assistant-model,
+.assistant-provider {
+  margin: 0.75rem 0 0;
+  padding: 0;
+  border: none;
+}
+
+.assistant-model legend,
+.assistant-provider legend {
+  margin-bottom: 0.3rem;
+  font-weight: 600;
+}
+
+.assistant-model code {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.assistant-other-model .assistant-model-name {
+  width: 16rem;
+}
+
+.assistant-insecure {
+  padding: 0.5rem 0.75rem;
+  border-left: 4px solid var(--warning);
+  background: var(--surface);
+}
+
+.assistant-check-works {
+  color: var(--tip);
+}

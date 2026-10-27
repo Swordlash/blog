@@ -12,6 +12,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged)
 import Test.Hspec.Halogen
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Mem.State (MemState (..), savePageIn)
 import Wiki.App.Demo (demoNow)
 import Wiki.App.Islands (MonadIslands)
@@ -34,7 +35,7 @@ savedTwice demo = case saves of
       (st2, _) <- savePageIn hello.id once.updatedAt "Hello, again" (heading "everyone") demoNow st1
       pure st2
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "lets someone not signed in open a page's history from the page, and come back" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["tour"]))

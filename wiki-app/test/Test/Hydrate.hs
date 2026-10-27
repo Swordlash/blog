@@ -135,6 +135,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , ResetPassword (MailToken "secret")
       , VerifyEmail (MailToken "secret")
       , Unsubscribe (MailToken "secret")
+      , AssistantSettings
       ]
 
 -- | The pages a server renders, adopted by the program that starts from
@@ -207,6 +208,7 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , ResetPassword (MailToken "secret")
            , VerifyEmail (MailToken "secret")
            , Unsubscribe (MailToken "secret")
+           , AssistantSettings
            ]
 
 -- | The demo with its first post saved once by the editor.

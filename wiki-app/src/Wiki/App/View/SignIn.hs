@@ -69,6 +69,8 @@ import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
 import Halogen.HTML.Properties qualified as HP
+import Halogen.Router (Follow, Router)
+import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
 import Wiki.Api.Account (LinkedIdentity (..), NewAccount (..), PasswordChange (..), SignInMethods (..), mayDisconnect, providerOnly)
@@ -78,6 +80,7 @@ import Wiki.App.Account (Accounts (..), SignInError (..), accountErrorText, code
 import Wiki.App.Backend (Session (..), WikiError (..))
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser (focusElement)
+import Wiki.App.Route (Route (AssistantSettings))
 import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Common (ariaBool, errorMessage)
 import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
@@ -92,6 +95,8 @@ data Input m = Input
   , here :: Text
   -- ^ The page's address, as the router writes it: where signing in with
   -- a provider comes back to.
+  , router :: Router Route
+  -- ^ For the link to the writing assistant's settings.
   }
 
 -- | Open the form, saying why.
@@ -175,6 +180,7 @@ data Action
   | TypedNew Text
   | TypedRepeat Text
   | SavePassword
+  | Followed (Follow Route)
 
 component :: forall m. (MonadUUID m, MonadIO m, MonadSecurity m, MonadNotifications m) => H.Component Query (Input m) Output m
 component =
@@ -397,6 +403,11 @@ component =
             <h3>Notifications</h3>
             {{ HH.slot_ "notifications" () NotificationSettingsView.component () }}
           </section>
+          <section class="account-assistant" aria-label="Writing assistant">
+            <h3>Writing assistant</h3>
+            <p class="account-note">Your own API keys for the editor's assistant, kept in this browser.</p>
+            <a class="assistant-settings-entry" {{ Router.linkProps st.input.router Followed AssistantSettings }}>Assistant</a>
+          </section>
         </section>
       |]
       where
@@ -493,7 +504,10 @@ component =
 
     handleAction :: Action -> H.HalogenM (State m) Action Slots Output m ()
     handleAction = \case
-      Receive session here -> modify (\st -> st {input = Input {accounts = st.input.accounts, session, here}})
+      Receive session here -> modify (\st -> st {input = Input {accounts = st.input.accounts, session, here, router = st.input.router}})
+      Followed f -> do
+        modify (\st -> st {accountOpen = False})
+        gets (\st -> st.input.router) >>= (`Router.follow` f)
       Toggle ->
         gets (\st -> st.open) >>= \case
           True -> close

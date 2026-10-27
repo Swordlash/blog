@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Protolude
+import Test.Assistant qualified as Assistant
 import Test.Backend.Http qualified as Http
 import Test.Backend.Mem qualified as Mem
 import Test.Backend.Persist qualified as Persist
@@ -39,3 +40,4 @@ main = hspec $ do
   Manifest.spec
   Licence.spec
   Readme.spec
+  Assistant.spec

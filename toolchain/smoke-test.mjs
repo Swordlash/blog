@@ -55,6 +55,9 @@
 //    that what it holds back (app.wasm, until the page is marked) is held
 //    back: a worker's own requests and what it answers from its cache pass
 //    by Playwright's routes.
+// 5. The writing assistant (WP4.19), with the scripted provider: its
+//    settings from the user menu, and its panel in the editor, whose
+//    model's edit is tracked in the text and accepted.
 //
 // HALOGEN_BASE_PATH is the base path the build was made for, as
 // toolchain/build-wasm.sh takes it (/ when unset): GitHub Pages serves the
@@ -1224,6 +1227,61 @@ try {
     assert.equal(await reader.locator(".offline-page").count(), 0, "the offline page, online");
     await offlineContext.close();
     console.log(`ok: the demo is installable under ${base} (a manifest and its icons, a service worker of that scope, nothing in the way by Chromium's check), and reads offline what it read, with an offline page for the rest`);
+  }
+
+  // ---- 5. The writing assistant, with the scripted provider --------------------
+
+  // No provider can be reached from here, and no key is at hand: the page
+  // gets the scripted provider the browser tests use
+  // (wiki-app/jsbits/assistant.js), installed before the program starts,
+  // as no page served to anyone has it. The providers' own island is
+  // loaded all the same, to see that the bundle runs in a browser.
+  {
+    const writer = await newPage();
+    await writer.addInitScript(() => {
+      globalThis.wikiAssistantScript = {
+        turns: [
+          [
+            { text: "Retitled. " },
+            { tool: "replace", input: { old_text: "## Why a wiki", new_text: "## Why this is a wiki" } },
+            { text: "Done." },
+          ],
+        ],
+      };
+    });
+    await writer.goto(url("/"));
+    await writer.locator("#app .directory h1", { hasText: "Spaces" }).waitFor({ timeout });
+    // The settings, from the user menu: the demo starts as admin.
+    await writer.locator("#app .user-switcher-toggle").click();
+    await writer.locator("#app .user-menu .assistant-settings-entry").click();
+    await writer.locator("#app .assistant-settings h1", { hasText: "Writing assistant" }).waitFor({ timeout });
+    assert.equal(await crumb(writer), "Writing assistant");
+    await writer.locator("#app .assistant-intro", { hasText: "billed by its provider" }).waitFor({ timeout });
+    assert.equal(await writer.locator("#app .assistant-insecure").count(), 0, "the demo, served from this machine, said it was not secure");
+    assert.equal(
+      await writer.evaluate(async () => typeof (await globalThis.wikiIslands.assistant()).startChat),
+      "function",
+      "the providers' island did not load",
+    );
+    await writer.locator("#app input[name='assistant-provider'][value='scripted']").check();
+    await writer.locator("#app .assistant-provider-settings[data-provider='scripted'] .assistant-test").click();
+    await writer.locator("#app .assistant-check-works").waitFor({ timeout });
+    // The editor's panel: a message, the model's edit a tracked change in
+    // the text, accepted.
+    await writer.goto(url("/s/blog/p/hello-world/edit/"));
+    await writer.locator(editorText).waitFor({ timeout });
+    await writer.locator("#app .editor-assistant-toggle").click();
+    await writer.locator("#app .assistant-using", { hasText: "Scripted" }).waitFor({ timeout });
+    await writer.locator("#app .assistant-input").fill("Retitle the second heading.");
+    await writer.locator("#app .assistant-send").click();
+    await writer.locator("#app .cm-wiki-inserted", { hasText: "## Why this is a wiki" }).waitFor({ timeout });
+    await writer.locator("#app .cm-wiki-removed", { hasText: "## Why a wiki" }).waitFor({ timeout });
+    await writer.locator("#app .assistant-message.from-model .assistant-text", { hasText: "Retitled. Done." }).waitFor({ timeout });
+    await writer.locator("#app .assistant-accept-all").click();
+    await writer.locator("#app .cm-wiki-inserted").waitFor({ state: "detached", timeout });
+    assert.match(await markdownIn(writer), /\n## Why this is a wiki\n/);
+    await writer.context().close();
+    console.log("ok: the assistant's settings and its panel, with the scripted provider: an edit tracked in the text and accepted; the providers' island loads");
   }
 } catch (error) {
   // What the page reported is usually why it did not get there.

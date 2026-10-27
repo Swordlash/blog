@@ -16,6 +16,7 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api.Export (ExportFormat (..))
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..), Session (..))
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -24,7 +25,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Id (UserId (..))
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   it "offers a page's documents from its actions, and a deck's presentations too" $ runPage $ do
     serverStarts

@@ -141,6 +141,22 @@
 -- but the same conflict view, which a save over a change made in the same
 -- tab (a version restored, a rename) meets.
 --
+-- = The writing assistant
+--
+-- "Assistant" in the toolbar opens the writing assistant's panel
+-- ("Wiki.App.View.Assistant", WP4.19 of docs/PLAN.md) beside the
+-- Markdown (under the attachments on a narrow screen): a chat with a model
+-- that edits the page through its tools, each edit a tracked change in
+-- CodeMirror that the author accepts or rejects, on the change itself or
+-- all at once in the panel. The editor tells the panel what is selected
+-- and how many changes are left, as CodeMirror tells it (its
+-- @wiki-selection@ and @wiki-changes@ events), and settles a change
+-- decided on the change itself (@wiki-decide@). The changes' text is in
+-- the work like any other (the draft and the preview have it); a save
+-- with changes left accepts them, which the editor says beside Save. The
+-- panel is mounted the first time it is opened and kept, with its
+-- conversation, until the editor goes; closing it stops the model's turn.
+--
 -- (The editor's own record of what is being written is 'Work'; a draft is
 -- the backend's copy of it, kept for the author.)
 module Wiki.App.View.Editor
@@ -167,11 +183,13 @@ import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
+import Web.DOM.Internal.Types (Element)
 import Web.Event.Event (Event, EventType (..))
 import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Events (PageEvent (PageChanged))
 import Wiki.Api.Events qualified as Event
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser
@@ -180,8 +198,10 @@ import Wiki.App.Editor.Browser
   , PickedFile (..)
   , applyCommand
   , attachEditor
+  , changesLeft
   , chosenFiles
   , clickElement
+  , decision
   , detachEditor
   , droppedFiles
   , editorKey
@@ -192,6 +212,8 @@ import Wiki.App.Editor.Browser
   , pastedFiles
   , pickedFiles
   , readPickedFile
+  , selectedSpan
+  , settleChanges
   , typedText
   )
 import Wiki.App.Islands (MonadIslands)
@@ -199,10 +221,13 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Live (Feed (..))
 import Wiki.App.Live qualified as Live
 import Wiki.App.Route (Route (..))
+import Wiki.App.View.Assistant qualified as Assistant
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Diff (diffView, titleChange)
 import Wiki.App.View.Preview qualified as Preview
+import Wiki.Core.Assistant.Edit (Decision (..))
+import Wiki.Core.Assistant.Prompt (Span)
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Diff (Diff (..), diffText)
 import Wiki.Core.Draft qualified as D
@@ -246,6 +271,7 @@ data Query a = IsDirty (Bool -> a)
 type Slots =
   ("preview" .== H.Slot (Const Void) Void ())
     .+ ("time" .== H.Slot (Const Void) Void Int)
+    .+ ("assistant" .== H.Slot Assistant.Query Assistant.Output ())
 
 -- | What is being written, and what it started from.
 data Work = Work
@@ -372,6 +398,17 @@ data State = State
   , changedSince :: Maybe UTCTime
   -- ^ When someone else saved the page since the edit began, if they did.
   , conflict :: Maybe Clash
+  , assistantOpen :: Bool
+  -- ^ Whether the writing assistant's panel is shown.
+  , assistantMounted :: Bool
+  -- ^ Whether it has been shown yet: it is mounted then, and kept.
+  , hostElement :: Maybe Element
+  -- ^ CodeMirror's host, once the text is loaded: the panel edits through
+  -- it.
+  , selection :: Maybe Span
+  -- ^ What is selected in the text, as CodeMirror last told.
+  , pendingChanges :: Int
+  -- ^ How many of the assistant's changes are left to decide.
   }
 
 -- | Where a save leaves the editor.
@@ -417,6 +454,11 @@ data Action
   | TakeTheirs
   | MergeByHand
   | HideTheirs
+  | ToggleAssistant
+  | FromAssistant Assistant.Output
+  | Selected (Maybe Span)
+  | ChangesLeft Int
+  | Decide Decision Int
 
 -- | Where the browser keeps whether the preview goes beside the Markdown.
 sideBySideKey :: Text
@@ -442,7 +484,7 @@ savedNoticeTime = 3_000_000
 
 component
   :: forall m
-   . (MonadLoad m, MonadNotifications m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
+   . (MonadLoad m, MonadNotifications m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
   => H.Component Query Input ViewOutput m
 component =
   H.mkComponent
@@ -486,6 +528,11 @@ component =
               , others = []
               , changedSince = Nothing
               , conflict = Nothing
+              , assistantOpen = False
+              , assistantMounted = False
+              , hostElement = Nothing
+              , selection = Nothing
+              , pendingChanges = 0
               }
       , render
       , eval =
@@ -531,7 +578,7 @@ component =
     editing st work =
       [hh|
         <form
-          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}"
+          class="editor-form{% if st.mode == Previewing %} previewing{% end %}{% if st.sideBySide %} side-by-side{% end %}{% if isJust st.conflict %} conflicting{% end %}{% if st.assistantOpen %} assisting{% end %}"
           {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}
           {{ HE.preventingDefault (HE.handler' (EventType "keydown") (keyAction st)) }}
         >
@@ -547,6 +594,9 @@ component =
                 <input type="file" multiple onChange={{ Picked }} {{ HP.ref st.fileInput }}>
               </label>
               <span class="editor-draft-status">{{ draftStatus st.draftNews }}</span>
+              {% if st.pendingChanges > 0 %}
+                <span class="editor-pending-note" role="status">{{ pendingNote st.pendingChanges }}</span>
+              {% end %}
             </div>
           </div>
           <div class="editor-notices">
@@ -557,7 +607,7 @@ component =
             {{ cancelQuestion st }}
             {{ problemView st }}
           </div>
-          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide} }}
+          {{ toolbar Bar {menuOpen = st.menu, twoPanes = st.sideBySide, assisting = st.assistantOpen} }}
           <div
             class="editor-panes{% if st.dropping %} dropping{% end %}"
             {{ HE.preventingDefault (HE.handler' (EventType "dragover") (const (Just DragOver))) }}
@@ -570,6 +620,7 @@ component =
             {{ conflictPane st }}
           </div>
           {{ attachmentList work }}
+          <div class="editor-assistant-holder">{{ assistantPane st work }}</div>
           <div class="editor-saved-notice" role="status">{% if isJust st.notice %}Saved{% end %}</div>
         </form>
       |]
@@ -724,6 +775,30 @@ component =
       Just key -> Just (Key key)
       Nothing -> Nothing
 
+    -- The assistant's panel, once it has been opened, hidden while it is
+    -- closed so that its conversation stays.
+    assistantPane :: State -> Work -> Maybe (H.ComponentHTML Action Slots m)
+    assistantPane st work
+      | st.assistantMounted =
+          Just
+            [hh|
+              <aside class="editor-assistant" hidden={{ not st.assistantOpen }}>
+                {{ HH.slot "assistant" () Assistant.component (assistantInput st work) FromAssistant }}
+              </aside>
+            |]
+      | otherwise = Nothing
+
+    assistantInput :: State -> Work -> Assistant.Input
+    assistantInput st work =
+      Assistant.Input
+        { context = st.input.context
+        , host = st.hostElement
+        , title = work.title
+        , body = work.body
+        , selection = st.selection
+        , pending = st.pendingChanges
+        }
+
     previewPane :: State -> Work -> Maybe (H.ComponentHTML Action Slots m)
     previewPane st work
       | st.previewMounted =
@@ -750,6 +825,7 @@ component =
           <div class="toolbar-group">{{ map toolButton codeTools }}{{ imageButton }}{{ toolButton tableTool }}</div>
           <div class="toolbar-group">{{ map toolButton blockTools }}{{ htmlMenu bar }}</div>
           <div class="toolbar-end">
+            <button type="button" class="editor-assistant-toggle" title="The writing assistant" aria-pressed={{ ariaBool bar.assisting }} onClick={{ const ToggleAssistant }}>{{ icon assistantIcon }}<span>Assistant</span></button>
             <label class="editor-side-by-side">
               <input type="checkbox" checked={{ bar.twoPanes }} {{ HE.onChecked SideBySide }}>
               Side by side preview
@@ -847,7 +923,19 @@ component =
         @I.HTMLdiv
         (HH.ElemName "div")
         [HP.class_ "editor-source"]
-        [ ("cm", [hh|<div class="editor-cm" ref={{ st.host }} {{ HE.handler' (EventType "wiki-input") typed }}></div>|])
+        [
+          ( "cm"
+          , [hh|
+              <div
+                class="editor-cm"
+                ref={{ st.host }}
+                {{ HE.handler' (EventType "wiki-input") typed }}
+                {{ HE.handler' (EventType "wiki-selection") (\ev -> Just $! Selected (selectedSpan ev)) }}
+                {{ HE.handler' (EventType "wiki-changes") (\ev -> Just $! ChangesLeft (changesLeft ev)) }}
+                {{ HE.handler' (EventType "wiki-decide") (\ev -> uncurry Decide <$> decision ev) }}
+              ></div>
+            |]
+          )
         ,
           ( loadKey st
           , HH.element
@@ -1087,6 +1175,16 @@ component =
             whenM (gets isDirty) scheduleAutosave
           _ -> pass
       HideTheirs -> modify (\st -> st {conflict = Nothing})
+      ToggleAssistant ->
+        gets (\st -> st.assistantOpen) >>= \case
+          True -> do
+            modify (\st -> st {assistantOpen = False})
+            H.tell "assistant" () Assistant.Hide
+          False -> modify (\st -> st {assistantOpen = True, assistantMounted = True, menu = Nothing})
+      FromAssistant Assistant.Closed -> modify (\st -> st {assistantOpen = False})
+      Selected selection -> modify (\st -> st {selection})
+      ChangesLeft n -> modify (\st -> st {pendingChanges = n})
+      Decide d i -> gets (\st -> st.hostElement) >>= traverse_ (\host -> H.liftEffect (settleChanges host d (Just i)))
       DiscardOffered -> do
         withPage (void . discardDraft)
         modify (\st -> st {hasDraft = False, found = Nothing})
@@ -1141,11 +1239,16 @@ component =
     -- CodeMirror in place of the textarea rendered last, with the text it
     -- was made with; it comes once the page has loaded it, so this returns
     -- at once.
+    --
+    -- A new CodeMirror has none of the assistant's changes, nor a selection.
     takeOver :: H.HalogenM State Action Slots ViewOutput m ()
     takeOver = do
       st <- get
       case st.loaded of
-        Ready w -> H.getRef st.host >>= traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody))
+        Ready w -> do
+          found <- H.getRef st.host
+          modify (\s -> s {hostElement = found, pendingChanges = 0, selection = Nothing})
+          traverse_ (\host -> H.liftEffect (attachEditor host w.loadedBody)) found
         _ -> pass
 
     -- A toolbar command on the text; its input event, handled before this
@@ -1330,6 +1433,10 @@ component =
                   , changedSince = Nothing
                   }
               syncGuard
+              -- What is saved is the text with the assistant's changes in
+              -- it: they are accepted.
+              whenM (gets (\s -> s.pendingChanges > 0)) $
+                gets (\s -> s.hostElement) >>= traverse_ (\host -> H.liftEffect (settleChanges host Accept Nothing))
               case after of
                 Close -> H.raise (Changed (Just (leaving st.input)))
                 Stay -> do
@@ -1555,6 +1662,7 @@ draftStatus = \case
 data Bar = Bar
   { menuOpen :: Maybe Menu
   , twoPanes :: Bool
+  , assisting :: Bool
   }
   deriving stock (Eq)
 
@@ -1600,12 +1708,18 @@ blockTools =
 tableTool :: Tool
 tableTool = Tool Table "Table" Nothing "M1.5 2.5h13v11h-13zM1.5 6h13M6 2.5v11M10.5 2.5v11"
 
-imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon :: Text
+-- | What a line beside Save says of the assistant's changes left.
+pendingNote :: Int -> Text
+pendingNote 1 = "Saving accepts the suggested change."
+pendingNote n = "Saving accepts the " <> show n <> " suggested changes."
+
+imageIcon, htmlIcon, colourIcon, noColourIcon, previewIcon, assistantIcon :: Text
 imageIcon = "M1.5 2.5h13v11h-13zM1.5 11l4-4 3 3 2-2 4 4M11 5.5h.01"
 htmlIcon = "M5 4 1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11"
 colourIcon = "M4.5 11 8 2.5l3.5 8.5M5.7 8h4.6M2 14h12"
 noColourIcon = "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 1 0 0-11zM4.1 4.1l7.8 7.8"
 previewIcon = "M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM8 8h.01"
+assistantIcon = "M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2zM5.5 6.5h5M5.5 8.5h3"
 
 -- | The HTML elements the toolbar's menu offers.
 htmlTags :: [HtmlTag]

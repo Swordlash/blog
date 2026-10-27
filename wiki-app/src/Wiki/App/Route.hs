@@ -30,6 +30,7 @@
 -- > /reset-password/<secret>/      ResetPassword (MailToken <secret>)
 -- > /verify-email/<secret>/        VerifyEmail (MailToken <secret>)
 -- > /unsubscribe/<secret>/         Unsubscribe (MailToken <secret>)
+-- > /assistant/                    AssistantSettings
 --
 -- Every address but the home's ends in a slash, because each is a directory
 -- with an @index.html@ in it on a static host (the prerender writes one per
@@ -143,6 +144,9 @@ data Route
   | -- | The page of the link a notification's mail carries, by its secret,
     -- which turns that mail off.
     Unsubscribe MailToken
+  | -- | The writing assistant's settings, the signed-in user's own (WP4.19
+    -- of docs/PLAN.md): their API keys, and the provider and model to use.
+    AssistantSettings
   deriving stock (Eq, Show)
 
 -- | What a version in a history is compared with.
@@ -196,6 +200,7 @@ route =
           (\(q, s, subspaces) -> Search q s subspaces)
           (prefix "search" (directory searchParams))
       , alternative (\case Admin -> Just (); _ -> Nothing) (const Admin) (prefix "admin" (directory noArgs))
+      , alternative (\case AssistantSettings -> Just (); _ -> Nothing) (const AssistantSettings) (prefix "assistant" (directory noArgs))
       , alternative
           (\case PageHistory s p v a -> Just ((s, p), (v, a)); _ -> Nothing)
           (\((s, p), (v, a)) -> PageHistory s p v a)

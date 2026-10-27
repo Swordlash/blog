@@ -4,9 +4,10 @@
 -- Halogen does not say: the files a drop, a paste or a file input brings
 -- and their bytes, CodeMirror put in place of the textarea, the text and selection,
 -- read and written as an edit the browser can undo, which of the editor's
--- keys was pressed, and the browser's warning before a reload or a close
--- loses unsaved changes. See @jsbits/editor.js@, and @web/src/editor.js@
--- for CodeMirror.
+-- keys was pressed, the browser's warning before a reload or a close
+-- loses unsaved changes, and the writing assistant's edits as changes the
+-- author accepts or rejects. See @jsbits/editor.js@, and
+-- @web/src/editor.js@ for CodeMirror.
 --
 -- Natively there is no browser: no event brings a file, no key is one of
 -- the editor's, the textarea is empty, CodeMirror never comes, and the rest
@@ -33,12 +34,23 @@ module Wiki.App.Editor.Browser
   , EditorKey (..)
   , editorKey
 
+    -- * The assistant's edits
+  , currentText
+  , selectedSpan
+  , changesLeft
+  , decision
+  , trackedChanges
+  , proposeEdit
+  , settleChanges
+
     -- * Leaving the page
   , guardUnload
   )
 where
 
+import Data.Aeson (FromJSON (..), ToJSON (..), eitherDecodeStrict, encode, object, withObject, (.:), (.=))
 import Data.ByteString.Base64 qualified as Base64
+import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
 import Halogen.JSBits (JSText, JSVal, Safety (..), browserJS, fromJSText, toJSText)
 import Numeric.Natural (Natural)
@@ -47,6 +59,8 @@ import System.IO.Error qualified as IOError
 -- With their constructors: the FFI passes the value inside each newtype.
 import Web.DOM.Internal.Types (Element (..))
 import Web.Event.Event (Event (..))
+import Wiki.Core.Assistant.Edit (Change (..), Decision (..), Edit, Refusal, Replacement (..), plan, propose, settle)
+import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
 
 -- Reading a file waits for the browser, so that binding is a safe import,
@@ -77,6 +91,12 @@ $( browserJS
      , ("js_focus_text", "wiki_editor_focus_text", Unsafe, [t|Element -> IO ()|])
      , ("js_click", "wiki_editor_click", Unsafe, [t|Element -> IO ()|])
      , ("js_guard_unload", "wiki_editor_guard_unload", Unsafe, [t|Bool -> IO ()|])
+     , ("js_selected", "wiki_editor_selected", Unsafe, [t|Event -> JSText|])
+     , ("js_change_count", "wiki_editor_change_count", Unsafe, [t|Event -> Int|])
+     , ("js_decided", "wiki_editor_decided", Unsafe, [t|Event -> JSText|])
+     , ("js_changes", "wiki_editor_changes", Unsafe, [t|Element -> IO JSText|])
+     , ("js_propose", "wiki_editor_propose", Unsafe, [t|Element -> Int -> Int -> JSText -> Int -> JSText -> IO ()|])
+     , ("js_settle", "wiki_editor_settle", Unsafe, [t|Element -> JSText -> JSText -> IO ()|])
      ]
  )
 
@@ -223,6 +243,74 @@ editorKey event = case fromJSText (js_key event) of
   "numbered" -> Just (CommandKey NumberedList)
   "bulleted" -> Just (CommandKey BulletList)
   _ -> Nothing
+
+-- | The editor's text as it is now: CodeMirror's, or the textarea's.
+currentText :: (MonadIO m) => Element -> m Text
+currentText host = liftIO (fromJSText <$> js_value host)
+
+-- | The selection a @wiki-selection@ event tells of, in characters, if
+-- anything is selected. Pure, as the event does not change.
+selectedSpan :: Event -> Maybe Span
+selectedSpan event = case T.splitOn ":" (fromJSText (js_selected event)) of
+  [a, b] | Just f <- readMaybe a, Just t <- readMaybe b -> Just (Span f t)
+  _ -> Nothing
+
+-- | How many of the assistant's changes a @wiki-changes@ event says are
+-- left to decide.
+changesLeft :: Event -> Int
+changesLeft = js_change_count
+
+-- | The decision a @wiki-decide@ event tells of, made with a change's own
+-- control: accept or reject, and which change.
+decision :: Event -> Maybe (Decision, Int)
+decision event = case T.splitOn ":" (fromJSText (js_decided event)) of
+  ["accept", i] -> (Accept,) <$> readMaybe i
+  ["reject", i] -> (Reject,) <$> readMaybe i
+  _ -> Nothing
+
+-- | The assistant's changes not yet decided, as CodeMirror keeps them,
+-- where they are now.
+trackedChanges :: (MonadIO m) => Element -> m [Change]
+trackedChanges host = liftIO $ do
+  text <- fromJSText <$> js_changes host
+  pure (either (const []) (map (\(Tracked c) -> c)) (eitherDecodeStrict (encodeUtf8 text)))
+
+-- | The assistant's edit, made in the text as it is now and tracked as the
+-- change of the id given, taking in the changes it touches
+-- ("Wiki.Core.Assistant.Edit"); or why it cannot be made. Its input event
+-- brings the change into the work before this returns, as a toolbar
+-- command's does. To be run in 'Halogen.liftEffect'.
+proposeEdit :: (MonadIO m) => Element -> Int -> Edit -> m (Either Refusal Replacement)
+proposeEdit host i change = liftIO $ do
+  text <- fromJSText <$> js_value host
+  case plan change text of
+    Left why -> pure (Left why)
+    Right r -> do
+      pending <- trackedChanges host
+      let (_, taken) = propose i r text pending
+      js_propose host r.from r.to (toJSText r.text) i (jsonText taken)
+      pure (Right r)
+
+-- | Accept or reject the change of the id given, or all of them: rejecting
+-- puts back what each replaced, as one edit the undo takes back; accepting
+-- only stops tracking them. To be run in 'Halogen.liftEffect'.
+settleChanges :: (MonadIO m) => Element -> Decision -> Maybe Int -> m ()
+settleChanges host d which = liftIO $ do
+  pending <- trackedChanges host
+  let chosen = maybe pending (\i -> filter (\c -> c.id == i) pending) which
+  unless (null chosen) $
+    js_settle host (jsonText (map (\c -> c.id) chosen)) (jsonText [object ["from" .= r.from, "to" .= r.to, "text" .= r.text] | r <- settle d chosen])
+
+-- | A change as @jsbits/editor.js@ gives it.
+newtype Tracked = Tracked Change
+
+instance FromJSON Tracked where
+  parseJSON = withObject "Change" $ \o -> do
+    c <- Change <$> o .: "id" <*> o .: "from" <*> o .: "to" <*> o .: "removed"
+    pure (Tracked c)
+
+jsonText :: (ToJSON a) => a -> JSText
+jsonText = toJSText . decodeUtf8 . BSL.toStrict . encode
 
 -- | Whether a reload or closing the tab should first be warned about, as
 -- browsers do for a page with unsaved changes.

@@ -9,10 +9,11 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "lets someone not signed in open a page's source from the page and come back" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["tour"]))

@@ -63,6 +63,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), IndexedDBFailure (..), MonadIndexedDB, StoreName (..))
 import Web.Storage.IndexedDB qualified as IDB
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -112,6 +113,8 @@ deriving newtype instance (MonadBrowserDOM m) => MonadBrowserDOM (MemWiki m)
 -- What the application's components need of their monad besides the wiki:
 -- the islands' libraries, and fresh ids for their refs.
 deriving newtype instance (MonadIslands m) => MonadIslands (MemWiki m)
+
+deriving newtype instance (MonadAssistant m) => MonadAssistant (MemWiki m)
 
 instance (MonadUUID m) => MonadUUID (MemWiki m) where
   generateV4 = MemWiki (lift generateV4)

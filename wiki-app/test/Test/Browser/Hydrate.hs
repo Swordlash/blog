@@ -20,6 +20,7 @@ import Protolude hiding (find)
 import Test.Browser.Mount (adopt, slugs, start)
 import Test.Browser.Text (markdown, movedBy)
 import Test.Hspec.Halogen
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
@@ -38,7 +39,7 @@ adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-tikz *, .wiki-code *, .e
 -- rendered ahead of the program holds it.
 prerendered
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => Maybe Text
   -> Route
   -> PageM s (Element s)
@@ -48,7 +49,7 @@ prerendered m who at = do
   unmount ui
   htmlContainer html
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "adopts a page with the shell around it, and follows a link from there" $ runPage $ do
     let tour = Page (slugs ["docs"]) (slugs ["tour"])

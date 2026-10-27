@@ -25,6 +25,7 @@ import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.User (Standing (..))
@@ -56,7 +57,7 @@ offerInstall = unsafeIOToPageM . js_offer_install . toJSText . fromMaybe ""
 keptKinds :: PageM s Text
 keptKinds = unsafeIOToPageM (fromJSText <$> (evaluate =<< js_kept_kinds))
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   describe "a page the service worker kept" $ do
     it "says it is an offline copy and since when, with the offline notice, until the reader goes elsewhere" $ runPage $ do

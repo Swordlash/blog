@@ -20,6 +20,7 @@ import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Mem (Opened (..), memArchive, runMemWiki)
 import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Browser (zipFiles)
@@ -34,7 +35,7 @@ $( browserJS
      ]
  )
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   it "finds a page saved in one mounted application in the next one" $ runPage $ do
     db <- fresh m "saved"

@@ -66,6 +66,7 @@ library
   exposed-modules:
       Wiki.App
       Wiki.App.Account
+      Wiki.App.Assistant
       Wiki.App.Backend
       Wiki.App.Backend.Admin
       Wiki.App.Backend.Comments
@@ -95,6 +96,8 @@ library
       Wiki.App.View.Access
       Wiki.App.View.Activity
       Wiki.App.View.Admin
+      Wiki.App.View.Assistant
+      Wiki.App.View.AssistantSettings
       Wiki.App.View.Backups
       Wiki.App.View.Invite
       Wiki.App.View.Bell
@@ -256,6 +259,7 @@ test-suite wiki-app-test
     buildable: False
   else
     other-modules:
+        Test.Assistant
         Test.Backend.Http
         Test.Backend.Mem
         Test.Backend.Persist
@@ -308,6 +312,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Access
       Test.Browser.Activity
       Test.Browser.Admin
+      Test.Browser.Assistant
       Test.Browser.Backups
       Test.Browser.Comments
       Test.Browser.Contents

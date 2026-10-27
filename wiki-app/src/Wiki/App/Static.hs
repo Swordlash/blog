@@ -62,6 +62,7 @@ import Halogen.VDom.DOM.Monad.Native qualified as N
 import Halogen.VDom.Driver (hydrateUI, renderSpec)
 import Protolude
 import Wiki.App (component, input, serverInput)
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
@@ -204,7 +205,7 @@ startServed how env base at container =
 -- dispose of the application.
 startApp
   :: forall m
-   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadSecurity m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => Bool
   -> Int
   -> Start

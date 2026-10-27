@@ -16,6 +16,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, start)
 import Test.Hspec.Halogen
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
@@ -32,7 +33,7 @@ $( browserJS
      ]
  )
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "lists the spaces as cards, and the ones visited last, the latest first" $ runPage $ do
     ui <- start m (Just "user-admin") Home

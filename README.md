@@ -390,6 +390,12 @@ It is [these seven slides](https://swordlash.github.io/blog/s/docs/p/markdown-gu
   (CodeMirror), with the preview beside it or in its place, files dropped or
   pasted in as attachments, drafts kept a few seconds after the typing stops,
   and a conflict shown in place when someone else saved first.
+- **A writing assistant** in the editor, with your own API key for Anthropic's
+  Claude or OpenAI: a chat beside the Markdown, whose model edits the page
+  through tools, each edit shown as a change you accept or reject. The key stays
+  in your browser and goes to its provider only; every request sends
+  [docs/markdown.md](docs/markdown.md) first, cached by the provider, so the
+  model writes this wiki's Markdown.
 - **Slides** made of any page, presented, printed and exported
   ([above](#presentations)).
 - **History**: every save a version, its changes shown word by word, and any
@@ -1262,7 +1268,7 @@ haskell-halogen's packages come from one `source-repository-package` stanza in
 ## Commands
 
 ```sh
-npm ci                          # once: Playwright, http-server, esbuild, KaTeX, Mermaid, TikZJax, highlight.js, CodeMirror
+npm ci                          # once: Playwright, http-server, esbuild, KaTeX, Mermaid, TikZJax, highlight.js, CodeMirror, the providers' SDKs
 npm run build-native            # every package, host GHC, into dist-newstyle/native
 npm run test-native             # the test suites, natively
 npm run build-wasm              # wiki-app to wasm, a prerendered page per route, the islands bundle, into dist-newstyle/wasm/public/app
@@ -1298,7 +1304,11 @@ server here and GitHub Pages send as `application/octet-stream`, since a
 corporate proxy may refuse to download a gzip archive from a site it does not
 know; the worker `web/src/tikz-worker.js` asks for the `.bin` names); `web/src/editor.js`, CodeMirror for the editor's text, into
 `islands/editor.js`, which it imports the first time the editor opens, so that a
-reader's page never fetches it; and KaTeX's stylesheet and fonts into `islands.css` and `fonts/`. `build-wasm` runs it into the page it builds, and
+reader's page never fetches it; `web/src/assistant.js`, the writing assistant's
+providers with Anthropic's and OpenAI's SDKs, into `islands/assistant.js`, which
+it imports the first time the assistant is opened (`toolchain/test-assistant.mjs`,
+run by the smoke test, tests it against the SDKs with a fetch that answers as the
+providers do); and KaTeX's stylesheet and fonts into `islands.css` and `fonts/`. `build-wasm` runs it into the page it builds, and
 the browser suite's `wiki-app/test/web/bundle.sh` into the test page. npm 11
 runs esbuild's install script only because `package.json`'s `allowScripts`
 approves it (`npm install-scripts approve esbuild`).
@@ -1381,6 +1391,7 @@ three, which only the server links:
 | the page | [Mermaid](https://mermaid.js.org/), with the libraries it bundles (DOMPurify among them: MPL-2.0 or Apache-2.0) | MIT |
 | the page | [highlight.js](https://highlightjs.org/) | BSD-3-Clause |
 | the page (the editor) | [CodeMirror](https://codemirror.net/) and `@lezer/highlight` | MIT |
+| the page (the editor's assistant) | [`@anthropic-ai/sdk`](https://github.com/anthropics/anthropic-sdk-typescript) and [`openai`](https://github.com/openai/openai-node), with `@opentelemetry/api`, which the first bundles | Apache-2.0 |
 | the page | [fflate](https://github.com/101arrowz/fflate) (the export's zip files) | MIT |
 | the page | [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim) (`wasi-shim.js`) | MIT or Apache-2.0 |
 | the page | [TikZJax](https://github.com/drgrice1/tikzjax) (`tikzjax/`) | GPL-3.0-or-later |

@@ -24,6 +24,7 @@ import Wiki.Api.Account (SignInMethods (..))
 import Wiki.Api.Admin (Directory (..))
 import Wiki.Api.Security
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (Session (..), session)
 import Wiki.App.Backend.Admin (MonadAdmin (directory))
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
@@ -37,7 +38,7 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.User (Standing (..))
 
-type Specs m = (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+type Specs m = (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
 
 spec :: forall m -> (Specs m) => Spec
 spec m = do

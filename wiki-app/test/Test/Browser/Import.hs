@@ -27,6 +27,7 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.Api.Import
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Mem (memWikiFound, openMemWiki)
 import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Browser (unzipFiles)
@@ -42,7 +43,7 @@ $( browserJS
      ]
  )
 
-type Constraints m = (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m, MonadUnliftIO m)
+type Constraints m = (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m, MonadUnliftIO m)
 
 spec :: forall m -> (Constraints m) => Spec
 spec m = do

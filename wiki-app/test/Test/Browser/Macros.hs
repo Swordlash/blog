@@ -21,6 +21,7 @@ import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start, startChanged)
 import Test.Browser.Text (editorText)
 import Test.Hspec.Halogen
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Mem.State (MemState (..), insertPage, setMathMacros)
 import Wiki.App.Demo (demoNow)
 import Wiki.App.Islands (Island (..), Macros (..), MonadIslands)
@@ -28,7 +29,7 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Space qualified as Core
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   describe "a formula" $ do
     it "is set with the built-in macros" $ runPage $ do

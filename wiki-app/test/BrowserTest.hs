@@ -7,6 +7,7 @@ import Test.Hspec.Halogen (describe, runBrowserTests)
 #if defined(wasm32_HOST_ARCH)
 import Test.Browser.Access qualified as Access
 import Test.Browser.Admin qualified as Admin
+import Test.Browser.Assistant qualified as Assistant
 import Test.Browser.Comments qualified as Comments
 import Test.Browser.Contents qualified as Contents
 import Test.Browser.Editor qualified as Editor
@@ -76,6 +77,7 @@ main = runBrowserTests $ do
   describe "Mentions, watching and notifications" (Notifications.spec BrowserDOM)
   describe "Reading offline and installing" (Offline.spec BrowserDOM)
   describe "Tables of contents and templates" (Contents.spec BrowserDOM)
+  describe "The writing assistant" (Assistant.spec BrowserDOM)
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

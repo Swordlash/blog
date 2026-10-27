@@ -19,6 +19,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (slugs, start, startWith)
 import Test.Hspec.Halogen
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Mem (runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState)
@@ -35,7 +36,7 @@ $( browserJS
      ]
  )
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "lists a long page's headings beside it, and marks the section being read as it scrolls" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["markdown-guide"]))

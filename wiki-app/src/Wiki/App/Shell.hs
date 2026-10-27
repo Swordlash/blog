@@ -121,6 +121,7 @@ import Web.Event.Event (Event)
 import Wiki.Api (ArchiveApi (..), WikiApi (..))
 import Wiki.Api.Links (links)
 import Wiki.App.Account (Accounts (..))
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), anonymous, shutOut)
 import Wiki.App.Backend.Admin (MonadAdmin)
 import Wiki.App.Backend.Comments (MonadComments)
@@ -139,6 +140,7 @@ import Wiki.App.Security (MonadSecurity)
 import Wiki.App.View.Access qualified as AccessView
 import Wiki.App.View.Activity qualified as ActivityView
 import Wiki.App.View.Admin qualified as AdminView
+import Wiki.App.View.AssistantSettings qualified as AssistantSettingsView
 import Wiki.App.View.Bell qualified as BellView
 import Wiki.App.View.Blog qualified as BlogView
 import Wiki.App.View.Common
@@ -220,6 +222,7 @@ type Slots =
     .+ ("bell" .== H.Slot (Const Void) Void ())
     .+ ("unsubscribe" .== H.Slot (Const Void) Void ())
     .+ ("offlineCopy" .== H.Slot (Const Void) Void ())
+    .+ ("assistantSettings" .== H.Slot (Const Void) Void ())
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -332,7 +335,7 @@ data Action
 
 component
   :: forall output m
-   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadSecurity m, MonadIslands m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
+   . (MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
   => H.Component Query (Input m) output m
 component =
   H.mkComponent
@@ -545,7 +548,7 @@ component =
       Nothing
         | st.world /= WorldReady -> Nothing
         | Just accounts <- st.accounts ->
-            Just (HH.slot "signIn" () SignInView.component SignInView.Input {accounts, session = st.session, here = Router.href st.router st.route} FromAccount)
+            Just (HH.slot "signIn" () SignInView.component SignInView.Input {accounts, session = st.session, here = Router.href st.router st.route, router = st.router} FromAccount)
         | otherwise -> Just [hh|<span class="user-name">{{ maybe "Not signed in" (\u -> u.displayName) st.session.user }}</span>|]
 
     -- The demo's menu of who one is: nobody, or one of its users.
@@ -574,6 +577,9 @@ component =
               {% if isJust st.session.user %}
                 <li class="user-menu-account">
                   <button type="button" class="demo-account-toggle" onClick={{ const ToggleDemoAccount }}>Your account…</button>
+                </li>
+                <li class="user-menu-assistant">
+                  <a class="assistant-settings-entry" {{ Router.linkProps st.router Followed AssistantSettings }}>Assistant</a>
                 </li>
               {% end %}
             </ul>
@@ -846,6 +852,7 @@ component =
       ResetPassword token -> HH.slot "reset" () ResetView.component ResetView.Input {accounts = st.accounts, token, session = st.session} FromReset
       VerifyEmail token -> HH.slot_ "verifyEmail" () VerifyEmailView.component VerifyEmailView.Input {accounts = st.accounts, token}
       Unsubscribe token -> HH.slot_ "unsubscribe" () UnsubscribeView.component UnsubscribeView.Input {token}
+      AssistantSettings -> HH.slot_ "assistantSettings" () AssistantSettingsView.component AssistantSettingsView.Input {context = context st}
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading
@@ -1303,6 +1310,7 @@ crumbs st = case st.route of
   Unknown -> [("Not found", Nothing)]
   Search {} -> [("Search", Nothing)]
   Admin -> [("Administration", Nothing)]
+  AssistantSettings -> [("Writing assistant", Nothing)]
   where
     spaceCrumbs path =
       [ (s.name, if mayView (context st) s.id then Just (Space (spacePathOf st.spaces s.id)) else Nothing)

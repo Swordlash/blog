@@ -63,6 +63,7 @@ import Wiki.Api.ServerSettings (ServerSettings, noServerSettings)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
@@ -226,7 +227,7 @@ quietServer =
 -- route, with a router of its own that keeps the route in the fragment.
 startServer
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
   => Route
   -> PageM s (Mounted s Shell.Query Void m)
 startServer m at = do
@@ -236,7 +237,7 @@ startServer m at = do
 -- | 'startServer', over a backend of the test's.
 startServerOver
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
   => HttpEnv
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
@@ -248,7 +249,7 @@ startServerOver m env at = do
 -- database rather than the demo's own.
 startServerWith
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
   => Database
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
@@ -260,7 +261,7 @@ startServerWith m db at = do
 -- | 'startServer', adopting a page that holds the shell's HTML already.
 adoptServer
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
   => Element s
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
@@ -271,7 +272,7 @@ adoptServer m page at = do
 -- | 'adoptServer', over a backend of the test's.
 adoptServerOver
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
   => HttpEnv
   -> Element s
   -> Route
@@ -309,7 +310,7 @@ testRouter = panic "the backend's browser tests run in a browser"
 overHttp :: HttpEnv -> (forall n. (MonadLoad n, MonadComments n, MonadNotifications n) => n a) -> PageM s a
 overHttp env program = unsafeIOToPageM (runHttpWiki env program)
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   requests
   refusals
@@ -331,7 +332,7 @@ nobody :: SessionInfo
 nobody = SessionInfo {user = Nothing, groups = mempty, grants = mempty, standing = NotSignedIn, providers = [], exports = []}
 
 -- | Signing in and out from the header, over the server's backend.
-accounts :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+accounts :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 accounts m = describe "signing in and out" $ do
   it "signs in from the header, and loads everything again as the user signed in" $ runPage $ do
     serverStarts
@@ -409,7 +410,7 @@ accounts m = describe "signing in and out" $ do
 -- | A signed-in user's own password, from the panel under their name
 -- (WP3.7 of docs/PLAN.md), where the server names no provider to sign in
 -- with: the name is a button all the same.
-ownPassword :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+ownPassword :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 ownPassword m = describe "one's own password" $ do
   let typeIn ui field text = find ui (".password-change input[name=" <> field <> "]") >>= (`typeText` text)
       puts = filter (\r -> r.method == "PUT") <$> asked
@@ -599,7 +600,7 @@ refusals = describe "its refusals, through fetch" $ do
     overHttp env (attempt listSpaces) `shouldReturn` Left (Unreachable "the network or the server is down")
     serverStops
 
-views :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+views :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 views m = describe "the application over it" $ do
   let tour = Page (slugs ["docs"]) (slugs ["tour"])
   it "shows that it is loading until the server answers, then the page" $ runPage $ do
@@ -883,7 +884,7 @@ tell = unsafeIOToPageM . js_server_tell . toJSText . decodeUtf8 . toS . encode
 -- comments taken from the answer to the subscription; and a comment made
 -- between the page's preload and its subscription caught up with, without
 -- a request.
-comments :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+comments :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 comments m = describe "a page's comments" $ do
   it "reads them with the page, sends a new one, hears another tab's, and catches up after a lost connection" $ runPage $ do
     serverStarts
@@ -979,7 +980,7 @@ comments m = describe "a page's comments" $ do
 -- the page, says it edits it once the author goes on, names the others,
 -- says it stopped when it goes away, says it again on a new connection,
 -- and says when someone else has saved the page meanwhile.
-presence :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m) => Spec
+presence :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 presence m = describe "who is editing" $ do
   let edgar = Author {id = UserId "user-editor", name = "Edgar Editor"}
       rita = Author {id = UserId "user-reader", name = "Rita Reader"}

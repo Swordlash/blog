@@ -17,6 +17,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, start)
 import Test.Hspec.Halogen
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
@@ -38,7 +39,7 @@ notes, hello :: Route
 notes = Page (slugs ["blog"]) (slugs ["notes-on-haskell"])
 hello = Page (slugs ["blog"]) (slugs ["hello-world"])
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "comments on text selected after a code block and a formula, and marks it" $ runPage $ do
     ui <- start m (Just "user-reader") notes

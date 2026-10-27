@@ -22,6 +22,27 @@ zlib streams of the same bytes named `.bin`, sent as
 those names. No `.gz` file ships under `tikzjax/` any more; a deployment
 serving the page from its own server needs nothing new.
 
+The writing assistant, bring-your-own-key (WP4.19, decision 21). "Assistant"
+in the editor's toolbar opens a chat beside the Markdown
+(`Wiki.App.View.Assistant`): shortcuts that fill the message in (improve, fix
+grammar, shorten, expand, summarise, continue, translate), the selection
+attached as a chip that can be detached, the model's answer streamed, Stop,
+and the conversation kept for the editing session. The model edits the page
+through two tools, and each edit is a tracked change in CodeMirror, on green
+with what it replaced struck through in red, accepted or rejected with the
+control after it or all at once in the panel; a save with changes left
+accepts them, which the editor says beside Save. Settings are a page of the
+user's own, `/assistant/` (`AssistantSettings`), reached from the account
+panel and the demo's user menu: a key per provider, kept in this browser's
+IndexedDB database `wiki-assistant` under the user's id and never sent to the
+wiki's server, "Test the key", "Forget", the provider and the model, and a
+warning on a page served over plain HTTP. Keys outlive signing out; "Forget"
+takes them away. `MonadAssistant` (`Wiki.App.Assistant`) is required by
+`Shell.component` and `Editor.component`, with instances for `BrowserDOM`,
+`MemDOM`, `ReaderT`, `MemWiki` and `HttpWiki`; the providers are Anthropic's
+and OpenAI's SDKs in `islands/assistant.js`, fetched the first time the panel
+is used. `SignIn.Input` gains the `router`.
+
 No password for accounts that sign in with a provider; the administrator
 mails password links (WP5.6). The menu under a user's name offers no "Set a
 password…" to one who has no password and signs in with a provider the

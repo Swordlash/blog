@@ -18,13 +18,14 @@ import Test.Browser.Mount (clickButton, slugs, start)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api.Events (ServerMessage (..))
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Kind (..), Notification (..), PageLocation (..))
 import Wiki.Core.Version (Author (..))
 
-type Specs m = (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m, MonadIndexedDB m)
+type Specs m = (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
 
 spec :: forall m -> (Specs m) => Spec
 spec m = do

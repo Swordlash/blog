@@ -20,6 +20,7 @@ import Protolude hiding (find)
 import Test.Browser.Mount (clickButton, slugs, startWith)
 import Test.Browser.Text (editorSelection, editorText, markdown)
 import Test.Hspec.Halogen
+import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Mem (runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -48,7 +49,7 @@ $( browserJS
      ]
  )
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadUUID m) => Spec
+spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "previews what is typed, with its formulas drawn, and saves it" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
