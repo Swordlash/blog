@@ -1204,6 +1204,33 @@ must be in before it is.
   rewrites the haddocks and comments that fail it, module by module, `wiki-app` and
   `wiki-server` first, with no change to code; a first PR of a few modules for the owner
   to judge the tone, then the rest.
+- **WP5.13 The wasm build's time: `Shell`'s slots and the `.dyn_o` objects** (the owner,
+  2026-10-27: "21 GB to w pizdu, spróbujmy to i te .dyn"). Confirm that `Wiki.App.Shell`'s
+  28-label `Slots` row is what the simplifier spends 75 s and 14.6 GB on, then restructure
+  (the route's page as one sum-typed slot, the shell's chrome in sub-components with small
+  rows), no flags; measure `shared: False` and its variants for the `.dyn_o` objects and
+  apply what works; measure one `hh` view to say where its typecheck time goes.
+- **WP5.14 No page cache past the first render; page lists without bodies** (the owner,
+  2026-10-27). The owner found a tab can show a page without someone else's edit (the live
+  channel tells a tab only about the pages it shows). Three designs were read against the
+  code (a subscription window of the last 10 pages; stale-while-revalidate; no page cache
+  after the preload) and the owner chose the last: `Cache` is a preload that answers reads
+  until the first route change, then page content always fetches; session, spaces, own
+  drafts, immutable versions and live notices stay. With it, `listPages` stops carrying
+  every page's body (summaries; the body from `getPage`). Tests: an end-to-end with two
+  sessions (A views X then Y, B saves X, A returns and sees B's text after one fetch),
+  hydration at zero repairs.
+- **WP5.15 Newtypes where `Text` carries a URL, an e-mail, a login, a file name, a token**
+  (the owner, 2026-10-27, "używamy mega dużo Text zamiast newtypów"; proposed): an
+  inventory of `Text` fields in `wiki-api` and `wiki-core`, a newtype with a parser at the
+  boundary where the value has rules of its own.
+- **WP5.16 Scalability audit** (the owner, 2026-10-27, "przejrzyj cały kod na rzeczy które
+  się nie skalują na dużo userów i stron"): a read-only review, findings ranked by impact
+  with evidence, each with the smallest fix; packages cut from it.
+- **Later, by the owner (2026-10-27, "zapisz to na potem"): a migration to PostgreSQL.**
+  Not now; when it comes, as one port of the whole storage layer (WP5.7's spike says why
+  not half and half), most likely with `rel8`, migrations hand-written, SQLite kept or
+  dropped as the owner decides then.
 
 ## Delegation protocol
 
