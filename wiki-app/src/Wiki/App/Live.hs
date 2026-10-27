@@ -1,71 +1,72 @@
--- | The live channel, as the application sees it (decision 23 of
--- docs/PLAN.md, "Wiki.Api.Events"): one WebSocket per tab to the server,
--- on which the page view says which page it shows and hears what happens
--- to that page's comments as it happens.
+-- | The live channel, as the application uses it (decision 23 of
+-- docs/PLAN.md, "Wiki.Api.Events"): one WebSocket per tab to the server.
+-- On it, the page view says which page it shows, and receives changes to
+-- that page's comments as they happen.
 --
--- A capability of its own, 'MonadLive', which only the backend over HTTP
--- has ("Wiki.App.Backend.Http"), as 'Wiki.App.Account.MonadAccount' is:
--- the demo keeps its wiki in the tab, where nobody else writes. The shell
--- is handed it as a value ('Live', through its input) when there is one,
--- asks it for the tab's 'Feed' once, and hands the feed to the page view,
--- which watches its page while it shows it.
+-- It is a separate capability, 'MonadLive', which only the HTTP backend
+-- has ("Wiki.App.Backend.Http"), as 'Wiki.App.Account.MonadAccount' is.
+-- The demo keeps its wiki in the tab, where nobody else writes. When
+-- there is a live channel, the shell gets it as a value ('Live', through
+-- its input), asks it for the tab's 'Feed' once, and hands the feed to the
+-- page view, which watches its page while it shows it.
 --
 -- = The feed
 --
--- The socket is opened lazily, when a page is first watched, and kept for
--- the tab's life. A page watched is subscribed to as soon as the socket is
--- open, and again whenever it opens anew; a page no longer watched is
--- unsubscribed from. What the server says of a page is told to whoever
--- listens ('heard'), and handed to the backend first, which keeps the
--- page's threads up to date with it.
+-- The WebSocket is opened lazily, when a page is first watched, and kept
+-- for the tab's life. A watched page is subscribed to as soon as the
+-- socket is open, and again whenever it reopens. A page no longer watched
+-- is unsubscribed from. Each message the server sends about a page goes
+-- to the listeners ('heard'), and to the backend first, which keeps the
+-- page's cached threads up to date with it.
 --
 -- The server answers a subscription with the page's threads as they are
--- then, and tells of every change after them ("Wiki.Api.Events"): the
--- answer replaces the threads the page view shows and the backend keeps
--- ('Replaced'), and the events are folded into them ('Heard'). So what
--- happened between the page's first read (with the page, or in the HTML
--- it was served in) and its subscription is caught up with, without a
--- request of the tab's own: a page adopted from the server's HTML still
--- asks for nothing.
+-- then, and afterwards sends every change ("Wiki.Api.Events"). The answer
+-- replaces the threads the page view shows and the backend caches
+-- ('Replaced'), and each event is applied to them ('Heard'). So any change
+-- between the page's first read (with the page, or in the HTML it was
+-- served in) and its subscription is caught up without a request of the
+-- tab's own: a page adopted from the server's HTML still fetches nothing.
 --
 -- When the socket closes (the server went away, the network did, or the
--- server closed it), it is opened again after a pause that doubles from
--- one second to half a minute, and is one second again once a socket has
--- opened. Nothing is replayed: the pages watched are subscribed to again,
--- and the answers are what was missed meanwhile, so a lost event costs
--- nothing. The backend lets go of the threads of every page watched while
--- the socket is closed, so that a page shown then reads the server's.
+-- server closed it), it is opened again after a pause. The pause doubles
+-- from one second up to half a minute, and is one second again once a
+-- socket has opened. Nothing is replayed: the watched pages are subscribed
+-- to again, and the answers contain whatever was missed, so a lost event
+-- costs nothing. While the socket is closed, the backend drops the cached
+-- threads of every watched page, so that a page shown then fetches them
+-- from the server.
 --
--- A socket is opened as whoever the browser's cookie says, and stays so:
--- signing in or out 'restart's it.
+-- A socket is opened as the user the browser's cookie names, and stays
+-- that user's: signing in or out 'restart's it.
 --
 -- = Notifications
 --
--- The server also tells a socket of every notification made for its user
+-- The server also sends on a socket every notification made for its user
 -- (WP4.13 of docs/PLAN.md, "Wiki.Core.Notification"), whatever page it is
--- about: the header's bell 'listen's for them, which opens the socket
--- even where no page is shown, and keeps it open (and opens it again)
--- until it stops. Each is told as 'Notice', and handed to the backend
--- first. A socket that opens again after it closed is told as 'Reopened':
--- what was made meanwhile was not told, and the bell reads its
--- notifications again.
+-- about. The header's bell 'listen's for them, which opens the socket
+-- even where no page is shown, and keeps it open (reopening it if needed)
+-- until the bell stops listening. Each notification is delivered as
+-- 'Notice', to the backend first. When a socket opens again after it
+-- closed, the feed delivers 'Reopened': notifications made meanwhile were
+-- not delivered, so the bell fetches its notifications again.
 --
 -- = Editing
 --
--- The editor says which page it edits ('startEditing', 'stopEditing'),
--- and the feed tells the server, now if the socket is open and again
--- each time it opens anew, after the pages watched have been subscribed
--- to: the server forgets who edits with the connection that said so, so a
--- new connection says it again. Who else edits a page comes as an event
--- ('Wiki.Api.Events.Editing'), and with the answer to its subscription,
--- which the feed tells as such an event after 'Replaced'; the feed keeps
--- the last it heard of each page watched ('editorsOf'), for a view that
--- starts watching a page another view watches already, which hears no
--- answer of its own.
+-- The editor says which page it edits ('startEditing', 'stopEditing'). The
+-- feed tells the server at once if the socket is open, and again each time
+-- it reopens, after the watched pages have been subscribed to: the server
+-- forgets who is editing when the connection that said so closes, so a new
+-- connection says it again. Who else is editing a page arrives as an event
+-- ('Wiki.Api.Events.Editing'), and with the answer to the page's
+-- subscription, which the feed delivers as such an event after
+-- 'Replaced'. The feed keeps the latest editors it received for each
+-- watched page ('editorsOf'), for a view that starts watching a page
+-- another view watches already: that view gets no subscription answer of
+-- its own.
 --
 -- Natively there is no WebSocket ("Halogen.Net.WebSocket" gives one that
--- never connects), and a feed does nothing: the server renders its pages
--- with a backend over HTTP, whose page views watch their pages too.
+-- never connects), and a feed does nothing. The server prerenders its
+-- pages with the HTTP backend, whose page views watch their pages too.
 module Wiki.App.Live
   ( -- * The capability
     MonadLive (..)
@@ -98,43 +99,43 @@ import Wiki.Core.Id (PageId)
 import Wiki.Core.Notification (Notification)
 import Wiki.Core.Version (Author)
 
--- | What the tab hears.
+-- | A message the feed delivers to the tab.
 data Heard
-  = -- | Something happened to a page it watches.
+  = -- | An event on a page the tab watches.
     Heard PageId PageEvent
-  | -- | A page it watches has these threads: the answer to its
-    -- subscription, which what it showed is replaced with.
+  | -- | The threads of a page the tab watches: the answer to its
+    -- subscription, which replaces the threads shown.
     Replaced PageId [Thread]
   | -- | The user has a new notification.
     Notice Notification
-  | -- | The socket opened again after it had closed: what the server said
-    -- meanwhile went unheard.
+  | -- | The socket opened again after it had closed: whatever the server
+    -- sent meanwhile was lost.
     Reopened
   deriving stock (Eq, Show)
 
 -- | The tab's live channel.
 data Feed = Feed
   { heard :: Emitter IO Heard
-  -- ^ What it hears, for 'Halogen.subscribe'.
+  -- ^ The messages it delivers, for 'Halogen.subscribe'.
   , watch :: PageId -> IO ()
-  -- ^ Listen for what happens to a page, as long as it is shown. Each
-  -- 'watch' is ended by an 'unwatch'.
+  -- ^ Listen for events on a page while it is shown. Each 'watch' is
+  -- ended by an 'unwatch'.
   , unwatch :: PageId -> IO ()
   , restart :: IO ()
-  -- ^ Open the socket again, as whoever the cookie now says.
+  -- ^ Open the socket again, as the user the cookie now names.
   , startEditing :: PageId -> IO ()
-  -- ^ Say that this tab edits a page, until 'stopEditing'.
+  -- ^ Announce that this tab edits a page, until 'stopEditing'.
   , stopEditing :: PageId -> IO ()
   , editorsOf :: PageId -> IO (Maybe [Author])
-  -- ^ Who else edits a page watched, as last heard; 'Nothing' until the
-  -- server has said.
+  -- ^ Who else edits a watched page, as last received; 'Nothing' until
+  -- the server has said.
   , listen :: IO ()
   -- ^ Keep the socket open for the user's notifications, until 'unlisten'.
   , unlisten :: IO ()
   }
 
--- | A feed that hears nothing: what there is natively, and for a backend
--- with no channel.
+-- | A feed that delivers nothing: the feed natively, and for a backend
+-- without a channel.
 quietFeed :: IO Feed
 quietFeed = do
   channel <- HS.create
@@ -159,44 +160,44 @@ class (Monad m) => MonadLive m where
 
 instance (MonadLive m) => MonadLive (HalogenM st act slots output m)
 
--- | The class's method as a value, handed to the shell over a backend that
+-- | The class's method as a value, given to the shell on a backend that
 -- has it.
 newtype Live m = Live {liveFeed :: m Feed}
 
 live :: (MonadLive m) => Live m
 live = Live {liveFeed}
 
--- | Where the feed is.
+-- | The state of the feed's connection.
 data Channel = Channel
   { socket :: Maybe WS.Socket
   -- ^ The socket, from when it is opened until it closes.
   , connecting :: Bool
-  -- ^ Whether a socket is being opened, or will be after a pause: then
-  -- nothing else opens one.
+  -- ^ Whether a socket is being opened, or will be after a pause; while
+  -- it is, nothing else opens one.
   , open :: Bool
   -- ^ Whether it is open, and can send.
   , pages :: Map PageId Int
-  -- ^ The pages watched, each with how many watch it.
+  -- ^ The watched pages, each with how many views watch it.
   , editing :: Set PageId
   -- ^ The pages this tab edits.
   , listeners :: Int
   -- ^ How many listen for notifications.
   , opened :: Bool
-  -- ^ Whether a socket has opened before, since the last restart: one
-  -- that opens again is 'Reopened'.
+  -- ^ Whether a socket has opened before, since the last restart. A
+  -- socket that opens again delivers 'Reopened'.
   , known :: Map PageId [Author]
-  -- ^ Who else edits each page watched, as the socket open now said.
+  -- ^ Who else edits each watched page, as the current socket said.
   , pause :: Int
   -- ^ How long to wait before opening it again, in milliseconds.
   , generation :: Int
-  -- ^ Counted up when it is restarted, so that what the socket it closed
-  -- says afterwards is not taken for the new one's.
+  -- ^ Incremented on each restart, so that messages from the socket the
+  -- restart closed are not taken for the new one's.
   }
 
--- | What the backend does with what is heard: keep a page's threads up to
--- date with an event, take the threads the server answered a subscription
--- with, let them go when they may change unheard, keep a notification, and
--- let the notifications go when some may have been missed.
+-- | What the backend does with the messages: apply an event to a page's
+-- cached threads, replace them with the threads a subscription returned,
+-- drop them when they may change unseen, add a notification, and drop the
+-- notifications when some may have been missed.
 data Keeping = Keeping
   { keep :: PageId -> PageEvent -> IO ()
   , catchUp :: PageId -> [Thread] -> IO ()
@@ -210,11 +211,11 @@ wanted :: Channel -> Bool
 wanted c = not (null c.pages) || c.listeners > 0
 
 -- | A feed whose socket is at @api\/v1\/events@, relative to the page's
--- @\<base href>@, with what the backend does with what is heard: keep a
--- page's threads up to date with an event, replace them with a
--- subscription's answer, let them go when they may have changed unheard,
--- keep a notification, and let the notifications go when some may have
--- been missed.
+-- @\<base href>@, with what the backend does with the messages: apply an
+-- event to a page's cached threads, replace them with a subscription's
+-- answer, drop them when they may have changed unseen, add a
+-- notification, and drop the notifications when some may have been
+-- missed.
 newFeed :: (PageId -> PageEvent -> IO ()) -> (PageId -> [Thread] -> IO ()) -> (PageId -> IO ()) -> (Notification -> IO ()) -> IO () -> IO Feed
 newFeed keep catchUp forget notified missed
   | not inBrowser = quietFeed
@@ -238,7 +239,7 @@ newFeed keep catchUp forget notified missed
             when gone $ do
               c <- readIORef held
               when c.open (say c (Unsubscribe page))
-              -- Not heard of any more: what is kept of it may go stale.
+              -- No longer watched: its cached threads may go stale.
               forget page
           restart = do
             old <- atomicModifyIORef' held $ \c ->
@@ -276,18 +277,18 @@ connect held keeping tell = do
       watched page = Map.member page . (\c -> c.pages) <$> readIORef held
       heardEditors page editors = atomicModifyIORef' held (\c -> (c {known = Map.insert page editors c.known}, ()))
   WS.open eventsPath [] >>= \case
-    -- Refused on the spot (the address is no WebSocket's): no socket,
-    -- and no point in trying again.
+    -- Refused at once (the address is not a WebSocket's): no socket, and
+    -- no point in trying again.
     Left _ -> atomicModifyIORef' held (\c -> (c {connecting = False}, ()))
     Right socket -> do
       atomicModifyIORef' held (\c -> (c {socket = Just socket, connecting = False}, ()))
       void . (WS.opened socket).registerHandler $ \() -> whenM current $ do
         (c, again) <- atomicModifyIORef' held (\c -> let c' = c {open = True, opened = True, pause = firstPause} in (c', (c', c.opened)))
         for_ (Map.keys c.pages) (say c . Subscribe)
-        -- The server knows nothing of what this tab edits on a new
-        -- connection.
+        -- On a new connection, the server knows nothing of what this tab
+        -- edits.
         for_ (Set.toList c.editing) (say c . StartEditing)
-        -- Notifications made while it was closed were told to nobody.
+        -- Notifications made while it was closed were delivered to nobody.
         when again $ do
           keeping.missed
           tell Reopened
@@ -299,8 +300,8 @@ connect held keeping tell = do
               _ -> pass
             keeping.keep page event
             tell (Heard page event)
-          -- An answer about a page unwatched since it was asked for is no
-          -- longer anyone's. Who else edits the page is told after the
+          -- An answer about a page no longer watched since it was asked
+          -- for is dropped. Who else edits the page is delivered after the
           -- threads, as the event that says it.
           Just (Subscribed page threads editors) -> whenM (watched page) $ do
             keeping.catchUp page threads
@@ -317,7 +318,7 @@ connect held keeping tell = do
         -- when something is.
         c <- atomicModifyIORef' held $ \c ->
           (c {socket = Nothing, open = False, connecting = wanted c, known = mempty, pause = min longestPause (c.pause * 2)}, c)
-        -- What changes now goes unheard.
+        -- Changes from now on go unseen.
         traverse_ keeping.forget (Map.keys c.pages)
         when (wanted c) . void . forkIO $ do
           threadDelay (c.pause * 1000)

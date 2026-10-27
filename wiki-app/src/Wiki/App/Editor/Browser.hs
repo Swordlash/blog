@@ -1,17 +1,17 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | What the editor ("Wiki.App.View.Editor") asks of the browser that
--- Halogen does not say: the files a drop, a paste or a file input brings
--- and their bytes, CodeMirror put in place of the textarea, the text and selection,
--- read and written as an edit the browser can undo, which of the editor's
--- keys was pressed, the browser's warning before a reload or a close
--- loses unsaved changes, and the writing assistant's edits as changes the
--- author accepts or rejects. See @jsbits/editor.js@, and
--- @web/src/editor.js@ for CodeMirror.
+-- | The browser features the editor ("Wiki.App.View.Editor") needs that
+-- Halogen does not provide: the files a drop, a paste or a file input
+-- brings, and their bytes; CodeMirror, put in place of the textarea; the
+-- text and selection, read and written as an edit the browser can undo;
+-- which of the editor's keys was pressed; the browser's warning before a
+-- reload or a close loses unsaved changes; and the writing assistant's
+-- edits, as changes the author accepts or rejects. See
+-- @jsbits/editor.js@, and @web/src/editor.js@ for CodeMirror.
 --
 -- Natively there is no browser: no event brings a file, no key is one of
--- the editor's, the textarea is empty, CodeMirror never comes, and the rest
--- does nothing.
+-- the editor's, the textarea is empty, CodeMirror never loads, and the
+-- rest does nothing.
 module Wiki.App.Editor.Browser
   ( -- * Files
     Files
@@ -64,9 +64,9 @@ import Wiki.Core.Assistant.Prompt (Span (..))
 import Wiki.Core.Markdown.Edit (Command (..), Selection (..), apply, cursor)
 
 -- Reading a file waits for the browser, so that binding is a safe import,
--- which waits for the promise; the rest return on the spot. The key and a
--- drop's or a paste's files are read in the event's listener, which is pure
--- (the event does not change while it is being dispatched), so those are
+-- which waits for the promise; the rest return at once. The key, and a
+-- drop's or a paste's files, are read in the event's listener, and the
+-- event does not change while it is dispatched, so those bindings are
 -- pure.
 $( browserJS
      ["jsbits/editor.js"]
@@ -100,42 +100,43 @@ $( browserJS
      ]
  )
 
--- | Files an event brought, not yet looked at.
+-- | The files an event brought, not yet read.
 newtype Files = Files JSVal
 
--- | A drop's files. To be called in the drop's listener, while the browser
--- dispatches it (the drop's handler), and forced there: once the dispatch
--- is over, the drop has no files any more.
+-- | A drop's files. Call it in the drop's listener, while the browser
+-- dispatches the drop (the drop's handler), and force it there: once the
+-- dispatch is over, the drop has no files any more.
 droppedFiles :: Event -> Files
 droppedFiles = Files . js_drop_files
 
--- | A paste's files, if it brought any: a screenshot or an image copied in
--- a browser, or files copied in a file manager. To be called in the paste's
--- listener and forced there, as 'droppedFiles' is. A paste of text alone
--- brings none, and is the editor's to put in.
+-- | A paste's files, if it brought any: a screenshot, an image copied in a
+-- browser, or files copied in a file manager. Call it in the paste's
+-- listener and force it there, as for 'droppedFiles'. A paste of text
+-- alone brings no files, and the editor inserts the text itself.
 pastedFiles :: Event -> Maybe Files
 pastedFiles ev
   | js_paste_file_count ev > 0 = Just (Files (js_paste_files ev))
   | otherwise = Nothing
 
--- | A file input's files, from its change event; the input is emptied, so
--- that choosing the same file again is a change too.
+-- | A file input's files, from its change event. The input is emptied, so
+-- that choosing the same file again is also a change.
 chosenFiles :: (MonadIO m) => Event -> m Files
 chosenFiles = liftIO . fmap Files . js_chosen_files
 
--- | A file a drop, a paste or a file input brought, before its bytes are read: what
--- the browser says of it, and where to read it from.
+-- | A file a drop, a paste or a file input brought, before its bytes are
+-- read: what the browser says about it, and where to read it from.
 data PickedFile = PickedFile
   { name :: Text
   , mediaType :: Text
   -- ^ As the browser guesses it from the name; empty when it cannot.
   , size :: Natural
-  -- ^ In bytes, so that a file too large is refused before it is read.
+  -- ^ In bytes, so that a file that is too large is refused before it is
+  -- read.
   , files :: JSVal
   , index :: Int
   }
 
--- | What the browser says of each file.
+-- | What the browser says about each file.
 pickedFiles :: (MonadIO m) => Files -> m [PickedFile]
 pickedFiles (Files files) = liftIO $ do
   n <- js_file_count files
@@ -145,8 +146,8 @@ pickedFiles (Files files) = liftIO $ do
     size <- fromIntegral @Integer . round <$> js_file_size files index
     pure PickedFile {name, mediaType, size, files, index}
 
--- | A file's bytes. This waits for the browser to read them, so a component
--- calls it with 'lift', off its loop.
+-- | A file's bytes. This waits for the browser to read them, so a
+-- component calls it with 'lift', off its loop.
 readPickedFile :: (MonadIO m) => PickedFile -> m ByteString
 readPickedFile file = liftIO $ do
   -- On wasm a safe import's result is a thunk that waits for the promise
@@ -154,39 +155,40 @@ readPickedFile file = liftIO $ do
   base64 <- evaluate . fromJSText =<< js_read_file file.files file.index
   either (\e -> throwIO (IOError.userError ("the browser read a file as malformed base64: " <> e))) pure (Base64.decode (encodeUtf8 base64))
 
--- | Put CodeMirror in the host element (the element the editor renders, with
--- no children, just before its textarea) in place of the textarea, with the
--- Markdown the textarea was made with (or what has been typed into it since,
--- if anything has), once the page has loaded CodeMirror; it returns at once.
--- A CodeMirror already there for an earlier textarea (before a reload) is
--- replaced. The text is then CodeMirror's, which tells of each change by a
--- @wiki-input@ event on the host ('typedText'); until then, it is the
--- textarea's.
+-- | Put CodeMirror in the host element (an empty element the editor
+-- renders just before its textarea) in place of the textarea, once the
+-- page has loaded CodeMirror. It starts with the Markdown the textarea was
+-- made with, or with what has been typed into the textarea since. The call
+-- returns at once. A CodeMirror already there for an earlier textarea
+-- (before a reload) is replaced. From then on the text is CodeMirror's,
+-- which reports each change with a @wiki-input@ event on the host
+-- ('typedText'); until then, it is the textarea's.
 --
 -- The functions here that edit the text take the host, and act on
 -- CodeMirror if it is there and on the textarea if not.
 attachEditor :: (MonadIO m) => Element -> Text -> m ()
 attachEditor host original = liftIO (js_attach host (toJSText original))
 
--- | Let go of the host's CodeMirror, if it has one.
+-- | Remove the host's CodeMirror, if it has one.
 detachEditor :: (MonadIO m) => Element -> m ()
 detachEditor = liftIO . js_detach
 
--- | The whole text a @wiki-input@ event says the editor has now. Pure, as
--- the event does not change.
+-- | The whole text a @wiki-input@ event says the editor now has. Pure,
+-- since the event does not change.
 typedText :: Event -> Text
 typedText = fromJSText . js_typed
 
--- | Apply a toolbar command to the editor's text: read its text and selection,
--- make the change ("Wiki.Core.Markdown.Edit"), and write the part that
--- changed back as one edit the undo takes back, with its input event (the
--- textarea's, or CodeMirror's @wiki-input@), which the component's handler
--- sees before this returns. To be run in 'Halogen.liftEffect'.
+-- | Apply a toolbar command to the editor's text: read its text and
+-- selection, make the change ("Wiki.Core.Markdown.Edit"), and write the
+-- part that changed back as one edit that undo reverts. The edit fires its
+-- input event (the textarea's, or CodeMirror's @wiki-input@), which the
+-- component's handler receives before this returns. Run it in
+-- 'Halogen.liftEffect'.
 applyCommand :: (MonadIO m) => Element -> Command -> m ()
 applyCommand host command = edit host (apply command)
 
--- | Put text in at the editor's cursor, in place of the selection, as typing
--- it would, and leave the cursor after it. To be run in
+-- | Insert text at the editor's cursor, replacing the selection, as typing
+-- it would, and leave the cursor after it. Run it in
 -- 'Halogen.liftEffect'.
 insertAtCursor :: (MonadIO m) => Element -> Text -> m ()
 insertAtCursor host text = edit host $ \old (Selection s e) ->
@@ -211,14 +213,14 @@ focusElement = liftIO . js_focus
 clickElement :: (MonadIO m) => Element -> m ()
 clickElement = liftIO . js_click
 
--- | The keys the editor answers to itself.
+-- | The keys the editor handles itself.
 data EditorKey
   = -- | Ctrl+S, or Cmd+S on a Mac, anywhere in the editor.
     SaveKey
-  | -- | Ctrl+Alt+P (Cmd+Option+P), anywhere in the editor: the preview, or
-    -- back to editing.
+  | -- | Ctrl+Alt+P (Cmd+Option+P), anywhere in the editor: show the preview,
+    -- or go back to editing.
     PreviewKey
-  | -- | Escape, anywhere in the editor, which closes a menu that is open.
+  | -- | Escape, anywhere in the editor: closes an open menu.
     EscapeKey
   | -- | Tab in the text, without a modifier.
     IndentKey
@@ -228,7 +230,7 @@ data EditorKey
 
 -- | Which of the editor's keys a keydown is, if any. Pure, so that a
 -- handler can decide in the event's listener, while the browser can still
--- be kept from doing what it does with the key
+-- be stopped from acting on the key
 -- ('Halogen.HTML.Events.preventingDefault').
 editorKey :: Event -> Maybe EditorKey
 editorKey event = case fromJSText (js_key event) of
@@ -244,43 +246,43 @@ editorKey event = case fromJSText (js_key event) of
   "bulleted" -> Just (CommandKey BulletList)
   _ -> Nothing
 
--- | The editor's text as it is now: CodeMirror's, or the textarea's.
+-- | The editor's current text: CodeMirror's, or the textarea's.
 currentText :: (MonadIO m) => Element -> m Text
 currentText host = liftIO (fromJSText <$> js_value host)
 
--- | The selection a @wiki-selection@ event tells of, in characters, if
--- anything is selected. Pure, as the event does not change.
+-- | The selection a @wiki-selection@ event reports, in characters, if
+-- anything is selected. Pure, since the event does not change.
 selectedSpan :: Event -> Maybe Span
 selectedSpan event = case T.splitOn ":" (fromJSText (js_selected event)) of
   [a, b] | Just f <- readMaybe a, Just t <- readMaybe b -> Just (Span f t)
   _ -> Nothing
 
 -- | How many of the assistant's changes a @wiki-changes@ event says are
--- left to decide.
+-- still undecided.
 changesLeft :: Event -> Int
 changesLeft = js_change_count
 
--- | The decision a @wiki-decide@ event tells of, made with a change's own
--- control: accept or reject, and which change.
+-- | The decision a @wiki-decide@ event reports, made with a change's own
+-- buttons: accept or reject, and which change.
 decision :: Event -> Maybe (Decision, Int)
 decision event = case T.splitOn ":" (fromJSText (js_decided event)) of
   ["accept", i] -> (Accept,) <$> readMaybe i
   ["reject", i] -> (Reject,) <$> readMaybe i
   _ -> Nothing
 
--- | The assistant's changes not yet decided, as CodeMirror keeps them,
--- where they are now.
+-- | The assistant's undecided changes, as CodeMirror tracks them, at their
+-- current positions.
 trackedChanges :: (MonadIO m) => Element -> m [Change]
 trackedChanges host = liftIO $ do
   text <- fromJSText <$> js_changes host
   pure (either (const []) (map (\(Tracked c) -> c)) (eitherDecodeStrict (encodeUtf8 text)))
 
--- | The assistant's edit, made in the text as it is now and tracked as the
--- change of the id given, taking in the changes it touches
--- ("Wiki.Core.Assistant.Edit"): where it went, and the ids of the changes
--- it took in; or why it cannot be made. Its input event brings the change
--- into the work before this returns, as a toolbar command's does. To be
--- run in 'Halogen.liftEffect'.
+-- | Make the assistant's edit in the current text, tracked as the change
+-- with the given id, merging any changes it overlaps
+-- ("Wiki.Core.Assistant.Edit"). The result is where the edit went and the
+-- ids of the changes it merged, or why it cannot be made. Its input event
+-- brings the change into the component's state before this returns, as a
+-- toolbar command's does. Run it in 'Halogen.liftEffect'.
 proposeEdit :: (MonadIO m) => Element -> Int -> Edit -> m (Either Refusal (Replacement, [Int]))
 proposeEdit host i change = liftIO $ do
   text <- fromJSText <$> js_value host
@@ -292,10 +294,10 @@ proposeEdit host i change = liftIO $ do
       js_propose host r.from r.to (toJSText r.text) i (jsonText taken)
       pure (Right (r, taken))
 
--- | Accept or reject the change of the id given, or all of them: rejecting
--- puts back what each replaced, as one edit the undo takes back; accepting
--- only stops tracking them. The ids of the changes settled. To be run in
--- 'Halogen.liftEffect'.
+-- | Accept or reject the change with the given id, or all of them.
+-- Rejecting restores what each change replaced, as one edit that undo
+-- reverts; accepting only stops tracking them. The result is the ids of
+-- the changes decided. Run it in 'Halogen.liftEffect'.
 settleChanges :: (MonadIO m) => Element -> Decision -> Maybe Int -> m [Int]
 settleChanges host d which = liftIO $ do
   pending <- trackedChanges host
@@ -316,7 +318,7 @@ instance FromJSON Tracked where
 jsonText :: (ToJSON a) => a -> JSText
 jsonText = toJSText . decodeUtf8 . BSL.toStrict . encode
 
--- | Whether a reload or closing the tab should first be warned about, as
--- browsers do for a page with unsaved changes.
+-- | Whether the browser should warn before a reload or closing the tab,
+-- as browsers do for a page with unsaved changes.
 guardUnload :: (MonadIO m) => Bool -> m ()
 guardUnload = liftIO . js_guard_unload

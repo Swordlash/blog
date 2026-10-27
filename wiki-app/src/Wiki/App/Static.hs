@@ -1,32 +1,34 @@
--- | The application rendered natively, for a route, as the page should
--- arrive before the program has loaded: what @wiki-app-prerender@ writes for
--- every route, and what the native tests look at.
+-- | Native rendering of the application to HTML: the prerender. For a
+-- route, it renders the page as it should arrive before the program has
+-- loaded. @wiki-app-prerender@ writes one for every route, and the native
+-- tests check them.
 --
 -- "Halogen.Static" takes the HTML as soon as the component has started,
--- which is before anything it loads through the backend on a worker has
--- arrived. The shell and its views load what a route shows in their initial
--- states, so that is there from the first render, but a view still says when
--- it is done ('Shell.Settled'), and the islands write their source in from
--- their initializers. So this asks the shell whether it has loaded what the
--- route shows, and then waits for the HTML to stop changing.
+-- which is before anything the component loads through the backend on a
+-- worker thread has arrived. The shell and its views load what a route
+-- shows in their initial states, so it is there from the first render.
+-- But a view still reports when it is done ('Shell.Settled'), and the
+-- islands write their source in from their initializers. So this asks the
+-- shell whether it has loaded what the route shows, and then waits for the
+-- HTML to stop changing.
 --
--- A wiki a server keeps is rendered by the server, for each request, as
--- the request's principal sees it ('renderServed'): the application over
--- the backend over HTTP, whose requests the server's API answers in the
--- same process, so that it reads exactly what the program would and the
--- page carries what it read ("Wiki.App.Backend.Http.Preload"). The build
--- prerenders one page for it besides, as the application shows before it
--- has loaded anything ('renderLoading'): the frame, the same at every
--- address, which the server sends when it cannot render a page. Its
--- requests are never answered, so it is taken as soon as it stops
+-- A wiki on a server is prerendered by the server, for each request, as
+-- the user who sent it sees it ('renderServed'). That is the application
+-- over the HTTP backend, whose requests the server's API answers in the
+-- same process, so that it reads exactly what the program would, and the
+-- page carries the responses ("Wiki.App.Backend.Http.Preload"). The build
+-- also prerenders one page for the server: the application before it has
+-- loaded anything ('renderLoading'), the bare frame, the same at every
+-- address. The server sends it when it cannot prerender a page. Its
+-- requests never get a response, so it is taken as soon as it stops
 -- changing.
 --
 -- The program adopts this HTML in the browser
--- ('Halogen.VDom.Driver.hydrateUI'), so its first render has to be the same
--- page; 'startRoute' can start the application either way, which is how the
--- native tests check that it is.
+-- ('Halogen.VDom.Driver.hydrateUI'), so its first render must produce the
+-- same page. 'startRoute' can start the application either way, which is
+-- how the native tests check that it does.
 --
--- Natively only: the in-memory document exists on a host GHC only.
+-- Native only: the in-memory document exists only on the host GHC.
 module Wiki.App.Static
   ( renderRoute
   , Rendered (..)
@@ -83,8 +85,8 @@ import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Space (Space (id))
 
 -- | A route's page: the application's HTML, for the mount point, the
--- document's title, and what else the page says about itself in its head
--- ("Wiki.App.Head"), the title among it.
+-- document's title, and everything else the page says about itself in its
+-- head ("Wiki.App.Head"), including the title.
 data Rendered = Rendered
   { html :: Text
   , title :: Text
@@ -101,15 +103,15 @@ renderRoute wiki base at = do
   html <- markup container `finally` dispose
   pure Rendered {html, title = meta.title, meta}
 
--- | The routes the build writes a page for: the front page, the page of
--- search results, every space (its home page) and every space's list of
--- pages, and every page of the wiki with its source
--- and its history (at its latest version: another version's address is the
--- history's with a query, which a static host serves the same page for, and
--- the program then shows the version asked for), and every page written as
--- slides ("Wiki.Core.Slides") as slides, at the first (another slide's
--- address is the same with a query, likewise).
--- (Every other address gets the page for 'Unknown'.)
+-- | The routes the build writes a page for: the front page; the search
+-- results page; every space (its home page) and every space's list of
+-- pages; every page of the wiki, with its source and its history (at its
+-- latest version: another version's address is the history's with a
+-- query, for which a static host serves the same page, and the program
+-- then shows the version asked for); and every page written as slides
+-- ("Wiki.Core.Slides"), as slides, at the first slide (another slide's
+-- address is the same with a query, likewise). Every other address gets
+-- the page for 'Unknown'.
 prerenderedRoutes :: MemState -> [Route]
 prerenderedRoutes st =
   Home
@@ -132,9 +134,9 @@ data Start = Build | Adopt
 
 -- | Start the application at a route in a container, over a wiki in this
 -- state, under this base path, and wait until it has loaded what the route
--- shows and its HTML has stopped changing. What the page says about itself
--- then (its title among it), and how to dispose of the application, which
--- takes its HTML out of the container again.
+-- shows and its HTML has stopped changing. The result is what the page
+-- then says about itself (its title included), and an action that
+-- disposes of the application, taking its HTML out of the container.
 startRoute :: Start -> MemState -> Text -> Route -> N.NativeNode -> IO (Head, IO ())
 startRoute how wiki base at container = do
   ref <- newMemWiki wiki
@@ -142,8 +144,8 @@ startRoute how wiki base at container = do
       run = runMemDOM . runMemWiki ref
   first (fromMaybe (untitled "Wiki")) <$> startApp True slowly how run input base at container
 
--- | The application for a wiki a server keeps, under this base path, as it
--- shows before anything has been loaded: what the server's build serves at
+-- | The application for a wiki on a server, under this base path, as it
+-- looks before anything has loaded: what the server's build serves at
 -- every address.
 renderLoading :: Text -> IO Rendered
 renderLoading base = do
@@ -152,17 +154,17 @@ renderLoading base = do
   html <- markup container `finally` dispose
   pure Rendered {html, title = "Wiki", meta = untitled "Wiki"}
 
--- | Start the application for a wiki a server keeps at a route in a
--- container, under this base path, over a server that never answers, and
--- wait until its HTML has stopped changing; then how to dispose of it.
+-- | Start the application for a wiki on a server at a route in a
+-- container, under this base path, over a server that never responds, and
+-- wait until its HTML has stopped changing. The result disposes of it.
 startLoading :: Start -> Text -> Route -> N.NativeNode -> IO (IO ())
 startLoading how base at container = do
   env <- newHttpEnv silentTransport
   snd <$> startApp False slowly how (runMemDOM . runHttpWiki env) serverInput base at container
 
--- | A route's page as a server renders it: the application's HTML, the
--- document's title, and what the application read, which the page
--- carries for the program ("Wiki.App.Backend.Http.Preload").
+-- | A route's page as a server prerenders it: the application's HTML, the
+-- document's title, and the responses the application read, which the
+-- page carries for the program ("Wiki.App.Backend.Http.Preload").
 data Served = Served
   { html :: Text
   , title :: Text
@@ -170,14 +172,14 @@ data Served = Served
   , cache :: Cache
   }
 
--- | The application for a wiki a server keeps, at a route, under this
--- base path, over a transport that answers at once (the server's API in
--- its own process, as the request's principal): every view loads what it
--- shows in its initial state, as over the in-memory backend, which is how
--- the program renders it first from what the page carries. Whatever the
--- transport answers is rendered, a failure to reach the server included:
--- whether to send the page is the caller's to decide, by what the
--- transport answered.
+-- | Prerender the application for a wiki on a server, at a route, under
+-- this base path, over a transport that answers at once (the server's API
+-- in its own process, as the user who sent the request). Every view loads
+-- its data in its initial state, as over the in-memory backend, which is
+-- also how the program first renders from the data the page carries.
+-- Whatever the transport returns is rendered, including a failure to reach
+-- the server: the caller decides, from the transport's responses, whether
+-- to send the page.
 renderServed :: Transport -> Text -> Route -> IO Served
 renderServed transport base at = do
   env <- newImmediateHttpEnv transport
@@ -187,22 +189,22 @@ renderServed transport base at = do
   cache <- cacheOf env
   pure Served {html, title = meta.title, meta, cache}
 
--- | Start the application for a wiki a server keeps at a route in a
--- container, over this backend, under this base path, and wait until it
--- has loaded what the route shows (from what the backend has read, or by
--- asking a transport that answers at once) and its HTML has stopped
--- changing. What the page says about itself then, and how to dispose of
--- it.
+-- | Start the application for a wiki on a server at a route in a
+-- container, over this backend, under this base path. Wait until it has
+-- loaded what the route shows (from the backend's cache, or from a
+-- transport that answers at once) and its HTML has stopped changing. The
+-- result is what the page then says about itself, and an action that
+-- disposes of it.
 startServed :: Start -> HttpEnv -> Text -> Route -> N.NativeNode -> IO (Head, IO ())
 startServed how env base at container =
   first (fromMaybe (untitled "Wiki")) <$> startApp True briskly how (runMemDOM . runHttpWiki env) serverInput base at container
 
--- | Start the application in a container, over a backend run as given, with
--- the shell's input for its router, at a route under a base path; wait,
--- if asked, until the shell has loaded what the route shows, and then
--- until its HTML has stopped changing, looking again every so many
--- microseconds. What the page says about itself, if waited for, and how to
--- dispose of the application.
+-- | Start the application in a container, over a backend run as given,
+-- with the shell's input for its router, at a route under a base path. If
+-- asked, wait until the shell has loaded what the route shows, and then
+-- until its HTML has stopped changing, checking every so many
+-- microseconds. The result is what the page says about itself, if waited
+-- for, and an action that disposes of the application.
 startApp
   :: forall m
    . (MonadLoad m, MonadAdmin m, MonadComments m, MonadNotifications m, MonadSecurity m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadBrowserDOM m, MonadUnliftIO m)
@@ -235,7 +237,7 @@ markup :: N.NativeNode -> IO Text
 markup container = mconcat <$> (traverse N.renderToText =<< N.childNodes container)
 
 -- | A page with a @\<base href>@ first in its head, before anything it
--- applies to: the template's, which has none.
+-- applies to (the template has none).
 withBase :: Text -> Text -> Text
 withBase base = T.replace "<head>" ("<head>\n    <base href=\"" <> escapeHtml base <> "\">")
 
@@ -243,32 +245,34 @@ withBase base = T.replace "<head>" ("<head>\n    <base href=\"" <> escapeHtml ba
 withTitle :: Text -> Text -> Text
 withTitle title = T.replace "<title>Wiki</title>" ("<title>" <> escapeHtml title <> "</title>")
 
--- | A page titled for its route, with what else it says about itself
--- ('headTags') after the title, for a writer that knows this of where it
--- is.
+-- | A page titled for its route, with the other tags about it
+-- ('headTags') after the title, for a writer that knows where the page is
+-- served.
 withHead :: Site -> Head -> Text -> Text
 withHead site h = T.replace "<title>Wiki</title>" ("<title>" <> escapeHtml h.title <> "</title>" <> headTags site h)
 
--- | How often the prerender looks, in microseconds: it writes its pages
--- once, so it can afford to look slowly.
+-- | How often the prerender checks the HTML, in microseconds: it writes
+-- its pages once, so it can afford to check slowly.
 slowly :: Int
 slowly = 10_000
 
--- | How often a server's render looks: a reader is waiting for the page,
--- and over a transport that answers at once everything is there by the
--- first look, so this is about the time the render waits in vain.
+-- | How often a server's prerender checks the HTML: a reader is waiting
+-- for the page, and over a transport that answers at once everything is
+-- there by the first check, so this is roughly the time the render waits
+-- for nothing.
 briskly :: Int
 briskly = 1_000
 
--- | Ask until the answer is there, every so many microseconds; ten seconds
--- is far longer than a render takes, and longer means something is wrong.
+-- | Check until the result is there, every so many microseconds. Ten
+-- seconds is far longer than a render takes; taking longer means
+-- something is wrong.
 settled :: Int -> IO (Maybe a) -> IO a
 settled pace asking = go (10_000_000 `div` pace)
   where
     go 0 = panic "Wiki.App.Static: the shell did not finish loading"
     go n = asking >>= maybe (threadDelay pace >> go (n - 1)) pure
 
--- | The HTML once two looks at it, so many microseconds apart, find it the
+-- | The HTML, once two checks so many microseconds apart find it the
 -- same.
 stable :: Int -> IO Text -> IO Text
 stable pace snapshot = snapshot >>= go (2_000_000 `div` pace)

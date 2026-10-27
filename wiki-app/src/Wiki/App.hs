@@ -1,8 +1,8 @@
 -- | The wiki's application: the shell ("Wiki.App.Shell") and its views,
--- polymorphic in the monad like every component here, so that the same
--- application runs in the browser (@Main.hs@ picks the in-memory backend
--- over 'Halogen.VDom.DOM.Monad.BrowserDOM') and is rendered natively into
--- the page for each route ahead of the program (@Prerender.hs@, through
+-- polymorphic in the monad like every component here. So the same
+-- application runs in the browser (@Main.hs@ picks the backend over
+-- 'Halogen.VDom.DOM.Monad.BrowserDOM') and is prerendered natively for
+-- each route before the program loads (@Prerender.hs@, through
 -- "Wiki.App.Static").
 module Wiki.App
   ( component
@@ -39,11 +39,11 @@ import Wiki.Core.Export (writeArchive)
 input :: (MonadDemoUsers m) => Router Route -> Shell.Input m
 input router = Shell.Input {router, welcome = Just (uncurry Page tourPath), demo = Just demoControls, migration = Nothing, accounts = Nothing, live = Nothing}
 
--- | The shell's input for a wiki a server keeps: the router, and the
--- import into the server, which offers the wiki the demo left in this
--- browser ('demoDatabase') as a source. The server's wiki is its owner's,
--- with no tour in it, and people sign in to it rather than switch
--- ("Wiki.App.Account"), and comments are heard of live ("Wiki.App.Live").
+-- | The shell's input for a wiki on a server: the router, and the import
+-- into the server, which offers the wiki the demo left in this browser
+-- ('demoDatabase') as a source. The server's wiki is its owner's, with no
+-- tour in it. People sign in to it rather than switch users
+-- ("Wiki.App.Account"), and comments arrive live ("Wiki.App.Live").
 serverInput :: (MonadIndexedDB m, MonadUnliftIO m) => Router Route -> Shell.Input (HttpWiki m)
 serverInput = serverInputWith demoDatabase
 

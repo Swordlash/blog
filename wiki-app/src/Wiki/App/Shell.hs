@@ -1,100 +1,103 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | The application's frame, around whatever the route shows: a header with
--- the site's name, breadcrumbs, the search box ("Wiki.App.View.Search"), a
--- link to the administration for an administrator, and the demo's user
--- switcher; a sidebar; the content of the route; and a footer saying what
--- the wiki is built with.
+-- | The shell: the application's frame around whatever the route shows.
+-- It has a header with the site's name, breadcrumbs, the search box
+-- ("Wiki.App.View.Search"), a link to the administration for an
+-- administrator, and the demo's user switcher; a sidebar; the content of
+-- the route; and a footer saying what the wiki is built with.
 --
 -- The front page is the directory of spaces ("Wiki.App.View.Directory").
 -- Inside a space (any route under @\/s\/\<space>@) the sidebar shows that
 -- space alone, as Confluence does: its icon and name, a link back to the
--- directory and a menu of the other spaces to switch to, the way up to the
--- space it is a subspace of, its home page and its list of pages, its
--- pages as a tree, its templates ('Wiki.Core.Page.template') apart from
--- the tree, and its subspaces below them. Elsewhere it lists the
--- spaces. A space's own route shows its home page, if it has one
--- ('Wiki.Core.Space.homePage'), and otherwise its list of pages; a space
+-- directory and a menu of the other spaces to switch to, a link up to its
+-- parent space, its home page and its list of pages, its pages as a tree,
+-- its templates ('Wiki.Core.Page.template') apart from the tree, and its
+-- subspaces below them. Elsewhere the sidebar lists the spaces. A space's
+-- own route shows its home page, if it has one
+-- ('Wiki.Core.Space.homePage'), and otherwise its list of pages. A space
 -- shown as a blog shows its posts instead, under its home page
--- ("Wiki.App.View.Blog"); every space shown is remembered as recently
+-- ("Wiki.App.View.Blog"). Every space shown is recorded as recently
 -- visited ("Wiki.App.Recent").
 --
--- The shell holds what every view needs and loads it itself: who is signed
--- in, the tree of spaces, and the space the route is in with its pages
--- (through 'getSpace' and 'listPages', so that a space the user may not see
--- is refused in place). The views are child components ("Wiki.App.View.*"):
--- a space, a page, a page's source, its history and its slides, the forms
--- for a new space and a new page, the editor. They are handed that context,
--- and they tell the shell when they have changed the wiki ('Changed'), which
--- it then reloads, counting up the context's revision so that they reload
--- what they hold as well, and goes where the change leads.
+-- The shell holds, and loads itself, the context every view needs: who is
+-- signed in, the tree of spaces, and the space the route is in with its
+-- pages. It loads the space through 'getSpace' and 'listPages', so that a
+-- space the user may not see is refused in place. The views are child
+-- components ("Wiki.App.View.*"): a space, a page, a page's source, its
+-- history and its slides, the forms for a new space and a new page, and
+-- the editor. They get that context, and tell the shell when they have
+-- changed the wiki ('Changed'). The shell then reloads the context,
+-- increments its revision so that the views reload their own data too,
+-- and navigates to where the change leads.
 --
--- The administration page ('Admin') is the shell's own rather than a view's:
--- what its first section does (export, import, reset) acts on the whole wiki
--- and on how the demo keeps it, which the shell holds and reloads after, so
--- those controls and their state stay here and the page is only where they
--- are shown. It is laid out as a heading per section, the wiki's data the
--- first; the sections on the wiki's people (its users and groups) follow,
--- a view of their own ("Wiki.App.View.Admin").
+-- The administration page ('Admin') belongs to the shell rather than to a
+-- view. Its first section (export, import, reset) acts on the whole wiki
+-- and on how the demo saves it, which the shell holds and reloads
+-- afterwards. So those controls and their state stay here, and the page
+-- only shows them. The page has a heading per section, the wiki's data
+-- first. The sections on the wiki's users and groups follow, in a view of
+-- their own ("Wiki.App.View.Admin").
 --
--- Over a backend that answers at once (the demo's), the shell loads all of
--- that with its initial state, so that its first render is the page the
--- prerender shows. Over one that would wait (the server's), it starts with
--- what that backend has kept, if anything, and otherwise with the frame
--- alone, the same at every address (no breadcrumbs, no spaces, "Loading…"),
--- which is what the server's pages are prerendered as, and loads the rest
--- in its initializer ("Loading" in "Wiki.App.Backend"). What could not be
--- loaded because the server could not be reached says so, with a button
--- to try again.
+-- When the backend answers at once (the demo's in-memory backend), the
+-- shell loads all of that in its initial state, so that its first render
+-- is the page the prerender shows. When the backend would wait (the HTTP
+-- backend), the shell starts with what that backend has cached, if
+-- anything. Otherwise it starts with the bare frame, the same at every
+-- address (no breadcrumbs, no spaces, "Loading…"), which is how the
+-- server's pages are prerendered, and loads the rest in its initializer
+-- (see "Loading" in "Wiki.App.Backend"). Anything that could not be loaded
+-- because the server could not be reached says so, with a button to try
+-- again.
 --
 -- The demo's controls (its users to switch between, and its content to
--- reset, export and import) come with the input ('Demo'), over the
--- backend that has them; without them the header says who is signed in,
--- with the way to sign in or out over a backend where people do
--- ('Accounts', "Wiki.App.View.SignIn"), after which, or after a session
--- ends by itself, the shell reloads everything as the new reader;
--- and the administration's section on the wiki's data offers the
--- server's export and, over a backend that merges an archive into what it
--- has, the import ("Wiki.App.View.Import"), which brings the demo's pages
--- into the server.
+-- reset, export and import) come with the input ('Demo'), on the backend
+-- that has them. Without them, the header says who is signed in, with a
+-- way to sign in or out on a backend where people do ('Accounts',
+-- "Wiki.App.View.SignIn"). After someone signs in or out, or a session
+-- ends by itself, the shell reloads everything as the new user. Without
+-- the demo's controls, the administration's section on the wiki's data
+-- offers the server's export and, on a backend that merges an archive into
+-- its content, the import ("Wiki.App.View.Import"), which brings the
+-- demo's pages into the server.
 --
 -- A closed wiki ("Wiki.Core.Access") shows someone who has not signed in
--- the way to sign in and nothing else, at every route ('shutOut'): the
--- header with the wiki's name and "Sign in" (or the demo's switcher), and
--- a word on why, but for an invitation's page ('Invite'), which is for
--- them. Nothing else is read for them, so that the server, which renders
--- the same page, is never asked what it would refuse.
+-- only the way to sign in, at every route ('shutOut'): the header with the
+-- wiki's name and "Sign in" (or the demo's switcher), and a line saying
+-- why. The exception is an invitation's page ('Invite'), which is meant
+-- for them. Nothing else is read for them, so that the server, which
+-- prerenders the same page, is never asked for something it would refuse.
 --
--- Over a backend with a live channel ("Wiki.App.Live", the server's), the
--- shell asks it for the tab's feed once, and hands it to the page view,
--- which listens on it for its page's comments, who edits it and its saves,
--- and to the editor, which says on it that it edits its page; the socket is opened as the
--- first page is watched, and opened again as whoever is asking now after
--- signing in or out, or a session's ending by itself.
+-- On a backend with a live channel ("Wiki.App.Live", the HTTP backend's),
+-- the shell asks it for the tab's feed once, and hands the feed to the
+-- page view and to the editor. The page view listens on it for its page's
+-- comments, who is editing the page, and its saves. The editor announces
+-- on it that it is editing its page. The WebSocket is opened when the
+-- first page is watched, and opened again as the new user after signing in
+-- or out, or after a session ends by itself.
 --
--- The route is the router's ('Router.current' at the start, then
--- 'Router.changes'), so links, the back and forward buttons and a reload all
--- arrive at the same place.
+-- The route comes from the router ('Router.current' at the start, then
+-- 'Router.changes'), so links, the back and forward buttons and a reload
+-- all arrive at the same place.
 --
--- Over the server's backend, which needs the network, the shell listens for
--- the browser going offline and online ("Halogen.Query.Event.Window"'s
--- 'Window.online'): while it is offline a notice says that the wiki cannot
--- be reached, before any request has failed to say so, and once it is back
--- what the shell could not load for want of it is loaded again. The demo,
--- which keeps its wiki in the browser, has nothing to say about it.
--- A page the service worker served from what it kept, for want of a
--- network ("Wiki.App.Offline"), says so too, and since when: "You are
--- reading an offline copy from …", until the reader goes elsewhere. Where
--- the browser offers to install the wiki as an application, the header has
--- "Install".
+-- On the HTTP backend, which needs the network, the shell listens for the
+-- browser going offline and online ("Halogen.Query.Event.Window"'s
+-- 'Window.online'). While the browser is offline, a notice says that the
+-- wiki cannot be reached, before any request has failed. Once it is back
+-- online, whatever the shell could not load is loaded again. The demo
+-- keeps its wiki in the browser, so it shows no such notice. A page the
+-- service worker served from its offline copy, because there was no
+-- network ("Wiki.App.Offline"), says so too, with the copy's time: "You
+-- are reading an offline copy from …", until the reader navigates
+-- elsewhere. Where the browser offers to install the wiki as an
+-- application, the header has an "Install" button.
 --
--- The one route the shell does not simply follow is one away from an editor
--- with unsaved changes: it asks the editor ('Editor.IsDirty') and, if the
--- draft would be lost, asks the reader in place whether to leave. By then
--- the browser's address is the new route's already (a link was followed, or
--- the back button pressed), so staying goes back to the editor's entry of
--- the session history, by as many entries as lie between ('historyEntry'
--- numbers them), as the browser's buttons would.
+-- The one route change the shell does not simply follow is one away from
+-- an editor with unsaved changes. It asks the editor ('Editor.IsDirty')
+-- and, if the draft would be lost, asks the reader in place whether to
+-- leave. By then the browser's address is already the new route's (a link
+-- was followed, or the back button pressed). So staying goes back through
+-- the session history to the editor's entry, by as many entries as lie in
+-- between ('historyEntry' numbers them), as the browser's buttons would.
 module Wiki.App.Shell
   ( Input (..)
   , Query (..)
@@ -176,10 +179,10 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (blog, description, icon, id, name, pageOrder, parent), subspacesOf)
 import Wiki.Core.User (User (..))
 
--- | The router, a route the home page invites a newcomer to (the demo's
--- tour), if there is one, the demo's controls, over a backend that has
--- them, the import into a server, over one that has it, and signing in
--- and out, over one where people do.
+-- | The shell's input: the router; a route the home page invites a
+-- newcomer to (the demo's tour), if any; the demo's controls, on a backend
+-- that has them; the import into a server, on a backend that has it; and
+-- signing in and out, on a backend where people do.
 data Input m = Input
   { router :: Router Route
   , welcome :: Maybe Route
@@ -189,10 +192,10 @@ data Input m = Input
   , live :: Maybe (Live m)
   }
 
--- | Whether the shell has loaded everything the route shows; when it has,
--- what the page says about itself (its title, and for a public page what a
--- link preview shows, "Wiki.App.Head"). The prerender and the server wait
--- for this before they take the page's HTML.
+-- | Whether the shell has loaded everything the route shows, and once it
+-- has, what the page says about itself (its title, and for a public page
+-- what a link preview shows, "Wiki.App.Head"). The prerender and the
+-- server wait for this before they take the page's HTML.
 data Query a = Settled (Maybe Head -> a)
 
 type Slots =
@@ -231,8 +234,8 @@ data Here
   | SpaceFailed [Slug] WikiError
   | InSpace [Slug] Space [Page]
 
--- | Whether what every route shows (who is signed in, the tree of spaces)
--- has been loaded.
+-- | Whether the context every route shows (who is signed in, the tree of
+-- spaces) has been loaded.
 data World
   = WorldLoading
   | WorldFailed WikiError
@@ -247,14 +250,15 @@ data State m = State
   , accounts :: Maybe (Accounts m)
   , live :: Maybe (Live m)
   , feed :: Maybe Feed
-  -- ^ The tab's live channel, which 'live' gave.
+  -- ^ The tab's live channel, from 'live'.
   , world :: World
   , route :: Route
   , session :: Session
   , users :: [User]
   , spaces :: [Space]
   , icons :: Map SpaceId Text
-  -- ^ Where the images of the spaces pictured with one are fetched from.
+  -- ^ The URLs of the spaces' icon images, for spaces whose icon is an
+  -- image.
   , here :: Here
   , switcherOpen :: Bool
   -- ^ Whether the sidebar's menu of spaces to switch to is open.
@@ -268,38 +272,39 @@ data State m = State
   , panel :: Panel
   -- ^ What the administration's section on the wiki's data shows.
   , kept :: Bool
-  -- ^ Whether the demo's changes are kept in the browser ('demoKept').
+  -- ^ Whether the demo's changes are saved in the browser ('demoKept').
   , settled :: Bool
   , leaving :: Maybe Route
-  -- ^ A route followed away from an editor with unsaved changes, which the
-  -- reader is being asked about.
+  -- ^ A route followed away from an editor with unsaved changes, about
+  -- which the reader is being asked.
   , entry :: Int
-  -- ^ The number of the session history's entry for the route shown
+  -- ^ The number of the session history entry for the route shown
   -- ('historyEntry'), which staying in the editor goes back to.
   , offline :: Bool
-  -- ^ Whether the browser has said it went offline, and not yet that it is
-  -- back. It starts online, and is set when the shell starts if the
-  -- browser says it is offline or the page is an offline copy: a page the
-  -- service worker served offline was loaded without a network, and no
-  -- event says so.
+  -- ^ Whether the browser has said it went offline, and not yet that it
+  -- is back. It starts online. It is set when the shell starts if the
+  -- browser says it is offline, or if the page is an offline copy: a page
+  -- the service worker served offline was loaded without a network, and no
+  -- event reports that.
   , offlineCopy :: Maybe UTCTime
-  -- ^ When the page shown was kept, if the service worker served it
-  -- offline from what it kept; until the reader goes elsewhere.
+  -- ^ When the page shown was stored, if the service worker served it
+  -- offline from its stored copy; kept until the reader navigates
+  -- elsewhere.
   , installable :: Bool
   -- ^ Whether the browser offers to install the wiki.
   }
 
 -- | What the administration's section on the wiki's data shows.
 data Panel
-  = -- | What can be done with the demo's content, under what the last
-    -- export or import did, if anything.
+  = -- | What can be done with the demo's content, under the result of the
+    -- last export or import, if any.
     Actions (Maybe Told)
   | ConfirmingReset
-  | -- | An archive read and checked, from the file of this name, waiting to
-    -- replace the wiki.
+  | -- | An archive, read and checked, from the file of this name, waiting
+    -- for confirmation to replace the wiki.
     ConfirmingImport Text Archive
 
--- | What an export or an import did, or why it did nothing.
+-- | The result of an export or an import, or the reason it did nothing.
 data Told = Told
   { refused :: Bool
   , message :: Text
@@ -343,13 +348,13 @@ component =
       { -- Loaded here rather than in 'Initialize', so that the first render
         -- is the page as the prerender left it, after its initializers:
         -- that is the HTML 'Halogen.VDom.Driver.hydrateUI' adopts, and a
-        -- first render of the empty state would take it all apart, only for
+        -- first render of the empty state would tear it all down, only for
         -- the initializer to build it again.
-        -- Over a backend that would wait, it is loaded in 'Initialize'
-        -- instead, unless the backend has kept it.
+        -- On a backend that would wait, it is loaded in 'Initialize'
+        -- instead, unless the backend has it cached.
         initialState = \Input {router, welcome, demo, migration, accounts, live} -> do
           route <- Router.current router
-          -- The tab's channel, before any view is made: a page shown from
+          -- The tab's live channel, made before any view: a page shown from
           -- the first render watches its page from its own initializer,
           -- which runs before the shell's.
           feed <- traverse (\l -> l.liveFeed) live
@@ -421,15 +426,15 @@ component =
         </div>
       |]
 
-    -- Last in the frame, so that its coming and going moves nothing else
-    -- the frame holds; the stylesheet puts it in a corner of the window.
+    -- Last in the frame, so that showing or hiding it moves nothing else
+    -- in the frame; the stylesheet puts it in a corner of the window.
     offlineNotice :: H.ComponentHTML Action Slots m
     offlineNotice =
       [hh|<p class="offline-notice" role="alert">You are offline: the wiki cannot be reached until the connection is back.</p>|]
 
-    -- Above what the route shows, while it shows a page the service worker
-    -- kept: since when. The time is the reader's (an island, as every time
-    -- the wiki shows).
+    -- Above what the route shows, while it shows a page from the service
+    -- worker's offline copy: the copy's time. The time is shown in the
+    -- reader's time zone (an island, like every time the wiki shows).
     offlineCopyLine :: State m -> Maybe (H.ComponentHTML Action Slots m)
     offlineCopyLine st = case st.offlineCopy of
       Just at
@@ -503,15 +508,15 @@ component =
         -- Each crumb, and whether it is the last one: the route itself,
         -- which is not a link.
         marked cs = zipWith (\n (label, target) -> (label, target, n == length cs)) [1 :: Int ..] cs
-        -- The last crumb names the route shown; one on the way is a link,
-        -- unless the user may not go there.
+        -- The last crumb names the route shown. A crumb before it is a
+        -- link, unless the user may not go there.
         crumb label target final = case target of
           _ | final -> [hh|<span aria-current="page">{{ label }}</span>|]
           Just r -> [hh|<a {{ Router.linkProps st.router Followed r }}>{{ label }}</a>|]
           Nothing -> [hh|<span class="unviewable">{{ label }}</span>|]
 
-    -- The way to the administration, for someone who may administer the
-    -- wiki; nobody else is shown it.
+    -- The link to the administration, for someone who may administer the
+    -- wiki; nobody else sees it.
     adminLink :: State m -> Maybe (H.ComponentHTML Action Slots m)
     adminLink st =
       guard (isAdministrator st)
@@ -525,8 +530,8 @@ component =
           </a>
         |]
 
-    -- The browser's offer to install the wiki as an application, where it
-    -- makes one (WP4.17 of docs/PLAN.md), beside who is asking.
+    -- The button to install the wiki as an application, where the browser
+    -- offers it (WP4.17 of docs/PLAN.md), beside the user's name.
     installButton :: State m -> Maybe (H.ComponentHTML Action Slots m)
     installButton st =
       guard st.installable
@@ -540,7 +545,7 @@ component =
         $> HH.slot_ "bell" () BellView.component BellView.Input {context = context st, feed = st.feed}
 
     -- Who is signed in: the demo's menu to switch between its users, or,
-    -- where people do not switch, their name, once it is known, with the
+    -- where people do not switch, their name, once it is known, with a
     -- way to sign in or out where people do.
     whoIsAsking :: State m -> Maybe (H.ComponentHTML Action Slots m)
     whoIsAsking st = case st.demo of
@@ -601,8 +606,9 @@ component =
         </div>
       |]
 
-    -- The administration of the wiki, for someone who may administer it;
-    -- anyone else is told whom it is for, and how to become one in the demo.
+    -- The administration of the wiki, for someone who may administer it.
+    -- Anyone else is told whom it is for, and in the demo how to become
+    -- one.
     admin :: State m -> H.ComponentHTML Action Slots m
     admin st
       | isAdministrator st =
@@ -648,9 +654,9 @@ component =
     dataControls st = maybe (serverControls st) (const (demoControls st)) st.demo
 
     -- The server's content as a whole: its export, which the browser
-    -- downloads as the file the server names, and the import, which merges
-    -- another wiki's pages into it, from an export or from the demo's data
-    -- in this browser.
+    -- downloads under the file name the server gives, and the import, which
+    -- merges another wiki's pages into it, from an export or from the
+    -- demo's data in this browser.
     serverControls :: State m -> H.ComponentHTML Action Slots m
     serverControls st =
       [hh|
@@ -664,8 +670,9 @@ component =
       where
         importer migration = HH.slot "importer" () ImportView.component ImportView.Input {migration} FromView
 
-    -- The demo's content as a whole: whether it is kept, exporting it,
-    -- importing one, and resetting it, the last two asking first, in place.
+    -- The demo's content as a whole: whether it is saved, exporting it,
+    -- importing one, and resetting it; the last two ask for confirmation
+    -- first, in place.
     demoControls :: State m -> H.ComponentHTML Action Slots m
     demoControls st = case st.panel of
       ConfirmingReset ->
@@ -727,7 +734,7 @@ component =
         </nav>
       |]
 
-    -- A space in a list of them, with its icon: a link to it, unless the
+    -- A space in a list of spaces, with its icon: a link to it, unless the
     -- user may not view it.
     spaceEntry :: State m -> Space -> H.ComponentHTML Action Slots m
     spaceEntry st x
@@ -736,7 +743,7 @@ component =
       | otherwise =
           [hh|<span class="space-link unviewable" title="You can see only a subspace of this space">{{ spaceIcon st.icons x }}<span>{{ x.name }}</span></span>|]
 
-    -- The space the route is in, and nothing else of the wiki but the way
+    -- The space the route is in, and nothing else of the wiki except links
     -- to the rest of it.
     spaceSidebar :: State m -> Space -> [Page] -> H.ComponentHTML Action Slots m
     spaceSidebar st space pages =
@@ -820,8 +827,8 @@ component =
         -- The space this one is under, if the user may go there.
         above = space.parent >>= \p -> find (\x -> x.id == p && mayView ctx x.id) st.spaces
         -- The spaces to switch to: each space the user may view that is
-        -- under none they may, which are the top-level spaces but for
-        -- those they see only a subspace of.
+        -- under no space they may view. Those are the top-level spaces,
+        -- except where the user sees only a subspace.
         switchable = [x | x <- subspacesInTree, mayView ctx x.id, not (any (mayView ctx . (\a -> a.id)) (drop 1 (reverse (chainOf ctx x.id))))]
         subspacesInTree = concatMap (\r -> r : descendants r) (subspacesOf st.spaces Nothing)
         descendants x = concatMap (\c -> c : descendants c) (subspacesOf st.spaces (Just x.id))
@@ -858,11 +865,11 @@ component =
         LoadingSpace _ -> loading
         SpaceFailed _ e -> failureView e RetryHere
         InSpace _ space pages -> case st.route of
-          -- Entering a blog shows its posts, at the page of them asked for.
+          -- Entering a blog shows its posts, at the requested page of them.
           Space _ | space.blog -> blogView space pages 1
           Posts _ n | space.blog -> blogView space pages n
           -- Entering a space shows its home page, if it has one, at any
-          -- page of posts it is asked for.
+          -- requested page of posts.
           Space _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
           Posts _ _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
           Page _ path -> pageView space pages path
@@ -871,8 +878,8 @@ component =
             HH.slot "history" () HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
           PageSlides _ path slide ->
             HH.slot "slides" () SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide} FromView
-          -- One editor per page edited: another page's is a component of
-          -- its own, with a draft of its own.
+          -- One editor per page edited: another page's editor is a
+          -- separate component, with its own draft.
           EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path, feed = st.feed} FromView
           NewPage _ parent -> HH.slot "newPage" () NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
           _ -> HH.slot "space" () SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
@@ -915,13 +922,13 @@ component =
     handleAction = \case
       Initialize -> do
         -- Made in 'H.liftEffect', before anything here waits, so that the
-        -- browser is listened to from the moment the shell has started.
+        -- shell listens to the browser from the moment it has started.
         whenM (gets overNetwork) $ do
           connection <- H.liftEffect Window.online
           void $ H.subscribe (Online <$> connection)
-          -- A page the service worker served from what it kept was served
-          -- so because the wiki could not be reached, whatever the browser
-          -- says of its network.
+          -- A page the service worker served from its stored copy was served
+          -- that way because the wiki could not be reached, whatever the
+          -- browser says about its network.
           copy <- H.liftEffect offlineCopy
           online <- H.liftEffect browserOnline
           modify (\st -> st {offlineCopy = copy, offline = isJust copy || not online})
@@ -933,12 +940,12 @@ component =
         gets (\st -> st.accounts) >>= traverse_ (\a -> lift a.sessionChanges >>= void . H.subscribe . fmap SessionChanged)
         entry <- H.liftEffect historyEntry
         modify (\st -> st {entry})
-        -- The bars that stick under the header need its height; the
-        -- lists of a page's headings mark the section being read.
+        -- The bars that stick under the header need its height, and the
+        -- lists of a page's headings highlight the section being read.
         H.liftEffect keepHeights
         H.liftEffect keepContents
-        -- What the route shows was loaded with the initial state, unless
-        -- the backend would have waited for it.
+        -- What the route shows was loaded in the initial state, unless the
+        -- backend would have waited for it.
         gets (\st -> st.world) >>= \case
           WorldReady -> announce
           _ -> loadEverything
@@ -947,9 +954,9 @@ component =
         loadEverything
       RetryHere -> loadHere True
       Online False -> modify (\st -> st {offline = True})
-      -- Back online: what failed to load because the server could not be
-      -- reached is loaded again, as "Try again" would. A view's own load
-      -- that failed keeps its own button.
+      -- Back online: whatever failed to load because the server could not
+      -- be reached is loaded again, as "Try again" would. A view whose own
+      -- load failed keeps its own button.
       Online True -> do
         modify (\st -> st {offline = False})
         st <- get
@@ -960,7 +967,7 @@ component =
       InstallChanged -> do
         installable <- H.liftEffect installAvailable
         modify (\st -> st {installable})
-      -- The browser asks the reader; its offer is spent either way.
+      -- The browser asks the reader; its offer is used up either way.
       Install -> do
         void install
         handleAction InstallChanged
@@ -969,8 +976,8 @@ component =
         before <- gets (\st -> st.route)
         if r == before
           then -- The route shown, at an entry of its own: one the shell
-          -- pushed itself after a change ('reload'), or the editor's gone
-          -- back to after staying.
+          -- pushed itself after a change ('reload'), or the editor's entry,
+          -- gone back to after staying.
             modify (\st -> st {entry = now})
           else do
             dirty <- or <$> H.queryAll "editor" (Editor.IsDirty identity)
@@ -983,11 +990,12 @@ component =
       Stay -> do
         st <- get
         modify (\s -> s {leaving = Nothing})
-        -- The address is the one not followed. Going back to the editor's
-        -- entry leaves the history as the browser's buttons would, with
-        -- the route not followed ahead, where it was; the router announces
-        -- the route already shown. Without a number for that entry (there
-        -- is none natively) the editor's address replaces the other.
+        -- The address is that of the route not followed. Going back to the
+        -- editor's entry leaves the history as the browser's buttons
+        -- would, with the route not followed ahead of it; the router
+        -- announces the route already shown. Without a number for that
+        -- entry (there is none natively), the editor's address replaces
+        -- the other.
         now <- H.liftEffect historyEntry
         if st.entry /= now
           then H.liftEffect (historyGo (st.entry - now))
@@ -995,16 +1003,16 @@ component =
       Followed f -> gets (\st -> st.router) >>= (`Router.follow` f)
       ToggleSwitcher -> modify (\st -> st {switcherOpen = not st.switcherOpen})
       ToggleMenu -> modify (\st -> st {menuOpen = not st.menuOpen})
-      -- What was asked or told about the wiki's data was asked of, or told
-      -- to, the user one was.
+      -- The questions and results about the wiki's data were for the user
+      -- one was before switching, so they are cleared.
       SwitchTo user -> withDemo $ \demo -> do
         modify (\st -> st {menuOpen = False, demoAccountOpen = False, panel = Actions Nothing, settled = False})
         lift (demo.switchTo user)
         reload Nothing
       AskReset -> modify (\st -> st {panel = ConfirmingReset})
       CancelPanel -> modify (\st -> st {panel = Actions Nothing})
-      -- The route stays, the administration, and says what was done, since
-      -- nothing else there shows it.
+      -- The route stays on the administration, which says what was done,
+      -- since nothing else there shows it.
       ResetDemo -> withDemo $ \demo -> do
         modify (\st -> st {panel = Actions Nothing, settled = False})
         lift demo.resetDemo
@@ -1015,8 +1023,8 @@ component =
         let name = "wiki-" <> toS (formatTime defaultTimeLocale "%Y-%m-%d" archive.createdAt) <> ".zip"
         download name "application/zip" =<< zipFiles (writeArchive archive)
         report False ("Exported the wiki as " <> name <> ".")
-      -- The file is read and checked whole before anything is asked: what
-      -- cannot be imported is refused here, with the reason.
+      -- The file is read and checked in full before anything is asked:
+      -- what cannot be imported is refused here, with the reason.
       ImportChosen ev -> do
         picked <- H.liftEffect (chosenFiles ev >>= pickedFiles)
         for_ (head picked) $ \file -> do
@@ -1037,14 +1045,14 @@ component =
           _ -> pass
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
-      -- Someone signed in or out: everything again, as them.
+      -- Someone signed in or out: reload everything, as the new user.
       FromAccount (SignInView.AccountChanged s) -> do
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
         restartFeed
         reload Nothing
-      -- The session ended by itself (or changed elsewhere): everything
-      -- again, as whoever is asking now, and if that is nobody, the way to
-      -- sign in again, saying why.
+      -- The session ended by itself (or changed elsewhere): reload
+      -- everything as the current user, and if that is nobody, show the way
+      -- to sign in again, saying why.
       SessionChanged s -> do
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
         restartFeed
@@ -1052,26 +1060,26 @@ component =
         when (isNothing s.user) $
           H.tell "signIn" () (SignInView.Prompt "Your session has ended. Sign in again to go on.")
       OpenSignIn -> H.tell "signIn" () (SignInView.Prompt "Sign in with your login and password.")
-      -- An invitation made its account and signed its maker in: the wiki
-      -- as them, from its front page.
+      -- An invitation created its account and signed the new user in: the
+      -- wiki as them, from its front page.
       FromInvite (InviteView.Accepted s) -> do
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
         restartFeed
         reload (Just Home)
-      -- A password set with a reset's link: the way in, with it.
+      -- A password set through a reset link: the sign-in form, to use it.
       FromReset ResetView.SignInWanted -> H.tell "signIn" () (SignInView.Prompt "Sign in with your new password.")
       ToggleDemoAccount -> modify (\st -> st {demoAccountOpen = not st.demoAccountOpen, menuOpen = False})
 
-    -- The live channel, opened again as whoever is asking now.
+    -- Open the live channel again, as the current user.
     restartFeed :: H.HalogenM (State m) Action Slots output m ()
     restartFeed = gets (\st -> st.feed) >>= traverse_ (\f -> H.liftEffect (liftIO f.restart))
 
-    -- Something only the demo does, which nothing offers without it.
+    -- Run something only the demo has, which nothing offers without it.
     withDemo :: (Demo m -> H.HalogenM (State m) Action Slots output m ()) -> H.HalogenM (State m) Action Slots output m ()
     withDemo f = gets (\st -> st.demo) >>= traverse_ f
 
-    -- Everything the route shows, which the initial state could not have
-    -- at once.
+    -- Load everything the route shows, which the initial state could not
+    -- have without waiting.
     loadEverything :: H.HalogenM (State m) Action Slots output m ()
     loadEverything = do
       loadWorld
@@ -1085,12 +1093,12 @@ component =
 
     arrive :: Route -> Int -> H.HalogenM (State m) Action Slots output m ()
     arrive r entry = do
-      -- What was asked or told about the wiki's data is not shown again on
-      -- coming back to the administration.
+      -- The questions and results about the wiki's data are not shown
+      -- again on coming back to the administration.
       modify (\st -> st {route = r, settled = False, menuOpen = False, switcherOpen = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
       loadHere False
 
-    -- After a change: everything again, and every view's own data too.
+    -- After a change: reload everything, and every view's own data too.
     reload :: Maybe Route -> H.HalogenM (State m) Action Slots output m ()
     reload next = do
       loadWorld
@@ -1098,12 +1106,13 @@ component =
       for_ next $ \r -> modify (\st -> st {route = r, settled = False, leaving = Nothing})
       loadHere True
       -- The router is told last, so that the route it announces is the one
-      -- already shown, which 'Arrived' leaves alone.
+      -- already shown, which 'Arrived' ignores.
       router <- gets (\st -> st.router)
       for_ next (Router.navigate router)
 
-    -- Who is signed in and the tree of spaces, on a worker. If they cannot
-    -- be loaded, the route's content is why, with a button to try again.
+    -- Load who is signed in and the tree of spaces, on a worker thread. If
+    -- they cannot be loaded, the route's content says why, with a button
+    -- to try again.
     loadWorld :: H.HalogenM (State m) Action Slots output m ()
     loadWorld = do
       demo <- gets (\st -> st.demo)
@@ -1111,8 +1120,8 @@ component =
         Right w -> modify (\st -> st {session = w.asking, users = w.users, spaces = w.spaces, icons = w.icons, kept = w.kept, world = WorldReady})
         Left e -> modify (\st -> st {world = WorldFailed e})
 
-    -- The space the route is in, unless it is the one loaded already
-    -- (or even so, if forced).
+    -- Load the space the route is in, unless it is the one loaded already
+    -- (or even then, if forced).
     loadHere :: Bool -> H.HalogenM (State m) Action Slots output m ()
     loadHere again = do
       st <- get
@@ -1122,24 +1131,25 @@ component =
         Just path
           | not again, hereIs path st.here -> pass
           | otherwise -> do
-              -- Reloading the space being shown keeps it on screen meanwhile.
+              -- Reloading the space being shown keeps it on screen
+              -- meanwhile.
               unless (hereIs path st.here) $ modify (\s -> s {here = LoadingSpace path})
               result <- fetchHere path
-              -- Unless the route has moved on to another space meanwhile.
+              -- Unless the route has moved to another space meanwhile.
               now <- gets (\s -> s.route)
               when (spaceOfRoute now == Just path) $
                 modify (\s -> s {here = result})
       announce
 
-    -- Title the document for what is shown, and say whether that is all of
-    -- it. A page's view, or the editor, says when it has loaded the page,
-    -- and the results of a search when they have come; everything else is
-    -- loaded by now.
+    -- Set the document's title for what is shown, and say whether all of
+    -- it has loaded. A page's view, or the editor, says when it has loaded
+    -- the page, and the search results when they have arrived; everything
+    -- else is loaded by now.
     announce :: H.HalogenM (State m) Action Slots output m ()
     announce = do
       st <- get
       H.liftEffect (setDocumentTitle (documentTitle st))
-      -- A space shown is one visited, for the directory to offer again.
+      -- A space shown counts as visited, for the directory to offer again.
       case st.here of
         InSpace _ space _ -> H.liftEffect (rememberVisit space.id)
         _ -> pass
@@ -1153,9 +1163,9 @@ component =
       st <- get
       pure (Just (reply (if st.settled then Just (headOf st) else Nothing)))
 
--- | What every route shows around it: who is signed in, who else one may
--- be in the demo, the tree of spaces, where the images of those pictured
--- with one are, and whether the demo keeps its changes.
+-- | The context every route shows: who is signed in, who else one may be
+-- in the demo, the tree of spaces, the URLs of the spaces' icon images,
+-- and whether the demo saves its changes.
 data Around = Around
   { asking :: Session
   , users :: [User]
@@ -1164,10 +1174,10 @@ data Around = Around
   , kept :: Bool
   }
 
--- | 'Around', read.
+-- | Load 'Around'.
 --
--- A closed wiki has no spaces to show someone who has not signed in, and
--- they are not asked for.
+-- A closed wiki has no spaces to show someone who has not signed in, so
+-- they are not requested.
 fetchWorld :: (MonadWiki n) => Maybe (Demo n) -> n Around
 fetchWorld demo = do
   asking <- session
@@ -1188,21 +1198,21 @@ fetchHere path =
           pure (InSpace path space pages)
       )
 
--- | Whether the wiki is reached over the network: over the server's
--- backend, which is the one people sign in to, and not the demo's, which
--- keeps its wiki in the browser.
+-- | Whether the wiki is reached over the network: true on the HTTP
+-- backend, which is the one people sign in to, and false on the demo's,
+-- which keeps its wiki in the browser.
 overNetwork :: State m -> Bool
 overNetwork st = isJust st.accounts
 
--- | Whether what the shell shows is the closed wiki's frame: the wiki is
--- closed to whoever is asking, and the route is not a mailed link's.
+-- | Whether the shell shows the closed wiki's frame: the wiki is closed to
+-- the current user, and the route is not the page of a mailed link.
 isShut :: State m -> Bool
 isShut st = st.world == WorldReady && shutOut st.session && not (isMailedLink st.route)
 
 -- | Whether a route is the page of a link mailed to someone who may not be
--- able to sign in yet: an invitation's, a password reset's, an address's
--- verification, a notification mail's unsubscribe. A closed wiki shows them
--- all the same.
+-- able to sign in yet: an invitation, a password reset, an address
+-- verification, or a notification mail's unsubscribe link. A closed wiki
+-- shows them all the same.
 isMailedLink :: Route -> Bool
 isMailedLink = \case
   Invite _ -> True
@@ -1211,8 +1221,8 @@ isMailedLink = \case
   Unsubscribe _ -> True
   _ -> False
 
--- | Whether the user may administer the wiki as a whole: who is shown the
--- administration.
+-- | Whether the user may administer the wiki as a whole, and so is shown
+-- the administration.
 isAdministrator :: State m -> Bool
 isAdministrator st = hasGlobalPermission (principalOf ctx) (grantsOf ctx) Administer
   where
@@ -1243,7 +1253,7 @@ hereIs path = \case
 
 waitsForPage :: State m -> Bool
 waitsForPage st = case (st.route, st.here) of
-  -- The closed frame shows no view that could say it has loaded.
+  -- The closed frame shows no view that could report having loaded.
   _ | isShut st -> False
   -- The directory says when it has counted the spaces' pages.
   (Home, _) -> st.world == WorldReady
@@ -1278,7 +1288,7 @@ currentPage st = case (st.route, st.here) of
 trail :: State m -> [(Text, Maybe Route)]
 trail st = [("Spaces", Just Home) | isJust (spaceOfRoute st.route), st.world == WorldReady, not (isShut st)] <> crumbs st
 
--- | What the route is, as far as it has been loaded: a title for it.
+-- | The title for the route, as far as it has been loaded.
 crumbs :: State m -> [(Text, Maybe Route)]
 crumbs st = case st.route of
   -- The same at every address until there is something to name.
@@ -1325,18 +1335,18 @@ crumbs st = case st.route of
 
 documentTitle :: State m -> Text
 documentTitle st = case reverse (map fst (crumbs st)) of
-  -- A space that cannot be shown has no name to show either: what is in
-  -- its place says why.
+  -- A space that cannot be shown has no name to show either: the content
+  -- in its place says why.
   [] -> case st.here of
     SpaceFailed _ Forbidden -> "Private · Wiki"
     SpaceFailed _ NotFound -> "Not found · Wiki"
     _ -> "Wiki"
   names -> mconcat (intersperse " · " (take 2 names)) <> " · Wiki"
 
--- | What the page says about itself: its title, and for a public page in a
--- space (the space's own route, a page of its posts, or a page) what a
--- link preview shows, and on every page of a public blog where its feeds
--- are ("Wiki.App.Head").
+-- | What the page says about itself ("Wiki.App.Head"): its title; for a
+-- public page in a space (the space's own route, a page of its posts, or a
+-- page), what a link preview shows; and on every page of a public blog,
+-- where its feeds are.
 headOf :: State m -> Head
 headOf st = Head {title = documentTitle st, preview, feeds}
   where
@@ -1359,9 +1369,10 @@ headOf st = Head {title = documentTitle st, preview, feeds}
         , Just p <- currentPageOf pages pagePath ->
             Just (ofPage space p (href (Page path pagePath)))
       _ -> Nothing
-    -- A space's own route: a blog, or a space without a home page, by its
-    -- description; a space that opens at its home page, as that page but
-    -- at the space's address, by its description first.
+    -- A space's own route: a blog, or a space without a home page, is
+    -- described by its description; a space that opens at its home page is
+    -- described as that page, at the space's address, its description
+    -- first.
     ofSpace path space pages = case homeOf space pages of
       Just home
         | not space.blog ->
@@ -1399,7 +1410,7 @@ headOf st = Head {title = documentTitle st, preview, feeds}
       Just (IconImage _ _) -> Just (SpaceImage space)
       _ -> Nothing
 
--- | How much an archive holds, for a person to read.
+-- | How much an archive holds, in words for a person to read.
 archiveSummary :: Archive -> Text
 archiveSummary a =
   T.intercalate

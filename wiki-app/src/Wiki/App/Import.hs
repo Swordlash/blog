@@ -1,19 +1,19 @@
--- | What the dialog "What to migrate" works with, as pure data: the plan a
--- server answered an import's preview with ("Wiki.Api.Import") as a tree
--- of spaces and pages, what has been checked and unchecked in it, and the
--- choices that the dialog's state sends with the import.
+-- | The data of the "What to migrate" dialog, as pure data: the plan with
+-- which a server answered an import's preview ("Wiki.Api.Import"), as a
+-- tree of spaces and pages; which boxes are checked and unchecked in it;
+-- and the choices the dialog sends with the import.
 --
 -- The plan is a list, each space before its subspaces and each page before
--- the pages under it, matched by path; the dialog shows it as the tree the
+-- the pages under it, matched by path. The dialog shows it as the tree the
 -- paths make ('planTree'). Everything starts checked, and every conflict
 -- keeps the server's page ('everything'), which sends 'importEverything'.
 --
--- A box unchecked leaves out what it stands for and everything under it, as
--- the server does with a skipped space or page: so a space unchecked shows
--- its pages and subspaces unchecked too, and they cannot be checked while
--- it is not ('Mark'). What was unchecked under it is remembered: checking
--- the space again brings back the boxes as they were, rather than checking
--- everything under it.
+-- An unchecked box leaves out what it stands for and everything under it,
+-- as the server does with a skipped space or page. So an unchecked space
+-- shows its pages and subspaces unchecked too, and they cannot be checked
+-- while it is unchecked ('Mark'). The boxes unchecked under it are
+-- remembered: checking the space again restores them as they were, rather
+-- than checking everything under it.
 module Wiki.App.Import
   ( -- * The plan as a tree
     SpaceNode (..)
@@ -64,16 +64,17 @@ data SpaceNode = SpaceNode
 -- | One of a space's pages, with the pages under it.
 data PageNode = PageNode
   { space :: [Slug]
-  -- ^ The path of its space, which with its own path names it ('ref').
+  -- ^ The path of its space, which together with its own path identifies
+  -- it ('ref').
   , plan :: PagePlan
   , children :: [PageNode]
   }
   deriving stock (Eq, Show)
 
 -- | The plan's spaces as the tree their paths make, in the plan's order. A
--- space whose parent is not in the plan (which a server does not answer,
--- since an archive holds the parents of its spaces) is shown at the top,
--- rather than not at all.
+-- space whose parent is not in the plan (which a server never returns,
+-- since an archive holds the parents of its spaces) is shown at the top
+-- level, rather than not at all.
 planTree :: ImportPlan -> [SpaceNode]
 planTree p = map spaceNode (roots (\s -> s.path) p.spaces)
   where
@@ -86,8 +87,8 @@ planTree p = map spaceNode (roots (\s -> s.path) p.spaces)
     pageNode space siblings x =
       PageNode {space, plan = x, children = map (pageNode space siblings) (childrenIn (\y -> y.path) x.path siblings)}
 
--- | The items whose parent (their path but its last slug) is not among
--- them.
+-- | The items whose parent (their path without its last slug) is not
+-- among them.
 roots :: (a -> [Slug]) -> [a] -> [a]
 roots pathOf xs = [x | x <- xs, initMay (pathOf x) `notElem` map (Just . pathOf) xs]
 
@@ -95,7 +96,7 @@ roots pathOf xs = [x | x <- xs, initMay (pathOf x) `notElem` map (Just . pathOf)
 childrenIn :: (a -> [Slug]) -> [Slug] -> [a] -> [a]
 childrenIn pathOf parent xs = [x | x <- xs, initMay (pathOf x) == Just parent]
 
--- | What has been unchecked, and which conflicts take the imported page.
+-- | Which boxes are unchecked, and which conflicts take the imported page.
 data Selection = Selection
   { skippedSpaces :: Set [Slug]
   , skippedPages :: Set PageRef
@@ -124,8 +125,8 @@ setResolution ref r sel = sel {taken = (if r == TakeImported then Set.insert els
 selectAll :: Selection -> Selection
 selectAll sel = sel {skippedSpaces = mempty, skippedPages = mempty}
 
--- | Every space's box unchecked, so that checking one brings in that
--- space alone, with its pages as they were checked; the conflicts stay as
+-- | Uncheck every space's box, so that checking one brings in that space
+-- alone, with its pages checked as they were. The conflicts stay as
 -- chosen.
 selectNone :: ImportPlan -> Selection -> Selection
 selectNone p sel = sel {skippedSpaces = Set.fromList [s.path | s <- p.spaces]}
@@ -140,14 +141,14 @@ data Mark = Mark
   }
   deriving stock (Eq, Show)
 
--- | A space's box: unchecked, and fixed, under a space left out.
+-- | A space's box: unchecked, and disabled, under a space left out.
 spaceMark :: Selection -> [Slug] -> Mark
 spaceMark sel path
   | spaceAbove sel path = Mark {checked = False, enabled = False}
   | otherwise = Mark {checked = path `Set.notMember` sel.skippedSpaces, enabled = True}
 
--- | A page's box: unchecked, and fixed, in a space left out or under a page
--- left out.
+-- | A page's box: unchecked, and disabled, in a space left out or under a
+-- page left out.
 pageMark :: Selection -> PageRef -> Mark
 pageMark sel ref
   | spaceLeftOut sel ref.space || pageAbove sel ref = Mark {checked = False, enabled = False}
@@ -177,8 +178,8 @@ pageIncluded sel ref = (pageMark sel ref).checked
 properPrefixes :: [a] -> [[a]]
 properPrefixes path = [take n path | n <- [1 .. length path - 1]]
 
--- | The choices the dialog's state sends with the import, in the plan's
--- order: each box unchecked that is not under one unchecked already (the
+-- | The choices the dialog sends with the import, in the plan's order:
+-- each unchecked box that is not under an unchecked box already (the
 -- server leaves out what is under a skipped space or page by itself), and
 -- each conflict that takes the imported page, among those imported. The
 -- dialog as it opens sends 'importEverything'.
@@ -206,7 +207,7 @@ choicesOf p sel =
 pagesOf :: ImportPlan -> [(PageRef, PagePlan)]
 pagesOf p = [(PageRef {space = s.path, page = x.path}, x) | s <- p.spaces, x <- s.pages]
 
--- | How much of a plan is what.
+-- | How many items of a plan fall into each kind.
 data Tally = Tally
   { spacesNew :: Int
   , spacesMerged :: Int
@@ -217,7 +218,8 @@ data Tally = Tally
   }
   deriving stock (Eq, Show)
 
--- | How much of a plan, or of what a selection imports of it, is what.
+-- | How many items of a plan, or of what a selection imports of it, fall
+-- into each kind.
 tally :: ImportPlan -> Selection -> Tally
 tally p sel =
   Tally
@@ -231,12 +233,14 @@ tally p sel =
     spaces = [s | s <- p.spaces, not (spaceLeftOut sel s.path)]
     pages = [x | (ref, x) <- pagesOf p, pageIncluded sel ref]
 
--- | What a plan holds, for a person to read: "4 spaces (1 new, 3 already
--- here) and 12 pages (9 new, 2 in conflict, 1 the same on both sides)".
+-- | What a plan holds, in words for a person to read: "4 spaces (1 new, 3
+-- already here) and 12 pages (9 new, 2 in conflict, 1 the same on both
+-- sides)".
 planSummary :: ImportPlan -> Text
 planSummary p = described (tally p everything)
 
--- | What the selection imports, for a person to read before they apply it.
+-- | What the selection imports, in words for a person to read before they
+-- apply it.
 selectionSummary :: ImportPlan -> Selection -> Text
 selectionSummary p sel = case tally p sel of
   t | t.spacesNew + t.spacesMerged == 0 -> "Nothing is checked: the import would bring in nothing."
@@ -263,8 +267,8 @@ described t =
       [] -> ""
       xs -> " (" <> T.intercalate ", " xs <> ")"
 
--- | What an import did, for a person to read, a line for each kind of
--- thing it did.
+-- | What an import did, in words for a person to read, one line for each
+-- kind of change it made.
 importSummary :: ImportSummary -> [Text]
 importSummary s =
   filter
@@ -280,6 +284,6 @@ importSummary s =
   where
     line n singular plural = if n == 0 then "" else counted n singular plural
 
--- | A number of things, with the word for one or for more.
+-- | A number of things, with the singular or plural word.
 counted :: Int -> Text -> Text -> Text
 counted n singular plural = show n <> " " <> if n == 1 then singular else plural

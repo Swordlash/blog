@@ -1,14 +1,13 @@
--- | Keeping one's account safe (WP4.11 of docs/PLAN.md, "Wiki.Api.Security"):
--- the sessions one has, a second factor, and an e-mail address, which the
--- account panel shows ("Wiki.App.View.Security").
+-- | Account security (WP4.11 of docs/PLAN.md, "Wiki.Api.Security"):
+-- 'MonadSecurity' covers one's sessions, a second factor, and an e-mail
+-- address, which the account panel shows ("Wiki.App.View.Security").
 --
--- A capability of its own, apart from "Wiki.App.Account"'s signing in, so
--- that the demo has it too: the demo's one session (the browser it runs
--- in) is listed there as a server's sessions are, while a second factor
--- and mail, which only a server has, are said to be unavailable
--- ('securityAvailable') and shown disabled with a note, as the demo shows
--- the server's other features. The backend over HTTP asks the server
--- ("Wiki.App.Backend.Http").
+-- It is a separate capability from "Wiki.App.Account"'s signing in, so
+-- that the demo has it too. The demo lists its one session (the browser it
+-- runs in) as a server lists sessions. A second factor and mail, which
+-- only a server has, are reported as unavailable ('securityAvailable') and
+-- shown disabled with a note, as the demo shows the server's other
+-- features. The HTTP backend asks the server ("Wiki.App.Backend.Http").
 module Wiki.App.Security
   ( MonadSecurity (..)
   )
@@ -24,61 +23,64 @@ import Wiki.App.Account (SignInError (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Mem (MemWiki)
 
--- | One's own account's safety.
+-- | 'MonadSecurity': the security of one's own account.
 class (Monad m) => MonadSecurity m where
-  -- | Whether a second factor and mail are there at all: a server's, not
-  -- the demo's.
+  -- | Whether second factors and mail exist at all: on a server, not in
+  -- the demo.
   securityAvailable :: m Bool
   default securityAvailable :: (MonadTrans t, m ~ t n, MonadSecurity n) => m Bool
   securityAvailable = lift securityAvailable
 
-  -- | The sessions of the user signed in, this one marked.
+  -- | The signed-in user's sessions, with the current one marked.
   ownSessions :: m (Either WikiError [SessionSummary])
   default ownSessions :: (MonadTrans t, m ~ t n, MonadSecurity n) => m (Either WikiError [SessionSummary])
   ownSessions = lift ownSessions
 
-  -- | End one of their other sessions: their sessions then.
+  -- | End one of the user's other sessions. The result is their sessions
+  -- afterwards.
   endOwnSession :: SessionRef -> m (Either WikiError [SessionSummary])
   default endOwnSession :: (MonadTrans t, m ~ t n, MonadSecurity n) => SessionRef -> m (Either WikiError [SessionSummary])
   endOwnSession = lift . endOwnSession
 
-  -- | End every session of theirs but this one: their sessions then.
+  -- | End every session of the user's except this one. The result is
+  -- their sessions afterwards.
   endOtherSessions :: m (Either WikiError [SessionSummary])
   default endOtherSessions :: (MonadTrans t, m ~ t n, MonadSecurity n) => m (Either WikiError [SessionSummary])
   endOtherSessions = lift endOtherSessions
 
-  -- | Whether they have a second factor.
+  -- | Whether the user has a second factor.
   secondFactorState :: m (Either WikiError SecondFactorState)
   default secondFactorState :: (MonadTrans t, m ~ t n, MonadSecurity n) => m (Either WikiError SecondFactorState)
   secondFactorState = lift secondFactorState
 
-  -- | Begin one, with their current password where they have one: a secret
-  -- for their authenticator application. 'WrongCredentials' for a wrong
-  -- password.
+  -- | Start setting up a second factor, with the current password where
+  -- the user has one. The result is a secret for their authenticator
+  -- application. 'WrongCredentials' for a wrong password.
   enrolTotp :: Maybe Text -> m (Either SignInError TotpEnrolment)
   default enrolTotp :: (MonadTrans t, m ~ t n, MonadSecurity n) => Maybe Text -> m (Either SignInError TotpEnrolment)
   enrolTotp = lift . enrolTotp
 
-  -- | Turn it on with a code of the application's: the recovery codes,
-  -- this once. 'WrongCredentials' for a wrong code.
+  -- | Turn the second factor on with a code from the application. The
+  -- result is the recovery codes, shown this once. 'WrongCredentials' for
+  -- a wrong code.
   confirmTotp :: Text -> m (Either SignInError RecoveryCodes)
   default confirmTotp :: (MonadTrans t, m ~ t n, MonadSecurity n) => Text -> m (Either SignInError RecoveryCodes)
   confirmTotp = lift . confirmTotp
 
-  -- | Turn it off with a code or a recovery code. 'WrongCredentials' for a
-  -- wrong one.
+  -- | Turn the second factor off with a code or a recovery code.
+  -- 'WrongCredentials' for a wrong one.
   removeOwnSecondFactor :: Text -> m (Either SignInError SecondFactorState)
   default removeOwnSecondFactor :: (MonadTrans t, m ~ t n, MonadSecurity n) => Text -> m (Either SignInError SecondFactorState)
   removeOwnSecondFactor = lift . removeOwnSecondFactor
 
-  -- | Their e-mail address, whether it is verified, and whether mail is
-  -- sent at all.
+  -- | The user's e-mail address, whether it is verified, and whether the
+  -- wiki sends mail at all.
   ownEmail :: m (Either WikiError EmailState)
   default ownEmail :: (MonadTrans t, m ~ t n, MonadSecurity n) => m (Either WikiError EmailState)
   ownEmail = lift ownEmail
 
-  -- | Give an address (a link to verify it is mailed there), or none
-  -- (blank), with their current password where they have one and the
+  -- | Set an address (a verification link is mailed there), or none
+  -- (blank), with the current password where the user has one and the
   -- address changes. 'WrongCredentials' for a wrong password.
   setOwnEmail :: Text -> Maybe Text -> m (Either SignInError EmailState)
   default setOwnEmail :: (MonadTrans t, m ~ t n, MonadSecurity n) => Text -> Maybe Text -> m (Either SignInError EmailState)
@@ -87,9 +89,9 @@ class (Monad m) => MonadSecurity m where
 -- | A component's handlers ask through its monad.
 instance (MonadSecurity m) => MonadSecurity (HalogenM st act slots output m)
 
--- | The demo's: one session, the browser it runs in, which began when it
--- is asked about (the demo keeps no record of when it was opened) and
--- cannot be ended but by switching to nobody; no second factor and no mail.
+-- | The demo's instance: one session, the browser it runs in, which began
+-- when it is asked about (the demo records no time it was opened) and can
+-- be ended only by switching to nobody; no second factor and no mail.
 instance (MonadIO m) => MonadSecurity (MemWiki m) where
   securityAvailable = pure False
   ownSessions =
@@ -107,6 +109,6 @@ instance (MonadIO m) => MonadSecurity (MemWiki m) where
   ownEmail = pure (Right EmailState {email = Nothing, verified = False, mailing = False, mailError = Nothing, asksPassword = False})
   setOwnEmail _ _ = pure (Left (SignInFailed unavailable))
 
--- | What the demo says of what only a server does.
+-- | The demo's refusal for what only a server does.
 unavailable :: WikiError
 unavailable = Invalid "This demo has no server: a second factor and mail are a server's."

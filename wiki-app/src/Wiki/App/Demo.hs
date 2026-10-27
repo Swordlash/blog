@@ -1,26 +1,26 @@
--- | What the serverless demo starts with: a few people with different
+-- | The serverless demo's starting content: a few users with different
 -- permissions, and spaces whose pages show everything the wiki's Markdown
--- does.
+-- can do.
 --
 -- Who is who, and what each may do:
 --
 -- * @admin@ holds the global 'Administer': everything, everywhere.
 -- * @editor@ holds the global 'CreateSpaces', and edits the @Blog@ through
 --   the group @writers@.
--- * @reader@ may view @Team / Projects@ and nothing else that is private; it
---   shows the private @Team@ above it in the space tree, but not its pages.
+-- * @reader@ may view @Team / Projects@ and nothing else that is private.
+--   The space tree shows the private @Team@ above it, but not its pages.
 -- * Someone who is not signed in reads the public @Blog@ and @Docs@.
 --
--- The demo starts signed in as @admin@, so that a newcomer sees everything
--- it has at once; the tour says how to be someone else.
+-- The demo starts signed in as @admin@, so that a newcomer sees
+-- everything it has at once; the tour says how to switch to another user.
 --
 -- The spaces are a public @Blog@, a private @Team@ with a subspace
 -- @Team / Projects@, and a public @Docs@ whose @Tour@ page explains all of
--- this to whoever opens the demo; each has a description, an icon and a
--- home page, the page it opens at. The image and the video on the pages are
--- public-domain NASA media on Wikimedia Commons, linked by URL; the image
--- attached to two of the pages is a 32×32 PNG kept in the store as bytes, as
--- a file uploaded into the demo is.
+-- this to whoever opens the demo. Each has a description, an icon and a
+-- home page, the page it opens at. The image and the video on the pages
+-- are public-domain NASA media on Wikimedia Commons, linked by URL. The
+-- image attached to two of the pages is a 32×32 PNG stored as bytes, as a
+-- file uploaded into the demo is.
 module Wiki.App.Demo
   ( demoState
   , demoNow
@@ -47,21 +47,21 @@ import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), User (..))
 import Wiki.Core.Version (Author (..))
 
--- | A fixed time for the demo to be built at, for a program that has no clock
--- to ask (a prerender that has to come out the same every time) and for
--- tests.
+-- | A fixed time at which the demo is built, for a program that has no
+-- clock to ask (a prerender that must come out the same every time) and
+-- for tests.
 demoNow :: UTCTime
 demoNow = UTCTime (fromGregorian 2026 10 1) 43200
 
--- | Where the browser keeps the demo's wiki between visits: the IndexedDB
--- database @wiki-demo@ of the page's origin. IndexedDB is per origin, not per
--- path, and the demo on GitHub Pages shares @swordlash.github.io@ with
--- whatever else is published there (haskell-halogen's gallery among them),
--- so the name is one no other site of that origin would choose.
+-- | Where the browser saves the demo's wiki between visits: the IndexedDB
+-- database @wiki-demo@ of the page's origin. IndexedDB is per origin, not
+-- per path, and the demo on GitHub Pages shares @swordlash.github.io@ with
+-- whatever else is published there (haskell-halogen's gallery among
+-- them), so the name is one no other site on that origin would choose.
 demoDatabase :: Database
 demoDatabase = memDatabase "wiki-demo"
 
--- | The demo's wiki, as it is at the time given: the pages were written in
+-- | The demo's wiki as it is at the given time: the pages were written in
 -- the weeks before it. @admin@ is signed in.
 demoState :: UTCTime -> MemState
 demoState now = flip execState emptyState $ do
@@ -104,10 +104,10 @@ demoState now = flip execState emptyState $ do
   _ <- page docs (Just guide) "Mathematics" 3 mathematics
   _ <- page docs (Just guide) "Presentations" 2 presentations
 
-  -- Each space's profile: what the directory of spaces shows of it, and the
-  -- page it opens at. The blog is shown as one, and opens at its posts.
-  -- Projects keeps a colour, as a space whose administrator chose no emoji
-  -- does.
+  -- Each space's profile: what the directory of spaces shows of it, and
+  -- the page it opens at. The blog is shown as a blog, and opens at its
+  -- posts. Projects has a colour for its icon, as a space whose
+  -- administrator chose no emoji does.
   modify $
     setProfile blog SpaceProfile {description = "Posts about this wiki and about writing it in Haskell.", icon = Just (IconEmoji "✍️"), homePage = Nothing, blog = True}
       . setProfile team SpaceProfile {description = "How the team works: its handbook, who is on call, and its projects.", icon = Just (IconEmoji "🧭"), homePage = Just handbook, blog = False}
@@ -201,8 +201,8 @@ tourPath = (slugs ["docs"], slugs ["tour"])
   where
     slugs = map (either (panic . show) identity . mkSlug)
 
--- | The small diagram of a tree the demo attaches to pages: a 32×32 PNG, small
--- enough to be written here.
+-- | The small diagram of a tree the demo attaches to pages: a 32×32 PNG,
+-- small enough to be written here.
 treePng :: ByteString
 treePng =
   Base64.decodeLenient

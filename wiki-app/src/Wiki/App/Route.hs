@@ -1,9 +1,9 @@
--- | Where the application is: its routes, how each is written as an address,
--- and where a link written in a page leads.
+-- | The application's routes: what they are, how each is written as an
+-- address, and where a link written in a page leads.
 --
 -- Addresses are paths, under the base path the site is served from (a
 -- @\<base href>@, read by "Halogen.Router"'s 'Halogen.Router.pageBase'), so
--- that the server of Phase 2 can serve the very same addresses:
+-- that the server can serve exactly the same addresses:
 --
 -- > /                              Home
 -- > /s/team/projects/              Space [team, projects]
@@ -32,20 +32,20 @@
 -- > /unsubscribe/<secret>/         Unsubscribe (MailToken <secret>)
 -- > /assistant/                    AssistantSettings
 --
--- Every address but the home's ends in a slash, because each is a directory
--- with an @index.html@ in it on a static host (the prerender writes one per
--- route), and a static host redirects @\/s\/docs@ to @\/s\/docs\/@. An address
--- without the slash is read as the same route, so a typed or pasted one
--- works too.
+-- Every address except the home's ends in a slash. On a static host each
+-- route is a directory with an @index.html@ in it (the prerender writes
+-- one per route), and a static host redirects @\/s\/docs@ to
+-- @\/s\/docs\/@. An address without the slash is read as the same route,
+-- so a typed or pasted one works too.
 --
--- A space's path and a page's path are separated by the segment @p@, an
+-- A space's path and a page's path are separated by the segment @p@. An
 -- edit route ends in @edit@, a page's source in @source@, its history in
--- @history@, its slides in @slides@, a space's list of pages in @pages@,
--- and a new page's route has @new-page@ after the space's path; a slug may be any of these
--- words too (a page titled "P"), so
--- a slug that is one of them is written with a @~@ before it (@\/s\/~p\/@),
--- which no slug can start with. That keeps every route's
--- address its own: 'route' reads back exactly the route it wrote.
+-- @history@, its slides in @slides@, and a space's list of pages in
+-- @pages@. A new page's route has @new-page@ after the space's path. A slug
+-- may be any of these words too (a page titled "P"), so a slug that is one
+-- of them is written with a @~@ before it (@\/s\/~p\/@), which no slug can
+-- start with. That keeps every route's address unique: 'route' parses
+-- back exactly the route it printed.
 module Wiki.App.Route
   ( -- * Routes
     Route (..)
@@ -81,17 +81,17 @@ import Wiki.Core.Space (Space (slug))
 data Route
   = -- | The front page: the top-level spaces.
     Home
-  | -- | A space, by its path from the top level: entering it, which shows
-    -- its home page ('Wiki.Core.Space.homePage'), or, for a space without
-    -- one, its list of pages ('SpacePages').
+  | -- | A space, by its path from the top level. Entering it shows its home
+    -- page ('Wiki.Core.Space.homePage'), or, for a space without one, its
+    -- list of pages ('SpacePages').
     Space [Slug]
-  | -- | A space entered at a later page of its posts, for a space shown as
-    -- a blog ("Wiki.Core.Blog"): its path, and the page, counted from 1.
-    -- The page is a parameter (@page@), so that a reload, or a link, comes
-    -- back to it; the first page is the space's own route, 'Space', and a
-    -- space that is no blog shows what 'Space' shows at any page.
+  | -- | A later page of a blog's posts ("Wiki.Core.Blog"): the space's
+    -- path, and the page number, counted from 1. The page number is a
+    -- parameter (@page@), so that a reload, or a link, comes back to it. The
+    -- first page is the space's own route, 'Space', and a space that is not
+    -- a blog shows what 'Space' shows at any page number.
     Posts [Slug] Int
-  | -- | A space's pages and subspaces, with what may be done to it (its
+  | -- | A space's pages and subspaces, with the actions on the space (its
     -- settings among them), by its path.
     SpacePages [Slug]
   | -- | A page: its space's path, and its own path among the space's pages.
@@ -131,8 +131,8 @@ data Route
     -- for the first), so that a reload, or a link, comes back to it.
     PageSlides [Slug] [Slug] Int
   | -- | An invitation's page, by the secret its link carries: the form that
-    -- makes the account it invites to (WP3.5 of docs/PLAN.md). Its 'Show'
-    -- hides the secret, so that a log that names a route does not name it.
+    -- creates the invited account (WP3.5 of docs/PLAN.md). Its 'Show' hides
+    -- the secret, so that a log line that names a route does not reveal it.
     Invite InvitationToken
   | -- | A password reset's page, by the secret of the link mailed for it:
     -- the form that sets a new password (WP4.11 of docs/PLAN.md). Its
@@ -141,8 +141,8 @@ data Route
   | -- | The page of a link mailed to verify an e-mail address, by its
     -- secret.
     VerifyEmail MailToken
-  | -- | The page of the link a notification's mail carries, by its secret,
-    -- which turns that mail off.
+  | -- | The page of the unsubscribe link in a notification mail, by its
+    -- secret: it turns those mails off.
     Unsubscribe MailToken
   | -- | The writing assistant's settings, the signed-in user's own (WP4.19
     -- of docs/PLAN.md): their API keys, and the provider and model to use.
@@ -158,16 +158,16 @@ data Against
   deriving stock (Eq, Show)
 
 -- | The routes' codec. Parsing tries the routes in this order and takes the
--- first that reads the whole path; since a slug is never @p@, @edit@,
--- @source@, @history@, @slides@, @pages@ or @new-page@ as written, no
--- address reads as two routes.
+-- first that parses the whole path. Since a written slug is never @p@,
+-- @edit@, @source@, @history@, @slides@, @pages@ or @new-page@, no address
+-- parses as two routes.
 route :: RouteDuplex' Route
 route =
   root $
     alternatives
       [ alternative (\case Home -> Just (); _ -> Nothing) (const Home) noArgs
-      , -- Before 'Space', which reads the same path and leaves the query
-        -- alone: this one reads it only with its parameter.
+      , -- Before 'Space', which parses the same path and ignores the
+        -- query: this one parses it only with its parameter.
         alternative
           (\case Posts s n -> Just (s, n); _ -> Nothing)
           (uncurry Posts)
@@ -241,9 +241,9 @@ route =
         <*> Duplex.lmap (\(_, s, _) -> s) (Duplex.optional (as renderPath readPath (param "space")))
         <*> Duplex.lmap (\(_, _, subspaces) -> subspaces) (not <$> Duplex.lmap not (flag (param "only")))
     -- A version is named by its time, written with every digit of its
-    -- fraction so that it reads back as the very time; one that is not a
-    -- time reads as left out, the latest. Anything but @current@ compares
-    -- with the version before.
+    -- fraction so that it parses back as exactly the same time. A value
+    -- that is not a time parses as left out, meaning the latest. Anything
+    -- except @current@ compares with the version before.
     historyParams :: RouteDuplex' (Maybe UTCTime, Against)
     historyParams =
       (,)
@@ -253,22 +253,22 @@ route =
           ( (\a -> if a == Just "current" then AgainstCurrent else AgainstPrevious)
               <$> Duplex.lmap (\a -> if a == AgainstCurrent then Just "current" else Nothing) (Duplex.optional (param "against"))
           )
-    -- The slide shown, counted from 1: the first is left out, and a
-    -- number that is not one reads as the first. One past the deck's end is
-    -- the view's to bring back into it.
+    -- The slide shown, counted from 1. The first is left out, and a value
+    -- that is not a number parses as the first. A number past the deck's
+    -- end is for the view to bring back into range.
     slideParam :: RouteDuplex' Int
     slideParam =
       fromMaybe 1
         <$> Duplex.lmap
           (\n -> if n == 1 then Nothing else Just n)
           (Duplex.optional (as show (\t -> maybe (Left ("not a number: " <> t)) Right (readMaybe t)) (param "slide")))
-    -- A page of posts, counted from 1, always written; one that is not a
-    -- number reads as the first.
+    -- A page of posts, counted from 1, always written; a value that is not
+    -- a number parses as the first.
     pageParam :: RouteDuplex' Int
     pageParam = as show (\t -> Right (fromMaybe 1 (readMaybe t))) (param "page")
-    -- A parameter that is not a path is read as the empty path, which names
-    -- no space, rather than refused: an optional parameter that is refused
-    -- reads as left out, which would search every space instead.
+    -- A parameter that is not a path is parsed as the empty path, which
+    -- names no space, instead of being refused: a refused optional
+    -- parameter parses as left out, which would search every space instead.
     readPath :: Text -> Either Text [Slug]
     readPath = Right . fromRight [] . parsePath
 
@@ -289,7 +289,7 @@ slugSegment = as written readSlug segment
         | otherwise -> first show (mkSlug t)
     reserved = ["p", "edit", "source", "history", "slides", "pages", "new-page"] :: [Text]
 
--- | A route's address ends in a slash ('route' says why), and is read
+-- | A route's address ends in a slash ('route' says why), and is parsed
 -- without one too.
 directory :: RouteDuplex i o -> RouteDuplex i o
 directory codec = RouteDuplex withSlash.printer (withSlash.parser <|> codec.parser)
@@ -309,9 +309,9 @@ alternatives :: [RouteDuplex Route Route] -> RouteDuplex Route Route
 alternatives alts = RouteDuplex (\r -> foldMap (\a -> a.printer r) alts) (asum (map (\a -> a.parser) alts))
 
 -- | The route a link's @href@ leads to, if it is one of the router's own
--- addresses ('Router.href' wrote it): what a click on a link the page's
--- Markdown made is followed to. The fragment is not part of the route, and
--- the query only of a search's.
+-- addresses (written by 'Router.href'). A click on a link that a page's
+-- Markdown made is followed to this route. The fragment is not part of
+-- the route, and the query only of a search's route.
 routeOfHref :: Router Route -> Text -> Maybe Route
 routeOfHref router href = do
   -- The home's address is the base, with a slash after it.

@@ -1,27 +1,30 @@
 {-# LANGUAGE QuasiQuotes #-}
 
--- | Islands: the parts of a page a JavaScript library draws. Mathematics
--- (KaTeX), diagrams (Mermaid), TikZ pictures (TikZJax) and highlighted code
--- (highlight.js) each render
--- as one element that Halogen creates, holds by ref and never looks inside:
--- it has no children in the virtual DOM, so no render touches what the
--- library wrote there.
+-- | Islands: the parts of a page that a JavaScript library draws.
+-- Mathematics (KaTeX), diagrams (Mermaid), TikZ pictures (TikZJax) and
+-- highlighted code (highlight.js) each render as one element that Halogen
+-- creates, holds by ref and never looks inside. The element has no
+-- children in the virtual DOM, so no render touches what the library wrote
+-- there.
 --
--- One component draws every kind, so that a page renders its islands into
--- one slot type: its input says which island and its source (and, for a
--- formula, the macros it is set with). It fills the element once it is in
--- the page, and again whenever the input changes; an input equal to the
--- last one leaves the element alone. So a formula is set again when a
--- definition before it changes, though its own TeX did not.
+-- One component draws every kind, so that a page renders all its islands
+-- with one slot type. Its input says which kind of island and its source
+-- (and, for a formula, the macros it is typeset with). The component fills
+-- the element once it is in the page, and again whenever the input
+-- changes; an input equal to the last one leaves the element alone. So a
+-- formula is typeset again when a macro definition before it changes,
+-- even if its own TeX did not.
 --
--- The page (@web/index.html@) must load @islands.js@ and @islands.css@ from
--- @web/bundle.sh@. Natively the element holds its source as text instead (see
--- "Wiki.App.Islands.Monad"), which is what a prerendered page shows.
+-- The page (@web/index.html@) must load @islands.js@ and @islands.css@,
+-- built by @web/bundle.sh@. Natively the element holds its source as text
+-- instead (see "Wiki.App.Islands.Monad"), which is what a prerendered page
+-- shows.
 --
--- A moment in time ('LocalTime') is one as well, though no library draws
--- it: the reader's browser writes it in their zone, which the server that
--- rendered the page does not know, so it is left out of what the program
--- adopts and written in once the program runs.
+-- A moment in time ('LocalTime') is an island as well, although no
+-- library draws it. The reader's browser writes it in the reader's time
+-- zone, which the server that prerendered the page does not know. So it is
+-- left out of the HTML the program adopts, and written in once the program
+-- runs.
 module Wiki.App.Islands
   ( Island (..)
   , component
@@ -44,10 +47,10 @@ import Wiki.Core.Math (Macros (..))
 
 -- | An island and its source.
 data Island
-  = -- | TeX set in the line, as Markdown's @$…$@, with the macros it is
-    -- set with besides the built-in ones ("Wiki.Core.Math").
+  = -- | TeX typeset inline, as Markdown's @$…$@, with the macros it uses
+    -- besides the built-in ones ("Wiki.Core.Math").
     MathInline Macros Text
-  | -- | TeX set on its own, as Markdown's @$$…$$@, with its macros.
+  | -- | TeX typeset as a block, as Markdown's @$$…$$@, with its macros.
     MathDisplay Macros Text
   | -- | A Mermaid diagram's source, as a @mermaid@ fence.
     Mermaid Text
@@ -55,7 +58,7 @@ data Island
     Tikz Text
   | -- | Code, in a language if the fence names one.
     CodeBlock (Maybe Text) Text
-  | -- | A moment, as the reader reads one.
+  | -- | A moment in time, written as the reader's browser writes one.
     LocalTime UTCTime
   deriving stock (Eq, Show)
 
@@ -97,7 +100,7 @@ component =
         State {island = current, ref} <- get
         when (island /= current) $ do
           -- Rendered first: an island of another kind is another element,
-          -- and the ref names the new one once the render is done.
+          -- and the ref points to the new one once the render is done.
           put State {island, ref}
           fill
 
@@ -111,10 +114,10 @@ component =
       MathInline macros tex -> H.liftEffect (renderMath Inline macros tex element)
       MathDisplay macros tex -> H.liftEffect (renderMath Display macros tex element)
       -- A diagram and a picture are only started here, and drawn into the
-      -- element when they are done (Mermaid's bundle, TeX's files are
-      -- fetched the first time; TeX runs in a worker); the page goes on
-      -- meanwhile. A newer input's drawing can overtake an older one;
-      -- islands.js keeps the newer.
+      -- element when they are done (Mermaid's bundle and TeX's files are
+      -- fetched the first time; TeX runs in a web worker); the page goes
+      -- on meanwhile. A newer input's drawing can finish before an older
+      -- one's; islands.js keeps the newer.
       Mermaid source -> H.liftEffect (renderMermaid source element)
       Tikz source -> H.liftEffect (renderTikz source (tikzDocument source) element)
       CodeBlock language code -> H.liftEffect (highlightCode language code element)

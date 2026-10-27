@@ -1,12 +1,13 @@
 {-# LANGUAGE TemplateHaskell #-}
 
--- | The little the shell asks of the browser that Halogen does not say: the
--- link a click in a rendered page landed on, scrolling to a heading or a
--- footnote, the document's title, where in the session history it is, the
--- clipboard, and a time as the reader's clock and language write it; and the demo's zip files, made, read and saved (see
--- @jsbits/archive.js@). See @jsbits/browser.js@. Natively there is no browser: no
--- click lands on a link, every entry of the history is the first, nothing is
--- copied, and the rest does nothing.
+-- | The few browser features the shell needs that Halogen does not
+-- provide: the link a click in a rendered page landed on, scrolling to a
+-- heading or a footnote, the document's title, the position in the
+-- session history, the clipboard, and a time written in the reader's time
+-- zone and language. Also the demo's zip files: making, reading and saving
+-- them (see @jsbits/archive.js@). See @jsbits/browser.js@. Natively there
+-- is no browser: no click lands on a link, every history entry is the
+-- first, nothing is copied, and the rest does nothing.
 module Wiki.App.Browser
   ( ArticleLink (..)
   , articleLink
@@ -53,10 +54,10 @@ import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Id (CommentThreadId (..))
 
 -- Copying waits for the browser's clipboard, so that binding is a safe
--- import, which waits for the promise; the rest return on the spot. The link
--- a click landed on is read in the click's listener, while the browser
--- dispatches it, and the click does not change meanwhile, so that binding is
--- pure.
+-- import, which waits for the promise; the rest return at once. The link a
+-- click landed on is read in the click's listener, while the browser
+-- dispatches it, and the click does not change meanwhile, so that binding
+-- is pure.
 $( browserJS
      ["jsbits/browser.js", "jsbits/archive.js", "jsbits/comments.js", "jsbits/layout.js", "jsbits/toc.js"]
      [ ("js_clicked_href", "wiki_clicked_href", Unsafe, [t|Event -> JSText|])
@@ -87,26 +88,28 @@ $( browserJS
      ]
  )
 
--- | Where a click on a link in HTML the application did not build link by
--- link (a page's Markdown, rendered by "Wiki.Core.Markdown") leads, when it
--- is the application's to follow rather than the browser's.
+-- | Where a click on a link leads, in HTML the application did not build
+-- element by element (a page's Markdown, rendered by
+-- "Wiki.Core.Markdown"), when the application should follow it rather
+-- than the browser.
 data ArticleLink
   = -- | One of the router's own addresses, followed without loading a page.
     ToRoute Route
-  | -- | A place on the page (@#fn-1@), by its id: the page's @\<base href>@
-    -- would otherwise send the browser to the base.
+  | -- | A place on the page (@#fn-1@), by its id. Without this, the page's
+    -- @\<base href>@ would send the browser to the base address.
     ToFragment Text
 
--- | Which of the application's links a click on an element around them
--- landed on, if any: 'Nothing' for anything the browser follows itself (a
--- link elsewhere, a download, a click with a modifier, no link at all).
+-- | Which of the application's links a click landed on, given an element
+-- around them, if any. 'Nothing' for anything the browser follows itself
+-- (a link elsewhere, a download, a click with a modifier key, no link at
+-- all).
 --
--- Pure, so that a click's handler decides in the listener, while the
--- browser dispatches the click and can still be kept from following the
--- link ('Halogen.HTML.Events.preventingDefault'): asked later, from the
--- component's action, the browser may have followed it already. The answer
--- is read from the click as it is then, so the listener forces it, which
--- deciding between 'Nothing' and 'Just' does.
+-- It is pure so that a click's handler decides inside the listener, while
+-- the browser dispatches the click and can still be stopped from following
+-- the link ('Halogen.HTML.Events.preventingDefault'). Asked later, from the
+-- component's action, the browser may have followed it already. The
+-- answer is read from the click as it is at that moment, so the listener
+-- forces it, which deciding between 'Nothing' and 'Just' does.
 articleLink :: Router Route -> Event -> Maybe ArticleLink
 articleLink router event = case (routeOfHref router href, T.stripPrefix "#" href) of
   _ | T.null href -> Nothing
@@ -116,45 +119,47 @@ articleLink router event = case (routeOfHref router href, T.stripPrefix "#" href
   where
     href = fromJSText (js_clicked_href event)
 
--- | Follow a link 'articleLink' found: by the router, or by scrolling to the
--- place on the page. The click's default is the listener's to prevent.
+-- | Follow a link 'articleLink' found: through the router, or by scrolling
+-- to the place on the page. Preventing the click's default is the
+-- listener's job.
 followArticleLink :: (MonadIO m) => Router Route -> ArticleLink -> m ()
 followArticleLink router = \case
   ToRoute r -> Router.navigate router r
   ToFragment fragment -> liftIO (js_scroll_to (toJSText fragment))
 
--- | Title the browser's tab and its history entry.
+-- | Set the title of the browser's tab and of its history entry.
 setDocumentTitle :: (MonadIO m) => Text -> m ()
 setDocumentTitle = liftIO . js_set_title . toJSText
 
--- | The number of the session history's current entry: entries the shell
--- has seen are numbered in order, so that 'historyGo' can return to one.
--- The router keeps no such number, nor any state of its own in the entry.
--- Natively 0, always.
+-- | The number of the session history's current entry. The entries the
+-- shell has seen are numbered in order, so that 'historyGo' can return to
+-- one. The router keeps no such number, nor any state of its own in the
+-- entry. Natively always 0.
 historyEntry :: (MonadIO m) => m Int
 historyEntry = liftIO js_history_entry
 
 -- | Go this many entries forward in the session history (back, if
--- negative), as the browser's buttons do: the router hears it as it hears
--- them.
+-- negative), as the browser's buttons do: the router receives it as it
+-- receives them.
 historyGo :: (MonadIO m) => Int -> m ()
 historyGo = liftIO . js_history_go
 
 -- | Put text on the clipboard, given the element that shows it, and say
--- whether it is there. If the browser will not copy it, the element's text
--- is left selected, for the reader to copy with the keyboard. This waits for
--- the browser, so a component calls it off its loop ('liftIO' in
--- 'Halogen.HalogenM', not 'Halogen.liftEffect'). Natively nothing is copied.
+-- whether it worked. If the browser will not copy it, the element's text
+-- is left selected, for the reader to copy with the keyboard. This waits
+-- for the browser, so a component calls it off its loop ('liftIO' in
+-- 'Halogen.HalogenM', not 'Halogen.liftEffect'). Natively nothing is
+-- copied.
 copyText :: (MonadIO m) => Element -> Text -> m Bool
 copyText element text =
   -- On wasm a safe import's result is a thunk that waits for the promise
   -- only when forced.
   liftIO (evaluate =<< js_copy_text element (toJSText text))
 
--- | An address of the application's (as 'Router.href' writes it) as a
--- whole URL, with the scheme and host the page was loaded from: what a
--- link to pass on in a mail or a message needs. Natively there is no page,
--- and the address is given back as it is.
+-- | An application address (as 'Router.href' writes it) as a full URL,
+-- with the scheme and host the page was loaded from: what a link sent in
+-- a mail or a message needs. Natively there is no page, and the address
+-- is returned unchanged.
 absoluteUrl :: (MonadIO m) => Text -> m Text
 absoluteUrl path
   | not inBrowser = pure path
@@ -183,33 +188,34 @@ unzipFiles bytes
             (,) <$> (fromJSText <$> js_archive_path unzipped i) <*> (fromJSBytes =<< js_archive_bytes unzipped i)
         why -> pure (Left why)
 
--- | Hand bytes to the browser to save as a file of this name and media
+-- | Give bytes to the browser to save as a file with this name and media
 -- type. Natively nothing is saved.
 download :: (MonadIO m) => Text -> Text -> ByteString -> m ()
 download name mediaType bytes = liftIO . when inBrowser $ js_download (toJSText name) (toJSText mediaType) =<< toJSBytes bytes
 
--- | A time as the reader reads one: in their time zone, written the way
+-- | A time as the reader reads it: in their time zone, written the way
 -- their browser's language writes a date and a time. Natively, where there
--- is no reader, in UTC, and saying so.
+-- is no reader, in UTC, saying so.
 localTime :: (MonadIO m) => UTCTime -> m Text
 localTime t
   | inBrowser = liftIO (fromJSText <$> js_local_time (realToFrac (utcTimeToPOSIXSeconds t) * 1000))
   | otherwise = pure (toS (formatTime defaultTimeLocale "%-d %B %Y, %H:%M UTC" t))
 
--- | A word on the console, for whoever looks there, about something the
--- program went on without. Natively nothing.
+-- | A warning on the browser's console, for whoever looks there, about
+-- something the program carried on without. Natively nothing.
 consoleWarn :: (MonadIO m) => Text -> m ()
 consoleWarn message = when inBrowser (liftIO (js_console_warn (toJSText message)))
 
--- | Where the page says the wiki is kept: in the browser, as the demo keeps
--- it, or by the server that served the page.
+-- | Which backend the page says to use: the in-memory one, which keeps
+-- the wiki in the browser like the demo, or the HTTP one, which talks to
+-- the server that served the page.
 data PageBackend = DemoBackend | ServerBackend
   deriving stock (Eq, Show)
 
 -- | What the page's @\<meta name="wiki-backend">@ says: @server@ for the
--- server's build (@wiki-app-prerender --server@ writes it), and anything
--- else, or none, for the demo's, which is what a page from before there was
--- a choice is. Natively, the demo.
+-- server's build (written by @wiki-app-prerender --server@), and anything
+-- else, or nothing, for the demo, which is what a page from before there
+-- was a choice means. Natively, the demo.
 pageBackend :: (MonadIO m) => m PageBackend
 pageBackend = liftIO $ (\b -> if fromJSText b == "server" then ServerBackend else DemoBackend) <$> js_page_backend
 
@@ -217,8 +223,8 @@ pageBackend = liftIO $ (\b -> if fromJSText b == "server" then ServerBackend els
 -- Comments
 
 -- | Text the reader has selected in a page, as the anchor of a comment
--- about it ("Wiki.Core.Anchor"), and where, under the selection, a button
--- to comment on it can go: in pixels from the top left corner of the
+-- about it ("Wiki.Core.Anchor"), and where a button to comment on it can
+-- go, under the selection: in pixels from the top left corner of the
 -- element the page's article is in.
 data Selected = Selected
   { anchor :: Anchor
@@ -233,14 +239,14 @@ instance FromJSON Selected where
 
 -- | What the reader has selected of the article inside this element, read
 -- as "Wiki.Core.Anchor" reads the page's text (see jsbits/comments.js), if
--- anything is; natively, nothing.
+-- anything is selected; natively, nothing.
 readSelection :: (MonadIO m) => Element -> m (Maybe Selected)
 readSelection element
   | not inBrowser = pure Nothing
   | otherwise = liftIO $ decodeStrict' . encodeUtf8 . fromJSText <$> js_comment_selection element
 
--- | The thread whose highlighted quote a click landed on, if it did: what
--- the page asks in the click's listener.
+-- | The thread whose highlighted quote a click landed on, if any: what
+-- the page checks in the click's listener.
 clickedThread :: Event -> Maybe CommentThreadId
 clickedThread event = case fromJSText (js_clicked_thread event) of
   "" -> Nothing
@@ -250,23 +256,24 @@ clickedThread event = case fromJSText (js_clicked_thread event) of
 reveal :: (MonadIO m) => Text -> m ()
 reveal selector = when inBrowser (liftIO (js_reveal (toJSText selector)))
 
--- | Keep the heights of the sticky header and of the page's bar of actions
--- as CSS variables, which the stylesheet stacks the bar, the editor's
--- toolbar and the comments' panel under, and mark a bar stuck under the
--- header as it is (see @jsbits/layout.js@). Once is enough: it follows the
--- document from then on. Natively there is no layout, and it does nothing.
+-- | Keep the heights of the sticky header and of the page's action bar as
+-- CSS variables, which the stylesheet uses to stack the bar, the editor's
+-- toolbar and the comments panel under the header, and mark a bar that is
+-- stuck under the header (see @jsbits/layout.js@). Calling it once is
+-- enough: it follows the document from then on. Natively there is no
+-- layout, and it does nothing.
 keepHeights :: (MonadIO m) => m ()
 keepHeights = liftIO js_keep_heights
 
--- | Mark the section being read in the page's lists of its headings, and
--- keep whether its "Contents" panel is folded in this browser (see
--- @jsbits/toc.js@). Once is enough, as for 'keepHeights'. Natively there is
--- nothing to read, and it does nothing.
+-- | Highlight the section being read in the page's lists of its headings,
+-- and remember in this browser whether its "Contents" panel is folded (see
+-- @jsbits/toc.js@). Calling it once is enough, as for 'keepHeights'.
+-- Natively there is nothing to read, and it does nothing.
 keepContents :: (MonadIO m) => m ()
 keepContents = liftIO js_keep_contents
 
--- | Scroll to the heading the address's fragment names, if it names one
--- that is shown: what the browser does in a page it was sent, for one the
--- program shows. Natively nothing.
+-- | Scroll to the heading the address's fragment names, if it is shown:
+-- what the browser does in a page it loaded, for a page the program
+-- renders. Natively nothing.
 revealFragment :: (MonadIO m) => m ()
 revealFragment = liftIO js_reveal_fragment
