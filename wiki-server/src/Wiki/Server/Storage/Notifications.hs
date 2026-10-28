@@ -17,6 +17,8 @@ module Wiki.Server.Storage.Notifications
   ( -- * Who is told
     Telling (..)
   , loadTelling
+  , Audience (..)
+  , loadAudience
   , pageMaker
 
     -- * Watches and choices
@@ -49,17 +51,19 @@ import Crypto.Random (getRandomBytes)
 import Data.ByteArray qualified as BA
 import Data.ByteArray.Encoding (Base (Base16), convertFromBase, convertToBase)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime, addUTCTime, nominalDay)
-import Database.SQLite.Simple (Connection, Only (..), Query, execute, execute_, query, queryWith, query_, (:.) (..))
+import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query, queryWith, query_, (:.) (..))
 import Database.SQLite.Simple.FromRow (RowParser, field)
+import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
 import Wiki.Api.Notifications (ReadMark (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Kind (..), MailMode (..), Mark, Notification (..), WatchTarget (..), keptNotifications, mailModeName, readMailMode)
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Membership, User (..))
 import Wiki.Core.Version (Author (..))
-import Wiki.Server.Storage.Rows (Stamp (..), VersionRow (..), loadVersions, stamp)
+import Wiki.Server.Storage.Rows (Stamp (..), stamp)
 
 --------------------------------------------------------------------------------
 -- Who is told
@@ -74,32 +78,96 @@ data Telling = Telling
   -- verified address, and mail is not off for them.
   }
 
+-- | A user's row as 'tellingOf' reads it: id, login, display name,
+-- whether they watch their own pages, whether their address is verified,
+-- and their mail mode.
+type TellingRow = (Text, Text, Text, Int, Int, Maybe Text)
+
+-- | A 'Telling' from a user's row and everyone's marks.
+tellingOf :: Map UserId Mark -> TellingRow -> Telling
+tellingOf allMarks (i, login, displayName, own, verified, mail) =
+  Telling
+    { user = User {id = UserId i, login, displayName}
+    , watchOwn = own /= 0
+    , marks = Map.findWithDefault mempty (UserId i) allMarks
+    , mailing = verified /= 0 && (mail >>= readMailMode) /= Just MailOff
+    }
+
 -- | Every user who may sign in, with their watches and choices.
 loadTelling :: Connection -> IO [Telling]
 loadTelling c = do
   users <- query_ c "SELECT id, login, display_name, watch_own, email_verified_at IS NOT NULL, notification_mail FROM users WHERE disabled = 0 ORDER BY id"
   allMarks <- loadAllMarks c
-  pure
-    [ Telling
-        { user = User {id = UserId i, login, displayName}
-        , watchOwn = own /= (0 :: Int)
-        , marks = Map.findWithDefault mempty (UserId i) allMarks
-        , mailing = verified /= (0 :: Int) && (mail >>= readMailMode) /= Just MailOff
-        }
-    | (i, login, displayName, own, verified, mail :: Maybe Text) <- users
-    ]
+  pure (map (tellingOf allMarks) users)
 
--- | Who created a page: the author of its first version, if known.
+-- | 'Audience' says who could be told of something that happened to a
+-- page: the page, the spaces of its chain, the users named because they
+-- made the page or commented in its thread, and the logins it mentions.
+data Audience = Audience
+  { page :: PageId
+  , spaces :: [SpaceId]
+  , named :: [UserId]
+  , mentioned :: [Text]
+  }
+
+-- | The users who may sign in and could be told of something that
+-- happened to a page, with their choices, and their groups. The rules of
+-- "Wiki.Core.Notification" ('recipients') tell a user only for a watch on
+-- the page or on one of its spaces, for making the page, for commenting in
+-- its thread, or for a mention. So only those users are read, through
+-- indexes, instead of every user and every watch. Each user's marks hold
+-- only their watches of the page and of those spaces, which are the only
+-- watches the rules look at.
+loadAudience :: Connection -> Audience -> IO ([Telling], Membership)
+loadAudience c a = do
+  users <- query c ("SELECT u.id, u.login, u.display_name, u.watch_own, u.email_verified_at IS NOT NULL, u.notification_mail FROM users u WHERE u.disabled = 0 AND u.id IN (" <> candidates <> ") ORDER BY u.id") params
+  marks <- query c ("SELECT user_id, page_id, space_id, watching FROM watches WHERE " <> watched) watchParams
+  members <- query c ("SELECT m.group_id, m.user_id FROM group_members m JOIN users u ON u.id = m.user_id WHERE u.disabled = 0 AND m.user_id IN (" <> candidates <> ")") params
+  pure
+    ( map (tellingOf (marksOf marks)) users
+    , Map.fromListWith (<>) [(GroupId g, Set.singleton (UserId u)) | (g, u) <- members]
+    )
+  where
+    -- The ids of the users who could be told: a union of one indexed
+    -- query for each reason, because SQLite reads a whole table for a
+    -- single query whose condition is the reasons joined with OR. A reason
+    -- with no values is left out, as SQLite's plan for @IN ()@ is a read
+    -- of the whole table.
+    reasons =
+      ("SELECT user_id FROM watches WHERE page_id = ?", [toField a.page.text])
+        : [ (q <> " IN (" <> T.intercalate ", " (map (const "?") vs) <> ")", vs)
+          | (q, vs) <-
+              [ ("SELECT user_id FROM watches WHERE space_id", map (\x -> toField x.text) a.spaces)
+              , ("SELECT id FROM users WHERE id", map (\u -> toField u.text) a.named)
+              , ("SELECT id FROM users WHERE login", map toField a.mentioned)
+              ]
+          , not (null vs)
+          ]
+    candidates = Query (T.intercalate " UNION " (map fst reasons))
+    params = concatMap snd reasons
+    -- The watches of the page and of its spaces.
+    (watched, watchParams) = (Query ("page_id = ?" <> T.concat [" OR space_id = ?" | _ <- a.spaces]), toField a.page.text : map (\x -> toField x.text) a.spaces)
+
+-- | Who created a page: the author of its first version, if known. The
+-- first version is the one saved when the page was created, so its time is
+-- the page's creation time, and the primary key of @page_versions@ finds
+-- it at once. A page an import made has its first version at another time,
+-- with no author, so it has no maker either way.
 pageMaker :: Connection -> PageId -> IO (Maybe UserId)
-pageMaker c page = (>>= \v -> v.author) . head . sortOn (\v -> v.updatedAt) <$> loadVersions c page
+pageMaker c page =
+  (>>= \(Only author) -> UserId <$> author)
+    . head
+    <$> query c "SELECT v.author FROM pages p JOIN page_versions v ON v.page_id = p.id AND v.updated_at = p.created_at WHERE p.id = ?" (Only page.text)
 
 --------------------------------------------------------------------------------
 -- Watches and choices
 
 loadAllMarks :: Connection -> IO (Map UserId Mark)
-loadAllMarks c = do
-  rows <- query_ c "SELECT user_id, page_id, space_id, watching FROM watches"
-  pure (Map.fromListWith (<>) [(UserId u, Map.singleton t (w /= (0 :: Int))) | (u, p, s, w) <- rows, Just t <- [target p s]])
+loadAllMarks c = marksOf <$> query_ c "SELECT user_id, page_id, space_id, watching FROM watches"
+
+-- | The marks of watch rows (user, page, space, watching), by user.
+marksOf :: [(Text, Maybe Text, Maybe Text, Int)] -> Map UserId Mark
+marksOf rows = Map.fromListWith (<>) [(UserId u, Map.singleton t (w /= 0)) | (u, p, s, w) <- rows, Just t <- [target p s]]
   where
     target p s = (WatchPage . PageId <$> p) <|> (WatchSpace . SpaceId <$> s)
 

@@ -13,6 +13,15 @@ they commit. The new `wiki-server-bench` executable times a big wiki's
 page view, save, backup and comment, to compare two versions of the
 storage.
 
+A save or a comment reads only the users who could be told of it
+(WP5.16a): those who watch the page or one of its spaces, the page's
+maker, the thread's commenters and the people it mentions. It used to read
+every user, every watch and every group membership. Migration
+`0013-notification-indexes.sql` adds the indexes this needs, and one on
+the notifications' `seq`: each new notification's number used to be found
+by scanning the whole table. Who made a page is now read from its first
+version alone.
+
 The static files' server sends a `.bin` file as `application/octet-stream`,
 named so explicitly (WP5.5): TikZJax's compressed files are now zlib streams
 named `.bin` rather than gzip files named `.gz`, since a corporate proxy may

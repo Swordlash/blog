@@ -2147,16 +2147,25 @@ tellTx :: PageId -> SpaceId -> Text -> Maybe CommentThreadId -> Text -> Occasion
 tellTx pid sid title thread excerpt occasion logins = do
   ctx <- ask
   for_ ctx.author $ \actor -> do
-    stored <- db loadGrants
-    membership <- db loadMembership
-    telling <- db Notifications.loadTelling
     maker <- db (`Notifications.pageMaker` pid)
-    nodes <- db (`pageNodes` sid)
+    let chain = chainOf ctx sid
+        commenters = case occasion of
+          CommentedIn _ people -> people
+          _ -> []
+    -- Only the users the rules could name are read, not every user.
+    (telling, membership) <-
+      db
+        ( `Notifications.loadAudience`
+            Notifications.Audience {page = pid, spaces = map (\x -> x.id) chain, named = toList maker <> commenters, mentioned = Set.toList logins}
+        )
+    nodes <- lineageOf pid
     let byLogin = Map.fromList [(t.user.login, t.user.id) | t <- telling]
-        grants = Grants {global = stored.global, spaces = stored.spaces, access = ctx.wiki.access}
+        -- The grants the transaction began with. For the administrator they
+        -- hold one more grant, to the administrator, who is never one of
+        -- the users told.
+        grants = Grants {global = ctx.grants.global, spaces = ctx.grants.spaces, access = ctx.wiki.access}
         watchers = [Watcher {principal = Permission.principal membership t.user.id, watchOwn = t.watchOwn, marks = t.marks} | t <- telling]
         mailed = Set.fromList [t.user.id | t <- telling, t.mailing]
-        chain = chainOf ctx sid
         happened =
           Happened
             { actor
@@ -2166,7 +2175,7 @@ tellTx pid sid title thread excerpt occasion logins = do
             , occasion
             , mentioned = Set.fromList (mapMaybe (`Map.lookup` byLogin) (Set.toList logins))
             }
-        location = PageLocation {space = map (\x -> x.slug) chain, page = fromMaybe [] (pathOf (\i -> find (\n -> n.id == i) nodes) pid)}
+        location = PageLocation {space = map (\x -> x.slug) chain, page = fromMaybe [] (pathOf (`Map.lookup` nodes) pid)}
         actorAuthor = maybe Author {id = actor, name = actor.text} (\u -> Author {id = u.id, name = u.displayName}) ctx.user
     time <- now
     for_ (recipients grants watchers happened) $ \(u, kind) -> do
@@ -2174,6 +2183,22 @@ tellTx pid sid title thread excerpt occasion logins = do
       let n = Notification {id = i, kind, page = pid, thread, actor = actorAuthor, title, excerpt, createdAt = time, read = False, location = Just location}
       db (\c -> Notifications.insertNotification c u n (Set.member u mailed))
       liftIO (modifyIORef' ctx.told ((u, n) :))
+
+-- | A page's node and the nodes of the pages above it, by id: what
+-- 'pathOf' needs to find the page's path. Each node is read by its id, so
+-- the cost grows with the page's depth, not with the size of its space.
+lineageOf :: PageId -> Tx (Map PageId PageNode)
+lineageOf = go mempty
+  where
+    go found pid
+      -- A page already found means a loop, which a page tree never has.
+      | Map.member pid found = pure found
+      | otherwise =
+          db (`pageNode` pid) >>= \case
+            Nothing -> pure found
+            Just n -> do
+              let more = Map.insert pid n found
+              maybe (pure more) (go more) n.parent
 
 -- | Notify of a comment in a thread whose comments so far are by these
 -- users.
