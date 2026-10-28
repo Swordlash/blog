@@ -16,7 +16,8 @@
 -- viewer's watches of the page and its spaces, the mentions read the
 -- logins mentioned, and an attachment reads its space's chain alone. A
 -- blog's list reads the first version of each page, and a history is read
--- a page of versions at a time.
+-- a page of versions at a time. The audit log's Activity reads one page of
+-- entries, however far back, and its list of actors a few rows per actor.
 --
 -- What the storage reads is seen through SQLite's trace of each statement
 -- a connection runs ('statementsOf'), and SQLite's plan for each
@@ -30,7 +31,7 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (UTCTime (..), addUTCTime, defaultTimeLocale, formatTime, fromGregorian, getCurrentTime)
 import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query, query_, setTrace)
 import Network.Wai (requestHeaders)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -42,12 +43,15 @@ import System.Timeout (timeout)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Storage.Fixture
+import Wiki.Api.Activity (Activity (..), ActivityQuery (..), activityPageSize)
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..), eventsPath)
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Contract (As (As))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Audit (Actor (..), AuditEntry (..))
 import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Notification (..), PageLocation (..), WatchTarget (..), maxListed)
@@ -72,6 +76,7 @@ spec = describe "the storage, at scale" $ do
   feeds
   pageView
   histories
+  auditLog
 
 -- | An action that must end within two seconds: one that waits for a lock
 -- another operation holds does not.
@@ -553,3 +558,31 @@ histories = describe "histories" $ do
     -- The next page starts where the first ends.
     older <- runSqliteWiki st Anonymous (listVersions pid VersionsQuery {before = (\v -> v.updatedAt) <$> lastMay listed, limit = 50}) >>= ok
     map (\v -> v.number) older `shouldBe` [70, 69 .. 21]
+
+auditLog :: Spec
+auditLog = describe "the audit log" $
+  it "reads page 100 of a 100,000-entry log as one page of rows, and its actors without reading every entry" $
+    withDemo $ \st -> do
+      let entries = 100_000 :: Int
+          start = UTCTime (fromGregorian 2026 1 1) 0
+          -- As the log writes a time: six digits of fraction, so that the
+          -- text sorts in time order.
+          logTime i = toS (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S.000000Z" (addUTCTime (fromIntegral i) start)) :: Text
+      withDatabase st $ \c -> do
+        execute_ c "BEGIN"
+        for_ [1 .. entries] $ \i ->
+          execute
+            c
+            "INSERT INTO audit_log (id, at, actor_id, actor_login, action, subject_kind, subject_id, subject_name) VALUES (?, ?, ?, ?, 'group.create', 'group', NULL, 'A group')"
+            ("bulk-" <> show i :: Text, logTime i, "bulk-actor-" <> show (i `mod` 10) :: Text, "actor" <> show (i `mod` 10) :: Text)
+        execute_ c "COMMIT"
+      -- The oldest entry of page 99.
+      cursor <-
+        withDatabase st (\c -> query c "SELECT id FROM audit_log ORDER BY at DESC, id DESC LIMIT 1 OFFSET ?" (Only (99 * activityPageSize - 1))) >>= \case
+          [Only i] -> pure i
+          _ -> assertFailure "no entry ends page 99"
+      (page, statements) <- statementsOf st (runSqliteWiki st Administrator (activity ActivityQuery {actor = Nothing, offset = 0, before = Just cursor}) >>= ok)
+      map (\e -> e.id) page.entries `shouldBe` ["bulk-" <> show i | i <- take activityPageSize [entries - 99 * activityPageSize, entries - 99 * activityPageSize - 1 ..]]
+      length (filter (\a -> "actor" `T.isPrefixOf` a.login) page.actors) `shouldBe` 10
+      scans <- Set.fromList . concat <$> traverse (scansOf st) statements
+      scans `shouldSatisfy` Set.notMember "audit_log"

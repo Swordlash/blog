@@ -70,9 +70,9 @@ overHttp m = describe "over HTTP" $
           made = entry "e2" 8 operator "user.create" Subject {kind = "user", id = Just "u1", name = "ada"} [("login", "ada")] "console"
           older = entry "e1" 7 operator "settings.wiki" Subject {kind = "settings", id = Nothing, name = "whom the wiki lets in"} [("access", "closed")] "127.0.0.1"
           firstPage = Activity {available = True, entries = [granted, made], more = True, actors = [ada, operator]}
-      answerWith "GET" (links.admin.activity Nothing Nothing) 200 firstPage
-      answerWith "GET" (links.admin.activity Nothing (Just 50)) 200 firstPage {entries = [older], more = False}
-      answerWith "GET" (links.admin.activity (Just ada.id) Nothing) 200 firstPage {entries = [granted], more = False}
+      answerWith "GET" (links.admin.activity Nothing Nothing Nothing) 200 firstPage
+      answerWith "GET" (links.admin.activity Nothing Nothing (Just "e2")) 200 firstPage {entries = [older], more = False}
+      answerWith "GET" (links.admin.activity (Just ada.id) Nothing Nothing) 200 firstPage {entries = [granted], more = False}
       answerWith "GET" links.admin.status 200 quietServer {errors = [LoggedError {at = at 10, route = "/api/v1/pages/:page", message = "SQLite3 returned ErrorIO"}]}
       ui <- startServer m Admin
       rows <- eventually $ do
@@ -98,7 +98,7 @@ overHttp m = describe "over HTTP" $
       choose ui ".activity-filter select" 1
       eventually $ do
         urls <- map (\r -> r.url) . filter (\r -> r.method == "GET") <$> asked
-        urls `shouldSatisfy` elem (links.admin.activity (Just ada.id) Nothing)
+        urls `shouldSatisfy` elem (links.admin.activity (Just ada.id) Nothing Nothing)
       eventually $ do
         rs <- findAll ui ".activity-row"
         length rs `shouldBe` 1

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+The administration's Activity pages through the log with the entry its
+"Older" starts after, not with how many entries to skip (WP5.16b), so
+an old page of a long log is as quick as the first.
+
 A page's history lists its latest 50 versions, and "Older…" under the
 list fetches the 50 before them (WP5.16b). A version older than those is
 still opened by its address: the history fetches the versions down to it.

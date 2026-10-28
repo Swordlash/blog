@@ -518,7 +518,7 @@ handlers env caller =
     , admin =
         AdminApi
           { status = administrator >> liftIO (statusOfServer env)
-          , activity = \actor offset -> wiki (activity ActivityQuery {actor, offset = fromMaybe 0 offset})
+          , activity = \actor offset before -> wiki (activity ActivityQuery {actor, offset = fromMaybe 0 offset, before})
           , -- The storage checks who may: these are the administration's
             -- own operations ("Wiki.App.Backend.Admin").
             directory = wiki directory

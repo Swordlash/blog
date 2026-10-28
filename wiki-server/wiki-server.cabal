@@ -190,6 +190,7 @@ executable wiki-server-bench
     build-depends:
         aeson,
         base,
+        bytestring,
         directory,
         filepath,
         protolude,

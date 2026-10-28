@@ -200,7 +200,7 @@ serveDemo = do
   for_ people (answerWith "GET" links.admin.directory 200)
   answerWith "GET" links.admin.server 200 (noServerSettings :: ServerSettings)
   answerWith "GET" links.admin.backups 200 Backups {available = True, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
-  answerWith "GET" (links.admin.activity Nothing Nothing) 200 Activity {available = True, entries = [], more = False, actors = []}
+  answerWith "GET" (links.admin.activity Nothing Nothing Nothing) 200 Activity {available = True, entries = [], more = False, actors = []}
   answerWith "GET" links.admin.status 200 quietServer
   answerWith "GET" "api/v1/spaces" 200 spaces
   answerWith "GET" links.spaces.pageCounts 200 counts

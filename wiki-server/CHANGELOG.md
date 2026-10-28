@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+The audit log's Activity reads a page after an entry (`before`) through
+the log's indexes, so page 100 of a long log reads one page of entries
+(WP5.16b). Its list of actors jumps from one actor to the next in the
+index on actors, where it read every entry with a subquery each.
+
 A history is read a page at a time (WP5.16b): `listVersions` reads the
 versions asked for through the index `page_versions_order` (migration
 0015), numbered with a count through the same index, instead of every

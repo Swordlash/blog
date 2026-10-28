@@ -248,12 +248,19 @@ reading = describe "is read" $ do
     page2 <- as st "admin" (activity firstPage {offset = activityPageSize}) >>= ok
     length page2.entries `shouldBe` 4
     page2.more `shouldBe` False
+    -- The same page, after the oldest entry of the first.
+    as st "admin" (activity firstPage {before = (\e -> e.id) <$> lastMay page1.entries}) `shouldReturn` Right page2
+    -- Nothing comes after an entry the log does not have.
+    (\a -> a.entries) <$> (as st "admin" (activity firstPage {before = Just "no-such-entry"}) >>= ok) `shouldReturn` []
     map (\a -> a.login) page1.actors `shouldBe` ["admin", "administrator"]
     admin <- userNamed st "admin"
-    theirs <- as st "admin" (activity ActivityQuery {actor = Just admin.id, offset = 0}) >>= ok
+    theirs <- as st "admin" (activity ActivityQuery {actor = Just admin.id, offset = 0, before = Nothing}) >>= ok
     all (\e -> e.actor.login == "admin") theirs.entries `shouldBe` True
-    console <- as st "admin" (activity ActivityQuery {actor = Just operator.id, offset = 0}) >>= ok
+    console <- as st "admin" (activity ActivityQuery {actor = Just operator.id, offset = 0, before = Nothing}) >>= ok
     map (\e -> e.action) console.entries `shouldBe` ["user.disable"]
+    -- One actor's entries after one of theirs.
+    theirsAfter <- as st "admin" (activity ActivityQuery {actor = Just admin.id, offset = 0, before = (\e -> e.id) <$> head theirs.entries}) >>= ok
+    take (length theirs.entries - 1) theirsAfter.entries `shouldBe` drop 1 theirs.entries
     as st "editor" (activity firstPage) >>= (`shouldBe` Left Forbidden)
 
 moving :: Spec

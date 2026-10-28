@@ -28,7 +28,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), defaultTimeLocale, diffTimeToPicoseconds, formatTime, getCurrentTime)
 import Data.UUID.Types qualified as UUID
-import Database.SQLite.Simple (Connection, Query (..), execute, query, query_, (:.) (..))
+import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_, (:.) (..))
 import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
 import Wiki.Api.Activity (Activity (..), ActivityQuery (..), activityPageSize)
@@ -112,15 +112,37 @@ columns = "id, at, actor_id, actor_login, action, subject_kind, subject_id, subj
 
 -- | A page of the log, the newest first, and the actors it can be
 -- filtered by.
+--
+-- A page after an entry ('before') is found from that entry's place in the
+-- index on @(at, id)@ (@audit_log_at@), or on @(actor_id, at, id)@
+-- (@audit_log_actor@) for one actor's entries, so it costs one page of
+-- rows however far back it is. An entry that is not in the log has
+-- nothing after it. A page at an 'offset' is still answered, by counting
+-- off the entries before it.
+--
+-- The actors are found by jumping from one actor to the next in
+-- @audit_log_actor@ (a recursive query, each step the smallest actor id
+-- after the last), and each one's latest login by one look into the same
+-- index. So the list costs a few reads per actor, not a read of every
+-- entry of the log.
 loadActivity :: Connection -> ActivityQuery -> IO Activity
 loadActivity c q = do
   let offset = max 0 q.offset
       limit = activityPageSize + 1
-  rows <- case q.actor of
-    Nothing -> query c (Query ("SELECT " <> columns <> " FROM audit_log ORDER BY at DESC, id DESC LIMIT ? OFFSET ?")) (limit, offset)
-    Just u -> query c (Query ("SELECT " <> columns <> " FROM audit_log WHERE actor_id = ? ORDER BY at DESC, id DESC LIMIT ? OFFSET ?")) (u.text, limit, offset)
+  after <- for q.before $ \i -> head <$> query c "SELECT at, id FROM audit_log WHERE id = ?" (Only i)
+  rows <- case (after, q.actor) of
+    (Just Nothing, _) -> pure []
+    (Just (Just (at, i)), Nothing) ->
+      query c (Query ("SELECT " <> columns <> " FROM audit_log WHERE (at, id) < (?, ?) ORDER BY at DESC, id DESC LIMIT ?")) (at :: Text, i :: Text, limit)
+    (Just (Just (at, i)), Just u) ->
+      query c (Query ("SELECT " <> columns <> " FROM audit_log WHERE actor_id = ? AND (at, id) < (?, ?) ORDER BY at DESC, id DESC LIMIT ?")) (u.text, at, i, limit)
+    (Nothing, Nothing) -> query c (Query ("SELECT " <> columns <> " FROM audit_log ORDER BY at DESC, id DESC LIMIT ? OFFSET ?")) (limit, offset)
+    (Nothing, Just u) -> query c (Query ("SELECT " <> columns <> " FROM audit_log WHERE actor_id = ? ORDER BY at DESC, id DESC LIMIT ? OFFSET ?")) (u.text, limit, offset)
   -- Each actor by the login of their latest entry.
-  named <- query_ c "SELECT actor_id, actor_login FROM audit_log a WHERE at = (SELECT max(at) FROM audit_log b WHERE b.actor_id = a.actor_id) GROUP BY actor_id"
+  named <-
+    query_ c . Query $
+      "WITH RECURSIVE actor(id) AS (SELECT min(actor_id) FROM audit_log UNION ALL SELECT (SELECT min(actor_id) FROM audit_log WHERE actor_id > actor.id) FROM actor WHERE actor.id IS NOT NULL) "
+        <> "SELECT id, (SELECT actor_login FROM audit_log WHERE actor_id = actor.id ORDER BY at DESC, id DESC LIMIT 1) FROM actor WHERE id IS NOT NULL"
   pure
     Activity
       { available = True

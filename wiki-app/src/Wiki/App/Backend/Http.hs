@@ -558,7 +558,7 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
     | q == firstPage = once (\c -> c.activity) forgetActivity (R.get (activityLink q)) withActivity
     | otherwise = answer <$> call (R.get (activityLink q))
     where
-      activityLink a = links.admin.activity a.actor (mfilter (> 0) (Just a.offset))
+      activityLink a = links.admin.activity a.actor (mfilter (> 0) (Just a.offset)) a.before
   serverStatus = fmap Just <$> once (\c -> c.status) forgetStatus (R.get links.admin.status) withStatus
 
 -- | A page's comments, over the API's @pages\/\<page>\/threads@. A page's

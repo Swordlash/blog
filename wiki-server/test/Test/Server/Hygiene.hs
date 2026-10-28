@@ -395,7 +395,7 @@ passwordLink = describe "a password link an administrator has mailed" $ do
     _ <- signInAs r "editor" "chosen by edgar"
     (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = "chosen again"} >>= jsonAs 404) `shouldReturn` NotFound
     -- Recorded as the operator's.
-    activity :: Activity <- getUrl r (onAdmin r (links.admin.activity Nothing Nothing)) >>= jsonAs 200
+    activity :: Activity <- getUrl r (onAdmin r (links.admin.activity Nothing Nothing Nothing)) >>= jsonAs 200
     [(e.actor.login, e.subject.name) | e <- activity.entries, e.action == "user.password-link"] `shouldBe` [("administrator", "editor")]
 
   it "is mailed once a minute, the second click refused" $ withVerifiedEditor $ \r _ -> do

@@ -112,7 +112,7 @@ activityLog = describe "the activity" $
   it "lists what the operator changed on the admin listener, from where, newest first and by actor" $
     withDemoRunning identity $ \r -> do
       _ :: Group <- sendJson r methodPost (onAdmin r links.admin.createGroup) GroupName {name = "Night shift"} >>= jsonAs 201
-      page :: Activity <- getUrl r (onAdmin r (links.admin.activity Nothing Nothing)) >>= jsonAs 200
+      page :: Activity <- getUrl r (onAdmin r (links.admin.activity Nothing Nothing Nothing)) >>= jsonAs 200
       case page.entries of
         newest : _ -> do
           newest.action `shouldBe` "group.create"
@@ -121,10 +121,10 @@ activityLog = describe "the activity" $
           newest.address `shouldBe` "127.0.0.1"
         [] -> expectationFailure "nothing in the log"
       operator <- maybe (expectationFailure "no actor" >> panic "") pure (head page.actors)
-      theirs :: Activity <- getUrl r (onAdmin r (links.admin.activity (Just operator.id) Nothing)) >>= jsonAs 200
+      theirs :: Activity <- getUrl r (onAdmin r (links.admin.activity (Just operator.id) Nothing Nothing)) >>= jsonAs 200
       map (\e -> e.action) theirs.entries `shouldBe` ["group.create"]
       -- Nobody signed in reads none of it.
-      refused <- getUrl r (onPublic r (links.admin.activity Nothing Nothing))
+      refused <- getUrl r (onPublic r (links.admin.activity Nothing Nothing Nothing))
       refused.status `shouldBe` 403
 
 -- | The schema's version this program migrates to.

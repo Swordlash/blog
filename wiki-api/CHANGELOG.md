@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The audit log's pages after an entry (WP5.16b). `ActivityQuery` gains
+`before`, the id of the oldest entry of the page before, and
+`AdminApi.activity` the query parameter `before`: the page is the entries
+logged before that one. `offset` is still answered, but costs the server
+more the further it skips.
+
 A history a page at a time (WP5.16b). `PagesApi.versions` (`GET
 pages/<id>/versions`) takes `before` (a version's time, as in its address)
 and `limit` (50 if not given, 500 at most) as query parameters, and answers

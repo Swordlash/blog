@@ -328,10 +328,10 @@ data AdminApi mode = AdminApi
   { status :: mode :- "status" :> Get '[JSON] ServerStatus
   -- ^ The server's version, data directory and counts, its schema
   -- version, the newest backup, and the last errors it logged.
-  , activity :: mode :- "activity" :> QueryParam "actor" UserId :> QueryParam "offset" Int :> Get '[JSON] Activity
+  , activity :: mode :- "activity" :> QueryParam "actor" UserId :> QueryParam "offset" Int :> QueryParam "before" Text :> Get '[JSON] Activity
   -- ^ @activity@: a page of the audit log ("Wiki.Api.Activity"), newest
-  -- first, starting at @offset@ (0 if missing), with one actor's entries or
-  -- everyone's.
+  -- first, starting after the entry @before@ names, or else at @offset@ (0
+  -- if missing), with one actor's entries or everyone's.
   , directory :: mode :- "directory" :> Get '[JSON] Directory
   -- ^ @directory@: the users, which of them are administrators, the groups
   -- and their members.

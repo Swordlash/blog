@@ -14,6 +14,11 @@
 -- revision), since that change is in the log, and when another person or
 -- page is chosen.
 --
+-- "Older" asks for the entries before the oldest one shown (the query's
+-- 'before'), which the server finds through an index however far back
+-- the log goes. "Newer" goes back to the page before, whose starting
+-- entry the section keeps.
+--
 -- The demo keeps no log (its administration has one user, in this
 -- browser): its backend says the log is not available, and the section
 -- says so.
@@ -47,6 +52,9 @@ data Loaded
 data State = State
   { input :: Input
   , query :: ActivityQuery
+  , newer :: [Maybe Text]
+  -- ^ Where each newer page started ('before' of its query), the nearest
+  -- first: "Newer" goes back to the first of them.
   , loaded :: Loaded
   , busy :: Bool
   -- ^ Another page, or another person's entries, are being fetched: the
@@ -67,7 +75,7 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           loaded <- maybe Loading (either Failed Ready) <$> atOnce (activity firstPage)
-          pure State {input, query = firstPage, loaded, busy = False}
+          pure State {input, query = firstPage, newer = [], loaded, busy = False}
       , render
       , eval =
           H.mkEval
@@ -145,9 +153,9 @@ component =
             </table>
           {% end %}
           <div class="actions activity-pages">
-            <button type="button" class="activity-newer" disabled={{ st.busy || st.query.offset == 0 }} onClick={{ const Newer }}>Newer</button>
+            <button type="button" class="activity-newer" disabled={{ st.busy || null st.newer }} onClick={{ const Newer }}>Newer</button>
             <button type="button" class="activity-older" disabled={{ st.busy || not a.more }} onClick={{ const Older }}>Older</button>
-            <span class="activity-range">{{ rangeText st.query a }}</span>
+            <span class="activity-range">{{ rangeText (length st.newer) a }}</span>
           </div>
         </div>
       |]
@@ -165,14 +173,20 @@ component =
         when (old /= input.context.revision) load
       ChoseActor chosen -> do
         let actor = if T.null chosen then Nothing else Just (UserId chosen)
-        modify (\st -> st {query = ActivityQuery {actor, offset = 0}, busy = True})
+        modify (\st -> st {query = ActivityQuery {actor, offset = 0, before = Nothing}, newer = [], busy = True})
         load
-      Newer -> do
-        modify (\st -> st {query = st.query {offset = max 0 (st.query.offset - activityPageSize)}, busy = True})
-        load
-      Older -> do
-        modify (\st -> st {query = st.query {offset = st.query.offset + activityPageSize}, busy = True})
-        load
+      Newer ->
+        gets (\st -> st.newer) >>= \case
+          start : rest -> do
+            modify (\st -> st {query = st.query {before = start}, newer = rest, busy = True})
+            load
+          [] -> pass
+      Older ->
+        gets (\st -> st.loaded) >>= \case
+          Ready a | Just oldest <- lastMay a.entries -> do
+            modify (\st -> st {query = st.query {before = Just oldest.id}, newer = st.query.before : st.newer, busy = True})
+            load
+          _ -> pass
 
     load :: H.HalogenM State Action Empty Void m ()
     load = do
@@ -194,8 +208,11 @@ subjectText s
 detailText :: Map Text Text -> Text
 detailText = T.intercalate "; " . map (\(k, v) -> k <> ": " <> v) . Map.toList
 
--- | Which entries these are: @1–50@, @51–73@.
-rangeText :: ActivityQuery -> Activity -> Text
-rangeText q a
+-- | Which entries these are, given how many pages come before them:
+-- @1–50@, @51–73@.
+rangeText :: Int -> Activity -> Text
+rangeText pages a
   | null a.entries = ""
-  | otherwise = show (q.offset + 1) <> "–" <> show (q.offset + length a.entries)
+  | otherwise = show (start + 1) <> "–" <> show (start + length a.entries)
+  where
+    start = pages * activityPageSize

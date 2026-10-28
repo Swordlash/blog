@@ -278,7 +278,7 @@ apiOver providers st = do
               : (links.admin.invitations, answerOf invited)
               : (links.admin.server, answerOf server)
               : (links.admin.backups, answerOf kept)
-              : (links.admin.activity Nothing Nothing, answerOf logged)
+              : (links.admin.activity Nothing Nothing Nothing, answerOf logged)
               : (links.admin.status, answerOf (Right status :: Either WikiError ServerStatus))
               : (links.notifications.list, answerOf told)
               : (links.invitations.details (InvitationToken "valid"), answerOf (Right InvitationInfo {email = "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))

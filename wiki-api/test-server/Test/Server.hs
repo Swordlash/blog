@@ -224,7 +224,7 @@ stubs =
     , admin =
         AdminApi
           { status = pure Sample.serverStatus
-          , activity = \actor offset -> pure Sample.activity {more = actor == Just (UserId "u1") && offset == Just 50}
+          , activity = \actor offset cursor -> pure Sample.activity {more = actor == Just (UserId "u1") && (offset == Just 50 || cursor == Just "e1")}
           , directory = pure Sample.directory
           , setAdministrator = \u flag -> if u == UserId "u2" && flag.administrator then pure NoContent else refuse NotFound
           , setCreateSpaces = \u flag -> if u == UserId "u2" && not flag.createSpaces then pure NoContent else refuse NotFound
@@ -601,10 +601,12 @@ spec = describe "a server of the API's type" $ do
       answers (getAt links.admin.status) 200 Sample.serverStatus
 
     it "gives a page of the audit log, by actor and from an offset" $ do
-      links.admin.activity Nothing Nothing `shouldBe` "api/v1/admin/activity"
-      links.admin.activity (Just (UserId "u1")) (Just 50) `shouldBe` "api/v1/admin/activity?actor=u1&offset=50"
-      answers (getAt (links.admin.activity (Just (UserId "u1")) (Just 50))) 200 Sample.activity {more = True}
-      answers (getAt (links.admin.activity Nothing Nothing)) 200 Sample.activity {more = False}
+      links.admin.activity Nothing Nothing Nothing `shouldBe` "api/v1/admin/activity"
+      links.admin.activity (Just (UserId "u1")) (Just 50) Nothing `shouldBe` "api/v1/admin/activity?actor=u1&offset=50"
+      links.admin.activity (Just (UserId "u1")) Nothing (Just "e1") `shouldBe` "api/v1/admin/activity?actor=u1&before=e1"
+      answers (getAt (links.admin.activity (Just (UserId "u1")) (Just 50) Nothing)) 200 Sample.activity {more = True}
+      answers (getAt (links.admin.activity (Just (UserId "u1")) Nothing (Just "e1"))) 200 Sample.activity {more = True}
+      answers (getAt (links.admin.activity Nothing Nothing Nothing)) 200 Sample.activity {more = False}
 
     it "makes a user with a password, sets one, and disables a login" $ do
       answers (sendJson methodPost links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = "x", email = Nothing}) 201 Account {user = User {id = UserId "new", login = "bea", displayName = "Bea"}, hasPassword = True, disabled = False}
