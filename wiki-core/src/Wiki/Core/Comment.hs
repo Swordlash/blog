@@ -37,6 +37,11 @@ module Wiki.Core.Comment
   , isInline
   , opener
 
+    -- * Authors who are not users
+  , formerAuthor
+  , formerAuthorName
+  , absentAuthor
+
     -- * Rules
   , mayComment
   , mayEditComment
@@ -105,6 +110,29 @@ isInline t = isJust t.anchor
 -- | Who started a thread: the author of its first comment.
 opener :: Thread -> Maybe UserId
 opener t = (\c -> c.author.id) <$> head t.comments
+
+-- | 'formerAuthor' is the user id a comment keeps for an author who is
+-- not a user of this wiki: a person whose comments came in an import
+-- ("Wiki.Core.Export") and whose login matches nobody here. The id holds
+-- the person's name, so that the comment can still say who wrote it. It
+-- starts with @~@, which no login and no other user id starts with, so it
+-- never names a real user, and nobody may edit the comment.
+formerAuthor :: Text -> UserId
+formerAuthor name = UserId (formerPrefix <> name)
+
+-- | The name kept in a 'formerAuthor' id, or 'Nothing' for any other id.
+formerAuthorName :: UserId -> Maybe Text
+formerAuthorName u = T.stripPrefix formerPrefix u.text
+
+formerPrefix :: Text
+formerPrefix = "~former:"
+
+-- | 'absentAuthor' is how a comment or a version names an author who is
+-- not among the wiki's users. An author kept by 'formerAuthor' is shown by
+-- their name, marked as not a user here. Any other id is shown as it is,
+-- since the id is all that is left of that person.
+absentAuthor :: UserId -> Author
+absentAuthor u = Author {id = u, name = maybe u.text (<> " (not a user here)") (formerAuthorName u)}
 
 -- | Whether a user may comment on a page of the space at the end of the
 -- chain: they are signed in, and may read the page.

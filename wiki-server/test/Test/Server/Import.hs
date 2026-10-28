@@ -8,15 +8,17 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), fromGregorian)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Network.HTTP.Types (methodPost, methodPut)
 import Protolude
 import Servant.API (toUrlPiece)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
-import Wiki.Api (AdminApi (..), ArchiveApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AdminApi (..), ArchiveApi (..), CommentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Admin (ServerStatus (..))
+import Wiki.Api.Comments (NewThread (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Import
 import Wiki.Api.Links (attachmentUrl, links, spaceIconUrl)
@@ -24,7 +26,9 @@ import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
 import Wiki.App.View.Common (pagePathOf)
 import Wiki.Core.Access (Access (..))
+import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Comment (Comment (..), Thread (..), formerAuthor)
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
 import Wiki.Core.Id
@@ -34,6 +38,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), withProfile)
 import Wiki.Core.User (User (..))
+import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Blobs (blobOf)
 
 spec :: Spec
@@ -44,6 +49,7 @@ spec = describe "export and import" $ do
   choices
   roundTrip
   profiles
+  discussions
   refusals
 
 -- | The admin listener's address of an endpoint.
@@ -120,6 +126,8 @@ archive spaces pages =
     , grants = Grants {global = [GlobalGrant {subject = SubjectUser (UserId "u1"), permission = Administer}], spaces = [], access = Open}
     , spaces
     , pages
+    , threads = mempty
+    , commentAuthors = []
     , blobs = Map.fromList [(BlobId "b1", "PNG")]
     , audit = []
     }
@@ -331,6 +339,97 @@ profiles = describe "a space's profile" $ do
     again <- spaceAt r ["docs"]
     tour <- pageAt r ["docs"] ["tour"]
     (again.description, again.icon, again.homePage) `shouldBe` ("Ours.", Just (IconEmoji "🦉"), Just tour.id)
+
+-- | The docs of the tests with comments on the tour: a thread about the
+-- whole page, opened by Alice (one of the archive's users) and answered by
+-- Bob (not one of them, but named among its comment authors, by login),
+-- with his answer edited; and an inline thread, resolved, by Carol, whom
+-- the archive names only by her name.
+discussed :: Archive
+discussed =
+  docs
+    { threads = Map.fromList [(PageId "p1", [aboutThePage, inline])]
+    , commentAuthors = [User {id = UserId "u7", login = "bob", displayName = "Bob"}]
+    }
+  where
+    aboutThePage =
+      Thread
+        { id = CommentThreadId "t1"
+        , page = PageId "p1"
+        , anchor = Nothing
+        , resolved = False
+        , createdAt = time
+        , comments = [comment "t1" "c1" (UserId "u1") "Is this right?" Nothing, comment "t1" "c2" (UserId "u7") "It is." (Just later)]
+        }
+    inline =
+      Thread
+        { id = CommentThreadId "t2"
+        , page = PageId "p1"
+        , anchor = Just Anchor {exact = "Tour", prefix = "", suffix = ""}
+        , resolved = True
+        , createdAt = time
+        , comments = [comment "t2" "c3" (formerAuthor "Carol") "Fixed." Nothing]
+        }
+    comment thread i author text editedAt =
+      Comment {id = CommentId i, thread = CommentThreadId thread, author = Author {id = author, name = author.text}, body = text, createdAt = time, editedAt}
+
+later :: UTCTime
+later = addUTCTime 60 time
+
+-- | The threads of the server's page at a path of a space at a path: each
+-- thread's id, whether it is resolved, and its comments' ids, authors,
+-- bodies and edit times.
+threadsAt :: Running -> [Text] -> [Text] -> IO [(CommentThreadId, Bool, [(CommentId, UserId, Text, Text, Maybe UTCTime)])]
+threadsAt r s p = do
+  found <- pageAt r s p
+  ts <- ok200 (getUrl r (admin r (links.comments found.id).list))
+  pure [(t.id, t.resolved, [(c.id, c.author.id, c.author.name, c.body, c.editedAt) | c <- t.comments]) | (t :: Thread) <- ts]
+
+discussions :: Spec
+discussions = describe "a page's comments" $ do
+  let expected alice =
+        [ (CommentThreadId "t1", False, [(CommentId "c1", alice, "Alice Here", "Is this right?", Nothing), (CommentId "c2", UserId "~former:Bob", "Bob (not a user here)", "It is.", Just later)])
+        , (CommentThreadId "t2", True, [(CommentId "c3", UserId "~former:Carol", "Carol (not a user here)", "Fixed.", Nothing)])
+        ]
+      makeAlice r = do
+        made :: Account <- sendJson r methodPost (admin r links.admin.createUser) NewAccount {login = "alice", displayName = "Alice Here", password = "alice's password", email = Nothing} >>= jsonAs 201
+        pure made.user.id
+
+  it "come with a page the import makes: authors matched by login, anyone else kept by name, ids and times kept" $ withRunning $ \r -> do
+    alice <- makeAlice r
+    apply r discussed importEverything `shouldReturn` summary {spacesCreated = 2, pagesCreated = 3, attachments = 1}
+    threadsAt r ["docs"] ["tour"] `shouldReturn` expected alice
+    threadsAt r ["docs"] ["tour", "more"] `shouldReturn` []
+
+  it "are not brought twice, whether the server's page is kept or replaced" $ withRunning $ \r -> do
+    alice <- makeAlice r
+    _ <- apply r discussed importEverything
+    _ <- apply r discussed importEverything
+    let taken = importEverything {conflicts = [ConflictChoice {page = PageRef {space = [slug "docs"], page = [slug "tour"]}, resolution = TakeImported}]}
+    _ <- apply r discussed taken
+    threadsAt r ["docs"] ["tour"] `shouldReturn` expected alice
+
+  it "come with a page whose content the import replaces, after the page's own, but not with a page the server keeps" $ withRunning $ \r -> do
+    ours <- makeSpace r "docs"
+    mine <- makePage r ours "Tour" "Ours."
+    _ :: Thread <- sendJson r methodPost (admin r (links.comments mine.id).open) NewThread {anchor = Nothing, body = "Our own."} >>= jsonAs 201
+    _ <- apply r discussed importEverything
+    map (\(_, _, cs) -> map (\(_, _, _, b, _) -> b) cs) <$> threadsAt r ["docs"] ["tour"] `shouldReturn` [["Our own."]]
+    let taken = importEverything {conflicts = [ConflictChoice {page = PageRef {space = [slug "docs"], page = [slug "tour"]}, resolution = TakeImported}]}
+    _ <- apply r discussed taken
+    map (\(_, _, cs) -> map (\(_, _, _, b, _) -> b) cs) <$> threadsAt r ["docs"] ["tour"] `shouldReturn` [["Our own."], ["Is this right?", "It is."], ["Fixed."]]
+
+  it "go out with an export, and into another server, kept by name where it has no such user" $
+    withRunning $ \origin -> withRunning $ \copy -> do
+      _ <- makeAlice origin
+      _ <- apply origin discussed importEverything
+      reply <- getUrl origin (admin origin links.archive.export)
+      exported <- either (assertFailure . toS) pure (unzipFiles (BSL.toStrict reply.body) >>= readArchive)
+      _ <- apply copy exported importEverything
+      threadsAt copy ["docs"] ["tour"]
+        `shouldReturn` [ (CommentThreadId "t1", False, [(CommentId "c1", UserId "~former:Alice Here", "Alice Here (not a user here)", "Is this right?", Nothing), (CommentId "c2", UserId "~former:Bob", "Bob (not a user here)", "It is.", Just later)])
+                       , (CommentThreadId "t2", True, [(CommentId "c3", UserId "~former:Carol", "Carol (not a user here)", "Fixed.", Nothing)])
+                       ]
 
 refusals :: Spec
 refusals = describe "export and import" $ do

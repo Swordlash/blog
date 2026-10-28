@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+The export (`GET api/v1/export`) writes version 2 of the export format
+(WP5.8, `docs/export.md`), the pages' comments included, read in two
+queries for the whole wiki inside the export's read transaction. The
+administrator's comments name them by the login `administrator`. Both
+imports read versions 1 and 2. Loading a wiki into an empty storage
+(`importArchive`) brings every comment with its id, its times, its edit
+and its thread's resolution. The merge (`api/v1/import/apply`) brings a
+page's comments with its content: a page it makes, and a page whose
+content it replaces, get the archive's threads that the page does not have
+yet, after its own; a page the server keeps keeps its own. Comments'
+authors are matched by login with the server's users and its
+administrator; anyone else is kept by their name and shown as "(not a user
+here)". The import's audit entry counts the comments. An export of a wiki
+with two attachments of the same bytes now imports: their shared blob used
+to be refused. No migration.
+
 The list of a space's pages carries no bodies (WP5.14): it reads only the
 pages' titles, slugs, places and dates, however long the pages are. The
 details of a blog's posts carry each post's excerpt instead. A space's

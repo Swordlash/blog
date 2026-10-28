@@ -4,7 +4,9 @@
 -- which check the rules first.
 module Wiki.Server.Storage.Comments
   ( loadThreads
+  , loadAllThreads
   , insertThread
+  , restoreThread
   , insertComment
   , updateCommentBody
   , deleteCommentRow
@@ -15,13 +17,13 @@ where
 
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
-import Database.SQLite.Simple (Connection, Only (..), Query, execute, query, queryWith)
+import Database.SQLite.Simple (Connection, Only (..), Query, execute, query, queryWith, queryWith_, (:.) (..))
 import Database.SQLite.Simple.FromRow (RowParser, field)
 import Protolude
 import Wiki.Core.Anchor (Anchor (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id
-import Wiki.Core.Version (Author)
+import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Rows (Stamp (..), stamp)
 
 -- | Every thread of a page, in the order they were opened, each with its
@@ -44,6 +46,20 @@ loadThreads named c page = do
       (Only page.text)
   let byThread = Map.fromListWith (flip (<>)) [(x.thread, [x]) | x <- comments]
   pure [t {comments = Map.findWithDefault [] t.id byThread} | t <- threads]
+
+-- | Every thread of every page, by page, each with its comments, as
+-- 'loadThreads' gives them. The export reads them all at once, with two
+-- queries rather than two per page.
+loadAllThreads :: (UserId -> Maybe Text -> Author) -> Connection -> IO (Map PageId [Thread])
+loadAllThreads named c = do
+  threads <- queryWith_ threadRow c "SELECT id, page_id, quote, prefix, suffix, resolved, created_at FROM threads ORDER BY page_id, seq"
+  comments <-
+    queryWith_
+      (commentRow named)
+      c
+      "SELECT c.id, c.thread_id, c.author, u.display_name, c.body, c.created_at, c.edited_at FROM comments c LEFT JOIN users u ON u.id = c.author ORDER BY c.thread_id, c.seq"
+  let byThread = Map.fromListWith (flip (<>)) [(x.thread, [x]) | x <- comments]
+  pure (Map.fromListWith (flip (<>)) [(t.page, [t {comments = Map.findWithDefault [] t.id byThread}]) | t <- threads])
 
 threadRow :: RowParser Thread
 threadRow = do
@@ -92,6 +108,25 @@ insertComment c cid tid author body at = do
     c
     "INSERT INTO comments (id, thread_id, author, body, created_at, edited_at, seq) VALUES (?, ?, ?, ?, ?, NULL, ?)"
     (cid.text, tid.text, author.text, body, Stamp at, next)
+
+-- | Add a whole thread, as an import brings it: last among its page's
+-- threads, resolved or not, with its comments in order, each with its
+-- author, its times and whether it was edited. The thread and its
+-- comments keep the ids they are given.
+restoreThread :: Connection -> Thread -> IO ()
+restoreThread c t = do
+  next <- nextSeq c "SELECT coalesce(max(seq) + 1, 0) FROM threads WHERE page_id = ?" t.page.text
+  execute
+    c
+    "INSERT INTO threads (id, page_id, quote, prefix, suffix, resolved, created_at, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ( (t.id.text, t.page.text, (\a -> a.exact) <$> t.anchor, (\a -> a.prefix) <$> t.anchor, (\a -> a.suffix) <$> t.anchor)
+        :. (t.resolved && isJust t.anchor, Stamp t.createdAt, next)
+    )
+  for_ (zip [0 :: Int ..] t.comments) $ \(ordinal, x) ->
+    execute
+      c
+      "INSERT INTO comments (id, thread_id, author, body, created_at, edited_at, seq) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      (x.id.text, t.id.text, x.author.id.text, x.body, Stamp x.createdAt, Stamp <$> x.editedAt, ordinal)
 
 -- | The position after the last of a page's threads, or of a thread's
 -- comments.

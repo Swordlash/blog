@@ -21,12 +21,16 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend (MonadWiki (..))
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Mem (Opened (..), memArchive, runMemWiki)
 import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Browser (zipFiles)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Export (writeArchive)
+import Wiki.Core.Page qualified as P
+import Wiki.Core.Space (Space (..))
 
 $( browserJS
      ["jsbits/test-files.js"]
@@ -118,7 +122,13 @@ spec m = do
     -- Handed to the browser to save, by the name it says.
     saved <- unsafeIOToPageM downloads
     drop (length before) saved `shouldBe` [T.dropEnd 1 (T.drop (T.length "Exported the wiki as ") told)]
-    -- What was handed to the browser to save, made again the same way.
+    -- A comment, which the export carries and the import brings back.
+    unsafeIOToPageM . runMemWiki opened.wiki $ do
+      blog <- either (panic . show) pure =<< getSpace (slugs ["blog"])
+      hello <- either (panic . show) pure =<< getPage blog.id (slugs ["hello-world"])
+      either (panic . show) (const pass) =<< openThread hello.id Nothing "Carried by the export."
+    -- What was handed to the browser to save, made again the same way,
+    -- with the comment.
     zipped <- unsafeIOToPageM (runMemWiki opened.wiki (memArchive "test") >>= zipFiles . writeArchive)
     find ui ".admin-view .demo-reset-ask" >>= click
     clickButton ui ".demo-reset-confirm button" "Reset"
@@ -138,6 +148,7 @@ spec m = do
     find ui ".admin-view .demo-told" >>= textContent >>= (`shouldSatisfy` ("Imported wiki-export.zip: 3 users, 4 spaces" `T.isPrefixOf`))
     helloWorld ui
     find ui ".page-view .page-body p" >>= (`shouldHaveText` "Exported, and brought back.")
+    eventually $ (traverse textContent =<< findAll ui ".page-comments .comment-body") >>= (`shouldSatisfy` elem "Carried by the export.")
     -- And kept: the next visit finds it too.
     unmount ui
     again <- startKept m db Nothing (Page (slugs ["blog"]) (slugs ["hello-world"]))

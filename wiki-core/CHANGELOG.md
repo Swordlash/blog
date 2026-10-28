@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+The export is version 2 of its format (WP5.8, `docs/export.md`): a zip
+file whose spaces, subspaces and pages are directories, named by their
+slugs. A space's directory holds `space.json` and its icon's image; a page's
+holds `page.json`, its body as `page.md` byte for byte, its attachments'
+bytes under `attachments/`, and its comments as `comments.json`; subspaces
+and subpages are directories inside, to any depth. Slugs that are Windows
+device names get a `_`, and attachments' names have what a file system
+refuses written as `%` and hex. `writeArchive` writes version 2 only;
+`readArchive` reads versions 1 and 2, bringing an archive of version 1 to
+version 2 first (`migrations` now works on the archive's files). Version 1's
+flat records stay the demo's IndexedDB records: `encodeSpace`, `encodePage`
+and `encodeAttachment` write what they wrote.
+
+Comments are in the export. `Archive` gains `threads`, each page's comment
+threads, and `commentAuthors`, the people who wrote comments and are not
+among its users (the server's administrator). A comment's author is
+written by id, login and name; `threadsAmong` matches authors by login
+with the users of the wiki that imports them, and keeps anyone else by
+their name. `Wiki.Core.Comment` has `formerAuthor`, the id kept for such an
+author (`~former:` and their name), `formerAuthorName`, and `absentAuthor`,
+how an author who is not among the users is shown ("Carol (not a user
+here)"). Two attachments may share a blob, as the server's do when their
+bytes are the same; an archive used to be refused for it, and is now
+refused only when their files differ.
+
 The assistant's default effort is medium, on both providers (WP5.11), and
 is the user's own choice per provider. `ProviderSettings.effort` is now a
 `Maybe Text`, the effort chosen for new conversations; `Nothing` means

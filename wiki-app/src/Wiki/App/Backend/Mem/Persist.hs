@@ -7,9 +7,12 @@
 -- The records are JSON, written and read by "Wiki.Core.Export", the codec
 -- of the export archive. So a saved record and an exported record have one
 -- format, with the same rules for what may change without a new format
--- version. A page is the export's page record, with its attachments'
--- records in a field @attachments@. An attachment's bytes are saved as
--- bytes, under the id of its blob.
+-- version. A space's and a page's records are those of version 1 of the
+-- export: they name their parent, and a page its space and its body,
+-- which version 2 takes from the archive's tree of directories. A page is
+-- the export's page record, with its attachments' records in a field
+-- @attachments@. An attachment's bytes are saved as bytes, under the id of
+-- its blob.
 --
 -- Besides those records, the store @meta@ holds what the export's user
 -- records lack: the id counter (new ids are made from it, and a counter
@@ -23,14 +26,19 @@
 -- the tab and come back to their draft, which is what drafts are for.
 -- Every version of every page ("Wiki.Core.Version") is a record: one full
 -- title and body per save, so a page saved a hundred times takes a hundred
--- times its size. A page's comment threads ("Wiki.Core.Comment") are one
--- record, under the page's id. A user's notifications, what they watch,
+-- times its size. A user's notifications, what they watch,
 -- and how they want to be notified ("Wiki.Core.Notification") are one
 -- record, under the user's id.
 --
 -- Everything here is pure. "Wiki.App.Backend.Mem" reads and writes the
 -- database, and works out what to write by comparing two sets of
 -- 'records' with 'changes'.
+--
+-- A page's comment threads ("Wiki.Core.Comment") are in the export, but
+-- saved here in a record of their own: the threads' JSON encoding, under
+-- the page's id. That record is older than the export's @comments.json@,
+-- and changing it would make the comments of every demo saved before
+-- unreadable.
 module Wiki.App.Backend.Mem.Persist
   ( -- * The database
     memDatabase

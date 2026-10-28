@@ -1,8 +1,8 @@
 -- | The demo's export and import: the in-memory wiki as an archive
 -- ("Wiki.Core.Export") in a zip file and back, natively through
 -- @zip-archive@ ("Wiki.Core.Export.Zip"), what an import refuses, and the
--- archive of version 1 checked in under @test/data@, which every later
--- version must still import.
+-- archives of versions 1 and 2 checked in under @test/data@, which every
+-- later version must still import.
 module Test.Export (spec, goldenArchive, goldenPath) where
 
 import Data.Aeson (Value (..), decodeStrict', toJSON)
@@ -19,12 +19,14 @@ import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Backend (MonadWiki (..), WikiError)
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Mem
-import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
+import Wiki.App.Backend.Mem.Archive (fromArchive, nextCounter, toArchive)
 import Wiki.App.Backend.Mem.Persist (memDatabase, spacesStore)
 import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions)
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor)
 import Wiki.Core.Export (Archive, encodeJson, readArchive, writeArchive)
 -- Qualified, for the fields of an archive, which the in-memory wiki has too.
 import Wiki.Core.Export qualified as Export
@@ -37,27 +39,35 @@ import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (User (..))
+import Wiki.Core.Version (Author (..))
 
--- | The golden archive: the demo as it was when version 1 of the format was
--- made, written once by 'goldenArchive' below (in GHCi:
--- @goldenArchive >>= Data.ByteString.writeFile goldenPath@) and checked in.
--- It is never written again; a version 2 adds a file of its own beside it.
+-- | The golden archive of version 1: the demo as it was when version 1 of
+-- the format was made, written once by the export of that version and
+-- checked in. It is never written again.
+goldenV1Path :: FilePath
+goldenV1Path = "test/data/wiki-export-v1.zip"
+
+-- | The golden archive of version 2, written once by 'goldenArchive' below
+-- (in GHCi: @goldenArchive >>= Data.ByteString.writeFile goldenPath@) and
+-- checked in. A version 3 adds a file of its own beside it.
 goldenPath :: FilePath
-goldenPath = "test/data/wiki-export-v1.zip"
+goldenPath = "test/data/wiki-export-v2.zip"
 
--- | When the golden archive says it was written.
+-- | When the golden archives say they were written.
 goldenTime :: UTCTime
 goldenTime = UTCTime (fromGregorian 2026 10 22) 0
 
--- | What the golden archive holds: the demo, with a file uploaded that is
--- not text, as the demo's export at version 1 wrote it.
+-- | What the golden archive of version 2 holds: the demo, with a file
+-- uploaded that is not text and comments with a reply, as the demo's
+-- export at version 2 writes it.
 goldenArchive :: IO ByteString
 goldenArchive = do
   st <- edited
   pure (zipFiles goldenTime (writeArchive (toArchive goldenTime "wiki-app 0.1.0.0" st)))
 
 -- | The demo with some of everything changed: a space and a page made, a
--- page saved, a file of every byte uploaded.
+-- page saved, a file of every byte uploaded, a thread of comments with a
+-- reply by another user.
 edited :: IO MemState
 edited = do
   ref <- newMemWiki (demoState demoNow)
@@ -72,6 +82,9 @@ edited = do
     _ <- ok' =<< uploadSpaceIcon space.id "image/png" (BS.pack [0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
     page <- ok' =<< createPage space.id Nothing "Exported page" "# Exported\n\nWith *Markdown*."
     _ <- ok' =<< savePage page.id page.updatedAt "Exported page" "# Exported, then saved"
+    thread <- ok' =<< openThread tour.id Nothing "Is the tour up to date?"
+    switchUser (Just (UserId "user-editor"))
+    _ <- ok' =<< reply tour.id thread.id "It is now."
     pass
   st <- readIORef ref
   pure (withoutHistory st {current = Nothing, objectUrls = mempty})
@@ -98,16 +111,40 @@ ordered = do
     either (panic . show) (const pass) =<< shiftPage made.id ShiftToTop
   (\x -> withoutHistory x {current = Nothing}) <$> readIORef ref
 
--- | The wiki with each page's history as an import starts it: the page as
--- it is, saved by nobody known; and with no comments. An archive has no
--- history and no comments, so this is the wiki an archive of it reads back
--- as.
+-- | The wiki with each page's history as an import starts it (the page as
+-- it is, saved by nobody known), with nobody notified of anything or
+-- watching anything, and each comment's author named as the users name
+-- them. An archive has no history and no notifications, and an import
+-- names the authors from the users, so this is the wiki an archive of it
+-- reads back as. (The demo's own comments keep an author's id as their
+-- name, which nothing shows: the comments are listed with the users'
+-- names.) The counter for new ids is the one an import starts: the ids of
+-- the notifications left out do not count.
 withoutHistory :: MemState -> MemState
-withoutHistory st = completeVersions st {versions = mempty, threads = mempty}
+withoutHistory st = imported {counter = nextCounter imported}
+  where
+    imported =
+      completeVersions
+        st
+          { versions = mempty
+          , notices = mempty
+          , watches = mempty
+          , choices = mempty
+          , threads = map (map (\t -> t {comments = map named t.comments})) st.threads
+          }
+    named c =
+      Comment
+        { id = c.id
+        , thread = c.thread
+        , author = maybe (absentAuthor c.author.id) (\u -> Author {id = u.id, name = u.displayName}) (Map.lookup c.author.id st.users)
+        , body = c.body
+        , createdAt = c.createdAt
+        , editedAt = c.editedAt
+        }
 
--- | The files every archive has, besides the attachments'.
+-- | The files every archive has, besides its tree of spaces and pages.
 recordFiles :: [Text]
-recordFiles = ["manifest.json", "users.json", "groups.json", "grants.json", "spaces.json", "pages.json", "attachments.json"]
+recordFiles = ["manifest.json", "users.json", "groups.json", "grants.json"]
 
 -- | A wiki with its space grants in an order of their own: the store keeps
 -- them by space.
@@ -125,14 +162,20 @@ readBack zipped = unzipFiles zipped >>= readArchive
 filesOf :: Archive -> Map Text ByteString
 filesOf = Map.fromList . writeArchive
 
--- | A JSON file's records, each changed.
+-- | The records of every file whose name ends so (@space.json@,
+-- @page.json@), each changed.
 editRecords :: Text -> (KeyMap.KeyMap Value -> KeyMap.KeyMap Value) -> Map Text ByteString -> Map Text ByteString
-editRecords file f = Map.adjust change file
+editRecords name f = Map.mapWithKey change
   where
-    change bytes = case decodeStrict' bytes of
-      Just (Array values) -> encodeJson (Array (map (\case Object o -> Object (f o); v -> v) values))
-      Just (Object o) -> encodeJson (Object (f o))
-      _ -> bytes
+    change file bytes
+      | not (name `T.isSuffixOf` file) = bytes
+      | otherwise = case decodeStrict' bytes of
+          Just (Object o) -> encodeJson (Object (f o))
+          _ -> bytes
+
+-- | The records of every file whose name ends so.
+recordsIn :: Text -> Map Text ByteString -> [KeyMap.KeyMap Value]
+recordsIn name files = [o | (file, bytes) <- Map.toList files, name `T.isSuffixOf` file, Just (Object o) <- [decodeStrict' bytes]]
 
 refused :: (HasCallStack) => Text -> Either Text a -> Expectation
 refused saying = \case
@@ -141,7 +184,7 @@ refused saying = \case
 
 spec :: Spec
 spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
-  it "reads a wiki back from its zip file as it was, attachments' bytes included" $ do
+  it "reads a wiki back from its zip file as it was, attachments' bytes and comments included" $ do
     st <- edited
     let zipped = zipFiles goldenTime (writeArchive (toArchive goldenTime "test" st))
     case readBack zipped of
@@ -150,15 +193,19 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
         fromArchive archive `shouldBe` st
         archive.createdAt `shouldBe` goldenTime
         Map.elems archive.blobs `shouldContain` [BS.pack [0 .. 255]]
+        [c.body | ts <- Map.elems archive.threads, t <- ts, c <- t.comments] `shouldContain` ["Is the tour up to date?", "It is now."]
 
-  it "writes the manifest and a file per kind of record, and each attachment's bytes as a file" $ do
+  it "writes the manifest, the people, and a directory per space and page with each attachment's bytes as a file" $ do
     st <- edited
     let files = filesOf (toArchive goldenTime "test" st)
     filter (`Map.member` files) recordFiles `shouldBe` recordFiles
     -- The images spaces are pictured with have files of their own.
-    [p | p <- Map.keys files, any (`T.isPrefixOf` p) ["attachments/", "icons/"]] `shouldSatisfy` (\ps -> length ps == Map.size st.blobs)
+    [p | p <- Map.keys files, "/attachments/" `T.isInfixOf` p || "/icon." `T.isInfixOf` p] `shouldSatisfy` (\ps -> length ps == Map.size st.blobs)
+    length (recordsIn "/page.json" files) `shouldBe` Map.size st.pages
+    length (recordsIn "/space.json" files) `shouldBe` Map.size st.spaces
+    Map.lookup "spaces/docs/pages/tour/attachments/bytes.bin" files `shouldBe` Just (BS.pack [0 .. 255])
     (decodeStrict' =<< Map.lookup "manifest.json" files) `shouldSatisfy` \case
-      Just (Object o) -> KeyMap.lookup "format" o == Just (String "wiki-export") && KeyMap.lookup "formatVersion" o == Just (toJSON (1 :: Int))
+      Just (Object o) -> KeyMap.lookup "format" o == Just (String "wiki-export") && KeyMap.lookup "formatVersion" o == Just (toJSON (2 :: Int))
       _ -> False
 
   it "carries a space's description, icon and home page, an icon's image as a file of its own" $ do
@@ -166,7 +213,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
     let files = filesOf (toArchive goldenTime "test" st)
         exported = [x | x <- Map.elems st.spaces, x.name == "Exported"]
     for_ exported $ \x -> do
-      Map.lookup (Export.iconFile x) files `shouldBe` Just (BS.pack [0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+      Map.lookup "spaces/docs/spaces/exported/icon.png" files `shouldBe` Just (BS.pack [0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
       case readArchive files of
         Left why -> expectationFailure (toS why)
         Right archive -> do
@@ -175,13 +222,29 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
     length exported `shouldBe` 1
     -- An icon whose file is missing is refused, and so is a home page that
     -- is not one of its space's pages.
-    refused "icons/" (readArchive (Map.filterWithKey (\k _ -> not ("icons/" `T.isPrefixOf` k)) files))
-    let elsewhere = editRecords "spaces.json" (\o -> if KeyMap.lookup "name" o == Just (String "Blog") then KeyMap.insert "homePage" (toJSON ("page-no-such" :: Text)) o else o) files
+    refused "icon" (readArchive (Map.delete "spaces/docs/spaces/exported/icon.png" files))
+    let elsewhere = editRecords "/space.json" (\o -> if KeyMap.lookup "name" o == Just (String "Blog") then KeyMap.insert "homePage" (toJSON ("page-no-such" :: Text)) o else o) files
     refused "home page" (readArchive elsewhere)
+
+  it "carries the comments' authors by login, and shows one no user has as not a user here" $ do
+    st <- edited
+    let files = filesOf (toArchive goldenTime "test" st)
+        comments = "spaces/docs/pages/tour/comments.json"
+        -- The reply's author, as another wiki's user whose login this one
+        -- does not have.
+        stranger = T.replace "\"login\":\"editor\"" "\"login\":\"stranger\"" . T.replace "\"displayName\":\"Edgar Editor\"" "\"displayName\":\"Stan\""
+    archive <- either (assertFailure . toS) pure (readArchive (Map.adjust (encodeUtf8 . stranger . decodeUtf8) comments files))
+    ref <- newMemWiki (fromArchive archive) {current = Just (UserId "user-admin")}
+    threads <- runMemWiki ref $ do
+      docs <- either (panic . show) pure =<< getSpace (path "docs")
+      tour <- either (panic . show) pure =<< getPage docs.id (path "tour")
+      either (panic . show) pure =<< listThreads tour.id
+    [(c.author.id, c.author.name) | t <- threads, c <- t.comments]
+      `shouldBe` [(UserId "user-admin", "Ada Admin"), (UserId "~former:Stan", "Stan (not a user here)")]
 
   describe "the archive of version 1" $ do
     it "still imports, with everything it held" $ do
-      golden <- BS.readFile goldenPath
+      golden <- BS.readFile goldenV1Path
       case readBack golden of
         Left why -> expectationFailure (toS why)
         Right archive -> do
@@ -193,9 +256,10 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
             [Attachment {source = SourceBlob blob}] -> Map.lookup blob archive.blobs `shouldBe` Just (BS.pack [0 .. 255])
             other -> expectationFailure ("expected bytes.bin, kept as bytes, got " <> show other)
           length (Map.toList archive.membership) `shouldBe` 1
+          archive.threads `shouldBe` mempty
 
     it "imports with every space listing its children by name, made with its first page, and no positions" $ do
-      golden <- BS.readFile goldenPath
+      golden <- BS.readFile goldenV1Path
       case readBack golden of
         Left why -> expectationFailure (toS why)
         Right archive -> do
@@ -205,16 +269,35 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
           for_ archive.spaces $ \s -> Just s.createdAt `shouldBe` (firstPage s <|> Just archive.createdAt)
 
     it "imports with no math macros, which version 1 was first written without" $ do
-      golden <- BS.readFile goldenPath
+      golden <- BS.readFile goldenV1Path
       case readBack golden of
         Left why -> expectationFailure (toS why)
         Right archive -> map (\s -> (s.name, s.mathMacros)) archive.spaces `shouldSatisfy` all ((== "") . snd)
+
+  describe "the archive of version 2" $
+    it "still imports, with everything it held, comments included" $ do
+      golden <- BS.readFile goldenPath
+      case readBack golden of
+        Left why -> expectationFailure (toS why)
+        Right archive -> do
+          (archive.app, archive.createdAt) `shouldBe` ("wiki-app 0.1.0.0", goldenTime)
+          map (\u -> u.login) archive.users `shouldBe` ["admin", "editor", "reader"]
+          sort (map (\s -> s.name) archive.spaces) `shouldBe` ["Blog", "Docs", "Exported", "Projects", "Team"]
+          [s.name | s <- archive.spaces, Just parent <- [s.parent], Just above <- [find (\x -> x.id == parent) archive.spaces], above.name == "Docs"] `shouldBe` ["Exported"]
+          map (\p -> p.body) archive.pages `shouldContain` ["# Exported, then saved"]
+          case [x | p <- archive.pages, x <- p.attachments, x.name == "bytes.bin"] of
+            [Attachment {source = SourceBlob blob}] -> Map.lookup blob archive.blobs `shouldBe` Just (BS.pack [0 .. 255])
+            other -> expectationFailure ("expected bytes.bin, kept as bytes, got " <> show other)
+          [x.icon | x <- archive.spaces, x.name == "Docs"] `shouldBe` [Just (IconEmoji "📘")]
+          let tour = [p.id | p <- archive.pages, p.title == "Tour"]
+              said = [(c.author.name, c.body) | p <- tour, t <- Map.findWithDefault [] p (Export.threadsAmong archive.users archive), c <- t.comments]
+          said `shouldBe` [("Ada Admin", "Is the tour up to date?"), ("Edgar Editor", "It is now.")]
 
   describe "compatibility" $ do
     it "reads a file with fields it does not know, ignoring them" $ do
       st <- edited
       let files = filesOf (toArchive goldenTime "test" st)
-          extra = Map.insert "notes.json" "[]" (editRecords "spaces.json" (KeyMap.insert "colour" (String "teal")) (editRecords "manifest.json" (KeyMap.insert "producer" (String "a later wiki")) files))
+          extra = Map.insert "notes.json" "[]" (editRecords "/space.json" (KeyMap.insert "colour" (String "teal")) (editRecords "manifest.json" (KeyMap.insert "producer" (String "a later wiki")) files))
       fromArchive <$> readArchive extra `shouldBe` Right st
 
     it "keeps a space's math macros, written only for a space that has them" $ do
@@ -226,9 +309,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
         setSpaceMathMacros exported.id macros
       withMacros <- (\x -> x {current = Nothing}) <$> readIORef ref
       let files = filesOf (toArchive goldenTime "test" withMacros)
-          written = case decodeStrict' =<< Map.lookup "spaces.json" files of
-            Just (Array records) -> [(KeyMap.lookup "name" o, KeyMap.lookup "mathMacros" o) | Object o <- toList records]
-            _ -> []
+          written = [(KeyMap.lookup "name" o, KeyMap.lookup "mathMacros" o) | o <- recordsIn "/space.json" files]
       [m | (Just (String "Exported"), m) <- written] `shouldBe` [Just (String macros)]
       [m | (Just (String "Blog"), m) <- written] `shouldBe` [Nothing]
       fromArchive <$> readArchive files `shouldBe` Right withMacros
@@ -236,20 +317,17 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
     it "keeps the order of a space's children, and their positions, written only when not the default" $ do
       st <- ordered
       let files = filesOf (toArchive goldenTime "test" st)
-          written file = case decodeStrict' =<< Map.lookup file files of
-            Just (Array records) -> [o | Object o <- toList records]
-            _ -> []
           field name o = KeyMap.lookup name o
-      [(field "subspaceOrder" o, field "pageOrder" o) | o <- written "spaces.json", field "name" o == Just (String "Team")]
+      [(field "subspaceOrder" o, field "pageOrder" o) | o <- recordsIn "/space.json" files, field "name" o == Just (String "Team")]
         `shouldBe` [(Just (String "newest-first"), Just (String "by-hand"))]
-      [(field "subspaceOrder" o, field "pageOrder" o) | o <- written "spaces.json", field "name" o == Just (String "Blog")] `shouldBe` [(Nothing, Nothing)]
-      [field "position" o | o <- written "pages.json", field "title" o == Just (String "Team handbook")] `shouldBe` [Just (toJSON (1 :: Int))]
-      [field "position" o | o <- written "pages.json", field "title" o == Just (String "Second")] `shouldBe` [Nothing]
+      [(field "subspaceOrder" o, field "pageOrder" o) | o <- recordsIn "/space.json" files, field "name" o == Just (String "Blog")] `shouldBe` [(Nothing, Nothing)]
+      [field "position" o | o <- recordsIn "/page.json" files, field "title" o == Just (String "Team handbook")] `shouldBe` [Just (toJSON (1 :: Int))]
+      [field "position" o | o <- recordsIn "/page.json" files, field "title" o == Just (String "Second")] `shouldBe` [Nothing]
       fromArchive <$> readArchive files `shouldBe` Right st
 
     it "reads an order it does not know as by name" $ do
       st <- ordered
-      let files = editRecords "spaces.json" (\o -> if KeyMap.member "pageOrder" o then KeyMap.insert "pageOrder" (String "by-colour") o else o) (filesOf (toArchive goldenTime "test" st))
+      let files = editRecords "/space.json" (\o -> if KeyMap.member "pageOrder" o then KeyMap.insert "pageOrder" (String "by-colour") o else o) (filesOf (toArchive goldenTime "test" st))
       case readArchive files of
         Left why -> expectationFailure (toS why)
         Right archive -> [(s.name, s.pageOrder) | s <- archive.spaces, s.name == "Team"] `shouldBe` [("Team", ByName)]
@@ -258,15 +336,15 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       st <- ordered
       let files = filesOf (toArchive goldenTime "test" st)
           thin =
-            editRecords "pages.json" (KeyMap.delete "position") $
+            editRecords "/page.json" (KeyMap.delete "position") $
               editRecords
-                "spaces.json"
-                (KeyMap.delete "public" . KeyMap.delete "parent" . KeyMap.delete "mathMacros" . KeyMap.delete "createdAt" . KeyMap.delete "position" . KeyMap.delete "subspaceOrder" . KeyMap.delete "pageOrder" . KeyMap.delete "homePage" . KeyMap.delete "icon" . KeyMap.delete "description")
+                "/space.json"
+                (KeyMap.delete "public" . KeyMap.delete "mathMacros" . KeyMap.delete "createdAt" . KeyMap.delete "position" . KeyMap.delete "subspaceOrder" . KeyMap.delete "pageOrder" . KeyMap.delete "homePage" . KeyMap.delete "icon" . KeyMap.delete "description")
                 files
       case readArchive thin of
         Left why -> expectationFailure (toS why)
         Right archive -> do
-          all (\s -> not s.public && isNothing s.parent && s.mathMacros == "" && s.position == 0 && s.subspaceOrder == ByName && s.pageOrder == ByName) archive.spaces `shouldBe` True
+          all (\s -> not s.public && s.mathMacros == "" && s.position == 0 && s.subspaceOrder == ByName && s.pageOrder == ByName) archive.spaces `shouldBe` True
           all (\s -> isNothing s.homePage && isNothing s.icon && s.description == "") archive.spaces `shouldBe` True
           all (\p -> p.position == 0) archive.pages `shouldBe` True
           -- A space is taken to have been made with its first page, and
@@ -279,7 +357,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
 
     it "refuses an archive of a newer version, saying so" $ do
       st <- edited
-      let files = editRecords "manifest.json" (KeyMap.insert "formatVersion" (toJSON (2 :: Int))) (filesOf (toArchive goldenTime "test" st))
+      let files = editRecords "manifest.json" (KeyMap.insert "formatVersion" (toJSON (3 :: Int))) (filesOf (toArchive goldenTime "test" st))
       refused "newer version of the wiki" (readArchive files)
 
   describe "refusing" $ do
@@ -288,7 +366,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
 
     it "an archive without one of its record files" $ do
       st <- edited
-      refused "It has no pages.json." (readArchive (Map.delete "pages.json" (filesOf (toArchive goldenTime "test" st))))
+      refused "It has no users.json." (readArchive (Map.delete "users.json" (filesOf (toArchive goldenTime "test" st))))
 
     it "a zip file that is not an export" $
       refused "no manifest.json" (readBack (zipFiles goldenTime [("readme.txt", "hello")]))
@@ -298,17 +376,17 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       let files = filesOf (toArchive goldenTime "test" st)
           file = fromMaybe (panic "no bytes.bin") (head [p | p <- Map.keys files, "bytes.bin" `T.isSuffixOf` p])
       refused "is not in the archive" (readArchive (Map.delete file files))
-      refused "bytes, where attachments.json says" (readArchive (Map.insert file "short" files))
+      refused "bytes, where spaces/docs/pages/tour/page.json says" (readArchive (Map.insert file "short" files))
 
-    it "a page in a space that is not there" $ do
+    it "a page's directory without its record" $ do
       st <- edited
       let files = filesOf (toArchive goldenTime "test" st)
-      refused "which is not in spaces.json" (readArchive (editRecords "pages.json" (KeyMap.insert "space" (String "space-nowhere")) files))
+      refused "It has no spaces/docs/pages/tour/page.json." (readArchive (Map.delete "spaces/docs/pages/tour/page.json" files))
 
     it "a record that does not read" $ do
       st <- edited
       let files = filesOf (toArchive goldenTime "test" st)
-      refused "pages.json" (readArchive (Map.insert "pages.json" "{ not json" files))
+      refused "spaces/docs/pages/tour/page.json" (readArchive (Map.insert "spaces/docs/pages/tour/page.json" "{ not json" files))
 
   it "leaves the pages' histories out, and starts each again with the page as it is" $ do
     ref <- newMemWiki (demoState demoNow)
@@ -320,7 +398,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
     st <- readIORef ref
     Map.size (Map.findWithDefault mempty saved.id st.versions) `shouldBe` 2
     let files = filesOf (toArchive goldenTime "test" st)
-    Map.keys files `shouldSatisfy` all (\f -> f `elem` recordFiles || "attachments/" `T.isPrefixOf` f)
+    Map.keys files `shouldSatisfy` all (\f -> f `elem` recordFiles || "spaces/" `T.isPrefixOf` f)
     back <- either (panic . toS) pure (readArchive files)
     let imported = fromArchive back
     Map.map Map.keys imported.versions `shouldBe` Map.map (\p -> [p.updatedAt]) imported.pages

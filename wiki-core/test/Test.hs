@@ -7,6 +7,7 @@ import Test.Attachment qualified as Attachment
 import Test.Blog qualified as Blog
 import Test.Comment qualified as Comment
 import Test.Diff qualified as Diff
+import Test.Export qualified as Export
 import Test.Hspec (hspec)
 import Test.Json qualified as Json
 import Test.Markdown.Allowlist qualified as Allowlist
@@ -55,3 +56,4 @@ main = hspec $ do
   Toc.spec
   Template.spec
   Assistant.spec
+  Export.spec

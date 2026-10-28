@@ -16,7 +16,8 @@ import Protolude
 import Wiki.Api.ServerSettings (noServerSettings)
 import Wiki.App.Backend.Mem.State (MemState (..), completeVersions, prepareSearch)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
-import Wiki.Core.Export (Archive (..))
+import Wiki.Core.Comment (Comment (..), Thread (..))
+import Wiki.Core.Export (Archive (..), threadsAmong)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Space (Icon (..), Space (..))
@@ -34,6 +35,9 @@ toArchive createdAt app st =
     , grants = st.grants
     , spaces = Map.elems st.spaces
     , pages = Map.elems st.pages
+    , threads = st.threads
+    , -- The authors of the demo's comments are its users.
+      commentAuthors = []
     , blobs = st.blobs
     , -- The demo keeps no audit log (WP4.10 of docs/PLAN.md): its
       -- administration has one user, in this browser.
@@ -43,8 +47,11 @@ toArchive createdAt app st =
 -- | The wiki an archive holds, with nobody signed in. Its ids are the
 -- archive's, and the counter for new ids starts after the largest of them
 -- ('nextCounter'). An archive has no history: each page's history starts
--- with the page as the archive has it ('completeVersions'). The archive's
--- audit log is left out, since the demo keeps none.
+-- with the page as the archive has it ('completeVersions'). The comments
+-- come with the pages, each author being the archive's user with the
+-- author's login, or else a person who is not a user here, kept by their
+-- name ('threadsAmong'). The archive's audit log is left out, since the
+-- demo keeps none.
 fromArchive :: Archive -> MemState
 fromArchive a =
   completeVersions (prepareSearch st {counter = nextCounter st})
@@ -73,8 +80,7 @@ fromArchive a =
           newAccountsCreateSpaces = False
         , invitations = mempty
         , server = noServerSettings
-        , -- Nor comments (docs/export.md).
-          threads = mempty
+        , threads = threadsAmong a.users a
         , -- Nor notifications, watches or notification choices: they
           -- belong to each user, and are about the pages of the wiki that
           -- was exported.
@@ -100,6 +106,8 @@ nextCounter st = 1 + foldl' max 0 (mapMaybe numbered ids)
         <> [x.id.text | p <- Map.elems st.pages, x <- p.attachments]
         <> [b.text | p <- Map.elems st.pages, x <- p.attachments, SourceBlob b <- [x.source]]
         <> [b.text | s <- Map.elems st.spaces, Just (IconImage b _) <- [s.icon]]
+        <> [t.id.text | ts <- Map.elems st.threads, t <- ts]
+        <> [c.id.text | ts <- Map.elems st.threads, t <- ts, c <- t.comments]
     numbered i = case T.breakOnEnd "-" i of
       (prefix, digits) | not (T.null prefix), not (T.null digits), T.all isDigit digits -> readMaybe (T.unpack digits)
       _ -> Nothing

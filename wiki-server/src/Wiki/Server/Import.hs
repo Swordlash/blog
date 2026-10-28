@@ -32,6 +32,14 @@
 -- * The archive's users, groups and grants are not imported: the server's
 --   people are its own. A space created by an import has no grants, as one
 --   the administrator creates has none.
+-- * A page's comments come with its content: a page the import creates,
+--   and a page whose content it replaces, get the archive's threads that
+--   the page does not have yet (by id), after the page's own. A page the
+--   server keeps keeps its own conversation, about its own text. A thread
+--   or comment keeps the archive's id unless another of the server's has
+--   it. Each comment's author is the server's user with the author's
+--   login (or the administrator); anyone else is kept by their name
+--   ('Wiki.Core.Comment.formerAuthor').
 -- * The archive's audit log is merged into the server's. Each of its
 --   entries that the server does not have (by its id) is imported as it
 --   was written, so that importing an export of this server puts back its
@@ -67,7 +75,8 @@ import Protolude
 import Wiki.Api.Import
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Audit (Actor, Subject (..))
-import Wiki.Core.Export (Archive (..), readArchive)
+import Wiki.Core.Comment (Comment (..), Thread (..))
+import Wiki.Core.Export (Archive (..), readArchive, threadsAmong)
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
@@ -76,9 +85,10 @@ import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Search (bodyText)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
-import Wiki.Server.Storage (Storage, storageDataDir, withDatabase)
+import Wiki.Server.Storage (Storage, administratorUser, storageDataDir, withDatabase)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, restoreAudit)
 import Wiki.Server.Storage.Blobs (blobOf, storeBlob)
+import Wiki.Server.Storage.Comments (restoreThread)
 import Wiki.Server.Storage.Layout (attachmentsDir)
 import Wiki.Server.Storage.Rows
 
@@ -219,6 +229,8 @@ data Progress = Progress
   , pageIds :: Map PageId PageId
   -- ^ Each imported or kept page of the archive, and the server's page it
   -- now is.
+  , commentsBrought :: Int
+  -- ^ How many comments came in.
   }
 
 -- | Import an archive with these choices, in one transaction, as someone
@@ -229,8 +241,10 @@ applyImport st actor address a choices = withDatabase st $ \c -> do
   execute_ c "BEGIN IMMEDIATE"
   flip onException (execute_ c "ROLLBACK") $ do
     matches <- matchIn c a
-    let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty}
-    done <- foldlM (importSpace c (attachmentsDir (storageDataDir st)) a choices) start matches
+    people <- loadUsers c
+    let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
+        discussions = threadsAmong (administratorUser : people) a
+    done <- foldlM (importSpace c (attachmentsDir (storageDataDir st)) a discussions choices) start matches
     restoreAudit c a.audit
     let s = done.summary
     insertAudit
@@ -248,6 +262,7 @@ applyImport st actor address a choices = withDatabase st $ \c -> do
             , ("pages kept", show s.pagesKept)
             , ("pages skipped", show s.pagesSkipped)
             , ("attachments", show s.attachments)
+            , ("comments", show done.commentsBrought)
             , ("log entries", show (length a.audit))
             ]
         , address
@@ -255,8 +270,8 @@ applyImport st actor address a choices = withDatabase st $ \c -> do
     execute_ c "COMMIT"
     pure s
 
-importSpace :: Connection -> FilePath -> Archive -> ImportChoices -> Progress -> SpaceMatch -> IO Progress
-importSpace c blobs a choices progress m
+importSpace :: Connection -> FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> Progress -> SpaceMatch -> IO Progress
+importSpace c blobs a discussions choices progress m
   | spaceSkipped choices m.path = pure (count progress (\s -> s {pagesSkipped = s.pagesSkipped + length m.pages}))
   | otherwise = do
       target <- case m.server of
@@ -293,7 +308,7 @@ importSpace c blobs a choices progress m
             count
               progress {spaceIds = Map.insert m.archived.id target progress.spaceIds}
               (\s -> if isJust m.server then s {spacesMerged = s.spacesMerged + 1} else s {spacesCreated = s.spacesCreated + 1})
-      done <- foldlM (importPage c blobs a choices m.path target) placed m.pages
+      done <- foldlM (importPage c blobs a discussions choices m.path target) placed m.pages
       fillProfile c blobs a m target done
       pure done
 
@@ -321,8 +336,8 @@ fillProfile c blobs a m target progress =
           when (filled /= theirs) (updateSpace c filled)
       )
 
-importPage :: Connection -> FilePath -> Archive -> ImportChoices -> [Slug] -> SpaceId -> Progress -> PageMatch -> IO Progress
-importPage c blobs a choices spacePath target progress pm
+importPage :: Connection -> FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> [Slug] -> SpaceId -> Progress -> PageMatch -> IO Progress
+importPage c blobs a discussions choices spacePath target progress pm
   | pageSkipped choices spacePath pm.path = pure (count progress (\s -> s {pagesSkipped = s.pagesSkipped + 1}))
   | Just theirs <- pm.server = do
       let kept = progress {pageIds = Map.insert pm.archived.id theirs.id progress.pageIds}
@@ -355,7 +370,8 @@ importPage c blobs a choices spacePath target progress pm
           insertVersion c replaced Nothing
           execute c "DELETE FROM attachments WHERE page_id = ?" (Only theirs.id.text)
           n <- attach c blobs a theirs.id pm.archived.attachments
-          pure (count kept (\s -> s {pagesReplaced = s.pagesReplaced + 1, attachments = s.attachments + n}))
+          said <- discuss c theirs.id (Map.findWithDefault [] pm.archived.id discussions)
+          pure (count kept {commentsBrought = kept.commentsBrought + said} (\s -> s {pagesReplaced = s.pagesReplaced + 1, attachments = s.attachments + n}))
   | otherwise = do
       i <- PageId <$> newId
       let parent = pm.archived.parent >>= (`Map.lookup` progress.pageIds)
@@ -377,9 +393,10 @@ importPage c blobs a choices spacePath target progress pm
       insertPage c page
       insertVersion c page Nothing
       n <- attach c blobs a i pm.archived.attachments
+      said <- discuss c i (Map.findWithDefault [] pm.archived.id discussions)
       pure
         ( count
-            progress {pageIds = Map.insert pm.archived.id i progress.pageIds}
+            progress {pageIds = Map.insert pm.archived.id i progress.pageIds, commentsBrought = progress.commentsBrought + said}
             (\s -> s {pagesCreated = s.pagesCreated + 1, attachments = s.attachments + n})
         )
 
@@ -398,6 +415,27 @@ attach c blobs a page xs = do
     i <- AttachmentId <$> newId
     insertAttachment c page ordinal Attachment {id = i, name = x.name, mediaType = x.mediaType, size = x.size, source}
   pure (length xs)
+
+-- | Add an archive's threads to a page, after its own, leaving out a
+-- thread the page has already (by id): the page was exported from this
+-- server, or imported before. A thread or a comment whose id the server
+-- uses elsewhere gets a new one. The result is how many comments were
+-- added.
+discuss :: Connection -> PageId -> [Thread] -> IO Int
+discuss c page ts = sum <$> for ts bring
+  where
+    bring t = do
+      holders <- query c "SELECT page_id FROM threads WHERE id = ?" (Only t.id.text)
+      case holders of
+        [Only holder] | holder == page.text -> pure 0
+        _ -> do
+          tid <- if null holders then pure t.id else CommentThreadId <$> newId
+          written <- for t.comments $ \x -> do
+            taken <- query c "SELECT 1 FROM comments WHERE id = ?" (Only x.id.text) :: IO [Only Int]
+            cid <- if null taken then pure x.id else CommentId <$> newId
+            pure x {id = cid, thread = tid}
+          restoreThread c t {id = tid, page, comments = written}
+          pure (length written)
 
 nothingYet :: ImportSummary
 nothingYet = ImportSummary {spacesCreated = 0, spacesMerged = 0, pagesCreated = 0, pagesReplaced = 0, pagesKept = 0, pagesSkipped = 0, attachments = 0}

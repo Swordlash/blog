@@ -169,6 +169,7 @@ import Wiki.App.View.Unsubscribe qualified as UnsubscribeView
 import Wiki.App.View.VerifyEmail qualified as VerifyEmailView
 import Wiki.Core.Attachment (findAttachment)
 import Wiki.Core.Blog (excerpt, firstImage)
+import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
@@ -1469,6 +1470,7 @@ archiveSummary a =
     , counted (length a.spaces) "space" "spaces"
     , counted (length a.pages) "page" "pages"
     , counted (sum [length p.attachments | p <- a.pages]) "attachment" "attachments"
+    , counted (sum [length t.comments | ts <- Map.elems a.threads, t <- ts]) "comment" "comments"
     ]
   where
     counted :: Int -> Text -> Text -> Text

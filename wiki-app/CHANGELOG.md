@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+"Export the wiki" writes version 2 of the export format (WP5.8,
+`docs/export.md`): a directory per space and per page, with the page's
+Markdown in `page.md`, its attachments and its comments. "Import a wiki"
+reads versions 1 and 2, and brings the comments in, their authors matched
+by login with the archive's users. The summary of an import counts the
+comments. A comment by someone who is not a user here (one an import kept
+by their name) shows their name followed by "(not a user here)". The new
+ids the demo makes start after the ids of imported comments too. The demo
+still keeps each page's comments in IndexedDB in the record it had, so a
+demo saved before reads as it did.
+
 `Wiki.App.Shell` compiles in an eighth of its time (WP5.13): 11 s instead
 of 87 s on wasm, and 5.4 GB allocated instead of 21 GB. Its `Slots` row has
 six labels instead of 27: the views whose output is `ViewOutput` share the

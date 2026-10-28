@@ -163,7 +163,7 @@ import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
-import Wiki.Core.Comment (Comment (Comment), Thread (Thread), checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
+import Wiki.Core.Comment (Comment (Comment), Thread (Thread), absentAuthor, checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Comment qualified as C
 import Wiki.Core.Draft (Draft (Draft))
 import Wiki.Core.Draft qualified as D
@@ -1112,9 +1112,10 @@ discardDraftIn pid st = do
 --------------------------------------------------------------------------------
 -- History
 
--- | Who saved a version, as its history names them.
+-- | Who saved a version or wrote a comment, as the wiki names them: a
+-- user by their display name, and anyone else as 'absentAuthor' says.
 authorOf :: MemState -> UserId -> Author
-authorOf st u = Author {id = u, name = maybe u.text (\x -> x.displayName) (Map.lookup u st.users)}
+authorOf st u = maybe (absentAuthor u) (\x -> Author {id = u, name = x.displayName}) (Map.lookup u st.users)
 
 -- | A page's version in the form the class returns it.
 versionOf :: MemState -> PageId -> UTCTime -> Saved -> Version

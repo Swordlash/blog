@@ -19,10 +19,12 @@ import Test.Storage.Fixture
 import Wiki.Api.Admin (Directory (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Contract (As (As))
 import Wiki.Core.Attachment (Attachment (..), Source (..), findAttachment)
+import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Export (Archive (..))
+import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
@@ -284,6 +286,26 @@ wholeWikis = describe "importArchive and exportArchive" $ do
       exported <- exportArchive st "wiki-server-test" >>= ok
       contents (byHash exported) `shouldBe` contents (byHash demoArchive)
       exported.app `shouldBe` "wiki-server-test"
+
+  it "carry the pages' comments into another storage, with their ids, authors, times and edits" $
+    withDemo $ \st -> do
+      hello <- pageIn st "blog" "hello-world"
+      opened <- runSqliteWiki st Administrator (openThread hello.id Nothing "From the administrator.") >>= ok
+      editor <- whoFor st (As "editor")
+      answer <- runSqliteWiki st editor (reply hello.id opened.id "From the editor.") >>= ok
+      _ <- runSqliteWiki st editor (editComment hello.id opened.id answer.id "Edited by the editor.") >>= ok
+      exported <- exportArchive st "wiki-server-test" >>= ok
+      -- The administrator has no row among the users, so the archive
+      -- names them among its comment authors, by login.
+      exported.commentAuthors `shouldBe` [administratorUser]
+      [(c.author.name, c.body, isJust c.editedAt) | t <- Map.findWithDefault [] hello.id exported.threads, t.id == opened.id, c <- t.comments]
+        `shouldBe` [("Administrator", "From the administrator.", False), ("Edgar Editor", "Edited by the editor.", True)]
+      -- The files of the archive read back as the same comments.
+      (\a -> (a.threads, a.commentAuthors)) <$> readArchive (Map.fromList (writeArchive exported)) `shouldBe` Right (exported.threads, exported.commentAuthors)
+      withStorageIn $ \_ fresh -> do
+        importArchive fresh exported >>= ok
+        again <- exportArchive fresh "wiki-server-test" >>= ok
+        again.threads `shouldBe` exported.threads
 
   it "refuse to import into a storage with a wiki in it, changing nothing" $
     withDemo $ \st -> do

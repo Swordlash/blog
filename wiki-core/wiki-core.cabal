@@ -136,6 +136,7 @@ test-suite wiki-core-test
       Test.Blog
       Test.Comment
       Test.Diff
+      Test.Export
       Test.Gen
       Test.Json
       Test.Markdown.Allowlist
@@ -159,6 +160,7 @@ test-suite wiki-core-test
   build-depends:
       QuickCheck,
       aeson,
+      bytestring,
       containers,
       haskell-halogen-core,
       hspec >= 2,

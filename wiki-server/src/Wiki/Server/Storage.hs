@@ -152,9 +152,9 @@ import Wiki.Core.Audit (Actor (..))
 import Wiki.Core.Audit qualified as Audit
 import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
-import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
+import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Export (Archive (..))
+import Wiki.Core.Export (Archive (..), threadsAmong)
 import Wiki.Core.Id
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
@@ -2034,12 +2034,14 @@ removeSecondFactorTx u = do
 --------------------------------------------------------------------------------
 -- Comments
 
--- | Who wrote a comment, as a reader sees them: as a version's author is
--- named ('versionOf').
+-- | Who wrote a comment, as a reader sees them: the administrator, a user
+-- by the display name the users table has for them, or, for an author who
+-- is not a user here (one an import brought), as 'absentAuthor' names
+-- them.
 commentAuthor :: UserId -> Maybe Text -> Author
 commentAuthor u name
   | u == administratorId = Author {id = u, name = administratorUser.displayName}
-  | otherwise = Author {id = u, name = fromMaybe u.text name}
+  | otherwise = maybe (absentAuthor u) (\n -> Author {id = u, name = n}) name
 
 -- | Check that the current user may read a page, and return its space's
 -- chain and its threads. Every comment operation starts with this, so its
@@ -2384,8 +2386,11 @@ instance (MonadIO m) => MonadNotifications (SqliteWiki m) where
 -- | Load a whole wiki from an export archive ("Wiki.Core.Export", already
 -- checked by 'Wiki.Core.Export.readArchive') into an empty storage: its
 -- people, groups, grants, spaces and pages with their ids, each page as
--- its first version, and its attachments' bytes stored under their hashes
--- (so the blobs' ids are hashes from then on). A storage that already
+-- its first version, its pages' comments with their ids, and its
+-- attachments' bytes stored under their hashes (so the blobs' ids are
+-- hashes from then on). A comment's author is the archive's user with
+-- the author's login, or the administrator for the administrator's login;
+-- anyone else is kept by their name ('Wiki.Core.Comment.formerAuthor'). A storage that already
 -- holds a wiki is refused and left unchanged: bringing one wiki into
 -- another is a merge, which is the job of the import (WP2.8 of
 -- docs/PLAN.md).
@@ -2421,6 +2426,7 @@ importArchive st a = withDatabase st $ \c -> do
                   SourceBlob b -> maybe x.source SourceBlob (Map.lookup b hashes)
                   url -> url
              in insertAttachment c p.id ordinal x {source}
+        traverse_ (traverse_ (Comments.restoreThread c)) (threadsAmong (administratorUser : a.users) a)
         restoreAudit c a.audit
         execute_ c "COMMIT"
         pure (Right ())
@@ -2428,34 +2434,38 @@ importArchive st a = withDatabase st $ \c -> do
 -- | The whole wiki as an export archive, written now by this program
 -- (@app@ names it): what "Export the wiki" downloads. An attachment whose
 -- file is missing makes it fail, saying which, rather than leave the
--- attachment out of an archive meant to be the whole wiki.
+-- attachment out of an archive meant to be the whole wiki. The comments'
+-- authors are the users, and the administrator, who has no row among the
+-- users, is named among the archive's comment authors when they wrote any.
 exportArchive :: Storage -> Text -> IO (Either Text Archive)
 exportArchive st app = do
   createdAt <- getCurrentTime
-  (users, groups, membership, grants, spaces, pages, audit) <-
+  (users, groups, membership, grants, spaces, pages, threads, audit) <-
     withReadConnection st $ \c -> do
       execute_ c "BEGIN"
       -- A reader goes back to the pool after this, so a failed read must
       -- not leave its transaction open.
       records <-
         flip onException (execute_ c "ROLLBACK") $
-          (,,,,,,)
+          (,,,,,,,)
             <$> loadUsers c
             <*> loadGroups c
             <*> loadMembership c
             <*> loadGrants c
             <*> (Map.elems <$> loadSpaces c)
             <*> loadAllPages c
+            <*> Comments.loadAllThreads commentAuthor c
             <*> loadAuditLog c
       execute_ c "COMMIT"
       pure records
+  let commentAuthors = [administratorUser | any (any (any (\x -> x.author.id == administratorId) . (\t -> t.comments))) threads]
   blobs <- for [(x, b) | p <- pages, x <- p.attachments, SourceBlob b <- [x.source]] $ \(x, b) ->
     maybe (Left ("The file of the attachment " <> show x.id.text <> " (" <> x.name <> ") is missing.")) (Right . (b,))
       <$> readBlob (attachmentsDir st.dataDir) b
   icons <- for [(sp, b) | sp <- spaces, Just (IconImage b _) <- [sp.icon]] $ \(sp, b) ->
     maybe (Left ("The image of the icon of the space " <> show sp.id.text <> " (" <> sp.name <> ") is missing.")) (Right . (b,))
       <$> readBlob (attachmentsDir st.dataDir) b
-  pure $ (\kept -> Archive {createdAt, app, users, groups, membership, grants, spaces, pages, blobs = Map.fromList kept, audit}) <$> sequence (blobs <> icons)
+  pure $ (\kept -> Archive {createdAt, app, users, groups, membership, grants, spaces, pages, threads, commentAuthors, blobs = Map.fromList kept, audit}) <$> sequence (blobs <> icons)
 
 -- | The version of the database's schema: its last migration.
 schemaVersionOf :: Storage -> IO Int
