@@ -13,6 +13,13 @@
 -- fetches the page's history and the versions it compares; the latest
 -- needs no request, since it is the page.
 --
+-- The history is fetched a page of versions at a time, the latest first
+-- ('Wiki.Core.Version.VersionsQuery'): the first page, and further pages
+-- only until the version shown and the one before it, which it is
+-- compared with, are there. "Older…" under the list fetches the next
+-- page. Each version carries its number, so the list numbers its
+-- versions without the rest of the history.
+--
 -- The diff comes from "Wiki.Core.Diff", worked out once when the versions
 -- are loaded, and rendered here as Halogen HTML. It is a table of lines
 -- with their numbers in the old and the new text, with removed and added
@@ -46,7 +53,7 @@ import Wiki.Core.Diff (Diff (..), diffText)
 import Wiki.Core.Page (Page (body, id, title, updatedAt))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
-import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..), latestVersions, versionsPageSize)
 
 -- | The history view's input, from the route: a page of a space the shell
 -- has loaded, the version of it to show, and what to compare it with.
@@ -69,7 +76,8 @@ type Numbered = (Int, VersionInfo)
 data Viewed = Viewed
   { page :: Page
   , versions :: [Numbered]
-  -- ^ The latest first; the latest is the current page.
+  -- ^ The versions fetched so far, the latest first; the latest is the
+  -- current page. The older ones may not have been fetched yet.
   , chosen :: Numbered
   , version :: Version
   -- ^ The chosen version, whole.
@@ -98,6 +106,8 @@ data State = State
   -- ^ Whether "Restore this version" is asking for confirmation.
   , problem :: Maybe WikiError
   -- ^ Why the last restore failed.
+  , olderProblem :: Maybe WikiError
+  -- ^ Why fetching older versions failed.
   }
 
 data Action
@@ -108,6 +118,7 @@ data Action
   | CancelRestore
   | Restore
   | Retry
+  | Older
 
 component :: forall query m. (MonadLoad m, MonadIslands m, MonadUUID m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -118,8 +129,8 @@ component =
           -- can ('atOnce'), so that the first render is the page the server
           -- or the prerender shows (see "Wiki.App.Shell"); otherwise loaded
           -- in 'Initialize'.
-          loaded <- fromMaybe Loading <$> atOnce (fetch input)
-          pure State {input, loaded, confirming = False, problem = Nothing}
+          loaded <- fromMaybe Loading <$> atOnce (fetch 0 input)
+          pure State {input, loaded, confirming = False, problem = Nothing, olderProblem = Nothing}
       , render
       , eval =
           H.mkEval
@@ -143,7 +154,7 @@ component =
             </header>
             <div class="actions">{{ back st.input }}</div>
             <div class="history">
-              {{ versionList st.input shown }}
+              {{ versionList st.input st.olderProblem shown }}
               {{ detail st shown }}
             </div>
           </div>
@@ -153,8 +164,8 @@ component =
     back input =
       Router.link input.context.router Followed (Page (spacePathOf input.context.spaces input.space.id) input.path) [HP.class_ "button history-back"] [HH.text "Back"]
 
-    versionList :: Input -> Viewed -> H.ComponentHTML Action Slots m
-    versionList input shown =
+    versionList :: Input -> Maybe WikiError -> Viewed -> H.ComponentHTML Action Slots m
+    versionList input olderProblem shown =
       [hh|
         <nav class="version-list" aria-label="Versions">
           <ol>
@@ -165,6 +176,10 @@ component =
               </li>
             {% end %}
           </ol>
+          {% if maybe False (\(n, _) -> n > 1) (lastMay shown.versions) %}
+            <button type="button" class="versions-older" onClick={{ const Older }}>Older…</button>
+          {% end %}
+          {{ toList (errorView <$> olderProblem) }}
         </nav>
       |]
 
@@ -261,6 +276,25 @@ component =
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
       AskRestore -> modify (\st -> st {confirming = True, problem = Nothing})
       CancelRestore -> modify (\st -> st {confirming = False})
+      -- The next page of the history, added under the versions listed.
+      Older ->
+        gets (\st -> st.loaded) >>= \case
+          Ready shown
+            | Just (n, oldest) <- lastMay shown.versions
+            , n > 1 ->
+                listVersions shown.page.id VersionsQuery {before = Just oldest.updatedAt, limit = versionsPageSize} >>= \case
+                  Left e -> modify (\st -> st {olderProblem = Just e})
+                  Right more ->
+                    -- Only if the same history is still shown, with the
+                    -- same oldest version: another load may have
+                    -- overtaken this one.
+                    modify $ \st -> case st.loaded of
+                      Ready now
+                        | now.page.id == shown.page.id
+                        , fmap fst (lastMay now.versions) == Just n ->
+                            st {loaded = Ready now {versions = now.versions <> numbered more}, olderProblem = Nothing}
+                      _ -> st
+          _ -> pass
       Restore ->
         get >>= \st -> case st.loaded of
           Ready shown -> do
@@ -279,7 +313,12 @@ component =
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
       input <- gets (\st -> st.input)
-      loaded <- fetch input
+      -- As many versions as are listed now, so that a list made longer
+      -- with "Older…" stays as long when another version is chosen.
+      shownBefore <- gets $ \st -> case st.loaded of
+        Ready shown -> length shown.versions
+        _ -> 0
+      loaded <- fetch shownBefore input
       -- Only if the requested history is still what to show: another
       -- navigation may have overtaken this load.
       now <- gets (\st -> st.input)
@@ -289,14 +328,16 @@ component =
 
 -- | Fetch the history the input asks for, with the versions compared and
 -- their diff, or the reason it cannot be shown. A version the history does
--- not have is 'NotFound'.
-fetch :: (MonadWiki n) => Input -> n Loaded
-fetch input = either Failed Ready <$> runExceptT go
+-- not have is 'NotFound'. The history is fetched a page at a time until
+-- the chosen version and the one before it are there, and at least as
+-- many versions as given (all there are, if fewer).
+fetch :: (MonadWiki n) => Int -> Input -> n Loaded
+fetch atLeast input = either Failed Ready <$> runExceptT go
   where
     go = do
       page <- ExceptT (getPage input.space.id input.path)
-      listed <- ExceptT (listVersions page.id)
-      let versions = zip [length listed, length listed - 1 ..] listed
+      listed <- olderUntilEnough page.id =<< ExceptT (listVersions page.id latestVersions)
+      let versions = numbered listed
       chosen <- case input.version of
         Nothing -> maybe (throwError NotFound) pure (head versions)
         Just at -> maybe (throwError NotFound) pure (find (\(_, v) -> v.updatedAt == at) versions)
@@ -312,6 +353,27 @@ fetch input = either Failed Ready <$> runExceptT go
             Nothing -> pure (FirstVersion (diffText "" this.body))
             Just before -> (\v -> FromPrevious before v (diffText v.body this.body)) <$> whole before
       pure Viewed {page, versions, chosen, version = this, comparison}
+    olderUntilEnough pid listed
+      | enough listed = pure listed
+      | otherwise = case lastMay listed of
+          Just oldest | oldest.number > 1 -> do
+            more <- ExceptT (listVersions pid VersionsQuery {before = Just oldest.updatedAt, limit = versionsPageSize})
+            if null more then pure listed else olderUntilEnough pid (listed <> more)
+          _ -> pure listed
+    -- Enough when the chosen version is there with the one before it (or
+    -- is the first), or when the versions fetched went past the time
+    -- asked for without it, which then is no version of the page.
+    enough listed =
+      length listed >= atLeast && case chosenIn listed of
+        Just v -> v.number == 1 || any (\w -> w.number == v.number - 1) listed
+        Nothing -> maybe True (\at -> any (\v -> v.updatedAt < at) listed) input.version
+    chosenIn listed = case input.version of
+      Nothing -> head listed
+      Just at -> find (\v -> v.updatedAt == at) listed
+
+-- | Versions with their numbers, as the list shows them.
+numbered :: [VersionInfo] -> [Numbered]
+numbered = map (\v -> (v.number, v))
 
 -- | The route of a version of the page, compared as given; the latest is
 -- the history's own address.
@@ -325,10 +387,15 @@ versionRoute input shown v against =
 
 -- | Whether a version is the latest: the current page.
 isLatest :: Viewed -> Numbered -> Bool
-isLatest shown (n, _) = n == length shown.versions
+isLatest shown (n, _) = n == latestNumber shown
+
+-- | The number of the latest version, which is how many versions there
+-- are.
+latestNumber :: Viewed -> Int
+latestNumber shown = maybe 0 fst (head shown.versions)
 
 versionName :: Viewed -> Int -> Text
-versionName shown n = "Version " <> show n <> (if n == length shown.versions then " (current)" else "")
+versionName shown n = "Version " <> show n <> (if n == latestNumber shown then " (current)" else "")
 
 -- | Who saved a version, in words for a person to read.
 authorName :: Maybe Author -> Text

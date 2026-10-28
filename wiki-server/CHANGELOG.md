@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+A history is read a page at a time (WP5.16b): `listVersions` reads the
+versions asked for through the index `page_versions_order` (migration
+0015), numbered with a count through the same index, instead of every
+version of the page. A blog's list (`postDetails`) reads the first version
+of each page through the first-version join, not every version of the
+space, and the bodies of the pages that can be posts only.
+
 The sitemap is written from where each page is, without its text, in one
 query, and a feed reads only the posts it carries (WP5.16b). Both are kept
 in memory for a minute for each address, and answered with

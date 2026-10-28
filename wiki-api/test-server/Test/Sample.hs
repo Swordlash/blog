@@ -156,6 +156,7 @@ versionInfo =
     , updatedAt = time
     , title = "Tour"
     , author = Just Author {id = UserId "u1", name = "Ada"}
+    , number = 2
     }
 
 -- | The same version, whole.

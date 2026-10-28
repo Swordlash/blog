@@ -28,10 +28,10 @@ import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
-import Wiki.Core.Search (SearchHit (..), bodyText, searchQuery)
+import Wiki.Core.Search (SearchHit (..), bodyText, foldText, searchQuery)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), User (..))
-import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..), latestVersions)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Blobs (blobFile, blobOf, storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir)
@@ -164,7 +164,7 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
       -- A version whose author is no longer one of the users.
       withDatabase st $ \c ->
         execute c "UPDATE page_versions SET author = 'user-gone' WHERE page_id = ? AND updated_at = ?" (hello.id.text, Stamp byEditor.updatedAt)
-      versions <- asAdmin st (listVersions hello.id) >>= ok
+      versions <- asAdmin st (listVersions hello.id latestVersions) >>= ok
       map (\v -> (v.updatedAt, (\a -> (a.id, a.name)) <$> v.author)) versions
         `shouldBe` [ (byAdministrator.updatedAt, Just (administratorId, "Administrator"))
                    , (byEditor.updatedAt, Just (UserId "user-gone", "user-gone"))
@@ -181,16 +181,26 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
           fraction = UTCTime (utctDay hello.updatedAt) (picosecondsToDiffTime 50000500000000000)
       withDatabase st $ \c -> for_ [whole, fraction] $ \t ->
         execute c "INSERT INTO page_versions (page_id, updated_at, title, body, author) VALUES (?, ?, 'Hello', '', NULL)" (hello.id.text, Stamp t)
-      listed <- map (\x -> x.updatedAt) <$> (asAdmin st (listVersions hello.id) >>= ok)
+      listed <- map (\x -> x.updatedAt) <$> (asAdmin st (listVersions hello.id latestVersions) >>= ok)
       listed `shouldBe` sortOn Down listed
       sort listed `shouldBe` sort [hello.updatedAt, whole, fraction]
+      -- And a page of one version at a time goes through them in the same
+      -- order, each numbered.
+      let oneBefore at = asAdmin st (listVersions hello.id VersionsQuery {before = at, limit = 1}) >>= ok
+          walk at =
+            oneBefore at >>= \case
+              [v] -> ((v.number, v.updatedAt) :) <$> walk (Just v.updatedAt)
+              _ -> pure []
+      walk Nothing `shouldReturn` zip [3, 2, 1] listed
 
   it "keep the search text in step with every page's body, through imports, saves and moves" $
     withDemo $ \st -> do
       let inStep = do
-            rows <- withDatabase st $ \c -> query_ c "SELECT body, search_text FROM pages"
+            rows <- withDatabase st $ \c -> query_ c "SELECT title, body, search_text, search_fold FROM pages"
             length rows `shouldSatisfy` (> 0)
-            for_ rows $ \(body, text) -> text `shouldBe` bodyText body
+            for_ rows $ \(title, body, text, stored) -> do
+              text `shouldBe` bodyText body
+              stored `shouldBe` (foldText title <> "\n" <> foldText text)
       inStep
       docs <- asAdmin st (getSpace (path "docs")) >>= ok
       blog <- asAdmin st (getSpace (path "blog")) >>= ok

@@ -38,7 +38,7 @@ import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetT
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), maxIconSize, profileOf)
 import Wiki.Core.User (Group (..), Standing (..), User (..))
-import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (VersionsQuery), latestVersions)
 
 -- | Who a request is made as: nobody, or the demo's user with this login
 -- (@admin@, @editor@, @reader@).
@@ -291,7 +291,7 @@ hiddenSpaces = describe "a space someone may not view" $ do
       getPageAt run who "team" "team-handbook" `shouldReturn` Left NotFound
       getPageAt run who "team" "no-such-page" `shouldReturn` Left NotFound
       run who (savePage handbook.id handbook.updatedAt "Mine" "") >>= (`shouldFailWith` NotFound)
-      run who (listVersions handbook.id) >>= (`shouldFailWith` NotFound)
+      run who (listVersions handbook.id latestVersions) >>= (`shouldFailWith` NotFound)
 
   it "finds nothing in a search scoped to it, as in a search scoped to a space that is not there" $ \(Fixture run) -> do
     team <- spaceAt run admin "team"
@@ -1056,7 +1056,7 @@ templates = describe "setPageTemplate" $ do
     listed <- run Anonymous (listPages docs.id) >>= ok
     [p.title | p <- listed, p.template] `shouldBe` ["Diagrams"]
     -- No version is recorded: it is not a save.
-    run admin (listVersions diagrams.id) >>= ok >>= (`shouldSatisfy` ((== 1) . length))
+    run admin (listVersions diagrams.id latestVersions) >>= ok >>= (`shouldSatisfy` ((== 1) . length))
     again <- run admin (setPageTemplate diagrams.id True) >>= ok
     again.template `shouldBe` True
     back <- run admin (setPageTemplate diagrams.id False) >>= ok
@@ -1191,7 +1191,7 @@ drafts = describe "getDraft, saveDraft and discardDraft" $ do
 
 -- | A page's history as someone sees it, which must exist.
 versionsOf :: (HasCallStack, MonadWiki m) => Run m -> As -> PageId -> IO [VersionInfo]
-versionsOf run who p = run who (listVersions p) >>= ok
+versionsOf run who p = run who (listVersions p latestVersions) >>= ok
 
 -- | Someone, as a history names them.
 authorAs :: (HasCallStack, MonadWiki m) => Run m -> As -> IO Author
@@ -1205,7 +1205,7 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
   it "start a page's history with the page as it is, saved by nobody known" $ \(Fixture run) -> do
     hello <- pageAt run admin "blog" "hello-world"
     versionsOf run Anonymous hello.id
-      `shouldReturn` [VersionInfo {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, author = Nothing}]
+      `shouldReturn` [VersionInfo {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, author = Nothing, number = 1}]
     run Anonymous (getVersion hello.id hello.updatedAt)
       `shouldReturn` Right Version {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, body = hello.body, author = Nothing}
 
@@ -1222,6 +1222,24 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
     bodies <- for vs $ \v -> (\x -> x.body) <$> (run Anonymous (getVersion made.id v.updatedAt) >>= ok)
     bodies `shouldBe` ["Third", "Second", "First"]
 
+  it "list a history a page at a time, the latest first, each version with its number" $ \(Fixture run) -> do
+    blog <- spaceAt run admin "blog"
+    made <- run editor (createPage blog.id Nothing "Paged" "0") >>= ok
+    latest <- foldM (\p i -> run editor (savePage p.id p.updatedAt "Paged" (show i)) >>= ok) made [1 .. 6 :: Int]
+    -- Three versions before a time: the query's fields in order.
+    let threeBefore at = run reader (listVersions made.id (VersionsQuery at 3)) >>= ok
+    newest <- threeBefore Nothing
+    map (\v -> v.number) newest `shouldBe` [7, 6, 5]
+    map (\v -> v.updatedAt) (take 1 newest) `shouldBe` [latest.updatedAt]
+    older <- threeBefore ((\v -> v.updatedAt) <$> lastMay newest)
+    map (\v -> v.number) older `shouldBe` [4, 3, 2]
+    oldest <- threeBefore ((\v -> v.updatedAt) <$> lastMay older)
+    map (\v -> (v.number, v.updatedAt)) oldest `shouldBe` [(1, made.updatedAt)]
+    threeBefore ((\v -> v.updatedAt) <$> lastMay oldest) `shouldReturn` []
+    -- The pages together are the whole history, as the first page of the
+    -- default size lists it.
+    versionsOf run reader made.id `shouldReturn` (newest <> older <> oldest)
+
   it "make no version for a move or an attachment, and go with a page deleted" $ \(Fixture run) -> do
     blog <- spaceAt run admin "blog"
     hello <- pageAt run admin "blog" "hello-world"
@@ -1230,7 +1248,7 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
     _ <- run editor (uploadAttachment hello.id "a.txt" "text/plain" "a") >>= ok
     length <$> versionsOf run editor hello.id `shouldReturn` 1
     run editor (deletePage notes.id) >>= ok
-    run editor (listVersions hello.id) >>= (`shouldFailWith` NotFound)
+    run editor (listVersions hello.id latestVersions) >>= (`shouldFailWith` NotFound)
     run editor (getVersion hello.id hello.updatedAt) >>= (`shouldFailWith` NotFound)
 
   it "restore a version as a new save of its title and body, keeping every version" $ \(Fixture run) -> do
@@ -1269,10 +1287,10 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
     hello <- pageAt run admin "blog" "hello-world"
     -- Someone who may not view the page learns nothing of its history,
     -- not even whether a time is one of its versions.
-    run Anonymous (listVersions handbook.id) >>= (`shouldFailWith` NotFound)
+    run Anonymous (listVersions handbook.id latestVersions) >>= (`shouldFailWith` NotFound)
     run Anonymous (getVersion handbook.id handbook.updatedAt) >>= (`shouldFailWith` NotFound)
     run Anonymous (getVersion handbook.id hello.updatedAt) >>= (`shouldFailWith` NotFound)
-    run reader (listVersions wiki.id) >>= void . ok
+    run reader (listVersions wiki.id latestVersions) >>= void . ok
     run reader (getVersion wiki.id wiki.updatedAt) >>= void . ok
     run reader (getVersion wiki.id hello.updatedAt) >>= (`shouldFailWith` NotFound)
     run reader (restoreVersion wiki.id wiki.updatedAt wiki.updatedAt) >>= (`shouldFailWith` Forbidden)
@@ -1280,7 +1298,7 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
     run Anonymous (restoreVersion hello.id hello.updatedAt hello.updatedAt) >>= (`shouldFailWith` Forbidden)
     run Anonymous (restoreVersion hello.id tour.updatedAt hello.updatedAt) >>= (`shouldFailWith` Forbidden)
     run editor (restoreVersion hello.id tour.updatedAt hello.updatedAt) >>= (`shouldFailWith` NotFound)
-    run editor (listVersions (PageId "no-such-page")) >>= (`shouldFailWith` NotFound)
+    run editor (listVersions (PageId "no-such-page") latestVersions) >>= (`shouldFailWith` NotFound)
     run editor (restoreVersion (PageId "no-such-page") hello.updatedAt hello.updatedAt) >>= (`shouldFailWith` NotFound)
 
 --------------------------------------------------------------------------------
@@ -1564,7 +1582,7 @@ neverThrown = describe "errors" $ do
           , void <$> getDraft p
           , void <$> saveDraft p hello.updatedAt "X" ""
           , discardDraft p
-          , void <$> listVersions p
+          , void <$> listVersions p latestVersions
           , void <$> getVersion p hello.updatedAt
           , void <$> restoreVersion p hello.updatedAt hello.updatedAt
           ]

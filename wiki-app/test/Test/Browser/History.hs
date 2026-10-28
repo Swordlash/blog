@@ -2,7 +2,8 @@
 -- saved twice by the editor: opened from the page by anyone who may read
 -- it, a version chosen and compared both ways, and restored by an editor,
 -- which the page and its history then show; a reader is offered no
--- restore.
+-- restore. And the post saved sixty times: its history listed fifty
+-- versions at a time, and an old version opened by its address.
 module Test.Browser.History (spec) where
 
 import Control.Monad.UUID (MonadUUID)
@@ -14,11 +15,22 @@ import Test.Browser.Mount (clickButton, slugs, start, startChanged)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend.Mem.State (MemState (..), savePageIn)
-import Wiki.App.Demo (demoNow)
+import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page qualified as P
+
+-- | The demo with its first post saved this many times by the editor, its
+-- heading numbered from "Hello, 1" and its title "Hello, " and the number
+-- of the last save.
+savedMany :: Int -> MemState -> MemState
+savedMany n demo = case foldM save (demo {current = Just (UserId "user-editor")}, hello) [1 .. n] of
+  Right (st, _) -> st {current = demo.current}
+  Left e -> panic ("the demo's first post could not be saved: " <> show e)
+  where
+    hello = fromMaybe (panic "the demo has no first post") (head (filter (\p -> p.title == "Hello, world") (Map.elems demo.pages)))
+    save (st, p) i = savePageIn p.id p.updatedAt ("Hello, " <> show i) (T.replace "# Hello, world" ("# Hello, " <> show i) hello.body) demoNow st
 
 -- | The demo with its first post's heading changed twice by the editor:
 -- "Hello, world", then "Hello, wiki" (with a new title), then "Hello,
@@ -94,6 +106,29 @@ spec m = do
     find ui ".version-detail h2" >>= (`shouldHaveText` "Version 1")
     find ui ".diff-summary" >>= (`shouldHaveText` "The first version: all of its text is new.")
     length <$> findAll ui ".restore" `shouldReturn` 0
+
+  it "lists a long history fifty versions at a time, and the rest after Older…" $ runPage $ do
+    ui <- startChanged m (savedMany 60) (Just "user-reader") (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) Nothing AgainstPrevious)
+    shown <- traverse textContent =<< findAll ui ".version-list li > a"
+    length shown `shouldBe` 50
+    (head shown, lastMay shown) `shouldBe` (Just "Version 61 (current)", Just "Version 12")
+    find ui ".versions-older" >>= (`shouldHaveText` "Older…")
+    find ui ".versions-older" >>= click
+    eventually $ (length <$> findAll ui ".version-list li > a") `shouldReturn` 61
+    (lastMay <$> (traverse textContent =<< findAll ui ".version-list li > a")) `shouldReturn` Just "Version 1"
+    length <$> findAll ui ".versions-older" `shouldReturn` 0
+
+  it "opens a version older than the first fifty, compared with the one before it" $ runPage $ do
+    let saved = savedMany 60 (demoState demoNow)
+        times = maybe [] Map.keys (head [vs | (pid, vs) <- Map.toList saved.versions, Just p <- [Map.lookup pid saved.pages], p.title == "Hello, 60"])
+        third = fromMaybe (panic "the post has no third version") (head (drop 2 times))
+    ui <- startChanged m (savedMany 60) (Just "user-reader") (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) (Just third) AgainstPrevious)
+    find ui ".version-detail h2" >>= (`shouldHaveText` "Version 3")
+    (find ui ".diff-removed del" >>= textContent) `shouldReturn` "1"
+    (find ui ".diff-added ins" >>= textContent) `shouldReturn` "2"
+    -- Listed down to it and the one before it, the 59 versions after
+    -- them included.
+    length <$> findAll ui ".version-list li > a" `shouldReturn` 61
 
   it "refuses the history where the page is refused" $ runPage $ do
     ui <- start m Nothing (PageHistory (slugs ["team"]) (slugs ["team-handbook"]) Nothing AgainstPrevious)

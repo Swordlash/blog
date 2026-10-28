@@ -14,7 +14,9 @@
 -- feed reads the posts it carries; both are written once a minute. A
 -- page view finds its page one slug at a time, its watch button reads the
 -- viewer's watches of the page and its spaces, the mentions read the
--- logins mentioned, and an attachment reads its space's chain alone.
+-- logins mentioned, and an attachment reads its space's chain alone. A
+-- blog's list reads the first version of each page, and a history is read
+-- a page of versions at a time.
 --
 -- What the storage reads is seen through SQLite's trace of each statement
 -- a connection runs ('statementsOf'), and SQLite's plan for each
@@ -28,8 +30,8 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
-import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query_, setTrace)
+import Data.Time (addUTCTime, getCurrentTime)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query, query_, setTrace)
 import Network.Wai (requestHeaders)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.WebSockets qualified as WS
@@ -46,12 +48,14 @@ import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Contract (As (As))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Notification (..), PageLocation (..), WatchTarget (..), maxListed)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Version (Author (..), VersionInfo (..), VersionsQuery (..), latestVersions)
 import Wiki.Server.Accounts (Resolved (..), resolveSession, startSession)
 import Wiki.Server.Events (eventsApplication, newHub, publish)
 import Wiki.Server.Feed (FeedKind (..), feed, feedSize, newFeedCache, sitemap)
@@ -67,6 +71,7 @@ spec = describe "the storage, at scale" $ do
   search
   feeds
   pageView
+  histories
 
 -- | An action that must end within two seconds: one that waits for a lock
 -- another operation holds does not.
@@ -488,3 +493,63 @@ pageView = describe "a page view" $ do
     counting <- maybe (assertFailure "no count of pages") pure (find ("count(*) FROM pages" `T.isInfixOf`) statements)
     plan <- withDatabase st (\c -> query_ c (Query ("EXPLAIN QUERY PLAN " <> counting))) :: IO [(Int, Int, Int, Text)]
     [detail | (_, _, _, detail) <- plan] `shouldSatisfy` any ("COVERING INDEX pages_space_template" `T.isInfixOf`)
+
+-- | Give each of these pages versions saved a second apart from its
+-- creation, the first by the user given.
+withVersions :: Storage -> UserId -> Int -> [PageId] -> IO ()
+withVersions st u n pages = withDatabase st $ \c -> do
+  execute_ c "BEGIN"
+  for_ pages $ \pid -> do
+    [Only (Stamp made)] <- query c "SELECT created_at FROM pages WHERE id = ?" (Only pid.text)
+    for_ [0 .. n - 1] $ \i ->
+      execute
+        c
+        "INSERT INTO page_versions (page_id, updated_at, title, body, author) VALUES (?, ?, 'A version', 'Its text.', ?)"
+        (pid.text, Stamp (addUTCTime (fromIntegral i) made), if i == 0 then Just u.text else Nothing)
+  execute_ c "COMMIT"
+
+-- | SQLite's plan for a statement, step by step.
+planOf :: Storage -> Text -> IO [Text]
+planOf st statement = withDatabase st $ \c -> do
+  plan <- query_ c (Query ("EXPLAIN QUERY PLAN " <> statement)) :: IO [(Int, Int, Int, Text)]
+  pure [detail | (_, _, _, detail) <- plan]
+
+histories :: Spec
+histories = describe "histories" $ do
+  it "list a blog's posts reading the first version of each page, not every version" $ withDemo $ \st -> do
+    editor <-
+      whoFor st (As "editor") >>= \case
+        AsUser u -> pure u
+        _ -> assertFailure "the editor is nobody"
+    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    pages <- addPagesWith st blog.id "post" "A post." 200
+    withVersions st editor 20 pages
+    (details, statements) <- statementsOf st (runSqliteWiki st Anonymous (postDetails blog.id) >>= ok)
+    [(\d -> (\a -> a.name) <$> d.author) <$> Map.lookup pid details | pid <- take 3 pages] `shouldBe` replicate 3 (Just (Just "Edgar Editor"))
+    readingVersions <- case filter ("page_versions" `T.isInfixOf`) statements of
+      [found] -> pure found
+      other -> assertFailure ("expected one read of versions, got " <> show other)
+    plan <- planOf st readingVersions
+    -- Each page's first version found by its page and its time, the
+    -- primary key, not by reading the page's versions.
+    plan `shouldSatisfy` any ("(page_id=? AND updated_at=?)" `T.isInfixOf`)
+    plan `shouldSatisfy` all (not . ("SCAN v" `T.isPrefixOf`))
+
+  it "list a page of a history from an index, numbered, without reading or sorting the rest" $ withDemo $ \st -> do
+    editor <-
+      whoFor st (As "editor") >>= \case
+        AsUser u -> pure u
+        _ -> assertFailure "the editor is nobody"
+    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    pages <- addPagesWith st blog.id "saved" "Saved often." 1
+    withVersions st editor 120 pages
+    pid <- maybe (assertFailure "no page") pure (head pages)
+    (listed, statements) <- statementsOf st (runSqliteWiki st Anonymous (listVersions pid latestVersions) >>= ok)
+    map (\v -> v.number) listed `shouldBe` [120, 119 .. 71]
+    plans <- traverse (planOf st) (filter ("page_versions" `T.isInfixOf`) statements)
+    length plans `shouldBe` 2
+    concat plans `shouldSatisfy` any ("page_versions_order" `T.isInfixOf`)
+    concat plans `shouldSatisfy` all (not . ("USE TEMP B-TREE" `T.isInfixOf`))
+    -- The next page starts where the first ends.
+    older <- runSqliteWiki st Anonymous (listVersions pid VersionsQuery {before = (\v -> v.updatedAt) <$> lastMay listed, limit = 50}) >>= ok
+    map (\v -> v.number) older `shouldBe` [70, 69 .. 21]

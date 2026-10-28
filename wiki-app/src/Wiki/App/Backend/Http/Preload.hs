@@ -56,6 +56,7 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedDraft, draftAnswer, emptyCache, kept)
 import Wiki.App.Backend.Http.Request (fromApiError, fromSessionInfo, sessionInfo)
 import Wiki.Core.Notification (WatchTarget (..))
+import Wiki.Core.Version (VersionsQuery (..), versionsPageSize)
 
 -- | The id of the page's script element that holds the preload.
 preloadId :: Text
@@ -85,7 +86,7 @@ preloadJSON c =
     , "pagesAt" .= answers "page" (\(space, path) -> ["space" .= space, "path" .= path]) c.pageAt
     , "drafts" .= answers "draft" (\page -> ["page" .= page]) (draftAnswer <$> c.drafts)
     , "searches" .= [object ["query" .= query, "hits" .= hits] | (query, hits) <- c.searches]
-    , "versionLists" .= answers "versions" (\page -> ["page" .= page]) c.versionLists
+    , "versionLists" .= answers "versions" (\(page, q) -> ["page" .= page, "before" .= q.before, "limit" .= q.limit]) c.versionLists
     , "versions" .= answers "version" (\(page, updatedAt) -> ["page" .= page, "updatedAt" .= updatedAt]) c.versions
     , "directory" .= answer "directory" c.directory
     , "settings" .= answer "settings" c.settings
@@ -149,7 +150,7 @@ parsePreload = withObject "the page's payload" $ \o -> do
   pageAt <- byArguments "page" (\e -> (,) <$> e .: "space" <*> e .: "path") =<< o .: "pagesAt"
   drafts <- fmap cachedDraft <$> (byArguments "draft" (.: "page") =<< o .: "drafts")
   searches <- traverse (withObject "a search" (\e -> (,) <$> e .: "query" <*> e .: "hits")) =<< o .: "searches"
-  versionLists <- byArguments "versions" (.: "page") =<< o .: "versionLists"
+  versionLists <- byArguments "versions" (\e -> (,) <$> e .: "page" <*> (VersionsQuery <$> e .:? "before" <*> (fromMaybe versionsPageSize <$> e .:? "limit"))) =<< o .: "versionLists"
   versions <- byArguments "version" (\e -> (,) <$> e .: "page" <*> e .: "updatedAt") =<< o .: "versions"
   directory <- traverse (withObject "an answer" (answerIn "directory")) =<< o .:? "directory"
   settings <- traverse (withObject "an answer" (answerIn "settings")) =<< o .:? "settings"

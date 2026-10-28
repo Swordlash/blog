@@ -197,7 +197,7 @@ import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space, SpaceProfile)
 import Wiki.Core.User (SignInProvider, Standing (..), User (..))
-import Wiki.Core.Version (Version, VersionInfo)
+import Wiki.Core.Version (Version, VersionInfo, VersionsQuery)
 
 -- | Why a request was not carried out. See the module's Haddock for which is
 -- returned when.
@@ -599,16 +599,17 @@ class (Monad m) => MonadWiki m where
 
   -- * History
 
-  -- | A page's history ("Wiki.Core.Version"): every version of it, the
-  -- latest first, which is the page as it is now. A page has a version for
-  -- each save and one for when it was made. A page that was imported, or
-  -- that existed before versions were kept, starts its history with the
-  -- state it came in with. Moving a page and changing its attachments make
-  -- no version: a version is a title and a body. The versions are deleted
+  -- | A page of a page's history ("Wiki.Core.Version"): the versions the
+  -- query asks for, the latest first, each with its number. The latest
+  -- version is the page as it is now. A page has a version for each save
+  -- and one for when it was made. A page that was imported, or that
+  -- existed before versions were kept, starts its history with the state
+  -- it came in with. Moving a page and changing its attachments make no
+  -- version: a version is a title and a body. The versions are deleted
   -- with the page.
-  listVersions :: PageId -> m (Either WikiError [VersionInfo])
-  default listVersions :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> m (Either WikiError [VersionInfo])
-  listVersions = lift . listVersions
+  listVersions :: PageId -> VersionsQuery -> m (Either WikiError [VersionInfo])
+  default listVersions :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> VersionsQuery -> m (Either WikiError [VersionInfo])
+  listVersions p = lift . listVersions p
 
   -- | One version of a page, by the page's @updatedAt@ at that version.
   -- The checks come in this order: a page that is not there, or one the

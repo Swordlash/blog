@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+A history a page at a time (WP5.16b). `PagesApi.versions` (`GET
+pages/<id>/versions`) takes `before` (a version's time, as in its address)
+and `limit` (50 if not given, 500 at most) as query parameters, and answers
+the latest `limit` versions before `before`. Without them it answers the
+50 latest versions, where it answered all of them. Each `VersionInfo`
+carries its `number`.
+
 Page lists without bodies (WP5.14). `SpacesApi.listPages`
 (`GET spaces/<id>/pages`) answers `[PageSummary]`: each page without its
 `body` and `attachments`, which `pageAt` reads. `PostDetails` gains

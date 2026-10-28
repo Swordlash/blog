@@ -452,7 +452,7 @@ permissions = describe "permissions given over HTTP" $ do
       (pageIn hs team.id "team-handbook" >>= jsonAs 404) `shouldReturn` NotFound
       (pageIn hs team.id "no-such-page" >>= jsonAs 404) `shouldReturn` NotFound
       (save hs handbook >>= jsonAs 404) `shouldReturn` NotFound
-      (getUrlWith r (onPublic r (links.pages.versions handbook.id)) hs >>= jsonAs 404) `shouldReturn` NotFound
+      (getUrlWith r (onPublic r (links.pages.versions handbook.id Nothing Nothing)) hs >>= jsonAs 404) `shouldReturn` NotFound
       hits hs team.id `shouldReturn` ([] :: [SearchHit])
       hits hs (SpaceId "no-such-space") `shouldReturn` ([] :: [SearchHit])
     -- A space Rita may view, but not edit: what she may not do there is 403.

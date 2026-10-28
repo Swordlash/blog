@@ -72,7 +72,7 @@ import Wiki.App.Route (Route (..), route, routeOfHref)
 import Wiki.App.Static (Served (..), renderServed, withHead)
 import Wiki.Core.Page (Page (id))
 import Wiki.Core.Space (Space (id))
-import Wiki.Core.Version (VersionInfo (updatedAt))
+import Wiki.Core.Version (VersionInfo (number, updatedAt))
 import Wiki.Server.Address (addressOf, hrefAddress, publicAddress)
 import Wiki.Server.Api (Env (..), apiApplication, callerAs)
 import Wiki.Server.Log (Level (..), Logger, logWith, redactedPath)
@@ -186,14 +186,18 @@ statusOf at c = case at of
     ofPage s p = case Map.lookup s c.spaceAt of
       Just (Right space) -> refusal (cachedPage space.id p c)
       _ -> status200
-    -- A version the page's history does not have.
+    -- A version the page's history does not have. The history view reads
+    -- the history a page at a time, the latest first, until it reaches
+    -- the version asked for. So the version is not there if the pages read
+    -- went past its time, or down to the first version, without it.
     ofVersion s p = \case
       Nothing -> status200
       Just time -> case Map.lookup s c.spaceAt of
         Just (Right space)
           | Just (Right page) <- cachedPage space.id p c
-          , Just (Right versions) <- Map.lookup page.id c.versionLists
-          , not (any (\v -> v.updatedAt == time) versions) ->
+          , listed <- concat [vs | ((pid, _), Right vs) <- Map.toList c.versionLists, pid == page.id]
+          , not (any (\v -> v.updatedAt == time) listed)
+          , any (\v -> v.number == 1 || v.updatedAt < time) listed ->
               status404
         _ -> status200
     refusal = \case

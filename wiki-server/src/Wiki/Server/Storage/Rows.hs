@@ -43,9 +43,10 @@ module Wiki.Server.Storage.Rows
   , loadAttachmentIn
   , loadDraft
   , VersionRow (..)
-  , loadVersions
+  , loadVersionsPage
   , loadFirstVersion
-  , loadSpaceVersions
+  , loadFirstVersions
+  , loadPostBodies
   , loadCommentCounts
   , loadVersion
   , SearchRow (..)
@@ -598,17 +599,32 @@ data VersionRow = VersionRow
   , authorName :: Maybe Text
   }
 
--- | Every version of a page, in no particular order: the times are stored
--- as text, whose order is not the times' order (a time without a fraction
--- sorts after one with), so the caller orders them. Without their bodies,
--- which a history's list does not show.
-loadVersions :: Connection -> PageId -> IO [VersionRow]
-loadVersions c page =
-  queryWith
-    versionRow
-    c
-    "SELECT v.updated_at, v.title, '', v.author, u.display_name FROM page_versions v LEFT JOIN users u ON u.id = v.author WHERE v.page_id = ?"
-    (Only page.text)
+-- | A page of a page's history: at most this many of its versions saved
+-- before the time given (of all of them, for 'Nothing'), the latest
+-- first, without their bodies, which a history's list does not show; and
+-- how many versions there are before that time, which is the number of
+-- the first of them.
+--
+-- A time is stored as text, and the text does not sort in time order: a
+-- time without a fraction of a second sorts after one with, since the
+-- @Z@ at its end sorts after the dot. Without the @Z@ it does, and the
+-- index @page_versions_order@ of migration @0015-version-order.sql@ holds
+-- each version under its time written so. Both queries name the index's
+-- expression exactly as it is written there, so SQLite reads the page of
+-- versions from the index rather than every version of the page.
+loadVersionsPage :: Connection -> PageId -> Maybe UTCTime -> Int -> IO (Int, [VersionRow])
+loadVersionsPage c page before limit = do
+  counted <- query c (sql ("SELECT count(*) FROM page_versions v WHERE v.page_id = ?" <> earlier)) params
+  rows <-
+    queryWith
+      versionRow
+      c
+      (sql ("SELECT v.updated_at, v.title, '', v.author, u.display_name FROM page_versions v LEFT JOIN users u ON u.id = v.author WHERE v.page_id = ?" <> earlier <> " ORDER BY rtrim(v.updated_at, 'Z') DESC LIMIT ?"))
+      (params <> [toField limit])
+  pure (maybe 0 fromOnly (head counted), rows)
+  where
+    earlier = maybe "" (const " AND rtrim(v.updated_at, 'Z') < rtrim(?, 'Z')") before
+    params = toField page.text : [toField (Stamp t) | t <- toList before]
 
 -- | The first version of a page, without its body: the version saved when
 -- the page was created, so the one whose time is the page's creation
@@ -624,16 +640,22 @@ loadFirstVersion c page =
       "SELECT v.updated_at, v.title, '', v.author, u.display_name FROM pages p JOIN page_versions v ON v.page_id = p.id AND v.updated_at = p.created_at LEFT JOIN users u ON u.id = v.author WHERE p.id = ?"
       (Only page.text)
 
--- | Every version of every page of a space, without their bodies, by
--- page: what each page's first author is read from. In no particular
--- order, as for 'loadVersions'.
-loadSpaceVersions :: Connection -> SpaceId -> IO [(PageId, VersionRow)]
-loadSpaceVersions c space =
+-- | The first version of every page of a space, without its body, by
+-- page, as 'loadFirstVersion' finds it: one version for each page, each
+-- found through the primary key, instead of every version of the space.
+loadFirstVersions :: Connection -> SpaceId -> IO [(PageId, VersionRow)]
+loadFirstVersions c space =
   queryWith
     ((,) <$> (PageId <$> field) <*> versionRow)
     c
-    "SELECT v.page_id, v.updated_at, v.title, '', v.author, u.display_name FROM page_versions v JOIN pages p ON p.id = v.page_id LEFT JOIN users u ON u.id = v.author WHERE p.space_id = ?"
+    "SELECT v.page_id, v.updated_at, v.title, '', v.author, u.display_name FROM pages p JOIN page_versions v ON v.page_id = p.id AND v.updated_at = p.created_at LEFT JOIN users u ON u.id = v.author WHERE p.space_id = ?"
     (Only space.text)
+
+-- | The bodies of the pages of a space that can be posts of a blog: the
+-- pages at its top level that are not templates ("Wiki.Core.Blog"'s
+-- 'isPost' decides the rest). A blog's list shows an excerpt of each.
+loadPostBodies :: Connection -> SpaceId -> IO [(PageId, Text)]
+loadPostBodies c space = map (first PageId) <$> query c "SELECT id, body FROM pages WHERE space_id = ? AND parent IS NULL AND template = 0" (Only space.text)
 
 -- | How many comments each page of a space has, in all its threads; a page
 -- with none is left out.

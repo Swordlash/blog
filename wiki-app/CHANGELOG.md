@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+A page's history lists its latest 50 versions, and "Older…" under the
+list fetches the 50 before them (WP5.16b). A version older than those is
+still opened by its address: the history fetches the versions down to it.
+`MonadWiki.listVersions` takes a `VersionsQuery`; each version carries its
+number.
+
 The backends answer `NotFound` for a space the current user may not view,
 and for everything in it, exactly as for a space that does not exist
 (WP5.17). `Forbidden` is left for what the user may not do in a space they

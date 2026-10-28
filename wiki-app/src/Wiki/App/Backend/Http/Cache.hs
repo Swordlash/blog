@@ -173,7 +173,7 @@ import Wiki.Core.Page (Page, PageSummary)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
-import Wiki.Core.Version (Author, Version, VersionInfo)
+import Wiki.Core.Version (Author, Version, VersionInfo, VersionsQuery)
 
 -- | The cached responses, one field for each of 'Wiki.App.Backend.MonadWiki''s
 -- read methods ('Wiki.App.Backend.getPage', 'Wiki.App.Backend.listPages',
@@ -200,8 +200,9 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.searchPages', by query, the latest first. The
   -- list stays short because every write empties it, and searches are
   -- cached only until the first route change ('forgetPageContent').
-  , versionLists :: Map PageId (Either WikiError [VersionInfo])
-  -- ^ 'Wiki.App.Backend.listVersions', by page.
+  , versionLists :: Map (PageId, VersionsQuery) (Either WikiError [VersionInfo])
+  -- ^ 'Wiki.App.Backend.listVersions', by page and the part of its
+  -- history asked for.
   , versions :: Map (PageId, UTCTime) (Either WikiError Version)
   -- ^ 'Wiki.App.Backend.getVersion', by page and time. Only the versions
   -- this tab has opened are cached; the server keeps every saved version
@@ -353,8 +354,8 @@ forgetDraft pid c = c {drafts = Map.delete pid c.drafts}
 withSearch :: SearchQuery -> [SearchHit] -> Cache -> Cache
 withSearch q hits c = c {searches = (q, hits) : filter ((/= q) . fst) c.searches}
 
-withVersions :: PageId -> Either WikiError [VersionInfo] -> Cache -> Cache
-withVersions pid vs c = c {versionLists = Map.insert pid vs c.versionLists}
+withVersions :: PageId -> VersionsQuery -> Either WikiError [VersionInfo] -> Cache -> Cache
+withVersions pid q vs c = c {versionLists = Map.insert (pid, q) vs c.versionLists}
 
 withVersion :: PageId -> UTCTime -> Either WikiError Version -> Cache -> Cache
 withVersion pid at v c = c {versions = Map.insert (pid, at) v c.versions}

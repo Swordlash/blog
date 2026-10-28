@@ -736,8 +736,8 @@ views m = describe "the application over it" $ do
     hello <- unsafeIOToPageM helloWorld
     let older = addUTCTime (negate 86400) hello.updatedAt
         ada = Just Author {id = UserId "user-admin", name = "Ada Admin"}
-        current = VersionInfo {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, author = ada}
-    answerWith "GET" (links.pages.versions hello.id) 200 [current, VersionInfo {page = hello.id, updatedAt = older, title = "Hello", author = Nothing}]
+        current = VersionInfo {page = hello.id, updatedAt = hello.updatedAt, title = hello.title, author = ada, number = 2}
+    answerWith "GET" (links.pages.versions hello.id Nothing Nothing) 200 [current, VersionInfo {page = hello.id, updatedAt = older, title = "Hello", author = Nothing, number = 1}]
     answerWith "GET" (links.pages.version hello.id (VersionTime older)) 200 Version {page = hello.id, updatedAt = older, title = "Hello", body = "# Hello\n", author = Nothing}
     answerWith "POST" (links.pages.restore hello.id (VersionTime older)) 200 hello
     ui <- startServer m (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) (Just older) AgainstPrevious)
@@ -746,7 +746,7 @@ views m = describe "the application over it" $ do
     versions `shouldBe` ["Version 2 (current)", "Version 1"]
     (find ui ".diff-added .diff-text" >>= textContent) `shouldReturn` "# Hello"
     fetched <- map (\r -> r.url) . filter (\r -> r.method == "GET") <$> asked
-    filter (T.isInfixOf "/versions") fetched `shouldBe` [links.pages.versions hello.id, links.pages.version hello.id (VersionTime older)]
+    filter (T.isInfixOf "/versions") fetched `shouldBe` [links.pages.versions hello.id Nothing Nothing, links.pages.version hello.id (VersionTime older)]
     find ui "button.restore" >>= click
     find ui ".restore-confirm button.primary" >>= click
     eventually $ do
@@ -760,7 +760,7 @@ views m = describe "the application over it" $ do
     serverStarts
     serveDemo
     hello <- unsafeIOToPageM helloWorld
-    let versions = links.pages.versions hello.id
+    let versions = links.pages.versions hello.id Nothing Nothing
     unsafeIOToPageM (js_server_hold_at (toJSText "GET") (toJSText versions))
     ui <- startServer m (PageHistory (slugs ["blog"]) (slugs ["hello-world"]) Nothing AgainstPrevious)
     eventually (map (\r -> r.aborted) . filter (\r -> r.url == versions) <$> asked `shouldReturn` [False])

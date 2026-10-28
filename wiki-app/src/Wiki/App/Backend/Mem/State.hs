@@ -200,7 +200,7 @@ import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
 import Wiki.Core.User (Group (..), Membership, Standing (..), User (..), checkLogin, checkPassword)
-import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, versionInfo)
+import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
 import Wiki.Core.Version qualified as V
 
 -- | Everything the in-memory wiki holds.
@@ -1128,12 +1128,14 @@ authorOf st u = maybe (absentAuthor u) (\x -> Author {id = u, name = x.displayNa
 versionOf :: MemState -> PageId -> UTCTime -> Saved -> Version
 versionOf st pid at v = Version {V.page = pid, V.updatedAt = at, V.title = v.title, V.body = v.body, V.author = authorOf st <$> v.author}
 
--- | A page's versions, the latest first.
-listVersionsIn :: PageId -> MemState -> Either WikiError [VersionInfo]
-listVersionsIn pid st = do
+-- | A page of a page's versions, the latest first, each numbered from the
+-- first.
+listVersionsIn :: PageId -> VersionsQuery -> MemState -> Either WikiError [VersionInfo]
+listVersionsIn pid q st = do
   p <- findPage st pid
   requireView st (chainOf st p.space)
-  pure [versionInfo (versionOf st pid at v) | (at, v) <- Map.toDescList (Map.findWithDefault mempty pid st.versions)]
+  let history = Map.findWithDefault mempty pid st.versions
+  pure (versionsPage q [versionInfo n (versionOf st pid at v) | (n, (at, v)) <- zip [Map.size history, Map.size history - 1 ..] (Map.toDescList history)])
 
 -- | A version of a page, after checking that the user may view the page
 -- (or, for a restore, edit it).

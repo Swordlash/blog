@@ -19,11 +19,21 @@
 -- field names. Versions are not part of an export (docs/export.md): an
 -- archive holds the wiki's content, and a page's history can be many
 -- times its size.
+--
+-- A history is listed a page of versions at a time ('VersionsQuery'), the
+-- latest first, since a page saved thousands of times has a history too
+-- long to send whole. Each version carries its number, counted from the
+-- first, so a page of the history can say which versions it shows.
 module Wiki.Core.Version
   ( VersionInfo (..)
   , Version (..)
   , Author (..)
   , versionInfo
+  , VersionsQuery (..)
+  , latestVersions
+  , versionsPageSize
+  , maxVersionsPageSize
+  , versionsPage
   )
 where
 
@@ -53,6 +63,10 @@ data VersionInfo = VersionInfo
   , author :: Maybe Author
   -- ^ 'Nothing' when nobody is known to have saved it: a page that was
   -- imported whole.
+  , number :: Int
+  -- ^ Its place in the page's history: 1 for the first version, and the
+  -- number of versions for the latest. Versions are never deleted, so a
+  -- version keeps its number.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -69,6 +83,37 @@ data Version = Version
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | The part of a version a history lists.
-versionInfo :: Version -> VersionInfo
-versionInfo v = VersionInfo {page = v.page, updatedAt = v.updatedAt, title = v.title, author = v.author}
+-- | The part of a version a history lists, given its number.
+versionInfo :: Int -> Version -> VersionInfo
+versionInfo number v = VersionInfo {page = v.page, updatedAt = v.updatedAt, title = v.title, author = v.author, number}
+
+-- | 'VersionsQuery' says which page of a history to list: at most 'limit'
+-- versions, the latest first, of those saved before 'before' (of every
+-- version, for 'Nothing'). The next page of a history is the one before
+-- the oldest version listed so far.
+data VersionsQuery = VersionsQuery
+  { before :: Maybe UTCTime
+  , limit :: Int
+  }
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The first page of a history: its 'versionsPageSize' latest versions.
+latestVersions :: VersionsQuery
+latestVersions = VersionsQuery {before = Nothing, limit = versionsPageSize}
+
+-- | How many versions a page of a history lists, unless asked for another
+-- number.
+versionsPageSize :: Int
+versionsPageSize = 50
+
+-- | The most versions one page of a history lists, whatever is asked for.
+maxVersionsPageSize :: Int
+maxVersionsPageSize = 500
+
+-- | The page of a history a query asks for, from the whole history, the
+-- latest first: for a backend that holds the whole history at hand. A
+-- limit below one, or above 'maxVersionsPageSize', counts as the nearest
+-- of the two.
+versionsPage :: VersionsQuery -> [VersionInfo] -> [VersionInfo]
+versionsPage q = take (max 1 (min maxVersionsPageSize q.limit)) . filter (\v -> maybe True (v.updatedAt <) q.before)

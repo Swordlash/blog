@@ -160,7 +160,7 @@ import Wiki.Core.Export (Archive (..), threadsAmong)
 import Wiki.Core.Id
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
-import Wiki.Core.Page (Page (..), PageSummary, pageTreeOrder, summaryOf)
+import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath, resolvePathM)
 import Wiki.Core.Permission
   ( GlobalGrant (..)
@@ -185,7 +185,7 @@ import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
 import Wiki.Core.User (Group (..), Standing (..), User (..), checkLogin, checkPassword)
-import Wiki.Core.Version (Author (..), Version (..), VersionInfo, versionInfo)
+import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, loadActivity, loadAuditLog, restoreAudit)
@@ -806,7 +806,7 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   getDraft = run Reads . getDraftTx
   saveDraft pid base title = run Writes . saveDraftTx pid base title
   discardDraft = run Writes . discardDraftTx
-  listVersions = run Reads . listVersionsTx
+  listVersions pid = run Reads . listVersionsTx pid
   getVersion pid = run Reads . getVersionTx pid
   restoreVersion pid at = saving . restoreVersionTx pid at
 
@@ -1177,23 +1177,25 @@ spacePagesTx sid = do
 
 -- | The details each page of a space is listed with as a blog post: the
 -- author of its first version, how many comments it has, and its excerpt.
--- The first version is the earliest, compared as times rather than as the
--- text the times are stored as.
+-- The first version is the one saved when the page was created
+-- ('loadFirstVersions'): one version is read for each page, not every
+-- version of the space. Only the bodies of the pages that can be posts
+-- are read.
 postDetailsTx :: SpaceId -> Tx (Map PageId PostDetails)
 postDetailsTx sid = do
   (s, c) <- findSpace sid
   requireView c
-  pages <- db (`loadPages` sid)
-  versions <- db (`loadSpaceVersions` sid)
+  pages <- db (`loadPageSummaries` sid)
+  firsts <- Map.fromList <$> db (`loadFirstVersions` sid)
   counts <- Map.fromList <$> db (`loadCommentCounts` sid)
-  let firsts = Map.fromListWith (\a b -> if a.updatedAt <= b.updatedAt then a else b) versions
-      details p =
+  bodies <- Map.fromList <$> db (`loadPostBodies` sid)
+  let details p =
         PostDetails
           { author = (Map.lookup p.id firsts >>= \r -> (versionOf p.id r).author)
           , comments = Map.findWithDefault 0 p.id counts
           , -- Only a post is listed with its excerpt: parsing every page
             -- of a large space for nothing would slow the answer down.
-            excerpt = if isPost s (summaryOf p) then Blog.excerptOf p.body else ""
+            excerpt = if isPost s p then maybe "" Blog.excerptOf (Map.lookup p.id bodies) else ""
           }
   pure (Map.fromList [(p.id, details p) | p <- pages])
 
@@ -1795,11 +1797,15 @@ versionOf page r =
       | u == administratorId = Author {id = u, name = administratorUser.displayName}
       | otherwise = Author {id = u, name = fromMaybe u.text r.authorName}
 
-listVersionsTx :: PageId -> Tx [VersionInfo]
-listVersionsTx pid = do
+-- | A page of a page's history, each version with its number: the first
+-- of them is numbered with how many versions there are up to it, and the
+-- next ones count down from there.
+listVersionsTx :: PageId -> VersionsQuery -> Tx [VersionInfo]
+listVersionsTx pid q = do
   p <- findNode pid
   requireView =<< chainOfPage p
-  map (versionInfo . versionOf pid) . sortOn (Down . (\r -> r.updatedAt)) <$> db (`loadVersions` pid)
+  (before, rows) <- db (\c -> loadVersionsPage c pid q.before (max 1 (min maxVersionsPageSize q.limit)))
+  pure [versionInfo n (versionOf pid r) | (n, r) <- zip [before, before - 1 ..] rows]
 
 -- | A version of a page someone may view (or, for a restore, edit): the
 -- page's permission checked first, so that whoever may not see the page

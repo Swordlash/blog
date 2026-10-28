@@ -240,7 +240,7 @@ not the attachment's is 404.
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
-| GET | `api/v1/pages/<page>/versions` | | `[VersionInfo]` `{"page", "updatedAt", "title", "author"}`, the page's every version, the latest (the page as it is) first | 404 | `listVersions` |
+| GET | `api/v1/pages/<page>/versions?before=<time>&limit=<n>` | | `[VersionInfo]` `{"page", "updatedAt", "title", "author", "number"}`, a page of the page's history, the latest (the page as it is) first: at most `limit` versions (50 if missing, 500 at most) of those saved before the version `before` (of all, if missing), written as in a version's address; `number` is the version's place in the history, 1 for the first | 404 | `listVersions` |
 | GET | `api/v1/pages/<page>/versions/<time>` | | `Version` `{"page", "updatedAt", "title", "body", "author"}` | 404 | `getVersion` |
 | POST | `api/v1/pages/<page>/versions/<time>/restore` | none, with `If-Match` | `Page`, with its new `ETag` | 404, 403, 400, 409 | `restoreVersion` |
 

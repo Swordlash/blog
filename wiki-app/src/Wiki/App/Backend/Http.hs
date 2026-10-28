@@ -124,6 +124,7 @@ import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.User (Standing (..))
+import Wiki.Core.Version (VersionsQuery (..), versionsPageSize)
 
 -- | How a request reaches the server: the response, or why none came.
 newtype Transport = Transport (Request -> IO (Either Text Response))
@@ -497,7 +498,10 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
     result <- answerNothing <$> call (R.delete (links.pages.discardDraft pid))
     modifyCache (either (const (forgetDraft pid)) (const (withDraft pid NoDraft)) result)
     pure result
-  listVersions pid = pageContent (\c -> Map.lookup pid c.versionLists) (R.get (links.pages.versions pid)) (withVersions pid)
+
+  -- The first page of a history is asked for at the address it always
+  -- had, with no query.
+  listVersions pid q = pageContent (\c -> Map.lookup (pid, q) c.versionLists) (R.get (links.pages.versions pid (VersionTime <$> q.before) (mfilter (/= versionsPageSize) (Just q.limit)))) (withVersions pid q)
   getVersion pid at =
     cached (\c -> Map.lookup (pid, at) c.versions) (R.get (links.pages.version pid (VersionTime at))) (withVersion pid at)
   restoreVersion pid at base = write (ifMatch base (R.post (links.pages.restore pid (VersionTime at))))

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+A history is listed a page at a time (WP5.16b). `VersionInfo` gains
+`number`, the version's place in its page's history counted from the
+first, so `versionInfo` takes the number first. `VersionsQuery` (`before`,
+`limit`) says which page of a history to list; `latestVersions` is the
+first page of `versionsPageSize` (50) versions, `maxVersionsPageSize` (500)
+the most one page lists, and `versionsPage` cuts a whole history to the
+page a query asks for.
+
 The export is version 2 of its format (WP5.8, `docs/export.md`): a zip
 file whose spaces, subspaces and pages are directories, named by their
 slugs. A space's directory holds `space.json` and its icon's image; a page's

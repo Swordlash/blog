@@ -57,6 +57,7 @@ import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
 import Wiki.Core.User (Group (..), Standing (..), User (..))
+import Wiki.Core.Version (VersionInfo)
 
 -- | Refuse a request as the server's handlers will: the error's status, and
 -- the error as the JSON body.
@@ -177,7 +178,8 @@ stubs =
           , draft = \p -> pure (if p == Sample.page.id then Just Sample.draft else Nothing)
           , saveDraft = \p body -> pure Sample.draft {Draft.page = p, Draft.base = body.base, Draft.title = body.title, Draft.body = body.body}
           , discardDraft = \_ -> pure NoContent
-          , versions = \p -> if p == Sample.page.id then pure [Sample.versionInfo] else refuse NotFound
+          , -- The sample's history is one version: nothing is before it.
+            versions = \p asked _ -> if p == Sample.page.id then pure [Sample.versionInfo | isNothing asked] else refuse NotFound
           , version = \p at ->
               if p == Sample.page.id && at.time == Sample.time then pure Sample.version else refuse NotFound
           , restore = \p at current ->
@@ -505,10 +507,14 @@ spec = describe "a server of the API's type" $ do
 
   describe "versions" $ do
     it "lists a page's history, and gives one version by its time" $ do
-      answers (getAt (links.pages.versions p)) 200 [Sample.versionInfo]
+      answers (getAt (links.pages.versions p Nothing Nothing)) 200 [Sample.versionInfo]
+      answers (getAt (links.pages.versions p (Just (VersionTime Sample.time)) (Just 10))) 200 ([] :: [VersionInfo])
       answers (getAt (links.pages.version p (VersionTime Sample.time))) 200 Sample.version
       answers (getAt (links.pages.version p (VersionTime Sample.later))) 404 NotFound
-      answers (getAt (links.pages.versions (PageId "p2"))) 404 NotFound
+      answers (getAt (links.pages.versions (PageId "p2") Nothing Nothing)) 404 NotFound
+
+    it "asks for a page of a history with the version it is before and how many, in the query" $
+      links.pages.versions p (Just (VersionTime Sample.time)) (Just 10) `shouldBe` "api/v1/pages/p1/versions?before=2026-10-24T09%3A30%3A12.345678Z&limit=10"
 
     it "writes a version's time in its address with every digit of its fraction, colons escaped" $
       links.pages.version p (VersionTime Sample.time) `shouldBe` "api/v1/pages/p1/versions/2026-10-24T09%3A30%3A12.345678Z"

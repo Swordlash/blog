@@ -93,7 +93,7 @@ patterns = describe "routePattern" $ do
 
   it "never writes a secret of an address, nor an id" $ do
     onPublic (links.invitations.details (InvitationToken "secret-of-the-link")) `shouldBe` "/api/v1/invitations/:token"
-    onPublic (links.pages.versions (PageId "p-123")) `shouldNotSatisfy` T.isInfixOf "p-123"
+    onPublic (links.pages.versions (PageId "p-123") Nothing Nothing) `shouldNotSatisfy` T.isInfixOf "p-123"
 
   it "names what is not the API's by what it is" $ do
     onPublic "metrics" `shouldBe` "/metrics"

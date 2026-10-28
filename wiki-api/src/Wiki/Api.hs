@@ -267,8 +267,10 @@ data PagesApi mode = PagesApi
   -- ^ @saveDraft@.
   , discardDraft :: mode :- Capture "page" PageId :> "draft" :> DeleteNoContent
   -- ^ @discardDraft@.
-  , versions :: mode :- Capture "page" PageId :> "versions" :> Get '[JSON] [VersionInfo]
-  -- ^ @listVersions@: the page's history, latest first.
+  , versions :: mode :- Capture "page" PageId :> "versions" :> QueryParam "before" VersionTime :> QueryParam "limit" Int :> Get '[JSON] [VersionInfo]
+  -- ^ @listVersions@: a page of the page's history, latest first: at most
+  -- @limit@ versions (50 if not given, 500 at most), of those before the
+  -- version @before@ (of all, if not given), each with its number.
   , version :: mode :- Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> Get '[JSON] Version
   -- ^ @getVersion@: one version, by its time.
   , restore :: mode :- Capture "page" PageId :> "versions" :> Capture "version" VersionTime :> "restore" :> IfMatch :> Post '[JSON] (Versioned Page)

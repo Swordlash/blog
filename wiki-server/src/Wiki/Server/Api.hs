@@ -113,6 +113,7 @@ import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Search (SearchQuery (..))
 import Wiki.Core.User (User (..))
+import Wiki.Core.Version (VersionsQuery (VersionsQuery), versionsPageSize)
 import Wiki.Server.Accounts (endSession)
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Backups (BackupService, currentBackups, requestBackup, settingsChanged)
@@ -482,7 +483,7 @@ handlers env caller =
           , draft = wiki . getDraft
           , saveDraft = \p body -> wiki (saveDraft p body.base body.title body.body)
           , discardDraft = \p -> wiki (discardDraft p) $> NoContent
-          , versions = wiki . listVersions
+          , versions = \p before limit -> wiki (listVersions p (VersionsQuery ((\v -> v.time) <$> before) (fromMaybe versionsPageSize limit)))
           , version = \p at -> wiki (getVersion p at.time)
           , restore = \p at current -> versioned <$> wiki (restoreVersion p at.time current.time)
           , export = \p format request respond -> liftIO (exporting request respond (\key -> exportPage env.exports key env.storage who p format))

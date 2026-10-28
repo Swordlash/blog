@@ -185,7 +185,7 @@ genAuthor :: Gen Author
 genAuthor = Author <$> genUserId <*> genText
 
 genVersionInfo :: Gen VersionInfo
-genVersionInfo = VersionInfo <$> genPageId <*> genUtcTime <*> genText <*> oneof [pure Nothing, Just <$> genAuthor]
+genVersionInfo = VersionInfo <$> genPageId <*> genUtcTime <*> genText <*> oneof [pure Nothing, Just <$> genAuthor] <*> chooseInt (1, 10000)
 
 genVersion :: Gen Version
 genVersion = Version <$> genPageId <*> genUtcTime <*> genText <*> genText <*> oneof [pure Nothing, Just <$> genAuthor]

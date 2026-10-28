@@ -43,7 +43,7 @@ import Wiki.Core.Permission (Grants (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (User (..))
-import Wiki.Core.Version (Version (..), VersionInfo (..))
+import Wiki.Core.Version (Version (..), VersionInfo (..), latestVersions)
 
 seed :: MemState
 seed = demoState demoNow
@@ -218,11 +218,11 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       run (switchUser (Just (UserId "user-admin")))
       docs <- run (getSpace (path "docs")) >>= ok
       tour <- run (getPage docs.id (path "tour")) >>= ok
-      map (\v -> (v.updatedAt, v.author)) <$> (run (listVersions tour.id) >>= ok) `shouldReturn` [(tour.updatedAt, Nothing)]
+      map (\v -> (v.updatedAt, v.author)) <$> (run (listVersions tour.id latestVersions) >>= ok) `shouldReturn` [(tour.updatedAt, Nothing)]
       saved <- run (savePage tour.id tour.updatedAt "Tour" "Saved after the upgrade") >>= ok
       shouldReload db reopened.wiki
       again <- open db
-      versions <- runKept again (switchUser (Just (UserId "user-admin")) >> listVersions tour.id) >>= ok
+      versions <- runKept again (switchUser (Just (UserId "user-admin")) >> listVersions tour.id latestVersions) >>= ok
       map (\v -> v.updatedAt) versions `shouldBe` [saved.updatedAt, tour.updatedAt]
       runKept again (getVersion tour.id tour.updatedAt) >>= ok >>= \v -> v.body `shouldBe` tour.body
 

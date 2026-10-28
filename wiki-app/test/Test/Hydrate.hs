@@ -65,7 +65,7 @@ import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Space qualified as S
 import Wiki.Core.User (SignInProvider (..))
-import Wiki.Core.Version (Author)
+import Wiki.Core.Version (Author, latestVersions)
 
 spec :: Spec
 spec = do
@@ -252,7 +252,7 @@ apiOver providers st = do
       perPage <- for [p | p <- Map.elems st.pages, p.space == s.id] $ \p -> do
         page <- getPage s.id (pagePath p.id)
         draft <- getDraft p.id
-        versions <- listVersions p.id
+        versions <- listVersions p.id latestVersions
         each <- for (Map.keys (Map.findWithDefault mempty p.id st.versions)) $ \at ->
           (links.pages.version p.id (VersionTime at),) . answerOf <$> getVersion p.id at
         threads <- fromRight [] <$> listThreads p.id
@@ -260,7 +260,7 @@ apiOver providers st = do
         let logins = Body.unasked Body.noPeople (p.body : [c.body | t <- threads, c <- t.comments])
         named <- Body.askPeople logins
         pure
-          ( [(links.spaces.pageAt s.id (pagePath p.id), answerOf page), (links.pages.draft p.id, answerOf draft), (links.pages.versions p.id, answerOf versions)]
+          ( [(links.spaces.pageAt s.id (pagePath p.id), answerOf page), (links.pages.draft p.id, answerOf draft), (links.pages.versions p.id Nothing Nothing, answerOf versions)]
               <> [(links.notifications.pageWatch p.id, answerOf watch)]
               <> [(links.notifications.people logins, answerOf (Right named :: Either WikiError (Map Text Author))) | not (null logins)]
               <> each
