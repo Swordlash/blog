@@ -44,7 +44,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalPermission (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 
 -- | A fixed time at which the demo is built, for a program that has no
@@ -66,9 +66,9 @@ demoDatabase = memDatabase "wiki-demo"
 demoState :: UTCTime -> MemState
 demoState now = flip execState emptyState $ do
   modify $
-    insertUser User {id = adminId, login = "admin", displayName = "Ada Admin"}
-      . insertUser User {id = editorId, login = "editor", displayName = "Edgar Editor"}
-      . insertUser User {id = readerId, login = "reader", displayName = "Rita Reader"}
+    insertUser User {id = adminId, login = Login "admin", displayName = "Ada Admin"}
+      . insertUser User {id = editorId, login = Login "editor", displayName = "Edgar Editor"}
+      . insertUser User {id = readerId, login = Login "reader", displayName = "Rita Reader"}
       . insertGroup Group {id = writers, name = "writers"} [editorId]
       . grantGlobal (SubjectUser adminId) Administer
       . grantGlobal (SubjectUser editorId) CreateSpaces

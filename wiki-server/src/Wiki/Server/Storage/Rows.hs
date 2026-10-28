@@ -142,7 +142,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (bodyText, foldText)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Group (..), Membership, User (..))
+import Wiki.Core.User (Group (..), Login (..), Membership, User (..))
 import Wiki.Server.Secret (Kept, Secret (..), revealed)
 
 --------------------------------------------------------------------------------
@@ -439,7 +439,7 @@ grantsOf globals spaceGrants =
 userRow :: RowParser User
 userRow = do
   id <- UserId <$> field
-  login <- field
+  login <- Login <$> field
   displayName <- field
   pure User {id, login, displayName}
 
@@ -718,7 +718,7 @@ loadSearchMatches c spaces templates ws =
 
 -- | Add a user.
 insertUser :: Connection -> User -> IO ()
-insertUser c u = execute c "INSERT INTO users (id, login, display_name) VALUES (?, ?, ?)" (u.id.text, u.login, u.displayName)
+insertUser c u = execute c "INSERT INTO users (id, login, display_name) VALUES (?, ?, ?)" (u.id.text, u.login.text, u.displayName)
 
 -- | Add a group.
 insertGroup :: Connection -> Group -> IO ()
@@ -905,7 +905,7 @@ type AccountRow = (Text, Text, Text, Maybe Text, Int)
 accountFromRow :: AccountRow -> Account
 accountFromRow (uid, login, displayName, phc, disabled) =
   Account
-    { user = User {id = UserId uid, login, displayName}
+    { user = User {id = UserId uid, login = Login login, displayName}
     , hasPassword = isJust phc
     , disabled = disabled /= 0
     }
@@ -931,13 +931,13 @@ loadAccountFlags c = do
 -- | Add a user with a login no other user has, ignoring case, or return a
 -- 'Left' with the login that is taken. The login and the password hash are
 -- stored as given.
-insertAccount :: Connection -> UserId -> Text -> Text -> Maybe Text -> IO (Either Text Account)
+insertAccount :: Connection -> UserId -> Login -> Text -> Maybe Text -> IO (Either Login Account)
 insertAccount c u login displayName phc = do
-  taken <- query c "SELECT count(*) FROM users WHERE login = ? COLLATE NOCASE" (Only login)
+  taken <- query c "SELECT count(*) FROM users WHERE login = ? COLLATE NOCASE" (Only login.text)
   if taken /= [Only (0 :: Int)]
     then pure (Left login)
     else do
-      execute c "INSERT INTO users (id, login, display_name, password_hash, disabled) VALUES (?, ?, ?, ?, 0)" (u.text, login, displayName, phc)
+      execute c "INSERT INTO users (id, login, display_name, password_hash, disabled) VALUES (?, ?, ?, ?, 0)" (u.text, login.text, displayName, phc)
       maybe (Left login) Right <$> loadAccount c u
 
 -- | Replace a user's password hash.

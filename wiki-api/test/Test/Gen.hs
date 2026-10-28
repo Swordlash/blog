@@ -57,7 +57,7 @@ import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.User (SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Login (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | Any text, Unicode included.
@@ -103,7 +103,7 @@ genGroupId = GroupId <$> genText
 genUser :: Gen User
 genUser = do
   id <- genUserId
-  login <- genText
+  login <- Login <$> genText
   displayName <- genText
   pure User {id, login, displayName}
 

@@ -32,7 +32,7 @@ import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (InvitationId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Standing (..), User (..))
+import Wiki.Core.User (Login (..), Standing (..), User (..))
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Storage.Layout (databaseFile)
 
@@ -100,10 +100,10 @@ open = describe "an open wiki" $ do
   it "lets anyone make an account, signed in at once and holding no grant" $ withDemoRunning identity $ \r -> do
     reply <- register r [] "newcomer" "a long password"
     info :: SessionInfo <- jsonAs 200 reply
-    ((\u -> u.login) <$> info.user, info.standing, info.grants.global) `shouldBe` (Just "newcomer", SignedIn, [])
+    ((\u -> u.login.text) <$> info.user, info.standing, info.grants.global) `shouldBe` (Just "newcomer", SignedIn, [])
     c <- cookieOf reply
     me <- sessionOf r [c]
-    (\u -> u.login) <$> me.user `shouldBe` Just "newcomer"
+    (\u -> u.login.text) <$> me.user `shouldBe` Just "newcomer"
     spaceNames r [c] `shouldReturn` ["Blog", "Docs"]
     made <- send r methodPost (onPublic r links.spaces.create) [(hContentType, "application/json"), c] "{\"parent\":null,\"name\":\"Mine\"}"
     made.status `shouldBe` 403
@@ -221,7 +221,7 @@ invitations = describe "an invitation, where the server mails nothing" $ do
     decodeUtf8 (BSL.toStrict page.body) `shouldSatisfy` T.isInfixOf "Create my account"
     reply <- accept r token "bea" "a long password"
     signedIn :: SessionInfo <- jsonAs 200 reply
-    ((\u -> (u.login, u.displayName)) <$> signedIn.user) `shouldBe` Just ("bea", "Invited")
+    ((\u -> (u.login.text, u.displayName)) <$> signedIn.user) `shouldBe` Just ("bea", "Invited")
     c <- cookieOf reply
     spaceNames r [c] `shouldReturn` ["Blog", "Docs"]
     -- Used up.
@@ -239,7 +239,7 @@ invitations = describe "an invitation, where the server mails nothing" $ do
     made <- inviteAs r "bea@example.org"
     token <- maybe (panic "no secret") pure made.token
     (accept r token "editor" "a long password" >>= jsonAs 409) >>= (`shouldSatisfy` \case Conflict _ -> True; _ -> False)
-    (accept r token "bea" "a long password") >>= jsonAs @SessionInfo 200 >>= \s -> (\u -> u.login) <$> s.user `shouldBe` Just "bea"
+    (accept r token "bea" "a long password") >>= jsonAs @SessionInfo 200 >>= \s -> (\u -> u.login.text) <$> s.user `shouldBe` Just "bea"
 
   it "gives the account create-spaces when the settings say so" $ withDemoRunning identity $ \r -> do
     settle r WikiSettings {access = Closed, newAccountsCreateSpaces = True, adminCreatesPasswordAccounts = True}

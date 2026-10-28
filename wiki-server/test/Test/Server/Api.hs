@@ -35,7 +35,7 @@ import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Server.Storage (administratorUser)
 
 spec :: Spec
@@ -313,7 +313,7 @@ people :: Spec
 people = describe "the wiki's people" $ do
   it "are the operator's on the admin listener, without a session" $ withDemoRunning identity $ \r -> do
     d <- ok200 (getUrl r (onAdmin r links.admin.directory))
-    map (\u -> u.login) (d :: Directory).users `shouldBe` ["admin", "editor", "reader"]
+    map (\u -> u.login.text) (d :: Directory).users `shouldBe` ["admin", "editor", "reader"]
     map (\g -> g.name) d.groups `shouldBe` ["writers"]
     let editor = loginId d "editor"
     marked <- sendJson r methodPut (onAdmin r (links.admin.setAdministrator editor)) AdministratorFlag {administrator = True}
@@ -341,7 +341,7 @@ people = describe "the wiki's people" $ do
         post' :: (ToJSON b) => Text -> b -> IO Reply
         post' address body = send r methodPost (onPublic r address) [session, (hContentType, "application/json")] (encode body)
     d <- ok200 (get' links.admin.directory)
-    map (\u -> u.login) (d :: Directory).users `shouldBe` ["admin", "editor", "reader"]
+    map (\u -> u.login.text) (d :: Directory).users `shouldBe` ["admin", "editor", "reader"]
     (d.administrators, d.withPassword, d.disabled, d.creators) `shouldBe` (Set.singleton (loginId d "admin"), Set.singleton (loginId d "admin"), mempty, Set.singleton (loginId d "editor"))
     _ :: ServerStatus <- ok200 (get' links.admin.status)
     made <- post' links.admin.createGroup GroupName {name = "Reviewers"} >>= jsonAs 201
@@ -400,7 +400,7 @@ people = describe "the wiki's people" $ do
     ok200 (getUrl r (onAdmin r links.admin.directory)) `shouldReturn` d
   where
     loginId :: Directory -> Text -> UserId
-    loginId d login = maybe (panic ("no user " <> login)) (\u -> u.id) (find (\u -> u.login == login) d.users)
+    loginId d login = maybe (panic ("no user " <> login)) (\u -> u.id) (find (\u -> u.login.text == login) d.users)
 
 -- | Who may do what, given over HTTP by an administrator's session on the
 -- public listener, and kept to by the server for each user's own: the
@@ -475,7 +475,7 @@ permissions = describe "permissions given over HTTP" $ do
     initially <- ok200 (getUrlWith r (onPublic r (links.spaces.access projects.id)) [session])
     [(g.space == projects.id, g.subject, g.permission) | g <- (initially :: SpaceAccess).grants]
       `shouldBe` [(True, SubjectUser (UserId "user-reader"), View)]
-    map (\u -> u.login) initially.users `shouldBe` ["admin", "editor", "reader"]
+    map (\u -> u.login.text) initially.users `shouldBe` ["admin", "editor", "reader"]
     -- View on Team: both, read only.
     (.status) <$> grant View team.id True `shouldReturn` 204
     (.status) <$> at' [editor] "team" `shouldReturn` 200

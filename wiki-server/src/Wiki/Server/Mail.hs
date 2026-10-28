@@ -54,6 +54,7 @@ import System.Timeout (timeout)
 import Text.Show (Show (showsPrec))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), securityFor, securityName)
 import Wiki.Core.Notification (DigestGroup (..), Notification (..), PageLocation, notificationText)
+import Wiki.Core.User (Login (..))
 import Wiki.Server.Secret (Kept, revealed)
 
 -- | Where mail goes, and the wiki's address its links start with.
@@ -115,7 +116,7 @@ verificationLink publicUrl token = publicUrl <> "verify-email/" <> token <> "/"
 
 -- | The mail with a password reset link (WP4.11 of docs/PLAN.md), sent to
 -- a user's verified address, for their login.
-resetMessage :: Text -> Text -> Text -> Text -> UTCTime -> Message
+resetMessage :: Text -> Text -> Login -> Text -> UTCTime -> Message
 resetMessage publicUrl email login token expiresAt =
   Message
     { to = email
@@ -124,7 +125,7 @@ resetMessage publicUrl email login token expiresAt =
         T.unlines
           [ "Hello,"
           , ""
-          , "Someone asked to reset the password of the account " <> login <> " on the wiki at " <> publicUrl <> "."
+          , "Someone asked to reset the password of the account " <> login.text <> " on the wiki at " <> publicUrl <> "."
           , "Follow this link to choose a new password:"
           , ""
           , resetLink publicUrl token
@@ -136,7 +137,7 @@ resetMessage publicUrl email login token expiresAt =
     }
 
 -- | The mail that verifies an address set for a user's account.
-verificationMessage :: Text -> Text -> Text -> Text -> Message
+verificationMessage :: Text -> Text -> Login -> Text -> Message
 verificationMessage publicUrl email login token =
   Message
     { to = email
@@ -145,7 +146,7 @@ verificationMessage publicUrl email login token =
         T.unlines
           [ "Hello,"
           , ""
-          , "This address was given for the account " <> login <> " on the wiki at " <> publicUrl <> "."
+          , "This address was given for the account " <> login.text <> " on the wiki at " <> publicUrl <> "."
           , "Follow this link to confirm that it is yours, so that you can reset your password with it:"
           , ""
           , verificationLink publicUrl token

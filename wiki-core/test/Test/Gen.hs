@@ -151,7 +151,7 @@ genPage = do
 genUser :: Gen User
 genUser = do
   id <- genUserId
-  login <- genText
+  login <- Login <$> genText
   displayName <- genText
   pure User {id, login, displayName}
 

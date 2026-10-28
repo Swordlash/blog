@@ -29,7 +29,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Search (SearchHit (..), searchQuery, searchable)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 
 -- | A fresh in-memory wiki with the demo in it, run as each of its users by
 -- switching to them.
@@ -39,7 +39,7 @@ memFixture = do
   users <- runMemWiki ref memUsers
   let userId = \case
         Anonymous -> Nothing
-        As login -> (\u -> u.id) <$> find (\u -> u.login == login) users
+        As login -> (\u -> u.id) <$> find (\u -> u.login.text == login) users
   pure (Fixture (\who program -> runMemWiki ref (switchUser (userId who) >> program)))
 
 spec :: Spec
@@ -53,7 +53,7 @@ spec = do
     it "offers the demo's users to switch between" $ do
       ref <- newMemWiki (demoState demoNow)
       users <- runMemWiki ref memUsers
-      map (\u -> u.login) users `shouldBe` ["admin", "editor", "reader"]
+      map (\u -> u.login.text) users `shouldBe` ["admin", "editor", "reader"]
 
     it "takes someone who is not a user for nobody" $ do
       ref <- newMemWiki (demoState demoNow)

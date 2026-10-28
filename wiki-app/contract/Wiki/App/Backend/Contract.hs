@@ -37,7 +37,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), maxIconSize, profileOf)
-import Wiki.Core.User (Group (..), Standing (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (VersionsQuery), latestVersions)
 
 -- | Who a request is made as: nobody, or the demo's user with this login
@@ -158,7 +158,7 @@ sessions = describe "session" $ do
   it "names the user who is signed in" $ \(Fixture run) -> do
     for_ ["admin", "editor", "reader"] $ \login -> do
       u <- run (As login) currentUser
-      (\x -> x.login) <$> u `shouldBe` Just login
+      (\x -> x.login.text) <$> u `shouldBe` Just login
 
   it "says that the user is signed in, and nobody is not" $ \(Fixture run) -> do
     e <- run editor session
@@ -406,7 +406,7 @@ spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
     readerId <- userId run reader
     access <- run admin (spaceAccess projects.id) >>= ok
     [(g.space, g.subject, g.permission) | g <- access.grants] `shouldBe` [(projects.id, SubjectUser readerId, View)]
-    map (\u -> u.login) access.users `shouldBe` ["admin", "editor", "reader"]
+    map (\u -> u.login.text) access.users `shouldBe` ["admin", "editor", "reader"]
     map (\g -> g.name) access.groups `shouldBe` ["writers"]
     run admin (setSpaceGrant team.id (SubjectUser readerId) Edit True) >>= ok
     inherited <- run admin (spaceAccess projects.id) >>= ok

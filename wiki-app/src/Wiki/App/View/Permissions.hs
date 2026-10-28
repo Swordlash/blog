@@ -45,7 +45,7 @@ import Wiki.App.View.Common
 import Wiki.Core.Id (GroupId (..), UserId (..))
 import Wiki.Core.Permission (SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..), keepsAdministering)
 import Wiki.Core.Space (Space (id, name, public))
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), User (..))
 
 -- | The permissions view's input: the space, as the space's view has it.
 data Input = Input
@@ -282,14 +282,14 @@ permissions = [minBound .. maxBound]
 -- login, a group by name, and one that no longer exists by its id.
 subjectName :: SpaceAccess -> Subject -> Text
 subjectName access = \case
-  SubjectUser u -> maybe u.text (\x -> x.displayName <> " (" <> x.login <> ")") (findUser access u)
+  SubjectUser u -> maybe u.text (\x -> x.displayName <> " (" <> x.login.text <> ")") (findUser access u)
   SubjectGroup g -> maybe g.text (\x -> "Group " <> x.name) (findGroup access g)
 
 -- | Who a grant is for, as a test or a stylesheet identifies it: a user's
 -- login, a group's name.
 subjectKey :: SpaceAccess -> Subject -> Text
 subjectKey access = \case
-  SubjectUser u -> maybe u.text (\x -> x.login) (findUser access u)
+  SubjectUser u -> maybe u.text (\x -> x.login.text) (findUser access u)
   SubjectGroup g -> maybe g.text (\x -> x.name) (findGroup access g)
 
 findUser :: SpaceAccess -> UserId -> Maybe User

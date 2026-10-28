@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Logins are `Login` inside the server (WP5.15): `insertAccount`, the
+pending sign-in of a second factor and the mails that name an account
+take one. `Wiki.Server.Accounts` no longer re-exports `checkLogin`; the
+rule is `Wiki.Core.User.parseLogin`.
+
 A deck's steps reach its exports (WP5.20). The Beamer LaTeX and PDF keep
 the pauses (`\pause`) and the `incremental` boxes (`[<+->]` on their lists),
 so the PDF has a page for each step "Present" shows; a pause after an

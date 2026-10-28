@@ -4,6 +4,7 @@
 -- password hashes and sessions belong to the server (@wiki-server@).
 module Wiki.Core.User
   ( User (..)
+  , Login (..)
   , Standing (..)
   , SignInProvider (..)
   , Group (..)
@@ -11,7 +12,7 @@ module Wiki.Core.User
   , groupsOf
 
     -- * Accounts
-  , checkLogin
+  , parseLogin
   , checkPassword
   , minimumPasswordLength
   , maximumPasswordLength
@@ -23,18 +24,30 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Protolude
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import Wiki.Core.Id
 
 -- | 'User': an account that can sign in.
 data User = User
   { id :: UserId
-  , login :: Text
+  , login :: Login
   -- ^ The name they sign in with; unique.
   , displayName :: Text
   -- ^ The name pages show for them.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+-- | 'Login': the name a user signs in with, such as @ada@. It is unique
+-- among the wiki's users, without regard to case. A new login must follow
+-- the rules of 'parseLogin', the only function that checks them. The JSON
+-- and URL instances do not check them: a login in a response or a
+-- database row was checked when it was made, and a backend parses the
+-- login in a request itself, so that a bad one is answered with its own
+-- error message. The constructor is exported for those trusted sources.
+newtype Login = Login {text :: Text}
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
 
 -- | 'Standing': how the current requester is identified, which decides
 -- whether they may sign in or out. A requester who is not signed in may
@@ -84,19 +97,19 @@ groupsOf membership user = Map.keysSet (Map.filter (Set.member user) membership)
 --------------------------------------------------------------------------------
 -- Accounts
 
--- | A login as it is stored, or why it is invalid. It is trimmed of white
--- space, at most 64 characters, with no white space or control character
--- inside, and does not start with @~@, which marks the server's own
--- principals (its operator is @~administrator@). Every backend creates
+-- | A new login as it is stored, or why it is invalid. It is trimmed of
+-- white space, at most 64 characters, with no white space or control
+-- character inside, and does not start with @~@, which marks the server's
+-- own principals (its operator is @~administrator@). Every backend creates
 -- users with this rule, so that a login the demo accepts the server
 -- accepts too.
-checkLogin :: Text -> Either Text Text
-checkLogin raw
+parseLogin :: Text -> Either Text Login
+parseLogin raw
   | T.null login = Left "A login cannot be blank."
   | T.length login > 64 = Left "A login has at most 64 characters."
   | T.any (\ch -> isSpace ch || isControl ch) login = Left "A login cannot have a blank in it."
   | "~" `T.isPrefixOf` login = Left "A login cannot start with ~."
-  | otherwise = Right login
+  | otherwise = Right (Login login)
   where
     login = T.strip raw
 

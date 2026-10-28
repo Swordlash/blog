@@ -78,7 +78,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..))
-import Wiki.Core.User (Group (..), SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | A time with a fraction of a second, as a page's version has.
@@ -184,7 +184,7 @@ hit =
 sessionInfo :: SessionInfo
 sessionInfo =
   SessionInfo
-    { user = Just User {id = UserId "u1", login = "ada", displayName = "Ada"}
+    { user = Just User {id = UserId "u1", login = Login "ada", displayName = "Ada"}
     , groups = Set.fromList [GroupId "g1"]
     , grants =
         Grants
@@ -201,7 +201,7 @@ sessionInfo =
 account :: Account
 account =
   Account
-    { user = User {id = UserId "u1", login = "ada", displayName = "Ada"}
+    { user = User {id = UserId "u1", login = Login "ada", displayName = "Ada"}
     , hasPassword = True
     , disabled = False
     }
@@ -275,7 +275,7 @@ activity =
         [ AuditEntry
             { id = "e2"
             , at = later
-            , actor = Actor {id = UserId "u1", login = "ada"}
+            , actor = Actor {id = UserId "u1", login = Login "ada"}
             , action = "space.grant"
             , subject = Audit.Subject {kind = "space", id = Just "s1", name = "Docs"}
             , detail = Map.fromList [("to", "group writers"), ("permission", "edit")]
@@ -284,7 +284,7 @@ activity =
         , AuditEntry
             { id = "e1"
             , at = time
-            , actor = Actor {id = UserId "~administrator", login = "administrator"}
+            , actor = Actor {id = UserId "~administrator", login = Login "administrator"}
             , action = "user.create"
             , subject = Audit.Subject {kind = "user", id = Just "u1", name = "ada"}
             , detail = Map.fromList [("login", "ada"), ("name", "Ada")]
@@ -292,7 +292,7 @@ activity =
             }
         ]
     , more = True
-    , actors = [Actor {id = UserId "u1", login = "ada"}, Actor {id = UserId "~administrator", login = "administrator"}]
+    , actors = [Actor {id = UserId "u1", login = Login "ada"}, Actor {id = UserId "~administrator", login = Login "administrator"}]
     }
 
 -- | The wiki's people, as the administration reads them: two users, one of
@@ -303,8 +303,8 @@ directory :: Directory
 directory =
   Directory
     { users =
-        [ User {id = UserId "u1", login = "ada", displayName = "Ada"}
-        , User {id = UserId "u2", login = "edgar", displayName = "Edgar"}
+        [ User {id = UserId "u1", login = Login "ada", displayName = "Ada"}
+        , User {id = UserId "u2", login = Login "edgar", displayName = "Edgar"}
         ]
     , administrators = Set.fromList [UserId "u1"]
     , creators = Set.fromList [UserId "u1"]

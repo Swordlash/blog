@@ -59,6 +59,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.User (Login (..))
 import Wiki.Core.Version (Author (..), VersionInfo (..), VersionsQuery (..), latestVersions)
 import Wiki.Server.Accounts (Resolved (..), resolveSession, startSession)
 import Wiki.Server.Events (eventsApplication, newHub, publish)
@@ -583,6 +584,6 @@ auditLog = describe "the audit log" $
           _ -> assertFailure "no entry ends page 99"
       (page, statements) <- statementsOf st (runSqliteWiki st Administrator (activity ActivityQuery {actor = Nothing, offset = 0, before = Just cursor}) >>= ok)
       map (\e -> e.id) page.entries `shouldBe` ["bulk-" <> show i | i <- take activityPageSize [entries - 99 * activityPageSize, entries - 99 * activityPageSize - 1 ..]]
-      length (filter (\a -> "actor" `T.isPrefixOf` a.login) page.actors) `shouldBe` 10
+      length (filter (\a -> "actor" `T.isPrefixOf` a.login.text) page.actors) `shouldBe` 10
       scans <- Set.fromList . concat <$> traverse (scansOf st) statements
       scans `shouldSatisfy` Set.notMember "audit_log"

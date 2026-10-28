@@ -38,7 +38,7 @@ import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 
 -- | The golden archive of version 1: the demo as it was when version 1 of
@@ -265,7 +265,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       case readBack golden of
         Left why -> expectationFailure (toS why)
         Right archive -> do
-          map (\u -> u.login) archive.users `shouldBe` ["admin", "editor", "reader"]
+          map (\u -> u.login.text) archive.users `shouldBe` ["admin", "editor", "reader"]
           sort (map (\s -> s.name) archive.spaces) `shouldBe` ["Blog", "Docs", "Exported", "Projects", "Team"]
           map (\p -> p.body) archive.pages `shouldContain` ["# Exported, then saved"]
           let bytes = [x | p <- archive.pages, x <- p.attachments, x.name == "bytes.bin"]
@@ -298,7 +298,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
         Left why -> expectationFailure (toS why)
         Right archive -> do
           (archive.app, archive.createdAt) `shouldBe` ("wiki-app 0.1.0.0", goldenTime)
-          map (\u -> u.login) archive.users `shouldBe` ["admin", "editor", "reader"]
+          map (\u -> u.login.text) archive.users `shouldBe` ["admin", "editor", "reader"]
           sort (map (\s -> s.name) archive.spaces) `shouldBe` ["Blog", "Docs", "Exported", "Projects", "Team"]
           [s.name | s <- archive.spaces, Just parent <- [s.parent], Just above <- [find (\x -> x.id == parent) archive.spaces], above.name == "Docs"] `shouldBe` ["Exported"]
           map (\p -> p.body) archive.pages `shouldContain` ["# Exported, then saved"]

@@ -96,7 +96,7 @@ import Wiki.App.View.Common
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (GroupId, UserId)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..), canCreateSpaces, principal)
-import Wiki.Core.User (Group (..), SignInProvider (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), SignInProvider (..), User (..))
 
 newtype Input = Input {context :: Context}
 
@@ -284,9 +284,9 @@ component =
     userRow :: State -> Directory -> User -> H.ComponentHTML Action Empty m
     userRow st d u =
       [hh|
-        <tr class="user-row{% if disabled %} user-disabled{% end %}" data-login={{ u.login }}>
+        <tr class="user-row{% if disabled %} user-disabled{% end %}" data-login={{ u.login.text }}>
           <td class="user-display-name">{{ u.displayName }}</td>
-          <td class="user-login">{{ u.login }}</td>
+          <td class="user-login">{{ u.login.text }}</td>
           <td class="user-administrator">
             <button
               type="button"
@@ -524,9 +524,9 @@ component =
           {% else %}
             <ul class="group-members">
               {% for u in members %}
-                <li class="group-member" data-login={{ u.login }}>
+                <li class="group-member" data-login={{ u.login.text }}>
                   <span class="group-member-name">{{ u.displayName }}</span>
-                  <span class="group-member-login">{{ u.login }}</span>
+                  <span class="group-member-login">{{ u.login.text }}</span>
                   <button
                     type="button"
                     class="group-remove"
@@ -630,7 +630,7 @@ component =
                     Just
                       ( account.user.displayName
                           <> " ("
-                          <> account.user.login
+                          <> account.user.login.text
                           <> ") can sign in now."
                           <> maybe "" (\e -> " A link to verify " <> e <> " is sent to it.") email
                       )
@@ -787,7 +787,7 @@ noLinkText = \case
 
 -- | A user as the list of users to add names them.
 userLabel :: User -> Text
-userLabel u = u.displayName <> " (" <> u.login <> ")"
+userLabel u = u.displayName <> " (" <> u.login.text <> ")"
 
 -- | How many members a group has, in words for a person to read.
 counted :: Int -> Text

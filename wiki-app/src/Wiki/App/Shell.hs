@@ -178,7 +178,7 @@ import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (blog, description, icon, id, name, pageOrder, parent), subspacesOf)
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 
 -- | The shell's input: the router; a route the home page invites a
 -- newcomer to (the demo's tour), if any; the demo's controls, on a backend
@@ -612,11 +612,11 @@ component =
                   <button
                     type="button"
                     class="user-option"
-                    data-login={{ maybe "" (\u -> u.login) candidate }}
+                    data-login={{ maybe "" (\u -> u.login.text) candidate }}
                     aria-pressed={{ ariaBool (((\u -> u.id) <$> candidate) == ((\u -> u.id) <$> st.session.user)) }}
                     onClick={{ const (SwitchTo ((\u -> u.id) <$> candidate)) }}
                   >
-                    {{ maybe "Nobody (not signed in)" (\u -> u.displayName <> " (" <> u.login <> ")") candidate }}
+                    {{ maybe "Nobody (not signed in)" (\u -> u.displayName <> " (" <> u.login.text <> ")") candidate }}
                   </button>
                 </li>
               {% end %}

@@ -56,7 +56,7 @@ import Wiki.Core.Page qualified as Page (Page (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
-import Wiki.Core.User (Group (..), Standing (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), Standing (..), User (..))
 import Wiki.Core.Version (VersionInfo)
 
 -- | Refuse a request as the server's handlers will: the error's status, and
@@ -236,7 +236,7 @@ stubs =
           , deleteGroup = \g -> if g == GroupId "g1" then pure NoContent else refuse NotFound
           , addMember = \g u -> if (g, u) == (GroupId "g1", UserId "u1") then pure NoContent else refuse NotFound
           , removeMember = \g u -> if (g, u) == (GroupId "g1", UserId "u2") then pure NoContent else refuse NotFound
-          , createUser = \new -> pure Account {user = User {id = UserId "new", login = new.login, displayName = new.displayName}, hasPassword = True, disabled = False}
+          , createUser = \new -> pure Account {user = User {id = UserId "new", login = Login new.login, displayName = new.displayName}, hasPassword = True, disabled = False}
           , setPassword = \u _ -> pure Account {user = adaAs u, hasPassword = True, disabled = False}
           , sendPasswordLink = \u -> if u == UserId "u1" then pure NoContent else refuse (Invalid "No verified address.")
           , setDisabled = \u body -> pure Account {user = adaAs u, hasPassword = True, disabled = body.disabled}
@@ -299,7 +299,7 @@ invitedAs email =
 
 -- | The sample account's user, with another id.
 adaAs :: UserId -> User
-adaAs u = User {id = u, login = "ada", displayName = "Ada"}
+adaAs u = User {id = u, login = Login "ada", displayName = "Ada"}
 
 app :: Application
 app = serve api stubs
@@ -612,7 +612,7 @@ spec = describe "a server of the API's type" $ do
       answers (getAt (links.admin.activity Nothing Nothing Nothing)) 200 Sample.activity {more = False}
 
     it "makes a user with a password, sets one, and disables a login" $ do
-      answers (sendJson methodPost links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = "x", email = Nothing}) 201 Account {user = User {id = UserId "new", login = "bea", displayName = "Bea"}, hasPassword = True, disabled = False}
+      answers (sendJson methodPost links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = "x", email = Nothing}) 201 Account {user = User {id = UserId "new", login = Login "bea", displayName = "Bea"}, hasPassword = True, disabled = False}
       answers (sendJson methodPut (links.admin.setPassword (UserId "u7")) NewPassword {password = "y"}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = False}
       answers (sendJson methodPut (links.admin.setDisabled (UserId "u7")) AccountDisabled {disabled = True}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = True}
       links.admin.setDisabled (UserId "u7") `shouldBe` "api/v1/admin/users/u7/disabled"

@@ -30,7 +30,7 @@ import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), User (..))
 
 admin, editor, reader :: As
 admin = As "admin"
@@ -90,7 +90,7 @@ membersOf :: (MonadAdmin m) => Run m -> Group -> IO [Text]
 membersOf run g = do
   d <- directoryNow run
   let ids = Map.findWithDefault mempty g.id d.membership
-  pure [u.login | u <- d.users, u.id `Set.member` ids]
+  pure [u.login.text | u <- d.users, u.id `Set.member` ids]
 
 -- | Whether someone holds the global administer, as their session says.
 isAdministrator :: (MonadWiki m) => Run m -> As -> IO Bool
@@ -112,7 +112,7 @@ reading = describe "directory" $ do
     adminId <- idOf run admin
     editorId <- idOf run editor
     d <- directoryNow run
-    map (\u -> u.login) d.users `shouldBe` ["admin", "editor", "reader"]
+    map (\u -> u.login.text) d.users `shouldBe` ["admin", "editor", "reader"]
     d.administrators `shouldBe` Set.singleton adminId
     d.creators `shouldBe` Set.singleton editorId
     (d.disabled, d.withPassword) `shouldBe` (mempty, mempty)
@@ -231,9 +231,9 @@ accounts :: (MonadWiki m, MonadAdmin m) => SpecWith (Fixture m)
 accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" $ do
   it "make a user with a password, listed by login, their login the name if none is given" $ \(Fixture run) -> do
     made <- run admin (createUser NewAccount {login = " bea ", displayName = "", password = "bea's password", email = Nothing}) >>= ok
-    (made.user.login, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("bea", "bea", True, False)
+    (made.user.login.text, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("bea", "bea", True, False)
     d <- directoryNow run
-    map (\u -> u.login) d.users `shouldBe` ["admin", "bea", "editor", "reader"]
+    map (\u -> u.login.text) d.users `shouldBe` ["admin", "bea", "editor", "reader"]
     d.withPassword `shouldBe` Set.singleton made.user.id
     named <- run admin (createUser NewAccount {login = "cid", displayName = " Cid ", password = "cid's password", email = Nothing}) >>= ok
     named.user.displayName `shouldBe` "Cid"
@@ -247,13 +247,13 @@ accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" 
     new "two words" "a good password" >>= shouldBeInvalid
     new "~operator" "a good password" >>= shouldBeInvalid
     new "dee" "short" >>= shouldBeInvalid
-    map (\u -> u.login) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
+    map (\u -> u.login.text) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
 
   it "give a user a password, and refuse a short one" $ \(Fixture run) -> do
     readerId <- idOf run reader
     run admin (setPassword readerId "short") >>= shouldBeInvalid
     account <- run admin (setPassword readerId "rita's password") >>= ok
-    (account.user.login, account.hasPassword) `shouldBe` ("reader", True)
+    (account.user.login.text, account.hasPassword) `shouldBe` ("reader", True)
     (\d -> d.withPassword) <$> directoryNow run `shouldReturn` Set.singleton readerId
     run admin (setPassword (UserId "user-nobody") "a good password") >>= (`shouldFailWith` NotFound)
 
@@ -276,12 +276,12 @@ accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" 
     (\d -> d.disabled) <$> directoryNow run `shouldReturn` Set.singleton readerId
     -- Still in the directory, but they count as nobody signed in, and see
     -- what nobody sees.
-    map (\u -> u.login) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
+    map (\u -> u.login.text) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
     (\s -> s.user) <$> run reader session `shouldReturn` Nothing
     run reader (listPages projects.id) >>= (`shouldFailWith` NotFound)
     enabled <- run admin (setDisabled readerId False) >>= ok
     enabled.disabled `shouldBe` False
-    (\s -> (\u -> u.login) <$> s.user) <$> run reader session `shouldReturn` Just "reader"
+    (\s -> (\u -> u.login.text) <$> s.user) <$> run reader session `shouldReturn` Just "reader"
     void (run reader (listPages projects.id) >>= ok)
     run admin (setDisabled (UserId "user-nobody") True) >>= (`shouldFailWith` NotFound)
 
@@ -414,7 +414,7 @@ letsIn = describe "wikiSettings, invitations and the rest" $ do
     run admin (createUser bea) >>= (`shouldFailWith` Forbidden)
     -- Refused before the login and the password are looked at.
     run admin (createUser NewAccount {login = "", displayName = "", password = "", email = Nothing}) >>= (`shouldFailWith` Forbidden)
-    map (\u -> u.login) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
+    map (\u -> u.login.text) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
     -- An existing user's password, a link to choose one, and invitations
     -- are as before: a link is refused only because nothing is mailed.
     readerId <- idOf run reader
@@ -423,7 +423,7 @@ letsIn = describe "wikiSettings, invitations and the rest" $ do
     void (run admin (invite "bea@example.org") >>= ok)
     -- Turned on again, the administration creates accounts again.
     run admin (setWikiSettings defaultSettings) >>= ok >>= (`shouldBe` defaultSettings)
-    (\a -> a.user.login) <$> (run admin (createUser bea) >>= ok) `shouldReturn` "bea"
+    (\a -> a.user.login.text) <$> (run admin (createUser bea) >>= ok) `shouldReturn` "bea"
 
   it "invite an address, with the link's secret when it is not mailed, in place of any invitation it had" $ \(Fixture run) -> do
     made <- run admin (invite "  bea@example.org ") >>= ok

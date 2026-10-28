@@ -31,7 +31,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), bodyText, foldText, searchQuery)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..), latestVersions)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Blobs (blobFile, blobOf, storedBlobs)
@@ -104,7 +104,7 @@ administrator = describe "the administrator" $ do
   it "administers the wiki's people, of whom they are not one" $
     withDemo $ \st -> do
       d <- runSqliteWiki st Administrator directory >>= ok
-      map (\u -> u.login) d.users `shouldBe` ["admin", "editor", "reader"]
+      map (\u -> u.login.text) d.users `shouldBe` ["admin", "editor", "reader"]
       runSqliteWiki st Administrator (setAdministrator administratorId False) `shouldReturn` Left NotFound
       -- Every user's administer may go, the last one's included: the
       -- operator gives it back.

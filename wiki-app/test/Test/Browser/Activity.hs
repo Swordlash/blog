@@ -24,6 +24,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.User (Login (..))
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = describe "the activity and the server's status" $ do
@@ -54,8 +55,8 @@ at :: Int -> UTCTime
 at h = UTCTime (fromGregorian 2026 10 25) (fromIntegral (h * 3600))
 
 ada, operator :: Actor
-ada = Actor {id = UserId "u1", login = "ada"}
-operator = Actor {id = UserId "~administrator", login = "administrator"}
+ada = Actor {id = UserId "u1", login = Login "ada"}
+operator = Actor {id = UserId "~administrator", login = Login "administrator"}
 
 entry :: Text -> Int -> Actor -> Text -> Subject -> [(Text, Text)] -> Text -> AuditEntry
 entry i h actor action subject detail address = AuditEntry {id = i, at = at h, actor, action, subject, detail = Map.fromList detail, address}

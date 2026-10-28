@@ -69,6 +69,7 @@ import Protolude
 import Wiki.Api.Security (SecondFactorState (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.User (Login (..))
 import Wiki.Server.Accounts (immediately)
 import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Session (CookieSettings (..))
@@ -188,7 +189,7 @@ codeOf c now u typed =
 -- | A sign-in waiting for its code.
 data PendingSignIn = PendingSignIn
   { user :: UserId
-  , login :: Text
+  , login :: Login
   -- ^ What the limit on failed sign-ins counts its wrong codes against.
   , next :: Text
   -- ^ Where a provider's sign-in continues to once it is done.
@@ -218,7 +219,7 @@ maxPending = 10000
 
 -- | Hold a sign-in waiting for its code. The result is the id its cookie
 -- is to carry.
-holdSignIn :: PendingSignIns -> UTCTime -> UserId -> Text -> Text -> IO Text
+holdSignIn :: PendingSignIns -> UTCTime -> UserId -> Login -> Text -> IO Text
 holdSignIn (PendingSignIns ref) now user login next = do
   token <- newToken
   let held = PendingSignIn {user, login, next, expires = addUTCTime pendingLifetime now, wrong = 0}

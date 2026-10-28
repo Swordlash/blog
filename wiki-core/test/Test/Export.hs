@@ -26,7 +26,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..))
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 
 at :: Integer -> UTCTime
@@ -36,12 +36,12 @@ slug :: Text -> Slug
 slug t = either (panic . show) identity (mkSlug t)
 
 alice, bob, administrator :: User
-alice = User {id = UserId "u1", login = "alice", displayName = "Alice"}
-bob = User {id = UserId "u2", login = "bob", displayName = "Bob"}
+alice = User {id = UserId "u1", login = Login "alice", displayName = "Alice"}
+bob = User {id = UserId "u2", login = Login "bob", displayName = "Bob"}
 
 -- | A comment author who is not among the users, as the server's
 -- administrator is not.
-administrator = User {id = UserId "~administrator", login = "administrator", displayName = "Administrator"}
+administrator = User {id = UserId "~administrator", login = Login "administrator", displayName = "Administrator"}
 
 spaceOf :: Text -> Maybe Text -> Text -> Space
 spaceOf i parent s =
@@ -279,7 +279,7 @@ spec = describe "Wiki.Core.Export" $ do
 
   describe "comments' authors" $ do
     it "are matched by login with the users of the wiki that imports them, and are otherwise kept by name" $ do
-      let elsewhere = [User {id = UserId "x-alice", login = "alice", displayName = "Alice Elsewhere"}, User {id = UserId "x-root", login = "administrator", displayName = "Root"}]
+      let elsewhere = [User {id = UserId "x-alice", login = Login "alice", displayName = "Alice Elsewhere"}, User {id = UserId "x-root", login = Login "administrator", displayName = "Root"}]
           authors = [(c.author.id, c.author.name) | ts <- Map.elems (threadsAmong elsewhere wiki), t <- ts, c <- t.comments]
       authors
         `shouldBe` [ (UserId "x-alice", "Alice Elsewhere")

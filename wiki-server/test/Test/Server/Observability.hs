@@ -22,7 +22,7 @@ import Wiki.Api.Info (Health (..))
 import Wiki.Api.Links (links)
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Path (parsePath)
-import Wiki.Core.User (Group)
+import Wiki.Core.User (Group, Login (..))
 import Wiki.Server.Storage.Backup (backup)
 import Wiki.Server.Storage.Layout (attachmentsDir, databaseFile)
 import Wiki.Server.Storage.Migrate (Migration (..), migrations)
@@ -137,7 +137,7 @@ activityLog = describe "the activity" $
         newest : _ -> do
           newest.action `shouldBe` "group.create"
           newest.subject.name `shouldBe` "Night shift"
-          newest.actor.login `shouldBe` "administrator"
+          newest.actor.login.text `shouldBe` "administrator"
           newest.address `shouldBe` "127.0.0.1"
         [] -> expectationFailure "nothing in the log"
       operator <- maybe (expectationFailure "no actor" >> panic "") pure (head page.actors)

@@ -189,7 +189,7 @@ import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), folded, queryWords, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
-import Wiki.Core.User (Group (..), Standing (..), User (..), checkLogin, checkPassword)
+import Wiki.Core.User (Group (..), Login (..), Standing (..), User (..), checkPassword, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
@@ -470,7 +470,7 @@ administratorId = UserId "~administrator"
 -- | The administrator as the application sees them: signed in, holding the
 -- global 'Administer'.
 administratorUser :: User
-administratorUser = User {id = administratorId, login = "administrator", displayName = "Administrator"}
+administratorUser = User {id = administratorId, login = Login "administrator", displayName = "Administrator"}
 
 -- | The user with a login.
 userByLogin :: Storage -> Text -> IO (Maybe User)
@@ -706,14 +706,14 @@ record action subject detail = do
   let actor = maybe nobody (\u -> Actor {id = u.id, login = u.login}) ctx.user
   db (\c -> insertAudit c Recorded {actor, action, subject, detail, address = ctx.address})
   where
-    nobody = Actor {id = UserId "~anonymous", login = "anonymous"}
+    nobody = Actor {id = UserId "~anonymous", login = Login "anonymous"}
 
 -- | How an audit log entry names a space, a user, a group or settings.
 spaceSubject :: Space -> Audit.Subject
 spaceSubject sp = Audit.Subject {kind = "space", id = Just sp.id.text, name = sp.name}
 
 userSubject :: User -> Audit.Subject
-userSubject u = Audit.Subject {kind = "user", id = Just u.id.text, name = u.login}
+userSubject u = Audit.Subject {kind = "user", id = Just u.id.text, name = u.login.text}
 
 groupSubject :: GroupId -> Text -> Audit.Subject
 groupSubject g name = Audit.Subject {kind = "group", id = Just g.text, name}
@@ -762,9 +762,9 @@ runSqliteWikiFrom storage who address (SqliteWiki program) = runReaderT program 
 -- as @administrator@, a reader who has not signed in as @anonymous@.
 actorOf :: Storage -> Who -> IO Actor
 actorOf st who = case who of
-  Anonymous -> pure Actor {id = UserId "~anonymous", login = "anonymous"}
+  Anonymous -> pure Actor {id = UserId "~anonymous", login = Login "anonymous"}
   Administrator -> pure Actor {id = administratorId, login = administratorUser.login}
-  AsUser u -> maybe Actor {id = u, login = u.text} (\found -> Actor {id = found.id, login = found.login}) <$> withDatabase st (`loadUser` u)
+  AsUser u -> maybe Actor {id = u, login = Login u.text} (\found -> Actor {id = found.id, login = found.login}) <$> withDatabase st (`loadUser` u)
 
 run :: (MonadIO m) => Mode -> Tx a -> SqliteWiki m (Either WikiError a)
 run mode tx = SqliteWiki $ do
@@ -836,20 +836,20 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   createUser new =
     run Reads requireAccountCreator >>= \case
       Left e -> pure (Left e)
-      Right () -> case (,) <$> checkLogin new.login <*> checkPassword new.password of
+      Right () -> case (,) <$> parseLogin new.login <*> checkPassword new.password of
         Left why -> pure (Left (Invalid why))
         Right (login, password) -> do
           phc <- liftIO (hashPassword password)
           uid <- liftIO (UUID.toText <$> generateV4)
           let name = case T.strip new.displayName of
-                "" -> login
+                "" -> login.text
                 n -> n
           run Writes $ do
             requireAccountCreator
             db (\c -> insertAccount c (UserId uid) login name (Just phc)) >>= \case
-              Left taken -> failWith (Conflict ("There is a user with the login " <> taken <> " already."))
+              Left taken -> failWith (Conflict ("There is a user with the login " <> taken.text <> " already."))
               Right account -> do
-                record "user.create" (userSubject account.user) [("login", login), ("name", name)]
+                record "user.create" (userSubject account.user) [("login", login.text), ("name", name)]
                 pure account
   setPassword u password =
     run Reads (requireAdministrator >> findUser u >>= requirePasswordToSet) >>= \case
@@ -1419,7 +1419,7 @@ setSpaceGrantTx sid subject permission granted = do
       else deleteSpaceGrant conn grant
   (sp, _) <- findSpace sid
   grantee <- case subject of
-    SubjectUser u -> maybe ("user " <> u.text) (\x -> "user " <> x.login) <$> db (`loadUser` u)
+    SubjectUser u -> maybe ("user " <> u.text) (\x -> "user " <> x.login.text) <$> db (`loadUser` u)
     SubjectGroup g -> maybe ("group " <> g.text) (\x -> "group " <> x.name) . find (\x -> x.id == g) <$> db loadGroups
   record (if granted then "space.grant" else "space.revoke") (spaceSubject sp) [("to", grantee), ("permission", permissionText permission)]
 
@@ -2029,7 +2029,7 @@ setMemberTx member gid u = do
   g <- findGroup gid
   user <- findUser u
   db (\c -> (if member then insertMember else deleteMember) c gid u)
-  record (if member then "group.member-add" else "group.member-remove") (groupSubject gid g.name) [("user", user.login)]
+  record (if member then "group.member-add" else "group.member-remove") (groupSubject gid g.name) [("user", user.login.text)]
 
 --------------------------------------------------------------------------------
 -- Whom the wiki lets in
@@ -2311,7 +2311,7 @@ tellTx pid sid title thread excerpt occasion logins = do
             Notifications.Audience {page = pid, spaces = map (\x -> x.id) chain, named = toList maker <> commenters, mentioned = Set.toList logins}
         )
     nodes <- lineageOf pid
-    let byLogin = Map.fromList [(t.user.login, t.user.id) | t <- telling]
+    let byLogin = Map.fromList [(t.user.login.text, t.user.id) | t <- telling]
         -- The grants the transaction began with. For the administrator they
         -- hold one more grant, to the administrator, who is never one of
         -- the users told.
@@ -2493,7 +2493,7 @@ mentionableTx logins =
   asks (\x -> x.user) >>= \case
     Just _ | not (null logins) -> do
       users <- db (`loadActiveUsersByLogin` logins)
-      pure (Map.fromList [(u.login, Author {id = u.id, name = u.displayName}) | u <- users])
+      pure (Map.fromList [(u.login.text, Author {id = u.id, name = u.displayName}) | u <- users])
     _ -> pure mempty
 
 -- | Mentions, watches and notifications, as the class's Haddock describes

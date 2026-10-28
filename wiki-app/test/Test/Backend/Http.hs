@@ -37,7 +37,7 @@ import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Search (SearchHit, searchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Standing (..), User (..))
+import Wiki.Core.User (Login (..), Standing (..), User (..))
 
 -- | A transport that answers as the function says, and keeps every request
 -- it was given, the latest first.
@@ -383,7 +383,7 @@ caching = describe "what it keeps" $ do
 signedIn, nobody :: SessionInfo
 signedIn =
   SessionInfo
-    { user = Just User {id = UserId "user-admin", login = "admin", displayName = "Ada Admin"}
+    { user = Just User {id = UserId "user-admin", login = Login "admin", displayName = "Ada Admin"}
     , groups = mempty
     , grants = mempty
     , standing = SignedIn

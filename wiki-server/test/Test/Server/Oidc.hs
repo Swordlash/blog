@@ -40,7 +40,7 @@ import Wiki.Api.ServerSettings (ProviderChange, ProviderKind (..), ProviderSetti
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.User (SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Login (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Server.Accounts (Claimed (..), loginCandidates)
 import Wiki.Server.Auth (safeNext)
 import Wiki.Server.Console (OidcCheck (..), runOidcCheck)
@@ -157,7 +157,7 @@ sessionOf :: (HasCallStack) => Running -> [Header] -> IO SessionInfo
 sessionOf r hs = getUrlWith r (onPublic r links.session) hs >>= jsonAs 200
 
 loginOf :: SessionInfo -> Maybe Text
-loginOf s = (\u -> u.login) <$> s.user
+loginOf s = (\u -> u.login.text) <$> s.user
 
 -- | Sign in through a provider, which must work: the session's cookie.
 signedInWith :: (HasCallStack) => Running -> Text -> Text -> [Header] -> IO Header
@@ -228,9 +228,9 @@ overHttp = describe "over HTTP" $ do
     lookup "wiki_oidc" (cookiesSet reply) `shouldBe` Just ""
     c <- sessionGiven reply
     me <- sessionOf r [c]
-    ((\u -> (u.login, u.displayName)) <$> me.user, me.standing) `shouldBe` (Just ("grace", "Grace Hopper"), SignedIn)
+    ((\u -> (u.login.text, u.displayName)) <$> me.user, me.standing) `shouldBe` (Just ("grace", "Grace Hopper"), SignedIn)
     d <- usersNow r
-    let grace = find (\u -> u.login == "grace") d.users
+    let grace = find (\u -> u.login.text == "grace") d.users
     (\u -> u.id `elem` toList d.withPassword) <$> grace `shouldBe` Just False
     ((\u -> lookup u.id (toPairs d.identities)) =<< grace) `shouldBe` Just ["acme"]
 
@@ -261,7 +261,7 @@ overHttp = describe "over HTTP" $ do
     writeIORef fake.user (someone "4242" (Just "octo@example.org") True (Just "Octo Cat") (Just "octo-cat") True)
     c <- signedInWith r "hub" "next=%2F" []
     me <- sessionOf r [c]
-    (\u -> (u.login, u.displayName)) <$> me.user `shouldBe` Just ("octo-cat", "Octo Cat")
+    (\u -> (u.login.text, u.displayName)) <$> me.user `shouldBe` Just ("octo-cat", "Octo Cat")
     methods :: SignInMethods <- getUrlWith r (onPublic r links.account.identities) [c] >>= jsonAs 200
     map (\i -> (i.provider, i.email)) methods.identities `shouldBe` [("hub", Just "octo@example.org")]
 
@@ -281,7 +281,7 @@ overHttp = describe "over HTTP" $ do
     writeIORef fake.user (someone "apple-1" (Just "apple-1@example.org") True Nothing Nothing True)
     c <- signedInWith r "fruit" "next=%2F" []
     me <- sessionOf r [c]
-    (\u -> (u.login, u.displayName)) <$> me.user `shouldBe` Just ("apple-1", "Fruit Lover")
+    (\u -> (u.login.text, u.displayName)) <$> me.user `shouldBe` Just ("apple-1", "Fruit Lover")
 
   describe "in a closed wiki" $ do
     it "lets the round trip through, but makes no account without an invitation" $ withOidc $ \fake r -> do

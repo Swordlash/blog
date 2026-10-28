@@ -28,6 +28,7 @@ import Test.Slides qualified as Slides
 import Test.Slug qualified as Slug
 import Test.Space qualified as Space
 import Test.Template qualified as Template
+import Test.User qualified as User
 
 main :: IO ()
 main = hspec $ do
@@ -57,3 +58,4 @@ main = hspec $ do
   Template.spec
   Assistant.spec
   Export.spec
+  User.spec

@@ -41,6 +41,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Common
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..), actionText)
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.User (Login (..))
 
 newtype Input = Input {context :: Context}
 
@@ -122,7 +123,7 @@ component =
             <select name="actor" disabled={{ st.busy }} onValueChange={{ ChoseActor }}>
               <option value="" selected={{ isNothing st.query.actor }}>Everyone</option>
               {% for who in a.actors %}
-                <option value={{ who.id.text }} selected={{ st.query.actor == Just who.id }}>{{ who.login }}</option>
+                <option value={{ who.id.text }} selected={{ st.query.actor == Just who.id }}>{{ who.login.text }}</option>
               {% end %}
             </select>
           </label>
@@ -143,7 +144,7 @@ component =
                 {% for e in a.entries %}
                   <tr class="activity-row" data-action={{ e.action }}>
                     <td class="activity-when">{{ timeText e.at }}</td>
-                    <td class="activity-who">{{ e.actor.login }}</td>
+                    <td class="activity-who">{{ e.actor.login.text }}</td>
                     <td class="activity-what">{{ actionText e.action }}{{ subjectText e.subject }}</td>
                     <td class="activity-detail">{{ detailText e.detail }}</td>
                     <td class="activity-from">{{ e.address }}</td>

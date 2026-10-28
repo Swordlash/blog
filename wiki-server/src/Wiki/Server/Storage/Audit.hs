@@ -34,6 +34,7 @@ import Protolude
 import Wiki.Api.Activity (Activity (..), ActivityQuery (..), activityPageSize)
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.User (Login (..))
 import Wiki.Server.Storage.Rows (Stamp (..))
 
 -- | What a write records: everything of an entry except its id and time,
@@ -50,7 +51,7 @@ data Recorded = Recorded
 -- the admin listener, and of the console. The id is the administrator's
 -- (@administratorId@ in "Wiki.Server.Storage"), which no user has.
 operator :: Actor
-operator = Actor {id = UserId "~administrator", login = "administrator"}
+operator = Actor {id = UserId "~administrator", login = Login "administrator"}
 
 -- | The address recorded for a write made from the server's console
 -- (@wiki-server users …@).
@@ -89,7 +90,7 @@ insertEntry c verb e =
   execute
     c
     (Query (verb <> " audit_log (id, at, actor_id, actor_login, action, subject_kind, subject_id, subject_name, detail, address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
-    ( (e.id, LogTime e.at, e.actor.id.text, e.actor.login, e.action)
+    ( (e.id, LogTime e.at, e.actor.id.text, e.actor.login.text, e.action)
         :. (e.subject.kind, e.subject.id, e.subject.name, decodeUtf8 (BSL.toStrict (encode e.detail)), e.address)
     )
 
@@ -100,7 +101,7 @@ entryOf ((i, Stamp at, actorId, login, action) :. (kind, subjectId, name, detail
   AuditEntry
     { id = i
     , at
-    , actor = Actor {id = UserId actorId, login}
+    , actor = Actor {id = UserId actorId, login = Login login}
     , action
     , subject = Subject {kind, id = subjectId, name}
     , detail = fromMaybe mempty (decodeStrict' (encodeUtf8 detail))
@@ -148,7 +149,7 @@ loadActivity c q = do
       { available = True
       , entries = map entryOf (take activityPageSize rows)
       , more = length rows > activityPageSize
-      , actors = sortOn (\a -> (T.toCaseFold a.login, a.id)) [Actor {id = UserId i, login} | (i, login) <- named]
+      , actors = sortOn (\a -> (T.toCaseFold a.login.text, a.id)) [Actor {id = UserId i, login = Login login} | (i, login) <- named]
       }
 
 -- | The whole log, the oldest first: what an export contains.

@@ -15,7 +15,7 @@ import Wiki.Api.Account (Account (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
-import Wiki.Core.User (Standing (..), User (..))
+import Wiki.Core.User (Login (..), Standing (..), User (..))
 import Wiki.Server.Accounts
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.Limiter (Limits (..), Verdict (..), failed, newLimiter, succeeded, verdict)
@@ -118,7 +118,7 @@ accounts :: Spec
 accounts = describe "the storage's accounts" $ do
   it "are made with a password, and sign in with it" $ withEmpty $ \st -> do
     made <- ok (createAccount st "ada" "Ada" (Just "correct horse"))
-    (made.user.login, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("ada", "Ada", True, False)
+    (made.user.login.text, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("ada", "Ada", True, False)
     now <- getCurrentTime
     Right (user, token) <- signIn st now "127.0.0.1" "ada" "correct horse"
     user `shouldBe` made.user
@@ -147,14 +147,14 @@ accounts = describe "the storage's accounts" $ do
 
   it "are named by their login when no name is given, and trimmed" $ withEmpty $ \st -> do
     a <- ok (createAccount st "  ada  " "   " (Just "correct horse"))
-    (a.user.login, a.user.displayName) `shouldBe` ("ada", "ada")
+    (a.user.login.text, a.user.displayName) `shouldBe` ("ada", "ada")
 
   it "are made administrators and unmade, and listed with it" $ withEmpty $ \st -> do
     ada <- ok (createAccount st "ada" "Ada" (Just "correct horse"))
     bea <- ok (createAccount st "bea" "Bea" Nothing)
     _ <- ok (setAdministrator st ada.user.id True)
     _ <- ok (setAdministrator st ada.user.id True)
-    map (\(a, admin) -> (a.user.login, admin)) <$> listAccounts st `shouldReturn` [("ada", True), ("bea", False)]
+    map (\(a, admin) -> (a.user.login.text, admin)) <$> listAccounts st `shouldReturn` [("ada", True), ("bea", False)]
     s <- runSqliteWiki st (AsUser ada.user.id) session
     (s.user, s.standing) `shouldBe` (Just ada.user, SignedIn)
     _ <- ok (setAdministrator st ada.user.id False)

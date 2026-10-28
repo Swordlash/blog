@@ -130,7 +130,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Icon (..), Space (..))
-import Wiki.Core.User (Group (..), Membership, User (..))
+import Wiki.Core.User (Group (..), Login (..), Membership, User (..))
 import Wiki.Core.Version (Author (..))
 
 -- | A whole wiki: its users, its grants, its spaces and pages (each page
@@ -633,7 +633,7 @@ readVersion2 manifest entries = do
     -- archive gives, with their login for an import to match, if it gives
     -- one. An id that is one of the users' is not kept for another person:
     -- such an author is kept by their name ('formerAuthor').
-    authorFrom :: Map Text User -> Set UserId -> Named -> (Author, Maybe User)
+    authorFrom :: Map Login User -> Set UserId -> Named -> (Author, Maybe User)
     authorFrom byLogin userIds n = case n.login >>= (`Map.lookup` byLogin) of
       Just u -> (Author {id = u.id, name = u.displayName}, Nothing)
       Nothing ->
@@ -670,7 +670,7 @@ data Naming = Naming
 checkArchive :: Naming -> Archive -> [AttachmentRecord] -> Either Text ()
 checkArchive naming a attachments = do
   unique "user" [(u.id.text, "users.json") | u <- a.users]
-  unique "login" [(u.login, "users.json") | u <- a.users]
+  unique "login" [(u.login.text, "users.json") | u <- a.users]
   unique "group" [(g.id.text, "groups.json") | g <- a.groups]
   unique "space" [(s.id.text, naming.spaceAt s.id) | s <- a.spaces]
   unique "page" [(p.id.text, naming.pageAt p.id) | p <- a.pages]
@@ -779,7 +779,7 @@ threadsAmong here a = map (map thread) a.threads
 -- not a user there, none), and their name.
 data Named = Named
   { id :: Maybe UserId
-  , login :: Maybe Text
+  , login :: Maybe Login
   , displayName :: Text
   }
 
@@ -832,9 +832,9 @@ parseComment named thread = withObject "comment" $ \o -> do
 parseNamed :: Value -> Parser Named
 parseNamed = withObject "author" $ \o -> do
   id <- fmap UserId <$> o .:? "id"
-  login <- o .:? "login"
+  login <- fmap Login <$> o .:? "login"
   given <- o .:? "displayName"
-  displayName <- maybe (fail "an author has a displayName, a login or an id") pure (given <|> login <|> fmap (\u -> u.text) id)
+  displayName <- maybe (fail "an author has a displayName, a login or an id") pure (given <|> fmap (\l -> l.text) login <|> fmap (\u -> u.text) id)
   pure Named {id, login, displayName}
 
 --------------------------------------------------------------------------------
@@ -1050,7 +1050,7 @@ parseUser = withObject "user" $ \o -> do
   id <- UserId <$> o .: "id"
   login <- o .: "login"
   displayName <- o .:? "displayName" .!= login
-  pure User {id, login, displayName}
+  pure User {id, login = Login login, displayName}
 
 -- | @{"id", "name", "members"}@, the members by user id; none if missing.
 encodeGroup :: Group -> Set UserId -> Value

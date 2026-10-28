@@ -49,7 +49,7 @@ import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (Grants (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 import Wiki.Core.Version (Version (..), VersionInfo (..), latestVersions)
 
 seed :: MemState
@@ -120,7 +120,7 @@ keptFixture = do
   users <- runKept opened memUsers
   let userId = \case
         Anonymous -> Nothing
-        As login -> (\u -> u.id) <$> find (\u -> u.login == login) users
+        As login -> (\u -> u.id) <$> find (\u -> u.login.text == login) users
   let run :: As -> MemWiki IO a -> IO a
       run who program = do
         result <- runKept opened (switchUser (userId who) >> program)
@@ -137,7 +137,7 @@ reopenedFixture = do
   users <- runKept seeded memUsers
   let userId = \case
         Anonymous -> Nothing
-        As login -> (\u -> u.id) <$> find (\u -> u.login == login) users
+        As login -> (\u -> u.id) <$> find (\u -> u.login.text == login) users
   let run :: As -> MemWiki IO a -> IO a
       run who program = do
         opened <- open db

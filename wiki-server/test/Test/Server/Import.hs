@@ -37,7 +37,7 @@ import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), withProfile)
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Blobs (blobOf)
 
@@ -120,7 +120,7 @@ archive spaces pages =
   Archive
     { createdAt = time
     , app = "the tests"
-    , users = [User {id = UserId "u1", login = "alice", displayName = "Alice"}]
+    , users = [User {id = UserId "u1", login = Login "alice", displayName = "Alice"}]
     , groups = []
     , membership = mempty
     , grants = Grants {global = [GlobalGrant {subject = SubjectUser (UserId "u1"), permission = Administer}], spaces = [], access = Open}
@@ -349,7 +349,7 @@ discussed :: Archive
 discussed =
   docs
     { threads = Map.fromList [(PageId "p1", [aboutThePage, inline])]
-    , commentAuthors = [User {id = UserId "u7", login = "bob", displayName = "Bob"}]
+    , commentAuthors = [User {id = UserId "u7", login = Login "bob", displayName = "Bob"}]
     }
   where
     aboutThePage =

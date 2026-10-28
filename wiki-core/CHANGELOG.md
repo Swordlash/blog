@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+A login is a `Login` (WP5.15, `docs/newtypes.md`), a newtype over
+`Text`: `User.login`, the audit's `Actor.login`, and the login of a
+comment's author in an archive. `parseLogin` replaces `checkLogin`: it
+applies the same rules and returns a `Login`. The JSON of every record is
+unchanged; decoding a `Login` does not apply the rules, so a backend calls
+`parseLogin` on a login it is asked to create.
+
 A slide can be shown in steps (WP5.20), with pandoc's markers. The
 Markdown tree has a new block, `Pause`: three dots separated by spaces,
 `. . .`, alone in a paragraph at the top level, in a box, an alert or a list

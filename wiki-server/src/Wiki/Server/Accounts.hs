@@ -84,7 +84,6 @@ module Wiki.Server.Accounts
   , setPassword
   , setDisabled
   , setAdministrator
-  , checkLogin
 
     -- * Accounts people make themselves
   , register
@@ -140,7 +139,7 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Audit (Actor (..), Subject (..))
 import Wiki.Core.Id (InvitationId (..), UserId (..))
-import Wiki.Core.User (User (..), checkLogin)
+import Wiki.Core.User (Login (..), User (..), parseLogin)
 import Wiki.Server.Password (checkPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
 import Wiki.Server.Storage (Storage, readServerSettings, readSettings, settingsWith, withDatabase, withReadConnection)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
@@ -180,21 +179,21 @@ listAccounts st = withDatabase st $ \c -> do
 -- invalid login or password is 'Invalid'.
 createAccount :: Storage -> Text -> Text -> Maybe Text -> IO (Either WikiError Account)
 createAccount st rawLogin rawName password = runExceptT $ do
-  login <- either (throwError . Invalid) pure (checkLogin rawLogin)
+  login <- either (throwError . Invalid) pure (parseLogin rawLogin)
   phc <- for password $ \p -> either (throwError . Invalid) (liftIO . hashPassword) (checkPassword p)
   uid <- liftIO (UUID.toText <$> generateV4)
   let name = case T.strip rawName of
-        "" -> login
+        "" -> login.text
         n -> n
   ExceptT . withDatabase st $ \c ->
     immediately c $
       insertAccount c (UserId uid) login name phc >>= \case
         Left t -> pure (Left (taken t))
         Right account -> do
-          fromConsole c "user.create" account.user [("login", login), ("name", name)]
+          fromConsole c "user.create" account.user [("login", login.text), ("name", name)]
           pure (Right account)
   where
-    taken login = Conflict ("There is a user with the login " <> login <> " already.")
+    taken login = Conflict ("There is a user with the login " <> login.text <> " already.")
 
 -- | Give a user a new password, and end their sessions.
 setPassword :: Storage -> UserId -> Text -> IO (Either WikiError Account)
@@ -235,7 +234,7 @@ changeAccount st u action detail change = withDatabase st $ \c -> immediately c 
 -- | Record what the console did to a user.
 fromConsole :: Connection -> Text -> User -> [(Text, Text)] -> IO ()
 fromConsole c action u detail =
-  insertAudit c Recorded {actor = operator, action, subject = Subject {kind = "user", id = Just u.id.text, name = u.login}, detail, address = consoleAddress}
+  insertAudit c Recorded {actor = operator, action, subject = Subject {kind = "user", id = Just u.id.text, name = u.login.text}, detail, address = consoleAddress}
 
 -- | Run something in a transaction that holds the write lock from its
 -- start: committed if it returns a 'Right', rolled back if it returns a
@@ -301,18 +300,18 @@ acceptInvitation st now address token new = runExceptT $ do
 recordMade :: Connection -> Text -> Text -> [(Text, Text)] -> Either e (User, Text) -> IO (Either e (User, Text))
 recordMade c address action detail made = do
   for_ made $ \(u, _) ->
-    insertAudit c Recorded {actor = Actor {id = u.id, login = u.login}, action, subject = Subject {kind = "user", id = Just u.id.text, name = u.login}, detail, address}
+    insertAudit c Recorded {actor = Actor {id = u.id, login = u.login}, action, subject = Subject {kind = "user", id = Just u.id.text, name = u.login.text}, detail, address}
   pure made
 
 -- | An account to create, checked, with its password hashed: its id,
 -- login, display name and the password's hash.
-prepared :: NewAccount -> ExceptT WikiError IO (UserId, Text, Text, Maybe Text)
+prepared :: NewAccount -> ExceptT WikiError IO (UserId, Login, Text, Maybe Text)
 prepared new = do
-  (login, password) <- either (throwError . Invalid) pure ((,) <$> checkLogin new.login <*> checkPassword new.password)
+  (login, password) <- either (throwError . Invalid) pure ((,) <$> parseLogin new.login <*> checkPassword new.password)
   phc <- liftIO (hashPassword password)
   uid <- liftIO (UUID.toText <$> generateV4)
   let name = case T.strip new.displayName of
-        "" -> login
+        "" -> login.text
         n -> n
   pure (UserId uid, login, name, Just phc)
 
@@ -320,10 +319,10 @@ prepared new = do
 -- wiki's settings give new accounts, and sign its creator in, from their
 -- network address. An account without a password signs in another way:
 -- with a provider's account.
-makeAccount :: Connection -> UTCTime -> Text -> WikiSettings -> (UserId, Text, Text, Maybe Text) -> IO (Either WikiError (User, Text))
+makeAccount :: Connection -> UTCTime -> Text -> WikiSettings -> (UserId, Login, Text, Maybe Text) -> IO (Either WikiError (User, Text))
 makeAccount c now address settings (uid, login, name, phc) =
   insertAccount c uid login name phc >>= \case
-    Left taken -> pure (Left (Conflict ("There is a user with the login " <> taken <> " already.")))
+    Left taken -> pure (Left (Conflict ("There is a user with the login " <> taken.text <> " already.")))
     Right account -> do
       when settings.newAccountsCreateSpaces (grantCreateSpaces c uid)
       token <- startSession c now uid address
@@ -448,7 +447,7 @@ landWith st now address intent claimed = withDatabase st $ \c ->
       uid <- UserId . UUID.toText <$> generateV4
       let tries = take 100 (loginCandidates claimed)
           made login =
-            makeAccount c now address settings (uid, login, fromMaybe login (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
+            makeAccount c now address settings (uid, Login login, fromMaybe login (mfilter (not . T.null) (T.strip <$> claimed.name)), Nothing)
           go = \case
             [] -> do
               -- A hundred are taken: use one with a random suffix, which

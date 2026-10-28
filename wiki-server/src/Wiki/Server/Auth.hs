@@ -88,7 +88,7 @@ import Wiki.Api.Account
   )
 import Wiki.Api.Auth (callbackPath)
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 import Wiki.Server.Accounts (Intent (..), Landing (..), Refusal (..), accountOf, endSession, landWith, startSession)
 import Wiki.Server.Api (Caller (..), Env (..), Signing (..), currentProviders, registering)
 import Wiki.Server.Limiter (Verdict (..))
@@ -238,14 +238,14 @@ secondStep logger env signing mount p request respond = do
   waiting <- maybe (pure Nothing) (pendingSignIn env.pending now) held
   case (held, waiting) of
     (Just token, Just w) ->
-      Limiter.verdict env.limiter now w.login signing.address >>= \case
+      Limiter.verdict env.limiter now w.login.text signing.address >>= \case
         Refused seconds ->
           respond (page status429 [] (codeForm mount p (Just ("Too many wrong codes: try again in " <> show ((seconds + 59) `div` 60) <> " minutes."))))
         Allowed ->
           checkCode env.storage now w.user code >>= \case
             False -> do
               wrongCode env.pending token
-              Limiter.failed env.limiter now w.login signing.address
+              Limiter.failed env.limiter now w.login.text signing.address
               logged "wrong-code" [("user", w.user.text)]
               still <- pendingSignIn env.pending now token
               if isJust still
@@ -253,7 +253,7 @@ secondStep logger env signing mount p request respond = do
                 else expired
             True -> do
               finishPending env.pending token
-              Limiter.succeeded env.limiter w.login signing.address
+              Limiter.succeeded env.limiter w.login.text signing.address
               accountOf env.storage w.user >>= \case
                 Just a | not a.disabled -> do
                   session <- withDatabase env.storage (\c -> startSession c now w.user signing.address)

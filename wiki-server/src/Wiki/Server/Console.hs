@@ -64,7 +64,7 @@ import Wiki.Api.Account (Account (..))
 import Wiki.Api.ServerSettings (ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, providerProblems, redirectUri)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (removeSecondFactor))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdministrator, setDisabled, setPassword)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Secret (revealed)
@@ -172,7 +172,7 @@ found :: Storage -> Text -> ExceptT Text IO Account
 found st login = maybe (throwError ("There is no user with the login " <> login <> ".")) pure =<< liftIO (accountByLogin st login)
 
 describe :: User -> Text
-describe user = user.login <> " (" <> user.displayName <> ")"
+describe user = user.login.text <> " (" <> user.displayName <> ")"
 
 -- | The users as a table: login, name, and what they may do.
 listing :: [(Account, Bool)] -> [Text]
@@ -182,7 +182,7 @@ listing accounts = row heading : map (row . cells) accounts
     heading = ("LOGIN", "NAME", "ADMINISTRATOR", "SIGNS IN")
     cells :: (Account, Bool) -> (Text, Text, Text, Text)
     cells (a, admin) =
-      ( a.user.login
+      ( a.user.login.text
       , a.user.displayName
       , if admin then "yes" else "no"
       , if

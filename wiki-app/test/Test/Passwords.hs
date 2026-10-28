@@ -23,7 +23,7 @@ import Wiki.App.View.Admin (NoLink (..), PasswordControl (..), passwordControl)
 import Wiki.App.View.Security (addressText, factorOffText)
 import Wiki.App.View.SignIn (passwordOffer)
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (SignInProvider (..), User (..))
+import Wiki.Core.User (Login (..), SignInProvider (..), User (..))
 
 spec :: Spec
 spec = describe "what the views offer for a password" $ do
@@ -65,7 +65,7 @@ mailingOr mailing =
     , membership = mempty
     }
   where
-    person login = User {id = uid login, login, displayName = login}
+    person login = User {id = uid login, login = Login login, displayName = login}
 
 uid :: Text -> UserId
 uid login = UserId ("user-" <> login)

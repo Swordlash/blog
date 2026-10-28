@@ -202,7 +202,7 @@ import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
-import Wiki.Core.User (Group (..), Membership, Standing (..), User (..), checkLogin, checkPassword)
+import Wiki.Core.User (Group (..), Login (..), Membership, Standing (..), User (..), checkPassword, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
 import Wiki.Core.Version qualified as V
 
@@ -1288,12 +1288,12 @@ createUserIn :: NewAccount -> Write Account
 createUserIn new st = do
   requireAdministrator st
   require st.adminCreatesPasswordAccounts
-  login <- first Invalid (checkLogin new.login)
+  login <- first Invalid (parseLogin new.login)
   _ <- first Invalid (checkPassword new.password)
-  for_ (find (\u -> T.toCaseFold u.login == T.toCaseFold login) (Map.elems st.users)) $ \_ ->
-    Left (Conflict ("There is a user with the login " <> login <> " already."))
+  for_ (find (\u -> T.toCaseFold u.login.text == T.toCaseFold login.text) (Map.elems st.users)) $ \_ ->
+    Left (Conflict ("There is a user with the login " <> login.text <> " already."))
   let (i, st1) = newId "user" st
-      u = User {id = UserId i, login, displayName = fromMaybe login (mfilter (not . T.null) (Just (T.strip new.displayName)))}
+      u = User {id = UserId i, login, displayName = fromMaybe login.text (mfilter (not . T.null) (Just (T.strip new.displayName)))}
       st2 = (insertUser u st1) {passwords = Set.insert u.id st1.passwords}
   pure (st2, accountIn st2 u)
 
@@ -1684,7 +1684,7 @@ tell now p thread excerpt occasion logins st = case currentUserId st of
   Nothing -> st
   Just actor ->
     let users = activeUsers st
-        byLogin = Map.fromList [(u.login, u.id) | u <- users]
+        byLogin = Map.fromList [(u.login.text, u.id) | u <- users]
         watchers =
           [ Watcher {principal = principal st.membership u.id, watchOwn = (choicesOf st u.id).watchOwn, marks = Map.findWithDefault mempty u.id st.watches}
           | u <- users
@@ -1739,7 +1739,7 @@ insertNotification u n st = st {notices = Map.insert u (take (snd keptNotificati
 mentionableIn :: [Text] -> MemState -> Map Text Author
 mentionableIn logins st = case currentUserId st of
   Nothing -> mempty
-  Just _ -> Map.fromList [(u.login, authorOf st u.id) | u <- activeUsers st, u.login `elem` logins]
+  Just _ -> Map.fromList [(u.login.text, authorOf st u.id) | u <- activeUsers st, u.login.text `elem` logins]
 
 -- | The id of the signed-in user, or 'Forbidden' for nobody.
 signedIn :: MemState -> Either WikiError UserId

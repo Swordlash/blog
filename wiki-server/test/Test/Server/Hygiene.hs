@@ -38,7 +38,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (setServerSettings))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 import Wiki.Server.Accounts (Resolved (..), createAccount, resolveSession, seenEvery, signIn)
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
@@ -142,7 +142,7 @@ sessions = describe "one's sessions" $ do
     map (\s -> s.current) only `shouldBe` [True]
     for_ [t2, t3] $ \t -> ((\(i :: SessionInfo) -> i.user) <$> (getUrlWith r (onPublic r links.session) [cookie t] >>= jsonAs 200)) `shouldReturn` Nothing
     me :: SessionInfo <- getUrlWith r (onPublic r links.session) [cookie t1] >>= jsonAs 200
-    (\u -> u.login) <$> me.user `shouldBe` Just "editor"
+    (\u -> u.login.text) <$> me.user `shouldBe` Just "editor"
 
 --------------------------------------------------------------------------------
 
@@ -203,7 +203,7 @@ secondFactor = describe "a second factor" $ do
     let next = codeAt secret (addUTCTime 30 now)
     reply <- withCode r held next
     info :: SessionInfo <- jsonAs 200 reply
-    (\u -> u.login) <$> info.user `shouldBe` Just "editor"
+    (\u -> u.login.text) <$> info.user `shouldBe` Just "editor"
     token <- maybe (panic "no session cookie") (pure . fst) (setCookie reply)
     me :: SessionInfo <- getUrlWith r (onPublic r links.session) [cookie token] >>= jsonAs 200
     isJust me.user `shouldBe` True
@@ -396,7 +396,7 @@ passwordLink = describe "a password link an administrator has mailed" $ do
     (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = "chosen again"} >>= jsonAs 404) `shouldReturn` NotFound
     -- Recorded as the operator's.
     activity :: Activity <- getUrl r (onAdmin r (links.admin.activity Nothing Nothing Nothing)) >>= jsonAs 200
-    [(e.actor.login, e.subject.name) | e <- activity.entries, e.action == "user.password-link"] `shouldBe` [("administrator", "editor")]
+    [(e.actor.login.text, e.subject.name) | e <- activity.entries, e.action == "user.password-link"] `shouldBe` [("administrator", "editor")]
 
   it "is mailed as before where the administration may not create accounts with a password" $ withVerifiedEditor $ \r _ -> do
     let consoleOnly = WikiSettings {access = Open, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = False}

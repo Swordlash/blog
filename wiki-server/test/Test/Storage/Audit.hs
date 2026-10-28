@@ -32,7 +32,7 @@ import Wiki.Core.Permission (SpacePermission (..))
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Slug (slugText)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
-import Wiki.Core.User (Group (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Import (applyImport)
 import Wiki.Server.Storage
@@ -88,7 +88,7 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     rita <- userNamed st "reader"
     granted <- recordsOne st (as st "admin" (setSpaceGrant docs.id (P.SubjectUser rita.id) Edit True))
     summary granted `shouldBe` ("space.grant", "space", "Docs", [("permission", "edit"), ("to", "user reader")])
-    granted.actor.login `shouldBe` "admin"
+    granted.actor.login.text `shouldBe` "admin"
     granted.address `shouldBe` origin
     granted.subject.id `shouldBe` Just docs.id.text
     revoked <- recordsOne st (as st "admin" (setSpaceGrant docs.id (P.SubjectUser rita.id) Edit False))
@@ -118,7 +118,7 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     victim <- maybe (assertFailure "the blog has no page without pages under it") pure (head leaves)
     deletedPage <- recordsOne st (as st "editor" (deletePage victim.id))
     summary deletedPage `shouldBe` ("page.delete", "page", victim.title, [("path", slugText victim.slug), ("space", "blog")])
-    deletedPage.actor.login `shouldBe` "editor"
+    deletedPage.actor.login.text `shouldBe` "editor"
     team <- spaceNamed st "Team"
     deletedSpace <- recordsOne st (as st "admin" (deleteSpace team.id))
     (\(a, k, n, _) -> (a, k, n)) (summary deletedSpace) `shouldBe` ("space.delete", "space", "Team")
@@ -183,12 +183,12 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     now <- getCurrentTime
     registered <- recordsOne st (Accounts.register st now "100.64.0.10" (newAccount "dora" "Dora"))
     summary registered `shouldBe` ("user.register", "user", "dora", [])
-    registered.actor.login `shouldBe` "dora"
+    registered.actor.login.text `shouldBe` "dora"
     registered.address `shouldBe` "100.64.0.10"
     -- One a provider's sign-in makes, with the provider.
     landed <- recordsOne st (Accounts.landWith st now "100.64.0.11" Accounts.SignInOnly Accounts.Claimed {provider = "github", subject = "42", email = Nothing, name = Just "Eve", login = Just "eve"})
     summary landed `shouldBe` ("user.register", "user", "eve", [("provider", "github")])
-    landed.actor.login `shouldBe` "eve"
+    landed.actor.login.text `shouldBe` "eve"
     landed.address `shouldBe` "100.64.0.11"
 
   it "an import, with what it did, as the administrator" $ withDemo $ \st -> do
@@ -252,10 +252,10 @@ reading = describe "is read" $ do
     as st "admin" (activity firstPage {before = (\e -> e.id) <$> lastMay page1.entries}) `shouldReturn` Right page2
     -- Nothing comes after an entry the log does not have.
     (\a -> a.entries) <$> (as st "admin" (activity firstPage {before = Just "no-such-entry"}) >>= ok) `shouldReturn` []
-    map (\a -> a.login) page1.actors `shouldBe` ["admin", "administrator"]
+    map (\a -> a.login.text) page1.actors `shouldBe` ["admin", "administrator"]
     admin <- userNamed st "admin"
     theirs <- as st "admin" (activity ActivityQuery {actor = Just admin.id, offset = 0, before = Nothing}) >>= ok
-    all (\e -> e.actor.login == "admin") theirs.entries `shouldBe` True
+    all (\e -> e.actor.login.text == "admin") theirs.entries `shouldBe` True
     console <- as st "admin" (activity ActivityQuery {actor = Just operator.id, offset = 0, before = Nothing}) >>= ok
     map (\e -> e.action) console.entries `shouldBe` ["user.disable"]
     -- One actor's entries after one of theirs.

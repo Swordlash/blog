@@ -36,6 +36,7 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Protolude
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.User (Login (..))
 
 -- | 'AuditEntry': one administration write.
 data AuditEntry = AuditEntry
@@ -61,7 +62,7 @@ data AuditEntry = AuditEntry
 -- belongs to no user.
 data Actor = Actor
   { id :: UserId
-  , login :: Text
+  , login :: Login
   }
   deriving stock (Eq, Ord, Show)
 

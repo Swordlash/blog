@@ -112,7 +112,7 @@ import Wiki.Core.Id
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Search (SearchQuery (..))
-import Wiki.Core.User (User (..))
+import Wiki.Core.User (Login (..), User (..))
 import Wiki.Core.Version (VersionsQuery (VersionsQuery), versionsPageSize)
 import Wiki.Server.Accounts (endSession)
 import Wiki.Server.Accounts qualified as Accounts
@@ -373,16 +373,16 @@ handlers env caller =
         waiting <- liftIO (maybe (pure Nothing) (pendingSignIn env.pending now) s.pending)
         case (s.pending, waiting) of
           (Just held, Just p) ->
-            limitedFor p.login s $ do
+            limitedFor p.login.text s $ do
               right <- liftIO (checkCode env.storage now p.user body.code)
               if not right
                 then do
                   liftIO (wrongCode env.pending held)
-                  liftIO (Limiter.failed env.limiter now p.login s.address)
+                  liftIO (Limiter.failed env.limiter now p.login.text s.address)
                   refuse ApiError.Unauthenticated
                 else do
                   liftIO (finishPending env.pending held)
-                  liftIO (Limiter.succeeded env.limiter p.login s.address)
+                  liftIO (Limiter.succeeded env.limiter p.login.text s.address)
                   liftIO (Accounts.accountOf env.storage p.user) >>= \case
                     Just a | not a.disabled -> do
                       token <- liftIO (withDatabase env.storage (\c -> Accounts.startSession c now p.user s.address))
@@ -702,7 +702,7 @@ handlers env caller =
     ownPassword change = do
       u <- signedInUser
       s <- signingHere
-      login <- liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) (\(a :: Account) -> pure a.user.login)
+      login <- liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) (\(a :: Account) -> pure a.user.login.text)
       now <- liftIO getCurrentTime
       liftIO (Limiter.verdict env.limiter now login s.address) >>= \case
         Refused seconds ->
@@ -721,7 +721,7 @@ handlers env caller =
               pure methods
     -- The login of the user signed in.
     loginOf :: UserId -> Handler Text
-    loginOf u = liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) (\(a :: Account) -> pure a.user.login)
+    loginOf u = liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) (\(a :: Account) -> pure a.user.login.text)
     -- Run a guess at a code or password for a login, from the request's
     -- address, under the limit on failed sign-ins: refused while there
     -- have been too many wrong guesses.
@@ -783,7 +783,7 @@ handlers env caller =
       currentMailer env >>= \case
         Nothing -> pure (Just "This wiki does not send mail yet.")
         Just m -> do
-          login <- maybe "" (\(a :: Account) -> a.user.login) <$> Accounts.accountOf env.storage u
+          login <- maybe (Login "") (\(a :: Account) -> a.user.login) <$> Accounts.accountOf env.storage u
           leftToMaybe <$> m.deliver (verificationMessage m.publicUrl address login token)
     -- An administrator has a user mailed a link to choose a password, the
     -- same link a reset mails (WP5.6 of docs/PLAN.md). The storage checks
@@ -835,7 +835,7 @@ handlers env caller =
               void . liftIO . forkIO $ do
                 mails <- Reset.requestReset env.storage now body.login
                 for_ mails $ \r -> do
-                  login <- maybe "" (\(a :: Account) -> a.user.login) <$> Accounts.accountOf env.storage r.user
+                  login <- maybe (Login "") (\(a :: Account) -> a.user.login) <$> Accounts.accountOf env.storage r.user
                   m.deliver (resetMessage m.publicUrl r.email login r.token r.expiresAt) >>= \case
                     Right () -> logWith env.logger Info [("event", "password-reset"), ("user", r.user.text), ("outcome", "mailed")]
                     Left why -> logWith env.logger Warning [("event", "password-reset"), ("user", r.user.text), ("outcome", "failed"), ("error", why)]

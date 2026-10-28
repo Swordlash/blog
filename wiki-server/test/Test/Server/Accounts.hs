@@ -33,7 +33,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Standing (..), User (..))
+import Wiki.Core.User (Login (..), Standing (..), User (..))
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.Options (ServeOptions (..))
 
@@ -82,7 +82,7 @@ signingIn = describe "signing in" $ do
   it "answers with the session, and a cookie that is HttpOnly, SameSite=Strict, at the base path, for two weeks" $ withPasswords identity $ \r -> do
     reply <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = "editor's password"}
     info :: SessionInfo <- jsonAs 200 reply
-    ((\u -> u.login) <$> info.user, info.standing) `shouldBe` (Just "editor", SignedIn)
+    ((\u -> u.login.text) <$> info.user, info.standing) `shouldBe` (Just "editor", SignedIn)
     (snd <$> setCookie reply) `shouldBe` Just ["Path=/", "Max-Age=1209600", "HttpOnly", "SameSite=Strict"]
     token <- maybe (panic "no cookie") (pure . fst) (setCookie reply)
     (me, _) <- sessionWith r [cookie token]
@@ -116,7 +116,7 @@ signingIn = describe "signing in" $ do
     (old, _) <- sessionWith r [cookie first']
     old.user `shouldBe` Nothing
     (new, _) <- sessionWith r [cookie second']
-    (\u -> u.login) <$> new.user `shouldBe` Just "admin"
+    (\u -> u.login.text) <$> new.user `shouldBe` Just "admin"
 
 rules :: Spec
 rules = describe "each principal" $ do
@@ -160,12 +160,12 @@ administration = describe "the administrator on the admin listener" $ do
     _ :: ServerStatus <- getUrl r (onAdmin r links.admin.status) >>= jsonAs 200
     editor <- signInAs r "editor" "editor's password"
     me :: SessionInfo <- getUrlWith r (onAdmin r links.session) [cookie editor] >>= jsonAs 200
-    ((\u -> u.login) <$> me.user, me.standing) `shouldBe` (Just "administrator", Operator)
+    ((\u -> u.login.text) <$> me.user, me.standing) `shouldBe` (Just "administrator", Operator)
     (.status) <$> sendJson r methodPost (onAdmin r links.signIn) Credentials {login = "editor", password = "editor's password"} `shouldReturn` 400
 
   it "makes a user with a password, who signs in on the public listener" $ withPasswords identity $ \r -> do
     made :: Account <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "bea", displayName = "Bea", password = "bea's password", email = Nothing} >>= jsonAs 201
-    (made.user.login, made.hasPassword, made.disabled) `shouldBe` ("bea", True, False)
+    (made.user.login.text, made.hasPassword, made.disabled) `shouldBe` ("bea", True, False)
     token <- signInAs r "bea" "bea's password"
     (me, _) <- sessionWith r [cookie token]
     (\u -> u.id) <$> me.user `shouldBe` Just made.user.id
@@ -201,7 +201,7 @@ administration = describe "the administrator on the admin listener" $ do
           (sendJson again methodPost (onAdmin again links.admin.createUser) (newAccount "cid") >>= jsonAs 403) `shouldReturn` Forbidden
           users :: Directory <- getUrl again (onAdmin again links.admin.directory) >>= jsonAs 200
           users.adminCreatesPasswordAccounts `shouldBe` False
-          map (\u -> u.login) users.users `shouldBe` ["admin", "bea", "editor", "reader"]
+          map (\u -> u.login.text) users.users `shouldBe` ["admin", "bea", "editor", "reader"]
           -- The console makes the account, which signs in.
           made <- runUsers (const (pure (Right "cid's password"))) Users {dataDir = again.dataDir, command = AddUser "cid" Nothing False True}
           made `shouldSatisfy` isRight
@@ -250,7 +250,7 @@ endings = describe "a session" $ do
     (.status) <$> newPage r [cookie token] blog `shouldReturn` 403
     -- Still one of the wiki's people, in the administration's directory.
     people :: Directory <- getUrl r (onAdmin r links.admin.directory) >>= jsonAs 200
-    map (\u -> u.login) people.users `shouldContain` ["editor"]
+    map (\u -> u.login.text) people.users `shouldContain` ["editor"]
     -- Enabled again, they sign in again; the old session stays ended.
     _ :: Account <- sendJson r methodPut (onAdmin r (links.admin.setDisabled (UserId "user-editor"))) AccountDisabled {disabled = False} >>= jsonAs 200
     (stale, _) <- sessionWith r [cookie token]
@@ -289,7 +289,7 @@ ownPassword = describe "one's own password" $ do
     methods :: SignInMethods <- changing r here (Just "editor's password") "a longer new password" >>= jsonAs 200
     methods.password `shouldBe` True
     (me, _) <- sessionWith r [cookie here]
-    (\u -> u.login) <$> me.user `shouldBe` Just "editor"
+    (\u -> u.login.text) <$> me.user `shouldBe` Just "editor"
     (other, _) <- sessionWith r [cookie elsewhere]
     other.user `shouldBe` Nothing
     (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = "editor's password"} `shouldReturn` 401
@@ -298,14 +298,14 @@ ownPassword = describe "one's own password" $ do
     admin <- signInAs r "admin" "admin's password"
     _ <- changing r here (Just "a longer new password") "and another one"
     (stillAdmin, _) <- sessionWith r [cookie admin]
-    (\u -> u.login) <$> stillAdmin.user `shouldBe` Just "admin"
+    (\u -> u.login.text) <$> stillAdmin.user `shouldBe` Just "admin"
 
   it "is refused without the current one, or with a wrong one, with a 401, and nothing changes" $ withPasswords identity $ \r -> do
     here <- signInAs r "editor" "editor's password"
     for_ [Nothing, Just "not my password"] $ \current ->
       changing r here current "a longer new password" >>= jsonAs 401 >>= (`shouldBe` Unauthenticated)
     (me, _) <- sessionWith r [cookie here]
-    (\u -> u.login) <$> me.user `shouldBe` Just "editor"
+    (\u -> u.login.text) <$> me.user `shouldBe` Just "editor"
     _ <- signInAs r "editor" "editor's password"
     pass
 

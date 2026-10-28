@@ -162,6 +162,7 @@ test-suite wiki-core-test
       Test.Slug
       Test.Space
       Test.Template
+      Test.User
   build-depends:
       QuickCheck,
       aeson,
