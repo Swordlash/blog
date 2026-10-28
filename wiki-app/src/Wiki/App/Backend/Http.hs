@@ -590,9 +590,10 @@ commentWrite_ pid event request = do
 -- notifications the bell shows, whether a page or a space is watched, and
 -- which users logins belong to are cached, so that a page the server
 -- prerendered with them is also the program's first render. Marking
--- notifications read, choosing a watch and changing the settings change
--- nothing else that is cached, so each puts its response in the cache
--- instead of emptying it.
+-- notifications read changes nothing else that is cached, so it puts its
+-- response in the cache instead of emptying it. Choosing a watch and
+-- changing the settings can change other watches, so each removes the
+-- cached watches, and does not empty the rest of the cache.
 instance (MonadIO m) => MonadNotifications (HttpWiki m) where
   mentionable logins =
     cachedPeople logins <$> readCache >>= \case

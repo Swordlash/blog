@@ -98,9 +98,14 @@
 --   header and the page with them.
 --
 -- A notification received over the live channel is added at the front of
--- the cached ones ('withNotice'). Marking notifications read, or choosing
--- a watch, puts the server's response in the cache and changes nothing
--- else.
+-- the cached ones ('withNotice'). Marking notifications read puts the
+-- server's response in the cache and changes nothing else. Choosing a
+-- watch removes every cached watch, then caches the server's response:
+-- watching a space changes whether the pages in it are watched, so the
+-- other cached watches may be out of date. Changing the notification
+-- settings also removes every cached watch, because one setting says
+-- whether a user watches the pages they create, which changes whether
+-- those pages are watched.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
   , CachedDraft (..)

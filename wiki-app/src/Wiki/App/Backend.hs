@@ -40,11 +40,12 @@
 -- The HTTP backend, whose wiki is on the server, can fail to reach it at
 -- all: the network is down, the server does not answer in time, or it
 -- breaks. That is 'Unreachable'. No rule causes it, and a retry may
--- well work, so a component offers to try again. Four reads cannot be
--- refused, so they return no @Either@ ('session', 'listSpaces',
--- 'pageCounts', 'searchPages'). They throw 'Unreachable' instead, and the
--- component that shows their result catches it with 'attempt' (see
--- "Loading" below).
+-- well work, so a component offers to try again. Five reads cannot be
+-- refused, so they return no @Either@: 'session', 'listSpaces',
+-- 'pageCounts' and 'searchPages' here, and
+-- 'Wiki.App.Backend.Notifications.mentionable'. They throw 'Unreachable'
+-- instead, and the component that shows their result catches it with
+-- 'attempt' (see "Loading" below).
 --
 -- = Permissions
 --
@@ -211,9 +212,8 @@ data WikiError
     Unreachable Text
   deriving stock (Eq, Show)
 
--- | So that the reads that return no @Either@ ('session', 'listSpaces',
--- 'pageCounts', 'searchPages') can throw 'Unreachable', and 'attempt' can
--- catch it.
+-- | So that the reads that return no @Either@ (the five in "Errors" in the
+-- module's Haddock) can throw 'Unreachable', and 'attempt' can catch it.
 instance Exception WikiError
 
 -- | Throw 'Unreachable', from a read that returns no @Either@ to report
@@ -642,9 +642,9 @@ class (MonadWiki m) => MonadLoad m where
   -- sent over the network.
   atOnce :: m a -> m (Maybe a)
 
-  -- | Run a program, and return an 'Unreachable' thrown by 'session',
-  -- 'listSpaces' or 'searchPages' as a 'Left' instead of letting it
-  -- propagate.
+  -- | Run a program, and return an 'Unreachable' thrown by one of the
+  -- reads that return no @Either@ (the five in "Errors" in the module's
+  -- Haddock) as a 'Left' instead of letting it propagate.
   attempt :: m a -> m (Either WikiError a)
 
   -- | Say that the reader went to another route. The HTTP backend then
