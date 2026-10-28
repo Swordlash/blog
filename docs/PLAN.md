@@ -1294,7 +1294,11 @@ must be in before it is.
   animated transitions worth having) and as a step in PPTX, and `incremental` as
   `\item<+->`; DOCX, HTML and EPUB ignore both. Tests: `Wiki.Core.Slides` cutting steps,
   hspec-halogen for the keys and the address, the server's export test finding `\pause` in
-  the Beamer source. `docs/markdown.md`'s "Presentations" says it.
+  the Beamer source. `docs/markdown.md`'s "Presentations" says it, and the demo's
+  "Presentations" deck (`Wiki.App.Demo`, the page under the Markdown guide that teaches
+  presenting by being a deck) gains a slide or two that use `. . .` and `::: incremental`
+  and say what they do (the owner, 2026-10-28: "zaktualizować tutorial prezentacji"); the
+  README's "Presentations" section mentions steps too.
 
 - **Later, by the owner (2026-10-28, "PRF jest spoko na później"): the assistant's API keys
   synchronised with a passkey.** The keys stay out of the server today (IndexedDB per user,
