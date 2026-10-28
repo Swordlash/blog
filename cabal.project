@@ -21,7 +21,7 @@ semaphore: True
 source-repository-package
   type: git
   location: https://github.com/Swordlash/haskell-halogen
-  tag: f7ee7e3828cf280e4e2c1af87a7af937c08dc8fd
+  tag: 1f934f2de4b8d3253e18f70287918e22009534d9
   subdir:
     core
     jsbits
