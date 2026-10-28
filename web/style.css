@@ -4991,7 +4991,12 @@ a.mention {
   font-size: 0.85rem;
 }
 
-.assistant-close,
+/* Close, in words: a plain small button at the header's end. */
+.assistant-close {
+  padding: 0.1rem 0.6rem;
+  font-size: 0.85rem;
+}
+
 .assistant-detach {
   padding: 0 0.4rem;
   border: none;
@@ -5064,11 +5069,111 @@ a.mention {
 }
 
 .assistant-thinking,
+.assistant-status,
 .assistant-stopped,
 .assistant-cut {
   margin: 0.2rem 0 0;
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+/* The seconds waited, after the dots. */
+.assistant-waited {
+  margin-left: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The summary of the model's thinking: collapsed under "Thinking" while it
+   streams, and under "Thought" once the model has gone on. */
+.assistant-thinking summary,
+.assistant-thought summary {
+  cursor: pointer;
+}
+
+.assistant-thought {
+  margin: 0 0 0.3rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.assistant-thinking-text,
+.assistant-thought-text {
+  margin: 0.2rem 0 0;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The three dots after "Thinking" and "Editing the page": still, unless
+   motion is welcome, when they blink in turn. */
+.assistant-dots span {
+  display: inline-block;
+}
+
+/* The cursor at the end of streaming text: a thin bar, which blinks unless
+   motion is unwelcome. */
+.assistant-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: currentColor;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .assistant-dots span {
+    animation: assistant-dot 1.2s infinite ease-in-out both;
+  }
+
+  .assistant-dots span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+
+  .assistant-dots span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  .assistant-cursor {
+    animation: assistant-cursor 1s steps(1) infinite;
+  }
+}
+
+@keyframes assistant-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.2;
+  }
+
+  40% {
+    opacity: 1;
+  }
+}
+
+@keyframes assistant-cursor {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* The time a message was sent, and how long an answer took. */
+.assistant-meta {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.2rem 0 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.assistant-message.from-user .assistant-meta {
+  justify-content: flex-end;
+}
+
+.assistant-took::before {
+  content: "\00b7";
+  margin-right: 0.5rem;
 }
 
 .assistant-notes {
@@ -5292,4 +5397,21 @@ a.mention {
 
 .assistant-check-works {
   color: var(--tip);
+}
+
+.assistant-effort-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.75rem 0 0;
+}
+
+.assistant-effort-field span {
+  font-weight: 600;
+}
+
+.assistant-default-effort {
+  width: 12rem;
+  max-width: 100%;
+  font: inherit;
 }

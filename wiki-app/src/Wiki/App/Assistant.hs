@@ -17,12 +17,13 @@
 -- A chat is one conversation with a provider ('openTalk'), which the
 -- browser-side code keeps for the editing session. Each message sent
 -- ('sayTo') runs one turn of the model, whose events are reported as they
--- happen ('Heard'): its text as it streams, each tool call, which the turn
--- waits on until it is answered ('answerCall'), and how the turn ended. A
--- turn can be stopped ('stopTalk'). The providers are reached through
--- Anthropic's and OpenAI's SDKs, called from the browser with the user's
--- key (@web/src/assistant.js@, fetched the first time the assistant is
--- used), or through the scripted provider a test installs
+-- happen ('Heard'): its text as it streams, the summary of its thinking
+-- as it streams, the start of each tool call, each whole tool call, which
+-- the turn waits on until it is answered ('answerCall'), and how the turn
+-- ended. A turn can be stopped ('stopTalk'). The providers are reached
+-- through Anthropic's and OpenAI's SDKs, called from the browser with the
+-- user's key (@web/src/assistant.js@, fetched the first time the
+-- assistant is used), or through the scripted provider a test installs
 -- ('scriptedInstalled'); see @jsbits/assistant.js@.
 --
 -- The provider's model list is fetched with the key ('listModels'), for
@@ -40,6 +41,8 @@ module Wiki.App.Assistant
   , Opening (..)
   , Heard (..)
   , sendsMessage
+  , closesPanel
+  , clockTime
 
     -- * Settings
   , updateAssistantSettings
@@ -55,6 +58,8 @@ import Data.Aeson (FromJSON (..), Value (Object), eitherDecodeStrict, encode, ob
 import Data.Aeson.Types (Pair, parseEither)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Type.Equality (type (~))
 import Halogen.JSBits (Callback, JSText, Safety (..), browserJS, freeCallback, fromJSText, inBrowser, jsValText, mkSyncCallback, toJSText)
 import Halogen.VDom.DOM.Monad (BrowserDOM)
@@ -83,6 +88,8 @@ $( browserJS
      , ("js_secure", "wiki_assistant_secure", Unsafe, [t|IO Bool|])
      , ("js_prepare", "wiki_assistant_prepare", Unsafe, [t|IO ()|])
      , ("js_send_key", "wiki_assistant_send_key", Unsafe, [t|Event -> Bool|])
+     , ("js_close_key", "wiki_assistant_close_key", Unsafe, [t|Event -> Bool|])
+     , ("js_clock", "wiki_assistant_clock", Unsafe, [t|Double -> IO JSText|])
      ]
  )
 
@@ -107,6 +114,15 @@ data Opening = Opening
 data Heard
   = -- | Text the model wrote, as it streams.
     HeardText Text
+  | -- | A piece of the summary of its thinking, as it streams. Anthropic
+    -- and OpenAI send one when the request asks for it
+    -- ("Wiki.Core.Assistant.Prompt") and the model thought; a model that
+    -- did not think sends none.
+    HeardThinking Text
+  | -- | The model began writing a call of the tool named. The whole call
+    -- follows as 'HeardCall' once its input is written, which for a long
+    -- edit takes a while.
+    HeardToolStart Text
   | -- | A tool call, by its number in the chat: the tool's name and its
     -- input. The turn waits for 'answerCall'.
     HeardCall Int Text Value
@@ -122,6 +138,8 @@ instance FromJSON Heard where
   parseJSON = withObject "Heard" $ \o ->
     o .: "type" >>= \case
       "text" -> HeardText <$> o .: "text"
+      "thinking" -> HeardThinking <$> o .: "text"
+      "tool-start" -> HeardToolStart <$> o .: "name"
       "tool" -> HeardCall <$> o .: "call" <*> o .: "name" <*> o .: "input"
       "done" -> pure HeardDone
       "stopped" -> pure HeardStopped
@@ -134,6 +152,21 @@ instance FromJSON Heard where
 -- Enter from inserting a new line.
 sendsMessage :: Event -> Bool
 sendsMessage = js_send_key
+
+-- | Whether a keydown in the message box closes the panel: Escape, but not
+-- in the middle of composing a character, where Escape cancels the
+-- composition.
+closesPanel :: Event -> Bool
+closesPanel = js_close_key
+
+-- | The time of day of a moment, as the chat shows it beside a message:
+-- in the browser's time zone, written the way the browser's language
+-- writes a short time ("14:32", or "2:32 PM"). Natively, where there is
+-- no browser, hours and minutes in UTC.
+clockTime :: (MonadIO m) => UTCTime -> m Text
+clockTime t
+  | inBrowser = liftIO (fromJSText <$> js_clock (realToFrac (utcTimeToPOSIXSeconds t) * 1000))
+  | otherwise = pure (toS (formatTime defaultTimeLocale "%H:%M" t))
 
 -- | The writing assistant, in the monad a component runs in.
 --

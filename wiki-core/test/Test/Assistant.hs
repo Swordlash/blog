@@ -57,9 +57,9 @@ settingsSpec = describe "settings" $ do
 
   it "are ready with the chosen provider's key, and say what is missing" $ do
     let s = withKey Anthropic (Just "sk-a") defaultSettings
-    ready s `shouldBe` Right (Ready Anthropic "claude-opus-5-5" "sk-a" "low" Nothing)
+    ready s `shouldBe` Right (Ready Anthropic "claude-opus-5-5" "sk-a" "medium" Nothing)
     ready (chooseProvider OpenAI s) `shouldSatisfy` isLeft
-    ready (chooseProvider Scripted defaultSettings) `shouldBe` Right (Ready Scripted "scripted" "" "low" Nothing)
+    ready (chooseProvider Scripted defaultSettings) `shouldBe` Right (Ready Scripted "scripted" "" "medium" Nothing)
 
   it "are blank with nothing but defaults in them" $ do
     blankSettings defaultSettings `shouldBe` True
@@ -69,16 +69,35 @@ settingsSpec = describe "settings" $ do
     blankSettings (withModel OpenAI "gpt-6-luna" defaultSettings) `shouldBe` False
     blankSettings (withModel OpenAI "" (withModel OpenAI "gpt-6-luna" defaultSettings)) `shouldBe` True
 
-  it "keep an effort per provider, low by default, and only one the provider offers" $ do
-    (settingsOf Anthropic defaultSettings).effort `shouldBe` "low"
+  it "keep a default effort per provider, medium when none is chosen, and only one the provider offers" $ do
+    defaultEffort `shouldBe` "medium"
+    effortOf (settingsOf Anthropic defaultSettings) `shouldBe` "medium"
+    effortOf (settingsOf OpenAI defaultSettings) `shouldBe` "medium"
     let s = withEffort OpenAI "minimal" (withEffort Anthropic "xhigh" defaultSettings)
-    (settingsOf Anthropic s).effort `shouldBe` "xhigh"
-    (settingsOf OpenAI s).effort `shouldBe` "minimal"
-    (settingsOf OpenAI (withEffort OpenAI "xhigh" s)).effort `shouldBe` "low"
+    effortOf (settingsOf Anthropic s) `shouldBe` "xhigh"
+    effortOf (settingsOf OpenAI s) `shouldBe` "minimal"
+    (settingsOf OpenAI (withEffort OpenAI "xhigh" s)).effort `shouldBe` Nothing
+    effortOf (settingsOf OpenAI (withEffort OpenAI "xhigh" s)) `shouldBe` "medium"
     efforts Anthropic `shouldBe` ["low", "medium", "high", "xhigh", "max"]
     efforts OpenAI `shouldBe` ["minimal", "low", "medium", "high"]
     (\r -> r.effort) <$> ready (withKey Anthropic (Just "k") s) `shouldBe` Right "xhigh"
     blankSettings (withEffort Anthropic "max" defaultSettings) `shouldBe` False
+    -- The default chosen is none chosen: such settings stay blank.
+    blankSettings (withEffort Anthropic "medium" (withEffort Anthropic "max" defaultSettings)) `shouldBe` True
+
+  it "keep the default effort as defaultEffort, only when one is chosen" $ do
+    let s = withEffort Anthropic "high" (withKey Anthropic (Just "sk-a") defaultSettings)
+    encode s `shouldBe` "{\"anthropic\":{\"defaultEffort\":\"high\",\"key\":\"sk-a\",\"model\":null},\"provider\":\"anthropic\"}"
+    encode (withKey Anthropic (Just "sk-a") defaultSettings) `shouldBe` "{\"anthropic\":{\"key\":\"sk-a\",\"model\":null},\"provider\":\"anthropic\"}"
+    decode (encode s) `shouldBe` Just s
+
+  it "read the effort settings kept before WP5.11 as the new default" $ do
+    -- The old field held the old default, low, for every provider with
+    -- settings, or the effort last picked in the chat.
+    let old = decode "{\"provider\":\"anthropic\",\"anthropic\":{\"key\":\"sk-a\",\"model\":null,\"effort\":\"low\"},\"openai\":{\"key\":null,\"model\":null,\"effort\":\"high\"}}"
+    effortOf . settingsOf Anthropic <$> old `shouldBe` Just "medium"
+    effortOf . settingsOf OpenAI <$> old `shouldBe` Just "medium"
+    (\r -> r.effort) <$> (ready =<< maybeToEither "" old) `shouldBe` Right "medium"
 
   it "read settings kept before there was an effort, an address or a list" $
     decode "{\"provider\":\"openai\",\"openai\":{\"key\":\"sk-o\",\"model\":\"gpt-6-luna\"}}"
@@ -160,7 +179,7 @@ modelsSpec = describe "the models offered" $ do
         ps = settingsOf OpenAI onMachine
     ps.baseUrl `shouldBe` Just "http://localhost:11434/v1"
     -- A server on this machine needs no key.
-    ready onMachine `shouldBe` Right (Ready OpenAI "gpt-6.1-sol" "" "low" (Just "http://localhost:11434/v1"))
+    ready onMachine `shouldBe` Right (Ready OpenAI "gpt-6.1-sol" "" "medium" (Just "http://localhost:11434/v1"))
     usable OpenAI ps `shouldBe` True
     usable Anthropic (settingsOf Anthropic (withBaseUrl Anthropic "http://localhost:1/v1" defaultSettings)) `shouldBe` False
     serviceName OpenAI ps `shouldBe` "localhost:11434"
@@ -382,8 +401,9 @@ requestSpec = describe "the requests" $ do
     -- The same for every request with the same model: what is cached.
     encode (anthropicRequest "claude-opus-5-5" "low") `shouldBe` encode request
     field "messages" request `shouldBe` Nothing
-    field "thinking" request `shouldBe` Nothing
-    -- The effort, as Anthropic takes it, and no thinking budget.
+    -- Adaptive thinking, with its summary shown, and no budget.
+    field "thinking" request `shouldBe` Just (object ["type" .= ("adaptive" :: Text), "display" .= ("summarized" :: Text)])
+    -- The effort, as Anthropic takes it.
     field "output_config" request `shouldBe` Just (object ["effort" .= ("low" :: Text)])
     field "output_config" (anthropicRequest "claude-opus-5-5" "max") `shouldBe` Just (object ["effort" .= ("max" :: Text)])
 
@@ -395,8 +415,9 @@ requestSpec = describe "the requests" $ do
         text `shouldSatisfy` T.isSuffixOf instructions
       other -> expectationFailure ("no instructions: " <> show other)
     field "store" request `shouldBe` Just (Bool False)
-    field "reasoning" request `shouldBe` Just (object ["effort" .= ("low" :: Text)])
-    field "reasoning" (openAiRequest "gpt-6.1-sol" "minimal") `shouldBe` Just (object ["effort" .= ("minimal" :: Text)])
+    -- The effort, and a summary of the reasoning, for the panel.
+    field "reasoning" request `shouldBe` Just (object ["effort" .= ("low" :: Text), "summary" .= ("auto" :: Text)])
+    field "reasoning" (openAiRequest "gpt-6.1-sol" "minimal") `shouldBe` Just (object ["effort" .= ("minimal" :: Text), "summary" .= ("auto" :: Text)])
     field "max_output_tokens" request `shouldBe` Nothing
     field "tools" request `shouldBe` Just openAiTools
     encode (openAiRequest "gpt-6.1-sol" "low") `shouldBe` encode request

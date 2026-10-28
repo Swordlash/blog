@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+The assistant's default effort is medium, on both providers (WP5.11), and
+is the user's own choice per provider. `ProviderSettings.effort` is now a
+`Maybe Text`, the effort chosen for new conversations; `Nothing` means
+`defaultEffort`, and `effortOf` gives the effort to use. `withEffort` stores
+the default itself as `Nothing`. The JSON field is `defaultEffort`, written
+only when an effort is chosen. The old `effort` field is not read: it held
+the effort last picked in the chat, or the old default, low, so settings
+stored before read as medium.
+
+The requests ask for a summary of the model's thinking, which the chat
+shows as it streams: Anthropic's `anthropicRequest` has `thinking: {type:
+"adaptive", display: "summarized"}`, and OpenAI's `openAiRequest` has
+`reasoning.summary: "auto"`.
+
+
 The audit log names `user.password-link` (WP5.6): "Mailed a user a link to
 choose a password".
 

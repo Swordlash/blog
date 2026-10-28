@@ -41,6 +41,7 @@ module Wiki.Core.Assistant
   , listStale
   , efforts
   , defaultEffort
+  , effortOf
 
     -- * Settings
   , Settings (..)
@@ -317,11 +318,18 @@ efforts = \case
   OpenAI -> ["minimal", "low", "medium", "high"]
   Scripted -> efforts Anthropic
 
--- | Low, for both providers: editing a page is quick work, and a model
--- that thinks less responds sooner and costs less. The panel offers higher
--- efforts.
+-- | The effort a new conversation starts with when the user has chosen
+-- none in the settings: medium, for both providers. The owner found low
+-- too shallow for editing a whole page. The settings page changes it per
+-- provider ('withEffort'), and the chat's picker changes it for one
+-- conversation.
 defaultEffort :: Text
-defaultEffort = "low"
+defaultEffort = "medium"
+
+-- | The effort a new conversation with a provider starts with: the one
+-- chosen in the settings, or else 'defaultEffort'.
+effortOf :: ProviderSettings -> Text
+effortOf ps = fromMaybe defaultEffort ps.effort
 
 -- | 'ProviderSettings': what a user has set for one provider.
 data ProviderSettings = ProviderSettings
@@ -329,8 +337,9 @@ data ProviderSettings = ProviderSettings
   -- ^ The API key, if one was given.
   , model :: Maybe Text
   -- ^ The chosen model, if any ('chosenModel').
-  , effort :: Text
-  -- ^ The reasoning effort ('efforts').
+  , effort :: Maybe Text
+  -- ^ The effort chosen for new conversations ('efforts'), if any.
+  -- 'Nothing' means 'defaultEffort' ('effortOf').
   , baseUrl :: Maybe Text
   -- ^ The base URL requests go to, if not the provider's own: for OpenAI,
   -- any service that implements its API ('baseUrlOf').
@@ -357,12 +366,12 @@ defaultSettings = Settings {provider = Anthropic, byProvider = mempty}
 
 -- | The settings of a provider before anything is set.
 noSettings :: ProviderSettings
-noSettings = ProviderSettings {key = Nothing, model = Nothing, effort = defaultEffort, baseUrl = Nothing, fetched = Nothing, unreachable = False}
+noSettings = ProviderSettings {key = Nothing, model = Nothing, effort = Nothing, baseUrl = Nothing, fetched = Nothing, unreachable = False}
 
 -- | Whether settings are the same as 'defaultSettings': no key, the first
--- provider, no model chosen, every effort at its default, no base URL of
--- another service, and nothing learnt about a provider. Such settings need
--- not be stored.
+-- provider, no model chosen, no effort chosen, no base URL of another
+-- service, and nothing learnt about a provider. Such settings need not be
+-- stored.
 blankSettings :: Settings -> Bool
 blankSettings s = s.provider == Anthropic && all (== noSettings) (Map.elems s.byProvider)
 
@@ -391,9 +400,12 @@ withKey p k = alter p $ \(ProviderSettings old m e b f u) ->
 withModel :: Provider -> Text -> Settings -> Settings
 withModel p m = alter p $ \(ProviderSettings k _ e b f u) -> ProviderSettings k (trimmed (Just m)) e b f u
 
--- | The settings with a provider's effort set; one it does not offer means its default.
+-- | The settings with a provider's default effort for new conversations
+-- set. The default itself, or an effort the provider does not offer, is
+-- stored as no effort chosen. So settings that hold only the default stay
+-- blank, and a later change of 'defaultEffort' reaches them.
 withEffort :: Provider -> Text -> Settings -> Settings
-withEffort p e = alter p $ \(ProviderSettings k m _ b f u) -> ProviderSettings k m (if e `elem` efforts p then e else defaultEffort) b f u
+withEffort p e = alter p $ \(ProviderSettings k m _ b f u) -> ProviderSettings k m (if e `elem` efforts p && e /= defaultEffort then Just e else Nothing) b f u
 
 -- | The settings with a provider's base URL set ('baseUrlOf'), an empty
 -- one meaning the provider's own. What was learnt at the old URL is
@@ -474,26 +486,34 @@ ready s = readyFor s.provider s
 -- provider (its model list is fetched with them); or what is missing.
 readyFor :: Provider -> Settings -> Either Text Ready
 readyFor p s
-  | usable p ps = Right Ready {provider = p, model = chosenModel p ps, key = fromMaybe "" ps.key, effort = ps.effort, baseUrl = baseUrlOf p ps}
+  | usable p ps = Right Ready {provider = p, model = chosenModel p ps, key = fromMaybe "" ps.key, effort = effortOf ps, baseUrl = baseUrlOf p ps}
   | otherwise = Left ("There is no API key for " <> providerLabel p <> " yet: add one in the assistant's settings.")
   where
     ps = settingsOf p s
 
 -- | Stored as one JSON object: the chosen provider, and an object per
 -- provider that has settings, under its 'providerKey'. Each has its
--- @key@, @model@, @effort@ and @baseUrl@, its model list as @models@ with
--- the fetch time as @modelsAt@, and @unreachable@ when it is set.
+-- @key@ and @model@, its @defaultEffort@ when one was chosen, its
+-- @baseUrl@, its model list as @models@ with the fetch time as
+-- @modelsAt@, and @unreachable@ when it is set.
+--
+-- The effort is stored as @defaultEffort@. Settings stored before WP5.11
+-- have an @effort@ field instead. That field held the effort last picked
+-- in the chat, or the old default, low, for every provider. It is not
+-- read: such settings read as the new default, medium, until the user
+-- chooses an effort on the settings page.
 instance ToJSON Settings where
   toJSON s =
     object $
       ("provider" .= providerKey s.provider)
-        : [ Key.fromText (providerKey p) .= object (["key" .= ps.key, "model" .= ps.model, "effort" .= ps.effort] <> learnt ps)
+        : [ Key.fromText (providerKey p) .= object (["key" .= ps.key, "model" .= ps.model] <> learnt ps)
           | (p, ps) <- Map.toList s.byProvider
           ]
     where
       learnt :: ProviderSettings -> [Pair]
       learnt ps =
-        maybe [] (\u -> ["baseUrl" .= u]) ps.baseUrl
+        maybe [] (\e -> ["defaultEffort" .= e]) ps.effort
+          <> maybe [] (\u -> ["baseUrl" .= u]) ps.baseUrl
           <> maybe [] (\l -> ["models" .= l.listed, "modelsAt" .= l.fetchedAt]) ps.fetched
           <> ["unreachable" .= True | ps.unreachable]
 
@@ -514,7 +534,7 @@ instance FromJSON Settings where
           <$> o
           .:? "key"
           <*> o .:? "model"
-          <*> (o .:? "effort" .!= defaultEffort)
+          <*> o .:? "defaultEffort"
           <*> o .:? "baseUrl"
           <*> pure (ModelList <$> listing <*> at)
           <*> (o .:? "unreachable" .!= False)

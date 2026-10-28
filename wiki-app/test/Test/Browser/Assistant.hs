@@ -7,12 +7,18 @@
 -- undone as usual) or rejected; two edits in one turn, an insertion at the
 -- end, and Reject all; an edit whose text is not in the page, refused with
 -- the tool's answer and followed by the model's text; a turn stopped, by
--- Stop and by closing the panel; an error shown without anything like a
--- key in it; the models offered, the provider's own list grouped; a
--- bubble per provider with a key, or one without any; a provider that
--- cannot be reached, said so and tried again; OpenAI's API at another
--- address without a key; and the settings page: keys kept per user,
--- forgotten, and tested, and the list of models fetched with a key. The
+-- Stop and by closing the panel; what the panel shows while the model
+-- works: "Thinking" with its dots, the seconds waited and the thinking's
+-- summary, a status line while a tool call is written, a cursor at the
+-- end of streaming text, and the time and duration of each message;
+-- Close and Escape; the effort, from the settings' default and changed
+-- for one conversation; an error shown without anything like a key in
+-- it; the models offered, the provider's own list grouped; a bubble per
+-- provider with a key, or one without any; a provider that cannot be
+-- reached, said so and tried again; OpenAI's API at another address
+-- without a key; and the settings page: keys kept per user, forgotten,
+-- and tested, the list of models fetched with a key, and the default
+-- effort per provider. The
 -- providers themselves cannot be reached from here (the script answers
 -- for all of them on a test's page): they are tested over their SDKs by
 -- toolchain/test-assistant.mjs.
@@ -22,6 +28,7 @@ import Control.Monad.UUID (MonadUUID)
 import Data.Aeson (Value, decodeStrict, encode, object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types qualified as Aeson
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
@@ -35,7 +42,7 @@ import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Assistant (Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withKey)
+import Wiki.Core.Assistant (Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey)
 import Wiki.Core.Id (UserId (..))
 
 $( browserJS
@@ -58,10 +65,11 @@ spec m = do
     _ <- unsafeIOToPageM (js_select 16 38)
     chip <- find ui ".assistant-scope .assistant-chip"
     chip `shouldHaveText` "line 3×"
-    -- The effort, chosen under the message, goes with it, and is kept.
-    find ui ".assistant-effort" >>= (`getProperty` "value") >>= (`shouldBe` "low")
+    -- The effort starts at the default, medium. One chosen under the
+    -- message goes with the message, and the settings keep their default.
+    find ui ".assistant-effort" >>= (`getProperty` "value") >>= (`shouldBe` "medium")
     _ <- unsafeIOToPageM (js_choose (toJSText ".assistant-effort") (toJSText "high"))
-    eventually $ (\s -> (settingsOf Scripted s).effort) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` "high")
+    eventually $ find ui ".assistant-effort" >>= (`getProperty` "value") >>= (`shouldBe` "high")
     send ui "Make it sound newer."
     eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "I will make it the very first. Done.")
     find ui ".assistant-made" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Replaced")
@@ -77,6 +85,7 @@ spec m = do
     [request] <- requests
     fieldText ["request", "system", "0", "text"] request `shouldSatisfy` maybe False (T.isPrefixOf "# Writing pages")
     fieldText ["request", "output_config", "effort"] request `shouldBe` Just "high"
+    (\s -> (settingsOf Scripted s).effort) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
     let user = fromMaybe "" (fieldText ["user"] request)
     user `shouldSatisfy` T.isInfixOf "<selection>\nThis is the first post\n</selection>"
     user `shouldSatisfy` T.isInfixOf "<before>\n# Hello, world\n\n\n</before>"
@@ -142,8 +151,11 @@ spec m = do
     ui <- openAssistant m
     send ui "Go on."
     eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Working")
+    -- The streaming text ends in a cursor, which goes when the message ends.
+    _ <- find ui ".assistant-message.from-model .assistant-text .assistant-cursor"
     find ui ".assistant-stop" >>= click
     eventually $ find ui ".assistant-stopped" >>= (`shouldHaveText` "Stopped.")
+    length <$> findAll ui ".assistant-cursor" `shouldReturn` 0
     find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Working")
     find ui ".cm-wiki-inserted" >>= (`shouldHaveText` "## Why")
     _ <- find ui ".assistant-send"
@@ -164,6 +176,81 @@ spec m = do
     send ui "Once more."
     eventually $ length <$> findAll ui ".assistant-message.from-user" `shouldReturn` 2
     eventually $ findAll ui ".assistant-message.from-model .assistant-text" >>= traverse textContent >>= (`shouldBe` ["Thinking it over", "Again."])
+
+  it "shows Thinking with three dots until the first text, the seconds waited, and the thinking's summary, kept as Thought" $ runPage $ do
+    script [[thinking "Weighing the words.", quiet 4000, text "Here it is."]]
+    ui <- openAssistant m
+    send ui "Go on."
+    eventually $ find ui ".assistant-message.from-model .assistant-thinking" >>= textContent >>= (`shouldSatisfy` T.isPrefixOf "Thinking")
+    length <$> findAll ui ".assistant-message.from-model .assistant-dots span" `shouldReturn` 3
+    length <$> findAll ui ".assistant-message.from-model .assistant-text" `shouldReturn` 0
+    -- The summary of the thinking, collapsed under the line; a click opens it.
+    eventually $ find ui "details.assistant-thinking .assistant-thinking-text" >>= (`shouldHaveText` "Weighing the words.")
+    find ui "details.assistant-thinking" >>= (`getProperty` "open") >>= (`shouldBe` "false")
+    find ui "details.assistant-thinking summary" >>= click
+    find ui "details.assistant-thinking" >>= (`getProperty` "open") >>= (`shouldBe` "true")
+    -- After a few seconds without anything from the model, the seconds
+    -- waited, beside the dots.
+    waited <- eventuallyWithin 5000 $ find ui ".assistant-thinking .assistant-waited" >>= textContent
+    waited `shouldSatisfy` T.isSuffixOf " s"
+    -- The first text ends the wait: the line goes, and the summary stays
+    -- at the top of the message as Thought.
+    eventuallyWithin 5000 $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Here it is.")
+    eventually $ length <$> findAll ui ".assistant-thinking" `shouldReturn` 0
+    find ui ".assistant-thought-text" >>= (`shouldHaveText` "Weighing the words.")
+
+  it "says the page is being edited while the model writes a tool call, and shows the edit's note once it is made" $ runPage $ do
+    script [[pausing 1500 (replace "## Why a wiki" "## Why"), text "Retitled."]]
+    ui <- openAssistant m
+    send ui "Retitle it."
+    eventually $ find ui ".assistant-message.from-model .assistant-status" >>= textContent >>= (`shouldSatisfy` T.isPrefixOf "Editing the page")
+    length <$> findAll ui ".assistant-made" `shouldReturn` 0
+    eventuallyWithin 4000 $ find ui ".assistant-made" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "Replaced")
+    length <$> findAll ui ".assistant-status" `shouldReturn` 0
+    eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Retitled.")
+
+  it "shows the time of each message, and how long a finished answer took" $ runPage $ do
+    script [[quiet 1200, text "Done."]]
+    ui <- openAssistant m
+    send ui "Hello?"
+    eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "Done.")
+    asked <- find ui ".assistant-message.from-user .assistant-time" >>= textContent
+    asked `shouldSatisfy` (\t -> T.isInfixOf ":" t && T.any isDigit t)
+    find ui ".assistant-message.from-model .assistant-time" >>= textContent >>= (`shouldBe` asked)
+    eventually $ find ui ".assistant-message.from-model .assistant-took" >>= textContent >>= (`shouldSatisfy` (`elem` ["1 s", "2 s", "3 s"]))
+
+  it "closes with Close in its header, and with Escape in the message box" $ runPage $ do
+    script []
+    ui <- openAssistant m
+    close <- find ui ".assistant-head .assistant-close"
+    close `shouldHaveText` "Close"
+    click close
+    eventually $ find ui ".editor-assistant" >>= shouldBeHidden
+    find ui scriptedButton >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "false")
+    find ui scriptedButton >>= click
+    eventually $ find ui ".editor-assistant" >>= shouldBeVisible
+    find ui ".assistant-input" >>= focus
+    press "Escape"
+    eventually $ find ui ".editor-assistant" >>= shouldBeHidden
+    find ui scriptedButton >>= (`getAttribute` "aria-pressed") >>= (`shouldBe` Just "false")
+
+  it "starts the chat's effort at the settings' default, and a change in the chat stays with the conversation" $ runPage $ do
+    script [[text "One."], [text "Two."]]
+    keep m (UserId "user-editor") (withEffort Scripted "xhigh" (chooseProvider Scripted defaultSettings))
+    ui <- openAssistantKept m
+    find ui ".assistant-effort" >>= (`getProperty` "value") >>= (`shouldBe` "xhigh")
+    send ui "First."
+    eventually $ find ui ".assistant-message.from-model .assistant-text" >>= (`shouldHaveText` "One.")
+    eventually $ find ui ".assistant-effort" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing)
+    _ <- unsafeIOToPageM (js_choose (toJSText ".assistant-effort") (toJSText "low"))
+    eventually $ find ui ".assistant-effort" >>= (`getProperty` "value") >>= (`shouldBe` "low")
+    send ui "Second."
+    eventually $ length <$> requests `shouldReturn` 2
+    [firstAsked, secondAsked] <- requests
+    fieldText ["request", "output_config", "effort"] firstAsked `shouldBe` Just "xhigh"
+    fieldText ["request", "output_config", "effort"] secondAsked `shouldBe` Just "low"
+    -- The settings keep their default.
+    (\s -> (settingsOf Scripted s).effort) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just "xhigh")
 
   it "opens with a provider from its button, and switching starts a new conversation with the changes kept" $ runPage $ do
     script [[replace "## Why a wiki" "## Why", text "Retitled."], [text "Claude here."]]
@@ -318,6 +405,25 @@ spec m = do
     findIn scripted ".assistant-test" >>= click
     eventually $ findIn scripted ".assistant-check-works" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "The key works")
 
+  it "chooses each provider's default effort on the settings page, medium unless one is chosen" $ runPage $ do
+    scriptWith [] (object ["anthropic" .= take 2 scriptedModels])
+    keep m (UserId "user-editor") (withKey Anthropic (Just "sk-ant-test") defaultSettings)
+    (ui, _) <- startWith m (Just "user-editor") AssistantSettings
+    anthropic <- find ui ".assistant-provider-settings[data-provider='anthropic']"
+    findIn anthropic ".assistant-default-effort" >>= (`getProperty` "value") >>= (`shouldBe` "medium")
+    findAllIn anthropic ".assistant-default-effort option" >>= traverse textContent >>= (`shouldBe` ["low", "medium (default)", "high", "xhigh", "max"])
+    openai <- find ui ".assistant-provider-settings[data-provider='openai']"
+    findAllIn openai ".assistant-default-effort option" >>= traverse textContent >>= (`shouldBe` ["minimal", "low", "medium (default)", "high"])
+    let choose effort = do
+          eventually $ findIn anthropic ".assistant-default-effort" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing)
+          void (unsafeIOToPageM (js_choose (toJSText ".assistant-provider-settings[data-provider='anthropic'] .assistant-default-effort") (toJSText effort)))
+    choose "high"
+    eventually $ (\s -> (settingsOf Anthropic s).effort) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just "high")
+    (\s -> (settingsOf OpenAI s).effort) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
+    -- The default chosen again is kept as none chosen.
+    choose "medium"
+    eventually $ (\s -> (settingsOf Anthropic s).effort) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Nothing)
+
 -- | The editor on the demo's first post, as its author, with the scripted
 -- provider chosen and the panel open; and the page's Markdown.
 openAssistantWith
@@ -418,6 +524,20 @@ insert anchor place t = object ["tool" .= ("insert" :: Text), "input" .= object 
 
 hold :: Value
 hold = object ["hold" .= True]
+
+-- | A summary of thinking, streamed.
+thinking :: Text -> Value
+thinking t = object ["thinking" .= t]
+
+-- | A pause of so many milliseconds, before the next step.
+quiet :: Int -> Value
+quiet ms = object ["wait" .= ms]
+
+-- | A tool call that the model takes so many milliseconds to write: the
+-- call starts, and is made after the pause.
+pausing :: Int -> Value -> Value
+pausing ms (Aeson.Object o) = Aeson.Object (o <> KeyMap.fromList [("pause", Aeson.toJSON ms)])
+pausing _ other = other
 
 failing :: Text -> Int -> Text -> Value
 failing kind status message = object ["error" .= object ["kind" .= kind, "status" .= status, "message" .= message]]

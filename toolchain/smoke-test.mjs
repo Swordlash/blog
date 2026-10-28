@@ -55,9 +55,11 @@
 //    that what it holds back (app.wasm, until the page is marked) is held
 //    back: a worker's own requests and what it answers from its cache pass
 //    by Playwright's routes.
-// 5. The writing assistant (WP4.19), with the scripted provider: its
-//    settings from the user menu, and its panel in the editor, whose
-//    model's edit is tracked in the text and accepted.
+// 5. The writing assistant (WP4.19, WP5.11), with the scripted provider:
+//    its settings from the user menu, with a default effort, and its panel
+//    in the editor: "Thinking" and the edit's status while the model works,
+//    the times of the messages, the model's edit tracked in the text and
+//    accepted, and Close.
 //
 // HALOGEN_BASE_PATH is the base path the build was made for, as
 // toolchain/build-wasm.sh takes it (/ when unset): GitHub Pages serves the
@@ -1296,8 +1298,9 @@ try {
         },
         turns: [
           [
+            { thinking: "Weighing the heading.", wait: 1500 },
             { text: "Retitled. " },
-            { tool: "replace", input: { old_text: "## Why a wiki", new_text: "## Why this is a wiki" } },
+            { tool: "replace", input: { old_text: "## Why a wiki", new_text: "## Why this is a wiki" }, pause: 1500 },
             { text: "Done." },
           ],
         ],
@@ -1327,6 +1330,11 @@ try {
     await claude.locator(".assistant-key").fill("sk-ant-smoke");
     await claude.locator(".assistant-key-form button[type='submit']").click();
     await claude.locator(".assistant-listed", { hasText: "2 models fetched" }).waitFor({ timeout });
+    // The scripted provider's default effort, high, for new conversations.
+    const scriptedEffort = writer.locator("#app .assistant-provider-settings[data-provider='scripted'] .assistant-default-effort");
+    assert.equal(await scriptedEffort.inputValue(), "medium", "the default effort is not medium");
+    await scriptedEffort.selectOption("high");
+    await eventually(async () => assert.equal(await scriptedEffort.isDisabled(), false), "the default effort kept");
     // The editor's panel: a message, the model's edit a tracked change in
     // the text, accepted.
     await writer.goto(url("/s/blog/p/hello-world/edit/"));
@@ -1349,23 +1357,36 @@ try {
         ["All models", ["Claude Opus 4.8"]],
       ],
     );
-    // The effort under the message, which goes with it.
-    await writer.locator("#app .assistant-effort").selectOption("medium");
+    // The effort under the message starts at the settings' default; one
+    // chosen there goes with the message.
+    await eventually(async () => assert.equal(await writer.locator("#app .assistant-effort").inputValue(), "high"), "the chat's effort starting at the default");
+    await writer.locator("#app .assistant-effort").selectOption("low");
     await writer.locator("#app .assistant-input").fill("Retitle the second heading.");
     await writer.locator("#app .assistant-send").click();
+    // While the model works: "Thinking" with its summary, then the status
+    // of the edit it is writing.
+    await writer.locator("#app .assistant-message.from-model .assistant-thinking", { hasText: "Thinking" }).waitFor({ timeout });
+    await writer.locator("#app .assistant-message.from-model .assistant-thinking-text", { hasText: "Weighing the heading." }).waitFor({ state: "attached", timeout });
+    await writer.locator("#app .assistant-message.from-model .assistant-status", { hasText: "Editing the page" }).waitFor({ timeout });
     await writer.locator("#app .cm-wiki-inserted", { hasText: "## Why this is a wiki" }).waitFor({ timeout });
     await writer.locator("#app .cm-wiki-removed", { hasText: "## Why a wiki" }).waitFor({ timeout });
     await writer.locator("#app .assistant-message.from-model .assistant-text", { hasText: "Retitled. Done." }).waitFor({ timeout });
+    // The time of each message, and how long the answer took.
+    await writer.locator("#app .assistant-message.from-model .assistant-took").waitFor({ timeout });
+    assert.equal(await writer.locator("#app .assistant-message .assistant-time").count(), 2, "a message without its time");
     await writer.locator("#app .assistant-accept-all").click();
     await writer.locator("#app .cm-wiki-inserted").waitFor({ state: "detached", timeout });
     assert.match(await markdownIn(writer), /\n## Why this is a wiki\n/);
     assert.equal(
       await writer.evaluate(() => globalThis.wikiAssistantScript.requests[0].request.output_config.effort),
-      "medium",
+      "low",
       "the effort chosen did not go with the message",
     );
+    // Close, in the panel's header.
+    await writer.locator("#app .assistant-head .assistant-close", { hasText: "Close" }).click();
+    await writer.locator("#app .editor-assistant").waitFor({ state: "hidden", timeout });
     await writer.context().close();
-    console.log("ok: the assistant's settings, a key kept with its list of models, its providers' bubbles and its panel, with the scripted provider: its models grouped, the effort chosen sent, an edit tracked in the text and accepted; the providers' island loads");
+    console.log("ok: the assistant's settings, a key kept with its list of models, a default effort, its providers' bubbles and its panel, with the scripted provider: its models grouped, the effort starting at the default and the one chosen sent, Thinking and the edit's status while the model works, the times of the messages, an edit tracked in the text and accepted, Close; the providers' island loads");
   }
 } catch (error) {
   // What the page reported is usually why it did not get there.

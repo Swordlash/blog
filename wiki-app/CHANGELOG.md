@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+The writing assistant's chat shows that the model is working (WP5.11).
+From Send until the first text, the model's message shows "Thinking" with
+three animated dots (still when the reader prefers reduced motion). After
+three seconds without anything from the model, a count of the seconds
+waited appears beside the dots. The summary of the model's thinking streams
+under the line, collapsed until clicked, and stays at the top of the
+message as "Thought" once the model goes on. While the model writes a tool
+call, a status line says "Editing the page"; the edit's note replaces it
+once the edit is made. Streaming text ends in a blinking cursor. Each
+message shows the time it was sent, by the browser's clock, and a finished
+answer shows how long it took. The island (`web/src/assistant.js`) and
+`jsbits/assistant.js` report two more events for this: `thinking`, the
+summary's text as it streams, and `tool-start`, when the model begins a
+tool call (`Wiki.App.Assistant.Heard`'s `HeardThinking` and
+`HeardToolStart`). The scripted provider takes `{thinking}` steps, a
+`pause` on a tool step, and a step of `{wait}` alone.
+
+The panel closes with a "Close" button in its header, which replaces the
+`×`, and with Escape in the message box (`Wiki.App.Assistant.closesPanel`).
+The provider's bubble still closes it too.
+
+The effort a new conversation starts with is chosen per provider on the
+assistant's settings page ("Effort"), and is medium unless chosen. The
+picker under the chat starts at that default and changes the effort for the
+current conversation only; it no longer writes the settings.
+
 The live channel's socket waits a random 70 % to 130 % of its pause
 before it opens again (WP5.16a), so that the tabs a server restart
 disconnected do not all connect again in the same instant.

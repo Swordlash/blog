@@ -305,20 +305,31 @@ maxTokens :: Int
 maxTokens = 32_000
 
 -- | A request to Anthropic's Messages API, without its messages, which the
--- browser-side code adds. It holds the model, the tools, and the system
+-- browser-side code adds. It holds the model, the tools, the system
 -- prompt, with the reference first and both blocks marked for caching
 -- (the reference alone is about seven thousand tokens, above every
--- model's minimum), and the effort chosen in the panel. It has no
--- @thinking@ field: the Claude 5 models think adaptively, as much as the
--- effort asks, and refuse a request that turns thinking off or gives it a
--- budget. A change of effort between messages invalidates Anthropic's
--- cache of the conversation, but not of the system prompt before it.
+-- model's minimum), the effort chosen for the conversation, and adaptive
+-- thinking with its summary shown.
+--
+-- Adaptive thinking (@thinking.type@ @adaptive@) is how the Claude 5
+-- models think anyway: as much as the effort asks. They refuse a request
+-- that turns thinking off or gives it a budget. @display: summarized@
+-- makes the API stream a summary of the thinking, which the panel shows
+-- under "Thinking…". At a low effort a model may think little or not at
+-- all and send no summary; the panel then shows "Thinking…" alone. Older
+-- models (Claude Haiku 4.5, Opus 4.5) refuse adaptive thinking. The
+-- browser-side code then sends the request again without @thinking@
+-- (@web/src/assistant.js@).
+--
+-- A change of effort between messages invalidates Anthropic's cache of
+-- the conversation, but not of the system prompt before it.
 anthropicRequest :: Text -> Text -> Value
 anthropicRequest model effort =
   object
     [ "model" .= model
     , "max_tokens" .= maxTokens
     , "output_config" .= object ["effort" .= effort]
+    , "thinking" .= object ["type" .= ("adaptive" :: Text), "display" .= ("summarized" :: Text)]
     , "system" .= toJSONList [cached markdownReference, cached instructions]
     , "tools" .= anthropicTools
     ]
@@ -331,10 +342,16 @@ anthropicRequest model effort =
 -- is cached), the tools, and asks OpenAI to store nothing (@store@
 -- false). So the whole conversation is sent each time, with the model's
 -- reasoning as OpenAI returned it (encrypted, since OpenAI stores none of
--- it). Reasoning is as brief as the effort chosen in the panel asks ("low"
--- by default), and no limit is set on the response's length: a reasoning
--- model given a small budget spends it all on reasoning and responds with
+-- it). Reasoning is as brief as the effort chosen for the conversation
+-- asks, and no limit is set on the response's length: a reasoning model
+-- given a small budget spends it all on reasoning and responds with
 -- nothing.
+--
+-- @reasoning.summary@ @auto@ asks for a summary of the reasoning. The
+-- summary streams before the response, and the panel shows it under
+-- "Thinking…". OpenAI refuses the summary to an organisation it has not
+-- verified. The browser-side code then sends the request again without
+-- it (@web/src/assistant.js@).
 openAiRequest :: Text -> Text -> Value
 openAiRequest model effort =
   object
@@ -343,5 +360,5 @@ openAiRequest model effort =
     , "tools" .= openAiTools
     , "store" .= False
     , "include" .= ["reasoning.encrypted_content" :: Text]
-    , "reasoning" .= object ["effort" .= effort]
+    , "reasoning" .= object ["effort" .= effort, "summary" .= ("auto" :: Text)]
     ]

@@ -3,12 +3,15 @@
 -- | The assistant settings page: the writing assistant's settings, a page
 -- of the signed-in user's own ("Assistant" in the account menu; WP4.19 of
 -- docs/PLAN.md). It holds an API key per provider, the provider the
--- assistant uses, and the model to use. The model is one from the
--- provider's own list, or any other id typed in. The list is fetched with
--- the key when the key is saved or tested and on "Refresh the list", and
--- grouped into the recommended models and all the others
+-- assistant uses, the model to use, and the effort a new conversation
+-- starts with. The model is one from the provider's own list, or any
+-- other id typed in. The list is fetched with the key when the key is
+-- saved or tested and on "Refresh the list", and grouped into the
+-- recommended models and all the others
 -- ('Wiki.Core.Assistant.modelChoices'). Until there is a key, the list is
--- the wiki's short list.
+-- the wiki's short list. The effort ("Effort") is medium unless the user
+-- chooses another ('Wiki.Core.Assistant.defaultEffort'). The chat's own
+-- picker changes the effort for one conversation only.
 --
 -- The assistant is bring-your-own-key (decision 21). A key belongs to the
 -- user and is billed by its provider. It stays in this browser, stored
@@ -67,6 +70,9 @@ import Wiki.Core.Assistant
   , baseUrlOf
   , chooseProvider
   , chosenModel
+  , defaultEffort
+  , effortOf
+  , efforts
   , errorText
   , insecureUrl
   , keyPage
@@ -79,6 +85,7 @@ import Wiki.Core.Assistant
   , settingsOf
   , usable
   , withBaseUrl
+  , withEffort
   , withKey
   , withModel
   , withModels
@@ -124,6 +131,7 @@ data Action
   | Test Provider
   | Refresh Provider
   | TypedBaseUrl Provider Text
+  | ChooseEffort Provider Text
 
 component :: forall query output m. (MonadAssistant m, MonadIO m) => H.Component query Input output m
 component =
@@ -286,6 +294,15 @@ component =
             {% end %}
             {{ listingView }}
           </fieldset>
+          <label class="field assistant-effort-field">
+            <span>Effort</span>
+            <select class="assistant-default-effort" disabled={{ st.busy }} onValueChange={{ ChooseEffort p }}>
+              {% for e in efforts p %}
+                <option value={{ e }} selected={{ effortOf ps == e }}>{{ effortName e }}</option>
+              {% end %}
+            </select>
+          </label>
+          <p class="account-note assistant-effort-hint">How hard the model thinks before it answers, at the start of each conversation. A higher effort answers more carefully, more slowly, and costs more. The chat can change it for one conversation.</p>
           {{ checkView }}
         </section>
       |]
@@ -306,6 +323,7 @@ component =
           Just (Fetched n) -> Just [hh|<p class="assistant-listing assistant-listed" role="status">{{ show n :: Text }} models fetched from {{ providerLabel p }}, {{ show (length choices.recommended + length choices.others) :: Text }} of them offered for a chat.</p>|]
           Just (NotFetched why) -> Just [hh|<p class="error assistant-listing assistant-not-listed" role="alert">The list of models could not be fetched. {{ why }}</p>|]
         typedModel = Map.findWithDefault "" p st.typedModels
+        effortName e = if e == defaultEffort then e <> " (default)" else e
         checking = case Map.lookup p st.checks of
           Just Checking -> True
           _ -> False
@@ -371,6 +389,7 @@ component =
             when (isNothing result) (fetchModels p)
           _ -> pass
       Refresh p -> fetchModels p
+      ChooseEffort p e -> change (withEffort p e)
       TypedBaseUrl p url -> do
         change (withBaseUrl p url)
         modify (\st -> st {checks = Map.delete p st.checks, listings = Map.delete p st.listings})
