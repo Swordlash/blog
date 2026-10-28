@@ -5,6 +5,7 @@
 module Wiki.Core.User
   ( User (..)
   , Login (..)
+  , Password (..)
   , Standing (..)
   , SignInProvider (..)
   , Group (..)
@@ -13,7 +14,7 @@ module Wiki.Core.User
 
     -- * Accounts
   , parseLogin
-  , checkPassword
+  , checkNewPassword
   , minimumPasswordLength
   , maximumPasswordLength
   )
@@ -24,6 +25,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Protolude
+import Text.Show (Show (showsPrec))
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import Wiki.Core.Id
 
@@ -48,6 +50,20 @@ data User = User
 newtype Login = Login {text :: Text}
   deriving stock (Eq, Ord, Show, Generic)
   deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
+
+-- | 'Password': a password as someone typed it, to sign in or to set. Its
+-- 'Show' instance prints @Password <hidden>@ and never the password, so
+-- that a password cannot reach a log through 'show', nor through the
+-- 'Show' of a request that holds one. A 'Password' is not checked: a
+-- password typed to sign in has no rules, and a wrong one is refused by
+-- its hash. 'checkNewPassword' applies the rules for a new password. The
+-- JSON is the bare text.
+newtype Password = Password {text :: Text}
+  deriving stock (Eq, Generic)
+  deriving newtype (FromJSON, ToJSON)
+
+instance Show Password where
+  showsPrec _ _ rest = "Password <hidden>" <> rest
 
 -- | 'Standing': how the current requester is identified, which decides
 -- whether they may sign in or out. A requester who is not signed in may
@@ -113,16 +129,16 @@ parseLogin raw
   where
     login = T.strip raw
 
--- | The password, or why it is invalid: shorter than
+-- | A new password, or why it is invalid: shorter than
 -- 'minimumPasswordLength' characters, or longer than
 -- 'maximumPasswordLength'. The server hashes a valid password. The demo,
 -- which has no passwords, checks them all the same, so that its
 -- administration refuses what the server's would.
-checkPassword :: Text -> Either Text Text
-checkPassword p
+checkNewPassword :: Password -> Either Text Password
+checkNewPassword (Password p)
   | T.length p < minimumPasswordLength = Left ("A password needs at least " <> show minimumPasswordLength <> " characters.")
   | T.length p > maximumPasswordLength = Left ("A password has at most " <> show maximumPasswordLength <> " characters.")
-  | otherwise = Right p
+  | otherwise = Right (Password p)
 
 -- | The shortest password a backend accepts: NIST's minimum for a password
 -- chosen by its user (SP 800-63B).

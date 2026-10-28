@@ -22,6 +22,7 @@ import Wiki.Api.Security (EmailState (..), RecoveryCodes, SecondFactorState (..)
 import Wiki.App.Account (SignInError (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Mem (MemWiki)
+import Wiki.Core.User (Password (..))
 
 -- | 'MonadSecurity': the security of one's own account.
 class (Monad m) => MonadSecurity m where
@@ -56,8 +57,8 @@ class (Monad m) => MonadSecurity m where
   -- | Start setting up a second factor, with the current password where
   -- the user has one. The result is a secret for their authenticator
   -- application. 'WrongCredentials' for a wrong password.
-  enrolTotp :: Maybe Text -> m (Either SignInError TotpEnrolment)
-  default enrolTotp :: (MonadTrans t, m ~ t n, MonadSecurity n) => Maybe Text -> m (Either SignInError TotpEnrolment)
+  enrolTotp :: Maybe Password -> m (Either SignInError TotpEnrolment)
+  default enrolTotp :: (MonadTrans t, m ~ t n, MonadSecurity n) => Maybe Password -> m (Either SignInError TotpEnrolment)
   enrolTotp = lift . enrolTotp
 
   -- | Turn the second factor on with a code from the application. The
@@ -82,8 +83,8 @@ class (Monad m) => MonadSecurity m where
   -- | Set an address (a verification link is mailed there), or none
   -- (blank), with the current password where the user has one and the
   -- address changes. 'WrongCredentials' for a wrong password.
-  setOwnEmail :: Text -> Maybe Text -> m (Either SignInError EmailState)
-  default setOwnEmail :: (MonadTrans t, m ~ t n, MonadSecurity n) => Text -> Maybe Text -> m (Either SignInError EmailState)
+  setOwnEmail :: Text -> Maybe Password -> m (Either SignInError EmailState)
+  default setOwnEmail :: (MonadTrans t, m ~ t n, MonadSecurity n) => Text -> Maybe Password -> m (Either SignInError EmailState)
   setOwnEmail e = lift . setOwnEmail e
 
 -- | A component's handlers ask through its monad.

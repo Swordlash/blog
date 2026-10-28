@@ -84,6 +84,7 @@ import Data.Time (NominalDiffTime, UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
+import Wiki.Core.User (Password)
 
 --------------------------------------------------------------------------------
 -- Sessions
@@ -146,12 +147,9 @@ instance Show TotpEnrolment where
 -- | 'CurrentPassword': the requesting user's password, where they have
 -- one, for an action a session alone does not allow: @POST
 -- \/api\/v1\/account\/second-factor\/totp@.
-newtype CurrentPassword = CurrentPassword {password :: Maybe Text}
-  deriving stock (Eq, Generic)
+newtype CurrentPassword = CurrentPassword {password :: Maybe Password}
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
-instance Show CurrentPassword where
-  showsPrec _ c rest = "CurrentPassword {password = " <> maybe "Nothing" (const "Just <hidden>") c.password <> "}" <> rest
 
 -- | 'OneTimeCode': a code from an authenticator application, or a recovery
 -- code. It confirms a second factor, completes a sign-in, and removes a
@@ -199,13 +197,10 @@ data EmailState = EmailState
 -- where the user has one.
 data EmailChange = EmailChange
   { email :: Text
-  , password :: Maybe Text
+  , password :: Maybe Password
   }
-  deriving stock (Eq, Generic)
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
-instance Show EmailChange where
-  showsPrec _ c rest = "EmailChange {email = " <> show c.email <> ", password = " <> maybe "Nothing" (const "Just <hidden>") c.password <> "}" <> rest
 
 -- | 'AccountEmail': a user's address, as the administration sees it.
 data AccountEmail = AccountEmail
@@ -237,12 +232,9 @@ newtype ResetRequest = ResetRequest {login :: Text}
 
 -- | 'NewPasswordByMail': the new password a reset link sets, @POST
 -- \/api\/v1\/password-reset\/\<secret>@.
-newtype NewPasswordByMail = NewPasswordByMail {password :: Text}
-  deriving stock (Eq, Generic)
+newtype NewPasswordByMail = NewPasswordByMail {password :: Password}
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
-instance Show NewPasswordByMail where
-  showsPrec _ _ rest = "NewPasswordByMail {password = <hidden>}" <> rest
 
 -- | How long a reset link is valid: thirty minutes, enough time to read
 -- one's mail, and short enough that a link left in a mailbox soon stops

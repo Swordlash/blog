@@ -189,7 +189,7 @@ import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), folded, queryWords, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
-import Wiki.Core.User (Group (..), Login (..), Standing (..), User (..), checkPassword, parseLogin)
+import Wiki.Core.User (Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
@@ -836,7 +836,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   createUser new =
     run Reads requireAccountCreator >>= \case
       Left e -> pure (Left e)
-      Right () -> case (,) <$> parseLogin new.login <*> checkPassword new.password of
+      Right () -> case (,) <$> parseLogin new.login <*> checkNewPassword new.password of
         Left why -> pure (Left (Invalid why))
         Right (login, password) -> do
           phc <- liftIO (hashPassword password)
@@ -854,7 +854,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   setPassword u password =
     run Reads (requireAdministrator >> findUser u >>= requirePasswordToSet) >>= \case
       Left e -> pure (Left e)
-      Right _ -> case checkPassword password of
+      Right _ -> case checkNewPassword password of
         Left why -> pure (Left (Invalid why))
         Right p -> do
           phc <- liftIO (hashPassword p)

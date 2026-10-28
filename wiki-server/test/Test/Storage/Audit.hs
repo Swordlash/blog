@@ -32,7 +32,7 @@ import Wiki.Core.Permission (SpacePermission (..))
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Slug (slugText)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
-import Wiki.Core.User (Group (..), Login (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Import (applyImport)
 import Wiki.Server.Storage
@@ -131,7 +131,7 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     summary made `shouldBe` ("user.administrator", "user", "reader", [("administrator", "yes")])
     creates <- recordsOne st (as st "admin" (setCreateSpaces rita.id True))
     summary creates `shouldBe` ("user.create-spaces", "user", "reader", [("creates spaces", "yes")])
-    password <- recordsOne st (as st "admin" (setPassword rita.id "a new password of hers"))
+    password <- recordsOne st (as st "admin" (setPassword rita.id (Password "a new password of hers")))
     summary password `shouldBe` ("user.password", "user", "reader", [])
     disabled <- recordsOne st (as st "admin" (setDisabled rita.id True))
     summary disabled `shouldBe` ("user.disable", "user", "reader", [])
@@ -173,7 +173,7 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     revoked.subject.id `shouldBe` Just i.id.text
 
   it "the console's writes, as the operator's from the console, and an account someone makes, with a password or a provider" $ withDemo $ \st -> do
-    made <- recordsOne st (Accounts.createAccount st "cleo" "Cleo" (Just "a password of hers"))
+    made <- recordsOne st (Accounts.createAccount st "cleo" "Cleo" (Just (Password "a password of hers")))
     summary made `shouldBe` ("user.create", "user", "cleo", [("login", "cleo"), ("name", "Cleo")])
     made.actor `shouldBe` operator
     made.address `shouldBe` "console"
@@ -199,7 +199,7 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     imported.address `shouldBe` "127.0.0.1"
     Map.lookup "pages kept" imported.detail `shouldSatisfy` isJust
   where
-    newAccount login displayName = NewAccount {login, displayName, password = "a password of theirs", email = Nothing}
+    newAccount login displayName = NewAccount {login, displayName, password = Password "a password of theirs", email = Nothing}
 
 secrets :: Spec
 secrets = describe "never holds a secret" $ do

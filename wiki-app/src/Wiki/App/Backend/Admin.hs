@@ -46,7 +46,7 @@
 -- as a hash (decision 8 of the plan). Their login follows
 -- 'Wiki.Core.User.checkLogin' and differs from every other user's,
 -- ignoring case ('Conflict' otherwise). A blank display name becomes the
--- login. A password follows 'Wiki.Core.User.checkPassword' ('Invalid'
+-- login. A password follows 'Wiki.Core.User.checkNewPassword' ('Invalid'
 -- otherwise). Setting a new password, and disabling a login, end the
 -- user's sessions. A disabled user cannot sign in, stays in the
 -- 'directory', and keeps their pages and grants. A user who signs in with
@@ -136,7 +136,7 @@ import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (GroupId, InvitationId, UserId)
-import Wiki.Core.User (Group)
+import Wiki.Core.User (Group, Password (..))
 
 -- | 'MonadAdmin' is the administration's backend interface: the wiki's
 -- users, groups and settings, as an administrator sees and changes them.
@@ -171,8 +171,8 @@ class (Monad m) => MonadAdmin m where
   -- their account. 'Invalid' for a user who has no password to set: one
   -- who signs in with one of the server's providers
   -- ('Wiki.Api.Admin.Directory.providerOnly').
-  setPassword :: UserId -> Text -> m (Either WikiError Account)
-  default setPassword :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Text -> m (Either WikiError Account)
+  setPassword :: UserId -> Password -> m (Either WikiError Account)
+  default setPassword :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Password -> m (Either WikiError Account)
   setPassword u = lift . setPassword u
 
   -- | Mail a user, at their verified address, the link to choose a new

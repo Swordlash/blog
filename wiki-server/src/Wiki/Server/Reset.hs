@@ -53,8 +53,9 @@ import Wiki.Api.Admin (checkEmail)
 import Wiki.Api.Security (MailToken (..), resetLifetime, verificationLifetime)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.User (Password)
 import Wiki.Server.Accounts (immediately)
-import Wiki.Server.Password (checkPassword, hashPassword, newToken, tokenHash)
+import Wiki.Server.Password (checkNewPassword, hashPassword, newToken, tokenHash)
 import Wiki.Server.Storage (Storage, readServerSettings, withDatabase)
 import Wiki.Server.Storage.Rows (Stamp (..), deleteSessionsOf, insertResetToken, noPasswordToSet, providerNames, resetsSince, updatePasswordHash)
 
@@ -203,8 +204,8 @@ forgetReset st token = withDatabase st $ \c -> execute c "DELETE FROM reset_toke
 -- not work; 'Invalid' for an invalid password (checked first, which uses
 -- nothing up), and for a user who has no password to set because they sign
 -- in with one of the server's providers (the link stays unused).
-resetPassword :: Storage -> UTCTime -> MailToken -> Text -> IO (Either WikiError ())
-resetPassword st now token new = case checkPassword new of
+resetPassword :: Storage -> UTCTime -> MailToken -> Password -> IO (Either WikiError ())
+resetPassword st now token new = case checkNewPassword new of
   Left why -> pure (Left (Invalid why))
   Right password -> do
     configured <- providerNames <$> readServerSettings st

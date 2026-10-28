@@ -1,4 +1,4 @@
--- | Tests of the rules for a new account's login ("Wiki.Core.User").
+-- | Tests of the rules for a new account's login and password ("Wiki.Core.User").
 module Test.User (spec) where
 
 import Data.Aeson (decode, encode)
@@ -25,3 +25,17 @@ spec = describe "Wiki.Core.User" $ do
     it "is the bare text in JSON, which decoding does not check" $ do
       encode (Login "ada") `shouldBe` "\"ada\""
       decode "\"~x\"" `shouldBe` Just (Login "~x")
+
+  describe "checkNewPassword" $ do
+    it "takes a password of 8 to 1024 characters" $ do
+      checkNewPassword (Password "eight 88") `shouldBe` Right (Password "eight 88")
+      checkNewPassword (Password (T.replicate 1024 "x")) `shouldSatisfy` isRight
+    it "refuses a shorter or a longer one" $ do
+      checkNewPassword (Password "seven 7") `shouldBe` Left "A password needs at least 8 characters."
+      checkNewPassword (Password (T.replicate 1025 "x")) `shouldBe` Left "A password has at most 1024 characters."
+
+  describe "Password" $ do
+    it "never shows the password" $
+      (show (Password "hunter2") :: Text) `shouldBe` "Password <hidden>"
+    it "is the bare text in JSON" $
+      encode (Password "hunter2") `shouldBe` "\"hunter2\""

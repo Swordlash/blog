@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+A password is a `Password` (WP5.15), a newtype over `Text` whose `Show`
+prints `Password <hidden>`. `checkNewPassword :: Password -> Either Text
+Password` replaces `checkPassword`, with the same rules for a new password.
+A `Password` itself is not checked: a password typed to sign in has no
+rules.
+
 A login is a `Login` (WP5.15, `docs/newtypes.md`), a newtype over
 `Text`: `User.login`, the audit's `Actor.login`, and the login of a
 comment's author in an archive. `parseLogin` replaces `checkLogin`: it

@@ -29,7 +29,7 @@ import Wiki.Api.Security (MailToken)
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Backend (Session (..), WikiError (..))
 import Wiki.App.View.Common (errorMessage)
-import Wiki.Core.User (User (..), minimumPasswordLength)
+import Wiki.Core.User (Password (..), User (..), minimumPasswordLength)
 
 data Input m = Input
   { accounts :: Maybe (Accounts m)
@@ -133,7 +133,7 @@ component =
                 modify (\s -> s {problem = Just "The new password and its repetition are not the same."})
             | otherwise -> do
                 modify (\s -> s {busy = True, problem = Nothing})
-                lift (a.resetPassword st.input.token st.typedPassword) >>= \case
+                lift (a.resetPassword st.input.token (Password st.typedPassword)) >>= \case
                   Right () -> modify (\s -> s {busy = False, done = True, typedPassword = "", typedRepeat = ""})
                   Left NotFound ->
                     modify (\s -> s {busy = False, problem = Just "This link no longer works: it has been used, or it has expired. Ask for a new one with \"Forgot your password?\" under the sign-in form."})

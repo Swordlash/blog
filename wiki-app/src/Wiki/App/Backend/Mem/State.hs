@@ -202,7 +202,7 @@ import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
-import Wiki.Core.User (Group (..), Login (..), Membership, Standing (..), User (..), checkPassword, parseLogin)
+import Wiki.Core.User (Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
 import Wiki.Core.Version qualified as V
 
@@ -1289,7 +1289,7 @@ createUserIn new st = do
   requireAdministrator st
   require st.adminCreatesPasswordAccounts
   login <- first Invalid (parseLogin new.login)
-  _ <- first Invalid (checkPassword new.password)
+  _ <- first Invalid (checkNewPassword new.password)
   for_ (find (\u -> T.toCaseFold u.login.text == T.toCaseFold login.text) (Map.elems st.users)) $ \_ ->
     Left (Conflict ("There is a user with the login " <> login.text <> " already."))
   let (i, st1) = newId "user" st
@@ -1298,11 +1298,11 @@ createUserIn new st = do
   pure (st2, accountIn st2 u)
 
 -- | Give a user a new password, which the demo does not store.
-setPasswordIn :: UserId -> Text -> Write Account
+setPasswordIn :: UserId -> Password -> Write Account
 setPasswordIn uid password st = do
   requireAdministrator st
   u <- findUser st uid
-  _ <- first Invalid (checkPassword password)
+  _ <- first Invalid (checkNewPassword password)
   let st1 = st {passwords = Set.insert uid st.passwords}
   pure (st1, accountIn st1 u)
 

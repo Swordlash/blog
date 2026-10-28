@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Passwords are `Password` in the backend classes (WP5.15): `signIn`,
+`resetPassword`, `setPassword`, `enrolTotp` and `setOwnEmail` take one. The
+forms wrap what was typed when they submit it.
+
 Presenting shows a slide's steps (WP5.20). The right arrow, Space and
 PageDown show the next step before the next slide; the left arrow and
 PageUp hide the last step, or go back to the slide before, whole; End goes

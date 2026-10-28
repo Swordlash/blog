@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Every password in a request is a `Password` (WP5.15, from
+`Wiki.Core.User`): `Credentials`, `NewAccount`, `NewPassword`,
+`PasswordChange`, `CurrentPassword`, `EmailChange` and
+`NewPasswordByMail`. Their `Show` instances are now derived, since
+`Password`'s own never shows the password. The JSON is unchanged.
+
 The upload forms take servant-multipart's backend as a parameter
 (WP5.16c): `AttachmentUpload tag`, `ArchiveUpload tag` and `ImportApply
 tag`, whose file is `MultipartResult tag` (the field `bytes` of

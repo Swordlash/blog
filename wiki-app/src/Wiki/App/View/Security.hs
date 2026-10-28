@@ -63,6 +63,7 @@ import Wiki.App.Backend (WikiError)
 import Wiki.App.Editor.Browser (focusElement)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.View.Common (attr, errorMessage)
+import Wiki.Core.User (Password (..))
 
 data State = State
   { available :: Bool
@@ -391,7 +392,7 @@ component =
             modify (\st -> st {askingPassword = True, typedPassword = "", factorProblem = Nothing})
             focusPassword
           _ -> enrol Nothing
-      SubmitTotpPassword -> gets (\st -> st.typedPassword) >>= enrol . Just
+      SubmitTotpPassword -> gets (\st -> st.typedPassword) >>= enrol . Just . Password
       CancelTotpPassword -> modify (\st -> st {askingPassword = False, typedPassword = "", factorProblem = Nothing})
       TypedPassword t -> modify (\st -> st {typedPassword = t})
       CancelTotp -> modify (\st -> st {enrolment = Nothing, typedCode = "", factorProblem = Nothing})
@@ -433,7 +434,7 @@ component =
             modify (\st -> st {emailForm = RemovingEmail, typedPassword = "", emailProblem = Nothing, emailTold = Nothing})
             focusPassword
           _ -> emailChange "" Nothing
-      ConfirmClear -> gets (\st -> st.typedPassword) >>= emailChange "" . Just
+      ConfirmClear -> gets (\st -> st.typedPassword) >>= emailChange "" . Just . Password
 
     -- Run something while nothing else may run.
     busily :: H.HalogenM State Action Empty output m () -> H.HalogenM State Action Empty output m ()
@@ -445,7 +446,7 @@ component =
 
     -- Start setting up a second factor, with the password if it was asked
     -- for.
-    enrol :: Maybe Text -> H.HalogenM State Action Empty output m ()
+    enrol :: Maybe Password -> H.HalogenM State Action Empty output m ()
     enrol password = busily $ do
       modify (\st -> st {factorProblem = Nothing})
       lift (enrolTotp password) >>= \case
@@ -455,9 +456,9 @@ component =
           focusCode
 
     -- The typed password, where the address's state says it is asked for.
-    passwordIfAsked :: State -> Maybe Text
+    passwordIfAsked :: State -> Maybe Password
     passwordIfAsked st = case st.mailbox of
-      Just (Right e) | e.asksPassword -> Just st.typedPassword
+      Just (Right e) | e.asksPassword -> Just (Password st.typedPassword)
       _ -> Nothing
 
     focusPassword :: H.HalogenM State Action Empty output m ()
@@ -473,7 +474,7 @@ component =
         Left e -> modify (\st -> st {sessionsProblem = Just (errorMessage e)})
         Right ss -> modify (\st -> st {sessions = Just (Right ss)})
 
-    emailChange :: Text -> Maybe Text -> H.HalogenM State Action Empty output m ()
+    emailChange :: Text -> Maybe Password -> H.HalogenM State Action Empty output m ()
     emailChange address password = busily $ do
       modify (\st -> st {emailProblem = Nothing, emailTold = Nothing})
       lift (setOwnEmail address password) >>= \case

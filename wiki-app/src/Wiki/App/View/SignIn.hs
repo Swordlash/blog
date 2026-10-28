@@ -90,7 +90,7 @@ import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
 import Wiki.App.View.Security qualified as SecurityView
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Permission (Grants (..))
-import Wiki.Core.User (SignInProvider (..), Standing (..), User (..), minimumPasswordLength)
+import Wiki.Core.User (Password (..), SignInProvider (..), Standing (..), User (..), minimumPasswordLength)
 
 data Input m = Input
   { accounts :: Accounts m
@@ -523,7 +523,7 @@ component =
         st <- get
         unless st.busy $ do
           modify (\s -> s {busy = True, problem = Nothing})
-          result <- lift (st.input.accounts.signIn st.typedLogin st.typedPassword)
+          result <- lift (st.input.accounts.signIn st.typedLogin (Password st.typedPassword))
           case result of
             Left SecondFactorNeeded -> do
               modify (\s -> s {busy = False, step = AtCode, typedPassword = "", typedCode = "", notice = Nothing, problem = Nothing})
@@ -576,7 +576,7 @@ component =
         st <- get
         unless st.busy $ do
           modify (\s -> s {busy = True, problem = Nothing})
-          result <- lift (st.input.accounts.register NewAccount {login = st.typedLogin, displayName = st.typedName, password = st.typedPassword, email = Nothing})
+          result <- lift (st.input.accounts.register NewAccount {login = st.typedLogin, displayName = st.typedName, password = Password st.typedPassword, email = Nothing})
           case result of
             Left e -> modify (\s -> s {busy = False, problem = Just (accountErrorText e)})
             Right s -> do
@@ -618,7 +618,7 @@ component =
                 modify (\s -> s {passwordProblem = Just "The new password and its repetition are not the same."})
             | otherwise -> do
                 modify (\s -> s {busy = True, passwordProblem = Nothing})
-                let change = PasswordChange {current = if m.password then Just st.typedCurrent else Nothing, new = st.typedNew}
+                let change = PasswordChange {current = if m.password then Just (Password st.typedCurrent) else Nothing, new = Password st.typedNew}
                 lift (st.input.accounts.changePassword change) >>= \case
                   Left e -> modify (\s -> s {busy = False, passwordProblem = Just (passwordErrorText e)})
                   Right after ->

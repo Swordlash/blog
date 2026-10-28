@@ -71,6 +71,7 @@ import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken, NewAccount, PasswordChange, SignInMethods)
 import Wiki.Api.Security (MailToken)
 import Wiki.App.Backend (Session, WikiError (..))
+import Wiki.Core.User (Password (..))
 
 -- | Why signing in did not work.
 data SignInError
@@ -127,8 +128,8 @@ passwordErrorText = \case
 -- | 'MonadAccount': signing in and out, and the account's own settings.
 class (Monad m) => MonadAccount m where
   -- | Sign in with a login and a password. The result is the new session.
-  signIn :: Text -> Text -> m (Either SignInError Session)
-  default signIn :: (MonadTrans t, m ~ t n, MonadAccount n) => Text -> Text -> m (Either SignInError Session)
+  signIn :: Text -> Password -> m (Either SignInError Session)
+  default signIn :: (MonadTrans t, m ~ t n, MonadAccount n) => Text -> Password -> m (Either SignInError Session)
   signIn login = lift . signIn login
 
   -- | Sign out. The result is the new session, of nobody.
@@ -198,8 +199,8 @@ class (Monad m) => MonadAccount m where
   -- | Set a new password with a reset link: every session of the user
   -- ends, and nobody is signed in. 'NotFound' for a link that no longer
   -- works.
-  resetPassword :: MailToken -> Text -> m (Either WikiError ())
-  default resetPassword :: (MonadTrans t, m ~ t n, MonadAccount n) => MailToken -> Text -> m (Either WikiError ())
+  resetPassword :: MailToken -> Password -> m (Either WikiError ())
+  default resetPassword :: (MonadTrans t, m ~ t n, MonadAccount n) => MailToken -> Password -> m (Either WikiError ())
   resetPassword t = lift . resetPassword t
 
   -- | Follow a link that verifies an e-mail address. 'NotFound' for one
@@ -214,7 +215,7 @@ instance (MonadAccount m) => MonadAccount (HalogenM st act slots output m)
 -- | The class's methods as values, given to the shell on a backend that
 -- has them.
 data Accounts m = Accounts
-  { signIn :: Text -> Text -> m (Either SignInError Session)
+  { signIn :: Text -> Password -> m (Either SignInError Session)
   , signOut :: m (Either WikiError Session)
   , sessionChanges :: m (Emitter IO Session)
   , register :: NewAccount -> m (Either SignInError Session)
@@ -225,7 +226,7 @@ data Accounts m = Accounts
   , changePassword :: PasswordChange -> m (Either SignInError SignInMethods)
   , confirmSecondFactor :: Text -> m (Either SignInError Session)
   , requestPasswordReset :: Text -> m (Either SignInError ())
-  , resetPassword :: MailToken -> Text -> m (Either WikiError ())
+  , resetPassword :: MailToken -> Password -> m (Either WikiError ())
   , verifyEmail :: MailToken -> m (Either WikiError ())
   }
 

@@ -40,7 +40,7 @@ import Wiki.Api.ServerSettings (ProviderChange, ProviderKind (..), ProviderSetti
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.User (Login (..), SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Login (..), Password (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Server.Accounts (Claimed (..), loginCandidates)
 import Wiki.Server.Auth (safeNext)
 import Wiki.Server.Console (OidcCheck (..), runOidcCheck)
@@ -355,10 +355,10 @@ overHttp = describe "over HTTP" $ do
       c <- signedInWith r "acme" "next=%2F" []
       Just me <- (\s -> s.user) <$> sessionOf r [c]
       (\d -> me.id `Set.member` d.providerOnly) <$> usersNow r `shouldReturn` True
-      own <- sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Nothing, new = "solo's own password"}
+      own <- sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Nothing, new = Password "solo's own password"}
       own.status `shouldBe` 400
       own `says` "no password to set"
-      given <- sendJson r methodPut (onAdmin r (links.admin.setPassword me.id)) NewPassword {password = "given by the administrator"}
+      given <- sendJson r methodPut (onAdmin r (links.admin.setPassword me.id)) NewPassword {password = Password "given by the administrator"}
       given.status `shouldBe` 400
       given `says` "no password to set"
       mailed <- send r methodPost (onAdmin r (links.admin.sendPasswordLink me.id)) [] ""
@@ -367,7 +367,7 @@ overHttp = describe "over HTTP" $ do
       -- Nothing was set: the provider is still the only way in.
       methods :: SignInMethods <- getUrlWith r (onPublic r links.account.identities) [c] >>= jsonAs 200
       methods.password `shouldBe` False
-      (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "solo", password = "solo's own password"} `shouldReturn` 401
+      (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "solo", password = Password "solo's own password"} `shouldReturn` 401
 
     it "lets a user whose provider is removed from the server set a password, without a current one, and then sign in with it" $ withOidc $ \fake r -> do
       writeIORef fake.user (person "solo")
@@ -378,27 +378,27 @@ overHttp = describe "over HTTP" $ do
       d <- usersNow r
       (lookup me.id (toPairs d.identities), me.id `Set.member` d.providerOnly) `shouldBe` (Just ["acme"], False)
       set :: SignInMethods <-
-        sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Nothing, new = "solo's own password"} >>= jsonAs 200
+        sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Nothing, new = Password "solo's own password"} >>= jsonAs 200
       (set.password, map (\i -> i.provider) set.identities) `shouldBe` (True, ["acme"])
       -- Still signed in, and now with a password too.
       loginOf <$> sessionOf r [c] `shouldReturn` Just "solo"
-      signedIn <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "solo", password = "solo's own password"}
+      signedIn <- sendJson r methodPost (onPublic r links.signIn) Credentials {login = "solo", password = Password "solo's own password"}
       signedIn.status `shouldBe` 200
       -- From now on, changing it asks for it, the provider back or not.
       _ <- setServer r (signingInWith (fakeProviders fake))
-      (.status) <$> sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Nothing, new = "another password"} `shouldReturn` 401
-      (.status) <$> sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Just "solo's own password", new = "another password"} `shouldReturn` 200
+      (.status) <$> sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Nothing, new = Password "another password"} `shouldReturn` 401
+      (.status) <$> sendJson' r methodPut (onPublic r links.account.changePassword) [c] PasswordChange {current = Just (Password "solo's own password"), new = Password "another password"} `shouldReturn` 200
 
     it "lets an administrator give a password to a user whose last provider they disconnected" $ withOidc $ \fake r -> do
       writeIORef fake.user (person "ex")
       c <- signedInWith r "acme" "next=%2F" []
       Just me <- (\s -> s.user) <$> sessionOf r [c]
-      (.status) <$> sendJson r methodPut (onAdmin r (links.admin.setPassword me.id)) NewPassword {password = "given by the administrator"} `shouldReturn` 400
+      (.status) <$> sendJson r methodPut (onAdmin r (links.admin.setPassword me.id)) NewPassword {password = Password "given by the administrator"} `shouldReturn` 400
       (.status) <$> send r methodDelete (onAdmin r (links.admin.unlinkIdentity me.id "acme")) [] "" `shouldReturn` 204
       (\d -> me.id `Set.member` d.providerOnly) <$> usersNow r `shouldReturn` False
-      account :: Account <- sendJson r methodPut (onAdmin r (links.admin.setPassword me.id)) NewPassword {password = "given by the administrator"} >>= jsonAs 200
+      account :: Account <- sendJson r methodPut (onAdmin r (links.admin.setPassword me.id)) NewPassword {password = Password "given by the administrator"} >>= jsonAs 200
       account.hasPassword `shouldBe` True
-      (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "ex", password = "given by the administrator"} `shouldReturn` 200
+      (.status) <$> sendJson r methodPost (onPublic r links.signIn) Credentials {login = "ex", password = Password "given by the administrator"} `shouldReturn` 200
 
     it "lets an administrator disconnect one, which ends the user's sessions" $ withOidc $ \fake r -> do
       writeIORef fake.user (person "ex")

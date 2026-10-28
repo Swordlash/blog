@@ -10,8 +10,9 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
 import Wiki.Api.Account (Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Error (ApiError (..))
-import Wiki.Api.Security (MailToken (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), TotpEnrolment (..))
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), MailToken (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), TotpEnrolment (..))
 import Wiki.Api.Types (SpaceName (..))
+import Wiki.Core.User (Password (..))
 
 -- | A property that values of a type, as the generator makes them, come
 -- back from their JSON unchanged.
@@ -57,11 +58,13 @@ spec = describe "JSON" $ do
   it "never shows a password, so that none ends up in a log" $ do
     let shown :: Text
         shown =
-          show (Credentials "ada" "hunter2")
-            <> show (NewAccount "ada" "Ada" "hunter2" Nothing)
-            <> show (NewPassword "hunter2")
-            <> show (PasswordChange (Just "hunter2") "hunter2")
-            <> show (NewPasswordByMail "hunter2")
+          show (Credentials "ada" (Password "hunter2"))
+            <> show (NewAccount "ada" "Ada" (Password "hunter2") Nothing)
+            <> show (NewPassword (Password "hunter2"))
+            <> show (PasswordChange (Just (Password "hunter2")) (Password "hunter2"))
+            <> show (NewPasswordByMail (Password "hunter2"))
+            <> show (CurrentPassword (Just (Password "hunter2")))
+            <> show EmailChange {email = "ada@example.org", password = Just (Password "hunter2")}
             <> show (OneTimeCode "hunter2")
             <> show (RecoveryCodes ["hunter2"])
             <> show (MailToken "hunter2")
@@ -75,4 +78,4 @@ spec = describe "JSON" $ do
     (decode "{\"error\":\"Forbidden\",\"message\":\"ignored\"}" :: Maybe ApiError) `shouldBe` Just Forbidden
 
   it "reads a change of password without a current one, for a user who has none" $
-    decode "{\"new\":\"a new password\"}" `shouldBe` Just PasswordChange {current = Nothing, new = "a new password"}
+    decode "{\"new\":\"a new password\"}" `shouldBe` Just PasswordChange {current = Nothing, new = Password "a new password"}

@@ -112,7 +112,7 @@ import Wiki.Core.Id
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Search (SearchQuery (..))
-import Wiki.Core.User (Login (..), User (..))
+import Wiki.Core.User (Login (..), Password, User (..))
 import Wiki.Core.Version (VersionsQuery (VersionsQuery), versionsPageSize)
 import Wiki.Server.Accounts (endSession)
 import Wiki.Server.Accounts qualified as Accounts
@@ -756,7 +756,7 @@ handlers env caller =
     -- Check the signed-in user's current password, which some changes
     -- need besides the session. A wrong password counts as a failed
     -- sign-in.
-    reauthenticated :: UserId -> Maybe Text -> Handler ()
+    reauthenticated :: UserId -> Maybe Password -> Handler ()
     reauthenticated u given = do
       s <- signingHere
       login <- loginOf u

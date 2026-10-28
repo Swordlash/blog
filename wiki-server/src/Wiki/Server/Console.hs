@@ -64,7 +64,7 @@ import Wiki.Api.Account (Account (..))
 import Wiki.Api.ServerSettings (ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, providerProblems, redirectUri)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (removeSecondFactor))
-import Wiki.Core.User (Login (..), User (..))
+import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdministrator, setDisabled, setPassword)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
 import Wiki.Server.Secret (revealed)
@@ -123,7 +123,7 @@ usersParser =
 
 -- | Run a command, with this way of reading a password. The result is the
 -- lines to show, or why it could not be done.
-runUsers :: (Text -> IO (Either Text Text)) -> Users -> IO (Either Text [Text])
+runUsers :: (Text -> IO (Either Text Password)) -> Users -> IO (Either Text [Text])
 runUsers askPassword u = withStorageAside u.dataDir $ \st -> runExceptT $ case u.command of
   ListUsers -> do
     accounts <- liftIO (listAccounts st)
@@ -198,18 +198,18 @@ listing accounts = row heading : map (row . cells) accounts
 
 -- | Read a user's password: asked for twice on the terminal, without
 -- echoing it, or, when standard input is not a terminal, its first line.
-readPassword :: Text -> IO (Either Text Text)
+readPassword :: Text -> IO (Either Text Password)
 readPassword login = do
   terminal <- hIsTerminalDevice stdin
   if terminal
     then do
       first' <- silently ("Password for " <> login <> ": ")
       second' <- silently "Again, to be sure: "
-      pure (if first' == second' then Right first' else Left "The two passwords differ; nothing was changed.")
+      pure (if first' == second' then Right (Password first') else Left "The two passwords differ; nothing was changed.")
     else do
       line <- try @IOException (TIO.hGetLine stdin)
       pure $ case line of
-        Right l | not (T.null (T.dropWhileEnd (== '\r') l)) -> Right (T.dropWhileEnd (== '\r') l)
+        Right l | not (T.null (T.dropWhileEnd (== '\r') l)) -> Right (Password (T.dropWhileEnd (== '\r') l))
         _ -> Left "No password on standard input: give it as the first line, or run this on a terminal to be asked."
   where
     silently :: Text -> IO Text

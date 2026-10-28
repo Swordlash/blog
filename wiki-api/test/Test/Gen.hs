@@ -57,7 +57,7 @@ import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), Grants (..), SpaceGrant (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
-import Wiki.Core.User (Login (..), SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Login (..), Password (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | Any text, Unicode included.
@@ -131,16 +131,16 @@ genSessionInfo = do
   pure SessionInfo {user, groups, grants, standing, providers, exports}
 
 genCredentials :: Gen Credentials
-genCredentials = Credentials <$> genText <*> genText
+genCredentials = Credentials <$> genText <*> (Password <$> genText)
 
 genNewAccount :: Gen NewAccount
-genNewAccount = NewAccount <$> genText <*> genText <*> genText <*> oneof [pure Nothing, Just <$> genText]
+genNewAccount = NewAccount <$> genText <*> genText <*> (Password <$> genText) <*> oneof [pure Nothing, Just <$> genText]
 
 genNewPassword :: Gen NewPassword
-genNewPassword = NewPassword <$> genText
+genNewPassword = NewPassword . Password <$> genText
 
 genPasswordChange :: Gen PasswordChange
-genPasswordChange = PasswordChange <$> genMaybe genText <*> genText
+genPasswordChange = PasswordChange <$> genMaybe (Password <$> genText) <*> (Password <$> genText)
 
 genAccountDisabled :: Gen AccountDisabled
 genAccountDisabled = AccountDisabled <$> arbitrary

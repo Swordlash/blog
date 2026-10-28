@@ -139,8 +139,8 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Audit (Actor (..), Subject (..))
 import Wiki.Core.Id (InvitationId (..), UserId (..))
-import Wiki.Core.User (Login (..), User (..), parseLogin)
-import Wiki.Server.Password (checkPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
+import Wiki.Core.User (Login (..), Password (..), User (..), parseLogin)
+import Wiki.Server.Password (checkNewPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
 import Wiki.Server.Storage (Storage, readServerSettings, readSettings, settingsWith, withDatabase, withReadConnection)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
 import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accountFromRow, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, noPasswordToSet, pendingInvitation, providerNames, refreshIdentity, selectAccounts, totpEnabled, updateDisabled, updatePasswordHash)
@@ -177,10 +177,10 @@ listAccounts st = withDatabase st $ \c -> do
 -- sign in until they are given one. A blank display name becomes the
 -- login. A login another user has, in any case, is a 'Conflict'; an
 -- invalid login or password is 'Invalid'.
-createAccount :: Storage -> Text -> Text -> Maybe Text -> IO (Either WikiError Account)
+createAccount :: Storage -> Text -> Text -> Maybe Password -> IO (Either WikiError Account)
 createAccount st rawLogin rawName password = runExceptT $ do
   login <- either (throwError . Invalid) pure (parseLogin rawLogin)
-  phc <- for password $ \p -> either (throwError . Invalid) (liftIO . hashPassword) (checkPassword p)
+  phc <- for password $ \p -> either (throwError . Invalid) (liftIO . hashPassword) (checkNewPassword p)
   uid <- liftIO (UUID.toText <$> generateV4)
   let name = case T.strip rawName of
         "" -> login.text
@@ -196,8 +196,8 @@ createAccount st rawLogin rawName password = runExceptT $ do
     taken login = Conflict ("There is a user with the login " <> login.text <> " already.")
 
 -- | Give a user a new password, and end their sessions.
-setPassword :: Storage -> UserId -> Text -> IO (Either WikiError Account)
-setPassword st u password = case checkPassword password of
+setPassword :: Storage -> UserId -> Password -> IO (Either WikiError Account)
+setPassword st u password = case checkNewPassword password of
   Left why -> pure (Left (Invalid why))
   Right p -> do
     phc <- hashPassword p
@@ -307,7 +307,7 @@ recordMade c address action detail made = do
 -- login, display name and the password's hash.
 prepared :: NewAccount -> ExceptT WikiError IO (UserId, Login, Text, Maybe Text)
 prepared new = do
-  (login, password) <- either (throwError . Invalid) pure ((,) <$> parseLogin new.login <*> checkPassword new.password)
+  (login, password) <- either (throwError . Invalid) pure ((,) <$> parseLogin new.login <*> checkNewPassword new.password)
   phc <- liftIO (hashPassword password)
   uid <- liftIO (UUID.toText <$> generateV4)
   let name = case T.strip new.displayName of
@@ -525,9 +525,9 @@ data PasswordRefusal
 -- session of theirs ends except the one with this id (from the request's
 -- cookie), if any. The new password is checked before anything is hashed,
 -- and hashed before the connection is taken.
-changePassword :: Storage -> UserId -> Maybe Text -> Maybe Text -> Text -> IO (Either PasswordRefusal SignInMethods)
+changePassword :: Storage -> UserId -> Maybe Text -> Maybe Password -> Password -> IO (Either PasswordRefusal SignInMethods)
 changePassword st u keep current new = runExceptT $ do
-  password <- either (throwError . PasswordRefused . Invalid) pure (checkPassword new)
+  password <- either (throwError . PasswordRefused . Invalid) pure (checkNewPassword new)
   -- Read before the connection is taken, since reading them may take it.
   configured <- liftIO (providerNames <$> readServerSettings st)
   before <- liftIO (withDatabase st (`passwordHashOf` u)) >>= maybe (throwError (PasswordRefused NotFound)) pure
@@ -552,7 +552,7 @@ changePassword st u keep current new = runExceptT $ do
 -- alone may not do (WP4.11 of docs/PLAN.md). 'Just True' for the right
 -- one, and for a user who has none (who signs in only with a provider's
 -- account, and gives none); 'Nothing' for a user who does not exist.
-currentPasswordIs :: Storage -> UserId -> Maybe Text -> IO (Maybe Bool)
+currentPasswordIs :: Storage -> UserId -> Maybe Password -> IO (Maybe Bool)
 currentPasswordIs st u given =
   fmap (maybe True (\phc -> maybe False (verifyPassword phc) given)) <$> withDatabase st (`passwordHashOf` u)
 
@@ -599,9 +599,9 @@ data SignInFailure
 -- unknown login costs the same hashing as a known one, so that the time
 -- the answer takes does not reveal whether a login exists. Sessions that
 -- have ended by themselves are deleted along the way.
-signIn :: Storage -> UTCTime -> Text -> Text -> Text -> IO (Either SignInFailure (User, Text))
+signIn :: Storage -> UTCTime -> Text -> Text -> Password -> IO (Either SignInFailure (User, Text))
 signIn st now address login password
-  | T.length password > 1024 = pure (Left BadPassword)
+  | T.length password.text > 1024 = pure (Left BadPassword)
   | otherwise = do
       found <- withDatabase st $ \c ->
         head <$> query c (selectAccounts "WHERE login = ? COLLATE NOCASE") (Only (T.strip login))

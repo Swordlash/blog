@@ -60,7 +60,7 @@ import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (Standing (..))
+import Wiki.Core.User (Password (..), Standing (..))
 import Wiki.Server (Server (..), withServerUsing)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Message, SendMail, Smtp (..), smtpSend)
@@ -318,14 +318,14 @@ setCookie reply = case T.splitOn "; " . decodeUtf8 <$> header "Set-Cookie" reply
 -- | Give a user a password, as the operator on the admin listener.
 givePassword :: (HasCallStack) => Running -> Text -> Text -> IO ()
 givePassword r uid password = do
-  reply <- sendJson r "PUT" (r.admin <> "/admin/" <> links.admin.setPassword (UserId uid)) NewPassword {password}
+  reply <- sendJson r "PUT" (r.admin <> "/admin/" <> links.admin.setPassword (UserId uid)) NewPassword {password = Password password}
   account :: Account <- jsonAs 200 reply
   unless account.hasPassword $ assertFailure ("no password for " <> toS uid)
 
 -- | Sign in on the public listener: the session id its cookie carries.
 signInAs :: (HasCallStack) => Running -> Text -> Text -> IO Text
 signInAs r login password = do
-  reply <- sendJson r "POST" (r.public <> "/" <> links.signIn) Credentials {login, password}
+  reply <- sendJson r "POST" (r.public <> "/" <> links.signIn) Credentials {login, password = Password password}
   info :: SessionInfo <- jsonAs 200 reply
   unless (info.standing == SignedIn) $ assertFailure ("not signed in: " <> show info)
   maybe (assertFailure ("no session cookie: " <> show reply)) (pure . fst) (setCookie reply)

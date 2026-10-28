@@ -56,7 +56,7 @@ import Wiki.Core.Page qualified as Page (Page (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
-import Wiki.Core.User (Group (..), Login (..), Standing (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), Password (..), Standing (..), User (..))
 import Wiki.Core.Version (VersionInfo)
 
 -- | Refuse a request as the server's handlers will: the error's status, and
@@ -78,7 +78,7 @@ stubs =
     { info = pure ServerInfo {name = "Stub", apiVersion = 1}
     , session = pure Sample.sessionInfo
     , signIn = \c ->
-        if c.login == "ada" && c.password == "secret"
+        if c.login == "ada" && c.password == Password "secret"
           then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
           else refuse Unauthenticated
     , signOut = pure (addHeader "wiki-session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict" Sample.sessionInfo {user = Nothing, standing = NotSignedIn})
@@ -89,7 +89,7 @@ stubs =
     , passwordReset =
         PasswordResetApi
           { request = \body -> if body.login == "" then refuse (Invalid "Give a login.") else pure NoContent
-          , reset = \t body -> if t == MailToken "secret" && body.password == "long enough" then pure NoContent else refuse NotFound
+          , reset = \t body -> if t == MailToken "secret" && body.password == Password "long enough" then pure NoContent else refuse NotFound
           }
     , emailVerification = \t -> if t == MailToken "secret" then pure NoContent else refuse NotFound
     , register = \new ->
@@ -100,7 +100,7 @@ stubs =
         InvitationsApi
           { details = \t -> if t == InvitationToken "secret" then pure Sample.invitationInfo else refuse NotFound
           , accept = \t new ->
-              if t == InvitationToken "secret" && new.password == "long enough"
+              if t == InvitationToken "secret" && new.password == Password "long enough"
                 then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
                 else refuse NotFound
           }
@@ -112,14 +112,14 @@ stubs =
                 then pure (withoutIdentity "github" Sample.signInMethods)
                 else refuse (Conflict "This is the only way you have to sign in.")
           , changePassword = \change ->
-              if change.current == Just "the current one"
+              if change.current == Just (Password "the current one")
                 then pure SignInMethods {password = True, identities = Sample.signInMethods.identities}
                 else refuse Unauthenticated
           , sessions = pure Sample.sessions
           , endSession = \ref -> if ref == SessionRef "4e5f6a7b" then pure (take 1 Sample.sessions) else refuse NotFound
           , endOtherSessions = pure (take 1 Sample.sessions)
           , secondFactorState = pure Sample.secondFactor
-          , enrolTotp = \body -> if body.password == Just "the current one" then pure Sample.enrolment else refuse Unauthenticated
+          , enrolTotp = \body -> if body.password == Just (Password "the current one") then pure Sample.enrolment else refuse Unauthenticated
           , confirmTotp = \body -> if body.code == "287082" then pure RecoveryCodes {codes = ["abcd-efgh-ijkl-mnop"]} else refuse Unauthenticated
           , removeSecondFactor = \body -> if body.code == "287082" then pure SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = True} else refuse Unauthenticated
           , email = pure Sample.emailState
@@ -589,10 +589,10 @@ spec = describe "a server of the API's type" $ do
 
   describe "sessions" $ do
     it "signs in at the session's address, answering with the session and its cookie" $ do
-      r <- sendJson methodPost links.signIn Credentials {login = "ada", password = "secret"}
+      r <- sendJson methodPost links.signIn Credentials {login = "ada", password = Password "secret"}
       (status r, jsonBody r) `shouldBe` (200, Just Sample.sessionInfo)
       header "Set-Cookie" r `shouldBe` Just "wiki-session=token; Path=/; HttpOnly; SameSite=Strict"
-      answers (sendJson methodPost links.signIn Credentials {login = "ada", password = "wrong"}) 401 Unauthenticated
+      answers (sendJson methodPost links.signIn Credentials {login = "ada", password = Password "wrong"}) 401 Unauthenticated
 
     it "signs out there too, answering with nobody and a cookie that clears the session's" $ do
       r <- request methodDelete links.signOut [] ""
@@ -612,8 +612,8 @@ spec = describe "a server of the API's type" $ do
       answers (getAt (links.admin.activity Nothing Nothing Nothing)) 200 Sample.activity {more = False}
 
     it "makes a user with a password, sets one, and disables a login" $ do
-      answers (sendJson methodPost links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = "x", email = Nothing}) 201 Account {user = User {id = UserId "new", login = Login "bea", displayName = "Bea"}, hasPassword = True, disabled = False}
-      answers (sendJson methodPut (links.admin.setPassword (UserId "u7")) NewPassword {password = "y"}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = False}
+      answers (sendJson methodPost links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = Password "x", email = Nothing}) 201 Account {user = User {id = UserId "new", login = Login "bea", displayName = "Bea"}, hasPassword = True, disabled = False}
+      answers (sendJson methodPut (links.admin.setPassword (UserId "u7")) NewPassword {password = Password "y"}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = False}
       answers (sendJson methodPut (links.admin.setDisabled (UserId "u7")) AccountDisabled {disabled = True}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = True}
       links.admin.setDisabled (UserId "u7") `shouldBe` "api/v1/admin/users/u7/disabled"
 
@@ -649,17 +649,17 @@ spec = describe "a server of the API's type" $ do
 
   describe "whom the wiki lets in" $ do
     it "makes an account of one's own at accounts, signing its maker in" $ do
-      r <- sendJson methodPost links.register NewAccount {login = "bea", displayName = "", password = "long enough", email = Nothing}
+      r <- sendJson methodPost links.register NewAccount {login = "bea", displayName = "", password = Password "long enough", email = Nothing}
       (status r, jsonBody r) `shouldBe` (200, Just Sample.sessionInfo)
       header "Set-Cookie" r `shouldSatisfy` isJust
-      answers (sendJson methodPost links.register NewAccount {login = "cy", displayName = "", password = "long enough", email = Nothing}) 403 Forbidden
+      answers (sendJson methodPost links.register NewAccount {login = "cy", displayName = "", password = Password "long enough", email = Nothing}) 403 Forbidden
       links.register `shouldBe` "api/v1/accounts"
 
     it "tells whom an invitation is for by its secret, and accepts it with an account" $ do
       links.invitations.details (InvitationToken "secret") `shouldBe` "api/v1/invitations/secret"
       answers (getAt (links.invitations.details (InvitationToken "secret"))) 200 Sample.invitationInfo
       answers (getAt (links.invitations.details (InvitationToken "other"))) 404 NotFound
-      r <- sendJson methodPost (links.invitations.accept (InvitationToken "secret")) NewAccount {login = "bea", displayName = "Bea", password = "long enough", email = Nothing}
+      r <- sendJson methodPost (links.invitations.accept (InvitationToken "secret")) NewAccount {login = "bea", displayName = "Bea", password = Password "long enough", email = Nothing}
       (status r, jsonBody r) `shouldBe` (200, Just Sample.sessionInfo)
 
     it "reads and changes the wiki's settings, and lists, makes and revokes invitations" $ do
@@ -680,8 +680,8 @@ spec = describe "a server of the API's type" $ do
 
     it "changes the user's own password, with the current one" $ do
       links.account.changePassword `shouldBe` "api/v1/account/password"
-      answers (sendJson methodPut links.account.changePassword PasswordChange {current = Just "the current one", new = "a new one"}) 200 SignInMethods {password = True, identities = Sample.signInMethods.identities}
-      answers (sendJson methodPut links.account.changePassword PasswordChange {current = Nothing, new = "a new one"}) 401 Unauthenticated
+      answers (sendJson methodPut links.account.changePassword PasswordChange {current = Just (Password "the current one"), new = Password "a new one"}) 200 SignInMethods {password = True, identities = Sample.signInMethods.identities}
+      answers (sendJson methodPut links.account.changePassword PasswordChange {current = Nothing, new = Password "a new one"}) 401 Unauthenticated
 
     it "lets the administration disconnect a user's account at a provider" $ do
       links.admin.unlinkIdentity (UserId "u2") "github" `shouldBe` "api/v1/admin/users/u2/identities/github"
@@ -706,7 +706,7 @@ spec = describe "a server of the API's type" $ do
     it "sets up a second factor, confirms it with a code, and takes it away with one" $ do
       links.account.enrolTotp `shouldBe` "api/v1/account/second-factor/totp"
       answers (getAt links.account.secondFactorState) 200 Sample.secondFactor
-      answers (sendJson methodPost links.account.enrolTotp CurrentPassword {password = Just "the current one"}) 200 Sample.enrolment
+      answers (sendJson methodPost links.account.enrolTotp CurrentPassword {password = Just (Password "the current one")}) 200 Sample.enrolment
       answers (sendJson methodPost links.account.enrolTotp CurrentPassword {password = Nothing}) 401 Unauthenticated
       answers (sendJson methodPut links.account.confirmTotp OneTimeCode {code = "287082"}) 200 RecoveryCodes {codes = ["abcd-efgh-ijkl-mnop"]}
       answers (sendJson methodPut links.account.confirmTotp OneTimeCode {code = "000000"}) 401 Unauthenticated
@@ -724,7 +724,7 @@ spec = describe "a server of the API's type" $ do
     it "reads and gives the user's e-mail address, and follows the link that verifies it" $ do
       links.account.email `shouldBe` "api/v1/account/email"
       answers (getAt links.account.email) 200 Sample.emailState
-      answers (sendJson methodPut links.account.setEmail EmailChange {email = "ada@example.com", password = Just "the current one"}) 200 EmailState {email = Just "ada@example.com", verified = False, mailing = True, mailError = Nothing, asksPassword = True}
+      answers (sendJson methodPut links.account.setEmail EmailChange {email = "ada@example.com", password = Just (Password "the current one")}) 200 EmailState {email = Just "ada@example.com", verified = False, mailing = True, mailError = Nothing, asksPassword = True}
       links.emailVerification (MailToken "secret") `shouldBe` "api/v1/email-verification/secret"
       (status <$> request methodPost (links.emailVerification (MailToken "secret")) [] "") `shouldReturn` 204
       answers (request methodPost (links.emailVerification (MailToken "other")) [] "") 404 NotFound
@@ -733,8 +733,8 @@ spec = describe "a server of the API's type" $ do
       links.passwordReset.request `shouldBe` "api/v1/password-reset"
       (status <$> sendJson methodPost links.passwordReset.request ResetRequest {login = "ada"}) `shouldReturn` 204
       links.passwordReset.reset (MailToken "secret") `shouldBe` "api/v1/password-reset/secret"
-      (status <$> sendJson methodPost (links.passwordReset.reset (MailToken "secret")) NewPasswordByMail {password = "long enough"}) `shouldReturn` 204
-      answers (sendJson methodPost (links.passwordReset.reset (MailToken "other")) NewPasswordByMail {password = "long enough"}) 404 NotFound
+      (status <$> sendJson methodPost (links.passwordReset.reset (MailToken "secret")) NewPasswordByMail {password = Password "long enough"}) `shouldReturn` 204
+      answers (sendJson methodPost (links.passwordReset.reset (MailToken "other")) NewPasswordByMail {password = Password "long enough"}) 404 NotFound
 
   describe "a space's permissions" $ do
     it "lists the grants on a space and its ancestors, with whom a grant may be given to" $ do

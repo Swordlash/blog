@@ -32,7 +32,7 @@ module Wiki.Server.Password
 
   -- The rules for a valid password are the same for every backend, so
   -- they live in "Wiki.Core.User".
-  , checkPassword
+  , checkNewPassword
 
     -- * Session ids
   , newToken
@@ -50,7 +50,7 @@ import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Protolude
-import Wiki.Core.User (checkPassword)
+import Wiki.Core.User (Password (..), checkNewPassword)
 
 -- | What a hash is made with: memory in KiB, passes, lanes.
 data Parameters = Parameters
@@ -65,15 +65,15 @@ parameters :: Parameters
 parameters = Parameters {memory = 19 * 1024, iterations = 2, parallelism = 1}
 
 -- | A password's hash, with its own salt, as a PHC string.
-hashPassword :: Text -> IO Text
+hashPassword :: Password -> IO Text
 hashPassword password = do
   salt <- getRandomBytes 16
   pure (hashWith parameters salt password)
 
 -- | A password's hash with these parameters and this salt (at least eight
 -- bytes): how the tests get a known hash.
-hashWith :: Parameters -> ByteString -> Text -> Text
-hashWith p salt password =
+hashWith :: Parameters -> ByteString -> Password -> Text
+hashWith p salt (Password password) =
   T.intercalate
     "$"
     [ ""
@@ -88,8 +88,8 @@ hashWith p salt password =
 -- this module would not have written (another algorithm, a malformed one)
 -- matches no password. The comparison of the hashes takes the same time
 -- whatever they contain.
-verifyPassword :: Text -> Text -> Bool
-verifyPassword phc password = case T.splitOn "$" phc of
+verifyPassword :: Text -> Password -> Bool
+verifyPassword phc (Password password) = case T.splitOn "$" phc of
   ["", "argon2id", "v=19", params, salt64, hash64]
     | Just p <- readParameters params
     , Right salt <- unbase64 salt64

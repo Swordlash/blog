@@ -30,7 +30,7 @@ import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Group (..), Login (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
 
 admin, editor, reader :: As
 admin = As "admin"
@@ -146,9 +146,9 @@ refusing = describe "refusals" $
       run who (removeMember writers.id readerId) >>= (`shouldFailWith` Forbidden)
       run who (setCreateSpaces readerId True) >>= (`shouldFailWith` Forbidden)
       run who (setCreateSpaces nobody True) >>= (`shouldFailWith` Forbidden)
-      run who (createUser NewAccount {login = "", displayName = "", password = "", email = Nothing}) >>= (`shouldFailWith` Forbidden)
-      run who (setPassword readerId "a good password") >>= (`shouldFailWith` Forbidden)
-      run who (setPassword nobody "") >>= (`shouldFailWith` Forbidden)
+      run who (createUser NewAccount {login = "", displayName = "", password = Password "", email = Nothing}) >>= (`shouldFailWith` Forbidden)
+      run who (setPassword readerId (Password "a good password")) >>= (`shouldFailWith` Forbidden)
+      run who (setPassword nobody (Password "")) >>= (`shouldFailWith` Forbidden)
       run who (sendPasswordLink readerId) >>= (`shouldFailWith` Forbidden)
       run who (sendPasswordLink nobody) >>= (`shouldFailWith` Forbidden)
       run who (setDisabled readerId True) >>= (`shouldFailWith` Forbidden)
@@ -230,16 +230,16 @@ creators = describe "setCreateSpaces" $ do
 accounts :: (MonadWiki m, MonadAdmin m) => SpecWith (Fixture m)
 accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" $ do
   it "make a user with a password, listed by login, their login the name if none is given" $ \(Fixture run) -> do
-    made <- run admin (createUser NewAccount {login = " bea ", displayName = "", password = "bea's password", email = Nothing}) >>= ok
+    made <- run admin (createUser NewAccount {login = " bea ", displayName = "", password = Password "bea's password", email = Nothing}) >>= ok
     (made.user.login.text, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("bea", "bea", True, False)
     d <- directoryNow run
     map (\u -> u.login.text) d.users `shouldBe` ["admin", "bea", "editor", "reader"]
     d.withPassword `shouldBe` Set.singleton made.user.id
-    named <- run admin (createUser NewAccount {login = "cid", displayName = " Cid ", password = "cid's password", email = Nothing}) >>= ok
+    named <- run admin (createUser NewAccount {login = "cid", displayName = " Cid ", password = Password "cid's password", email = Nothing}) >>= ok
     named.user.displayName `shouldBe` "Cid"
 
   it "refuse a login that is taken in any case, one that cannot be a login, and a short password" $ \(Fixture run) -> do
-    let new login password = run admin (createUser NewAccount {login, displayName = "", password, email = Nothing})
+    let new login password = run admin (createUser NewAccount {login, displayName = "", password = Password password, email = Nothing})
     new "EDITOR" "a good password" >>= \case
       Left (Conflict _) -> pass
       other -> expectationFailure ("expected a conflict, got " <> show other)
@@ -251,11 +251,11 @@ accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" 
 
   it "give a user a password, and refuse a short one" $ \(Fixture run) -> do
     readerId <- idOf run reader
-    run admin (setPassword readerId "short") >>= shouldBeInvalid
-    account <- run admin (setPassword readerId "rita's password") >>= ok
+    run admin (setPassword readerId (Password "short")) >>= shouldBeInvalid
+    account <- run admin (setPassword readerId (Password "rita's password")) >>= ok
     (account.user.login.text, account.hasPassword) `shouldBe` ("reader", True)
     (\d -> d.withPassword) <$> directoryNow run `shouldReturn` Set.singleton readerId
-    run admin (setPassword (UserId "user-nobody") "a good password") >>= (`shouldFailWith` NotFound)
+    run admin (setPassword (UserId "user-nobody") (Password "a good password")) >>= (`shouldFailWith` NotFound)
 
   -- A newly made wiki sends no mail (the demo never does, and the server
   -- only once its mail server is set): a link is refused with the reason,
@@ -406,19 +406,19 @@ letsIn = describe "wikiSettings, invitations and the rest" $ do
 
   it "leave accounts with a password to the console while the setting is off, and nothing else" $ \(Fixture run) -> do
     let consoleOnly = WikiSettings {access = Open, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = False}
-        bea = NewAccount {login = "bea", displayName = "", password = "bea's password", email = Nothing}
+        bea = NewAccount {login = "bea", displayName = "", password = Password "bea's password", email = Nothing}
     (\d -> d.adminCreatesPasswordAccounts) <$> directoryNow run `shouldReturn` True
     run admin (setWikiSettings consoleOnly) >>= ok >>= (`shouldBe` consoleOnly)
     run admin wikiSettings >>= ok >>= (`shouldBe` consoleOnly)
     (\d -> d.adminCreatesPasswordAccounts) <$> directoryNow run `shouldReturn` False
     run admin (createUser bea) >>= (`shouldFailWith` Forbidden)
     -- Refused before the login and the password are looked at.
-    run admin (createUser NewAccount {login = "", displayName = "", password = "", email = Nothing}) >>= (`shouldFailWith` Forbidden)
+    run admin (createUser NewAccount {login = "", displayName = "", password = Password "", email = Nothing}) >>= (`shouldFailWith` Forbidden)
     map (\u -> u.login.text) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
     -- An existing user's password, a link to choose one, and invitations
     -- are as before: a link is refused only because nothing is mailed.
     readerId <- idOf run reader
-    (\a -> a.hasPassword) <$> (run admin (setPassword readerId "rita's password") >>= ok) `shouldReturn` True
+    (\a -> a.hasPassword) <$> (run admin (setPassword readerId (Password "rita's password")) >>= ok) `shouldReturn` True
     run admin (sendPasswordLink readerId) >>= shouldBeInvalid
     void (run admin (invite "bea@example.org") >>= ok)
     -- Turned on again, the administration creates accounts again.

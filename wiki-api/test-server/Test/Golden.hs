@@ -36,6 +36,7 @@ import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (summaryOf)
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Space (Icon (..), SpaceProfile (..))
+import Wiki.Core.User (Password (..))
 import Wiki.Core.Version (VersionInfo (..))
 
 -- | A golden file: its name, and the value it holds.
@@ -146,15 +147,15 @@ spec = describe "golden JSON" $ do
     golden "create-spaces-flag" CreateSpacesFlag {createSpaces = False}
     golden "space-grant-change" SpaceGrantChange {subject = SubjectGroup (GroupId "g1"), permission = View, granted = True}
     golden "group-name" GroupName {name = "writers"}
-    golden "credentials" Credentials {login = "ada", password = "correct horse battery staple"}
-    golden "new-account" NewAccount {login = "ada", displayName = "Ada", password = "correct horse battery staple", email = Just "ada@example.org"}
+    golden "credentials" Credentials {login = "ada", password = Password "correct horse battery staple"}
+    golden "new-account" NewAccount {login = "ada", displayName = "Ada", password = Password "correct horse battery staple", email = Just "ada@example.org"}
     golden "one-time-code" OneTimeCode {code = "287082"}
-    golden "email-change" EmailChange {email = "ada@example.org", password = Just "correct horse battery staple"}
-    golden "current-password" CurrentPassword {password = Just "correct horse battery staple"}
+    golden "email-change" EmailChange {email = "ada@example.org", password = Just (Password "correct horse battery staple")}
+    golden "current-password" CurrentPassword {password = Just (Password "correct horse battery staple")}
     golden "reset-request" ResetRequest {login = "ada"}
-    golden "new-password-by-mail" NewPasswordByMail {password = "correct horse battery staple"}
-    golden "new-password" NewPassword {password = "correct horse battery staple"}
-    golden "password-change" PasswordChange {current = Just "correct horse battery staple", new = "a longer passphrase than that"}
+    golden "new-password-by-mail" NewPasswordByMail {password = Password "correct horse battery staple"}
+    golden "new-password" NewPassword {password = Password "correct horse battery staple"}
+    golden "password-change" PasswordChange {current = Just (Password "correct horse battery staple"), new = Password "a longer passphrase than that"}
     golden "account-disabled" AccountDisabled {disabled = True}
     golden "new-invitation" NewInvitation {email = "bea@example.org"}
     golden "server-settings-change" Sample.serverChange

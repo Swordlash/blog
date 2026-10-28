@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Passwords are `Password` inside the server (WP5.15): `hashPassword`,
+`hashWith`, `verifyPassword`, the accounts' `signIn`, `createAccount`,
+`setPassword`, `changePassword`, `currentPasswordIs` and the reset's
+`resetPassword` take one, and the console's password reader returns one.
+`Wiki.Server.Password` re-exports `checkNewPassword` in place of
+`checkPassword`.
+
 Logins are `Login` inside the server (WP5.15): `insertAccount`, the
 pending sign-in of a second factor and the mails that name an account
 take one. `Wiki.Server.Accounts` no longer re-exports `checkLogin`; the

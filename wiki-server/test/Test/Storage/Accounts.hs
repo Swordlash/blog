@@ -15,7 +15,7 @@ import Wiki.Api.Account (Account (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
-import Wiki.Core.User (Login (..), Standing (..), User (..))
+import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
 import Wiki.Server.Accounts
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.Limiter (Limits (..), Verdict (..), failed, newLimiter, succeeded, verdict)
@@ -41,24 +41,24 @@ ok act = act >>= either (\e -> panic ("expected it to work: " <> show e)) pure
 passwords :: Spec
 passwords = describe "passwords" $ do
   it "match the hash made from them, and no other password" $ do
-    phc <- hashPassword "correct horse battery staple"
-    verifyPassword phc "correct horse battery staple" `shouldBe` True
-    verifyPassword phc "correct horse battery stapler" `shouldBe` False
-    verifyPassword phc "" `shouldBe` False
+    phc <- hashPassword (Password "correct horse battery staple")
+    verifyPassword phc (Password "correct horse battery staple") `shouldBe` True
+    verifyPassword phc (Password "correct horse battery stapler") `shouldBe` False
+    verifyPassword phc (Password "") `shouldBe` False
 
   it "are hashed as argon2id with the parameters chosen, a salt of their own each time" $ do
-    a <- hashPassword "same"
-    b <- hashPassword "same"
+    a <- hashPassword (Password "same")
+    b <- hashPassword (Password "same")
     a `shouldNotBe` b
     a `shouldSatisfy` T.isPrefixOf "$argon2id$v=19$m=19456,t=2,p=1$"
 
   it "are the hashes another implementation makes (Node's, OpenSSL's), with their parameters" $ do
     -- crypto.argon2Sync('argon2id', {message, nonce, memory, passes,
     -- parallelism, tagLength: 32}) in Node 24.
-    hashWith parameters "wiki-test-salt-1" "correct horse battery staple"
+    hashWith parameters "wiki-test-salt-1" (Password "correct horse battery staple")
       `shouldBe` "$argon2id$v=19$m=19456,t=2,p=1$d2lraS10ZXN0LXNhbHQtMQ$euKVLgBJjO4DyH+Cv85FSuFxwP2L5mqOfM7AK3iPHOA"
-    verifyPassword "$argon2id$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$GpZ3sK/oH9p7VIiV56G/64Zo/8GaUw434IimaPqxwCo" "password" `shouldBe` True
-    verifyPassword "$argon2id$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$GpZ3sK/oH9p7VIiV56G/64Zo/8GaUw434IimaPqxwCo" "Password" `shouldBe` False
+    verifyPassword "$argon2id$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$GpZ3sK/oH9p7VIiV56G/64Zo/8GaUw434IimaPqxwCo" (Password "password") `shouldBe` True
+    verifyPassword "$argon2id$v=19$m=65536,t=2,p=4$c29tZXNhbHQ$GpZ3sK/oH9p7VIiV56G/64Zo/8GaUw434IimaPqxwCo" (Password "Password") `shouldBe` False
 
   it "match nothing against a hash this server would not have written" $ do
     for_
@@ -68,12 +68,12 @@ passwords = describe "passwords" $ do
       , "$argon2id$v=19$m=99999999,t=2,p=1$d2lraS10ZXN0LXNhbHQtMQ$euKVLgBJjO4DyH+Cv85FSuFxwP2L5mqOfM7AK3iPHOA"
       , "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$euKVLgBJjO4DyH+Cv85FSuFxwP2L5mqOfM7AK3iPHOA"
       ]
-      $ \phc -> verifyPassword phc "correct horse battery staple" `shouldBe` False
+      $ \phc -> verifyPassword phc (Password "correct horse battery staple") `shouldBe` False
 
   it "are refused when too short or too long" $ do
-    checkPassword "seven 7" `shouldSatisfy` isLeft
-    checkPassword "eight 88" `shouldBe` Right "eight 88"
-    checkPassword (T.replicate 1025 "x") `shouldSatisfy` isLeft
+    checkNewPassword (Password "seven 7") `shouldSatisfy` isLeft
+    checkNewPassword (Password "eight 88") `shouldBe` Right (Password "eight 88")
+    checkNewPassword (Password (T.replicate 1025 "x")) `shouldSatisfy` isLeft
 
   it "make session ids that are random, and kept by a hash of them" $ do
     a <- newToken
@@ -117,40 +117,40 @@ limits = describe "failed sign-ins" $ do
 accounts :: Spec
 accounts = describe "the storage's accounts" $ do
   it "are made with a password, and sign in with it" $ withEmpty $ \st -> do
-    made <- ok (createAccount st "ada" "Ada" (Just "correct horse"))
+    made <- ok (createAccount st "ada" "Ada" (Just (Password "correct horse")))
     (made.user.login.text, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("ada", "Ada", True, False)
     now <- getCurrentTime
-    Right (user, token) <- signIn st now "127.0.0.1" "ada" "correct horse"
+    Right (user, token) <- signIn st now "127.0.0.1" "ada" (Password "correct horse")
     user `shouldBe` made.user
     T.length token `shouldBe` 43
     -- As people type a login: without regard to case or blanks around it.
-    signIn st now "127.0.0.1" " ADA " "correct horse" >>= (`shouldSatisfy` isRight)
+    signIn st now "127.0.0.1" " ADA " (Password "correct horse") >>= (`shouldSatisfy` isRight)
 
   it "refuse a wrong password, an unknown login, a login without a password and a disabled one alike" $ withEmpty $ \st -> do
-    ada <- ok (createAccount st "ada" "" (Just "correct horse"))
+    ada <- ok (createAccount st "ada" "" (Just (Password "correct horse")))
     _ <- ok (createAccount st "bea" "" Nothing)
     now <- getCurrentTime
-    signIn st now "127.0.0.1" "ada" "wrong horse" `shouldReturn` Left NoSuchAccount
-    signIn st now "127.0.0.1" "nobody" "correct horse" `shouldReturn` Left NoSuchAccount
-    signIn st now "127.0.0.1" "bea" "" `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "ada" (Password "wrong horse") `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "nobody" (Password "correct horse") `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "bea" (Password "") `shouldReturn` Left NoSuchAccount
     _ <- ok (setDisabled st ada.user.id True)
-    signIn st now "127.0.0.1" "ada" "correct horse" `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "ada" (Password "correct horse") `shouldReturn` Left NoSuchAccount
     _ <- ok (setDisabled st ada.user.id False)
-    signIn st now "127.0.0.1" "ada" "correct horse" >>= (`shouldSatisfy` isRight)
+    signIn st now "127.0.0.1" "ada" (Password "correct horse") >>= (`shouldSatisfy` isRight)
 
   it "refuse a login taken in another case, a blank or spaced one, and a short password" $ withEmpty $ \st -> do
-    _ <- ok (createAccount st "ada" "" (Just "correct horse"))
-    createAccount st "ADA" "" (Just "correct horse") >>= (`shouldSatisfy` \case Left (Conflict _) -> True; _ -> False)
+    _ <- ok (createAccount st "ada" "" (Just (Password "correct horse")))
+    createAccount st "ADA" "" (Just (Password "correct horse")) >>= (`shouldSatisfy` \case Left (Conflict _) -> True; _ -> False)
     for_ ["", "   ", "two words", "~operator", T.replicate 65 "x"] $ \login ->
-      createAccount st login "" (Just "correct horse") >>= (`shouldSatisfy` \case Left (Invalid _) -> True; _ -> False)
-    createAccount st "bea" "" (Just "short") >>= (`shouldSatisfy` \case Left (Invalid _) -> True; _ -> False)
+      createAccount st login "" (Just (Password "correct horse")) >>= (`shouldSatisfy` \case Left (Invalid _) -> True; _ -> False)
+    createAccount st "bea" "" (Just (Password "short")) >>= (`shouldSatisfy` \case Left (Invalid _) -> True; _ -> False)
 
   it "are named by their login when no name is given, and trimmed" $ withEmpty $ \st -> do
-    a <- ok (createAccount st "  ada  " "   " (Just "correct horse"))
+    a <- ok (createAccount st "  ada  " "   " (Just (Password "correct horse")))
     (a.user.login.text, a.user.displayName) `shouldBe` ("ada", "ada")
 
   it "are made administrators and unmade, and listed with it" $ withEmpty $ \st -> do
-    ada <- ok (createAccount st "ada" "Ada" (Just "correct horse"))
+    ada <- ok (createAccount st "ada" "Ada" (Just (Password "correct horse")))
     bea <- ok (createAccount st "bea" "Bea" Nothing)
     _ <- ok (setAdministrator st ada.user.id True)
     _ <- ok (setAdministrator st ada.user.id True)
@@ -163,7 +163,7 @@ accounts = describe "the storage's accounts" $ do
     accountOf st bea.user.id `shouldReturn` Just bea
 
   it "take a disabled user for nobody, wherever they are named" $ withEmpty $ \st -> do
-    ada <- ok (createAccount st "ada" "Ada" (Just "correct horse"))
+    ada <- ok (createAccount st "ada" "Ada" (Just (Password "correct horse")))
     _ <- ok (setDisabled st ada.user.id True)
     s <- runSqliteWiki st (AsUser ada.user.id) session
     (s.user, s.standing) `shouldBe` (Nothing, NotSignedIn)
@@ -171,9 +171,9 @@ accounts = describe "the storage's accounts" $ do
 sessions :: Spec
 sessions = describe "sessions" $ do
   let signedIn st = do
-        ada <- ok (createAccount st "ada" "Ada" (Just "correct horse"))
+        ada <- ok (createAccount st "ada" "Ada" (Just (Password "correct horse")))
         now <- getCurrentTime
-        Right (_, token) <- signIn st now "127.0.0.1" "ada" "correct horse"
+        Right (_, token) <- signIn st now "127.0.0.1" "ada" (Password "correct horse")
         pure (ada, now, token)
 
   it "are found by the id their cookie carries, and by nothing else" $ withEmpty $ \st -> do
@@ -194,11 +194,11 @@ sessions = describe "sessions" $ do
     _ <- ok (setDisabled st ada.user.id False)
     resolveSession st now "127.0.0.1" token `shouldReturn` Nothing
     signedInAgain <- getCurrentTime
-    Right (_, again) <- signIn st signedInAgain "127.0.0.1" "ada" "correct horse"
-    _ <- ok (setPassword st ada.user.id "battery staple")
+    Right (_, again) <- signIn st signedInAgain "127.0.0.1" "ada" (Password "correct horse")
+    _ <- ok (setPassword st ada.user.id (Password "battery staple"))
     resolveSession st now "127.0.0.1" again `shouldReturn` Nothing
-    signIn st now "127.0.0.1" "ada" "correct horse" `shouldReturn` Left NoSuchAccount
-    signIn st now "127.0.0.1" "ada" "battery staple" >>= (`shouldSatisfy` isRight)
+    signIn st now "127.0.0.1" "ada" (Password "correct horse") `shouldReturn` Left NoSuchAccount
+    signIn st now "127.0.0.1" "ada" (Password "battery staple") >>= (`shouldSatisfy` isRight)
 
   it "end after being idle for the idle time, and each use moves their end on (at most hourly)" $ withEmpty $ \st -> do
     (ada, now, token) <- signedIn st
@@ -222,21 +222,21 @@ console = describe "wiki-server users" $ do
     withSystemTempDirectory "wiki-console-test" $ \dir -> do
       (listed, _) <- run dir (Left "not asked") ListUsers
       listed `shouldSatisfy` either (const False) (any (T.isInfixOf "There are no users yet"))
-      (made, asked) <- run dir (Right "correct horse") (AddUser "ada" (Just "Ada") True True)
+      (made, asked) <- run dir (Right (Password "correct horse")) (AddUser "ada" (Just "Ada") True True)
       asked `shouldBe` ["ada"]
       made `shouldSatisfy` isRight
       (table, _) <- run dir (Left "not asked") ListUsers
       table `shouldBe` Right ["LOGIN  NAME  ADMINISTRATOR  SIGNS IN", "ada    Ada   yes            yes"]
       withStorage defaultConfig dir $ \st -> do
         now <- getCurrentTime
-        Right (user, _) <- signIn st now "127.0.0.1" "ada" "correct horse"
+        Right (user, _) <- signIn st now "127.0.0.1" "ada" (Password "correct horse")
         s <- runSqliteWiki st (AsUser user.id) session
         [g.permission | g <- s.grants.global] `shouldBe` [Administer]
 
   it "sets a password, disables and enables a login, and makes and unmakes an administrator" $
     withSystemTempDirectory "wiki-console-test" $ \dir -> do
-      _ <- run dir (Right "correct horse") (AddUser "bea" Nothing False True)
-      (changed, asked) <- run dir (Right "battery staple") (SetUserPassword "BEA")
+      _ <- run dir (Right (Password "correct horse")) (AddUser "bea" Nothing False True)
+      (changed, asked) <- run dir (Right (Password "battery staple")) (SetUserPassword "BEA")
       (changed, asked) `shouldSatisfy` \(r, a) -> isRight r && a == ["BEA"]
       _ <- run dir (Left "not asked") (SetUserDisabled "bea" True)
       _ <- run dir (Left "not asked") (SetUserAdministrator "bea" True)
@@ -245,15 +245,15 @@ console = describe "wiki-server users" $ do
       _ <- run dir (Left "not asked") (SetUserDisabled "bea" False)
       withStorage defaultConfig dir $ \st -> do
         now <- getCurrentTime
-        signIn st now "127.0.0.1" "bea" "battery staple" >>= (`shouldSatisfy` isRight)
+        signIn st now "127.0.0.1" "bea" (Password "battery staple") >>= (`shouldSatisfy` isRight)
 
   it "says what is wrong, and changes nothing: an unknown login, a password not given, one too short" $
     withSystemTempDirectory "wiki-console-test" $ \dir -> do
-      (unknown, _) <- run dir (Right "correct horse") (SetUserPassword "nobody")
+      (unknown, _) <- run dir (Right (Password "correct horse")) (SetUserPassword "nobody")
       unknown `shouldBe` Left "There is no user with the login nobody."
       (noPassword, _) <- run dir (Left "No password on standard input.") (AddUser "ada" Nothing False True)
       noPassword `shouldBe` Left "No password on standard input."
-      (short, _) <- run dir (Right "short") (AddUser "ada" Nothing False True)
+      (short, _) <- run dir (Right (Password "short")) (AddUser "ada" Nothing False True)
       short `shouldSatisfy` isLeft
       (table, _) <- run dir (Left "not asked") ListUsers
       table `shouldSatisfy` either (const False) (any (T.isInfixOf "There are no users yet"))

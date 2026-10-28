@@ -96,7 +96,7 @@ import Wiki.App.View.Common
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (GroupId, UserId)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..), canCreateSpaces, principal)
-import Wiki.Core.User (Group (..), Login (..), SignInProvider (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), Password (..), SignInProvider (..), User (..))
 
 newtype Input = Input {context :: Context}
 
@@ -615,7 +615,7 @@ component =
         form <- gets (\st -> st.newUser)
         modify (\st -> st {busy = True, usersProblem = Nothing, usersTold = Nothing})
         let email = mfilter (not . T.null) (Just (T.strip form.typedEmail))
-        createUser NewAccount {login = form.typedLogin, displayName = form.typedName, password = form.typedPassword, email} >>= \case
+        createUser NewAccount {login = form.typedLogin, displayName = form.typedName, password = Password form.typedPassword, email} >>= \case
           Left e -> modify (\st -> st {busy = False, usersProblem = Just e})
           Right account -> do
             -- Created: whatever the result of making them an
@@ -659,7 +659,7 @@ component =
           change
             (\s -> s {settingPassword = Nothing, usersProblem = Nothing, usersTold = Just (nameOf st u <> " has a new password: their sessions have ended.")})
             usersFailed
-            (void <$> setPassword u typed)
+            (void <$> setPassword u (Password typed))
       SetDisabled u off ->
         change
           (\st -> st {usersProblem = Nothing, usersTold = Just (if off then u.displayName <> " can no longer sign in: their sessions have ended." else u.displayName <> " can sign in again.")})

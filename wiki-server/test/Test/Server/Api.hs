@@ -35,7 +35,7 @@ import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
-import Wiki.Core.User (Group (..), Login (..), User (..))
+import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
 import Wiki.Server.Storage (administratorUser)
 
 spec :: Spec
@@ -349,9 +349,9 @@ people = describe "the wiki's people" $ do
     renamed <- put' (links.admin.renameGroup made.id) GroupName {name = "Editors"} >>= jsonAs 200
     renamed `shouldBe` Group {id = made.id, name = "Editors"}
     -- The accounts' operations too.
-    bea :: Account <- post' links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = "bea's password", email = Nothing} >>= jsonAs 201
+    bea :: Account <- post' links.admin.createUser NewAccount {login = "bea", displayName = "Bea", password = Password "bea's password", email = Nothing} >>= jsonAs 201
     (bea.hasPassword, bea.disabled) `shouldBe` (True, False)
-    reset :: Account <- put' (links.admin.setPassword bea.user.id) NewPassword {password = "another password"} >>= jsonAs 200
+    reset :: Account <- put' (links.admin.setPassword bea.user.id) NewPassword {password = Password "another password"} >>= jsonAs 200
     reset.hasPassword `shouldBe` True
     off :: Account <- put' (links.admin.setDisabled bea.user.id) AccountDisabled {disabled = True} >>= jsonAs 200
     off.disabled `shouldBe` True
@@ -372,9 +372,9 @@ people = describe "the wiki's people" $ do
     getUrlWith r (onPublic r links.admin.status) [editor] >>= forbidden
     put' (links.admin.setAdministrator (loginId d "editor")) AdministratorFlag {administrator = True} >>= forbidden
     put' (links.admin.setCreateSpaces (loginId d "editor")) CreateSpacesFlag {createSpaces = True} >>= forbidden
-    put' (links.admin.setPassword rita) NewPassword {password = "a password of mine"} >>= forbidden
+    put' (links.admin.setPassword rita) NewPassword {password = Password "a password of mine"} >>= forbidden
     put' (links.admin.setDisabled rita) AccountDisabled {disabled = True} >>= forbidden
-    send r methodPost (onPublic r links.admin.createUser) [editor, (hContentType, "application/json")] (encode NewAccount {login = "mine", displayName = "", password = "a password of mine", email = Nothing}) >>= forbidden
+    send r methodPost (onPublic r links.admin.createUser) [editor, (hContentType, "application/json")] (encode NewAccount {login = "mine", displayName = "", password = Password "a password of mine", email = Nothing}) >>= forbidden
     send r methodPost (onPublic r links.admin.createGroup) [editor, (hContentType, "application/json")] (encode GroupName {name = "Mine"}) >>= forbidden
     ok200 (getUrl r (onAdmin r links.admin.directory)) `shouldReturn` d
 
@@ -393,8 +393,8 @@ people = describe "the wiki's people" $ do
     send r methodPut (onPublic r (links.admin.addMember writers rita)) [] "" >>= forbidden
     send r methodDelete (onPublic r (links.admin.removeMember writers rita)) [] "" >>= forbidden
     sendJson r methodPut (onPublic r (links.admin.setCreateSpaces rita)) CreateSpacesFlag {createSpaces = True} >>= forbidden
-    sendJson r methodPost (onPublic r links.admin.createUser) NewAccount {login = "mine", displayName = "", password = "a password of mine", email = Nothing} >>= forbidden
-    sendJson r methodPut (onPublic r (links.admin.setPassword rita)) NewPassword {password = "a password of mine"} >>= forbidden
+    sendJson r methodPost (onPublic r links.admin.createUser) NewAccount {login = "mine", displayName = "", password = Password "a password of mine", email = Nothing} >>= forbidden
+    sendJson r methodPut (onPublic r (links.admin.setPassword rita)) NewPassword {password = Password "a password of mine"} >>= forbidden
     sendJson r methodPut (onPublic r (links.admin.setDisabled nobody)) AccountDisabled {disabled = True} >>= forbidden
     -- Nothing changed.
     ok200 (getUrl r (onAdmin r links.admin.directory)) `shouldReturn` d

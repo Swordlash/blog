@@ -49,7 +49,7 @@ import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (Grants (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Login (..), User (..))
+import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Core.Version (Version (..), VersionInfo (..), latestVersions)
 
 seed :: MemState
@@ -278,7 +278,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       _ <- run (deleteAttachment gone.id) >>= ok
       _ <- run (renameSpace space.id "Kept and renamed") >>= ok
       _ <- run (setSpacePublic space.id True) >>= ok
-      bea <- run (createUser NewAccount {login = "bea", displayName = "Bea", password = "bea's password", email = Nothing}) >>= ok
+      bea <- run (createUser NewAccount {login = "bea", displayName = "Bea", password = Password "bea's password", email = Nothing}) >>= ok
       _ <- run (setDisabled bea.user.id True) >>= ok
       _ <- run (setSpaceGrant space.id (SubjectUser bea.user.id) Edit True) >>= ok
       _ <- run (setCreateSpaces bea.user.id True) >>= ok

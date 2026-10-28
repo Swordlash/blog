@@ -36,7 +36,7 @@ import Wiki.Api.Auth (Purpose (..), startUrl)
 import Wiki.App.Account (Accounts (..), accountErrorText)
 import Wiki.App.Backend (MonadLoad (..), Session (..), WikiError (..))
 import Wiki.App.View.Common (failureView)
-import Wiki.Core.User (SignInProvider (..), User (..), minimumPasswordLength)
+import Wiki.Core.User (Password (..), SignInProvider (..), User (..), minimumPasswordLength)
 
 data Input m = Input
   { accounts :: Maybe (Accounts m)
@@ -165,7 +165,7 @@ component =
         st <- get
         for_ st.input.accounts $ \a -> unless st.busy $ do
           modify (\s -> s {busy = True, problem = Nothing})
-          lift (a.acceptInvitation st.input.token NewAccount {login = st.typedLogin, displayName = st.typedName, password = st.typedPassword, email = Nothing}) >>= \case
+          lift (a.acceptInvitation st.input.token NewAccount {login = st.typedLogin, displayName = st.typedName, password = Password st.typedPassword, email = Nothing}) >>= \case
             Left e -> modify (\s -> s {busy = False, problem = Just (accountErrorText e)})
             Right s -> do
               modify (\x -> x {busy = False, typedPassword = ""})

@@ -63,18 +63,17 @@ import Data.Time (UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
-import Wiki.Core.User (User)
+import Wiki.Core.User (Password, User)
 
 -- | 'Credentials': what a user signs in with, @POST \/api\/v1\/session@.
+-- The login is the text typed: sign-in looks it up, trimmed and in any
+-- case, and applies no rule to it.
 data Credentials = Credentials
   { login :: Text
-  , password :: Text
+  , password :: Password
   }
-  deriving stock (Eq, Generic)
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
-instance Show Credentials where
-  showsPrec _ c rest = "Credentials {login = " <> show c.login <> ", password = <hidden>}" <> rest
 
 -- | 'NewAccount': a user to create, who signs in with this password, @POST
 -- \/api\/v1\/admin\/users@.
@@ -83,13 +82,14 @@ data NewAccount = NewAccount
   -- ^ The name they sign in with: unique, trimmed of white space.
   , displayName :: Text
   -- ^ The name pages show for them; their login if blank.
-  , password :: Text
+  , password :: Password
+  -- ^ Checked by the backend with 'Wiki.Core.User.checkNewPassword'.
   , email :: Maybe Text
   -- ^ Their e-mail address, verified by a link sent to it (WP4.11 of
   -- docs/PLAN.md). Only the administration's "New user" form sets one, and
   -- it is optional; the JSON leaves the field out when there is none.
   }
-  deriving stock (Eq, Generic)
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON)
 
 -- Written with 'toJSON' only, like the other request bodies: their keys in
@@ -97,18 +97,12 @@ data NewAccount = NewAccount
 instance ToJSON NewAccount where
   toJSON = genericToJSON defaultOptions {omitNothingFields = True}
 
-instance Show NewAccount where
-  showsPrec _ a rest = "NewAccount {login = " <> show a.login <> ", displayName = " <> show a.displayName <> ", password = <hidden>, email = " <> show a.email <> "}" <> rest
-
 -- | 'NewPassword': a user's new password, @PUT
 -- \/api\/v1\/admin\/users\/\<id>\/password@. It ends the user's sessions, so
 -- that anyone who knew the old password is signed out.
-newtype NewPassword = NewPassword {password :: Text}
-  deriving stock (Eq, Generic)
+newtype NewPassword = NewPassword {password :: Password}
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
-instance Show NewPassword where
-  showsPrec _ _ rest = "NewPassword {password = <hidden>}" <> rest
 
 -- | 'PasswordChange': a user's own new password, @PUT
 -- \/api\/v1\/account\/password@. The current password is required, so that
@@ -116,16 +110,13 @@ instance Show NewPassword where
 -- The change ends the user's other sessions; the session that made it
 -- stays.
 data PasswordChange = PasswordChange
-  { current :: Maybe Text
+  { current :: Maybe Password
   -- ^ The current password, if they have one. A user who has none (who
   -- signs in with a provider's account) leaves it out.
-  , new :: Text
+  , new :: Password
   }
-  deriving stock (Eq, Generic)
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
-instance Show PasswordChange where
-  showsPrec _ c rest = "PasswordChange {current = " <> maybe "Nothing" (const "Just <hidden>") c.current <> ", new = <hidden>}" <> rest
 
 -- | 'AccountDisabled': whether a user's account is disabled, @PUT
 -- \/api\/v1\/admin\/users\/\<id>\/disabled@. A disabled user cannot sign in,

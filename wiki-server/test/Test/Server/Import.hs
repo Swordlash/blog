@@ -37,7 +37,7 @@ import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), withProfile)
-import Wiki.Core.User (Login (..), User (..))
+import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Blobs (blobOf)
 
@@ -392,7 +392,7 @@ discussions = describe "a page's comments" $ do
         , (CommentThreadId "t2", True, [(CommentId "c3", UserId "~former:Carol", "Carol (not a user here)", "Fixed.", Nothing)])
         ]
       makeAlice r = do
-        made :: Account <- sendJson r methodPost (admin r links.admin.createUser) NewAccount {login = "alice", displayName = "Alice Here", password = "alice's password", email = Nothing} >>= jsonAs 201
+        made :: Account <- sendJson r methodPost (admin r links.admin.createUser) NewAccount {login = "alice", displayName = "Alice Here", password = Password "alice's password", email = Nothing} >>= jsonAs 201
         pure made.user.id
 
   it "come with a page the import makes: authors matched by login, anyone else kept by name, ids and times kept" $ withRunning $ \r -> do

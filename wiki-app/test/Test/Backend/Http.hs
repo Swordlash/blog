@@ -37,7 +37,7 @@ import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Search (SearchHit, searchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Login (..), Standing (..), User (..))
+import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
 
 -- | A transport that answers as the function says, and keeps every request
 -- it was given, the latest first.
@@ -407,7 +407,7 @@ accounts = describe "signing in and out" $ do
         | r.method == "POST" -> ok signedIn
         | otherwise -> ok (Map.elems demo.spaces)
     _ <- runHttpWiki env listSpaces
-    s <- runHttpWiki env (signIn "admin" "correct horse")
+    s <- runHttpWiki env (signIn "admin" (Password "correct horse"))
     (\x -> (x.user, x.standing)) <$> s `shouldBe` Right (signedIn.user, SignedIn)
     [r, _] <- readIORef asked
     (r.method, r.url, r.body) `shouldBe` ("POST", "api/v1/session", Body "application/json" "{\"login\":\"admin\",\"password\":\"correct horse\"}")
@@ -416,7 +416,7 @@ accounts = describe "signing in and out" $ do
     runHttpWiki env (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
 
   it "says why signing in failed" $ do
-    let failing n body = backend (const (status n body)) >>= \(env, _) -> runHttpWiki env (signIn "admin" "nope")
+    let failing n body = backend (const (status n body)) >>= \(env, _) -> runHttpWiki env (signIn "admin" (Password "nope"))
     failing 401 "{\"error\":\"Unauthenticated\"}" `shouldReturn` Left WrongCredentials
     failing 429 "{\"error\":\"TooManyRequests\",\"message\":\"Wait 15 minutes.\"}" `shouldReturn` Left (TooManyAttempts "Wait 15 minutes.")
     failing 403 "{\"error\":\"Forbidden\"}" `shouldReturn` Left (SignInFailed Forbidden)
@@ -428,12 +428,12 @@ accounts = describe "signing in and out" $ do
         | r.method == "PUT" -> ok SignInMethods {password = True, identities = []}
         | otherwise -> ok (Map.elems demo.spaces)
     _ <- runHttpWiki env listSpaces
-    runHttpWiki env (changePassword PasswordChange {current = Just "old one", new = "a new one"}) `shouldReturn` Right SignInMethods {password = True, identities = []}
+    runHttpWiki env (changePassword PasswordChange {current = Just (Password "old one"), new = Password "a new one"}) `shouldReturn` Right SignInMethods {password = True, identities = []}
     (r : _) <- readIORef asked
     (r.method, r.url, r.body) `shouldBe` ("PUT", "api/v1/account/password", Body "application/json" "{\"current\":\"old one\",\"new\":\"a new one\"}")
     -- Who is asking is the same: what was read stays.
     isJust <$> runHttpWiki env (atOnce listSpaces) `shouldReturn` True
-    let failing n body = backend (const (status n body)) >>= \(e, _) -> runHttpWiki e (changePassword PasswordChange {current = Just "wrong", new = "a new one"})
+    let failing n body = backend (const (status n body)) >>= \(e, _) -> runHttpWiki e (changePassword PasswordChange {current = Just (Password "wrong"), new = Password "a new one"})
     failing 401 "{\"error\":\"Unauthenticated\"}" `shouldReturn` Left WrongCredentials
     failing 429 "{\"error\":\"TooManyRequests\",\"message\":\"Wait 15 minutes.\"}" `shouldReturn` Left (TooManyAttempts "Wait 15 minutes.")
     failing 400 "{\"error\":\"Invalid\",\"message\":\"Too short.\"}" `shouldReturn` Left (SignInFailed (Invalid "Too short."))
@@ -447,7 +447,7 @@ accounts = describe "signing in and out" $ do
     env' <- newHttpEnvWith transport (withSession (fromSessionInfo signedIn) emptyCache)
     changes <- runHttpWiki env' sessionChanges
     _ <- HS.subscribe changes (const (writeIORef changed True))
-    runHttpWiki env' (changePassword PasswordChange {current = Just "wrong", new = "a new one"}) `shouldReturn` Left WrongCredentials
+    runHttpWiki env' (changePassword PasswordChange {current = Just (Password "wrong"), new = Password "a new one"}) `shouldReturn` Left WrongCredentials
     readIORef changed `shouldReturn` False
     runHttpWiki env' (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
     map (\r -> r.url) <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/account/password"]
