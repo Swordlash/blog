@@ -3,7 +3,8 @@
 -- run beside a long read and beside a write, on the storage's readers. A
 -- save reads only the users who could be told of it, through indexes, so
 -- it runs the same statements in a wiki of 300 more users and 3,000 more
--- watches as in the demo.
+-- watches as in the demo. The bell reads one page of notifications and the
+-- pages of each of their spaces once, however many notifications are kept.
 --
 -- What the storage reads is seen through SQLite's trace of each statement
 -- a connection runs ('statementsOf'), and SQLite's plan for each
@@ -23,20 +24,24 @@ import System.Timeout (timeout)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Storage.Fixture
+import Wiki.Api.Notifications (Notifications (..))
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Contract (As (As))
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Id
+import Wiki.Core.Notification (Notification (..), PageLocation (..), maxListed)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Accounts (Resolved (..), resolveSession, startSession)
 import Wiki.Server.Storage
-import Wiki.Server.Storage.Rows (insertPage)
+import Wiki.Server.Storage.Rows (Stamp (..), insertPage)
 
 spec :: Spec
 spec = describe "the storage, at scale" $ do
   readers
   writes
+  bell
 
 -- | An action that must end within two seconds: one that waits for a lock
 -- another operation holds does not.
@@ -197,3 +202,82 @@ writes = describe "a save of a watched page" $ do
     (big, _, bigMade) <- saved 300 3000
     bigMade `shouldBe` smallMade
     length big `shouldBe` length small
+
+-- | Add pages to a space, at its top level, named by a word and a number:
+-- @bulk-1@ and on. Their ids, in that order.
+addPages :: Storage -> SpaceId -> Text -> Int -> IO [PageId]
+addPages st space name n = do
+  now <- getCurrentTime
+  let ids = [PageId (name <> "-page-" <> show i) | i <- [1 .. n]]
+  withDatabase st $ \c -> do
+    execute_ c "BEGIN"
+    for_ (zip [1 :: Int ..] ids) $ \(i, pid) ->
+      insertPage
+        c
+        Page
+          { id = pid
+          , space
+          , parent = Nothing
+          , title = name <> " " <> show i
+          , slug = either (panic . show) identity (mkSlug (name <> "-" <> show i))
+          , body = ""
+          , attachments = []
+          , createdAt = now
+          , updatedAt = now
+          , position = 1000 + i
+          , template = False
+          }
+    execute_ c "COMMIT"
+  pure ids
+
+-- | Notify a user of a change to each of these pages, the last the newest,
+-- as rows of the database.
+notifyOf :: Storage -> UserId -> [PageId] -> IO ()
+notifyOf st u pages = do
+  now <- getCurrentTime
+  withDatabase st $ \c -> do
+    execute_ c "BEGIN"
+    [Only next] <- query_ c "SELECT coalesce(max(seq) + 1, 0) FROM notifications"
+    for_ (zip [next :: Int ..] pages) $ \(seq', pid) ->
+      execute
+        c
+        "INSERT INTO notifications (id, user_id, kind, page_id, thread_id, actor, actor_name, title, excerpt, created_at, seq, read_at, mail) VALUES (?, ?, 'changed', ?, NULL, 'someone', 'Someone', 'A page', '', ?, ?, NULL, 0)"
+        ("bulk-notification-" <> show seq' :: Text, u.text, pid.text, Stamp now, seq')
+    execute_ c "COMMIT"
+
+bell :: Spec
+bell = describe "the bell" $ do
+  let readerIn st =
+        whoFor st (As "reader") >>= \case
+          AsUser u -> pure u
+          _ -> assertFailure "the reader is nobody"
+      isNodesOfSpace statement = "FROM pages WHERE space_id" `T.isInfixOf` statement
+
+  it "reads the pages of a space once for 500 notifications about pages of a 2,000-page space" $ withDemo $ \st -> do
+    rita <- readerIn st
+    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    pages <- addPages st blog.id "bulk" 2000
+    notifyOf st rita (take 500 pages)
+    (ns, statements) <- statementsOf st (runSqliteWiki st (AsUser rita) notifications >>= ok)
+    ns.unread `shouldBe` 500
+    length ns.items `shouldBe` maxListed
+    map (\n -> n.page) ns.items `shouldBe` take maxListed (reverse (take 500 pages))
+    map (\n -> n.location) (take 1 ns.items) `shouldBe` [Just PageLocation {space = path "blog", page = path "bulk-500"}]
+    length (filter isNodesOfSpace statements) `shouldBe` 1
+    -- One page of notifications, a node for each of its pages, the count
+    -- of unread ones, the space's pages, and the transaction's own.
+    length statements `shouldSatisfy` (< maxListed + 15)
+
+  it "counts and lists only notifications about pages the user may read, the newest first" $ withDemo $ \st -> do
+    rita <- readerIn st
+    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    hidden <- runSqliteWiki st Administrator (createSpace Nothing "Hidden") >>= ok
+    shown <- addPages st blog.id "shown" 10
+    unseen <- addPages st hidden.id "unseen" 60
+    -- The ten notifications the reader may read are older than sixty
+    -- about the space they may not: more than one page of the bell's.
+    notifyOf st rita shown
+    notifyOf st rita unseen
+    ns <- runSqliteWiki st (AsUser rita) notifications >>= ok
+    ns.unread `shouldBe` 10
+    map (\n -> n.page) ns.items `shouldBe` reverse shown

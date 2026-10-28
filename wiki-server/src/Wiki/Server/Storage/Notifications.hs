@@ -30,7 +30,8 @@ module Wiki.Server.Storage.Notifications
 
     -- * Notifications
   , insertNotification
-  , loadNotifications
+  , loadNewest
+  , unreadBySpace
   , markNotificationsRead
 
     -- * Mail
@@ -258,11 +259,22 @@ notificationRow = do
     (\k -> Notification {id = NotificationId i, kind = k, page = PageId page, thread = CommentThreadId <$> thread, actor = Author {id = UserId actor, name = actorName}, title, excerpt, createdAt, read = wasRead /= (0 :: Int), location = Nothing})
       <$> readKind kind
 
--- | A user's notifications, the newest first, without where their pages
--- are now, which the caller looks up.
-loadNotifications :: Connection -> UserId -> IO [Notification]
-loadNotifications c u =
-  catMaybes <$> queryWith notificationRow c (notificationColumns <> "WHERE user_id = ? ORDER BY seq DESC") (Only u.text)
+-- | Some of a user's notifications, the newest first, without where their
+-- pages are now: at most a given number, after skipping a given number of
+-- newer ones. With them, how many rows were read, which is less than the
+-- number asked for only when no older notification is left.
+loadNewest :: Connection -> UserId -> Int -> Int -> IO (Int, [Notification])
+loadNewest c u limit offset = do
+  rows <- queryWith notificationRow c (notificationColumns <> "WHERE user_id = ? ORDER BY seq DESC LIMIT ? OFFSET ?") (u.text, limit, offset)
+  pure (length rows, catMaybes rows)
+
+-- | How many unread notifications a user has, by the space their page is
+-- in. The caller adds up the counts of the spaces the user may read, so
+-- that a notification about a page they may no longer read is not counted.
+unreadBySpace :: Connection -> UserId -> IO [(SpaceId, Int)]
+unreadBySpace c u =
+  map (first SpaceId)
+    <$> query c "SELECT p.space_id, count(*) FROM notifications n JOIN pages p ON p.id = n.page_id WHERE n.user_id = ? AND n.read_at IS NULL GROUP BY p.space_id" (Only u.text)
 
 -- | Mark some of a user's notifications read, or all of them.
 markNotificationsRead :: Connection -> UserId -> UTCTime -> ReadMark -> IO ()

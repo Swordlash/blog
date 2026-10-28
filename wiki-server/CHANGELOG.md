@@ -22,6 +22,14 @@ the notifications' `seq`: each new notification's number used to be found
 by scanning the whole table. Who made a page is now read from its first
 version alone.
 
+The bell reads one page of a user's notifications, not all of them
+(WP5.16a). It used to read every notification kept for the user (up to
+500), and the pages of a whole space for each one, on every page view. It
+now reads the newest 50, and reads further only when some of those are
+about pages the user may no longer read. The pages of each space are read
+once. The unread count is one SQL count by space, and still leaves out
+notifications about pages the user may no longer read.
+
 The static files' server sends a `.bin` file as `application/octet-stream`,
 named so explicitly (WP5.5): TikZJax's compressed files are now zlib streams
 named `.bin` rather than gzip files named `.gz`, since a corporate proxy may

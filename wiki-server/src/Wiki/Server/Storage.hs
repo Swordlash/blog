@@ -2231,11 +2231,45 @@ locatedTx n = do
           pure (Just (withLocation (PageLocation (map (\x -> x.slug) chain) <$> path) n))
         else pure Nothing
 
+-- | A user's notifications for the bell: the 'maxListed' newest of those
+-- about pages the user may still read, each with where its page is now,
+-- and how many unread notifications the user has about such pages. The
+-- unread ones are counted in SQL by space, so the cost does not grow with
+-- the number of notifications kept.
 notificationsTx :: Tx Notifications
 notificationsTx = do
   u <- notified
-  shown <- catMaybes <$> (traverse locatedTx =<< db (`Notifications.loadNotifications` u))
-  pure Notifications {unread = length (filter (\n -> not n.read) shown), items = take maxListed shown}
+  ctx <- ask
+  let readable sid = canView ctx.principal ctx.grants (chainOf ctx sid)
+  counts <- db (`Notifications.unreadBySpace` u)
+  items <- newestLocated u readable
+  pure Notifications {unread = sum [n | (sid, n) <- counts, readable sid], items}
+
+-- | The 'maxListed' newest of a user's notifications about pages in spaces
+-- the user may read, each with where its page is now. The notifications
+-- are read 'maxListed' at a time, the newest first, until enough are found
+-- or none are left; usually one read is enough. Each space's pages are
+-- read once, for the paths of every notification about a page in it.
+newestLocated :: UserId -> (SpaceId -> Bool) -> Tx [Notification]
+newestLocated u readable = go 0 mempty []
+  where
+    go offset spaces found = do
+      ctx <- ask
+      (rows, batch) <- db (\c -> Notifications.loadNewest c u maxListed offset)
+      nodes <- Map.fromList . catMaybes <$> for (ordNub (map (\n -> n.page) batch)) (\pid -> fmap (pid,) <$> db (`pageNode` pid))
+      let wanted = ordNub [p.space | p <- Map.elems nodes, readable p.space, Map.notMember p.space spaces]
+      more <- for wanted $ \sid -> (sid,) . Map.fromList . map (\x -> (x.id, x)) <$> db (`pageNodes` sid)
+      let known = spaces <> Map.fromList more
+          located =
+            [ withLocation (PageLocation (map (\x -> x.slug) (chainOf ctx p.space)) <$> pathOf (`Map.lookup` Map.findWithDefault mempty p.space known) p.id) n
+            | n <- batch
+            , Just p <- [Map.lookup n.page nodes]
+            , readable p.space
+            ]
+          now' = found <> located
+      if length now' >= maxListed || rows < maxListed
+        then pure (take maxListed now')
+        else go (offset + maxListed) known now'
 
 markReadTx :: ReadMark -> Tx Notifications
 markReadTx m = do
