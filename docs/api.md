@@ -920,7 +920,9 @@ wiki at, and answered before a closed wiki's rule:
   {version}`, `wiki_start_time_seconds`, `wiki_schema_version`,
   `wiki_websockets_open`, `wiki_spaces`, `wiki_pages`, `wiki_attachments`,
   `wiki_users`, `wiki_database_bytes` (with the write-ahead log),
-  `wiki_blobs`, `wiki_blob_bytes`, `wiki_backups_kept`,
+  `wiki_blobs`, `wiki_blob_bytes` (the blobs the attachments and the
+  spaces' icons name, counted once each, and their sizes, from the database:
+  a scrape reads no directory), `wiki_backups_kept`,
   `wiki_backup_age_seconds` (absent when there is no backup), and the counter
   `wiki_errors_total`. A `route` is the pattern the request matched, read
   from the API's own router (`/api/v1/spaces/:space/name`), or

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The scrape of `/metrics` counts the blobs from the database, not from the
+blob directory (WP5.16c). `wiki_blobs` is now the blobs the attachments and
+the spaces' icons name, each counted once, and `wiki_blob_bytes` their
+sizes as the attachments' rows record them. A scrape is one query however
+many attachments there are (10,000 blobs: 0.39 s before, 0.02 s now). A
+file nothing names any more, which the next start deletes, is no longer
+counted.
+
 "Export the wiki" no longer holds the wiki in memory (WP5.16c). The server
 writes the zip file into `<data>/tmp/` one file at a time, copying each
 attachment from its blob's file, and sends it from there with the file's

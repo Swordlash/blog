@@ -7,6 +7,7 @@
 module Test.Server.Observability (spec) where
 
 import Data.Text qualified as T
+import Database.SQLite.Simple (Only (..), execute, execute_, query_, withConnection, withTransaction)
 import Network.HTTP.Types (methodPost)
 import Protolude
 import System.Directory (listDirectory, removePathForcibly)
@@ -23,7 +24,7 @@ import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.User (Group)
 import Wiki.Server.Storage.Backup (backup)
-import Wiki.Server.Storage.Layout (attachmentsDir)
+import Wiki.Server.Storage.Layout (attachmentsDir, databaseFile)
 import Wiki.Server.Storage.Migrate (Migration (..), migrations)
 
 spec :: Spec
@@ -72,6 +73,25 @@ metrics = describe "/metrics" $ do
     again `shouldSatisfy` T.isInfixOf "wiki_backups_kept 1\n"
     -- The scrape before is counted too.
     again `shouldSatisfy` T.isInfixOf "wiki_http_requests_total{listener=\"admin\",route=\"/metrics\",method=\"GET\",status=\"2xx\"} 1\n"
+
+  it "counts the blobs from the database, without walking the blob directory: 10,000 more of them in one scrape" $ withDemoRunning identity $ \r -> do
+    -- No directory to walk: a scrape that walked it would count nothing.
+    removePathForcibly (attachmentsDir r.dataDir)
+    let sample name text = fromMaybe (panic ("no " <> name)) (head [v | line <- T.lines text, Just v <- [T.stripPrefix (name <> " ") line]])
+    scraped <- bodyText <$> getUrl r (r.admin <> "/metrics")
+    withConnection (databaseFile r.dataDir) $ \c -> do
+      execute_ c "PRAGMA busy_timeout = 10000"
+      page <- maybe (panic "the demo has no pages") fromOnly . head <$> (query_ c "SELECT id FROM pages LIMIT 1" :: IO [Only Text])
+      withTransaction c $
+        for_ [1 .. 10_000 :: Int] $ \i ->
+          execute
+            c
+            "INSERT INTO attachments (id, page_id, name, media_type, size, url, blob, ordinal) VALUES (?, ?, ?, 'text/plain', 1024, NULL, ?, ?)"
+            ("counted-" <> show i :: Text, page :: Text, "counted-" <> show i <> ".txt" :: Text, T.justifyRight 64 '0' (show i) :: Text, 1000 + i)
+    rescraped <- bodyText <$> getUrl r (r.admin <> "/metrics")
+    let grew name = (readMaybe (sample name rescraped) :: Maybe Integer) `shouldBe` ((+) <$> readMaybe (sample name scraped) <*> pure (if name == "wiki_blobs" then 10_000 else 10_000 * 1024))
+    grew "wiki_blobs"
+    grew "wiki_blob_bytes"
 
   it "is not served by the public listener" $ withDemoRunning identity $ \r -> do
     reply <- getUrl r (r.public <> "/metrics")
