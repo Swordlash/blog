@@ -185,6 +185,9 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
         inner <- renderInlines xs
         pure [headingOf level (idAndClasses attrs []) (inner <> (if opts.headingAnchors then headingAnchor attrs else []))]
       ThematicBreak -> pure [HH.hr_]
+      -- A pause matters only on a slide ("Wiki.Core.Slides"), which has
+      -- taken it out by now. A page shows nothing for it.
+      Pause -> pure []
       BlockQuote bs -> single . HH.blockquote_ <$> renderBlocks' bs
       CodeBlock _ lang code -> island code <&> \k -> [opts.codeBlock k lang code]
       Mermaid src -> island src <&> \k -> [opts.mermaid k src]

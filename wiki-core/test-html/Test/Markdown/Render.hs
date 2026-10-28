@@ -32,6 +32,10 @@ spec = describe "Markdown.Render" $ do
       ":tada:" `shows'` "<p><span class=\"emoji\" title=\":tada:\">🎉</span></p>"
     it "writes a block quote and a thematic break" $
       "> q\n\n---" `shows'` "<blockquote><p>q</p></blockquote><hr>"
+    it "writes nothing for a pause, and an incremental box as a plain box, on a page" $ do
+      "a\n\n. . .\n\nb" `shows'` "<p>a</p><p>b</p>"
+      "::: incremental\n- a\n\n. . .\n:::" `shows'` "<div class=\"incremental\"><ul><li>a</li></ul></div>"
+      "> . . ." `shows'` "<blockquote><p>. . .</p></blockquote>"
 
   describe "mentions" $ do
     let people = defaultOptions {resolveMention = \login -> if login == "ada" then Just MentionTarget {href = "/search/?q=%40ada", name = "Ada Lovelace"} else Nothing}

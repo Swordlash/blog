@@ -84,6 +84,7 @@ kind = \case
   Plain _ -> "plain"
   Heading {} -> "heading"
   ThematicBreak -> "break"
+  Pause -> "pause"
   BlockQuote _ -> "quote"
   CodeBlock {} -> "code"
   Mermaid _ -> "mermaid"

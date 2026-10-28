@@ -225,6 +225,7 @@ bodyText source =
       Plain xs -> plainText xs
       Heading _ _ xs -> plainText xs
       ThematicBreak -> ""
+      Pause -> ""
       BlockQuote bs -> blocks bs
       CodeBlock _ _ code -> code
       Mermaid diagram -> diagram

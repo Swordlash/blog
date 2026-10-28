@@ -26,6 +26,8 @@
 -- * attributes in braces after a heading, a fence's info string, a link,
 --   an image or inline code (@# Intro {#start}@, @![](a.png){width=300}@);
 -- * fenced divs (@::: warning@ … @:::@), for boxes styled by class;
+-- * pandoc's pause, @. . .@ alone in a paragraph ('Pause'), which cuts a
+--   slide into steps;
 -- * wiki links, @[[page]]@ and @[[page|label]]@, read as ordinary links to
 --   @page@, except @[[toc]]@ alone in a paragraph, which marks where the
 --   page's table of contents goes ('TableOfContents');
@@ -92,6 +94,13 @@ data Block
     -- text.
     Heading Int Attributes [Inline]
   | ThematicBreak
+  | -- | A pause, @. . .@: a paragraph of three dots separated by spaces,
+    -- alone. A deck ("Wiki.Core.Slides") shows a slide in steps, and a
+    -- pause starts the next step; a page shows nothing for it. It is
+    -- read at the top level of the page, in boxes, in alerts and in list
+    -- items. In a quotation or a footnote the three dots stay text: there
+    -- they are more likely an omission than a pause.
+    Pause
   | BlockQuote [Block]
   | -- | Fenced or indented code: attributes, the language (the first word
     -- of the info string, or else the first class), and the code.
@@ -192,7 +201,7 @@ newtype ParseError = ParseError Text
 -- | Parse a page's Markdown.
 parseMarkdown :: Text -> Either ParseError [Block]
 parseMarkdown source =
-  bimap (ParseError . show) (\(Blocks bs) -> withHeadingIds (map (contentsMarker . withMentions) (toList bs)))
+  bimap (ParseError . show) (\(Blocks bs) -> withHeadingIds (map (withPauses . contentsMarker . withMentions) (toList bs)))
     $ runIdentity
     $ CM.commonmarkWith syntax "markdown" terminated
   where
@@ -329,6 +338,16 @@ contentsMarker = \case
     , T.toLower dest == "toc"
     , T.toLower label == "toc" ->
         TableOfContents
+  other -> other
+
+-- | A block with its pauses ('Pause') read: each paragraph of three dots
+-- separated by spaces, where a pause is read.
+withPauses :: Block -> Block
+withPauses = \case
+  Para [Str t] | T.words t == [".", ".", "."] -> Pause
+  Div attrs bs -> Div attrs (map withPauses bs)
+  Alert kind bs -> Alert kind (map withPauses bs)
+  List kind items -> List kind [ListItem task (map withPauses bs) | ListItem task bs <- items]
   other -> other
 
 ----------------------------------------------------------------------

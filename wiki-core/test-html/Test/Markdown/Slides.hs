@@ -48,3 +48,15 @@ spec = describe "Slides.renderDeck" $ do
                  , "<p>B<sup class=\"footnote-ref\"><a href=\"#fn-2\" id=\"fnref-2\">2</a></sup>.</p>"
                      <> "<section class=\"footnotes\"><ol start=\"2\"><li id=\"fn-2\"><p>Note b. <a class=\"footnote-back\" href=\"#fnref-2\">↩</a></p></li></ol></section>"
                  ]
+
+  it "renders a slide's steps in place, the later ones in the class that hides them" $ do
+    let deck = either (panic . show) deckOf (parseMarkdown "One\n\n. . .\n\n::: incremental\n- a\n- b\n:::\n")
+        shown k = deck {slides = map (showingStep k) deck.slides}
+    traverse (\s -> renderHtml s.body) (renderDeck defaultOptions (shown 1))
+      `shouldReturn` [ "<p>One</p><div class=\"slide-step slide-step-later\"><div class=\"incremental\"><ul>"
+                         <> "<li>a</li><li>b<div class=\"slide-step-item slide-step-later\"></div></li></ul></div></div>"
+                     ]
+    traverse (\s -> renderHtml s.body) (renderDeck defaultOptions (shown 3))
+      `shouldReturn` [ "<p>One</p><div class=\"slide-step\"><div class=\"incremental\"><ul>"
+                         <> "<li>a</li><li>b<div class=\"slide-step-item\"></div></li></ul></div></div>"
+                     ]

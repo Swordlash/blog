@@ -79,6 +79,16 @@ spec = describe "Markdown.Ast" $ do
       "> quoted" `parses` [BlockQuote (para [Str "quoted"])]
     it "reads a thematic break" $
       "a\n\n---\n\nb" `parses` [Para [Str "a"], ThematicBreak, Para [Str "b"]]
+    it "reads a pause, three dots alone in a paragraph, where a slide can have one" $ do
+      "a\n\n. . .\n\nb" `parses` [Para [Str "a"], Pause, Para [Str "b"]]
+      "::: incremental\n. . .\n:::" `parses` [Div [("class", "incremental")] [Pause]]
+      "> [!TIP]\n> . . ." `parses` [Alert Tip [Pause]]
+      "- a\n\n  . . .\n" `parses` [List BulletList [ListItem Nothing [Para [Str "a"], Pause]]]
+    it "leaves three dots text in a quotation, after other text, or written closer" $ do
+      "> . . ." `parses` [BlockQuote (para [Str ". . ."])]
+      "a\n. . ." `parses` para [Str "a", SoftBreak, Str ". . ."]
+      "..." `parses` para [Str "..."]
+      ". . . ." `parses` para [Str ". . . ."]
     it "reads a fenced div with its class" $
       "::: warning\nCareful.\n:::" `parses` [Div [("class", "warning")] (para [Str "Careful."])]
     it "reads a GitHub alert" $

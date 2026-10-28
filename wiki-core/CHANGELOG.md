@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+A slide can be shown in steps (WP5.20), with pandoc's markers. The
+Markdown tree has a new block, `Pause`: three dots separated by spaces,
+`. . .`, alone in a paragraph at the top level, in a box, an alert or a list
+item (in a quotation or a footnote they stay text). The renderer writes
+nothing for it. `Slide` gains `steps`, and its `body` now holds the
+content of every step, the pieces shown from a later step marked
+(`stepMark`, `itemMark`); `deckOf` cuts each slide at its pauses and shows
+the lists in an `incremental` box one item at a time, counting steps as
+Beamer counts overlays. `atStep` gives a slide's body as shown at a step,
+and `showingStep` gives the slide with the later pieces in the class
+`slide-step-later`, which the stylesheet hides. A deck without either
+marker has one step a slide and is unchanged.
+
 An export can be written without holding its attachments (WP5.16c).
 `archiveFiles` gives an archive's files in `writeArchive`'s order, with
 each attachment's and icon's file as the blob it names (`FileBlob`) rather
