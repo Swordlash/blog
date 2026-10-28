@@ -349,9 +349,10 @@ anthropicRequest model effort =
 --
 -- @reasoning.summary@ @auto@ asks for a summary of the reasoning. The
 -- summary streams before the response, and the panel shows it under
--- "Thinking…". OpenAI refuses the summary to an organisation it has not
--- verified. The browser-side code then sends the request again without
--- it (@web/src/assistant.js@).
+-- "Thinking…". OpenAI may refuse the summary to an organisation it has
+-- not verified. The browser-side code then sends the request again
+-- without it (@web/src/assistant.js@). OpenAI may also send empty
+-- summaries; the panel then shows "Thinking…" alone.
 openAiRequest :: Text -> Text -> Value
 openAiRequest model effort =
   object

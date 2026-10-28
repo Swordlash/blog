@@ -144,10 +144,12 @@ const anthropicChat = (key, request, options) => {
 //
 // The request asks for a summary of the reasoning (reasoning.summary,
 // Wiki.Core.Assistant.Prompt), which streams in parts before the answer;
-// the parts are handed on separated by a blank line. OpenAI refuses the
+// the parts are handed on separated by a blank line. OpenAI may refuse the
 // summary to an organisation it has not verified, with a 400 that names
 // it: the request is then sent again without the summary, and so is every
-// later request of the chat.
+// later request of the chat. OpenAI may also accept the request and send
+// empty summaries, as it did for gpt-6.1-sol and gpt-6-luna in October
+// 2026: the panel then shows "Thinking" alone.
 const openAiChat = (key, request, options) => {
   const client = new OpenAI(clientOptions(key, options));
   const input = [];
