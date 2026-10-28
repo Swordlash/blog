@@ -81,6 +81,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, nominalDay)
 import Protolude
+import Wiki.Core.Url (Url (..))
 
 -- | 'Provider': the service the assistant sends requests to. 'Scripted' is
 -- not a real provider: it is the scripted provider that the browser tests
@@ -340,7 +341,7 @@ data ProviderSettings = ProviderSettings
   , effort :: Maybe Text
   -- ^ The effort chosen for new conversations ('efforts'), if any.
   -- 'Nothing' means 'defaultEffort' ('effortOf').
-  , baseUrl :: Maybe Text
+  , baseUrl :: Maybe Url
   -- ^ The base URL requests go to, if not the provider's own: for OpenAI,
   -- any service that implements its API ('baseUrlOf').
   , fetched :: Maybe ModelList
@@ -412,7 +413,7 @@ withEffort p e = alter p $ \(ProviderSettings k m _ b f u) -> ProviderSettings k
 -- discarded, as with a key.
 withBaseUrl :: Provider -> Text -> Settings -> Settings
 withBaseUrl p url = alter p $ \(ProviderSettings k m e old f u) ->
-  let new = T.dropWhileEnd (== '/') <$> trimmed (Just url)
+  let new = Url . T.dropWhileEnd (== '/') <$> trimmed (Just url)
    in if new == old then ProviderSettings k m e old f u else ProviderSettings k m e new Nothing False
 
 -- | The settings with a provider's model list, fetched at the given time.
@@ -433,7 +434,7 @@ chooseProvider p s = Settings {provider = p, byProvider = s.byProvider}
 -- | The base URL of a service other than OpenAI that implements OpenAI's
 -- API (Azure OpenAI, GitHub Models, OpenRouter, a server on this machine
 -- such as Ollama or LM Studio). Only OpenAI's settings have one.
-baseUrlOf :: Provider -> ProviderSettings -> Maybe Text
+baseUrlOf :: Provider -> ProviderSettings -> Maybe Url
 baseUrlOf p ps = if p == OpenAI then ps.baseUrl else Nothing
 
 -- | Whether a URL is plain HTTP to a machine other than this one, which
@@ -459,7 +460,7 @@ usable p ps = p == Scripted || isJust ps.key || isJust (baseUrlOf p ps)
 -- the provider, or the host of its other base URL.
 serviceName :: Provider -> ProviderSettings -> Text
 serviceName p ps = case baseUrlOf p ps of
-  Just url -> T.takeWhile (`notElem` ("/?#" :: [Char])) (snd (T.breakOnEnd "://" url))
+  Just url -> T.takeWhile (`notElem` ("/?#" :: [Char])) (snd (T.breakOnEnd "://" url.text))
   Nothing -> case p of
     Anthropic -> "Anthropic"
     OpenAI -> "OpenAI"
@@ -473,7 +474,7 @@ data Ready = Ready
   , model :: Text
   , key :: Text
   , effort :: Text
-  , baseUrl :: Maybe Text
+  , baseUrl :: Maybe Url
   }
   deriving stock (Eq, Show)
 

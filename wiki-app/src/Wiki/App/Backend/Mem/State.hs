@@ -201,6 +201,7 @@ import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
 import Wiki.Core.Version qualified as V
@@ -561,7 +562,7 @@ attachBytes page name mediaType bytes st0 =
 
 -- | Attach a file on the web to a page, replacing an attachment of the
 -- same name, without other checks.
-attachUrl :: PageId -> Text -> Text -> Natural -> Text -> MemState -> (MemState, Attachment)
+attachUrl :: PageId -> Text -> Text -> Natural -> Url -> MemState -> (MemState, Attachment)
 attachUrl page name mediaType size url = attachSource page name mediaType size (SourceUrl url)
 
 attachSource :: PageId -> Text -> Text -> Natural -> Source -> MemState -> (MemState, Attachment)

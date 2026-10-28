@@ -54,12 +54,13 @@ import System.Timeout (timeout)
 import Text.Show (Show (showsPrec))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), securityFor, securityName)
 import Wiki.Core.Notification (DigestGroup (..), Notification (..), PageLocation, notificationText)
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Login (..))
 import Wiki.Server.Secret (Kept, revealed)
 
 -- | Where mail goes, and the wiki's address its links start with.
 data Mailer = Mailer
-  { publicUrl :: Text
+  { publicUrl :: Url
   -- ^ The wiki's address as its readers reach it, ending in a slash
   -- (@https:\/\/wiki.example.org\/@): the start of every link in a mail.
   , deliver :: Message -> IO (Either Text ())
@@ -82,12 +83,12 @@ instance Show Message where
 
 -- | The link of an invitation: its page in the application, under the
 -- wiki's address.
-inviteLink :: Text -> Text -> Text
-inviteLink publicUrl token = publicUrl <> "invite/" <> token <> "/"
+inviteLink :: Url -> Text -> Text
+inviteLink publicUrl token = publicUrl.text <> "invite/" <> token <> "/"
 
 -- | The mail that invites someone, with the link that creates their
 -- account and when the link expires.
-invitationMessage :: Text -> Email -> Text -> UTCTime -> Message
+invitationMessage :: Url -> Email -> Text -> UTCTime -> Message
 invitationMessage publicUrl email token expiresAt =
   Message
     { to = email
@@ -96,7 +97,7 @@ invitationMessage publicUrl email token expiresAt =
         T.unlines
           [ "Hello,"
           , ""
-          , "You are invited to make yourself an account on the wiki at " <> publicUrl <> "."
+          , "You are invited to make yourself an account on the wiki at " <> publicUrl.text <> "."
           , "Follow this link to choose your login and your password:"
           , ""
           , inviteLink publicUrl token
@@ -107,16 +108,16 @@ invitationMessage publicUrl email token expiresAt =
     }
 
 -- | The link of a password reset: its page in the application.
-resetLink :: Text -> Text -> Text
-resetLink publicUrl token = publicUrl <> "reset-password/" <> token <> "/"
+resetLink :: Url -> Text -> Text
+resetLink publicUrl token = publicUrl.text <> "reset-password/" <> token <> "/"
 
 -- | The link that verifies an e-mail address: its page in the application.
-verificationLink :: Text -> Text -> Text
-verificationLink publicUrl token = publicUrl <> "verify-email/" <> token <> "/"
+verificationLink :: Url -> Text -> Text
+verificationLink publicUrl token = publicUrl.text <> "verify-email/" <> token <> "/"
 
 -- | The mail with a password reset link (WP4.11 of docs/PLAN.md), sent to
 -- a user's verified address, for their login.
-resetMessage :: Text -> Email -> Login -> Text -> UTCTime -> Message
+resetMessage :: Url -> Email -> Login -> Text -> UTCTime -> Message
 resetMessage publicUrl email login token expiresAt =
   Message
     { to = email
@@ -125,7 +126,7 @@ resetMessage publicUrl email login token expiresAt =
         T.unlines
           [ "Hello,"
           , ""
-          , "Someone asked to reset the password of the account " <> login.text <> " on the wiki at " <> publicUrl <> "."
+          , "Someone asked to reset the password of the account " <> login.text <> " on the wiki at " <> publicUrl.text <> "."
           , "Follow this link to choose a new password:"
           , ""
           , resetLink publicUrl token
@@ -137,7 +138,7 @@ resetMessage publicUrl email login token expiresAt =
     }
 
 -- | The mail that verifies an address set for a user's account.
-verificationMessage :: Text -> Email -> Login -> Text -> Message
+verificationMessage :: Url -> Email -> Login -> Text -> Message
 verificationMessage publicUrl email login token =
   Message
     { to = email
@@ -146,7 +147,7 @@ verificationMessage publicUrl email login token =
         T.unlines
           [ "Hello,"
           , ""
-          , "This address was given for the account " <> login.text <> " on the wiki at " <> publicUrl <> "."
+          , "This address was given for the account " <> login.text <> " on the wiki at " <> publicUrl.text <> "."
           , "Follow this link to confirm that it is yours, so that you can reset your password with it:"
           , ""
           , verificationLink publicUrl token
@@ -157,8 +158,8 @@ verificationMessage publicUrl email login token =
 
 -- | The link that turns a user's notification mail off: its page in the
 -- application, which asks for confirmation first.
-unsubscribeLink :: Text -> Text -> Text
-unsubscribeLink publicUrl token = publicUrl <> "unsubscribe/" <> token <> "/"
+unsubscribeLink :: Url -> Text -> Text
+unsubscribeLink publicUrl token = publicUrl.text <> "unsubscribe/" <> token <> "/"
 
 -- | The mail of a user's notifications ("Wiki.Core.Notification"): one
 -- mailed at once, or a daily digest, grouped by page, the page with the
@@ -166,7 +167,7 @@ unsubscribeLink publicUrl token = publicUrl <> "unsubscribe/" <> token <> "/"
 -- given function, from where the page is, under the wiki's address), and
 -- the mail ends with the link that turns the mail off.
 notificationMessage
-  :: Text
+  :: Url
   -- ^ The wiki's address.
   -> Email
   -- ^ The address mailed.
@@ -187,8 +188,8 @@ notificationMessage publicUrl email token isDigest pathOf groups =
           [ "Hello,"
           , ""
           , if isDigest
-              then "This is what happened on the wiki at " <> publicUrl <> " that you were told of since the last digest."
-              else "This happened on the wiki at " <> publicUrl <> ":"
+              then "This is what happened on the wiki at " <> publicUrl.text <> " that you were told of since the last digest."
+              else "This happened on the wiki at " <> publicUrl.text <> ":"
           ]
             <> concatMap section groups
             <> [ ""
@@ -207,7 +208,7 @@ notificationMessage publicUrl email token isDigest pathOf groups =
         | otherwise -> show count <> " notifications from the wiki at " <> hostOf publicUrl
     section g =
       [ ""
-      , quoted g.title <> maybe "" (\l -> " (" <> publicUrl <> pathOf l <> ")") g.location
+      , quoted g.title <> maybe "" (\l -> " (" <> publicUrl.text <> pathOf l <> ")") g.location
       ]
         <> map item g.items
     item n =
@@ -219,8 +220,8 @@ notificationMessage publicUrl email token isDigest pathOf groups =
     quoted t = "\"" <> t <> "\""
 
 -- | The host of the wiki's address.
-hostOf :: Text -> Text
-hostOf publicUrl = T.takeWhile (/= '/') (T.drop 1 (T.dropWhile (/= '/') (T.drop 1 (T.dropWhile (/= '/') publicUrl))))
+hostOf :: Url -> Text
+hostOf publicUrl = T.takeWhile (/= '/') (T.drop 1 (T.dropWhile (/= '/') (T.drop 1 (T.dropWhile (/= '/') publicUrl.text))))
 
 --------------------------------------------------------------------------------
 -- Over SMTP
@@ -245,7 +246,7 @@ mailTimeout = 30_000_000
 
 -- | A mailer over an SMTP server, signing in with this password if a user
 -- is set for the server.
-smtpMailer :: Smtp -> Maybe Text -> Text -> Mailer
+smtpMailer :: Smtp -> Maybe Text -> Url -> Mailer
 smtpMailer smtp password publicUrl = Mailer {publicUrl, deliver = smtpSend smtp password}
 
 -- | How a message is sent through an SMTP server, with a password: over
@@ -267,7 +268,7 @@ mailerFrom send s = do
   pure Mailer {publicUrl, deliver = send smtp password}
 
 -- | The mail that confirms the mail server works.
-testMessage :: Text -> Email -> Message
+testMessage :: Url -> Email -> Message
 testMessage publicUrl recipient =
   Message
     { to = recipient
@@ -276,7 +277,7 @@ testMessage publicUrl recipient =
         T.unlines
           [ "Hello,"
           , ""
-          , "This mail was sent from the administration of the wiki at " <> publicUrl <> ","
+          , "This mail was sent from the administration of the wiki at " <> publicUrl.text <> ","
           , "to check that it can send mail. Invitations go out the same way."
           ]
     }

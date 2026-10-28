@@ -91,6 +91,7 @@ import Wiki.Core.Id (BlobId (..), PageId, UserId)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (User (..))
 
 -- The browser's side of the attachments uploaded into the demo; see
@@ -224,7 +225,7 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   getVersion pid at = needVersions (unreadHistory pid) >> query (getVersionIn pid at)
   restoreVersion pid at base = needVersions (unreadHistory pid) >> writeAt (restoreVersionIn pid at base)
   attachmentUrl a = case a.source of
-    SourceUrl url -> pure url
+    SourceUrl url -> pure url.text
     SourceBlob blob -> blobUrl a.mediaType blob
 
 -- | The URL of bytes the store holds, with a media type: an object URL,

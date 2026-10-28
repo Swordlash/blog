@@ -189,6 +189,7 @@ import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), folded, queryWords, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
@@ -807,7 +808,7 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   uploadAttachment pid name mediaType bytes = run Writes (uploadAttachmentTx pid name mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes))
   deleteAttachment = run Writes . deleteAttachmentTx
   attachmentUrl a = case a.source of
-    SourceUrl url -> pure url
+    SourceUrl url -> pure url.text
     SourceBlob _ -> do
       address <- SqliteWiki (asks (\env -> env.storage.config.attachmentAddress))
       answer "" (maybe "" (const (address a)) <$> db (`loadAttachment` a.id))
@@ -2073,7 +2074,7 @@ setBackupSettingsTx change = do
 -- changed or cleared, never what it is.
 serverChanges :: Kept -> Kept -> [(Text, Text)]
 serverChanges old new =
-  [("public address", fromMaybe "none" new.publicUrl) | old.publicUrl /= new.publicUrl]
+  [("public address", maybe "none" (\u -> u.text) new.publicUrl) | old.publicUrl /= new.publicUrl]
     <> mail
     <> concatMap provider (ordNub (map (\p -> p.name) (old.providers <> new.providers)))
   where

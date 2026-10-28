@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+A web address is a `Url` (WP5.15), a newtype over `Text` in the new
+module `Wiki.Core.Url`: an attachment's `SourceUrl`, and the assistant's
+base URL (`ProviderSettings.baseUrl`, `Ready.baseUrl`, `baseUrlOf`).
+`withBaseUrl` still takes the text typed, with the same rule.
+
 An e-mail address is an `Email` (WP5.15), a newtype over `Text`.
 `parseEmail` moves here from `Wiki.Api.Admin.checkEmail`, with the same
 rules, and returns an `Email`.

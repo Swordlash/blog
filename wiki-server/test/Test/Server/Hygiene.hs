@@ -38,6 +38,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (setServerSettings))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (Resolved (..), createAccount, resolveSession, seenEvery, signIn)
 import Wiki.Server.Mail (Message (..))
@@ -71,7 +72,7 @@ mailing :: Running -> IO ()
 mailing r =
   void . setServer r $
     noServerSettings
-      { publicUrl = Just "https://wiki.example.org/"
+      { publicUrl = Just (Url "https://wiki.example.org/")
       , mail = Just MailSettings {host = "mail.test", port = 587, security = StartTls, user = Nothing, password = Nothing, from = "Wiki <wiki@example.org>"}
       }
 
@@ -511,8 +512,8 @@ storageRules = describe "the storage's rules" $ do
 withAcme :: ServerSettingsChange
 withAcme =
   noServerSettings
-    { publicUrl = Just "https://wiki.example.org/"
-    , providers = [ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just "https://id.example.org", secret = Just "acme's secret"}]
+    { publicUrl = Just (Url "https://wiki.example.org/")
+    , providers = [ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just (Url "https://id.example.org"), secret = Just "acme's secret"}]
     }
 
 -- | The secret of the latest link mailed that starts so.

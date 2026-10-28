@@ -46,6 +46,7 @@ import Wiki.Core.Permission
 import Wiki.Core.Search
 import Wiki.Core.Slug
 import Wiki.Core.Space
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User
 
 -- | Any text, Unicode included.
@@ -96,7 +97,7 @@ genGroupId :: Gen GroupId
 genGroupId = GroupId <$> genSmallId "g"
 
 genSource :: Gen Source
-genSource = oneof [SourceUrl <$> genText, SourceBlob <$> genBlobId]
+genSource = oneof [SourceUrl . Url <$> genText, SourceBlob <$> genBlobId]
 
 genAttachment :: Gen Attachment
 genAttachment = do

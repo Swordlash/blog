@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+The demo's `attachUrl` takes a `Url` (WP5.15).
+
 Passwords are `Password` in the backend classes (WP5.15): `signIn`,
 `resetPassword`, `setPassword`, `enrolTotp` and `setOwnEmail` take one. The
 forms wrap what was typed when they submit it.

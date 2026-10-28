@@ -21,6 +21,7 @@ import Data.Text qualified as T
 import Network.Wai (Request (..))
 import Protolude
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Server.Storage (Storage, readServerSettings)
 
 -- | The wiki's public address for a request to a listener that serves the
@@ -28,7 +29,7 @@ import Wiki.Server.Storage (Storage, readServerSettings)
 publicAddress :: Storage -> Text -> Request -> IO Text
 publicAddress storage mount request = do
   settings <- readServerSettings storage
-  pure (fromMaybe (requestAddress mount request) settings.publicUrl)
+  pure (maybe (requestAddress mount request) (\u -> u.text) settings.publicUrl)
 
 -- | The address a request names the wiki by: its host, as the browser or
 -- a proxy in front of the server requested it, under the listener's path.

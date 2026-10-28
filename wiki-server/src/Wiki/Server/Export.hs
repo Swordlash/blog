@@ -102,6 +102,7 @@ import Wiki.Core.Page (Page (..), pageTreeOrder)
 import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), Theme (..), deckOf, isDeck)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Server.Export.Document
 import Wiki.Server.Storage (Storage, Who (..), blobPath, exportedPage, readServerSettings, runSqliteWiki, spacePages)
 
@@ -260,7 +261,7 @@ refusalOf = \case
   Unreachable t -> ApiError.Invalid t
 
 -- | Where a page is, for reading it.
-placeOf :: Maybe Text -> [Space] -> [Page] -> Page -> ([Slug] -> [Slug] -> Maybe Text) -> Text -> (AttachmentId -> Bool) -> Place
+placeOf :: Maybe Url -> [Space] -> [Page] -> Page -> ([Slug] -> [Slug] -> Maybe Text) -> Text -> (AttachmentId -> Bool) -> Place
 placeOf publicUrl spaces pages page inDocument idPrefix stored =
   Place
     { spaces

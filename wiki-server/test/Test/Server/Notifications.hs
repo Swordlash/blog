@@ -46,6 +46,7 @@ import Wiki.Core.Notification (Kind (..), MailMode (..), Notification (..), Watc
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Log (silentLogger)
@@ -191,7 +192,7 @@ mailing :: Running -> IO ()
 mailing r =
   void . setServer r $
     noServerSettings
-      { publicUrl = Just "https://wiki.example.org/"
+      { publicUrl = Just (Url "https://wiki.example.org/")
       , mail = Just MailSettings {host = "mail.test", port = 587, security = StartTls, user = Nothing, password = Nothing, from = "Wiki <wiki@example.org>"}
       }
 
@@ -244,7 +245,7 @@ byMail = describe "by mail" $
 -- | Mail settings on a storage, as the administration sets them.
 mailOn :: Storage -> IO ()
 mailOn st =
-  runSqliteWiki st Administrator (setServerSettings noServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just MailSettings {host = "mail.test", port = 587, security = StartTls, user = Nothing, password = Nothing, from = "wiki@example.org"}})
+  runSqliteWiki st Administrator (setServerSettings noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.test", port = 587, security = StartTls, user = Nothing, password = Nothing, from = "wiki@example.org"}})
     >>= void
     . ok
 

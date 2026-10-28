@@ -94,6 +94,7 @@ library
       Wiki.Core.Slug
       Wiki.Core.Space
       Wiki.Core.Template
+      Wiki.Core.Url
       Wiki.Core.User
       Wiki.Core.Version
   other-modules:

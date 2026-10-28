@@ -22,6 +22,7 @@ import Data.Text qualified as T
 import Numeric.Natural (Natural)
 import Protolude
 import Wiki.Core.Id
+import Wiki.Core.Url (Url (..))
 
 -- | 'Attachment': one file attached to a page.
 data Attachment = Attachment
@@ -42,7 +43,7 @@ data Attachment = Attachment
 data Source
   = -- | A URL anywhere on the web, such as the demo's sample image
     -- ("Wiki.App.Demo"). Uploads are always stored as blobs.
-    SourceUrl Text
+    SourceUrl Url
   | -- | A blob stored by the backend, which serves it at a URL of its own.
     SourceBlob BlobId
   deriving stock (Eq, Show, Generic)

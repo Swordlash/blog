@@ -33,6 +33,7 @@ import Protolude hiding (Handler)
 import System.Posix.Signals (Handler (..), installHandler, sigINT, sigTERM)
 import Wiki.Api.Links (attachmentUrl, spaceIconUrl)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, redirectUri, securityName)
+import Wiki.Core.Url (Url (..))
 import Wiki.Server.Api (Env (..))
 import Wiki.Server.App (Finding (..), Listener (..), listenerApp)
 import Wiki.Server.Backups (newBackupService, runScheduler)
@@ -161,11 +162,11 @@ withServerUsing given raw sendMail action = do
     -- The administration's settings as the server starts with them
     -- (secrets left out); a change is seen by the next request, unlogged.
     configured <- readServerSettings storage
-    logWith logger Info [("event", "server-settings"), ("public-url", fromMaybe "none" configured.publicUrl)]
+    logWith logger Info [("event", "server-settings"), ("public-url", maybe "none" (\u -> u.text) configured.publicUrl)]
     for_ configured.mail $ \m ->
       logWith logger Info [("event", "mail"), ("smtp", m.host <> ":" <> show m.port), ("security", securityName m.security), ("from", m.from)]
     for_ configured.providers $ \p ->
-      logWith logger Info ([("event", "oidc"), ("provider", p.name), ("kind", kindName p.kind)] <> [("redirect", redirectUri u p.name) | Just u <- [configured.publicUrl]])
+      logWith logger Info ([("event", "oidc"), ("provider", p.name), ("kind", kindName p.kind)] <> [("redirect", (redirectUri u p.name).text) | Just u <- [configured.publicUrl]])
     stopping <- newIORef False
     -- The thread that backs the server up, which does nothing until the
     -- administration turns backups on, and the one that mails

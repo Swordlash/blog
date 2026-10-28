@@ -22,6 +22,7 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings
 import Wiki.Api.Types qualified as Types
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), SignInProvider (..))
 import Wiki.Server.Mail (Message (..))
 
@@ -49,11 +50,11 @@ mailAs host user password = MailSettings {host, port = 587, security = StartTls,
 
 -- | A provider of the fake's, with a secret if one is given.
 provider :: Text -> Text -> Maybe Text -> ProviderChange
-provider name issuer secret = ProviderSettings {name, kind = Generic, clientId = name <> "-client", issuer = Just issuer, secret}
+provider name issuer secret = ProviderSettings {name, kind = Generic, clientId = name <> "-client", issuer = Just (Url issuer), secret}
 
 -- | Settings with an address, and what else is given.
 withAddress :: ServerSettingsChange
-withAddress = noServerSettings {publicUrl = Just "https://wiki.example.org/"}
+withAddress = noServerSettings {publicUrl = Just (Url "https://wiki.example.org/")}
 
 putServer :: Running -> [Header] -> Text -> ServerSettingsChange -> IO Reply
 putServer r hs root change = send r "PUT" (root <> links.admin.setServer) (("Content-Type", "application/json") : hs) (encode change)
@@ -75,12 +76,12 @@ reading = describe "reading and writing them" $ do
     (send r "POST" (onPublic r (links.admin.checkProvider "x")) [editor, ("Content-Type", "application/json")] "null" >>= jsonAs 403) `shouldReturn` Forbidden
     -- The administrator's session writes them, as the operator does.
     set :: ServerSettings <- putServer r [admin] (r.public <> "/") withAddress >>= jsonAs 200
-    set.publicUrl `shouldBe` Just "https://wiki.example.org/"
+    set.publicUrl `shouldBe` Just (Url "https://wiki.example.org/")
     serverAs r `shouldReturn` set
 
   it "normalises the address, and leaves out what is blank" $ withDemoRunning identity $ \r -> do
-    set <- setServer r noServerSettings {publicUrl = Just "  https://wiki.example.org/team  ", mail = Just (mailAs " mail.example.org " (Just "  ") Nothing)}
-    set.publicUrl `shouldBe` Just "https://wiki.example.org/team/"
+    set <- setServer r noServerSettings {publicUrl = Just (Url "  https://wiki.example.org/team  "), mail = Just (mailAs " mail.example.org " (Just "  ") Nothing)}
+    set.publicUrl `shouldBe` Just (Url "https://wiki.example.org/team/")
     ((\m -> (m.host, m.user)) <$> set.mail) `shouldBe` Just ("mail.example.org", Nothing)
 
 secrets :: Spec
@@ -125,7 +126,7 @@ checks = describe "a change that cannot be" $
   it "is refused whole, saying why, and nothing of it is kept" $
     withFakeProvider $ \fake -> withDemoRunning identity $ \r -> do
       let refused change = sendJson r "PUT" (onAdmin r links.admin.setServer) change >>= jsonAs @ApiError 400
-      refused noServerSettings {publicUrl = Just "wiki.example.org"} `shouldReturn` Invalid "The wiki's public address starts with http:// or https://: wiki.example.org"
+      refused noServerSettings {publicUrl = Just (Url "wiki.example.org")} `shouldReturn` Invalid "The wiki's public address starts with http:// or https://: wiki.example.org"
       refused noServerSettings {mail = Just (mailServer "mail.example.org" Nothing)} `shouldReturn` Invalid "The mail needs the wiki's public address: the links it carries start with it."
       refused noServerSettings {providers = [provider "acme" fake.url (Just "s")]} `shouldReturn` Invalid "The providers need the wiki's public address: they send people back below it."
       refused withAddress {providers = [provider "acme" fake.url (Just "s"), provider "acme" fake.url (Just "t")]} `shouldReturn` Invalid "There are two providers named acme."
@@ -157,17 +158,17 @@ checkingProviders = describe "checking a provider" $ do
   it "asks it how to sign in, as set, and gives the redirect URI to register" $ withFakeProvider $ \fake -> withDemoRunning identity $ \r -> do
     _ <- setServer r withAddress {providers = [provider "acme" fake.url (Just clientSecret)]}
     found :: ProviderCheck <- sendJson r "POST" (onAdmin r (links.admin.checkProvider "acme")) (Nothing :: Maybe ProviderChange) >>= jsonAs 200
-    found.redirectUri `shouldBe` Just "https://wiki.example.org/auth/acme/callback"
+    found.redirectUri `shouldBe` Just (Url "https://wiki.example.org/auth/acme/callback")
     found.clientSecret `shouldBe` Set
     found.problem `shouldBe` Nothing
-    (\d -> d.token) <$> found.discovered `shouldBe` Just (fake.url <> "/token")
+    (\d -> d.token) <$> found.discovered `shouldBe` Just (Url (fake.url <> "/token"))
 
   it "asks one as given before it is saved, with the secret set for its name" $ withFakeProvider $ \fake -> withDemoRunning identity $ \r -> do
     _ <- setServer r withAddress {providers = [provider "acme" "https://id.invalid" (Just clientSecret)]}
     found :: ProviderCheck <- sendJson r "POST" (onAdmin r (links.admin.checkProvider "acme")) (Just (provider "acme" fake.url Nothing)) >>= jsonAs 200
     (found.clientSecret, isJust found.discovered, found.problem) `shouldBe` (Set, True, Nothing)
     fresh :: ProviderCheck <- sendJson r "POST" (onAdmin r (links.admin.checkProvider "new")) (Just (provider "new" fake.url Nothing)) >>= jsonAs 200
-    (fresh.clientSecret, fresh.redirectUri) `shouldBe` (NotSet, Just "https://wiki.example.org/auth/new/callback")
+    (fresh.clientSecret, fresh.redirectUri) `shouldBe` (NotSet, Just (Url "https://wiki.example.org/auth/new/callback"))
     -- Nothing given and nothing set by that name.
     (sendJson r "POST" (onAdmin r (links.admin.checkProvider "nobody")) (Nothing :: Maybe ProviderChange) >>= jsonAs 404) `shouldReturn` NotFound
 

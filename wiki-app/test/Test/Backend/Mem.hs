@@ -29,6 +29,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Search (SearchHit (..), searchQuery, searchable)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Login (..), User (..))
 
 -- | A fresh in-memory wiki with the demo in it, run as each of its users by
@@ -99,8 +100,8 @@ spec = do
         pure (findAttachment "earth.jpg" page.attachments)
       case earth of
         Just a@Attachment {source = SourceUrl url} -> do
-          url `shouldSatisfy` T.isPrefixOf "https://upload.wikimedia.org/"
-          runMemWiki ref (attachmentUrl a) `shouldReturn` url
+          url.text `shouldSatisfy` T.isPrefixOf "https://upload.wikimedia.org/"
+          runMemWiki ref (attachmentUrl a) `shouldReturn` url.text
         other -> expectationFailure ("expected earth.jpg by URL, got " <> show other)
 
     it "keeps each page's text prepared for the search in step with the page, and nowhere else" $ do

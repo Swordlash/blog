@@ -44,6 +44,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalPermission (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 
@@ -99,7 +100,7 @@ demoState now = flip execState emptyState $ do
   tourPage <- page docs Nothing "Tour" 1 tour
   guide <- page docs Nothing "Markdown guide" 2 markdownGuide
   attach guide "tree.png" "image/png" treePng
-  modify (fst . attachUrl guide "earth.jpg" "image/jpeg" 267290 earthUrl)
+  modify (fst . attachUrl guide "earth.jpg" "image/jpeg" 267290 (Url earthUrl))
   _ <- page docs (Just guide) "Diagrams" 3 diagrams
   _ <- page docs (Just guide) "Mathematics" 3 mathematics
   _ <- page docs (Just guide) "Presentations" 2 presentations

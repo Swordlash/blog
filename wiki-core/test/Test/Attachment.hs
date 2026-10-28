@@ -4,6 +4,7 @@ import Protolude
 import Test.Hspec
 import Wiki.Core.Attachment
 import Wiki.Core.Id
+import Wiki.Core.Url (Url (..))
 
 spec :: Spec
 spec = describe "Attachment" $ do
@@ -24,7 +25,7 @@ spec = describe "Attachment" $ do
 
   describe "an attachment" $ do
     let attachment name mediaType =
-          Attachment {id = AttachmentId name, name, mediaType, size = 1024, source = SourceUrl ("https://example.com/" <> name)}
+          Attachment {id = AttachmentId name, name, mediaType, size = 1024, source = SourceUrl (Url ("https://example.com/" <> name))}
         diagram = attachment "diagram.png" "image/png"
         talk = attachment "talk.webm" "video/webm"
     it "is shown by its media type" $

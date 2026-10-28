@@ -8,6 +8,7 @@ import Data.Text qualified as T
 import Protolude
 import Test.Hspec
 import Wiki.Api.ServerSettings
+import Wiki.Core.Url (Url (..))
 
 -- | Settings kept with their secrets as text, as the demo keeps them.
 type Kept = ServerSettingsOf (Maybe Text)
@@ -21,7 +22,7 @@ providerWithSecret name secret = ProviderSettings {name, kind = Google, clientId
 kept :: Kept
 kept =
   ServerSettings
-    { publicUrl = Just "https://wiki.example.org/"
+    { publicUrl = Just (Url "https://wiki.example.org/")
     , mail = mailWith (Just "wiki") (Just "pw")
     , providers = [providerWithSecret "google" (Just "g"), providerWithSecret "other" (Just "o")]
     }
@@ -55,23 +56,23 @@ spec = describe "the server's settings" $ do
   describe "the checks" $ do
     let checked = checkServerSettings isJust
     it "take settings that can be, normalised" $
-      ((\s -> s.publicUrl) <$> checked kept {publicUrl = Just " https://wiki.example.org/team "}) `shouldBe` Right (Just "https://wiki.example.org/team/")
+      ((\s -> s.publicUrl) <$> checked kept {publicUrl = Just (Url " https://wiki.example.org/team ")}) `shouldBe` Right (Just (Url "https://wiki.example.org/team/"))
     it "take nothing set" $ checked (noServerSettings :: Kept) `shouldBe` Right noServerSettings
     it "refuse what cannot be, saying why" $ do
       let refused s why = either (why `T.isInfixOf`) (const False) (checked s) `shouldBe` True
       refused kept {publicUrl = Nothing} "The mail needs the wiki's public address"
       refused kept {mail = Nothing, publicUrl = Nothing} "The providers need the wiki's public address"
-      refused kept {publicUrl = Just "ftp://x/"} "starts with http:// or https://"
+      refused kept {publicUrl = Just (Url "ftp://x/")} "starts with http:// or https://"
       refused kept {mail = mailWith (Just "wiki") Nothing} "needs its password"
       refused kept {providers = [providerWithSecret "google" Nothing]} "needs its client secret"
       refused kept {providers = [providerWithSecret "g" (Just "x"), providerWithSecret "g" (Just "y")]} "two providers named g"
       refused kept {providers = [ProviderSettings {name = "corp", kind = Generic, clientId = "c", issuer = Nothing, secret = Just "x"}]} "needs its issuer"
-      refused kept {providers = [ProviderSettings {name = "corp", kind = Generic, clientId = "c", issuer = Just "http://id.example.org", secret = Just "x"}]} "must start with https://"
+      refused kept {providers = [ProviderSettings {name = "corp", kind = Generic, clientId = "c", issuer = Just (Url "http://id.example.org"), secret = Just "x"}]} "must start with https://"
       refused kept {providers = [providerWithSecret "Bad Name" (Just "x")]} "lower-case letters"
       refused kept {providers = [ProviderSettings {name = "g", kind = Google, clientId = " ", issuer = Nothing, secret = Just "x"}]} "needs its client id"
     it "let a provider on this machine be talked to over plain HTTP, for a test" $
-      providerProblems ProviderSettings {name = "local", kind = Generic, clientId = "c", issuer = Just "http://127.0.0.1:9000", secret = ()} `shouldBe` []
+      providerProblems ProviderSettings {name = "local", kind = Generic, clientId = "c", issuer = Just (Url "http://127.0.0.1:9000"), secret = ()} `shouldBe` []
 
   it "name a provider for its buttons, and give the redirect URI to register" $ do
     map (`providerLabel` "corp") [Google, Apple, GitHub, Generic] `shouldBe` ["Google", "Apple", "GitHub", "Corp"]
-    redirectUri "https://wiki.example.org/" "corp" `shouldBe` "https://wiki.example.org/auth/corp/callback"
+    redirectUri (Url "https://wiki.example.org/") "corp" `shouldBe` Url "https://wiki.example.org/auth/corp/callback"

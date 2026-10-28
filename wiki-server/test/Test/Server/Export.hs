@@ -38,6 +38,7 @@ import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Slides (Deck (..), Slide (..), deckOf)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Server.Export (availableFormats, newExports, oneAtATime, restrictTeX, texEngine, texLimits)
 import Wiki.Server.Export.Document
 
@@ -70,7 +71,7 @@ place =
     , attachments = [tree, paper]
     , stored = (== tree.id)
     , attachmentAddress = attachmentUrl
-    , publicUrl = Just "https://wiki.example.org/"
+    , publicUrl = Just (Url "https://wiki.example.org/")
     , inDocument = \_ _ -> Nothing
     , idPrefix = ""
     , macros = Macros []

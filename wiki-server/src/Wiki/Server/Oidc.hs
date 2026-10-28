@@ -107,6 +107,7 @@ import Protolude
 import Text.Show (Show (showsPrec))
 import Web.FormUrlEncoded (urlEncodeParams)
 import Wiki.Api.ServerSettings (ProviderKind (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, readKind, redirectUri)
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), SignInProvider (..))
 import Wiki.Server.Accounts (Claimed (..), Intent)
 import Wiki.Server.Password (newToken, tokenHash)
@@ -131,7 +132,7 @@ data OidcOption = OidcOption
 
 -- | A provider's settings, without its secret.
 optionOf :: ProviderSettingsOf s -> OidcOption
-optionOf p = OidcOption {name = p.name, kind = p.kind, clientId = p.clientId, issuer = p.issuer}
+optionOf p = OidcOption {name = p.name, kind = p.kind, clientId = p.clientId, issuer = (\u -> u.text) <$> p.issuer}
 
 -- | A provider, as the server talks to it.
 data Provider = Provider
@@ -140,7 +141,7 @@ data Provider = Provider
   -- ^ The client's secret.
   , label :: Text
   -- ^ How the wiki's pages name it: "Sign in with Google".
-  , publicUrl :: Text
+  , publicUrl :: Url
   -- ^ The wiki's address, ending in a slash, under which the redirect URI
   -- is.
   , manager :: Manager
@@ -154,7 +155,7 @@ instance Show Provider where
 
 -- | A provider, with its secret, under the wiki's public address, reached
 -- through this connection manager.
-newProvider :: Manager -> Text -> OidcOption -> Text -> IO Provider
+newProvider :: Manager -> Url -> OidcOption -> Text -> IO Provider
 newProvider manager publicUrl option secret = do
   discovered <- newIORef Nothing
   pure Provider {option, secret, label = providerLabel option.kind option.name, publicUrl, manager, discovered}
@@ -174,7 +175,7 @@ signInProvider p = SignInProvider {name = p.option.name, label = p.label}
 -- with the first.
 data ProviderCache = ProviderCache
   { manager :: MVar (Maybe Manager)
-  , made :: MVar (Map (OidcOption, Secret, Text) Provider)
+  , made :: MVar (Map (OidcOption, Secret, Url) Provider)
   }
 
 newProviderCache :: IO ProviderCache
@@ -205,7 +206,7 @@ providersFor cache s = case s.publicUrl of
 
 -- | A provider as given, that has asked nothing yet: what checking a
 -- provider uses, to ask afresh.
-freshProvider :: ProviderCache -> Text -> OidcOption -> Text -> IO Provider
+freshProvider :: ProviderCache -> Url -> OidcOption -> Text -> IO Provider
 freshProvider cache url option secret = do
   manager <- managerOf cache
   newProvider manager url option secret
@@ -310,7 +311,7 @@ authorizeUrl p e s = e.authorization <> (if "?" `T.isInfixOf` e.authorization th
     params =
       [ ("response_type", "code")
       , ("client_id", o.clientId)
-      , ("redirect_uri", redirectUri p.publicUrl o.name)
+      , ("redirect_uri", (redirectUri p.publicUrl o.name).text)
       , ("scope", scope)
       , ("state", s.state)
       ]
@@ -406,7 +407,7 @@ exchange p e s code = do
       form =
         [ ("grant_type", "authorization_code")
         , ("code", code)
-        , ("redirect_uri", redirectUri p.publicUrl o.name)
+        , ("redirect_uri", (redirectUri p.publicUrl o.name).text)
         , ("client_id", o.clientId)
         ]
           <> [("client_secret", p.secret) | e.secretInForm]

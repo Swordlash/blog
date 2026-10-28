@@ -27,6 +27,7 @@ import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Url (Url (..))
 
 -- | Every endpoint's URL, as a function of its captures and parameters:
 -- @links.spaces.rename spaceId@ is @api\/v1\/spaces\/\<id>\/name@. An
@@ -43,7 +44,7 @@ linkText = toUrlPiece
 -- whose bytes the server stores is at its API URL, which ends in its name.
 attachmentUrl :: Attachment -> Text
 attachmentUrl a = case a.source of
-  SourceUrl url -> url
+  SourceUrl url -> url.text
   SourceBlob _ -> links.attachments.content a.id a.name
 
 -- | The URL a browser fetches a space's icon image from: @spaceIconUrl@

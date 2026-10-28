@@ -19,6 +19,7 @@ import Wiki.Api (AdminApi (..), WikiApi (..))
 import Wiki.Api.Admin (Invited (..), NewInvitation (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), MailTest (..), MailTestResult (..), ServerSettingsOf (..), noServerSettings)
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..))
 import Wiki.Server.Log (redactedPath)
 import Wiki.Server.Mail
@@ -36,21 +37,21 @@ expiry = UTCTime (fromGregorian 2026 11 1) 3600
 messages :: Spec
 messages = describe "an invitation's message" $ do
   it "is to its address, with the link below the wiki's address, and when it stops working" $ do
-    let m = invitationMessage "https://wiki.example.org/team/" (Email "bea@example.org") "s3cr3t" expiry
+    let m = invitationMessage (Url "https://wiki.example.org/team/") (Email "bea@example.org") "s3cr3t" expiry
     m.to.text `shouldBe` "bea@example.org"
     m.subject `shouldBe` "You are invited to the wiki at wiki.example.org"
     m.body `shouldSatisfy` T.isInfixOf "https://wiki.example.org/team/invite/s3cr3t/"
     m.body `shouldSatisfy` T.isInfixOf "2026-11-01 01:00 UTC"
 
   it "never shows its body" $
-    show (invitationMessage "https://wiki.example.org/" (Email "bea@example.org") "s3cr3t" expiry) `shouldSatisfy` (not . T.isInfixOf "s3cr3t")
+    show (invitationMessage (Url "https://wiki.example.org/") (Email "bea@example.org") "s3cr3t" expiry) `shouldSatisfy` (not . T.isInfixOf "s3cr3t")
 
 overSmtp :: Spec
 overSmtp = describe "over SMTP" $ do
   it "signs in, says who from and to whom, and sends the mail whole" $ do
     (told, port) <- sink (const True)
     let smtp = Smtp {host = "127.0.0.1", port, security = Plain, user = Just "wiki", from = "Wiki <wiki@example.org>"}
-        mailer = smtpMailer smtp (Just "smtp password") "https://wiki.example.org/"
+        mailer = smtpMailer smtp (Just "smtp password") (Url "https://wiki.example.org/")
     mailer.deliver (invitationMessage mailer.publicUrl (Email "bea@example.org") "s3cr3t" expiry) `shouldReturn` Right ()
     said <- readIORef told
     said `shouldContain` ["AUTH LOGIN"]
@@ -67,14 +68,14 @@ overSmtp = describe "over SMTP" $ do
 
   it "says why a recipient was refused, and nothing of the mail" $ do
     (_, port) <- sink (not . ("RCPT" `T.isPrefixOf`))
-    let mailer = smtpMailer Smtp {host = "127.0.0.1", port, security = Plain, user = Nothing, from = "wiki@example.org"} Nothing "https://wiki.example.org/"
+    let mailer = smtpMailer Smtp {host = "127.0.0.1", port, security = Plain, user = Nothing, from = "wiki@example.org"} Nothing (Url "https://wiki.example.org/")
     result <- mailer.deliver (invitationMessage mailer.publicUrl (Email "nobody@example.org") "s3cr3t" expiry)
     result `shouldSatisfy` either (T.isInfixOf "RCPT TO with 550") (const False)
     result `shouldSatisfy` either (not . T.isInfixOf "s3cr3t") (const False)
 
   it "says so when nothing listens" $ do
     port <- freePort
-    let mailer = smtpMailer Smtp {host = "127.0.0.1", port, security = Plain, user = Nothing, from = "wiki@example.org"} Nothing "https://wiki.example.org/"
+    let mailer = smtpMailer Smtp {host = "127.0.0.1", port, security = Plain, user = Nothing, from = "wiki@example.org"} Nothing (Url "https://wiki.example.org/")
     mailer.deliver (invitationMessage mailer.publicUrl (Email "bea@example.org") "s3cr3t" expiry) >>= (`shouldSatisfy` isLeft)
 
   it "takes implicit TLS on 465, and STARTTLS on any other port" $
@@ -85,7 +86,7 @@ atRunTime = describe "through the mail server set while the server runs" $
   it "mails an invitation with the settings as they are when it is sent, the password included" $
     withDemoRunning identity $ \r -> do
       let through port password = MailSettings {host = "127.0.0.1", port, security = Plain, user = Just "wiki", password, from = "Wiki <wiki@example.org>"}
-          settings port password = noServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just (through port password)}
+          settings port password = noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just (through port password)}
           invite email = sendJson r "POST" (r.admin <> "/admin/" <> links.admin.invite) NewInvitation {email} >>= jsonAs @Invited 201
       -- Nothing set: nothing mailed, the link given.
       (\i -> isJust i.token) <$> invite "first@example.org" `shouldReturn` True

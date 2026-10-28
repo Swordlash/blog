@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The server's addresses are `Url` (WP5.15, from `Wiki.Core.Url`):
+`ServerSettingsOf.publicUrl`, `ProviderSettingsOf.issuer`,
+`ProviderCheck.redirectUri`, the endpoints of `Discovered`, and
+`redirectUri`, which takes and gives one. `checkPublicUrl` is now
+`parsePublicUrl`, with the same rule, and `secureAddress` takes a `Url`.
+The JSON is unchanged.
+
 The addresses in responses are `Email` (WP5.15): `Invitation.email`,
 `InvitationInfo.email`, `AccountEmail.email`, `EmailState.email` and
 `LinkedIdentity.email`. The addresses a request carries as typed

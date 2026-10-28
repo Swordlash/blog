@@ -32,6 +32,7 @@ import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (InvitationId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Login (..), Password (..), Standing (..), User (..))
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Storage.Layout (databaseFile)
@@ -286,7 +287,7 @@ invitations = describe "an invitation, where the server mails nothing" $ do
 
 mailed :: Spec
 mailed = describe "an invitation, where the server mails them" $ do
-  let mailingThrough host r = setServer r noServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just MailSettings {host, port = 587, security = StartTls, user = Nothing, password = Nothing, from = "Wiki <wiki@example.org>"}}
+  let mailingThrough host r = setServer r noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host, port = 587, security = StartTls, user = Nothing, password = Nothing, from = "Wiki <wiki@example.org>"}}
   it "is mailed with its link, which the panel is not given" $ withDemoRunning identity $ \r -> do
     _ <- mailingThrough "mail.test" r
     made <- inviteAs r "bea@example.org"

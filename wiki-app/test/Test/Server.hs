@@ -15,6 +15,7 @@ import Protolude
 import Test.Hspec
 import Wiki.Api.ServerSettings (ProviderKind (..))
 import Wiki.App.View.Server (ProviderHints (..), providerHints, providerRedirect)
+import Wiki.Core.Url (Url (..))
 
 -- | Some HTML as the page has it, rendered by a component that shows only
 -- it.
@@ -46,13 +47,13 @@ spec = describe "Wiki.App.View.Server's provider form" $ do
       html `lacks` "once it has a name"
 
     it "asks for the name, while it is empty" $ do
-      html <- rendered (providerRedirect (Just "https://wiki.example.org/") "")
+      html <- rendered (providerRedirect (Just (Url "https://wiki.example.org/")) "")
       html `contains` "Type the name above and the redirect URI to register appears here."
       html `lacks` "once it has a name"
       html `lacks` "callback"
 
     it "shows the URI once the name is typed, and what to do with it" $ do
-      html <- rendered (providerRedirect (Just "https://wiki.example.org/") "google")
+      html <- rendered (providerRedirect (Just (Url "https://wiki.example.org/")) "google")
       html `contains` "Redirect URI to register: <code class=\"server-provider-redirect\">https://wiki.example.org/auth/google/callback</code>"
       html `contains` "Register it with the provider as its redirect (callback) URI; Google's “Authorized JavaScript origins” may stay empty."
 

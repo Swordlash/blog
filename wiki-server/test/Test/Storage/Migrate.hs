@@ -14,6 +14,7 @@ import Wiki.Api.Admin (WikiSettings (..), defaultSettings)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Search (foldText)
+import Wiki.Core.Url (Url (..))
 import Wiki.Server.Secret (Secret (..))
 import Wiki.Server.Storage (closeStorage, defaultConfig, openStorage, withStorage)
 import Wiki.Server.Storage.Layout (databaseFile)
@@ -103,7 +104,7 @@ spec = describe "migrations" $ do
       (\s -> s.access) <$> loadSettings c `shouldReturn` Closed
       query_ c "SELECT count(*) FROM identities" `shouldReturn` [Only (1 :: Int)]
       -- What the administration sets is read back, the secrets with it.
-      let set = noServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just MailSettings {host = "mail.example.org", port = 465, security = ImplicitTls, user = Just "wiki", password = Just (Secret "pw"), from = "w@example.org"}, providers = [ProviderSettings {name = "github", kind = GitHub, clientId = "Iv1", issuer = Nothing, secret = Just (Secret "s")}]}
+      let set = noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.example.org", port = 465, security = ImplicitTls, user = Just "wiki", password = Just (Secret "pw"), from = "w@example.org"}, providers = [ProviderSettings {name = "github", kind = GitHub, clientId = "Iv1", issuer = Nothing, secret = Just (Secret "s")}]}
       storeServerSettings c set
       loadServerSettings c `shouldReturn` set
       (\s -> s.access) <$> loadSettings c `shouldReturn` Closed

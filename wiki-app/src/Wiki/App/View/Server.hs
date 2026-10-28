@@ -60,6 +60,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Backups qualified as Backups
 import Wiki.App.View.Common
 import Wiki.App.View.Status qualified as Status
+import Wiki.Core.Url (Url (..))
 
 newtype Input = Input {context :: Context}
 
@@ -259,7 +260,7 @@ component =
           _ ->
             [hh|
               <div class="server-url-shown">
-                <p class="server-url-value">{{ fromMaybe "Not set: invitations cannot be mailed, nor providers set up, until it is." settings.publicUrl }}</p>
+                <p class="server-url-value">{{ maybe "Not set: invitations cannot be mailed, nor providers set up, until it is." (\u -> u.text) settings.publicUrl }}</p>
                 <p class="admin-intro">Mailed links and the providers' redirect URIs start with it.</p>
                 <div class="actions">
                   <button type="button" class="server-url-edit" disabled={{ editingSomething st }} onClick={{ const EditUrl }}>Change</button>
@@ -404,7 +405,7 @@ component =
           <span class="server-provider-kind">{{ providerLabel p.kind p.name }} ({{ kindName p.kind }})</span>
           <dl>
             <dt>Client id</dt><dd>{{ p.clientId }}</dd>
-            {% for i in maybeToList p.issuer %}<dt>Address</dt><dd>{{ i }}</dd>{% end %}
+            {% for i in maybeToList p.issuer %}<dt>Address</dt><dd>{{ i.text }}</dd>{% end %}
             <dt>Client secret</dt><dd class="server-provider-secret">{{ secretText p.secret }}</dd>
             <dt>Redirect URI</dt><dd class="server-provider-redirect">{{ redirectText settings p.name }}</dd>
           </dl>
@@ -473,9 +474,9 @@ component =
             <div class="server-provider-checked" role="status">
               <p>It answered: people can sign in with it{{ if c.clientSecret == Set then "." else ", once its client secret is set." :: Text }}</p>
               <dl>
-                <dt>Issuer</dt><dd>{{ d.issuer }}</dd>
-                <dt>Sign-in page</dt><dd>{{ d.authorization }}</dd>
-                <dt>Token endpoint</dt><dd>{{ d.token }}</dd>
+                <dt>Issuer</dt><dd>{{ d.issuer.text }}</dd>
+                <dt>Sign-in page</dt><dd>{{ d.authorization.text }}</dd>
+                <dt>Token endpoint</dt><dd>{{ d.token.text }}</dd>
               </dl>
             </div>
           |]
@@ -516,11 +517,11 @@ component =
         modify (\st -> st {input})
         when (old /= input.context.revision) load
       Cancel -> modify (\st -> st {editing = NotEditing, refusal = Nothing})
-      EditUrl -> withSettings $ \s -> modify (\st -> st {editing = EditingUrl (fromMaybe "" s.publicUrl), refusal = Nothing})
+      EditUrl -> withSettings $ \s -> modify (\st -> st {editing = EditingUrl (maybe "" (\u -> u.text) s.publicUrl), refusal = Nothing})
       TypedUrl t -> modify (\st -> st {editing = EditingUrl t})
       SaveUrl ->
         gets (\st -> st.editing) >>= \case
-          EditingUrl typed -> save (\s -> (unchanged s) {publicUrl = mfilter (not . T.null) (Just (T.strip typed))})
+          EditingUrl typed -> save (\s -> (unchanged s) {publicUrl = Url <$> mfilter (not . T.null) (Just (T.strip typed))})
           _ -> pass
       EditMail -> withSettings $ \s ->
         modify (\st -> st {editing = EditingMail (maybe newMail mailFormOf s.mail), refusal = Nothing})
@@ -707,7 +708,7 @@ providerFormOf' p =
     { typedName = p.name
     , chosenKind = p.kind
     , typedClientId = p.clientId
-    , typedIssuer = fromMaybe "" p.issuer
+    , typedIssuer = maybe "" (\u -> u.text) p.issuer
     , typedSecret = ""
     , secretSet = p.secret == Set
     , replacingSecret = False
@@ -722,7 +723,7 @@ providerChangeOf f =
     { name = T.strip f.typedName
     , kind = f.chosenKind
     , clientId = T.strip f.typedClientId
-    , issuer = mfilter (not . T.null) (Just (T.strip f.typedIssuer))
+    , issuer = Url <$> mfilter (not . T.null) (Just (T.strip f.typedIssuer))
     , secret = mfilter (not . T.null) (Just f.typedSecret)
     }
 
@@ -793,7 +794,7 @@ providerHints k =
 -- | The redirect URI the provider form says to register, given the wiki's
 -- public address and the name typed: nothing until both are there, and
 -- then the URI, with what to do with it.
-providerRedirect :: Maybe Text -> Text -> HH.HTML w i
+providerRedirect :: Maybe Url -> Text -> HH.HTML w i
 providerRedirect publicUrl name = case publicUrl of
   Nothing ->
     [hh|
@@ -811,7 +812,7 @@ providerRedirect publicUrl name = case publicUrl of
     | otherwise ->
         [hh|
           <div class="server-provider-redirect-to">
-            <p>Redirect URI to register: <code class="server-provider-redirect">{{ redirectUri url name }}</code></p>
+            <p>Redirect URI to register: <code class="server-provider-redirect">{{ (redirectUri url name).text }}</code></p>
             <p class="field-hint">Register it with the provider as its redirect (callback) URI; Google's “Authorized JavaScript origins” may stay empty.</p>
           </div>
         |]
@@ -819,6 +820,6 @@ providerRedirect publicUrl name = case publicUrl of
 -- | A provider's redirect URI, once the wiki has a public address.
 redirectText :: ServerSettings -> Text -> Text
 redirectText settings name = case settings.publicUrl of
-  Just url | not (T.null name) -> redirectUri url name
+  Just url | not (T.null name) -> (redirectUri url name).text
   Just _ -> "below the public address, once it has a name"
   Nothing -> "none until the wiki's public address is set"

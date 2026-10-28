@@ -30,6 +30,7 @@ import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Password (..), User (..))
 
 admin, editor, reader :: As
@@ -457,7 +458,7 @@ closedWiki = WikiSettings {access = Closed, newAccountsCreateSpaces = False, adm
 serverWith :: Maybe Text -> Maybe Text -> Maybe Text -> ServerSettingsChange
 serverWith user password secret =
   ServerSettings
-    { publicUrl = Just "https://wiki.example.org/"
+    { publicUrl = Just (Url "https://wiki.example.org/")
     , mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user, password, from = "wiki@example.org"}
     , providers = [ProviderSettings {name = "google", kind = Google, clientId = "id.example", issuer = Nothing, secret}]
     }
@@ -487,7 +488,7 @@ serverSide = describe "serverSettings and setServerSettings" $ do
 
   it "refuse settings that cannot be, and keep none of them" $ \(Fixture run) -> do
     run admin (setServerSettings (serverWith Nothing Nothing (Just "s")) {publicUrl = Nothing}) >>= shouldBeInvalid
-    run admin (setServerSettings (serverWith Nothing Nothing (Just "s")) {publicUrl = Just "wiki.example.org"}) >>= shouldBeInvalid
+    run admin (setServerSettings (serverWith Nothing Nothing (Just "s")) {publicUrl = Just (Url "wiki.example.org")}) >>= shouldBeInvalid
     run admin (setServerSettings (serverWith (Just "wiki") Nothing (Just "s"))) >>= shouldBeInvalid
     run admin serverSettings >>= ok >>= (`shouldBe` noServerSettings)
 

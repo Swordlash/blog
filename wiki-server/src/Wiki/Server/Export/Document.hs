@@ -107,6 +107,7 @@ import Wiki.Core.Math (Macros (..))
 import Wiki.Core.Page (Page (title))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Url (Url (..))
 
 -- | Where a page is: what its links and embeds are resolved against.
 data Place = Place
@@ -125,7 +126,7 @@ data Place = Place
   , attachmentAddress :: Attachment -> Text
   -- ^ The address of an attachment the document links to rather than
   -- shows, relative to the wiki's address.
-  , publicUrl :: Maybe Text
+  , publicUrl :: Maybe Url
   -- ^ The wiki's public address, which a link out of the document starts
   -- with; without one, such a link becomes its text.
   , inDocument :: [Slug] -> [Slug] -> Maybe Text
@@ -484,7 +485,7 @@ linkTarget place dest = case classifyDestination dest of
 
 -- | An address in the wiki, under its public address.
 absolute :: Place -> Text -> Maybe Text
-absolute place path = place.publicUrl <&> \base -> T.dropWhileEnd (== '/') base <> "/" <> T.dropWhile (== '/') path
+absolute place path = place.publicUrl <&> \base -> T.dropWhileEnd (== '/') base.text <> "/" <> T.dropWhile (== '/') path
 
 -- | Expand into each formula the macros it uses in the wiki: the space's,
 -- then those of the formulas before it, the nearest definition winning. A

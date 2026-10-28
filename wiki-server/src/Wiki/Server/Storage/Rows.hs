@@ -142,6 +142,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (bodyText, foldText)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, User (..))
 import Wiki.Server.Secret (Kept, Secret (..), revealed)
 
@@ -510,7 +511,7 @@ attachmentRow = do
   url <- field
   blob <- field
   page <- PageId <$> field
-  let source = maybe (SourceBlob (BlobId (fromMaybe "" blob))) SourceUrl url
+  let source = maybe (SourceBlob (BlobId (fromMaybe "" blob))) (SourceUrl . Url) url
   pure (page, Attachment {id, name, mediaType, size, source})
 
 -- | Pages with their attachments, each page's attachments in order.
@@ -892,7 +893,7 @@ insertAttachment c page ordinal a =
     ]
   where
     (url, blob) = case a.source of
-      SourceUrl u -> (Just u, Nothing)
+      SourceUrl u -> (Just u.text, Nothing)
       SourceBlob b -> (Nothing, Just b.text)
 
 --------------------------------------------------------------------------------
@@ -1145,7 +1146,7 @@ loadServerSettings c = do
       port = fromMaybe defaultMailPort (valueOf "mail-port" >>= readMaybe)
   pure
     ServerSettings
-      { publicUrl = valueOf "public-url"
+      { publicUrl = Url <$> valueOf "public-url"
       , mail =
           valueOf "mail-host" <&> \host ->
             MailSettings
@@ -1157,7 +1158,7 @@ loadServerSettings c = do
               , from = fromMaybe "" (valueOf "mail-from")
               }
       , providers =
-          [ ProviderSettings {name, kind, clientId, issuer, secret = Secret <$> mfilter (not . T.null) secret}
+          [ ProviderSettings {name, kind, clientId, issuer = Url <$> issuer, secret = Secret <$> mfilter (not . T.null) secret}
           | (name, k, clientId, issuer, secret) <- providerRows
           , Just kind <- [readKind k]
           ]
@@ -1168,7 +1169,7 @@ storeServerSettings :: Connection -> Kept -> IO ()
 storeServerSettings c s = do
   execute_' "DELETE FROM settings WHERE key = 'public-url' OR key LIKE 'mail-%'"
   let rows =
-        [("public-url", u) | Just u <- [s.publicUrl]]
+        [("public-url", u.text) | Just u <- [s.publicUrl]]
           <> case s.mail of
             Nothing -> []
             Just m ->
@@ -1185,6 +1186,6 @@ storeServerSettings c s = do
     execute
       c
       "INSERT INTO sign_in_providers (name, position, kind, client_id, issuer, secret) VALUES (?, ?, ?, ?, ?, ?)"
-      (p.name, position, kindName p.kind, p.clientId, p.issuer, revealed <$> p.secret)
+      (p.name, position, kindName p.kind, p.clientId, (\u -> u.text) <$> p.issuer, revealed <$> p.secret)
   where
     execute_' q = execute c q ()

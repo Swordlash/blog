@@ -25,6 +25,7 @@ import Wiki.Api.ServerSettings
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
+import Wiki.Core.Url (Url (..))
 
 -- How the page lays a form out (test/jsbits/test-layout.js).
 $( browserJS
@@ -225,11 +226,11 @@ overHttp m = describe "over HTTP" $
     runPage $ do
       serverStarts
       serveDemo
-      let corp = ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just "https://id.example.org/realms/corp", secret = Set}
-          set = ServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user = Just "wiki", password = Set, from = "wiki@example.org"}, providers = [corp]}
-          found = Discovered {issuer = "https://id.example.org/realms/corp", authorization = "https://id.example.org/auth", token = "https://id.example.org/token", userinfo = Nothing}
+      let corp = ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just (Url "https://id.example.org/realms/corp"), secret = Set}
+          set = ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user = Just "wiki", password = Set, from = "wiki@example.org"}, providers = [corp]}
+          found = Discovered {issuer = Url "https://id.example.org/realms/corp", authorization = Url "https://id.example.org/auth", token = Url "https://id.example.org/token", userinfo = Nothing}
       answerWith "GET" "api/v1/admin/server" 200 set
-      answerWith "POST" "api/v1/admin/server/providers/corp/check" 200 ProviderCheck {redirectUri = Just "https://wiki.example.org/auth/corp/callback", clientSecret = Set, discovered = Just found, problem = Nothing}
+      answerWith "POST" "api/v1/admin/server/providers/corp/check" 200 ProviderCheck {redirectUri = Just (Url "https://wiki.example.org/auth/corp/callback"), clientSecret = Set, discovered = Just found, problem = Nothing}
       answerWith "PUT" "api/v1/admin/server" 200 set
       ui <- startServer m Admin
       let row = ".server-provider[data-name=corp] "

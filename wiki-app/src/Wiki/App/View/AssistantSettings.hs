@@ -92,6 +92,7 @@ import Wiki.Core.Assistant
   , withReached
   )
 import Wiki.Core.Id (UserId)
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (User (id))
 
 newtype Input = Input {context :: Context}
@@ -230,11 +231,11 @@ component =
             {% if p == OpenAI %}
               <label class="field assistant-base-url-field">
                 <span>Base URL</span>
-                <input type="url" class="assistant-base-url" spellcheck="false" placeholder="https://api.openai.com/v1" value={{ fromMaybe "" ps.baseUrl }} disabled={{ st.busy }} onValueChange={{ TypedBaseUrl p }}>
+                <input type="url" class="assistant-base-url" spellcheck="false" placeholder="https://api.openai.com/v1" value={{ maybe "" (\u -> u.text) ps.baseUrl }} disabled={{ st.busy }} onValueChange={{ TypedBaseUrl p }}>
               </label>
               <p class="account-note assistant-base-url-hint">Empty for OpenAI's own; or another service that speaks its API: GitHub Models (https://models.github.ai/inference, with a GitHub token as the key), OpenRouter (https://openrouter.ai/api/v1), or a server on this machine such as Ollama (http://localhost:11434/v1), which needs no key.</p>
               {% for url in maybeToList ps.baseUrl %}
-                {% if insecureUrl url %}
+                {% if insecureUrl url.text %}
                   <p class="warning assistant-insecure-base-url" role="alert">This address is plain HTTP to another machine: your key and your pages would cross the network unencrypted, for anyone on the way to read. Use an HTTPS address, or a server on this machine.</p>
                 {% end %}
               {% end %}

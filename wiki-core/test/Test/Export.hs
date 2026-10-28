@@ -26,6 +26,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..))
 
@@ -121,7 +122,7 @@ wiki =
         [ (pageOf "p1" "s1" Nothing "intro" "# Intro\r\n\nZażółć gęślą jaźń.\n")
             { attachments =
                 [ kept "x1" "a/b:c?.txt"
-                , Attachment {id = AttachmentId "x2", name = "web.png", mediaType = "image/png", size = 10, source = SourceUrl "https://example.com/web.png"}
+                , Attachment {id = AttachmentId "x2", name = "web.png", mediaType = "image/png", size = 10, source = SourceUrl (Url "https://example.com/web.png")}
                 , kept "x3" "con.txt"
                 , kept "x4" ".."
                 , kept "x5" "żółw. "

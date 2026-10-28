@@ -14,6 +14,7 @@ import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug)
+import Wiki.Core.Url (Url (..))
 
 slug :: Text -> Slug
 slug t = either (panic . show) identity (mkSlug t)
@@ -56,7 +57,7 @@ spec = describe "Wiki.Api.Links" $ do
       `shouldBe` "api/v1/attachments/a1/photo%20of%20us.png"
 
   it "gives an attachment that lives on the web its own address" $
-    attachmentUrl (attachment (SourceUrl "https://example.org/x.png") "x.png")
+    attachmentUrl (attachment (SourceUrl (Url "https://example.org/x.png")) "x.png")
       `shouldBe` "https://example.org/x.png"
 
   it "writes every field of a search into its address" $ do

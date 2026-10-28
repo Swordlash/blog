@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+The wiki's public address is a `Url` inside the server (WP5.15): the
+mailer's `publicUrl`, the links and mails of `Wiki.Server.Mail`, a
+provider's `publicUrl`, and the export's `Place`.
+
 Addresses are `Email` inside the server (WP5.15): a mail's `Message.to`,
 the mail functions of `Wiki.Server.Mail`, the reset and verification
 functions of `Wiki.Server.Reset`, the queued notifications, and what a

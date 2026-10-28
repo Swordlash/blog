@@ -64,6 +64,7 @@ import Wiki.Api.Account (Account (..))
 import Wiki.Api.ServerSettings (ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, providerProblems, redirectUri)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (removeSecondFactor))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdministrator, setDisabled, setPassword)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
@@ -267,7 +268,7 @@ runOidcCheck c = do
                 Nothing -> "  client secret: NOT SET, set it in the administration's Server section"
           asked <- case problems of
             why : _ -> pure (Left why)
-            [] -> freshProvider cache (fromMaybe "" kept.publicUrl) (optionOf p) (maybe "" revealed p.secret) >>= endpointsOf
+            [] -> freshProvider cache (fromMaybe (Url "") kept.publicUrl) (optionOf p) (maybe "" revealed p.secret) >>= endpointsOf
           let label = p.name <> " (" <> providerLabel p.kind p.name <> ", kind " <> kindName p.kind <> ", client " <> p.clientId <> ")"
               lines' = case asked of
                 Left why -> ["  cannot be asked how to sign in: " <> why]
@@ -275,7 +276,7 @@ runOidcCheck c = do
                   ["  issuer: " <> e.issuer, "  authorization: " <> e.authorization, "  token: " <> e.token]
                     <> ["  user info: " <> u | Just u <- [e.userinfo]]
               redirect = case kept.publicUrl of
-                Just u -> "  redirect URI to register: " <> redirectUri u p.name
+                Just u -> "  redirect URI to register: " <> (redirectUri u p.name).text
                 Nothing -> "  redirect URI: none until the wiki's public address is set in the administration's Server section"
           pure
             ( isRight asked && isJust p.secret && isJust kept.publicUrl

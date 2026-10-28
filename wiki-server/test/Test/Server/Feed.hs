@@ -31,6 +31,7 @@ import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..), SpaceProfile (..), profileOf)
+import Wiki.Core.Url (Url (..))
 import Wiki.Server.Feed
 
 spec :: Spec
@@ -248,7 +249,7 @@ served = describe "served" $ do
     decodeUtf8 (BSL.toStrict rss.body) `shouldValidate` "test/schemas/rss.rng"
 
   it "gives its addresses under the public address the panel sets" $ withDemoRunning identity $ \r -> do
-    _ <- setServer r noServerSettings {publicUrl = Just "https://wiki.example.org/"}
+    _ <- setServer r noServerSettings {publicUrl = Just (Url "https://wiki.example.org/")}
     atom <- getUrl r (r.public <> "/s/blog/feed.xml")
     root <- parsed (decodeUtf8 (BSL.toStrict atom.body))
     map textOf (children "id" root) `shouldBe` ["https://wiki.example.org/s/blog/"]

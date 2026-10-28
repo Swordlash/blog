@@ -32,6 +32,7 @@ import Wiki.Core.Permission (SpacePermission (..))
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Slug (slugText)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Import (applyImport)
@@ -206,14 +207,14 @@ secrets = describe "never holds a secret" $ do
   it "says a mail password and an rclone configuration changed, not what they are" $ withDemo $ \st -> do
     let mailWith password = MailSettings {host = "mail.example.org", port = 587, security = StartTls, user = Just "wiki", password, from = "wiki@example.org"}
         mail = mailWith (Just "hunter2-mail-secret")
-    server <- recordsOne st (as st "admin" (setServerSettings noServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just mail}))
+    server <- recordsOne st (as st "admin" (setServerSettings noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just mail}))
     summary server
       `shouldBe` ( "settings.server"
                  , "settings"
                  , "the server"
                  , [("mail", "mail.example.org:587 (starttls), from wiki@example.org"), ("mail password", "changed"), ("public address", "https://wiki.example.org/")]
                  )
-    kept <- recordsOne st (as st "admin" (setServerSettings noServerSettings {publicUrl = Just "https://wiki.example.org/", mail = Just (mailWith Nothing)}))
+    kept <- recordsOne st (as st "admin" (setServerSettings noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just (mailWith Nothing)}))
     summary kept `shouldBe` ("settings.server", "settings", "the server", [])
     backed <- recordsOne st (as st "admin" (setBackupSettings defaultBackupSettings {enabled = True, destination = Just (ToRclone "b2:wiki" (Just "[b2]\naccount = rclone-secret"))}))
     summary backed `shouldBe` ("settings.backups", "settings", "backups", [("copied to", "b2:wiki"), ("on", "yes"), ("rclone configuration", "changed")])

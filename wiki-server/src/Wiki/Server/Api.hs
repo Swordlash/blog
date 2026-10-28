@@ -112,6 +112,7 @@ import Wiki.Core.Id
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Search (SearchQuery (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Login (..), Password, User (..), parseEmail)
 import Wiki.Core.Version (VersionsQuery (VersionsQuery), versionsPageSize)
 import Wiki.Server.Accounts (endSession)
@@ -430,7 +431,7 @@ handlers env caller =
               now <- liftIO getCurrentTime
               secret <- liftIO (enrol env.storage now u) >>= either (throwError . wikiError) pure
               settings <- liftIO (readServerSettings env.storage)
-              let issuer = maybe "Wiki" (\url -> "Wiki " <> hostOfUrl url) settings.publicUrl
+              let issuer = maybe "Wiki" (\url -> "Wiki " <> hostOfUrl url.text) settings.publicUrl
                   uri = otpauthUri issuer login secret
               pure TotpEnrolment {secret = secretText secret, uri, qr = fromMaybe [] (qrRows uri)}
           , confirmTotp = \body -> withCode (\u now -> confirm env.storage now u body.code) <&> RecoveryCodes
@@ -883,10 +884,10 @@ checkingProvider env name given = do
       Right <$> case providerProblems p of
         why : _ -> pure (report Nothing (Just why))
         [] -> do
-          provider <- freshProvider env.providerCache (fromMaybe "" kept.publicUrl) (optionOf p) (maybe "" revealed p.secret)
+          provider <- freshProvider env.providerCache (fromMaybe (Url "") kept.publicUrl) (optionOf p) (maybe "" revealed p.secret)
           endpointsOf provider <&> \case
             Left why -> report Nothing (Just why)
-            Right e -> report (Just Discovered {issuer = e.issuer, authorization = e.authorization, token = e.token, userinfo = e.userinfo}) Nothing
+            Right e -> report (Just Discovered {issuer = Url e.issuer, authorization = Url e.authorization, token = Url e.token, userinfo = Url <$> e.userinfo}) Nothing
 
 -- | Send a test mail through the mail server as set.
 sendingTestMail :: Env -> MailTest -> IO (Either ApiError MailTestResult)

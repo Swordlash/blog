@@ -78,6 +78,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..))
+import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
@@ -396,11 +397,11 @@ emailState = EmailState {email = Just (Email "ada@example.org"), verified = Fals
 serverSettings :: ServerSettings
 serverSettings =
   ServerSettings
-    { publicUrl = Just "https://wiki.example.org/"
+    { publicUrl = Just (Url "https://wiki.example.org/")
     , mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user = Just "wiki", password = Set, from = "Wiki <wiki@example.org>"}
     , providers =
         [ ProviderSettings {name = "google", kind = Google, clientId = "id.apps.example", issuer = Nothing, secret = Set}
-        , ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just "https://id.example.org/realms/corp", secret = NotSet}
+        , ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just (Url "https://id.example.org/realms/corp"), secret = NotSet}
         ]
     }
 
@@ -409,7 +410,7 @@ serverSettings =
 serverChange :: ServerSettingsChange
 serverChange =
   ServerSettings
-    { publicUrl = Just "https://wiki.example.org/"
+    { publicUrl = Just (Url "https://wiki.example.org/")
     , mail = Just MailSettings {host = "mail.example.org", port = 465, security = ImplicitTls, user = Just "wiki", password = Nothing, from = "wiki@example.org"}
     , providers =
         [ ProviderSettings {name = "google", kind = Google, clientId = "id.apps.example", issuer = Nothing, secret = Just "a new secret"}
@@ -471,15 +472,15 @@ backupRcloneChange = backupChange {destination = Just (ToRclone "b2:other" Nothi
 providerCheck :: ProviderCheck
 providerCheck =
   ProviderCheck
-    { redirectUri = Just "https://wiki.example.org/auth/corp/callback"
+    { redirectUri = Just (Url "https://wiki.example.org/auth/corp/callback")
     , clientSecret = Set
     , discovered =
         Just
           Discovered
-            { issuer = "https://id.example.org/realms/corp"
-            , authorization = "https://id.example.org/realms/corp/auth"
-            , token = "https://id.example.org/realms/corp/token"
-            , userinfo = Just "https://id.example.org/realms/corp/userinfo"
+            { issuer = Url "https://id.example.org/realms/corp"
+            , authorization = Url "https://id.example.org/realms/corp/auth"
+            , token = Url "https://id.example.org/realms/corp/token"
+            , userinfo = Just (Url "https://id.example.org/realms/corp/userinfo")
             }
     , problem = Nothing
     }

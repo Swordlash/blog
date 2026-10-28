@@ -16,6 +16,7 @@ import Wiki.Core.Assistant
 import Wiki.Core.Assistant.Edit
 import Wiki.Core.Assistant.Prompt
 import Wiki.Core.Assistant.Reference (markdownReference)
+import Wiki.Core.Url (Url (..))
 
 spec :: Spec
 spec = describe "Wiki.Core.Assistant" $ do
@@ -177,9 +178,9 @@ modelsSpec = describe "the models offered" $ do
   it "take another address for OpenAI's API, with or without a key, and offer all its models" $ do
     let onMachine = chooseProvider OpenAI (withBaseUrl OpenAI " http://localhost:11434/v1/ " defaultSettings)
         ps = settingsOf OpenAI onMachine
-    ps.baseUrl `shouldBe` Just "http://localhost:11434/v1"
+    ps.baseUrl `shouldBe` Just (Url "http://localhost:11434/v1")
     -- A server on this machine needs no key.
-    ready onMachine `shouldBe` Right (Ready OpenAI "gpt-6.1-sol" "" "medium" (Just "http://localhost:11434/v1"))
+    ready onMachine `shouldBe` Right (Ready OpenAI "gpt-6.1-sol" "" "medium" (Just (Url "http://localhost:11434/v1")))
     usable OpenAI ps `shouldBe` True
     usable Anthropic (settingsOf Anthropic (withBaseUrl Anthropic "http://localhost:1/v1" defaultSettings)) `shouldBe` False
     serviceName OpenAI ps `shouldBe` "localhost:11434"

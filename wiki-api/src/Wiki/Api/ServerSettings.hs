@@ -62,7 +62,7 @@ module Wiki.Api.ServerSettings
 
     -- * Checks
   , checkServerSettings
-  , checkPublicUrl
+  , parsePublicUrl
   , providerProblems
   , secureAddress
 
@@ -82,13 +82,14 @@ import Data.Char (isAsciiLower)
 import Data.Text qualified as T
 import Protolude
 import Wiki.Api.Auth (callbackPath)
+import Wiki.Core.Url (Url (..))
 
 --------------------------------------------------------------------------------
 -- The settings
 
 -- | 'ServerSettingsOf': the server's settings, with each secret of type @s@.
 data ServerSettingsOf s = ServerSettings
-  { publicUrl :: Maybe Text
+  { publicUrl :: Maybe Url
   -- ^ The wiki's address as its readers reach it, ending in a slash
   -- (@https:\/\/wiki.example.org\/@): the start of links sent by mail and
   -- of the providers' redirect URIs. Behind a proxy the server cannot find
@@ -143,7 +144,7 @@ data ProviderSettingsOf s = ProviderSettings
   , clientId :: Text
   -- ^ The client id the provider issued when the wiki was registered with
   -- it.
-  , issuer :: Maybe Text
+  , issuer :: Maybe Url
   -- ^ For @oidc@, the issuer; for another kind, an address that replaces
   -- the provider's default one (a GitHub Enterprise server's, for example).
   , secret :: s
@@ -304,8 +305,8 @@ providerLabel kind name = case kind of
 
 -- | The URL a provider redirects the browser back to, which is registered
 -- with the provider: @\<public-url>auth\/\<name>\/callback@.
-redirectUri :: Text -> Text -> Text
-redirectUri publicUrl name = publicUrl <> callbackPath name
+redirectUri :: Url -> Text -> Url
+redirectUri publicUrl name = Url (publicUrl.text <> callbackPath name)
 
 --------------------------------------------------------------------------------
 -- Checks
@@ -316,7 +317,7 @@ redirectUri publicUrl name = publicUrl <> callbackPath name
 -- and so does a mail server that has a user.
 checkServerSettings :: (s -> Bool) -> ServerSettingsOf s -> Either Text (ServerSettingsOf s)
 checkServerSettings isSet s = do
-  publicUrl <- traverse checkPublicUrl (blankless s.publicUrl)
+  publicUrl <- traverse parsePublicUrl (blankless ((\u -> u.text) <$> s.publicUrl))
   mail <- traverse checkMail s.mail
   let providers = map trimProvider s.providers
   case concatMap providerProblems providers <> duplicates providers <> missingSecrets providers of
@@ -338,7 +339,7 @@ checkServerSettings isSet s = do
       when (T.null sender) $ Left "The mail needs its sender: the address it is sent from."
       when (isJust user && not (isSet m.password)) $ Left ("The mail server's user " <> fromMaybe "" user <> " needs its password.")
       pure MailSettings {host, port = m.port, security = m.security, user, password = m.password, from = sender}
-    trimProvider p = ProviderSettings {name = T.strip p.name, kind = p.kind, clientId = T.strip p.clientId, issuer = blankless p.issuer, secret = p.secret}
+    trimProvider p = ProviderSettings {name = T.strip p.name, kind = p.kind, clientId = T.strip p.clientId, issuer = Url <$> blankless ((\u -> u.text) <$> p.issuer), secret = p.secret}
     duplicates ps =
       let names = map (\p -> p.name) ps
        in ["There are two providers named " <> n <> "." | n <- ordNub names, length (filter (== n) names) > 1]
@@ -347,12 +348,12 @@ checkServerSettings isSet s = do
 
 -- | The wiki's address as the server uses it: @http@ or @https@, with a
 -- host, and a slash at the end; or why it is invalid.
-checkPublicUrl :: Text -> Either Text Text
-checkPublicUrl raw
+parsePublicUrl :: Text -> Either Text Url
+parsePublicUrl raw
   | not (any (`T.isPrefixOf` u) ["http://", "https://"]) = Left ("The wiki's public address starts with http:// or https://: " <> u)
   | T.null (T.takeWhile (/= '/') (T.drop 2 (T.dropWhile (/= '/') u))) = Left ("The wiki's public address has no host: " <> u)
   | T.any (\c -> isControl c || isSpace c || c `elem` ("\"<>\\?#" :: [Char])) u = Left ("The wiki's public address has a character an address cannot: " <> u)
-  | otherwise = Right (if "/" `T.isSuffixOf` u then u else u <> "/")
+  | otherwise = Right (Url (if "/" `T.isSuffixOf` u then u else u <> "/"))
   where
     u = T.strip raw
 
@@ -364,7 +365,7 @@ providerProblems p =
   ]
     <> ["The provider " <> p.name <> " needs its client id." | T.null (T.strip p.clientId)]
     <> ["The provider " <> p.name <> ", of kind oidc, needs its issuer: https://issuer.example.org" | p.kind == Generic, isNothing p.issuer]
-    <> [ "The provider " <> p.name <> "'s address " <> i <> " must start with https:// (or http:// on this machine, for a test)."
+    <> [ "The provider " <> p.name <> "'s address " <> i.text <> " must start with https:// (or http:// on this machine, for a test)."
        | Just i <- [p.issuer]
        , not (secureAddress i)
        ]
@@ -377,8 +378,8 @@ providerProblems p =
 
 -- | Whether secrets may be sent to an address: over TLS, or on this
 -- machine.
-secureAddress :: Text -> Bool
-secureAddress a =
+secureAddress :: Url -> Bool
+secureAddress (Url a) =
   "https://" `T.isPrefixOf` a
     || any (\here -> ("http://" <> here) `T.isPrefixOf` a) ["127.0.0.1:", "127.0.0.1/", "localhost:", "localhost/", "[::1]:"]
 
@@ -388,7 +389,7 @@ secureAddress a =
 -- | 'ProviderCheck': the result of a provider's discovery, the response to
 -- @POST \/api\/v1\/admin\/server\/providers\/\<name>\/check@.
 data ProviderCheck = ProviderCheck
-  { redirectUri :: Maybe Text
+  { redirectUri :: Maybe Url
   -- ^ The redirect URI to register with the provider, once the wiki has a
   -- public address.
   , clientSecret :: SecretState
@@ -403,10 +404,10 @@ data ProviderCheck = ProviderCheck
 
 -- | 'Discovered': the endpoints discovery found.
 data Discovered = Discovered
-  { issuer :: Text
-  , authorization :: Text
-  , token :: Text
-  , userinfo :: Maybe Text
+  { issuer :: Url
+  , authorization :: Url
+  , token :: Url
+  , userinfo :: Maybe Url
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
