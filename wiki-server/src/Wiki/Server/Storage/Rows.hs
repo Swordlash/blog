@@ -16,14 +16,20 @@ module Wiki.Server.Storage.Rows
   , allPageNodes
   , pageNode
   , pageNodesWithIds
+  , childPage
+  , childPages
+  , subtreeIds
   , SitemapNode (..)
   , loadSitemapNodes
 
     -- * Reads
   , loadSpaces
+  , loadChain
   , loadGrants
+  , loadGrantsOn
   , loadUser
   , loadUserByLogin
+  , loadActiveUsersByLogin
   , loadActiveUser
   , loadUsers
   , loadGroupsOf
@@ -34,6 +40,7 @@ module Wiki.Server.Storage.Rows
   , loadPageSummaries
   , loadAllPages
   , loadAttachment
+  , loadAttachmentIn
   , loadDraft
   , VersionRow (..)
   , loadVersions
@@ -272,6 +279,34 @@ pageNodesWithIds :: Connection -> [PageId] -> IO [PageNode]
 pageNodesWithIds c pids =
   concat <$> for (chunksOf 500 (ordNub pids)) (\ids -> queryWith nodeRow c (sql ("SELECT " <> nodeColumns <> " FROM pages WHERE id IN (" <> marks ids <> ")")) (map (\p -> p.text) ids))
 
+-- | The page of a space with this slug under this parent ('Nothing' for
+-- the space's top level), as a node: one step of finding a page by its
+-- path. The condition is written as the unique index
+-- @pages_sibling_slug@ is, @coalesce(parent, '')@, so that SQLite finds
+-- the page through the index instead of reading the space's pages.
+childPage :: Connection -> SpaceId -> Maybe PageId -> Slug -> IO (Maybe PageNode)
+childPage c sid parent slug =
+  head
+    <$> queryWith nodeRow c (sql ("SELECT " <> nodeColumns <> " FROM pages WHERE space_id = ? AND coalesce(parent, '') = ? AND slug = ?")) (sid.text, maybe "" (\p -> p.text) parent, slugText slug)
+
+-- | The pages of a space under this parent ('Nothing' for the space's top
+-- level), as nodes, in no particular order: what choosing a new page's
+-- slug and position needs. Found through the same index as 'childPage'.
+childPages :: Connection -> SpaceId -> Maybe PageId -> IO [PageNode]
+childPages c sid parent =
+  queryWith nodeRow c (sql ("SELECT " <> nodeColumns <> " FROM pages WHERE space_id = ? AND coalesce(parent, '') = ?")) (sid.text, maybe "" (\p -> p.text) parent)
+
+-- | A page and the pages under it, at any depth, by id: one recursive
+-- query that follows the index on a page's parent, so it reads the
+-- subtree and nothing else of the space. UNION rather than UNION ALL
+-- keeps each page once, so even a loop of parents, which a page tree
+-- never has, ends.
+subtreeIds :: Connection -> PageId -> IO (Set PageId)
+subtreeIds c pid =
+  Set.fromList
+    . map (PageId . fromOnly)
+    <$> query c "WITH RECURSIVE below(id) AS (SELECT ? UNION SELECT p.id FROM pages p JOIN below b ON p.parent = b.id) SELECT id FROM below" (Only pid.text)
+
 -- | 'SitemapNode' is a page as the sitemap lists it: its place in its
 -- space's tree, and when it last changed. It has no title and no text,
 -- so a sitemap of a large wiki reads little of each page's row.
@@ -352,30 +387,53 @@ spaceRow = do
 loadSpaces :: Connection -> IO (Map SpaceId Space)
 loadSpaces c = Map.fromList . map (\s -> (s.id, s)) <$> queryWith_ spaceRow c (sql ("SELECT " <> spaceColumns <> " FROM spaces"))
 
+-- | A space and the spaces above it, by id: a space's chain, which is all
+-- a permission rule about the space looks at. One recursive query, each
+-- step by a space's primary key. UNION keeps each space once, so a loop of
+-- parents ends.
+loadChain :: Connection -> SpaceId -> IO (Map SpaceId Space)
+loadChain c sid =
+  Map.fromList
+    . map (\s -> (s.id, s))
+    <$> queryWith
+      spaceRow
+      c
+      (sql ("WITH RECURSIVE chain(id) AS (SELECT ? UNION SELECT s.parent FROM spaces s JOIN chain ON s.id = chain.id WHERE s.parent IS NOT NULL) SELECT " <> spaceColumns <> " FROM spaces WHERE id IN (SELECT id FROM chain)"))
+      (Only sid.text)
+
 -- | Every grant, global and on spaces, in the order they were given.
 loadGrants :: Connection -> IO Grants
-loadGrants c = do
-  globals <- query_ c "SELECT subject_kind, subject_id, permission FROM global_grants ORDER BY rowid"
-  spaceGrants <- query_ c "SELECT space_id, subject_kind, subject_id, permission FROM space_grants ORDER BY rowid"
-  pure
-    Grants
-      { global =
-          [ GlobalGrant {subject, permission}
-          | (kind, i, p) <- globals
-          , Just subject <- [subjectFrom kind i]
-          , Just permission <- [find (\x -> globalText x == p) [minBound .. maxBound]]
-          ]
-      , spaces =
-          [ SpaceGrant {space = SpaceId s, subject, permission}
-          | (s, kind, i, p) <- spaceGrants
-          , Just subject <- [subjectFrom kind i]
-          , Just permission <- [find (\x -> spaceText x == p) [minBound .. maxBound]]
-          ]
-      , -- The wiki's access setting, which the storage adds to the grants
-        -- where it is needed (Wiki.Server.Storage), is not stored in the
-        -- grants' rows.
-        access = Open
-      }
+loadGrants c = grantsOf <$> query_ c "SELECT subject_kind, subject_id, permission FROM global_grants ORDER BY rowid" <*> query_ c "SELECT space_id, subject_kind, subject_id, permission FROM space_grants ORDER BY rowid"
+
+-- | Every global grant, and the grants on these spaces, in the order they
+-- were given: the grants the rules about these spaces look at.
+loadGrantsOn :: Connection -> [SpaceId] -> IO Grants
+loadGrantsOn c sids =
+  grantsOf
+    <$> query_ c "SELECT subject_kind, subject_id, permission FROM global_grants ORDER BY rowid"
+    <*> (concat <$> for (chunksOf 500 sids) (\chunk -> query c (sql ("SELECT space_id, subject_kind, subject_id, permission FROM space_grants WHERE space_id IN (" <> marks chunk <> ") ORDER BY rowid")) (map (\s -> s.text) chunk)))
+
+-- | Grants from their rows: the global ones, and those on spaces.
+grantsOf :: [(Text, Text, Text)] -> [(Text, Text, Text, Text)] -> Grants
+grantsOf globals spaceGrants =
+  Grants
+    { global =
+        [ GlobalGrant {subject, permission}
+        | (kind, i, p) <- globals
+        , Just subject <- [subjectFrom kind i]
+        , Just permission <- [find (\x -> globalText x == p) [minBound .. maxBound]]
+        ]
+    , spaces =
+        [ SpaceGrant {space = SpaceId s, subject, permission}
+        | (s, kind, i, p) <- spaceGrants
+        , Just subject <- [subjectFrom kind i]
+        , Just permission <- [find (\x -> spaceText x == p) [minBound .. maxBound]]
+        ]
+    , -- The wiki's access setting, which the storage adds to the grants
+      -- where it is needed (Wiki.Server.Storage), is not stored in the
+      -- grants' rows.
+      access = Open
+    }
 
 userRow :: RowParser User
 userRow = do
@@ -395,6 +453,12 @@ loadActiveUser c u = head <$> queryWith userRow c "SELECT id, login, display_nam
 -- | A user by login.
 loadUserByLogin :: Connection -> Text -> IO (Maybe User)
 loadUserByLogin c login = head <$> queryWith userRow c "SELECT id, login, display_name FROM users WHERE login = ?" (Only login)
+
+-- | The users with these logins who may act, not those whose login is
+-- disabled, through the unique index on the login.
+loadActiveUsersByLogin :: Connection -> [Text] -> IO [User]
+loadActiveUsersByLogin c logins =
+  concat <$> for (chunksOf 500 (ordNub logins)) (\chunk -> queryWith userRow c (sql ("SELECT id, login, display_name FROM users WHERE disabled = 0 AND login IN (" <> marks chunk <> ")")) chunk)
 
 -- | Every user, by id.
 loadUsers :: Connection -> IO [User]
@@ -501,6 +565,17 @@ loadAllPages c = do
 -- | An attachment, with the page it is on.
 loadAttachment :: Connection -> AttachmentId -> IO (Maybe (PageId, Attachment))
 loadAttachment c aid = head <$> queryWith attachmentRow c (sql ("SELECT " <> attachmentColumns <> ", a.page_id FROM attachments a WHERE a.id = ?")) (Only aid.text)
+
+-- | An attachment, with the space its page is in, in one query: what
+-- serving its bytes needs to check whether the reader may see it.
+loadAttachmentIn :: Connection -> AttachmentId -> IO (Maybe (SpaceId, Attachment))
+loadAttachmentIn c aid =
+  head
+    <$> queryWith
+      ((\(_, a) s -> (SpaceId s, a)) <$> attachmentRow <*> field)
+      c
+      (sql ("SELECT " <> attachmentColumns <> ", a.page_id, p.space_id FROM attachments a JOIN pages p ON p.id = a.page_id WHERE a.id = ?"))
+      (Only aid.text)
 
 -- | A user's draft of a page.
 loadDraft :: Connection -> PageId -> UserId -> IO (Maybe Draft)

@@ -16,13 +16,12 @@
 module Wiki.Server.Storage.Notifications
   ( -- * Who is told
     Telling (..)
-  , loadTelling
   , Audience (..)
   , loadAudience
   , pageMaker
 
     -- * Watches and choices
-  , loadMarks
+  , loadMarksOn
   , storeMark
   , Choices (..)
   , loadChoices
@@ -84,7 +83,7 @@ data Telling = Telling
 -- and their mail mode.
 type TellingRow = (Text, Text, Text, Int, Int, Maybe Text)
 
--- | A 'Telling' from a user's row and everyone's marks.
+-- | A 'Telling' from a user's row and the marks read.
 tellingOf :: Map UserId Mark -> TellingRow -> Telling
 tellingOf allMarks (i, login, displayName, own, verified, mail) =
   Telling
@@ -93,13 +92,6 @@ tellingOf allMarks (i, login, displayName, own, verified, mail) =
     , marks = Map.findWithDefault mempty (UserId i) allMarks
     , mailing = verified /= 0 && (mail >>= readMailMode) /= Just MailOff
     }
-
--- | Every user who may sign in, with their watches and choices.
-loadTelling :: Connection -> IO [Telling]
-loadTelling c = do
-  users <- query_ c "SELECT id, login, display_name, watch_own, email_verified_at IS NOT NULL, notification_mail FROM users WHERE disabled = 0 ORDER BY id"
-  allMarks <- loadAllMarks c
-  pure (map (tellingOf allMarks) users)
 
 -- | 'Audience' says who could be told of something that happened to a
 -- page: the page, the spaces of its chain, the users named because they
@@ -163,18 +155,27 @@ pageMaker c page =
 --------------------------------------------------------------------------------
 -- Watches and choices
 
-loadAllMarks :: Connection -> IO (Map UserId Mark)
-loadAllMarks c = marksOf <$> query_ c "SELECT user_id, page_id, space_id, watching FROM watches"
-
 -- | The marks of watch rows (user, page, space, watching), by user.
 marksOf :: [(Text, Maybe Text, Maybe Text, Int)] -> Map UserId Mark
 marksOf rows = Map.fromListWith (<>) [(UserId u, Map.singleton t (w /= 0)) | (u, p, s, w) <- rows, Just t <- [target p s]]
   where
     target p s = (WatchPage . PageId <$> p) <|> (WatchSpace . SpaceId <$> s)
 
--- | What a user chose to watch, or not to.
-loadMarks :: Connection -> UserId -> IO Mark
-loadMarks c u = Map.findWithDefault mempty u <$> loadAllMarks c
+-- | What a user chose to watch, or not to, of a page and of some spaces:
+-- the marks the rules read to say whether the user watches the page or
+-- the last of the spaces ("Wiki.Core.Notification"'s 'pageWatch' and
+-- 'spaceWatch'), given the page, if it is one, and its chain of spaces.
+-- Each query names the page or the space, so SQLite finds the rows
+-- through the unique indexes on a user's watches, which hold only rows
+-- that name a page, or only rows that name a space.
+loadMarksOn :: Connection -> UserId -> Maybe PageId -> [SpaceId] -> IO Mark
+loadMarksOn c u page spaces = do
+  onPage <- for (toList page) $ \p -> query c "SELECT user_id, page_id, space_id, watching FROM watches WHERE user_id = ? AND page_id = ?" (u.text, p.text)
+  onSpaces <-
+    if null spaces
+      then pure []
+      else query c (Query ("SELECT user_id, page_id, space_id, watching FROM watches WHERE user_id = ? AND space_id IN (" <> T.intercalate ", " (map (const "?") spaces) <> ")")) (toField u.text : map (\s -> toField s.text) spaces)
+  pure (Map.findWithDefault mempty u (marksOf (concat onPage <> onSpaces)))
 
 -- | Choose to watch a page or a space, or not to.
 storeMark :: Connection -> UserId -> WatchTarget -> Bool -> IO ()

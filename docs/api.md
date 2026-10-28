@@ -218,7 +218,7 @@ take that from themself, which the space's view does not offer.
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | POST | `api/v1/pages/<page>/attachments` | multipart form, one file part named `file`: its file name is the attachment's name, its `Content-Type` the attachment's media type | 201 `Attachment` | 404, 403, 400 (a bad name, or a file over 50 MB) | `uploadAttachment` |
-| GET, HEAD | `api/v1/attachments/<attachment>/<name>` | | the file's bytes, streamed, with the attachment's media type as `Content-Type`; a `Range` request gets that range (a `<video>` seeks with one) | 404 | `attachmentUrl` gives this address |
+| GET, HEAD | `api/v1/attachments/<attachment>/<name>` | | the file's bytes, streamed, with the attachment's media type as `Content-Type`; a `Range` request gets that range (a `<video>` seeks with one); `ETag` the hash of the bytes, and `Cache-Control: private, max-age=300`, since the bytes never change under this address | 404 | `attachmentUrl` gives this address |
 | DELETE | `api/v1/attachments/<attachment>` | | 204 | 404, 403 | `deleteAttachment` |
 
 An attachment whose bytes the server keeps has `"source": {"tag":

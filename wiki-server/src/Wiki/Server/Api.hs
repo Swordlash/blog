@@ -901,6 +901,14 @@ exportedResponse e =
 -- its media type, a byte range when one is requested (Warp handles ranges
 -- for a file), and revalidated by its content hash.
 --
+-- The browser may keep the bytes for five minutes without asking again
+-- ('keptPrivately'). An attachment's bytes never change under its URL: a
+-- new upload is a new attachment with a new id, and the ETag is the hash
+-- of the bytes. So the only thing a reader can miss in those five minutes
+-- is losing the right to read the page. Without this, every image of
+-- every page view was a request and a read of the database, even when
+-- the answer was 304.
+--
 -- An attachment is whatever someone uploaded, served from the wiki's own
 -- origin, so it is served as data and never as a page of the wiki. The
 -- browser is told not to guess a type other than the one given
@@ -929,7 +937,7 @@ attachmentContent env who aid name request respond
                     , ("X-Content-Type-Options", "nosniff")
                     , ("Content-Disposition", disposition a)
                     , ("Content-Security-Policy", "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox")
-                    , (hCacheControl, "private, no-cache")
+                    , (hCacheControl, keptPrivately)
                     , (hETag, tag)
                     ]
               if lookup hIfNoneMatch (requestHeaders request) == Just tag
@@ -938,10 +946,11 @@ attachmentContent env who aid name request respond
         Right _ -> respond (refusal ApiError.NotFound)
 
 -- | Serve a space's icon image at its URL: from its file, with its media
--- type, revalidated by its content hash, and with the same protections as
--- an attachment's bytes (see 'attachmentContent'). Only image types a
--- browser shows by themselves can be icons
--- ('Wiki.Core.Space.iconMediaTypes').
+-- type, revalidated by its content hash, kept by the browser for five
+-- minutes, and with the same protections as an attachment's bytes (see
+-- 'attachmentContent'). Its URL names the image's hash, so a new image
+-- has a new URL. Only image types a browser shows by themselves can be
+-- icons ('Wiki.Core.Space.iconMediaTypes').
 iconContent :: Env -> Who -> SpaceId -> BlobId -> Request -> (Response -> IO a) -> IO a
 iconContent env who sid blob request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
@@ -960,12 +969,18 @@ iconContent env who sid blob request respond
                     , ("X-Content-Type-Options", "nosniff")
                     , ("Content-Disposition", "inline")
                     , ("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
-                    , (hCacheControl, "private, no-cache")
+                    , (hCacheControl, keptPrivately)
                     , (hETag, tag)
                     ]
               if lookup hIfNoneMatch (requestHeaders request) == Just tag
                 then respond (responseLBS status304 headers "")
                 else respond (responseFile status200 headers file Nothing)
+
+-- | How long a browser keeps an attachment's bytes or an icon without
+-- asking again: five minutes, and only that browser, since they belong to
+-- a page or a space that not everyone may read.
+keptPrivately :: ByteString
+keptPrivately = "private, max-age=300"
 
 -- | The media type, if it can go in a header as it is; otherwise
 -- @application/octet-stream@.

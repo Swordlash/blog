@@ -161,7 +161,7 @@ import Wiki.Core.Id
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
 import Wiki.Core.Page (Page (..), PageSummary, pageTreeOrder, summaryOf)
-import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath)
+import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath, resolvePathM)
 import Wiki.Core.Permission
   ( GlobalGrant (..)
   , GlobalPermission (..)
@@ -560,6 +560,12 @@ context :: Storage -> Connection -> Who -> Text -> IO Ctx
 context st c who address = do
   spaces <- loadSpaces c
   rows <- loadGrants c
+  contextWith st c who address spaces rows
+
+-- | 'context', with the spaces and the grants it holds given: every one,
+-- or only those some rules need ('readWithin').
+contextWith :: Storage -> Connection -> Who -> Text -> Map SpaceId Space -> Grants -> IO Ctx
+contextWith st c who address spaces rows = do
   wiki <- settingsWith st c
   server <- serverSettingsWith st c
   told <- newIORef []
@@ -582,6 +588,30 @@ context st c who address = do
             (Just administratorId)
             Nothing
         )
+
+-- | A read about one thing in one space, on a reader: an attachment's
+-- bytes, which every image of a page asks for. @locate@ finds the space
+-- the thing is in, and whatever the read needs of it; 'Nothing' is
+-- 'NotFound'. The context then holds only that space's chain and the
+-- grants on the chain ('loadChain', 'loadGrantsOn'), which is all a rule
+-- about the space looks at, instead of every space and grant of the
+-- wiki. The operation must not look at any other space.
+readWithin :: Storage -> Who -> (Connection -> IO (Maybe (SpaceId, b))) -> (SpaceId -> b -> Tx a) -> IO (Either WikiError a)
+readWithin st who locate body = withReadConnection st $ \c -> do
+  execute_ c "BEGIN"
+  -- A reader goes back to the pool after this, so a failed read must not
+  -- leave its transaction open.
+  result <-
+    flip onException (execute_ c "ROLLBACK") $
+      locate c >>= \case
+        Nothing -> pure (Left NotFound)
+        Just (sid, found) -> do
+          spaces <- loadChain c sid
+          ctx <- contextWith st c who "" spaces =<< loadGrantsOn c (Map.keys spaces)
+          let Tx tx = body sid found
+          runExceptT (runReaderT tx ctx)
+  execute_ c "COMMIT" `onException` execute_ c "ROLLBACK"
+  pure result
 
 -- | Run an IO action on the transaction's connection.
 db :: (Connection -> IO a) -> Tx a
@@ -994,11 +1024,13 @@ saving tx = SqliteWiki $ do
 -- are in when the storage holds them ('Nothing' for an attachment that
 -- lives on the web). The server's route for an attachment's bytes serves
 -- this.
+--
+-- It reads the attachment and its page's space in one query, and only
+-- that space's chain and grants ('readWithin'): a page with many images
+-- asks for each of them.
 attachmentFile :: (MonadIO m) => AttachmentId -> SqliteWiki m (Either WikiError (Attachment, Maybe FilePath))
-attachmentFile aid = run Reads $ do
-  (pid, a) <- db (`loadAttachment` aid) >>= maybe (failWith NotFound) pure
-  page <- findNode pid
-  requireView =<< chainOfPage page
+attachmentFile aid = SqliteWiki . ReaderT $ \env -> liftIO . readWithin env.storage env.who (`loadAttachmentIn` aid) $ \sid a -> do
+  requireView =<< asks (`chainOf` sid)
   dir <- asks (\x -> x.blobs)
   pure
     ( a
@@ -1165,12 +1197,15 @@ postDetailsTx sid = do
           }
   pure (Map.fromList [(p.id, details p) | p <- pages])
 
+-- | A page by its path in a space. The path is followed one slug at a
+-- time, each step one query through the index of siblings' slugs
+-- ('childPage'), so the reads grow with the path's length, not with the
+-- size of the space.
 getPageTx :: SpaceId -> [Slug] -> Tx Page
 getPageTx sid path = do
   (_, c) <- findSpace sid
   requireView c
-  nodes <- db (`pageNodes` sid)
-  case resolvePath (findChild nodes) path of
+  resolvePathM (\parent slug -> db (\conn -> childPage conn sid parent slug)) path >>= \case
     Right ps | Just p <- lastMay ps -> findPage p.id
     _ -> failWith NotFound
 
@@ -1542,7 +1577,7 @@ shiftPageTx pid how = do
   requireEdit c
   unless (s.pageOrder == ByHand) $
     invalid (s.name <> " lists its pages " <> T.toLower (orderName s.pageOrder) <> ", not by hand.")
-  nodes <- db (`pageNodes` p.space)
+  nodes <- db (\c' -> childPages c' p.space p.parent)
   placePages (reposition (\x -> x.id) how pid (childrenInOrder ByHand nodes p.parent))
   findPage pid
 
@@ -1557,7 +1592,8 @@ createPageTx sid parent title body = do
   when (any (\p -> p.space /= sid) parentPage) $
     invalid "A page's parent has to be in the same space."
   t <- nonBlank "A page's title" title
-  nodes <- db (`pageNodes` sid)
+  -- Its siblings to be: what its slug and position are chosen among.
+  nodes <- db (\c' -> childPages c' sid parent)
   i <- newId
   time <- now
   let page =
@@ -1617,17 +1653,6 @@ savePageTx pid base title body = do
   tellTx p'.id p'.space p'.title Nothing "" PageSaved (newlyMentioned p.body body)
   pure p'
 
--- | A page and the pages under it, by id, among the nodes of its space.
-subtreeOf :: [PageNode] -> PageId -> Set PageId
-subtreeOf nodes pid =
-  Set.fromList
-    [ n.id
-    | n <- nodes
-    , maybe False (any (\a -> a.id == pid)) (ancestry (`Map.lookup` byId) n.id)
-    ]
-  where
-    byId = Map.fromList [(n.id, n) | n <- nodes]
-
 movePageTx :: PageId -> SpaceId -> Maybe PageId -> Tx Page
 movePageTx pid destination parent = do
   ctx <- ask
@@ -1640,10 +1665,12 @@ movePageTx pid destination parent = do
   require (mayMovePage ctx.principal ctx.grants source target)
   when (any (\q -> q.space /= destination) parentPage) $
     invalid "A page's parent has to be in the same space."
-  subtree <- (`subtreeOf` pid) <$> db (`pageNodes` p.space)
+  subtree <- db (`subtreeIds` pid)
   when (any (`Set.member` subtree) parent) $
     invalid "A page cannot be moved under itself or a page under it."
-  others <- filter (\q -> q.id /= pid) <$> db (`pageNodes` destination)
+  -- Its siblings at the destination: what a new slug and position are
+  -- chosen among.
+  others <- filter (\q -> q.id /= pid) <$> db (\c -> childPages c destination parent)
   let (slug, position)
         | destination == p.space && parent == p.parent = (p.slug, p.position)
         | otherwise = (freshSlug (isJust . findChild others parent) p.slug, nextPosition (childrenOf others parent))
@@ -1678,9 +1705,9 @@ deletePageTx pid = do
   p <- findNode pid
   c <- chainOfPage p
   requireEdit c
-  nodes <- db (`pageNodes` p.space)
-  let under = Set.size (subtreeOf nodes pid) - 1
-      path = maybe "" (T.intercalate "/" . map slugText) (pathOf (`Map.lookup` Map.fromList [(n.id, n) | n <- nodes]) pid)
+  under <- subtract 1 . Set.size <$> db (`subtreeIds` pid)
+  above <- lineageOf pid
+  let path = maybe "" (T.intercalate "/" . map slugText) (pathOf (`Map.lookup` above) pid)
   db $ \x -> execute x "DELETE FROM pages WHERE id = ?" (Only pid.text)
   record
     "page.delete"
@@ -2310,8 +2337,8 @@ locatedTx n = do
       let chain = chainOf ctx p.space
       if canView ctx.principal ctx.grants chain
         then do
-          nodes <- db (`pageNodes` p.space)
-          let path = pathOf (\i -> find (\x -> x.id == i) nodes) p.id
+          nodes <- lineageOf p.id
+          let path = pathOf (`Map.lookup` nodes) p.id
           pure (Just (withLocation (PageLocation (map (\x -> x.slug) chain) <$> path) n))
         else pure Nothing
 
@@ -2380,7 +2407,7 @@ watchingTx :: WatchTarget -> Tx Watch
 watchingTx target = do
   (chain, page) <- watchedTx target
   u <- notified
-  marks <- db (`Notifications.loadMarks` u)
+  marks <- db (\c -> Notifications.loadMarksOn c u page (map (\s -> s.id) chain))
   case page of
     Nothing -> pure (spaceWatch marks chain)
     Just pid -> do
@@ -2418,14 +2445,15 @@ setNotificationSettingsTx change = do
   notificationSettingsTx
 
 -- | The users with these logins who may sign in, for a caller who is
--- signed in.
+-- signed in. Only those logins are read, through the index on a user's
+-- login, not every user.
 mentionableTx :: [Text] -> Tx (Map Text Author)
 mentionableTx logins =
   asks (\x -> x.user) >>= \case
-    Nothing -> pure mempty
-    Just _ -> do
-      telling <- db Notifications.loadTelling
-      pure (Map.fromList [(t.user.login, Author {id = t.user.id, name = t.user.displayName}) | t <- telling, t.user.login `elem` logins])
+    Just _ | not (null logins) -> do
+      users <- db (`loadActiveUsersByLogin` logins)
+      pure (Map.fromList [(u.login, Author {id = u.id, name = u.displayName}) | u <- users])
+    _ -> pure mempty
 
 -- | Mentions, watches and notifications, as the class's Haddock describes
 -- them ("Wiki.App.Backend.Notifications"). Each operation is one

@@ -27,6 +27,13 @@ view the parent they name. The administration keeps its order: it checks
 the global administer first, so whoever does not hold it gets 403 for any
 id.
 
+A page view reads only what it shows (WP5.16b): a page is found by its
+path one slug at a time through the index of siblings' slugs, the watch
+button reads the viewer's watches of the page and its spaces, the
+mentions read the logins mentioned, and a subtree is one recursive query.
+An attachment is served after reading its space's chain and grants
+alone, with `Cache-Control: private, max-age=300`, as space icons are.
+
 The export (`GET api/v1/export`) writes version 2 of the export format
 (WP5.8, `docs/export.md`), the pages' comments included, read in two
 queries for the whole wiki inside the export's read transaction. The

@@ -227,6 +227,9 @@ attachments = describe "attachments" $ do
     header "X-Content-Type-Options" reply `shouldBe` Just "nosniff"
     header "Content-Disposition" reply `shouldBe` Just "inline; filename=\"chart.png\"; filename*=UTF-8''chart.png"
     header "Content-Security-Policy" reply `shouldSatisfy` maybe False (BS.isSuffixOf "sandbox")
+    -- Kept by this browser for five minutes: the bytes never change
+    -- under their address.
+    header "Cache-Control" reply `shouldBe` Just "private, max-age=300"
     revalidated <- getUrlWith r (onAdmin r (attachmentUrl a)) [("If-None-Match", fromMaybe "" (header "ETag" reply))]
     revalidated.status `shouldBe` 304
 

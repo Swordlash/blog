@@ -11,7 +11,10 @@
 -- WP5.16b adds the reads of an ordinary visit. A search reads the pages
 -- of the spaces it searches, and folds the text of only the pages that
 -- match. The sitemap reads where each page is, not what it says, and a
--- feed reads the posts it carries; both are written once a minute.
+-- feed reads the posts it carries; both are written once a minute. A
+-- page view finds its page one slug at a time, its watch button reads the
+-- viewer's watches of the page and its spaces, the mentions read the
+-- logins mentioned, and an attachment reads its space's chain alone.
 --
 -- What the storage reads is seen through SQLite's trace of each statement
 -- a connection runs ('statementsOf'), and SQLite's plan for each
@@ -22,6 +25,7 @@ module Test.Storage.Scale (spec) where
 import Data.Aeson (decode, encode)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.List (lookup)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -41,8 +45,9 @@ import Wiki.Api.Notifications (Notifications (..))
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Contract (As (As))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
+import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Id
-import Wiki.Core.Notification (Notification (..), PageLocation (..), maxListed)
+import Wiki.Core.Notification (Notification (..), PageLocation (..), WatchTarget (..), maxListed)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
 import Wiki.Core.Slug (mkSlug)
@@ -61,6 +66,7 @@ spec = describe "the storage, at scale" $ do
   hub
   search
   feeds
+  pageView
 
 -- | An action that must end within two seconds: one that waits for a lock
 -- another operation holds does not.
@@ -425,3 +431,60 @@ feeds = describe "the sitemap and the feeds" $ do
     other `shouldSatisfy` (not . null)
     (_, rss) <- statementsOf st (feed st cache base Rss ["blog"])
     rss `shouldSatisfy` (not . null)
+
+pageView :: Spec
+pageView = describe "a page view" $ do
+  -- What a page view of the docs' diagrams page reads, as the reader: the
+  -- page by its path, whether the reader watches it, and which of three
+  -- logins its mentions name.
+  let viewed st = do
+        rita <- whoFor st (As "reader")
+        docs <- runSqliteWiki st Administrator (getSpace (path "docs")) >>= ok
+        ((page, watch, people), statements) <- statementsOf st . runSqliteWiki st rita $ do
+          page <- getPage docs.id (path "markdown-guide/diagrams")
+          watch <- either (pure . Left) (\p -> watching (WatchPage p.id)) page
+          people <- mentionable ["admin", "editor", "nobody"]
+          pure (page, watch, people)
+        p <- ok page
+        p.title `shouldBe` "Diagrams"
+        void (ok watch)
+        Map.keys people `shouldBe` ["admin", "editor"]
+        pure statements
+      -- A read of every page of a space: by the space alone, not by a
+      -- parent and a slug in it as well.
+      isNodesOfSpace statement = "FROM pages WHERE space_id" `T.isInfixOf` statement && not (" AND " `T.isInfixOf` statement)
+
+  it "reads no table whole and no whole space, the same in a 2,000-page space with 300 more users and 3,000 more watches" $ withDemo $ \st -> do
+    small <- viewed st
+    docs <- runSqliteWiki st Administrator (getSpace (path "docs")) >>= ok
+    _ <- addPages st docs.id "bulk" 2000
+    crowd st 300 3000
+    big <- viewed st
+    scans <- Set.fromList . concat <$> traverse (scansOf st) big
+    scans `shouldSatisfy` (`Set.isSubsetOf` everyTransactionScans)
+    filter isNodesOfSpace big `shouldBe` []
+    length big `shouldBe` length small
+
+  it "serves an attachment after reading its space's chain and grants, not every space and grant" $ withDemo $ \st -> do
+    rita <- whoFor st (As "reader")
+    docs <- runSqliteWiki st Administrator (getSpace (path "docs")) >>= ok
+    page <- runSqliteWiki st Administrator (getPage docs.id (path "markdown-guide/diagrams")) >>= ok
+    a <- runSqliteWiki st Administrator (uploadAttachment page.id "chart.png" "image/png" "png bytes") >>= ok
+    ((found, _), statements) <- statementsOf st (runSqliteWiki st rita (attachmentFile a.id) >>= ok)
+    found `shouldBe` a
+    scans <- Set.fromList . concat <$> traverse (scansOf st) statements
+    -- The global grants, a handful, and the recursive query's own steps:
+    -- its first row, a constant, and the rows it has found so far.
+    scans `shouldSatisfy` (`Set.isSubsetOf` Set.fromList ["global_grants", "CONSTANT", "chain"])
+    -- Someone who may not read the page may not have it either.
+    team <- runSqliteWiki st Administrator (getSpace (path "team")) >>= ok
+    handbook <- runSqliteWiki st Administrator (getPage team.id (path "team-handbook")) >>= ok
+    hidden <- runSqliteWiki st Administrator (uploadAttachment handbook.id "secret.png" "image/png" "secret bytes") >>= ok
+    runSqliteWiki st rita (attachmentFile hidden.id) >>= (`shouldSatisfy` isLeft)
+    runSqliteWiki st Anonymous (attachmentFile a.id) >>= (`shouldSatisfy` isRight)
+
+  it "counts each space's pages from an index alone, not from the pages' rows" $ withDemo $ \st -> do
+    (_, statements) <- statementsOf st (runSqliteWiki st Anonymous pageCounts)
+    counting <- maybe (assertFailure "no count of pages") pure (find ("count(*) FROM pages" `T.isInfixOf`) statements)
+    plan <- withDatabase st (\c -> query_ c (Query ("EXPLAIN QUERY PLAN " <> counting))) :: IO [(Int, Int, Int, Text)]
+    [detail | (_, _, _, detail) <- plan] `shouldSatisfy` any ("COVERING INDEX pages_space_template" `T.isInfixOf`)
