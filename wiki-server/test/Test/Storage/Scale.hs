@@ -5,6 +5,8 @@
 -- it runs the same statements in a wiki of 300 more users and 3,000 more
 -- watches as in the demo. The bell reads one page of notifications and the
 -- pages of each of their spaces once, however many notifications are kept.
+-- The live channel checks once for each user whether they may read a page
+-- an event is about, however many of their tabs show it.
 --
 -- What the storage reads is seen through SQLite's trace of each statement
 -- a connection runs ('statementsOf'), and SQLite's plan for each
@@ -12,11 +14,16 @@
 -- of it.
 module Test.Storage.Scale (spec) where
 
+import Data.Aeson (decode, encode)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
+import Data.List (lookup)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query_, setTrace)
+import Network.Wai (requestHeaders)
+import Network.Wai.Handler.Warp (testWithApplication)
+import Network.WebSockets qualified as WS
 import Protolude
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -24,6 +31,7 @@ import System.Timeout (timeout)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Storage.Fixture
+import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..), eventsPath)
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Contract (As (As))
@@ -34,6 +42,7 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Accounts (Resolved (..), resolveSession, startSession)
+import Wiki.Server.Events (eventsApplication, newHub, publish)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Rows (Stamp (..), insertPage)
 
@@ -42,6 +51,7 @@ spec = describe "the storage, at scale" $ do
   readers
   writes
   bell
+  hub
 
 -- | An action that must end within two seconds: one that waits for a lock
 -- another operation holds does not.
@@ -281,3 +291,47 @@ bell = describe "the bell" $ do
     ns <- runSqliteWiki st (AsUser rita) notifications >>= ok
     ns.unread `shouldBe` 10
     map (\n -> n.page) ns.items `shouldBe` reverse shown
+
+hub :: Spec
+hub = describe "the live channel" $
+  it "checks once for each user whether they may read a page an event is about, not once for each tab" $
+    withDemo $ \st -> do
+      events <- newHub
+      notes <- runSqliteWiki st Administrator (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "notes-on-haskell"))) >>= ok
+      users <- for ["admin", "editor", "reader"] $ \login -> whoFor st (As login)
+      -- Who a connection is opened as, by a header of the test's own, so
+      -- that one server has tabs of three users.
+      let app request = eventsApplication st events (whoOf request) request
+          whoOf request = fromMaybe Anonymous (lookup "X-Test-User" (requestHeaders request) >>= (`lookup` zip [show i :: ByteString | i <- [0 :: Int ..]] users))
+          tabs = 100 :: Int
+      testWithApplication (pure app) $ \port -> do
+        subscribed <- newEmptyMVar
+        heard <- newEmptyMVar
+        let tab i = WS.runClientWith "127.0.0.1" port ("/" <> toS eventsPath) WS.defaultConnectionOptions [("X-Test-User", show (i `mod` length users))] $ \c -> do
+              WS.sendTextData c (encode (Subscribe notes.id))
+              let next = timeout 10_000_000 (WS.receiveData c) >>= maybe (assertFailure "nothing heard in ten seconds") (pure . decode)
+                  untilSubscribed =
+                    next >>= \case
+                      Just (Subscribed {}) -> putMVar subscribed ()
+                      _ -> untilSubscribed
+                  untilEvents n
+                    | n <= (0 :: Int) = pass
+                    | otherwise =
+                        next >>= \case
+                          Just (Event _ _) -> putMVar heard () >> untilEvents (n - 1)
+                          _ -> untilEvents n
+              untilSubscribed
+              untilEvents 2
+        running <- for [1 .. tabs] (async . tab)
+        flip finally (traverse_ cancel running) $ do
+          replicateM_ tabs (takeMVar subscribed)
+          -- Each permission check is a read transaction on a reader, which
+          -- begins with a plain BEGIN; a write begins with BEGIN IMMEDIATE.
+          let checksFor event = do
+                (_, statements) <- statementsOf st $ do
+                  publish events notes.id event
+                  replicateM_ tabs (takeMVar heard)
+                pure (length (filter (== "BEGIN") statements))
+          checksFor (PageChanged notes.updatedAt) `shouldReturn` length users
+          checksFor (PageChanged notes.updatedAt) `shouldReturn` length users
+          traverse_ wait running

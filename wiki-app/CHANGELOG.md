@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The live channel's socket waits a random 70 % to 130 % of its pause
+before it opens again (WP5.16a), so that the tabs a server restart
+disconnected do not all connect again in the same instant.
+`Wiki.App.Live.jittered` is that wait. The longest wait is now 39 seconds,
+130 % of the half-minute pause.
+
 TikZ pictures draw Polish and German letters (WP5.10): `ł` and `Ł`, which
 failed with "Cannot read properties of undefined (reading 'toString')",
 the umlauts, which failed with "Could not find font metric for 127", and

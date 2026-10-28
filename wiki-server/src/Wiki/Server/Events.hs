@@ -13,6 +13,9 @@
 -- opens another. A page is subscribed to only if that user may read it.
 -- That is checked when they subscribe ('Refused' otherwise), and again
 -- before each event is sent, since a grant may have been removed since.
+-- The check before an event is made once for each user the event goes to,
+-- however many of their tabs show the page ('Check'), and on one of the
+-- storage's readers, so it waits for no write.
 --
 -- The answer to a subscription carries the page's threads, read as that
 -- user may read them. The subscription is made while the storage's writer
@@ -75,7 +78,7 @@ module Wiki.Server.Events
   )
 where
 
-import Control.Concurrent.STM (TBQueue, TVar, isFullTBQueue, modifyTVar', newTBQueueIO, newTVarIO, readTBQueue, readTVar, readTVarIO, writeTBQueue, writeTVar)
+import Control.Concurrent.STM (TBQueue, TVar, isFullTBQueue, modifyTVar', newTBQueueIO, newTVar, newTVarIO, readTBQueue, readTVar, readTVarIO, writeTBQueue, writeTVar)
 import Data.Aeson (decode, encode)
 import Data.ByteString.Char8 qualified as BS8
 import Data.CaseInsensitive qualified as CI
@@ -108,8 +111,8 @@ data Hub = Hub
 
 -- | A connection, as the hub sees it.
 data Connection = Connection
-  { user :: Maybe UserId
-  -- ^ The user it was opened as, if any.
+  { who :: Who
+  -- ^ Who it was opened as.
   , pages :: TVar (Set PageId)
   , outbox :: TBQueue Outgoing
   , behind :: TVar Bool
@@ -133,8 +136,8 @@ data Outgoing
   = -- | Send this message.
     Say ServerMessage
   | -- | Send this event, if the page is still subscribed to and may still
-    -- be read.
-    Tell PageId PageEvent
+    -- be read. The 'Check' answers whether it may be read.
+    Tell PageId PageEvent Check
   | -- | Close the connection: the server is stopping, or the tab is behind.
     Hangup Text
 
@@ -152,18 +155,63 @@ outboxSize = 256
 publish :: Hub -> PageId -> PageEvent -> IO ()
 publish hub page event = atomically $ do
   connections <- readTVar hub.connections
-  for_ connections $ \c -> do
-    subscribed <- Set.member page <$> readTVar c.pages
-    when subscribed $ enqueue c (Tell page event)
+  tellSubscribers page (Map.toList connections) (const event)
+
+-- | Put an event on a page in the outbox of every connection subscribed to
+-- the page. The event for a connection may depend on its key. All the
+-- connections opened as one 'Who' share one 'Check' of whether that 'Who'
+-- may read the page.
+tellSubscribers :: PageId -> [(Key, Connection)] -> (Key -> PageEvent) -> STM ()
+tellSubscribers page connections eventFor = foldM_ tell mempty connections
+  where
+    tell :: Map Who Check -> (Key, Connection) -> STM (Map Who Check)
+    tell checks (k, c) = do
+      subscribed <- Set.member page <$> readTVar c.pages
+      if not subscribed
+        then pure checks
+        else do
+          shared <- maybe (newTVar Unasked) pure (Map.lookup c.who checks)
+          enqueue c (Tell page (eventFor k) shared)
+          pure (Map.insert c.who shared checks)
+
+-- | 'Check' is whether one 'Who' may read one page, for one event. Every
+-- connection of that 'Who' that the event goes to shares it. The first
+-- connection to send the event asks the storage, and the others wait for
+-- its answer. So an event costs one permission check for each person
+-- subscribed, not one for each connection: a person with many tabs open on
+-- a page is checked once.
+type Check = TVar CheckState
+
+-- | Where a 'Check' is: not asked yet, being asked by a connection, or
+-- answered.
+data CheckState = Unasked | Asking | Answered Bool
+
+-- | The answer of a 'Check'. The first connection to need it asks, with
+-- the action given, and the others wait for that answer. A connection that
+-- fails or is closed while it asks puts the check back to 'Unasked', for
+-- the next connection to ask.
+answerOf :: Check -> IO Bool -> IO Bool
+answerOf shared askStorage = mask $ \restore -> do
+  claimed <- atomically $ do
+    readTVar shared >>= \case
+      Answered allowed -> pure (Just allowed)
+      Asking -> retry
+      Unasked -> writeTVar shared Asking $> Nothing
+  case claimed of
+    Just allowed -> pure allowed
+    Nothing -> do
+      allowed <- restore askStorage `onException` atomically (writeTVar shared Unasked)
+      atomically (writeTVar shared (Answered allowed))
+      pure allowed
 
 -- | Send each user's notification to every connection of that user. It
 -- never waits: it is called while the storage holds its writer.
 notify :: Hub -> [(UserId, Notification)] -> IO ()
 notify hub told = atomically $ do
   connections <- readTVar hub.connections
-  for_ connections $ \c ->
-    for_ c.user $ \u ->
-      for_ [n | (v, n) <- told, v == u] $ \n -> enqueue c (Say (Notified n))
+  for_ connections $ \c -> case c.who of
+    AsUser u -> for_ [n | (v, n) <- told, v == u] $ \n -> enqueue c (Say (Notified n))
+    _ -> pass
 
 -- | Tell every connection subscribed to a page who else is editing it, as
 -- the presence now says, in the transaction that changed it.
@@ -171,9 +219,7 @@ tellEditors :: Hub -> PageId -> STM ()
 tellEditors hub page = do
   connections <- readTVar hub.connections
   now <- readTVar hub.presence
-  for_ (Map.toList connections) $ \(k, c) -> do
-    subscribed <- Set.member page <$> readTVar c.pages
-    when subscribed $ enqueue c (Tell page (Editing (editorsFor k page now)))
+  tellSubscribers page (Map.toList connections) (\k -> Editing (editorsFor k page now))
 
 -- | Change the presence, and if that changed who is editing a page, tell
 -- its subscribers.
@@ -223,7 +269,7 @@ serve storage hub who pending = do
       pages <- newTVarIO mempty
       outbox <- newTBQueueIO outboxSize
       behind <- newTVarIO False
-      let connection = Connection {user = case who of AsUser u -> Just u; _ -> Nothing, pages, outbox, behind}
+      let connection = Connection {who, pages, outbox, behind}
       key <- atomically $ do
         k <- readTVar hub.next
         writeTVar hub.next (k + 1)
@@ -277,9 +323,9 @@ serve storage hub who pending = do
         if behind then pure (Hangup "Connect again.") else readTBQueue connection.outbox
       case next of
         Say message -> WS.sendTextData socket (encode message) >> sending socket connection
-        Tell page event -> do
+        Tell page event shared -> do
           subscribed <- Set.member page <$> readTVarIO connection.pages
-          allowed <- if subscribed then may page else pure False
+          allowed <- if subscribed then answerOf shared (may page) else pure False
           when allowed $ WS.sendTextData socket (encode (Event page event))
           sending socket connection
         -- The tab's close reaches the receiving thread, which ends the

@@ -157,6 +157,7 @@ library
       time,
       transformers,
       unliftio-core,
+      uuid-types,
       haskell-halogen-core,
       haskell-halogen-jsbits,
       haskell-halogen-net,
@@ -272,6 +273,7 @@ test-suite wiki-app-test
         Test.Islands
         Test.Licence
         Test.Link
+        Test.Live
         Test.Manifest
         Test.Passwords
         Test.Readme

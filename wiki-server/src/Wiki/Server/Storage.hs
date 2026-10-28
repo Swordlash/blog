@@ -442,7 +442,7 @@ data Who
     -- global 'Administer' does. The operator is not a user of the wiki, and
     -- the application sees them as 'administratorUser'.
     Administrator
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Ord, Show)
 
 -- | The user id of the operator ('Administrator'), where an id is needed:
 -- their drafts are stored under it, and the versions they save name it.

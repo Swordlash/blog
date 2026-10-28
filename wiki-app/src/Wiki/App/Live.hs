@@ -30,9 +30,11 @@
 -- When the socket closes (the server went away, the network did, or the
 -- server closed it), it is opened again after a pause. The pause doubles
 -- from one second up to half a minute, and is one second again once a
--- socket has opened. Nothing is replayed: the watched pages are subscribed
--- to again, and the answers contain whatever was missed, so a lost event
--- costs nothing. While the socket is closed, the backend drops the cached
+-- socket has opened. Each wait is the pause give or take up to 30 % at
+-- random ('jittered'), so that the tabs a server restart disconnected do
+-- not all connect again in the same instant. Nothing is replayed: the
+-- watched pages are subscribed to again, and the answers contain whatever
+-- was missed, so a lost event costs nothing. While the socket is closed, the backend drops the cached
 -- threads of every watched page, so that a page shown then fetches them
 -- from the server.
 --
@@ -78,15 +80,20 @@ module Wiki.App.Live
   , Heard (..)
   , newFeed
   , quietFeed
+
+    -- * Reconnecting
+  , jittered
   )
 where
 
 import Control.Monad.Trans.Class (MonadTrans)
+import Control.Monad.UUID (generateV4)
 import Data.Aeson (decodeStrict', encode)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Type.Equality (type (~))
+import Data.UUID.Types (toWords64)
 import Halogen.JSBits (inBrowser)
 import Halogen.Net.WebSocket qualified as WS
 import Halogen.Query.HalogenM (HalogenM)
@@ -261,9 +268,20 @@ newFeed keep catchUp forget notified missed
           editorsOf page = Map.lookup page . (\c -> c.known) <$> readIORef held
       pure Feed {heard = channel.emitter, watch, unwatch, restart, startEditing, stopEditing, editorsOf, listen, unlisten}
 
+-- | The pause before the socket is opened again, in milliseconds: the first
+-- after a socket closed, and the longest it doubles to.
 firstPause, longestPause :: Int
 firstPause = 1000
 longestPause = 30_000
+
+-- | 'jittered' is a pause changed by up to 30 % either way, by a random
+-- number: from 70 % of the pause for a number that is 0 modulo 601, to
+-- 130 % for one that is 600. The socket waits this long rather than the
+-- pause itself, so that the tabs that lost their socket at the same moment
+-- do not all open a new one at the same moment. The longest wait is 130 %
+-- of 'longestPause', 39 seconds.
+jittered :: Word64 -> Int -> Int
+jittered random pause = pause + pause * (fromIntegral (random `mod` 601) - 300) `div` 1000
 
 -- | Send a message on the socket, if there is one.
 say :: Channel -> ClientMessage -> IO ()
@@ -321,5 +339,8 @@ connect held keeping tell = do
         -- Changes from now on go unseen.
         traverse_ keeping.forget (Map.keys c.pages)
         when (wanted c) . void . forkIO $ do
-          threadDelay (c.pause * 1000)
+          -- The random number comes from a random UUID, which the
+          -- browser's own generator makes.
+          random <- fst . toWords64 <$> generateV4
+          threadDelay (jittered random c.pause * 1000)
           whenM current (connect held keeping tell)

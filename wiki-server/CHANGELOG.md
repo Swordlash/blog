@@ -30,6 +30,11 @@ about pages the user may no longer read. The pages of each space are read
 once. The unread count is one SQL count by space, and still leaves out
 notifications about pages the user may no longer read.
 
+The live channel checks once per user whether an event's page may be
+read, not once per tab (WP5.16a). An event on a page that 100 tabs of 3
+users show makes 3 permission checks, on the storage's readers. `Who`
+now has an `Ord` instance.
+
 The static files' server sends a `.bin` file as `application/octet-stream`,
 named so explicitly (WP5.5): TikZJax's compressed files are now zlib streams
 named `.bin` rather than gzip files named `.gz`, since a corporate proxy may
