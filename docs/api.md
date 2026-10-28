@@ -513,6 +513,14 @@ space or page made by an import has a new id, a space made by one has no
 grants (the administrator needs none), and an attachment's bytes are kept
 under their content hash, once, however many pages have them.
 
+A page's comments come with its content: a page the import makes, and a
+page whose content it replaces, get the archive's comment threads that the
+page does not have yet, after its own; a page the server keeps keeps its
+own. A comment's author is the server's user with the author's login, or
+else is kept by their name, shown as "(not a user here)". The audit entry
+of the import counts the comments it brought. [The export
+format](export.md) says more.
+
 What a merge keeps of each side (a merged space keeps the server's settings
 unless the server's are empty, attachments follow their pages by content
 hash, positions follow the archive's order after the server's; the archive's
