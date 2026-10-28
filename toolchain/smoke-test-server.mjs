@@ -382,6 +382,15 @@ const pagesOf = async (spacePath) => {
   assert.equal(space.status, 200, `no space at ${spacePath}`);
   return (await api(`spaces/${encodeURIComponent(space.body.id)}/pages`)).body;
 };
+// A page at a top-level path of a space, body and all: the list of a
+// space's pages has no bodies.
+const pageAt = async (spacePath, slug) => {
+  const space = await api(`spaces/at/${spacePath}`);
+  assert.equal(space.status, 200, `no space at ${spacePath}`);
+  const found = await api(`spaces/${encodeURIComponent(space.body.id)}/pages/at/${slug}`);
+  assert.equal(found.status, 200, `no page at ${spacePath}/${slug}`);
+  return found.body;
+};
 
 async function migrateTheDemo() {
   const page = await newPage();
@@ -451,7 +460,7 @@ async function migrateTheDemo() {
   }
   // The shell has reloaded the tree of spaces, with the demo's in it.
   await page.locator("#app .wiki-sidebar a", { hasText: "Docs" }).waitFor({ timeout });
-  const hello = (await pagesOf("blog")).find((p) => p.slug === "hello-world");
+  const hello = await pageAt("blog", "hello-world");
   assert.ok(hello && !hello.body.includes("Written on the server."), "the server's Hello, world was not replaced");
   // The server's Blog was made with its home page.
   assert.deepEqual((await pagesOf("blog")).map((p) => p.slug), ["hello-world", "home"], "Notes on Haskell was imported though left out");
