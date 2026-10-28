@@ -103,6 +103,9 @@
 -- else.
 module Wiki.App.Backend.Http.Cache
   ( Cache (..)
+  , CachedDraft (..)
+  , draftAnswer
+  , cachedDraft
   , emptyCache
   , kept
   , cachedPage
@@ -115,6 +118,7 @@ module Wiki.App.Backend.Http.Cache
   , withPostDetails
   , withPageAt
   , withDraft
+  , forgetDraft
   , withSearch
   , withVersions
   , withVersion
@@ -183,9 +187,9 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.postDetails', by space.
   , pageAt :: Map (SpaceId, [Slug]) (Either WikiError Page)
   -- ^ 'Wiki.App.Backend.getPage', by space and path.
-  , drafts :: Map PageId (Either WikiError (Maybe Draft))
-  -- ^ 'Wiki.App.Backend.getDraft', by page: the signed-in user's draft,
-  -- or 'Nothing' when they have none.
+  , drafts :: Map PageId CachedDraft
+  -- ^ 'Wiki.App.Backend.getDraft', by page. A page without an entry is
+  -- not known: the next read fetches its draft.
   , searches :: [(SearchQuery, [SearchHit])]
   -- ^ 'Wiki.App.Backend.searchPages', by query, the latest first. The
   -- list stays short because every write empties it, and searches are
@@ -228,6 +232,35 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.Notifications.watching', by page or space.
   }
   deriving stock (Eq, Show)
+
+-- | 'CachedDraft' is what the cache knows of the signed-in user's draft of
+-- one page. The cache has no entry for a page whose draft it does not
+-- know, and then the next read fetches the draft.
+data CachedDraft
+  = -- | The user has no draft of the page.
+    NoDraft
+  | -- | The user has this draft of the page.
+    HasDraft Draft
+  | -- | The server refused the read of the draft, with this error
+    -- ('NotFound' or 'Forbidden', the refusals 'kept' accepts).
+    DraftRefused WikiError
+  deriving stock (Eq, Show)
+
+-- | The cached draft as 'Wiki.App.Backend.getDraft' returns it: a refusal,
+-- or the draft if there is one. The page's preload writes it in this shape
+-- too.
+draftAnswer :: CachedDraft -> Either WikiError (Maybe Draft)
+draftAnswer = \case
+  NoDraft -> Right Nothing
+  HasDraft d -> Right (Just d)
+  DraftRefused e -> Left e
+
+-- | What 'Wiki.App.Backend.getDraft' returned, as the cache keeps it.
+cachedDraft :: Either WikiError (Maybe Draft) -> CachedDraft
+cachedDraft = \case
+  Right Nothing -> NoDraft
+  Right (Just d) -> HasDraft d
+  Left e -> DraftRefused e
 
 emptyCache :: Cache
 emptyCache =
@@ -300,12 +333,14 @@ withPostDetails sid d c = c {postDetails = Map.insert sid d c.postDetails}
 withPageAt :: SpaceId -> [Slug] -> Either WikiError Page -> Cache -> Cache
 withPageAt sid path p c = c {pageAt = Map.insert (sid, path) p c.pageAt}
 
--- | Set what the cache knows of the signed-in user's draft of a page. The
--- value says one of four things: the user has this draft; the user has no
--- draft; the read was refused (with the error); or the draft is not
--- known, which removes the entry so that the next read fetches it.
-withDraft :: PageId -> Maybe (Either WikiError (Maybe Draft)) -> Cache -> Cache
-withDraft pid d c = c {drafts = Map.alter (const d) pid c.drafts}
+-- | Set what the cache knows of the signed-in user's draft of a page.
+withDraft :: PageId -> CachedDraft -> Cache -> Cache
+withDraft pid d c = c {drafts = Map.insert pid d c.drafts}
+
+-- | Remove the cached draft of a page: the draft is not known any more,
+-- and the next read fetches it.
+forgetDraft :: PageId -> Cache -> Cache
+forgetDraft pid c = c {drafts = Map.delete pid c.drafts}
 
 -- | Cache the hits of a query, replacing any hits cached for the same
 -- query.

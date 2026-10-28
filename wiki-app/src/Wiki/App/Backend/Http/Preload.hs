@@ -53,7 +53,7 @@ import Protolude
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.App.Backend (WikiError (..))
-import Wiki.App.Backend.Http.Cache (Cache (..), emptyCache, kept)
+import Wiki.App.Backend.Http.Cache (Cache (..), cachedDraft, draftAnswer, emptyCache, kept)
 import Wiki.App.Backend.Http.Request (fromApiError, fromSessionInfo, sessionInfo)
 import Wiki.Core.Notification (WatchTarget (..))
 
@@ -83,7 +83,7 @@ preloadJSON c =
     , "spacesAt" .= answers "space" (\path -> ["path" .= path]) c.spaceAt
     , "pages" .= answers "pages" (\space -> ["space" .= space]) c.pages
     , "pagesAt" .= answers "page" (\(space, path) -> ["space" .= space, "path" .= path]) c.pageAt
-    , "drafts" .= answers "draft" (\page -> ["page" .= page]) c.drafts
+    , "drafts" .= answers "draft" (\page -> ["page" .= page]) (draftAnswer <$> c.drafts)
     , "searches" .= [object ["query" .= query, "hits" .= hits] | (query, hits) <- c.searches]
     , "versionLists" .= answers "versions" (\page -> ["page" .= page]) c.versionLists
     , "versions" .= answers "version" (\(page, updatedAt) -> ["page" .= page, "updatedAt" .= updatedAt]) c.versions
@@ -147,7 +147,7 @@ parsePreload = withObject "the page's payload" $ \o -> do
   spaceAt <- byArguments "space" (.: "path") =<< o .: "spacesAt"
   pages <- byArguments "pages" (.: "space") =<< o .: "pages"
   pageAt <- byArguments "page" (\e -> (,) <$> e .: "space" <*> e .: "path") =<< o .: "pagesAt"
-  drafts <- byArguments "draft" (.: "page") =<< o .: "drafts"
+  drafts <- fmap cachedDraft <$> (byArguments "draft" (.: "page") =<< o .: "drafts")
   searches <- traverse (withObject "a search" (\e -> (,) <$> e .: "query" <*> e .: "hits")) =<< o .: "searches"
   versionLists <- byArguments "versions" (.: "page") =<< o .: "versionLists"
   versions <- byArguments "version" (\e -> (,) <$> e .: "page" <*> e .: "updatedAt") =<< o .: "versions"

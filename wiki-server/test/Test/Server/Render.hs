@@ -25,7 +25,7 @@ import Test.Server.Fixture
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.App.Backend (WikiError (..))
-import Wiki.App.Backend.Http.Cache (Cache (..))
+import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), draftAnswer)
 import Wiki.App.Backend.Http.Preload
 import Wiki.App.Backend.Http.Request (sessionInfo)
 import Wiki.App.Route (Against (..), Route (..))
@@ -169,7 +169,7 @@ administrator = describe "for an administrator signed in" $ do
     appIn html `shouldSatisfy` T.isInfixOf "<textarea"
     appIn html `shouldSatisfy` T.isInfixOf "Editing Hello, world"
     preload <- preloadIn html
-    Map.elems preload.drafts `shouldBe` [Right Nothing]
+    Map.elems preload.drafts `shouldBe` [NoDraft]
 
 adminListener :: Spec
 adminListener = describe "on the admin listener" $ do
@@ -217,7 +217,7 @@ preloads = describe "what a page carries for the program" $ do
       for_ (Map.toList p.spaceAt) $ \(at, s) -> answers (links.spaces.atPath at) s
       for_ (Map.toList p.pages) $ \(space, ps) -> answers (links.spaces.listPages space) ps
       for_ (Map.toList p.pageAt) $ \((space, at), x) -> answers (links.spaces.pageAt space at) x
-      for_ (Map.toList p.drafts) $ \(pageId, d) -> answers (links.pages.draft pageId) d
+      for_ (Map.toList p.drafts) $ \(pageId, d) -> answers (links.pages.draft pageId) (draftAnswer d)
       for_ p.searches $ \(query, hits) -> api (searchUrl query) `shouldReturn` hits
 
   it "holds what the route shows: its space's list of pages, and the page shown" $ withDemoRunning identity $ \r -> do

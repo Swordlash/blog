@@ -485,17 +485,17 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- program can build without a request.
   attachmentUrl = pure . Links.attachmentUrl
   searchPages q = orThrow (pageContent (fmap Right . cachedSearch q) (R.get (searchUrl q)) (either (const identity) (withSearch q)))
-  getDraft pid = cached (\c -> Map.lookup pid c.drafts) (R.get (links.pages.draft pid)) (withDraft pid . Just)
+  getDraft pid = cached (\c -> draftAnswer <$> Map.lookup pid c.drafts) (R.get (links.pages.draft pid)) (withDraft pid . cachedDraft)
 
   -- A draft's writes change that draft alone (see
   -- "Wiki.App.Backend.Http.Cache").
   saveDraft pid base title body = do
     result <- answer <$> call (withJson "PUT" (links.pages.saveDraft pid) DraftEdit {base, title, body})
-    modifyCache (withDraft pid (either (const Nothing) (Just . Right . Just) result))
+    modifyCache (either (const (forgetDraft pid)) (withDraft pid . HasDraft) result)
     pure result
   discardDraft pid = do
     result <- answerNothing <$> call (R.delete (links.pages.discardDraft pid))
-    modifyCache (withDraft pid (either (const Nothing) (const (Just (Right Nothing))) result))
+    modifyCache (either (const (forgetDraft pid)) (const (withDraft pid NoDraft)) result)
     pure result
   listVersions pid = pageContent (\c -> Map.lookup pid c.versionLists) (R.get (links.pages.versions pid)) (withVersions pid)
   getVersion pid at =

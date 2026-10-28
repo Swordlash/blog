@@ -25,7 +25,7 @@ import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Http
-import Wiki.App.Backend.Http.Cache (Cache (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
+import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
 import Wiki.App.Backend.Http.Request
 import Wiki.App.Backend.Mem.State (MemState (..))
@@ -487,8 +487,8 @@ preload = describe "what a page it is rendered into carries" $ do
           . withPages hello.space (Right (map summaryOf blogPages))
           . withPages (SpaceId "gone") (Left NotFound)
           . withPageAt hello.space (slugs "nowhere") (Left NotFound)
-          . withDraft hello.id (Just (Right (Just draft)))
-          . withDraft (PageId "other") (Just (Right Nothing))
+          . withDraft hello.id (HasDraft draft)
+          . withDraft (PageId "other") NoDraft
           . withSearch (searchQuery "hello") []
           $ emptyCache
   it "reads back as the cache it was written from" $
