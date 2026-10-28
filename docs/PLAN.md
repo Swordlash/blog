@@ -3476,6 +3476,34 @@ Amended by the planning session after each work package's report.
   `DOM.HTML.Indexed`) is the next saving on the views. Rule for later: a row named by a
   synonym and used at many sites is written flat. Full gate; CI green on the rebased head
   (the wasm job 14 min against 16 before).
+- **WP5.8 merged** (2026-10-28, PR #100, `main` at `040cb8f`). The export is a tree, format
+  version 2 of `docs/export.md`: the manifest, `users.json`, `groups.json`, `grants.json` and
+  `audit.json` as before, then `spaces/<slug>/space.json` (no `parent`), `icon.<ext>`,
+  `pages/<slug>/page.json` (no `space`, `parent` or `body`; the attachments' records
+  inside), `page.md` (the body byte for byte), `attachments/<name>`, `comments.json`
+  (threads with their comments nested, as `Wiki.Core.Comment` is shaped, not the brief's
+  flat list), subpages under `pages/` and subspaces under `spaces/` to any depth. Import
+  reads versions 1 and 2 through `migrations`, which now works on the archive's files (1
+  → 2 reads the flat files and writes the same wiki as version 2, so one reader handles
+  every version); golden archives `wiki-export-v1.zip` and `-v2.zip`. Comments are new to
+  the archive: `Archive.threads` and `commentAuthors` (people who wrote comments but are
+  not users, in practice the server's `~administrator`); on import an author is matched by
+  login, else kept by name under the id `~former:<name>` and shown as "Carol (not a user
+  here)", not editable, deletable by a space administrator (`formerAuthor`,
+  `formerAuthorName`, `absentAuthor` in `Wiki.Core.Comment`; no SQL migration, the name is
+  in the `author` column). Directory names are the slugs (Windows device names get a
+  trailing `_`); attachment names are percent-escaped where a file system refuses them,
+  with a property test that two names never give one file name, and non-ASCII names
+  checked through a real zip; the record's slug wins over the directory. The server's
+  export reads all threads in two queries inside its read-only transaction; the empty-
+  storage import restores threads with ids and times; the merge import brings threads only
+  to pages it creates or replaces, skipping ids the page has, renumbering ids used
+  elsewhere, and counts comments in the audit entry (the import dialog's `ImportSummary`
+  in `wiki-api` is unchanged). Fixed on the way, present in version 1 too: a server wiki
+  with two identical attachments (one blob) exported an archive that could not be imported;
+  a shared blob is now refused only when its files differ. Not covered: fflate writing a
+  non-ASCII name read back by zip-archive, names differing only in case on a case-
+  insensitive file system, very long names. Full gate; CI green.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
