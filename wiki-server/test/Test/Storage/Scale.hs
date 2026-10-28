@@ -19,10 +19,13 @@
 -- a page of versions at a time. The audit log's Activity reads one page of
 -- entries, however far back, and its list of actors a few rows per actor.
 --
--- What the storage reads is seen through SQLite's trace of each statement
--- a connection runs ('statementsOf'), and SQLite's plan for each
--- statement ('scansOf'): a plan step that scans a table reads every row
--- of it.
+-- What the storage reads is seen through the storage's trace of each
+-- statement it runs ('statementsOf'), on either database, and SQLite's
+-- plan for each statement ('scansOf'): a plan step that scans a table
+-- reads every row of it. The plans are checked on SQLite only: PostgreSQL
+-- plans a scan of a table as small as a test's whatever its indexes, so
+-- its plans say nothing about a large wiki. The statements are checked on
+-- both.
 module Test.Storage.Scale (spec) where
 
 import Data.Aeson (decode, encode)
@@ -31,16 +34,16 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addUTCTime, defaultTimeLocale, formatTime, fromGregorian, getCurrentTime)
-import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query, query_, setTrace)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
+import Database.Beam (all_, default_, desc_, filter_, insert, insertExpressions, insertValues, limit_, offset_, orderBy_, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (<-.), (==.))
+import Database.SQLite.Simple qualified as SQLite
 import Network.Wai (requestHeaders)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.WebSockets qualified as WS
 import Protolude
-import System.FilePath ((</>))
-import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
 import Test.HUnit (assertFailure)
+import Test.Database (Backing, withConnectionTo)
 import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Activity (Activity (..), ActivityQuery (..), activityPageSize)
@@ -59,111 +62,148 @@ import Wiki.Core.Page (Page (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Login (..))
+import Wiki.Core.User (Login (..), User (..))
 import Wiki.Core.Version (Author (..), VersionInfo (..), VersionsQuery (..), latestVersions)
 import Wiki.Server.Accounts (Resolved (..), resolveSession, startSession)
 import Wiki.Server.Events (eventsApplication, newHub, publish)
 import Wiki.Server.Feed (FeedKind (..), feed, feedSize, newFeedCache, sitemap)
 import Wiki.Server.Storage
-import Wiki.Server.Storage.Rows (Stamp (..), insertPage)
+import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Rows (chunksOf, insertPage, micro)
+import Wiki.Server.Storage.Schema (AuditLog (..), Notifications (..), PageVersions (..), Pages (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
 
-spec :: Spec
-spec = describe "the storage, at scale" $ do
-  readers
-  writes
-  bell
-  hub
-  search
-  feeds
-  pageView
-  histories
-  auditLog
+spec :: Backing -> Spec
+spec backing = describe "the storage, at scale" $ do
+  readers backing
+  writes backing
+  bell backing
+  hub backing
+  search backing
+  feeds backing
+  pageView backing
+  histories backing
+  auditLog backing
 
 -- | An action that must end within two seconds: one that waits for a lock
 -- another operation holds does not.
 soon :: (HasCallStack) => IO a -> IO a
 soon act = timeout 2_000_000 act >>= maybe (assertFailure "still waiting after two seconds") pure
 
--- | Hold a transaction open on a connection of the storage's, after a
--- statement in it, until the action given is done: what a long operation
--- does to everything else.
-holding :: ((Connection -> IO ()) -> IO ()) -> Query -> Query -> IO a -> IO a
-holding onConnection begin statement act = do
+-- | Hold a transaction open on a connection of its own to the storage's
+-- database, one that writes or one that reads, after a statement in it,
+-- until the action given is done: what a long operation of another
+-- process does to everything else.
+holding :: Storage -> Bool -> (forall be. (Backend be) => Db be ()) -> IO a -> IO a
+holding st toWrite statement act = do
   started <- newEmptyMVar
   done <- newEmptyMVar
-  held <- async . onConnection $ \c -> do
-    execute_ c begin
-    execute_ c statement
+  held <- async $ withConnectionTo (storagePlace st) $ \c -> do
+    begin toWrite c
+    runDb c statement
     putMVar started ()
     takeMVar done
-    execute_ c "ROLLBACK"
-  takeMVar started
+    rollbackTransaction c
+  race (wait held) (takeMVar started) >>= either (const (assertFailure "the transaction held ended at once")) pure
   act `finally` (putMVar done () >> wait held)
 
-readers :: Spec
-readers = describe "reads" $ do
+-- | A statement that reads every page, for a long read to hold.
+countPages :: (Backend be) => Db be ()
+countPages = void (runSelectReturningList (select (all_ wikiDb.pages)))
+
+-- | A statement that renames the blog, for a long write to hold.
+renameBlog :: (Backend be) => Db be ()
+renameBlog = runUpdate (update wikiDb.spaces (\x -> x.name <-. val_ "Renamed") (\x -> x.slug ==. val_ "blog"))
+
+readers :: Backing -> Spec
+readers backing = describe "reads" $ do
   let signedIn st = do
         who <- whoFor st (As "reader")
         u <- case who of
           AsUser u -> pure u
           _ -> assertFailure "the reader is nobody"
         now <- getCurrentTime
-        token <- withDatabase st (\c -> startSession c now u "127.0.0.1")
+        token <- writing st (startSession now u "127.0.0.1")
         pure (who, u, now, token)
       blog st who = soon (runStoredWiki st who (getSpace (path "blog"))) >>= ok
 
-  it "run beside a long read, and so does finding whose a session is" $ withDemo $ \st -> do
+  it "run beside a long read, and so does finding whose a session is" $ withDemo backing $ \st -> do
     (who, u, now, token) <- signedIn st
     -- A read, so that the transaction holds a snapshot.
-    holding (withReadConnection st) "BEGIN" "SELECT count(*) FROM pages" $ do
+    holding st False countPages $ do
       s <- blog st who
       s.name `shouldBe` "Blog"
       soon (resolveSession st now "127.0.0.1" token) `shouldReturn` Just Resolved {user = u, refreshed = False}
 
-  it "run beside a long write, and see what was committed before it" $ withDemo $ \st -> do
+  it "run beside a long write, and see what was committed before it" $ withDemo backing $ \st -> do
     (who, u, now, token) <- signedIn st
     committed <- blog st who
-    holding (withDatabase st) "BEGIN IMMEDIATE" "UPDATE spaces SET name = 'Renamed' WHERE slug = 'blog'" $ do
+    holding st True renameBlog $ do
       s <- blog st who
       s `shouldBe` committed
       soon (resolveSession st now "127.0.0.1" token) `shouldReturn` Just Resolved {user = u, refreshed = False}
 
-  it "run beside a backup, and a backup runs beside a long write" $ withDemo $ \st ->
-    withSystemTempDirectory "wiki-scale-test" $ \dir -> do
-      (who, _, _, _) <- signedIn st
-      holding (withDatabase st) "BEGIN IMMEDIATE" "UPDATE spaces SET name = 'Renamed' WHERE slug = 'blog'" $ do
-        soon (copyDatabase st (dir </> "copy.sqlite"))
-        void (blog st who)
+  it "run beside a backup, and a backup runs beside a long write" $ withDemo backing $ \st -> do
+    (who, _, _, _) <- signedIn st
+    holding st True renameBlog $ do
+      soon (getCurrentTime >>= backUp st) >>= either (assertFailure . toS) (const pass)
+      void (blog st who)
 
--- | The statements the storage's connections run while an action runs, in
--- the order they ran, as SQLite's trace gives them: with their values in
--- place of their parameters.
+-- | The statements the storage runs while an action runs, in the order
+-- they ran, as the storage traces them ('traceStatements'): the SQL of
+-- each, and @BEGIN@ or @BEGIN IMMEDIATE@ where a transaction begins.
 statementsOf :: Storage -> IO a -> IO (a, [Text])
 statementsOf st act = do
   seen <- newIORef []
   let keep t = atomicModifyIORef' seen (\ts -> (t : ts, ()))
-  traceAll (Just keep)
-  a <- act `finally` traceAll Nothing
+  a <- traceStatements st keep act
   (a,) . reverse <$> readIORef seen
-  where
-    traceAll f = do
-      withDatabase st (`setTrace` f)
-      -- Every reader at once, so that each is a different one.
-      let readersFrom :: Int -> IO ()
-          readersFrom n
-            | n <= 0 = pass
-            | otherwise = withReadConnection st (\c -> setTrace c f >> readersFrom (n - 1))
-      readersFrom readConnections
+
+-- | Whether the storage's database is SQLite, whose plans the tests check.
+onSqlite :: Storage -> Bool
+onSqlite st = case (storagePlace st).database of
+  SqliteFile _ -> True
+  PostgresAt _ -> False
+
+-- | A statement as the trace gives it, without the values SQLite's trace
+-- adds after it.
+sqlOf :: Text -> Text
+sqlOf = fst . T.breakOn ";\n-- With values:"
+
+-- | SQLite's plan for a statement, step by step, from a connection of its
+-- own. A statement with no plan (BEGIN) has none. On PostgreSQL, none.
+planOf :: Storage -> Text -> IO [Text]
+planOf st statement = case (storagePlace st).database of
+  PostgresAt _ -> pure []
+  SqliteFile file
+    | "BEGIN" `T.isPrefixOf` statement -> pure []
+    | otherwise -> bracket (SQLite.open file) SQLite.close $ \c -> do
+        plan <- SQLite.query_ c (SQLite.Query ("EXPLAIN QUERY PLAN " <> sqlOf statement)) :: IO [(Int, Int, Int, Text)]
+        pure [detail | (_, _, _, detail) <- plan]
 
 -- | The tables a statement reads whole: the steps of its plan that scan a
--- table, by the table's name or the alias the statement gives it. A
--- statement with no plan (BEGIN, COMMIT) scans nothing.
+-- table, by the table's name. Beam gives each table of a statement an
+-- alias (@"pages" AS "t0"@), which the plan names, so the alias is read
+-- back as the table's name; a scan of what is no table (the rows of a
+-- recursive query so far) keeps the name the plan gives it.
 scansOf :: Storage -> Text -> IO [Text]
-scansOf st statement
-  | any (`T.isPrefixOf` T.toUpper (T.stripStart statement)) ["BEGIN", "COMMIT", "ROLLBACK", "PRAGMA", "--"] = pure []
-  | otherwise = withDatabase st $ \c -> do
-      plan <- query_ c (Query ("EXPLAIN QUERY PLAN " <> statement)) :: IO [(Int, Int, Int, Text)]
-      pure [T.takeWhile (/= ' ') table | (_, _, _, detail) <- plan, Just table <- [T.stripPrefix "SCAN " detail]]
+scansOf st statement = do
+  plan <- planOf st statement
+  pure [Map.findWithDefault alias alias aliases | detail <- plan, Just scanned <- [T.stripPrefix "SCAN " detail], let alias = T.takeWhile (/= ' ') scanned]
+  where
+    -- Each @"name" AS "alias"@ of the statement: the text before the
+    -- needle ends with the name, the text after it starts with the needle
+    -- and then the alias.
+    needle = "\" AS \""
+    aliases = Map.fromList [(T.takeWhile (/= '"') (T.drop (T.length needle) rest), T.takeWhileEnd (/= '"') ahead) | (ahead, rest) <- T.breakOnAll needle statement]
+
+-- | The part of a statement after its last @WHERE@, up to its grouping,
+-- order or limit: what it selects by.
+whereOf :: Text -> Text
+whereOf statement = foldr (\clause -> fst . T.breakOn clause) (snd (T.breakOnEnd " WHERE " statement)) [" GROUP BY ", " ORDER BY ", " LIMIT ", ";"]
+
+-- | Whether a statement reads a table: names it after @FROM@ or a join.
+readsTable :: Text -> Text -> Bool
+readsTable table statement = any (`T.isInfixOf` statement) ["FROM \"" <> table <> "\"", "JOIN \"" <> table <> "\""]
 
 -- | The tables a whole operation may still scan: every transaction reads
 -- every space and every grant ("Known already" in
@@ -177,14 +217,12 @@ everyTransactionScans = Set.fromList ["spaces", "global_grants", "space_grants"]
 crowd :: Storage -> Int -> Int -> IO ()
 crowd st users watches = do
   blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
-  now <- getCurrentTime
-  withDatabase st $ \c -> do
-    execute_ c "BEGIN"
-    for_ [1 .. users] $ \i ->
-      execute c "INSERT INTO users (id, login, display_name) VALUES (?, ?, ?)" (crowdUser i, "crowd" <> show i :: Text, "Crowd " <> show i :: Text)
+  now <- micro <$> getCurrentTime
+  writing st $ do
+    for_ (chunksOf 200 [1 .. users]) $ \is ->
+      runInsert (insert wikiDb.users (insertValues [UserRow {id = crowdUser i, login = "crowd" <> show i, display_name = "Crowd " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True} | i <- is]))
     for_ [1 .. 10 :: Int] $ \i ->
       insertPage
-        c
         Page
           { id = crowdPage i
           , space = blog.id
@@ -198,35 +236,32 @@ crowd st users watches = do
           , position = 100 + i
           , template = False
           }
-    for_ [0 .. watches - 1] $ \i ->
-      execute c "INSERT INTO watches (user_id, page_id, watching) VALUES (?, ?, 1)" (crowdUser (1 + i `mod` users), (crowdPage (1 + i `div` users)).text)
-    execute_ c "COMMIT"
+    for_ (chunksOf 200 [0 .. watches - 1]) $ \is ->
+      runInsert (insert wikiDb.watches (insertValues [WatchRow {user_id = crowdUser (1 + i `mod` users), page_id = Just (crowdPage (1 + i `div` users)).text, space_id = Nothing, watching = True} | i <- is]))
   where
     crowdUser i = "crowd-" <> show i :: Text
     crowdPage i = PageId ("crowded-page-" <> show (i :: Int))
 
-writes :: Spec
-writes = describe "a save of a watched page" $ do
+writes :: Backing -> Spec
+writes backing = describe "a save of a watched page" $ do
   -- A save of the blog's notes by the editor that mentions the reader, in
   -- the demo's wiki with some people added: the statements it ran, the
   -- tables they scanned, and how many notifications it made.
-  let saved users watches = withDemo $ \st -> do
+  let saved users watches = withDemo backing $ \st -> do
         crowd st users watches
         editor <- whoFor st (As "editor")
         notes <- runStoredWiki st editor (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "notes-on-haskell"))) >>= ok
         -- Two watchers of the page, the admin and one of the crowd, are
         -- told of the save, and the reader of the mention.
-        for_ ["admin", "crowd1"] $ \login ->
-          withDatabase st $ \c -> execute c "INSERT INTO watches (user_id, page_id, watching) SELECT id, ?, 1 FROM users WHERE login = ?" (notes.id.text, login :: Text)
+        for_ ["admin", "crowd1"] $ \login -> do
+          u <- userByLogin st login >>= maybe (assertFailure ("no user " <> toS login)) pure
+          writing st (runInsert (insert wikiDb.watches (insertValues [WatchRow {user_id = u.id.text, page_id = Just notes.id.text, space_id = Nothing, watching = True}])))
         told <- countOf st
         (_, statements) <- statementsOf st (runStoredWiki st editor (savePage notes.id notes.updatedAt notes.title (notes.body <> "\n\nThanks, @reader.")) >>= void . ok)
         made <- subtract told <$> countOf st
         scans <- Set.fromList . concat <$> traverse (scansOf st) statements
         pure (statements, scans, made)
-      countOf st =
-        withDatabase st (\c -> query_ c "SELECT count(*) FROM notifications") >>= \case
-          [Only n] -> pure (n :: Int)
-          _ -> assertFailure "no count"
+      countOf st = reading st (countWhere wikiDb.notifications (const (val_ True)))
 
   it "reads no table whole that grows with users, watches or notifications" $ do
     (_, scans, made) <- saved 300 3000
@@ -247,13 +282,11 @@ addPages st space name = addPagesWith st space name ""
 -- | 'addPages', each page with this body.
 addPagesWith :: Storage -> SpaceId -> Text -> Text -> Int -> IO [PageId]
 addPagesWith st space name body n = do
-  now <- getCurrentTime
+  now <- micro <$> getCurrentTime
   let ids = [PageId (name <> "-page-" <> show i) | i <- [1 .. n]]
-  withDatabase st $ \c -> do
-    execute_ c "BEGIN"
+  writing st $
     for_ (zip [1 :: Int ..] ids) $ \(i, pid) ->
       insertPage
-        c
         Page
           { id = pid
           , space
@@ -267,33 +300,44 @@ addPagesWith st space name body n = do
           , position = 1000 + i
           , template = False
           }
-    execute_ c "COMMIT"
   pure ids
 
 -- | Notify a user of a change to each of these pages, the last the newest,
 -- as rows of the database.
 notifyOf :: Storage -> UserId -> [PageId] -> IO ()
 notifyOf st u pages = do
-  now <- getCurrentTime
-  withDatabase st $ \c -> do
-    execute_ c "BEGIN"
-    [Only next] <- query_ c "SELECT coalesce(max(seq) + 1, 0) FROM notifications"
-    for_ (zip [next :: Int ..] pages) $ \(seq', pid) ->
-      execute
-        c
-        "INSERT INTO notifications (id, user_id, kind, page_id, thread_id, actor, actor_name, title, excerpt, created_at, seq, read_at, mail) VALUES (?, ?, 'changed', ?, NULL, 'someone', 'Someone', 'A page', '', ?, ?, NULL, 0)"
-        ("bulk-notification-" <> show seq' :: Text, u.text, pid.text, Stamp now, seq')
-    execute_ c "COMMIT"
+  now <- micro <$> getCurrentTime
+  -- One at a time, so that the database numbers them in this order.
+  writing st $ for_ pages $ \pid -> do
+    n <- countWhere wikiDb.notifications (const (val_ True))
+    runInsert . insert wikiDb.notifications $
+      insertExpressions
+        [ NotificationRow
+            { seq = default_
+            , id = val_ ("bulk-notification-" <> show n <> "-" <> pid.text)
+            , user_id = val_ u.text
+            , kind = val_ "changed"
+            , page_id = val_ pid.text
+            , thread_id = val_ Nothing
+            , actor = val_ "someone"
+            , actor_name = val_ "Someone"
+            , title = val_ "A page"
+            , excerpt = val_ ""
+            , created_at = val_ now
+            , read_at = val_ Nothing
+            , mail = val_ False
+            }
+        ]
 
-bell :: Spec
-bell = describe "the bell" $ do
+bell :: Backing -> Spec
+bell backing = describe "the bell" $ do
   let readerIn st =
         whoFor st (As "reader") >>= \case
           AsUser u -> pure u
           _ -> assertFailure "the reader is nobody"
-      isNodesOfSpace statement = "FROM pages WHERE space_id" `T.isInfixOf` statement
+      isNodesOfSpace statement = readsTable "pages" statement && "\"space_id\"" `T.isInfixOf` whereOf statement && not ("\"id\"" `T.isInfixOf` whereOf statement)
 
-  it "reads the pages of a space once for 500 notifications about pages of a 2,000-page space" $ withDemo $ \st -> do
+  it "reads the pages of a space once for 500 notifications about pages of a 2,000-page space" $ withDemo backing $ \st -> do
     rita <- readerIn st
     blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
     pages <- addPages st blog.id "bulk" 2000
@@ -303,12 +347,12 @@ bell = describe "the bell" $ do
     length ns.items `shouldBe` maxListed
     map (\n -> n.page) ns.items `shouldBe` take maxListed (reverse (take 500 pages))
     map (\n -> n.location) (take 1 ns.items) `shouldBe` [Just PageLocation {space = path "blog", page = path "bulk-500"}]
-    length (filter isNodesOfSpace statements) `shouldBe` 1
+    filter isNodesOfSpace statements `shouldSatisfy` ((== 1) . length)
     -- One page of notifications, a node for each of its pages, the count
     -- of unread ones, the space's pages, and the transaction's own.
     length statements `shouldSatisfy` (< maxListed + 15)
 
-  it "counts and lists only notifications about pages the user may read, the newest first" $ withDemo $ \st -> do
+  it "counts and lists only notifications about pages the user may read, the newest first" $ withDemo backing $ \st -> do
     rita <- readerIn st
     blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
     hidden <- runStoredWiki st Administrator (createSpace Nothing "Hidden") >>= ok
@@ -322,10 +366,10 @@ bell = describe "the bell" $ do
     ns.unread `shouldBe` 10
     map (\n -> n.page) ns.items `shouldBe` reverse shown
 
-hub :: Spec
-hub = describe "the live channel" $
+hub :: Backing -> Spec
+hub backing = describe "the live channel" $
   it "checks once for each user whether they may read a page an event is about, not once for each tab" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       events <- newHub
       notes <- runStoredWiki st Administrator (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "notes-on-haskell"))) >>= ok
       users <- for ["admin", "editor", "reader"] $ \login -> whoFor st (As login)
@@ -366,8 +410,8 @@ hub = describe "the live channel" $
           checksFor (PageChanged notes.updatedAt) `shouldReturn` length users
           traverse_ wait running
 
-search :: Spec
-search = describe "the search" $ do
+search :: Backing -> Spec
+search backing = describe "the search" $ do
   -- Two spaces of 200 pages each, every page with the word "needle".
   let twoSpaces st = do
         asked <- runStoredWiki st Administrator (createSpace Nothing "Asked") >>= ok
@@ -375,43 +419,50 @@ search = describe "the search" $ do
         _ <- addPagesWith st asked.id "asked" "A needle in the text." 200
         _ <- addPagesWith st other.id "other" "Another needle in the text." 200
         pure (asked, other)
-      -- A page's search text made into bytes that are no text: a search
-      -- that reads the page fails.
-      spoil st (condition :: Text) = withDatabase st (\c -> execute_ c (Query ("UPDATE pages SET search_text = x'00' WHERE " <> condition)))
+      -- A page's slug made into what is no slug: a search that reads the
+      -- page fails.
+      spoil :: Storage -> Maybe SpaceId -> IO ()
+      spoil st space = writing st $ do
+        ids <- runSelectReturningList (select ((\p -> p.id) <$> filter_ (\p -> maybe (val_ True) (\sid -> p.space_id ==. val_ sid.text) space) (all_ wikiDb.pages)))
+        for_ ids $ \i -> runUpdate (update wikiDb.pages (\p -> p.slug <-. val_ ("Not a slug! " <> i)) (\p -> p.id ==. val_ i))
+      -- A search whose hits are read to the end, so that a page that
+      -- cannot be read fails it.
+      searchedThrough st q = searching st q >>= \r -> void (evaluate (T.length (show r)))
       asking text space = SearchQuery {text, space, includeSubspaces = True, limit = 500, templates = False}
       needle = asking "needle"
       searching st q = runStoredWiki st Administrator (searchPages q)
 
-  it "reads only the pages of the space asked for, through an index" $ withDemo $ \st -> do
+  it "reads only the pages of the space asked for, through an index" $ withDemo backing $ \st -> do
     (asked, other) <- twoSpaces st
-    spoil st ("space_id = '" <> other.id.text <> "'")
+    spoil st (Just other.id)
     (hits, statements) <- statementsOf st (searching st (needle (Just asked.id)))
     length hits `shouldBe` 200
     map (\h -> h.space) hits `shouldSatisfy` all (== asked.id)
     scans <- Set.fromList . concat <$> traverse (scansOf st) statements
     scans `shouldSatisfy` (`Set.isSubsetOf` everyTransactionScans)
     -- A search of every space reads the other space's pages too.
-    void (searching st (needle Nothing)) `shouldThrow` anyException
+    searchedThrough st (needle Nothing) `shouldThrow` anyException
 
-  it "folds no page's text for a query that nothing matches" $ withDemo $ \st -> do
+  it "folds no page's text for a query that nothing matches" $ withDemo backing $ \st -> do
     _ <- twoSpaces st
-    spoil st "1 = 1"
+    spoil st Nothing
     searching st (asking "haystack" Nothing) `shouldReturn` []
-    void (searching st (needle Nothing)) `shouldThrow` anyException
+    searchedThrough st (needle Nothing) `shouldThrow` anyException
 
-  it "finds what the stored fold finds: no case, no diacritics, a part of a word" $ withDemo $ \st -> do
+  it "finds what the stored fold finds: no case, no diacritics, and on SQLite a part of a word" $ withDemo backing $ \st -> do
     (asked, _) <- twoSpaces st
     [pid] <- addPagesWith st asked.id "polish" "Zażółć gęślą jaźń, sagt die Straße." 1
-    hits <- searching st (asking "ZAZOLC strasse jaz" (Just asked.id))
+    -- PostgreSQL's full-text search finds whole words only.
+    hits <- searching st (asking (if onSqlite st then "ZAZOLC strasse jaz" else "ZAZOLC strasse jazn") (Just asked.id))
     map (\h -> h.page) hits `shouldBe` [pid]
 
-feeds :: Spec
-feeds = describe "the sitemap and the feeds" $ do
+feeds :: Backing -> Spec
+feeds backing = describe "the sitemap and the feeds" $ do
   let base = "https://wiki.example/"
       -- A statement that reads a page's text.
-      readsText t = "FROM pages" `T.isInfixOf` t && any (`T.isInfixOf` t) ["body", "search_text", "search_fold"]
+      readsText t = readsTable "pages" t && any (\c -> ("\"" <> c <> "\"") `T.isInfixOf` t) ["body", "search_text", "search_fold"]
 
-  it "write the sitemap of a 2,000-page space with the same statements as of the demo, reading no page's text" $ withDemo $ \st -> do
+  it "write the sitemap of a 2,000-page space with the same statements as of the demo, reading no page's text" $ withDemo backing $ \st -> do
     blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
     (_, small) <- statementsOf st (newFeedCache >>= \cache -> sitemap st cache base)
     _ <- addPages st blog.id "bulk" 2000
@@ -420,7 +471,7 @@ feeds = describe "the sitemap and the feeds" $ do
     filter readsText statements `shouldBe` []
     length statements `shouldBe` length small
 
-  it "write a feed from the text of the posts it carries alone" $ withDemo $ \st -> do
+  it "write a feed from the text of the posts it carries alone" $ withDemo backing $ \st -> do
     blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
     _ <- addPagesWith st blog.id "post" "A post, with some text." 100
     cache <- newFeedCache
@@ -428,7 +479,7 @@ feeds = describe "the sitemap and the feeds" $ do
     fmap (T.count "<entry>") xml `shouldBe` Just feedSize
     length (filter readsText statements) `shouldBe` feedSize
 
-  it "write each address once a minute, and keep it for whoever asks again" $ withDemo $ \st -> do
+  it "write each address once a minute, and keep it for whoever asks again" $ withDemo backing $ \st -> do
     cache <- newFeedCache
     (kept, written) <- statementsOf st (sitemap st cache base)
     written `shouldSatisfy` (not . null)
@@ -443,8 +494,8 @@ feeds = describe "the sitemap and the feeds" $ do
     (_, rss) <- statementsOf st (feed st cache base Rss ["blog"])
     rss `shouldSatisfy` (not . null)
 
-pageView :: Spec
-pageView = describe "a page view" $ do
+pageView :: Backing -> Spec
+pageView backing = describe "a page view" $ do
   -- What a page view of the docs' diagrams page reads, as the reader: the
   -- page by its path, whether the reader watches it, and which of three
   -- logins its mentions name.
@@ -463,9 +514,9 @@ pageView = describe "a page view" $ do
         pure statements
       -- A read of every page of a space: by the space alone, not by a
       -- parent and a slug in it as well.
-      isNodesOfSpace statement = "FROM pages WHERE space_id" `T.isInfixOf` statement && not (" AND " `T.isInfixOf` statement)
+      isNodesOfSpace statement = readsTable "pages" statement && "\"space_id\"" `T.isInfixOf` whereOf statement && not (" AND " `T.isInfixOf` whereOf statement)
 
-  it "reads no table whole and no whole space, the same in a 2,000-page space with 300 more users and 3,000 more watches" $ withDemo $ \st -> do
+  it "reads no table whole and no whole space, the same in a 2,000-page space with 300 more users and 3,000 more watches" $ withDemo backing $ \st -> do
     small <- viewed st
     docs <- runStoredWiki st Administrator (getSpace (path "docs")) >>= ok
     _ <- addPages st docs.id "bulk" 2000
@@ -476,7 +527,7 @@ pageView = describe "a page view" $ do
     filter isNodesOfSpace big `shouldBe` []
     length big `shouldBe` length small
 
-  it "serves an attachment after reading its space's chain and grants, not every space and grant" $ withDemo $ \st -> do
+  it "serves an attachment after reading its space's chain and grants, not every space and grant" $ withDemo backing $ \st -> do
     rita <- whoFor st (As "reader")
     docs <- runStoredWiki st Administrator (getSpace (path "docs")) >>= ok
     page <- runStoredWiki st Administrator (getPage docs.id (path "markdown-guide/diagrams")) >>= ok
@@ -494,35 +545,27 @@ pageView = describe "a page view" $ do
     runStoredWiki st rita (attachmentFile hidden.id) >>= (`shouldSatisfy` isLeft)
     runStoredWiki st Anonymous (attachmentFile a.id) >>= (`shouldSatisfy` isRight)
 
-  it "counts each space's pages from an index alone, not from the pages' rows" $ withDemo $ \st -> do
+  it "counts each space's pages from an index alone, not from the pages' rows" $ withDemo backing $ \st -> do
     (_, statements) <- statementsOf st (runStoredWiki st Anonymous pageCounts)
-    counting <- maybe (assertFailure "no count of pages") pure (find ("count(*) FROM pages" `T.isInfixOf`) statements)
-    plan <- withDatabase st (\c -> query_ c (Query ("EXPLAIN QUERY PLAN " <> counting))) :: IO [(Int, Int, Int, Text)]
-    [detail | (_, _, _, detail) <- plan] `shouldSatisfy` any ("COVERING INDEX pages_space_template" `T.isInfixOf`)
+    counting <- maybe (assertFailure "no count of pages") pure (find (\t -> readsTable "pages" t && "COUNT(*)" `T.isInfixOf` T.toUpper t) statements)
+    plan <- planOf st counting
+    when (onSqlite st) $ plan `shouldSatisfy` any ("COVERING INDEX pages_space_template" `T.isInfixOf`)
 
 -- | Give each of these pages versions saved a second apart from its
 -- creation, the first by the user given.
 withVersions :: Storage -> UserId -> Int -> [PageId] -> IO ()
-withVersions st u n pages = withDatabase st $ \c -> do
-  execute_ c "BEGIN"
+withVersions st u n pages = writing st $
   for_ pages $ \pid -> do
-    [Only (Stamp made)] <- query c "SELECT created_at FROM pages WHERE id = ?" (Only pid.text)
-    for_ [0 .. n - 1] $ \i ->
-      execute
-        c
-        "INSERT INTO page_versions (page_id, updated_at, title, body, author) VALUES (?, ?, 'A version', 'Its text.', ?)"
-        (pid.text, Stamp (addUTCTime (fromIntegral i) made), if i == 0 then Just u.text else Nothing)
-  execute_ c "COMMIT"
+    made <- maybe (panic "no page") (\p -> p.created_at) <$> runSelectReturningOne (select (filter_ (\p -> p.id ==. val_ pid.text) (all_ wikiDb.pages)))
+    runInsert . insert wikiDb.page_versions $
+      insertValues
+        [ VersionRow {page_id = pid.text, updated_at = addUTCTime (fromIntegral i) made, title = "A version", body = "Its text.", author = if i == 0 then Just u.text else Nothing}
+        | i <- [0 .. n - 1]
+        ]
 
--- | SQLite's plan for a statement, step by step.
-planOf :: Storage -> Text -> IO [Text]
-planOf st statement = withDatabase st $ \c -> do
-  plan <- query_ c (Query ("EXPLAIN QUERY PLAN " <> statement)) :: IO [(Int, Int, Int, Text)]
-  pure [detail | (_, _, _, detail) <- plan]
-
-histories :: Spec
-histories = describe "histories" $ do
-  it "list a blog's posts reading the first version of each page, not every version" $ withDemo $ \st -> do
+histories :: Backing -> Spec
+histories backing = describe "histories" $ do
+  it "list a blog's posts reading the first version of each page, not every version" $ withDemo backing $ \st -> do
     editor <-
       whoFor st (As "editor") >>= \case
         AsUser u -> pure u
@@ -538,10 +581,11 @@ histories = describe "histories" $ do
     plan <- planOf st readingVersions
     -- Each page's first version found by its page and its time, the
     -- primary key, not by reading the page's versions.
-    plan `shouldSatisfy` any ("(page_id=? AND updated_at=?)" `T.isInfixOf`)
-    plan `shouldSatisfy` all (not . ("SCAN v" `T.isPrefixOf`))
+    when (onSqlite st) $ do
+      (readingVersions, plan) `shouldSatisfy` any ("(page_id=? AND updated_at=?)" `T.isInfixOf`) . snd
+      (readingVersions, plan) `shouldSatisfy` all (not . ("SCAN " `T.isPrefixOf`)) . snd
 
-  it "list a page of a history from an index, numbered, without reading or sorting the rest" $ withDemo $ \st -> do
+  it "list a page of a history from an index, numbered, without reading or sorting the rest" $ withDemo backing $ \st -> do
     editor <-
       whoFor st (As "editor") >>= \case
         AsUser u -> pure u
@@ -554,34 +598,42 @@ histories = describe "histories" $ do
     map (\v -> v.number) listed `shouldBe` [120, 119 .. 71]
     plans <- traverse (planOf st) (filter ("page_versions" `T.isInfixOf`) statements)
     length plans `shouldBe` 2
-    concat plans `shouldSatisfy` any ("page_versions_order" `T.isInfixOf`)
-    concat plans `shouldSatisfy` all (not . ("USE TEMP B-TREE" `T.isInfixOf`))
+    when (onSqlite st) $ do
+      -- The primary key, the page and the time, lists them in order.
+      (statements, concat plans) `shouldSatisfy` any ("sqlite_autoindex_page_versions_1" `T.isInfixOf`) . snd
+      (statements, concat plans) `shouldSatisfy` all (not . ("USE TEMP B-TREE" `T.isInfixOf`)) . snd
     -- The next page starts where the first ends.
     older <- runStoredWiki st Anonymous (listVersions pid VersionsQuery {before = (\v -> v.updatedAt) <$> lastMay listed, limit = 50}) >>= ok
     map (\v -> v.number) older `shouldBe` [70, 69 .. 21]
 
-auditLog :: Spec
-auditLog = describe "the audit log" $
+auditLog :: Backing -> Spec
+auditLog backing = describe "the audit log" $
   it "reads page 100 of a 100,000-entry log as one page of rows, and its actors without reading every entry" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       let entries = 100_000 :: Int
           start = UTCTime (fromGregorian 2026 1 1) 0
-          -- As the log writes a time: six digits of fraction, so that the
-          -- text sorts in time order.
-          logTime i = toS (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S.000000Z" (addUTCTime (fromIntegral i) start)) :: Text
-      withDatabase st $ \c -> do
-        execute_ c "BEGIN"
-        for_ [1 .. entries] $ \i ->
-          execute
-            c
-            "INSERT INTO audit_log (id, at, actor_id, actor_login, action, subject_kind, subject_id, subject_name) VALUES (?, ?, ?, ?, 'group.create', 'group', NULL, 'A group')"
-            ("bulk-" <> show i :: Text, logTime i, "bulk-actor-" <> show (i `mod` 10) :: Text, "actor" <> show (i `mod` 10) :: Text)
-        execute_ c "COMMIT"
+      writing st $
+        for_ (chunksOf 500 [1 .. entries]) $ \is ->
+          runInsert . insert wikiDb.audit_log $
+            insertValues
+              [ AuditRow
+                  { id = "bulk-" <> show i
+                  , at = addUTCTime (fromIntegral i) start
+                  , actor_id = "bulk-actor-" <> show (i `mod` 10)
+                  , actor_login = "actor" <> show (i `mod` 10)
+                  , action = "group.create"
+                  , subject_kind = "group"
+                  , subject_id = Nothing
+                  , subject_name = "A group"
+                  , detail = "{}"
+                  , address = ""
+                  }
+              | i <- is
+              ]
       -- The oldest entry of page 99.
       cursor <-
-        withDatabase st (\c -> query c "SELECT id FROM audit_log ORDER BY at DESC, id DESC LIMIT 1 OFFSET ?" (Only (99 * activityPageSize - 1))) >>= \case
-          [Only i] -> pure i
-          _ -> assertFailure "no entry ends page 99"
+        reading st (runSelectReturningOne (select (limit_ 1 (offset_ (fromIntegral (99 * activityPageSize - 1)) (orderBy_ (\e -> (desc_ e.at, desc_ e.id)) (all_ wikiDb.audit_log))))))
+          >>= maybe (assertFailure "no entry ends page 99") (\e -> pure e.id)
       (page, statements) <- statementsOf st (runStoredWiki st Administrator (activity ActivityQuery {actor = Nothing, offset = 0, before = Just cursor}) >>= ok)
       map (\e -> e.id) page.entries `shouldBe` ["bulk-" <> show i | i <- take activityPageSize [entries - 99 * activityPageSize, entries - 99 * activityPageSize - 1 ..]]
       length (filter (\a -> "actor" `T.isPrefixOf` a.login.text) page.actors) `shouldBe` 10

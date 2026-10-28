@@ -31,8 +31,8 @@ import Data.Time (UTCTime)
 import Database.Beam (FromBackendRow, HasQBuilder, HasSqlEqualityCheck, MonadBeam)
 import Database.Beam.Backend.SQL (BeamSqlBackend, BeamSqlBackendCanSerialize, BeamSqlBackendIsString, SqlNull)
 import Database.Beam.Backend.SQL.BeamExtensions (BeamHasInsertOnConflict)
-import Database.Beam.Postgres (Pg, Postgres, runBeamPostgres)
-import Database.Beam.Sqlite (Sqlite, SqliteM, runBeamSqlite)
+import Database.Beam.Postgres (Pg, Postgres, runBeamPostgres, runBeamPostgresDebug)
+import Database.Beam.Sqlite (Sqlite, SqliteM, runBeamSqlite, runBeamSqliteDebug)
 import Database.PostgreSQL.Simple qualified as Pg
 import Database.SQLite.Simple qualified as Sqlite
 import Protolude
@@ -74,6 +74,11 @@ class
 
   -- | Run statements on a connection.
   runDb :: Connection be -> Db be a -> IO a
+
+  -- | Run statements on a connection, and give each statement's SQL to the
+  -- function first: what a test or the bench reads to see which statements
+  -- an operation runs.
+  runDbTraced :: (Text -> IO ()) -> Connection be -> Db be a -> IO a
 
   -- | Close a connection.
   closeConnection :: Connection be -> IO ()
@@ -121,6 +126,7 @@ instance Backend Sqlite where
   type Db Sqlite = SqliteM
   type Connection Sqlite = Sqlite.Connection
   runDb = runBeamSqlite
+  runDbTraced tracer = runBeamSqliteDebug (tracer . toS)
   closeConnection = closeSqlite
   begin = beginSqlite
   commitTransaction = commitSqlite
@@ -137,6 +143,7 @@ instance Backend Postgres where
   type Db Postgres = Pg
   type Connection Postgres = Pg.Connection
   runDb = runBeamPostgres
+  runDbTraced tracer = runBeamPostgresDebug (tracer . toS)
   closeConnection = closePostgres
   begin = beginPostgres
   commitTransaction = commitPostgres

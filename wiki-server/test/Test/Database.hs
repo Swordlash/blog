@@ -21,6 +21,9 @@ module Test.Database
   , withBackings
   , withPlace
   , databaseUrl
+  , choiceOf
+  , placeOptionsOf
+  , withConnectionTo
   )
 where
 
@@ -38,8 +41,11 @@ import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
 import System.Posix.User (getEffectiveUserID)
 import System.Process (callProcess, readProcessWithExitCode)
 import Test.Hspec (pendingWith)
+import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..))
 import Wiki.Server.Storage (Database (..), Place (..), inDataDir)
-import Wiki.Server.Storage.Postgres (defaultPgPrograms)
+import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Postgres (PgPrograms (..), closePostgres, defaultPgPrograms, openPostgres)
+import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, openSqlite)
 
 -- | A database the tests run on.
 data Backing
@@ -56,6 +62,9 @@ data Backing
 data PgServer = PgServer
   { url :: Text
   , made :: IORef Int
+  , programs :: PgPrograms
+  -- ^ The @pg_dump@ and @pg_restore@ of the server's version: those of
+  -- the cluster's own installation, or those on the PATH.
   }
 
 -- | How a suite's title names a backing.
@@ -72,13 +81,13 @@ withBackings act =
   lookupEnv "WIKI_TEST_DATABASE_URL" >>= \case
     Just url -> do
       made <- newIORef 0
-      act [OnSqlite, OnPostgres PgServer {url = T.pack url, made}]
+      act [OnSqlite, OnPostgres PgServer {url = T.pack url, made, programs = defaultPgPrograms}]
     Nothing ->
       findPostgres >>= \case
         Nothing -> act [OnSqlite, PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH"]
         Just bin -> withCluster bin $ \url -> do
           made <- newIORef 0
-          act [OnSqlite, OnPostgres PgServer {url, made}]
+          act [OnSqlite, OnPostgres PgServer {url, made, programs = PgPrograms {dump = bin </> "pg_dump", restore = bin </> "pg_restore"}}]
 
 -- | The directory of PostgreSQL's programs, if they are installed: where
 -- @pg_ctl@ is on the PATH, or the @bin@ directory of the newest version
@@ -147,4 +156,23 @@ withPlace backing dir act = case backing of
         admin = BC.pack (toS server.url)
         statement q = bracket (Pg.connectPostgreSQL admin) Pg.close (\c -> void (Pg.execute_ c (Query (encodeUtf8 q))))
     bracket_ (statement ("CREATE DATABASE " <> name)) (statement ("DROP DATABASE IF EXISTS " <> name <> " WITH (FORCE)")) $
-      act Place {dataDir = dir, database = PostgresAt (encodeUtf8 (databaseUrl server.url name)), programs = defaultPgPrograms}
+      act Place {dataDir = dir, database = PostgresAt (encodeUtf8 (databaseUrl server.url name)), programs = server.programs}
+
+-- | The command line's choice of a database, for a place: what a test
+-- gives a server or a console command to find the place's database.
+choiceOf :: Database -> DatabaseChoice
+choiceOf = \case
+  SqliteFile file -> SqliteChosen file
+  PostgresAt url -> PostgresChosen (decodeUtf8 url) Nothing
+
+-- | The console's options for a place.
+placeOptionsOf :: Place -> PlaceOptions
+placeOptionsOf at = PlaceOptions {dataDir = at.dataDir, database = choiceOf at.database, programs = at.programs}
+
+-- | A connection of its own to a place's database, outside any storage:
+-- for a test that looks at the database as the storage leaves it, or
+-- prepares one for the storage to find.
+withConnectionTo :: Place -> (forall be. (Backend be) => Connection be -> IO a) -> IO a
+withConnectionTo at act = case at.database of
+  SqliteFile file -> bracket (openSqlite ReadWrite file) closeSqlite act
+  PostgresAt url -> bracket (openPostgres url) closePostgres act

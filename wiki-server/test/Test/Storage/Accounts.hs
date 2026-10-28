@@ -8,9 +8,9 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Protolude
-import System.FilePath ((</>))
-import System.IO.Temp (withSystemTempDirectory)
+import Test.Database (Backing, placeOptionsOf)
 import Test.Hspec
+import Test.Storage.Fixture (withPlaceIn)
 import Wiki.Api.Account (Account (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.Core.Id (UserId (..))
@@ -22,17 +22,17 @@ import Wiki.Server.Limiter (Limits (..), Verdict (..), failed, newLimiter, succe
 import Wiki.Server.Password
 import Wiki.Server.Storage (Storage, Who (..), defaultConfig, runStoredWiki, withStorage)
 
-spec :: Spec
-spec = describe "accounts" $ do
+spec :: Backing -> Spec
+spec backing = describe "accounts" $ do
   passwords
   limits
-  accounts
-  sessions
-  console
+  accounts backing
+  sessions backing
+  console backing
 
 -- | A storage in a directory of its own, empty.
-withEmpty :: (Storage -> IO a) -> IO a
-withEmpty action = withSystemTempDirectory "wiki-accounts-test" $ \dir -> withStorage defaultConfig (dir </> "data") action
+withEmpty :: Backing -> (Storage -> IO a) -> IO a
+withEmpty backing action = withPlaceIn backing $ \at -> withStorage defaultConfig at action
 
 -- | Something that should have worked.
 ok :: (HasCallStack, Show e) => IO (Either e a) -> IO a
@@ -114,9 +114,9 @@ limits = describe "failed sign-ins" $ do
     succeeded l "ada" "10.0.0.1"
     verdict l now "ada" "10.0.0.1" `shouldReturn` Allowed
 
-accounts :: Spec
-accounts = describe "the storage's accounts" $ do
-  it "are made with a password, and sign in with it" $ withEmpty $ \st -> do
+accounts :: Backing -> Spec
+accounts backing = describe "the storage's accounts" $ do
+  it "are made with a password, and sign in with it" $ withEmpty backing $ \st -> do
     made <- ok (createAccount st "ada" "Ada" (Just (Password "correct horse")))
     (made.user.login.text, made.user.displayName, made.hasPassword, made.disabled) `shouldBe` ("ada", "Ada", True, False)
     now <- getCurrentTime
@@ -128,7 +128,7 @@ accounts = describe "the storage's accounts" $ do
     -- As people type a login: without regard to case or blanks around it.
     signIn st now "127.0.0.1" " ADA " (Password "correct horse") >>= (`shouldSatisfy` isRight)
 
-  it "refuse a wrong password, an unknown login, a login without a password and a disabled one alike" $ withEmpty $ \st -> do
+  it "refuse a wrong password, an unknown login, a login without a password and a disabled one alike" $ withEmpty backing $ \st -> do
     ada <- ok (createAccount st "ada" "" (Just (Password "correct horse")))
     _ <- ok (createAccount st "bea" "" Nothing)
     now <- getCurrentTime
@@ -140,18 +140,18 @@ accounts = describe "the storage's accounts" $ do
     _ <- ok (setDisabled st ada.user.id False)
     signIn st now "127.0.0.1" "ada" (Password "correct horse") >>= (`shouldSatisfy` isRight)
 
-  it "refuse a login taken in another case, a blank or spaced one, and a short password" $ withEmpty $ \st -> do
+  it "refuse a login taken in another case, a blank or spaced one, and a short password" $ withEmpty backing $ \st -> do
     _ <- ok (createAccount st "ada" "" (Just (Password "correct horse")))
     createAccount st "ADA" "" (Just (Password "correct horse")) >>= (`shouldSatisfy` \case Left (Conflict _) -> True; _ -> False)
     for_ ["", "   ", "two words", "~operator", T.replicate 65 "x"] $ \login ->
       createAccount st login "" (Just (Password "correct horse")) >>= (`shouldSatisfy` \case Left (Invalid _) -> True; _ -> False)
     createAccount st "bea" "" (Just (Password "short")) >>= (`shouldSatisfy` \case Left (Invalid _) -> True; _ -> False)
 
-  it "are named by their login when no name is given, and trimmed" $ withEmpty $ \st -> do
+  it "are named by their login when no name is given, and trimmed" $ withEmpty backing $ \st -> do
     a <- ok (createAccount st "  ada  " "   " (Just (Password "correct horse")))
     (a.user.login.text, a.user.displayName) `shouldBe` ("ada", "ada")
 
-  it "are made administrators and unmade, and listed with it" $ withEmpty $ \st -> do
+  it "are made administrators and unmade, and listed with it" $ withEmpty backing $ \st -> do
     ada <- ok (createAccount st "ada" "Ada" (Just (Password "correct horse")))
     bea <- ok (createAccount st "bea" "Bea" Nothing)
     _ <- ok (setAdministrator st ada.user.id True)
@@ -164,33 +164,33 @@ accounts = describe "the storage's accounts" $ do
     setAdministrator st (UserId "nobody") True `shouldReturn` Left NotFound
     accountOf st bea.user.id `shouldReturn` Just bea
 
-  it "take a disabled user for nobody, wherever they are named" $ withEmpty $ \st -> do
+  it "take a disabled user for nobody, wherever they are named" $ withEmpty backing $ \st -> do
     ada <- ok (createAccount st "ada" "Ada" (Just (Password "correct horse")))
     _ <- ok (setDisabled st ada.user.id True)
     s <- runStoredWiki st (AsUser ada.user.id) session
     (s.user, s.standing) `shouldBe` (Nothing, NotSignedIn)
 
-sessions :: Spec
-sessions = describe "sessions" $ do
+sessions :: Backing -> Spec
+sessions backing = describe "sessions" $ do
   let signedIn st = do
         ada <- ok (createAccount st "ada" "Ada" (Just (Password "correct horse")))
         now <- getCurrentTime
         Right (_, token) <- signIn st now "127.0.0.1" "ada" (Password "correct horse")
         pure (ada, now, token)
 
-  it "are found by the id their cookie carries, and by nothing else" $ withEmpty $ \st -> do
+  it "are found by the id their cookie carries, and by nothing else" $ withEmpty backing $ \st -> do
     (ada, now, token) <- signedIn st
     resolveSession st now "127.0.0.1" token `shouldReturn` Just Resolved {user = ada.user.id, refreshed = False}
     resolveSession st now "127.0.0.1" (SessionToken (tokenHash token.text)) `shouldReturn` Nothing
     other <- SessionToken <$> newToken
     resolveSession st now "127.0.0.1" other `shouldReturn` Nothing
 
-  it "end when signed out" $ withEmpty $ \st -> do
+  it "end when signed out" $ withEmpty backing $ \st -> do
     (_, now, token) <- signedIn st
     endSession st token
     resolveSession st now "127.0.0.1" token `shouldReturn` Nothing
 
-  it "end when their user is disabled or given a new password" $ withEmpty $ \st -> do
+  it "end when their user is disabled or given a new password" $ withEmpty backing $ \st -> do
     (ada, now, token) <- signedIn st
     _ <- ok (setDisabled st ada.user.id True)
     _ <- ok (setDisabled st ada.user.id False)
@@ -202,7 +202,7 @@ sessions = describe "sessions" $ do
     signIn st now "127.0.0.1" "ada" (Password "correct horse") `shouldReturn` Left NoSuchAccount
     signIn st now "127.0.0.1" "ada" (Password "battery staple") >>= (`shouldSatisfy` isRight)
 
-  it "end after being idle for the idle time, and each use moves their end on (at most hourly)" $ withEmpty $ \st -> do
+  it "end after being idle for the idle time, and each use moves their end on (at most hourly)" $ withEmpty backing $ \st -> do
     (ada, now, token) <- signedIn st
     let later = addUTCTime (refreshEvery + 1) now
     resolveSession st later "127.0.0.1" token `shouldReturn` Just Resolved {user = ada.user.id, refreshed = True}
@@ -214,48 +214,48 @@ sessions = describe "sessions" $ do
     -- And it is gone, not merely refused.
     resolveSession st now "127.0.0.1" token `shouldReturn` Nothing
 
-console :: Spec
-console = describe "wiki-server users" $ do
-  let run dir password command = do
+console :: Backing -> Spec
+console backing = describe "wiki-server users" $ do
+  let run at password command = do
         asked <- newIORef []
-        result <- runUsers (\login -> modifyIORef' asked (login :) $> password) Users {dataDir = dir, command}
+        result <- runUsers (\login -> modifyIORef' asked (login :) $> password) Users {place = placeOptionsOf at, command}
         (result,) <$> readIORef asked
   it "makes the first administrator, who then signs in, with the password it asked for" $
-    withSystemTempDirectory "wiki-console-test" $ \dir -> do
-      (listed, _) <- run dir (Left "not asked") ListUsers
+    withPlaceIn backing $ \at -> do
+      (listed, _) <- run at (Left "not asked") ListUsers
       listed `shouldSatisfy` either (const False) (any (T.isInfixOf "There are no users yet"))
-      (made, asked) <- run dir (Right (Password "correct horse")) (AddUser "ada" (Just "Ada") True True)
+      (made, asked) <- run at (Right (Password "correct horse")) (AddUser "ada" (Just "Ada") True True)
       asked `shouldBe` ["ada"]
       made `shouldSatisfy` isRight
-      (table, _) <- run dir (Left "not asked") ListUsers
+      (table, _) <- run at (Left "not asked") ListUsers
       table `shouldBe` Right ["LOGIN  NAME  ADMINISTRATOR  SIGNS IN", "ada    Ada   yes            yes"]
-      withStorage defaultConfig dir $ \st -> do
+      withStorage defaultConfig at $ \st -> do
         now <- getCurrentTime
         Right (user, _) <- signIn st now "127.0.0.1" "ada" (Password "correct horse")
         s <- runStoredWiki st (AsUser user.id) session
         [g.permission | g <- s.grants.global] `shouldBe` [Administer]
 
   it "sets a password, disables and enables a login, and makes and unmakes an administrator" $
-    withSystemTempDirectory "wiki-console-test" $ \dir -> do
-      _ <- run dir (Right (Password "correct horse")) (AddUser "bea" Nothing False True)
-      (changed, asked) <- run dir (Right (Password "battery staple")) (SetUserPassword "BEA")
+    withPlaceIn backing $ \at -> do
+      _ <- run at (Right (Password "correct horse")) (AddUser "bea" Nothing False True)
+      (changed, asked) <- run at (Right (Password "battery staple")) (SetUserPassword "BEA")
       (changed, asked) `shouldSatisfy` \(r, a) -> isRight r && a == ["BEA"]
-      _ <- run dir (Left "not asked") (SetUserDisabled "bea" True)
-      _ <- run dir (Left "not asked") (SetUserAdministrator "bea" True)
-      (table, _) <- run dir (Left "not asked") ListUsers
+      _ <- run at (Left "not asked") (SetUserDisabled "bea" True)
+      _ <- run at (Left "not asked") (SetUserAdministrator "bea" True)
+      (table, _) <- run at (Left "not asked") ListUsers
       table `shouldBe` Right ["LOGIN  NAME  ADMINISTRATOR  SIGNS IN", "bea    bea   yes            no (disabled)"]
-      _ <- run dir (Left "not asked") (SetUserDisabled "bea" False)
-      withStorage defaultConfig dir $ \st -> do
+      _ <- run at (Left "not asked") (SetUserDisabled "bea" False)
+      withStorage defaultConfig at $ \st -> do
         now <- getCurrentTime
         signIn st now "127.0.0.1" "bea" (Password "battery staple") >>= (`shouldSatisfy` isRight)
 
   it "says what is wrong, and changes nothing: an unknown login, a password not given, one too short" $
-    withSystemTempDirectory "wiki-console-test" $ \dir -> do
-      (unknown, _) <- run dir (Right (Password "correct horse")) (SetUserPassword "nobody")
+    withPlaceIn backing $ \at -> do
+      (unknown, _) <- run at (Right (Password "correct horse")) (SetUserPassword "nobody")
       unknown `shouldBe` Left "There is no user with the login nobody."
-      (noPassword, _) <- run dir (Left "No password on standard input.") (AddUser "ada" Nothing False True)
+      (noPassword, _) <- run at (Left "No password on standard input.") (AddUser "ada" Nothing False True)
       noPassword `shouldBe` Left "No password on standard input."
-      (short, _) <- run dir (Right (Password "short")) (AddUser "ada" Nothing False True)
+      (short, _) <- run at (Right (Password "short")) (AddUser "ada" Nothing False True)
       short `shouldSatisfy` isLeft
-      (table, _) <- run dir (Left "not asked") ListUsers
+      (table, _) <- run at (Left "not asked") ListUsers
       table `shouldSatisfy` either (const False) (any (T.isInfixOf "There are no users yet"))

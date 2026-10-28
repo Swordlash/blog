@@ -10,6 +10,7 @@
 module Wiki.Server.Storage.Rows
   ( -- * Columns
     micro
+  , holds
   , orderText
   , readOrder
   , chunksOf
@@ -170,7 +171,7 @@ import Database.Beam
   , isNothing_
   , join_
   , just_
-  , leftJoin_
+  , leftJoin_'
   , like_
   , limit_
   , lower_
@@ -188,9 +189,11 @@ import Database.Beam
   , (<-.)
   , (<.)
   , (==.)
+  , (==?.)
   , (>.)
   )
 import Database.Beam qualified as Beam
+import Database.Beam.Backend.SQL (BeamSqlBackend)
 import Database.Beam.Backend.SQL.BeamExtensions (anyConflict, conflictingFields, insertOnConflict, onConflictDoNothing, onConflictUpdateSet)
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), providerOnly)
@@ -225,6 +228,17 @@ import Wiki.Server.Storage.Schema qualified as S
 -- this, and writes every time with it.
 micro :: UTCTime -> UTCTime
 micro (UTCTime day t) = UTCTime day (picosecondsToDiffTime (diffTimeToPicoseconds t `div` 1000000 * 1000000))
+
+-- | Whether a column that may be NULL holds this value: SQL's plain @=@,
+-- which an index on the column answers. Beam's '==.' on a nullable column
+-- is NULL-safe instead (two NULLs are equal), and writes it as a @CASE@
+-- that no index answers, so that the database reads every row. The value
+-- here is never NULL, so the NULL-safe comparison is not needed. It is
+-- written as @IN@ with one value, which both databases treat as @=@.
+holds :: (BeamSqlBackend be) => QExpr be s (Maybe a) -> QExpr be s a -> QExpr be s Bool
+holds column value = column `in_` [just_ value]
+
+infix 4 `holds`
 
 -- | A slug read back from a column, through 'mkSlug'. A column holds only
 -- slugs the storage made, so one that is not a slug means a database
@@ -348,7 +362,7 @@ pageNodesWithIds pids = inChunks (ordNub pids) $ \ids -> nodesWhere (\p -> p.id 
 -- level of its space for 'Nothing'. Written as @parent = ?@ or @parent IS
 -- NULL@, which the index @pages_place@ serves.
 under :: (Backend be) => Maybe PageId -> S.Pages (QExpr be s) -> QExpr be s Bool
-under parent p = maybe (isNothing_ p.parent) (\x -> p.parent ==. just_ (val_ x.text)) parent
+under parent p = maybe (isNothing_ p.parent) (\x -> p.parent `holds` val_ x.text) parent
 
 -- | The page of a space with this slug under this parent ('Nothing' for
 -- the space's top level), as a node: one step of finding a page by its
@@ -670,7 +684,7 @@ loadVersionsPage page before most = do
   counted <- runSelectReturningOne (select (aggregate_ (\_ -> as_ @Int64 countAll_) (filter_ earlier (all_ wikiDb.page_versions))))
   rows <- runSelectReturningList . select . limit_ (fromIntegral most) . orderBy_ (\(t, _, _, _) -> desc_ t) $ do
     v <- filter_ earlier (all_ wikiDb.page_versions)
-    u <- leftJoin_ (all_ wikiDb.users) (\u -> just_ u.id ==. v.author)
+    u <- leftJoin_' (all_ wikiDb.users) (\u -> just_ u.id ==?. v.author)
     pure (v.updated_at, v.title, v.author, u.display_name)
   pure (maybe 0 fromIntegral counted, [VersionRow {updatedAt, title, body = "", author = UserId <$> author, authorName} | (updatedAt, title, author, authorName) <- rows])
 
@@ -685,7 +699,7 @@ firstVersionsWhere cond = do
   rows <- runSelectReturningList . select $ do
     p <- filter_ cond (all_ wikiDb.pages)
     v <- join_ wikiDb.page_versions (\v -> v.page_id ==. p.id &&. v.updated_at ==. p.created_at)
-    u <- leftJoin_ (all_ wikiDb.users) (\u -> just_ u.id ==. v.author)
+    u <- leftJoin_' (all_ wikiDb.users) (\u -> just_ u.id ==?. v.author)
     pure (v.page_id, v.updated_at, v.title, v.author, u.display_name)
   pure [(PageId pid, VersionRow {updatedAt, title, body = "", author = UserId <$> author, authorName}) | (pid, updatedAt, title, author, authorName) <- rows]
 
@@ -722,7 +736,7 @@ loadVersion :: (Backend be) => PageId -> UTCTime -> Db be (Maybe VersionRow)
 loadVersion page at = do
   row <- runSelectReturningOne . select $ do
     v <- filter_ (\v -> v.page_id ==. val_ page.text &&. v.updated_at ==. val_ (micro at)) (all_ wikiDb.page_versions)
-    u <- leftJoin_ (all_ wikiDb.users) (\u -> just_ u.id ==. v.author)
+    u <- leftJoin_' (all_ wikiDb.users) (\u -> just_ u.id ==?. v.author)
     pure (v, u.display_name)
   pure ((\(v, name) -> VersionRow {updatedAt = v.updated_at, title = v.title, body = v.body, author = UserId <$> v.author, authorName = name}) <$> row)
 
@@ -770,7 +784,7 @@ loadIcons = catMaybes <$> runSelectReturningList (select ((\s -> s.icon) <$> fil
 
 -- | Whether an attachment names this blob.
 blobAttached :: (Backend be) => BlobId -> Db be Bool
-blobAttached b = isJust <$> runSelectReturningOne (select (limit_ 1 ((\a -> a.id) <$> filter_ (\a -> a.blob ==. just_ (val_ b.text)) (all_ wikiDb.attachments))))
+blobAttached b = isJust <$> runSelectReturningOne (select (limit_ 1 ((\a -> a.id) <$> filter_ (\a -> a.blob `holds` val_ b.text) (all_ wikiDb.attachments))))
 
 -- | The blobs the attachments and the spaces' icons name: the files of
 -- the blob store a database refers to ("Wiki.Server.Storage.Blobs").

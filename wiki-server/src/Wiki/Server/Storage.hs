@@ -86,6 +86,7 @@ module Wiki.Server.Storage
   , storageDataDir
   , storagePlace
   , storageCapabilities
+  , traceStatements
   , databaseBytes
   , DataDirInUse (..)
 
@@ -235,6 +236,9 @@ data Storage = Storage
   -- overwrite the changed ones.
   , serverKept :: IORef (Maybe Kept)
   -- ^ The server's own settings, kept the same way.
+  , tracer :: IORef (Maybe (Text -> IO ()))
+  -- ^ The function each statement's SQL is given to before it runs, while
+  -- 'traceStatements' runs; none otherwise.
   , lock :: Maybe DataLock
   -- ^ The data directory's lock. A storage opened with 'openStorage',
   -- which may delete files in the directory, holds it. A storage opened
@@ -348,7 +352,8 @@ openWith collect config place = do
           -- is used. A reader then always finds them in memory, and never
           -- writes the in-memory copy.
           (,) <$> (newIORef . Just =<< runDb c loadSettings) <*> (newIORef . Just =<< runDb c loadServerSettings)
-      pure Storage {engine, place, config, settings, serverKept, lock}
+      tracer <- newIORef Nothing
+      pure Storage {engine, place, config, settings, serverKept, tracer, lock}
 
 -- | The pools of a database's connections: one writer, and the readers.
 -- A connection unused for ten minutes is closed.
@@ -397,8 +402,8 @@ writing st action = either absurd identity <$> writingEither st (Right <$> actio
 writingEither :: Storage -> (forall be. (Backend be) => Db be (Either e a)) -> IO (Either e a)
 writingEither st action = case st.engine of
   Engine p -> retrying p.writer $ \c -> do
-    begin True c
-    result <- runDb c action `onException` rollbackTransaction c
+    tracer <- beginTraced st True c
+    result <- runTraced tracer c action `onException` rollbackTransaction c
     case result of
       Left _ -> rollbackTransaction c
       Right _ -> commitTransaction c `onException` rollbackTransaction c
@@ -409,26 +414,50 @@ writingEither st action = case st.engine of
 reading :: Storage -> (forall be. (Backend be) => Db be a) -> IO a
 reading st action = case st.engine of
   Engine p -> withResource p.readers $ \c -> do
-    begin False c
+    tracer <- beginTraced st False c
     -- A reader goes back to the pool after this, so a failed read must
     -- not leave its transaction open.
-    result <- runDb c action `onException` rollbackTransaction c
+    result <- runTraced tracer c action `onException` rollbackTransaction c
     commitTransaction c `onException` rollbackTransaction c
     pure result
 
 -- | Run a transaction on a connection of a pool, and run it again, up to
 -- three times in all, when it failed only because of another transaction
 -- beside it ('retryable': on PostgreSQL, another process's write).
+--
+-- Any other exception leaves 'withResource' as an exception, so that the
+-- pool closes the connection instead of handing it to the next operation:
+-- after a failure the connection may be broken (the database server
+-- restarted, or the rollback failed too).
 retrying :: (Backend be) => Pool (Connection be) -> (Connection be -> IO a) -> IO a
 retrying pool body = go (3 :: Int)
   where
     go n =
-      try (withResource pool (\c -> (c,) <$> try (body c))) >>= \case
-        Right (_, Right a) -> pure a
-        Right (c, Left e)
-          | n > 1 && retryable c e -> go (n - 1)
-          | otherwise -> throwIO e
-        Left (e :: SomeException) -> throwIO e
+      withResource pool (\c -> tryJust (\e -> if n > 1 && retryable c e then Just () else Nothing) (body c)) >>= \case
+        Right a -> pure a
+        Left () -> go (n - 1)
+
+-- | Begin a transaction on a connection, as 'begin' does, and give back
+-- the function its statements are traced with, while 'traceStatements'
+-- runs. The transaction's beginning is traced too: @BEGIN@ for one that
+-- reads, @BEGIN IMMEDIATE@ for one that writes, as SQLite would say it.
+beginTraced :: (Backend be) => Storage -> Bool -> Connection be -> IO (Maybe (Text -> IO ()))
+beginTraced st writes c = do
+  begin writes c
+  tracer <- readIORef st.tracer
+  for_ tracer ($ if writes then "BEGIN IMMEDIATE" else "BEGIN")
+  pure tracer
+
+-- | Run statements on a connection, traced if a tracer is given.
+runTraced :: (Backend be) => Maybe (Text -> IO ()) -> Connection be -> Db be a -> IO a
+runTraced = maybe runDb runDbTraced
+
+-- | Run an action, and give the SQL of each statement the storage runs
+-- meanwhile, on any of its connections, to a function: what the tests of
+-- the storage at scale and the bench count and look into. One action at a
+-- time may be traced.
+traceStatements :: Storage -> (Text -> IO ()) -> IO a -> IO a
+traceStatements st f act = bracket_ (writeIORef st.tracer (Just f)) (writeIORef st.tracer Nothing) act
 
 -- | The data directory a storage was opened in.
 storageDataDir :: Storage -> FilePath
@@ -547,11 +576,11 @@ data Ctx = Ctx
 
 -- | 'Conn' is the connection a transaction runs on, to a database of
 -- either kind.
-data Conn = forall be. (Backend be) => Conn (Connection be)
+data Conn = forall be. (Backend be) => Conn (Maybe (Text -> IO ())) (Connection be)
 
 -- | Run statements on a transaction's connection.
 viaConn :: Conn -> (forall be. (Backend be) => Db be a) -> IO a
-viaConn (Conn c) action = runDb c action
+viaConn (Conn tracer c) action = runTraced tracer c action
 
 -- | An operation, in a transaction: what it finds wrong ends it with a
 -- 'WikiError', and the transaction is rolled back.
@@ -593,8 +622,8 @@ transactThen st who = transactThenFrom st who ""
 transactThenFrom :: Storage -> Who -> Text -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
 transactThenFrom st who address mode (Tx body) committed = case st.engine of
   Engine p -> retrying (if mode == Reads then p.readers else p.writer) $ \c -> do
-    begin (mode == Writes) c
-    ctx <- context st (Conn c) who address `onException` rollbackTransaction c
+    tracer <- beginTraced st (mode == Writes) c
+    ctx <- context st (Conn tracer c) who address `onException` rollbackTransaction c
     result <- runExceptT (runReaderT body ctx) `onException` rollbackTransaction c
     case result of
       Left _ -> rollbackTransaction c
@@ -652,16 +681,16 @@ contextWith st c who address spaces rows = do
 readWithin :: Storage -> Who -> (forall be. (Backend be) => Db be (Maybe (SpaceId, b))) -> (SpaceId -> b -> Tx a) -> IO (Either WikiError a)
 readWithin st who locate body = case st.engine of
   Engine p -> withResource p.readers $ \c -> do
-    begin False c
+    tracer <- beginTraced st False c
     -- A reader goes back to the pool after this, so a failed read must not
     -- leave its transaction open.
     result <-
       flip onException (rollbackTransaction c) $
-        runDb c locate >>= \case
+        runTraced tracer c locate >>= \case
           Nothing -> pure (Left NotFound)
           Just (sid, found) -> do
-            spaces <- runDb c (loadChain sid)
-            ctx <- contextWith st (Conn c) who "" spaces =<< runDb c (loadGrantsOn (Map.keys spaces))
+            spaces <- runTraced tracer c (loadChain sid)
+            ctx <- contextWith st (Conn tracer c) who "" spaces =<< runTraced tracer c (loadGrantsOn (Map.keys spaces))
             let Tx tx = body sid found
             runExceptT (runReaderT tx ctx)
     commitTransaction c `onException` rollbackTransaction c

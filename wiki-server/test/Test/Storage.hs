@@ -8,12 +8,13 @@ import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
-import Database.SQLite.Simple (Only (..), execute, query, query_)
+import Database.Beam (all_, asc_, filter_, insert, insertValues, orderBy_, runInsert, runSelectReturningList, runUpdate, select, update, val_, (&&.), (<-.), (==.))
 import Protolude
 import System.Directory (doesFileExist)
 import System.Directory qualified as Directory
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
+import Test.Database (Backing)
 import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Admin (Directory (..))
@@ -36,15 +37,15 @@ import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQ
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Blobs (blobFile, blobOf, storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir)
-import Wiki.Server.Storage.Rows (Stamp (..))
+import Wiki.Server.Storage.Schema (GlobalGrants (..), GroupMembers (..), PageVersions (..), Pages (..), SpaceGrants (..), Users (..), WikiDb (..), wikiDb)
 
-spec :: Spec
-spec = describe "StoredWiki, besides the contract" $ do
-  times
-  administrator
-  versionsAndSearchText
-  attachmentsOnDisk
-  wholeWikis
+spec :: Backing -> Spec
+spec backing = describe "StoredWiki, besides the contract" $ do
+  times backing
+  administrator backing
+  versionsAndSearchText backing
+  attachmentsOnDisk backing
+  wholeWikis backing
 
 -- | Run as the demo's administrator user.
 asAdmin :: Storage -> StoredWiki IO a -> IO a
@@ -54,43 +55,43 @@ asAdmin st program = whoFor st (As "admin") >>= \who -> runStoredWiki st who pro
 pageIn :: Storage -> Text -> Text -> IO Page
 pageIn st s p = asAdmin st (getSpace (path s) >>= either (pure . Left) (\space -> getPage space.id (path p))) >>= ok
 
-times :: Spec
-times = describe "times" $
-  it "come back from the database exactly as they went in, to the picosecond" $
-    withStorageIn $ \_ st -> do
+times :: Backing -> Spec
+times backing = describe "times" $
+  it "come back from the database exactly as they went in, to the microsecond" $
+    withDemo backing $ \st -> do
+      hello <- pageIn st "blog" "hello-world"
       let day = fromGregorian 2026 10 24
           ts =
             [ UTCTime day 0
-            , UTCTime day (picosecondsToDiffTime 43200123456789012)
-            , UTCTime day (picosecondsToDiffTime 86399999999999999)
+            , UTCTime day (picosecondsToDiffTime 43200123456000000)
+            , UTCTime day (picosecondsToDiffTime 86399999999000000)
             , UTCTime day (picosecondsToDiffTime 1000000)
             ]
-      back <- withDatabase st $ \c -> for ts $ \t -> query c "SELECT ?" (Only (Stamp t))
-      [t | [Only (Stamp t)] <- back] `shouldBe` ts
+      writing st (runInsert (insert wikiDb.page_versions (insertValues [VersionRow {page_id = hello.id.text, updated_at = t, title = "Hello", body = "", author = Nothing} | t <- ts])))
+      back <- reading st (runSelectReturningList (select (orderBy_ asc_ ((\v -> v.updated_at) <$> filter_ (\v -> v.page_id ==. val_ hello.id.text) (all_ wikiDb.page_versions)))))
+      back `shouldBe` sort (hello.updatedAt : ts)
 
-administrator :: Spec
-administrator = describe "the administrator" $ do
+administrator :: Backing -> Spec
+administrator backing = describe "the administrator" $ do
   it "is signed in as no user of the wiki, holding Administer" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       s <- runStoredWiki st Administrator session
       s.user `shouldBe` Just administratorUser
       s.grants.global `shouldBe` [GlobalGrant {subject = SubjectUser administratorId, permission = Administer}]
-      users <- withDatabase st $ \c -> query_ c "SELECT count(*) FROM users WHERE id = '~administrator'"
-      users `shouldBe` [Only (0 :: Int)]
+      reading st (countWhere wikiDb.users (\u -> u.id ==. val_ "~administrator")) `shouldReturn` 0
 
   it "sees every space and may do everything, without a grant of their own" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       names <- map (\s -> s.name) <$> runStoredWiki st Administrator listSpaces
       names `shouldBe` ["Blog", "Docs", "Team", "Projects"]
       team <- runStoredWiki st Administrator (getSpace (path "team")) >>= ok
       mine <- runStoredWiki st Administrator (createSpace (Just team.id) "Mine") >>= ok
       _ <- runStoredWiki st Administrator (setSpacePublic mine.id True) >>= ok
-      grants <- withDatabase st $ \c -> query c "SELECT count(*) FROM space_grants WHERE space_id = ?" (Only mine.id.text)
-      grants `shouldBe` [Only (0 :: Int)]
+      reading st (countWhere wikiDb.space_grants (\g -> g.space_id ==. val_ mine.id.text)) `shouldReturn` 0
       runStoredWiki st Administrator (deleteSpace team.id) >>= ok
 
   it "keeps drafts of their own, and saves versions under their id" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       hello <- pageIn st "blog" "hello-world"
       d <- runStoredWiki st Administrator (saveDraft hello.id hello.updatedAt "Hello" "The administrator's") >>= ok
       d.author `shouldBe` administratorId
@@ -98,11 +99,11 @@ administrator = describe "the administrator" $ do
       asAdmin st (getDraft hello.id) `shouldReturn` Right Nothing
       saved <- runStoredWiki st Administrator (savePage hello.id hello.updatedAt "Hello" "Saved") >>= ok
       runStoredWiki st Administrator (getDraft hello.id) `shouldReturn` Right Nothing
-      authors <- withDatabase st $ \c -> query c "SELECT author FROM page_versions WHERE page_id = ? AND updated_at = ?" (hello.id.text, Stamp saved.updatedAt)
-      authors `shouldBe` [Only (Just administratorId.text)]
+      authors <- reading st (runSelectReturningList (select ((\v -> v.author) <$> filter_ (\v -> v.page_id ==. val_ hello.id.text &&. v.updated_at ==. val_ saved.updatedAt) (all_ wikiDb.page_versions))))
+      authors `shouldBe` [Just administratorId.text]
 
   it "administers the wiki's people, of whom they are not one" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       d <- runStoredWiki st Administrator directory >>= ok
       map (\u -> u.login.text) d.users `shouldBe` ["admin", "editor", "reader"]
       runStoredWiki st Administrator (setAdministrator administratorId False) `shouldReturn` Left NotFound
@@ -113,58 +114,56 @@ administrator = describe "the administrator" $ do
       none <- runStoredWiki st Administrator directory >>= ok
       none.administrators `shouldBe` mempty
       runStoredWiki st Administrator (setAdministrator admin True) >>= ok
-      rows <- withDatabase st $ \c -> query c "SELECT count(*) FROM global_grants WHERE subject_kind = 'user' AND subject_id = ?" (Only admin.text)
-      rows `shouldBe` [Only (1 :: Int)]
+      reading st (countWhere wikiDb.global_grants (\g -> g.subject_kind ==. val_ "user" &&. g.subject_id ==. val_ admin.text)) `shouldReturn` 1
 
   it "deletes a group with the rows that grant it anything" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       d <- runStoredWiki st Administrator directory >>= ok
       let writers = maybe (panic "no writers") (\g -> g.id) (head d.groups)
-      let grantsTo = withDatabase st $ \c ->
-            (,)
-              <$> query c "SELECT count(*) FROM space_grants WHERE subject_kind = 'group' AND subject_id = ?" (Only writers.text)
-              <*> query c "SELECT count(*) FROM group_members WHERE group_id = ?" (Only writers.text)
-      grantsTo `shouldReturn` ([Only (1 :: Int)], [Only (1 :: Int)])
+      let grantsTo =
+            reading st $
+              (,)
+                <$> countWhere wikiDb.space_grants (\g -> g.subject_kind ==. val_ "group" &&. g.subject_id ==. val_ writers.text)
+                <*> countWhere wikiDb.group_members (\m -> m.group_id ==. val_ writers.text)
+      grantsTo `shouldReturn` (1, 1)
       runStoredWiki st Administrator (deleteGroup writers) >>= ok
-      grantsTo `shouldReturn` ([Only 0], [Only 0])
+      grantsTo `shouldReturn` (0, 0)
 
   it "is told apart from a user who is not there, who is nobody" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       runStoredWiki st (AsUser (UserId "no-such-user")) session `shouldReturn` anonymous
       names <- map (\s -> s.name) <$> runStoredWiki st (AsUser (UserId "no-such-user")) listSpaces
       names `shouldBe` ["Blog", "Docs"]
 
-versionsAndSearchText :: Spec
-versionsAndSearchText = describe "each page's versions and search text" $ do
+versionsAndSearchText :: Backing -> Spec
+versionsAndSearchText backing = describe "each page's versions and search text" $ do
   it "keep a version for the page as made and one for every save, by its updatedAt" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       blog <- asAdmin st (getSpace (path "blog")) >>= ok
       editor <- whoFor st (As "editor")
       made <- runStoredWiki st editor (createPage blog.id Nothing "Marsupials" "A wombat.") >>= ok
       saved <- runStoredWiki st editor (savePage made.id made.updatedAt "Marsupials" "A quokka.") >>= ok
       again <- runStoredWiki st editor (savePage made.id saved.updatedAt "Marsupials, again" "A numbat.") >>= ok
-      versions <- withDatabase st $ \c -> query c "SELECT updated_at, title, body, author FROM page_versions WHERE page_id = ? ORDER BY updated_at" (Only made.id.text)
+      versions <- reading st (runSelectReturningList (select (orderBy_ (\v -> asc_ v.updated_at) (filter_ (\v -> v.page_id ==. val_ made.id.text) (all_ wikiDb.page_versions)))))
       let editorId = case editor of
             AsUser u -> Just u.text
             _ -> Nothing
-      [(t, title, body, author) | (Stamp t, title :: Text, body :: Text, author) <- versions]
+      [(v.updated_at, v.title, v.body, v.author) | v <- versions]
         `shouldBe` [ (made.updatedAt, "Marsupials", "A wombat.", editorId)
                    , (saved.updatedAt, "Marsupials", "A quokka.", editorId)
                    , (again.updatedAt, "Marsupials, again", "A numbat.", editorId)
                    ]
       _ <- runStoredWiki st editor (deletePage made.id) >>= ok
-      gone <- withDatabase st $ \c -> query c "SELECT count(*) FROM page_versions WHERE page_id = ?" (Only made.id.text)
-      gone `shouldBe` [Only (0 :: Int)]
+      reading st (countWhere wikiDb.page_versions (\v -> v.page_id ==. val_ made.id.text)) `shouldReturn` 0
 
   it "name each version's author: a user by their name, the administrator, someone gone by their id, nobody for an import" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       hello <- pageIn st "blog" "hello-world"
       editor <- whoFor st (As "editor")
       byEditor <- runStoredWiki st editor (savePage hello.id hello.updatedAt "Hello" "By the editor") >>= ok
       byAdministrator <- runStoredWiki st Administrator (savePage hello.id byEditor.updatedAt "Hello" "By the administrator") >>= ok
       -- A version whose author is no longer one of the users.
-      withDatabase st $ \c ->
-        execute c "UPDATE page_versions SET author = 'user-gone' WHERE page_id = ? AND updated_at = ?" (hello.id.text, Stamp byEditor.updatedAt)
+      writing st (runUpdate (update wikiDb.page_versions (\v -> v.author <-. val_ (Just "user-gone")) (\v -> v.page_id ==. val_ hello.id.text &&. v.updated_at ==. val_ byEditor.updatedAt)))
       versions <- asAdmin st (listVersions hello.id latestVersions) >>= ok
       map (\v -> (v.updatedAt, (\a -> (a.id, a.name)) <$> v.author)) versions
         `shouldBe` [ (byAdministrator.updatedAt, Just (administratorId, "Administrator"))
@@ -176,12 +175,11 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
       ((\a -> a.name) <$> v.author, v.body) `shouldBe` (Just "Edgar Editor", "By the editor again")
 
   it "list the versions by time, though times written with and without a fraction sort otherwise as text" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       hello <- pageIn st "blog" "hello-world"
       let whole = UTCTime (utctDay hello.updatedAt) 50000
           fraction = UTCTime (utctDay hello.updatedAt) (picosecondsToDiffTime 50000500000000000)
-      withDatabase st $ \c -> for_ [whole, fraction] $ \t ->
-        execute c "INSERT INTO page_versions (page_id, updated_at, title, body, author) VALUES (?, ?, 'Hello', '', NULL)" (hello.id.text, Stamp t)
+      writing st (runInsert (insert wikiDb.page_versions (insertValues [VersionRow {page_id = hello.id.text, updated_at = t, title = "Hello", body = "", author = Nothing} | t <- [whole, fraction]])))
       listed <- map (\x -> x.updatedAt) <$> (asAdmin st (listVersions hello.id latestVersions) >>= ok)
       listed `shouldBe` sortOn Down listed
       sort listed `shouldBe` sort [hello.updatedAt, whole, fraction]
@@ -195,9 +193,9 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
       walk Nothing `shouldReturn` zip [3, 2, 1] listed
 
   it "keep the search text in step with every page's body, through imports, saves and moves" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       let inStep = do
-            rows <- withDatabase st $ \c -> query_ c "SELECT title, body, search_text, search_fold FROM pages"
+            rows <- reading st (runSelectReturningList (select ((\p -> (p.title, p.body, p.search_text, p.search_fold)) <$> all_ wikiDb.pages)))
             length rows `shouldSatisfy` (> 0)
             for_ rows $ \(title, body, text, stored) -> do
               text `shouldBe` bodyText body
@@ -215,10 +213,10 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
       map (\h -> h.page) found `shouldBe` [p.id]
       asAdmin st (searchPages (searchQuery "wombat")) `shouldReturn` []
 
-attachmentsOnDisk :: Spec
-attachmentsOnDisk = describe "attachments" $ do
+attachmentsOnDisk :: Backing -> Spec
+attachmentsOnDisk backing = describe "attachments" $ do
   it "keep their bytes in a file named by their hash, one file for the same bytes" $
-    withStorageIn $ \dir st -> do
+    withStorageIn backing $ \at st -> do
       importArchive st demoArchive >>= ok
       hello <- pageIn st "blog" "hello-world"
       notes <- pageIn st "blog" "notes-on-haskell"
@@ -227,11 +225,11 @@ attachmentsOnDisk = describe "attachments" $ do
       (a.mediaType.text, b.mediaType.text) `shouldBe` ("application/octet-stream", "application/x-thing")
       a.source `shouldBe` SourceBlob (blobOf "the same bytes")
       b.source `shouldBe` a.source
-      file <- maybe (panic "not a hash") pure (blobFile (attachmentsDir dir) (blobOf "the same bytes"))
+      file <- maybe (panic "not a hash") pure (blobFile (attachmentsDir at.dataDir) (blobOf "the same bytes"))
       BS.readFile file `shouldReturn` "the same bytes"
 
   it "are served from their file to those who may view their page, at the address configured" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       wiki <- pageIn st "team/projects" "the-wiki"
       a <- asAdmin st (uploadAttachment wiki.id "plan.txt" "text/plain" "The plan.") >>= ok
       rita <- whoFor st (As "reader")
@@ -248,15 +246,15 @@ attachmentsOnDisk = describe "attachments" $ do
       none `shouldBe` Nothing
 
   it "over 50 MB is refused before anything is written" $
-    withStorageIn $ \dir st -> do
+    withStorageIn backing $ \at st -> do
       importArchive st demoArchive >>= ok
       hello <- pageIn st "blog" "hello-world"
-      already <- storedBlobs (attachmentsDir dir)
+      already <- storedBlobs (attachmentsDir at.dataDir)
       let tooLarge = BS.replicate (fromIntegral maxAttachmentSize + 1) 7
       asAdmin st (uploadAttachment hello.id "big.bin" "application/octet-stream" tooLarge) >>= \case
         Left (Invalid _) -> pass
         other -> expectationFailure ("expected Invalid, got " <> show (fmap (\x -> x.size) other))
-      storedBlobs (attachmentsDir dir) `shouldReturn` already
+      storedBlobs (attachmentsDir at.dataDir) `shouldReturn` already
       found <- pageIn st "blog" "hello-world"
       findAttachment "big.bin" found.attachments `shouldBe` Nothing
       -- 50 MB exactly is not too large.
@@ -265,41 +263,42 @@ attachmentsOnDisk = describe "attachments" $ do
       kept.size `shouldBe` maxAttachmentSize
 
   it "whose files nothing refers to any more are deleted when the storage is next opened, and only then" $
-    withSystemTempDirectory "wiki-server-test" $ \dir -> do
-      let shard = attachmentsDir dir </> "ab"
-      file <- withStorage defaultConfig dir $ \st -> do
+    withPlaceIn backing $ \at -> do
+      let dir = at.dataDir
+          shard = attachmentsDir dir </> "ab"
+      file <- withStorage defaultConfig at $ \st -> do
         importArchive st demoArchive >>= ok
         hello <- pageIn st "blog" "hello-world"
         a <- asAdmin st (uploadAttachment hello.id "gone.txt" "text/plain" "soon gone") >>= ok
         _ <- asAdmin st (uploadAttachment hello.id "kept.txt" "text/plain" "kept") >>= ok
         _ <- asAdmin st (deleteAttachment a.id) >>= ok
-        file <- maybe (panic "not a hash") pure (blobFile (attachmentsDir dir) (blobOf "soon gone"))
+        file <- maybe (panic "not a hash") pure (blobFile (attachmentsDir at.dataDir) (blobOf "soon gone"))
         doesFileExist file `shouldReturn` True
         -- A write that never finished leaves a file behind, which goes too.
         Directory.createDirectoryIfMissing True shard
         writeFile (shard </> "incoming123") "half"
         -- Nobody else may open the directory meanwhile: a second storage
         -- would delete what this one may still be writing.
-        (withStorage defaultConfig dir (const pass) >> pure False) `catch` (\(_ :: DataDirInUse) -> pure True) `shouldReturn` True
+        (withStorage defaultConfig at (const pass) >> pure False) `catch` (\(_ :: DataDirInUse) -> pure True) `shouldReturn` True
         doesFileExist file `shouldReturn` True
         pure file
-      withStorage defaultConfig dir (const pass)
+      withStorage defaultConfig at (const pass)
       doesFileExist file `shouldReturn` False
       doesFileExist (shard </> "incoming123") `shouldReturn` False
-      storedBlobs (attachmentsDir dir) `shouldReturn` Set.fromList [blobOf "kept", blobOf treePng]
+      storedBlobs (attachmentsDir at.dataDir) `shouldReturn` Set.fromList [blobOf "kept", blobOf treePng]
   where
     treePng = fromMaybe "" (head (Map.elems demoArchive.blobs))
 
-wholeWikis :: Spec
-wholeWikis = describe "importArchive and exportArchive" $ do
+wholeWikis :: Backing -> Spec
+wholeWikis backing = describe "importArchive and exportArchive" $ do
   it "give back the wiki that was put in, its attachments under their hashes" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       exported <- exportArchive st "wiki-server-test" >>= ok
       contents (byHash exported) `shouldBe` contents (byHash demoArchive)
       exported.app `shouldBe` "wiki-server-test"
 
   it "carry the pages' comments into another storage, with their ids, authors, times and edits" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       hello <- pageIn st "blog" "hello-world"
       opened <- runStoredWiki st Administrator (openThread hello.id Nothing "From the administrator.") >>= ok
       editor <- whoFor st (As "editor")
@@ -313,13 +312,13 @@ wholeWikis = describe "importArchive and exportArchive" $ do
         `shouldBe` [("Administrator", "From the administrator.", False), ("Edgar Editor", "Edited by the editor.", True)]
       -- The files of the archive read back as the same comments.
       (\a -> (a.threads, a.commentAuthors)) <$> readArchive (Map.fromList (writeArchive exported)) `shouldBe` Right (exported.threads, exported.commentAuthors)
-      withStorageIn $ \_ fresh -> do
+      withStorageIn backing $ \_ fresh -> do
         importArchive fresh exported >>= ok
         again <- exportArchive fresh "wiki-server-test" >>= ok
         again.threads `shouldBe` exported.threads
 
   it "write the export as a zip file on disk that holds exportArchive's files, and that imports back as the same wiki" $
-    withDemo $ \st -> do
+    withDemo backing $ \st -> do
       hello <- pageIn st "blog" "hello-world"
       -- Bytes that do not compress, bytes that do, none, and a name
       -- outside ASCII.
@@ -336,7 +335,7 @@ wholeWikis = describe "importArchive and exportArchive" $ do
         readBack <- either (panic . show) pure (readArchive files)
         readBack.createdAt `shouldBe` at
         contents readBack `shouldBe` contents exported
-        withStorageIn $ \_ fresh -> do
+        withStorageIn backing $ \_ fresh -> do
           importArchive fresh readBack >>= ok
           again <- exportArchive fresh "wiki-server-test" >>= ok
           contents (byHash again) `shouldBe` contents (byHash exported)
@@ -365,16 +364,16 @@ wholeWikis = describe "importArchive and exportArchive" $ do
       unzipFile (dir </> "written.zip") `shouldReturn` Right (Map.fromList files)
 
   it "refuse to import into a storage with a wiki in it, changing nothing" $
-    withDemo $ \st -> do
-      original <- withDatabase st tableRows
+    withDemo backing $ \st -> do
+      original <- tableRows st
       importArchive st demoArchive >>= (`shouldSatisfy` isLeft)
-      withDatabase st tableRows `shouldReturn` original
+      tableRows st `shouldReturn` original
 
   it "refuse an archive without the bytes of an attachment, writing nothing" $
-    withStorageIn $ \_ st -> do
-      original <- withDatabase st tableRows
+    withStorageIn backing $ \_ st -> do
+      original <- tableRows st
       importArchive st demoArchive {blobs = mempty} >>= (`shouldSatisfy` isLeft)
-      withDatabase st tableRows `shouldReturn` original
+      tableRows st `shouldReturn` original
 
 -- | What an archive holds, but for when and by what it was written.
 contents :: Archive -> _

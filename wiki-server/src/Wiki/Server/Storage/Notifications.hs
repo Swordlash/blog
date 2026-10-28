@@ -64,7 +64,7 @@ import Wiki.Core.Notification (Kind (..), MailMode (..), Mark, Notification (..)
 import Wiki.Core.User (Email (..), Login (..), Membership, User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Backend (Backend (..))
-import Wiki.Server.Storage.Rows (chunksOf, keepSetting, micro, settingValue, storeSetting)
+import Wiki.Server.Storage.Rows (chunksOf, holds, keepSetting, micro, settingValue, storeSetting)
 import Wiki.Server.Storage.Schema (wikiDb)
 import Wiki.Server.Storage.Schema qualified as S
 
@@ -116,7 +116,7 @@ idsWhere xs f = concat <$> traverse f (chunksOf 500 xs)
 -- those spaces, which are the only watches the rules look at.
 loadAudience :: (Backend be) => Audience -> Db be ([Telling], Membership)
 loadAudience a = do
-  onPage <- runSelectReturningList (select ((\w -> w.user_id) <$> filter_ (\w -> w.page_id ==. just_ (val_ a.page.text)) (all_ wikiDb.watches)))
+  onPage <- runSelectReturningList (select ((\w -> w.user_id) <$> filter_ (\w -> w.page_id `holds` val_ a.page.text) (all_ wikiDb.watches)))
   onSpaces <- idsWhere a.spaces $ \chunk ->
     runSelectReturningList (select ((\w -> w.user_id) <$> filter_ (\w -> w.space_id `in_` map (\s -> just_ (val_ s.text)) chunk) (all_ wikiDb.watches)))
   mentioned <- idsWhere a.mentioned $ \chunk ->
@@ -125,7 +125,7 @@ loadAudience a = do
   users <- fmap concat . for (chunksOf 500 candidates) $ \chunk ->
     runSelectReturningList (select (filter_ (\u -> u.disabled ==. val_ False &&. u.id `in_` map val_ chunk) (all_ wikiDb.users)))
   marks <- runSelectReturningList . select $
-    filter_ (\w -> w.page_id ==. just_ (val_ a.page.text) ||. w.space_id `in_` map (\s -> just_ (val_ s.text)) a.spaces) (all_ wikiDb.watches)
+    filter_ (\w -> w.page_id `holds` val_ a.page.text ||. w.space_id `in_` map (\s -> just_ (val_ s.text)) a.spaces) (all_ wikiDb.watches)
   let active = map (\u -> u.id) users
   members <- fmap concat . for (chunksOf 500 active) $ \chunk ->
     runSelectReturningList (select (filter_ (\m -> m.user_id `in_` map val_ chunk) (all_ wikiDb.group_members)))
@@ -165,7 +165,7 @@ marksOf rows = Map.fromListWith (<>) [(UserId w.user_id, Map.singleton t w.watch
 loadMarksOn :: (Backend be) => UserId -> Maybe PageId -> [SpaceId] -> Db be Mark
 loadMarksOn u page spaces = do
   onPage <- for (toList page) $ \p ->
-    runSelectReturningList (select (filter_ (\w -> w.user_id ==. val_ u.text &&. w.page_id ==. just_ (val_ p.text)) (all_ wikiDb.watches)))
+    runSelectReturningList (select (filter_ (\w -> w.user_id ==. val_ u.text &&. w.page_id `holds` val_ p.text) (all_ wikiDb.watches)))
   onSpaces <-
     if null spaces
       then pure []
@@ -176,10 +176,10 @@ loadMarksOn u page spaces = do
 storeMark :: (Backend be) => UserId -> WatchTarget -> Bool -> Db be ()
 storeMark u t w = case t of
   WatchPage p -> do
-    runDelete (delete wikiDb.watches (\x -> x.user_id ==. val_ u.text &&. x.page_id ==. just_ (val_ p.text)))
+    runDelete (delete wikiDb.watches (\x -> x.user_id ==. val_ u.text &&. x.page_id `holds` val_ p.text))
     runInsert (insert wikiDb.watches (insertValues [S.WatchRow {user_id = u.text, page_id = Just p.text, space_id = Nothing, watching = w}]))
   WatchSpace s -> do
-    runDelete (delete wikiDb.watches (\x -> x.user_id ==. val_ u.text &&. x.space_id ==. just_ (val_ s.text)))
+    runDelete (delete wikiDb.watches (\x -> x.user_id ==. val_ u.text &&. x.space_id `holds` val_ s.text))
     runInsert (insert wikiDb.watches (insertValues [S.WatchRow {user_id = u.text, page_id = Nothing, space_id = Just s.text, watching = w}]))
 
 -- | How a user wants to be notified, as they chose, and whether their

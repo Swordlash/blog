@@ -95,9 +95,12 @@ runSqliteScript c = SQLite.exec c.connectionHandle
 
 -- | 'Master' is SQLite's own table of what a database holds
 -- (@sqlite_master@), as far as the storage reads it: the name of each
--- table and index.
-newtype Master f = MasterRow
+-- table, index and other object, and which kind of object it is.
+data Master f = MasterRow
   { name :: Columnar f Text
+  , objectType :: Columnar f Text
+  -- ^ The column @type@, which cannot be a field's name. Beam names the
+  -- column of a field in camel case after its words but the first.
   }
   deriving stock (Generic)
   deriving anyclass (Beamable)
@@ -117,12 +120,12 @@ newtype Catalog f = Catalog
 catalog :: DatabaseSettings Sqlite Catalog
 catalog = defaultDbSettings
 
--- | The names of the tables and indexes a database holds, but SQLite's
--- own (whose names start with @sqlite_@).
+-- | The names of the tables a database holds, but SQLite's own (whose
+-- names start with @sqlite_@).
 sqliteObjects :: SqliteM [Text]
 sqliteObjects =
   filter (not . T.isPrefixOf "sqlite_")
-    <$> Beam.runSelectReturningList (select (fmap (\o -> o.name) (all_ catalog.sqlite_master)))
+    <$> Beam.runSelectReturningList (select (fmap (\o -> o.name) (filter_ (\o -> o.objectType ==. val_ "table") (all_ catalog.sqlite_master))))
 
 -- | Write a copy of the database a connection is open on into a new file:
 -- one consistent state of the database, read as a reader reads it, into

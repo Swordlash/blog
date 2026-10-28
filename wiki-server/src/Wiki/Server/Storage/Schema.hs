@@ -562,6 +562,112 @@ instance Table AuditLog where
     deriving anyclass (Beamable)
   primaryKey r = AuditKey r.id
 
+
+--------------------------------------------------------------------------------
+-- Rows as values
+
+-- A row read back is a plain value. Tests compare rows and show the ones
+-- that differ, so each table's row type can be compared and shown.
+deriving stock instance Eq (Users Identity)
+
+deriving stock instance Show (Users Identity)
+
+deriving stock instance Eq (Groups Identity)
+
+deriving stock instance Show (Groups Identity)
+
+deriving stock instance Eq (GroupMembers Identity)
+
+deriving stock instance Show (GroupMembers Identity)
+
+deriving stock instance Eq (GlobalGrants Identity)
+
+deriving stock instance Show (GlobalGrants Identity)
+
+deriving stock instance Eq (SpaceGrants Identity)
+
+deriving stock instance Show (SpaceGrants Identity)
+
+deriving stock instance Eq (Sessions Identity)
+
+deriving stock instance Show (Sessions Identity)
+
+deriving stock instance Eq (Invitations Identity)
+
+deriving stock instance Show (Invitations Identity)
+
+deriving stock instance Eq (Identities Identity)
+
+deriving stock instance Show (Identities Identity)
+
+deriving stock instance Eq (Totp Identity)
+
+deriving stock instance Show (Totp Identity)
+
+deriving stock instance Eq (RecoveryCodes Identity)
+
+deriving stock instance Show (RecoveryCodes Identity)
+
+deriving stock instance Eq (ResetTokens Identity)
+
+deriving stock instance Show (ResetTokens Identity)
+
+deriving stock instance Eq (EmailVerifications Identity)
+
+deriving stock instance Show (EmailVerifications Identity)
+
+deriving stock instance Eq (Spaces Identity)
+
+deriving stock instance Show (Spaces Identity)
+
+deriving stock instance Eq (Pages Identity)
+
+deriving stock instance Show (Pages Identity)
+
+deriving stock instance Eq (PageVersions Identity)
+
+deriving stock instance Show (PageVersions Identity)
+
+deriving stock instance Eq (Attachments Identity)
+
+deriving stock instance Show (Attachments Identity)
+
+deriving stock instance Eq (Drafts Identity)
+
+deriving stock instance Show (Drafts Identity)
+
+deriving stock instance Eq (Threads Identity)
+
+deriving stock instance Show (Threads Identity)
+
+deriving stock instance Eq (Comments Identity)
+
+deriving stock instance Show (Comments Identity)
+
+deriving stock instance Eq (Watches Identity)
+
+deriving stock instance Show (Watches Identity)
+
+deriving stock instance Eq (Notifications Identity)
+
+deriving stock instance Show (Notifications Identity)
+
+deriving stock instance Eq (Settings Identity)
+
+deriving stock instance Show (Settings Identity)
+
+deriving stock instance Eq (SignInProviders Identity)
+
+deriving stock instance Show (SignInProviders Identity)
+
+deriving stock instance Eq (AuditLog Identity)
+
+deriving stock instance Show (AuditLog Identity)
+
+deriving stock instance Eq (WikiSchema Identity)
+
+deriving stock instance Show (WikiSchema Identity)
+
 --------------------------------------------------------------------------------
 -- The database
 

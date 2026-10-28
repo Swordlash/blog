@@ -264,12 +264,19 @@ test-suite wiki-server-test
   else
     other-modules:
         Test.Database
+        Test.Storage
+        Test.Storage.Accounts
+        Test.Storage.Audit
+        Test.Storage.Backup
         Test.Storage.Contract
         Test.Storage.Fixture
+        Test.Storage.Migrate
+        Test.Storage.Scale
     build-depends:
         HUnit,
         aeson,
         base,
+        beam-core,
         bytestring,
         case-insensitive,
         cborg,

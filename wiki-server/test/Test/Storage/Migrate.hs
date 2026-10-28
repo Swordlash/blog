@@ -1,295 +1,165 @@
--- | The schema's migrations: applied on an empty database, not again on one
--- that has them, all or none of them, and never over a newer schema.
+-- | The schema's versions ("Wiki.Server.Storage.Migrate"): one initial
+-- schema for each database, applied to an empty database, not again to one
+-- that has it, all of a step or none of it, and never over a newer schema
+-- or the schema of an earlier wiki-server, which is refused with what to
+-- do instead.
 module Test.Storage.Migrate (spec) where
 
+import Data.List qualified as List
 import Data.Text qualified as T
-import Database.SQLite.Simple (Connection, Only (..), execute_, query_, withConnection)
-import Database.SQLite.Simple qualified as SQLite
+import Data.Time (getCurrentTime)
+import Database.Beam (all_, insert, insertValues, runInsert, runSelectReturningList, select)
 import Protolude
-import System.FilePath ((</>))
-import System.IO.Temp (withSystemTempDirectory)
-import Test.HUnit (assertFailure)
+import Test.Database (Backing, withConnectionTo)
 import Test.Hspec
-import Wiki.Api.Admin (WikiSettings (..), defaultSettings)
-import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
-import Wiki.Core.Access (Access (..))
-import Wiki.Core.Search (foldText)
-import Wiki.Core.Url (Url (..))
-import Wiki.Server.Secret (Secret (..))
-import Wiki.Server.Storage (closeStorage, defaultConfig, openStorage, withStorage)
-import Wiki.Server.Storage.Layout (databaseFile)
+import Test.Storage.Fixture (withPlaceIn)
+import Wiki.Server.Storage (Place, closeStorage, defaultConfig, openStorage, withStorage)
+import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Migrate
-import Wiki.Server.Storage.Rows (loadServerSettings, loadSettings, storeServerSettings)
+import Wiki.Server.Storage.Rows (micro)
+import Wiki.Server.Storage.Schema (SchemaDb (..), WikiSchema (..), schemaDb)
 
--- | A database in a temporary file of its own.
-withFreshDatabase :: (FilePath -> Connection -> IO a) -> IO a
-withFreshDatabase action = withSystemTempDirectory "wiki-migrate-test" $ \dir ->
-  let file = dir </> "test.sqlite" in withConnection file (action file)
+-- | The tables of the wiki's schema, the same on both databases.
+wikiTables :: [Text]
+wikiTables =
+  [ "attachments"
+  , "audit_log"
+  , "comments"
+  , "drafts"
+  , "email_verifications"
+  , "global_grants"
+  , "group_members"
+  , "groups"
+  , "identities"
+  , "invitations"
+  , "notifications"
+  , "page_versions"
+  , "pages"
+  , "recovery_codes"
+  , "reset_tokens"
+  , "sessions"
+  , "settings"
+  , "sign_in_providers"
+  , "space_grants"
+  , "spaces"
+  , "threads"
+  , "totp"
+  , "users"
+  , "watches"
+  , "wiki_schema"
+  ]
 
--- | The schema as SQLite holds it: what migrating must leave alone once it
--- is done.
-schema :: Connection -> IO [(Text, Text, Maybe Text)]
-schema c = query_ c "SELECT type, name, sql FROM sqlite_master ORDER BY type, name"
+-- | The versions a database records, in order.
+versionsOf :: (Backend be) => Connection be -> IO [Int]
+versionsOf c = sort . map (\v -> fromIntegral v.version) <$> runDb c (runSelectReturningList (select (all_ schemaDb.wiki_schema)))
 
-tableNames :: Connection -> IO [Text]
-tableNames c = map fromOnly <$> query_ c "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+-- | The tables of a database, in order.
+tablesOf :: (Backend be) => Connection be -> IO [Text]
+tablesOf c = sort <$> runDb c tableNames
 
-spec :: Spec
-spec = describe "migrations" $ do
-  it "are numbered from 1 with no gaps, as their files are" $ do
-    map (\m -> m.version) migrations `shouldBe` [1 .. length migrations]
-    map (\m -> m.name) (take 1 migrations) `shouldBe` ["0001-initial.sql"]
+-- | A first step of a made-up schema for a database: it makes the table
+-- of versions, as a real first step does, and one more table.
+firstStep :: (Backend be) => Connection be -> Migration
+firstStep c =
+  Migration
+    { version = 1
+    , name = "0001-first." <> schemaSuffix c <> ".sql"
+    , statements = "CREATE TABLE wiki_schema (version INTEGER PRIMARY KEY NOT NULL, applied_at " <> timeType <> " NOT NULL); CREATE TABLE first (x INTEGER);"
+    }
+  where
+    timeType = if schemaSuffix c == "postgres" then "TIMESTAMPTZ" else "TEXT"
+
+-- | Open a storage on a place, expecting it refused with an exception of
+-- this type.
+refusedWith :: forall e. (Exception e) => Place -> IO e
+refusedWith at =
+  try @e (openStorage defaultConfig at >>= closeStorage) >>= \case
+    Left e -> pure e
+    Right () -> panic "the storage opened"
+
+spec :: Backing -> Spec
+spec backing = describe "the schema's versions" $ do
+  it "are numbered from 1 with no gaps, the same for both databases, as their files are" $ do
+    let numbers suffix = map (\m -> m.version) (migrationsFor suffix)
+    numbers "sqlite" `shouldBe` [1 .. length (migrationsFor "sqlite")]
+    numbers "postgres" `shouldBe` numbers "sqlite"
+    map (\m -> m.name) (take 1 (migrationsFor "sqlite")) `shouldBe` ["0001-initial.sqlite.sql"]
+    map (\m -> m.name) (take 1 (migrationsFor "postgres")) `shouldBe` ["0001-initial.postgres.sql"]
 
   it "make the whole schema in an empty database, and say which they applied" $
-    withFreshDatabase $ \_ c -> do
+    withPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+      let steps = migrationsFor (schemaSuffix c)
       schemaVersion c `shouldReturn` 0
-      migrate c `shouldReturn` [1 .. length migrations]
-      schemaVersion c `shouldReturn` length migrations
-      tables <- tableNames c
-      for_ ["users", "groups", "group_members", "global_grants", "space_grants", "spaces", "pages", "page_versions", "attachments", "drafts", "sessions", "settings", "invitations", "identities", "sign_in_providers", "threads", "comments", "totp", "recovery_codes", "reset_tokens", "email_verifications", "watches", "notifications", "schema_version"] $ \t ->
-        tables `shouldContain` [t]
-      rows <- query_ c "SELECT version FROM schema_version ORDER BY version"
-      map fromOnly rows `shouldBe` [1 .. length migrations]
-
-  it "bring a database of the first schema up to accounts: its users kept, with no password and not disabled" $
-    withFreshDatabase $ \_ c -> do
-      applyMigrations (take 1 migrations) c `shouldReturn` [1]
-      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
-      execute_ c "INSERT INTO global_grants (subject_kind, subject_id, permission) VALUES ('user', 'user-1', 'administer')"
-      migrate c `shouldReturn` [2 .. length migrations]
-      rows <- query_ c "SELECT id, login, display_name, password_hash, disabled FROM users"
-      rows `shouldBe` [("user-1" :: Text, "ada" :: Text, "Ada" :: Text, Nothing :: Maybe Text, 0 :: Int)]
-      tableNames c >>= (`shouldContain` ["sessions"])
-      -- A session goes with its user.
-      execute_ c "PRAGMA foreign_keys = ON"
-      execute_ c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ('h', 'user-1', 'a', 'b', 'c')"
-      execute_ c "DELETE FROM users WHERE id = 'user-1'"
-      query_ c "SELECT count(*) FROM sessions" `shouldReturn` [Only (0 :: Int)]
-
-  it "bring a database of accounts up to settings: an open wiki, and no invitation" $
-    withFreshDatabase $ \_ c -> do
-      applyMigrations (take 2 migrations) c `shouldReturn` [1, 2]
-      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
-      migrate c `shouldReturn` [3 .. length migrations]
-      tables <- tableNames c
-      for_ ["settings", "invitations"] $ \t -> tables `shouldContain` [t]
-      query_ c "SELECT count(*) FROM settings" `shouldReturn` [Only (0 :: Int)]
-      loadSettings c `shouldReturn` defaultSettings
-      defaultSettings.access `shouldBe` Open
-      query_ c "SELECT count(*) FROM users" `shouldReturn` [Only (1 :: Int)]
-
-  it "bring a database of settings up to identities: none, each a user's, and gone with them" $
-    withFreshDatabase $ \_ c -> do
-      applyMigrations (take 3 migrations) c `shouldReturn` [1, 2, 3]
-      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
-      migrate c `shouldReturn` [4 .. length migrations]
-      tableNames c >>= (`shouldContain` ["identities"])
-      query_ c "SELECT count(*) FROM identities" `shouldReturn` [Only (0 :: Int)]
-      execute_ c "PRAGMA foreign_keys = ON"
-      execute_ c "INSERT INTO identities (provider, subject, user_id, linked_at) VALUES ('github', '42', 'user-1', 'now')"
-      -- A provider's account is one user's at most.
-      (try (execute_ c "INSERT INTO identities (provider, subject, user_id, linked_at) VALUES ('github', '42', 'user-1', 'later')") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
-      execute_ c "DELETE FROM users WHERE id = 'user-1'"
-      query_ c "SELECT count(*) FROM identities" `shouldReturn` [Only (0 :: Int)]
-
-  it "bring a database of identities up to the server's settings: nothing set, the wiki's settings and identities kept" $
-    withFreshDatabase $ \_ c -> do
-      applyMigrations (take 4 migrations) c `shouldReturn` [1, 2, 3, 4]
-      execute_ c "INSERT INTO settings (key, value) VALUES ('access', 'closed')"
-      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
-      execute_ c "INSERT INTO identities (provider, subject, user_id, linked_at) VALUES ('github', '42', 'user-1', 'now')"
-      migrate c `shouldReturn` [5 .. length migrations]
-      tableNames c >>= (`shouldContain` ["sign_in_providers"])
-      loadServerSettings c `shouldReturn` noServerSettings
-      (\s -> s.access) <$> loadSettings c `shouldReturn` Closed
-      query_ c "SELECT count(*) FROM identities" `shouldReturn` [Only (1 :: Int)]
-      -- What the administration sets is read back, the secrets with it.
-      let set = noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.example.org", port = 465, security = ImplicitTls, user = Just "wiki", password = Just (Secret "pw"), from = "w@example.org"}, providers = [ProviderSettings {name = "github", kind = GitHub, clientId = "Iv1", issuer = Nothing, secret = Just (Secret "s")}]}
-      storeServerSettings c set
-      loadServerSettings c `shouldReturn` set
-      (\s -> s.access) <$> loadSettings c `shouldReturn` Closed
-      storeServerSettings c noServerSettings
-      loadServerSettings c `shouldReturn` noServerSettings
-      query_ c "SELECT count(*) FROM settings" `shouldReturn` [Only (1 :: Int)]
-  it "bring a database of the server's settings up to comments: none, each thread on a page, gone with it with its comments" $
-    withFreshDatabase $ \_ c -> do
-      applyMigrations (take 5 migrations) c `shouldReturn` [1, 2, 3, 4, 5]
-      migrate c `shouldReturn` [6 .. length migrations]
-      tables <- tableNames c
-      for_ ["threads", "comments"] $ \t -> tables `shouldContain` [t]
-      execute_ c "PRAGMA foreign_keys = ON"
-      execute_ c "INSERT INTO spaces (id, name, slug, parent, public, created_at, position, subspace_order, page_order, math_macros) VALUES ('space-1', 'S', 's', NULL, 0, 'now', 0, 'name', 'name', '')"
-      execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('page-1', 'space-1', NULL, 'P', 'p', '', 'now', 'now', 0, '')"
-      execute_ c "INSERT INTO threads (id, page_id, quote, prefix, suffix, created_at, seq) VALUES ('t1', 'page-1', 'q', '', '', 'now', 0)"
-      execute_ c "INSERT INTO threads (id, page_id, created_at, seq) VALUES ('t2', 'page-1', 'now', 1)"
-      execute_ c "INSERT INTO comments (id, thread_id, author, body, created_at, seq) VALUES ('c1', 't1', 'user-1', 'Hm.', 'now', 0)"
-      -- A thread about the whole page is never resolved, and an anchor is
-      -- all there or not at all.
-      (try (execute_ c "UPDATE threads SET resolved = 1 WHERE id = 't2'") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
-      (try (execute_ c "INSERT INTO threads (id, page_id, quote, created_at, seq) VALUES ('t3', 'page-1', 'q', 'now', 2)") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
-      execute_ c "DELETE FROM pages WHERE id = 'page-1'"
-      query_ c "SELECT (SELECT count(*) FROM threads) + (SELECT count(*) FROM comments)" `shouldReturn` [Only (0 :: Int)]
-
-  it "bring a database of comments up to spaces' profiles: no home page, the default icon, no description; a home page deleted goes" $
-    withFreshDatabase $ \_ c -> do
-      applyMigrations (take 6 migrations) c `shouldReturn` [1 .. 6]
-      execute_ c "INSERT INTO spaces (id, name, slug, parent, public, created_at, position, subspace_order, page_order, math_macros) VALUES ('space-1', 'S', 's', NULL, 0, 'now', 0, 'name', 'name', '')"
-      execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('page-1', 'space-1', NULL, 'P', 'p', '', 'now', 'now', 0, '')"
-      migrate c `shouldReturn` [7 .. length migrations]
-      query_ c "SELECT home_page, icon, description FROM spaces" `shouldReturn` [(Nothing :: Maybe Text, Nothing :: Maybe Text, "" :: Text)]
-      execute_ c "PRAGMA foreign_keys = ON"
-      execute_ c "UPDATE spaces SET home_page = 'page-1', icon = '{\"emoji\":\"x\"}', description = 'What it is for.'"
-      -- A home page has to be a page.
-      (try (execute_ c "UPDATE spaces SET home_page = 'page-2'") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
-      execute_ c "DELETE FROM pages WHERE id = 'page-1'"
-      query_ c "SELECT home_page, icon, description FROM spaces" `shouldReturn` [(Nothing :: Maybe Text, Just ("{\"emoji\":\"x\"}" :: Text), "What it is for." :: Text)]
-
-  it "bring a database of spaces' profiles up to account hygiene: users without an address, sessions with an id of their own, a second factor that goes with its user" $
-    withFreshDatabase $ \_ c -> do
-      applyMigrations (take 7 migrations) c `shouldReturn` [1 .. 7]
-      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
-      execute_ c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ('h1', 'user-1', 'now', 'now', 'later')"
-      execute_ c "INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, expires_at) VALUES ('h2', 'user-1', 'now', 'now', 'later')"
-      migrate c `shouldReturn` [8 .. length migrations]
-      query_ c "SELECT email, email_verified_at FROM users" `shouldReturn` [(Nothing :: Maybe Text, Nothing :: Maybe Text)]
-      ids <- query_ c "SELECT public_id, address FROM sessions ORDER BY id_hash"
-      map snd ids `shouldBe` ["" :: Text, ""]
-      -- Each session has an id of its own, which is not its key.
-      let publicIds = mapMaybe fst ids :: [Text]
-      length publicIds `shouldBe` 2
-      ordNub publicIds `shouldBe` publicIds
-      tables <- tableNames c
-      for_ ["totp", "recovery_codes", "reset_tokens", "email_verifications"] $ \t -> tables `shouldContain` [t]
-      execute_ c "PRAGMA foreign_keys = ON"
-      execute_ c "INSERT INTO totp (user_id, secret, created_at) VALUES ('user-1', 'GEZDGNBV', 'now')"
-      execute_ c "INSERT INTO recovery_codes (user_id, code_hash) VALUES ('user-1', 'x')"
-      execute_ c "INSERT INTO reset_tokens (token_hash, user_id, created_at, expires_at) VALUES ('t', 'user-1', 'now', 'later')"
-      execute_ c "INSERT INTO email_verifications (token_hash, user_id, email, created_at, expires_at) VALUES ('v', 'user-1', 'ada@example.org', 'now', 'later')"
-      execute_ c "DELETE FROM users WHERE id = 'user-1'"
-      query_ c "SELECT (SELECT count(*) FROM totp) + (SELECT count(*) FROM recovery_codes) + (SELECT count(*) FROM reset_tokens) + (SELECT count(*) FROM email_verifications) + (SELECT count(*) FROM sessions)" `shouldReturn` [Only (0 :: Int)]
-
-  it "bring a database up to spaces shown as blogs: none is, and a space is one or not" $
-    withFreshDatabase $ \_ c -> do
-      -- Found by its name, so that the test holds whatever number the step
-      -- is given.
-      step <- maybe (assertFailure "no migration adds the blog flag") pure (find (\m -> "space-blog" `T.isInfixOf` m.name) migrations)
-      let earlier = takeWhile (\m -> m.version < step.version) migrations
-      applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
-      execute_ c "INSERT INTO spaces (id, name, slug, parent, public, created_at, position, subspace_order, page_order, math_macros) VALUES ('space-1', 'S', 's', NULL, 1, 'now', 0, 'name', 'name', '')"
-      migrate c `shouldReturn` [step.version .. length migrations]
-      query_ c "SELECT blog FROM spaces" `shouldReturn` [Only False]
-      execute_ c "UPDATE spaces SET blog = 1"
-      query_ c "SELECT blog FROM spaces" `shouldReturn` [Only True]
-      (try (execute_ c "UPDATE spaces SET blog = 2") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
-
-  it "bring a database up to notifications: nobody told of anything, everyone watching their own, the mail not chosen, all going with its user" $
-    withFreshDatabase $ \_ c -> do
-      -- Found by its name, as the blog's step is.
-      step <- maybe (assertFailure "no migration adds notifications") pure (find (\m -> "notifications" `T.isInfixOf` m.name) migrations)
-      let earlier = takeWhile (\m -> m.version < step.version) migrations
-      applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
-      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
-      execute_ c "INSERT INTO spaces (id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order) VALUES ('s1', NULL, 'S', 's', 0, '', 'now', 0, 'name', 'name')"
-      execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('p1', 's1', NULL, 'P', 'p', '', 'now', 'now', 0, '')"
-      migrate c `shouldReturn` [step.version .. length migrations]
-      query_ c "SELECT notification_mail, watch_own FROM users" `shouldReturn` [(Nothing :: Maybe Text, 1 :: Int)]
-      query_ c "SELECT (SELECT count(*) FROM watches) + (SELECT count(*) FROM notifications)" `shouldReturn` [Only (0 :: Int)]
-      execute_ c "PRAGMA foreign_keys = ON"
-      execute_ c "INSERT INTO watches (user_id, page_id, watching) VALUES ('user-1', 'p1', 1)"
-      execute_ c "INSERT INTO watches (user_id, space_id, watching) VALUES ('user-1', 's1', 0)"
-      execute_ c "INSERT INTO notifications (id, user_id, kind, page_id, actor, actor_name, title, created_at, seq) VALUES ('n1', 'user-1', 'changed', 'p1', 'user-2', 'Bea', 'P', 'now', 0)"
-      execute_ c "DELETE FROM users WHERE id = 'user-1'"
-      query_ c "SELECT (SELECT count(*) FROM watches) + (SELECT count(*) FROM notifications)" `shouldReturn` [Only (0 :: Int)]
-
-  it "bring a database up to templates: no page is one, and a page is one or not" $
-    withFreshDatabase $ \_ c -> do
-      -- Found by its name, as the blog's step is.
-      step <- maybe (assertFailure "no migration adds the template flag") pure (find (\m -> "page-template" `T.isInfixOf` m.name) migrations)
-      let earlier = takeWhile (\m -> m.version < step.version) migrations
-      applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
-      execute_ c "INSERT INTO spaces (id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order) VALUES ('s1', NULL, 'S', 's', 0, '', 'now', 0, 'name', 'name')"
-      execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('p1', 's1', NULL, 'P', 'p', '', 'now', 'now', 0, '')"
-      migrate c `shouldReturn` [step.version .. length migrations]
-      query_ c "SELECT template FROM pages" `shouldReturn` [Only False]
-      execute_ c "UPDATE pages SET template = 1"
-      query_ c "SELECT template FROM pages" `shouldReturn` [Only True]
-      (try (execute_ c "UPDATE pages SET template = 2") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
-
-  it "bring a database up to the assistant's vault: none, and a user's passkeys and vault gone with them" $
-    withFreshDatabase $ \_ c -> do
-      step <- maybe (assertFailure "no migration adds the assistant's vault") pure (find (\m -> "assistant-vault" `T.isInfixOf` m.name) migrations)
-      let earlier = takeWhile (\m -> m.version < step.version) migrations
-      applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
-      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
-      migrate c `shouldReturn` [step.version .. length migrations]
-      query_ c "SELECT count(*) FROM passkeys" `shouldReturn` [Only (0 :: Int)]
-      query_ c "SELECT count(*) FROM assistant_vaults" `shouldReturn` [Only (0 :: Int)]
-      execute_ c "PRAGMA foreign_keys = ON"
-      execute_ c "INSERT INTO passkeys (credential_id, user_id, public_key, algorithm, sign_count, name, created_at) VALUES ('Y3JlZA', 'user-1', x'a1', -7, 0, 'A passkey', 'now')"
-      execute_ c "INSERT INTO assistant_vaults (user_id, format, salt, nonce, ciphertext, revision, updated_at) VALUES ('user-1', 1, 's', 'n', 'c', 1, 'now')"
-      execute_ c "DELETE FROM users WHERE id = 'user-1'"
-      query_ c "SELECT count(*) FROM passkeys" `shouldReturn` [Only (0 :: Int)]
-      query_ c "SELECT count(*) FROM assistant_vaults" `shouldReturn` [Only (0 :: Int)]
-
-  it "bring a database up to the search's fold: the pages there get theirs when the storage opens" $
-    withSystemTempDirectory "wiki-migrate-test" $ \dir -> do
-      step <- maybe (assertFailure "no migration adds the search's fold") pure (find (\m -> "search-fold" `T.isInfixOf` m.name) migrations)
-      let earlier = takeWhile (\m -> m.version < step.version) migrations
-      withConnection (databaseFile dir) $ \c -> do
-        applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
-        execute_ c "INSERT INTO spaces (id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order) VALUES ('s1', NULL, 'S', 's', 0, '', 'now', 0, 'name', 'name')"
-        execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('p1', 's1', NULL, 'Zażółć', 'p', '', 'now', 'now', 0, 'Gęślą jaźń STRASSE')"
-      withStorage defaultConfig dir $ \_ -> pass
-      withConnection (databaseFile dir) $ \c -> do
-        schemaVersion c `shouldReturn` length migrations
-        query_ c "SELECT search_fold FROM pages" `shouldReturn` [Only (Just (foldText "Zażółć" <> "\n" <> foldText "Gęślą jaźń STRASSE"))]
-        foldText "Zażółć" `shouldBe` "zazolc"
+      migrate c `shouldReturn` [1 .. length steps]
+      schemaVersion c `shouldReturn` length steps
+      tablesOf c `shouldReturn` wikiTables
+      versionsOf c `shouldReturn` [1 .. length steps]
 
   it "apply nothing a second time, and change nothing" $
-    withFreshDatabase $ \_ c -> do
+    withPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
       _ <- migrate c
-      migrated <- schema c
+      tables <- tablesOf c
+      versions <- versionsOf c
       migrate c `shouldReturn` []
-      schema c `shouldReturn` migrated
-      count <- query_ c "SELECT count(*) FROM schema_version"
-      count `shouldBe` [Only (length migrations)]
+      tablesOf c `shouldReturn` tables
+      versionsOf c `shouldReturn` versions
 
   it "run when the storage is opened, and find the database migrated the next time" $
-    withSystemTempDirectory "wiki-migrate-test" $ \dir -> do
-      withStorage defaultConfig dir (const pass)
-      withStorage defaultConfig dir (const pass)
-      withConnection (databaseFile dir) $ \c -> do
-        schemaVersion c `shouldReturn` length migrations
-        count <- query_ c "SELECT count(*) FROM schema_version"
-        count `shouldBe` [Only (length migrations)]
+    withPlaceIn backing $ \at -> do
+      withStorage defaultConfig at (const pass)
+      withStorage defaultConfig at (const pass)
+      withConnectionTo at $ \c -> do
+        let steps = migrationsFor (schemaSuffix c)
+        schemaVersion c `shouldReturn` length steps
+        versionsOf c `shouldReturn` [1 .. length steps]
 
   it "apply every pending step or none: a step that fails leaves the database as it was" $
-    withFreshDatabase $ \_ c -> do
-      let steps =
-            [ Migration {version = 1, name = "0001-good.sql", statements = "CREATE TABLE first (x INTEGER);"}
-            , Migration {version = 2, name = "0002-bad.sql", statements = "CREATE TABLE second (x INTEGER); CREATE TABLE ("}
-            ]
-      result <- try @SQLite.SQLError (applyMigrations steps c)
+    withPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+      let bad = Migration {version = 2, name = "0002-bad.sql", statements = "CREATE TABLE second (x INTEGER); CREATE TABLE ("}
+          good = Migration {version = 2, name = "0002-good.sql", statements = "CREATE TABLE second (x INTEGER);"}
+      result <- try @SomeException (applyMigrations [firstStep c, bad] c)
       result `shouldSatisfy` isLeft
       schemaVersion c `shouldReturn` 0
-      tableNames c `shouldReturn` []
+      tablesOf c `shouldReturn` []
       -- And once the step is right, both are applied.
-      applyMigrations (take 1 steps <> [Migration {version = 2, name = "0002-good.sql", statements = "CREATE TABLE second (x INTEGER);"}]) c `shouldReturn` [1, 2]
+      applyMigrations [firstStep c, good] c `shouldReturn` [1, 2]
 
   it "apply only the steps after the database's version" $
-    withFreshDatabase $ \_ c -> do
-      let stepOne = Migration {version = 1, name = "0001.sql", statements = "CREATE TABLE first (x INTEGER);"}
-          stepTwo = Migration {version = 2, name = "0002.sql", statements = "CREATE TABLE second (x INTEGER);"}
-      applyMigrations [stepOne] c `shouldReturn` [1]
-      applyMigrations [stepOne, stepTwo] c `shouldReturn` [2]
-      tableNames c `shouldReturn` ["first", "schema_version", "second"]
+    withPlaceIn backing $ \at -> withConnectionTo at $ \c -> do
+      let secondStep = Migration {version = 2, name = "0002.sql", statements = "CREATE TABLE second (x INTEGER);"}
+      applyMigrations [firstStep c] c `shouldReturn` [1]
+      applyMigrations [firstStep c, secondStep] c `shouldReturn` [2]
+      tablesOf c `shouldReturn` ["first", "second", "wiki_schema"]
 
   it "refuse a database a newer program has migrated, and leave it alone" $
-    withSystemTempDirectory "wiki-migrate-test" $ \dir -> do
-      withStorage defaultConfig dir (const pass)
-      let newer = length migrations + 1
-      withConnection (databaseFile dir) $ \c ->
-        execute_ c (SQLite.Query ("INSERT INTO schema_version (version, applied_at) VALUES (" <> show newer <> ", 'later')"))
-      result <- try (openStorage defaultConfig dir >>= closeStorage)
-      result `shouldBe` Left SchemaTooNew {found = newer, known = length migrations}
-      withConnection (databaseFile dir) $ \c -> schemaVersion c `shouldReturn` newer
+    withPlaceIn backing $ \at -> do
+      withStorage defaultConfig at (const pass)
+      known <- withConnectionTo at schemaVersion
+      let newer = known + 1
+      now <- micro <$> getCurrentTime
+      withConnectionTo at $ \c -> runDb c (runInsert (insert schemaDb.wiki_schema (insertValues [SchemaRow {version = fromIntegral newer, applied_at = now}])))
+      refusedWith at `shouldReturn` SchemaTooNew {found = newer, known}
+      withConnectionTo at schemaVersion `shouldReturn` newer
+
+  it "refuse the database of an earlier wiki-server, saying to export and import, and leave it alone" $
+    withPlaceIn backing $ \at -> do
+      withConnectionTo at $ \c -> do
+        begin True c
+        runScript c "CREATE TABLE schema_version (version INTEGER PRIMARY KEY NOT NULL, applied_at TEXT NOT NULL); CREATE TABLE users (id TEXT PRIMARY KEY NOT NULL);"
+        commitTransaction c
+      refused <- refusedWith @OldSchema at
+      let said = T.pack (displayException refused)
+      said `shouldSatisfy` T.isInfixOf "earlier wiki-server"
+      said `shouldSatisfy` T.isInfixOf "Export"
+      said `shouldSatisfy` T.isInfixOf "import"
+      withConnectionTo at tablesOf `shouldReturn` ["schema_version", "users"]
+
+  it "refuse a database that holds tables of something else, naming them" $
+    withPlaceIn backing $ \at -> do
+      withConnectionTo at $ \c -> do
+        begin True c
+        runScript c "CREATE TABLE invoices (id INTEGER);"
+        commitTransaction c
+      refused <- refusedWith @OldSchema at
+      displayException refused `shouldSatisfy` List.isInfixOf "invoices"
+      withConnectionTo at tablesOf `shouldReturn` ["invoices"]
