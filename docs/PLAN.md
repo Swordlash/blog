@@ -1248,6 +1248,33 @@ must be in before it is.
     `listVersions` paged; the audit log's actor query and keyset paging.
   - **WP5.16c** (10, 12, 13): streamed export, `Tmp` multipart, metrics from the table, the
     demo reading attachments and versions lazily.
+- **WP5.17 Small fixes found in the night of 2026-10-27** (the owner, 2026-10-28, "zrób
+  wszystko oprócz polskiego"): Anthropic's 400 "This model does not support the effort
+  parameter" (Claude Haiku 4.5) makes the island resend without `output_config` and leave
+  it out for the rest of the chat, as it does for `thinking`; `test-native` no longer
+  needs the caller to set a UTF-8 locale (the toolchain scripts set `LANG=C.UTF-8` when
+  the locale is unset or `C`/`POSIX`, and the tests that read `docs/markdown.md` read bytes
+  and decode UTF-8 themselves); `withDraft`'s `Maybe (Either WikiError (Maybe Draft))`
+  becomes a named type (the owner: "`Right (Just Nothing)` is just insane, this needs a
+  custom datatype"); the two comments WP5.12 left as found are made true (`Cache`'s module
+  comment on choosing a watch, `Backend.attempt`'s list of reads that throw); and, the
+  owner's review of #93 ("Forbidden should be before NotFound; otherwise unknown user can
+  extract knowledge which pages exist"): a space the principal may not view, and
+  everything under it, answers `NotFound` exactly as a space that does not exist; a space
+  the principal may view but may not change answers `Forbidden`. The administration's
+  order (the global administer checked before any id) stays.
+- **WP5.18 Accounts with a password only from the console** (the owner, 2026-10-27, "Dałbym w
+  admin opcje wyłączania tworzenia password based użytkowników, zostawiając to tylko przez
+  CLI serwera"): a wiki setting, on by default, "The administration may create accounts
+  with a password"; when off, the administration's "New user" form is replaced by a note
+  that says to use `wiki-server users add` on the console, and the API's `createUser`
+  refuses; sending a password link to an existing user and the console are unaffected.
+- **Flat element rows in haskell-halogen's `DOM.HTML.Indexed`** (from WP5.13's
+  measurement: an element with no attributes costs 88 ms to type-check against the
+  `.+`-chained row, 4.5 ms against the same row written flat; `hh` emits a bare `[]` for
+  such elements): a package in the haskell-halogen repository, then a pin bump here with
+  the `hh` views' type-check times before and after.
+
 - **Later, by the owner (2026-10-27, "zapisz to na potem"): a migration to PostgreSQL.**
   Not now; when it comes, as one port of the whole storage layer (WP5.7's spike says why
   not half and half), most likely with `rel8`, migrations hand-written, SQLite kept or
@@ -3504,6 +3531,11 @@ Amended by the planning session after each work package's report.
   a shared blob is now refused only when its files differ. Not covered: fflate writing a
   non-ASCII name read back by zip-archive, names differing only in case on a case-
   insensitive file system, very long names. Full gate; CI green.
+- **The round of 2026-10-28** (the owner: "Zrób wszystko oprócz polskiego"): WP5.16b, WP5.17,
+  WP5.16c, WP5.18, WP5.15 and the haskell-halogen flat rows, two at a time (the container
+  has 15 GB; six at once killed it on 2026-10-27): WP5.16b with WP5.17, then WP5.16c with
+  WP5.18, then WP5.15 alone in this repository beside the haskell-halogen package, then the
+  pin bump. The Polish interface stays out.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
