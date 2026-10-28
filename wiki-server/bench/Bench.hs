@@ -19,9 +19,23 @@
 -- space, which becomes a blog; and 100,000 entries in the audit log. The
 -- sitemap and the feed are timed through their applications, as a
 -- request reaches them, written afresh and kept.
+--
+-- For WP5.16c, two arguments seed a data directory instead, for timing a
+-- running server from outside (its resident memory is the process's):
+--
+-- > wiki-server-bench attachments DIR PAGES MB
+--
+-- writes a wiki of PAGES pages in one space with MB attachments of 1 MiB
+-- each, of bytes that do not compress, one on each of the first pages;
+--
+-- > wiki-server-bench blobs DIR N
+--
+-- writes a wiki of one page with N attachments of 1 KiB, each with a
+-- blob of its own.
 module Main (main) where
 
 import Data.Aeson (decode, encode)
+import Data.ByteString qualified as BS
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup, (!!))
@@ -69,6 +83,49 @@ tabUsers = 10
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
+  getArgs >>= \case
+    ["attachments", dir, n, mb] -> seedAttachments dir (readNumber n) (readNumber mb)
+    ["blobs", dir, n] -> seedBlobs dir (readNumber n)
+    [] -> timings
+    _ -> die "usage: wiki-server-bench [attachments DIR PAGES MB | blobs DIR N]"
+  where
+    readNumber t = fromMaybe (panic ("not a number: " <> toS t)) (readMaybe t)
+
+-- | Seed a data directory with a wiki of this many pages in one space and
+-- this many attachments of 1 MiB, of random bytes, one on each of the
+-- first pages.
+seedAttachments :: FilePath -> Int -> Int -> IO ()
+seedAttachments dir n mb =
+  withStorage defaultConfig dir $ \st -> do
+    space <- runSqliteWiki st Administrator (createSpace Nothing "Big") >>= either (panic . show) pure
+    now <- getCurrentTime
+    withDatabase st $ \c -> do
+      execute_ c "BEGIN"
+      for_ [0 .. n - 1] $ \i -> do
+        let p = pageOf space.id now i
+        insertPage c p
+        insertVersion c p Nothing
+      execute_ c "COMMIT"
+    withFile "/dev/urandom" ReadMode $ \random ->
+      for_ [0 .. mb - 1] $ \i -> do
+        bytes <- BS.hGet random (1024 * 1024)
+        runSqliteWiki st Administrator (uploadAttachment (pageId (i `mod` n)) ("file-" <> show i <> ".bin") "application/octet-stream" bytes) >>= either (panic . show) (const pass)
+    printf "seeded %s: %d pages, %d MiB of attachments\n" dir n mb
+
+-- | Seed a data directory with a wiki of one page and this many
+-- attachments of 1 KiB, each with a blob of its own.
+seedBlobs :: FilePath -> Int -> IO ()
+seedBlobs dir n =
+  withStorage defaultConfig dir $ \st -> do
+    space <- runSqliteWiki st Administrator (createSpace Nothing "Blobs") >>= either (panic . show) pure
+    p <- runSqliteWiki st Administrator (createPage space.id Nothing "Attachments" "Many.") >>= either (panic . show) pure
+    for_ [0 .. n - 1] $ \i ->
+      runSqliteWiki st Administrator (uploadAttachment p.id ("file-" <> show i <> ".txt") "text/plain" (encodeUtf8 (T.justifyLeft 1024 '.' (show i)))) >>= either (panic . show) (const pass)
+    printf "seeded %s: %d attachments\n" dir n
+
+-- | The timings of WP5.16a and WP5.16b.
+timings :: IO ()
+timings = do
   hub <- Events.newHub
   withSystemTempDirectory "wiki-bench" $ \dir ->
     withStorage defaultConfig {publish = Events.publish hub, notify = Events.notify hub} (dir </> "data") $ \st -> do

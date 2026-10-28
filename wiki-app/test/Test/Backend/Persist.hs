@@ -3,18 +3,21 @@
 -- read, all against the in-memory IndexedDB of 'MemDOM'. That store is one
 -- per process, shared by every 'MemDOM', which is what lets a test start a
 -- second wiki from what the first wrote, as a reload does; each test has a
--- database of its own.
+-- database of its own. A wiki loaded again reads the attachments' bytes
+-- and the versions only when they are needed, and these tests also see
+-- which records a load, a view and a write read and write ('Counting').
 module Test.Backend.Persist (spec) where
 
 import Data.Aeson (Value (..), decodeStrict')
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.IORef (IORef, readIORef)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Unique (hashUnique, newUnique)
 import Halogen.VDom.DOM.Monad (runBrowserDOM, runMemDOM)
 import Protolude
+import Test.Counting (Call (..), isRead, runCounting)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
@@ -33,9 +36,13 @@ import Wiki.App.Backend.Mem.Persist
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (encodeJson)
-import Wiki.Core.Id (PageId (..), UserId (..))
+import Wiki.Core.Id
+  ( BlobId (..)
+  , PageId (..)
+  , UserId (..)
+  )
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
@@ -82,13 +89,13 @@ lasting st =
     }
 
 -- | The wiki a fresh start from the database finds, which must be the one
--- in memory.
-shouldReload :: (HasCallStack) => Database -> IORef MemState -> IO ()
-shouldReload db ref = do
+-- in memory, once everything it reads only when needed is read.
+shouldReload :: (HasCallStack) => Database -> Opened -> IO ()
+shouldReload db opened = do
   reopened <- open db
   reopened.found `shouldBe` Restored
-  now <- readIORef ref
-  again <- readIORef reopened.wiki
+  now <- runKept opened readWholly
+  again <- runKept reopened readWholly
   lasting again `shouldBe` lasting now
 
 ok :: (HasCallStack) => Either WikiError a -> IO a
@@ -117,7 +124,25 @@ keptFixture = do
   let run :: As -> MemWiki IO a -> IO a
       run who program = do
         result <- runKept opened (switchUser (userId who) >> program)
-        shouldReload db opened.wiki
+        shouldReload db opened
+        pure result
+  pure (Fixture run)
+
+-- | 'keptFixture', except that each program runs on the wiki loaded again
+-- from the database, as a reload would load it.
+reopenedFixture :: IO (Fixture (MemWiki IO))
+reopenedFixture = do
+  db <- freshDatabase
+  seeded <- open db
+  users <- runKept seeded memUsers
+  let userId = \case
+        Anonymous -> Nothing
+        As login -> (\u -> u.id) <$> find (\u -> u.login == login) users
+  let run :: As -> MemWiki IO a -> IO a
+      run who program = do
+        opened <- open db
+        result <- runKept opened (switchUser (userId who) >> program)
+        shouldReload db opened
         pure result
   pure (Fixture run)
 
@@ -135,7 +160,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
 
     it "keep an attachment's bytes as they are" $ do
       let held = Map.findWithDefault mempty attachmentsStore (records seed)
-      Map.elems held `shouldBe` Map.elems seed.blobs
+      Map.elems held `shouldBe` map Just (Map.elems seed.blobs)
 
     it "read back as nothing written out when there is no counter" $ do
       restore mempty `shouldBe` Unseeded
@@ -143,13 +168,13 @@ spec = describe "MemWiki kept in IndexedDB" $ do
 
     it "do not read back when one of them is not what it should be" $ do
       let page = fromMaybe (panic "the demo has no pages") (head (Map.keys seed.pages))
-          broken = Map.adjust (Map.insert page.text "{ not json") pagesStore (records seed)
+          broken = Map.adjust (Map.insert page.text (Just "{ not json")) pagesStore (records seed)
           moved = Map.adjust (\pages -> Map.insert "page-x" (pages Map.! page.text) pages) pagesStore (records seed)
       restore broken `shouldSatisfy` unreadable
       restore moved `shouldSatisfy` unreadable
 
     it "read a space kept before spaces had a time and an order as made with its first page, listing by name" $ do
-      let old = Map.adjust (Map.map (stripFields ["createdAt", "subspaceOrder", "pageOrder", "position"])) spacesStore (records seed)
+      let old = Map.adjust (Map.map (map (stripFields ["createdAt", "subspaceOrder", "pageOrder", "position"]))) spacesStore (records seed)
       case restore old of
         Stored st -> do
           for_ (Map.elems st.spaces) $ \s -> do
@@ -163,7 +188,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       opened <- open db
       opened.found `shouldBe` Seeded
       readIORef opened.wiki `shouldReturn` seed
-      shouldReload db opened.wiki
+      shouldReload db opened
 
     it "starts over from the seed when a record cannot be read" $ do
       db <- freshDatabase
@@ -172,7 +197,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       reopened <- open db
       reopened.found `shouldSatisfy` reseeded
       lasting <$> readIORef reopened.wiki `shouldReturn` lasting seed
-      shouldReload db reopened.wiki
+      shouldReload db reopened
 
     it "starts over from the seed when a newer version wrote the database" $ do
       db <- freshDatabase
@@ -180,7 +205,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       reopened <- open db
       reopened.found `shouldSatisfy` reseeded
       lasting <$> readIORef reopened.wiki `shouldReturn` lasting seed
-      shouldReload db reopened.wiki
+      shouldReload db reopened
 
     it "starts over from the seed when the database lacks a store this version keeps" $ do
       db <- freshDatabase
@@ -188,7 +213,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       runMemDOM (IDB.put db {stores = [spacesStore]} spacesStore "space-1" "{}")
       reopened <- open db
       reopened.found `shouldSatisfy` reseeded
-      shouldReload db reopened.wiki
+      shouldReload db reopened
 
     it "reads a database of version 1, from before drafts, and keeps drafts in it from then on" $ do
       db <- freshDatabase
@@ -204,7 +229,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       docs <- runKept reopened (getSpace (path "docs")) >>= ok
       tour <- runKept reopened (getPage docs.id (path "tour")) >>= ok
       _ <- runKept reopened (saveDraft tour.id tour.updatedAt "Tour" "A draft") >>= ok
-      shouldReload db reopened.wiki
+      shouldReload db reopened
 
     it "reads a database of version 2, from before versions, starting each page's history with the page as it is" $ do
       db <- freshDatabase
@@ -221,7 +246,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       tour <- run (getPage docs.id (path "tour")) >>= ok
       map (\v -> (v.updatedAt, v.author)) <$> (run (listVersions tour.id latestVersions) >>= ok) `shouldReturn` [(tour.updatedAt, Nothing)]
       saved <- run (savePage tour.id tour.updatedAt "Tour" "Saved after the upgrade") >>= ok
-      shouldReload db reopened.wiki
+      shouldReload db reopened
       again <- open db
       versions <- runKept again (switchUser (Just (UserId "user-admin")) >> listVersions tour.id latestVersions) >>= ok
       map (\v -> v.updatedAt) versions `shouldBe` [saved.updatedAt, tour.updatedAt]
@@ -260,7 +285,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       _ <- run (setSpaceOrder docs.id ChildPages ByHand) >>= ok
       _ <- run (setSpaceOrder docs.id ChildSpaces NewestFirst) >>= ok
       _ <- run (shiftPage tour.id ShiftToTop) >>= ok
-      shouldReload db opened.wiki
+      shouldReload db opened
       reopened <- open db
       st <- readIORef reopened.wiki
       map (\s -> s.name) (Map.elems st.spaces) `shouldContain` ["Kept and renamed"]
@@ -269,7 +294,7 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       (Set.member bea.user.id st.disabled, Set.member bea.user.id st.passwords) `shouldBe` (True, True)
       -- A space deleted takes its pages, attachments and grants with it.
       _ <- run (deleteSpace space.id) >>= ok
-      shouldReload db opened.wiki
+      shouldReload db opened
 
     it "keeps a draft for its author's next visit, and an import takes every draft away" $ do
       db <- freshDatabase
@@ -280,14 +305,14 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       blog <- run (getSpace (path "blog")) >>= ok
       hello <- run (getPage blog.id (path "hello-world")) >>= ok
       draft <- run (saveDraft hello.id hello.updatedAt "Hello" "Not saved yet") >>= ok
-      shouldReload db opened.wiki
+      shouldReload db opened
       reopened <- open db
       runKept reopened (switchUser (Just (UserId "user-editor")) >> getDraft hello.id) `shouldReturn` Right (Just draft)
       -- The export has no drafts, and what is imported replaces them all.
       archive <- run (memArchive "test")
       run (importMemWiki archive) `shouldReturn` Right ()
       run (getDraft hello.id) `shouldReturn` Right Nothing
-      shouldReload db opened.wiki
+      shouldReload db opened
 
     it "makes ids after the ones kept, not over them" $ do
       db <- freshDatabase
@@ -324,8 +349,79 @@ spec = describe "MemWiki kept in IndexedDB" $ do
       run (resetMemWiki seed)
       st <- readIORef opened.wiki
       st `shouldBe` seed
-      shouldReload db opened.wiki
+      shouldReload db opened
 
+  describe "reading only what is needed" $ do
+    it "reads no attachment's bytes and no version when it loads a wiki, and an attachment's bytes once, when it is shown" $ do
+      db <- freshDatabase
+      opened <- open db
+      let run :: MemWiki IO x -> IO x
+          run = runKept opened
+      run (switchUser (Just (UserId "user-admin")))
+      docs <- run (getSpace (path "docs")) >>= ok
+      tour <- run (getPage docs.id (path "tour")) >>= ok
+      uploaded <- for [1 .. 20 :: Int] $ \i -> run (uploadAttachment tour.id ("file-" <> show i <> ".bin") "application/octet-stream" (encodeUtf8 ("bytes of file " <> show i))) >>= ok
+      calls <- newIORef []
+      reopened <- runMemDOM (runCounting calls (openMemWiki db seed))
+      reopened.found `shouldBe` Restored
+      loading <- readIORef calls
+      filter (\c -> isRead attachmentsStore c || isRead versionsStore c) loading `shouldBe` []
+      loading `shouldContain` [Listed attachmentsStore]
+      st <- readIORef reopened.wiki
+      (Map.size st.blobs, Set.size st.unreadBlobs >= 20, Map.size st.versions) `shouldBe` (0, True, 0)
+      writeIORef calls []
+      let shown = fromMaybe (panic "nothing uploaded") (head uploaded)
+      url <- runKept reopened (attachmentUrl shown)
+      url `shouldBe` "data:application/octet-stream;base64,Ynl0ZXMgb2YgZmlsZSAx"
+      again <- runKept reopened (attachmentUrl shown)
+      again `shouldBe` url
+      blob <- case shown.source of
+        SourceBlob b -> pure b
+        _ -> panic "an upload is a blob"
+      readIORef calls `shouldReturn` [Got attachmentsStore blob.text]
+      -- Not kept in memory: the URL holds the bytes.
+      ((\x -> Map.member blob x.blobs) <$> readIORef reopened.wiki) `shouldReturn` False
+
+    it "reads a page's versions when its history is shown, and those of no other page" $ do
+      db <- freshDatabase
+      opened <- open db
+      runKept opened (switchUser (Just (UserId "user-admin")))
+      docs <- runKept opened (getSpace (path "docs")) >>= ok
+      tour <- runKept opened (getPage docs.id (path "tour")) >>= ok
+      saved <- runKept opened (savePage tour.id tour.updatedAt "Tour" "Saved once more") >>= ok
+      calls <- newIORef []
+      reopened <- runMemDOM (runCounting calls (openMemWiki db seed))
+      runKept reopened (switchUser (Just (UserId "user-admin")))
+      writeIORef calls []
+      history <- runKept reopened (listVersions tour.id latestVersions) >>= ok
+      map (\v -> v.updatedAt) history `shouldBe` [saved.updatedAt, tour.updatedAt]
+      made <- readIORef calls
+      sort made `shouldBe` sort [Got versionsStore (versionKey tour.id at) | at <- [saved.updatedAt, tour.updatedAt]]
+      runKept reopened (getVersion tour.id tour.updatedAt) >>= ok >>= \v -> v.body `shouldBe` tour.body
+      length <$> readIORef calls `shouldReturn` 2
+
+    it "saves a draft by encoding and writing the drafts store only" $ do
+      db <- freshDatabase
+      _ <- open db
+      calls <- newIORef []
+      opened <- runMemDOM (runCounting calls (openMemWiki db seed))
+      runKept opened (switchUser (Just (UserId "user-editor")))
+      blog <- runKept opened (getSpace (path "blog")) >>= ok
+      hello <- runKept opened (getPage blog.id (path "hello-world")) >>= ok
+      unsaved <- readIORef opened.wiki
+      writeIORef calls []
+      _ <- runKept opened (saveDraft hello.id hello.updatedAt "Hello" "Typed, not saved") >>= ok
+      drafted <- readIORef opened.wiki
+      touched unsaved drafted `shouldReturn` [draftsStore]
+      readIORef calls `shouldReturn` [Wrote [(draftsStore, hello.id.text <> "/user-editor")]]
+      shouldReload db opened
+
+  -- Every law of the contract on a wiki loaded again from the database
+  -- before each program, so that every read and write meets the
+  -- attachments and the versions not read yet.
+  Contract.spec (type (MemWiki IO)) (reopenedFixture >>=)
+  Notifications.spec (type (MemWiki IO)) (reopenedFixture >>=)
+  Comments.spec (type (MemWiki IO)) (reopenedFixture >>=)
   Contract.spec (type (MemWiki IO)) (keptFixture >>=)
   -- The administration's changes are kept too: its groups, their members
   -- and the global grants, records the database has had from the start.

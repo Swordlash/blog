@@ -266,6 +266,7 @@ test-suite wiki-app-test
         Test.Backend.Mem
         Test.Backend.Persist
         Test.Blog
+        Test.Counting
         Test.Demo
         Test.Export
         Test.Hydrate
@@ -293,6 +294,7 @@ test-suite wiki-app-test
         protolude,
         text,
         time,
+        unliftio-core,
         haskell-halogen-core,
         haskell-halogen-net,
         haskell-halogen-router,
@@ -342,6 +344,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Source
       Test.Browser.Spaces
       Test.Browser.Text
+      Test.Counting
   build-depends:
       aeson,
       base,

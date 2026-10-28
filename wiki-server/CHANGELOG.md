@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+The scrape of `/metrics` counts the blobs from the database, not from the
+blob directory (WP5.16c). `wiki_blobs` is now the blobs the attachments and
+the spaces' icons name, each counted once, and `wiki_blob_bytes` their
+sizes as the attachments' rows record them. A scrape is one query however
+many attachments there are (10,000 blobs: 0.39 s before, 0.02 s now). A
+file nothing names any more, which the next start deletes, is no longer
+counted.
+
+"Export the wiki" no longer holds the wiki in memory (WP5.16c). The server
+writes the zip file into `<data>/tmp/` one file at a time, copying each
+attachment from its blob's file, and sends it from there with the file's
+length. A wiki with 500 MiB of attachments took 1.4 GB of resident memory
+to export and often failed at Warp's 30-second timeout; it now takes 34 MB
+more than an idle server and is not timed out. The zip file is the one the
+export wrote before, byte for byte. An archive that needs ZIP64 (4 GiB or
+more, or 65,535 files or more) is refused with a message that says so, as
+it was before by the library. An upload (an attachment, an icon, an archive
+to import) is written to `<data>/tmp/` as it arrives and copied into the
+blob store in chunks, hashed on the way: a 50 MB upload costs 16 MB of
+memory, not 104 MB. An import reads the archive from that file. The
+directory is emptied when the server starts.
+
 A wiki setting leaves accounts with a password to the console (WP5.18).
 `adminCreatesPasswordAccounts` is kept in the `settings` table as the row
 `admin-creates-password-accounts` (`0` or `1`); no migration, and a wiki

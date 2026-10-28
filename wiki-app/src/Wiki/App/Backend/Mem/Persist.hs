@@ -34,6 +34,16 @@
 -- database, and works out what to write by comparing two sets of
 -- 'records' with 'changes'.
 --
+-- Two stores are large, and are read only in part when the demo starts:
+-- the attachments' bytes and the versions. "Wiki.App.Backend.Mem" reads
+-- their keys only ('lazyStores'), and 'restore' gives a wiki that knows
+-- those records are there without holding them ('unreadBlobs',
+-- 'unreadVersions'). A record is read when it is needed. In 'Records', a
+-- record that has not been read is 'Nothing'.
+--
+-- A write saves only the stores whose records it may have changed
+-- ('touched'), so that saving a draft does not encode every page again.
+--
 -- A page's comment threads ("Wiki.Core.Comment") are in the export, but
 -- saved here in a record of their own: the threads' JSON encoding, under
 -- the page's id. That record is older than the export's @comments.json@,
@@ -54,13 +64,18 @@ module Wiki.App.Backend.Mem.Persist
   , threadsStore
   , notificationsStore
   , storeNames
+  , lazyStores
+  , versionKey
 
     -- * Records
   , Records
   , records
   , changes
+  , changesIn
+  , touched
   , Stored (..)
   , restore
+  , readVersion
   )
 where
 
@@ -72,10 +87,12 @@ import Data.Map.Lazy qualified as LazyMap
 import Data.Map.Merge.Strict qualified as Merge
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (Day (ModifiedJulianDay), UTCTime (..))
-import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Numeric.Natural (Natural)
 import Protolude
+import System.Mem.StableName (makeStableName)
 import Web.Storage.IndexedDB (Database (..), StoreName)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Backend.Mem.State (Choices (..), MemState (..), Saved (..), completeVersions, emptyState, prepareSearch)
@@ -148,6 +165,13 @@ notificationsStore = "notifications"
 storeNames :: [StoreName]
 storeNames = [usersStore, groupsStore, spacesStore, pagesStore, attachmentsStore, grantsStore, metaStore, draftsStore, versionsStore, threadsStore, notificationsStore]
 
+-- | The stores that "Wiki.App.Backend.Mem" reads the keys of when the
+-- demo starts, and each record of only when it is needed: the
+-- attachments' bytes and the versions, which hold most of a wiki's bytes
+-- and are seldom all needed.
+lazyStores :: [StoreName]
+lazyStores = [attachmentsStore, versionsStore]
+
 -- | A draft's key: its page's id and its author's id, which identify one
 -- draft.
 draftKey :: Draft -> Text
@@ -158,8 +182,17 @@ draftKey d = d.page.text <> "/" <> d.author.text
 versionKey :: PageId -> UTCTime -> Text
 versionKey page at = page.text <> "/" <> toS (iso8601Show at)
 
--- | What a store holds, by store and key.
-type Records = Map StoreName (Map Text ByteString)
+-- | The page and the time a version's key names; 'Nothing' for a key
+-- 'versionKey' did not make.
+versionOfKey :: Text -> Maybe (PageId, UTCTime)
+versionOfKey key = case T.breakOnEnd "/" key of
+  (page, at) | T.length page > 1 -> (PageId (T.dropEnd 1 page),) <$> iso8601ParseM (T.unpack at)
+  _ -> Nothing
+
+-- | What a store holds, by store and key. A record of one of the
+-- 'lazyStores' that has not been read is 'Nothing': the store has it, and
+-- this program does not know what it holds.
+type Records = Map StoreName (Map Text (Maybe ByteString))
 
 counterKey, globalGrantsKey, accountsKey :: Text
 counterKey = "counter"
@@ -167,31 +200,94 @@ globalGrantsKey = "globalGrants"
 accountsKey = "accounts"
 
 -- | The state as records, by store: every store, even an empty one.
+--
+-- Each store's records are worked out when that store is first looked at,
+-- not before: a write that saves the drafts encodes the drafts only
+-- ('touched'). Each store's records come from the fields of the state
+-- that 'touched' names for it, and from no other.
 records :: MemState -> Records
 records st =
-  Map.fromList
-    [ (usersStore, Map.fromList [(u.id.text, encodeJson (encodeUser u)) | u <- Map.elems st.users])
-    , (groupsStore, Map.fromList [(g.id.text, encodeJson (encodeGroup g (Map.findWithDefault mempty g.id st.membership))) | g <- Map.elems st.groups])
-    , (spacesStore, Map.fromList [(s.id.text, encodeJson (encodeSpace s)) | s <- Map.elems st.spaces])
-    , (pagesStore, Map.fromList [(p.id.text, encodeJson (storedPage p)) | p <- Map.elems st.pages])
-    , (attachmentsStore, Map.mapKeys (\b -> b.text) st.blobs)
-    , (grantsStore, Map.fromList [(sid.text, encodeJson (map encodeSpaceGrant gs)) | (sid, gs) <- Map.toList (spaceGrants st)])
+  LazyMap.fromList
+    [ (usersStore, encoded [(u.id.text, encodeJson (encodeUser u)) | u <- Map.elems st.users])
+    , (groupsStore, encoded [(g.id.text, encodeJson (encodeGroup g (Map.findWithDefault mempty g.id st.membership))) | g <- Map.elems st.groups])
+    , (spacesStore, encoded [(s.id.text, encodeJson (encodeSpace s)) | s <- Map.elems st.spaces])
+    , (pagesStore, encoded [(p.id.text, encodeJson (storedPage p)) | p <- Map.elems st.pages])
+    , (attachmentsStore, Map.fromList ([(b.text, Just bytes) | (b, bytes) <- Map.toList st.blobs] <> [(b.text, Nothing) | b <- Set.toList st.unreadBlobs]))
+    , (grantsStore, encoded [(sid.text, encodeJson (map encodeSpaceGrant gs)) | (sid, gs) <- Map.toList (spaceGrants st)])
     ,
       ( metaStore
-      , Map.fromList
+      , encoded
           [ (counterKey, encodeJson st.counter)
           , (globalGrantsKey, encodeJson (map encodeGlobalGrant st.grants.global))
           , (accountsKey, encodeJson (object ["disabled" .= st.disabled, "passwords" .= st.passwords]))
           ]
       )
-    , (draftsStore, Map.fromList [(draftKey d, encodeJson (encodeDraft d)) | d <- Map.elems st.drafts])
+    , (draftsStore, encoded [(draftKey d, encodeJson (encodeDraft d)) | d <- Map.elems st.drafts])
     , -- Lazily: a version never changes once made, so 'changes' writes it
       -- only when its key is new, and only then is its record encoded.
       -- Otherwise every write would encode the whole history again.
-      (versionsStore, LazyMap.fromList [(versionKey page at, encodeJson (encodeVersion page at v)) | (page, kept) <- Map.toList st.versions, (at, v) <- Map.toList kept])
-    , (threadsStore, Map.fromList [(page.text, encodeJson (toJSON ts)) | (page, ts) <- Map.toList st.threads])
-    , (notificationsStore, Map.fromList [(u.text, encodeJson (encodeNotified st u)) | u <- Set.toList (Map.keysSet st.notices <> Map.keysSet st.watches <> Map.keysSet st.choices)])
+
+      ( versionsStore
+      , LazyMap.fromList
+          ( [(versionKey page at, Just (encodeJson (encodeVersion page at v))) | (page, kept) <- Map.toList st.versions, (at, v) <- Map.toList kept]
+              <> [(versionKey page at, Nothing) | (page, ats) <- Map.toList st.unreadVersions, at <- Set.toList ats]
+          )
+      )
+    , (threadsStore, encoded [(page.text, encodeJson (toJSON ts)) | (page, ts) <- Map.toList st.threads])
+    , (notificationsStore, encoded [(u.text, encodeJson (encodeNotified st u)) | u <- Set.toList (Map.keysSet st.notices <> Map.keysSet st.watches <> Map.keysSet st.choices)])
     ]
+  where
+    encoded = Map.fromList . map (second Just)
+
+-- | The stores whose records may differ between two states: those whose
+-- fields of the state (the ones 'records' makes them from) are not the
+-- very same values in memory. A write leaves the fields it does not change
+-- as they were, the same values, so this costs a look at the address of
+-- each field ('makeStableName') and never compares or encodes a record.
+-- Two equal values that are not the same object count as different, which
+-- costs an encoding that finds nothing to write; never the other way
+-- round, so a store with a change is never missed.
+touched :: MemState -> MemState -> IO [StoreName]
+touched old new = do
+  users <- same (\x -> x.users)
+  groups <- same (\x -> x.groups)
+  membership <- same (\x -> x.membership)
+  spaces <- same (\x -> x.spaces)
+  pages <- same (\x -> x.pages)
+  blobs <- same (\x -> x.blobs)
+  unreadBlobs <- same (\x -> x.unreadBlobs)
+  grants <- same (\x -> x.grants)
+  disabled <- same (\x -> x.disabled)
+  passwords <- same (\x -> x.passwords)
+  drafts <- same (\x -> x.drafts)
+  versions <- same (\x -> x.versions)
+  unreadVersions <- same (\x -> x.unreadVersions)
+  threads <- same (\x -> x.threads)
+  notices <- same (\x -> x.notices)
+  watches <- same (\x -> x.watches)
+  choices <- same (\x -> x.choices)
+  pure
+    [ store
+    | (store, unchanged) <-
+        [ (usersStore, users)
+        , (groupsStore, groups && membership)
+        , (spacesStore, spaces)
+        , (pagesStore, pages)
+        , (attachmentsStore, blobs && unreadBlobs)
+        , (grantsStore, grants)
+        , (metaStore, old.counter == new.counter && grants && disabled && passwords)
+        , (draftsStore, drafts)
+        , (versionsStore, versions && unreadVersions)
+        , (threadsStore, threads)
+        , (notificationsStore, notices && watches && choices)
+        ]
+    , not unchanged
+    ]
+  where
+    -- A stable name is the same for one object, whatever pointer to it
+    -- is given, and different for two objects.
+    same :: (MemState -> a) -> IO Bool
+    same field = (==) <$> (makeStableName =<< evaluate (field old)) <*> (makeStableName =<< evaluate (field new))
 
 -- | A user's record of notifications: what they were notified of, what
 -- they marked to watch or not, and their choices.
@@ -246,6 +342,13 @@ parseVersion = withObject "version" $ \o -> do
   at <- o .: "updatedAt"
   saved <- Saved <$> o .: "title" <*> o .: "body" <*> o .:? "author"
   pure (page, at, saved)
+
+-- | A version read from its record in 'versionsStore', if the record is
+-- that version's.
+readVersion :: PageId -> UTCTime -> ByteString -> Maybe Saved
+readVersion page at bytes = case decodeJson parseVersion bytes of
+  Right (p, t, v) | p == page && t == at -> Just v
+  _ -> Nothing
 
 -- | Parse the accounts' flags: the users who are disabled, and those who
 -- have a password.
@@ -306,12 +409,18 @@ spaceGrants st = Map.fromListWith (flip (<>)) [(g.space, [g]) | g <- st.grants.s
 -- ids are never made twice, and a whole wiki written over another (an
 -- import) gives one of its pages the other's time and id only if it is
 -- that very version, exported and imported again.
+--
+-- A record that has not been read ('Nothing') is never written: the store
+-- has it already. A record the store has unread and the second set holds
+-- is written, except a version, by the rule above: only a wiki written
+-- over another (an import) has the bytes of an attachment the other had
+-- unread, and they may be other bytes under the same id.
 changes :: Records -> Records -> [IDB.Write]
 changes before after =
   concat . Map.elems $
     Merge.merge
       (Merge.mapMissing (\store old -> [(store, k, Nothing) | k <- Map.keys old]))
-      (Merge.mapMissing (\store new -> [(store, k, Just v) | (k, v) <- Map.toList new]))
+      (Merge.mapMissing (\store new -> [(store, k, Just v) | (k, Just v) <- Map.toList new]))
       (Merge.zipWithMatched (\store old new -> inStore store old new))
       before
       after
@@ -320,10 +429,18 @@ changes before after =
       Map.elems $
         Merge.merge
           (Merge.mapMissing (\k _ -> (store, k, Nothing)))
-          (Merge.mapMissing (\k v -> (store, k, Just v)))
-          (Merge.zipWithMaybeMatched (\k v w -> if store == versionsStore || v == w then Nothing else Just (store, k, Just w)))
+          (Merge.mapMaybeMissing (\k v -> (store,k,) . Just <$> v))
+          (Merge.zipWithMaybeMatched (\k v w -> if store == versionsStore || isNothing w || v == w then Nothing else Just (store, k, w)))
           old
           new
+
+-- | 'changes' in these stores only: the writes that save a change to the
+-- wiki that 'touched' only these stores. The records of the other stores
+-- are not looked at, and so not encoded.
+changesIn :: [StoreName] -> Records -> Records -> [IDB.Write]
+changesIn stores before after = changes (Map.restrictKeys before kept) (Map.restrictKeys after kept)
+  where
+    kept = Set.fromList stores
 
 -- | What 'restore' found in the stores.
 data Stored
@@ -337,7 +454,9 @@ data Stored
 
 -- | The wiki the stores hold, with nobody signed in (the caller sets who
 -- is) and no attachment with an object URL yet: the tab makes one when it
--- is first needed, as it does for an upload.
+-- is first needed, as it does for an upload. An attachment's bytes or a
+-- version that has not been read is in the wiki's 'unreadBlobs' or
+-- 'unreadVersions', to be read when it is needed.
 restore :: Records -> Stored
 restore stored = case Map.lookup counterKey (holding metaStore) of
   Nothing -> Unseeded
@@ -355,6 +474,8 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
     spaces <- keyed spacesStore (parseSpace (spaceCreatedDefault firstPage (Map.elems pages))) (\s -> s.id.text) SpaceId
     kept <- keyed draftsStore parseDraft draftKey identity
     history <- keyed versionsStore parseVersion (\(page, at, _) -> versionKey page at) identity
+    unread <- for [k | (k, Nothing) <- Map.toList (Map.findWithDefault mempty versionsStore stored)] $ \k ->
+      maybe (Left (failure versionsStore k "is not a version's key")) Right (versionOfKey k)
     discussed <- fmap Map.fromList . for (Map.toList (holding threadsStore)) $ \(key, bytes) -> do
       ts <- decoding threadsStore key (parseJSON :: Value -> Parser [Thread]) bytes
       if all (\t -> t.page.text == key) ts
@@ -374,10 +495,12 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
         , spaces
         , pages
         , blobs = Map.mapKeys BlobId (holding attachmentsStore)
+        , unreadBlobs = Set.fromList [BlobId k | (k, Nothing) <- Map.toList (Map.findWithDefault mempty attachmentsStore stored)]
         , drafts = Map.fromList [((d.page, d.author), d) | d <- Map.elems kept]
         , -- The versions of pages that exist: deleting a page deletes its
           -- versions in the same transaction, so there are no others.
           versions = Map.intersection (Map.fromListWith (<>) [(page, Map.singleton at v) | (page, at, v) <- Map.elems history]) pages
+        , unreadVersions = Map.intersection (Map.fromListWith (<>) [(page, Set.singleton at) | (page, at) <- unread]) pages
         , -- Like versions: deleting a page deletes its threads.
           threads = Map.intersection discussed pages
         , notices = Map.filter (not . null) (map (\(_, ns, _, _) -> ns) notified)
@@ -391,7 +514,8 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
         , counter
         }
   where
-    holding store = Map.findWithDefault mempty store stored
+    -- The records of a store that have been read.
+    holding store = Map.mapMaybe identity (Map.findWithDefault mempty store stored)
 
     keyed :: (Ord k) => StoreName -> (Value -> Parser a) -> (a -> Text) -> (Text -> k) -> Either Text (Map k a)
     keyed store parse idOf key = fmap Map.fromList . for (Map.toList (holding store)) $ \(k, bytes) -> do

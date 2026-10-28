@@ -25,6 +25,7 @@ import Wiki.Core.Attachment (Attachment (..), Source (..), findAttachment)
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
+import Wiki.Core.Export.Zip (ZipSource (..), unzipFile, writeZipFile, zipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
@@ -316,6 +317,52 @@ wholeWikis = describe "importArchive and exportArchive" $ do
         importArchive fresh exported >>= ok
         again <- exportArchive fresh "wiki-server-test" >>= ok
         again.threads `shouldBe` exported.threads
+
+  it "write the export as a zip file on disk that holds exportArchive's files, and that imports back as the same wiki" $
+    withDemo $ \st -> do
+      hello <- pageIn st "blog" "hello-world"
+      -- Bytes that do not compress, bytes that do, none, and a name
+      -- outside ASCII.
+      let noise = BS.pack (take 300_000 (iterate (\b -> b * 31 + 7) 1))
+      for_ [("noise.bin", noise), ("lines.txt", encodeUtf8 (mconcat (replicate 5000 "a line of text\n"))), ("empty", ""), ("żółw.txt", "turtle")] $ \(name, bytes) ->
+        asAdmin st (uploadAttachment hello.id name "application/octet-stream" bytes) >>= ok
+      exported <- exportArchive st "wiki-server-test" >>= ok
+      withSystemTempDirectory "export" $ \dir -> do
+        let file = dir </> "wiki.zip"
+        at <- writeExport st "wiki-server-test" file >>= ok
+        files <- unzipFile file >>= ok
+        -- The same files, but for the manifest's time.
+        Map.delete "manifest.json" files `shouldBe` Map.delete "manifest.json" (Map.fromList (writeArchive exported))
+        readBack <- either (panic . show) pure (readArchive files)
+        readBack.createdAt `shouldBe` at
+        contents readBack `shouldBe` contents exported
+        withStorageIn $ \_ fresh -> do
+          importArchive fresh readBack >>= ok
+          again <- exportArchive fresh "wiki-server-test" >>= ok
+          contents (byHash again) `shouldBe` contents (byHash exported)
+
+  it "write a zip file one file at a time that is zip-archive's zip file of the same files, byte for byte" $
+    withSystemTempDirectory "zip" $ \dir -> do
+      let at = UTCTime (fromGregorian 2026 10 28) 45296.7
+          noise = BS.pack (take 70_000 (iterate (\b -> b * 31 + 7) 1))
+          files =
+            Map.toList (Map.fromList (writeArchive demoArchive))
+              <> [ ("noise.bin", noise)
+                 , ("empty", "")
+                 , ("spaces/żółw/page.md", encodeUtf8 "# Żółw\n")
+                 , ("repeated.txt", encodeUtf8 (mconcat (replicate 10000 "the same line\n")))
+                 ]
+      -- Every other file read from disk rather than memory.
+      sources <- for (zip [0 :: Int ..] files) $ \(i, (name, bytes)) ->
+        if even i
+          then pure (name, ZipBytes bytes)
+          else do
+            let source = dir </> ("source-" <> show i)
+            BS.writeFile source bytes
+            pure (name, ZipFile source)
+      writeZipFile (dir </> "written.zip") at sources
+      BS.readFile (dir </> "written.zip") `shouldReturn` zipFiles at files
+      unzipFile (dir </> "written.zip") `shouldReturn` Right (Map.fromList files)
 
   it "refuse to import into a storage with a wiki in it, changing nothing" $
     withDemo $ \st -> do

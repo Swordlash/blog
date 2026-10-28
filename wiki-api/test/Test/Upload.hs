@@ -17,7 +17,7 @@ spec :: Spec
 spec = describe "Wiki.Api.Upload" $ do
   prop "an attachment's form reads back as it was" $
     forAll ((,,) <$> genText <*> genText <*> genBytes) $ \(name, mediaType, bytes) ->
-      let u = AttachmentUpload {name, mediaType, bytes}
+      let u = AttachmentUpload {name, mediaType, payload = bytes}
        in fromMultipart (toMultipart u :: MultipartData Mem) === Right u
 
   prop "an import's form reads back as it was" $
@@ -30,12 +30,12 @@ spec = describe "Wiki.Api.Upload" $ do
 
   it "takes an attachment's name and media type from its file part, as FormData sends them" $
     fromMultipart (form [] [file "file" "notes.pdf" "application/pdf" "%PDF"])
-      `shouldBe` Right AttachmentUpload {name = "notes.pdf", mediaType = "application/pdf", bytes = "%PDF"}
+      `shouldBe` Right AttachmentUpload {name = "notes.pdf", mediaType = "application/pdf", payload = "%PDF"}
 
   it "refuses a form without the part it needs" $ do
-    (fromMultipart (form [] [file "upload" "x" "text/plain" ""]) :: Either [Char] AttachmentUpload) `shouldSatisfy` isLeft
-    (fromMultipart (form [] [file "archive" "wiki.zip" "application/zip" ""]) :: Either [Char] ImportApply) `shouldSatisfy` isLeft
-    (fromMultipart (form [Input "choices" "{}"] [file "archive" "wiki.zip" "application/zip" ""]) :: Either [Char] ImportApply) `shouldSatisfy` isLeft
+    (fromMultipart (form [] [file "upload" "x" "text/plain" ""]) :: Either [Char] (AttachmentUpload Mem)) `shouldSatisfy` isLeft
+    (fromMultipart (form [] [file "archive" "wiki.zip" "application/zip" ""]) :: Either [Char] (ImportApply Mem)) `shouldSatisfy` isLeft
+    (fromMultipart (form [Input "choices" "{}"] [file "archive" "wiki.zip" "application/zip" ""]) :: Either [Char] (ImportApply Mem)) `shouldSatisfy` isLeft
 
   it "reads an import's choices from the JSON a browser sends as a text part" $
     fromMultipart (form [Input "choices" (decodeUtf8 (BSL.toStrict (encode importEverything)))] [file "archive" "wiki.zip" "application/zip" "PK"])

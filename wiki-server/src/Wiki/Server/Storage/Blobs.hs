@@ -6,7 +6,9 @@
 -- pages, an upload made again) share one file, and a file that exists is
 -- the right one, so writing it again is skipped. A blob is stored at
 -- @\<dir\>/\<first two hex digits\>/\<the 64 hex digits\>@, so that no
--- directory holds every file.
+-- directory holds every file. A file is written under a temporary name
+-- (@incoming…@), in its shard or, while its hash is still being worked out,
+-- in the directory itself, and then renamed.
 --
 -- Files are never deleted while the wiki runs, because the database is
 -- backed up without them: a backup taken before an attachment was deleted
@@ -17,6 +19,7 @@
 module Wiki.Server.Storage.Blobs
   ( blobOf
   , storeBlob
+  , storeBlobFile
   , blobFile
   , readBlob
   , storedBlobs
@@ -33,7 +36,7 @@ import Data.Text qualified as T
 import Protolude
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory, removeFile, renameFile)
 import System.FilePath ((</>))
-import System.IO (hClose, openBinaryTempFile)
+import System.IO (hClose, openBinaryTempFile, withBinaryFile)
 import Wiki.Core.Id (BlobId (..))
 
 -- | The blob id of some bytes: their SHA-256, in lowercase hex.
@@ -63,6 +66,38 @@ storeBlob dir bytes = do
     renameFile temporary file
   pure blob
 
+-- | Store the bytes of a file, unless they are stored already: an upload
+-- the server received into a temporary file. The result is their blob id
+-- and their size. The file is read once, in chunks: each chunk is hashed
+-- and written to a temporary file in the blob directory, which is then
+-- renamed to its hash. So a file of any size costs one chunk of memory.
+-- The file given is left as it is.
+storeBlobFile :: FilePath -> FilePath -> IO (BlobId, Integer)
+storeBlobFile dir source = do
+  createDirectoryIfMissing True dir
+  (temporary, out) <- openBinaryTempFile dir "incoming"
+  let copy = withBinaryFile source ReadMode $ \input ->
+        -- The hash and the count are forced at each chunk, or they would
+        -- hold every chunk until the end.
+        let loop !context !n = do
+              chunk <- BS.hGetSome input chunkSize
+              if BS.null chunk
+                then pure (SHA256.finalize context, n)
+                else BS.hPut out chunk >> loop (SHA256.update context chunk) (n + fromIntegral (BS.length chunk))
+         in loop SHA256.init 0
+  (digest, size) <- (copy <* hClose out) `onException` (hClose out >> removeFile temporary)
+  let blob = BlobId (decodeUtf8 (BSL.toStrict (toLazyByteString (byteStringHex digest))))
+  case blobFile dir blob of
+    Nothing -> removeFile temporary >> panic "a SHA-256 in hex is a blob id"
+    Just file ->
+      ifM
+        (doesFileExist file)
+        (removeFile temporary)
+        (createDirectoryIfMissing True (dir </> T.unpack (T.take 2 blob.text)) >> renameFile temporary file)
+  pure (blob, size)
+  where
+    chunkSize = 64 * 1024
+
 -- | A blob's bytes, if they are stored.
 readBlob :: FilePath -> BlobId -> IO (Maybe ByteString)
 readBlob dir blob = case blobFile dir blob of
@@ -88,10 +123,12 @@ collectBlobs dir keep = do
   stored <- storedBlobs dir
   let gone = Set.toList (stored `Set.difference` keep)
   for_ gone $ \blob -> traverse_ removeFile (blobFile dir blob)
-  -- Files of a write that was interrupted: nothing is writing now.
+  -- Files of a write that was interrupted: nothing is writing now. They
+  -- are in a shard, or in the directory itself for a file whose hash was
+  -- not known yet ('storeBlobFile').
   whenM (doesDirectoryExist dir) $ do
     shards <- filterM (doesDirectoryExist . (dir </>)) =<< listDirectory dir
-    for_ shards $ \s -> do
+    for_ ("" : shards) $ \s -> do
       leftovers <- filter ("incoming" `isPrefixOf`) <$> listDirectory (dir </> s)
       traverse_ (removeFile . ((dir </> s) </>)) leftovers
   pure gone

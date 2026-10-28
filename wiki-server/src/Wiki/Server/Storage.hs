@@ -109,6 +109,8 @@ module Wiki.Server.Storage
   , locatedFor
   , editorOf
   , threadsThen
+  , uploadAttachmentFile
+  , uploadSpaceIconFile
 
     -- * Accounts
   , PasswordLink (..)
@@ -117,6 +119,7 @@ module Wiki.Server.Storage
     -- * Whole wikis
   , importArchive
   , exportArchive
+  , writeExport
 
     -- * The audit log
   , schemaVersionOf
@@ -135,7 +138,7 @@ import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.UUID.Types qualified as UUID
 import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, open, query, query_, withConnection)
 import Protolude
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize, removePathForcibly)
 import Wiki.Api.Account (Account (..), NewAccount (..), providerOnly)
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
@@ -156,7 +159,9 @@ import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
-import Wiki.Core.Export (Archive (..), threadsAmong)
+import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, threadsAmong)
+import Wiki.Core.Export qualified as Export
+import Wiki.Core.Export.Zip (ZipSource (..), ZipTooLarge (..), writeZipFile)
 import Wiki.Core.Id
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
@@ -190,9 +195,9 @@ import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, loadActivity, loadAuditLog, restoreAudit)
 import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupFiles, backupInto, loadBackupSettings, loadLastBackup, lockDataDir, referencedBlobs, storeBackupSettings, storeLastBackup, unlockDataDir)
-import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, readBlob, storeBlob)
+import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFile)
 import Wiki.Server.Storage.Comments qualified as Comments
-import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
+import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile, temporaryDir)
 import Wiki.Server.Storage.Migrate (migrate, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
 import Wiki.Server.Storage.Rows
@@ -292,7 +297,11 @@ openWith collect config dataDir = do
     -- The search's fold of the pages a database held before it had one,
     -- which SQL cannot make ("Wiki.Server.Storage.Rows").
     fillSearchFolds c
-    when collect (collectGarbage c dataDir)
+    when collect $ do
+      collectGarbage c dataDir
+      -- Uploads and exports left by a server that stopped: nothing is
+      -- writing them now.
+      removePathForcibly (temporaryDir dataDir)
     -- The settings are read here, on the writer, before any reader is
     -- open. A reader then always finds them in memory, and never writes
     -- the in-memory copy.
@@ -775,7 +784,7 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   setSpacePublic sid = run Writes . setSpacePublicTx sid
   setSpaceMathMacros sid macros = run Writes (adjustSpace sid (\s -> pure s {mathMacros = trimLines macros}))
   setSpaceProfile sid = run Writes . setSpaceProfileTx sid
-  uploadSpaceIcon sid mediaType = run Writes . uploadSpaceIconTx sid mediaType
+  uploadSpaceIcon sid mediaType bytes = run Writes (uploadSpaceIconTx sid mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes))
   spaceIconUrl s = case s.icon of
     Just (IconImage _ _) -> SqliteWiki (asks (\env -> env.storage.config.iconAddress s))
     _ -> pure ""
@@ -795,7 +804,7 @@ instance (MonadIO m) => MonadWiki (SqliteWiki m) where
   movePage pid sid = run Writes . movePageTx pid sid
   setPageTemplate pid = run Writes . setPageTemplateTx pid
   deletePage = run Writes . deletePageTx
-  uploadAttachment pid name mediaType = run Writes . uploadAttachmentTx pid name mediaType
+  uploadAttachment pid name mediaType bytes = run Writes (uploadAttachmentTx pid name mediaType (fromIntegral (BS.length bytes)) (`storeBlob` bytes))
   deleteAttachment = run Writes . deleteAttachmentTx
   attachmentUrl a = case a.source of
     SourceUrl url -> pure url
@@ -1352,14 +1361,16 @@ profileChanges nodes old new =
 
 -- | Set a space's icon to an image, its bytes stored under their hash as
 -- an attachment's are. The previous image's file is left for the deletion
--- of unreferenced files ("Wiki.Server.Storage.Blobs").
-uploadSpaceIconTx :: SpaceId -> Text -> ByteString -> Tx Space
-uploadSpaceIconTx sid mediaType bytes = do
+-- of unreferenced files ("Wiki.Server.Storage.Blobs"). The image is this
+-- many bytes, which the last argument stores in the blob directory given
+-- to it, after the checks.
+uploadSpaceIconTx :: SpaceId -> Text -> Integer -> (FilePath -> IO BlobId) -> Tx Space
+uploadSpaceIconTx sid mediaType size store = do
   (s, c) <- findSpace sid
   requireAdminister c
-  mt <- either invalid pure (checkIconUpload mediaType (fromIntegral (BS.length bytes)))
+  mt <- either invalid pure (checkIconUpload mediaType (fromIntegral size))
   dir <- asks (\x -> x.blobs)
-  blob <- liftIO (storeBlob dir bytes)
+  blob <- liftIO (store dir)
   let s' = withProfile SpaceProfile {description = s.description, icon = Just (IconImage blob mt), homePage = s.homePage, blog = s.blog} s
   db (`updateSpace` s')
   -- The icon is part of the profile; it has its own operation only
@@ -1723,21 +1734,25 @@ deletePageTx pid = do
 -- | Attach a file, its bytes kept under their hash. The size is checked
 -- before anything is hashed or written, so that a file too large costs
 -- nothing but its reading.
-uploadAttachmentTx :: PageId -> Text -> Text -> ByteString -> Tx Attachment
-uploadAttachmentTx pid name mediaType bytes = do
+-- | Attach a file to a page. The file is this many bytes, which the last
+-- argument stores in the blob directory given to it, after the checks:
+-- bytes in memory ('uploadAttachment') or a file on disk
+-- ('uploadAttachmentFile').
+uploadAttachmentTx :: PageId -> Text -> Text -> Integer -> (FilePath -> IO BlobId) -> Tx Attachment
+uploadAttachmentTx pid name mediaType size store = do
   p <- findNode pid
   requireEdit =<< chainOfPage p
   n <- nonBlank "An attachment's name" name
   when (T.any (\ch -> ch == '/' || ch == '\\' || isControl ch) n) $
     invalid "An attachment's name cannot have slashes or control characters in it."
-  when (fromIntegral (BS.length bytes) > maxAttachmentSize) $
+  when (size > fromIntegral maxAttachmentSize) $
     invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB.")
   let declared = T.strip mediaType
       mt = if T.null declared then "application/octet-stream" else declared
   dir <- asks (\x -> x.blobs)
-  blob <- liftIO (storeBlob dir bytes)
+  blob <- liftIO (store dir)
   i <- newId
-  let attachment = Attachment {id = AttachmentId i, name = n, mediaType = mt, size = fromIntegral (BS.length bytes), source = SourceBlob blob}
+  let attachment = Attachment {id = AttachmentId i, name = n, mediaType = mt, size = fromIntegral size, source = SourceBlob blob}
   db $ \c -> do
     -- One of the same name is replaced, in its place among the page's.
     replaced <- query c "SELECT id, ordinal FROM attachments WHERE page_id = ? AND name = ?" (pid.text, n)
@@ -2547,13 +2562,48 @@ importArchive st a = withDatabase st $ \c -> do
         pure (Right ())
 
 -- | The whole wiki as an export archive, written now by this program
--- (@app@ names it): what "Export the wiki" downloads. An attachment whose
--- file is missing makes it fail, saying which, rather than leave the
--- attachment out of an archive meant to be the whole wiki. The comments'
--- authors are the users, and the administrator, who has no row among the
--- users, is named among the archive's comment authors when they wrote any.
+-- (@app@ names it), with every blob's bytes in memory. The tests compare
+-- it with what an import brings back; "Export the wiki" writes a zip file
+-- with 'writeExport' instead, which never holds the blobs in memory. An
+-- attachment whose file is missing makes it fail, saying which, rather
+-- than leave the attachment out of an archive meant to be the whole wiki.
 exportArchive :: Storage -> Text -> IO (Either Text Archive)
-exportArchive st app = do
+exportArchive st app =
+  exportRecords st app >>= \case
+    Left e -> pure (Left e)
+    Right (a, files) -> do
+      bytes <- for (Map.toList files) (\(b, file) -> (b,) <$> BS.readFile file)
+      pure (Right a {Export.blobs = Map.fromList bytes})
+
+-- | Write the whole wiki as the zip file of its export archive at this
+-- path, as 'exportArchive' would give it, and say when the archive was
+-- made. The zip file is written one file at a time ("Wiki.Core.Export.Zip"),
+-- and each attachment's and icon's bytes are copied from their blob's file
+-- in chunks. So memory holds the wiki's records (users, spaces, pages with
+-- their bodies, comments) but never the attachments, whatever their size.
+-- It fails as 'exportArchive' does, and also for a wiki that a zip file
+-- without ZIP64 cannot hold (4 GiB or more, or 65,535 files or more).
+writeExport :: Storage -> Text -> FilePath -> IO (Either Text UTCTime)
+writeExport st app target =
+  exportRecords st app >>= \case
+    Left e -> pure (Left e)
+    Right (a, files) -> do
+      let source = \case
+            FileBytes bytes -> ZipBytes bytes
+            FileBlob b -> maybe (ZipBytes "") ZipFile (Map.lookup b files)
+      written <- try (writeZipFile target a.createdAt [(path, source file) | (path, file) <- archiveFiles a])
+      pure $ case written of
+        Left (ZipTooLarge why) -> Left ("The wiki is too large for a zip file without ZIP64: " <> why <> ".")
+        Right () -> Right a.createdAt
+
+-- | The whole wiki as an export archive without the bytes of its blobs
+-- (its 'blobs' is empty), and the file of each blob it names. An
+-- attachment or an icon whose file is missing makes it fail, saying which.
+-- The comments' authors are the users, and the administrator, who has no
+-- row among the users, is named among the archive's comment authors when
+-- they wrote any.
+exportRecords :: Storage -> Text -> IO (Either Text (Archive, Map BlobId FilePath))
+exportRecords st app = do
   createdAt <- getCurrentTime
   (users, groups, membership, grants, spaces, pages, threads, audit) <-
     withReadConnection st $ \c -> do
@@ -2574,13 +2624,33 @@ exportArchive st app = do
       execute_ c "COMMIT"
       pure records
   let commentAuthors = [administratorUser | any (any (any (\x -> x.author.id == administratorId) . (\t -> t.comments))) threads]
-  blobs <- for [(x, b) | p <- pages, x <- p.attachments, SourceBlob b <- [x.source]] $ \(x, b) ->
+      dir = attachmentsDir st.dataDir
+      -- A blob's file, if it is there.
+      fileOf b = case blobFile dir b of
+        Nothing -> pure Nothing
+        Just file -> (\there -> if there then Just file else Nothing) <$> doesFileExist file
+  attachments <- for [(x, b) | p <- pages, x <- p.attachments, SourceBlob b <- [x.source]] $ \(x, b) ->
     maybe (Left ("The file of the attachment " <> show x.id.text <> " (" <> x.name <> ") is missing.")) (Right . (b,))
-      <$> readBlob (attachmentsDir st.dataDir) b
+      <$> fileOf b
   icons <- for [(sp, b) | sp <- spaces, Just (IconImage b _) <- [sp.icon]] $ \(sp, b) ->
     maybe (Left ("The image of the icon of the space " <> show sp.id.text <> " (" <> sp.name <> ") is missing.")) (Right . (b,))
-      <$> readBlob (attachmentsDir st.dataDir) b
-  pure $ (\kept -> Archive {createdAt, app, users, groups, membership, grants, spaces, pages, threads, commentAuthors, blobs = Map.fromList kept, audit}) <$> sequence (blobs <> icons)
+      <$> fileOf b
+  pure $ (\files -> (Archive {createdAt, app, users, groups, membership, grants, spaces, pages, threads, commentAuthors, blobs = mempty, audit}, Map.fromList files)) <$> sequence (attachments <> icons)
+
+-- | 'uploadAttachment' with the bytes in a file: an upload the server
+-- received into a temporary file. The file is copied into the blob store
+-- in chunks ('storeBlobFile'), never read into memory whole, and is left
+-- where it is.
+uploadAttachmentFile :: (MonadIO m) => PageId -> Text -> Text -> FilePath -> SqliteWiki m (Either WikiError Attachment)
+uploadAttachmentFile pid name mediaType file = do
+  size <- liftIO (getFileSize file)
+  run Writes (uploadAttachmentTx pid name mediaType size (\dir -> fst <$> storeBlobFile dir file))
+
+-- | 'uploadSpaceIcon' with the image in a file, as 'uploadAttachmentFile'.
+uploadSpaceIconFile :: (MonadIO m) => SpaceId -> Text -> FilePath -> SqliteWiki m (Either WikiError Space)
+uploadSpaceIconFile sid mediaType file = do
+  size <- liftIO (getFileSize file)
+  run Writes (uploadSpaceIconTx sid mediaType size (\dir -> fst <$> storeBlobFile dir file))
 
 -- | The version of the database's schema: its last migration.
 schemaVersionOf :: Storage -> IO Int

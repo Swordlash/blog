@@ -70,4 +70,4 @@ apiPattern = go apiStructure
 -- | The API's router, without its handlers: the structure servant's own
 -- layout of an API is drawn from.
 apiStructure :: RouterStructure
-apiStructure = routerStructure (route api (errorFormatters :. uploadOptions 0 :. EmptyContext) (emptyDelayed (FailFatal err501)))
+apiStructure = routerStructure (route api (errorFormatters :. uploadOptions "" 0 :. EmptyContext) (emptyDelayed (FailFatal err501)))
