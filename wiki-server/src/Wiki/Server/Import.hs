@@ -82,7 +82,6 @@ import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
 import Wiki.Core.Page (Page (..), pageTreeOrder)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
-import Wiki.Core.Search (bodyText)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
 import Wiki.Server.Storage (Storage, administratorUser, storageDataDir, withDatabase)
@@ -363,10 +362,7 @@ importPage c blobs a discussions choices spacePath target progress pm
                   , position = theirs.position
                   , template = theirs.template
                   }
-          execute
-            c
-            "UPDATE pages SET title = ?, body = ?, updated_at = ?, search_text = ? WHERE id = ?"
-            (replaced.title, replaced.body, Stamp updatedAt, bodyText replaced.body, theirs.id.text)
+          updatePageText c theirs.id replaced.title replaced.body updatedAt
           insertVersion c replaced Nothing
           execute c "DELETE FROM attachments WHERE page_id = ?" (Only theirs.id.text)
           n <- attach c blobs a theirs.id pm.archived.attachments

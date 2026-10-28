@@ -13,6 +13,7 @@ import Test.Hspec
 import Wiki.Api.Admin (WikiSettings (..), defaultSettings)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
 import Wiki.Core.Access (Access (..))
+import Wiki.Core.Search (foldText)
 import Wiki.Server.Secret (Secret (..))
 import Wiki.Server.Storage (closeStorage, defaultConfig, openStorage, withStorage)
 import Wiki.Server.Storage.Layout (databaseFile)
@@ -212,6 +213,20 @@ spec = describe "migrations" $ do
       execute_ c "UPDATE pages SET template = 1"
       query_ c "SELECT template FROM pages" `shouldReturn` [Only True]
       (try (execute_ c "UPDATE pages SET template = 2") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
+
+  it "bring a database up to the search's fold: the pages there get theirs when the storage opens" $
+    withSystemTempDirectory "wiki-migrate-test" $ \dir -> do
+      step <- maybe (assertFailure "no migration adds the search's fold") pure (find (\m -> "search-fold" `T.isInfixOf` m.name) migrations)
+      let earlier = takeWhile (\m -> m.version < step.version) migrations
+      withConnection (databaseFile dir) $ \c -> do
+        applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
+        execute_ c "INSERT INTO spaces (id, parent, name, slug, public, math_macros, created_at, position, subspace_order, page_order) VALUES ('s1', NULL, 'S', 's', 0, '', 'now', 0, 'name', 'name')"
+        execute_ c "INSERT INTO pages (id, space_id, parent, title, slug, body, created_at, updated_at, position, search_text) VALUES ('p1', 's1', NULL, 'Zażółć', 'p', '', 'now', 'now', 0, 'Gęślą jaźń STRASSE')"
+      withStorage defaultConfig dir $ \_ -> pass
+      withConnection (databaseFile dir) $ \c -> do
+        schemaVersion c `shouldReturn` length migrations
+        query_ c "SELECT search_fold FROM pages" `shouldReturn` [Only (Just (foldText "Zażółć" <> "\n" <> foldText "Gęślą jaźń STRASSE"))]
+        foldText "Zażółć" `shouldBe` "zazolc"
 
   it "apply nothing a second time, and change nothing" $
     withFreshDatabase $ \_ c -> do

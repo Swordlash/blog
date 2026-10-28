@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The search matches a query in SQL against each page's stored fold
+(`search_fold`, migration 0014), in the spaces searched only, and folds
+again only the pages that match (WP5.16b). The storage fills in the fold
+of the pages of an older database when it opens. Migration 0014 also
+indexes `pages (space_id, template)`.
+
 A space the caller may not view now answers 404 `NotFound`, exactly as a
 space that does not exist (WP5.17). Before, it answered 403 `Forbidden`,
 so anyone could tell that a private space existed. Everything in such a

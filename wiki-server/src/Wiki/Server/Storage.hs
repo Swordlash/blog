@@ -179,7 +179,7 @@ import Wiki.Core.Permission
   , mayMoveSpace
   )
 import Wiki.Core.Permission qualified as Permission
-import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), bodyText, folded, searchPlain)
+import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), folded, queryWords, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
 import Wiki.Core.User (Group (..), Standing (..), User (..), checkLogin, checkPassword)
@@ -287,6 +287,9 @@ openWith collect config dataDir = do
     _ <- query_ c "PRAGMA journal_mode = WAL" :: IO [Only Text]
     execute_ c "PRAGMA synchronous = NORMAL"
     _ <- migrate c
+    -- The search's fold of the pages a database held before it had one,
+    -- which SQL cannot make ("Wiki.Server.Storage.Rows").
+    fillSearchFolds c
     when collect (collectGarbage c dataDir)
     -- The settings are read here, on the writer, before any reader is
     -- open. A reader then always finds them in memory, and never writes
@@ -1142,15 +1145,17 @@ getPageTx sid path = do
     _ -> failWith NotFound
 
 -- | The search, the same as the demo's: 'searchPlain' over the pages the
--- user may view in the spaces the query asks for. Each page is searched
--- through the text prepared when it was saved, folded as the matcher
--- wants it, which is quick, unlike parsing the Markdown.
+-- user may view in the spaces the query asks for. SQL picks the pages: of
+-- the spaces searched only, and of those only the ones whose stored fold
+-- has every word of the query ('loadSearchMatches'). Only those pages'
+-- titles and texts are folded again here, since a hit's marks and snippet
+-- need the fold of the original text, and 'searchPlain' ranks them and
+-- keeps the best. So a search costs what its matches cost, not what the
+-- whole wiki holds.
 searchPagesTx :: SearchQuery -> Tx [SearchHit]
 searchPagesTx q = do
   ctx <- ask
-  rows <- db loadSearchRows
-  let nodes = Map.fromList [(r.node.id, r.node) | r <- rows]
-      wanted c = case q.space of
+  let wanted c = case q.space of
         Nothing -> True
         Just sid
           | q.includeSubspaces -> within sid c
@@ -1159,19 +1164,38 @@ searchPagesTx q = do
         Map.filter
           (\c -> wanted c && canView ctx.principal ctx.grants c)
           (Map.mapWithKey (\sid _ -> chainOf ctx sid) ctx.spaces)
-  pure . searchPlain q $
-    [ Candidate
-        { page = r.node.id
-        , space = r.node.space
-        , spacePath = map (\s -> s.slug) c
-        , pagePath
-        , text = Searchable {title = folded r.node.title, body = folded r.text}
-        }
-    | r <- rows
-    , q.templates || not r.node.template
-    , Just c <- [Map.lookup r.node.space searched]
-    , Just pagePath <- [pathOf (`Map.lookup` nodes) r.node.id]
-    ]
+      ws = queryWords q
+  -- No words find nothing, and no space has nothing to find. SQLite would
+  -- read every page for an empty @IN ()@.
+  if null ws || Map.null searched
+    then pure []
+    else do
+      rows <- db (\c -> loadSearchMatches c (Map.keys searched) q.templates ws)
+      nodes <- withAncestors (map (\r -> r.node) rows)
+      pure . searchPlain q $
+        [ Candidate
+            { page = r.node.id
+            , space = r.node.space
+            , spacePath = map (\s -> s.slug) c
+            , pagePath
+            , text = Searchable {title = folded r.node.title, body = folded r.text}
+            }
+        | r <- rows
+        , Just c <- [Map.lookup r.node.space searched]
+        , Just pagePath <- [pathOf (`Map.lookup` nodes) r.node.id]
+        ]
+
+-- | These pages and every page above them, by id: what 'pathOf' needs to
+-- find each one's path. The pages above are read one level at a time, all
+-- of a level in one query, so the reads grow with the depth of the tree,
+-- not with the size of a space.
+withAncestors :: [PageNode] -> Tx (Map PageId PageNode)
+withAncestors = go mempty
+  where
+    go found nodes = do
+      let more = found <> Map.fromList [(n.id, n) | n <- nodes]
+          missing = ordNub [p | n <- nodes, Just p <- [n.parent], Map.notMember p more]
+      if null missing then pure more else db (`pageNodesWithIds` missing) >>= go more
 
 --------------------------------------------------------------------------------
 -- Spaces
@@ -1557,10 +1581,7 @@ savePageTx pid base title body = do
           }
   author <- asks (\x -> x.author)
   db $ \c -> do
-    execute
-      c
-      "UPDATE pages SET title = ?, body = ?, updated_at = ?, search_text = ? WHERE id = ?"
-      (t, body, Stamp updatedAt, bodyText body, pid.text)
+    updatePageText c pid t body updatedAt
     insertVersion c p' author
     for_ author $ \u -> execute c "DELETE FROM drafts WHERE page_id = ? AND author = ?" (pid.text, u.text)
   tellTx p'.id p'.space p'.title Nothing "" PageSaved (newlyMentioned p.body body)

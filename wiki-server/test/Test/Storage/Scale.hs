@@ -8,6 +8,10 @@
 -- The live channel checks once for each user whether they may read a page
 -- an event is about, however many of their tabs show it.
 --
+-- WP5.16b adds the reads of an ordinary visit. A search reads the pages
+-- of the spaces it searches, and folds the text of only the pages that
+-- match.
+--
 -- What the storage reads is seen through SQLite's trace of each statement
 -- a connection runs ('statementsOf'), and SQLite's plan for each
 -- statement ('scansOf'): a plan step that scans a table reads every row
@@ -39,6 +43,7 @@ import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Notification (..), PageLocation (..), maxListed)
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.Search (SearchHit (..), SearchQuery (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Accounts (Resolved (..), resolveSession, startSession)
@@ -52,6 +57,7 @@ spec = describe "the storage, at scale" $ do
   writes
   bell
   hub
+  search
 
 -- | An action that must end within two seconds: one that waits for a lock
 -- another operation holds does not.
@@ -216,7 +222,11 @@ writes = describe "a save of a watched page" $ do
 -- | Add pages to a space, at its top level, named by a word and a number:
 -- @bulk-1@ and on. Their ids, in that order.
 addPages :: Storage -> SpaceId -> Text -> Int -> IO [PageId]
-addPages st space name n = do
+addPages st space name = addPagesWith st space name ""
+
+-- | 'addPages', each page with this body.
+addPagesWith :: Storage -> SpaceId -> Text -> Text -> Int -> IO [PageId]
+addPagesWith st space name body n = do
   now <- getCurrentTime
   let ids = [PageId (name <> "-page-" <> show i) | i <- [1 .. n]]
   withDatabase st $ \c -> do
@@ -230,7 +240,7 @@ addPages st space name n = do
           , parent = Nothing
           , title = name <> " " <> show i
           , slug = either (panic . show) identity (mkSlug (name <> "-" <> show i))
-          , body = ""
+          , body
           , attachments = []
           , createdAt = now
           , updatedAt = now
@@ -335,3 +345,42 @@ hub = describe "the live channel" $
           checksFor (PageChanged notes.updatedAt) `shouldReturn` length users
           checksFor (PageChanged notes.updatedAt) `shouldReturn` length users
           traverse_ wait running
+
+search :: Spec
+search = describe "the search" $ do
+  -- Two spaces of 200 pages each, every page with the word "needle".
+  let twoSpaces st = do
+        asked <- runSqliteWiki st Administrator (createSpace Nothing "Asked") >>= ok
+        other <- runSqliteWiki st Administrator (createSpace Nothing "Other") >>= ok
+        _ <- addPagesWith st asked.id "asked" "A needle in the text." 200
+        _ <- addPagesWith st other.id "other" "Another needle in the text." 200
+        pure (asked, other)
+      -- A page's search text made into bytes that are no text: a search
+      -- that reads the page fails.
+      spoil st (condition :: Text) = withDatabase st (\c -> execute_ c (Query ("UPDATE pages SET search_text = x'00' WHERE " <> condition)))
+      asking text space = SearchQuery {text, space, includeSubspaces = True, limit = 500, templates = False}
+      needle = asking "needle"
+      searching st q = runSqliteWiki st Administrator (searchPages q)
+
+  it "reads only the pages of the space asked for, through an index" $ withDemo $ \st -> do
+    (asked, other) <- twoSpaces st
+    spoil st ("space_id = '" <> other.id.text <> "'")
+    (hits, statements) <- statementsOf st (searching st (needle (Just asked.id)))
+    length hits `shouldBe` 200
+    map (\h -> h.space) hits `shouldSatisfy` all (== asked.id)
+    scans <- Set.fromList . concat <$> traverse (scansOf st) statements
+    scans `shouldSatisfy` (`Set.isSubsetOf` everyTransactionScans)
+    -- A search of every space reads the other space's pages too.
+    void (searching st (needle Nothing)) `shouldThrow` anyException
+
+  it "folds no page's text for a query that nothing matches" $ withDemo $ \st -> do
+    _ <- twoSpaces st
+    spoil st "1 = 1"
+    searching st (asking "haystack" Nothing) `shouldReturn` []
+    void (searching st (needle Nothing)) `shouldThrow` anyException
+
+  it "finds what the stored fold finds: no case, no diacritics, a part of a word" $ withDemo $ \st -> do
+    (asked, _) <- twoSpaces st
+    [pid] <- addPagesWith st asked.id "polish" "Zażółć gęślą jaźń, sagt die Straße." 1
+    hits <- searching st (asking "ZAZOLC strasse jaz" (Just asked.id))
+    map (\h -> h.page) hits `shouldBe` [pid]

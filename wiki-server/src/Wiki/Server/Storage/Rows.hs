@@ -15,6 +15,7 @@ module Wiki.Server.Storage.Rows
   , pageNodes
   , allPageNodes
   , pageNode
+  , pageNodesWithIds
 
     -- * Reads
   , loadSpaces
@@ -38,7 +39,7 @@ module Wiki.Server.Storage.Rows
   , loadCommentCounts
   , loadVersion
   , SearchRow (..)
-  , loadSearchRows
+  , loadSearchMatches
 
     -- * Accounts
   , AccountRow
@@ -83,6 +84,8 @@ module Wiki.Server.Storage.Rows
   , insertSpace
   , updateSpace
   , insertPage
+  , updatePageText
+  , fillSearchFolds
   , insertVersion
   , insertAttachment
 
@@ -108,7 +111,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
-import Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData, changes, execute, query, queryWith, queryWith_, query_)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData, changes, execute, execute_, query, queryWith, queryWith_, query_)
 import Database.SQLite.Simple.FromField (FieldParser, FromField (..), ResultError (..), returnError)
 import Database.SQLite.Simple.FromRow (RowParser, field, fieldWith)
 import Database.SQLite.Simple.ToField (ToField (..))
@@ -125,7 +128,7 @@ import Wiki.Core.Order (ChildOrder (..), Sibling (..))
 import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
-import Wiki.Core.Search (bodyText)
+import Wiki.Core.Search (bodyText, foldText)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), Membership, User (..))
@@ -259,6 +262,25 @@ allPageNodes c = queryWith_ nodeRow c (sql ("SELECT " <> nodeColumns <> " FROM p
 -- | One page, as a node.
 pageNode :: Connection -> PageId -> IO (Maybe PageNode)
 pageNode c pid = head <$> queryWith nodeRow c (sql ("SELECT " <> nodeColumns <> " FROM pages WHERE id = ?")) (Only pid.text)
+
+-- | The pages with these ids, as nodes, in no particular order. An id that
+-- names no page is left out.
+pageNodesWithIds :: Connection -> [PageId] -> IO [PageNode]
+pageNodesWithIds c pids =
+  concat <$> for (chunksOf 500 (ordNub pids)) (\ids -> queryWith nodeRow c (sql ("SELECT " <> nodeColumns <> " FROM pages WHERE id IN (" <> marks ids <> ")")) (map (\p -> p.text) ids))
+
+-- | Values for a query in groups of at most this many. SQLite limits the
+-- number of parameters one statement may have, and a list of ids can be
+-- longer than that limit.
+chunksOf :: Int -> [a] -> [[a]]
+chunksOf n xs = case splitAt n xs of
+  ([], _) -> []
+  (now, rest) -> now : chunksOf n rest
+
+-- | One parameter mark for each of the values, separated by commas: the
+-- inside of an @IN (…)@.
+marks :: [a] -> Text
+marks vs = T.intercalate ", " (map (const "?") vs)
 
 --------------------------------------------------------------------------------
 -- Reads
@@ -520,11 +542,31 @@ data SearchRow = SearchRow
   , text :: Text
   }
 
--- | Every page, as the search reads it.
-loadSearchRows :: Connection -> IO [SearchRow]
-loadSearchRows c = queryWith_ row c (sql ("SELECT " <> nodeColumns <> ", search_text FROM pages"))
+-- | The pages of these spaces whose fold ('searchFold') contains every one
+-- of these words, as the search reads them. The words must be folded as
+-- the fold is ('foldText'). Templates are left out unless asked for. Only
+-- the rows of the spaces given are read, through the index on a page's
+-- space, and of those only the matching ones are returned. The search
+-- then folds the title and text of these rows alone, which is where its
+-- time goes.
+loadSearchMatches :: Connection -> [SpaceId] -> Bool -> [Text] -> IO [SearchRow]
+loadSearchMatches c spaces templates ws =
+  concat <$> for (chunksOf 500 spaces) (\chunk -> queryWith row c (statement chunk) (map (\s -> toField s.text) chunk <> map toField ws))
   where
     row = SearchRow <$> nodeRow <*> field
+    -- instr finds a word anywhere in the fold, as the matcher's
+    -- 'T.isInfixOf' does, with no character that means something else, as
+    -- LIKE's @%@ and @_@ would.
+    statement chunk =
+      sql
+        ( "SELECT "
+            <> nodeColumns
+            <> ", search_text FROM pages WHERE space_id IN ("
+            <> marks chunk
+            <> ")"
+            <> (if templates then "" else " AND template = 0")
+            <> T.concat [" AND instr(search_fold, ?) > 0" | _ <- ws]
+        )
 
 --------------------------------------------------------------------------------
 -- Writes
@@ -613,13 +655,13 @@ updateSpace c s =
     "UPDATE spaces SET parent = ?, name = ?, slug = ?, public = ?, math_macros = ?, created_at = ?, position = ?, subspace_order = ?, page_order = ?, home_page = ?, icon = ?, description = ?, blog = ? WHERE id = ?"
     (drop 1 (spaceValues s) <> [toField s.id.text])
 
--- | Add a page, without its attachments, with its search text prepared
--- from its body.
+-- | Add a page, without its attachments, with its search text and its
+-- fold prepared from its title and body.
 insertPage :: Connection -> Page -> IO ()
 insertPage c p =
   execute
     c
-    (sql ("INSERT INTO pages (" <> pageColumns <> ", search_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
+    (sql ("INSERT INTO pages (" <> pageColumns <> ", search_text, search_fold) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
     [ toField p.id.text
     , toField p.space.text
     , toField (fmap (\x -> x.text) p.parent)
@@ -630,8 +672,53 @@ insertPage c p =
     , toField (Stamp p.updatedAt)
     , toField p.position
     , toField p.template
-    , toField (bodyText p.body)
+    , toField searchText
+    , toField (searchFold p.title searchText)
     ]
+  where
+    searchText = bodyText p.body
+
+-- | Change a page's title and body, as a save does, with its search text
+-- and its fold made again from them, and its @updated_at@.
+updatePageText :: Connection -> PageId -> Text -> Text -> UTCTime -> IO ()
+updatePageText c pid title body updatedAt =
+  execute
+    c
+    "UPDATE pages SET title = ?, body = ?, updated_at = ?, search_text = ?, search_fold = ? WHERE id = ?"
+    (title, body, Stamp updatedAt, searchText, searchFold title searchText, pid.text)
+  where
+    searchText = bodyText body
+
+-- | The fold a search matches a page against: its title and its search
+-- text ('bodyText' of its body), each folded as the search folds them
+-- ('foldText'), with a line break between them. A query's words have no
+-- blanks, so no word can match across the line break.
+searchFold :: Text -> Text -> Text
+searchFold title searchText = foldText title <> "\n" <> foldText searchText
+
+-- | Fill in the fold of every page that has none: the pages a database
+-- held before it had the column (migration
+-- @0014-search-fold.sql@). The fold is made from the title and the
+-- search text already stored, so no page's Markdown is parsed again.
+-- Called when the storage opens, before anything searches. The pages are
+-- read a few hundred at a time, so that a large wiki's text is not held
+-- in memory all at once.
+fillSearchFolds :: Connection -> IO ()
+fillSearchFolds c = do
+  -- Through the index of the pages with no fold, which is empty once all
+  -- are filled in, so a storage that opens a filled database takes no
+  -- write lock here.
+  missing <- query_ c "SELECT count(*) FROM (SELECT id FROM pages WHERE search_fold IS NULL LIMIT 1)"
+  when (missing /= [Only (0 :: Int)]) $ do
+    execute_ c "BEGIN IMMEDIATE"
+    flip onException (execute_ c "ROLLBACK") $ do
+      let batch = do
+            rows <- query_ c "SELECT id, title, search_text FROM pages WHERE search_fold IS NULL LIMIT 500"
+            for_ rows $ \(i, title, searchText) ->
+              execute c "UPDATE pages SET search_fold = ? WHERE id = ?" (searchFold title searchText, i :: Text)
+            unless (null rows) batch
+      batch
+      execute_ c "COMMIT"
 
 -- | Store a version of a page: its title and body as of its @updatedAt@,
 -- and who saved it, if known.
