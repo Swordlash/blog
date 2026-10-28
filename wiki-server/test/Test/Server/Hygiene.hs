@@ -280,13 +280,13 @@ email = describe "an e-mail address" $ do
     first' <- maybe (panic "no link") pure =<< linkIn r "https://wiki.example.org/verify-email/"
     -- A new address: the first link no longer verifies anything.
     _ <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.com", password = Just (Password "editor\'s password")}) >>= jsonAs @EmailState 200
-    (send r methodPost (onPublic r (links.emailVerification (MailToken first'))) [] "" >>= jsonAs 404) `shouldReturn` NotFound
+    (send r methodPost (onPublic r (links.emailVerification (VerificationToken first'))) [] "" >>= jsonAs 404) `shouldReturn` NotFound
     second' <- maybe (panic "no link") pure =<< latestLink r "https://wiki.example.org/verify-email/"
     second' `shouldNotBe` first'
     -- Anyone with the link verifies it, signed in or not.
-    (.status) <$> send r methodPost (onPublic r (links.emailVerification (MailToken second'))) [] "" `shouldReturn` 204
+    (.status) <$> send r methodPost (onPublic r (links.emailVerification (VerificationToken second'))) [] "" `shouldReturn` 204
     (as r t methodGet links.account.email "" >>= jsonAs 200) `shouldReturn` EmailState {email = Just (Email "edgar@example.com"), verified = True, mailing = True, mailError = Nothing, asksPassword = True}
-    (send r methodPost (onPublic r (links.emailVerification (MailToken second'))) [] "" >>= jsonAs 404) `shouldReturn` NotFound
+    (send r methodPost (onPublic r (links.emailVerification (VerificationToken second'))) [] "" >>= jsonAs 404) `shouldReturn` NotFound
     directory :: Directory <- getUrl r (onAdmin r links.admin.directory) >>= jsonAs 200
     directory.emails `shouldBe` Map.singleton (UserId "user-editor") AccountEmail {email = Email "edgar@example.com", verified = True}
     directory.mailing `shouldBe` True
@@ -325,7 +325,7 @@ reset = describe "a password reset" $ do
       threadDelay 300_000
       length <$> readIORef r.outbox `shouldReturn` 1
       verify <- maybe (panic "no link") pure =<< linkIn r "https://wiki.example.org/verify-email/"
-      (.status) <$> send r methodPost (onPublic r (links.emailVerification (MailToken verify))) [] "" `shouldReturn` 204
+      (.status) <$> send r methodPost (onPublic r (links.emailVerification (VerificationToken verify))) [] "" `shouldReturn` 204
       known <- askReset r "editor"
       unknown <- askReset r "nobody"
       (known.status, known.body) `shouldBe` (unknown.status, unknown.body)
@@ -337,18 +337,18 @@ reset = describe "a password reset" $ do
       -- By the verified address too, whatever its case.
       _ <- askReset r "EDGAR@example.org"
       eventually ((== 3) . length <$> readIORef r.outbox)
-      (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = Password "short"} >>= jsonAs 400)
+      (sendJson r methodPost (onPublic r (links.passwordReset.reset (ResetToken token))) NewPasswordByMail {password = Password "short"} >>= jsonAs 400)
         >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
-      (.status) <$> sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = Password "a brand new password"} `shouldReturn` 204
+      (.status) <$> sendJson r methodPost (onPublic r (links.passwordReset.reset (ResetToken token))) NewPasswordByMail {password = Password "a brand new password"} `shouldReturn` 204
       -- Everyone who was signed in is signed out, and nobody is signed in.
       me :: SessionInfo <- getUrlWith r (onPublic r links.session) [cookie t] >>= jsonAs 200
       me.user `shouldBe` Nothing
       (sendJson r methodPost (onPublic r links.signIn) Credentials {login = "editor", password = Password "editor's password"} >>= jsonAs 401) `shouldReturn` Unauthenticated
       _ <- signInAs r "editor" "a brand new password"
       -- Used: neither it nor the other link mailed since works.
-      (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = Password "another new password"} >>= jsonAs 404) `shouldReturn` NotFound
+      (sendJson r methodPost (onPublic r (links.passwordReset.reset (ResetToken token))) NewPasswordByMail {password = Password "another new password"} >>= jsonAs 404) `shouldReturn` NotFound
       other <- maybe (panic "no link") pure =<< latestLink r "https://wiki.example.org/reset-password/"
-      (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken other))) NewPasswordByMail {password = Password "another new password"} >>= jsonAs 404) `shouldReturn` NotFound
+      (sendJson r methodPost (onPublic r (links.passwordReset.reset (ResetToken other))) NewPasswordByMail {password = Password "another new password"} >>= jsonAs 404) `shouldReturn` NotFound
 
   it "is limited per address it is asked from" $ withDemoRunning identity $ \r -> do
     mailing r
@@ -361,7 +361,7 @@ reset = describe "a password reset" $ do
     mailing r
     _ <- sendJson r methodPut (onAdmin r links.admin.setSettings) defaultSettings {access = Closed} >>= jsonAs @WikiSettings 200
     (.status) <$> askReset r "editor" `shouldReturn` 204
-    (send r methodPost (onPublic r (links.emailVerification (MailToken "nothing"))) [] "" >>= jsonAs 404) `shouldReturn` NotFound
+    (send r methodPost (onPublic r (links.emailVerification (VerificationToken "nothing"))) [] "" >>= jsonAs 404) `shouldReturn` NotFound
     (.status) <$> getUrl r (onPublic r links.account.sessions) `shouldReturn` 401
 
 --------------------------------------------------------------------------------
@@ -373,7 +373,7 @@ withVerifiedEditor test = withEditor $ \r t -> do
   mailing r
   _ <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.org", password = Just (Password "editor's password")}) >>= jsonAs @EmailState 200
   verify <- maybe (panic "no link") pure =<< linkIn r "https://wiki.example.org/verify-email/"
-  (.status) <$> send r methodPost (onPublic r (links.emailVerification (MailToken verify))) [] "" `shouldReturn` 204
+  (.status) <$> send r methodPost (onPublic r (links.emailVerification (VerificationToken verify))) [] "" `shouldReturn` 204
   test r t
 
 -- | Ask for an administrator's link to choose a password for a user, on
@@ -390,11 +390,11 @@ passwordLink = describe "a password link an administrator has mailed" $ do
     map (\m -> m.to.text) sent `shouldBe` ["edgar@example.org", "edgar@example.org"]
     -- The reset's own mail, link and all.
     token <- maybe (panic "no link") pure =<< latestLink r "https://wiki.example.org/reset-password/"
-    (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = Password "chosen by edgar"} >>= \x -> pure x.status) `shouldReturn` 204
+    (sendJson r methodPost (onPublic r (links.passwordReset.reset (ResetToken token))) NewPasswordByMail {password = Password "chosen by edgar"} >>= \x -> pure x.status) `shouldReturn` 204
     me :: SessionInfo <- getUrlWith r (onPublic r links.session) [cookie t] >>= jsonAs 200
     me.user `shouldBe` Nothing
     _ <- signInAs r "editor" "chosen by edgar"
-    (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = Password "chosen again"} >>= jsonAs 404) `shouldReturn` NotFound
+    (sendJson r methodPost (onPublic r (links.passwordReset.reset (ResetToken token))) NewPasswordByMail {password = Password "chosen again"} >>= jsonAs 404) `shouldReturn` NotFound
     -- Recorded as the operator's.
     activity :: Activity <- getUrl r (onAdmin r (links.admin.activity Nothing Nothing Nothing)) >>= jsonAs 200
     [(e.actor.login.text, e.subject.name) | e <- activity.entries, e.action == "user.password-link"] `shouldBe` [("administrator", "editor")]
@@ -404,7 +404,7 @@ passwordLink = describe "a password link an administrator has mailed" $ do
     _ <- sendJson r methodPut (onAdmin r links.admin.setSettings) consoleOnly >>= jsonAs @WikiSettings 200
     (.status) <$> askLink r "user-editor" `shouldReturn` 204
     token <- maybe (panic "no link") pure =<< latestLink r "https://wiki.example.org/reset-password/"
-    (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = Password "chosen by edgar"} >>= \x -> pure x.status) `shouldReturn` 204
+    (sendJson r methodPost (onPublic r (links.passwordReset.reset (ResetToken token))) NewPasswordByMail {password = Password "chosen by edgar"} >>= \x -> pure x.status) `shouldReturn` 204
 
   it "is mailed once a minute, the second click refused" $ withVerifiedEditor $ \r _ -> do
     (.status) <$> askLink r "user-editor" `shouldReturn` 204
@@ -447,7 +447,7 @@ withVerified action = withSystemTempDirectory "wiki-hygiene-test" $ \dir -> with
   ada <- createAccount st "ada" "Ada" (Just (Password "correct horse")) >>= either (panic . show) pure
   now <- getCurrentTime
   Right (Just (_, token)) <- setEmail st now ada.user.id "ada@example.org"
-  verifyEmail st now (MailToken token) `shouldReturn` Right ()
+  verifyEmail st now token `shouldReturn` Right ()
   action st ada.user.id
 
 storageRules :: Spec
@@ -455,8 +455,8 @@ storageRules = describe "the storage's rules" $ do
   it "a reset's link works for thirty minutes" $ withVerified $ \st _ -> do
     now <- getCurrentTime
     [early, late] <- (<>) <$> requestReset st now "ada" <*> requestReset st now "ada"
-    resetPassword st (addUTCTime (31 * 60) now) (MailToken late.token) (Password "a new password") `shouldReturn` Left WikiError.NotFound
-    resetPassword st (addUTCTime (29 * 60) now) (MailToken early.token) (Password "a new password") `shouldReturn` Right ()
+    resetPassword st (addUTCTime (31 * 60) now) late.token (Password "a new password") `shouldReturn` Left WikiError.NotFound
+    resetPassword st (addUTCTime (29 * 60) now) early.token (Password "a new password") `shouldReturn` Right ()
 
   it "an account is mailed three an hour at most, and a disabled or unverified one none" $ withVerified $ \st u -> do
     now <- getCurrentTime
@@ -469,7 +469,7 @@ storageRules = describe "the storage's rules" $ do
 
   it "an administrator's link is one a minute, beside the three an hour the account is mailed when it asks" $ withVerified $ \st u -> do
     now <- getCurrentTime
-    let linkAt seconds secret = runSqliteWiki st Administrator (passwordLinkFor True (addUTCTime seconds now) secret u) >>= either (panic . show) pure
+    let linkAt seconds secret = runSqliteWiki st Administrator (passwordLinkFor True (addUTCTime seconds now) (ResetToken secret) u) >>= either (panic . show) pure
     length . concat <$> replicateM 3 (requestReset st now "ada") `shouldReturn` 3
     -- Not held back by the three an hour, but by the minute since the last.
     (\l -> (\x -> x.email.text) <$> l) <$> linkAt 30 "first" `shouldReturn` Nothing
@@ -479,23 +479,23 @@ storageRules = describe "the storage's rules" $ do
     -- They count against the account's three an hour.
     length <$> requestReset st (addUTCTime (30 * 60) now) "ada" `shouldReturn` 0
     -- A link works as a reset's does, and one that was not made does not.
-    resetPassword st (addUTCTime 125 now) (MailToken "first") (Password "chosen by ada") `shouldReturn` Left WikiError.NotFound
-    resetPassword st (addUTCTime 125 now) (MailToken "fourth") (Password "chosen by ada") `shouldReturn` Right ()
+    resetPassword st (addUTCTime 125 now) (ResetToken "first") (Password "chosen by ada") `shouldReturn` Left WikiError.NotFound
+    resetPassword st (addUTCTime 125 now) (ResetToken "fourth") (Password "chosen by ada") `shouldReturn` Right ()
 
   it "a reset mails no link to a user who signs in with a provider the server has and has no password, and a link sets none" $ withVerified $ \st _ -> do
     now <- getCurrentTime
     pat <- createAccount st "pat" "Pat" Nothing >>= either (panic . show) pure
     Right (Just (_, token)) <- setEmail st now pat.user.id "pat@example.org"
-    verifyEmail st now (MailToken token) `shouldReturn` Right ()
+    verifyEmail st now token `shouldReturn` Right ()
     withDatabase st $ \c -> insertIdentity c now pat.user.id "acme" "pat-1" Nothing Nothing
     -- The server has no such provider: Pat has no way in, and may reset.
     [early] <- requestReset st now "pat"
     _ <- runSqliteWiki st Administrator (setServerSettings withAcme) >>= either (panic . show) pure
     length <$> requestReset st now "pat" `shouldReturn` 0
-    resetPassword st now (MailToken early.token) (Password "chosen by pat") >>= (`shouldSatisfy` \case Left (WikiError.Invalid _) -> True; _ -> False)
+    resetPassword st now early.token (Password "chosen by pat") >>= (`shouldSatisfy` \case Left (WikiError.Invalid _) -> True; _ -> False)
     -- The link stays unused, and works once the provider is gone again.
     _ <- runSqliteWiki st Administrator (setServerSettings noServerSettings) >>= either (panic . show) pure
-    resetPassword st now (MailToken early.token) (Password "chosen by pat") `shouldReturn` Right ()
+    resetPassword st now early.token (Password "chosen by pat") `shouldReturn` Right ()
 
   it "\"last seen\" is written at most once a minute, with the address, and the cookie sent again only hourly" $ withVerified $ \st u -> do
     now <- getCurrentTime

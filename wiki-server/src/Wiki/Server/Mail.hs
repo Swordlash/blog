@@ -52,6 +52,8 @@ import Network.Mail.SMTP.Types (AuthType (..), Command (..))
 import Protolude
 import System.Timeout (timeout)
 import Text.Show (Show (showsPrec))
+import Wiki.Api.Account (InvitationToken (..))
+import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), securityFor, securityName)
 import Wiki.Core.Notification (DigestGroup (..), Notification (..), PageLocation, notificationText)
 import Wiki.Core.Url (Url (..))
@@ -83,12 +85,12 @@ instance Show Message where
 
 -- | The link of an invitation: its page in the application, under the
 -- wiki's address.
-inviteLink :: Url -> Text -> Text
-inviteLink publicUrl token = publicUrl.text <> "invite/" <> token <> "/"
+inviteLink :: Url -> InvitationToken -> Text
+inviteLink publicUrl token = publicUrl.text <> "invite/" <> token.text <> "/"
 
 -- | The mail that invites someone, with the link that creates their
 -- account and when the link expires.
-invitationMessage :: Url -> Email -> Text -> UTCTime -> Message
+invitationMessage :: Url -> Email -> InvitationToken -> UTCTime -> Message
 invitationMessage publicUrl email token expiresAt =
   Message
     { to = email
@@ -108,16 +110,16 @@ invitationMessage publicUrl email token expiresAt =
     }
 
 -- | The link of a password reset: its page in the application.
-resetLink :: Url -> Text -> Text
-resetLink publicUrl token = publicUrl.text <> "reset-password/" <> token <> "/"
+resetLink :: Url -> ResetToken -> Text
+resetLink publicUrl token = publicUrl.text <> "reset-password/" <> token.text <> "/"
 
 -- | The link that verifies an e-mail address: its page in the application.
-verificationLink :: Url -> Text -> Text
-verificationLink publicUrl token = publicUrl.text <> "verify-email/" <> token <> "/"
+verificationLink :: Url -> VerificationToken -> Text
+verificationLink publicUrl token = publicUrl.text <> "verify-email/" <> token.text <> "/"
 
 -- | The mail with a password reset link (WP4.11 of docs/PLAN.md), sent to
 -- a user's verified address, for their login.
-resetMessage :: Url -> Email -> Login -> Text -> UTCTime -> Message
+resetMessage :: Url -> Email -> Login -> ResetToken -> UTCTime -> Message
 resetMessage publicUrl email login token expiresAt =
   Message
     { to = email
@@ -138,7 +140,7 @@ resetMessage publicUrl email login token expiresAt =
     }
 
 -- | The mail that verifies an address set for a user's account.
-verificationMessage :: Url -> Email -> Login -> Text -> Message
+verificationMessage :: Url -> Email -> Login -> VerificationToken -> Message
 verificationMessage publicUrl email login token =
   Message
     { to = email
@@ -158,8 +160,8 @@ verificationMessage publicUrl email login token =
 
 -- | The link that turns a user's notification mail off: its page in the
 -- application, which asks for confirmation first.
-unsubscribeLink :: Url -> Text -> Text
-unsubscribeLink publicUrl token = publicUrl.text <> "unsubscribe/" <> token <> "/"
+unsubscribeLink :: Url -> UnsubscribeToken -> Text
+unsubscribeLink publicUrl token = publicUrl.text <> "unsubscribe/" <> token.text <> "/"
 
 -- | The mail of a user's notifications ("Wiki.Core.Notification"): one
 -- mailed at once, or a daily digest, grouped by page, the page with the
@@ -171,7 +173,7 @@ notificationMessage
   -- ^ The wiki's address.
   -> Email
   -- ^ The address mailed.
-  -> Text
+  -> UnsubscribeToken
   -- ^ The secret of the user's unsubscribe link.
   -> Bool
   -- ^ Whether it is the daily digest.

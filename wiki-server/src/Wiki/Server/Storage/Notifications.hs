@@ -59,6 +59,7 @@ import Database.SQLite.Simple.FromRow (RowParser, field)
 import Database.SQLite.Simple.ToField (ToField (..))
 import Protolude
 import Wiki.Api.Notifications (ReadMark (..))
+import Wiki.Api.Security (UnsubscribeToken (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Kind (..), MailMode (..), Mark, Notification (..), WatchTarget (..), keptNotifications, mailModeName, readMailMode)
 import Wiki.Core.User (Email (..), Login (..), Membership, User (..))
@@ -348,13 +349,13 @@ mac :: ByteString -> UserId -> Text
 mac key u = decodeUtf8 (convertToBase Base16 (hmac key (encodeUtf8 ("unsubscribe:" <> u.text)) :: HMAC SHA256))
 
 -- | The secret of a user's unsubscribe link.
-unsubscribeToken :: Connection -> UserId -> IO Text
-unsubscribeToken c u = (\key -> u.text <> "." <> mac key u) <$> unsubscribeKey c
+unsubscribeToken :: Connection -> UserId -> IO UnsubscribeToken
+unsubscribeToken c u = (\key -> UnsubscribeToken (u.text <> "." <> mac key u)) <$> unsubscribeKey c
 
 -- | Turn off the mail of the user an unsubscribe link's secret names. The
 -- result is whether it named one.
-unsubscribeUser :: Connection -> Text -> IO Bool
-unsubscribeUser c token = case T.breakOnEnd "." token of
+unsubscribeUser :: Connection -> UnsubscribeToken -> IO Bool
+unsubscribeUser c token = case T.breakOnEnd "." token.text of
   (withDot, given)
     | Just u <- UserId <$> T.stripSuffix "." withDot
     , not (T.null u.text) -> do

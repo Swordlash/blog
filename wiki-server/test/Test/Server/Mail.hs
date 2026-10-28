@@ -16,6 +16,7 @@ import Protolude
 import Test.Hspec
 import Test.Server.Fixture (Running (..), jsonAs, sendJson, setServer, withDemoRunning)
 import Wiki.Api (AdminApi (..), WikiApi (..))
+import Wiki.Api.Account (InvitationToken (..))
 import Wiki.Api.Admin (Invited (..), NewInvitation (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), MailTest (..), MailTestResult (..), ServerSettingsOf (..), noServerSettings)
@@ -37,14 +38,14 @@ expiry = UTCTime (fromGregorian 2026 11 1) 3600
 messages :: Spec
 messages = describe "an invitation's message" $ do
   it "is to its address, with the link below the wiki's address, and when it stops working" $ do
-    let m = invitationMessage (Url "https://wiki.example.org/team/") (Email "bea@example.org") "s3cr3t" expiry
+    let m = invitationMessage (Url "https://wiki.example.org/team/") (Email "bea@example.org") (InvitationToken "s3cr3t") expiry
     m.to.text `shouldBe` "bea@example.org"
     m.subject `shouldBe` "You are invited to the wiki at wiki.example.org"
     m.body `shouldSatisfy` T.isInfixOf "https://wiki.example.org/team/invite/s3cr3t/"
     m.body `shouldSatisfy` T.isInfixOf "2026-11-01 01:00 UTC"
 
   it "never shows its body" $
-    show (invitationMessage (Url "https://wiki.example.org/") (Email "bea@example.org") "s3cr3t" expiry) `shouldSatisfy` (not . T.isInfixOf "s3cr3t")
+    show (invitationMessage (Url "https://wiki.example.org/") (Email "bea@example.org") (InvitationToken "s3cr3t") expiry) `shouldSatisfy` (not . T.isInfixOf "s3cr3t")
 
 overSmtp :: Spec
 overSmtp = describe "over SMTP" $ do
@@ -52,7 +53,7 @@ overSmtp = describe "over SMTP" $ do
     (told, port) <- sink (const True)
     let smtp = Smtp {host = "127.0.0.1", port, security = Plain, user = Just "wiki", from = "Wiki <wiki@example.org>"}
         mailer = smtpMailer smtp (Just "smtp password") (Url "https://wiki.example.org/")
-    mailer.deliver (invitationMessage mailer.publicUrl (Email "bea@example.org") "s3cr3t" expiry) `shouldReturn` Right ()
+    mailer.deliver (invitationMessage mailer.publicUrl (Email "bea@example.org") (InvitationToken "s3cr3t") expiry) `shouldReturn` Right ()
     said <- readIORef told
     said `shouldContain` ["AUTH LOGIN"]
     -- Base64 of the user and the password, as AUTH LOGIN sends them.
@@ -69,14 +70,14 @@ overSmtp = describe "over SMTP" $ do
   it "says why a recipient was refused, and nothing of the mail" $ do
     (_, port) <- sink (not . ("RCPT" `T.isPrefixOf`))
     let mailer = smtpMailer Smtp {host = "127.0.0.1", port, security = Plain, user = Nothing, from = "wiki@example.org"} Nothing (Url "https://wiki.example.org/")
-    result <- mailer.deliver (invitationMessage mailer.publicUrl (Email "nobody@example.org") "s3cr3t" expiry)
+    result <- mailer.deliver (invitationMessage mailer.publicUrl (Email "nobody@example.org") (InvitationToken "s3cr3t") expiry)
     result `shouldSatisfy` either (T.isInfixOf "RCPT TO with 550") (const False)
     result `shouldSatisfy` either (not . T.isInfixOf "s3cr3t") (const False)
 
   it "says so when nothing listens" $ do
     port <- freePort
     let mailer = smtpMailer Smtp {host = "127.0.0.1", port, security = Plain, user = Nothing, from = "wiki@example.org"} Nothing (Url "https://wiki.example.org/")
-    mailer.deliver (invitationMessage mailer.publicUrl (Email "bea@example.org") "s3cr3t" expiry) >>= (`shouldSatisfy` isLeft)
+    mailer.deliver (invitationMessage mailer.publicUrl (Email "bea@example.org") (InvitationToken "s3cr3t") expiry) >>= (`shouldSatisfy` isLeft)
 
   it "takes implicit TLS on 465, and STARTTLS on any other port" $
     map securityFor [465, 587, 25] `shouldBe` [ImplicitTls, StartTls, StartTls]

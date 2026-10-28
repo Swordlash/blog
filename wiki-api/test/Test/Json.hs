@@ -10,7 +10,7 @@ import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
 import Wiki.Api.Account (Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Error (ApiError (..))
-import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), MailToken (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), TotpEnrolment (..))
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetToken (..), TotpEnrolment (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Api.Types (SpaceName (..))
 import Wiki.Core.User (Password (..))
 
@@ -67,7 +67,9 @@ spec = describe "JSON" $ do
             <> show EmailChange {email = "ada@example.org", password = Just (Password "hunter2")}
             <> show (OneTimeCode "hunter2")
             <> show (RecoveryCodes ["hunter2"])
-            <> show (MailToken "hunter2")
+            <> show (ResetToken "hunter2")
+            <> show (VerificationToken "hunter2")
+            <> show (UnsubscribeToken "hunter2")
             <> show TotpEnrolment {secret = "hunter2", uri = "otpauth://totp/x?secret=hunter2", qr = []}
     shown `shouldSatisfy` (not . T.isInfixOf "hunter2")
     shown `shouldSatisfy` T.isInfixOf "\"ada\""

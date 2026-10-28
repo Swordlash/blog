@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+The assistant's API key is an `ApiKey` (WP5.15), whose `Show` hides it:
+`ProviderSettings.key`, `Ready.key`, and the key `errorText` and `redact`
+remove from a message. `withKey` still takes the text pasted. The stored
+settings' JSON is unchanged.
+
 A media type is a `MimeType` (WP5.15), a newtype over `Text`:
 `Attachment.mediaType`, a space's `IconImage` and `iconMediaTypes`.
 `uploadedMimeType` is how both backends stored an upload's declared type

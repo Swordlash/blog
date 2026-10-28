@@ -44,6 +44,7 @@ module Wiki.Server.SecondFactor
     -- * Sign-ins half done
   , PendingSignIns
   , PendingSignIn (..)
+  , PendingToken (..)
   , newPendingSignIns
   , holdSignIn
   , pendingSignIn
@@ -66,6 +67,7 @@ import Database.SQLite.Simple (Connection, Only (..), changes, execute, query)
 import Network.HTTP.Types (hCookie)
 import Network.Wai (Request (..))
 import Protolude
+import Text.Show (Show (showsPrec))
 import Wiki.Api.Security (SecondFactorState (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
@@ -199,6 +201,16 @@ data PendingSignIn = PendingSignIn
   }
   deriving stock (Eq, Show)
 
+-- | 'PendingToken': the secret a waiting sign-in's cookie carries. It is
+-- not a session: it lets its browser give the second factor's code, and
+-- nothing else. Its 'Show' instance never prints it. It is a type of its
+-- own so that it cannot be passed where a session's secret goes.
+newtype PendingToken = PendingToken {text :: Text}
+  deriving stock (Eq, Ord)
+
+instance Show PendingToken where
+  showsPrec _ _ rest = "PendingToken <hidden>" <> rest
+
 -- | The sign-ins waiting, by the hash of the id their cookie carries.
 newtype PendingSignIns = PendingSignIns (IORef (Map Text PendingSignIn))
 
@@ -219,54 +231,56 @@ maxPending = 10000
 
 -- | Hold a sign-in waiting for its code. The result is the id its cookie
 -- is to carry.
-holdSignIn :: PendingSignIns -> UTCTime -> UserId -> Login -> Text -> IO Text
+holdSignIn :: PendingSignIns -> UTCTime -> UserId -> Login -> Text -> IO PendingToken
 holdSignIn (PendingSignIns ref) now user login next = do
-  token <- newToken
+  token <- PendingToken <$> newToken
   let held = PendingSignIn {user, login, next, expires = addUTCTime pendingLifetime now, wrong = 0}
   atomicModifyIORef' ref $ \m ->
     let live = Map.filter (\p -> p.expires > now) m
         bounded = if Map.size live >= maxPending then Map.fromList (drop (Map.size live - maxPending + 1) (sortOn (\(_, p) -> p.expires) (Map.toList live))) else live
-     in (Map.insert (tokenHash token) held bounded, ())
+     in (Map.insert (tokenHash token.text) held bounded, ())
   pure token
 
 -- | The sign-in a cookie's id names, if it is still waiting.
-pendingSignIn :: PendingSignIns -> UTCTime -> Text -> IO (Maybe PendingSignIn)
+pendingSignIn :: PendingSignIns -> UTCTime -> PendingToken -> IO (Maybe PendingSignIn)
 pendingSignIn (PendingSignIns ref) now token =
   atomicModifyIORef' ref $ \m -> case Map.lookup key m of
     Just p | p.expires > now -> (m, Just p)
     Just _ -> (Map.delete key m, Nothing)
     Nothing -> (m, Nothing)
   where
-    key = tokenHash token
+    key = tokenHash token.text
 
 -- | Count a wrong code against a sign-in, which ends at the last allowed.
-wrongCode :: PendingSignIns -> Text -> IO ()
+wrongCode :: PendingSignIns -> PendingToken -> IO ()
 wrongCode (PendingSignIns ref) token =
-  atomicModifyIORef' ref $ \m -> (Map.update (\p -> if p.wrong + 1 >= maxWrongCodes then Nothing else Just p {wrong = p.wrong + 1}) (tokenHash token) m, ())
+  atomicModifyIORef' ref $ \m -> (Map.update (\p -> if p.wrong + 1 >= maxWrongCodes then Nothing else Just p {wrong = p.wrong + 1}) (tokenHash token.text) m, ())
 
 -- | End a sign-in that has received its code.
-finishPending :: PendingSignIns -> Text -> IO ()
-finishPending (PendingSignIns ref) token = atomicModifyIORef' ref (\m -> (Map.delete (tokenHash token) m, ()))
+finishPending :: PendingSignIns -> PendingToken -> IO ()
+finishPending (PendingSignIns ref) token = atomicModifyIORef' ref (\m -> (Map.delete (tokenHash token.text) m, ()))
 
 -- | The cookie that carries a waiting sign-in's id.
 pendingCookieName :: Text
 pendingCookieName = "wiki_pending"
 
 -- | The @Set-Cookie@ value that gives a browser a waiting sign-in's id,
--- for as long as it waits, or (when empty) deletes it. It covers the
+-- for as long as it waits, or (with none) deletes it. It covers the
 -- wiki's whole path, since a password sign-in ends at the API and a
 -- provider's at its own page, and it is as strict as the session cookie.
-pendingCookie :: CookieSettings -> Text -> Text
-pendingCookie s value =
+pendingCookie :: CookieSettings -> Maybe PendingToken -> Text
+pendingCookie s token =
   T.intercalate "; " $
     [pendingCookieName <> "=" <> value, "Path=" <> s.path, "Max-Age=" <> (if T.null value then "0" else show (truncate pendingLifetime :: Int)), "HttpOnly", "SameSite=Strict"]
       <> ["Secure" | s.secure]
+  where
+    value = maybe "" (\t -> t.text) token
 
 -- | The id of a waiting sign-in, from a request's cookies, if any.
-requestPending :: Request -> Maybe Text
+requestPending :: Request -> Maybe PendingToken
 requestPending request =
   head
-    [ value
+    [ PendingToken value
     | (header, raw) <- requestHeaders request
     , header == hCookie
     , pair <- BC.split ';' raw

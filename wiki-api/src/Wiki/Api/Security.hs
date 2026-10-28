@@ -28,7 +28,8 @@
 -- = An e-mail address
 --
 -- A user may set an e-mail address ('EmailChange'). The server trusts the
--- address only after the user follows a link sent to it ('MailToken').
+-- address only after the user follows a link sent to it
+-- ('VerificationToken').
 -- Only a verified address receives a password reset.
 --
 -- = Sensitive changes need the password
@@ -71,7 +72,9 @@ module Wiki.Api.Security
   , AccountEmail (..)
 
     -- * Links by mail
-  , MailToken (..)
+  , ResetToken (..)
+  , VerificationToken (..)
+  , UnsubscribeToken (..)
   , ResetRequest (..)
   , NewPasswordByMail (..)
   , resetLifetime
@@ -215,16 +218,42 @@ data AccountEmail = AccountEmail
 --------------------------------------------------------------------------------
 -- Links by mail
 
--- | 'MailToken': the secret in a link sent by mail
--- (@\/reset-password\/\<secret>\/@, @\/verify-email\/\<secret>\/@). It is
--- random, single-use, and stored by the server only as a hash. Its 'Show'
--- instance never prints it.
-newtype MailToken = MailToken {text :: Text}
+-- | 'ResetToken': the secret in a password reset link
+-- (@\/reset-password\/\<secret>\/@), mailed when someone asks for a reset
+-- or an administrator sends the link. It is random, single-use, and
+-- stored by the server only as a hash. Its 'Show' instance never prints
+-- it. The three kinds of secret mailed in a link ('ResetToken',
+-- 'VerificationToken', 'UnsubscribeToken') are separate types, so that
+-- one cannot be passed where another is expected.
+newtype ResetToken = ResetToken {text :: Text}
   deriving stock (Eq, Ord, Generic)
   deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
 
-instance Show MailToken where
-  showsPrec _ _ rest = "MailToken <hidden>" <> rest
+instance Show ResetToken where
+  showsPrec _ _ rest = "ResetToken <hidden>" <> rest
+
+-- | 'VerificationToken': the secret in the link that verifies a user's
+-- e-mail address (@\/verify-email\/\<secret>\/@). It is random,
+-- single-use, and stored by the server only as a hash. Its 'Show'
+-- instance never prints it.
+newtype VerificationToken = VerificationToken {text :: Text}
+  deriving stock (Eq, Ord, Generic)
+  deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
+
+instance Show VerificationToken where
+  showsPrec _ _ rest = "VerificationToken <hidden>" <> rest
+
+-- | 'UnsubscribeToken': the secret in the link at the end of a
+-- notification mail that turns notification mail off
+-- (@\/unsubscribe\/\<secret>\/@). The server signs the user's id to make
+-- it, so it keeps working until the server's key changes. Its 'Show'
+-- instance never prints it.
+newtype UnsubscribeToken = UnsubscribeToken {text :: Text}
+  deriving stock (Eq, Ord, Generic)
+  deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
+
+instance Show UnsubscribeToken where
+  showsPrec _ _ rest = "UnsubscribeToken <hidden>" <> rest
 
 -- | 'ResetRequest': request a password reset, @POST
 -- \/api\/v1\/password-reset@, with a login or an e-mail address.

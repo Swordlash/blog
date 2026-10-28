@@ -219,7 +219,7 @@ callback logger env signing mount p params request respond = do
                   Right (SecondFactorFor user) -> do
                     logged "second-factor" [("user", user.id.text)]
                     held <- holdSignIn env.pending now user.id user.login flow.next
-                    respond (page status200 (clearing <> [(hSetCookie, encodeUtf8 (pendingCookie signing.cookies held))]) (codeForm mount p Nothing))
+                    respond (page status200 (clearing <> [(hSetCookie, encodeUtf8 (pendingCookie signing.cookies (Just held)))]) (codeForm mount p Nothing))
         _ -> do
           logged "unknown" []
           refused status400 "Cannot sign in" "This sign-in has expired, or was not started in this browser: start it again." mount
@@ -232,7 +232,7 @@ secondStep logger env signing mount p request respond = do
   body <- strictRequestBody request
   let code = fromMaybe "" (head [v | (k, Just v) <- parseQueryText (toS body), k == "code"])
       held = requestPending request
-      clearing = [(hSetCookie, encodeUtf8 (pendingCookie signing.cookies ""))]
+      clearing = [(hSetCookie, encodeUtf8 (pendingCookie signing.cookies Nothing))]
       logged outcome extra = logWith logger Info ([("event", "oidc"), ("provider", p.option.name), ("outcome", outcome)] <> extra)
       expired = respond (page status400 clearing (problem "Cannot sign in" "This sign-in has expired, or was begun in another browser: sign in again." mount))
   waiting <- maybe (pure Nothing) (pendingSignIn env.pending now) held

@@ -11,7 +11,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Gen, chooseInt, elements, forAll, oneof, vectorOf, (===))
 import Wiki.Api.Account (InvitationToken (..))
-import Wiki.Api.Security (MailToken (..))
+import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.App.Route
 import Wiki.Core.Slug (Slug, mkSlug)
 
@@ -53,9 +53,9 @@ genRoute =
     , SpacePages <$> genPath
     , Posts <$> genPath <*> chooseInt (-3, 40)
     , Invite . InvitationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
-    , ResetPassword . MailToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
-    , VerifyEmail . MailToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
-    , Unsubscribe . MailToken <$> elements ["u-1.0123abcd", "x"]
+    , ResetPassword . ResetToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
+    , VerifyEmail . VerificationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
+    , Unsubscribe . UnsubscribeToken <$> elements ["u-1.0123abcd", "x"]
     , pure AssistantSettings
     ]
 
@@ -137,9 +137,9 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/s/a/p/b/slides/?slide=99&step=99" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 99 99)
       print route (Invite (InvitationToken "c2VjcmV0-_x")) `shouldBe` "/invite/c2VjcmV0-_x/"
       parse route "/invite/c2VjcmV0" `shouldBe` Right (Invite (InvitationToken "c2VjcmV0"))
-      print route (ResetPassword (MailToken "c2VjcmV0-_x")) `shouldBe` "/reset-password/c2VjcmV0-_x/"
-      parse route "/verify-email/c2VjcmV0/" `shouldBe` Right (VerifyEmail (MailToken "c2VjcmV0"))
-      parse route "/unsubscribe/u-1.0123abcd/" `shouldBe` Right (Unsubscribe (MailToken "u-1.0123abcd"))
+      print route (ResetPassword (ResetToken "c2VjcmV0-_x")) `shouldBe` "/reset-password/c2VjcmV0-_x/"
+      parse route "/verify-email/c2VjcmV0/" `shouldBe` Right (VerifyEmail (VerificationToken "c2VjcmV0"))
+      parse route "/unsubscribe/u-1.0123abcd/" `shouldBe` Right (Unsubscribe (UnsubscribeToken "u-1.0123abcd"))
       parse route "/assistant/" `shouldBe` Right AssistantSettings
       print route AssistantSettings `shouldBe` "/assistant/"
       -- A space may be called invite: spaces are below /s/.

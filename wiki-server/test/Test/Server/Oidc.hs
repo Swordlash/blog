@@ -299,7 +299,7 @@ overHttp = describe "over HTTP" $ do
     it "makes the account with an invitation, and uses the invitation up" $ withOidc $ \fake r -> do
       settleAccess r Closed
       invited :: Invited <- sendJson r methodPost (onAdmin r links.admin.invite) NewInvitation {email = "guest@example.org"} >>= jsonAs 201
-      token <- maybe (assertFailure "no secret") pure invited.token
+      token <- maybe (assertFailure "no secret") pure ((\t -> t.text) <$> invited.token)
       writeIORef fake.user (person "guest")
       c <- signedInWith r "acme" ("next=%2F&invite=" <> token) []
       loginOf <$> sessionOf r [c] `shouldReturn` Just "guest"

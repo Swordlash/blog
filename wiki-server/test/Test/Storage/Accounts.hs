@@ -122,7 +122,9 @@ accounts = describe "the storage's accounts" $ do
     now <- getCurrentTime
     Right (user, token) <- signIn st now "127.0.0.1" "ada" (Password "correct horse")
     user `shouldBe` made.user
-    T.length token `shouldBe` 43
+    T.length token.text `shouldBe` 43
+    -- The secret never reaches a log through show.
+    (show token :: Text) `shouldBe` "SessionToken <hidden>"
     -- As people type a login: without regard to case or blanks around it.
     signIn st now "127.0.0.1" " ADA " (Password "correct horse") >>= (`shouldSatisfy` isRight)
 
@@ -179,8 +181,8 @@ sessions = describe "sessions" $ do
   it "are found by the id their cookie carries, and by nothing else" $ withEmpty $ \st -> do
     (ada, now, token) <- signedIn st
     resolveSession st now "127.0.0.1" token `shouldReturn` Just Resolved {user = ada.user.id, refreshed = False}
-    resolveSession st now "127.0.0.1" (tokenHash token) `shouldReturn` Nothing
-    other <- newToken
+    resolveSession st now "127.0.0.1" (SessionToken (tokenHash token.text)) `shouldReturn` Nothing
+    other <- SessionToken <$> newToken
     resolveSession st now "127.0.0.1" other `shouldReturn` Nothing
 
   it "end when signed out" $ withEmpty $ \st -> do

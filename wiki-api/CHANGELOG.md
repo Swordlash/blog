@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The secrets mailed in links are three types instead of one `MailToken`
+(WP5.15): `ResetToken` (a password reset), `VerificationToken` (an
+address's verification) and `UnsubscribeToken` (turning notification mail
+off), each with a hidden `Show`, so that one cannot be passed where another
+goes. The routes that take them changed type, not address. `Invited.token`
+is a `Maybe InvitationToken`, and `Invited` derives `Show`.
+
 The file name segment of an attachment's content route is a `FileName`
 (WP5.15). The address is unchanged.
 

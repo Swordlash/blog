@@ -234,7 +234,7 @@ resets m = describe "a password reset" $ do
     serveDemo
     answerWith "GET" "api/v1/session" 200 nobody
     answerRaw "POST" "api/v1/password-reset/s3cr3t" 204 ""
-    ui <- startServer m (ResetPassword (MailToken "s3cr3t"))
+    ui <- startServer m (ResetPassword (ResetToken "s3cr3t"))
     find ui ".reset-form input[name=new]" >>= (`typeText` "a brand new password")
     find ui ".reset-form input[name=repeat]" >>= (`typeText` "a brand new password")
     find ui ".reset-form button[type=submit]" >>= click
@@ -249,7 +249,7 @@ resets m = describe "a password reset" $ do
     serverStarts
     serveDemo
     answerWith "GET" "api/v1/session" 200 nobody
-    ui <- startServer m (ResetPassword (MailToken "used"))
+    ui <- startServer m (ResetPassword (ResetToken "used"))
     find ui ".reset-form input[name=new]" >>= (`typeText` "a brand new password")
     find ui ".reset-form input[name=repeat]" >>= (`typeText` "a brand new password")
     find ui ".reset-form button[type=submit]" >>= click
@@ -262,7 +262,7 @@ resets m = describe "a password reset" $ do
     serveDemo
     answerWith "GET" "api/v1/session" 200 nobody
     answerRaw "POST" "api/v1/email-verification/s3cr3t" 204 ""
-    ui <- startServer m (VerifyEmail (MailToken "s3cr3t"))
+    ui <- startServer m (VerifyEmail (VerificationToken "s3cr3t"))
     -- Nothing is asked before the button is pressed.
     askedWith "POST" `shouldReturn` []
     find ui ".verify-confirm" >>= click

@@ -35,7 +35,7 @@ import Data.Type.Equality (type (~))
 import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Notifications (NotificationSettings, NotificationSettingsChange, Notifications, ReadMark)
-import Wiki.Api.Security (MailToken)
+import Wiki.Api.Security (UnsubscribeToken)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Notification (Watch, WatchTarget)
 import Wiki.Core.Version (Author)
@@ -93,8 +93,8 @@ class (Monad m) => MonadNotifications m where
   -- | Follow the unsubscribe link in a notification mail: mail to the user
   -- the link names is turned off. 'NotFound' for a link that is not a
   -- real one; 'Invalid' where nothing is mailed (the demo).
-  unsubscribe :: MailToken -> m (Either WikiError ())
-  default unsubscribe :: (MonadTrans t, m ~ t n, MonadNotifications n) => MailToken -> m (Either WikiError ())
+  unsubscribe :: UnsubscribeToken -> m (Either WikiError ())
+  default unsubscribe :: (MonadTrans t, m ~ t n, MonadNotifications n) => UnsubscribeToken -> m (Either WikiError ())
   unsubscribe = lift . unsubscribe
 
 -- | A component's handlers reach the backend through its monad.

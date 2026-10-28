@@ -20,12 +20,12 @@ import Data.Row (Empty)
 import Halogen qualified as H
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Security (MailToken)
+import Wiki.Api.Security (UnsubscribeToken)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.View.Common (errorMessage)
 
-newtype Input = Input {token :: MailToken}
+newtype Input = Input {token :: UnsubscribeToken}
 
 data Outcome
   = Waiting

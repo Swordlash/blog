@@ -85,7 +85,7 @@ import Wiki.Api.Export (ExportFormat)
 import Wiki.Api.Import (ImportPlan, ImportSummary)
 import Wiki.Api.Info (ServerInfo)
 import Wiki.Api.Notifications (NotificationsApi (..))
-import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, MailToken, NewPasswordByMail, OneTimeCode, RecoveryCodes, ResetRequest, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment)
+import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, NewPasswordByMail, OneTimeCode, RecoveryCodes, ResetRequest, ResetToken, SecondFactorState, SessionRef, SessionSummary, TotpEnrolment, UnsubscribeToken, VerificationToken)
 import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
@@ -132,7 +132,7 @@ data WikiApi mode = WikiApi
   -- a sign-in that has expired or was never started in this browser is
   -- 'Wiki.Api.Error.Invalid'.
   , passwordReset :: mode :- "password-reset" :> NamedRoutes PasswordResetApi
-  , emailVerification :: mode :- "email-verification" :> Capture "token" MailToken :> PostNoContent
+  , emailVerification :: mode :- "email-verification" :> Capture "token" VerificationToken :> PostNoContent
   -- ^ Follow a link that verifies an e-mail address: the address the link
   -- was sent to becomes the user's verified address, if it is still the
   -- user's address. A link that has been used or has expired, or whose
@@ -174,7 +174,7 @@ data WikiApi mode = WikiApi
   , notifications :: mode :- "notifications" :> NamedRoutes NotificationsApi
   -- ^ The signed-in user's notifications, the pages they watch, and how
   -- they are notified ("Wiki.Api.Notifications").
-  , unsubscribe :: mode :- "unsubscribe" :> Capture "token" MailToken :> PostNoContent
+  , unsubscribe :: mode :- "unsubscribe" :> Capture "token" UnsubscribeToken :> PostNoContent
   -- ^ Follow the unsubscribe link in a notification mail: notification
   -- mail is turned off for the user the link names, without signing in. An
   -- invalid link is 'Wiki.Api.Error.NotFound'.
@@ -519,7 +519,7 @@ data PasswordResetApi mode = PasswordResetApi
   -- only to a user's verified address. Too many requests from one address
   -- are 'Wiki.Api.Error.TooManyRequests'; a server that sends no mail
   -- responds 'Wiki.Api.Error.Invalid', for every login alike.
-  , reset :: mode :- Capture "token" MailToken :> ReqBody '[JSON] NewPasswordByMail :> PostNoContent
+  , reset :: mode :- Capture "token" ResetToken :> ReqBody '[JSON] NewPasswordByMail :> PostNoContent
   -- ^ Set a new password with a reset link, which ends every session the
   -- user had; they then sign in with the new password. A link that has
   -- been used or has expired is 'Wiki.Api.Error.NotFound'; an invalid

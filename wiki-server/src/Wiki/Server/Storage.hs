@@ -139,12 +139,12 @@ import Data.UUID.Types qualified as UUID
 import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, open, query, query_, withConnection)
 import Protolude
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize, removePathForcibly)
-import Wiki.Api.Account (Account (..), NewAccount (..), providerOnly)
+import Wiki.Api.Account (Account (..), InvitationToken (..), NewAccount (..), providerOnly)
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), invitationLifetime)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark)
-import Wiki.Api.Security (MailToken (..), resetLifetime)
+import Wiki.Api.Security (ResetToken (..), resetLifetime)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), applyChange, checkServerSettings, kindName, secretState, securityName)
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), anonymous, anonymousIn, maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -889,7 +889,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   -- The storage sends no mail. Whether the server does, the server's API
   -- says itself ("Wiki.Server.Api").
   invitations = run Reads invitationsTx
-  invite email = liftIO newToken >>= run Writes . inviteTx email
+  invite email = liftIO (InvitationToken <$> newToken) >>= run Writes . inviteTx email
   revokeInvitation = run Writes . revokeInvitationTx
   unlinkUserIdentity u = run Writes . unlinkUserIdentityTx u
   removeSecondFactor = run Writes . removeSecondFactorTx
@@ -1964,7 +1964,7 @@ data PasswordLink = PasswordLink
 -- address is verified. The limits of "Forgot your password?" do not apply,
 -- but a user who was given a link less than a minute ago gets none
 -- ('Nothing'), so that a button clicked twice sends one mail.
-passwordLinkFor :: (MonadIO m) => Bool -> UTCTime -> Text -> UserId -> SqliteWiki m (Either WikiError (Maybe PasswordLink))
+passwordLinkFor :: (MonadIO m) => Bool -> UTCTime -> ResetToken -> UserId -> SqliteWiki m (Either WikiError (Maybe PasswordLink))
 passwordLinkFor mailing at token u = run Writes $ do
   requireAdministrator
   user <- findUser u
@@ -1980,7 +1980,7 @@ passwordLinkFor mailing at token u = run Writes $ do
         then pure Nothing
         else do
           let expiresAt = addUTCTime resetLifetime at
-          db (\c -> insertResetToken c u (tokenHash token) at expiresAt)
+          db (\c -> insertResetToken c u (tokenHash token.text) at expiresAt)
           record "user.password-link" (userSubject user) []
           pure (Just PasswordLink {user, email = Email email, expiresAt})
     _ -> invalid (user.displayName <> " has no verified address: type a password for them.")
@@ -2116,14 +2116,14 @@ invitationsTx = do
 
 -- | An invitation for an address, with this secret for its link, in place
 -- of any the address had.
-inviteTx :: Text -> Text -> Tx Invited
+inviteTx :: Text -> InvitationToken -> Tx Invited
 inviteTx raw token = do
   requireAdministrator
   email <- either invalid pure (parseEmail raw)
   i <- InvitationId <$> newId
   t <- now
   let invitation = Invitation {id = i, email, createdAt = t, expiresAt = addUTCTime invitationLifetime t, expired = False}
-  db (\c -> insertInvitation c invitation (tokenHash token))
+  db (\c -> insertInvitation c invitation (tokenHash token.text))
   record "invitation.create" Audit.Subject {kind = "invitation", id = Just i.text, name = email.text} []
   pure Invited {invitation, token = Just token, mailError = Nothing}
 
@@ -2505,7 +2505,7 @@ instance (MonadIO m) => MonadNotifications (SqliteWiki m) where
   setWatching target = run Writes . setWatchingTx target
   notificationSettings = run Reads notificationSettingsTx
   setNotificationSettings = run Writes . setNotificationSettingsTx
-  unsubscribe (MailToken token) =
+  unsubscribe token =
     run Writes (db (`Notifications.unsubscribeUser` token) >>= \found -> unless found (failWith NotFound))
 
 --------------------------------------------------------------------------------

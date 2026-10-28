@@ -211,7 +211,7 @@ invitations = describe "an invitation, where the server mails nothing" $ do
     made <- inviteAs r "bea@example.org"
     made.invitation.email.text `shouldBe` "bea@example.org"
     made.mailError `shouldBe` Nothing
-    token <- maybe (panic "no secret") pure made.token
+    token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
     listed :: Invitations <- getUrl r (onAdmin r links.admin.invitations) >>= jsonAs 200
     (listed.mailing, map (\i -> (i.email.text, i.expired)) listed.invitations) `shouldBe` (False, [("bea@example.org", False)])
     info :: InvitationInfo <- details r token >>= jsonAs 200
@@ -238,20 +238,20 @@ invitations = describe "an invitation, where the server mails nothing" $ do
 
   it "leaves the invitation as it was when the login is taken" $ withDemoRunning identity $ \r -> do
     made <- inviteAs r "bea@example.org"
-    token <- maybe (panic "no secret") pure made.token
+    token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
     (accept r token "editor" "a long password" >>= jsonAs 409) >>= (`shouldSatisfy` \case Conflict _ -> True; _ -> False)
     (accept r token "bea" "a long password") >>= jsonAs @SessionInfo 200 >>= \s -> (\u -> u.login.text) <$> s.user `shouldBe` Just "bea"
 
   it "gives the account create-spaces when the settings say so" $ withDemoRunning identity $ \r -> do
     settle r WikiSettings {access = Closed, newAccountsCreateSpaces = True, adminCreatesPasswordAccounts = True}
     made <- inviteAs r "bea@example.org"
-    token <- maybe (panic "no secret") pure made.token
+    token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
     info :: SessionInfo <- accept r token "bea" "a long password" >>= jsonAs 200
     info.grants.global `shouldSatisfy` any (\g -> g.permission == CreateSpaces)
 
   it "is refused once revoked, and revoking it again finds nothing" $ withDemoRunning identity $ \r -> do
     made <- inviteAs r "bea@example.org"
-    token <- maybe (panic "no secret") pure made.token
+    token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
     revoked <- send r methodDelete (onAdmin r (links.admin.revokeInvitation made.invitation.id)) [] ""
     revoked.status `shouldBe` 204
     (details r token >>= jsonAs 404) `shouldReturn` NotFound
@@ -260,7 +260,7 @@ invitations = describe "an invitation, where the server mails nothing" $ do
 
   it "is refused once it has expired, and listed as expired" $ withDemoRunning identity $ \r -> do
     made <- inviteAs r "bea@example.org"
-    token <- maybe (panic "no secret") pure made.token
+    token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
     past <- addUTCTime (-60) <$> getCurrentTime
     withConnection (databaseFile r.dataDir) $ \c ->
       execute c "UPDATE invitations SET expires_at = ? WHERE id = ?" (T.pack (iso8601Show past), made.invitation.id.text)
@@ -272,9 +272,9 @@ invitations = describe "an invitation, where the server mails nothing" $ do
   it "replaces the invitation an address had, whose link no longer works" $ withDemoRunning identity $ \r -> do
     first' <- inviteAs r "bea@example.org"
     second' <- inviteAs r "BEA@example.org"
-    old <- maybe (panic "no secret") pure first'.token
+    old <- maybe (panic "no secret") pure ((\t -> t.text) <$> first'.token)
     (details r old >>= jsonAs 404) `shouldReturn` NotFound
-    new <- maybe (panic "no secret") pure second'.token
+    new <- maybe (panic "no secret") pure ((\t -> t.text) <$> second'.token)
     _ <- details r new >>= jsonAs @InvitationInfo 200
     listed :: Invitations <- getUrl r (onAdmin r links.admin.invitations) >>= jsonAs 200
     length listed.invitations `shouldBe` 1
@@ -309,6 +309,6 @@ mailed = describe "an invitation, where the server mails them" $ do
       _ <- mailingThrough "unreachable.test" r
       made <- inviteAs r "bea@example.org"
       made.mailError `shouldSatisfy` maybe False (T.isInfixOf "did not answer")
-      token <- maybe (panic "no secret") pure made.token
+      token <- maybe (panic "no secret") pure ((\t -> t.text) <$> made.token)
       _ <- details r token >>= jsonAs @InvitationInfo 200
       pass

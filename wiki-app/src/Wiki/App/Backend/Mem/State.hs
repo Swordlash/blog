@@ -1428,7 +1428,7 @@ inviteIn now token raw st = do
       pending = Pending {email, createdAt = now, expiresAt = addUTCTime invitationLifetime now, token}
       others = Map.filter (\p -> T.toCaseFold p.email.text /= T.toCaseFold email.text) st1.invitations
       st2 = st1 {invitations = Map.insert (InvitationId i) pending others}
-  pure (st2, Invited {A.invitation = invitationOf now (InvitationId i) pending, A.token = Just token, A.mailError = Nothing})
+  pure (st2, Invited {A.invitation = invitationOf now (InvitationId i) pending, A.token = Just (Acc.InvitationToken token), A.mailError = Nothing})
 
 -- | Revoke an invitation.
 revokeInvitationIn :: InvitationId -> Write ()

@@ -14,7 +14,8 @@ import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Assistant (MonadAssistant (..), assistantDatabase, readSettings, updateAssistantSettings, writeSettings)
 import Wiki.Core.Assistant
-  ( AssistantError (..)
+  ( ApiKey (..)
+  , AssistantError (..)
   , ErrorKind (..)
   , Listed (..)
   , Provider (..)
@@ -55,8 +56,8 @@ spec = describe "Wiki.App.Assistant's settings" $ do
     run (writeSettings db alice withKeys)
     run (readSettings db bob) `shouldReturn` defaultSettings
     run (writeSettings db bob (withKey Anthropic (Just "sk-bob") defaultSettings))
-    (\s -> (settingsOf Anthropic s).key) <$> run (readSettings db alice) `shouldReturn` Just "sk-ant"
-    (\s -> (settingsOf Anthropic s).key) <$> run (readSettings db bob) `shouldReturn` Just "sk-bob"
+    (\s -> (settingsOf Anthropic s).key) <$> run (readSettings db alice) `shouldReturn` Just (ApiKey "sk-ant")
+    (\s -> (settingsOf Anthropic s).key) <$> run (readSettings db bob) `shouldReturn` Just (ApiKey "sk-bob")
     sort <$> run (IDB.keys db "settings") `shouldReturn` ["user-alice", "user-bob"]
 
   it "forgets a key on request, and keeps nothing once nothing is set" $ do
@@ -65,7 +66,7 @@ spec = describe "Wiki.App.Assistant's settings" $ do
     run (writeSettings db alice (withKey OpenAI Nothing withKeys))
     s <- run (readSettings db alice)
     (settingsOf OpenAI s).key `shouldBe` Nothing
-    (settingsOf Anthropic s).key `shouldBe` Just "sk-ant"
+    (settingsOf Anthropic s).key `shouldBe` Just (ApiKey "sk-ant")
     run (writeSettings db alice (withKey Anthropic Nothing s))
     run (IDB.keys db "settings") `shouldReturn` []
 

@@ -97,7 +97,7 @@ import Wiki.Api.Export (formatMediaType)
 import Wiki.Api.Info (ServerInfo (..), apiVersion)
 import Wiki.Api.Links (searchQueryOf)
 import Wiki.Api.Notifications (Watching (..))
-import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), TotpEnrolment (..))
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), TotpEnrolment (..), VerificationToken)
 import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), named, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
@@ -128,9 +128,9 @@ import Wiki.Server.Log (ErrorRing, Level (..), Logger, logWith, recentErrors)
 import Wiki.Server.Mail (Mailer (..), SendMail, invitationMessage, mailerFrom, resetMessage, testMessage, verificationMessage)
 import Wiki.Server.Metrics (Metrics)
 import Wiki.Server.Oidc (Endpoints (..), Flows, Provider, ProviderCache, endpointsOf, freshProvider, optionOf, providersFor, signInProvider)
-import Wiki.Server.Password (newToken)
+import Wiki.Server.Password (SessionToken (..), newToken)
 import Wiki.Server.Reset qualified as Reset
-import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
+import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, PendingToken, checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
 import Wiki.Server.SecondFactor qualified as SecondFactor
 import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
@@ -203,10 +203,10 @@ data Signing = Signing
   { address :: Text
   -- ^ The address the request came from; sign-in attempts are counted per
   -- address.
-  , token :: Maybe Text
+  , token :: Maybe SessionToken
   -- ^ The session id its cookie carried, if any: the session that signing
   -- out (or in again) ends.
-  , pending :: Maybe Text
+  , pending :: Maybe PendingToken
   -- ^ The id of a sign-in waiting for its second factor, from the
   -- request's cookie, if any ("Wiki.Server.SecondFactor").
   , cookies :: CookieSettings
@@ -354,7 +354,7 @@ handlers env caller =
                 -- yet: the second factor's code comes next, with the
                 -- cookie that names this sign-in.
                 held <- liftIO (holdSignIn env.pending now user.id user.login "")
-                throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies held))]}
+                throwError (apiError ApiError.SecondFactorRequired) {errHeaders = [jsonHeader, (hSetCookie, encodeUtf8 (pendingCookie s.cookies (Just held)))]}
               Left _ -> do
                 liftIO (Limiter.failed env.limiter now credentials.login s.address)
                 refuse ApiError.Unauthenticated
@@ -674,14 +674,14 @@ handlers env caller =
     clampLimit q = q {limit = max 0 (min 200 q.limit)}
     -- Answer a sign-in that just succeeded: end the browser's previous
     -- session, if any, and set the cookie of the new one.
-    startedAs :: Signing -> User -> Text -> Handler (WithCookie SessionInfo)
+    startedAs :: Signing -> User -> SessionToken -> Handler (WithCookie SessionInfo)
     startedAs s user token = do
       liftIO (traverse_ (endSession env.storage) s.token)
       signedIn <- liftIO (runSqliteWiki env.storage (AsUser user.id) session)
       addHeader (sessionCookie s.cookies token) <$> sessionInfo signedIn
     -- Create one's own account and sign in, limited per address: every
     -- attempt counts toward the limit.
-    making :: (UTCTime -> IO (Either WikiError (User, Text))) -> Handler (WithCookie SessionInfo)
+    making :: (UTCTime -> IO (Either WikiError (User, SessionToken))) -> Handler (WithCookie SessionInfo)
     making attempt = do
       s <- signingHere
       now <- liftIO getCurrentTime
@@ -779,7 +779,7 @@ handlers env caller =
       pure EmailState {email, verified, mailing, mailError, asksPassword}
     -- Mail the link that verifies a user's address. The result is the
     -- reason it was not sent, if it was not.
-    mailVerification :: UserId -> (Email, Text) -> IO (Maybe Text)
+    mailVerification :: UserId -> (Email, VerificationToken) -> IO (Maybe Text)
     mailVerification u (address, token) =
       currentMailer env >>= \case
         Nothing -> pure (Just "This wiki does not send mail yet.")
@@ -796,7 +796,7 @@ handlers env caller =
     mailPasswordLink u = do
       now <- liftIO getCurrentTime
       mailer <- liftIO (currentMailer env)
-      token <- liftIO newToken
+      token <- liftIO (ResetToken <$> newToken)
       wiki (passwordLinkFor (isJust mailer) now token u) >>= \case
         Nothing ->
           throwError

@@ -44,6 +44,7 @@ module Wiki.Core.Assistant
   , effortOf
 
     -- * Settings
+  , ApiKey (..)
   , Settings (..)
   , ProviderSettings (..)
   , defaultSettings
@@ -81,6 +82,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, nominalDay)
 import Protolude
+import Text.Show (Show (showsPrec))
 import Wiki.Core.Url (Url (..))
 
 -- | 'Provider': the service the assistant sends requests to. 'Scripted' is
@@ -332,9 +334,21 @@ defaultEffort = "medium"
 effortOf :: ProviderSettings -> Text
 effortOf ps = fromMaybe defaultEffort ps.effort
 
+-- | 'ApiKey': the key a provider's API is called with, which the user
+-- pastes into the settings. Anyone who has it can spend the user's credit
+-- with the provider. Its 'Show' instance never prints it, so that it
+-- cannot reach a log or an error message through 'show'. The JSON of the
+-- stored settings is the bare text.
+newtype ApiKey = ApiKey {text :: Text}
+  deriving stock (Eq, Ord)
+  deriving newtype (FromJSON, ToJSON)
+
+instance Show ApiKey where
+  showsPrec _ _ rest = "ApiKey <hidden>" <> rest
+
 -- | 'ProviderSettings': what a user has set for one provider.
 data ProviderSettings = ProviderSettings
-  { key :: Maybe Text
+  { key :: Maybe ApiKey
   -- ^ The API key, if one was given.
   , model :: Maybe Text
   -- ^ The chosen model, if any ('chosenModel').
@@ -394,7 +408,7 @@ alter p f s = s {byProvider = Map.insert p (f (settingsOf p s)) s.byProvider}
 -- models.
 withKey :: Provider -> Maybe Text -> Settings -> Settings
 withKey p k = alter p $ \(ProviderSettings old m e b f u) ->
-  let new = trimmed k
+  let new = ApiKey <$> trimmed k
    in if new == old then ProviderSettings old m e b f u else ProviderSettings new m e b Nothing False
 
 -- | The settings with a provider's model set; an empty one means none chosen, the default.
@@ -472,7 +486,7 @@ serviceName p ps = case baseUrlOf p ps of
 data Ready = Ready
   { provider :: Provider
   , model :: Text
-  , key :: Text
+  , key :: ApiKey
   , effort :: Text
   , baseUrl :: Maybe Url
   }
@@ -487,7 +501,7 @@ ready s = readyFor s.provider s
 -- provider (its model list is fetched with them); or what is missing.
 readyFor :: Provider -> Settings -> Either Text Ready
 readyFor p s
-  | usable p ps = Right Ready {provider = p, model = chosenModel p ps, key = fromMaybe "" ps.key, effort = effortOf ps, baseUrl = baseUrlOf p ps}
+  | usable p ps = Right Ready {provider = p, model = chosenModel p ps, key = fromMaybe (ApiKey "") ps.key, effort = effortOf ps, baseUrl = baseUrlOf p ps}
   | otherwise = Left ("There is no API key for " <> providerLabel p <> " yet: add one in the assistant's settings.")
   where
     ps = settingsOf p s
@@ -590,7 +604,7 @@ instance FromJSON AssistantError where
 -- | The message the panel and the settings show for an error: what it
 -- means, then the provider's own message and the status, with the key
 -- removed ('redact') wherever it appears, since a provider may quote it.
-errorText :: Maybe Text -> AssistantError -> Text
+errorText :: Maybe ApiKey -> AssistantError -> Text
 errorText key e =
   meaning <> (if T.null said then "" else " The provider said: " <> said) <> maybe "" (\s -> " (" <> show s <> ")") e.status
   where
@@ -610,10 +624,10 @@ errorText key e =
 -- and anything that looks like a key or a part of one (a word starting
 -- with @sk-@, as both providers' keys do, which a provider may quote
 -- masked except for its ends).
-redact :: Maybe Text -> Text -> Text
+redact :: Maybe ApiKey -> Text -> Text
 redact key = T.intercalate " " . map hideWord . T.splitOn " " . maybe identity hideKey key
   where
-    hideKey k
+    hideKey (ApiKey k)
       | T.length k < 4 = identity
       | otherwise = T.replace k "[your key]"
     hideWord w = case T.breakOn "sk-" w of

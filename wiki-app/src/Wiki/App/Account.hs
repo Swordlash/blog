@@ -69,7 +69,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Halogen.Subscription (Emitter)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken, NewAccount, PasswordChange, SignInMethods)
-import Wiki.Api.Security (MailToken)
+import Wiki.Api.Security (ResetToken, VerificationToken)
 import Wiki.App.Backend (Session, WikiError (..))
 import Wiki.Core.User (Password (..))
 
@@ -199,14 +199,14 @@ class (Monad m) => MonadAccount m where
   -- | Set a new password with a reset link: every session of the user
   -- ends, and nobody is signed in. 'NotFound' for a link that no longer
   -- works.
-  resetPassword :: MailToken -> Password -> m (Either WikiError ())
-  default resetPassword :: (MonadTrans t, m ~ t n, MonadAccount n) => MailToken -> Password -> m (Either WikiError ())
+  resetPassword :: ResetToken -> Password -> m (Either WikiError ())
+  default resetPassword :: (MonadTrans t, m ~ t n, MonadAccount n) => ResetToken -> Password -> m (Either WikiError ())
   resetPassword t = lift . resetPassword t
 
   -- | Follow a link that verifies an e-mail address. 'NotFound' for one
   -- that no longer works.
-  verifyEmail :: MailToken -> m (Either WikiError ())
-  default verifyEmail :: (MonadTrans t, m ~ t n, MonadAccount n) => MailToken -> m (Either WikiError ())
+  verifyEmail :: VerificationToken -> m (Either WikiError ())
+  default verifyEmail :: (MonadTrans t, m ~ t n, MonadAccount n) => VerificationToken -> m (Either WikiError ())
   verifyEmail = lift . verifyEmail
 
 -- | A component's handlers sign in and out through its monad.
@@ -226,8 +226,8 @@ data Accounts m = Accounts
   , changePassword :: PasswordChange -> m (Either SignInError SignInMethods)
   , confirmSecondFactor :: Text -> m (Either SignInError Session)
   , requestPasswordReset :: Text -> m (Either SignInError ())
-  , resetPassword :: MailToken -> Password -> m (Either WikiError ())
-  , verifyEmail :: MailToken -> m (Either WikiError ())
+  , resetPassword :: ResetToken -> Password -> m (Either WikiError ())
+  , verifyEmail :: VerificationToken -> m (Either WikiError ())
   }
 
 -- | The methods, from the monad's instance.

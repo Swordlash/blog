@@ -35,6 +35,7 @@ module Wiki.Server.Password
   , checkNewPassword
 
     -- * Session ids
+  , SessionToken (..)
   , newToken
   , newPublicId
   , tokenHash
@@ -50,6 +51,7 @@ import Data.ByteArray.Encoding (Base (..), convertFromBase, convertToBase)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Protolude
+import Text.Show (Show (showsPrec))
 import Wiki.Core.User (Password (..), checkNewPassword)
 
 -- | What a hash is made with: memory in KiB, passes, lanes.
@@ -142,6 +144,17 @@ unbase64 :: Text -> Either [Char] ByteString
 unbase64 t = convertFromBase Base64 (encodeUtf8 (padded t))
   where
     padded s = s <> T.replicate ((4 - T.length s `mod` 4) `mod` 4) "="
+
+-- | 'SessionToken': the secret a session's cookie carries, which signs its
+-- browser in. It is made by 'newToken', and the database stores only its
+-- 'tokenHash'. Its 'Show' instance never prints it, so that it cannot reach
+-- a log through 'show'. The application never sees it: the cookie is
+-- @HttpOnly@.
+newtype SessionToken = SessionToken {text :: Text}
+  deriving stock (Eq, Ord)
+
+instance Show SessionToken where
+  showsPrec _ _ rest = "SessionToken <hidden>" <> rest
 
 -- | A new session id: 32 random bytes, as the cookie carries them
 -- (URL-safe base64, unpadded, which a cookie value may contain as it is).

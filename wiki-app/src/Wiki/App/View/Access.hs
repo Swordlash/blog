@@ -38,7 +38,6 @@ import Halogen.HTML.Properties qualified as HP
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Account (InvitationToken (..))
 import Wiki.Api.Admin (Invitation (..), Invitations (..), Invited (..), WikiSettings (..))
 import Wiki.App.Backend (MonadLoad (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
@@ -252,7 +251,7 @@ component =
           Left e -> modify (\st -> st {busy = False, problem = Just e})
           Right invited -> do
             router <- gets (\st -> st.input.context.router)
-            url <- for invited.token $ \t -> absoluteUrl (Router.href router (Route.Invite (InvitationToken t)))
+            url <- for invited.token $ \t -> absoluteUrl (Router.href router (Route.Invite t))
             modify (\st -> st {typedEmail = "", made = Just Made {email = invited.invitation.email, link = url, mailError = invited.mailError}})
             H.raise (Changed Nothing)
       Revoke i -> change (revokeInvitation i)

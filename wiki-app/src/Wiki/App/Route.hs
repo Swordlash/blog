@@ -27,9 +27,9 @@
 -- > /search/?q=mermaid&space=docs  Search (Just "mermaid") (Just [docs]) True
 -- > /search/?q=x&space=team&only   Search (Just "x") (Just [team]) False
 -- > /invite/<secret>/              Invite (InvitationToken <secret>)
--- > /reset-password/<secret>/      ResetPassword (MailToken <secret>)
--- > /verify-email/<secret>/        VerifyEmail (MailToken <secret>)
--- > /unsubscribe/<secret>/         Unsubscribe (MailToken <secret>)
+-- > /reset-password/<secret>/      ResetPassword (ResetToken <secret>)
+-- > /verify-email/<secret>/        VerifyEmail (VerificationToken <secret>)
+-- > /unsubscribe/<secret>/         Unsubscribe (UnsubscribeToken <secret>)
 -- > /assistant/                    AssistantSettings
 --
 -- Every address except the home's ends in a slash. On a static host each
@@ -69,7 +69,7 @@ import Halogen.Router.Duplex (RouteDuplex (..), RouteDuplex', as, flag, many1, n
 import Halogen.Router.Duplex qualified as Duplex
 import Protolude
 import Wiki.Api.Account (InvitationToken (..))
-import Wiki.Api.Security (MailToken (..))
+import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Core.Id (SpaceId)
 import Wiki.Core.Path (TreeNode (..), findChild, parsePath, renderPath, resolvePath)
 import Wiki.Core.Permission (spaceChain)
@@ -137,13 +137,13 @@ data Route
   | -- | A password reset's page, by the secret of the link mailed for it:
     -- the form that sets a new password (WP4.11 of docs/PLAN.md). Its
     -- 'Show' hides the secret, as an invitation's does.
-    ResetPassword MailToken
+    ResetPassword ResetToken
   | -- | The page of a link mailed to verify an e-mail address, by its
     -- secret.
-    VerifyEmail MailToken
+    VerifyEmail VerificationToken
   | -- | The page of the unsubscribe link in a notification mail, by its
     -- secret: it turns those mails off.
-    Unsubscribe MailToken
+    Unsubscribe UnsubscribeToken
   | -- | The writing assistant's settings, the signed-in user's own (WP4.19
     -- of docs/PLAN.md): their API keys, and the provider and model to use.
     AssistantSettings
@@ -219,15 +219,15 @@ route =
       , alternative
           (\case ResetPassword t -> Just t; _ -> Nothing)
           ResetPassword
-          (prefix "reset-password" (directory (as (\t -> t.text) (Right . MailToken) segment)))
+          (prefix "reset-password" (directory (as (\t -> t.text) (Right . ResetToken) segment)))
       , alternative
           (\case VerifyEmail t -> Just t; _ -> Nothing)
           VerifyEmail
-          (prefix "verify-email" (directory (as (\t -> t.text) (Right . MailToken) segment)))
+          (prefix "verify-email" (directory (as (\t -> t.text) (Right . VerificationToken) segment)))
       , alternative
           (\case Unsubscribe t -> Just t; _ -> Nothing)
           Unsubscribe
-          (prefix "unsubscribe" (directory (as (\t -> t.text) (Right . MailToken) segment)))
+          (prefix "unsubscribe" (directory (as (\t -> t.text) (Right . UnsubscribeToken) segment)))
       ]
   where
     spaceAndPage :: (RouteDuplex' [Slug] -> RouteDuplex' [Slug]) -> RouteDuplex' ([Slug], [Slug])

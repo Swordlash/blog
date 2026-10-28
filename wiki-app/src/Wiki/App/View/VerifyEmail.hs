@@ -21,14 +21,14 @@ import Data.Row (Empty)
 import Halogen qualified as H
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Security (MailToken)
+import Wiki.Api.Security (VerificationToken)
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.View.Common (errorMessage)
 
 data Input m = Input
   { accounts :: Maybe (Accounts m)
-  , token :: MailToken
+  , token :: VerificationToken
   }
 
 data Outcome

@@ -43,11 +43,15 @@ settingsSpec = describe "settings" $ do
 
   it "keep a key per provider, trimmed, and forget it" $ do
     let s = withKey OpenAI (Just "  sk-open \n") (withKey Anthropic (Just "sk-ant-1") defaultSettings)
-    (settingsOf Anthropic s).key `shouldBe` Just "sk-ant-1"
-    (settingsOf OpenAI s).key `shouldBe` Just "sk-open"
+    (settingsOf Anthropic s).key `shouldBe` Just (ApiKey "sk-ant-1")
+    (settingsOf OpenAI s).key `shouldBe` Just (ApiKey "sk-open")
     (settingsOf OpenAI (withKey OpenAI Nothing s)).key `shouldBe` Nothing
-    (settingsOf Anthropic (withKey OpenAI Nothing s)).key `shouldBe` Just "sk-ant-1"
+    (settingsOf Anthropic (withKey OpenAI Nothing s)).key `shouldBe` Just (ApiKey "sk-ant-1")
     (settingsOf OpenAI (withKey OpenAI (Just "   ") s)).key `shouldBe` Nothing
+
+  it "never show a key, so that none reaches a log, while its JSON is the bare text" $ do
+    (show (settingsOf Anthropic (withKey Anthropic (Just "sk-ant-1") defaultSettings)) :: Text) `shouldSatisfy` (not . T.isInfixOf "sk-ant-1")
+    encode (ApiKey "sk-ant-1") `shouldBe` "\"sk-ant-1\""
 
   it "keep a model per provider, an empty one being the default" $ do
     let s = withModel OpenAI "gpt-6-luna" (withModel Anthropic "claude-sonnet-5-5" defaultSettings)
@@ -58,9 +62,9 @@ settingsSpec = describe "settings" $ do
 
   it "are ready with the chosen provider's key, and say what is missing" $ do
     let s = withKey Anthropic (Just "sk-a") defaultSettings
-    ready s `shouldBe` Right (Ready Anthropic "claude-opus-5-5" "sk-a" "medium" Nothing)
+    ready s `shouldBe` Right (Ready Anthropic "claude-opus-5-5" (ApiKey "sk-a") "medium" Nothing)
     ready (chooseProvider OpenAI s) `shouldSatisfy` isLeft
-    ready (chooseProvider Scripted defaultSettings) `shouldBe` Right (Ready Scripted "scripted" "" "medium" Nothing)
+    ready (chooseProvider Scripted defaultSettings) `shouldBe` Right (Ready Scripted "scripted" (ApiKey "") "medium" Nothing)
 
   it "are blank with nothing but defaults in them" $ do
     blankSettings defaultSettings `shouldBe` True
@@ -180,7 +184,7 @@ modelsSpec = describe "the models offered" $ do
         ps = settingsOf OpenAI onMachine
     ps.baseUrl `shouldBe` Just (Url "http://localhost:11434/v1")
     -- A server on this machine needs no key.
-    ready onMachine `shouldBe` Right (Ready OpenAI "gpt-6.1-sol" "" "medium" (Just (Url "http://localhost:11434/v1")))
+    ready onMachine `shouldBe` Right (Ready OpenAI "gpt-6.1-sol" (ApiKey "") "medium" (Just (Url "http://localhost:11434/v1")))
     usable OpenAI ps `shouldBe` True
     usable Anthropic (settingsOf Anthropic (withBaseUrl Anthropic "http://localhost:1/v1" defaultSettings)) `shouldBe` False
     serviceName OpenAI ps `shouldBe` "localhost:11434"
@@ -290,7 +294,7 @@ errorSpec = describe "an error" $ do
   it "never shows the key, nor anything that looks like one" $ do
     let key = "sk-proj-abcdefghijklmnop1234"
         e = AssistantError {kind = BadKey, status = Just 401, message = "Incorrect API key provided: " <> key <> ". Also sk-proj-****1234 was seen."}
-        shown = errorText (Just key) e
+        shown = errorText (Just (ApiKey key)) e
     shown `shouldNotSatisfy` T.isInfixOf key
     shown `shouldNotSatisfy` T.isInfixOf "1234"
     shown `shouldSatisfy` T.isInfixOf "[your key]"
@@ -302,7 +306,7 @@ errorSpec = describe "an error" $ do
 
   it "is redacted whatever the key and the message" $ property $ \(PrintableString k) (PrintableString before) (PrintableString after) ->
     let key = "sk-" <> T.filter (/= ' ') (toS k) <> "Zz9"
-     in not (key `T.isInfixOf` redact (Just key) (toS before <> key <> toS after))
+     in not (key `T.isInfixOf` redact (Just (ApiKey key)) (toS before <> key <> toS after))
 
 promptSpec :: Spec
 promptSpec = describe "the page's context" $ do

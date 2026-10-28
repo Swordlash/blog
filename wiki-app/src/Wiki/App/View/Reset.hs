@@ -25,7 +25,7 @@ import Halogen qualified as H
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
 import Protolude hiding (State)
-import Wiki.Api.Security (MailToken)
+import Wiki.Api.Security (ResetToken)
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Backend (Session (..), WikiError (..))
 import Wiki.App.View.Common (errorMessage)
@@ -34,7 +34,7 @@ import Wiki.Core.User (Password (..), User (..), minimumPasswordLength)
 data Input m = Input
   { accounts :: Maybe (Accounts m)
   -- ^ Signing in and out, on a backend where people do.
-  , token :: MailToken
+  , token :: ResetToken
   , session :: Session
   }
 

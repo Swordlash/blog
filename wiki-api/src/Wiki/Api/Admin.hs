@@ -40,7 +40,7 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Time (NominalDiffTime, UTCTime)
 import Protolude
-import Text.Show (Show (showsPrec))
+import Wiki.Api.Account (InvitationToken)
 import Wiki.Api.Security (AccountEmail)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (InvitationId, UserId)
@@ -234,7 +234,7 @@ newtype NewInvitation = NewInvitation {email :: Text}
 -- | 'Invited': a new invitation, and how it reaches the invited person.
 data Invited = Invited
   { invitation :: Invitation
-  , token :: Maybe Text
+  , token :: Maybe InvitationToken
   -- ^ The secret of its link, for the panel to show the link to copy. It
   -- is given when the invitation was not sent by mail (the server sends no
   -- mail, or sending failed), and only in this response, since the server
@@ -242,11 +242,8 @@ data Invited = Invited
   , mailError :: Maybe Text
   -- ^ Why sending it by mail failed, if it was to be sent.
   }
-  deriving stock (Eq, Generic)
+  deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
-
-instance Show Invited where
-  showsPrec _ i rest = "Invited {invitation = " <> show i.invitation <> ", token = " <> (if isJust i.token then "<hidden>" else "Nothing") <> ", mailError = " <> show i.mailError <> "}" <> rest
 
 -- | How long an invitation's link can create an account: a week, long
 -- enough for someone away for a few days, short enough that a link

@@ -39,7 +39,7 @@ import Wiki.Api.Admin (LoggedError (..), ServerStatus (..))
 import Wiki.Api.Error (ApiError, errorStatus)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Links (links, searchQueryOf)
-import Wiki.Api.Security (MailToken (..))
+import Wiki.Api.Security (ResetToken (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Backend
@@ -132,9 +132,9 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , Admin
       , Unknown
       , Invite (InvitationToken "valid")
-      , ResetPassword (MailToken "secret")
-      , VerifyEmail (MailToken "secret")
-      , Unsubscribe (MailToken "secret")
+      , ResetPassword (ResetToken "secret")
+      , VerifyEmail (VerificationToken "secret")
+      , Unsubscribe (UnsubscribeToken "secret")
       , AssistantSettings
       ]
 
@@ -207,9 +207,9 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , Unknown
            , Invite (InvitationToken "valid")
            , Invite (InvitationToken "used")
-           , ResetPassword (MailToken "secret")
-           , VerifyEmail (MailToken "secret")
-           , Unsubscribe (MailToken "secret")
+           , ResetPassword (ResetToken "secret")
+           , VerifyEmail (VerificationToken "secret")
+           , Unsubscribe (UnsubscribeToken "secret")
            , AssistantSettings
            ]
 

@@ -37,7 +37,7 @@ import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..),
 import Wiki.Api.Info (ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, pageExportUrl, searchQueryOf, searchUrl, spaceExportUrl, spaceIconUrl)
 import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..))
-import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), MailToken (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), SecondFactorState (..), SessionRef (..))
+import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), SecondFactorState (..), SessionRef (..), UnsubscribeToken (..), VerificationToken (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
@@ -89,9 +89,9 @@ stubs =
     , passwordReset =
         PasswordResetApi
           { request = \body -> if body.login == "" then refuse (Invalid "Give a login.") else pure NoContent
-          , reset = \t body -> if t == MailToken "secret" && body.password == Password "long enough" then pure NoContent else refuse NotFound
+          , reset = \t body -> if t == ResetToken "secret" && body.password == Password "long enough" then pure NoContent else refuse NotFound
           }
-    , emailVerification = \t -> if t == MailToken "secret" then pure NoContent else refuse NotFound
+    , emailVerification = \t -> if t == VerificationToken "secret" then pure NoContent else refuse NotFound
     , register = \new ->
         if new.login == "bea"
           then pure (addHeader "wiki-session=token; Path=/; HttpOnly; SameSite=Strict" Sample.sessionInfo)
@@ -285,7 +285,7 @@ stubs =
           , spaceWatch = \_ -> pure (Watch False Unchosen)
           , setSpaceWatch = \_ w -> pure (Watch w.watching Chosen)
           }
-    , unsubscribe = \t -> if t == MailToken "unsubscribe" then pure NoContent else refuse NotFound
+    , unsubscribe = \t -> if t == UnsubscribeToken "unsubscribe" then pure NoContent else refuse NotFound
     }
 
 -- | The sample invitation, made for another address.
@@ -460,9 +460,9 @@ spec = describe "a server of the API's type" $ do
       answers (getAt (n.spaceWatch s)) 200 (Watch False Unchosen)
       answers (sendJson methodPut (n.setSpaceWatch s) Watching {watching = True}) 200 (Watch True Chosen)
     it "turns mail off with an unsubscribe link's secret" $ do
-      links.unsubscribe (MailToken "unsubscribe") `shouldBe` "api/v1/unsubscribe/unsubscribe"
-      (status <$> request methodPost (links.unsubscribe (MailToken "unsubscribe")) [] "") `shouldReturn` 204
-      answers (request methodPost (links.unsubscribe (MailToken "other")) [] "") 404 NotFound
+      links.unsubscribe (UnsubscribeToken "unsubscribe") `shouldBe` "api/v1/unsubscribe/unsubscribe"
+      (status <$> request methodPost (links.unsubscribe (UnsubscribeToken "unsubscribe")) [] "") `shouldReturn` 204
+      answers (request methodPost (links.unsubscribe (UnsubscribeToken "other")) [] "") 404 NotFound
 
   describe "pages" $ do
     it "lists a space's, and finds one by its path, with its version as the ETag" $ do
@@ -725,16 +725,16 @@ spec = describe "a server of the API's type" $ do
       links.account.email `shouldBe` "api/v1/account/email"
       answers (getAt links.account.email) 200 Sample.emailState
       answers (sendJson methodPut links.account.setEmail EmailChange {email = "ada@example.com", password = Just (Password "the current one")}) 200 EmailState {email = Just (Email "ada@example.com"), verified = False, mailing = True, mailError = Nothing, asksPassword = True}
-      links.emailVerification (MailToken "secret") `shouldBe` "api/v1/email-verification/secret"
-      (status <$> request methodPost (links.emailVerification (MailToken "secret")) [] "") `shouldReturn` 204
-      answers (request methodPost (links.emailVerification (MailToken "other")) [] "") 404 NotFound
+      links.emailVerification (VerificationToken "secret") `shouldBe` "api/v1/email-verification/secret"
+      (status <$> request methodPost (links.emailVerification (VerificationToken "secret")) [] "") `shouldReturn` 204
+      answers (request methodPost (links.emailVerification (VerificationToken "other")) [] "") 404 NotFound
 
     it "asks for a password reset, and sets a new password with its link" $ do
       links.passwordReset.request `shouldBe` "api/v1/password-reset"
       (status <$> sendJson methodPost links.passwordReset.request ResetRequest {login = "ada"}) `shouldReturn` 204
-      links.passwordReset.reset (MailToken "secret") `shouldBe` "api/v1/password-reset/secret"
-      (status <$> sendJson methodPost (links.passwordReset.reset (MailToken "secret")) NewPasswordByMail {password = Password "long enough"}) `shouldReturn` 204
-      answers (sendJson methodPost (links.passwordReset.reset (MailToken "other")) NewPasswordByMail {password = Password "long enough"}) 404 NotFound
+      links.passwordReset.reset (ResetToken "secret") `shouldBe` "api/v1/password-reset/secret"
+      (status <$> sendJson methodPost (links.passwordReset.reset (ResetToken "secret")) NewPasswordByMail {password = Password "long enough"}) `shouldReturn` 204
+      answers (sendJson methodPost (links.passwordReset.reset (ResetToken "other")) NewPasswordByMail {password = Password "long enough"}) 404 NotFound
 
   describe "a space's permissions" $ do
     it "lists the grants on a space and its ancestors, with whom a grant may be given to" $ do

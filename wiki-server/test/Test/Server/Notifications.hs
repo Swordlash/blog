@@ -31,7 +31,7 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), ServerMessage (..), eventsPath)
 import Wiki.Api.Links (links)
 import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..))
-import Wiki.Api.Security (MailToken (..))
+import Wiki.Api.Security (UnsubscribeToken (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), noServerSettings)
 import Wiki.Api.Types (PageEdit (..))
 import Wiki.Api.Version (pageVersion)
@@ -229,8 +229,8 @@ byMail = describe "by mail" $
       let secret = head [T.dropEnd 1 (T.drop (T.length prefix) w) | w <- T.words m.body, prefix `T.isPrefixOf` w]
           prefix = "https://wiki.example.org/unsubscribe/" :: Text
       token <- maybe (assertFailure "no unsubscribe link") pure secret
-      (asWithout r Nothing methodPost (links.unsubscribe (MailToken (token <> "0"))) >>= jsonAs 404) `shouldReturn` NotFound
-      (.status) <$> asWithout r Nothing methodPost (links.unsubscribe (MailToken token)) `shouldReturn` 204
+      (asWithout r Nothing methodPost (links.unsubscribe (UnsubscribeToken (token <> "0"))) >>= jsonAs 404) `shouldReturn` NotFound
+      (.status) <$> asWithout r Nothing methodPost (links.unsubscribe (UnsubscribeToken token)) `shouldReturn` 204
       settings :: NotificationSettings <- asWithout r (Just people.reader) methodGet links.notifications.settings >>= jsonAs 200
       (settings.mail, settings.verifiedEmail, settings.mailing) `shouldBe` (MailOff, True, True)
       -- Told under the bell all the same, and mailed nothing more.
@@ -311,8 +311,8 @@ inTheStorage = describe "in the storage" $ do
     unsubscribeToken c (UserId "user-reader") `shouldReturn` token
     other <- unsubscribeToken c (UserId "user-editor")
     other `shouldNotBe` token
-    unsubscribeUser c (T.replace "user-reader" "user-editor" token) `shouldReturn` False
-    unsubscribeUser c "nothing" `shouldReturn` False
+    unsubscribeUser c (UnsubscribeToken (T.replace "user-reader" "user-editor" token.text)) `shouldReturn` False
+    unsubscribeUser c (UnsubscribeToken "nothing") `shouldReturn` False
     unsubscribeUser c token `shouldReturn` True
     query c "SELECT notification_mail FROM users WHERE id = ?" (Only ("user-reader" :: Text)) `shouldReturn` [Only (Just ("off" :: Text))]
     query c "SELECT notification_mail FROM users WHERE id = ?" (Only ("user-editor" :: Text)) `shouldReturn` [Only (Nothing :: Maybe Text)]

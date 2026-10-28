@@ -52,7 +52,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian, picosecondsToDiffTime)
 import Protolude
-import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), SignInMethods (..))
+import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), SignInMethods (..))
 import Wiki.Api.Activity (Activity (..))
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), LoggedError (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Backups (BackupRecord (..), BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), OffSite (..), Retention (..), Schedule (..), Trigger (..))
@@ -354,7 +354,7 @@ invitations =
 
 -- | An invitation just made and not mailed, with its link's secret.
 invited :: Invited
-invited = Invited {invitation, token = Just "c2VjcmV0IG9mIGFuIGludml0YXRpb24gZm9yIGJlYQ", mailError = Just "the mail server answered RCPT TO with 550 no such mailbox"}
+invited = Invited {invitation, token = Just (InvitationToken "c2VjcmV0IG9mIGFuIGludml0YXRpb24gZm9yIGJlYQ"), mailError = Just "the mail server answered RCPT TO with 550 no such mailbox"}
 
 -- | An invitation as its link shows it.
 invitationInfo :: InvitationInfo

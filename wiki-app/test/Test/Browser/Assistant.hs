@@ -42,7 +42,7 @@ import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Assistant (Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey)
+import Wiki.Core.Assistant (ApiKey (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey)
 import Wiki.Core.Id (UserId (..))
 
 $( browserJS
@@ -388,7 +388,7 @@ spec m = do
     eventually $ findIn anthropic ".assistant-listed" >>= (`shouldHaveText` "4 models fetched from Anthropic (Claude), 4 of them offered for a chat.")
     findAllIn anthropic ".assistant-model-choice optgroup[label='All models'] option" >>= traverse textContent >>= (`shouldBe` ["Claude Opus 4.8", "Claude Haiku 4.5"])
     -- Kept under the user's id, and only theirs.
-    eventually $ (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just "sk-ant-test-key")
+    eventually $ (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ApiKey "sk-ant-test-key"))
     (\s -> (settingsOf Anthropic s).key) <$> settingsFor m (UserId "user-admin") >>= (`shouldBe` Nothing)
     -- The page never shows a key once kept.
     outerHTML anthropic >>= (`shouldNotSatisfy'` T.isInfixOf "sk-ant-test-key")

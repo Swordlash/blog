@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+A session's secret is a `SessionToken` (WP5.15, in `Wiki.Server.Password`)
+and a waiting sign-in's a `PendingToken` (in `Wiki.Server.SecondFactor`),
+each with a hidden `Show`. The accounts' session functions, the cookie
+functions of `Wiki.Server.Session`, and the reset, verification,
+invitation and unsubscribe functions take their own token types; the mail
+functions' links take them too.
+
 `spaceIconFile` gives the icon's `MimeType` (WP5.15).
 
 The wiki's public address is a `Url` inside the server (WP5.15): the

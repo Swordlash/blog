@@ -46,6 +46,7 @@ import Network.Wai (Middleware, Request (..), responseLBS)
 import Protolude
 import Wiki.Api (requestMarker)
 import Wiki.Server.Accounts (idleTime)
+import Wiki.Server.Password (SessionToken (..))
 
 -- | Where and how the cookie is set.
 data CookieSettings = CookieSettings
@@ -61,8 +62,8 @@ cookieName :: Text
 cookieName = "wiki_session"
 
 -- | The @Set-Cookie@ value that gives the browser a session's id.
-sessionCookie :: CookieSettings -> Text -> Text
-sessionCookie s token = cookie s token (Just (truncate (nominalDiffTimeToSeconds idleTime)))
+sessionCookie :: CookieSettings -> SessionToken -> Text
+sessionCookie s token = cookie s token.text (Just (truncate (nominalDiffTimeToSeconds idleTime)))
 
 -- | The @Set-Cookie@ value that makes the browser delete the session id.
 clearCookie :: CookieSettings -> Text
@@ -80,10 +81,10 @@ cookie s value maxAge =
 -- valid (as 'Wiki.Server.Password.newToken' makes them: 43 characters of
 -- URL-safe base64). Anything else in its place is reported as an empty id,
 -- which matches no session, so that the cookie is cleared.
-requestToken :: Request -> Maybe Text
+requestToken :: Request -> Maybe SessionToken
 requestToken request =
   head
-    [ if valid value then value else ""
+    [ SessionToken (if valid value then value else "")
     | (name, raw) <- requestHeaders request
     , name == hCookie
     , pair <- BC.split ';' raw
