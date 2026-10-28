@@ -38,8 +38,10 @@
 //    history and forward again, each step checked by its address and what
 //    is on screen. Then leaving the editor with changes by the back button
 //    (Stay, then Leave), a reload on a page that keeps the edit (the demo
-//    keeps its content in IndexedDB), the administration's export, its
-//    reset taking the edit away for good and its import bringing it back, a
+//    keeps its content in IndexedDB), the administration's export (a zip
+//    file of directories, one per space and page, the edited page's body
+//    in its page.md), its reset taking the edit away for good and its
+//    import bringing it back, a
 //    reload on a page's source, and 404.html for an address with no file,
 //    the administration's among them. On the way, a page saved twice more
 //    has its history opened, a version's diff read and the version
@@ -76,6 +78,7 @@ import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize, relative, resolve, sep } from "node:path";
+import { strFromU8, unzipSync } from "fflate";
 import { chromium } from "playwright";
 import { drawable } from "../web/src/tikz-letters.mjs";
 
@@ -982,6 +985,16 @@ try {
   const exportPath = await exported.path();
   assert.equal((await readFile(exportPath)).subarray(0, 2).toString(), "PK", "the export is not a zip file");
   await page.locator("#app .admin-view .demo-told", { hasText: `Exported the wiki as ${exported.suggestedFilename()}.` }).waitFor({ timeout });
+  // The zip file is version 2 of docs/export.md: a directory per space and
+  // per page, the page's body as page.md, its comments beside it.
+  const exportedFiles = unzipSync(await readFile(exportPath));
+  assert.equal(JSON.parse(strFromU8(exportedFiles["manifest.json"])).formatVersion, 2, "the export's format version");
+  const helloDir = "spaces/blog/pages/hello-world/";
+  for (const name of ["page.json", "page.md", "comments.json"]) {
+    assert.ok(exportedFiles[helloDir + name], `the export has no ${helloDir}${name}`);
+  }
+  assert.ok(strFromU8(exportedFiles[helloDir + "page.md"]).includes("Smoke test"), "the export's page.md is not the edited page");
+  assert.ok(!("pages.json" in exportedFiles), "the export still has version 1's pages.json");
   // Resetting the demo's content, from the administration and after asking,
   // takes the edit away, and a reload does not bring it back.
   await page.locator("#app .admin-view .demo-reset-ask").click();
