@@ -20,7 +20,7 @@ import Network.Wai.Test (SRequest (..), SResponse (..), runSession, setPath, sre
 import Protolude hiding (Handler)
 import Servant.API (NoContent (..), addHeader, toUrlPiece)
 import Servant.Multipart ()
-import Servant.Server (Handler, ServerError (..), serve)
+import Servant.Server (Handler, ServerError (..), err304, serve)
 import Servant.Server.Generic (AsServer)
 import Test.Hspec
 import Test.Sample qualified as Sample
@@ -41,8 +41,10 @@ import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), SecretState (..), ServerSettingsOf (..))
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
+import Wiki.Api.Vault (PasskeyInfo (..), StoredVault (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..), pageVersion)
 import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Assistant.Vault (CredentialId (..))
 import Wiki.Core.Attachment qualified as Attachment
 import Wiki.Core.Comment (Comment, Thread)
 import Wiki.Core.Comment qualified as Comment
@@ -286,6 +288,18 @@ stubs =
           , setSpaceWatch = \_ w -> pure (Watch w.watching Chosen)
           }
     , unsubscribe = \t -> if t == UnsubscribeToken "unsubscribe" then pure NoContent else refuse NotFound
+    , assistant =
+        AssistantApi
+          { vault = \known -> if known == Just Sample.storedVault.tag then throwError err304 else pure (addHeader Sample.storedVault.tag Sample.storedVault)
+          , storeVault = \base _ -> if base == Just Sample.storedVault.tag then pure Sample.storedVault else refuse (Conflict "The vault was changed on another device meanwhile.")
+          , deleteVault = pure NoContent
+          , passkeys = pure [Sample.passkeyInfo]
+          , beginRegistration = pure Sample.registrationOptions
+          , finishRegistration = \_ -> pure Sample.passkeyInfo
+          , beginAssertion = pure Sample.assertionOptions
+          , finishAssertion = \_ -> pure Sample.passkeyInfo
+          , removePasskey = \i -> if i == Sample.passkeyInfo.id then pure [] else refuse NotFound
+          }
     }
 
 -- | The sample invitation, made for another address.
@@ -459,6 +473,27 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (n.setPageWatch p) Watching {watching = False}) 200 (Watch False Chosen)
       answers (getAt (n.spaceWatch s)) 200 (Watch False Unchosen)
       answers (sendJson methodPut (n.setSpaceWatch s) Watching {watching = True}) 200 (Watch True Chosen)
+    it "fetches the assistant's vault unless the version named is the server's, and stores it over that version" $ do
+      let a = links.assistant
+      (a.vault, a.storeVault, a.passkeys, a.beginRegistration, a.removePasskey Sample.passkeyInfo.id)
+        `shouldBe` ("api/v1/assistant/vault", "api/v1/assistant/vault", "api/v1/assistant/passkeys", "api/v1/assistant/passkeys/registration", "api/v1/assistant/passkeys/Y3JlZGVudGlhbC0x")
+      r <- getAt a.vault
+      (status r, jsonBody r, header "ETag" r) `shouldBe` (200, Just Sample.storedVault, Just "\"3\"")
+      unchanged <- request methodGet a.vault [("If-None-Match", "\"3\"")] ""
+      (status unchanged, simpleBody unchanged) `shouldBe` (304, "")
+      answers (request methodPut a.storeVault [(hContentType, "application/json"), ("If-Match", "\"3\"")] (encode Sample.vault)) 200 Sample.storedVault
+      answers (request methodPut a.storeVault [(hContentType, "application/json"), ("If-Match", "\"2\"")] (encode Sample.vault)) 409 (Conflict "The vault was changed on another device meanwhile.")
+      (status <$> request methodDelete a.deleteVault [] "") `shouldReturn` 204
+    it "makes and uses a passkey in two steps each, and removes one" $ do
+      let a = links.assistant
+      answers (request methodPost a.beginRegistration [] "") 200 Sample.registrationOptions
+      answers (sendJson methodPut a.finishRegistration Sample.registrationResponse) 200 Sample.passkeyInfo
+      answers (request methodPost a.beginAssertion [] "") 200 Sample.assertionOptions
+      answers (sendJson methodPut a.finishAssertion Sample.assertionResponse) 200 Sample.passkeyInfo
+      answers (getAt a.passkeys) 200 [Sample.passkeyInfo]
+      answers (request methodDelete (a.removePasskey Sample.passkeyInfo.id) [] "") 200 ([] :: [PasskeyInfo])
+      answers (request methodDelete (a.removePasskey (CredentialId "other")) [] "") 404 NotFound
+
     it "turns mail off with an unsubscribe link's secret" $ do
       links.unsubscribe (UnsubscribeToken "unsubscribe") `shouldBe` "api/v1/unsubscribe/unsubscribe"
       (status <$> request methodPost (links.unsubscribe (UnsubscribeToken "unsubscribe")) [] "") `shouldReturn` 204

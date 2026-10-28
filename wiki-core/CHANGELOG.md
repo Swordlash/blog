@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+`Wiki.Core.Assistant.Vault` is the format of the assistant's vault
+(WP5.21): `Vault` (format, salt, sealed settings, the vault key wrapped per
+passkey by `CredentialId`), `VaultTag`, `Sealed`, `WrappedKey`, what is
+sealed (`secretsOf`) and what stays in the clear (`learntOf`), and a
+device's `DeviceRecord`, told from the settings stored as text before it
+(`readStored`).
+
 `ErrorKind` gains `Blocked`: an address the page's Content Security Policy
 does not let the browser reach (WP5.21).
 

@@ -104,6 +104,8 @@ library
         Wiki.Server.Storage.Migrate
         Wiki.Server.Storage.Rows
         Wiki.Server.Totp
+        Wiki.Server.Vault
+        Wiki.Server.WebAuthn
     other-modules:
         Paths_wiki_server
     autogen-modules:
@@ -114,6 +116,7 @@ library
         base,
         bytestring,
         case-insensitive,
+        cborg,
         containers,
         crypton,
         cryptohash-sha256,
@@ -273,6 +276,8 @@ test-suite wiki-server-test
         Test.Server.Settings
         Test.Server.Static
         Test.Server.Totp
+        Test.Server.Vault
+        Test.Server.WebAuthn
         Test.Storage
         Test.Storage.Accounts
         Test.Storage.Audit
@@ -287,7 +292,9 @@ test-suite wiki-server-test
         base,
         bytestring,
         case-insensitive,
+        cborg,
         containers,
+        crypton,
         cryptohash-sha256,
         directory,
         filepath,

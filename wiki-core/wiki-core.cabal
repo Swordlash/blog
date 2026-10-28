@@ -65,6 +65,7 @@ library
       Wiki.Core.Assistant.Edit
       Wiki.Core.Assistant.Prompt
       Wiki.Core.Assistant.Reference
+      Wiki.Core.Assistant.Vault
       Wiki.Core.Attachment
       Wiki.Core.Audit
       Wiki.Core.Blog
@@ -164,6 +165,7 @@ test-suite wiki-core-test
       Test.Space
       Test.Template
       Test.User
+      Test.Vault
   build-depends:
       QuickCheck,
       aeson,

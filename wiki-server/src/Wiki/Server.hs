@@ -52,6 +52,7 @@ import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
 import Wiki.Server.Storage (Config (..), DataDirInUse (..), readServerSettings, withStorage)
+import Wiki.Server.Vault (newCeremonies)
 import Wiki.Server.Version (serverVersion)
 
 -- | A configuration the server cannot run with, with every reason.
@@ -114,6 +115,7 @@ withServerUsing given raw sendMail action = do
   -- Ten password resets requested from an address in fifteen minutes.
   resets <- newLimiter defaultLimits {perLogin = 10, perAddress = 10}
   pending <- newPendingSignIns
+  ceremonies <- newCeremonies
   events <- newHub
   wake <- newWake
   exports <- newExports
@@ -145,6 +147,7 @@ withServerUsing given raw sendMail action = do
             , metrics
             , feeds
             , assistantHosts = options.assistantHosts
+            , ceremonies
             }
         public =
           Listener

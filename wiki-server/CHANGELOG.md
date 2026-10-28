@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The assistant's vault and passkeys (WP5.21): migration
+`0016-assistant-vault.sql` (`passkeys`, `assistant_vaults`),
+`Wiki.Server.Vault` (storage, and the challenges waiting for an answer,
+`Ceremonies`, a new field of `Env`) and `Wiki.Server.WebAuthn`
+(registration with attestation `none` and assertion, ES256 and RS256, with
+`cborg` and `crypton`). `Signing` gains `site`, the relying party and
+origins a passkey is made for.
+
 Every page is sent with the application's Content Security Policy
 (WP5.21), with `Referrer-Policy: same-origin` and a `Permissions-Policy`
 that turns off the camera, the microphone and the location; the page's

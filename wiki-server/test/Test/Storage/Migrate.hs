@@ -215,6 +215,22 @@ spec = describe "migrations" $ do
       query_ c "SELECT template FROM pages" `shouldReturn` [Only True]
       (try (execute_ c "UPDATE pages SET template = 2") :: IO (Either SomeException ())) >>= (`shouldSatisfy` isLeft)
 
+  it "bring a database up to the assistant's vault: none, and a user's passkeys and vault gone with them" $
+    withFreshDatabase $ \_ c -> do
+      step <- maybe (assertFailure "no migration adds the assistant's vault") pure (find (\m -> "assistant-vault" `T.isInfixOf` m.name) migrations)
+      let earlier = takeWhile (\m -> m.version < step.version) migrations
+      applyMigrations earlier c `shouldReturn` map (\m -> m.version) earlier
+      execute_ c "INSERT INTO users (id, login, display_name) VALUES ('user-1', 'ada', 'Ada')"
+      migrate c `shouldReturn` [step.version .. length migrations]
+      query_ c "SELECT count(*) FROM passkeys" `shouldReturn` [Only (0 :: Int)]
+      query_ c "SELECT count(*) FROM assistant_vaults" `shouldReturn` [Only (0 :: Int)]
+      execute_ c "PRAGMA foreign_keys = ON"
+      execute_ c "INSERT INTO passkeys (credential_id, user_id, public_key, algorithm, sign_count, name, created_at) VALUES ('Y3JlZA', 'user-1', x'a1', -7, 0, 'A passkey', 'now')"
+      execute_ c "INSERT INTO assistant_vaults (user_id, format, salt, nonce, ciphertext, revision, updated_at) VALUES ('user-1', 1, 's', 'n', 'c', 1, 'now')"
+      execute_ c "DELETE FROM users WHERE id = 'user-1'"
+      query_ c "SELECT count(*) FROM passkeys" `shouldReturn` [Only (0 :: Int)]
+      query_ c "SELECT count(*) FROM assistant_vaults" `shouldReturn` [Only (0 :: Int)]
+
   it "bring a database up to the search's fold: the pages there get theirs when the storage opens" $
     withSystemTempDirectory "wiki-migrate-test" $ \dir -> do
       step <- maybe (assertFailure "no migration adds the search's fold") pure (find (\m -> "search-fold" `T.isInfixOf` m.name) migrations)

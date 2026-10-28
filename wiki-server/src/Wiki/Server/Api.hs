@@ -82,7 +82,7 @@ import Network.Wai (Application, Middleware, Request (..), Response, mapResponse
 import Network.Wai.Handler.Warp (pauseTimeout)
 import Network.Wai.Parse (defaultParseRequestBodyOptions, setMaxRequestFileSize, setMaxRequestNumFiles, setMaxRequestParmsSize)
 import Protolude hiding (Handler)
-import Servant (Context (..), ErrorFormatters, Handler, NoContent (..), ServerError (..), addHeader, bodyParserErrorFormatter, defaultErrorFormatters, err503, headerParseErrorFormatter, notFoundErrorFormatter, serveWithContext, urlParseErrorFormatter)
+import Servant (Context (..), ErrorFormatters, Handler, NoContent (..), ServerError (..), addHeader, bodyParserErrorFormatter, defaultErrorFormatters, err304, err503, headerParseErrorFormatter, notFoundErrorFormatter, serveWithContext, urlParseErrorFormatter)
 import Servant.Multipart (MultipartOptions (..), Tmp, TmpBackendOptions (..))
 import Servant.Server.Generic (AsServer)
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
@@ -102,12 +102,14 @@ import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..
 import Wiki.Api.ServerSettings (Discovered (..), MailTest (..), MailTestResult (..), ProviderChange, ProviderCheck (..), ProviderSettingsOf (..), ServerSettingsOf (..), named, providerProblems, providerWith, redirectUri, secretState)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload (..), AttachmentUpload (..), ImportApply (..))
+import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Notifications qualified as Notifications
+import Wiki.Core.Assistant.Vault (CredentialId (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (WatchTarget (..))
@@ -129,7 +131,7 @@ import Wiki.Server.Log (ErrorRing, Level (..), Logger, logWith, recentErrors)
 import Wiki.Server.Mail (Mailer (..), SendMail, invitationMessage, mailerFrom, resetMessage, testMessage, verificationMessage)
 import Wiki.Server.Metrics (Metrics)
 import Wiki.Server.Oidc (Endpoints (..), Flows, Provider, ProviderCache, endpointsOf, freshProvider, optionOf, providersFor, signInProvider)
-import Wiki.Server.Password (SessionToken (..), newToken)
+import Wiki.Server.Password (SessionToken (..), newToken, tokenHash)
 import Wiki.Server.Reset qualified as Reset
 import Wiki.Server.SecondFactor (CodeRefusal (..), PendingSignIn (..), PendingSignIns, PendingToken, checkCode, confirm, enrol, finishPending, holdSignIn, pendingCookie, pendingSignIn, secondFactorState, wrongCode)
 import Wiki.Server.SecondFactor qualified as SecondFactor
@@ -139,6 +141,9 @@ import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles, backupTime)
 import Wiki.Server.Storage.Layout (backupsDir, temporaryDir)
 import Wiki.Server.Totp (otpauthUri, qrRows, secretText)
+import Wiki.Server.Vault (Ceremonies, Purpose (..), Site (..), assertPasskey, beginCeremony, passkeysOf, registerPasskey, storedVault, takeCeremony)
+import Wiki.Server.Vault qualified as Vault
+import Wiki.Server.WebAuthn (Expected (..), NewCredential (..), fromBase64Url, toBase64Url, verifyAssertion, verifyRegistration)
 
 -- | What the handlers work with, the same for every request.
 data Env = Env
@@ -190,6 +195,9 @@ data Env = Env
   -- ^ The assistant's hosts given on the command line
   -- (@--assistant-hosts@); 'currentAssistantHosts' adds the
   -- administration's.
+  , ceremonies :: Ceremonies
+  -- ^ The passkeys' challenges waiting for the browser's answer
+  -- ("Wiki.Server.Vault").
   }
 
 -- | 'Caller' is who sent a request, as the listener identified them.
@@ -215,6 +223,9 @@ data Signing = Signing
   -- ^ The id of a sign-in waiting for its second factor, from the
   -- request's cookie, if any ("Wiki.Server.SecondFactor").
   , cookies :: CookieSettings
+  , site :: Site
+  -- ^ The relying party and origins a passkey is made for, from the
+  -- wiki's public address or the request's host ("Wiki.Server.Vault").
   }
 
 -- | A 'Caller' that does not sign in or out: the user a page is rendered
@@ -610,8 +621,84 @@ handlers env caller =
           , setSpaceWatch = \sid w -> wiki (setWatching (WatchSpace sid) w.watching)
           }
     , unsubscribe = \token -> wiki (Notifications.unsubscribe token) $> NoContent
+    , assistant =
+        AssistantApi
+          { vault = \known -> do
+              u <- signedInUser
+              liftIO (storedVault env.storage u) >>= \case
+                Nothing -> refuse ApiError.NotFound
+                Just stored
+                  | Just stored.tag == known -> throwError err304
+                  | otherwise -> pure (addHeader stored.tag stored)
+          , storeVault = \base v -> do
+              u <- signedInUser
+              now <- liftIO getCurrentTime
+              liftIO (Vault.storeVault env.storage now u base v) >>= either (throwError . wikiError) pure
+          , deleteVault = signedInUser >>= \u -> liftIO (Vault.deleteVault env.storage u) $> NoContent
+          , passkeys = signedInUser >>= liftIO . passkeysOf env.storage
+          , beginRegistration = do
+              (u, s, key) <- ceremonyCaller
+              now <- liftIO getCurrentTime
+              challenge <- liftIO (beginCeremony env.ceremonies now key u Registering)
+              mine <- liftIO (passkeysOf env.storage u)
+              account <- liftIO (Accounts.accountOf env.storage u) >>= maybe (refuse ApiError.NotFound) pure
+              pure
+                RegistrationOptions
+                  { challenge = toBase64Url challenge
+                  , rpId = s.site.rpId
+                  , rpName = "Wiki"
+                  , userId = toBase64Url (encodeUtf8 u.text)
+                  , userName = account.user.login.text
+                  , displayName = account.user.displayName
+                  , exclude = map (\p -> p.id) mine
+                  }
+          , finishRegistration = \answer -> do
+              (u, s, key) <- ceremonyCaller
+              now <- liftIO getCurrentTime
+              challenge <- challengeFor now key u Registering
+              clientData <- bytesOf answer.clientDataJSON
+              attestation <- bytesOf answer.attestationObject
+              new <- either (\why -> refuse (ApiError.Invalid ("The passkey was refused: " <> why <> "."))) pure (verifyRegistration (expectedOf s challenge) clientData attestation)
+              unless (toBase64Url new.credentialId == answer.id.text) $
+                refuse (ApiError.Invalid "The passkey was refused: its id is not the one its authenticator data names.")
+              liftIO (registerPasskey env.storage now u new) >>= either (throwError . wikiError) pure
+          , beginAssertion = do
+              (u, s, key) <- ceremonyCaller
+              now <- liftIO getCurrentTime
+              challenge <- liftIO (beginCeremony env.ceremonies now key u Asserting)
+              mine <- liftIO (passkeysOf env.storage u)
+              pure AssertionOptions {challenge = toBase64Url challenge, rpId = s.site.rpId, allow = map (\p -> p.id) mine}
+          , finishAssertion = \answer -> do
+              (u, s, key) <- ceremonyCaller
+              now <- liftIO getCurrentTime
+              challenge <- challengeFor now key u Asserting
+              clientData <- bytesOf answer.clientDataJSON
+              authenticatorData <- bytesOf answer.authenticatorData
+              signature <- bytesOf answer.signature
+              liftIO (assertPasskey env.storage now u answer.id (\stored -> verifyAssertion (expectedOf s challenge) stored clientData authenticatorData signature))
+                >>= either (throwError . wikiError) pure
+          , removePasskey = \i -> do
+              u <- signedInUser
+              now <- liftIO getCurrentTime
+              liftIO (Vault.removePasskey env.storage now u i) >>= either (throwError . wikiError) pure
+          }
     }
   where
+    -- Who makes or uses a passkey: a signed-in user, on the listener where
+    -- people sign in, with the session a challenge is kept for (the hash
+    -- of its secret, which is never kept in clear).
+    ceremonyCaller = do
+      u <- signedInUser
+      s <- signingHere
+      token <- maybe (refuse ApiError.Unauthenticated) pure s.token
+      pure (u, s, tokenHash token.text)
+    -- The challenge given to this session for this, used up.
+    challengeFor now key u purpose =
+      liftIO (takeCeremony env.ceremonies now key u purpose)
+        >>= maybe (refuse (ApiError.Invalid "No passkey is being made or used in this session, or it took more than five minutes: start again.")) pure
+    expectedOf s challenge = Expected {challenge, origins = s.site.origins, rpId = s.site.rpId}
+    -- Bytes the browser sent in base64url.
+    bytesOf text = maybe (refuse (ApiError.Invalid "Something the browser sent is not in base64url.")) pure (fromBase64Url text)
     who = caller.who
     -- The session as the API answers it: with the providers the server
     -- signs in with, which the storage does not know.

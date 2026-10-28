@@ -29,6 +29,7 @@ import Test.Slug qualified as Slug
 import Test.Space qualified as Space
 import Test.Template qualified as Template
 import Test.User qualified as User
+import Test.Vault qualified as Vault
 
 main :: IO ()
 main = hspec $ do
@@ -59,3 +60,4 @@ main = hspec $ do
   Assistant.spec
   Export.spec
   User.spec
+  Vault.spec

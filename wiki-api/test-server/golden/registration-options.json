@@ -1,0 +1,11 @@
+{
+  "challenge": "Y2hhbGxlbmdlLW9mLXRoaXJ0eS10d28tYnl0ZXMtLS0",
+  "displayName": "Ada",
+  "exclude": [
+    "Y3JlZGVudGlhbC0x"
+  ],
+  "rpId": "wiki.example.org",
+  "rpName": "Wiki",
+  "userId": "dXNlci1hZGE",
+  "userName": "ada"
+}

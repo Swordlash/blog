@@ -57,6 +57,7 @@ module Wiki.Api
   , PasswordResetApi (..)
   , CommentsApi (..)
   , NotificationsApi (..)
+  , AssistantApi (..)
 
     -- * Sessions
   , WithCookie
@@ -74,7 +75,7 @@ where
 
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
-import Servant.API
+import Servant.API hiding (Vault)
 import Servant.Multipart.API (MultipartForm, Tmp)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
 import Wiki.Api.Activity (Activity)
@@ -89,7 +90,9 @@ import Wiki.Api.Security (CurrentPassword, EmailChange, EmailState, NewPasswordB
 import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
+import Wiki.Api.Vault (AssertionOptions, AssertionResponse, PasskeyInfo, RegistrationOptions, RegistrationResponse, StoredVault)
 import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
+import Wiki.Core.Assistant.Vault (CredentialId, Vault, VaultTag)
 import Wiki.Core.Attachment (Attachment, FileName)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
@@ -178,6 +181,48 @@ data WikiApi mode = WikiApi
   -- ^ Follow the unsubscribe link in a notification mail: notification
   -- mail is turned off for the user the link names, without signing in. An
   -- invalid link is 'Wiki.Api.Error.NotFound'.
+  , assistant :: mode :- "assistant" :> NamedRoutes AssistantApi
+  -- ^ The writing assistant's keys across devices: the vault and the
+  -- passkeys that unlock it ("Wiki.Api.Vault").
+  }
+  deriving stock (Generic)
+
+-- | 'AssistantApi': the signed-in user's vault of the assistant's settings,
+-- and the passkeys that unlock it (WP5.21 of docs/PLAN.md,
+-- "Wiki.Api.Vault"). A visitor who is not signed in is refused with
+-- 'Wiki.Api.Error.Unauthenticated', and the operator, who has no account,
+-- with 'Wiki.Api.Error.Invalid'.
+data AssistantApi mode = AssistantApi
+  { vault :: mode :- "vault" :> Header "If-None-Match" VaultTag :> Get '[JSON] (Headers '[Header "ETag" VaultTag] StoredVault)
+  -- ^ The vault and its tag (also its @ETag@); 304 with no body when
+  -- @If-None-Match@ names the version the server has, and
+  -- 'Wiki.Api.Error.NotFound' when the user has no vault.
+  , storeVault :: mode :- "vault" :> Header "If-Match" VaultTag :> ReqBody '[JSON] Vault :> Put '[JSON] StoredVault
+  -- ^ Store a version of the vault over the one @If-Match@ names, or,
+  -- without it, a first one. Another version on the server, or a vault
+  -- already there for a first one, is 'Wiki.Api.Error.Conflict'; a wrapped
+  -- key for a passkey that is not the user's is 'Wiki.Api.Error.Invalid'.
+  , deleteVault :: mode :- "vault" :> DeleteNoContent
+  -- ^ Turn synchronisation off: the vault and every passkey of the user go.
+  , passkeys :: mode :- "passkeys" :> Get '[JSON] [PasskeyInfo]
+  -- ^ The user's passkeys, the oldest first.
+  , beginRegistration :: mode :- "passkeys" :> "registration" :> Post '[JSON] RegistrationOptions
+  -- ^ The options of a new passkey, with a challenge kept for this session.
+  , finishRegistration :: mode :- "passkeys" :> "registration" :> ReqBody '[JSON] RegistrationResponse :> Put '[JSON] PasskeyInfo
+  -- ^ Check and store the passkey the browser made. No challenge waiting,
+  -- or an answer that does not check, is 'Wiki.Api.Error.Invalid'; a
+  -- passkey registered already is 'Wiki.Api.Error.Conflict'.
+  , beginAssertion :: mode :- "passkeys" :> "assertion" :> Post '[JSON] AssertionOptions
+  -- ^ The options of a use of one of the user's passkeys, with a challenge
+  -- kept for this session.
+  , finishAssertion :: mode :- "passkeys" :> "assertion" :> ReqBody '[JSON] AssertionResponse :> Put '[JSON] PasskeyInfo
+  -- ^ Check a use of a passkey. Another user's passkey is
+  -- 'Wiki.Api.Error.NotFound'; an answer that does not check is
+  -- 'Wiki.Api.Error.Invalid'; a signature counter that went back is
+  -- 'Wiki.Api.Error.Conflict'.
+  , removePasskey :: mode :- "passkeys" :> Capture "passkey" CredentialId :> Delete '[JSON] [PasskeyInfo]
+  -- ^ Remove one of the user's passkeys, with its wrapped copy of the
+  -- vault key. The response is the passkeys left.
   }
   deriving stock (Generic)
 

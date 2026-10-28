@@ -766,6 +766,52 @@ out of the log. The links are the application's pages
 `reset-password/<secret>/` and `verify-email/<secret>/`, which a closed wiki
 shows to anyone, as an invitation's.
 
+### The assistant's keys across devices
+
+| Method | Path | Body | Response | Errors | `MonadVault` |
+| ------ | ---- | ---- | -------- | ------ | ------------ |
+| GET | `api/v1/assistant/vault` | | `StoredVault` `{"tag", "vault"}`, the tag also as `ETag`; with `If-None-Match` naming the server's tag, 304 and no body | 401, 400 (the operator), 404 (no vault: syncing is off) | `fetchVault` |
+| PUT | `api/v1/assistant/vault` | `Vault` `{"format", "salt", "nonce", "ciphertext", "wrapped"}`, over the version `If-Match` names, or without `If-Match` a first one | `StoredVault` as it now is | 401, 409 (another version, or a first one where there is a vault), 400 (a wrapped key for a passkey not the user's, another format, a part empty or longer than 256 KiB) | `storeVault` |
+| DELETE | `api/v1/assistant/vault` | | 204: the vault and every passkey of the user gone | 401 | `deleteVault` |
+| GET | `api/v1/assistant/passkeys` | | `[PasskeyInfo]` `{"id", "name", "createdAt", "lastUsedAt", "unlocks"}`, the oldest first | 401 | `listPasskeys` |
+| POST | `api/v1/assistant/passkeys/registration` | | `RegistrationOptions` `{"challenge", "rpId", "rpName", "userId", "userName", "displayName", "exclude"}` | 401 | `beginRegistration` |
+| PUT | `api/v1/assistant/passkeys/registration` | `RegistrationResponse` `{"id", "clientDataJSON", "attestationObject"}` | `PasskeyInfo` | 401, 400 (no challenge waiting, or an answer that does not check), 409 (registered already), 400 (twenty passkeys already) | `finishRegistration` |
+| POST | `api/v1/assistant/passkeys/assertion` | | `AssertionOptions` `{"challenge", "rpId", "allow"}` | 401 | `beginAssertion` |
+| PUT | `api/v1/assistant/passkeys/assertion` | `AssertionResponse` `{"id", "clientDataJSON", "authenticatorData", "signature"}` | `PasskeyInfo`, used now | 401, 404 (not one of the user's passkeys), 400 (no challenge waiting, or an answer that does not check), 409 (its counter went back) | `finishAssertion` |
+| DELETE | `api/v1/assistant/passkeys/<id>` | | `[PasskeyInfo]` left; its wrapped key goes, and the vault's tag changes | 401, 404 | `dropPasskey` |
+
+WP5.21 of the plan (`Wiki.Api.Vault`, `Wiki.Core.Assistant.Vault`). The
+writing assistant's settings, API keys among them, are sealed in the browser
+with a random vault key (AES-GCM); the vault key is wrapped once per
+passkey, with a key derived (HKDF-SHA256, the vault's salt) from that
+passkey's WebAuthn PRF output. The server stores what the browser sends and
+can open none of it; the PRF output and the vault key never leave the
+browser. All bytes are base64url without padding:
+
+```json
+{
+  "tag": "\"3\"",
+  "vault": {
+    "format": 1,
+    "salt": "<32 bytes>",
+    "nonce": "<12 bytes>",
+    "ciphertext": "<the settings, sealed>",
+    "wrapped": {"<credential id>": {"nonce": "<12 bytes>", "key": "<the vault key, wrapped>"}}
+  }
+}
+```
+
+A passkey is registered and used in two requests each: the first gives a
+challenge, kept for the session that asked (by its secret's hash), for five
+minutes, used once; the second sends the browser's answer, which the server
+checks (`Wiki.Server.WebAuthn`): the client data's type, challenge and
+origin (the public address's, or the request's host over HTTPS or HTTP), the
+relying party's hash (the host without its port), the user present and
+verified, and for a use the signature (ES256 or RS256) over the
+authenticator data and the client data's SHA-256, and a counter that goes
+up (or stays 0, as a synced passkey's does). The attestation statement is
+not checked: the wiki asks for none. Neither signs anyone in.
+
 ### Administration
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
@@ -838,7 +884,7 @@ console: `wiki-server users …` (see the README).
 
 | Method | Path | Body | Response | Errors | `MonadAdmin` |
 | ------ | ---- | ---- | -------- | ------ | ------------ |
-| GET | `api/v1/admin/server` | | `ServerSettings` `{"publicUrl", "mail", "providers"}`, each secret as `"set"` or `"not-set"` | 403 | `serverSettings` |
+| GET | `api/v1/admin/server` | | `ServerSettings` `{"publicUrl", "mail", "providers", "assistantHosts"}`, each secret as `"set"` or `"not-set"` | 403 | `serverSettings` |
 | PUT | `api/v1/admin/server` | `ServerSettingsChange`, each secret `null` (kept), `""` (cleared) or a new one | `ServerSettings` as they now are | 403, 400 | `setServerSettings` |
 | POST | `api/v1/admin/server/providers/<name>/check` | `null` (the provider as set) or a `ProviderSettings` with its secret as in a change (the provider as typed) | `ProviderCheck` `{"redirectUri", "clientSecret", "discovered", "problem"}` | 403, 404 (nothing given and no provider of that name) | `checkProvider` |
 | POST | `api/v1/admin/server/mail/test` | `MailTest` `{"to"}` | `MailTestResult` `{"failure"}`, `null` when sent | 403, 400 (no mail server or public address, or not an address) | `sendTestMail` |
@@ -860,9 +906,17 @@ it, and a wiki made before them goes on with no mail and passwords only.
   "mail": {"host": "mail.example.org", "port": 587, "security": "starttls",
            "user": "wiki", "password": "set", "from": "Wiki <wiki@example.org>"},
   "providers": [{"name": "google", "kind": "google", "clientId": "1234-abc.apps.googleusercontent.com",
-                 "issuer": null, "secret": "set"}]
+                 "issuer": null, "secret": "set"}],
+  "assistantHosts": ["http://localhost:11434"]
 }
 ```
+
+`assistantHosts` (WP5.21) are the addresses the writing assistant may reach
+from the browser besides Anthropic's and OpenAI's APIs, as origins: every
+page's Content Security Policy allows them in `connect-src`, with those of
+`--assistant-hosts`. A base URL is taken down to its origin; anything else
+than an `https:` or `http:` origin is refused (400). Settings without the
+field read as having none.
 
 `security` is `tls` (implicit, port 465), `starttls` or `plain`; `kind` is
 `google`, `apple`, `github` or `oidc` (any OpenID Connect provider, at its

@@ -56,6 +56,10 @@ spec :: Spec
 spec = describe "golden JSON" $ do
   describe "responses" $ do
     golden "server-info" ServerInfo {name = "Wiki", apiVersion = 1}
+    golden "stored-vault" Sample.storedVault
+    golden "passkeys" [Sample.passkeyInfo]
+    golden "registration-options" Sample.registrationOptions
+    golden "assertion-options" Sample.assertionOptions
     golden "health" Health {status = "ok", schemaVersion = 9, lastBackupAgeSeconds = Just 3600}
     golden "activity" Sample.activity
     golden "session" Sample.sessionInfo
@@ -158,6 +162,9 @@ spec = describe "golden JSON" $ do
     golden "new-password" NewPassword {password = Password "correct horse battery staple"}
     golden "password-change" PasswordChange {current = Just (Password "correct horse battery staple"), new = Password "a longer passphrase than that"}
     golden "account-disabled" AccountDisabled {disabled = True}
+    golden "vault" Sample.vault
+    golden "registration-response" Sample.registrationResponse
+    golden "assertion-response" Sample.assertionResponse
     golden "new-invitation" NewInvitation {email = "bea@example.org"}
     golden "server-settings-change" Sample.serverChange
     golden "server-settings-clear" (noServerSettings :: ServerSettingsChange)

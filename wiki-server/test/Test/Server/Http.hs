@@ -43,6 +43,7 @@ import Wiki.Server.Oidc (newFlows, newProviderCache)
 import Wiki.Server.Render (inProcess)
 import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Storage (Storage, Who (..))
+import Wiki.Server.Vault (newCeremonies)
 
 spec :: Spec
 spec = describe "HttpWiki against the server's API" $ do
@@ -123,4 +124,5 @@ apiEnv storage = do
   errors <- newErrorRing
   metrics <- newMetrics
   feeds <- newFeedCache
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups, resets, pending, logger = silentLogger (const pass), errors, metrics, feeds, assistantHosts = []}
+  ceremonies <- newCeremonies
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups, resets, pending, logger = silentLogger (const pass), errors, metrics, feeds, assistantHosts = [], ceremonies}

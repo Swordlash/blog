@@ -23,6 +23,8 @@ import Test.Server.Render qualified as Render
 import Test.Server.Settings qualified as Settings
 import Test.Server.Static qualified as Static
 import Test.Server.Totp qualified as Totp
+import Test.Server.Vault qualified as Vault
+import Test.Server.WebAuthn qualified as WebAuthn
 import Test.Storage qualified as Storage
 import Test.Storage.Accounts qualified as StorageAccounts
 import Test.Storage.Audit qualified as Audit
@@ -56,6 +58,8 @@ main = hspec $ do
   Oidc.spec
   Export.spec
   Totp.spec
+  WebAuthn.spec
+  Vault.spec
   Hygiene.spec
   Audit.spec
   Metrics.spec

@@ -45,6 +45,13 @@ module Test.Sample
   , notification
   , notifications
   , notificationSettings
+  , vault
+  , storedVault
+  , passkeyInfo
+  , registrationOptions
+  , registrationResponse
+  , assertionOptions
+  , assertionResponse
   )
 where
 
@@ -62,8 +69,10 @@ import Wiki.Api.Notifications (NotificationSettings (..), Notifications (..))
 import Wiki.Api.Security (AccountEmail (..), EmailState (..), SecondFactorState (..), SessionRef (..), SessionSummary (..), TotpEnrolment (..))
 import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCheck (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettings, ServerSettingsChange, ServerSettingsOf (..))
 import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Api.Vault (AssertionOptions (..), AssertionResponse (..), PasskeyInfo (..), RegistrationOptions (..), RegistrationResponse (..), StoredVault (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Assistant.Vault (CredentialId (..), Sealed (..), Vault (..), VaultTag (..), WrappedKey (..))
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..))
 import Wiki.Core.Audit qualified as Audit
@@ -559,3 +568,42 @@ notifications =
 
 notificationSettings :: NotificationSettings
 notificationSettings = NotificationSettings {mail = MailDaily, watchOwn = True, verifiedEmail = True, mailing = True}
+
+-- | A user's vault of the assistant's settings, with the vault key
+-- wrapped for one passkey. Every part is made-up base64url: nothing here
+-- is a real key or ciphertext.
+vault :: Vault
+vault =
+  Vault
+    { format = 1
+    , salt = "c2FsdC1vZi10aGlydHktdHdvLWJ5dGVzLWZvci1wcmY"
+    , sealed = Sealed {nonce = "bm9uY2UtMTJieQ", ciphertext = "c2VhbGVkLXNldHRpbmdz"}
+    , wrapped = Map.fromList [(CredentialId "Y3JlZGVudGlhbC0x", WrappedKey {nonce = "d3JhcC1ub25jZQ", key = "d3JhcHBlZC1rZXk"})]
+    }
+
+storedVault :: StoredVault
+storedVault = StoredVault {tag = VaultTag "\"3\"", vault}
+
+passkeyInfo :: PasskeyInfo
+passkeyInfo = PasskeyInfo {id = CredentialId "Y3JlZGVudGlhbC0x", name = "Added on 2026-10-28 at 09:30 UTC", createdAt = time, lastUsedAt = Just later, unlocks = True}
+
+registrationOptions :: RegistrationOptions
+registrationOptions =
+  RegistrationOptions
+    { challenge = "Y2hhbGxlbmdlLW9mLXRoaXJ0eS10d28tYnl0ZXMtLS0"
+    , rpId = "wiki.example.org"
+    , rpName = "Wiki"
+    , userId = "dXNlci1hZGE"
+    , userName = "ada"
+    , displayName = "Ada"
+    , exclude = [CredentialId "Y3JlZGVudGlhbC0x"]
+    }
+
+registrationResponse :: RegistrationResponse
+registrationResponse = RegistrationResponse {id = CredentialId "Y3JlZGVudGlhbC0y", clientDataJSON = "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0", attestationObject = "o2NmbXRkbm9uZQ"}
+
+assertionOptions :: AssertionOptions
+assertionOptions = AssertionOptions {challenge = "Y2hhbGxlbmdlLW9mLXRoaXJ0eS10d28tYnl0ZXMtLS0", rpId = "wiki.example.org", allow = [CredentialId "Y3JlZGVudGlhbC0x"]}
+
+assertionResponse :: AssertionResponse
+assertionResponse = AssertionResponse {id = CredentialId "Y3JlZGVudGlhbC0x", clientDataJSON = "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0", authenticatorData = "YXV0aGVudGljYXRvci1kYXRh", signature = "c2lnbmF0dXJl"}

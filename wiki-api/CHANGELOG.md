@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+`WikiApi` gains `assistant`, the `AssistantApi` of the vault and its
+passkeys (WP5.21, `Wiki.Api.Vault`): `GET`, `PUT` and `DELETE
+assistant/vault` (with `If-None-Match` and `If-Match` by the vault's tag),
+`GET assistant/passkeys`, registration and assertion in two steps each,
+and `DELETE assistant/passkeys/<id>`.
+
 `Wiki.Api.ContentPolicy` is the application page's Content Security
 Policy (WP5.21): `basePolicy`, read from `web/index.html` when the package
 is compiled, `pagePolicy` and `headerPolicy` with an administrator's

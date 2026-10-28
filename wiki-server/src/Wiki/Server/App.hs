@@ -65,6 +65,7 @@ import Network.HTTP.Types (Header, hCacheControl, hContentType, hLocation, hSetC
 import Network.Wai (Application, Request (..), mapResponseHeaders, responseLBS)
 import Protolude
 import Wiki.Api.Admin (WikiSettings (..))
+import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Accounts (Resolved (..), resolveSession)
@@ -80,7 +81,8 @@ import Wiki.Server.Routes (routePattern)
 import Wiki.Server.SecondFactor (requestPending)
 import Wiki.Server.Session (CookieSettings, clearCookie, requestToken, sameOrigin, sessionCookie)
 import Wiki.Server.Static (StaticSite, serveStatic)
-import Wiki.Server.Storage (Who (..), readSettings)
+import Wiki.Server.Storage (Who (..), readServerSettings, readSettings)
+import Wiki.Server.Vault (siteFor)
 
 -- | A listener's configuration.
 data Listener = Listener
@@ -146,8 +148,9 @@ findCaller :: Env -> Listener -> Request -> IO (Caller, [Header])
 findCaller env l request = case l.finding of
   EveryoneAdministers -> pure (Caller {who = Administrator, address, signing = Nothing}, [])
   BySession cookies -> do
+    settings <- readServerSettings env.storage
     let token = requestToken request
-        signing = Signing {address, token, pending = requestPending request, cookies}
+        signing = Signing {address, token, pending = requestPending request, cookies, site = siteFor settings.publicUrl request}
     case token of
       Nothing -> pure (Caller {who = Anonymous, address, signing = Just signing}, [])
       Just t -> do
