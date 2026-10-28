@@ -60,8 +60,8 @@ of the backend's `WikiError`, with its text where it has one:
 
 | Status | Body | When |
 | ------ | ---- | ---- |
-| 404 | `{"error": "NotFound"}` | an id or a path names nothing |
-| 403 | `{"error": "Forbidden"}` | it names something the user may not see, or may not do this to |
+| 404 | `{"error": "NotFound"}` | an id or a path names nothing, or something the user may not see |
+| 403 | `{"error": "Forbidden"}` | it names something the user may see, but may not do this to |
 | 400 | `{"error": "Invalid", "message": "…"}` | the request cannot be carried out as it is |
 | 409 | `{"error": "Conflict", "message": "…"}` | the wiki has changed since the request was made |
 | 401 | `{"error": "Unauthenticated"}` | signing in failed: no account has that login and password, or it cannot sign in |
@@ -73,7 +73,18 @@ a client that meets them elsewhere takes them for forbidden and invalid.
 
 When more than one applies, the first in the order of `MonadWiki`'s Haddock
 is given: not found, forbidden, invalid, conflict. So a user who may not act
-learns nothing about whether their request was otherwise well formed. Any
+learns nothing about whether their request was otherwise well formed.
+
+A space the user may not view answers exactly as a space that does not
+exist: 404, and so does everything in it (its pages, their attachments,
+comments, versions and drafts, its watches, its subspaces, its export and
+its feed). A search scoped to it finds nothing, as one scoped to a space
+that does not exist does. So no refusal tells anyone that a space or a page
+exists. A space the user may view answers 403 to what they may not do in
+it: a save without the permission to edit, or a change of its grants without
+the permission to administer it. The administration is the exception: it
+checks the global `administer` before it looks up anything a request names,
+so whoever does not hold it gets 403 whatever they name (below). Any
 endpoint may answer any of these; the table below names the ones each is
 expected to give. A response with a 4xx status and no such body (one the
 routing answered before a handler ran, or a proxy) means the error of its
@@ -139,14 +150,14 @@ one's login, and a right one clears the count as signing in does. Passwords are 
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | GET | `api/v1/spaces` | | `[Space]`, every space the user may view with its ancestors, each before its subspaces | | `listSpaces` |
 | GET | `api/v1/spaces/page-counts` | | `{"<space id>": n, …}`, how many pages each space the user may view has (not the ancestors listed for their names) | | `pageCounts` |
-| GET | `api/v1/spaces/at/<slug>/<slug>…` | | `Space` at that path from the top level | 404, 403 | `getSpace` |
+| GET | `api/v1/spaces/at/<slug>/<slug>…` | | `Space` at that path from the top level | 404 | `getSpace` |
 | POST | `api/v1/spaces` | `NewSpace` `{"parent": id or null, "name"}` | 201 `Space`, with its home page made | 404, 403, 400 | `createSpace` |
 | PUT | `api/v1/spaces/<space>/name` | `SpaceName` `{"name"}` | `Space` | 404, 403, 400 | `renameSpace` |
 | PUT | `api/v1/spaces/<space>/public` | `SpacePublic` `{"public": bool}` | `Space` | 404, 403 | `setSpacePublic` |
 | PUT | `api/v1/spaces/<space>/math-macros` | `SpaceMathMacros` `{"mathMacros"}` | `Space` | 404, 403 | `setSpaceMathMacros` |
 | PUT | `api/v1/spaces/<space>/profile` | `SpaceProfile` `{"description", "icon": icon or null, "homePage": page id or null}` | `Space` | 404, 403, 400 | `setSpaceProfile` |
 | POST | `api/v1/spaces/<space>/icon` | multipart form, one file part named `file`: its `Content-Type` the image's media type, its file name not looked at | `Space`, its icon the image | 404, 403, 400 (not a PNG, JPEG, GIF, WebP or AVIF image, empty, or over 1 MB) | `uploadSpaceIcon` |
-| GET, HEAD | `api/v1/spaces/<space>/icon/<blob>` | | the image's bytes, with its media type | 404, 403 | `spaceIconUrl` gives this address |
+| GET, HEAD | `api/v1/spaces/<space>/icon/<blob>` | | the image's bytes, with its media type | 404 | `spaceIconUrl` gives this address |
 | PUT | `api/v1/spaces/<space>/order` | `SpaceOrder` `{"children": "ChildSpaces" or "ChildPages", "order": "ByName", "NewestFirst", "OldestFirst" or "ByHand"}` | `Space` | 404, 403 | `setSpaceOrder` |
 | POST | `api/v1/spaces/<space>/move` | `SpaceMove` `{"parent": id or null}` | `Space` | 404, 403, 400 | `moveSpace` |
 | POST | `api/v1/spaces/<space>/shift` | `ShiftBy` `{"shift": "ShiftUp", "ShiftDown", "ShiftToTop" or "ShiftToBottom"}` | `Space`, with its new position | 404, 403, 400 | `shiftSpace` |
@@ -192,9 +203,9 @@ take that from themself, which the space's view does not offer.
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
-| GET | `api/v1/spaces/<space>/pages` | | `[PageSummary]` `{"id", "space", "parent", "title", "slug", "createdAt", "updatedAt", "position", "template"}`, the space's whole tree, each page before the pages under it: a `Page` without its `body` and `attachments`, which `getPage` reads | 404, 403 | `listPages` |
-| GET | `api/v1/spaces/<space>/post-details` | | `{"<page id>": PostDetails}` `{"author", "comments", "excerpt"}` for every page of the space: the author of its first version (or `null`), its number of comments, and, for a blog's post, its first paragraph as text (`""` for any other page) | 404, 403 | `postDetails` |
-| GET | `api/v1/spaces/<space>/pages/at/<slug>/<slug>…` | | `Page` at that path in the space, with `ETag` | 404, 403 | `getPage` |
+| GET | `api/v1/spaces/<space>/pages` | | `[PageSummary]` `{"id", "space", "parent", "title", "slug", "createdAt", "updatedAt", "position", "template"}`, the space's whole tree, each page before the pages under it: a `Page` without its `body` and `attachments`, which `getPage` reads | 404 | `listPages` |
+| GET | `api/v1/spaces/<space>/post-details` | | `{"<page id>": PostDetails}` `{"author", "comments", "excerpt"}` for every page of the space: the author of its first version (or `null`), its number of comments, and, for a blog's post, its first paragraph as text (`""` for any other page) | 404 | `postDetails` |
+| GET | `api/v1/spaces/<space>/pages/at/<slug>/<slug>…` | | `Page` at that path in the space, with `ETag` | 404 | `getPage` |
 | POST | `api/v1/spaces/<space>/pages` | `NewPage` `{"parent": id or null, "title", "body"}` | 201 `Page`, with `ETag` | 404, 403, 400 | `createPage` |
 | PUT | `api/v1/pages/<page>` | `PageEdit` `{"title", "body"}`, with `If-Match` | `Page`, with its new `ETag` | 404, 403, 400, 409 | `savePage` |
 | POST | `api/v1/pages/<page>/move` | `PageMove` `{"space", "parent": id or null}` | `Page` | 404, 403, 400 | `movePage` |
@@ -207,7 +218,7 @@ take that from themself, which the space's view does not offer.
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
 | POST | `api/v1/pages/<page>/attachments` | multipart form, one file part named `file`: its file name is the attachment's name, its `Content-Type` the attachment's media type | 201 `Attachment` | 404, 403, 400 (a bad name, or a file over 50 MB) | `uploadAttachment` |
-| GET, HEAD | `api/v1/attachments/<attachment>/<name>` | | the file's bytes, streamed, with the attachment's media type as `Content-Type`; a `Range` request gets that range (a `<video>` seeks with one) | 404, 403 | `attachmentUrl` gives this address |
+| GET, HEAD | `api/v1/attachments/<attachment>/<name>` | | the file's bytes, streamed, with the attachment's media type as `Content-Type`; a `Range` request gets that range (a `<video>` seeks with one) | 404 | `attachmentUrl` gives this address |
 | DELETE | `api/v1/attachments/<attachment>` | | 204 | 404, 403 | `deleteAttachment` |
 
 An attachment whose bytes the server keeps has `"source": {"tag":
@@ -229,8 +240,8 @@ not the attachment's is 404.
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
-| GET | `api/v1/pages/<page>/versions` | | `[VersionInfo]` `{"page", "updatedAt", "title", "author"}`, the page's every version, the latest (the page as it is) first | 404, 403 | `listVersions` |
-| GET | `api/v1/pages/<page>/versions/<time>` | | `Version` `{"page", "updatedAt", "title", "body", "author"}` | 404, 403 | `getVersion` |
+| GET | `api/v1/pages/<page>/versions` | | `[VersionInfo]` `{"page", "updatedAt", "title", "author"}`, the page's every version, the latest (the page as it is) first | 404 | `listVersions` |
+| GET | `api/v1/pages/<page>/versions/<time>` | | `Version` `{"page", "updatedAt", "title", "body", "author"}` | 404 | `getVersion` |
 | POST | `api/v1/pages/<page>/versions/<time>/restore` | none, with `If-Match` | `Page`, with its new `ETag` | 404, 403, 400, 409 | `restoreVersion` |
 
 Every save of a page is a version of it, named by the page's `updatedAt` as
@@ -245,8 +256,9 @@ by their id), or `null` for nobody known (an import).
 
 Reading a history needs what reading the page does, restoring what saving it
 does. The page's permission is checked before the version is looked up, so a
-reader who may not see the page gets 403 for any time, and only one who may
-gets 404 for a time that is no version. A restore saves the version's title
+reader who may not see the page gets 404 for any time, as for a page that
+does not exist, and only one who may see it learns from a 404 that a time is
+no version. A restore saves the version's title
 and body as the page's latest version, against the version in `If-Match` as a
 save is (409 if the page has been saved since), and so discards the
 restorer's draft; the versions in between are kept.
@@ -255,7 +267,7 @@ restorer's draft; the versions in between are kept.
 
 | Method | Path | Body | Response | Errors | `MonadComments` |
 | ------ | ---- | ---- | -------- | ------ | --------------- |
-| GET | `api/v1/pages/<page>/threads` | | `[Thread]`, in the order they were opened | 404, 403 | `listThreads` |
+| GET | `api/v1/pages/<page>/threads` | | `[Thread]`, in the order they were opened | 404 | `listThreads` |
 | POST | `api/v1/pages/<page>/threads` | `NewThread` `{"anchor": Anchor or null, "body"}` | 201 `Thread` | 404, 403, 400 | `openThread` |
 | POST | `api/v1/pages/<page>/threads/<thread>/comments` | `CommentText` `{"body"}` | 201 `Comment`, last in the thread | 404, 403, 400 | `reply` |
 | PUT | `api/v1/pages/<page>/threads/<thread>/comments/<comment>` | `CommentText` `{"body"}` | `Comment`, with its `editedAt` | 404, 403, 400 | `editComment` |
@@ -286,7 +298,8 @@ is theirs. Only an inline thread is resolved (400 for a thread about the
 page). The first comment of a thread is the thread: deleting it deletes the
 thread, which is refused (400) while it has replies. A thread or a comment
 is addressed under its page; one that is not on the page named is 404,
-after the page's own 404 and 403. A comment is not blank and at most 20 000
+after the page's own 404 (a page that is not there, or that the user may
+not read). A comment is not blank and at most 20 000
 characters long, a quote not blank and at most 2000 (400).
 
 ### The live channel
@@ -431,8 +444,8 @@ alike.
 
 | Method | Path | Body | Response | Errors |
 | ------ | ---- | ---- | -------- | ------ |
-| GET, HEAD | `api/v1/pages/<page>/export/<format>` | | the page as a document of that format, with its media type and `Content-Disposition: attachment; filename="<title>.<extension>"` | 404, 403, 400, 429 |
-| GET, HEAD | `api/v1/spaces/<space>/export/<format>` | | the space's pages as one document, in the space's order, after a title page and a table of contents | 404, 403, 400, 429 |
+| GET, HEAD | `api/v1/pages/<page>/export/<format>` | | the page as a document of that format, with its media type and `Content-Disposition: attachment; filename="<title>.<extension>"` | 404, 400, 429 |
+| GET, HEAD | `api/v1/spaces/<space>/export/<format>` | | the space's pages as one document, in the space's order, after a title page and a table of contents | 404, 400, 429 |
 
 The formats (`Wiki.Api.Export`) are `docx` (Word, its formulas as Word's
 equations), `html` (one standalone page, its images inside it and its

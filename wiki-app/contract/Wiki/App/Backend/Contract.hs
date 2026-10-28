@@ -66,6 +66,7 @@ spec _ withFixture = around withFixture $ describe "MonadWiki contract" $ do
   sessions
   readingSpaces
   readingPages
+  hiddenSpaces
   creatingSpaces
   changingSpaces
   spacePermissions
@@ -198,8 +199,8 @@ readingSpaces = describe "listSpaces and getSpace" $ do
   it "list the ancestors of a space someone may view, though not the ancestors' pages" $ \(Fixture run) -> do
     spaceNames run reader `shouldReturn` ["Blog", "Docs", "Team", "Projects"]
     team <- spaceAt run admin "team"
-    run reader (getSpace (path "team")) `shouldReturn` Left Forbidden
-    run reader (listPages team.id) `shouldReturn` Left Forbidden
+    run reader (getSpace (path "team")) `shouldReturn` Left NotFound
+    run reader (listPages team.id) `shouldReturn` Left NotFound
 
   it "list a whole tree: every parent of a listed space is listed" $ \(Fixture run) ->
     for_ [Anonymous, admin, editor, reader] $ \who -> do
@@ -220,10 +221,10 @@ readingSpaces = describe "listSpaces and getSpace" $ do
     run admin (getSpace (path "projects")) `shouldReturn` Left NotFound
     run admin (getSpace []) `shouldReturn` Left NotFound
 
-  it "give Forbidden for a space someone may not view" $ \(Fixture run) -> do
-    run Anonymous (getSpace (path "team")) `shouldReturn` Left Forbidden
-    run Anonymous (getSpace (path "team/projects")) `shouldReturn` Left Forbidden
-    run editor (getSpace (path "team/projects")) `shouldReturn` Left Forbidden
+  it "give NotFound for a space someone may not view, as for one that is not there" $ \(Fixture run) -> do
+    run Anonymous (getSpace (path "team")) `shouldReturn` Left NotFound
+    run Anonymous (getSpace (path "team/projects")) `shouldReturn` Left NotFound
+    run editor (getSpace (path "team/projects")) `shouldReturn` Left NotFound
     void (spaceAt run reader "team/projects")
 
   it "make the subspaces of a public space public" $ \(Fixture run) -> do
@@ -259,12 +260,52 @@ readingPages = describe "listPages and getPage" $ do
     run admin (listPages (SpaceId "no-such-space")) `shouldReturn` Left NotFound
     run admin (getPage (SpaceId "no-such-space") (path "tour")) `shouldReturn` Left NotFound
 
-  it "give Forbidden for the pages of a space someone may not view" $ \(Fixture run) -> do
-    getPageAt run Anonymous "team" "team-handbook" `shouldReturn` Left Forbidden
-    getPageAt run editor "team" "team-handbook" `shouldReturn` Left Forbidden
-    getPageAt run reader "team" "team-handbook" `shouldReturn` Left Forbidden
+  it "give NotFound for the pages of a space someone may not view, whether the page is there or not" $ \(Fixture run) -> do
+    getPageAt run Anonymous "team" "team-handbook" `shouldReturn` Left NotFound
+    getPageAt run editor "team" "team-handbook" `shouldReturn` Left NotFound
+    getPageAt run reader "team" "team-handbook" `shouldReturn` Left NotFound
+    getPageAt run reader "team" "nowhere" `shouldReturn` Left NotFound
     void (pageAt run reader "team/projects" "the-wiki")
     void (pageAt run admin "team" "team-handbook/on-call")
+
+--------------------------------------------------------------------------------
+-- Spaces someone may not view
+
+-- | The rule the class's Haddock states in "Errors": a space someone may
+-- not view answers exactly as a space that is not there, and so does
+-- everything in it. Only in a space someone may view is a refusal of what
+-- they may not do 'Forbidden'.
+hiddenSpaces :: (MonadWiki m) => SpecWith (Fixture m)
+hiddenSpaces = describe "a space someone may not view" $ do
+  it "is not found, as a space that is not there is not found" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    for_ [Anonymous, editor, reader] $ \who -> do
+      run who (getSpace (path "team")) `shouldReturn` Left NotFound
+      run who (listPages team.id) `shouldReturn` Left NotFound
+      run who (renameSpace team.id "Ours") >>= (`shouldFailWith` NotFound)
+    run reader (getSpace (path "nowhere")) `shouldReturn` Left NotFound
+
+  it "has no page that is found, whether the page is there or not" $ \(Fixture run) -> do
+    handbook <- pageAt run admin "team" "team-handbook"
+    for_ [Anonymous, editor, reader] $ \who -> do
+      getPageAt run who "team" "team-handbook" `shouldReturn` Left NotFound
+      getPageAt run who "team" "no-such-page" `shouldReturn` Left NotFound
+      run who (savePage handbook.id handbook.updatedAt "Mine" "") >>= (`shouldFailWith` NotFound)
+      run who (listVersions handbook.id) >>= (`shouldFailWith` NotFound)
+
+  it "finds nothing in a search scoped to it, as in a search scoped to a space that is not there" $ \(Fixture run) -> do
+    team <- spaceAt run admin "team"
+    hitsFor run admin (inSpace team.id False "handbook") `shouldReturn` [("team", "Team handbook")]
+    for_ [Anonymous, editor, reader] $ \who -> do
+      hitsFor run who (inSpace team.id False "handbook") `shouldReturn` []
+      hitsFor run who (inSpace (SpaceId "no-such-space") False "handbook") `shouldReturn` []
+
+  it "differs from a space someone may view, which refuses what they may not do there with Forbidden" $ \(Fixture run) -> do
+    wiki <- pageAt run admin "team/projects" "the-wiki"
+    tour <- pageAt run admin "docs" "tour"
+    run reader (savePage wiki.id wiki.updatedAt "Mine" "") >>= (`shouldFailWith` Forbidden)
+    run editor (savePage tour.id tour.updatedAt "Mine" "") >>= (`shouldFailWith` Forbidden)
+    run Anonymous (savePage tour.id tour.updatedAt "Mine" "") >>= (`shouldFailWith` Forbidden)
 
 --------------------------------------------------------------------------------
 -- Creating spaces
@@ -283,8 +324,8 @@ creatingSpaces = describe "createSpace" $ do
     (s.name, slugOf s, s.public) `shouldBe` ("Zażółć gęślą jaźń", "zazolc-gesla-jazn", False)
     found <- spaceAt run editor "zazolc-gesla-jazn"
     found `shouldBe` s
-    run Anonymous (getSpace (path "zazolc-gesla-jazn")) `shouldReturn` Left Forbidden
-    run reader (getSpace (path "zazolc-gesla-jazn")) `shouldReturn` Left Forbidden
+    run Anonymous (getSpace (path "zazolc-gesla-jazn")) `shouldReturn` Left NotFound
+    run reader (getSpace (path "zazolc-gesla-jazn")) `shouldReturn` Left NotFound
 
   it "lets its creator administer it" $ \(Fixture run) -> do
     s <- run editor (createSpace Nothing "Mine") >>= ok
@@ -313,7 +354,7 @@ creatingSpaces = describe "createSpace" $ do
     projects <- spaceAt run admin "team/projects"
     sub <- run editor (createSpace (Just docs.id) "Drafts") >>= ok
     sub.parent `shouldBe` Just docs.id
-    run editor (createSpace (Just team.id) "Drafts") >>= (`shouldFailWith` Forbidden)
+    run editor (createSpace (Just team.id) "Drafts") >>= (`shouldFailWith` NotFound)
     run reader (createSpace (Just projects.id) "Drafts") >>= (`shouldFailWith` Forbidden)
     run Anonymous (createSpace (Just docs.id) "Drafts") >>= (`shouldFailWith` Forbidden)
     void (run admin (createSpace (Just team.id) "Drafts") >>= ok)
@@ -343,7 +384,7 @@ changingSpaces = describe "renameSpace and setSpacePublic" $ do
     run editor (renameSpace blog.id "Weblog") >>= (`shouldFailWith` Forbidden)
     run editor (setSpacePublic blog.id False) >>= (`shouldFailWith` Forbidden)
     run Anonymous (renameSpace blog.id "Weblog") >>= (`shouldFailWith` Forbidden)
-    run reader (setSpacePublic team.id True) >>= (`shouldFailWith` Forbidden)
+    run reader (setSpacePublic team.id True) >>= (`shouldFailWith` NotFound)
     run admin (renameSpace (SpaceId "no-such-space") "X") >>= (`shouldFailWith` NotFound)
     run admin (renameSpace blog.id "") >>= shouldBeInvalid
 
@@ -355,7 +396,7 @@ changingSpaces = describe "renameSpace and setSpacePublic" $ do
     void (pageAt run Anonymous "team/projects" "the-wiki")
     spaceNames run Anonymous `shouldReturn` ["Blog", "Docs", "Team", "Projects"]
     void (run admin (setSpacePublic team.id False) >>= ok)
-    getPageAt run Anonymous "team" "team-handbook" `shouldReturn` Left Forbidden
+    getPageAt run Anonymous "team" "team-handbook" `shouldReturn` Left NotFound
 
 spacePermissions :: (MonadWiki m) => SpecWith (Fixture m)
 spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
@@ -374,7 +415,7 @@ spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
   it "give a user a private space, its subspaces with it, and take it back" $ \(Fixture run) -> do
     team <- spaceAt run admin "team"
     editorId <- userId run editor
-    getPageAt run editor "team" "team-handbook" `shouldReturn` Left Forbidden
+    getPageAt run editor "team" "team-handbook" `shouldReturn` Left NotFound
     run admin (setSpaceGrant team.id (SubjectUser editorId) View True) >>= ok
     void (pageAt run editor "team" "team-handbook")
     void (pageAt run editor "team/projects" "the-wiki")
@@ -388,8 +429,8 @@ spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
     sort [g.permission | g <- held.grants.spaces, g.space == team.id] `shouldBe` [View, Edit]
     run admin (setSpaceGrant team.id (SubjectUser editorId) Edit False) >>= ok
     run admin (setSpaceGrant team.id (SubjectUser editorId) View False) >>= ok
-    getPageAt run editor "team" "team-handbook" `shouldReturn` Left Forbidden
-    getPageAt run editor "team/projects" "the-wiki" `shouldReturn` Left Forbidden
+    getPageAt run editor "team" "team-handbook" `shouldReturn` Left NotFound
+    getPageAt run editor "team/projects" "the-wiki" `shouldReturn` Left NotFound
 
   it "grant to a group's members, and change nothing more when asked twice" $ \(Fixture run) -> do
     team <- spaceAt run admin "team"
@@ -401,7 +442,7 @@ spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
     length [g | g <- access.grants, g.subject == SubjectGroup writers] `shouldBe` 1
     run admin (setSpaceGrant team.id (SubjectGroup writers) View False) >>= ok
     run admin (setSpaceGrant team.id (SubjectGroup writers) View False) >>= ok
-    getPageAt run editor "team" "team-handbook" `shouldReturn` Left Forbidden
+    getPageAt run editor "team" "team-handbook" `shouldReturn` Left NotFound
 
   it "let whoever administers the space do it, themself included, and nobody else" $ \(Fixture run) -> do
     blog <- spaceAt run admin "blog"
@@ -411,7 +452,7 @@ spacePermissions = describe "spaceAccess and setSpaceGrant" $ do
     for_ [Anonymous, editor, reader] $ \who -> do
       run who (spaceAccess blog.id) >>= (`shouldFailWith` Forbidden)
       run who (setSpaceGrant blog.id (SubjectUser editorId) AdministerSpace True) >>= (`shouldFailWith` Forbidden)
-    run reader (spaceAccess team.id) >>= (`shouldFailWith` Forbidden)
+    run reader (spaceAccess team.id) >>= (`shouldFailWith` NotFound)
     run admin (spaceAccess (SpaceId "no-such-space")) >>= (`shouldFailWith` NotFound)
     run admin (setSpaceGrant (SpaceId "no-such-space") (SubjectUser editorId) View True) >>= (`shouldFailWith` NotFound)
     -- Granted administration of the blog, the editor may grant on it, and
@@ -467,7 +508,7 @@ mathMacros = describe "setSpaceMathMacros" $ do
     team <- spaceAt run admin "team"
     run editor (setSpaceMathMacros blog.id "\\def\\x{1}") >>= (`shouldFailWith` Forbidden)
     run Anonymous (setSpaceMathMacros blog.id "\\def\\x{1}") >>= (`shouldFailWith` Forbidden)
-    run reader (setSpaceMathMacros team.id "\\def\\x{1}") >>= (`shouldFailWith` Forbidden)
+    run reader (setSpaceMathMacros team.id "\\def\\x{1}") >>= (`shouldFailWith` NotFound)
     run admin (setSpaceMathMacros (SpaceId "no-such-space") "") >>= (`shouldFailWith` NotFound)
     unchanged <- spaceAt run admin "blog"
     unchanged.mathMacros `shouldBe` ""
@@ -527,13 +568,16 @@ movingSpaces = describe "moveSpace" $ do
     under.parent `shouldBe` Just other.id
     back <- run editor (moveSpace mine.id Nothing) >>= ok
     back.parent `shouldBe` Nothing
-    run reader (moveSpace mine.id Nothing) >>= (`shouldFailWith` Forbidden)
+    run reader (moveSpace mine.id Nothing) >>= (`shouldFailWith` NotFound)
     run Anonymous (moveSpace blog.id Nothing) >>= (`shouldFailWith` Forbidden)
 
-  it "gives NotFound for a space or a parent that is not there" $ \(Fixture run) -> do
+  it "gives NotFound for a space or a parent that is not there, or that someone may not view" $ \(Fixture run) -> do
     blog <- spaceAt run admin "blog"
+    team <- spaceAt run admin "team"
     run admin (moveSpace blog.id (Just (SpaceId "no-such-space"))) >>= (`shouldFailWith` NotFound)
     run admin (moveSpace (SpaceId "no-such-space") Nothing) >>= (`shouldFailWith` NotFound)
+    mine <- run editor (createSpace Nothing "Mine") >>= ok
+    run editor (moveSpace mine.id (Just team.id)) >>= (`shouldFailWith` NotFound)
 
 --------------------------------------------------------------------------------
 -- Deleting spaces
@@ -680,8 +724,12 @@ ordering = describe "setSpaceOrder, shiftSpace and shiftPage" $ do
     (moved.id, moved.slug) `shouldBe` (archive.id, archive.slug)
     spaceNames run admin `shouldReturn` ["Blog", "Docs", "Team", "Archive", "Projects"]
     void (spaceAt run admin "team/archive")
-    run editor (shiftSpace archive.id ShiftDown) >>= (`shouldFailWith` Forbidden)
-    run reader (shiftSpace archive.id ShiftDown) >>= (`shouldFailWith` Forbidden)
+    run editor (shiftSpace archive.id ShiftDown) >>= (`shouldFailWith` NotFound)
+    run reader (shiftSpace archive.id ShiftDown) >>= (`shouldFailWith` NotFound)
+    blog <- spaceAt run admin "blog"
+    void (run admin (setSpaceOrder blog.id ChildSpaces ByHand) >>= ok)
+    drafts' <- run admin (createSpace (Just blog.id) "Drafts") >>= ok
+    run reader (shiftSpace drafts'.id ShiftUp) >>= (`shouldFailWith` Forbidden)
 
   it "refuse a move by hand where the order is not by hand, and for a top-level space" $ \(Fixture run) -> do
     hello <- pageAt run editor "blog" "hello-world"
@@ -697,7 +745,7 @@ ordering = describe "setSpaceOrder, shiftSpace and shiftPage" $ do
     team <- spaceAt run admin "team"
     run editor (setSpaceOrder blog.id ChildPages ByHand) >>= (`shouldFailWith` Forbidden)
     run Anonymous (setSpaceOrder blog.id ChildPages ByHand) >>= (`shouldFailWith` Forbidden)
-    run reader (setSpaceOrder team.id ChildSpaces ByHand) >>= (`shouldFailWith` Forbidden)
+    run reader (setSpaceOrder team.id ChildSpaces ByHand) >>= (`shouldFailWith` NotFound)
     (\s -> s.pageOrder) <$> spaceAt run admin "blog" `shouldReturn` ByName
     void (run admin (setSpaceOrder blog.id ChildPages ByHand) >>= ok)
     hello <- pageAt run admin "blog" "hello-world"
@@ -1221,9 +1269,9 @@ history = describe "listVersions, getVersion and restoreVersion" $ do
     hello <- pageAt run admin "blog" "hello-world"
     -- Someone who may not view the page learns nothing of its history,
     -- not even whether a time is one of its versions.
-    run Anonymous (listVersions handbook.id) >>= (`shouldFailWith` Forbidden)
-    run Anonymous (getVersion handbook.id handbook.updatedAt) >>= (`shouldFailWith` Forbidden)
-    run Anonymous (getVersion handbook.id hello.updatedAt) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (listVersions handbook.id) >>= (`shouldFailWith` NotFound)
+    run Anonymous (getVersion handbook.id handbook.updatedAt) >>= (`shouldFailWith` NotFound)
+    run Anonymous (getVersion handbook.id hello.updatedAt) >>= (`shouldFailWith` NotFound)
     run reader (listVersions wiki.id) >>= void . ok
     run reader (getVersion wiki.id wiki.updatedAt) >>= void . ok
     run reader (getVersion wiki.id hello.updatedAt) >>= (`shouldFailWith` NotFound)
@@ -1375,7 +1423,7 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
     let bad = profile "" (Just (IconColour "nope")) Nothing
     run editor (setSpaceProfile blog.id bad) >>= (`shouldFailWith` Forbidden)
     run Anonymous (setSpaceProfile blog.id bad) >>= (`shouldFailWith` Forbidden)
-    run reader (setSpaceProfile team.id bad) >>= (`shouldFailWith` Forbidden)
+    run reader (setSpaceProfile team.id bad) >>= (`shouldFailWith` NotFound)
     run editor (uploadSpaceIcon blog.id "image/png" png) >>= (`shouldFailWith` Forbidden)
     run Anonymous (uploadSpaceIcon blog.id "text/html" "<p>") >>= (`shouldFailWith` Forbidden)
     run admin (setSpaceProfile (SpaceId "no-such-space") bad) >>= (`shouldFailWith` NotFound)
@@ -1475,7 +1523,7 @@ posting = describe "postDetails" $ do
 
   it "is refused as listPages is" $ \(Fixture run) -> do
     team <- spaceAt run admin "team"
-    run Anonymous (postDetails team.id) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (postDetails team.id) >>= (`shouldFailWith` NotFound)
     run admin (postDetails (SpaceId "no-such-space")) >>= (`shouldFailWith` NotFound)
     void (run admin (postDetails team.id) >>= ok)
 

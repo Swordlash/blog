@@ -106,14 +106,14 @@ spec = describe "Wiki.App.Shell, rendered" $ do
     guide `contains` "<a download=\"tree.png\" href=\"data:image/png;base64,"
     guide `contains` "<a download=\"earth.jpg\" href=\"https://upload.wikimedia.org/"
 
-  it "says in place that a private space is not for someone not signed in" $ do
+  it "says in place that a private space is not there, to someone not signed in" $ do
     Rendered {html, title} <- render (as Nothing) (Space (slugs ["team"]))
-    html `contains` "class=\"error error-forbidden\""
-    title `shouldBe` "Private · Wiki"
+    html `contains` "class=\"error error-not-found\""
+    title `shouldBe` "Not found · Wiki"
     Rendered {html = handbook, title = handbookTitle} <- render (as Nothing) (Page (slugs ["team"]) (slugs ["team-handbook"]))
-    handbook `contains` "class=\"error error-forbidden\""
+    handbook `contains` "class=\"error error-not-found\""
     handbook `lacks` "Ada"
-    handbookTitle `shouldBe` "Private · Wiki"
+    handbookTitle `shouldBe` "Not found · Wiki"
 
   it "shows a private space's pages to someone it is granted to, with what they may do" $ do
     Rendered {html, title} <- render (as (Just "user-admin")) (SpacePages (slugs ["team"]))
@@ -321,15 +321,15 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "refuses the source where the page is refused, for the same reasons" $ do
     Rendered {html, title} <- render (as Nothing) (PageSource (slugs ["team"]) (slugs ["team-handbook"]))
-    html `contains` "class=\"error error-forbidden\""
-    html `contains` "Switch to someone who has, at the top right."
+    html `contains` "class=\"error error-not-found\""
+    html `contains` "There is nothing here"
     html `lacks` "source-text"
-    title `shouldBe` "Private · Wiki"
+    title `shouldBe` "Not found · Wiki"
     Rendered {html = missing} <- render (as Nothing) (PageSource (slugs ["docs"]) (slugs ["no-such-page"]))
     missing `contains` "class=\"error error-not-found\""
     missing `lacks` "source-text"
     Rendered {html = projects} <- render (as Nothing) (PageSource (slugs ["team", "projects"]) (slugs ["the-wiki"]))
-    projects `contains` "class=\"error error-forbidden\""
+    projects `contains` "class=\"error error-not-found\""
 
   it "shows a page's history to someone not signed in: its one version, all of its text new" $ do
     Rendered {html, title} <- render (as Nothing) (PageHistory (slugs ["docs"]) (slugs ["tour"]) Nothing AgainstPrevious)
@@ -375,9 +375,9 @@ spec = describe "Wiki.App.Shell, rendered" $ do
 
   it "refuses a history where the page is refused, and a version the page does not have" $ do
     Rendered {html, title} <- render (as Nothing) (PageHistory (slugs ["team"]) (slugs ["team-handbook"]) Nothing AgainstPrevious)
-    html `contains` "class=\"error error-forbidden\""
+    html `contains` "class=\"error error-not-found\""
     html `lacks` "history-view"
-    title `shouldBe` "Private · Wiki"
+    title `shouldBe` "Not found · Wiki"
     Rendered {html = missing} <- render (as Nothing) (PageHistory (slugs ["docs"]) (slugs ["tour"]) (Just demoNow) AgainstPrevious)
     missing `contains` "class=\"error error-not-found\""
 

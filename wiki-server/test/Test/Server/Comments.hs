@@ -117,11 +117,11 @@ rules = describe "who may" $ do
     map (\c -> (c.author.name, c.body)) t.comments `shouldBe` [("Rita Reader", "Which Haskell?")]
     ok200 (getUrl r (onPublic r (links.comments p).list)) `shouldReturn` [t]
 
-  it "refuses a page one may not read, even its threads, and one that is not there" $ withDemoRunning identity $ \r -> do
+  it "refuses a page one may not read, even its threads, as one that is not there" $ withDemoRunning identity $ \r -> do
     people <- signedIn r
     handbook <- pageAt r "team" "team-handbook"
-    asWithout r (Just people.reader) "GET" (links.comments handbook).list >>= refusedWith 403 Forbidden
-    asWith r (Just people.reader) methodPost (links.comments handbook).open NewThread {anchor = Nothing, body = "Hi."} >>= refusedWith 403 Forbidden
+    asWithout r (Just people.reader) "GET" (links.comments handbook).list >>= refusedWith 404 NotFound
+    asWith r (Just people.reader) methodPost (links.comments handbook).open NewThread {anchor = Nothing, body = "Hi."} >>= refusedWith 404 NotFound
     asWithout r (Just people.reader) "GET" (links.comments (PageId "no-such-page")).list >>= refusedWith 404 NotFound
 
   it "lets an author edit their own comment, and nobody else" $ withDemoRunning identity $ \r -> do

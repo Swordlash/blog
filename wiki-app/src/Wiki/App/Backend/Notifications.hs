@@ -21,9 +21,10 @@
 -- Everything belongs to the signed-in user. Someone not signed in is
 -- refused with 'Forbidden' everywhere except 'mentionable' (which names
 -- nobody to them) and 'unsubscribe'. Watching a page or a space needs
--- permission to view it, checked first as everywhere ('NotFound', then
--- 'Forbidden'). A notification about a page the user may no longer read is
--- not listed.
+-- permission to view it, checked first, as everywhere: a page or a space
+-- that is not there, or that the user may not view, is 'NotFound', even
+-- to someone not signed in. A notification about a page the user may no
+-- longer read is not listed.
 module Wiki.App.Backend.Notifications
   ( MonadNotifications (..)
   )

@@ -104,10 +104,10 @@ reading = describe "listThreads" $ do
     run Anonymous (listThreads p) `shouldReturn` Right []
     run reader (listThreads p) `shouldReturn` Right []
 
-  it "refuses a page one may not read, and one that is not there" $ \(Fixture run) -> do
+  it "refuses a page one may not read as one that is not there" $ \(Fixture run) -> do
     p <- handbook run
-    run reader (listThreads p) >>= (`shouldFailWith` Forbidden)
-    run Anonymous (listThreads p) >>= (`shouldFailWith` Forbidden)
+    run reader (listThreads p) >>= (`shouldFailWith` NotFound)
+    run Anonymous (listThreads p) >>= (`shouldFailWith` NotFound)
     run admin (listThreads p) `shouldReturn` Right []
     run reader (listThreads (PageId "no-such-page")) >>= (`shouldFailWith` NotFound)
 
@@ -267,19 +267,19 @@ refusing = describe "refusals" $ do
     run reader (reply p t.id "") >>= shouldBeInvalid
     run editor (editComment p t.id r.id " ") >>= shouldBeInvalid
 
-  it "says whoever may not read the page is forbidden before anything else" $ \(Fixture run) -> do
+  it "says the page is not there, before anything else, to whoever may not read it" $ \(Fixture run) -> do
     p <- handbook run
     t <- run admin (openThread p Nothing "Internal.") >>= ok
     let c = maybe (CommentId "") (\x -> x.id) (head t.comments)
-    run reader (openThread p Nothing "") >>= (`shouldFailWith` Forbidden)
-    run reader (reply p (CommentThreadId "no-such-thread") "") >>= (`shouldFailWith` Forbidden)
-    run reader (reply p t.id "Hi.") >>= (`shouldFailWith` Forbidden)
-    run reader (editComment p t.id c "Hi.") >>= (`shouldFailWith` Forbidden)
-    run reader (deleteComment p t.id c) >>= (`shouldFailWith` Forbidden)
-    run reader (deleteThread p t.id) >>= (`shouldFailWith` Forbidden)
-    run reader (setResolved p t.id True) >>= (`shouldFailWith` Forbidden)
+    run reader (openThread p Nothing "") >>= (`shouldFailWith` NotFound)
+    run reader (reply p (CommentThreadId "no-such-thread") "") >>= (`shouldFailWith` NotFound)
+    run reader (reply p t.id "Hi.") >>= (`shouldFailWith` NotFound)
+    run reader (editComment p t.id c "Hi.") >>= (`shouldFailWith` NotFound)
+    run reader (deleteComment p t.id c) >>= (`shouldFailWith` NotFound)
+    run reader (deleteThread p t.id) >>= (`shouldFailWith` NotFound)
+    run reader (setResolved p t.id True) >>= (`shouldFailWith` NotFound)
     run reader (openThread (PageId "no-such-page") Nothing "Hi.") >>= (`shouldFailWith` NotFound)
-    run Anonymous (openThread p Nothing "") >>= (`shouldFailWith` Forbidden)
+    run Anonymous (openThread p Nothing "") >>= (`shouldFailWith` NotFound)
 
   it "names a comment's author by their id as well" $ \(Fixture run) -> do
     p <- notes run

@@ -618,8 +618,16 @@ findPage pid = db (`loadPage` pid) >>= maybe (failWith NotFound) pure
 chainOfPage :: PageNode -> Tx [Space]
 chainOfPage p = asks (`chainOf` p.space)
 
+-- | 'NotFound' unless the caller may view the last space of the chain. A
+-- space the caller may not view answers exactly as a space that does not
+-- exist, and so does everything in it: its pages, their attachments,
+-- comments, versions and drafts, its watches and its subspaces. Otherwise
+-- a 'Forbidden' would tell anyone that the space, or a page in it, exists.
+-- Every transaction that names a space or a page checks this first, and
+-- only then whether the caller may do what is asked ('requireEdit',
+-- 'requireAdminister'), which is 'Forbidden' when they may not.
 requireView :: [Space] -> Tx ()
-requireView c = ask >>= \x -> require (canView x.principal x.grants c)
+requireView c = ask >>= \x -> unless (canView x.principal x.grants c) (failWith NotFound)
 
 requireEdit :: [Space] -> Tx ()
 requireEdit c = requireView c >> ask >>= \x -> require (canEdit x.principal x.grants c)
@@ -1172,6 +1180,7 @@ createSpaceTx :: Maybe SpaceId -> Text -> Tx Space
 createSpaceTx parent name = do
   ctx <- ask
   parentChain <- traverse (fmap snd . findSpace) parent
+  traverse_ requireView parentChain
   require (mayCreateSpace ctx.principal ctx.grants parentChain)
   n <- nonBlank "A space's name" name
   i <- newId
@@ -1359,6 +1368,7 @@ moveSpaceTx sid destination = do
   (s, c) <- findSpace sid
   destinationChain <- traverse (fmap snd . findSpace) destination
   requireView c
+  traverse_ requireView destinationChain
   require (mayMoveSpace ctx.principal ctx.grants c destinationChain)
   when (maybe False (within sid) destinationChain) $
     invalid "A space cannot be moved into itself or one of its subspaces."

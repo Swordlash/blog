@@ -56,7 +56,7 @@ spec m = do
     find ui ".grant-row[data-subject=editor] .grant-revoke" >>= click
     eventually (grants ui `shouldReturn` [])
     switchTo ui "editor"
-    eventually (find ui ".wiki-content .error-forbidden" >>= (`shouldContainText` "You do not have permission"))
+    eventually (find ui ".wiki-content .error-not-found" >>= (`shouldContainText` "There is nothing here"))
 
   it "shows what a subspace inherits, with the space it is granted on" $ runPage $ do
     ui <- startChanged m (grantOn "team" (SubjectUser (UserId "user-editor")) Edit) (Just "user-admin") (SpacePages (slugs ["team", "projects"]))

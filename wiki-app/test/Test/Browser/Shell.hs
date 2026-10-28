@@ -69,9 +69,9 @@ spec m = do
     -- Team is no way up for her.
     length <$> findAll ui ".sidebar-up" `shouldReturn` 0
 
-  it "says in place that reader may not see Team" $ runPage $ do
+  it "says in place that Team is not there, to reader, who may not see it" $ runPage $ do
     ui <- start m (Just "user-reader") (Space (slugs ["team"]))
-    find ui ".wiki-content .error-forbidden" >>= (`shouldSatisfy'` "permission")
+    find ui ".wiki-content .error-not-found" >>= (`shouldSatisfy'` "nothing here")
     -- Switching to someone who may see it shows it where the refusal was.
     find ui ".user-switcher-toggle" >>= click
     find ui ".user-menu button[data-login=admin]" >>= click

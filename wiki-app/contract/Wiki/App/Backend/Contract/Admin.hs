@@ -278,7 +278,7 @@ accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" 
     -- what nobody sees.
     map (\u -> u.login) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
     (\s -> s.user) <$> run reader session `shouldReturn` Nothing
-    run reader (listPages projects.id) >>= (`shouldFailWith` Forbidden)
+    run reader (listPages projects.id) >>= (`shouldFailWith` NotFound)
     enabled <- run admin (setDisabled readerId False) >>= ok
     enabled.disabled `shouldBe` False
     (\s -> (\u -> u.login) <$> s.user) <$> run reader session `shouldReturn` Just "reader"
@@ -391,7 +391,7 @@ letsIn = describe "wikiSettings, invitations and the rest" $ do
     run admin wikiSettings >>= ok >>= (`shouldBe` closedWiki)
     nobody <- run Anonymous session
     (nobody.user, nobody.grants.access) `shouldBe` (Nothing, Closed)
-    run Anonymous (getSpace [slug "blog"]) >>= (`shouldFailWith` Forbidden)
+    run Anonymous (getSpace [slug "blog"]) >>= (`shouldFailWith` NotFound)
     -- Someone signed in reads the public spaces as before.
     (\s -> s.grants.access) <$> run reader session `shouldReturn` Closed
     run reader (getSpace [slug "blog"]) >>= ok >>= \s -> s.name `shouldBe` "Blog"

@@ -6,8 +6,9 @@
 -- with the unchecked 'insertSpace' and similar functions.
 --
 -- The checks happen in the order the class's Haddock promises: ids and
--- paths first ('NotFound'), then permissions ('Forbidden'), then the
--- arguments ('Invalid'), then the versions ('Conflict').
+-- paths first, and whether the current user may view the space they name
+-- ('NotFound' for both), then the other permissions ('Forbidden'), then
+-- the arguments ('Invalid'), then the versions ('Conflict').
 module Wiki.App.Backend.Mem.State
   ( -- * The store
     MemState (..)
@@ -580,9 +581,13 @@ findPage st pid = maybe (Left NotFound) Right (Map.lookup pid st.pages)
 require :: Bool -> Either WikiError ()
 require ok = unless ok (Left Forbidden)
 
--- | The current user may view the space at the end of the chain.
+-- | 'NotFound' unless the current user may view the space at the end of
+-- the chain. A space the user may not view answers exactly as a space
+-- that does not exist, and so does everything in it, as on the server
+-- ("Wiki.Server.Storage"'s @requireView@): a 'Forbidden' would tell the
+-- user that it exists.
 requireView :: MemState -> [Space] -> Either WikiError ()
-requireView st c = require (canView (currentPrincipal st) st.grants c)
+requireView st c = unless (canView (currentPrincipal st) st.grants c) (Left NotFound)
 
 -- | The current user may edit the pages of the space at the end of the chain.
 requireEdit :: MemState -> [Space] -> Either WikiError ()
@@ -754,6 +759,7 @@ type Write a = MemState -> Either WikiError (MemState, a)
 createSpaceIn :: Maybe SpaceId -> Text -> UTCTime -> Write Space
 createSpaceIn parent name now st = do
   parentChain <- traverse (fmap snd . findSpace st) parent
+  traverse_ (requireView st) parentChain
   require (mayCreateSpace who st.grants parentChain)
   n <- nonBlank "A space's name" name
   let (st1, made) = insertSpace parent n False now st
@@ -842,6 +848,7 @@ moveSpaceIn sid destination st = do
   (s, c) <- findSpace st sid
   destinationChain <- traverse (fmap snd . findSpace st) destination
   requireView st c
+  traverse_ (requireView st) destinationChain
   require (mayMoveSpace (currentPrincipal st) st.grants c destinationChain)
   when (maybe False (within sid) destinationChain) $
     Left (Invalid "A space cannot be moved into itself or one of its subspaces.")

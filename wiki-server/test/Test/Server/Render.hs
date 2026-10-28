@@ -125,13 +125,14 @@ anonymous = describe "for someone not signed in" $ do
     appIn search `shouldSatisfy` T.isInfixOf "class=\"search-hit\""
     appIn search `shouldNotSatisfy` T.isInfixOf "Searching…"
 
-  it "renders nothing of a private space but that it is private, with a 403" $ withDemoRunning identity $ \r -> do
-    for_ ["/s/team/", "/s/team/pages/", "/s/team/projects/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/", "/s/team/p/team-handbook/slides/"] $ \path -> do
+  it "renders a private space as not there, with a 404, and nothing of it" $ withDemoRunning identity $ \r -> do
+    for_ ["/s/team/", "/s/team/pages/", "/s/team/projects/", "/s/team/p/team-handbook/", "/s/team/p/team-handbook/source/", "/s/team/p/team-handbook/history/", "/s/team/p/team-handbook/slides/", "/s/team/p/nowhere/"] $ \path -> do
       (status, html) <- page r r.public path
-      status `shouldBe` 403
+      (path, status) `shouldBe` (path, 404)
       html `shouldNotSatisfy` T.isInfixOf "handbook"
       html `shouldNotSatisfy` T.isInfixOf "Handbook"
-      appIn html `shouldSatisfy` T.isInfixOf "error-forbidden"
+      appIn html `shouldSatisfy` T.isInfixOf "error-not-found"
+      appIn html `shouldNotSatisfy` T.isInfixOf "error-forbidden"
 
   it "renders what is not there with a 404: an address, a space, a page, a version" $ withDemoRunning identity $ \r -> do
     for_ ["/nowhere/at/all", "/s/nowhere/", "/s/nowhere/pages/", "/s/docs/p/nowhere/", "/s/docs/p/nowhere/history/", "/s/docs/p/nowhere/slides/", "/s/docs/p/tour/history/?version=2020-01-01T00%3A00%3A00Z"] $ \path -> do
@@ -159,7 +160,7 @@ administrator = describe "for an administrator signed in" $ do
     appIn admin `shouldSatisfy` T.isInfixOf "class=\"user-table\""
     appIn admin `shouldSatisfy` T.isInfixOf "Edgar Editor"
     -- The same address, to nobody: neither the space nor the administration.
-    (.status) <$> getUrl r (r.public <> "/s/team/p/team-handbook/") `shouldReturn` 403
+    (.status) <$> getUrl r (r.public <> "/s/team/p/team-handbook/") `shouldReturn` 404
     (_, refused) <- page r r.public "/admin/"
     appIn refused `shouldNotSatisfy` T.isInfixOf "user-table"
 

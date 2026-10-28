@@ -19,23 +19,30 @@
 -- rather than dying of it. When more than one error applies, the first in
 -- this order is returned:
 --
--- 1. 'NotFound': an id or a path names nothing.
--- 2. 'Forbidden': it names something the current user may not see, or may
---    see but not do this to. Permissions are checked before the arguments
---    are validated, so someone who may not act learns nothing about whether
---    their request was otherwise well-formed.
+-- 1. 'NotFound': an id or a path names nothing, or it names a space the
+--    current user may not view, or something in such a space (a page, an
+--    attachment, a comment, a version, a draft, a watch, a subspace).
+-- 2. 'Forbidden': it names something the current user may view but not do
+--    this to. Permissions are checked before the arguments are validated,
+--    so someone who may not act learns nothing about whether their request
+--    was otherwise well-formed.
 -- 3. 'Invalid': the request cannot be carried out as asked (a blank title, a
 --    move that would make a space its own ancestor, an attachment too large).
 -- 4. 'Conflict': the request was right when it was made, but the wiki has
 --    changed since (a save based on an older version of the page).
 --
--- What this order reveals, as the server behaves today: within a space,
--- the permission on the space is checked before a page is looked up
--- (@getPageTx@ in "Wiki.Server.Storage" finds the space, checks that the
--- caller may view it, and only then resolves the page's path). So a page's
--- existence is never revealed to someone who may not view its space. But
--- a space that does not exist is 'NotFound', while a space the caller may
--- not view is 'Forbidden', so anyone can tell whether a space exists.
+-- A space the current user may not view answers exactly as a space that
+-- does not exist, so nobody learns from a refusal that a space or a page
+-- exists. The permission to view a space is checked before a page in it
+-- is looked up, so a page's path in such a space is 'NotFound' whether
+-- the page exists or not. A search scoped to such a space finds nothing,
+-- as a search scoped to a space that does not exist does. The
+-- administration is the exception ("Wiki.App.Backend.Admin"): it checks
+-- the global 'Wiki.Core.Permission.Administer' before it looks up any id,
+-- so whoever does not administer the wiki gets 'Forbidden' whatever they
+-- name. The ancestors of a space the user may view are listed by
+-- 'listSpaces' with their names and slugs, but reading one of them
+-- ('getSpace', 'listPages') is 'NotFound' all the same.
 --
 -- The HTTP backend, whose wiki is on the server, can fail to reach it at
 -- all: the network is down, the server does not answer in time, or it
@@ -195,9 +202,10 @@ import Wiki.Core.Version (Version, VersionInfo)
 -- | Why a request was not carried out. See the module's Haddock for which is
 -- returned when.
 data WikiError
-  = -- | Nothing has that id or path.
+  = -- | Nothing has that id or path, or nothing the current user may see:
+    -- a space they may not view, and everything in it, is not found.
     NotFound
-  | -- | The current user may not see it, or may not do that to it.
+  | -- | The current user may see it, but may not do that to it.
     Forbidden
   | -- | Something has changed since the request was made: the text says
     -- what, for a person to read.
@@ -302,8 +310,8 @@ class (Monad m) => MonadWiki m where
   -- down: the client can build every path and breadcrumb from it with
   -- "Wiki.Core.Path". An ancestor that the user may not view itself (because
   -- the grant they have is on a subspace of it) is listed for its name and
-  -- slug only: 'getSpace' and 'listPages' refuse it, and the client can
-  -- tell this in advance from the permission rules.
+  -- slug only: 'getSpace' and 'listPages' answer 'NotFound' for it, and
+  -- the client can tell this in advance from the permission rules.
   --
   -- The whole tree, rather than one level at a time, because a wiki has tens
   -- of spaces rather than thousands and the sidebar shows all of them.
@@ -603,10 +611,10 @@ class (Monad m) => MonadWiki m where
   listVersions = lift . listVersions
 
   -- | One version of a page, by the page's @updatedAt@ at that version.
-  -- The checks come in this order: a page that is not there is
-  -- 'NotFound', one the user may not view 'Forbidden', and only then a
-  -- time that is no version of it 'NotFound'. So whoever may not see a
-  -- page learns nothing of its history.
+  -- The checks come in this order: a page that is not there, or one the
+  -- user may not view, is 'NotFound', and only then a time that is no
+  -- version of it is 'NotFound'. So whoever may not see a page learns
+  -- nothing of its history.
   getVersion :: PageId -> UTCTime -> m (Either WikiError Version)
   default getVersion :: (MonadTrans t, m ~ t n, MonadWiki n) => PageId -> UTCTime -> m (Either WikiError Version)
   getVersion p = lift . getVersion p

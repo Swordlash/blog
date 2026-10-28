@@ -149,9 +149,9 @@ spec m = do
     find ui ".slides-view" >>= (`shouldNotHaveClass` "overview")
     find ui ".slides-position" >>= (`shouldHaveText` "6 / 7")
 
-  it "refuses the slides of a page the reader may not read" $ runPage $ do
+  it "says a page the reader may not read is not there, with no slides" $ runPage $ do
     ui <- start m (Just "user-reader") (PageSlides (slugs ["team"]) (slugs ["team-handbook"]) 1)
-    find ui ".wiki-content .error-forbidden" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "permission")
+    find ui ".wiki-content .error-not-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "nothing here")
     length <$> findAll ui ".slides-view" `shouldReturn` 0
   where
     docs = slugs ["docs"]

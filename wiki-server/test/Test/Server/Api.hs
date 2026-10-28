@@ -125,7 +125,7 @@ spacesAndPages = describe "spaces and pages" $ do
   it "are hidden from an anonymous reader unless public, and never changed by one" $ withRunning $ \r -> do
     (private, _) <- withSpace r False
     ok200 (getUrl r (onPublic r links.spaces.list)) `shouldReturn` ([] :: [Space])
-    getUrl r (onPublic r (links.spaces.listPages private.id)) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+    getUrl r (onPublic r (links.spaces.listPages private.id)) >>= jsonAs 404 >>= (`shouldBe` NotFound)
     _ :: Space <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setPublic private.id)) SpacePublic {public = True})
     map (\(s :: Space) -> s.id) <$> ok200 (getUrl r (onPublic r links.spaces.list)) `shouldReturn` [private.id]
     sendJson r methodPost (onPublic r links.spaces.create) NewSpace {parent = Nothing, name = "Mine"} >>= jsonAs 403 >>= (`shouldBe` Forbidden)
@@ -253,7 +253,7 @@ attachments = describe "attachments" $ do
     (space, page) <- withSpace r False
     a <- upload r page "chart.png" "image/png" bytes >>= jsonAs 201
     getUrl r (onAdmin r ("api/v1/attachments/" <> (a :: Attachment).id.text <> "/other.png")) >>= jsonAs 404 >>= (`shouldBe` NotFound)
-    getUrl r (onPublic r (attachmentUrl a)) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+    getUrl r (onPublic r (attachmentUrl a)) >>= jsonAs 404 >>= (`shouldBe` NotFound)
     _ :: Space <- ok200 (sendJson r methodPut (onAdmin r (links.spaces.setPublic space.id)) SpacePublic {public = True})
     (.status) <$> getUrl r (onPublic r (attachmentUrl a)) `shouldReturn` 200
     (.status) <$> send r methodDelete (onAdmin r (links.attachments.delete a.id)) [] "" `shouldReturn` 204
@@ -430,6 +430,32 @@ permissions = describe "permissions given over HTTP" $ do
     (.status) <$> create [] "Nobody's" `shouldReturn` 403
     (.status) <$> create [rita] "Rita's again" `shouldReturn` 201
 
+  it "answers a space one may not view, and everything in it, as one that is not there: 404, not 403" $ withAdminSession identity $ \r session -> do
+    givePassword r "user-reader" "reader's password"
+    rita <- cookie <$> signInAs r "reader" "reader's password"
+    let at' hs path = getUrlWith r (onPublic r (links.spaces.atPath (either (panic . show) identity (parsePath path)))) hs
+        pageIn hs sid path = getUrlWith r (onPublic r (links.spaces.pageAt sid (either (panic . show) identity (parsePath path)))) hs
+        save hs page = send r methodPut (onPublic r (links.pages.save page.id)) ([(hContentType, "application/json"), ("If-Match", encodeUtf8 (toUrlPiece (pageVersion page)))] <> hs) (encode PageEdit {title = page.title, body = "Mine."})
+        hits hs sid = ok200 (getUrlWith r (onPublic r (searchUrl (searchQuery "handbook") {space = Just sid, includeSubspaces = False})) hs)
+    team :: Space <- at' [session] "team" >>= jsonAs 200
+    projects :: Space <- at' [session] "team/projects" >>= jsonAs 200
+    handbook :: Page <- pageIn [session] team.id "team-handbook" >>= jsonAs 200
+    map (\h -> h.page) <$> hits [session] team.id `shouldReturn` [handbook.id]
+    -- Rita may view Projects, under Team, but not Team; nobody signed in
+    -- may view neither.
+    for_ [[rita], []] $ \hs -> do
+      (at' hs "team" >>= jsonAs 404) `shouldReturn` NotFound
+      (at' hs "no-such-space" >>= jsonAs 404) `shouldReturn` NotFound
+      (pageIn hs team.id "team-handbook" >>= jsonAs 404) `shouldReturn` NotFound
+      (pageIn hs team.id "no-such-page" >>= jsonAs 404) `shouldReturn` NotFound
+      (save hs handbook >>= jsonAs 404) `shouldReturn` NotFound
+      (getUrlWith r (onPublic r (links.pages.versions handbook.id)) hs >>= jsonAs 404) `shouldReturn` NotFound
+      hits hs team.id `shouldReturn` ([] :: [SearchHit])
+      hits hs (SpaceId "no-such-space") `shouldReturn` ([] :: [SearchHit])
+    -- A space Rita may view, but not edit: what she may not do there is 403.
+    wiki :: Page <- pageIn [rita] projects.id "the-wiki" >>= jsonAs 200
+    (save [rita] wiki >>= jsonAs 403) `shouldReturn` Forbidden
+
   it "grants a user a private space, which its subspace inherits, until it is revoked" $ withAdminSession identity $ \r session -> do
     givePassword r "user-editor" "editor's password"
     editor <- cookie <$> signInAs r "editor" "editor's password"
@@ -439,8 +465,8 @@ permissions = describe "permissions given over HTTP" $ do
         newPage' sid = send r methodPost (onPublic r (links.spaces.createPage sid)) [editor, (hContentType, "application/json")] (encode NewPage {parent = Nothing, title = "Granted", body = "Hello."})
     team :: Space <- at' [session] "team" >>= jsonAs 200
     projects :: Space <- at' [session] "team/projects" >>= jsonAs 200
-    (.status) <$> at' [editor] "team" `shouldReturn` 403
-    (.status) <$> at' [editor] "team/projects" `shouldReturn` 403
+    (.status) <$> at' [editor] "team" `shouldReturn` 404
+    (.status) <$> at' [editor] "team/projects" `shouldReturn` 404
     -- Who may do what on Projects, as its administrator reads it: its own
     -- grants and Team's above it.
     initially <- ok200 (getUrlWith r (onPublic r (links.spaces.access projects.id)) [session])
@@ -465,8 +491,8 @@ permissions = describe "permissions given over HTTP" $ do
     -- Revoked, they are gone, from both.
     (.status) <$> grant Edit team.id False `shouldReturn` 204
     (.status) <$> grant View team.id False `shouldReturn` 204
-    (.status) <$> at' [editor] "team" `shouldReturn` 403
-    (.status) <$> at' [editor] "team/projects" `shouldReturn` 403
+    (.status) <$> at' [editor] "team" `shouldReturn` 404
+    (.status) <$> at' [editor] "team/projects" `shouldReturn` 404
     -- Granting to nobody is refused, after the permission.
     (.status) <$> send r methodPut (onPublic r (links.spaces.setGrant team.id)) [session, (hContentType, "application/json")] (encode SpaceGrantChange {subject = SubjectGroup (GroupId "no-such-group"), permission = View, granted = True})
       `shouldReturn` 400
@@ -497,7 +523,7 @@ profiles = describe "a space's profile and icon over HTTP" $ do
         -- Another blob is not the space's icon; another space's is its own.
         (.status) <$> getUrl r (onPublic r (links.spaces.icon blog.id (BlobId (T.replicate 64 "0")))) `shouldReturn` 404
         teamIcon :: Space <- multipart r (onAdmin r (links.spaces.uploadIcon team.id)) [] [("file", "icon.png", "image/png", png)] >>= jsonAs 200
-        (.status) <$> getUrl r (onPublic r (spaceIconUrl teamIcon)) `shouldReturn` 403
+        (.status) <$> getUrl r (onPublic r (spaceIconUrl teamIcon)) `shouldReturn` 404
         (.status) <$> getUrl r (onAdmin r (spaceIconUrl teamIcon)) `shouldReturn` 200
         -- An SVG, which could run scripts on the wiki's origin, is refused.
         multipart r (onAdmin r (links.spaces.uploadIcon blog.id)) [] [("file", "icon.svg", "image/svg+xml", "<svg/>")] >>= jsonAs 400 >>= \case

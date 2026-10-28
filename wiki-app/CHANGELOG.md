@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+The backends answer `NotFound` for a space the current user may not view,
+and for everything in it, exactly as for a space that does not exist
+(WP5.17). `Forbidden` is left for what the user may not do in a space they
+may view. The in-memory backend follows the server, and the contract tests
+state the rule. So a private space now shows "There is nothing here" to
+whoever may not view it, with the title "Not found", instead of "You do
+not have permission". The client's own checks before a write (the editor
+and the new page form) still say "You do not have permission", since
+they apply to spaces the user may view.
+
 The writing assistant works with Claude Haiku 4.5 again (WP5.17). Since
 the effort picker came (WP4.19), every request has carried
 `output_config.effort`, and Claude Haiku 4.5 refused each one with a 400:

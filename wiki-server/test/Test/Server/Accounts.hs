@@ -121,13 +121,13 @@ rules = describe "each principal" $ do
   it "anonymous reads the public spaces and nothing else, and writes nothing" $ withPasswords identity $ \r -> do
     spaces :: [Space] <- getUrl r (onPublic r links.spaces.list) >>= jsonAs 200
     map (\s -> s.name) spaces `shouldBe` ["Blog", "Docs"]
-    (.status) <$> spaceAt r [] "team" `shouldReturn` 403
+    (.status) <$> spaceAt r [] "team" `shouldReturn` 404
     blog <- spaceIdAt r [] "blog"
     (.status) <$> newPage r [] blog `shouldReturn` 403
     (me, _) <- sessionWith r []
     (me.user, me.standing) `shouldBe` (Nothing, NotSignedIn)
 
-  it "a user signed in writes where they are granted to, and gets 403 elsewhere" $ withPasswords identity $ \r -> do
+  it "a user signed in writes where they are granted to, gets 403 elsewhere, and 404 where they may not look" $ withPasswords identity $ \r -> do
     token <- signInAs r "editor" "editor's password"
     blog <- spaceIdAt r [cookie token] "blog"
     docs <- spaceIdAt r [cookie token] "docs"
@@ -135,7 +135,7 @@ rules = describe "each principal" $ do
     made.status `shouldBe` 201
     (\(p :: Page) -> p.title) <$> json made `shouldReturn` "From a session"
     (.status) <$> newPage r [cookie token] docs `shouldReturn` 403
-    (.status) <$> spaceAt r [cookie token] "team" `shouldReturn` 403
+    (.status) <$> spaceAt r [cookie token] "team" `shouldReturn` 404
     -- Nor does a cookie make anyone an administrator.
     (.status) <$> getUrlWith r (onPublic r links.admin.status) [cookie token] `shouldReturn` 403
 
@@ -308,9 +308,10 @@ pages = describe "the pages the server renders" $ do
     html `shouldSatisfy` T.isInfixOf "\"standing\":\"SignedIn\""
     header "Cache-Control" reply `shouldBe` Just "private, no-cache"
     header "Vary" reply `shouldBe` Just "Cookie"
-    -- A private space's page renders for whoever may see it.
+    -- A private space's page renders for whoever may see it, and is not
+    -- found by anyone else.
     team <- getUrlWith r (r.public <> "/s/team/") [cookie token]
-    team.status `shouldBe` 403
+    team.status `shouldBe` 404
     admin <- signInAs r "admin" "admin's password"
     (.status) <$> getUrlWith r (r.public <> "/s/team/") [cookie admin] `shouldReturn` 200
 

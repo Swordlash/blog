@@ -22,11 +22,11 @@
 -- = Errors
 --
 -- In "Wiki.App.Backend"'s order: a page that does not exist is
--- 'NotFound'. A page the user may not read is 'Forbidden', checked before
+-- 'NotFound', and so is a page the user may not read, checked before
 -- anything else is looked up, so that someone who may not read a page
--- learns nothing about its threads. Then a thread or a comment that is not
--- on that page is 'NotFound'. Then an operation the rules do not allow is
--- 'Forbidden'. Then a request that cannot be carried out is 'Invalid': a
+-- learns nothing about its threads, nor whether it exists. Then a thread
+-- or a comment that is not on that page is 'NotFound'. Then an operation
+-- the rules do not allow is 'Forbidden'. Then a request that cannot be carried out is 'Invalid': a
 -- blank or too long comment or quote, resolving a thread about the whole
 -- page, or deleting the first comment of a thread that has replies (delete
 -- the thread instead).

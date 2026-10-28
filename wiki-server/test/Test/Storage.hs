@@ -227,7 +227,7 @@ attachmentsOnDisk = describe "attachments" $ do
       (found, file) <- runSqliteWiki st rita (attachmentFile a.id) >>= ok
       found `shouldBe` a
       maybe (pure "") BS.readFile file `shouldReturn` "The plan."
-      runSqliteWiki st Anonymous (attachmentFile a.id) >>= (`shouldBe` Left Forbidden) . fmap (const ())
+      runSqliteWiki st Anonymous (attachmentFile a.id) >>= (`shouldBe` Left NotFound) . fmap (const ())
       runSqliteWiki st rita (attachmentFile (AttachmentId "no-such-attachment")) >>= (`shouldBe` Left NotFound) . fmap (const ())
       runSqliteWiki st rita (attachmentUrl a) `shouldReturn` ("/api/v1/attachments/" <> a.id.text)
       -- One on the web is there, not here.

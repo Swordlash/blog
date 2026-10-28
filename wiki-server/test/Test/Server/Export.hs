@@ -302,8 +302,8 @@ overHttp = describe "over HTTP" $ do
   it "is for whoever may read the page or the space" $ withDemoRunning identity $ \r -> do
     team <- spaceAt r "team"
     handbook <- fromMaybe (panic "no handbook") . find (\p -> p.title == "Team handbook") <$> pagesOf r team
-    getUrl r (r.public <> "/" <> links.pages.export handbook.id Docx) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
-    getUrl r (r.public <> "/" <> links.spaces.export team.id Docx) >>= jsonAs 403 >>= (`shouldBe` Forbidden)
+    getUrl r (r.public <> "/" <> links.pages.export handbook.id Docx) >>= jsonAs 404 >>= (`shouldBe` NotFound)
+    getUrl r (r.public <> "/" <> links.spaces.export team.id Docx) >>= jsonAs 404 >>= (`shouldBe` NotFound)
     -- The operator, on the admin listener, may read every page.
     getUrl r (r.admin <> "/admin/" <> links.pages.export handbook.id Docx) >>= (`exported` Docx) >>= zipped >>= (`entryText` "word/document.xml") >>= (`shouldSatisfy` T.isInfixOf "Team handbook")
 

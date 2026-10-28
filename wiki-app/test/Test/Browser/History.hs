@@ -97,7 +97,7 @@ spec m = do
 
   it "refuses the history where the page is refused" $ runPage $ do
     ui <- start m Nothing (PageHistory (slugs ["team"]) (slugs ["team-handbook"]) Nothing AgainstPrevious)
-    find ui ".wiki-content .error-forbidden" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "permission")
+    find ui ".wiki-content .error-not-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "nothing here")
     length <$> findAll ui ".history-view" `shouldReturn` 0
   where
     -- Follow the link among those matching a selector that says this.

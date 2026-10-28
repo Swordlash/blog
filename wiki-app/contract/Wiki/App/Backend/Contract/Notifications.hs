@@ -191,11 +191,13 @@ watchingPages = describe "watching" $ do
     _ <- saveAs run editor notes "Changed again."
     length <$> toldOf run reader `shouldReturn` 1
 
-  it "refuses a page or a space one may not view, one that is not there, and someone not signed in" $ \(Fixture run) -> do
+  it "refuses a page or a space one may not view as one that is not there, and someone not signed in" $ \(Fixture run) -> do
     handbook <- pageAt run "team" "team-handbook"
     notes <- pageAt run "blog" "notes-on-haskell"
-    run reader (watching (WatchPage handbook.id)) >>= (`shouldFailWith` Forbidden)
-    run reader (setWatching (WatchPage handbook.id) True) >>= (`shouldFailWith` Forbidden)
+    run reader (watching (WatchPage handbook.id)) >>= (`shouldFailWith` NotFound)
+    run reader (setWatching (WatchPage handbook.id) True) >>= (`shouldFailWith` NotFound)
+    run reader (watching (WatchSpace handbook.space)) >>= (`shouldFailWith` NotFound)
+    run Anonymous (watching (WatchPage handbook.id)) >>= (`shouldFailWith` NotFound)
     run reader (watching (WatchPage (PageId "no-such-page"))) >>= (`shouldFailWith` NotFound)
     run reader (watching (WatchSpace (SpaceId "no-such-space"))) >>= (`shouldFailWith` NotFound)
     run Anonymous (watching (WatchPage notes.id)) >>= (`shouldFailWith` Forbidden)

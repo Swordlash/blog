@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+A space the caller may not view now answers 404 `NotFound`, exactly as a
+space that does not exist (WP5.17). Before, it answered 403 `Forbidden`,
+so anyone could tell that a private space existed. Everything in such a
+space answers 404 too: its pages, their attachments, comments, versions
+and drafts, its watches, its icon, its export, its subspaces, and the
+pages the server renders for them. A search scoped to it finds nothing,
+as before. 403 now means that the caller may view the space but may not
+do what was asked there, such as saving a page without the permission to
+edit. The check is in one place, `requireView` in `Wiki.Server.Storage`;
+creating a subspace and moving a space also check that the caller may
+view the parent they name. The administration keeps its order: it checks
+the global administer first, so whoever does not hold it gets 403 for any
+id.
+
 The export (`GET api/v1/export`) writes version 2 of the export format
 (WP5.8, `docs/export.md`), the pages' comments included, read in two
 queries for the whole wiki inside the export's read transaction. The

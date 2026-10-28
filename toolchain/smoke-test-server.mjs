@@ -830,7 +830,7 @@ try {
   );
   assert.equal(await visitor.locator("#app .admin-link").count(), 0, "the way to the administration, to a visitor");
   await visitor.locator("#app .sign-in-toggle").waitFor({ timeout });
-  assert.equal((await fetch(url("/s/smoke-space/"))).status, 403, "the private space, to a visitor");
+  assert.equal((await fetch(url("/s/smoke-space/"))).status, 404, "the private space, to a visitor, as if it were not there");
   assert.equal((await fetch(url("/api/v1/admin/directory"))).status, 403, "the administration's API, to a visitor");
   console.log("ok: a visitor who is not signed in sees the public space and nothing else, and no administration");
 

@@ -136,13 +136,13 @@ overHttp = describe "over HTTP" $ do
     nobody :: Map Text Value <- asWithout r Nothing methodGet (encoded (links.notifications.people ["editor"])) >>= jsonAs 200
     Map.keys nobody `shouldBe` []
 
-  it "reads and sets a watch, refusing a page one may not read" $ withDemoRunning identity $ \r -> do
+  it "reads and sets a watch, refusing a page one may not read as one that is not there" $ withDemoRunning identity $ \r -> do
     people <- signedIn r
     notes <- pageNamed r "blog" "notes-on-haskell"
     handbook <- pageNamed r "team" "team-handbook"
     (asWithout r (Just people.reader) methodGet (links.notifications.pageWatch notes.id) >>= jsonAs 200) `shouldReturn` Watch False Unchosen
     (asWith r (Just people.reader) methodPut (links.notifications.setPageWatch notes.id) Watching {watching = True} >>= jsonAs 200) `shouldReturn` Watch True Chosen
-    (asWithout r (Just people.reader) methodGet (links.notifications.pageWatch handbook.id) >>= jsonAs 403) `shouldReturn` Forbidden
+    (asWithout r (Just people.reader) methodGet (links.notifications.pageWatch handbook.id) >>= jsonAs 404) `shouldReturn` NotFound
     _ <- saveAs r people.editor notes "Changed."
     (toldOver r people.reader <&> map (\n -> n.kind) . (\n -> n.items)) `shouldReturn` [Changed]
 

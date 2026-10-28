@@ -44,9 +44,11 @@ import Protolude
 -- When more than one error applies, the order in @MonadWiki@'s Haddock
 -- decides (not found first, then forbidden, invalid and conflict).
 data ApiError
-  = -- | No record has that id or path: status 404.
+  = -- | No record has that id or path, or none the current user may see:
+    -- status 404. A space the user may not view, and everything in it, is
+    -- not found.
     NotFound
-  | -- | The current user may not see it, or may not do that to it: status 403.
+  | -- | The current user may see it, but may not do that to it: status 403.
     Forbidden
   | -- | Something has changed since the request was made, as the text
     -- says: status 409.

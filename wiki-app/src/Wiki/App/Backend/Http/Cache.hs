@@ -60,8 +60,9 @@
 -- ("Wiki.App.Live") drops the cached pages, and the other entries a save
 -- changes ('afterEvent').
 --
--- Refusals are cached too. 'NotFound' (the space is not there) and
--- 'Forbidden' (the reader may not see it) are what the view shows. The
+-- Refusals are cached too. 'NotFound' (the space is not there, or the
+-- reader may not view it) and 'Forbidden' (the reader may view it, but
+-- may not do what was asked) are what the view shows. The
 -- server may prerender an error page for such a refusal
 -- ("Wiki.App.Backend.Http.Preload"). The program renders the same error
 -- page only if that error is already in the cache (the prerender put it

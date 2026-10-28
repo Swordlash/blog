@@ -48,9 +48,9 @@ spec m = do
     actions <- traverse textContent =<< findAll ui ".page-view .actions > a"
     take 2 actions `shouldBe` ["Edit", "View source"]
 
-  it "refuses the source to a reader who may not read the page" $ runPage $ do
+  it "says the page is not there to a reader who may not read it" $ runPage $ do
     ui <- start m (Just "user-reader") (PageSource (slugs ["team"]) (slugs ["team-handbook"]))
-    find ui ".wiki-content .error-forbidden" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "permission")
+    find ui ".wiki-content .error-not-found" >>= textContent >>= (`shouldSatisfy` T.isInfixOf "nothing here")
     length <$> findAll ui ".source-text" `shouldReturn` 0
     -- Switching to someone who may read it shows it where the refusal was.
     find ui ".user-switcher-toggle" >>= click

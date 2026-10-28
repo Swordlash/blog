@@ -24,7 +24,7 @@
 --
 -- A route that is not one of the application's is rendered as its "Not
 -- found" page, with a 404. A space or a page that does not exist also
--- gives a 404, and one the reader may not see a 403, as the API would,
+-- gives a 404, and so does one the reader may not see, as the API would,
 -- each with the page that says so. In a closed wiki, someone who has not
 -- signed in is shown the way to sign in at every route, with a 401,
 -- except on an invitation's page, which is meant for them; an invitation
@@ -158,7 +158,8 @@ routeOf mount raw = do
 
 -- | The status a page is sent with: a 404 for an address that is not one
 -- of the application's, and for a space or page it names that does not
--- exist; a 403 for one the reader may not see; otherwise a 200.
+-- exist or that the reader may not see; a 403 for a refusal of what the
+-- reader may see; otherwise a 200.
 statusOf :: Route -> Cache -> Status
 statusOf at c = case at of
   Invite token -> refusal (Map.lookup token c.invitationAt)
