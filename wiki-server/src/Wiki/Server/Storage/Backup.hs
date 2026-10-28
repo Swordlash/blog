@@ -1,26 +1,34 @@
+{-# LANGUAGE DeriveAnyClass #-}
+
 -- | Database backups: copies of the database set aside, such as the one
 -- the deploy script takes before it starts a new server (decision 15 of
--- docs/PLAN.md).
+-- docs/PLAN.md), and the ones the server makes on its own once an
+-- administrator has turned that on (WP4.9, "Wiki.Server.Backups").
 --
--- A copy is made with SQLite's own @VACUUM INTO@, never by copying the
--- file. The server may be running and writing, and @VACUUM INTO@ reads one
--- consistent state of the database through SQLite (the database is in WAL
--- mode, so it waits for no writer and blocks none) into a new file that
--- is a complete database, with no WAL file beside it. The copies go into
--- @\<data\>/backups/\<time\>.sqlite@, named by the time in UTC so that
--- their names sort in time order, and only the last few are kept.
+-- A copy is made with the database's own means, never by copying its
+-- files, while the server may be running and writing:
+--
+-- * On SQLite, @VACUUM INTO@ reads one consistent state of the database
+--   (in WAL mode it waits for no writer and blocks none) into a new file
+--   that is a complete database: @\<data\>/backups/\<time\>.sqlite@. It is
+--   checked with SQLite's @PRAGMA integrity_check@.
+-- * On PostgreSQL, @pg_dump@ writes one consistent state into
+--   @\<data\>/backups/\<time\>.pgdump@, in its custom format, which
+--   @pg_restore@ reads; the dump is checked by listing it. Beside it,
+--   @\<time\>.pgdump.json@ says which version of the schema the dump has and
+--   which attachments' files it refers to, read in the very snapshot the
+--   dump reads, since the dump itself cannot be read without restoring it.
+--
+-- The copies are named by the time in UTC so that their names sort in time
+-- order, and only the last few are kept.
 --
 -- Attachments are not copied: their files never change, and none is
 -- deleted while a kept backup still refers to it
--- ("Wiki.Server.Storage.Blobs"). So a backup restored in place of the
--- database finds every file it refers to.
+-- ("Wiki.Server.Storage.Blobs", 'backupBlobs'). So a backup restored in
+-- place of the database finds every file it refers to.
 --
--- The server also backs itself up, once an administrator has turned that
--- on (WP4.9 of docs/PLAN.md, "Wiki.Server.Backups"). Its backup settings
--- and the result of its last backup are rows of the @settings@ table,
--- read and written here ('loadBackupSettings', 'loadLastBackup'). Each
--- backup it makes is checked ('checkedBackup'), and old ones are deleted
--- by its retention rules ('pruneRetained').
+-- The backups' settings and the result of the last backup are rows of the
+-- @settings@ table ('loadBackupSettings', 'loadLastBackup').
 --
 -- A backup is restored with 'restore' (@wiki-server restore@), into a data
 -- directory no server has open: a running server holds the directory's
@@ -28,13 +36,14 @@
 -- process ends, however it ends.
 module Wiki.Server.Storage.Backup
   ( -- * Backups
-    backup
-  , backupInto
+    backupInto
+  , backupNow
   , backupFiles
   , backupTime
   , pruneBackups
   , defaultKeep
   , freshName
+  , backupBlobs
 
     -- * Backups the server makes
   , KeptBackups
@@ -42,12 +51,9 @@ module Wiki.Server.Storage.Backup
   , storeBackupSettings
   , loadLastBackup
   , storeLastBackup
-  , checkedBackup
-  , integrityProblems
   , pruneRetained
 
-    -- * What a database refers to
-  , referencedBlobs
+    -- * Files of attachments
   , copyBlobs
 
     -- * The data directory's lock
@@ -61,79 +67,149 @@ module Wiki.Server.Storage.Backup
   )
 where
 
-import Data.Aeson (decodeStrict', encode)
+import Data.Aeson (FromJSON, ToJSON, decodeStrict', eitherDecodeFileStrict', encode, encodeFile)
+import Data.ByteString.Lazy qualified as BSL
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, defaultTimeLocale, diffTimeToPicoseconds, formatTime, getCurrentTime, parseTimeM)
-import Database.SQLite.Simple (Connection, Only (..), SQLError, execute, execute_, query_, withConnection)
 import GHC.IO.Handle.Lock (LockMode (..), hTryLock, hUnlock)
 import Protolude
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getFileSize, listDirectory, removeFile, renameFile)
 import System.FilePath (takeFileName, (</>))
 import System.IO (hClose)
-import System.IO.Error (isAlreadyInUseError)
+import System.IO.Error (isAlreadyInUseError, userError)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsOf (..), DestinationOf (..), Retention (..), Schedule (..), defaultBackupSettings, retained)
 import Wiki.Core.Id (BlobId (..))
-import Wiki.Core.Space (Icon (..))
 import Wiki.Server.Secret (Secret (..), revealed)
+import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Blobs (blobFile, storedBlobs)
-import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
-import Wiki.Server.Storage.Migrate (Migration (..), migrations, schemaVersion)
+import Wiki.Server.Storage.Layout (Database (..), attachmentsDir)
+import Wiki.Server.Storage.Migrate (Migration (..), migrationsFor, schemaVersion)
+import Wiki.Server.Storage.Postgres (PgPrograms, checkDump, closePostgres, dumpPostgres, exportSnapshot, openPostgres, restorePostgres)
+import Wiki.Server.Storage.Rows (deleteSettingsLike, referencedBlobs, settingValue, settingsLike, storeSetting)
+import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, integrityProblems, openSqlite, vacuumInto)
 
 -- | How many backups are kept unless configured otherwise: a week of
 -- daily deploys and a few more.
 defaultKeep :: Int
 defaultKeep = 10
 
--- | Back up a data directory's database into its backups, and delete all
--- but the last @keep@ of them (never the one just made). The result is the
--- new backup's path, or 'Nothing' when there is no database to back up yet
--- (the first deploy).
-backup :: FilePath -> Int -> IO (Maybe FilePath)
-backup dataDir keep =
-  ifM
-    (not <$> doesFileExist (databaseFile dataDir))
-    (pure Nothing)
-    ( do
-        let dir = backupsDir dataDir
-        createDirectoryIfMissing True dir
-        target <- freshName dir =<< getCurrentTime
-        withConnection (databaseFile dataDir) $ \c -> do
-          execute_ c "PRAGMA busy_timeout = 10000"
-          backupInto c target
-        _ <- pruneBackups dir (max 1 keep)
-        pure (Just target)
-    )
+--------------------------------------------------------------------------------
+-- Backups
 
--- | Write a copy of the database a connection is open on into a new file.
-backupInto :: Connection -> FilePath -> IO ()
-backupInto c target = execute c "VACUUM INTO ?" (Only (T.pack target))
+-- | What is known of a PostgreSQL backup without restoring it, kept beside
+-- it (@\<time\>.pgdump.json@): the version of the schema it has, and the
+-- attachments' files it refers to.
+data DumpFacts = DumpFacts
+  { schema :: Int
+  , blobs :: [Text]
+  }
+  deriving stock (Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | The file that holds a PostgreSQL backup's 'DumpFacts'.
+factsFile :: FilePath -> FilePath
+factsFile dump = dump <> ".json"
+
+-- | Make a backup of a database in a directory of backups, named for a
+-- time, and check it. The result is its path and size, or why there is
+-- none. A copy that fails its check, or could not be finished, is deleted:
+-- a backup that cannot be restored must not count as one, nor be kept in
+-- place of a good one.
+--
+-- The copy is made through a connection opened for it alone, which reads
+-- the last committed state as a reader does: neither reads nor writes wait
+-- for it, however long it takes.
+backupInto :: PgPrograms -> Database -> FilePath -> UTCTime -> IO (Either Text (FilePath, Integer))
+backupInto programs database dir t = do
+  createDirectoryIfMissing True dir
+  target <- freshName dir t (extensionOf database)
+  let discard = for_ [target, factsFile target] $ \f -> whenM (doesFileExist f) (removeFile f)
+  made <- try @SomeException (copy target)
+  case made of
+    Left e -> discard $> Left ("The database could not be copied: " <> show e)
+    Right (Left why) -> discard $> Left ("The database could not be copied: " <> why)
+    Right (Right ()) ->
+      problemsOf target >>= \case
+        [] -> Right . (target,) <$> getFileSize target
+        problems -> discard $> Left ("The copy failed its check, and was deleted: " <> T.intercalate "; " (take 5 problems))
+  where
+    copy target = case database of
+      SqliteFile file -> Right <$> bracket (openSqlite ReadWrite file) closeSqlite (`vacuumInto` target)
+      PostgresAt url -> bracket (openPostgres url) closePostgres $ \c -> do
+        -- A read-only transaction whose snapshot the dump reads: the facts
+        -- kept beside the dump are read in the same snapshot.
+        begin False c
+        flip finally (rollbackTransaction c) $ do
+          snapshot <- runDb c exportSnapshot
+          facts <- DumpFacts <$> schemaVersion c <*> (map (\b -> b.text) . Set.toList <$> runDb c referencedBlobs)
+          dumped <- dumpPostgres programs url (Just snapshot) target
+          for_ dumped (\() -> encodeFile (factsFile target) facts)
+          pure dumped
+    problemsOf target
+      | ".pgdump" `T.isSuffixOf` T.pack target = either (: []) (const []) <$> checkDump programs target
+      | otherwise = integrityProblems target
+
+-- | Back up a database into a data directory's backups, and delete all
+-- but the last @keep@ of them (never the one just made): what the deploy
+-- scripts run before they start a new server (@wiki-server backup@). The
+-- result is the new backup's path, 'Nothing' when there is no wiki to back
+-- up yet (the first deploy), or why it failed.
+backupNow :: PgPrograms -> Database -> FilePath -> Int -> IO (Either Text (Maybe FilePath))
+backupNow programs database dataDir keep = do
+  there <- case database of
+    SqliteFile file -> ifM (doesFileExist file) (bracket (openSqlite ReadOnly file) closeSqlite (fmap (> 0) . schemaVersion)) (pure False)
+    PostgresAt url -> bracket (openPostgres url) closePostgres (fmap (> 0) . schemaVersion)
+  if not there
+    then pure (Right Nothing)
+    else do
+      let dir = dataDir </> "backups"
+      now <- getCurrentTime
+      backupInto programs database dir now >>= \case
+        Left why -> pure (Left why)
+        Right (file, _) -> pruneBackups dir (max 1 keep) $> Right (Just file)
+
+-- | The ending of a backup's file name on a database.
+extensionOf :: Database -> Text
+extensionOf = \case
+  SqliteFile _ -> "sqlite"
+  PostgresAt _ -> "pgdump"
 
 -- | The time a backup was made, from its name ('freshName').
 backupTime :: FilePath -> Maybe UTCTime
-backupTime file = T.stripSuffix "Z.sqlite" (T.pack (takeFileName file)) >>= parseTimeM False defaultTimeLocale "%Y%m%dT%H%M%S%Q" . T.unpack
+backupTime file = stemOf (T.pack (takeFileName file)) >>= parseTimeM False defaultTimeLocale "%Y%m%dT%H%M%S%Q" . T.unpack
+
+-- | A backup's file name without its @Z.sqlite@ or @Z.pgdump@.
+stemOf :: Text -> Maybe Text
+stemOf name = T.stripSuffix "Z.sqlite" name <|> T.stripSuffix "Z.pgdump" name
 
 -- | A backup's file name for a time, a millisecond later if that name
--- exists already: @20261024T153000.123Z.sqlite@.
-freshName :: FilePath -> UTCTime -> IO FilePath
-freshName dir t = do
+-- exists already: @20261024T153000.123Z.sqlite@ (or @.pgdump@).
+freshName :: FilePath -> UTCTime -> Text -> IO FilePath
+freshName dir t extension = do
   let millis = diffTimeToPicoseconds (utctDayTime t) `div` 1000000000 `mod` 1000
-      name = formatTime defaultTimeLocale "%Y%m%dT%H%M%S" t <> "." <> T.unpack (T.justifyRight 3 '0' (show millis)) <> "Z.sqlite"
+      name = formatTime defaultTimeLocale "%Y%m%dT%H%M%S" t <> "." <> T.unpack (T.justifyRight 3 '0' (show millis)) <> "Z." <> T.unpack extension
       file = dir </> name
-  ifM (doesFileExist file) (freshName dir (addUTCTime 0.001 t)) (pure file)
+  ifM (doesFileExist file) (freshName dir (addUTCTime 0.001 t) extension) (pure file)
 
--- | The backups in a directory, oldest first: the files named as 'backup'
--- names them, and nothing else in it.
+-- | The backups in a directory, oldest first: the files named as
+-- 'freshName' names them, and nothing else in it.
 backupFiles :: FilePath -> IO [FilePath]
 backupFiles dir =
   ifM
     (doesDirectoryExist dir)
-    (map (dir </>) . sort . filter isBackup <$> listDirectory dir)
+    (map (dir </>) . sortOn takeFileName . filter isBackup <$> listDirectory dir)
     (pure [])
   where
-    isBackup f = case T.stripSuffix "Z.sqlite" (T.pack f) of
+    isBackup f = case stemOf (T.pack f) of
       Just stem -> T.length stem == 19 && T.all (\ch -> isDigit ch || ch == 'T' || ch == '.') stem
       Nothing -> False
+
+-- | Delete a backup, and what is kept beside it.
+removeBackup :: FilePath -> IO ()
+removeBackup f = do
+  removeFile f
+  whenM (doesFileExist (factsFile f)) (removeFile (factsFile f))
 
 -- | Delete all but the newest @keep@ backups in a directory. The result is
 -- the files deleted.
@@ -141,8 +217,19 @@ pruneBackups :: FilePath -> Int -> IO [FilePath]
 pruneBackups dir keep = do
   files <- backupFiles dir
   let old = take (length files - keep) files
-  traverse_ removeFile old
+  traverse_ removeBackup old
   pure old
+
+-- | The attachments' files a backup refers to: read from the copy itself
+-- on SQLite, and from the facts kept beside it on PostgreSQL. A backup
+-- that cannot be read is an exception.
+backupBlobs :: FilePath -> IO (Set BlobId)
+backupBlobs file
+  | ".pgdump" `T.isSuffixOf` T.pack file =
+      eitherDecodeFileStrict' @DumpFacts (factsFile file) >>= \case
+        Left e -> throwIO (userError ("The facts of the backup " <> file <> " cannot be read: " <> e))
+        Right facts -> pure (Set.fromList (map BlobId facts.blobs))
+  | otherwise = bracket (openSqlite ReadOnly file) closeSqlite (`runDb` referencedBlobs)
 
 --------------------------------------------------------------------------------
 -- Backups the server makes
@@ -164,9 +251,9 @@ type KeptBackups = BackupSettingsOf (Maybe Secret)
 -- > backup-rclone          b2:bucket/wiki        (another)
 -- > backup-rclone-config   the text of an rclone.conf
 -- > backup-last            the last backup made or tried, as JSON
-loadBackupSettings :: Connection -> IO KeptBackups
-loadBackupSettings c = do
-  rows :: [(Text, Text)] <- query_ c "SELECT key, value FROM settings WHERE key LIKE 'backup-%'"
+loadBackupSettings :: (Backend be) => Db be KeptBackups
+loadBackupSettings = do
+  rows <- settingsLike "backup-"
   let valueOf key = mfilter (not . T.null) (snd <$> find ((== key) . fst) rows)
       number key = valueOf key >>= readMaybe
       d = defaultBackupSettings :: KeptBackups
@@ -187,9 +274,9 @@ loadBackupSettings c = do
 
 -- | Store the backup settings, replacing those stored before (the last
 -- backup's row is left as it is).
-storeBackupSettings :: Connection -> KeptBackups -> IO ()
-storeBackupSettings c s = do
-  execute_ c "DELETE FROM settings WHERE key LIKE 'backup-%' AND key <> 'backup-last'"
+storeBackupSettings :: (Backend be) => KeptBackups -> Db be ()
+storeBackupSettings s = do
+  deleteSettingsLike "backup-" ["backup-last"]
   let rows =
         [ ("backup-enabled", if s.enabled then "1" else "0")
         ,
@@ -205,52 +292,17 @@ storeBackupSettings c s = do
             Nothing -> []
             Just (ToDirectory path) -> [("backup-directory", path)]
             Just (ToRclone remote config) -> ("backup-rclone", remote) : [("backup-rclone-config", revealed x) | Just x <- [config]]
-  for_ rows $ \(key :: Text, value :: Text) -> execute c "INSERT INTO settings (key, value) VALUES (?, ?)" (key, value)
+  traverse_ (uncurry storeSetting) rows
   where
     twoDigits n = T.justifyRight 2 '0' (show n)
 
 -- | The last backup made or tried, if any is known.
-loadLastBackup :: Connection -> IO (Maybe BackupRecord)
-loadLastBackup c = do
-  rows :: [Only Text] <- query_ c "SELECT value FROM settings WHERE key = 'backup-last'"
-  pure (head rows >>= \(Only t) -> decodeStrict' (encodeUtf8 t))
+loadLastBackup :: (Backend be) => Db be (Maybe BackupRecord)
+loadLastBackup = (>>= decodeStrict' . encodeUtf8) <$> settingValue "backup-last"
 
 -- | Store the last backup made or tried, replacing the one before.
-storeLastBackup :: Connection -> BackupRecord -> IO ()
-storeLastBackup c r =
-  execute c "INSERT INTO settings (key, value) VALUES ('backup-last', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value" (Only (decodeUtf8 (toS (encode r)) :: Text))
-
--- | Make a backup in a directory of backups, named for a time, with an
--- action that writes the copy into the file it is given ('backupInto' on
--- an open connection), and check it. The result is its path and size, or
--- why there is none. A copy that fails its check, or could not be
--- finished, is deleted: a backup that cannot be restored must not count
--- as one, nor be kept in place of a good one.
-checkedBackup :: (FilePath -> IO ()) -> FilePath -> UTCTime -> IO (Either Text (FilePath, Integer))
-checkedBackup copy dir t = do
-  createDirectoryIfMissing True dir
-  target <- freshName dir t
-  let discard = whenM (doesFileExist target) (removeFile target)
-  made <- try @SomeException (copy target)
-  case made of
-    Left e -> do
-      discard
-      pure (Left ("The database could not be copied: " <> show e))
-    Right () ->
-      integrityProblems target >>= \case
-        [] -> Right . (target,) <$> getFileSize target
-        problems -> do
-          discard
-          pure (Left ("The copy failed SQLite's integrity check, and was deleted: " <> T.intercalate "; " (take 5 problems)))
-
--- | The problems SQLite's @PRAGMA integrity_check@ finds in a database:
--- none if it is sound, or that it cannot be opened as a database.
-integrityProblems :: FilePath -> IO [Text]
-integrityProblems file =
-  try @SomeException (withConnection file (\c -> query_ c "PRAGMA integrity_check")) <&> \case
-    Left e -> ["it cannot be read as a database: " <> show e]
-    Right [Only "ok"] -> []
-    Right rows -> map fromOnly rows
+storeLastBackup :: (Backend be) => BackupRecord -> Db be ()
+storeLastBackup r = storeSetting "backup-last" (decodeUtf8 (BSL.toStrict (encode r)))
 
 -- | Delete the backups in a directory that a retention does not keep
 -- ('Wiki.Api.Backups.retained'), never this one. The result is the files
@@ -262,20 +314,8 @@ pruneRetained dir r newest = do
   let timed = [(f, t) | f <- files, Just t <- [backupTime f]]
       keep = retained r (map snd timed)
       gone = [f | (f, t) <- timed, not (t `Set.member` keep), takeFileName f /= takeFileName newest]
-  traverse_ removeFile gone
+  traverse_ removeBackup gone
   pure gone
-
---------------------------------------------------------------------------------
--- What a database refers to
-
--- | The attachment files a database refers to: its attachments', and its
--- spaces' icon images. A backup taken before spaces had icons has no
--- column for them, and refers to no image.
-referencedBlobs :: Connection -> IO (Set BlobId)
-referencedBlobs d = do
-  attached <- map (BlobId . fromOnly) <$> query_ d "SELECT DISTINCT blob FROM attachments WHERE blob IS NOT NULL"
-  icons <- query_ d "SELECT icon FROM spaces WHERE icon IS NOT NULL" `catch` \(_ :: SQLError) -> pure []
-  pure (Set.fromList (attached <> [b | Only t <- icons, Just (IconImage b _) <- [decodeStrict' (encodeUtf8 (t :: Text))]]))
 
 --------------------------------------------------------------------------------
 -- The data directory's lock
@@ -310,7 +350,8 @@ unlockDataDir (DataLock h) = hUnlock h `finally` hClose h
 --------------------------------------------------------------------------------
 -- Restoring
 
--- | @wiki-server restore BACKUP --data DIR [--attachments DIR]@.
+-- | @wiki-server restore BACKUP --data DIR [--attachments DIR]@, with the
+-- database the data directory's server uses.
 data Restore = Restore
   { backupFile :: FilePath
   -- ^ The backup to restore: one from @data\/backups@, or one copied off
@@ -318,68 +359,116 @@ data Restore = Restore
   , dataDir :: FilePath
   -- ^ The data directory to restore it into, which no server may have
   -- open; a new one is created.
+  , database :: Database
+  -- ^ The database to restore it into: a backup of SQLite into SQLite, a
+  -- backup of PostgreSQL into PostgreSQL.
+  , programs :: PgPrograms
+  -- ^ @pg_dump@ and @pg_restore@, for PostgreSQL.
   , attachments :: Maybe FilePath
   -- ^ A copy of the attachment files (an off-site copy's @attachments@),
   -- from which the data directory gets the files it lacks.
   }
-  deriving stock (Eq, Show)
+  deriving stock (Show)
 
 -- | Restore a backup as a data directory's database. The result is the
 -- lines to show, or why nothing was done.
 --
--- The backup is checked first (a sound SQLite database, of a wiki, at a
--- schema version this program knows), and the directory's lock is taken,
--- so that a server running on it, or one started meanwhile, is refused.
--- The database it replaces is not deleted: it is moved as it is, with its
--- @-wal@ and @-shm@ files, into @replaced\/\<time>\/@ beside it, so that a
--- restore made by mistake can itself be undone, even for a database too
--- damaged to read. The backup is copied in (not moved: it stays among the
--- backups), and the server migrates it to its schema when it next starts.
--- The attachment files the restored database refers to and the directory
--- lacks are listed, so that the operator knows to bring them.
+-- The backup is checked first (a sound copy, of a wiki, at a schema
+-- version this program knows, of the same kind of database), and the
+-- directory's lock is taken, so that a server running on it, or one
+-- started meanwhile, is refused. The database it replaces is not deleted:
+-- a SQLite file is moved as it is, with its @-wal@ and @-shm@ files, into
+-- @replaced\/\<time>\/@ beside the data, and a PostgreSQL database is
+-- dumped there first, so that a restore made by mistake can itself be
+-- undone. The backup stays among the backups. The attachment files the
+-- restored database refers to and the directory lacks are listed, so that
+-- the operator knows to bring them.
 restore :: Restore -> IO (Either Text [Text])
 restore r = runExceptT $ do
   present <- liftIO (doesFileExist r.backupFile)
   unless present $ throwError ("There is no file " <> toS r.backupFile <> ".")
+  for_ r.attachments $ \dir -> unlessM (liftIO (doesDirectoryExist dir)) $ throwError ("There is no directory " <> toS dir <> " to bring attachments from.")
+  let ofPostgres = ".pgdump" `T.isSuffixOf` T.pack r.backupFile
+  (wanted, steps) <- case (ofPostgres, r.database) of
+    (False, SqliteFile file) -> restoreSqlite r file
+    (True, PostgresAt url) -> restorePostgresDump r url
+    (False, PostgresAt _) -> throwError "This is a backup of a wiki on SQLite, and the database is PostgreSQL's: export the wiki from a server on that backup, and import the archive into this one."
+    (True, SqliteFile _) -> throwError "This is a backup of a wiki on PostgreSQL, and the database is a SQLite file: give the PostgreSQL database to restore it into (--database), or export the wiki from a server on that backup and import the archive."
+  brought <- liftIO (maybe (pure 0) (copyBlobs (attachmentsDir r.dataDir)) r.attachments)
+  stored <- liftIO (storedBlobs (attachmentsDir r.dataDir))
+  let missing = Set.size (wanted `Set.difference` stored)
+  pure
+    ( steps
+        <> ["Brought " <> show brought <> " attachments' files from " <> toS dir <> "." | Just dir <- [r.attachments]]
+        <> [ "Warning: "
+               <> show missing
+               <> " of the attachments' files it refers to are not in "
+               <> toS (attachmentsDir r.dataDir)
+               <> ": bring them with --attachments DIR (a copy's attachments directory), or those attachments will be missing."
+           | missing > 0
+           ]
+    )
+
+-- | The schema version the steps of a database end at.
+knownVersion :: Text -> Int
+knownVersion suffix = maybe 0 (\m -> m.version) (lastMay (migrationsFor suffix))
+
+-- | Check a schema version of a backup against this program's.
+checkVersion :: FilePath -> Text -> Int -> ExceptT Text IO ()
+checkVersion file suffix version = do
+  let known = knownVersion suffix
+  when (version == 0) $ throwError ("The file " <> toS file <> " is a database, but not a wiki's of this wiki-server: a backup of an earlier one is restored with that one, and its wiki exported and imported.")
+  when (version > known) $ throwError ("The backup is at version " <> show version <> " of the schema, newer than this program's " <> show known <> ": restore it with a newer wiki-server.")
+
+-- | Take the data directory's lock for the time of a restore.
+withLock :: FilePath -> ExceptT Text IO a -> ExceptT Text IO a
+withLock dataDir body = do
+  lock <- ExceptT (lockDataDir dataDir)
+  ExceptT (runExceptT body `finally` unlockDataDir lock)
+
+-- | Where a restore keeps what it replaced.
+asideIn :: FilePath -> IO FilePath
+asideIn dataDir = (\now -> dataDir </> "replaced" </> formatTime defaultTimeLocale "%Y%m%dT%H%M%SZ" now) <$> getCurrentTime
+
+restoreSqlite :: Restore -> FilePath -> ExceptT Text IO (Set BlobId, [Text])
+restoreSqlite r database = do
   problems <- liftIO (integrityProblems r.backupFile)
   unless (null problems) $ throwError ("The backup " <> toS r.backupFile <> " is not sound: " <> T.intercalate "; " (take 5 problems))
-  version <- liftIO (withConnection r.backupFile schemaVersion)
-  let known = maybe 0 (\m -> m.version) (lastMay migrations)
-  when (version == 0) $ throwError ("The file " <> toS r.backupFile <> " is a database, but not a wiki's.")
-  when (version > known) $ throwError ("The backup is at version " <> show version <> " of the schema, newer than this program's " <> show known <> ": restore it with a newer wiki-server.")
-  for_ r.attachments $ \dir -> unlessM (liftIO (doesDirectoryExist dir)) $ throwError ("There is no directory " <> toS dir <> " to bring attachments from.")
-  lock <- ExceptT (lockDataDir r.dataDir)
-  flip finally' (unlockDataDir lock) $ do
-    now <- liftIO getCurrentTime
-    let database = databaseFile r.dataDir
-        aside = r.dataDir </> "replaced" </> formatTime defaultTimeLocale "%Y%m%dT%H%M%SZ" now
-        files = [database, database <> "-wal", database <> "-shm"]
-    existing <- liftIO (filterM doesFileExist files)
-    unless (null existing) $ liftIO $ do
+  version <- liftIO (bracket (openSqlite ReadOnly r.backupFile) closeSqlite schemaVersion)
+  checkVersion r.backupFile "sqlite" version
+  withLock r.dataDir $ liftIO $ do
+    aside <- asideIn r.dataDir
+    let files = [database, database <> "-wal", database <> "-shm"]
+    existing <- filterM doesFileExist files
+    unless (null existing) $ do
       createDirectoryIfMissing True aside
       for_ existing $ \f -> renameFile f (aside </> takeFileName f)
-    liftIO $ do
-      copyFile r.backupFile (database <> ".restoring")
-      renameFile (database <> ".restoring") database
-    brought <- liftIO (maybe (pure 0) (copyBlobs (attachmentsDir r.dataDir)) r.attachments)
-    wanted <- liftIO (withConnection database referencedBlobs)
-    stored <- liftIO (storedBlobs (attachmentsDir r.dataDir))
-    let missing = Set.size (wanted `Set.difference` stored)
+    copyFile r.backupFile (database <> ".restoring")
+    renameFile (database <> ".restoring") database
+    wanted <- backupBlobs database
     pure
-      ( ["Restored " <> toS r.backupFile <> " as " <> toS database <> "; the server brings it up to its schema when it starts."]
+      ( wanted
+      , ["Restored " <> toS r.backupFile <> " as " <> toS database <> "; the server brings it up to its schema when it starts."]
           <> ["The database it replaced is kept in " <> toS aside <> "." | not (null existing)]
-          <> ["Brought " <> show brought <> " attachments' files from " <> toS dir <> "." | Just dir <- [r.attachments]]
-          <> [ "Warning: "
-                 <> show missing
-                 <> " of the attachments' files it refers to are not in "
-                 <> toS (attachmentsDir r.dataDir)
-                 <> ": bring them with --attachments DIR (a copy's attachments directory), or those attachments will be missing."
-             | missing > 0
-             ]
       )
-  where
-    finally' :: ExceptT Text IO a -> IO () -> ExceptT Text IO a
-    finally' body after = ExceptT (runExceptT body `finally` after)
+
+restorePostgresDump :: Restore -> ByteString -> ExceptT Text IO (Set BlobId, [Text])
+restorePostgresDump r url = do
+  ExceptT (checkDump r.programs r.backupFile)
+  facts <- ExceptT (first (\e -> "The facts kept beside the backup cannot be read (" <> toS (factsFile r.backupFile) <> "): " <> T.pack e) <$> eitherDecodeFileStrict' @DumpFacts (factsFile r.backupFile))
+  checkVersion r.backupFile "postgres" facts.schema
+  withLock r.dataDir $ do
+    aside <- liftIO (asideIn r.dataDir)
+    had <- liftIO (bracket (openPostgres url) closePostgres (\c -> not . null <$> runDb c tableNames))
+    when had $ do
+      liftIO (createDirectoryIfMissing True aside)
+      ExceptT (first ("The database to be replaced could not be set aside: " <>) <$> dumpPostgres r.programs url Nothing (aside </> "wiki.pgdump"))
+    ExceptT (first ("The backup could not be restored, and the database is as it was: " <>) <$> restorePostgres r.programs url r.backupFile)
+    pure
+      ( Set.fromList (map BlobId facts.blobs)
+      , ["Restored " <> toS r.backupFile <> " into the PostgreSQL database; the server brings it up to its schema when it starts."]
+          <> ["The database it replaced is kept, dumped, in " <> toS (aside </> "wiki.pgdump") <> "." | had]
+      )
 
 -- | Copy into a directory of blobs the files of another that it lacks (a
 -- blob's file never changes, so one that is there is the right one). The

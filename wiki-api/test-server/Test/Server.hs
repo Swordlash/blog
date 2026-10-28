@@ -34,7 +34,7 @@ import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..
 import Wiki.Api.Error (ApiError (..), errorStatus)
 import Wiki.Api.Export (ExportFormat (..), formatMediaType, formatName)
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), SpacePlan (..), SpaceStatus (..))
-import Wiki.Api.Info (ServerInfo (..))
+import Wiki.Api.Info (Capabilities (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Links (attachmentUrl, links, pageExportUrl, searchQueryOf, searchUrl, spaceExportUrl, spaceIconUrl)
 import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark (..), Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), EmailState (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..), ResetToken (..), SecondFactorState (..), SessionRef (..), UnsubscribeToken (..), VerificationToken (..))
@@ -77,7 +77,7 @@ refuse e =
 stubs :: WikiApi Tmp AsServer
 stubs =
   WikiApi
-    { info = pure ServerInfo {name = "Stub", apiVersion = 1}
+    { info = pure ServerInfo {name = "Stub", apiVersion = 1, capabilities = Capabilities {database = "sqlite", search = FoldedText}}
     , session = pure Sample.sessionInfo
     , signIn = \c ->
         if c.login == "ada" && c.password == Password "secret"
@@ -381,7 +381,7 @@ spec = describe "a server of the API's type" $ do
       etag = toUrlPiece (pageVersion Sample.page)
 
   it "describes itself, and says who is asking" $ do
-    answers (getAt links.info) 200 ServerInfo {name = "Stub", apiVersion = 1}
+    answers (getAt links.info) 200 ServerInfo {name = "Stub", apiVersion = 1, capabilities = Capabilities {database = "sqlite", search = FoldedText}}
     answers (getAt links.session) 200 Sample.sessionInfo
 
   describe "spaces" $ do

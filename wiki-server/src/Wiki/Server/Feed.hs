@@ -76,7 +76,7 @@ import Wiki.Core.Path (TreeNode (..), pathOf)
 import Wiki.Core.Space (Space (blog, createdAt, description, id, name))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Address (addressOf, publicAddress)
-import Wiki.Server.Storage (Storage, Who (..), feedPosts, readSettings, runSqliteWiki, sitemapPages)
+import Wiki.Server.Storage (Storage, Who (..), feedPosts, readSettings, runStoredWiki, sitemapPages)
 import Wiki.Server.Storage.Rows (SitemapNode (..))
 
 -- | The two feeds of a blog.
@@ -198,7 +198,7 @@ feed storage cache base kind segments =
   ifM (not <$> open storage) (pure Nothing) $
     case Duplex.parse route ("/s/" <> T.intercalate "/" segments <> "/") of
       Right (Space path) -> cached cache (T.unwords [kindName, base, T.intercalate "/" segments]) $ do
-        found <- runSqliteWiki storage Anonymous $ runExceptT $ do
+        found <- runStoredWiki storage Anonymous $ runExceptT $ do
           space <- ExceptT (getSpace path)
           unless space.blog (throwError NotFound)
           pages <- ExceptT (listPages space.id)
@@ -240,7 +240,7 @@ feed storage cache base kind segments =
 sitemap :: Storage -> FeedCache -> Text -> IO (Maybe Text)
 sitemap storage cache base =
   ifM (not <$> open storage) (pure Nothing) . cached cache ("sitemap " <> base) $ do
-    (spaces, pages) <- runSqliteWiki storage Anonymous ((,) <$> listSpaces <*> sitemapPages)
+    (spaces, pages) <- runStoredWiki storage Anonymous ((,) <$> listSpaces <*> sitemapPages)
     let at r = addressOf base (Duplex.print route r)
         -- A space listed only for its name (an ancestor of a public one)
         -- has no pages here, and is left out.

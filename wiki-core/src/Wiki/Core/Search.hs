@@ -41,6 +41,7 @@ module Wiki.Core.Search
   , Candidate (..)
   , candidate
   , searchPlain
+  , searchRanked
   , snippetLength
 
     -- * A page's text, prepared
@@ -177,7 +178,7 @@ candidate p spacePath pagePath =
 searchPlain :: SearchQuery -> [Candidate] -> [SearchHit]
 searchPlain q candidates
   | null ws = []
-  | otherwise = map (hitOf . snd) (take q.limit (sortOn fst (mapMaybe rank candidates)))
+  | otherwise = map (hitOf ws . snd) (take q.limit (sortOn fst (mapMaybe rank candidates)))
   where
     ws = queryWords q
     rank c = do
@@ -186,15 +187,30 @@ searchPlain q candidates
           inTitle = filter (`T.isInfixOf` title) ws
       guard (all (\w -> w `T.isInfixOf` title || w `T.isInfixOf` body) ws)
       pure ((Down (length inTitle), c.spacePath, c.pagePath), c)
-    hitOf c =
-      SearchHit
-        { page = c.page
-        , space = c.space
-        , title = marked ws c.text.title 0 c.text.title.length
-        , spacePath = c.spacePath
-        , pagePath = c.pagePath
-        , snippet = snippetOf ws c.text.body
-        }
+
+-- | The hits of candidates a database's own search found and ranked
+-- (PostgreSQL's full-text search, on the server): the best first by the
+-- database's rank, among equals the one whose path comes first, at most
+-- 'limit' of them. Every candidate is a hit; the query's words are marked
+-- in its title and snippet where they are found. The query may be written
+-- as for a web search engine, so a word to leave out (@-word@), the word
+-- @or@ and the quotes around a phrase are not marked.
+searchRanked :: SearchQuery -> [(Double, Candidate)] -> [SearchHit]
+searchRanked q ranked = map (hitOf ws . snd) (take q.limit (sortOn (\(r, c) -> (Down r, c.spacePath, c.pagePath)) ranked))
+  where
+    ws = filter (not . T.null) [T.filter (/= '"') w | w <- queryWords q, not ("-" `T.isPrefixOf` w), w /= "or"]
+
+-- | A candidate as a hit, the words marked in its title and snippet.
+hitOf :: [Text] -> Candidate -> SearchHit
+hitOf ws c =
+  SearchHit
+    { page = c.page
+    , space = c.space
+    , title = marked ws c.text.title 0 c.text.title.length
+    , spacePath = c.spacePath
+    , pagePath = c.pagePath
+    , snippet = snippetOf ws c.text.body
+    }
 
 -- | A page's title and the text of its body ('bodyText'), each folded:
 -- what 'searchPlain' compares a query with, and what it cuts snippets

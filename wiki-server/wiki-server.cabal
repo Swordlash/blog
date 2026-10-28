@@ -96,13 +96,17 @@ library
         Wiki.Server.Version
         Wiki.Server.Storage
         Wiki.Server.Storage.Audit
+        Wiki.Server.Storage.Backend
         Wiki.Server.Storage.Backup
         Wiki.Server.Storage.Blobs
         Wiki.Server.Storage.Comments
         Wiki.Server.Storage.Notifications
         Wiki.Server.Storage.Layout
         Wiki.Server.Storage.Migrate
+        Wiki.Server.Storage.Postgres
         Wiki.Server.Storage.Rows
+        Wiki.Server.Storage.Schema
+        Wiki.Server.Storage.Sqlite
         Wiki.Server.Totp
         Wiki.Server.Vault
         Wiki.Server.WebAuthn
@@ -114,6 +118,9 @@ library
         aeson,
         async,
         base,
+        beam-core >= 0.11.1 && < 0.12,
+        beam-postgres >= 0.6.4 && < 0.7,
+        beam-sqlite >= 0.7 && < 0.8,
         bytestring,
         case-insensitive,
         cborg,
@@ -134,10 +141,12 @@ library
         optparse-applicative,
         pandoc,
         pandoc-types,
+        postgresql-simple,
         process,
         protolude,
         qrcode-core >= 0.9.11 && < 0.10,
         ram,
+        resource-pool,
         row-types,
         servant-client-core,
         servant-multipart,
@@ -169,7 +178,7 @@ executable wiki-server
   hs-source-dirs:   app
   -- Warp needs the threaded runtime (its timeouts run on the I/O manager's
   -- timer), and requests are answered on every core.
-  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N" -Wno-unused-packages
 
   if arch(wasm32)
     buildable: False
@@ -186,7 +195,7 @@ executable wiki-server-bench
   import:           shared
   main-is:          Bench.hs
   hs-source-dirs:   bench
-  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N" -Wno-unused-packages
 
   if arch(wasm32)
     buildable: False
@@ -248,45 +257,15 @@ test-suite wiki-server-test
   main-is:          Test.hs
   -- The tests start servers, which need the threaded runtime as the
   -- executable does.
-  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N" -Wno-unused-packages
 
   if arch(wasm32)
     buildable: False
   else
     other-modules:
-        Test.Server.Access
-        Test.Server.Accounts
-        Test.Server.Backups
-        Test.Server.Api
-        Test.Server.Comments
-        Test.Server.Export
-        Test.Server.FakeProvider
-        Test.Server.Feed
-        Test.Server.Fixture
-        Test.Server.Http
-        Test.Server.Hygiene
-        Test.Server.Import
-        Test.Server.Mail
-        Test.Server.Metrics
-        Test.Server.Observability
-        Test.Server.Notifications
-        Test.Server.Oidc
-        Test.Server.Options
-        Test.Server.Presence
-        Test.Server.Render
-        Test.Server.Settings
-        Test.Server.Static
-        Test.Server.Totp
-        Test.Server.Vault
-        Test.Server.WebAuthn
-        Test.Storage
-        Test.Storage.Accounts
-        Test.Storage.Audit
-        Test.Storage.Backup
+        Test.Database
         Test.Storage.Contract
         Test.Storage.Fixture
-        Test.Storage.Migrate
-        Test.Storage.Scale
     build-depends:
         HUnit,
         aeson,
@@ -301,6 +280,8 @@ test-suite wiki-server-test
         filepath,
         hspec >= 2,
         http-api-data,
+        postgresql-simple,
+        unix,
         http-client,
         http-types,
         network,

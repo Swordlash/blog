@@ -39,7 +39,7 @@ import Wiki.Server.Storage.Layout (attachmentsDir)
 import Wiki.Server.Storage.Rows (Stamp (..))
 
 spec :: Spec
-spec = describe "SqliteWiki, besides the contract" $ do
+spec = describe "StoredWiki, besides the contract" $ do
   times
   administrator
   versionsAndSearchText
@@ -47,8 +47,8 @@ spec = describe "SqliteWiki, besides the contract" $ do
   wholeWikis
 
 -- | Run as the demo's administrator user.
-asAdmin :: Storage -> SqliteWiki IO a -> IO a
-asAdmin st program = whoFor st (As "admin") >>= \who -> runSqliteWiki st who program
+asAdmin :: Storage -> StoredWiki IO a -> IO a
+asAdmin st program = whoFor st (As "admin") >>= \who -> runStoredWiki st who program
 
 -- | The page at a path of the space at a path.
 pageIn :: Storage -> Text -> Text -> IO Page
@@ -72,7 +72,7 @@ administrator :: Spec
 administrator = describe "the administrator" $ do
   it "is signed in as no user of the wiki, holding Administer" $
     withDemo $ \st -> do
-      s <- runSqliteWiki st Administrator session
+      s <- runStoredWiki st Administrator session
       s.user `shouldBe` Just administratorUser
       s.grants.global `shouldBe` [GlobalGrant {subject = SubjectUser administratorId, permission = Administer}]
       users <- withDatabase st $ \c -> query_ c "SELECT count(*) FROM users WHERE id = '~administrator'"
@@ -80,58 +80,58 @@ administrator = describe "the administrator" $ do
 
   it "sees every space and may do everything, without a grant of their own" $
     withDemo $ \st -> do
-      names <- map (\s -> s.name) <$> runSqliteWiki st Administrator listSpaces
+      names <- map (\s -> s.name) <$> runStoredWiki st Administrator listSpaces
       names `shouldBe` ["Blog", "Docs", "Team", "Projects"]
-      team <- runSqliteWiki st Administrator (getSpace (path "team")) >>= ok
-      mine <- runSqliteWiki st Administrator (createSpace (Just team.id) "Mine") >>= ok
-      _ <- runSqliteWiki st Administrator (setSpacePublic mine.id True) >>= ok
+      team <- runStoredWiki st Administrator (getSpace (path "team")) >>= ok
+      mine <- runStoredWiki st Administrator (createSpace (Just team.id) "Mine") >>= ok
+      _ <- runStoredWiki st Administrator (setSpacePublic mine.id True) >>= ok
       grants <- withDatabase st $ \c -> query c "SELECT count(*) FROM space_grants WHERE space_id = ?" (Only mine.id.text)
       grants `shouldBe` [Only (0 :: Int)]
-      runSqliteWiki st Administrator (deleteSpace team.id) >>= ok
+      runStoredWiki st Administrator (deleteSpace team.id) >>= ok
 
   it "keeps drafts of their own, and saves versions under their id" $
     withDemo $ \st -> do
       hello <- pageIn st "blog" "hello-world"
-      d <- runSqliteWiki st Administrator (saveDraft hello.id hello.updatedAt "Hello" "The administrator's") >>= ok
+      d <- runStoredWiki st Administrator (saveDraft hello.id hello.updatedAt "Hello" "The administrator's") >>= ok
       d.author `shouldBe` administratorId
-      runSqliteWiki st Administrator (getDraft hello.id) `shouldReturn` Right (Just d)
+      runStoredWiki st Administrator (getDraft hello.id) `shouldReturn` Right (Just d)
       asAdmin st (getDraft hello.id) `shouldReturn` Right Nothing
-      saved <- runSqliteWiki st Administrator (savePage hello.id hello.updatedAt "Hello" "Saved") >>= ok
-      runSqliteWiki st Administrator (getDraft hello.id) `shouldReturn` Right Nothing
+      saved <- runStoredWiki st Administrator (savePage hello.id hello.updatedAt "Hello" "Saved") >>= ok
+      runStoredWiki st Administrator (getDraft hello.id) `shouldReturn` Right Nothing
       authors <- withDatabase st $ \c -> query c "SELECT author FROM page_versions WHERE page_id = ? AND updated_at = ?" (hello.id.text, Stamp saved.updatedAt)
       authors `shouldBe` [Only (Just administratorId.text)]
 
   it "administers the wiki's people, of whom they are not one" $
     withDemo $ \st -> do
-      d <- runSqliteWiki st Administrator directory >>= ok
+      d <- runStoredWiki st Administrator directory >>= ok
       map (\u -> u.login.text) d.users `shouldBe` ["admin", "editor", "reader"]
-      runSqliteWiki st Administrator (setAdministrator administratorId False) `shouldReturn` Left NotFound
+      runStoredWiki st Administrator (setAdministrator administratorId False) `shouldReturn` Left NotFound
       -- Every user's administer may go, the last one's included: the
       -- operator gives it back.
       admin <- maybe (panic "no admin") (\u -> u.id) <$> userByLogin st "admin"
-      runSqliteWiki st Administrator (setAdministrator admin False) >>= ok
-      none <- runSqliteWiki st Administrator directory >>= ok
+      runStoredWiki st Administrator (setAdministrator admin False) >>= ok
+      none <- runStoredWiki st Administrator directory >>= ok
       none.administrators `shouldBe` mempty
-      runSqliteWiki st Administrator (setAdministrator admin True) >>= ok
+      runStoredWiki st Administrator (setAdministrator admin True) >>= ok
       rows <- withDatabase st $ \c -> query c "SELECT count(*) FROM global_grants WHERE subject_kind = 'user' AND subject_id = ?" (Only admin.text)
       rows `shouldBe` [Only (1 :: Int)]
 
   it "deletes a group with the rows that grant it anything" $
     withDemo $ \st -> do
-      d <- runSqliteWiki st Administrator directory >>= ok
+      d <- runStoredWiki st Administrator directory >>= ok
       let writers = maybe (panic "no writers") (\g -> g.id) (head d.groups)
       let grantsTo = withDatabase st $ \c ->
             (,)
               <$> query c "SELECT count(*) FROM space_grants WHERE subject_kind = 'group' AND subject_id = ?" (Only writers.text)
               <*> query c "SELECT count(*) FROM group_members WHERE group_id = ?" (Only writers.text)
       grantsTo `shouldReturn` ([Only (1 :: Int)], [Only (1 :: Int)])
-      runSqliteWiki st Administrator (deleteGroup writers) >>= ok
+      runStoredWiki st Administrator (deleteGroup writers) >>= ok
       grantsTo `shouldReturn` ([Only 0], [Only 0])
 
   it "is told apart from a user who is not there, who is nobody" $
     withDemo $ \st -> do
-      runSqliteWiki st (AsUser (UserId "no-such-user")) session `shouldReturn` anonymous
-      names <- map (\s -> s.name) <$> runSqliteWiki st (AsUser (UserId "no-such-user")) listSpaces
+      runStoredWiki st (AsUser (UserId "no-such-user")) session `shouldReturn` anonymous
+      names <- map (\s -> s.name) <$> runStoredWiki st (AsUser (UserId "no-such-user")) listSpaces
       names `shouldBe` ["Blog", "Docs"]
 
 versionsAndSearchText :: Spec
@@ -140,9 +140,9 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
     withDemo $ \st -> do
       blog <- asAdmin st (getSpace (path "blog")) >>= ok
       editor <- whoFor st (As "editor")
-      made <- runSqliteWiki st editor (createPage blog.id Nothing "Marsupials" "A wombat.") >>= ok
-      saved <- runSqliteWiki st editor (savePage made.id made.updatedAt "Marsupials" "A quokka.") >>= ok
-      again <- runSqliteWiki st editor (savePage made.id saved.updatedAt "Marsupials, again" "A numbat.") >>= ok
+      made <- runStoredWiki st editor (createPage blog.id Nothing "Marsupials" "A wombat.") >>= ok
+      saved <- runStoredWiki st editor (savePage made.id made.updatedAt "Marsupials" "A quokka.") >>= ok
+      again <- runStoredWiki st editor (savePage made.id saved.updatedAt "Marsupials, again" "A numbat.") >>= ok
       versions <- withDatabase st $ \c -> query c "SELECT updated_at, title, body, author FROM page_versions WHERE page_id = ? ORDER BY updated_at" (Only made.id.text)
       let editorId = case editor of
             AsUser u -> Just u.text
@@ -152,7 +152,7 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
                    , (saved.updatedAt, "Marsupials", "A quokka.", editorId)
                    , (again.updatedAt, "Marsupials, again", "A numbat.", editorId)
                    ]
-      _ <- runSqliteWiki st editor (deletePage made.id) >>= ok
+      _ <- runStoredWiki st editor (deletePage made.id) >>= ok
       gone <- withDatabase st $ \c -> query c "SELECT count(*) FROM page_versions WHERE page_id = ?" (Only made.id.text)
       gone `shouldBe` [Only (0 :: Int)]
 
@@ -160,8 +160,8 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
     withDemo $ \st -> do
       hello <- pageIn st "blog" "hello-world"
       editor <- whoFor st (As "editor")
-      byEditor <- runSqliteWiki st editor (savePage hello.id hello.updatedAt "Hello" "By the editor") >>= ok
-      byAdministrator <- runSqliteWiki st Administrator (savePage hello.id byEditor.updatedAt "Hello" "By the administrator") >>= ok
+      byEditor <- runStoredWiki st editor (savePage hello.id hello.updatedAt "Hello" "By the editor") >>= ok
+      byAdministrator <- runStoredWiki st Administrator (savePage hello.id byEditor.updatedAt "Hello" "By the administrator") >>= ok
       -- A version whose author is no longer one of the users.
       withDatabase st $ \c ->
         execute c "UPDATE page_versions SET author = 'user-gone' WHERE page_id = ? AND updated_at = ?" (hello.id.text, Stamp byEditor.updatedAt)
@@ -171,7 +171,7 @@ versionsAndSearchText = describe "each page's versions and search text" $ do
                    , (byEditor.updatedAt, Just (UserId "user-gone", "user-gone"))
                    , (hello.updatedAt, Nothing)
                    ]
-      edgar <- runSqliteWiki st editor (savePage hello.id byAdministrator.updatedAt "Hello" "By the editor again") >>= ok
+      edgar <- runStoredWiki st editor (savePage hello.id byAdministrator.updatedAt "Hello" "By the editor again") >>= ok
       v <- asAdmin st (getVersion hello.id edgar.updatedAt) >>= ok
       ((\a -> a.name) <$> v.author, v.body) `shouldBe` (Just "Edgar Editor", "By the editor again")
 
@@ -235,16 +235,16 @@ attachmentsOnDisk = describe "attachments" $ do
       wiki <- pageIn st "team/projects" "the-wiki"
       a <- asAdmin st (uploadAttachment wiki.id "plan.txt" "text/plain" "The plan.") >>= ok
       rita <- whoFor st (As "reader")
-      (found, file) <- runSqliteWiki st rita (attachmentFile a.id) >>= ok
+      (found, file) <- runStoredWiki st rita (attachmentFile a.id) >>= ok
       found `shouldBe` a
       maybe (pure "") BS.readFile file `shouldReturn` "The plan."
-      runSqliteWiki st Anonymous (attachmentFile a.id) >>= (`shouldBe` Left NotFound) . fmap (const ())
-      runSqliteWiki st rita (attachmentFile (AttachmentId "no-such-attachment")) >>= (`shouldBe` Left NotFound) . fmap (const ())
-      runSqliteWiki st rita (attachmentUrl a) `shouldReturn` ("/api/v1/attachments/" <> a.id.text)
+      runStoredWiki st Anonymous (attachmentFile a.id) >>= (`shouldBe` Left NotFound) . fmap (const ())
+      runStoredWiki st rita (attachmentFile (AttachmentId "no-such-attachment")) >>= (`shouldBe` Left NotFound) . fmap (const ())
+      runStoredWiki st rita (attachmentUrl a) `shouldReturn` ("/api/v1/attachments/" <> a.id.text)
       -- One on the web is there, not here.
       guide <- pageIn st "docs" "markdown-guide"
       earth <- maybe (panic "no earth.jpg") pure (findAttachment "earth.jpg" guide.attachments)
-      (_, none) <- runSqliteWiki st Anonymous (attachmentFile earth.id) >>= ok
+      (_, none) <- runStoredWiki st Anonymous (attachmentFile earth.id) >>= ok
       none `shouldBe` Nothing
 
   it "over 50 MB is refused before anything is written" $
@@ -301,10 +301,10 @@ wholeWikis = describe "importArchive and exportArchive" $ do
   it "carry the pages' comments into another storage, with their ids, authors, times and edits" $
     withDemo $ \st -> do
       hello <- pageIn st "blog" "hello-world"
-      opened <- runSqliteWiki st Administrator (openThread hello.id Nothing "From the administrator.") >>= ok
+      opened <- runStoredWiki st Administrator (openThread hello.id Nothing "From the administrator.") >>= ok
       editor <- whoFor st (As "editor")
-      answer <- runSqliteWiki st editor (reply hello.id opened.id "From the editor.") >>= ok
-      _ <- runSqliteWiki st editor (editComment hello.id opened.id answer.id "Edited by the editor.") >>= ok
+      answer <- runStoredWiki st editor (reply hello.id opened.id "From the editor.") >>= ok
+      _ <- runStoredWiki st editor (editComment hello.id opened.id answer.id "Edited by the editor.") >>= ok
       exported <- exportArchive st "wiki-server-test" >>= ok
       -- The administrator has no row among the users, so the archive
       -- names them among its comment authors, by login.

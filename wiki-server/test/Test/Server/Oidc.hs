@@ -47,7 +47,7 @@ import Wiki.Server.Accounts (Claimed (..), loginCandidates)
 import Wiki.Server.Auth (safeNext)
 import Wiki.Server.Console (OidcCheck (..), runOidcCheck)
 import Wiki.Server.Oidc (IdClaims (..), checkClaims, decodeIdToken)
-import Wiki.Server.Storage (Who (..), defaultConfig, runSqliteWiki, withStorage)
+import Wiki.Server.Storage (Who (..), defaultConfig, runStoredWiki, withStorage)
 import Wiki.Server.Totp (codeAt, secretFromText)
 
 spec :: Spec
@@ -587,7 +587,7 @@ logins = describe "the logins of accounts made with a provider" $ do
 checking :: Spec
 checking = describe "wiki-server oidc check" $ do
   let inData change test = withSystemTempDirectory "wiki-oidc-check" $ \dir -> do
-        withStorage defaultConfig dir (\st -> runSqliteWiki st Administrator (setServerSettings change)) >>= either (\e -> assertFailure (show e)) (const pass)
+        withStorage defaultConfig dir (\st -> runStoredWiki st Administrator (setServerSettings change)) >>= either (\e -> assertFailure (show e)) (const pass)
         test dir
   it "asks each provider set how to sign in, and prints the redirect URI to register" $ withFakeProvider $ \fake -> do
     let acme = ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just (Url fake.url), secret = Just "x"}

@@ -110,7 +110,7 @@ readers = describe "reads" $ do
         now <- getCurrentTime
         token <- withDatabase st (\c -> startSession c now u "127.0.0.1")
         pure (who, u, now, token)
-      blog st who = soon (runSqliteWiki st who (getSpace (path "blog"))) >>= ok
+      blog st who = soon (runStoredWiki st who (getSpace (path "blog"))) >>= ok
 
   it "run beside a long read, and so does finding whose a session is" $ withDemo $ \st -> do
     (who, u, now, token) <- signedIn st
@@ -176,7 +176,7 @@ everyTransactionScans = Set.fromList ["spaces", "global_grants", "space_grants"]
 -- spread over ten new pages.
 crowd :: Storage -> Int -> Int -> IO ()
 crowd st users watches = do
-  blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+  blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
   now <- getCurrentTime
   withDatabase st $ \c -> do
     execute_ c "BEGIN"
@@ -213,13 +213,13 @@ writes = describe "a save of a watched page" $ do
   let saved users watches = withDemo $ \st -> do
         crowd st users watches
         editor <- whoFor st (As "editor")
-        notes <- runSqliteWiki st editor (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "notes-on-haskell"))) >>= ok
+        notes <- runStoredWiki st editor (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "notes-on-haskell"))) >>= ok
         -- Two watchers of the page, the admin and one of the crowd, are
         -- told of the save, and the reader of the mention.
         for_ ["admin", "crowd1"] $ \login ->
           withDatabase st $ \c -> execute c "INSERT INTO watches (user_id, page_id, watching) SELECT id, ?, 1 FROM users WHERE login = ?" (notes.id.text, login :: Text)
         told <- countOf st
-        (_, statements) <- statementsOf st (runSqliteWiki st editor (savePage notes.id notes.updatedAt notes.title (notes.body <> "\n\nThanks, @reader.")) >>= void . ok)
+        (_, statements) <- statementsOf st (runStoredWiki st editor (savePage notes.id notes.updatedAt notes.title (notes.body <> "\n\nThanks, @reader.")) >>= void . ok)
         made <- subtract told <$> countOf st
         scans <- Set.fromList . concat <$> traverse (scansOf st) statements
         pure (statements, scans, made)
@@ -295,10 +295,10 @@ bell = describe "the bell" $ do
 
   it "reads the pages of a space once for 500 notifications about pages of a 2,000-page space" $ withDemo $ \st -> do
     rita <- readerIn st
-    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
     pages <- addPages st blog.id "bulk" 2000
     notifyOf st rita (take 500 pages)
-    (ns, statements) <- statementsOf st (runSqliteWiki st (AsUser rita) notifications >>= ok)
+    (ns, statements) <- statementsOf st (runStoredWiki st (AsUser rita) notifications >>= ok)
     ns.unread `shouldBe` 500
     length ns.items `shouldBe` maxListed
     map (\n -> n.page) ns.items `shouldBe` take maxListed (reverse (take 500 pages))
@@ -310,15 +310,15 @@ bell = describe "the bell" $ do
 
   it "counts and lists only notifications about pages the user may read, the newest first" $ withDemo $ \st -> do
     rita <- readerIn st
-    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
-    hidden <- runSqliteWiki st Administrator (createSpace Nothing "Hidden") >>= ok
+    blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
+    hidden <- runStoredWiki st Administrator (createSpace Nothing "Hidden") >>= ok
     shown <- addPages st blog.id "shown" 10
     unseen <- addPages st hidden.id "unseen" 60
     -- The ten notifications the reader may read are older than sixty
     -- about the space they may not: more than one page of the bell's.
     notifyOf st rita shown
     notifyOf st rita unseen
-    ns <- runSqliteWiki st (AsUser rita) notifications >>= ok
+    ns <- runStoredWiki st (AsUser rita) notifications >>= ok
     ns.unread `shouldBe` 10
     map (\n -> n.page) ns.items `shouldBe` reverse shown
 
@@ -327,7 +327,7 @@ hub = describe "the live channel" $
   it "checks once for each user whether they may read a page an event is about, not once for each tab" $
     withDemo $ \st -> do
       events <- newHub
-      notes <- runSqliteWiki st Administrator (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "notes-on-haskell"))) >>= ok
+      notes <- runStoredWiki st Administrator (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "notes-on-haskell"))) >>= ok
       users <- for ["admin", "editor", "reader"] $ \login -> whoFor st (As login)
       -- Who a connection is opened as, by a header of the test's own, so
       -- that one server has tabs of three users.
@@ -370,8 +370,8 @@ search :: Spec
 search = describe "the search" $ do
   -- Two spaces of 200 pages each, every page with the word "needle".
   let twoSpaces st = do
-        asked <- runSqliteWiki st Administrator (createSpace Nothing "Asked") >>= ok
-        other <- runSqliteWiki st Administrator (createSpace Nothing "Other") >>= ok
+        asked <- runStoredWiki st Administrator (createSpace Nothing "Asked") >>= ok
+        other <- runStoredWiki st Administrator (createSpace Nothing "Other") >>= ok
         _ <- addPagesWith st asked.id "asked" "A needle in the text." 200
         _ <- addPagesWith st other.id "other" "Another needle in the text." 200
         pure (asked, other)
@@ -380,7 +380,7 @@ search = describe "the search" $ do
       spoil st (condition :: Text) = withDatabase st (\c -> execute_ c (Query ("UPDATE pages SET search_text = x'00' WHERE " <> condition)))
       asking text space = SearchQuery {text, space, includeSubspaces = True, limit = 500, templates = False}
       needle = asking "needle"
-      searching st q = runSqliteWiki st Administrator (searchPages q)
+      searching st q = runStoredWiki st Administrator (searchPages q)
 
   it "reads only the pages of the space asked for, through an index" $ withDemo $ \st -> do
     (asked, other) <- twoSpaces st
@@ -412,7 +412,7 @@ feeds = describe "the sitemap and the feeds" $ do
       readsText t = "FROM pages" `T.isInfixOf` t && any (`T.isInfixOf` t) ["body", "search_text", "search_fold"]
 
   it "write the sitemap of a 2,000-page space with the same statements as of the demo, reading no page's text" $ withDemo $ \st -> do
-    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
     (_, small) <- statementsOf st (newFeedCache >>= \cache -> sitemap st cache base)
     _ <- addPages st blog.id "bulk" 2000
     (xml, statements) <- statementsOf st (newFeedCache >>= \cache -> sitemap st cache base)
@@ -421,7 +421,7 @@ feeds = describe "the sitemap and the feeds" $ do
     length statements `shouldBe` length small
 
   it "write a feed from the text of the posts it carries alone" $ withDemo $ \st -> do
-    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
     _ <- addPagesWith st blog.id "post" "A post, with some text." 100
     cache <- newFeedCache
     (xml, statements) <- statementsOf st (feed st cache base Atom ["blog"])
@@ -450,8 +450,8 @@ pageView = describe "a page view" $ do
   -- logins its mentions name.
   let viewed st = do
         rita <- whoFor st (As "reader")
-        docs <- runSqliteWiki st Administrator (getSpace (path "docs")) >>= ok
-        ((page, watch, people), statements) <- statementsOf st . runSqliteWiki st rita $ do
+        docs <- runStoredWiki st Administrator (getSpace (path "docs")) >>= ok
+        ((page, watch, people), statements) <- statementsOf st . runStoredWiki st rita $ do
           page <- getPage docs.id (path "markdown-guide/diagrams")
           watch <- either (pure . Left) (\p -> watching (WatchPage p.id)) page
           people <- mentionable ["admin", "editor", "nobody"]
@@ -467,7 +467,7 @@ pageView = describe "a page view" $ do
 
   it "reads no table whole and no whole space, the same in a 2,000-page space with 300 more users and 3,000 more watches" $ withDemo $ \st -> do
     small <- viewed st
-    docs <- runSqliteWiki st Administrator (getSpace (path "docs")) >>= ok
+    docs <- runStoredWiki st Administrator (getSpace (path "docs")) >>= ok
     _ <- addPages st docs.id "bulk" 2000
     crowd st 300 3000
     big <- viewed st
@@ -478,24 +478,24 @@ pageView = describe "a page view" $ do
 
   it "serves an attachment after reading its space's chain and grants, not every space and grant" $ withDemo $ \st -> do
     rita <- whoFor st (As "reader")
-    docs <- runSqliteWiki st Administrator (getSpace (path "docs")) >>= ok
-    page <- runSqliteWiki st Administrator (getPage docs.id (path "markdown-guide/diagrams")) >>= ok
-    a <- runSqliteWiki st Administrator (uploadAttachment page.id "chart.png" "image/png" "png bytes") >>= ok
-    ((found, _), statements) <- statementsOf st (runSqliteWiki st rita (attachmentFile a.id) >>= ok)
+    docs <- runStoredWiki st Administrator (getSpace (path "docs")) >>= ok
+    page <- runStoredWiki st Administrator (getPage docs.id (path "markdown-guide/diagrams")) >>= ok
+    a <- runStoredWiki st Administrator (uploadAttachment page.id "chart.png" "image/png" "png bytes") >>= ok
+    ((found, _), statements) <- statementsOf st (runStoredWiki st rita (attachmentFile a.id) >>= ok)
     found `shouldBe` a
     scans <- Set.fromList . concat <$> traverse (scansOf st) statements
     -- The global grants, a handful, and the recursive query's own steps:
     -- its first row, a constant, and the rows it has found so far.
     scans `shouldSatisfy` (`Set.isSubsetOf` Set.fromList ["global_grants", "CONSTANT", "chain"])
     -- Someone who may not read the page may not have it either.
-    team <- runSqliteWiki st Administrator (getSpace (path "team")) >>= ok
-    handbook <- runSqliteWiki st Administrator (getPage team.id (path "team-handbook")) >>= ok
-    hidden <- runSqliteWiki st Administrator (uploadAttachment handbook.id "secret.png" "image/png" "secret bytes") >>= ok
-    runSqliteWiki st rita (attachmentFile hidden.id) >>= (`shouldSatisfy` isLeft)
-    runSqliteWiki st Anonymous (attachmentFile a.id) >>= (`shouldSatisfy` isRight)
+    team <- runStoredWiki st Administrator (getSpace (path "team")) >>= ok
+    handbook <- runStoredWiki st Administrator (getPage team.id (path "team-handbook")) >>= ok
+    hidden <- runStoredWiki st Administrator (uploadAttachment handbook.id "secret.png" "image/png" "secret bytes") >>= ok
+    runStoredWiki st rita (attachmentFile hidden.id) >>= (`shouldSatisfy` isLeft)
+    runStoredWiki st Anonymous (attachmentFile a.id) >>= (`shouldSatisfy` isRight)
 
   it "counts each space's pages from an index alone, not from the pages' rows" $ withDemo $ \st -> do
-    (_, statements) <- statementsOf st (runSqliteWiki st Anonymous pageCounts)
+    (_, statements) <- statementsOf st (runStoredWiki st Anonymous pageCounts)
     counting <- maybe (assertFailure "no count of pages") pure (find ("count(*) FROM pages" `T.isInfixOf`) statements)
     plan <- withDatabase st (\c -> query_ c (Query ("EXPLAIN QUERY PLAN " <> counting))) :: IO [(Int, Int, Int, Text)]
     [detail | (_, _, _, detail) <- plan] `shouldSatisfy` any ("COVERING INDEX pages_space_template" `T.isInfixOf`)
@@ -527,10 +527,10 @@ histories = describe "histories" $ do
       whoFor st (As "editor") >>= \case
         AsUser u -> pure u
         _ -> assertFailure "the editor is nobody"
-    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
     pages <- addPagesWith st blog.id "post" "A post." 200
     withVersions st editor 20 pages
-    (details, statements) <- statementsOf st (runSqliteWiki st Anonymous (postDetails blog.id) >>= ok)
+    (details, statements) <- statementsOf st (runStoredWiki st Anonymous (postDetails blog.id) >>= ok)
     [(\d -> (\a -> a.name) <$> d.author) <$> Map.lookup pid details | pid <- take 3 pages] `shouldBe` replicate 3 (Just (Just "Edgar Editor"))
     readingVersions <- case filter ("page_versions" `T.isInfixOf`) statements of
       [found] -> pure found
@@ -546,18 +546,18 @@ histories = describe "histories" $ do
       whoFor st (As "editor") >>= \case
         AsUser u -> pure u
         _ -> assertFailure "the editor is nobody"
-    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
     pages <- addPagesWith st blog.id "saved" "Saved often." 1
     withVersions st editor 120 pages
     pid <- maybe (assertFailure "no page") pure (head pages)
-    (listed, statements) <- statementsOf st (runSqliteWiki st Anonymous (listVersions pid latestVersions) >>= ok)
+    (listed, statements) <- statementsOf st (runStoredWiki st Anonymous (listVersions pid latestVersions) >>= ok)
     map (\v -> v.number) listed `shouldBe` [120, 119 .. 71]
     plans <- traverse (planOf st) (filter ("page_versions" `T.isInfixOf`) statements)
     length plans `shouldBe` 2
     concat plans `shouldSatisfy` any ("page_versions_order" `T.isInfixOf`)
     concat plans `shouldSatisfy` all (not . ("USE TEMP B-TREE" `T.isInfixOf`))
     -- The next page starts where the first ends.
-    older <- runSqliteWiki st Anonymous (listVersions pid VersionsQuery {before = (\v -> v.updatedAt) <$> lastMay listed, limit = 50}) >>= ok
+    older <- runStoredWiki st Anonymous (listVersions pid VersionsQuery {before = (\v -> v.updatedAt) <$> lastMay listed, limit = 50}) >>= ok
     map (\v -> v.number) older `shouldBe` [70, 69 .. 21]
 
 auditLog :: Spec
@@ -582,7 +582,7 @@ auditLog = describe "the audit log" $
         withDatabase st (\c -> query c "SELECT id FROM audit_log ORDER BY at DESC, id DESC LIMIT 1 OFFSET ?" (Only (99 * activityPageSize - 1))) >>= \case
           [Only i] -> pure i
           _ -> assertFailure "no entry ends page 99"
-      (page, statements) <- statementsOf st (runSqliteWiki st Administrator (activity ActivityQuery {actor = Nothing, offset = 0, before = Just cursor}) >>= ok)
+      (page, statements) <- statementsOf st (runStoredWiki st Administrator (activity ActivityQuery {actor = Nothing, offset = 0, before = Just cursor}) >>= ok)
       map (\e -> e.id) page.entries `shouldBe` ["bulk-" <> show i | i <- take activityPageSize [entries - 99 * activityPageSize, entries - 99 * activityPageSize - 1 ..]]
       length (filter (\a -> "actor" `T.isPrefixOf` a.login.text) page.actors) `shouldBe` 10
       scans <- Set.fromList . concat <$> traverse (scansOf st) statements

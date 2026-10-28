@@ -27,7 +27,7 @@ import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Import (readUploadFile)
-import Wiki.Server.Storage (Storage, Who (..), defaultConfig, exportArchive, importArchive, runSqliteWiki, uploadAttachmentFile, withStorage, writeExport)
+import Wiki.Server.Storage (Storage, Who (..), defaultConfig, exportArchive, importArchive, runStoredWiki, uploadAttachmentFile, withStorage, writeExport)
 
 -- | The most the live heap may reach: 30 MiB.
 bound :: Int
@@ -41,14 +41,14 @@ main = hspec . describe "the server's memory with large attachments" $
         page <- newPage st "Attachments"
         for_ [1 .. 100 :: Int] $ \i -> do
           randomFile (dir </> "upload") (1024 * 1024)
-          void (runSqliteWiki st Administrator (uploadAttachmentFile page.id ("file-" <> show i <> ".bin") "application/octet-stream" (dir </> "upload")) >>= ok)
+          void (runStoredWiki st Administrator (uploadAttachmentFile page.id ("file-" <> show i <> ".bin") "application/octet-stream" (dir </> "upload")) >>= ok)
         settled <- liveMax
         at <- writeExport st "wiki-server-memory-test" (dir </> "wiki.zip") >>= ok
         exported <- liveMax
         withStorage defaultConfig (dir </> "other") $ \other -> do
           target <- newPage other "Upload"
           randomFile (dir </> "big") 50_000_000
-          uploaded <- runSqliteWiki other Administrator (uploadAttachmentFile target.id "big.bin" "application/octet-stream" (dir </> "big")) >>= ok
+          uploaded <- runStoredWiki other Administrator (uploadAttachmentFile target.id "big.bin" "application/octet-stream" (dir </> "big")) >>= ok
           uploaded.size `shouldBe` 50_000_000
         afterUpload <- liveMax
         printf "largest live heap: %d KiB after making the wiki, %d KiB after its export, %d KiB after an upload of 50 MB (bound %d KiB)\n" (kib settled) (kib exported) (kib afterUpload) (kib bound)
@@ -70,8 +70,8 @@ main = hspec . describe "the server's memory with large attachments" $
 -- | A space with one page.
 newPage :: Storage -> Text -> IO Page
 newPage st title = do
-  space <- runSqliteWiki st Administrator (createSpace Nothing title) >>= ok
-  runSqliteWiki st Administrator (createPage space.id Nothing title "") >>= ok
+  space <- runStoredWiki st Administrator (createSpace Nothing title) >>= ok
+  runStoredWiki st Administrator (createPage space.id Nothing title "") >>= ok
 
 -- | Write a file of this many random bytes, 1 MiB at a time.
 randomFile :: FilePath -> Int -> IO ()

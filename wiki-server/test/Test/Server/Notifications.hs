@@ -52,7 +52,7 @@ import Wiki.Core.Version (Author (..))
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Notifier (mailRound, newNotifier, newWake)
-import Wiki.Server.Storage (SqliteWiki, Storage, Who (..), runSqliteWiki, withDatabase, withStorageAside)
+import Wiki.Server.Storage (StoredWiki, Storage, Who (..), runStoredWiki, withDatabase, withStorageAside)
 import Wiki.Server.Storage.Notifications (unsubscribeToken, unsubscribeUser)
 
 spec :: Spec
@@ -245,13 +245,13 @@ byMail = describe "by mail" $
 -- | Mail settings on a storage, as the administration sets them.
 mailOn :: Storage -> IO ()
 mailOn st =
-  runSqliteWiki st Administrator (setServerSettings noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.test", port = 587, security = StartTls, user = Nothing, password = Nothing, from = "wiki@example.org"}})
+  runStoredWiki st Administrator (setServerSettings noServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Just MailSettings {host = "mail.test", port = 587, security = StartTls, user = Nothing, password = Nothing, from = "wiki@example.org"}})
     >>= void
     . ok
 
 -- | Run something as one of the demo's users.
-as' :: Storage -> Text -> SqliteWiki IO a -> IO a
-as' st login program = whoFor st (As login) >>= \who -> runSqliteWiki st who program
+as' :: Storage -> Text -> StoredWiki IO a -> IO a
+as' st login program = whoFor st (As login) >>= \who -> runStoredWiki st who program
 
 -- | A day at an hour, UTC.
 at :: Integer -> Int -> UTCTime

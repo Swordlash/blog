@@ -109,7 +109,7 @@ import Wiki.Server.Log (Level (..), Logger, logWith)
 import Wiki.Server.Oidc (Answer (..), OidcOption (..), Pending (..), Provider (..), Secrets (..), authorizeUrl, claimsFor, endpointsOf, flowLifetime, newSecrets, remember, takePending)
 import Wiki.Server.SecondFactor (PendingSignIn (..), checkCode, finishPending, holdSignIn, pendingCookie, pendingSignIn, requestPending, wrongCode)
 import Wiki.Server.Session (CookieSettings (..), sessionCookie)
-import Wiki.Server.Storage (Who (..), withDatabase)
+import Wiki.Server.Storage (Who (..), writing)
 
 -- | The cookie that binds a round trip to the browser that started it.
 flowCookieName :: Text
@@ -269,7 +269,7 @@ secondStep logger env signing mount p request respond = do
               Limiter.succeeded env.limiter w.login.text signing.address
               accountOf env.storage w.user >>= \case
                 Just a | not a.disabled -> do
-                  session <- withDatabase env.storage (\c -> startSession c now w.user signing.address)
+                  session <- writing env.storage (startSession now w.user signing.address)
                   traverse_ (endSession env.storage) signing.token
                   logged "signed-in" [("user", w.user.text)]
                   respond $

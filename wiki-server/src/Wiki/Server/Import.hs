@@ -71,7 +71,6 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Data.UUID.Types qualified as UUID
-import Database.SQLite.Simple (Connection, Only (..), execute, execute_, query)
 import Protolude
 import Wiki.Api.Import
 import Wiki.Core.Attachment (Attachment (..), Source (..))
@@ -85,10 +84,11 @@ import Wiki.Core.Page (Page (..), pageTreeOrder)
 import Wiki.Core.Path (childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), spaceTreeOrder, withProfile)
-import Wiki.Server.Storage (Storage, administratorUser, storageDataDir, withDatabase)
+import Wiki.Server.Storage (Storage, administratorUser, reading, storageDataDir, writing)
+import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, restoreAudit)
 import Wiki.Server.Storage.Blobs (blobOf, storeBlob)
-import Wiki.Server.Storage.Comments (restoreThread)
+import Wiki.Server.Storage.Comments (commentExists, restoreThread, threadPage)
 import Wiki.Server.Storage.Layout (attachmentsDir)
 import Wiki.Server.Storage.Rows
 
@@ -214,18 +214,14 @@ resolutionOf choices space path =
 
 -- | The plan of importing an archive into a storage as it is now.
 planImport :: Storage -> Archive -> IO ImportPlan
-planImport st a = withDatabase st $ \c -> do
-  execute_ c "BEGIN"
-  matches <- matchIn c a `onException` execute_ c "ROLLBACK"
-  execute_ c "COMMIT"
-  pure (toPlan a matches)
+planImport st a = toPlan a <$> reading st (matchIn a)
 
 -- | The archive matched against the wiki in a database.
-matchIn :: Connection -> Archive -> IO [SpaceMatch]
-matchIn c a = do
-  spaces <- Map.elems <$> loadSpaces c
+matchIn :: (Backend be) => Archive -> Db be [SpaceMatch]
+matchIn a = do
+  spaces <- Map.elems <$> loadSpaces
   let wanted = matchArchive spaces (const []) a
-  pages <- Map.fromList <$> for [s | m <- wanted, Just s <- [m.server]] (\s -> (s.id,) <$> loadPages c s.id)
+  pages <- Map.fromList <$> for [s | m <- wanted, Just s <- [m.server]] (\s -> (s.id,) <$> loadPages s.id)
   pure (matchArchive spaces (\sid -> Map.findWithDefault [] sid pages) a)
 
 -- | What applying an import has done so far, and where the archive's
@@ -246,18 +242,15 @@ data Progress = Progress
 -- asking from an address (which the audit log records): either all of it
 -- is in the storage afterwards, or (if it threw) none of it.
 applyImport :: Storage -> Actor -> Text -> Archive -> ImportChoices -> IO ImportSummary
-applyImport st actor address a choices = withDatabase st $ \c -> do
-  execute_ c "BEGIN IMMEDIATE"
-  flip onException (execute_ c "ROLLBACK") $ do
-    matches <- matchIn c a
-    people <- loadUsers c
+applyImport st actor address a choices = writing st $ do
+    matches <- matchIn a
+    people <- loadUsers
     let start = Progress {summary = nothingYet, spaceIds = mempty, pageIds = mempty, commentsBrought = 0}
         discussions = threadsAmong (administratorUser : people) a
-    done <- foldlM (importSpace c (attachmentsDir (storageDataDir st)) a discussions choices) start matches
-    restoreAudit c a.audit
+    done <- foldlM (importSpace (attachmentsDir (storageDataDir st)) a discussions choices) start matches
+    restoreAudit a.audit
     let s = done.summary
     insertAudit
-      c
       Recorded
         { actor
         , action = "wiki.import"
@@ -276,24 +269,22 @@ applyImport st actor address a choices = withDatabase st $ \c -> do
             ]
         , address
         }
-    execute_ c "COMMIT"
     pure s
 
-importSpace :: Connection -> FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> Progress -> SpaceMatch -> IO Progress
-importSpace c blobs a discussions choices progress m
+importSpace :: (Backend be) => FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> Progress -> SpaceMatch -> Db be Progress
+importSpace blobs a discussions choices progress m
   | spaceSkipped choices m.path = pure (count progress (\s -> s {pagesSkipped = s.pagesSkipped + length m.pages}))
   | otherwise = do
       target <- case m.server of
         Just theirs -> do
           when (T.null theirs.mathMacros && not (T.null m.archived.mathMacros)) $
-            updateSpace c theirs {mathMacros = m.archived.mathMacros}
+            updateSpace theirs {mathMacros = m.archived.mathMacros}
           pure theirs.id
         Nothing -> do
-          i <- SpaceId <$> newId
-          spaces <- Map.elems <$> loadSpaces c
+          i <- SpaceId <$> liftIO newId
+          spaces <- Map.elems <$> loadSpaces
           let parent = m.archived.parent >>= (`Map.lookup` progress.spaceIds)
           insertSpace
-            c
             Space
               { id = i
               , name = m.archived.name
@@ -317,8 +308,8 @@ importSpace c blobs a discussions choices progress m
             count
               progress {spaceIds = Map.insert m.archived.id target progress.spaceIds}
               (\s -> if isJust m.server then s {spacesMerged = s.spacesMerged + 1} else s {spacesCreated = s.spacesCreated + 1})
-      done <- foldlM (importPage c blobs a discussions choices m.path target) placed m.pages
-      fillProfile c blobs a m target done
+      done <- foldlM (importPage blobs a discussions choices m.path target) placed m.pages
+      fillProfile blobs a m target done
       pure done
 
 -- | Fill a space's description, icon and home page from the archive's,
@@ -327,33 +318,33 @@ importSpace c blobs a discussions choices progress m
 -- image is stored under its hash, as an attachment's bytes are. A space the
 -- archive shows as a blog is shown as one (a flag has no "none of its own"
 -- to keep: a space already shown as a blog stays one).
-fillProfile :: Connection -> FilePath -> Archive -> SpaceMatch -> SpaceId -> Progress -> IO ()
-fillProfile c blobs a m target progress =
+fillProfile :: (Backend be) => FilePath -> Archive -> SpaceMatch -> SpaceId -> Progress -> Db be ()
+fillProfile blobs a m target progress =
   Map.lookup target
-    <$> loadSpaces c
+    <$> loadSpaces
     >>= traverse_
       ( \theirs -> do
           icon <- case (theirs.icon, m.archived.icon) of
             (Nothing, Just (IconImage b mediaType)) ->
               -- 'readArchive' has checked that the image's file is there.
-              traverse (fmap (`IconImage` mediaType) . storeBlob blobs) (Map.lookup b a.blobs)
+              liftIO (traverse (fmap (`IconImage` mediaType) . storeBlob blobs) (Map.lookup b a.blobs))
             (Nothing, archived) -> pure archived
             (own, _) -> pure own
           let description = if T.null theirs.description then m.archived.description else theirs.description
               homePage = theirs.homePage <|> (m.archived.homePage >>= (`Map.lookup` progress.pageIds))
               filled = withProfile SpaceProfile {description, icon, homePage, blog = theirs.blog || m.archived.blog} theirs
-          when (filled /= theirs) (updateSpace c filled)
+          when (filled /= theirs) (updateSpace filled)
       )
 
-importPage :: Connection -> FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> [Slug] -> SpaceId -> Progress -> PageMatch -> IO Progress
-importPage c blobs a discussions choices spacePath target progress pm
+importPage :: (Backend be) => FilePath -> Archive -> Map PageId [Thread] -> ImportChoices -> [Slug] -> SpaceId -> Progress -> PageMatch -> Db be Progress
+importPage blobs a discussions choices spacePath target progress pm
   | pageSkipped choices spacePath pm.path = pure (count progress (\s -> s {pagesSkipped = s.pagesSkipped + 1}))
   | Just theirs <- pm.server = do
       let kept = progress {pageIds = Map.insert pm.archived.id theirs.id progress.pageIds}
       case resolutionOf choices spacePath pm.path of
         KeepServer -> pure (count kept (\s -> s {pagesKept = s.pagesKept + 1}))
         TakeImported -> do
-          time <- getCurrentTime
+          time <- micro <$> liftIO getCurrentTime
           -- Later than the version it replaces even if the clock says
           -- otherwise, as a save makes it, so that an editor open on the
           -- server's page sees that it has changed.
@@ -372,16 +363,16 @@ importPage c blobs a discussions choices spacePath target progress pm
                   , position = theirs.position
                   , template = theirs.template
                   }
-          updatePageText c theirs.id replaced.title replaced.body updatedAt
-          insertVersion c replaced Nothing
-          execute c "DELETE FROM attachments WHERE page_id = ?" (Only theirs.id.text)
-          n <- attach c blobs a theirs.id pm.archived.attachments
-          said <- discuss c theirs.id (Map.findWithDefault [] pm.archived.id discussions)
+          updatePageText theirs.id replaced.title replaced.body updatedAt
+          insertVersion replaced Nothing
+          deleteAttachmentsOf theirs.id
+          n <- attach blobs a theirs.id pm.archived.attachments
+          said <- discuss theirs.id (Map.findWithDefault [] pm.archived.id discussions)
           pure (count kept {commentsBrought = kept.commentsBrought + said} (\s -> s {pagesReplaced = s.pagesReplaced + 1, attachments = s.attachments + n}))
   | otherwise = do
-      i <- PageId <$> newId
+      i <- PageId <$> liftIO newId
       let parent = pm.archived.parent >>= (`Map.lookup` progress.pageIds)
-      siblings <- query c "SELECT coalesce(max(position) + 1, 0) FROM pages WHERE space_id = ? AND parent IS ?" (target.text, (\p -> p.text) <$> parent)
+      siblings <- childPages target parent
       let page =
             Page
               { id = i
@@ -393,13 +384,13 @@ importPage c blobs a discussions choices spacePath target progress pm
               , attachments = []
               , createdAt = pm.archived.createdAt
               , updatedAt = pm.archived.updatedAt
-              , position = maybe 0 fromOnly (head siblings)
+              , position = maybe 0 ((+ 1) . maximum) (nonEmpty (map (\x -> x.position) siblings))
               , template = pm.archived.template
               }
-      insertPage c page
-      insertVersion c page Nothing
-      n <- attach c blobs a i pm.archived.attachments
-      said <- discuss c i (Map.findWithDefault [] pm.archived.id discussions)
+      insertPage page
+      insertVersion page Nothing
+      n <- attach blobs a i pm.archived.attachments
+      said <- discuss i (Map.findWithDefault [] pm.archived.id discussions)
       pure
         ( count
             progress {pageIds = Map.insert pm.archived.id i progress.pageIds, commentsBrought = progress.commentsBrought + said}
@@ -409,17 +400,17 @@ importPage c blobs a discussions choices spacePath target progress pm
 -- | Attach an archive's attachments to a page, in order, each with a new
 -- id and its bytes stored under their hash. The result is how many there
 -- were.
-attach :: Connection -> FilePath -> Archive -> PageId -> [Attachment] -> IO Int
-attach c blobs a page xs = do
+attach :: (Backend be) => FilePath -> Archive -> PageId -> [Attachment] -> Db be Int
+attach blobs a page xs = do
   for_ (zip [0 ..] xs) $ \(ordinal, x) -> do
     source <- case x.source of
       SourceBlob b -> case Map.lookup b a.blobs of
-        Just bytes -> SourceBlob <$> storeBlob blobs bytes
+        Just bytes -> SourceBlob <$> liftIO (storeBlob blobs bytes)
         -- 'readArchive' has checked that every attachment's file is there.
         Nothing -> panic ("an archive without the bytes of " <> x.id.text <> " was read")
       url -> pure url
-    i <- AttachmentId <$> newId
-    insertAttachment c page ordinal Attachment {id = i, name = x.name, mediaType = x.mediaType, size = x.size, source}
+    i <- AttachmentId <$> liftIO newId
+    insertAttachment page ordinal Attachment {id = i, name = x.name, mediaType = x.mediaType, size = x.size, source}
   pure (length xs)
 
 -- | Add an archive's threads to a page, after its own, leaving out a
@@ -427,20 +418,20 @@ attach c blobs a page xs = do
 -- server, or imported before. A thread or a comment whose id the server
 -- uses elsewhere gets a new one. The result is how many comments were
 -- added.
-discuss :: Connection -> PageId -> [Thread] -> IO Int
-discuss c page ts = sum <$> for ts bring
+discuss :: (Backend be) => PageId -> [Thread] -> Db be Int
+discuss page ts = sum <$> for ts bring
   where
     bring t = do
-      holders <- query c "SELECT page_id FROM threads WHERE id = ?" (Only t.id.text)
-      case holders of
-        [Only holder] | holder == page.text -> pure 0
+      holder <- threadPage t.id
+      case holder of
+        Just p | p == page -> pure 0
         _ -> do
-          tid <- if null holders then pure t.id else CommentThreadId <$> newId
+          tid <- if isNothing holder then pure t.id else CommentThreadId <$> liftIO newId
           written <- for t.comments $ \x -> do
-            taken <- query c "SELECT 1 FROM comments WHERE id = ?" (Only x.id.text) :: IO [Only Int]
-            cid <- if null taken then pure x.id else CommentId <$> newId
+            taken <- commentExists x.id
+            cid <- if taken then CommentId <$> liftIO newId else pure x.id
             pure x {id = cid, thread = tid}
-          restoreThread c t {id = tid, page, comments = written}
+          restoreThread t {id = tid, page, comments = written}
           pure (length written)
 
 nothingYet :: ImportSummary

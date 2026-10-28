@@ -63,7 +63,8 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
-import Database.SQLite.Simple (Connection, Only (..), changes, execute, query)
+import Database.Beam (QExpr, aggregate_, all_, as_, countAll_, delete, filter_, insert, insertValues, isJust_, isNothing_, runDelete, runInsert, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (<-.), (==.))
+import Database.Beam.Backend.SQL.BeamExtensions (conflictingFields, insertOnConflict, onConflictUpdateSet)
 import Network.HTTP.Types (hCookie)
 import Network.Wai (Request (..))
 import Protolude
@@ -72,11 +73,13 @@ import Wiki.Api.Security (SecondFactorState (..))
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Login (..))
-import Wiki.Server.Accounts (immediately)
 import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Session (CookieSettings (..))
-import Wiki.Server.Storage (Storage, withDatabase)
-import Wiki.Server.Storage.Rows (Stamp (..), deleteSecondFactor, totpEnabled)
+import Wiki.Server.Storage (Storage, reading, writing, writingEither)
+import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Rows (deleteSecondFactor, micro, totpEnabled)
+import Wiki.Server.Storage.Schema (wikiDb)
+import Wiki.Server.Storage.Schema qualified as S
 import Wiki.Server.Totp (Secret, matchingCounter, newRecoveryCodes, newSecret, recoveryKey, secretFromText, secretText)
 
 --------------------------------------------------------------------------------
@@ -85,18 +88,18 @@ import Wiki.Server.Totp (Secret, matchingCounter, newRecoveryCodes, newSecret, r
 -- | Whether a user has a second factor, and how many recovery codes they
 -- have left.
 secondFactorState :: Storage -> UserId -> IO SecondFactorState
-secondFactorState st u = withDatabase st (`stateOf` u)
+secondFactorState st u = reading st (stateOf u)
 
-stateOf :: Connection -> UserId -> IO SecondFactorState
-stateOf c u = do
-  enabled <- totpEnabled c u
-  left <- query c "SELECT count(*) FROM recovery_codes WHERE user_id = ? AND used_at IS NULL" (Only u.text)
-  withPassword <- query c "SELECT password_hash IS NOT NULL FROM users WHERE id = ?" (Only u.text)
+stateOf :: (Backend be) => UserId -> Db be SecondFactorState
+stateOf u = do
+  enabled <- totpEnabled u
+  left <- runSelectReturningOne (select (aggregate_ (\_ -> as_ @Int64 countAll_) (filter_ (\r -> r.user_id ==. val_ u.text &&. isNothing_ r.used_at) (all_ wikiDb.recovery_codes))))
+  withPassword <- runSelectReturningOne (select ((\r -> isJust_ r.password_hash) <$> filter_ (\r -> r.id ==. val_ u.text) (all_ wikiDb.users)))
   pure
     SecondFactorState
       { enabled
-      , recoveryCodesLeft = if enabled then maybe 0 fromOnly (head left) else 0
-      , asksPassword = maybe False ((/= (0 :: Int)) . fromOnly) (head withPassword)
+      , recoveryCodesLeft = if enabled then maybe 0 fromIntegral left else 0
+      , asksPassword = fromMaybe False withPassword
       }
 
 -- | Start setting up a second factor: a new secret, stored for the user
@@ -105,17 +108,18 @@ stateOf c u = do
 enrol :: Storage -> UTCTime -> UserId -> IO (Either WikiError Secret)
 enrol st now u = do
   secret <- newSecret
-  withDatabase st $ \c ->
-    immediately c $
-      totpEnabled c u >>= \case
-        True -> pure (Left (Conflict "You have a second factor already: remove it first to set up another."))
-        False -> do
-          execute c "DELETE FROM recovery_codes WHERE user_id = ?" (Only u.text)
-          execute
-            c
-            "INSERT INTO totp (user_id, secret, created_at, enabled_at, last_counter) VALUES (?, ?, ?, NULL, NULL) ON CONFLICT (user_id) DO UPDATE SET secret = excluded.secret, created_at = excluded.created_at, enabled_at = NULL, last_counter = NULL"
-            (u.text, secretText secret, Stamp now)
-          pure (Right secret)
+  writingEither st $
+    totpEnabled u >>= \case
+      True -> pure (Left (Conflict "You have a second factor already: remove it first to set up another."))
+      False -> do
+        runDelete (delete wikiDb.recovery_codes (\r -> r.user_id ==. val_ u.text))
+        runInsert $
+          insertOnConflict
+            wikiDb.totp
+            (insertValues [S.TotpRow {user_id = u.text, secret = secretText secret, created_at = micro now, enabled_at = Nothing, last_counter = Nothing}])
+            (conflictingFields (\r -> r.user_id))
+            (onConflictUpdateSet (\r new -> mconcat [r.secret <-. new.secret, r.created_at <-. new.created_at, r.enabled_at <-. val_ Nothing, r.last_counter <-. val_ Nothing]))
+        pure (Right secret)
 
 -- | Why a code was not accepted.
 data CodeRefusal
@@ -131,35 +135,31 @@ data CodeRefusal
 confirm :: Storage -> UTCTime -> UserId -> Text -> IO (Either CodeRefusal [Text])
 confirm st now u typed = do
   codes <- newRecoveryCodes
-  withDatabase st $ \c ->
-    immediately c $
-      query c "SELECT secret, enabled_at IS NOT NULL FROM totp WHERE user_id = ?" (Only u.text) >>= \case
-        [(_, True)] -> pure (Left (CodeRefused (Conflict "Your second factor is on already.")))
-        [(stored, False)]
-          | Just secret <- secretFromText stored
-          , Just counter <- matchingCounter secret now Nothing typed -> do
-              execute c "UPDATE totp SET enabled_at = ?, last_counter = ? WHERE user_id = ?" (Stamp now, fromIntegral counter :: Int64, u.text)
-              execute c "DELETE FROM recovery_codes WHERE user_id = ?" (Only u.text)
-              for_ codes $ \code ->
-                for_ (recoveryKey code) $ \key ->
-                  execute c "INSERT INTO recovery_codes (user_id, code_hash, used_at) VALUES (?, ?, NULL)" (u.text, tokenHash key)
-              pure (Right codes)
-          | otherwise -> pure (Left WrongCode)
-        _ -> pure (Left (CodeRefused NotFound))
+  writingEither st $
+    runSelectReturningOne (select (filter_ (\r -> r.user_id ==. val_ u.text) (all_ wikiDb.totp))) >>= \case
+      Just r
+        | isJust r.enabled_at -> pure (Left (CodeRefused (Conflict "Your second factor is on already.")))
+        | Just secret <- secretFromText r.secret
+        , Just counter <- matchingCounter secret now Nothing typed -> do
+            runUpdate (update wikiDb.totp (\x -> (x.enabled_at <-. val_ (Just (micro now))) <> (x.last_counter <-. val_ (Just (fromIntegral counter)))) (\x -> x.user_id ==. val_ u.text))
+            runDelete (delete wikiDb.recovery_codes (\x -> x.user_id ==. val_ u.text))
+            runInsert (insert wikiDb.recovery_codes (insertValues [S.RecoveryCodeRow {user_id = u.text, code_hash = tokenHash key, used_at = Nothing} | code <- codes, Just key <- [recoveryKey code]]))
+            pure (Right codes)
+        | otherwise -> pure (Left WrongCode)
+      Nothing -> pure (Left (CodeRefused NotFound))
 
 -- | Turn a user's second factor off, with one of their codes. The result
 -- is their second factor's state afterwards (off).
 remove :: Storage -> UTCTime -> UserId -> Text -> IO (Either CodeRefusal SecondFactorState)
-remove st now u typed = withDatabase st $ \c ->
-  immediately c $
-    totpEnabled c u >>= \case
-      False -> pure (Left (CodeRefused NotFound))
-      True ->
-        codeOf c now u typed >>= \case
-          False -> pure (Left WrongCode)
-          True -> do
-            void (deleteSecondFactor c u)
-            Right <$> stateOf c u
+remove st now u typed = writingEither st $
+  totpEnabled u >>= \case
+    False -> pure (Left (CodeRefused NotFound))
+    True ->
+      codeOf now u typed >>= \case
+        False -> pure (Left WrongCode)
+        True -> do
+          void (deleteSecondFactor u)
+          Right <$> stateOf u
 
 --------------------------------------------------------------------------------
 -- Codes
@@ -169,21 +169,26 @@ remove st now u typed = withDatabase st $ \c ->
 -- an unused recovery code. Either way it is used up, so that it is not
 -- accepted again.
 checkCode :: Storage -> UTCTime -> UserId -> Text -> IO Bool
-checkCode st now u typed = withDatabase st $ \c -> immediately c (bool (Left ()) (Right ()) <$> codeOf c now u typed) <&> isRight
+checkCode st now u typed = writing st (codeOf now u typed)
 
 -- | 'checkCode' in a running transaction.
-codeOf :: Connection -> UTCTime -> UserId -> Text -> IO Bool
-codeOf c now u typed =
-  query c "SELECT secret, last_counter FROM totp WHERE user_id = ? AND enabled_at IS NOT NULL" (Only u.text) >>= \case
-    [(stored, lastUsed)]
-      | Just secret <- secretFromText stored
-      , Just counter <- matchingCounter secret now (fromIntegral <$> (lastUsed :: Maybe Int64)) typed -> do
-          execute c "UPDATE totp SET last_counter = ? WHERE user_id = ?" (fromIntegral counter :: Int64, u.text)
+codeOf :: (Backend be) => UTCTime -> UserId -> Text -> Db be Bool
+codeOf now u typed =
+  runSelectReturningOne (select (filter_ (\r -> r.user_id ==. val_ u.text &&. isJust_ r.enabled_at) (all_ wikiDb.totp))) >>= \case
+    Just r
+      | Just secret <- secretFromText r.secret
+      , Just counter <- matchingCounter secret now (fromIntegral <$> r.last_counter) typed -> do
+          runUpdate (update wikiDb.totp (\x -> x.last_counter <-. val_ (Just (fromIntegral counter))) (\x -> x.user_id ==. val_ u.text))
           pure True
       | Just key <- recoveryKey typed -> do
-          execute c "UPDATE recovery_codes SET used_at = ? WHERE user_id = ? AND code_hash = ? AND used_at IS NULL" (Stamp now, u.text, tokenHash key)
-          (== 1) <$> changes c
+          found <- runSelectReturningOne (select ((\x -> x.code_hash) <$> filter_ (unused key) (all_ wikiDb.recovery_codes)))
+          runUpdate (update wikiDb.recovery_codes (\x -> x.used_at <-. val_ (Just (micro now))) (unused key))
+          pure (isJust found)
     _ -> pure False
+  where
+    -- The user's recovery code with this key, if it is not used.
+    unused :: (Backend be) => Text -> S.RecoveryCodes (QExpr be s) -> QExpr be s Bool
+    unused key x = x.user_id ==. val_ u.text &&. x.code_hash ==. val_ (tokenHash key) &&. isNothing_ x.used_at
 
 --------------------------------------------------------------------------------
 -- Sign-ins half done

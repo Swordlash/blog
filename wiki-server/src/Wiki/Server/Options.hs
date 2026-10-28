@@ -28,6 +28,15 @@ module Wiki.Server.Options
   , defaultServeOptions
   , serveOptions
 
+    -- * The database
+  , PlaceOptions (..)
+  , DatabaseChoice (..)
+  , placeOptions
+  , databaseChoice
+  , pgPrograms
+  , resolvePlace
+  , databaseUrlVariable
+
     -- * Addresses
   , Listen (..)
   , parseListen
@@ -42,11 +51,16 @@ module Wiki.Server.Options
 where
 
 import Data.Text qualified as T
+import Network.HTTP.Types.URI (urlEncode)
 import Network.Socket (HostAddress6, hostAddressToTuple)
 import Network.Socket qualified as Socket
 import Options.Applicative
 import Protolude
 import Wiki.Api.ContentPolicy (parseAssistantHost)
+import System.Environment (lookupEnv)
+import Wiki.Server.Storage (Database (..), Place (..))
+import Wiki.Server.Storage.Layout (defaultDatabase)
+import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)
 
 -- | An address to listen on: a numeric IPv4 or IPv6 address and a port
 -- (port 0 for any free one, which the tests use).
@@ -144,6 +158,10 @@ isLoopback h = case numericAddress h of
 data ServeOptions = ServeOptions
   { dataDir :: FilePath
   -- ^ The data directory ("Wiki.Server.Storage.Layout").
+  , database :: DatabaseChoice
+  -- ^ The database the wiki is kept in.
+  , pgPrograms :: PgPrograms
+  -- ^ The programs that back a PostgreSQL database up and restore it.
   , listen :: Listen
   -- ^ The public listener.
   , adminListen :: Maybe Listen
@@ -180,6 +198,8 @@ defaultServeOptions :: FilePath -> ServeOptions
 defaultServeOptions dataDir =
   ServeOptions
     { dataDir
+    , database = InDataDirectory
+    , pgPrograms = defaultPgPrograms
     , listen = Listen "127.0.0.1" 8080
     , adminListen = Just (Listen "127.0.0.1" 8081)
     , adminListenUnsafe = False
@@ -200,7 +220,9 @@ defaultMaxImportSize = 512 * 1024 * 1024
 -- | The options of @wiki-server serve@.
 serveOptions :: Parser ServeOptions
 serveOptions = do
-  dataDir <- strOption (long "data" <> metavar "DIR" <> help "The data directory: the database, the attachments and the backups")
+  dataDir <- strOption (long "data" <> metavar "DIR" <> help "The data directory: the attachments, the backups, and the database on SQLite")
+  database <- databaseChoice
+  programs <- pgPrograms
   listen <- option address (long "listen" <> metavar "HOST:PORT" <> value (Listen "127.0.0.1" 8080) <> showDefaultWith (toS . renderListen) <> help "The public listener")
   admin <- option address (long "admin-listen" <> metavar "HOST:PORT" <> value (Listen "127.0.0.1" 8081) <> showDefaultWith (toS . renderListen) <> help "The admin listener, where everyone is the administrator: loopback only")
   noAdmin <- switch (long "no-admin-listen" <> help "Do not listen for the administrator at all")
@@ -219,6 +241,8 @@ serveOptions = do
   pure
     ServeOptions
       { dataDir
+      , database
+      , pgPrograms = programs
       , listen
       , adminListen = if noAdmin then Nothing else Just admin
       , adminListenUnsafe
@@ -234,6 +258,89 @@ serveOptions = do
     hosts = eitherReader (first toS . traverse parseAssistantHost . filter (not . T.null) . map T.strip . T.splitOn "," . toS)
     gone :: ReadM ()
     gone = eitherReader (const (Left (toS removedMessage)))
+
+-- | 'DatabaseChoice' is the database the command line names: the SQLite
+-- file in the data directory unless it says otherwise (or the environment
+-- names a PostgreSQL database, 'databaseUrlVariable'), another SQLite
+-- file, or a PostgreSQL database by its URL. A URL on the command line
+-- holds no password, since every user of the machine can read a process's
+-- arguments: the password is read from a file
+-- (@--database-password-file@), or the whole URL from the environment.
+data DatabaseChoice
+  = InDataDirectory
+  | SqliteChosen FilePath
+  | PostgresChosen Text (Maybe FilePath)
+  deriving stock (Eq, Show)
+
+-- | The environment variable that may hold a PostgreSQL database's URL,
+-- password included: @WIKI_DATABASE_URL@. It is read when the command
+-- line names no database.
+databaseUrlVariable :: [Char]
+databaseUrlVariable = "WIKI_DATABASE_URL"
+
+-- | The options that name the database: @--sqlite FILE@, or @--database
+-- URL@ with @--database-password-file FILE@.
+databaseChoice :: Parser DatabaseChoice
+databaseChoice = sqlite <|> postgres <|> pure InDataDirectory
+  where
+    sqlite = SqliteChosen <$> strOption (long "sqlite" <> metavar "FILE" <> help "Keep the wiki in this SQLite file (by default DIR/wiki.sqlite, when no PostgreSQL database is named)")
+    postgres =
+      PostgresChosen
+        <$> option url (long "database" <> metavar "URL" <> help "Keep the wiki in this PostgreSQL database, postgres://USER@HOST:PORT/NAME, without its password (the whole URL may be in WIKI_DATABASE_URL instead)")
+        <*> optional (strOption (long "database-password-file" <> metavar "FILE" <> help "The file that holds the PostgreSQL database's password"))
+    url = eitherReader $ \raw ->
+      let t = toS raw
+       in if hasPassword t
+            then Left "a --database URL with a password in it would show the password to every user of the machine: put the password in --database-password-file FILE, or the whole URL in WIKI_DATABASE_URL"
+            else Right t
+    hasPassword t = case T.breakOn "@" (snd (T.breakOn "://" t)) of
+      (credentials, rest) -> not (T.null rest) && ":" `T.isInfixOf` credentials || "password=" `T.isInfixOf` t
+
+-- | The options that name the programs a PostgreSQL backup and restore
+-- run: @--pg-dump@ and @--pg-restore@.
+pgPrograms :: Parser PgPrograms
+pgPrograms =
+  PgPrograms
+    <$> strOption (long "pg-dump" <> metavar "PROGRAM" <> value "pg_dump" <> showDefault <> help "The pg_dump program, for backups of a PostgreSQL database (of its major version or newer)")
+    <*> strOption (long "pg-restore" <> metavar "PROGRAM" <> value "pg_restore" <> showDefault <> help "The pg_restore program, for restoring them")
+
+-- | 'PlaceOptions' is where the console's commands find the wiki: the
+-- data directory, the database, and the programs a PostgreSQL backup and
+-- restore run.
+data PlaceOptions = PlaceOptions
+  { dataDir :: FilePath
+  , database :: DatabaseChoice
+  , programs :: PgPrograms
+  }
+  deriving stock (Eq, Show)
+
+-- | The options of 'PlaceOptions': @--data DIR@ and the database's.
+placeOptions :: Parser PlaceOptions
+placeOptions =
+  PlaceOptions
+    <$> strOption (long "data" <> metavar "DIR" <> help "The server's data directory")
+    <*> databaseChoice
+    <*> pgPrograms
+
+-- | Where the wiki is, from the options and the environment: the database
+-- with its password read from its file. The result is why not, when the
+-- password file cannot be read.
+resolvePlace :: FilePath -> DatabaseChoice -> PgPrograms -> IO (Either Text Place)
+resolvePlace dataDir choice programs = runExceptT $ do
+  database <- case choice of
+    SqliteChosen file -> pure (SqliteFile file)
+    PostgresChosen url Nothing -> pure (PostgresAt (encodeUtf8 url))
+    PostgresChosen url (Just file) -> do
+      read' <- liftIO (try @SomeException (readFile file))
+      password <- either (\e -> throwError ("The database's password file " <> toS file <> " cannot be read: " <> show e)) (pure . T.strip) read'
+      pure (PostgresAt (encodeUtf8 (withPassword url password)))
+    InDataDirectory -> maybe (defaultDatabase dataDir) (PostgresAt . encodeUtf8 . T.pack) <$> liftIO (lookupEnv databaseUrlVariable)
+  pure Place {dataDir, database, programs}
+  where
+    -- The password as a parameter of the URL, which libpq reads as it
+    -- reads one in the URL's user part, escaped as a URL's query is.
+    withPassword url password =
+      url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "password=" <> decodeUtf8 (urlEncode True (encodeUtf8 password))
 
 -- | The options the administration's "Server" section replaced (WP4.4).
 removedOptions :: [[Char]]

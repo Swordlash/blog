@@ -26,16 +26,19 @@ import Data.Aeson (decodeStrict', encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), defaultTimeLocale, diffTimeToPicoseconds, formatTime, getCurrentTime)
+import Data.Time (getCurrentTime)
 import Data.UUID.Types qualified as UUID
-import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_, (:.) (..))
-import Database.SQLite.Simple.ToField (ToField (..))
+import Database.Beam (QExpr, aggregate_, all_, asc_, desc_, filter_, insert, insertValues, limit_, min_, offset_, orderBy_, runInsert, runSelectReturningList, runSelectReturningOne, select, val_, (&&.), (<.), (<=.), (==.), (>.), (||.))
+import Database.Beam.Backend.SQL.BeamExtensions (anyConflict, insertOnConflict, onConflictDoNothing)
 import Protolude
 import Wiki.Api.Activity (Activity (..), ActivityQuery (..), activityPageSize)
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Login (..))
-import Wiki.Server.Storage.Rows (Stamp (..))
+import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Rows (micro)
+import Wiki.Server.Storage.Schema (wikiDb)
+import Wiki.Server.Storage.Schema qualified as S
 
 -- | What a write records: everything of an entry except its id and time,
 -- which 'insertAudit' assigns.
@@ -58,58 +61,44 @@ operator = Actor {id = UserId "~administrator", login = Login "administrator"}
 consoleAddress :: Text
 consoleAddress = "console"
 
--- | A time as the log's column stores it: ISO 8601 in UTC with exactly
--- six digits of fraction, so that the text sorts in time order (which
--- 'Stamp''s format, with as many digits as needed, does not within a
--- second), and parses back as a 'Stamp'.
-newtype LogTime = LogTime UTCTime
-
-instance ToField LogTime where
-  toField (LogTime t) =
-    toField
-      ( T.pack (formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S" t)
-          <> "."
-          <> T.justifyRight 6 '0' (show (diffTimeToPicoseconds (utctDayTime t) `div` 1000000 `mod` 1000000))
-          <> "Z"
-      )
-
 -- | Record a write, now, in the running transaction.
-insertAudit :: Connection -> Recorded -> IO ()
-insertAudit c r = do
-  i <- UUID.toText <$> generateV4
-  t <- getCurrentTime
-  insertEntry c "INSERT INTO" AuditEntry {id = i, at = t, actor = r.actor, action = r.action, subject = r.subject, detail = Map.fromList r.detail, address = r.address}
+insertAudit :: (Backend be) => Recorded -> Db be ()
+insertAudit r = do
+  i <- liftIO (UUID.toText <$> generateV4)
+  t <- liftIO getCurrentTime
+  runInsert (insert wikiDb.audit_log (insertValues [rowOf AuditEntry {id = i, at = t, actor = r.actor, action = r.action, subject = r.subject, detail = Map.fromList r.detail, address = r.address}]))
 
 -- | Add an archive's entries, each one not already here (by its id): an
 -- import of the same archive twice adds them once.
-restoreAudit :: Connection -> [AuditEntry] -> IO ()
-restoreAudit c = traverse_ (insertEntry c "INSERT OR IGNORE INTO")
+restoreAudit :: (Backend be) => [AuditEntry] -> Db be ()
+restoreAudit = traverse_ (\e -> runInsert (insertOnConflict wikiDb.audit_log (insertValues [rowOf e]) anyConflict onConflictDoNothing))
 
-insertEntry :: Connection -> Text -> AuditEntry -> IO ()
-insertEntry c verb e =
-  execute
-    c
-    (Query (verb <> " audit_log (id, at, actor_id, actor_login, action, subject_kind, subject_id, subject_name, detail, address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
-    ( (e.id, LogTime e.at, e.actor.id.text, e.actor.login.text, e.action)
-        :. (e.subject.kind, e.subject.id, e.subject.name, decodeUtf8 (BSL.toStrict (encode e.detail)), e.address)
-    )
-
-type Row = (Text, Stamp, Text, Text, Text) :. (Text, Maybe Text, Text, Text, Text)
-
-entryOf :: Row -> AuditEntry
-entryOf ((i, Stamp at, actorId, login, action) :. (kind, subjectId, name, detail, address)) =
-  AuditEntry
-    { id = i
-    , at
-    , actor = Actor {id = UserId actorId, login = Login login}
-    , action
-    , subject = Subject {kind, id = subjectId, name}
-    , detail = fromMaybe mempty (decodeStrict' (encodeUtf8 detail))
-    , address
+rowOf :: AuditEntry -> S.AuditLog Identity
+rowOf e =
+  S.AuditRow
+    { id = e.id
+    , at = micro e.at
+    , actor_id = e.actor.id.text
+    , actor_login = e.actor.login.text
+    , action = e.action
+    , subject_kind = e.subject.kind
+    , subject_id = e.subject.id
+    , subject_name = e.subject.name
+    , detail = decodeUtf8 (BSL.toStrict (encode e.detail))
+    , address = e.address
     }
 
-columns :: Text
-columns = "id, at, actor_id, actor_login, action, subject_kind, subject_id, subject_name, detail, address"
+entryOf :: S.AuditLog Identity -> AuditEntry
+entryOf r =
+  AuditEntry
+    { id = r.id
+    , at = r.at
+    , actor = Actor {id = UserId r.actor_id, login = Login r.actor_login}
+    , action = r.action
+    , subject = Subject {kind = r.subject_kind, id = r.subject_id, name = r.subject_name}
+    , detail = fromMaybe mempty (decodeStrict' (encodeUtf8 r.detail))
+    , address = r.address
+    }
 
 -- | A page of the log, the newest first, and the actors it can be
 -- filtered by.
@@ -122,36 +111,41 @@ columns = "id, at, actor_id, actor_login, action, subject_kind, subject_id, subj
 -- off the entries before it.
 --
 -- The actors are found by jumping from one actor to the next in
--- @audit_log_actor@ (a recursive query, each step the smallest actor id
--- after the last), and each one's latest login by one look into the same
--- index. So the list costs a few reads per actor, not a read of every
--- entry of the log.
-loadActivity :: Connection -> ActivityQuery -> IO Activity
-loadActivity c q = do
-  let offset = max 0 q.offset
-      limit = activityPageSize + 1
-  after <- for q.before $ \i -> head <$> query c "SELECT at, id FROM audit_log WHERE id = ?" (Only i)
-  rows <- case (after, q.actor) of
-    (Just Nothing, _) -> pure []
-    (Just (Just (at, i)), Nothing) ->
-      query c (Query ("SELECT " <> columns <> " FROM audit_log WHERE (at, id) < (?, ?) ORDER BY at DESC, id DESC LIMIT ?")) (at :: Text, i :: Text, limit)
-    (Just (Just (at, i)), Just u) ->
-      query c (Query ("SELECT " <> columns <> " FROM audit_log WHERE actor_id = ? AND (at, id) < (?, ?) ORDER BY at DESC, id DESC LIMIT ?")) (u.text, at, i, limit)
-    (Nothing, Nothing) -> query c (Query ("SELECT " <> columns <> " FROM audit_log ORDER BY at DESC, id DESC LIMIT ? OFFSET ?")) (limit, offset)
-    (Nothing, Just u) -> query c (Query ("SELECT " <> columns <> " FROM audit_log WHERE actor_id = ? ORDER BY at DESC, id DESC LIMIT ? OFFSET ?")) (u.text, limit, offset)
-  -- Each actor by the login of their latest entry.
-  named <-
-    query_ c . Query $
-      "WITH RECURSIVE actor(id) AS (SELECT min(actor_id) FROM audit_log UNION ALL SELECT (SELECT min(actor_id) FROM audit_log WHERE actor_id > actor.id) FROM actor WHERE actor.id IS NOT NULL) "
-        <> "SELECT id, (SELECT actor_login FROM audit_log WHERE actor_id = actor.id ORDER BY at DESC, id DESC LIMIT 1) FROM actor WHERE id IS NOT NULL"
+-- @audit_log_actor@ (each step the smallest actor id after the last), and
+-- each one's latest login by one look into the same index. So the list
+-- costs a few reads per actor, not a read of every entry of the log.
+loadActivity :: forall be. (Backend be) => ActivityQuery -> Db be Activity
+loadActivity q = do
+  let skipped = max 0 q.offset
+      most = fromIntegral (activityPageSize + 1)
+      byActor :: forall s. S.AuditLog (QExpr be s) -> QExpr be s Bool
+      byActor e = maybe (val_ True) (\u -> e.actor_id ==. val_ u.text) q.actor
+  after <- for q.before $ \i -> runSelectReturningOne (select ((\e -> (e.at, e.id)) <$> filter_ (\e -> e.id ==. val_ i) (all_ wikiDb.audit_log)))
+  rows <- case after of
+    Just Nothing -> pure []
+    Just (Just (at, i)) ->
+      runSelectReturningList . select . limit_ most . orderBy_ (\e -> (desc_ e.at, desc_ e.id)) $
+        filter_ (\e -> byActor e &&. e.at <=. val_ at &&. (e.at <. val_ at ||. e.id <. val_ i)) (all_ wikiDb.audit_log)
+    Nothing ->
+      runSelectReturningList . select . limit_ most . offset_ (fromIntegral skipped) . orderBy_ (\e -> (desc_ e.at, desc_ e.id)) $
+        filter_ byActor (all_ wikiDb.audit_log)
+  named <- actors Nothing []
   pure
     Activity
       { available = True
       , entries = map entryOf (take activityPageSize rows)
       , more = length rows > activityPageSize
-      , actors = sortOn (\a -> (T.toCaseFold a.login.text, a.id)) [Actor {id = UserId i, login = Login login} | (i, login) <- named]
+      , actors = sortOn (\a -> (T.toCaseFold a.login.text, a.id)) named
       }
+  where
+    actors after found = do
+      next <- join <$> runSelectReturningOne (select (aggregate_ (\e -> min_ e.actor_id) (filter_ (\e -> maybe (val_ True) (\a -> e.actor_id >. val_ a) after) (all_ wikiDb.audit_log))))
+      case next of
+        Nothing -> pure (reverse found)
+        Just a -> do
+          login <- runSelectReturningOne (select (limit_ 1 ((\e -> e.actor_login) <$> orderBy_ (\e -> (desc_ e.at, desc_ e.id)) (filter_ (\e -> e.actor_id ==. val_ a) (all_ wikiDb.audit_log)))))
+          actors (Just a) (Actor {id = UserId a, login = Login (fromMaybe a login)} : found)
 
 -- | The whole log, the oldest first: what an export contains.
-loadAuditLog :: Connection -> IO [AuditEntry]
-loadAuditLog c = map entryOf <$> query_ c (Query ("SELECT " <> columns <> " FROM audit_log ORDER BY at, id"))
+loadAuditLog :: (Backend be) => Db be [AuditEntry]
+loadAuditLog = map entryOf <$> runSelectReturningList (select (orderBy_ (\e -> (asc_ e.at, asc_ e.id)) (all_ wikiDb.audit_log)))

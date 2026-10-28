@@ -53,10 +53,10 @@ origin :: Text
 origin = "100.64.0.9"
 
 -- | Run as one of the demo's users, from 'origin'.
-as :: Storage -> Text -> SqliteWiki IO a -> IO a
+as :: Storage -> Text -> StoredWiki IO a -> IO a
 as st login program = do
   who <- whoFor st (As login)
-  runSqliteWikiFrom st who origin program
+  runStoredWikiFrom st who origin program
 
 -- | The log, the oldest first.
 logged :: Storage -> IO [AuditEntry]

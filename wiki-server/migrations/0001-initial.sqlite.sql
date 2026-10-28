@@ -1,0 +1,422 @@
+-- The wiki's schema on SQLite: everything the storage keeps
+-- (Wiki.Server.Storage.Schema declares the same tables for Beam, and
+-- 0001-initial.postgres.sql is the same schema for PostgreSQL).
+--
+-- The columns are the types Beam's SQLite backend writes and reads: text,
+-- integers, and booleans as 0 or 1. A time is text as beam-sqlite writes a
+-- UTCTime, 2026-10-24 15:30:00.123456 (no fraction for a whole second), in
+-- UTC. That text sorts in time order, so a time compares and sorts in SQL
+-- as a time does. The storage keeps times to the microsecond, as
+-- PostgreSQL does, so a time read back is the very time written: a save is
+-- checked against the time it started from, by equality. Ids are text, as
+-- Wiki.Core.Id has them. Orders, permissions and the kinds of subjects are
+-- the words the export format writes them with.
+--
+-- This file runs inside the transaction that applies the schema. It makes
+-- wiki_schema, the versions of the schema the database has had, but
+-- records nothing in it itself: Wiki.Server.Storage.Migrate does, for this
+-- step and each later one.
+
+CREATE TABLE wiki_schema (
+  version    INTEGER PRIMARY KEY NOT NULL,
+  applied_at TEXT NOT NULL
+);
+
+-- A user, who may sign in with a password (an argon2id hash in the PHC
+-- string format, $argon2id$v=19$m=...,t=...,p=...$salt$hash), with an
+-- account at a provider (identities), or both; or not at all, until one is
+-- set. A login is unique as written; signing in compares logins ignoring
+-- the case of ASCII letters, through users_login_folded. An e-mail address
+-- is trusted once it is verified (email_verified_at), by a link mailed to
+-- it. notification_mail is how the user is told by mail (off, now or
+-- daily; NULL until they choose), watch_own whether they watch the pages
+-- they made and the threads they are in.
+CREATE TABLE users (
+  id                TEXT PRIMARY KEY NOT NULL,
+  login             TEXT NOT NULL UNIQUE,
+  display_name      TEXT NOT NULL,
+  password_hash     TEXT,
+  disabled          INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
+  email             TEXT,
+  email_verified_at TEXT,
+  notification_mail TEXT CHECK (notification_mail IN ('off', 'now', 'daily')),
+  watch_own         INTEGER NOT NULL DEFAULT 1 CHECK (watch_own IN (0, 1))
+);
+
+CREATE INDEX users_login_folded ON users (lower(login));
+
+CREATE TABLE groups (
+  id   TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL
+);
+
+CREATE TABLE group_members (
+  group_id TEXT NOT NULL REFERENCES groups (id) ON DELETE CASCADE,
+  user_id  TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  PRIMARY KEY (group_id, user_id)
+);
+
+-- A user's groups, found by the user: every transaction of a signed-in
+-- user reads them.
+CREATE INDEX group_members_user ON group_members (user_id);
+
+-- A grant names a user or a group. Not a foreign key, since it is one of
+-- two tables; the rules count only grants for someone who is there. seq is
+-- the order the grants were given in, which an export keeps.
+CREATE TABLE global_grants (
+  seq          INTEGER PRIMARY KEY NOT NULL,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('user', 'group')),
+  subject_id   TEXT NOT NULL,
+  permission   TEXT NOT NULL CHECK (permission IN ('administer', 'create-spaces')),
+  UNIQUE (subject_kind, subject_id, permission)
+);
+
+-- A space, at a place in the tree of spaces. Its profile: home_page, one
+-- of its own pages or NULL (the list of its pages); icon, Wiki.Core.Space's
+-- Icon as JSON ({"emoji": ...}, {"colour": ...} or {"image": <blob>,
+-- "mediaType": ...}) or NULL for the default, an image's bytes in the blob
+-- store as an attachment's are; description, plain text; blog, whether it
+-- opens at its posts.
+CREATE TABLE spaces (
+  id             TEXT PRIMARY KEY NOT NULL,
+  -- A subspace goes with the space it is in.
+  parent         TEXT REFERENCES spaces (id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  slug           TEXT NOT NULL,
+  public         INTEGER NOT NULL CHECK (public IN (0, 1)),
+  math_macros    TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  position       INTEGER NOT NULL,
+  subspace_order TEXT NOT NULL CHECK (subspace_order IN ('name', 'newest-first', 'oldest-first', 'by-hand')),
+  page_order     TEXT NOT NULL CHECK (page_order IN ('name', 'newest-first', 'oldest-first', 'by-hand')),
+  -- Deleting the page leaves the space without one; the storage clears it
+  -- when the page moves to another space.
+  home_page      TEXT REFERENCES pages (id) ON DELETE SET NULL,
+  icon           TEXT,
+  description    TEXT NOT NULL DEFAULT '',
+  blog           INTEGER NOT NULL DEFAULT 0 CHECK (blog IN (0, 1))
+);
+
+-- No two siblings share a slug, the top-level spaces included (whose
+-- parent is NULL, which a plain unique index would take for all
+-- different).
+CREATE UNIQUE INDEX spaces_sibling_slug ON spaces (coalesce(parent, ''), slug);
+
+CREATE TABLE space_grants (
+  seq          INTEGER PRIMARY KEY NOT NULL,
+  space_id     TEXT NOT NULL REFERENCES spaces (id) ON DELETE CASCADE,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('user', 'group')),
+  subject_id   TEXT NOT NULL,
+  permission   TEXT NOT NULL CHECK (permission IN ('view', 'edit', 'administer')),
+  UNIQUE (space_id, subject_kind, subject_id, permission)
+);
+
+-- A page as it is now: its place in its space's tree, and its current
+-- version. search_text is the body as a reader sees it
+-- (Wiki.Core.Search.bodyText), made by the write that made the version, so
+-- that a search never parses a page. search_fold is the title and that
+-- text, each folded as the search compares them (Wiki.Core.Search.foldText:
+-- no case, no diacritics), with a line break between them: a search
+-- matches the query's words against it in SQL, and reads and folds again
+-- only the pages that match. template says whether the page is one of its
+-- space's templates, listed apart and left out of a search that does not
+-- ask for them.
+CREATE TABLE pages (
+  id          TEXT PRIMARY KEY NOT NULL,
+  -- A page goes with its space, and with the page it is under.
+  space_id    TEXT NOT NULL REFERENCES spaces (id) ON DELETE CASCADE,
+  parent      TEXT REFERENCES pages (id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  slug        TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  position    INTEGER NOT NULL,
+  template    INTEGER NOT NULL DEFAULT 0 CHECK (template IN (0, 1)),
+  search_text TEXT NOT NULL,
+  search_fold TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX pages_sibling_slug ON pages (space_id, coalesce(parent, ''), slug);
+-- A page found by its slug among its siblings, one step of finding a page
+-- by its path (Wiki.Server.Storage.Rows.childPage), and the pages under
+-- one page or at a space's top level. The unique index above cannot serve
+-- a query whose condition is written parent = ? or parent IS NULL.
+CREATE INDEX pages_place ON pages (space_id, parent, slug);
+CREATE INDEX pages_parent ON pages (parent);
+-- A space's pages, templates or not: the count of each space's pages reads
+-- this index alone, and a search finds a space's pages through it.
+CREATE INDEX pages_space_template ON pages (space_id, template);
+
+-- Every version of every page, the current one included: a row for the
+-- page as it was made, and one for each save, keyed by the page's
+-- updated_at then. The primary key lists a page's versions in time order.
+-- The author is the id of whoever saved it (a user's, or the
+-- administrator's, Wiki.Server.Storage.administratorId); NULL for a page
+-- imported from an export.
+CREATE TABLE page_versions (
+  page_id    TEXT NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
+  updated_at TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  author     TEXT,
+  PRIMARY KEY (page_id, updated_at)
+);
+
+-- An attachment's bytes are either on the web (url) or in the blob store
+-- under their content hash (blob, the SHA-256 in hex); never both.
+-- ordinal is its place among the page's attachments, which a replacement
+-- keeps.
+CREATE TABLE attachments (
+  id         TEXT PRIMARY KEY NOT NULL,
+  page_id    TEXT NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  size       INTEGER NOT NULL CHECK (size >= 0),
+  url        TEXT,
+  blob       TEXT,
+  ordinal    INTEGER NOT NULL,
+  CHECK ((url IS NULL) <> (blob IS NULL)),
+  UNIQUE (page_id, name)
+);
+
+CREATE INDEX attachments_blob ON attachments (blob) WHERE blob IS NOT NULL;
+
+-- Each author's draft of a page. The author is a user's id, or the
+-- administrator's, so not a foreign key.
+CREATE TABLE drafts (
+  page_id  TEXT NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
+  author   TEXT NOT NULL,
+  title    TEXT NOT NULL,
+  body     TEXT NOT NULL,
+  base     TEXT NOT NULL,
+  saved_at TEXT NOT NULL,
+  PRIMARY KEY (page_id, author)
+);
+
+-- A session is known by the SHA-256 (in hex) of the random id its cookie
+-- carries, never by the id itself, so that the database (or a backup of
+-- it) signs nobody in. public_id is another random id, which the account
+-- panel ends a session by and which says nothing of the cookie's; address
+-- is where it was last used from. It ends when its user signs out, is
+-- disabled, is given a new password or is deleted, and when it has not
+-- been used until expires_at, which each use moves on
+-- (Wiki.Server.Accounts).
+CREATE TABLE sessions (
+  id_hash      TEXT PRIMARY KEY NOT NULL,
+  user_id      TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  created_at   TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  expires_at   TEXT NOT NULL,
+  public_id    TEXT NOT NULL UNIQUE,
+  address      TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX sessions_user ON sessions (user_id);
+
+-- The wiki's own settings, the server's address and mail server, the
+-- backups' settings and the like, each a row by its name. A setting that
+-- has no row has its default (Wiki.Server.Storage.Rows says which rows
+-- there are).
+CREATE TABLE settings (
+  key   TEXT PRIMARY KEY NOT NULL,
+  value TEXT NOT NULL
+);
+
+-- An invitation is known by the SHA-256 (in hex) of the random secret its
+-- link carries, as a session is. It is deleted when it is used, when it is
+-- revoked, and when its address is invited again; one past expires_at
+-- stays, unusable, until then, so that the administration sees that it
+-- expired.
+CREATE TABLE invitations (
+  id         TEXT PRIMARY KEY NOT NULL,
+  email      TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX invitations_email ON invitations (lower(email));
+
+-- An account at a provider that signs a user in: the provider's name in
+-- the server's settings and the subject the provider knows the account by
+-- (never its e-mail address or its login there, which change). A
+-- provider's account signs in one user at most; a user may have one per
+-- provider. The e-mail address and the name are what the provider said
+-- the last time, for people to tell identities apart.
+CREATE TABLE identities (
+  provider     TEXT NOT NULL,
+  subject      TEXT NOT NULL,
+  user_id      TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  email        TEXT,
+  display_name TEXT,
+  linked_at    TEXT NOT NULL,
+  PRIMARY KEY (provider, subject)
+);
+
+CREATE UNIQUE INDEX identities_user ON identities (user_id, provider);
+
+-- The providers people sign in with, set in the administration, in the
+-- order their buttons show. The client secrets are kept in clear, since
+-- the server needs them so: the database is as sensitive as the password
+-- and session hashes it holds already. The API never gives them back.
+CREATE TABLE sign_in_providers (
+  name      TEXT PRIMARY KEY NOT NULL,
+  position  INTEGER NOT NULL,
+  kind      TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  issuer    TEXT,
+  secret    TEXT
+);
+
+-- Comments on pages (decision 23 of docs/PLAN.md): threads, each opened by
+-- a comment and answered by replies. A thread is about a quote of its
+-- page's rendered text (quote, prefix and suffix, the W3C text quote
+-- selector of Wiki.Core.Anchor), or, with all three NULL, about the whole
+-- page. Only an inline thread is ever resolved. seq is a thread's place
+-- among its page's threads, and a comment's among its thread's. A
+-- comment's author is a user's id, or the administrator's, so not a
+-- foreign key; an import keeps an author who is not a user here by name
+-- (Wiki.Core.Comment.formerAuthor).
+CREATE TABLE threads (
+  id         TEXT PRIMARY KEY NOT NULL,
+  page_id    TEXT NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
+  quote      TEXT,
+  prefix     TEXT,
+  suffix     TEXT,
+  resolved   INTEGER NOT NULL DEFAULT 0 CHECK (resolved IN (0, 1)),
+  created_at TEXT NOT NULL,
+  seq        INTEGER NOT NULL,
+  CHECK ((quote IS NULL) = (prefix IS NULL) AND (quote IS NULL) = (suffix IS NULL)),
+  CHECK (quote IS NOT NULL OR resolved = 0)
+);
+
+CREATE INDEX threads_page ON threads (page_id, seq);
+
+CREATE TABLE comments (
+  id         TEXT PRIMARY KEY NOT NULL,
+  thread_id  TEXT NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
+  author     TEXT NOT NULL,
+  body       TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  edited_at  TEXT,
+  seq        INTEGER NOT NULL
+);
+
+CREATE INDEX comments_thread ON comments (thread_id, seq);
+
+-- A user's TOTP second factor (RFC 6238): the shared secret in base32,
+-- which the server needs in clear to compute the codes. enabled_at is NULL
+-- while the user is enrolling, until they confirm with a code.
+-- last_counter is the time step of the last code accepted, so that each
+-- code is accepted once.
+CREATE TABLE totp (
+  user_id      TEXT PRIMARY KEY NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  secret       TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  enabled_at   TEXT,
+  last_counter INTEGER
+);
+
+-- The recovery codes of a user's second factor, each usable once: their
+-- SHA-256 in hex.
+CREATE TABLE recovery_codes (
+  user_id   TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  used_at   TEXT,
+  PRIMARY KEY (user_id, code_hash)
+);
+
+-- A password reset's link, by the SHA-256 of its secret: single use
+-- (used_at), until expires_at. Rows are kept for a while after they are
+-- used or expire, so that the mails sent for an account can be counted.
+CREATE TABLE reset_tokens (
+  token_hash TEXT PRIMARY KEY NOT NULL,
+  user_id    TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at    TEXT
+);
+
+CREATE INDEX reset_tokens_user ON reset_tokens (user_id);
+
+-- The link that verifies an e-mail address, by the SHA-256 of its secret:
+-- it verifies the address it was mailed to only while that is still the
+-- user's address, once, until expires_at.
+CREATE TABLE email_verifications (
+  token_hash TEXT PRIMARY KEY NOT NULL,
+  user_id    TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  email      TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX email_verifications_user ON email_verifications (user_id);
+
+-- The audit log: one row for each write to the wiki's administration,
+-- written in the transaction of the write it records. A row names whom
+-- and what it is about by id and by name as they were (actor_login,
+-- subject_name), since the log is read after they may be gone, and an
+-- import brings rows of another wiki: nothing here is a foreign key.
+-- detail is a JSON object of texts, never a secret; address is where the
+-- request came from (console for the server's console).
+CREATE TABLE audit_log (
+  id           TEXT PRIMARY KEY NOT NULL,
+  at           TEXT NOT NULL,
+  actor_id     TEXT NOT NULL,
+  actor_login  TEXT NOT NULL,
+  action       TEXT NOT NULL,
+  subject_kind TEXT NOT NULL,
+  subject_id   TEXT,
+  subject_name TEXT NOT NULL DEFAULT '',
+  detail       TEXT NOT NULL DEFAULT '{}',
+  address      TEXT NOT NULL DEFAULT ''
+);
+
+-- Newest first, everyone's or one actor's.
+CREATE INDEX audit_log_at ON audit_log (at, id);
+CREATE INDEX audit_log_actor ON audit_log (actor_id, at, id);
+
+-- What a user chose to watch, or not to: a page, or a space (and with it
+-- its pages and its subspaces'). A row is a choice made with the "Watch"
+-- bell, which wins over whatever would otherwise decide.
+CREATE TABLE watches (
+  user_id  TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  page_id  TEXT REFERENCES pages (id) ON DELETE CASCADE,
+  space_id TEXT REFERENCES spaces (id) ON DELETE CASCADE,
+  watching INTEGER NOT NULL CHECK (watching IN (0, 1)),
+  CHECK ((page_id IS NULL) <> (space_id IS NULL))
+);
+
+CREATE UNIQUE INDEX watches_page ON watches (user_id, page_id) WHERE page_id IS NOT NULL;
+CREATE UNIQUE INDEX watches_space ON watches (user_id, space_id) WHERE space_id IS NOT NULL;
+-- The users who watch a page, or a space, found by the page or the space.
+CREATE INDEX watches_page_id ON watches (page_id);
+CREATE INDEX watches_space_id ON watches (space_id);
+
+-- What a user is told of: a mention, a reply in a thread of theirs, a
+-- comment on a page they watch, or a save of it, by someone (actor, a
+-- user's id or the administrator's, named as they were then). seq is its
+-- place among all notifications, in the order they were made: the table's
+-- rowid, so the next one is one more than the last without a read.
+-- read_at is when its user marked it read; mail is 1 while it waits to be
+-- mailed. It goes with its user and its page; a thread deleted leaves it
+-- about the page.
+CREATE TABLE notifications (
+  seq        INTEGER PRIMARY KEY NOT NULL,
+  id         TEXT NOT NULL UNIQUE,
+  user_id    TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('mentioned', 'replied', 'commented', 'changed')),
+  page_id    TEXT NOT NULL REFERENCES pages (id) ON DELETE CASCADE,
+  thread_id  TEXT REFERENCES threads (id) ON DELETE SET NULL,
+  actor      TEXT NOT NULL,
+  actor_name TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  excerpt    TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  read_at    TEXT,
+  mail       INTEGER NOT NULL DEFAULT 0 CHECK (mail IN (0, 1))
+);
+
+CREATE INDEX notifications_user ON notifications (user_id, seq);
+CREATE INDEX notifications_mail ON notifications (user_id) WHERE mail = 1;

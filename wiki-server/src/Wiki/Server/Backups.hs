@@ -53,8 +53,9 @@ import Wiki.Api.Backups
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Server.Log (Level (..), Logger, logWith)
 import Wiki.Server.Secret (Secret, revealed)
-import Wiki.Server.Storage (Storage, Who, copyDatabase, readBackupSettings, readBackups, readLastBackup, storageDataDir, writeLastBackup)
-import Wiki.Server.Storage.Backup (KeptBackups, checkedBackup, copyBlobs, pruneRetained)
+import Wiki.Server.Storage (Storage, Who, readBackupSettings, readBackups, readLastBackup, storageDataDir, writeLastBackup)
+import Wiki.Server.Storage qualified as Storage
+import Wiki.Server.Storage.Backup (KeptBackups, copyBlobs, pruneRetained)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir)
 
 -- | The backup thread, and its current state.
@@ -182,7 +183,7 @@ backUp svc trigger settings = do
   flip finally (atomically (modifyTVar' svc.doing (\d -> d {running = False, finished = d.finished + 1}))) $ do
     let dataDir = storageDataDir svc.storage
     startedAt <- getCurrentTime
-    made <- checkedBackup (copyDatabase svc.storage) (backupsDir dataDir) startedAt
+    made <- Storage.backUp svc.storage startedAt
     (file, size, failure, offSite) <- case made of
       Left why -> pure (Nothing, Nothing, Just why, Nothing)
       Right (target, bytes) -> do
@@ -211,7 +212,9 @@ backUp svc trigger settings = do
 
 -- | Copy a backup just made, and the attachment files, to a destination
 -- off the machine. The result is the outcome. The destination is laid out
--- like a data directory, @backups\/\<time>.sqlite@ and @attachments\/@, so
+-- like a data directory, @backups\/\<time>.sqlite@ (or a PostgreSQL
+-- backup's @\<time>.pgdump@ with the @.json@ kept beside it) and
+-- @attachments\/@, so
 -- that @wiki-server restore@ takes a copy from there as it takes one from
 -- the data directory. Nothing is ever deleted there: what the destination
 -- keeps, and for how long, is up to it (so a server that has gone wrong
@@ -235,10 +238,11 @@ copyOffSite rclone dataDir file destination = do
         (pure (Just ("The directory " <> toS dir <> " is not there: is the disk it is on mounted?")))
         ( do
             let into = dir </> "backups"
-                incoming = into </> ("incoming-" <> takeFileName file)
             createDirectoryIfMissing True into
-            copyFile file incoming
-            renameFile incoming (into </> takeFileName file)
+            for_ (backupAndBeside file) $ \f -> do
+              let incoming = into </> ("incoming-" <> takeFileName f)
+              copyFile f incoming
+              renameFile incoming (into </> takeFileName f)
             _ <- copyBlobs (dir </> "attachments") blobs
             pure Nothing
         )
@@ -266,11 +270,17 @@ copyOffSite rclone dataDir file destination = do
 -- skipping those already there (@copy@, never @sync@, which would delete).
 rcloneArgs :: Maybe FilePath -> Text -> FilePath -> Maybe FilePath -> [[[Char]]]
 rcloneArgs configFile remote file blobs =
-  [ withConfig ["copyto", file, toS (remotePath remote ("backups/" <> toS (takeFileName file)))]
+  [ withConfig ["copyto", f, toS (remotePath remote ("backups/" <> toS (takeFileName f)))]
+  | f <- backupAndBeside file
   ]
     <> [withConfig ["copy", dir, toS (remotePath remote "attachments"), "--ignore-existing"] | Just dir <- [blobs]]
   where
     withConfig args = maybe [] (\c -> ["--config", c]) configFile <> args
+
+-- | A backup's file, and the facts kept beside it if it is a PostgreSQL
+-- backup ("Wiki.Server.Storage.Backup"): the files a copy of it takes.
+backupAndBeside :: FilePath -> [FilePath]
+backupAndBeside file = file : [file <> ".json" | ".pgdump" `isSuffixOf` file]
 
 -- | A path under a remote: @b2:bucket/wiki@ and @backups@ make
 -- @b2:bucket/wiki/backups@, @drive:@ and @backups@ make @drive:backups@.

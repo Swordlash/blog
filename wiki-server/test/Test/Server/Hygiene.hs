@@ -43,7 +43,7 @@ import Wiki.Core.User (Email (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (Resolved (..), createAccount, resolveSession, seenEvery, signIn)
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
-import Wiki.Server.Storage (PasswordLink (..), Storage, Who (..), defaultConfig, passwordLinkFor, runSqliteWiki, withDatabase, withStorage)
+import Wiki.Server.Storage (PasswordLink (..), Storage, Who (..), defaultConfig, passwordLinkFor, runStoredWiki, withDatabase, withStorage)
 import Wiki.Server.Storage.Rows (insertIdentity)
 import Wiki.Server.Totp (codeAt, secretFromText)
 
@@ -469,7 +469,7 @@ storageRules = describe "the storage's rules" $ do
 
   it "an administrator's link is one a minute, beside the three an hour the account is mailed when it asks" $ withVerified $ \st u -> do
     now <- getCurrentTime
-    let linkAt seconds secret = runSqliteWiki st Administrator (passwordLinkFor True (addUTCTime seconds now) (ResetToken secret) u) >>= either (panic . show) pure
+    let linkAt seconds secret = runStoredWiki st Administrator (passwordLinkFor True (addUTCTime seconds now) (ResetToken secret) u) >>= either (panic . show) pure
     length . concat <$> replicateM 3 (requestReset st now "ada") `shouldReturn` 3
     -- Not held back by the three an hour, but by the minute since the last.
     (\l -> (\x -> x.email.text) <$> l) <$> linkAt 30 "first" `shouldReturn` Nothing
@@ -490,11 +490,11 @@ storageRules = describe "the storage's rules" $ do
     withDatabase st $ \c -> insertIdentity c now pat.user.id "acme" "pat-1" Nothing Nothing
     -- The server has no such provider: Pat has no way in, and may reset.
     [early] <- requestReset st now "pat"
-    _ <- runSqliteWiki st Administrator (setServerSettings withAcme) >>= either (panic . show) pure
+    _ <- runStoredWiki st Administrator (setServerSettings withAcme) >>= either (panic . show) pure
     length <$> requestReset st now "pat" `shouldReturn` 0
     resetPassword st now early.token (Password "chosen by pat") >>= (`shouldSatisfy` \case Left (WikiError.Invalid _) -> True; _ -> False)
     -- The link stays unused, and works once the provider is gone again.
-    _ <- runSqliteWiki st Administrator (setServerSettings noServerSettings) >>= either (panic . show) pure
+    _ <- runStoredWiki st Administrator (setServerSettings noServerSettings) >>= either (panic . show) pure
     resetPassword st now early.token (Password "chosen by pat") `shouldReturn` Right ()
 
   it "\"last seen\" is written at most once a minute, with the address, and the cookie sent again only hourly" $ withVerified $ \st u -> do

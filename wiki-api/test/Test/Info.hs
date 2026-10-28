@@ -7,10 +7,15 @@ import Wiki.Api.Info
 
 spec :: Spec
 spec = describe "ServerInfo" $ do
-  let info = ServerInfo {name = "Wiki", apiVersion}
+  let info = ServerInfo {name = "Wiki", apiVersion, capabilities = Capabilities {database = "postgres", search = FullText}}
 
   it "is written with the record's field names" $
-    toJSON info `shouldBe` object ["name" .= ("Wiki" :: Text), "apiVersion" .= (1 :: Int)]
+    toJSON info
+      `shouldBe` object
+        [ "name" .= ("Wiki" :: Text)
+        , "apiVersion" .= (1 :: Int)
+        , "capabilities" .= object ["database" .= ("postgres" :: Text), "search" .= ("FullText" :: Text)]
+        ]
 
   it "reads back what it writes" $
     decode (encode info) `shouldBe` Just info

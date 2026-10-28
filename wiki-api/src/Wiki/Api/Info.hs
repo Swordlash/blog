@@ -7,6 +7,8 @@
 -- and both sides encode and decode it with the same code.
 module Wiki.Api.Info
   ( ServerInfo (..)
+  , Capabilities (..)
+  , SearchKind (..)
   , Health (..)
   , apiVersion
   )
@@ -21,7 +23,34 @@ data ServerInfo = ServerInfo
   -- ^ The wiki's name, as its pages show it in their titles.
   , apiVersion :: Int
   -- ^ The API version the server implements: 'apiVersion' for this server.
+  , capabilities :: Capabilities
+  -- ^ The database the server keeps the wiki in, and what it can do.
   }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'Capabilities' says which database a server keeps the wiki in, and
+-- what differs with it (WP5.22 of docs/PLAN.md). The server fills it in
+-- from its storage; the application reads it rather than guessing.
+data Capabilities = Capabilities
+  { database :: Text
+  -- ^ @postgres@ or @sqlite@.
+  , search :: SearchKind
+  -- ^ How a search finds pages.
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+-- | 'SearchKind' is how a server's search finds pages. Both answer with
+-- the same hits, each with its title and a snippet, marked.
+data SearchKind
+  = -- | PostgreSQL's full-text search: whole words, ranked by how well a
+    -- page matches; a query may hold a phrase in quotes, @or@, and a word
+    -- to leave out after @-@.
+    FullText
+  | -- | Every word of the query anywhere in the page's title or text, as
+    -- the demo searches (SQLite): a part of a word finds it too.
+    FoldedText
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 

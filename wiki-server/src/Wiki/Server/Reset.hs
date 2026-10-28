@@ -47,16 +47,19 @@ where
 
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
-import Database.SQLite.Simple (Connection, Only (..), changes, execute, query)
+import Database.Beam qualified as Beam
+import Database.Beam (all_, delete, filter_, insert, insertValues, isJust_, isNothing_, join_, lower_, runDelete, runInsert, runSelectReturningList, runSelectReturningOne, runUpdate, select, update, val_, (&&.), (<-.), (<=.), (==.), (>.), (||.))
 import Protolude
 import Wiki.Api.Security (ResetToken (..), VerificationToken (..), resetLifetime, verificationLifetime)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Email (..), Password, parseEmail)
-import Wiki.Server.Accounts (immediately)
 import Wiki.Server.Password (checkNewPassword, hashPassword, newToken, tokenHash)
-import Wiki.Server.Storage (Storage, readServerSettings, withDatabase)
-import Wiki.Server.Storage.Rows (Stamp (..), deleteSessionsOf, insertResetToken, noPasswordToSet, providerNames, resetsSince, updatePasswordHash)
+import Wiki.Server.Storage (Storage, readServerSettings, reading, writing, writingEither)
+import Wiki.Server.Storage.Backend (Backend (..))
+import Wiki.Server.Storage.Rows (deleteSessionsOf, insertResetToken, micro, noPasswordToSet, providerNames, resetsSince, updatePasswordHash)
+import Wiki.Server.Storage.Schema (wikiDb)
+import Wiki.Server.Storage.Schema qualified as S
 
 --------------------------------------------------------------------------------
 -- An e-mail address
@@ -64,10 +67,12 @@ import Wiki.Server.Storage.Rows (Stamp (..), deleteSessionsOf, insertResetToken,
 -- | A user's address, if they have one, and whether it is verified;
 -- 'Nothing' for a user who does not exist.
 emailOf :: Storage -> UserId -> IO (Maybe (Maybe Email, Bool))
-emailOf st u = withDatabase st $ \c ->
-  head
-    . map (\(e, v) -> (Email <$> e, v /= (0 :: Int)))
-    <$> query c "SELECT email, email_verified_at IS NOT NULL FROM users WHERE id = ?" (Only u.text)
+emailOf st u = reading st (addressOf u)
+
+addressOf :: (Backend be) => UserId -> Db be (Maybe (Maybe Email, Bool))
+addressOf u =
+  fmap (\(e, v) -> (Email <$> e, isJust v))
+    <$> runSelectReturningOne (select ((\r -> (r.email, r.email_verified_at)) <$> filter_ (\r -> r.id ==. val_ u.text) (all_ wikiDb.users)))
 
 -- | Set a user's address, or none (blank). The result is the address and
 -- the secret of a verification link to mail there, unless the address is
@@ -76,49 +81,43 @@ emailOf st u = withDatabase st $ \c ->
 -- it is not verified.
 setEmail :: Storage -> UTCTime -> UserId -> Text -> IO (Either WikiError (Maybe (Email, VerificationToken)))
 setEmail st now u raw
-  | T.null (T.strip raw) = withDatabase st $ \c -> immediately c $ do
-      gone <- userThere c u
-      if not gone
-        then pure (Left NotFound)
-        else do
-          execute c "UPDATE users SET email = NULL, email_verified_at = NULL WHERE id = ?" (Only u.text)
-          execute c "DELETE FROM email_verifications WHERE user_id = ?" (Only u.text)
+  | T.null (T.strip raw) = writingEither st $
+      addressOf u >>= \case
+        Nothing -> pure (Left NotFound)
+        Just _ -> do
+          runUpdate (update wikiDb.users (\r -> (r.email <-. val_ Nothing) <> (r.email_verified_at <-. val_ Nothing)) (\r -> r.id ==. val_ u.text))
+          runDelete (delete wikiDb.email_verifications (\r -> r.user_id ==. val_ u.text))
           pure (Right Nothing)
   | otherwise = case parseEmail raw of
       Left why -> pure (Left (Invalid why))
       Right address -> do
         token <- VerificationToken <$> newToken
-        withDatabase st $ \c ->
-          immediately c $
-            query c "SELECT email, email_verified_at IS NOT NULL FROM users WHERE id = ?" (Only u.text) >>= \case
-              [] -> pure (Left NotFound)
-              (before, verified) : _
-                | before == Just address.text && verified /= (0 :: Int) -> pure (Right Nothing)
-                | otherwise -> do
-                    execute c "UPDATE users SET email = ?, email_verified_at = NULL WHERE id = ?" (address.text, u.text)
-                    Right . Just . (address,) <$> verificationLink c now u address token
-  where
-    userThere c who = not . null <$> (query c "SELECT 1 FROM users WHERE id = ?" (Only who.text) :: IO [Only Int])
+        writingEither st $
+          addressOf u >>= \case
+            Nothing -> pure (Left NotFound)
+            Just (before, verified)
+              | before == Just address && verified -> pure (Right Nothing)
+              | otherwise -> do
+                  runUpdate (update wikiDb.users (\r -> (r.email <-. val_ (Just address.text)) <> (r.email_verified_at <-. val_ Nothing)) (\r -> r.id ==. val_ u.text))
+                  Right . Just . (address,) <$> verificationLink now u address token
 
 -- | A verification link for a user's current address, if they have one
 -- that is not verified: the address and the link's secret, to mail there.
 startVerification :: Storage -> UTCTime -> UserId -> IO (Maybe (Email, VerificationToken))
 startVerification st now u = do
   token <- VerificationToken <$> newToken
-  withDatabase st $ \c ->
-    query c "SELECT email FROM users WHERE id = ? AND email IS NOT NULL AND email_verified_at IS NULL" (Only u.text) >>= \case
-      [Only address] -> Just . (Email address,) <$> verificationLink c now u (Email address) token
+  writing st $
+    addressOf u >>= \case
+      Just (Just address, False) -> Just . (address,) <$> verificationLink now u address token
       _ -> pure Nothing
 
 -- | Store a new verification link for an address, replacing the user's
 -- earlier ones.
-verificationLink :: Connection -> UTCTime -> UserId -> Email -> VerificationToken -> IO VerificationToken
-verificationLink c now u address token = do
-  execute c "DELETE FROM email_verifications WHERE user_id = ? OR expires_at <= ?" (u.text, Stamp now)
-  execute
-    c
-    "INSERT INTO email_verifications (token_hash, user_id, email, created_at, expires_at) VALUES (?, ?, ?, ?, ?)"
-    (tokenHash token.text, u.text, address.text, Stamp now, Stamp (addUTCTime verificationLifetime now))
+verificationLink :: (Backend be) => UTCTime -> UserId -> Email -> VerificationToken -> Db be VerificationToken
+verificationLink now u address token = do
+  runDelete (delete wikiDb.email_verifications (\r -> r.user_id ==. val_ u.text ||. r.expires_at <=. val_ (micro now)))
+  runInsert . insert wikiDb.email_verifications $
+    insertValues [S.EmailVerificationRow {token_hash = tokenHash token.text, user_id = u.text, email = address.text, created_at = micro now, expires_at = micro (addUTCTime verificationLifetime now)}]
   pure token
 
 -- | Follow a link that verifies an address: the user's address is
@@ -126,14 +125,17 @@ verificationLink c now u address token = do
 -- link that was used, has expired, or whose address is no longer the
 -- user's.
 verifyEmail :: Storage -> UTCTime -> VerificationToken -> IO (Either WikiError ())
-verifyEmail st now token = withDatabase st $ \c -> immediately c $ do
+verifyEmail st now token = writingEither st $ do
   let key = tokenHash token.text
-  query c "SELECT user_id, email, expires_at FROM email_verifications WHERE token_hash = ?" (Only key) >>= \case
-    [(uid, address, Stamp expires)] | expires > now -> do
-      execute c "DELETE FROM email_verifications WHERE token_hash = ?" (Only key)
-      execute c "UPDATE users SET email_verified_at = ? WHERE id = ? AND email = ?" (Stamp now, uid :: Text, address :: Text)
-      verified <- changes c
-      pure (if verified == 1 then Right () else Left NotFound)
+  runSelectReturningOne (select (filter_ (\r -> r.token_hash ==. val_ key) (all_ wikiDb.email_verifications))) >>= \case
+    Just r | r.expires_at > now -> do
+      runDelete (delete wikiDb.email_verifications (\x -> x.token_hash ==. val_ key))
+      still <- addressOf (UserId r.user_id)
+      case still of
+        Just (Just address, _) | address.text == r.email -> do
+          runUpdate (update wikiDb.users (\x -> x.email_verified_at <-. val_ (Just (micro now))) (\x -> x.id ==. val_ r.user_id))
+          pure (Right ())
+        _ -> pure (Left NotFound)
     _ -> pure (Left NotFound)
 
 --------------------------------------------------------------------------------
@@ -164,38 +166,43 @@ keptFor = 60 * 60
 requestReset :: Storage -> UTCTime -> Text -> IO [ResetMail]
 requestReset st now raw = do
   let named = T.strip raw
-  -- Read before the connection is taken, since reading them may take it.
   configured <- providerNames <$> readServerSettings st
   if T.null named
     then pure []
-    else withDatabase st $ \c -> do
-      execute c "DELETE FROM reset_tokens WHERE created_at <= ?" (Only (Stamp (addUTCTime (negate keptFor) now)))
+    else writing st $ do
+      runDelete (delete wikiDb.reset_tokens (\r -> r.created_at <=. val_ (micro (addUTCTime (negate keptFor) now))))
+      -- A login or an address, compared ignoring the case of their
+      -- letters.
       found <-
-        query
-          c
-          "SELECT id, email FROM users WHERE disabled = 0 AND email IS NOT NULL AND email_verified_at IS NOT NULL AND (login = ? COLLATE NOCASE OR email = ? COLLATE NOCASE)"
-          (named, named)
-      fmap catMaybes . for found $ \(uid, address) -> do
-        let u = UserId uid
-        recent <- resetsSince c u (addUTCTime (negate keptFor) now)
-        none <- noPasswordToSet c configured u
+        runSelectReturningList . select $
+          (\r -> (r.id, r.email))
+            <$> filter_
+              ( \r ->
+                  r.disabled ==. val_ False
+                    &&. isJust_ r.email_verified_at
+                    &&. (lower_ r.login ==. lower_ (val_ named) ||. lower_ (Beam.coalesce_ [r.email] (val_ "")) ==. lower_ (val_ named))
+              )
+              (all_ wikiDb.users)
+      fmap catMaybes . for [(UserId uid, address) | (uid, Just address) <- found] $ \(u, address) -> do
+        recent <- resetsSince u (addUTCTime (negate keptFor) now)
+        none <- noPasswordToSet configured u
         if recent >= resetsPerHour || none
           then pure Nothing
-          else Just <$> resetMail c now u address
+          else Just <$> resetMail now u address
 
--- | A stored reset link for a user, to mail to their address. The caller
--- holds the connection and has checked that the user may have one.
-resetMail :: Connection -> UTCTime -> UserId -> Text -> IO ResetMail
-resetMail c now u address = do
-  token <- ResetToken <$> newToken
+-- | A stored reset link for a user, to mail to their address, in a running
+-- transaction that has checked that the user may have one.
+resetMail :: (Backend be) => UTCTime -> UserId -> Text -> Db be ResetMail
+resetMail now u address = do
+  token <- liftIO (ResetToken <$> newToken)
   let expiresAt = addUTCTime resetLifetime now
-  insertResetToken c u (tokenHash token.text) now expiresAt
+  insertResetToken u (tokenHash token.text) now expiresAt
   pure ResetMail {user = u, email = Email address, token, expiresAt}
 
 -- | Delete a reset link that could not be mailed, so that it neither
 -- works nor counts against the user's links.
 forgetReset :: Storage -> ResetToken -> IO ()
-forgetReset st token = withDatabase st $ \c -> execute c "DELETE FROM reset_tokens WHERE token_hash = ?" (Only (tokenHash token.text))
+forgetReset st token = writing st (runDelete (delete wikiDb.reset_tokens (\r -> r.token_hash ==. val_ (tokenHash token.text))))
 
 -- | Set a new password with a reset link: once, before it expires, and for
 -- a user who is not disabled. Every session of the user ends, and every
@@ -209,30 +216,32 @@ resetPassword st now token new = case checkNewPassword new of
   Right password -> do
     configured <- providerNames <$> readServerSettings st
     let key = tokenHash token.text
-        usable c =
-          query
-            c
-            "SELECT r.user_id FROM reset_tokens r JOIN users u ON u.id = r.user_id WHERE r.token_hash = ? AND r.used_at IS NULL AND r.expires_at > ? AND u.disabled = 0"
-            (key, Stamp now)
-    found <- withDatabase st usable
+    found <- reading st (usable key)
     case found of
-      [Only (_ :: Text)] -> do
-        -- Hashed before the connection is taken, as every password is.
+      Just _ -> do
+        -- Hashed before the writer is taken, as every password is.
         phc <- hashPassword password
-        withDatabase st $ \c ->
-          immediately c $
-            usable c >>= \case
-              [Only uid] -> do
-                let u = UserId uid
-                noPasswordToSet c configured u >>= \case
-                  True -> pure (Left (Invalid noPasswordHere))
-                  False -> do
-                    updatePasswordHash c u phc
-                    deleteSessionsOf c u
-                    execute c "UPDATE reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL" (Stamp now, uid)
-                    pure (Right ())
-              _ -> pure (Left NotFound)
-      _ -> pure (Left NotFound)
+        writingEither st $
+          usable key >>= \case
+            Just uid -> do
+              let u = UserId uid
+              noPasswordToSet configured u >>= \case
+                True -> pure (Left (Invalid noPasswordHere))
+                False -> do
+                  updatePasswordHash u phc
+                  deleteSessionsOf u
+                  runUpdate (update wikiDb.reset_tokens (\r -> r.used_at <-. val_ (Just (micro now))) (\r -> r.user_id ==. val_ uid &&. isNothing_ r.used_at))
+                  pure (Right ())
+            Nothing -> pure (Left NotFound)
+      Nothing -> pure (Left NotFound)
+  where
+    -- The user of a reset link that works now.
+    usable :: (Backend be) => Text -> Db be (Maybe Text)
+    usable key =
+      runSelectReturningOne . select $ do
+        r <- filter_ (\r -> r.token_hash ==. val_ key &&. isNothing_ r.used_at &&. r.expires_at >. val_ (micro now)) (all_ wikiDb.reset_tokens)
+        _ <- join_ wikiDb.users (\u -> u.id ==. r.user_id &&. u.disabled ==. val_ False)
+        pure r.user_id
 
 -- | Why a reset link sets no password for a user who signs in with a
 -- provider.

@@ -50,8 +50,11 @@ module Wiki.Server.Console
   , oidcCheckParser
   , runOidcCheck
 
-    -- * Restoring a backup
+    -- * Backing up and restoring
+  , RestoreCommand (..)
   , restoreParser
+  , runRestore
+  , runBackup
   )
 where
 
@@ -68,14 +71,15 @@ import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdministrator, setDisabled, setPassword)
 import Wiki.Server.Oidc (Endpoints (..), endpointsOf, freshProvider, newProviderCache, optionOf)
-import Wiki.Server.Secret (revealed)
-import Wiki.Server.Storage (Storage, Who (..), readServerSettings, runSqliteWikiFrom, withStorageAside)
+import Wiki.Server.Secret (Kept, revealed)
+import Wiki.Server.Options (PlaceOptions (..), placeOptions, resolvePlace)
+import Wiki.Server.Storage (Place (..), Storage, Who (..), readServerSettings, runStoredWikiFrom, withStorageAside)
 import Wiki.Server.Storage.Audit (consoleAddress)
-import Wiki.Server.Storage.Backup (Restore (..))
+import Wiki.Server.Storage.Backup (Restore (..), backupNow, restore)
 
 -- | A @wiki-server users@ command, on a data directory.
 data Users = Users
-  { dataDir :: FilePath
+  { place :: PlaceOptions
   , command :: UsersCommand
   }
   deriving stock (Eq, Show)
@@ -110,7 +114,7 @@ usersParser =
         <> command "second-factor-remove" (info (users (RemoveSecondFactor <$> login)) (progDesc "Take a user's second factor away, so that they sign in with their password alone"))
     )
   where
-    users c = Users <$> strOption (long "data" <> metavar "DIR" <> help "The server's data directory") <*> c
+    users c = Users <$> placeOptions <*> c
     login = strArgument (metavar "LOGIN" <> help "The user's login")
     add = do
       l <- login
@@ -125,12 +129,12 @@ usersParser =
 -- | Run a command, with this way of reading a password. The result is the
 -- lines to show, or why it could not be done.
 runUsers :: (Text -> IO (Either Text Password)) -> Users -> IO (Either Text [Text])
-runUsers askPassword u = withStorageAside u.dataDir $ \st -> runExceptT $ case u.command of
+runUsers askPassword u = (`onPlace` u.place) $ \at -> withStorageAside at $ \st -> runExceptT $ case u.command of
   ListUsers -> do
     accounts <- liftIO (listAccounts st)
     pure $
       if null accounts
-        then ["There are no users yet: make the first administrator with", "  wiki-server users add --data " <> toS u.dataDir <> " LOGIN --admin"]
+        then ["There are no users yet: make the first administrator with", "  wiki-server users add --data " <> toS u.place.dataDir <> " LOGIN --admin"]
         else listing accounts
   AddUser login name admin withPassword -> do
     password <- if withPassword then Just <$> ExceptT (askPassword login) else pure Nothing
@@ -156,7 +160,7 @@ runUsers askPassword u = withStorageAside u.dataDir $ \st -> runExceptT $ case u
   RemoveSecondFactor login -> do
     a <- found st login
     -- The user exists: what is missing is their second factor.
-    _ <- withExceptT (const (describe a.user <> " has no second factor.")) (ExceptT (runSqliteWikiFrom st Administrator consoleAddress (removeSecondFactor a.user.id)))
+    _ <- withExceptT (const (describe a.user <> " has no second factor.")) (ExceptT (runStoredWikiFrom st Administrator consoleAddress (removeSecondFactor a.user.id)))
     pure [describe a.user <> " signs in with their password alone now."]
   where
     wiki :: IO (Either WikiError a) -> ExceptT Text IO a
@@ -230,7 +234,7 @@ readPassword login = do
 -- URI each must have registered, and whether its secret is set. Nobody is
 -- signed in, and no secret is shown.
 data OidcCheck = OidcCheck
-  { dataDir :: FilePath
+  { place :: PlaceOptions
   , only :: Maybe Text
   -- ^ The one provider to check, if not all.
   }
@@ -243,7 +247,7 @@ oidcCheckParser =
         "check"
         ( info
             ( OidcCheck
-                <$> strOption (long "data" <> metavar "DIR" <> help "The server's data directory, whose database holds the providers")
+                <$> placeOptions
                 <*> optional (strArgument (metavar "NAME" <> help "Check only this provider"))
             )
             (progDesc "Ask each provider set in the administration how to sign in, and print the redirect URI to register with it")
@@ -253,8 +257,14 @@ oidcCheckParser =
 -- | Check the providers. The result is the lines to show, and whether
 -- every provider checked can be used to sign in.
 runOidcCheck :: OidcCheck -> IO (Bool, [Text])
-runOidcCheck c = do
-  kept <- withStorageAside c.dataDir readServerSettings
+runOidcCheck c =
+  resolvePlace c.place.dataDir c.place.database c.place.programs >>= \case
+    Left why -> pure (False, [why])
+    Right at -> withStorageAside at readServerSettings >>= checkProviders c
+
+-- | 'runOidcCheck' with the server's settings read.
+checkProviders :: OidcCheck -> Kept -> IO (Bool, [Text])
+checkProviders c kept = do
   let chosen = maybe kept.providers (\n -> filter (\p -> p.name == n) kept.providers) c.only
   cache <- newProviderCache
   if
@@ -287,11 +297,37 @@ runOidcCheck c = do
 --------------------------------------------------------------------------------
 -- Restoring a backup
 
--- | The options of @wiki-server restore BACKUP --data DIR [--attachments
--- DIR]@.
-restoreParser :: Parser Restore
+-- | @wiki-server restore BACKUP --data DIR [--attachments DIR]@, with the
+-- options that name the database to restore into.
+data RestoreCommand = RestoreCommand
+  { backupFile :: FilePath
+  , place :: PlaceOptions
+  , attachments :: Maybe FilePath
+  }
+  deriving stock (Eq, Show)
+
+-- | The options of @wiki-server restore@.
+restoreParser :: Parser RestoreCommand
 restoreParser =
-  Restore
+  RestoreCommand
     <$> strArgument (metavar "BACKUP" <> help "The backup to restore: a file of DIR/backups, or one copied off the machine")
-    <*> strOption (long "data" <> metavar "DIR" <> help "The data directory to restore it into, which no server may be running on (made if it is not there)")
+    <*> placeOptions
     <*> optional (strOption (long "attachments" <> metavar "DIR" <> help "A copy of the attachments' files (an off-site copy's attachments directory), to bring the missing ones from"))
+
+-- | Restore a backup ('Wiki.Server.Storage.Backup.restore'). The result is
+-- the lines to show, or why nothing was done.
+runRestore :: RestoreCommand -> IO (Either Text [Text])
+runRestore r = (`onPlace` r.place) $ \at ->
+  restore Restore {backupFile = r.backupFile, dataDir = at.dataDir, database = at.database, programs = at.programs, attachments = r.attachments}
+
+-- | Back up the database, keeping this many backups
+-- ('Wiki.Server.Storage.Backup.backupNow'). The result is the line to
+-- show, or why it failed.
+runBackup :: PlaceOptions -> Int -> IO (Either Text Text)
+runBackup options keep = (`onPlace` options) $ \at ->
+  fmap (maybe "There is no database to back up yet." (\file -> "Backed up into " <> toS file)) <$> backupNow at.programs at.database at.dataDir keep
+
+-- | Run something where the options say the wiki is; why not, when they
+-- name a password file that cannot be read.
+onPlace :: (Place -> IO (Either Text a)) -> PlaceOptions -> IO (Either Text a)
+onPlace act options = resolvePlace options.dataDir options.database options.programs >>= either (pure . Left) act

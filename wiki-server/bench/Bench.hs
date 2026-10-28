@@ -68,7 +68,7 @@ import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Events qualified as Events
 import Wiki.Server.Feed (FeedKind (..), feedApplication, newFeedCache, sitemapApplication)
-import Wiki.Server.Storage (Config (..), Storage, Who (..), copyDatabase, defaultConfig, runSqliteWiki, withDatabase, withStorage)
+import Wiki.Server.Storage (Config (..), Storage, Who (..), copyDatabase, defaultConfig, runStoredWiki, withDatabase, withStorage)
 import Wiki.Server.Storage.Rows (Stamp (..), insertPage, insertVersion)
 
 users, pages, watches, kept, watchers, tabs, tabUsers :: Int
@@ -97,7 +97,7 @@ main = do
 seedAttachments :: FilePath -> Int -> Int -> IO ()
 seedAttachments dir n mb =
   withStorage defaultConfig dir $ \st -> do
-    space <- runSqliteWiki st Administrator (createSpace Nothing "Big") >>= either (panic . show) pure
+    space <- runStoredWiki st Administrator (createSpace Nothing "Big") >>= either (panic . show) pure
     now <- getCurrentTime
     withDatabase st $ \c -> do
       execute_ c "BEGIN"
@@ -109,7 +109,7 @@ seedAttachments dir n mb =
     withFile "/dev/urandom" ReadMode $ \random ->
       for_ [0 .. mb - 1] $ \i -> do
         bytes <- BS.hGet random (1024 * 1024)
-        runSqliteWiki st Administrator (uploadAttachment (pageId (i `mod` n)) ("file-" <> show i <> ".bin") "application/octet-stream" bytes) >>= either (panic . show) (const pass)
+        runStoredWiki st Administrator (uploadAttachment (pageId (i `mod` n)) ("file-" <> show i <> ".bin") "application/octet-stream" bytes) >>= either (panic . show) (const pass)
     printf "seeded %s: %d pages, %d MiB of attachments\n" dir n mb
 
 -- | Seed a data directory with a wiki of one page and this many
@@ -117,10 +117,10 @@ seedAttachments dir n mb =
 seedBlobs :: FilePath -> Int -> IO ()
 seedBlobs dir n =
   withStorage defaultConfig dir $ \st -> do
-    space <- runSqliteWiki st Administrator (createSpace Nothing "Blobs") >>= either (panic . show) pure
-    p <- runSqliteWiki st Administrator (createPage space.id Nothing "Attachments" "Many.") >>= either (panic . show) pure
+    space <- runStoredWiki st Administrator (createSpace Nothing "Blobs") >>= either (panic . show) pure
+    p <- runStoredWiki st Administrator (createPage space.id Nothing "Attachments" "Many.") >>= either (panic . show) pure
     for_ [0 .. n - 1] $ \i ->
-      runSqliteWiki st Administrator (uploadAttachment p.id ("file-" <> show i <> ".txt") "text/plain" (encodeUtf8 (T.justifyLeft 1024 '.' (show i)))) >>= either (panic . show) (const pass)
+      runStoredWiki st Administrator (uploadAttachment p.id ("file-" <> show i <> ".txt") "text/plain" (encodeUtf8 (T.justifyLeft 1024 '.' (show i)))) >>= either (panic . show) (const pass)
     printf "seeded %s: %d attachments\n" dir n
 
 -- | The timings of WP5.16a and WP5.16b.
@@ -134,33 +134,33 @@ timings = do
       let (space, target) = fst seeded
           viewer = AsUser (UserId (userId 0))
           saver = AsUser (UserId (userId 1))
-      report "page view: session, getPage, watching" 20 $ runSqliteWiki st viewer $ do
+      report "page view: session, getPage, watching" 20 $ runStoredWiki st viewer $ do
         _ <- session
         _ <- getPage space [slugOf target]
         void (watching (WatchPage (pageId target)))
-      report "page view: the bell (500 notifications)" 5 (void (runSqliteWiki st viewer notifications))
+      report "page view: the bell (500 notifications)" 5 (void (runStoredWiki st viewer notifications))
       report "save of a page 50 users watch" 10 $ do
-        p <- runSqliteWiki st saver (getPage space [slugOf target]) >>= either (panic . show) pure
-        runSqliteWiki st saver (savePage p.id p.updatedAt p.title (p.body <> "\n\nMore.")) >>= either (panic . show) (const pass)
+        p <- runStoredWiki st saver (getPage space [slugOf target]) >>= either (panic . show) pure
+        runStoredWiki st saver (savePage p.id p.updatedAt p.title (p.body <> "\n\nMore.")) >>= either (panic . show) (const pass)
       report "backup" 3 (copyDatabase st (dir </> "backup.sqlite") `finally` removeIfThere (dir </> "backup.sqlite"))
       readsDuringBackup st viewer space target (dir </> "during.sqlite")
       commentWithTabs st hub viewer target
       grown <- timed (grow st space)
       printf "grown in %.1f s\n" (snd grown)
-      report "search: a word on 1 page of 20,000" 10 (void (runSqliteWiki st Administrator (searchPages (searchQuery "token12345"))))
-      report "search: a word on every page of 20,000" 5 (void (runSqliteWiki st Administrator (searchPages (searchQuery "fifty"))))
-      report "search: a word on 1 page, in a 2,000-page space" 10 (void (runSqliteWiki st Administrator (searchPages SearchQuery {text = "token1234", space = Just space, includeSubspaces = True, limit = 50, templates = False})))
+      report "search: a word on 1 page of 20,000" 10 (void (runStoredWiki st Administrator (searchPages (searchQuery "token12345"))))
+      report "search: a word on every page of 20,000" 5 (void (runStoredWiki st Administrator (searchPages (searchQuery "fifty"))))
+      report "search: a word on 1 page, in a 2,000-page space" 10 (void (runStoredWiki st Administrator (searchPages SearchQuery {text = "token1234", space = Just space, includeSubspaces = True, limit = 50, templates = False})))
       report "sitemap of a 2,000-page public space, written" 5 (newFeedCache >>= \cache -> asked (sitemapApplication st cache "/"))
       report "feed of a 2,000-page blog, written" 5 (newFeedCache >>= \cache -> asked (feedApplication st cache "/" Atom ["big"]))
       cache <- newFeedCache
       report "sitemap, asked again within a minute" 20 (asked (sitemapApplication st cache "/"))
-      report "page view: getPage, watching, mentionable (3)" 20 $ runSqliteWiki st viewer $ do
+      report "page view: getPage, watching, mentionable (3)" 20 $ runStoredWiki st viewer $ do
         _ <- getPage space [slugOf 1500]
         _ <- watching (WatchPage (pageId 1500))
         void (mentionable [loginOf 1, loginOf 2, "nobody"])
-      report "blog listing: 2,000 posts of 20 versions each" 5 (void (runSqliteWiki st viewer (postDetails space)))
+      report "blog listing: 2,000 posts of 20 versions each" 5 (void (runStoredWiki st viewer (postDetails space)))
       cursor <- activityCursor st
-      report "activity: page 100 of 100,000 entries" 10 (void (runSqliteWiki st Administrator (activity (pageHundred cursor))))
+      report "activity: page 100 of 100,000 entries" 10 (void (runStoredWiki st Administrator (activity (pageHundred cursor))))
 
 -- | The query for page 100 of the audit log, given the oldest entry of
 -- page 99.
@@ -187,7 +187,7 @@ asked app = void . app defaultRequest $ \response -> do
 -- blog, and 100,000 entries in the audit log.
 grow :: Storage -> SpaceId -> IO ()
 grow st space = do
-  others <- for [1 .. 18 :: Int] $ \i -> runSqliteWiki st Administrator (createSpace Nothing ("Other " <> show i)) >>= either (panic . show) pure
+  others <- for [1 .. 18 :: Int] $ \i -> runStoredWiki st Administrator (createSpace Nothing ("Other " <> show i)) >>= either (panic . show) pure
   now <- getCurrentTime
   withDatabase st $ \c -> do
     execute_ c "BEGIN"
@@ -212,8 +212,8 @@ grow st space = do
 -- timed.
 seed :: Storage -> IO (SpaceId, Int)
 seed st = do
-  space <- runSqliteWiki st Administrator (createSpace Nothing "Big") >>= either (panic . show) pure
-  _ <- runSqliteWiki st Administrator (setSpacePublic space.id True) >>= either (panic . show) pure
+  space <- runStoredWiki st Administrator (createSpace Nothing "Big") >>= either (panic . show) pure
+  _ <- runStoredWiki st Administrator (setSpacePublic space.id True) >>= either (panic . show) pure
   now <- getCurrentTime
   withDatabase st $ \c -> do
     execute_ c "BEGIN"
@@ -240,7 +240,7 @@ seed st = do
         (("n" <> show i) :: Text, userId u, pageText (i `mod` pages), userId 2, Stamp now, i)
     execute_ c "COMMIT"
   -- The user who saves may edit the space; everyone may read it.
-  _ <- runSqliteWiki st Administrator (setSpaceGrant space.id (SubjectUser (UserId (userId 1))) Edit True) >>= either (panic . show) pure
+  _ <- runStoredWiki st Administrator (setSpaceGrant space.id (SubjectUser (UserId (userId 1))) Edit True) >>= either (panic . show) pure
   pure (space.id, 0)
 
 userId :: Int -> Text
@@ -299,7 +299,7 @@ readsDuringBackup :: Storage -> Who -> SpaceId -> Int -> FilePath -> IO ()
 readsDuringBackup st who space target file = do
   backup <- async (timed (copyDatabase st file))
   let loop acc = do
-        (_, t) <- timed (runSqliteWiki st who (getPage space [slugOf target]))
+        (_, t) <- timed (runStoredWiki st who (getPage space [slugOf target]))
         poll backup >>= \case
           Nothing -> loop (t : acc)
           Just (Left e) -> throwIO e
@@ -332,7 +332,7 @@ commentWithTabs st hub commenter target = do
         untilEvent
     replicateM_ tabs (takeMVar ready)
     start <- getMonotonicTime
-    _ <- runSqliteWiki st commenter (openThread (pageId target) Nothing "A comment.") >>= either (panic . show) pure
+    _ <- runStoredWiki st commenter (openThread (pageId target) Nothing "A comment.") >>= either (panic . show) pure
     committed <- getMonotonicTime
     ends <- replicateM tabs (takeMVar heard)
     traverse_ wait clients

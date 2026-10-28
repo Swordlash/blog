@@ -75,7 +75,6 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
-import Database.SQLite.Simple (Only (..), query_)
 import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, hSetCookie, hVary, methodGet, methodHead, status200, status304, status405, status500, status503)
 import Network.HTTP.Types.URI (urlEncode)
 import Network.Wai (Application, Middleware, Request (..), Response, mapResponseHeaders, responseFile, responseHeaders, responseLBS, responseStatus)
@@ -139,6 +138,7 @@ import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles, backupTime)
+import Wiki.Server.Storage.Rows (countRows)
 import Wiki.Server.Storage.Layout (backupsDir, temporaryDir)
 import Wiki.Server.Totp (otpauthUri, qrRows, secretText)
 import Wiki.Server.Vault (Ceremonies, Purpose (..), Site (..), assertPasskey, beginCeremony, passkeysOf, registerPasskey, storedVault, takeCeremony)
@@ -352,7 +352,7 @@ refusal e = responseLBS (toEnum (errorStatus e)) [jsonHeader] (encode e)
 handlers :: Env -> Caller -> WikiApi Tmp AsServer
 handlers env caller =
   WikiApi
-    { info = pure ServerInfo {name = "Wiki", apiVersion}
+    { info = liftIO (storageCapabilities env.storage) <&> \capabilities -> ServerInfo {name = "Wiki", apiVersion, capabilities}
     , session = ask' session >>= sessionInfo
     , signIn = \credentials -> do
         s <- signingHere
@@ -382,7 +382,7 @@ handlers env caller =
         liftIO (traverse_ (endSession env.storage) s.token)
         -- Their session now: a reader who has not signed in, in the wiki
         -- as it is open or closed.
-        nobody <- liftIO (runSqliteWiki env.storage Anonymous session)
+        nobody <- liftIO (runStoredWiki env.storage Anonymous session)
         addHeader (clearCookie s.cookies) <$> sessionInfo nobody
     , secondFactor = \body -> do
         s <- signingHere
@@ -402,7 +402,7 @@ handlers env caller =
                   liftIO (Limiter.succeeded env.limiter p.login.text s.address)
                   liftIO (Accounts.accountOf env.storage p.user) >>= \case
                     Just a | not a.disabled -> do
-                      token <- liftIO (withDatabase env.storage (\c -> Accounts.startSession c now p.user s.address))
+                      token <- liftIO (writing env.storage (Accounts.startSession now p.user s.address))
                       startedAs s a.user token
                     _ -> refuse ApiError.Unauthenticated
           _ -> refuse (ApiError.Invalid "This sign-in has expired, or was begun in another browser: sign in again with your password.")
@@ -614,7 +614,7 @@ handlers env caller =
           , markRead = wiki . markRead
           , settings = wiki notificationSettings
           , setSettings = wiki . setNotificationSettings
-          , people = \logins -> runSqliteWiki env.storage who (mentionable logins)
+          , people = \logins -> runStoredWiki env.storage who (mentionable logins)
           , pageWatch = wiki . watching . WatchPage
           , setPageWatch = \p w -> wiki (setWatching (WatchPage p) w.watching)
           , spaceWatch = wiki . watching . WatchSpace
@@ -722,9 +722,9 @@ handlers env caller =
     -- everyone is the administrator already) is refused, with a message
     -- that says why.
     signingHere = maybe (refuse (ApiError.Invalid "Nobody signs in here: everyone who reaches this address is the administrator.")) pure caller.signing
-    ask' :: SqliteWiki IO a -> Handler a
-    ask' = liftIO . runSqliteWikiFrom env.storage who caller.address
-    wiki :: SqliteWiki IO (Either WikiError a) -> Handler a
+    ask' :: StoredWiki IO a -> Handler a
+    ask' = liftIO . runStoredWikiFrom env.storage who caller.address
+    wiki :: StoredWiki IO (Either WikiError a) -> Handler a
     wiki program = ask' program >>= either (throwError . wikiError) pure
     -- An export, as a file to download. Each caller may run one export at
     -- a time, and callers are told apart by a key: a user by their id, the
@@ -773,7 +773,7 @@ handlers env caller =
     startedAs :: Signing -> User -> SessionToken -> Handler (WithCookie SessionInfo)
     startedAs s user token = do
       liftIO (traverse_ (endSession env.storage) s.token)
-      signedIn <- liftIO (runSqliteWiki env.storage (AsUser user.id) session)
+      signedIn <- liftIO (runStoredWiki env.storage (AsUser user.id) session)
       addHeader (sessionCookie s.cookies token) <$> sessionInfo signedIn
     -- Create one's own account and sign in, limited per address: every
     -- attempt counts toward the limit.
@@ -1065,7 +1065,7 @@ attachmentContent env who aid name request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
       respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An attachment is fetched with GET or HEAD.")))
   | otherwise =
-      runSqliteWiki env.storage who (attachmentFile aid) >>= \case
+      runStoredWiki env.storage who (attachmentFile aid) >>= \case
         Left e -> respond (maybe (responseLBS status503 [] "The wiki could not be reached.") refusal (toApiError e))
         Right (a, Just file) | a.name == name -> do
           present <- doesFileExist file
@@ -1099,7 +1099,7 @@ iconContent env who sid blob request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
       respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An icon is fetched with GET or HEAD.")))
   | otherwise =
-      runSqliteWiki env.storage who (spaceIconFile sid blob) >>= \case
+      runStoredWiki env.storage who (spaceIconFile sid blob) >>= \case
         Left e -> respond (maybe (responseLBS status503 [] "The wiki could not be reached.") refusal (toApiError e))
         Right (mediaType, file) -> do
           present <- doesFileExist file
@@ -1146,9 +1146,7 @@ disposition a = how <> "; filename=\"" <> encodeUtf8 ascii <> "\"; filename*=UTF
 -- | The server's status, as the administration shows it.
 statusOfServer :: Env -> IO ServerStatus
 statusOfServer env = do
-  counts <- withDatabase env.storage $ \c ->
-    for ["spaces", "pages", "attachments", "users"] $ \table ->
-      maybe 0 fromOnly . head <$> query_ c ("SELECT count(*) FROM " <> table)
+  counts <- map snd <$> reading env.storage countRows
   files <- backupFiles (backupsDir env.dataDir)
   schemaVersion <- schemaVersionOf env.storage
   connections <- openConnections env.events

@@ -50,6 +50,12 @@ source-repository-package
 -- Arbitrary instances.
 -- qrcode-core's containers bound lags behind GHC 9.14's (the server draws a
 -- second factor's QR code with it, Wiki.Server.Totp).
+-- postgresql-simple's bounds on base, template-haskell, containers,
+-- bytestring, aeson and attoparsec lag behind GHC 9.14 and the versions
+-- the rest is built with, and dependent-map's (beam-migrate's, which
+-- beam-sqlite and beam-postgres need) on containers does too: the server
+-- reaches PostgreSQL through beam-postgres over postgresql-simple
+-- (Wiki.Server.Storage.Postgres).
 allow-newer:
   protolude:*,
   servant:QuickCheck,
@@ -64,7 +70,9 @@ allow-newer:
   cborg:containers,
   pandoc:crypton,
   pandoc-types:QuickCheck,
-  qrcode-core:containers
+  qrcode-core:containers,
+  postgresql-simple:*,
+  dependent-map:containers
 
 -- A test suite's dependencies are optional goals unless this says otherwise:
 -- rather than report that it cannot satisfy them, the solver is free to hand

@@ -23,7 +23,7 @@ import Wiki.Api.Backups (BackupRecord (..), Backups (..), Trigger (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (..), ServerMessage (..))
-import Wiki.Api.Info (Health (..), ServerInfo (..))
+import Wiki.Api.Info (Capabilities (..), Health (..), SearchKind (..), ServerInfo (..))
 import Wiki.Api.Notifications (NotificationSettingsChange (..), ReadMark (..), Watching (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetRequest (..))
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
@@ -55,7 +55,7 @@ golden name value = it name $ do
 spec :: Spec
 spec = describe "golden JSON" $ do
   describe "responses" $ do
-    golden "server-info" ServerInfo {name = "Wiki", apiVersion = 1}
+    golden "server-info" ServerInfo {name = "Wiki", apiVersion = 1, capabilities = Capabilities {database = "sqlite", search = FoldedText}}
     golden "stored-vault" Sample.storedVault
     golden "passkeys" [Sample.passkeyInfo]
     golden "registration-options" Sample.registrationOptions

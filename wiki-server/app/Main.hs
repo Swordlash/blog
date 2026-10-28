@@ -1,12 +1,17 @@
 -- | The wiki's server.
 --
--- > wiki-server [serve] --data DIR [--listen HOST:PORT] [--admin-listen HOST:PORT]
+-- > wiki-server [serve] --data DIR [DATABASE] [--listen HOST:PORT] [--admin-listen HOST:PORT]
 -- >                     [--base-path PATH] [--static DIR] [--secure-cookies] …
--- > wiki-server backup --data DIR [--keep N]
--- > wiki-server restore BACKUP --data DIR [--attachments DIR]
--- > wiki-server users (list | add | password | admin | disable) --data DIR …
--- > wiki-server oidc check --data DIR [NAME]
+-- > wiki-server backup --data DIR [DATABASE] [--keep N]
+-- > wiki-server restore BACKUP --data DIR [DATABASE] [--attachments DIR]
+-- > wiki-server users (list | add | password | admin | disable) --data DIR [DATABASE] …
+-- > wiki-server oidc check --data DIR [DATABASE] [NAME]
 -- > wiki-server --version
+--
+-- DATABASE is @--database postgres:\/\/USER\@HOST\/NAME
+-- [--database-password-file FILE]@ for a PostgreSQL database, or @--sqlite
+-- FILE@; without either, the URL in @WIKI_DATABASE_URL@ if it is set, else
+-- the SQLite file @DIR\/wiki.sqlite@ ("Wiki.Server.Options").
 --
 -- @serve@ (also what runs with no command) serves the wiki from the data
 -- directory on its two listeners ("Wiki.Server", "Wiki.Server.Options").
@@ -24,9 +29,9 @@ module Main (main) where
 import Options.Applicative
 import Protolude
 import Wiki.Server (ServerError (..), serve)
-import Wiki.Server.Console (OidcCheck, Users, oidcCheckParser, readPassword, restoreParser, runOidcCheck, runUsers, usersParser)
-import Wiki.Server.Options (ServeOptions, serveOptions)
-import Wiki.Server.Storage.Backup (Restore, backup, defaultKeep, restore)
+import Wiki.Server.Console (OidcCheck, RestoreCommand, Users, oidcCheckParser, readPassword, restoreParser, runBackup, runOidcCheck, runRestore, runUsers, usersParser)
+import Wiki.Server.Options (PlaceOptions, ServeOptions, placeOptions, serveOptions)
+import Wiki.Server.Storage.Backup (defaultKeep)
 import Wiki.Server.Version (serverVersion)
 
 -- | What the server is asked to do.
@@ -34,9 +39,9 @@ data Command
   = -- | Serve the wiki.
     Serve ServeOptions
   | -- | Back up a data directory's database, keeping this many backups.
-    Backup FilePath Int
+    Backup PlaceOptions Int
   | -- | Restore a backup as a data directory's database.
-    Restore Restore
+    Restore RestoreCommand
   | -- | Create or change a user.
     Users Users
   | -- | Check the providers to sign in with.
@@ -61,7 +66,7 @@ commands =
   where
     backupCommand =
       Backup
-        <$> strOption (long "data" <> metavar "DIR" <> help "The server's data directory")
+        <$> placeOptions
         <*> option auto (long "keep" <> metavar "N" <> value defaultKeep <> showDefault <> help "How many backups to keep")
 
 main :: IO ()
@@ -71,12 +76,14 @@ main =
       serve options `catch` \(ServerError reasons) -> do
         for_ reasons $ \r -> putErrText ("wiki-server: " <> r)
         exitWith (ExitFailure 2)
-    Backup dataDir keep ->
-      backup dataDir keep >>= \case
-        Just file -> putText ("Backed up into " <> toS file)
-        Nothing -> putText "There is no database to back up yet."
+    Backup place keep ->
+      runBackup place keep >>= \case
+        Right line -> putText line
+        Left why -> do
+          putErrText ("wiki-server: " <> why)
+          exitWith (ExitFailure 1)
     Restore r ->
-      restore r >>= \case
+      runRestore r >>= \case
         Right lines' -> traverse_ putText lines'
         Left why -> do
           putErrText ("wiki-server: " <> why)

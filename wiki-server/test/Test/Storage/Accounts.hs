@@ -20,7 +20,7 @@ import Wiki.Server.Accounts
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.Limiter (Limits (..), Verdict (..), failed, newLimiter, succeeded, verdict)
 import Wiki.Server.Password
-import Wiki.Server.Storage (Storage, Who (..), defaultConfig, runSqliteWiki, withStorage)
+import Wiki.Server.Storage (Storage, Who (..), defaultConfig, runStoredWiki, withStorage)
 
 spec :: Spec
 spec = describe "accounts" $ do
@@ -157,7 +157,7 @@ accounts = describe "the storage's accounts" $ do
     _ <- ok (setAdministrator st ada.user.id True)
     _ <- ok (setAdministrator st ada.user.id True)
     map (\(a, admin) -> (a.user.login.text, admin)) <$> listAccounts st `shouldReturn` [("ada", True), ("bea", False)]
-    s <- runSqliteWiki st (AsUser ada.user.id) session
+    s <- runStoredWiki st (AsUser ada.user.id) session
     (s.user, s.standing) `shouldBe` (Just ada.user, SignedIn)
     _ <- ok (setAdministrator st ada.user.id False)
     map snd <$> listAccounts st `shouldReturn` [False, False]
@@ -167,7 +167,7 @@ accounts = describe "the storage's accounts" $ do
   it "take a disabled user for nobody, wherever they are named" $ withEmpty $ \st -> do
     ada <- ok (createAccount st "ada" "Ada" (Just (Password "correct horse")))
     _ <- ok (setDisabled st ada.user.id True)
-    s <- runSqliteWiki st (AsUser ada.user.id) session
+    s <- runStoredWiki st (AsUser ada.user.id) session
     (s.user, s.standing) `shouldBe` (Nothing, NotSignedIn)
 
 sessions :: Spec
@@ -232,7 +232,7 @@ console = describe "wiki-server users" $ do
       withStorage defaultConfig dir $ \st -> do
         now <- getCurrentTime
         Right (user, _) <- signIn st now "127.0.0.1" "ada" (Password "correct horse")
-        s <- runSqliteWiki st (AsUser user.id) session
+        s <- runStoredWiki st (AsUser user.id) session
         [g.permission | g <- s.grants.global] `shouldBe` [Administer]
 
   it "sets a password, disables and enables a login, and makes and unmakes an administrator" $

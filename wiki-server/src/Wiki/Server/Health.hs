@@ -17,7 +17,6 @@ where
 import Data.Aeson (decodeStrict', encode)
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Database.SQLite.Simple (Only (..), Query (..), query, query_)
 import Network.HTTP.Types (hCacheControl, hContentType, methodGet, methodHead, status200, status405, status503)
 import Network.Wai (Application, Request (..), responseLBS)
 import Protolude
@@ -29,10 +28,11 @@ import Wiki.Server.Api (Env (..))
 import Wiki.Server.Events (openConnections)
 import Wiki.Server.Log (errorCount)
 import Wiki.Server.Metrics (Kind (..), Sample (..), contentType, renderMetrics, snapshot)
-import Wiki.Server.Storage (schemaVersionOf, storageDataDir, withReadConnection)
+import Wiki.Server.Storage (databaseBytes, reading, schemaVersionOf, storageDataDir)
+import Wiki.Server.Storage.Rows (blobAttached, blobSizes, countRows, loadIcons)
 import Wiki.Server.Storage.Backup (backupFiles, backupTime)
 import Wiki.Server.Storage.Blobs (blobFile)
-import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir, databaseFile)
+import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir)
 
 -- | @GET \/healthz@: 'Health' as JSON, a 200 while the database answers
 -- and a 503 when it does not.
@@ -76,20 +76,16 @@ metricSamples env = do
   now <- getCurrentTime
   let dataDir = storageDataDir env.storage
       gauge name help value = Sample {name, help, kind = Gauge, labels = [], value}
-  (counts, (blobs, attachedBytes), iconsAlone) <- withReadConnection env.storage $ \c -> do
-    counted <- for ["spaces", "pages", "attachments", "users"] $ \table ->
-      (table,) . maybe 0 fromOnly . head <$> (query_ c (Query ("SELECT count(*) FROM " <> table)) :: IO [Only Int])
+  (counts, (blobs, attachedBytes), iconsAlone) <- reading env.storage $ do
+    counted <- countRows
     -- Two attachments with the same bytes share one blob, of one size.
-    attached <-
-      fromMaybe (0, 0)
-        . head
-        <$> (query_ c "SELECT count(*), coalesce(sum(size), 0) FROM (SELECT blob, max(size) AS size FROM attachments WHERE blob IS NOT NULL GROUP BY blob)" :: IO [(Int, Integer)])
-    icons <- mapMaybe (\(Only t) -> imageOf =<< decodeStrict' (encodeUtf8 t)) <$> (query_ c "SELECT icon FROM spaces WHERE icon IS NOT NULL" :: IO [Only Text])
-    alone <- filterM (\b -> null <$> (query c "SELECT 1 FROM attachments WHERE blob = ? LIMIT 1" (Only b.text) :: IO [Only Int])) (ordNub icons)
+    attached <- (\sizes -> (length sizes, sum (map (fromIntegral . snd) sizes) :: Integer)) <$> blobSizes
+    icons <- mapMaybe (\t -> imageOf =<< decodeStrict' (encodeUtf8 t)) <$> loadIcons
+    alone <- filterM (fmap not . blobAttached) (ordNub icons)
     pure (counted, attached, alone)
   schema <- schemaVersionOf env.storage
   connections <- openConnections env.events
-  database <- sum <$> traverse sizeOf [databaseFile dataDir, databaseFile dataDir <> "-wal"]
+  database <- databaseBytes env.storage
   iconBytes <- sum <$> traverse (maybe (pure 0) sizeOf . blobFile (attachmentsDir dataDir)) iconsAlone
   kept <- backupFiles (backupsDir dataDir)
   errors <- errorCount env.errors
@@ -100,7 +96,7 @@ metricSamples env = do
     , gauge "wiki_websockets_open" "Live channels (WebSockets) open." (fromIntegral connections)
     ]
       <> [gauge ("wiki_" <> table) ("How many " <> table <> " the wiki has.") (fromIntegral n) | (table, n) <- counts]
-      <> [ gauge "wiki_database_bytes" "The size of the database's files (with its write-ahead log), in bytes." (fromIntegral database)
+      <> [ gauge "wiki_database_bytes" "The size of the database, in bytes: its files (with the write-ahead log) on SQLite, what PostgreSQL says it takes on PostgreSQL." (fromIntegral database)
          , gauge "wiki_blobs" "The blobs (files of bytes) the attachments and the spaces' icons name." (fromIntegral (blobs + length iconsAlone))
          , gauge "wiki_blob_bytes" "The size of those blobs, in bytes." (fromIntegral (attachedBytes + iconBytes))
          , gauge "wiki_backups_kept" "The backups kept in the data directory." (fromIntegral (length kept))

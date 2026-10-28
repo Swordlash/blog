@@ -47,12 +47,14 @@ import Wiki.Server.Mail (SendMail, smtpSend)
 import Wiki.Server.Metrics (newMetrics)
 import Wiki.Server.Notifier (newNotifier, newWake, runNotifier, wakeUp)
 import Wiki.Server.Oidc (newFlows, newProviderCache)
-import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen)
+import Wiki.Server.Options (Listen (..), ServeOptions (..), checkOptions, renderListen, resolvePlace)
 import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
-import Wiki.Server.Storage (Config (..), DataDirInUse (..), readServerSettings, withStorage)
 import Wiki.Server.Vault (newCeremonies)
+import Wiki.Server.Storage (Config (..), DataDirInUse (..), Database (..), Place (..), readServerSettings, withStorage)
+import Wiki.Server.Storage.Layout (withoutPassword)
+import Wiki.Server.Storage.Migrate (OldSchema, SchemaTooNew)
 import Wiki.Server.Version (serverVersion)
 
 -- | A configuration the server cannot run with, with every reason.
@@ -122,7 +124,14 @@ withServerUsing given raw sendMail action = do
   feeds <- newFeedCache
   -- A data directory another server has open is a configuration this one
   -- cannot run with, reported like the others.
-  handle (\(DataDirInUse why) -> throwIO (ServerError [why])) $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} options.dataDir $ \storage -> do
+  -- So is a database it cannot read: an earlier wiki-server's, or a newer
+  -- one's.
+  place <- resolvePlace options.dataDir options.database options.pgPrograms >>= either (\why -> throwIO (ServerError [why])) pure
+  handle (\(DataDirInUse why) -> throwIO (ServerError [why]))
+    . handle (\(e :: OldSchema) -> throwIO (ServerError [toS (displayException e)]))
+    . handle (\(e :: SchemaTooNew) -> throwIO (ServerError [toS (displayException e)]))
+    $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} place
+    $ \storage -> do
     backups <- newBackupService logger options.rclone storage
     let notifier = newNotifier logger sendMail wake storage
     let env =
@@ -162,7 +171,7 @@ withServerUsing given raw sendMail action = do
             , finding = EveryoneAdministers
             }
         listeners = (options.listen, public) : [(a, admin) | Just a <- [options.adminListen]]
-    logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
+    logWith logger Info [("event", "starting"), ("version", serverVersion), ("data", toS options.dataDir), ("database", databaseName place.database), ("static", maybe "none" toS options.staticDir), ("base", options.basePath)]
     -- The administration's settings as the server starts with them
     -- (secrets left out); a change is seen by the next request, unlogged.
     configured <- readServerSettings storage
@@ -236,3 +245,10 @@ bindListen l = do
 -- | An address as the start of a URL.
 showAddress :: SockAddr -> Text
 showAddress a = "http://" <> T.pack (show a)
+
+-- | A database as the log names it: a SQLite file by its path, a
+-- PostgreSQL database by its URL without its password.
+databaseName :: Database -> Text
+databaseName = \case
+  SqliteFile file -> "sqlite:" <> toS file
+  PostgresAt url -> decodeUtf8 (withoutPassword url)

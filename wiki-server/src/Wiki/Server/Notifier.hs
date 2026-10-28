@@ -48,7 +48,7 @@ import Wiki.Core.Notification (MailMode (..), Notification (..), PageLocation (.
 import Wiki.Core.User (User (..))
 import Wiki.Server.Log (Level (..), Logger, logWith)
 import Wiki.Server.Mail (Mailer (..), SendMail, mailerFrom, notificationMessage)
-import Wiki.Server.Storage (Storage, locatedFor, readServerSettings, withDatabase)
+import Wiki.Server.Storage (Storage, locatedFor, readServerSettings, reading, writing)
 import Wiki.Server.Storage.Notifications (Pending (..), clearPending, lastDigest, loadPending, pruneNotifications, storeLastDigest, unsubscribeToken)
 
 -- | What wakes the thread: incremented when notifications are created.
@@ -111,10 +111,10 @@ runNotifier n = do
 mailRound :: Notifier -> UTCTime -> IO ()
 mailRound n now = do
   mailer <- mailerFrom n.sendMail <$> readServerSettings n.storage
-  last' <- withDatabase n.storage lastDigest
+  last' <- reading n.storage lastDigest
   let today = utctDay now
       digestDue = todHour (timeToTimeOfDay (utctDayTime now)) >= digestHour && last' < Just today
-  pending <- withDatabase n.storage loadPending
+  pending <- writing n.storage loadPending
   for_ pending $ \p -> do
     let ids = map (\x -> x.id) p.notifications
         mode = effectiveMailMode p.verified p.mail
@@ -122,23 +122,22 @@ mailRound n now = do
       (Just m, Just email, MailAtOnce) | p.verified -> send m email False p
       (Just m, Just email, MailDaily) | p.verified -> when digestDue (send m email True p)
       -- Nothing can be mailed to them, now or later.
-      _ -> withDatabase n.storage (`clearPending` ids)
-  when digestDue $ withDatabase n.storage $ \c -> do
-    storeLastDigest c today
-    pruneNotifications c now
+      _ -> writing n.storage (clearPending ids)
+  when digestDue $
+    writing n.storage (storeLastDigest today >> pruneNotifications now)
   where
     send m email isDigest p = do
       readable <- catMaybes <$> traverse (locatedFor n.storage p.user.id) p.notifications
       let ids = map (\x -> x.id) p.notifications
       if null readable
-        then withDatabase n.storage (`clearPending` ids)
+        then writing n.storage (clearPending ids)
         else do
-          token <- withDatabase n.storage (`unsubscribeToken` p.user.id)
+          token <- writing n.storage (unsubscribeToken p.user.id)
           let pathOf l = Duplex.print route (Page l.space l.page)
               message = notificationMessage m.publicUrl email token isDigest (dropSlash . pathOf) (digest readable)
           m.deliver message >>= \case
             Right () -> do
-              withDatabase n.storage (`clearPending` ids)
+              writing n.storage (clearPending ids)
               logWith n.logger Info [("event", "notification-mail"), ("user", p.user.id.text), ("notifications", show (length readable)), ("digest", show isDigest)]
             Left why -> logWith n.logger Warning [("event", "notification-mail"), ("user", p.user.id.text), ("error", why)]
     -- The route's path is absolute; the wiki's address ends in a slash.

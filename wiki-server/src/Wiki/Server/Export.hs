@@ -104,7 +104,7 @@ import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Server.Export.Document
-import Wiki.Server.Storage (Storage, Who (..), blobPath, exportedPage, readServerSettings, runSqliteWiki, spacePages)
+import Wiki.Server.Storage (Storage, Who (..), blobPath, exportedPage, readServerSettings, runStoredWiki, spacePages)
 
 -- | Whose exports are in progress: at most one each.
 newtype Exports = Exports (TVar (Set Text))
@@ -156,7 +156,7 @@ availableFormats = do
 -- of one at a time.
 exportPage :: Exports -> Text -> Storage -> Who -> PageId -> ExportFormat -> IO (Either ApiError Exported)
 exportPage exports key storage who pid format = oneAtATime exports key . requiringTeX format $ do
-  loaded <- runSqliteWiki storage who $ runExceptT $ do
+  loaded <- runStoredWiki storage who $ runExceptT $ do
     page <- ExceptT (exportedPage pid)
     spaces <- lift listSpaces
     pages <- ExceptT (spacePages page.space)
@@ -187,7 +187,7 @@ exportPage exports key storage who pid format = oneAtATime exports key . requiri
 -- space.
 exportSpace :: Exports -> Text -> Storage -> Who -> SpaceId -> ExportFormat -> IO (Either ApiError Exported)
 exportSpace exports key storage who sid format = oneAtATime exports key . requiringTeX format $ do
-  loaded <- runSqliteWiki storage who $ runExceptT $ do
+  loaded <- runStoredWiki storage who $ runExceptT $ do
     -- The pages first: fetching them says whether the space exists and
     -- may be read, as the API's own listing does.
     pages <- ExceptT (spacePages sid)

@@ -48,10 +48,10 @@ copies = describe "backup" $ do
     withStorageIn $ \dir st -> do
       importArchive st demoArchive >>= ok
       let admin = Administrator
-      blog <- runSqliteWiki st admin (getSpace (path "blog")) >>= ok
-      page <- runSqliteWiki st admin (createPage blog.id Nothing "Kept" "In the backup.") >>= ok
-      _ <- runSqliteWiki st admin (uploadAttachment page.id "a.txt" "text/plain" "bytes") >>= ok
-      _ <- runSqliteWiki st admin (saveDraft page.id page.updatedAt "Kept" "A draft") >>= ok
+      blog <- runStoredWiki st admin (getSpace (path "blog")) >>= ok
+      page <- runStoredWiki st admin (createPage blog.id Nothing "Kept" "In the backup.") >>= ok
+      _ <- runStoredWiki st admin (uploadAttachment page.id "a.txt" "text/plain" "bytes") >>= ok
+      _ <- runStoredWiki st admin (saveDraft page.id page.updatedAt "Kept" "A draft") >>= ok
       file <- backup dir defaultKeep >>= maybe (expectationFailure "no backup made" >> panic "unreachable") pure
       takeDirectory file `shouldBe` backupsDir dir
       live <- withDatabase st tableRows
@@ -70,8 +70,8 @@ copies = describe "backup" $ do
   it "keeps the files of attachments a backup refers to, and lets the rest go" $
     withSystemTempDirectory "wiki-backup-test" $ \dir -> do
       let upload st name bytes = do
-            hello <- runSqliteWiki st Administrator (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "hello-world"))) >>= ok
-            runSqliteWiki st Administrator (uploadAttachment hello.id name "text/plain" bytes) >>= ok
+            hello <- runStoredWiki st Administrator (getSpace (path "blog") >>= either (pure . Left) (\b -> getPage b.id (path "hello-world"))) >>= ok
+            runStoredWiki st Administrator (uploadAttachment hello.id name "text/plain" bytes) >>= ok
           fileOf a = case a.source of
             SourceBlob b -> maybe (panic "not a hash") pure (blobFile (attachmentsDir dir) b)
             SourceUrl _ -> panic "an upload is kept as a blob"
@@ -80,7 +80,7 @@ copies = describe "backup" $ do
         a <- upload st "backed-up.txt" "in a backup"
         _ <- backup dir defaultKeep
         b <- upload st "not-backed-up.txt" "in no backup"
-        for_ [a, b] $ \x -> runSqliteWiki st Administrator (deleteAttachment x.id) >>= ok
+        for_ [a, b] $ \x -> runStoredWiki st Administrator (deleteAttachment x.id) >>= ok
         -- Nothing is deleted while the storage is open.
         for_ [a, b] $ \x -> (fileOf x >>= doesFileExist) `shouldReturn` True
         pure (a, b)
@@ -95,11 +95,11 @@ withContent action = withSystemTempDirectory "wiki-restore-test" $ \dir -> do
   let dataDir = dir </> "data"
   withStorage defaultConfig dataDir $ \st -> do
     importArchive st demoArchive >>= ok
-    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
-    hello <- runSqliteWiki st Administrator (getPage blog.id (path "hello-world")) >>= ok
-    _ <- runSqliteWiki st Administrator (uploadAttachment hello.id "kept.txt" "text/plain" "kept bytes") >>= ok
-    gone <- runSqliteWiki st Administrator (uploadAttachment hello.id "gone.txt" "text/plain" "gone bytes") >>= ok
-    _ <- runSqliteWiki st Administrator (deleteAttachment gone.id) >>= ok
+    blog <- runStoredWiki st Administrator (getSpace (path "blog")) >>= ok
+    hello <- runStoredWiki st Administrator (getPage blog.id (path "hello-world")) >>= ok
+    _ <- runStoredWiki st Administrator (uploadAttachment hello.id "kept.txt" "text/plain" "kept bytes") >>= ok
+    gone <- runStoredWiki st Administrator (uploadAttachment hello.id "gone.txt" "text/plain" "gone bytes") >>= ok
+    _ <- runStoredWiki st Administrator (deleteAttachment gone.id) >>= ok
     action dir st
 
 restoring :: Spec
@@ -178,7 +178,7 @@ serversOwn :: Spec
 serversOwn = describe "the server's own backups" $ do
   it "keep their settings, the rclone configuration kept, replaced and cleared, and never given back" $
     withStorageIn $ \_ st -> do
-      let admin = runSqliteWiki st Administrator
+      let admin = runStoredWiki st Administrator
           rclone config = defaultBackupSettings {enabled = True, schedule = EveryHours 6, destination = Just (ToRclone "b2:wiki" config)}
       set <- admin (setBackupSettings (rclone (Just "[b2]\ntype = b2\n"))) >>= ok
       set.settings `shouldBe` rclone Set
