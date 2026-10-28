@@ -3429,6 +3429,25 @@ Amended by the planning session after each work package's report.
   `output_config.effort` has been sent since WP4.19; a later package drops it on that 400
   as the island drops `thinking`. Seven new browser cases, island and native tests; full
   gate; CI green.
+- **WP5.14 merged** (2026-10-28, PR #98, `main` at `23566b2`). Design A: page content is
+  cached only until the first route change. The shell calls the new `MonadLoad.endPreload`
+  in `arrive` and in `reload` when the route changes; the HTTP backend then drops page
+  content (`Cache.forgetPageContent`: `pageAt`, `pages`, `postDetails`, `versionLists`,
+  `searches`, `pageCounts`) and fetches it on every read without storing it; session,
+  spaces, drafts, versions, threads, notifications, watches, mentions and the
+  administration's data stay cached; the server's prerender always caches; this client's
+  own writes still empty the whole cache. `listPages` answers `[PageSummary]`
+  (`Wiki.Core.Page`, `summaryOf`; the server reads summaries in one query,
+  `Rows.loadPageSummaries`); the blog view and the new-page form read their page by
+  themselves; the page view tells the shell which page it shows (`ViewOutput.Showing`) for
+  the head's preview; export and feeds read whole pages through `Storage.spacePages`; the
+  prerendered page carries the page shown under `pagesAt`; `excerpt` moved into
+  `PostDetails`. Not done, optional: caching `template.html` on the server. Tests: the HTTP
+  backend's cache before and after `endPreload`, the prerender caching whatever the route,
+  the preload carrying the page shown, and a browser case that reproduces the owner's bug
+  (tab A shows a page, the server's answer changes with no live event, A returns and shows
+  the new text; the page fetched twice, the list once). Full gate; CI green. The brief for
+  this package still described the subscription window; the agent followed the plan.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
