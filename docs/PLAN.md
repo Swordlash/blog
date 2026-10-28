@@ -1273,7 +1273,13 @@ must be in before it is.
   measurement: an element with no attributes costs 88 ms to type-check against the
   `.+`-chained row, 4.5 ms against the same row written flat; `hh` emits a bare `[]` for
   such elements): a package in the haskell-halogen repository, then a pin bump here with
-  the `hh` views' type-check times before and after.
+  the `hh` views' type-check times before and after. The owner (2026-10-28, on seeing the
+  first commit's generated modules: "rozwijanie tych rows jest ciężkie w utrzymaniu") chose
+  Template Haskell at the definition site over a generator: the groups stay readable
+  Haskell and each element row is one splice that expands, merges and sorts them; nothing
+  generated is kept in the repository. A GHC plugin was weighed and rejected: the cost is
+  at the use sites, so a plugin would have to be enabled in every consumer, and plugin
+  loading on the wasm and JS cross-compilers is fragile.
 
 - **Later, by the owner (2026-10-27, "zapisz to na potem"): a migration to PostgreSQL.**
   Not now; when it comes, as one port of the whole storage layer (WP5.7's spike says why
