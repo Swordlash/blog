@@ -49,7 +49,7 @@ $( browserJS
      ]
  )
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "previews what is typed, with its formulas drawn, and saves it" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor

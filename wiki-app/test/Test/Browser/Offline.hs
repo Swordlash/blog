@@ -57,7 +57,7 @@ offerInstall = unsafeIOToPageM . js_offer_install . toJSText . fromMaybe ""
 keptKinds :: PageM s Text
 keptKinds = unsafeIOToPageM (fromJSText <$> (evaluate =<< js_kept_kinds))
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   describe "a page the service worker kept" $ do
     it "says it is an offline copy and since when, with the offline notice, until the reader goes elsewhere" $ runPage $ do

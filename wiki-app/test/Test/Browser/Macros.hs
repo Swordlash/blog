@@ -29,7 +29,7 @@ import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Space qualified as Core
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   describe "a formula" $ do
     it "is set with the built-in macros" $ runPage $ do

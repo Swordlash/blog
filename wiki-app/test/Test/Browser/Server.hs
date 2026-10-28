@@ -32,7 +32,7 @@ $( browserJS
      [("js_one_column", "wiki_test_one_column", Unsafe, [t|JSText -> IO JSText|])]
  )
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   demo m
   overHttp m
@@ -64,7 +64,7 @@ choose ui selector n = do
 shouldContainText :: Element s -> Text -> PageM s ()
 shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
 
-demo :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+demo :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 demo m = describe "over the demo's wiki" $ do
   it "sets the public address and a mail server, whose password it never shows again" $ runPage $ do
     ui <- start m (Just "user-admin") Admin
@@ -219,7 +219,7 @@ demo m = describe "over the demo's wiki" $ do
     eventually (length <$> findAll ui ".server-provider-form" `shouldReturn` 0)
     unmount ui
 
-overHttp :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+overHttp :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 overHttp m = describe "over HTTP" $
   it "checks a provider through the server, and saves a change that keeps the secrets it does not touch" $
     runPage $ do

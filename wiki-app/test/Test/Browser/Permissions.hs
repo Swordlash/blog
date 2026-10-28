@@ -22,7 +22,7 @@ import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (slugText)
 import Wiki.Core.Space qualified as S
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "is offered to whoever administers the space, and to nobody else" $ runPage $ do
     rita <- start m (Just "user-reader") (SpacePages (slugs ["team", "projects"]))

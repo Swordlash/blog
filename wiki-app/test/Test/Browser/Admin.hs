@@ -21,7 +21,7 @@ import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   it "marks a user as an administrator, who then has the administration, and unmarks them" $ runPage $ do
     ui <- start m (Just "user-admin") Admin

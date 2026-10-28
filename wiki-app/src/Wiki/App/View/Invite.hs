@@ -75,7 +75,7 @@ data Action
   | TypedPassword Text
   | Submit
 
-component :: forall query m. (MonadLoad m) => H.Component query (Input m) Output m
+component :: forall query m. (Typeable m, MonadLoad m) => H.Component query (Input m) Output m
 component =
   H.mkComponent
     H.ComponentSpec

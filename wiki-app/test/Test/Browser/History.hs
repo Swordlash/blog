@@ -47,7 +47,7 @@ savedTwice demo = case saves of
       (st2, _) <- savePageIn hello.id once.updatedAt "Hello, again" (heading "everyone") demoNow st1
       pure st2
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "lets someone not signed in open a page's history from the page, and come back" $ runPage $ do
     ui <- start m Nothing (Page (slugs ["docs"]) (slugs ["tour"]))

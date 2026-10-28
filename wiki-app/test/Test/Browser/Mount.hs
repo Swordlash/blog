@@ -46,7 +46,7 @@ import Wiki.Core.Slug (Slug, mkSlug)
 -- at a route, with nothing in the browser's local storage.
 start
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => Maybe Text
   -> Route
   -> PageM s (Mounted s Shell.Query Void m)
@@ -56,7 +56,7 @@ start m who at = fst <$> startWith m who at
 -- application wrote, or to write behind its back.
 startWith
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => Maybe Text
   -> Route
   -> PageM s (Mounted s Shell.Query Void m, IORef MemState)
@@ -69,7 +69,7 @@ startWith m who at = do
 -- of its own (a space with macros, a page with formulas).
 startChanged
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => (MemState -> MemState)
   -> Maybe Text
   -> Route
@@ -84,7 +84,7 @@ startChanged m change who at = do
 -- it ('hydrate').
 adopt
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => Element s
   -> Maybe Text
   -> Route
@@ -109,7 +109,7 @@ prepare who at = do
 -- these on one database are a page and the same page reloaded.
 startKept
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
   => Database
   -> Maybe Text
   -> Route
@@ -119,7 +119,7 @@ startKept m db who at = fst <$> startKeptWith m db who at
 -- | 'startKept', and the wiki it runs over, for a test to read it.
 startKeptWith
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
   => Database
   -> Maybe Text
   -> Route
@@ -132,7 +132,7 @@ startKeptWith m db who at = do
 -- mounts it.
 startOpened
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => Opened
   -> Maybe Text
   -> Route

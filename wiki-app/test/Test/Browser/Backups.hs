@@ -25,7 +25,7 @@ import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   demo m
   overHttp m
@@ -41,7 +41,7 @@ choose ui selector n = do
   press "Home"
   replicateM_ n (press "ArrowDown")
 
-demo :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+demo :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 demo m = describe "over the demo's wiki" $
   it "shows the backups disabled, saying that the demo makes none" $
     runPage $ do
@@ -52,7 +52,7 @@ demo m = describe "over the demo's wiki" $
       find ui ".backups-last" >>= (`shouldHaveText` "None made yet.")
       unmount ui
 
-overHttp :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+overHttp :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 overHttp m = describe "over HTTP" $
   it "turns backups on with an rclone remote whose configuration it never shows again, and waits for one made by hand" $
     runPage $ do

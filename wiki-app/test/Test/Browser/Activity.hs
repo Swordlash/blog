@@ -25,7 +25,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Id (UserId (..))
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = describe "the activity and the server's status" $ do
   demo m
   overHttp m
@@ -41,7 +41,7 @@ choose ui selector n = do
   press "Home"
   replicateM_ n (press "ArrowDown")
 
-demo :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+demo :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 demo m = describe "over the demo's wiki" $
   it "says that the demo keeps no log and has no server" $
     runPage $ do
@@ -60,7 +60,7 @@ operator = Actor {id = UserId "~administrator", login = "administrator"}
 entry :: Text -> Int -> Actor -> Text -> Subject -> [(Text, Text)] -> Text -> AuditEntry
 entry i h actor action subject detail address = AuditEntry {id = i, at = at h, actor, action, subject, detail = Map.fromList detail, address}
 
-overHttp :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+overHttp :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 overHttp m = describe "over HTTP" $
   it "lists the log newest first in words, pages through it and filters it by person, and shows the server's last errors" $
     runPage $ do

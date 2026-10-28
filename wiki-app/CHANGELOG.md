@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+The browser application compiles faster, and nothing else changes
+(WP5.19): haskell-halogen is pinned to the commit that writes its element
+rows as flat lists of labels.
+
 The demo starts without reading the attachments' bytes or the pages'
 versions from IndexedDB, only their keys (WP5.16c). An attachment's bytes
 are read when it is shown (for its object URL, which then holds them) or

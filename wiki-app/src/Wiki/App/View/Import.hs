@@ -117,7 +117,7 @@ data Action
   | CheckNone
   | Apply
 
-component :: forall query m. (MonadIO m) => H.Component query (Input m) ViewOutput m
+component :: forall query m. (Typeable m, MonadIO m) => H.Component query (Input m) ViewOutput m
 component =
   H.mkComponent
     H.ComponentSpec

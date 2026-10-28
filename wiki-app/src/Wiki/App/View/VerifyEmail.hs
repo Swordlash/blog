@@ -44,7 +44,7 @@ data State m = State
 
 data Action = Confirm
 
-component :: forall query output m. (Monad m) => H.Component query (Input m) output m
+component :: forall query output m. (Typeable m, Monad m) => H.Component query (Input m) output m
 component =
   H.mkComponent
     H.ComponentSpec

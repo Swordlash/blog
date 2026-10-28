@@ -20,7 +20,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..))
 import Wiki.Core.Space qualified as Core
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   it "lists a space's pages newest first once an administrator chooses it, in the space and the sidebar" $ runPage $ do
     ui <- start m (Just "user-admin") blog

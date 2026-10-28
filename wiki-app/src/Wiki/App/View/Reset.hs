@@ -57,7 +57,7 @@ data Action
   | Submit
   | SignIn
 
-component :: forall query m. (Monad m) => H.Component query (Input m) Output m
+component :: forall query m. (Typeable m, Monad m) => H.Component query (Input m) Output m
 component =
   H.mkComponent
     H.ComponentSpec

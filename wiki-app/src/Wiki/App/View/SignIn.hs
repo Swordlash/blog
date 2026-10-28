@@ -186,7 +186,7 @@ data Action
   | SavePassword
   | Followed (Follow Route)
 
-component :: forall m. (MonadUUID m, MonadIO m, MonadSecurity m, MonadNotifications m) => H.Component Query (Input m) Output m
+component :: forall m. (Typeable m, MonadUUID m, MonadIO m, MonadSecurity m, MonadNotifications m) => H.Component Query (Input m) Output m
 component =
   H.mkComponent
     H.ComponentSpec

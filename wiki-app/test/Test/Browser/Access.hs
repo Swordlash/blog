@@ -34,7 +34,7 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.User (Standing (..))
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   registering m
   closed m
@@ -52,7 +52,7 @@ signedInAs uid = unsafeIOToPageM $ do
   me <- runMemWiki wiki session
   pure SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = SignedIn, providers = [], exports = []}
 
-registering :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+registering :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 registering m = describe "making an account" $ do
   it "is offered beside signing in in an open wiki, and signs its maker in" $ runPage $ do
     serverStarts
@@ -91,7 +91,7 @@ registering m = describe "making an account" $ do
     unmount ui
     serverStops
 
-closed :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+closed :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 closed m = describe "a closed wiki" $
   it "shows someone not signed in the way to sign in and nothing else, and asks for nothing else" $
     runPage $ do
@@ -109,7 +109,7 @@ closed m = describe "a closed wiki" $
       unmount ui
       serverStops
 
-invited :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+invited :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 invited m = describe "an invitation's page" $ do
   it "says whom it is for, makes its account, and shows the wiki as its maker" $ runPage $ do
     serverStarts
@@ -143,7 +143,7 @@ invited m = describe "an invitation's page" $ do
     unmount ui
     serverStops
 
-panel :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+panel :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 panel m = describe "the administration's section on it" $ do
   it "closes the wiki, invites someone with a link to pass on, revokes it, and opens the wiki again" $ runPage $ do
     ui <- start m (Just "user-admin") Admin

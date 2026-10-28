@@ -38,7 +38,7 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.User (Standing (..))
 
-type Specs m = (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
+type Specs m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
 
 spec :: forall m -> (Specs m) => Spec
 spec m = do

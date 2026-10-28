@@ -39,7 +39,7 @@ import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.User (SignInProvider (..), Standing (..))
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
   signingIn m
   inviting m
@@ -64,7 +64,7 @@ signedInAs uid = unsafeIOToPageM $ do
 hrefOf :: Element s -> PageM s Text
 hrefOf e = fromMaybe "" <$> getAttribute e "href"
 
-signingIn :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+signingIn :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 signingIn m = describe "the forms that sign in and make an account" $ do
   it "offer each provider, as a link to the server's round trip that comes back to the page" $ runPage $ do
     serverStarts
@@ -108,7 +108,7 @@ signingIn m = describe "the forms that sign in and make an account" $ do
     unmount ui
     serverStops
 
-inviting :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+inviting :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 inviting m = describe "an invitation's page" $
   it "offers to make the account with a provider, carrying the invitation" $
     runPage $ do
@@ -126,7 +126,7 @@ inviting m = describe "an invitation's page" $
       unmount ui
       serverStops
 
-ownPanel :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+ownPanel :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 ownPanel m = describe "the panel of how a user signs in" $ do
   let google = LinkedIdentity {provider = "google", email = Just "rita@example.org", name = Just "Rita", linkedAt = demoNow}
       hub = LinkedIdentity {provider = "hub", email = Nothing, name = Nothing, linkedAt = demoNow}
@@ -191,7 +191,7 @@ ownPanel m = describe "the panel of how a user signs in" $ do
     unmount ui
     serverStops
 
-administration :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
+administration :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 administration m = describe "the administration's accounts" $ do
   it "say who signs in with which provider, and disconnect one" $
     runPage $ do

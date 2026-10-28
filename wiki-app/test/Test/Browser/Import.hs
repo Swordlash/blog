@@ -43,7 +43,7 @@ $( browserJS
      ]
  )
 
-type Constraints m = (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m, MonadUnliftIO m)
+type Constraints m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m, MonadUnliftIO m)
 
 spec :: forall m -> (Constraints m) => Spec
 spec m = do

@@ -44,7 +44,7 @@ adoptable = "*:not(.wiki-math *, .wiki-mermaid *, .wiki-tikz *, .wiki-code *, .e
 -- rendered ahead of the program holds it.
 prerendered
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => Maybe Text
   -> Route
   -> PageM s (Element s)
@@ -54,7 +54,7 @@ prerendered m who at = do
   unmount ui
   htmlContainer html
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "adopts a page with the shell around it, and follows a link from there" $ runPage $ do
     let tour = Page (slugs ["docs"]) (slugs ["tour"])

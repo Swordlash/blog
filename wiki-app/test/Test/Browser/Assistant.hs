@@ -57,7 +57,7 @@ $( browserJS
      ]
  )
 
-spec :: forall m -> (MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
 spec m = do
   it "sends a selection, streams the answer, and makes its edit a change that Accept keeps and Ctrl+Z undoes" $ runPage $ do
     script [[text "I will ", text "make it the very first.", replace "the first post" "the very first post", text " Done."]]
@@ -428,7 +428,7 @@ spec m = do
 -- provider chosen and the panel open; and the page's Markdown.
 openAssistantWith
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => PageM s (Mounted s Shell.Query Void m, Text)
 openAssistantWith m = do
   keep m (UserId "user-editor") (chooseProvider Scripted defaultSettings)
@@ -437,7 +437,7 @@ openAssistantWith m = do
 -- | The same with the settings kept as they are.
 openAssistantKeptWith
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => PageM s (Mounted s Shell.Query Void m, Text)
 openAssistantKeptWith m = do
   (ui, _) <- startWith m (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
@@ -450,13 +450,13 @@ openAssistantKeptWith m = do
 
 openAssistant
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => PageM s (Mounted s Shell.Query Void m)
 openAssistant m = fst <$> openAssistantWith m
 
 openAssistantKept
   :: forall m
-  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
   => PageM s (Mounted s Shell.Query Void m)
 openAssistantKept m = fst <$> openAssistantKeptWith m
 
