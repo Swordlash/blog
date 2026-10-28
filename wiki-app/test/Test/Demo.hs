@@ -9,7 +9,7 @@ import Web.Storage.IndexedDB (Database (..))
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoDatabase, demoNow, demoState)
 import Wiki.App.Route qualified as Route
-import Wiki.Core.Attachment (Attachment (..), findAttachment)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), findAttachment)
 import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
@@ -87,7 +87,7 @@ spec = describe "Wiki.App.Demo" $ do
   it "attaches every file a page refers to" $
     for_ pages $ \p ->
       for_ (mapMaybe (T.stripPrefix "attachment:") (linkTargets p.body)) $ \name ->
-        ((p.title, name), (\a -> a.name) <$> findAttachment name p.attachments) `shouldBe` ((p.title, name), Just name)
+        ((p.title, name), (\a -> a.name.text) <$> findAttachment name p.attachments) `shouldBe` ((p.title, name), Just name)
 
   it "links pages to spaces and pages that are there, as the application reads the links" $ do
     let internal t = not (any (`T.isPrefixOf` t) ["https://", "http://", "attachment:", "<", "#"])

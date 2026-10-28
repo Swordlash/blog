@@ -98,7 +98,7 @@ import Text.Pandoc.Extensions (Extension (..), Extensions, extensionsFromList)
 import Text.Pandoc.Walk (query, walk, walkM)
 import Text.TeXMath.Readers.TeX.Macros (Macro, applyMacros, parseMacroDefinitions)
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
-import Wiki.Core.Attachment (Attachment (..), MediaKind (..), attachmentKind, findAttachment)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
 import Wiki.Core.Id (AttachmentId (..))
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
@@ -194,7 +194,7 @@ wikiExtensions =
 -- so that two pages' attachments with one name are two files, with its
 -- name last, from whose extension pandoc reads a type where it needs one.
 mediaPath :: Attachment -> FilePath
-mediaPath a = toS ("attachments/" <> a.id.text <> "/" <> T.map safe a.name)
+mediaPath a = toS ("attachments/" <> a.id.text <> "/" <> T.map safe a.name.text)
   where
     safe c = if c == '/' || c == '\\' then '_' else c
 

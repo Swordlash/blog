@@ -27,7 +27,7 @@ import Wiki.Api.Version (pageVersion)
 import Wiki.App.View.Common (pagePathOf)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), formerAuthor)
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
@@ -111,7 +111,7 @@ pageWith i s parent sl body position attachments =
 
 -- | An attachment kept in an archive, under a blob of the archive's own.
 picture :: Attachment
-picture = Attachment {id = AttachmentId "a1", name = "pic.png", mediaType = "image/png", size = 3, source = SourceBlob (BlobId "b1")}
+picture = Attachment {id = AttachmentId "a1", name = FileName "pic.png", mediaType = "image/png", size = 3, source = SourceBlob (BlobId "b1")}
 
 -- | An archive of these spaces and pages, with a user and grants that an
 -- import leaves out, and the bytes of 'picture'.
@@ -251,7 +251,7 @@ conflicts = describe "a page at the same path" $ do
     let taken = importEverything {conflicts = [ConflictChoice {page = PageRef {space = [slug "docs"], page = [slug "tour"]}, resolution = TakeImported}]}
     apply r theirs taken `shouldReturn` summary {spacesMerged = 1, pagesReplaced = 1, pagesCreated = 1, attachments = 1}
     now <- pageAt r ["docs"] ["tour"]
-    (now.id, now.slug, now.position, now.title, now.body, map (\a -> a.name) now.attachments)
+    (now.id, now.slug, now.position, now.title, now.body, map (\a -> a.name.text) now.attachments)
       `shouldBe` (mine.id, mine.slug, mine.position, "Title of tour", "Imported.", ["pic.png"])
     (now.updatedAt > mine.updatedAt) `shouldBe` True
     -- An editor open on the server's page saves against its old version,
@@ -296,7 +296,7 @@ roundTrip = describe "an export" $ do
               listed <- ok200 (getUrl r (admin r (links.spaces.listPages s.id)))
               -- The list has no bodies: each page is read by itself.
               pages <- for listed $ \(l :: PageSummary) -> ok200 (getUrl r (admin r (links.spaces.pageAt s.id (pagePathOf listed l.id))))
-              pure (s.name, s.slug, [(p.title, p.slug, p.body, map (\a -> (a.name, a.source)) p.attachments) | (p :: Page) <- pages])
+              pure (s.name, s.slug, [(p.title, p.slug, p.body, map (\a -> (a.name.text, a.source)) p.attachments) | (p :: Page) <- pages])
       expected <- shape origin
       shape copy `shouldReturn` expected
 

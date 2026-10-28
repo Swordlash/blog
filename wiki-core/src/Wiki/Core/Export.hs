@@ -121,7 +121,7 @@ import Numeric (showHex)
 import Protolude
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
 import Wiki.Core.Audit (AuditEntry (..), encodeAuditEntry, parseAuditEntry)
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor, formerAuthorName)
 import Wiki.Core.Id
@@ -289,7 +289,7 @@ endsAtTop parentOf = climb mempty
 
 -- | Where an attachment's bytes are, in its page's directory.
 attachmentPath :: Attachment -> Text
-attachmentPath x = "attachments/" <> safeFileName x.name
+attachmentPath x = "attachments/" <> safeFileName x.name.text
 
 -- | The name of a space's icon image, in its space's directory: @icon.@
 -- with the extension of the image's media type.
@@ -708,7 +708,7 @@ checkArchive naming a attachments = do
     case (r.attachment.source, r.file) of
       (SourceBlob _, Nothing) -> Left (naming.attachmentsAt r.page <> ": the attachment " <> show r.attachment.id.text <> " names no file for its bytes.")
       _ -> Right ()
-  for_ a.pages $ \p -> unique ("attachment name on the page " <> show p.id.text <> ",") [(x.name, naming.attachmentsAt p.id) | x <- p.attachments]
+  for_ a.pages $ \p -> unique ("attachment name on the page " <> show p.id.text <> ",") [(x.name.text, naming.attachmentsAt p.id) | x <- p.attachments]
   for_ (Map.toList a.threads) $ \(p, ts) -> do
     unless (Map.member p pagesById) $
       Left (naming.commentsAt p <> ": there are comments on the page " <> show p.text <> ", which is not in the archive.")
@@ -1006,7 +1006,7 @@ data AttachmentRecord = AttachmentRecord
 -- @page.json@ holds the same records without @page@, each file named in
 -- the page's directory.
 encodeAttachment :: PageId -> Attachment -> Value
-encodeAttachment page x = object (("page" .= page.text) : attachmentFields ("attachments/" <> x.id.text <> "/" <> x.name) x)
+encodeAttachment page x = object (("page" .= page.text) : attachmentFields ("attachments/" <> x.id.text <> "/" <> x.name.text) x)
 
 -- | An attachment's fields but its page, with the file its bytes are in,
 -- for one whose bytes the wiki keeps.

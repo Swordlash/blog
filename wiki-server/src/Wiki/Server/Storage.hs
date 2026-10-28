@@ -152,7 +152,7 @@ import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Access (Access (..), accessName)
 import Wiki.Core.Anchor (Anchor, checkAnchor)
-import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..), parseFileName)
 import Wiki.Core.Audit (Actor (..))
 import Wiki.Core.Audit qualified as Audit
 import Wiki.Core.Blog (PostDetails (..), isPost)
@@ -1743,9 +1743,7 @@ uploadAttachmentTx :: PageId -> Text -> Text -> Integer -> (FilePath -> IO BlobI
 uploadAttachmentTx pid name mediaType size store = do
   p <- findNode pid
   requireEdit =<< chainOfPage p
-  n <- nonBlank "An attachment's name" name
-  when (T.any (\ch -> ch == '/' || ch == '\\' || isControl ch) n) $
-    invalid "An attachment's name cannot have slashes or control characters in it."
+  n <- either invalid pure (parseFileName name)
   when (size > fromIntegral maxAttachmentSize) $
     invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB.")
   let declared = T.strip mediaType
@@ -1756,7 +1754,7 @@ uploadAttachmentTx pid name mediaType size store = do
   let attachment = Attachment {id = AttachmentId i, name = n, mediaType = mt, size = fromIntegral size, source = SourceBlob blob}
   db $ \c -> do
     -- One of the same name is replaced, in its place among the page's.
-    replaced <- query c "SELECT id, ordinal FROM attachments WHERE page_id = ? AND name = ?" (pid.text, n)
+    replaced <- query c "SELECT id, ordinal FROM attachments WHERE page_id = ? AND name = ?" (pid.text, n.text)
     ordinal <- case replaced of
       (old, at) : _ -> execute c "DELETE FROM attachments WHERE id = ?" (Only (old :: Text)) $> at
       [] -> maybe 0 fromOnly . head <$> query c "SELECT coalesce(max(ordinal) + 1, 0) FROM attachments WHERE page_id = ?" (Only pid.text)
@@ -2631,7 +2629,7 @@ exportRecords st app = do
         Nothing -> pure Nothing
         Just file -> (\there -> if there then Just file else Nothing) <$> doesFileExist file
   attachments <- for [(x, b) | p <- pages, x <- p.attachments, SourceBlob b <- [x.source]] $ \(x, b) ->
-    maybe (Left ("The file of the attachment " <> show x.id.text <> " (" <> x.name <> ") is missing.")) (Right . (b,))
+    maybe (Left ("The file of the attachment " <> show x.id.text <> " (" <> x.name.text <> ") is missing.")) (Right . (b,))
       <$> fileOf b
   icons <- for [(sp, b) | sp <- spaces, Just (IconImage b _) <- [sp.icon]] $ \(sp, b) ->
     maybe (Left ("The image of the icon of the space " <> show sp.id.text <> " (" <> sp.name <> ") is missing.")) (Right . (b,))

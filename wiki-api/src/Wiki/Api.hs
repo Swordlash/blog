@@ -90,7 +90,7 @@ import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, Provid
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
 import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
-import Wiki.Core.Attachment (Attachment)
+import Wiki.Core.Attachment (Attachment, FileName)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
@@ -291,7 +291,7 @@ data PagesApi mode = PagesApi
 data AttachmentsApi mode = AttachmentsApi
   { delete :: mode :- Capture "attachment" AttachmentId :> DeleteNoContent
   -- ^ @deleteAttachment@.
-  , content :: mode :- Capture "attachment" AttachmentId :> Capture "name" Text :> RawM
+  , content :: mode :- Capture "attachment" AttachmentId :> Capture "name" FileName :> RawM
   -- ^ An attachment's bytes, at the URL @attachmentUrl@ returns
   -- ("Wiki.Api.Links.attachmentUrl"). The name is the attachment's, so
   -- that the URL ends in the file's name; a different name is

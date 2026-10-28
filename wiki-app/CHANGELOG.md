@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+The demo's `attachBytes` and `attachUrl` take a `FileName` (WP5.15).
+
 The demo's `attachUrl` takes a `Url` (WP5.15).
 
 Passwords are `Password` in the backend classes (WP5.15): `signIn`,

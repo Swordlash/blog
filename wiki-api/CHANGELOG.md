@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+The file name segment of an attachment's content route is a `FileName`
+(WP5.15). The address is unchanged.
+
 The server's addresses are `Url` (WP5.15, from `Wiki.Core.Url`):
 `ServerSettingsOf.publicUrl`, `ProviderSettingsOf.issuer`,
 `ProviderCheck.redirectUri`, the endpoints of `Discovered`, and

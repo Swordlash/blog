@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+An attachment's name is a `FileName` (WP5.15), a newtype over `Text`.
+`parseFileName` holds the rule both backends applied by themselves: trimmed,
+not blank, no slash, backslash or control character. `findAttachment` still
+takes the name as a page's Markdown writes it.
+
 A web address is a `Url` (WP5.15), a newtype over `Text` in the new
 module `Wiki.Core.Url`: an attachment's `SourceUrl`, and the assistant's
 base URL (`ProviderSettings.baseUrl`, `Ready.baseUrl`, `baseUrlOf`).

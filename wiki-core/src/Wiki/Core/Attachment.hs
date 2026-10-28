@@ -9,6 +9,8 @@
 -- backend (the server's blob store, or the in-memory backend's state).
 module Wiki.Core.Attachment
   ( Attachment (..)
+  , FileName (..)
+  , parseFileName
   , Source (..)
   , MediaKind (..)
   , mediaKind
@@ -21,13 +23,14 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Text qualified as T
 import Numeric.Natural (Natural)
 import Protolude
+import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
 import Wiki.Core.Id
 import Wiki.Core.Url (Url (..))
 
 -- | 'Attachment': one file attached to a page.
 data Attachment = Attachment
   { id :: AttachmentId
-  , name :: Text
+  , name :: FileName
   -- ^ The file name, as the page's Markdown refers to it; unique among the
   -- page's attachments.
   , mediaType :: Text
@@ -38,6 +41,27 @@ data Attachment = Attachment
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
+
+-- | 'FileName': an attachment's file name, such as @diagram.png@. A page's
+-- Markdown refers to the attachment by it. 'parseFileName' checks the
+-- name of a new attachment. The JSON and URL instances are the bare text
+-- and check nothing: a stored name was checked when the file was
+-- uploaded. A name is not escaped for a file system here; an export does
+-- that when it writes the file ("Wiki.Core.Export").
+newtype FileName = FileName {text :: Text}
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving newtype (FromJSON, ToJSON, FromHttpApiData, ToHttpApiData)
+
+-- | A new attachment's name as it is stored, or why it is invalid: trimmed
+-- of white space, not blank, and without a slash, a backslash or a
+-- control character, which would make it a path or hide part of it.
+parseFileName :: Text -> Either Text FileName
+parseFileName raw
+  | T.null name = Left "An attachment's name cannot be blank."
+  | T.any (\ch -> ch == '/' || ch == '\\' || isControl ch) name = Left "An attachment's name cannot have slashes or control characters in it."
+  | otherwise = Right (FileName name)
+  where
+    name = T.strip raw
 
 -- | 'Source': where an attachment's bytes are.
 data Source
@@ -82,4 +106,4 @@ attachmentKind a = mediaKind a.mediaType
 
 -- | The attachment with this name, the name a page's Markdown refers to it by.
 findAttachment :: Text -> [Attachment] -> Maybe Attachment
-findAttachment n = find (\a -> a.name == n)
+findAttachment n = find (\a -> a.name.text == n)

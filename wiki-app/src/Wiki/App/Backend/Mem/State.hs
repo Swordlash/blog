@@ -163,7 +163,7 @@ import Wiki.App.Backend (Session (Session), WikiError (..), anonymousIn, maxAtta
 import Wiki.App.Backend qualified as B
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor, checkAnchor)
-import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..), parseFileName)
 import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (Comment), Thread (Thread), absentAuthor, checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
@@ -553,7 +553,7 @@ fallbackSlug t = either (\e -> panic ("not a slug: " <> t <> ", " <> show e)) id
 
 -- | Attach bytes stored in the state to a page, replacing an attachment of
 -- the same name, without other checks.
-attachBytes :: PageId -> Text -> Text -> ByteString -> MemState -> (MemState, Attachment)
+attachBytes :: PageId -> FileName -> Text -> ByteString -> MemState -> (MemState, Attachment)
 attachBytes page name mediaType bytes st0 =
   let (b, st1) = newId "blob" st0
       blob = BlobId b
@@ -562,10 +562,10 @@ attachBytes page name mediaType bytes st0 =
 
 -- | Attach a file on the web to a page, replacing an attachment of the
 -- same name, without other checks.
-attachUrl :: PageId -> Text -> Text -> Natural -> Url -> MemState -> (MemState, Attachment)
+attachUrl :: PageId -> FileName -> Text -> Natural -> Url -> MemState -> (MemState, Attachment)
 attachUrl page name mediaType size url = attachSource page name mediaType size (SourceUrl url)
 
-attachSource :: PageId -> Text -> Text -> Natural -> Source -> MemState -> (MemState, Attachment)
+attachSource :: PageId -> FileName -> Text -> Natural -> Source -> MemState -> (MemState, Attachment)
 attachSource page name mediaType size source st0 =
   let (i, st1) = newId "attachment" st0
       attachment = Attachment {id = AttachmentId i, name, mediaType, size, source}
@@ -1114,9 +1114,7 @@ uploadAttachmentIn :: PageId -> Text -> Text -> ByteString -> Write Attachment
 uploadAttachmentIn pid name mediaType bytes st = do
   p <- findPage st pid
   requireEdit st (chainOf st p.space)
-  n <- nonBlank "An attachment's name" name
-  when (T.any (\ch -> ch == '/' || ch == '\\' || isControl ch) n) $
-    Left (Invalid "An attachment's name cannot have slashes or control characters in it.")
+  n <- first Invalid (parseFileName name)
   when (fromIntegral (BS.length bytes) > maxAttachmentSize) $
     Left (Invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB."))
   let declared = T.strip mediaType

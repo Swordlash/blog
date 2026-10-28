@@ -132,7 +132,7 @@ import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Security (AccountEmail (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
 import Wiki.Core.Access (Access (..), accessName, readAccess)
-import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Sibling (..))
@@ -512,7 +512,7 @@ attachmentRow = do
   blob <- field
   page <- PageId <$> field
   let source = maybe (SourceBlob (BlobId (fromMaybe "" blob))) (SourceUrl . Url) url
-  pure (page, Attachment {id, name, mediaType, size, source})
+  pure (page, Attachment {id, name = FileName name, mediaType, size, source})
 
 -- | Pages with their attachments, each page's attachments in order.
 withAttachments :: [[Attachment] -> Page] -> [(PageId, Attachment)] -> [Page]
@@ -884,7 +884,7 @@ insertAttachment c page ordinal a =
     "INSERT INTO attachments (id, page_id, name, media_type, size, url, blob, ordinal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     [ toField a.id.text
     , toField page.text
-    , toField a.name
+    , toField a.name.text
     , toField a.mediaType
     , toField (fromIntegral a.size :: Int64)
     , toField url

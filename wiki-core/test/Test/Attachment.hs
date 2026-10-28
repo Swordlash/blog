@@ -8,6 +8,17 @@ import Wiki.Core.Url (Url (..))
 
 spec :: Spec
 spec = describe "Attachment" $ do
+  describe "parseFileName" $ do
+    it "trims a name of white space" $
+      parseFileName "  notes.txt \n" `shouldBe` Right (FileName "notes.txt")
+    it "refuses a blank name" $
+      parseFileName " " `shouldBe` Left "An attachment's name cannot be blank."
+    it "refuses a slash, a backslash or a control character" $
+      for_ ["a/b.png", "a\\b.png", "a\tb.png"] $ \t ->
+        parseFileName t `shouldBe` Left "An attachment's name cannot have slashes or control characters in it."
+    it "takes any other name, such as one with spaces or non-ASCII letters" $
+      parseFileName "Zażółć gęślą jaźń.pdf" `shouldBe` Right (FileName "Zażółć gęślą jaźń.pdf")
+
   describe "mediaKind" $ do
     let kind t k = it (show t <> " is " <> show k) $ mediaKind t `shouldBe` k
     kind "image/png" MediaImage
@@ -25,7 +36,7 @@ spec = describe "Attachment" $ do
 
   describe "an attachment" $ do
     let attachment name mediaType =
-          Attachment {id = AttachmentId name, name, mediaType, size = 1024, source = SourceUrl (Url ("https://example.com/" <> name))}
+          Attachment {id = AttachmentId name, name = FileName name, mediaType, size = 1024, source = SourceUrl (Url ("https://example.com/" <> name))}
         diagram = attachment "diagram.png" "image/png"
         talk = attachment "talk.webm" "video/webm"
     it "is shown by its media type" $

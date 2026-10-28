@@ -174,7 +174,7 @@ stubs =
           , template = \p body -> pure Sample.page {Page.id = p, Page.template = body.template}
           , delete = \p -> if p == Sample.page.id then pure NoContent else refuse Forbidden
           , upload = \_ u ->
-              liftIO (BS.readFile u.payload) <&> \bytes -> Sample.attachment {Attachment.name = u.name, Attachment.mediaType = u.mediaType, Attachment.size = fromIntegral (BS.length bytes)}
+              liftIO (BS.readFile u.payload) <&> \bytes -> Sample.attachment {Attachment.name = Attachment.FileName u.name, Attachment.mediaType = u.mediaType, Attachment.size = fromIntegral (BS.length bytes)}
           , draft = \p -> pure (if p == Sample.page.id then Just Sample.draft else Nothing)
           , saveDraft = \p body -> pure Sample.draft {Draft.page = p, Draft.base = body.base, Draft.title = body.title, Draft.body = body.body}
           , discardDraft = \_ -> pure NoContent
@@ -534,7 +534,7 @@ spec = describe "a server of the API's type" $ do
 
   describe "attachments" $ do
     it "uploads a file as a multipart form, its name and type from its part" $
-      answers (multipart (links.pages.upload p) [] [("file", "photo.jpg", "image/jpeg", "JPEG!")]) 201 Sample.attachment {Attachment.name = "photo.jpg", Attachment.mediaType = "image/jpeg", Attachment.size = 5}
+      answers (multipart (links.pages.upload p) [] [("file", "photo.jpg", "image/jpeg", "JPEG!")]) 201 Sample.attachment {Attachment.name = Attachment.FileName "photo.jpg", Attachment.mediaType = "image/jpeg", Attachment.size = 5}
 
     it "serves an attachment's bytes at its address, with its own media type" $ do
       r <- getAt (attachmentUrl Sample.attachment)

@@ -26,7 +26,7 @@ import Protolude hiding (reader)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.App.Backend
-import Wiki.Core.Attachment (Attachment (..), findAttachment)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), findAttachment)
 import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
@@ -929,7 +929,7 @@ attachments = describe "uploadAttachment, deleteAttachment and attachmentUrl" $ 
   it "attach a file that the page then has by name" $ \(Fixture run) -> do
     hello <- pageAt run admin "blog" "hello-world"
     a <- run editor (uploadAttachment hello.id "notes.bin" "application/octet-stream" bytes) >>= ok
-    (a.name, a.mediaType, a.size) `shouldBe` ("notes.bin", "application/octet-stream", 256)
+    (a.name.text, a.mediaType, a.size) `shouldBe` ("notes.bin", "application/octet-stream", 256)
     found <- pageAt run Anonymous "blog" "hello-world"
     findAttachment "notes.bin" found.attachments `shouldBe` Just a
     found.updatedAt `shouldBe` hello.updatedAt
@@ -941,7 +941,7 @@ attachments = describe "uploadAttachment, deleteAttachment and attachmentUrl" $ 
     _ <- run editor (uploadAttachment hello.id "a.png" "image/png" bytes) >>= ok
     b <- run editor (uploadAttachment hello.id "a.png" "image/png" (BS.take 10 bytes)) >>= ok
     found <- pageAt run admin "blog" "hello-world"
-    filter (\x -> x.name == "a.png") found.attachments `shouldBe` [b]
+    filter (\x -> x.name.text == "a.png") found.attachments `shouldBe` [b]
     b.size `shouldBe` 10
 
   it "show the demo's attachments" $ \(Fixture run) -> do

@@ -262,7 +262,7 @@ import Wiki.Core.Assistant
 import Wiki.Core.Assistant qualified as Assistant (ErrorKind (Unreachable))
 import Wiki.Core.Assistant.Edit (Decision (..))
 import Wiki.Core.Assistant.Prompt (Span)
-import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Diff (Diff (..), diffText)
 import Wiki.Core.Draft qualified as D
 import Wiki.Core.Id (AttachmentId, PageId, UserId)
@@ -1122,7 +1122,7 @@ component =
             <ul>
               {% for a in work.attachments %}
                 <li>
-                  <a href={{ Map.findWithDefault "" a.id work.urls }} download={{ a.name }}>{{ a.name }}</a>
+                  <a href={{ Map.findWithDefault "" a.id work.urls }} download={{ a.name.text }}>{{ a.name.text }}</a>
                   <span class="attachment-meta">{{ a.mediaType }}, {{ fileSize a.size }}</span>
                   <button type="button" class="attachment-insert" onClick={{ const (Insert a) }}>Insert</button>
                 </li>
@@ -1210,7 +1210,7 @@ component =
       -- The listener has stopped the browser from inserting a name or an
       -- image of its own, and taken the files.
       Pasted files -> H.liftEffect (pickedFiles files) >>= upload
-      Insert a -> insert (attachmentReference a.name a.mediaType)
+      Insert a -> insert (attachmentReference a.name.text a.mediaType)
       Run command -> run command
       AttachOrImage -> do
         closeMenu
@@ -1735,7 +1735,7 @@ component =
                   { attachments = filter (\b -> b.name /= a.name) w.attachments <> [a]
                   , urls = Map.insert a.id url w.urls
                   }
-              insert (attachmentReference a.name a.mediaType)
+              insert (attachmentReference a.name.text a.mediaType)
 
     -- Insert text at the text's cursor. The input event that puts it in the
     -- work is handled before this returns, like a keystroke.

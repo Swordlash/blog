@@ -26,7 +26,7 @@ import Wiki.App.Backend.Mem (runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
-import Wiki.Core.Attachment (Attachment (name))
+import Wiki.Core.Attachment (Attachment (name), FileName (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page (Page (attachments, body, id, title, updatedAt))
@@ -169,7 +169,7 @@ spec m = do
     find ui ".editor-attachments li a" >>= (`shouldHaveText` "dot.png")
     find ui ".editor-hint" >>= textContent >>= (`shouldSatisfy` (not . T.isInfixOf "first"))
     attached <- readPage wiki ["blog"] ["with-a-picture"]
-    map (\a -> a.name) attached.attachments `shouldBe` ["dot.png"]
+    map (\a -> a.name.text) attached.attachments `shouldBe` ["dot.png"]
     find ui ".editor-save-close" >>= click
     _ <- find ui ".page-view .page-body img[alt='dot.png']"
     pass
@@ -353,7 +353,7 @@ spec m = do
     find ui ".editor-save-close" >>= click
     _ <- find ui ".page-view .page-body img[alt='dot.png']"
     saved <- readPage wiki ["blog"] ["hello-world"]
-    map (\a -> a.name) saved.attachments `shouldBe` ["dot.png"]
+    map (\a -> a.name.text) saved.attachments `shouldBe` ["dot.png"]
 
   it "attaches a pasted image at the cursor, and a file pasted into the textarea, putting in nothing else" $ runPage $ do
     (ui, wiki) <- startWith m (Just "user-editor") helloEditor
@@ -380,7 +380,7 @@ spec m = do
     find ui ".editor-save-close" >>= click
     _ <- find ui ".page-view .page-body img[alt='dot.png']"
     saved <- readPage wiki ["blog"] ["hello-world"]
-    map (\a -> a.name) saved.attachments `shouldBe` ["dot.png", "notes.txt"]
+    map (\a -> a.name.text) saved.attachments `shouldBe` ["dot.png", "notes.txt"]
     saved.body `shouldBe` "Look: ![dot.png](attachment:dot.png)[notes.txt](attachment:notes.txt)"
 
   it "puts pasted text in unchanged but for its line endings, attaching nothing" $ runPage $ do

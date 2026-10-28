@@ -107,7 +107,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Notifications qualified as Notifications
-import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
@@ -955,7 +955,7 @@ exportedResponse e =
 -- opened by itself would run its scripts with the wiki's cookies. Even the
 -- shown types are sandboxed by their @Content-Security-Policy@. A page's
 -- @\<img>@ and @\<video>@ elements still display them.
-attachmentContent :: Env -> Who -> AttachmentId -> Text -> Request -> (Response -> IO a) -> IO a
+attachmentContent :: Env -> Who -> AttachmentId -> FileName -> Request -> (Response -> IO a) -> IO a
 attachmentContent env who aid name request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
       respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An attachment is fetched with GET or HEAD.")))
@@ -1030,13 +1030,13 @@ safeMediaType t
 -- | Whether an attachment is shown in the browser or downloaded, and its
 -- file's name, in ASCII for old clients and in full for the rest.
 disposition :: Attachment -> ByteString
-disposition a = how <> "; filename=\"" <> encodeUtf8 ascii <> "\"; filename*=UTF-8''" <> urlEncode False (encodeUtf8 a.name)
+disposition a = how <> "; filename=\"" <> encodeUtf8 ascii <> "\"; filename*=UTF-8''" <> urlEncode False (encodeUtf8 a.name.text)
   where
     t = T.toLower (safeMediaType a.mediaType)
     shown =
       any (`T.isPrefixOf` t) ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "video/", "audio/", "text/plain"]
     how = if shown then "inline" else "attachment"
-    ascii = T.map (\c -> if isAscii c && isPrint c && c `notElem` ['"', '\\'] then c else '_') a.name
+    ascii = T.map (\c -> if isAscii c && isPrint c && c `notElem` ['"', '\\'] then c else '_') a.name.text
 
 -- | The server's status, as the administration shows it.
 statusOfServer :: Env -> IO ServerStatus

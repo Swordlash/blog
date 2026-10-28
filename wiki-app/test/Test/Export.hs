@@ -25,7 +25,7 @@ import Wiki.App.Backend.Mem.Archive (fromArchive, nextCounter, toArchive)
 import Wiki.App.Backend.Mem.Persist (memDatabase, spacesStore)
 import Wiki.App.Backend.Mem.State (MemState (..), Saved (..), completeVersions)
 import Wiki.App.Demo (demoNow, demoState)
-import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor)
 import Wiki.Core.Export (Archive, encodeJson, readArchive, writeArchive)
 -- Qualified, for the fields of an archive, which the in-memory wiki has too.
@@ -209,7 +209,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
     Map.lookup "spaces/docs/pages/tour/attachments/żółw.png" unzipped `shouldBe` Just (encodeUtf8 "żółw.png")
     Map.lookup "spaces/docs/pages/tour/attachments/x%3A c%3F%2A.txt" unzipped `shouldBe` Just "x: c?*.txt"
     archive <- either (assertFailure . toS) pure (readArchive unzipped)
-    [(x.name, Map.lookup b archive.blobs) | p <- archive.pages, x <- p.attachments, SourceBlob b <- [x.source], x.name /= "tree.png"]
+    [(x.name.text, Map.lookup b archive.blobs) | p <- archive.pages, x <- p.attachments, SourceBlob b <- [x.source], x.name.text /= "tree.png"]
       `shouldMatchList` [("żółw.png", Just (encodeUtf8 "żółw.png")), ("x: c?*.txt", Just "x: c?*.txt")]
 
   it "writes the manifest, the people, and a directory per space and page with each attachment's bytes as a file" $ do
@@ -268,7 +268,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
           map (\u -> u.login.text) archive.users `shouldBe` ["admin", "editor", "reader"]
           sort (map (\s -> s.name) archive.spaces) `shouldBe` ["Blog", "Docs", "Exported", "Projects", "Team"]
           map (\p -> p.body) archive.pages `shouldContain` ["# Exported, then saved"]
-          let bytes = [x | p <- archive.pages, x <- p.attachments, x.name == "bytes.bin"]
+          let bytes = [x | p <- archive.pages, x <- p.attachments, x.name.text == "bytes.bin"]
           case bytes of
             [Attachment {source = SourceBlob blob}] -> Map.lookup blob archive.blobs `shouldBe` Just (BS.pack [0 .. 255])
             other -> expectationFailure ("expected bytes.bin, kept as bytes, got " <> show other)
@@ -302,7 +302,7 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
           sort (map (\s -> s.name) archive.spaces) `shouldBe` ["Blog", "Docs", "Exported", "Projects", "Team"]
           [s.name | s <- archive.spaces, Just parent <- [s.parent], Just above <- [find (\x -> x.id == parent) archive.spaces], above.name == "Docs"] `shouldBe` ["Exported"]
           map (\p -> p.body) archive.pages `shouldContain` ["# Exported, then saved"]
-          case [x | p <- archive.pages, x <- p.attachments, x.name == "bytes.bin"] of
+          case [x | p <- archive.pages, x <- p.attachments, x.name.text == "bytes.bin"] of
             [Attachment {source = SourceBlob blob}] -> Map.lookup blob archive.blobs `shouldBe` Just (BS.pack [0 .. 255])
             other -> expectationFailure ("expected bytes.bin, kept as bytes, got " <> show other)
           [x.icon | x <- archive.spaces, x.name == "Docs"] `shouldBe` [Just (IconEmoji "📘")]

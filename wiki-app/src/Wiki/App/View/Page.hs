@@ -100,7 +100,7 @@ import Wiki.App.View.Common
 import Wiki.App.View.Export (exportMenu)
 import Wiki.App.View.Watch qualified as WatchView
 import Wiki.Core.Anchor (Anchor, Located (..), Marking (Marking), Range (..), highlight, locate, renderedText)
-import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Blog (Neighbours (..), neighbours)
 import Wiki.Core.Comment (Comment (..), Thread (..), isInline, mayComment)
 import Wiki.Core.Id
@@ -522,7 +522,7 @@ component =
             <ul>
               {% for a in page.attachments %}
                 <li>
-                  <a href={{ Map.findWithDefault "" a.id urls }} download={{ a.name }}>{{ a.name }}</a>
+                  <a href={{ Map.findWithDefault "" a.id urls }} download={{ a.name.text }}>{{ a.name.text }}</a>
                   <span class="attachment-meta">{{ a.mediaType }}, {{ fileSize a.size }}</span>
                 </li>
               {% end %}

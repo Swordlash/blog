@@ -15,7 +15,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Head (Feeds (..), Head (..), Preview (..), PreviewImage (..), Site (..), headTags)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Static (Rendered (..), renderRoute)
-import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Slug (Slug, mkSlug)
@@ -135,7 +135,7 @@ spec = describe "a space shown as a blog, rendered" $ do
     html `lacks` "blog-view"
 
   describe "the head" $ do
-    let siteWith feeds = Site {address = ("https://wiki.example" <>), feeds, attachmentAddress = \a -> Just ("https://wiki.example/files/" <> a.name), iconAddress = const Nothing}
+    let siteWith feeds = Site {address = ("https://wiki.example" <>), feeds, attachmentAddress = \a -> Just ("https://wiki.example/files/" <> a.name.text), iconAddress = const Nothing}
         site = siteWith True
 
     it "describes a public post to a link preview, with its first image, and announces the blog's feeds" $ do
