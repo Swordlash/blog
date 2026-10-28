@@ -13,7 +13,7 @@ import Wiki.Core.Blog
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Order (ChildOrder (..))
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (PageSummary (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 
@@ -24,16 +24,14 @@ day :: Int -> UTCTime
 day n = addUTCTime (fromIntegral n * 86400) (UTCTime (fromGregorian 2026 1 1) 0)
 
 -- | A page of the space @s@: id, its parent's id, the day it was made.
-page :: Text -> Maybe Text -> Int -> Page
+page :: Text -> Maybe Text -> Int -> PageSummary
 page i parent made =
-  Page
+  PageSummary
     { id = PageId i
     , space = SpaceId "s"
     , parent = PageId <$> parent
     , title = "Title " <> i
     , slug = slug i
-    , body = ""
-    , attachments = []
     , createdAt = day made
     , updatedAt = day 100
     , position = 0
@@ -59,7 +57,7 @@ blogSpace home =
     , blog = True
     }
 
-ids :: [Page] -> [Text]
+ids :: [PageSummary] -> [Text]
 ids = map (\p -> p.id.text)
 
 spec :: Spec

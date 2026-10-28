@@ -71,8 +71,7 @@ import Protolude
 import Wiki.Api.Account (InvitationToken (..))
 import Wiki.Api.Security (MailToken (..))
 import Wiki.Core.Id (SpaceId)
-import Wiki.Core.Page (Page)
-import Wiki.Core.Path (findChild, parsePath, renderPath, resolvePath)
+import Wiki.Core.Path (TreeNode (..), findChild, parsePath, renderPath, resolvePath)
 import Wiki.Core.Permission (spaceChain)
 import Wiki.Core.Slug (Slug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Space (slug))
@@ -351,12 +350,13 @@ data PageLink = PageLink Route Text
 -- A segment that is not a slug is read as a title would be ('slugify'), so
 -- that a wiki link names a page by its title: @[[On-call]]@.
 resolvePageLink
-  :: [Space]
+  :: (TreeNode page, Eq (NodeId page))
+  => [Space]
   -- ^ Every space the reader can see the path of.
   -> [Slug]
   -- ^ The path of the page's space.
-  -> [Page]
-  -- ^ The pages of that space.
+  -> [page]
+  -- ^ The pages of that space: their summaries, or the pages themselves.
   -> [Slug]
   -- ^ The page's path.
   -> Text

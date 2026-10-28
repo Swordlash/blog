@@ -30,7 +30,7 @@ import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..))
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery)
@@ -115,7 +115,7 @@ spacesAndPages = describe "spaces and pages" $ do
     (ordered :: Space).pageOrder `shouldBe` NewestFirst
     pages <- ok200 (getUrl r (onAdmin r (links.spaces.listPages space.id)))
     -- Newest first: the page made after the space's home page, then it.
-    map (\(p :: Page) -> p.title) pages `shouldBe` ["Welcome", "Home"]
+    map (\(p :: PageSummary) -> p.title) pages `shouldBe` ["Welcome", "Home"]
     reply <- getUrl r (onAdmin r (links.spaces.pageAt space.id [page.slug]))
     jsonAs 200 reply `shouldReturn` page
     header "ETag" reply `shouldBe` Just (encodeUtf8 (toUrlPiece (pageVersion page)))
@@ -266,7 +266,7 @@ attachments = describe "attachments" $ do
     json reply >>= \case
       Invalid _ -> pass
       other -> expectationFailure ("not invalid: " <> show other)
-    ok200 (getUrl r (onAdmin r (links.spaces.listPages page.space))) >>= \(pages :: [Page]) -> map (\p -> p.attachments) pages `shouldBe` [[], []]
+    ok200 (getUrl r (onAdmin r (links.spaces.pageAt page.space [page.slug]))) >>= \(p :: Page) -> p.attachments `shouldBe` []
 
 refusals :: Spec
 refusals = describe "refusals servant makes itself" $ do

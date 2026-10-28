@@ -113,6 +113,14 @@
 -- component uses it in its own monad, in an initial state or through
 -- 'Halogen.Query.HalogenM.lift', never in 'HalogenM'.
 --
+-- The HTTP backend caches page content (pages, lists of pages, searches,
+-- version lists) only until the reader first goes to another route. Those
+-- responses are the ones the server prerendered the page with, and they
+-- make the program's first render match that page. The shell tells the
+-- backend when the route changes ('endPreload'). From then on page content
+-- is always fetched, so a page shown again shows what the server holds
+-- now, also when someone else changed it meanwhile (WP5.14 of the plan).
+--
 -- = Order
 --
 -- A space lists its subspaces in one order and its pages in another, each
@@ -175,7 +183,7 @@ import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder, Children, Shift)
-import Wiki.Core.Page (Page)
+import Wiki.Core.Page (Page, PageSummary)
 import Wiki.Core.Permission (Grants (..), Principal (..), SpaceAccess, SpacePermission, Subject)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
@@ -441,15 +449,19 @@ class (Monad m) => MonadWiki m where
   -- * Pages
 
   -- | Every page of a space, its whole tree, each page before the pages
-  -- under it, siblings in the space's page order (see "Order" above).
-  listPages :: SpaceId -> m (Either WikiError [Page])
-  default listPages :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError [Page])
+  -- under it, siblings in the space's page order (see "Order" above). Each
+  -- page is a summary, without its body and attachments: 'getPage' reads
+  -- those.
+  listPages :: SpaceId -> m (Either WikiError [PageSummary])
+  default listPages :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError [PageSummary])
   listPages = lift . listPages
 
   -- | The details each page of a space is listed with as a blog post
-  -- ("Wiki.Core.Blog"): who wrote it (the author of its first version) and
-  -- how many comments it has, by page, for every page of the space, whether
-  -- the space is shown as a blog or not. Refused as 'listPages' is.
+  -- ("Wiki.Core.Blog"): who wrote it (the author of its first version),
+  -- how many comments it has, and its excerpt, by page, for every page of
+  -- the space, whether the space is shown as a blog or not. Only a post
+  -- ('Wiki.Core.Blog.isPost') has an excerpt; the excerpt of any other
+  -- page is empty. Refused as 'listPages' is.
   postDetails :: SpaceId -> m (Either WikiError (Map PageId PostDetails))
   default postDetails :: (MonadTrans t, m ~ t n, MonadWiki n) => SpaceId -> m (Either WikiError (Map PageId PostDetails))
   postDetails = lift . postDetails
@@ -634,3 +646,11 @@ class (MonadWiki m) => MonadLoad m where
   -- 'listSpaces' or 'searchPages' as a 'Left' instead of letting it
   -- propagate.
   attempt :: m a -> m (Either WikiError a)
+
+  -- | Say that the reader went to another route. The HTTP backend then
+  -- drops the page content it cached from the server's prerender, and
+  -- fetches page content on every read from then on (see "Loading"). The
+  -- shell calls this before it renders the new route. The in-memory
+  -- backend has nothing to drop.
+  endPreload :: m ()
+  endPreload = pass

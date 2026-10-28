@@ -488,7 +488,7 @@ author = Author {id = UserId "u2", name = "Bea"}
 
 -- | What a post is listed with: its first author and its comments.
 postDetails :: PostDetails
-postDetails = PostDetails {author = Just author, comments = 3}
+postDetails = PostDetails {author = Just author, comments = 3, excerpt = "The first paragraph, without its markup."}
 
 reply :: Comment
 reply =

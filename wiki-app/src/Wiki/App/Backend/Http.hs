@@ -17,7 +17,9 @@
 --
 -- The backend caches the responses to its reads
 -- ("Wiki.App.Backend.Http.Cache"), so that a view whose data was fetched
--- already renders at once ('atOnce'); a write empties the cache. Reads
+-- already renders at once ('atOnce'); a write empties the cache. Page
+-- content is cached only until the reader first goes to another route
+-- ('endPreload'); after that, every read of page content is fetched. Reads
 -- made through 'atOnce' send nothing over the network: if the cache
 -- cannot answer one of them, 'atOnce' gives up on the whole program, and
 -- the view fetches in its initializer instead (decision 18 of the plan).
@@ -248,6 +250,10 @@ data HttpEnv = HttpEnv
   , feed :: Feed
   -- ^ The tab's live channel ("Wiki.App.Live"), which keeps the cached
   -- threads up to date with the events it receives.
+  , preloading :: IORef Bool
+  -- ^ Whether page content is still cached: true until the reader first
+  -- goes to another route ('endPreload'). Shared by every copy of the
+  -- environment, such as the one 'atOnce' makes.
   }
 
 -- | A backend over this transport, with an empty cache.
@@ -262,7 +268,8 @@ newHttpEnvWith transport start = liftIO $ do
   changes <- HS.create
   let change f = atomicModifyIORef' cache (\c -> (f c, ()))
   feed <- newFeed (\page event -> change (afterEvent page event)) (\page threads -> change (withThreads page (Right threads))) (change . forgetThreads) (change . withNotice) (change forgetNotices)
-  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, changes, feed}
+  preloading <- newIORef True
+  pure HttpEnv {transport, cache, immediate = False, cacheOnly = False, changes, feed, preloading}
 
 -- | A backend over a transport that answers at once: the server's
 -- application in the same process. 'atOnce' sends requests to it instead
@@ -369,6 +376,24 @@ cached look request keep =
       when (kept result) (modifyCache (keep result))
       pure result
 
+-- | A read of page content (see "Wiki.App.Backend.Http.Cache"): cached
+-- as 'cached' caches until the reader first goes to another route, and
+-- always sent to the server after that, without being cached. The server's
+-- own prerender ('newImmediateHttpEnv') always caches, since the page it
+-- writes carries the cache.
+pageContent
+  :: (MonadIO m, FromJSON a)
+  => (Cache -> Maybe (Either WikiError a))
+  -> Request
+  -> (Either WikiError a -> Cache -> Cache)
+  -> HttpWiki m (Either WikiError a)
+pageContent look request keep = do
+  env <- HttpWiki ask
+  preloading <- liftIO (readIORef env.preloading)
+  if preloading || env.immediate
+    then cached look request keep
+    else answer <$> call request
+
 -- | A read of something that changes on the server by itself (the audit
 -- log, the server's status). The first read uses the data the prerendered
 -- page carries, once, so that the program's first render matches that
@@ -433,7 +458,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
 
   -- At an address of the API's, as an attachment's bytes are.
   spaceIconUrl = pure . Links.spaceIconUrl
-  pageCounts = orThrow (cachedAlways (\c -> c.pageCounts) (R.get links.spaces.pageCounts) withPageCounts)
+  pageCounts = orThrow (pageContent (fmap Right . (\c -> c.pageCounts)) (R.get links.spaces.pageCounts) (either (const identity) withPageCounts))
 
   -- Not cached: it is read when the space's permissions are opened, which
   -- the server never prerenders, and read again after every change there.
@@ -444,10 +469,10 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   setSpaceOrder sid children order = write (withJson "PUT" (links.spaces.setOrder sid) SpaceOrder {children, order})
   shiftSpace sid by = write (withJson "POST" (links.spaces.shift sid) ShiftBy {shift = by})
   shiftPage pid by = write (withJson "POST" (links.pages.shift pid) ShiftBy {shift = by})
-  listPages sid = cached (\c -> Map.lookup sid c.pages) (R.get (links.spaces.listPages sid)) (withPages sid)
-  postDetails sid = cached (\c -> Map.lookup sid c.postDetails) (R.get (links.spaces.postDetails sid)) (withPostDetails sid)
+  listPages sid = pageContent (\c -> Map.lookup sid c.pages) (R.get (links.spaces.listPages sid)) (withPages sid)
+  postDetails sid = pageContent (\c -> Map.lookup sid c.postDetails) (R.get (links.spaces.postDetails sid)) (withPostDetails sid)
   getPage sid path =
-    cached (cachedPage sid path) (R.get (links.spaces.pageAt sid path)) (withPageAt sid path)
+    pageContent (cachedPage sid path) (R.get (links.spaces.pageAt sid path)) (withPageAt sid path)
   createPage sid parent title body = write (withJson "POST" (links.spaces.createPage sid) NewPage {parent, title, body})
   savePage pid base title body = write (ifMatch base (withJson "PUT" (links.pages.save pid) PageEdit {title, body}))
   movePage pid space parent = write (withJson "POST" (links.pages.move pid) PageMove {space, parent})
@@ -459,7 +484,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
   -- The server serves an attachment's bytes at an API address, which the
   -- program can build without a request.
   attachmentUrl = pure . Links.attachmentUrl
-  searchPages q = orThrow (cachedAlways (cachedSearch q) (R.get (searchUrl q)) (withSearch q))
+  searchPages q = orThrow (pageContent (fmap Right . cachedSearch q) (R.get (searchUrl q)) (either (const identity) (withSearch q)))
   getDraft pid = cached (\c -> Map.lookup pid c.drafts) (R.get (links.pages.draft pid)) (withDraft pid . Just)
 
   -- A draft's writes change that draft alone (see
@@ -472,7 +497,7 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
     result <- answerNothing <$> call (R.delete (links.pages.discardDraft pid))
     modifyCache (withDraft pid (either (const Nothing) (const (Just (Right Nothing))) result))
     pure result
-  listVersions pid = cached (\c -> Map.lookup pid c.versionLists) (R.get (links.pages.versions pid)) (withVersions pid)
+  listVersions pid = pageContent (\c -> Map.lookup pid c.versionLists) (R.get (links.pages.versions pid)) (withVersions pid)
   getVersion pid at =
     cached (\c -> Map.lookup (pid, at) c.versions) (R.get (links.pages.version pid (VersionTime at))) (withVersion pid at)
   restoreVersion pid at base = write (ifMatch base (R.post (links.pages.restore pid (VersionTime at))))
@@ -712,6 +737,11 @@ instance (MonadUnliftIO m) => MonadLoad (HttpWiki m) where
         (Just <$> run (runReaderT program env {cacheOnly = True})) `catch` \NotCached -> pure Nothing
   attempt (HttpWiki program) = HttpWiki . ReaderT $ \env ->
     withRunInIO $ \run -> try (run (runReaderT program env))
+  endPreload = HttpWiki $ do
+    env <- ask
+    liftIO $ do
+      atomicModifyIORef' env.preloading (const (False, ()))
+      atomicModifyIORef' env.cache (\c -> (forgetPageContent c, ()))
 
 -- | What importing an archive (a zip file in "Wiki.Core.Export"'s format)
 -- into the server would do: its plan, which changes nothing

@@ -8,12 +8,13 @@
 -- number of comments and its first paragraph. Links lead to newer and
 -- older posts when there are more than ten.
 --
--- The posts, with their dates and excerpts, come from the pages the shell
--- has loaded with the space. Each post's author and number of comments
--- come from the backend ('postDetails'), loaded as every view loads its
--- data: in the initial state on a backend that answers at once, and
--- otherwise in the initializer. The same goes for the URLs of the home
--- page's attachments, and for the people it mentions (WP4.13).
+-- The posts and their dates come from the summaries of the pages the
+-- shell has loaded with the space. Each post's author, number of comments
+-- and excerpt come from the backend ('postDetails'), loaded as every view
+-- loads its data: in the initial state on a backend that answers at once,
+-- and otherwise in the initializer. The same goes for the home page itself
+-- (the summaries have no bodies), the URLs of its attachments, and the
+-- people it mentions (WP4.13).
 --
 -- Its actions include the space's "Watch" button ("Wiki.App.View.Watch"),
 -- as in the space view of a space that is not a blog.
@@ -44,10 +45,10 @@ import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common
 import Wiki.App.View.Watch qualified as WatchView
 import Wiki.Core.Attachment (Attachment (..))
-import Wiki.Core.Blog (PostDetails (..), excerptOf, noDetails, onPage, pageCount, posts)
+import Wiki.Core.Blog (PostDetails (..), noDetails, onPage, pageCount, posts)
 import Wiki.Core.Id (AttachmentId, PageId (..))
 import Wiki.Core.Notification (WatchTarget (..))
-import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title))
+import Wiki.Core.Page (Page (attachments, body, id), PageSummary (createdAt, id, slug, title))
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (description, id, name, public))
 import Wiki.Core.Version (Author (..))
@@ -57,16 +58,17 @@ import Wiki.Core.Version (Author (..))
 data Input = Input
   { context :: Context
   , space :: Space
-  , pages :: [Page]
+  , pages :: [PageSummary]
   , page :: Int
   }
 
--- | The details the posts are listed with, and the URLs of the home page's
--- attachments, as far as they have been loaded.
+-- | The details the posts are listed with, the home page if the space has
+-- one, and the URLs of the home page's attachments, as far as they have
+-- been loaded.
 data Loaded
   = Loading
   | Failed WikiError
-  | Ready (Map PageId PostDetails) (Map AttachmentId Text)
+  | Ready (Map PageId PostDetails) (Maybe Page) (Map AttachmentId Text)
 
 data State = State
   { input :: Input
@@ -93,7 +95,7 @@ component =
         -- 'Initialize'.
         initialState = \input -> do
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
-          let logins = Body.unasked Body.noPeople (homeBodies input)
+          let logins = Body.unasked Body.noPeople (homeBodies loaded)
           people <- maybe Body.noPeople (\found -> Body.answered logins found Body.noPeople) <$> atOnce (Body.askPeople logins)
           pure State {input, loaded, people}
       , render
@@ -129,10 +131,10 @@ component =
         body = case loaded of
           Loading -> [hh|<p class="loading">Loading…</p>|]
           Failed e -> failureView e Retry
-          Ready details urls ->
+          Ready details home' urls ->
             [hh|
               <div class="blog-body">
-                {% for home in maybeToList (homeOf space pages) %}
+                {% for home in maybeToList home' %}
                   <div class="blog-home">{{ Body.article FollowLink (placeOf ctx space pages home urls people.found) home.body }}</div>
                 {% end %}
                 <h2 class="blog-posts-heading">Posts</h2>
@@ -151,7 +153,7 @@ component =
               </div>
             |]
 
-    card :: Context -> [Slug] -> Map PageId PostDetails -> Page -> H.ComponentHTML Action Slots m
+    card :: Context -> [Slug] -> Map PageId PostDetails -> PageSummary -> H.ComponentHTML Action Slots m
     card ctx path details p =
       [hh|
         <li class="space-card post-card" data-page={{ p.id.text }}>
@@ -162,7 +164,7 @@ component =
       |]
       where
         d = Map.findWithDefault noDetails p.id details
-        excerpt = excerptOf p.body
+        excerpt = d.excerpt
         meta =
           intersperse (HH.text " · ") $
             [HH.time [attr "datetime" (toS (iso8601Show p.createdAt)), HP.class_ "post-date"] [HH.text (dateOf p.createdAt)]]
@@ -209,26 +211,31 @@ component =
     resolvePeople :: H.HalogenM State Action Slots ViewOutput m ()
     resolvePeople = do
       st <- get
-      let logins = Body.unasked st.people (homeBodies st.input)
+      let logins = Body.unasked st.people (homeBodies st.loaded)
       unless (null logins) $
         lift (attempt (Body.askPeople logins)) >>= \case
           Right found -> modify (\s -> s {people = Body.answered logins found s.people})
           Left _ -> pass
 
 -- | The Markdown the view shows in full: the home page's, if any.
-homeBodies :: Input -> [Text]
-homeBodies input = [h.body | h <- maybeToList (homeOf input.space input.pages)]
+homeBodies :: Loaded -> [Text]
+homeBodies = \case
+  Ready _ (Just home) _ -> [home.body]
+  _ -> []
 
--- | Fetch the details the posts are listed with, and the URLs of the home
--- page's attachments.
+-- | Fetch the details the posts are listed with, the home page, and the
+-- URLs of the home page's attachments.
 fetch :: (MonadWiki n) => Input -> n Loaded
 fetch input =
-  postDetails input.space.id >>= \case
-    Left e -> pure (Failed e)
-    Right details -> do
-      let attachments = foldMap (\h -> h.attachments) (homeOf input.space input.pages)
-      urls <- Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) attachments
-      pure (Ready details urls)
+  either Failed identity
+    <$> runExceptT
+      ( do
+          details <- ExceptT (postDetails input.space.id)
+          home <- for (homeOf input.space input.pages) $ \h -> ExceptT (getPage input.space.id (pagePathOf input.pages h.id))
+          let attachments = foldMap (\h -> h.attachments) home
+          urls <- lift (Map.fromList <$> traverse (\a -> (a.id,) <$> attachmentUrl a) attachments)
+          pure (Ready details home urls)
+      )
 
 -- | The route of a page of a blog's posts: the space's own route for the
 -- first.
@@ -239,7 +246,7 @@ pageRoute path n
 
 -- | The place the home page is read in: its links are resolved among the
 -- space's pages, as the page view resolves them.
-placeOf :: Context -> Space -> [Page] -> Page -> Map AttachmentId Text -> Map Text Author -> Body.Place
+placeOf :: Context -> Space -> [PageSummary] -> Page -> Map AttachmentId Text -> Map Text Author -> Body.Place
 placeOf ctx space pages home urls people =
   Body.Place {context = ctx, space, pages, path = pagePathOf pages home.id, attachments = home.attachments, urls, people}
 

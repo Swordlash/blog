@@ -32,7 +32,7 @@ import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
 import Wiki.Core.Math (Macros (..))
-import Wiki.Core.Page (Page (..), pageTreeOrder)
+import Wiki.Core.Page (Page (..), PageSummary (..), pageTreeOrder)
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Export (availableFormats, newExports, oneAtATime, restrictTeX, texEngine, texLimits)
@@ -202,7 +202,7 @@ spaces = describe "a space, as one document" $ do
 
 -- | The ids of the demo's Docs space and of its pages, by title, as the
 -- administrator reads them.
-docsIds :: Running -> IO (Space, Map Text Page)
+docsIds :: Running -> IO (Space, Map Text PageSummary)
 docsIds r = do
   docs <- spaceAt r "docs"
   pages <- pagesOf r docs
@@ -215,7 +215,7 @@ spaceAt r name = do
   maybe (panic ("no space " <> name)) pure (find (\s -> s.slug == slug name) all')
 
 -- | A space's pages, as the operator reads them.
-pagesOf :: (HasCallStack) => Running -> Space -> IO [Page]
+pagesOf :: (HasCallStack) => Running -> Space -> IO [PageSummary]
 pagesOf r space = ok200 (getUrl r (r.admin <> "/admin/" <> links.spaces.listPages space.id))
 
 -- | The bytes of an export, which must have been made, with its media type.

@@ -278,7 +278,7 @@ import Wiki.Core.Markdown.Edit
   , textColourClass
   , textColours
   )
-import Wiki.Core.Page (Page)
+import Wiki.Core.Page (Page, PageSummary)
 -- Qualified, so that its fields (read with a dot) are not confused with
 -- the work's fields of the same names.
 import Wiki.Core.Page qualified as P
@@ -292,7 +292,7 @@ import Wiki.Core.Version (Author (..), Version (author))
 data Input = Input
   { context :: Context
   , space :: Space
-  , pages :: [Page]
+  , pages :: [PageSummary]
   , path :: [Slug]
   , feed :: Maybe Feed
   -- ^ The tab's live channel, on a backend that has one.

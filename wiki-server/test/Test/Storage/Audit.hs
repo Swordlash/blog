@@ -27,7 +27,7 @@ import Wiki.Core.Access (Access (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Id
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (PageSummary (..))
 import Wiki.Core.Permission (SpacePermission (..))
 import Wiki.Core.Permission qualified as P
 import Wiki.Core.Slug (slugText)

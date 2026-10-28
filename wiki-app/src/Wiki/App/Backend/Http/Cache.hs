@@ -23,9 +23,21 @@
 -- the page was loaded from) and to one signed-in user: signing in or out
 -- empties it. It lives as long as the page. It holds at most what this tab
 -- has read since this client's last write, because a write empties it
--- (the exceptions, drafts and comments, are below). Nothing else limits
--- its size: a tab that only reads for a long time keeps everything it has
--- read.
+-- (the exceptions, drafts and comments, are below).
+--
+-- Page content is cached only until the reader first goes to another
+-- route (WP5.14 of docs/PLAN.md). Page content is the pages, the lists of
+-- a space's pages, the details of a blog's posts, the version lists, the
+-- searches and the directory's page counts ('forgetPageContent'). Until
+-- then, the cache holds what the server prerendered the page with, and
+-- the program's first render matches that page. When the route changes,
+-- the backend drops the page content ('Wiki.App.Backend.endPreload') and
+-- fetches it on every read from then on. So a page shown again is fetched
+-- again, and shows someone else's edit made meanwhile. This also keeps
+-- the cache small: what stays cached after the first route is the
+-- session, the spaces, this user's drafts, the versions (a saved version
+-- never changes), the comment threads and notifications the live channel
+-- keeps up to date, the watches, and the administration's data.
 --
 -- Any write this client makes empties the whole cache ('afterWrite'). The
 -- rule is coarse on purpose, because a write can change much more than the
@@ -41,10 +53,12 @@
 -- else, and it happens every few seconds while someone types, so the new
 -- draft replaces the cached one instead.
 --
--- A change someone else makes on the server is not seen until this client
--- writes, or the page is reloaded. The exception is a page save reported
--- by the live channel ("Wiki.App.Live"): 'afterEvent' then drops the
--- cached pages, and the other entries a save changes.
+-- A change someone else makes to what stays cached (a space renamed, a
+-- user's rights changed) is not seen until this client writes, or the
+-- page is reloaded. Page content is fetched again after the first route,
+-- as said above. Before that, a page save reported by the live channel
+-- ("Wiki.App.Live") drops the cached pages, and the other entries a save
+-- changes ('afterEvent').
 --
 -- Refusals are cached too. 'NotFound' (the space is not there) and
 -- 'Forbidden' (the reader may not see it) are what the view shows. The
@@ -124,6 +138,7 @@ module Wiki.App.Backend.Http.Cache
   , afterComment
   , afterEvent
   , forgetThreads
+  , forgetPageContent
   , afterWrite
   )
 where
@@ -144,8 +159,7 @@ import Wiki.Core.Comment (Thread)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Notification (Notification, Watch, WatchTarget)
-import Wiki.Core.Page (Page)
-import Wiki.Core.Path (findChild, resolvePath)
+import Wiki.Core.Page (Page, PageSummary)
 import Wiki.Core.Search (SearchHit, SearchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space)
@@ -163,7 +177,7 @@ data Cache = Cache
   -- ^ 'Wiki.App.Backend.pageCounts'.
   , spaceAt :: Map [Slug] (Either WikiError Space)
   -- ^ 'Wiki.App.Backend.getSpace', by path.
-  , pages :: Map SpaceId (Either WikiError [Page])
+  , pages :: Map SpaceId (Either WikiError [PageSummary])
   -- ^ 'Wiki.App.Backend.listPages', by space.
   , postDetails :: Map SpaceId (Either WikiError (Map PageId PostDetails))
   -- ^ 'Wiki.App.Backend.postDetails', by space.
@@ -174,7 +188,8 @@ data Cache = Cache
   -- or 'Nothing' when they have none.
   , searches :: [(SearchQuery, [SearchHit])]
   -- ^ 'Wiki.App.Backend.searchPages', by query, the latest first. The
-  -- list stays short because every write empties it.
+  -- list stays short because every write empties it, and searches are
+  -- cached only until the first route change ('forgetPageContent').
   , versionLists :: Map PageId (Either WikiError [VersionInfo])
   -- ^ 'Wiki.App.Backend.listVersions', by page.
   , versions :: Map (PageId, UTCTime) (Either WikiError Version)
@@ -254,13 +269,9 @@ kept = \case
   Left _ -> False
 
 -- | The cached page at a path in a space, if there is one. It comes from
--- an earlier 'Wiki.App.Backend.getPage', or from the cached list of all
--- the space's pages ('withPages'). The space's view fetches that list, so
--- a page opened from the space's view needs no fetch.
+-- an earlier 'Wiki.App.Backend.getPage'.
 cachedPage :: SpaceId -> [Slug] -> Cache -> Maybe (Either WikiError Page)
-cachedPage sid path c =
-  Map.lookup (sid, path) c.pageAt
-    <|> (Map.lookup sid c.pages >>= rightToMaybe >>= \ps -> rightToMaybe (resolvePath (findChild ps) path) >>= fmap Right . lastMay)
+cachedPage sid path c = Map.lookup (sid, path) c.pageAt
 
 -- | The hits of a query searched for already.
 cachedSearch :: SearchQuery -> Cache -> Maybe [SearchHit]
@@ -280,7 +291,7 @@ withPageCounts n c = c {pageCounts = Just n}
 withSpaceAt :: [Slug] -> Either WikiError Space -> Cache -> Cache
 withSpaceAt path s c = c {spaceAt = Map.insert path s c.spaceAt}
 
-withPages :: SpaceId -> Either WikiError [Page] -> Cache -> Cache
+withPages :: SpaceId -> Either WikiError [PageSummary] -> Cache -> Cache
 withPages sid ps c = c {pages = Map.insert sid ps c.pages}
 
 withPostDetails :: SpaceId -> Either WikiError (Map PageId PostDetails) -> Cache -> Cache
@@ -393,6 +404,23 @@ afterEvent pid = \case
 -- | The cache without a page's threads: they have changed, or may have.
 forgetThreads :: PageId -> Cache -> Cache
 forgetThreads pid c = c {threads = Map.delete pid c.threads}
+
+-- | The cache without page content: the pages, the lists of a space's
+-- pages, the details of a blog's posts, the version lists, the searches
+-- and the directory's page counts. These change whenever anyone saves,
+-- creates, moves or deletes a page. The backend drops them when the
+-- reader first goes to another route, and caches them no more after that
+-- ('Wiki.App.Backend.endPreload').
+forgetPageContent :: Cache -> Cache
+forgetPageContent c =
+  c
+    { pageAt = mempty
+    , pages = mempty
+    , postDetails = mempty
+    , versionLists = mempty
+    , searches = []
+    , pageCounts = Nothing
+    }
 
 -- | The cache after a write that changed the wiki: nothing in it can be
 -- trusted any more.

@@ -35,7 +35,7 @@ import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readP
 import Wiki.App.View.Common
 import Wiki.App.View.Permissions qualified as Permissions
 import Wiki.Core.Id (PageId)
-import Wiki.Core.Page (Page (id, title), pageTreeOrder)
+import Wiki.Core.Page (PageSummary (id, title), pageTreeOrder)
 import Wiki.Core.Space
   ( Icon (..)
   , Space (blog, description, homePage, icon, id, name, pageOrder)
@@ -53,7 +53,7 @@ import Wiki.Core.Space
 data Input = Input
   { context :: Context
   , space :: Space
-  , pages :: [Page]
+  , pages :: [PageSummary]
   }
 
 -- | The kinds of icon the form chooses between.

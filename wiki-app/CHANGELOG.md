@@ -28,6 +28,22 @@ assistant's settings page ("Effort"), and is medium unless chosen. The
 picker under the chat starts at that default and changes the effort for the
 current conversation only; it no longer writes the settings.
 
+A page shown again is fetched again (WP5.14), so a tab no longer shows a
+page without someone else's edit made while it showed another page. The
+HTTP backend caches page content (pages, lists of pages, the details of a
+blog's posts, version lists, searches and the directory's page counts)
+only until the first route change, which the shell announces with the new
+`MonadLoad.endPreload`. Until then the cache answers from what the server
+prerendered the page with, so the first render still matches that page;
+from then on page content is fetched on every read, and the cache holds
+only the session, the spaces, drafts, versions, comment threads,
+notifications, watches and the administration's data. The list of a
+space's pages has no bodies (`Wiki.Core.Page.PageSummary`): the views read
+a page by itself, the blog reads its home page and lists its posts with
+the excerpts `postDetails` gives, and the new-page form reads the template
+it starts from. The page view tells the shell the page it shows
+(`Showing`), for the link preview in the document's head.
+
 The live channel's socket waits a random 70 % to 130 % of its pause
 before it opens again (WP5.16a), so that the tabs a server restart
 disconnected do not all connect again in the same instant.

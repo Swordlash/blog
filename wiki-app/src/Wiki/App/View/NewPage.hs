@@ -40,7 +40,7 @@ import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Route (Route (..))
 import Wiki.App.View.Common
 import Wiki.Core.Id (PageId)
-import Wiki.Core.Page (Page, templatePages)
+import Wiki.Core.Page (Page (body), PageSummary, templatePages)
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (findChild, resolvePath)
 import Wiki.Core.Slug (Slug)
@@ -54,7 +54,7 @@ import Wiki.Core.User (User (displayName))
 data Input = Input
   { context :: Context
   , space :: Space
-  , pages :: [Page]
+  , pages :: [PageSummary]
   , parent :: Maybe [Slug]
   -- ^ The path of the page to put it under, or 'Nothing' for the space's
   -- top level.
@@ -160,12 +160,17 @@ component =
           _ -> pass
 
 -- | The new page's body: empty, or the chosen template with its
--- placeholders filled in. A space template no longer among its pages
--- (deleted since the form was shown) gives a blank page.
-startingBody :: (MonadIO n) => State -> n Text
+-- placeholders filled in. A space template is fetched from the backend
+-- here, because the list of the space's pages has no bodies. A template
+-- that cannot be fetched any more (deleted since the form was shown) gives
+-- a blank page.
+startingBody :: (MonadWiki n, MonadIO n) => State -> n Text
 startingBody st = case st.start of
   Blank -> pure ""
-  SpaceTemplate pid -> filled (maybe "" (\p -> p.body) (find (\p -> p.id == pid) st.input.pages))
+  SpaceTemplate pid
+    | Just _ <- find (\p -> p.id == pid) st.input.pages ->
+        getPage st.input.space.id (pagePathOf st.input.pages pid) >>= filled . either (const "") (\p -> p.body)
+    | otherwise -> filled ""
   BuiltIn key -> filled (maybe "" (\t -> t.body) (find (\t -> t.key == key) builtinTemplates))
   where
     filled body = do
@@ -175,12 +180,12 @@ startingBody st = case st.start of
 
 -- | The page the new one goes under, if the route names one; 'Nothing'
 -- for the space's top level; 'NotFound' for a path that names no page.
-under :: Input -> Either WikiError (Maybe Page)
+under :: Input -> Either WikiError (Maybe PageSummary)
 under input = case input.parent of
   Nothing -> Right Nothing
   Just path -> maybe (Left NotFound) (Right . Just) (pageAt input.pages path)
 
-pageAt :: [Page] -> [Slug] -> Maybe Page
+pageAt :: [PageSummary] -> [Slug] -> Maybe PageSummary
 pageAt pages path = rightToMaybe (resolvePath (findChild pages) path) >>= lastMay
 
 headingOf :: Input -> Text

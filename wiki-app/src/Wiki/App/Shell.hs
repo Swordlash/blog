@@ -172,7 +172,7 @@ import Wiki.Core.Blog (excerpt, firstImage)
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Id (SpaceId, UserId)
 import Wiki.Core.Markdown (Destination (..), classifyDestination, parseMarkdown)
-import Wiki.Core.Page (Page (attachments, body, id, title), templatePages, treePages)
+import Wiki.Core.Page (Page (attachments, body, id, title), PageSummary (id, title), templatePages, treePages)
 import Wiki.Core.Path (PathError (..), findChild, resolvePath)
 import Wiki.Core.Permission (GlobalPermission (Administer), canView, hasGlobalPermission, mayCreateSpace)
 import Wiki.Core.Slug (Slug)
@@ -232,7 +232,7 @@ data Here
   = NoSpace
   | LoadingSpace [Slug]
   | SpaceFailed [Slug] WikiError
-  | InSpace [Slug] Space [Page]
+  | InSpace [Slug] Space [PageSummary]
 
 -- | Whether the context every route shows (who is signed in, the tree of
 -- spaces) has been loaded.
@@ -292,6 +292,10 @@ data State m = State
   -- elsewhere.
   , installable :: Bool
   -- ^ Whether the browser offers to install the wiki.
+  , shown :: Maybe Page
+  -- ^ The page the page view last said it shows ('Showing'), with its
+  -- body: the head's preview describes the page with it. The space's list
+  -- of pages has no bodies.
   }
 
 -- | What the administration's section on the wiki's data shows.
@@ -391,6 +395,7 @@ component =
               , offline = False
               , offlineCopy = Nothing
               , installable = False
+              , shown = Nothing
               }
       , render
       , eval =
@@ -745,7 +750,7 @@ component =
 
     -- The space the route is in, and nothing else of the wiki except links
     -- to the rest of it.
-    spaceSidebar :: State m -> Space -> [Page] -> H.ComponentHTML Action Slots m
+    spaceSidebar :: State m -> Space -> [PageSummary] -> H.ComponentHTML Action Slots m
     spaceSidebar st space pages =
       [hh|
         <nav class="wiki-sidebar space-sidebar" aria-label="Space">
@@ -1045,6 +1050,7 @@ component =
           _ -> pass
       FromView (Changed next) -> reload next
       FromView Loaded -> settle
+      FromView (Showing page) -> modify (\st -> st {shown = Just page})
       -- Someone signed in or out: reload everything, as the new user.
       FromAccount (SignInView.AccountChanged s) -> do
         modify (\st -> st {session = s, settled = False, panel = Actions Nothing})
@@ -1093,6 +1099,10 @@ component =
 
     arrive :: Route -> Int -> H.HalogenM (State m) Action Slots output m ()
     arrive r entry = do
+      -- Before the new route renders: its views fetch the page content
+      -- they show, rather than read what the server prerendered the first
+      -- route with.
+      lift endPreload
       -- The questions and results about the wiki's data are not shown
       -- again on coming back to the administration.
       modify (\st -> st {route = r, settled = False, menuOpen = False, switcherOpen = False, panel = Actions Nothing, leaving = Nothing, entry, offlineCopy = Nothing})
@@ -1101,6 +1111,9 @@ component =
     -- After a change: reload everything, and every view's own data too.
     reload :: Maybe Route -> H.HalogenM (State m) Action Slots output m ()
     reload next = do
+      -- Going to another route after the change ends the preload, as
+      -- 'arrive' does.
+      when (isJust next) (lift endPreload)
       loadWorld
       modify (\st -> st {generation = st.generation + 1})
       for_ next $ \r -> modify (\st -> st {route = r, settled = False, leaving = Nothing})
@@ -1269,10 +1282,10 @@ waitsForPage st = case (st.route, st.here) of
   (Search {}, _) -> True
   _ -> False
 
-currentPageOf :: [Page] -> [Slug] -> Maybe Page
+currentPageOf :: [PageSummary] -> [Slug] -> Maybe PageSummary
 currentPageOf pages path = rightToMaybe (resolvePath (findChild pages) path) >>= lastMay
 
-currentPage :: State m -> Maybe Page
+currentPage :: State m -> Maybe PageSummary
 currentPage st = case (st.route, st.here) of
   (Space _, InSpace _ space pages) -> homeOf space pages
   (Posts _ _, InSpace _ space pages) -> homeOf space pages
@@ -1366,14 +1379,16 @@ headOf st = Head {title = documentTitle st, preview, feeds}
       (Posts path _, InSpace _ space pages) | public space -> Just (ofSpace path space pages)
       (Page path pagePath, InSpace _ space pages)
         | public space
-        , Just p <- currentPageOf pages pagePath ->
+        , Just p <- currentPageOf pages pagePath >>= shownPage ->
             Just (ofPage space p (href (Page path pagePath)))
       _ -> Nothing
+    -- The page shown, with its body, if it is the page named.
+    shownPage named = mfilter (\p -> p.id == named.id) st.shown
     -- A space's own route: a blog, or a space without a home page, is
     -- described by its description; a space that opens at its home page is
     -- described as that page, at the space's address, its description
     -- first.
-    ofSpace path space pages = case homeOf space pages of
+    ofSpace path space pages = case homeOf space pages >>= shownPage of
       Just home
         | not space.blog ->
             let p = ofPage space home (href (Space path))

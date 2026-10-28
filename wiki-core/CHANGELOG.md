@@ -16,6 +16,10 @@ shows as it streams: Anthropic's `anthropicRequest` has `thinking: {type:
 "adaptive", display: "summarized"}`, and OpenAI's `openAiRequest` has
 `reasoning.summary: "auto"`.
 
+`Wiki.Core.Page.PageSummary` is a page without its body and attachments
+(WP5.14), with `summaryOf`; `treePages`, `templatePages` and
+`Wiki.Core.Blog`'s `posts`, `isPost` and `neighbours` take summaries, and
+`childPages` and `pageTreeOrder` take either. `PostDetails` gains `excerpt`.
 
 The audit log names `user.password-link` (WP5.6): "Mailed a user a link to
 choose a password".

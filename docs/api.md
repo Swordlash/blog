@@ -192,7 +192,8 @@ take that from themself, which the space's view does not offer.
 
 | Method | Path | Body | Response | Errors | `MonadWiki` |
 | ------ | ---- | ---- | -------- | ------ | ----------- |
-| GET | `api/v1/spaces/<space>/pages` | | `[Page]`, the space's whole tree, each page before the pages under it | 404, 403 | `listPages` |
+| GET | `api/v1/spaces/<space>/pages` | | `[PageSummary]` `{"id", "space", "parent", "title", "slug", "createdAt", "updatedAt", "position", "template"}`, the space's whole tree, each page before the pages under it: a `Page` without its `body` and `attachments`, which `getPage` reads | 404, 403 | `listPages` |
+| GET | `api/v1/spaces/<space>/post-details` | | `{"<page id>": PostDetails}` `{"author", "comments", "excerpt"}` for every page of the space: the author of its first version (or `null`), its number of comments, and, for a blog's post, its first paragraph as text (`""` for any other page) | 404, 403 | `postDetails` |
 | GET | `api/v1/spaces/<space>/pages/at/<slug>/<slug>…` | | `Page` at that path in the space, with `ETag` | 404, 403 | `getPage` |
 | POST | `api/v1/spaces/<space>/pages` | `NewPage` `{"parent": id or null, "title", "body"}` | 201 `Page`, with `ETag` | 404, 403, 400 | `createPage` |
 | PUT | `api/v1/pages/<page>` | `PageEdit` `{"title", "body"}`, with `If-Match` | `Page`, with its new `ETag` | 404, 403, 400, 409 | `savePage` |

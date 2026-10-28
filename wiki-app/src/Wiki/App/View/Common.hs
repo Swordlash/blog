@@ -46,6 +46,7 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Type.Equality (type (~))
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
 import Halogen.Router (Follow, Router)
@@ -57,8 +58,8 @@ import Wiki.App.Backend (Session (grants, standing, user), WikiError (..), sessi
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Id (PageId, SpaceId, UserId)
 import Wiki.Core.Order (ChildOrder, Shift (..))
-import Wiki.Core.Page (Page (id, slug, title), childPages)
-import Wiki.Core.Path (ancestry, childrenOf, findChild, resolvePath)
+import Wiki.Core.Page (Page, PageSummary (id, title), childPages)
+import Wiki.Core.Path (TreeNode (..), ancestry, childrenOf, findChild, resolvePath)
 import Wiki.Core.Permission (Grants, Principal, canAdministerSpace, canEdit, canView, spaceChain)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Icon (..), Space (homePage, icon, id, name, slug), colourOf, iconLetter)
@@ -88,6 +89,10 @@ data ViewOutput
     Changed (Maybe Route)
   | -- | The view has loaded what it shows.
     Loaded
+  | -- | The view shows this page, body and all: the shell describes the
+    -- page in the document's head with it (a link preview), since the
+    -- space's list of pages has no bodies.
+    Showing Page
 
 principalOf :: Context -> Maybe Principal
 principalOf ctx = sessionPrincipal ctx.session
@@ -115,9 +120,10 @@ notified ctx = isJust ctx.session.user && ctx.session.standing /= Operator
 spacePathOf :: [Space] -> SpaceId -> [Slug]
 spacePathOf spaces sid = map (\s -> s.slug) (spaceChain spaces sid)
 
--- | A page's path, among the pages of its space; empty if it is not there.
-pagePathOf :: [Page] -> PageId -> [Slug]
-pagePathOf pages pid = maybe [] (map (\p -> p.slug)) (ancestry (\i -> find (\p -> p.id == i) pages) pid)
+-- | A page's path, among the pages of its space (their summaries, or the
+-- pages themselves); empty if it is not there.
+pagePathOf :: (TreeNode page, NodeId page ~ PageId) => [page] -> PageId -> [Slug]
+pagePathOf pages pid = maybe [] (map nodeSlug) (ancestry (\i -> find (\p -> nodeId p == i) pages) pid)
 
 -- | The space at a path, with its chain, if there is one.
 findSpace :: [Space] -> [Slug] -> Maybe [Space]
@@ -172,9 +178,9 @@ pageTree
   -> (Follow Route -> action)
   -> [Slug]
   -> ChildOrder
-  -> [Page]
+  -> [PageSummary]
   -> Maybe PageId
-  -> (Page -> Bool -> Bool -> [HH.HTML w action])
+  -> (PageSummary -> Bool -> Bool -> [HH.HTML w action])
   -> HH.HTML w action
 pageTree router onFollow spacePath order pages current controls = level Nothing
   where
@@ -205,7 +211,7 @@ spaceIcon urls s = case s.icon of
   _ -> [hh|<span class="space-icon space-icon-{{ colourOf s }}" aria-hidden="true">{{ iconLetter s.name }}</span>|]
 
 -- | The page a space opens at, if it has one among its pages.
-homeOf :: Space -> [Page] -> Maybe Page
+homeOf :: Space -> [PageSummary] -> Maybe PageSummary
 homeOf s pages = s.homePage >>= \h -> find (\p -> p.id == h) pages
 
 -- | Buttons that move a child of a space by hand: to the top, up, down, to

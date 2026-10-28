@@ -65,7 +65,7 @@ import Wiki.Core.Id (PageId, SpaceId)
 import Wiki.Core.Math (Macros (..), spaceMacros)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, orderName)
-import Wiki.Core.Page (Page (id, title), templatePages, treePages)
+import Wiki.Core.Page (PageSummary (id, title), templatePages, treePages)
 import Wiki.Core.Permission (mayCreateSpace, mayMoveSpace)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (description, id, mathMacros, name, pageOrder, parent, public, slug, subspaceOrder), subspacesOf)
@@ -75,7 +75,7 @@ import Wiki.Core.Space (Space (description, id, mathMacros, name, pageOrder, par
 data Input = Input
   { context :: Context
   , space :: Space
-  , pages :: [Page]
+  , pages :: [PageSummary]
   }
 
 data Mode
@@ -184,7 +184,7 @@ component =
         path = spacePathOf ctx.spaces space.id
         managing = mode == ManagingSettings
 
-    form :: Context -> Space -> [Page] -> Mode -> Maybe (H.ComponentHTML Action Slots m)
+    form :: Context -> Space -> [PageSummary] -> Mode -> Maybe (H.ComponentHTML Action Slots m)
     form ctx space pages = \case
       Viewing -> Nothing
       ManagingSettings -> Just (HH.slot "settings" () SpaceSettings.component SpaceSettings.Input {context = ctx, space, pages} FromSettings)

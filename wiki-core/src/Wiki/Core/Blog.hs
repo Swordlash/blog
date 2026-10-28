@@ -48,7 +48,7 @@ import Protolude
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Markdown.Ast (Block (..), Inline (..), ListItem (..), parseMarkdown)
 import Wiki.Core.Order (ChildOrder (..), childrenInOrder)
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (PageSummary (..))
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Version (Author)
 
@@ -58,25 +58,25 @@ import Wiki.Core.Version (Author)
 -- | A space's posts, among its pages: its top-level pages except its home
 -- page and its templates ('Wiki.Core.Page.template'), newest first. The
 -- caller checks whether the space is shown as a blog.
-posts :: Space -> [Page] -> [Page]
+posts :: Space -> [PageSummary] -> [PageSummary]
 posts space pages = filter (isPost space) (childrenInOrder NewestFirst pages Nothing)
 
 -- | Whether a page of a space is one of its posts ('posts').
-isPost :: Space -> Page -> Bool
+isPost :: Space -> PageSummary -> Bool
 isPost space p = p.space == space.id && isNothing p.parent && space.homePage /= Just p.id && not p.template
 
 -- | 'Neighbours': the posts listed before and after a post.
 data Neighbours = Neighbours
-  { older :: Maybe Page
+  { older :: Maybe PageSummary
   -- ^ The post created before it, listed after it: the previous post.
-  , newer :: Maybe Page
+  , newer :: Maybe PageSummary
   -- ^ The post created after it, listed before it: the next post.
   }
   deriving stock (Eq, Show)
 
 -- | A post's neighbours among the space's posts, or 'Nothing' for a page
 -- that is not one of them.
-neighbours :: Space -> [Page] -> PageId -> Maybe Neighbours
+neighbours :: Space -> [PageSummary] -> PageId -> Maybe Neighbours
 neighbours space pages pid = case break (\p -> p.id == pid) (posts space pages) of
   (before, _ : after) -> Just Neighbours {older = head after, newer = lastMay before}
   (_, []) -> Nothing
@@ -104,20 +104,24 @@ onPage n xs = (shown, take postsPerPage (drop ((shown - 1) * postsPerPage) xs))
 --------------------------------------------------------------------------------
 -- What a post is listed with
 
--- | 'PostDetails': the facts a post is listed with that its page does not
--- hold. Who wrote it (the author of its first version; 'Nothing' for a
--- page that was imported whole) and how many comments it has, in every
--- thread, resolved or not.
+-- | 'PostDetails': the facts a post is listed with that its summary does
+-- not hold. Who wrote it (the author of its first version; 'Nothing' for a
+-- page that was imported whole), how many comments it has, in every
+-- thread, resolved or not, and its excerpt ('excerptOf'). The excerpt is
+-- here because the list of a space's pages has no bodies
+-- ('Wiki.Core.Page.PageSummary'): the backend, which has the bodies, makes
+-- the excerpt.
 data PostDetails = PostDetails
   { author :: Maybe Author
   , comments :: Int
+  , excerpt :: Text
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
 -- | The details of a page with no known details.
 noDetails :: PostDetails
-noDetails = PostDetails {author = Nothing, comments = 0}
+noDetails = PostDetails {author = Nothing, comments = 0, excerpt = ""}
 
 -- | The longest excerpt, in characters, including the ellipsis.
 maxExcerpt :: Int

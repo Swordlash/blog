@@ -51,8 +51,8 @@ import Wiki.Core.Draft qualified as Draft
 import Wiki.Core.Id
 import Wiki.Core.Notification (MailMode (..), Notification (..), Watch (..), WatchReason (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
-import Wiki.Core.Page (Page)
-import Wiki.Core.Page qualified as Page
+import Wiki.Core.Page (Page, summaryOf)
+import Wiki.Core.Page qualified as Page (Page (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
@@ -152,7 +152,7 @@ stubs =
               if s == SpaceId "s2" && body.subject == SubjectGroup (GroupId "g1") && body.permission == Edit && not body.granted
                 then pure NoContent
                 else refuse NotFound
-          , listPages = \s -> pure [Sample.page {Page.space = s}]
+          , listPages = \s -> pure [summaryOf Sample.page {Page.space = s}]
           , postDetails = \s -> if s == Sample.space.id then pure (Map.fromList [(Sample.page.id, Sample.postDetails)]) else refuse Forbidden
           , pageAt = \s path ->
               if path == [Sample.slug "tour"] then pure (versioned Sample.page {Page.space = s}) else refuse NotFound
@@ -461,7 +461,7 @@ spec = describe "a server of the API's type" $ do
 
   describe "pages" $ do
     it "lists a space's, and finds one by its path, with its version as the ETag" $ do
-      answers (getAt (links.spaces.listPages s)) 200 [Sample.page]
+      answers (getAt (links.spaces.listPages s)) 200 [summaryOf Sample.page]
       r <- getAt (links.spaces.pageAt s [Sample.slug "tour"])
       (status r, jsonBody r) `shouldBe` (200, Just Sample.page)
       header "ETag" r `shouldBe` Just (encodeUtf8 etag)

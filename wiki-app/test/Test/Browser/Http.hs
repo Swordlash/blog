@@ -78,7 +78,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.App.View.Body qualified as Body
-import Wiki.App.View.Common (spacePathOf)
+import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
@@ -169,9 +169,14 @@ serveDemo = do
     runMemWiki wiki $ do
       me <- session
       spaces <- listSpaces
-      pages <- for spaces $ \s -> (\ps details -> (s, ps, details)) . fromRight [] <$> listPages s.id <*> (fromRight mempty <$> postDetails s.id)
+      pages <- for spaces $ \s -> do
+        ps <- fromRight [] <$> listPages s.id
+        details <- fromRight mempty <$> postDetails s.id
+        -- The list of pages has no bodies: each page is read by itself.
+        full <- rights <$> for ps (\p -> getPage s.id (pagePathOf ps p.id))
+        pure (s, ps, details, full)
       people <- directory
-      threads <- for (concatMap (\(_, ps, _) -> ps) pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
+      threads <- for (concatMap (\(_, ps, _, _) -> ps) pages) $ \p -> (p.id,) . fromRight [] <$> listThreads p.id
       counts <- pageCounts
       pure (me, spaces, pages, people, threads, counts)
   -- What the bell, the "Watch" buttons and the mentions read
@@ -179,12 +184,12 @@ serveDemo = do
   (named, watched) <- unsafeIOToPageM $ do
     wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
     runMemWiki wiki $ do
-      named <- for (concatMap (\(_, ps, _) -> ps) pages) $ \p -> do
+      named <- for (concatMap (\(_, _, _, full) -> full) pages) $ \p -> do
         let logins = Body.unasked Body.noPeople (p.body : [c.body | (q, ts) <- threads, q == p.id, t <- ts, c <- t.comments])
         (logins,) <$> mentionable logins
       watched <-
         (<>)
-          <$> for (concatMap (\(_, ps, _) -> ps) pages) (\p -> (links.notifications.pageWatch p.id,) . fromRight (Watch False Unchosen) <$> watching (WatchPage p.id))
+          <$> for (concatMap (\(_, ps, _, _) -> ps) pages) (\p -> (links.notifications.pageWatch p.id,) . fromRight (Watch False Unchosen) <$> watching (WatchPage p.id))
           <*> for spaces (\s -> (links.notifications.spaceWatch s.id,) . fromRight (Watch False Unchosen) <$> watching (WatchSpace s.id))
       pure (named, watched)
   answerWith "GET" links.notifications.list 200 Notifications {unread = 0, items = []}
@@ -199,9 +204,10 @@ serveDemo = do
   answerWith "GET" links.admin.status 200 quietServer
   answerWith "GET" "api/v1/spaces" 200 spaces
   answerWith "GET" links.spaces.pageCounts 200 counts
-  for_ pages $ \(s, ps, details) -> do
+  for_ pages $ \(s, ps, details, full) -> do
     answerWith "GET" (links.spaces.atPath (spacePathOf spaces s.id)) 200 s
     answerWith "GET" (links.spaces.listPages s.id) 200 ps
+    for_ full $ \p -> answerWith "GET" (links.spaces.pageAt s.id (pagePathOf ps p.id)) 200 p
     answerWith "GET" (links.spaces.postDetails s.id) 200 details
     for_ ps $ \p -> answerWith "GET" ("api/v1/pages/" <> p.id.text <> "/draft") 200 (Nothing :: Maybe ())
 
@@ -516,6 +522,14 @@ helloWorld = do
     blog <- getSpace (slugs ["blog"])
     either (panic . show) pure =<< either (pure . Left) (\s -> getPage s.id (slugs ["hello-world"])) blog
 
+-- | The demo's tour of the Docs space, as its administrator reads it.
+tourOfDocs :: IO P.Page
+tourOfDocs = do
+  wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
+  runMemWiki wiki $ do
+    docs <- getSpace (slugs ["docs"])
+    either (panic . show) pure =<< either (pure . Left) (\s -> getPage s.id (slugs ["tour"])) docs
+
 requests :: Spec
 requests = describe "its requests, through fetch" $ do
   let page = PageId "page 1"
@@ -616,17 +630,37 @@ views m = describe "the application over it" $ do
     find ui ".user-name" >>= (`shouldHaveText` "Ada Admin")
     -- Whom the tour mentions is asked once it is shown, and answered.
     find ui ".page-body a.mention" >>= (`shouldHaveText` "@editor")
-    -- The page came with its space's pages: it was not asked for again.
-    urls <- map (\r -> r.url) <$> asked
-    filter (T.isInfixOf "/pages/at/") urls `shouldBe` []
-    -- A page of the same space opens at once, from what was read; only
-    -- its comments and whether it is watched, which nothing has read yet,
-    -- are asked for.
-    let notComments = filter (\r -> not ("/threads" `T.isSuffixOf` r.url || "notifications/watches/pages/" `T.isInfixOf` r.url))
-    before <- length . notComments <$> asked
+    -- The list of the space's pages has no bodies: the page is asked for
+    -- by itself, once.
+    let pagesAsked = map (\r -> r.url) . filter (\r -> "/pages/at/" `T.isInfixOf` r.url) <$> asked
+    pagesAsked >>= (`shouldSatisfy` ((== 1) . length))
+    unmount ui
+    serverStops
+
+  -- The tab that showed a page without someone else's edit (WP5.14 of
+  -- docs/PLAN.md): page content is cached only until the route changes,
+  -- so a page shown again is fetched again.
+  it "fetches a page shown again, and shows what someone else saved meanwhile" $ runPage $ do
+    serverStarts
+    serveDemo
+    tourPage <- unsafeIOToPageM tourOfDocs
+    ui <- startServer m tour
+    find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
+    let tourAt = links.spaces.pageAt tourPage.space (slugs ["tour"])
+        fetchesOf url = length . filter (\r -> r.method == "GET" && r.url == url) <$> asked
+        listsAsked = length . filter (\r -> "/pages" `T.isSuffixOf` r.url) <$> asked
+    fetchesOf tourAt `shouldReturn` 1
+    lists <- listsAsked
+    -- Another page of the space: fetched, the space's list kept.
     find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/markdown-guide/']" >>= click
     find ui ".page-body h1" >>= (`shouldHaveText` "Markdown guide")
-    map (\r -> r.url) . notComments <$> asked >>= \after -> drop before after `shouldBe` []
+    -- Someone else saves the tour meanwhile, in another session. Nothing
+    -- tells this tab: it no longer shows the tour.
+    answerWith "GET" tourAt 200 tourPage {P.body = "# Tour\n\nSaved by someone else."}
+    find ui ".wiki-sidebar .page-tree a[href$='#/s/docs/p/tour/']" >>= click
+    eventually $ (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved by someone else.")
+    fetchesOf tourAt `shouldReturn` 2
+    listsAsked `shouldReturn` lists
     unmount ui
     serverStops
 
@@ -1010,7 +1044,7 @@ presence m = describe "who is editing" $ do
     -- Saved elsewhere: read again and shown, with no button to ask for it.
     let later = addUTCTime 60 hello.updatedAt
         saved = hello {P.body = "Saved in another tab.", P.updatedAt = later}
-    answerWith "GET" (links.spaces.listPages hello.space) 200 [if p.id == hello.id then saved else p | p <- blogPages]
+    answerWith "GET" (links.spaces.listPages hello.space) 200 [if p.id == hello.id then P.summaryOf saved else p | p <- blogPages]
     answerWith "GET" (links.spaces.pageAt hello.space helloAt) 200 saved
     tell (Event hello.id (PageChanged later))
     eventuallyWithin 5000 $ (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved in another tab.")
@@ -1026,7 +1060,7 @@ presence m = describe "who is editing" $ do
     _ <- find ui ".page-view .inline-form"
     let again = addUTCTime 120 hello.updatedAt
         savedAgain = saved {P.body = "Saved once more.", P.updatedAt = again}
-    answerWith "GET" (links.spaces.listPages hello.space) 200 [if p.id == hello.id then savedAgain else p | p <- blogPages]
+    answerWith "GET" (links.spaces.listPages hello.space) 200 [if p.id == hello.id then P.summaryOf savedAgain else p | p <- blogPages]
     answerWith "GET" (links.spaces.pageAt hello.space helloAt) 200 savedAgain
     tell (Event hello.id (PageChanged again))
     _ <- find ui ".page-actions .page-live .page-changed"

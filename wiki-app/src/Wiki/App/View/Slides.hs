@@ -76,7 +76,7 @@ import Wiki.App.View.Common
 import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Id (AttachmentId)
 import Wiki.Core.Markdown (parseMarkdown)
-import Wiki.Core.Page (Page (attachments, body, title))
+import Wiki.Core.Page (Page (attachments, body, title), PageSummary)
 import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, themeName)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
@@ -103,7 +103,7 @@ $( browserJS
 data Input = Input
   { context :: Context
   , space :: Space
-  , pages :: [Page]
+  , pages :: [PageSummary]
   , path :: [Slug]
   , slide :: Int
   }

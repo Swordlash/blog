@@ -77,7 +77,7 @@ import Wiki.Core.Id (AttachmentId)
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Math (spaceMacros)
 import Wiki.Core.Notification (mentionedIn)
-import Wiki.Core.Page (Page)
+import Wiki.Core.Page (PageSummary)
 import Wiki.Core.Slides qualified as Slides
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
@@ -88,7 +88,7 @@ import Wiki.Core.Version (Author (..))
 data Place = Place
   { context :: Context
   , space :: Space
-  , pages :: [Page]
+  , pages :: [PageSummary]
   -- ^ The pages of the space, for the links between them.
   , path :: [Slug]
   -- ^ The page's path among them: a relative link is resolved from its

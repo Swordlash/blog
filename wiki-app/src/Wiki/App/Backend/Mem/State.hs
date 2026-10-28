@@ -161,7 +161,8 @@ import Wiki.App.Backend qualified as B
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
-import Wiki.Core.Blog (PostDetails (..))
+import Wiki.Core.Blog (PostDetails (..), isPost)
+import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (Comment), Thread (Thread), checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Comment qualified as C
 import Wiki.Core.Draft (Draft (Draft))
@@ -170,7 +171,7 @@ import Wiki.Core.Id
 import Wiki.Core.Notification (Happened (..), MailMode, Mark, Notification (Notification), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, keptNotifications, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Notification qualified as Notice
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
-import Wiki.Core.Page (Page (..), childPages, pageTreeOrder, positionPage)
+import Wiki.Core.Page (Page (..), PageSummary, childPages, pageTreeOrder, positionPage, summaryOf)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission
   ( GlobalGrant (GlobalGrant)
@@ -686,26 +687,28 @@ pageCountsIn st =
     , canView (currentPrincipal st) st.grants (chainOf st sid)
     ]
 
--- | The pages of a space.
-listPagesIn :: SpaceId -> MemState -> Either WikiError [Page]
+-- | The pages of a space, as summaries. What the demo keeps (and writes to
+-- IndexedDB) is still whole pages; the summaries are made from them here.
+listPagesIn :: SpaceId -> MemState -> Either WikiError [PageSummary]
 listPagesIn sid st = do
   (s, c) <- findSpace st sid
   requireView st c
-  pure (pageTreeOrder s.pageOrder (pagesOf sid st))
+  pure (map summaryOf (pageTreeOrder s.pageOrder (pagesOf sid st)))
 
 -- | The details each page of a space is listed with as a blog post: the
--- author of its first version, and how many comments it has in all its
--- threads.
+-- author of its first version, how many comments it has in all its
+-- threads, and, for a post, its excerpt.
 postDetailsIn :: SpaceId -> MemState -> Either WikiError (Map PageId PostDetails)
 postDetailsIn sid st = do
-  (_, c) <- findSpace st sid
+  (s, c) <- findSpace st sid
   requireView st c
-  pure (Map.fromList [(p.id, details p.id) | p <- pagesOf sid st])
+  pure (Map.fromList [(p.id, details s p) | p <- pagesOf sid st])
   where
-    details pid =
+    details s p =
       PostDetails
-        { author = authorOf st <$> (Map.lookupMin (Map.findWithDefault mempty pid st.versions) >>= \(_, v) -> v.author)
-        , comments = sum [length t.comments | t <- Map.findWithDefault [] pid st.threads]
+        { author = authorOf st <$> (Map.lookupMin (Map.findWithDefault mempty p.id st.versions) >>= \(_, v) -> v.author)
+        , comments = sum [length t.comments | t <- Map.findWithDefault [] p.id st.threads]
+        , excerpt = if isPost s (summaryOf p) then Blog.excerptOf p.body else ""
         }
 
 -- | The page at a path in a space.

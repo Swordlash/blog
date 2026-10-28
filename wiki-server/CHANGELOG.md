@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The list of a space's pages carries no bodies (WP5.14): it reads only the
+pages' titles, slugs, places and dates, however long the pages are. The
+details of a blog's posts carry each post's excerpt instead. A space's
+export and a blog's feed read the bodies themselves
+(`Wiki.Server.Storage.spacePages`). A prerendered page carries the page it
+shows by itself, beside its space's list.
+
 Reads no longer wait for writes, or for one another (WP5.16a). The storage
 opens four read-only SQLite connections beside the one that writes. Every
 operation that only reads runs on one of them, and so do the lookup of a

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Page lists without bodies (WP5.14). `SpacesApi.listPages`
+(`GET spaces/<id>/pages`) answers `[PageSummary]`: each page without its
+`body` and `attachments`, which `pageAt` reads. `PostDetails` gains
+`excerpt`, the post's first paragraph as a blog lists it, since the list
+no longer carries the body it was made from.
+
 No password for accounts that sign in with a provider; password links
 mailed by the administration (WP5.6). `Wiki.Api.Account.providerOnly` is the
 rule (no password, and an account at a provider the server has);

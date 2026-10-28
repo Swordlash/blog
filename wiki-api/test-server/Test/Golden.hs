@@ -33,6 +33,7 @@ import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Id (BlobId (..), CommentId (..), CommentThreadId (..), GroupId (..), NotificationId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Notification (MailMode (..), Watch (..), WatchReason (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
+import Wiki.Core.Page (summaryOf)
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Space (Icon (..), SpaceProfile (..))
 import Wiki.Core.Version (VersionInfo (..))
@@ -58,8 +59,9 @@ spec = describe "golden JSON" $ do
     golden "session" Sample.sessionInfo
     golden "space" Sample.space
     golden "page-counts" (Map.fromList [(SpaceId "s1", 5 :: Int), (SpaceId "s2", 0)])
-    golden "post-details" (Map.fromList [(PageId "p1", Sample.postDetails), (PageId "p2", PostDetails {author = Nothing, comments = 0})])
+    golden "post-details" (Map.fromList [(PageId "p1", Sample.postDetails), (PageId "p2", PostDetails {author = Nothing, comments = 0, excerpt = ""})])
     golden "page" Sample.page
+    golden "page-summaries" [summaryOf Sample.page]
     golden "attachment" Sample.attachment
     golden "draft" Sample.draft
     golden "versions" [Sample.versionInfo, Sample.versionInfo {updatedAt = Sample.later, title = "A tour", author = Nothing}]

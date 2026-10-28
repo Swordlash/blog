@@ -32,7 +32,7 @@ import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (Page (..), summaryOf)
 import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Search (SearchHit, searchQuery)
 import Wiki.Core.Slug (Slug)
@@ -263,7 +263,9 @@ caching = describe "what it keeps" $ do
       answering r
         | r.method /= "GET" = status 204 ""
         | "/draft" `T.isSuffixOf` r.url = ok (Nothing :: Maybe Draft)
-        | "/pages" `T.isSuffixOf` r.url = ok blogPages
+        | "/pages" `T.isSuffixOf` r.url = ok (map summaryOf blogPages)
+        | "/pages/at/" `T.isInfixOf` r.url = ok hello
+        | "api/v1/search" `T.isPrefixOf` r.url = ok ([] :: [SearchHit])
         | otherwise = ok (Map.elems demo.spaces)
   it "answers at once only what it has read, and asks nothing meanwhile" $ do
     (env, asked) <- backend answering
@@ -273,12 +275,40 @@ caching = describe "what it keeps" $ do
     runHttpWiki env (atOnce listSpaces) `shouldReturn` Just spaces
     length <$> readIORef asked `shouldReturn` 1
 
-  it "gives a page of a space whose pages it has read, at once" $ do
+  it "reads a page by itself, since its space's list of pages has no bodies" $ do
     (env, asked) <- backend answering
     _ <- runHttpWiki env (listPages hello.space)
+    runHttpWiki env (atOnce (getPage hello.space (slugs "hello-world"))) `shouldReturn` Nothing
+    runHttpWiki env (getPage hello.space (slugs "hello-world")) `shouldReturn` Right hello
     runHttpWiki env (atOnce (getPage hello.space (slugs "hello-world"))) `shouldReturn` Just (Right hello)
-    cachedPage hello.space (slugs "no-such-page") <$> cacheOf env `shouldReturn` Nothing
-    length <$> readIORef asked `shouldReturn` 1
+    length <$> readIORef asked `shouldReturn` 2
+
+  it "caches page content until the route changes, and fetches it on every read after that" $ do
+    (env, asked) <- backend answering
+    spaces <- runHttpWiki env listSpaces
+    _ <- runHttpWiki env (listPages hello.space)
+    _ <- runHttpWiki env (getPage hello.space (slugs "hello-world"))
+    _ <- runHttpWiki env (getDraft hello.id)
+    _ <- runHttpWiki env (searchPages (searchQuery "hello"))
+    old <- cacheOf env
+    runHttpWiki env endPreload
+    left <- cacheOf env
+    -- The page content goes; the spaces and this user's draft stay.
+    (Map.null left.pages, Map.null left.pageAt, left.searches) `shouldBe` (True, True, [])
+    (left.spaces, left.drafts, left.session) `shouldBe` (Just spaces, old.drafts, old.session)
+    runHttpWiki env (atOnce listSpaces) `shouldReturn` Just spaces
+    runHttpWiki env (atOnce (getDraft hello.id)) `shouldReturn` Just (Right Nothing)
+    -- Page content is no longer answered at once, and every read asks the
+    -- server, keeping nothing.
+    runHttpWiki env (atOnce (getPage hello.space (slugs "hello-world"))) `shouldReturn` Nothing
+    runHttpWiki env (atOnce (listPages hello.space)) `shouldReturn` Nothing
+    asked' <- length <$> readIORef asked
+    runHttpWiki env (getPage hello.space (slugs "hello-world")) `shouldReturn` Right hello
+    runHttpWiki env (getPage hello.space (slugs "hello-world")) `shouldReturn` Right hello
+    runHttpWiki env (listPages hello.space) `shouldReturn` Right (map summaryOf blogPages)
+    runHttpWiki env (searchPages (searchQuery "hello")) `shouldReturn` []
+    length <$> readIORef asked `shouldReturn` asked' + 4
+    (\c -> (Map.null c.pageAt, Map.null c.pages, c.searches)) <$> cacheOf env `shouldReturn` (True, True, [])
 
   it "lets everything go after a write" $ do
     (env, _) <- backend answering
@@ -293,7 +323,7 @@ caching = describe "what it keeps" $ do
     _ <- runHttpWiki env (listPages hello.space)
     runHttpWiki env (getDraft hello.id) `shouldReturn` Right Nothing
     runHttpWiki env (discardDraft hello.id) `shouldReturn` Right ()
-    runHttpWiki env (atOnce ((,) <$> getDraft hello.id <*> listPages hello.space)) `shouldReturn` Just (Right Nothing, Right blogPages)
+    runHttpWiki env (atOnce ((,) <$> getDraft hello.id <*> listPages hello.space)) `shouldReturn` Just (Right Nothing, Right (map summaryOf blogPages))
     length <$> readIORef asked `shouldReturn` 3
 
   it "lets the pages read go when the live channel tells of a save, and keeps the rest" $ do
@@ -339,9 +369,14 @@ caching = describe "what it keeps" $ do
   it "asks a transport that answers at once from within atOnce" $ do
     (transport, asked) <- scripted answering
     env <- newImmediateHttpEnv transport
-    runHttpWiki env (atOnce (listPages hello.space)) `shouldReturn` Just (Right blogPages)
+    runHttpWiki env (atOnce (listPages hello.space)) `shouldReturn` Just (Right (map summaryOf blogPages))
     runHttpWiki env (atOnce (getPage hello.space (slugs "hello-world"))) `shouldReturn` Just (Right hello)
-    length <$> readIORef asked `shouldReturn` 1
+    length <$> readIORef asked `shouldReturn` 2
+    -- The server's prerender caches page content whatever the route, since
+    -- the page it writes carries the cache.
+    runHttpWiki env endPreload
+    _ <- runHttpWiki env (atOnce (listPages hello.space))
+    (\c -> Map.member hello.space c.pages) <$> cacheOf env `shouldReturn` True
 
 -- | Who is asking: the demo's admin, signed in, or nobody, as the server
 -- sends them.
@@ -449,7 +484,7 @@ preload = describe "what a page it is rendered into carries" $ do
         withSpaces (Map.elems demo.spaces)
           . withSpaceAt (slugs "blog") (Right (fromMaybe (panic "blog") (Map.lookup hello.space demo.spaces)))
           . withSpaceAt (slugs "team") (Left Forbidden)
-          . withPages hello.space (Right blogPages)
+          . withPages hello.space (Right (map summaryOf blogPages))
           . withPages (SpaceId "gone") (Left NotFound)
           . withPageAt hello.space (slugs "nowhere") (Left NotFound)
           . withDraft hello.id (Just (Right (Just draft)))
@@ -459,9 +494,9 @@ preload = describe "what a page it is rendered into carries" $ do
   it "reads back as the cache it was written from" $
     decodePreload (encodePreload cache) `shouldBe` Right cache
 
-  it "carries a page in its space's list only once, and finds it there" $ do
+  it "carries the page shown by itself, beside its space's list of summaries" $ do
     let withPage = withPageAt hello.space (slugs "hello-world") (Right hello) cache
-    decodePreload (encodePreload withPage) `shouldBe` Right cache
+    decodePreload (encodePreload withPage) `shouldBe` Right withPage
     (cachedPage hello.space (slugs "hello-world") <$> decodePreload (encodePreload withPage)) `shouldBe` Right (Just (Right hello))
 
   it "writes a refusal as the API's error" $

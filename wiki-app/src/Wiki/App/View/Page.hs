@@ -111,7 +111,7 @@ import Wiki.Core.Id
   )
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Notification (WatchTarget (..))
-import Wiki.Core.Page (Page (attachments, body, createdAt, id, parent, slug, space, template, title, updatedAt))
+import Wiki.Core.Page (Page (attachments, body, createdAt, id, parent, slug, space, template, title, updatedAt), PageSummary (id, parent, slug, title))
 import Wiki.Core.Permission (mayMovePage)
 import Wiki.Core.Slides (isDeck)
 import Wiki.Core.Slug (Slug)
@@ -125,7 +125,7 @@ import Wiki.Core.Version (Author)
 data Input = Input
   { context :: Context
   , space :: Space
-  , pages :: [Page]
+  , pages :: [PageSummary]
   , path :: [Slug]
   , feed :: Maybe Feed
   -- ^ The tab's live channel, on a backend that has one.
@@ -153,7 +153,7 @@ data Mode
   | Renaming Text
   | -- | Moving: the space chosen (an index into 'targetSpaces'), its pages,
     -- and the parent chosen among them ('Nothing' for its top level).
-    Moving Int [Page] (Maybe PageId)
+    Moving Int [PageSummary] (Maybe PageId)
   | ConfirmingDelete
 
 data State = State
@@ -540,7 +540,8 @@ component =
         gets (\st -> st.input.feed) >>= traverse_ (\f -> void (H.subscribe (Heard <$> f.heard)))
         gets (\st -> st.loaded) >>= \case
           Loading -> load >> H.liftEffect revealFragment
-          _ -> do
+          loaded -> do
+            for_ (pageOf loaded) (H.raise . Showing)
             H.raise Loaded
             -- Scroll to the heading the address names, if any, once the
             -- page is shown: the browser does this for a page it loaded, but
@@ -682,6 +683,7 @@ component =
       when (now.space.id == input.space.id && now.path == input.path) $ do
         modify (\st -> st {loaded})
         resolvePeople
+        for_ (pageOf loaded) (H.raise . Showing)
         H.raise Loaded
         watch
         loadThreads
@@ -758,7 +760,7 @@ targetSpaces ctx page =
 
 -- | The pages of the target space a page may be put under: in its own
 -- space, not itself nor one of the pages under it.
-allowedParents :: Page -> Maybe SpaceId -> [Page] -> [PageId]
+allowedParents :: Page -> Maybe SpaceId -> [PageSummary] -> [PageId]
 allowedParents page target ps
   | target == Just page.space = [p.id | p <- ps, p.id /= page.id, page.id `notElem` ancestorsOf p]
   | otherwise = [p.id | p <- ps]
@@ -767,7 +769,7 @@ allowedParents page target ps
       Nothing -> []
       Just q -> q : maybe [] ancestorsOf (findPage ps q)
 
-findPage :: [Page] -> PageId -> Maybe Page
+findPage :: [PageSummary] -> PageId -> Maybe PageSummary
 findPage ps pid = find (\p -> p.id == pid) ps
 
 spaceName :: Context -> Space -> Text
@@ -785,6 +787,12 @@ applied :: PageEvent -> Threads -> Threads
 applied event = \case
   ThreadsReady ts -> ThreadsReady (applyEvent event ts)
   other -> other
+
+-- | The page loaded, if it has been.
+pageOf :: Loaded -> Maybe Page
+pageOf = \case
+  Ready page _ _ _ -> Just page
+  _ -> Nothing
 
 -- | The place the page's links, and its comments' links, are resolved
 -- from: where the page is.

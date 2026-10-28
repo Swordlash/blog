@@ -22,13 +22,14 @@ import Wiki.Api.Import
 import Wiki.Api.Links (attachmentUrl, links, spaceIconUrl)
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
+import Wiki.App.View.Common (pagePathOf)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..))
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), withProfile)
@@ -205,7 +206,7 @@ merging = describe "a space at the same path" $ do
     (merged.id, merged.public, merged.subspaceOrder, merged.mathMacros) `shouldBe` (ours.id, True, ByName, "\\R: \\mathbb{R}")
     pages <- ok200 (getUrl r (admin r (links.spaces.listPages ours.id)))
     -- The space's home page first, made with it.
-    [(p.title, p.position) | (p :: Page) <- pages] `shouldBe` [("Home", 0), ("Intro", intro.position), ("Title of guide", intro.position + 1), ("Title of tour", intro.position + 2)]
+    [(p.title, p.position) | (p :: PageSummary) <- pages] `shouldBe` [("Home", 0), ("Intro", intro.position), ("Title of guide", intro.position + 1), ("Title of tour", intro.position + 2)]
 
   it "keeps the server's math macros when it has some" $ withRunning $ \r -> do
     ours <- makeSpace r "docs"
@@ -263,7 +264,7 @@ choices = describe "what is left unchecked" $ do
     apply r docs skipped `shouldReturn` summary {spacesCreated = 1, pagesSkipped = 3}
     (.status) <$> getUrl r (admin r (links.spaces.atPath [slug "docs", slug "notes"])) `shouldReturn` 404
     kept <- spaceAt r ["docs"]
-    ok200 (getUrl r (admin r (links.spaces.listPages kept.id))) `shouldReturn` ([] :: [Page])
+    ok200 (getUrl r (admin r (links.spaces.listPages kept.id))) `shouldReturn` ([] :: [PageSummary])
 
   it "of a whole archive is nothing" $ withRunning $ \r -> do
     apply r docs importEverything {skipSpaces = [[slug "docs"]]} `shouldReturn` summary {pagesSkipped = 3}
@@ -284,7 +285,9 @@ roundTrip = describe "an export" $ do
           shape r = do
             spaces <- ok200 (getUrl r (admin r links.spaces.list))
             for spaces $ \(s :: Space) -> do
-              pages <- ok200 (getUrl r (admin r (links.spaces.listPages s.id)))
+              listed <- ok200 (getUrl r (admin r (links.spaces.listPages s.id)))
+              -- The list has no bodies: each page is read by itself.
+              pages <- for listed $ \(l :: PageSummary) -> ok200 (getUrl r (admin r (links.spaces.pageAt s.id (pagePathOf listed l.id))))
               pure (s.name, s.slug, [(p.title, p.slug, p.body, map (\a -> (a.name, a.source)) p.attachments) | (p :: Page) <- pages])
       expected <- shape origin
       shape copy `shouldReturn` expected

@@ -220,12 +220,13 @@ preloads = describe "what a page carries for the program" $ do
       for_ (Map.toList p.drafts) $ \(pageId, d) -> answers (links.pages.draft pageId) d
       for_ p.searches $ \(query, hits) -> api (searchUrl query) `shouldReturn` hits
 
-  it "holds what the route shows, and no page twice" $ withDemoRunning identity $ \r -> do
+  it "holds what the route shows: its space's list of pages, and the page shown" $ withDemoRunning identity $ \r -> do
     (_, html) <- page r r.public "/s/docs/p/tour/"
     p <- preloadIn html
     (isJust p.session, Map.keys p.spaceAt, Map.size p.pages) `shouldBe` (True, [slugs "docs"], 1)
-    -- The page is in its space's list, so not carried again by itself.
-    Map.keys p.pageAt `shouldBe` []
+    -- The list of pages has no bodies, so the page shown is carried by
+    -- itself, once.
+    map snd (Map.keys p.pageAt) `shouldBe` [slugs "tour"]
 
 addresses :: Spec
 addresses = describe "a request's address" $ do

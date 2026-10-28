@@ -24,7 +24,7 @@ import Wiki.App.Backend.Notifications
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Kind (..), MailMode (..), Notification (..), PageLocation (..), Watch (..), WatchReason (..), WatchTarget (..))
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))

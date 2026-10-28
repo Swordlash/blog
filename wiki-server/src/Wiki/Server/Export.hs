@@ -92,7 +92,7 @@ import Wiki.Api.Error qualified as ApiError
 import Wiki.Api.Export (ExportFormat (..), exportFileName, forDecks, formatLabel, needsTeX)
 import Wiki.Api.Links (attachmentUrl)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
-import Wiki.App.Backend (MonadWiki (listPages, listSpaces), WikiError (..))
+import Wiki.App.Backend (MonadWiki (listSpaces), WikiError (..))
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Attachment (Attachment (..), MediaKind (..), Source (..), attachmentKind)
 import Wiki.Core.Id
@@ -103,7 +103,7 @@ import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), Theme (..), d
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Export.Document
-import Wiki.Server.Storage (Storage, Who (..), blobPath, exportedPage, readServerSettings, runSqliteWiki)
+import Wiki.Server.Storage (Storage, Who (..), blobPath, exportedPage, readServerSettings, runSqliteWiki, spacePages)
 
 -- | Whose exports are in progress: at most one each.
 newtype Exports = Exports (TVar (Set Text))
@@ -158,7 +158,7 @@ exportPage exports key storage who pid format = oneAtATime exports key . requiri
   loaded <- runSqliteWiki storage who $ runExceptT $ do
     page <- ExceptT (exportedPage pid)
     spaces <- lift listSpaces
-    pages <- ExceptT (listPages page.space)
+    pages <- ExceptT (spacePages page.space)
     pure (page, spaces, pages)
   case loaded of
     Left e -> pure (Left (refusalOf e))
@@ -189,7 +189,7 @@ exportSpace exports key storage who sid format = oneAtATime exports key . requir
   loaded <- runSqliteWiki storage who $ runExceptT $ do
     -- The pages first: fetching them says whether the space exists and
     -- may be read, as the API's own listing does.
-    pages <- ExceptT (listPages sid)
+    pages <- ExceptT (spacePages sid)
     spaces <- lift listSpaces
     space <- maybe (throwError NotFound) pure (find (\s -> s.id == sid) spaces)
     pure (space, spaces, pages)

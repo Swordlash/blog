@@ -96,7 +96,7 @@ import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
 import Wiki.Core.Id
-import Wiki.Core.Page (Page)
+import Wiki.Core.Page (Page, PageSummary)
 import Wiki.Core.Permission (SpaceAccess)
 import Wiki.Core.Search (SearchHit)
 import Wiki.Core.Slug (Slug)
@@ -227,12 +227,13 @@ data SpacesApi mode = SpacesApi
   , setGrant :: mode :- Capture "space" SpaceId :> "grants" :> ReqBody '[JSON] SpaceGrantChange :> PutNoContent
   -- ^ @setSpaceGrant@: give a user or a group a permission on the space,
   -- or remove it.
-  , listPages :: mode :- Capture "space" SpaceId :> "pages" :> Get '[JSON] [Page]
-  -- ^ @listPages@.
+  , listPages :: mode :- Capture "space" SpaceId :> "pages" :> Get '[JSON] [PageSummary]
+  -- ^ @listPages@: summaries of the space's pages, without their bodies,
+  -- in the space's page order.
   , postDetails :: mode :- Capture "space" SpaceId :> "post-details" :> Get '[JSON] (Map PageId PostDetails)
   -- ^ @postDetails@: the details each page of the space is listed with as
-  -- a blog post (its first author and its number of comments), as an
-  -- object keyed by page id.
+  -- a blog post (its first author, its number of comments and its
+  -- excerpt), as an object keyed by page id.
   , pageAt :: mode :- Capture "space" SpaceId :> "pages" :> "at" :> CaptureAll "path" Slug :> Get '[JSON] (Versioned Page)
   -- ^ @getPage@: the page at a path of slugs from the space's top level.
   , createPage :: mode :- Capture "space" SpaceId :> "pages" :> ReqBody '[JSON] NewPage :> PostCreated '[JSON] (Versioned Page)

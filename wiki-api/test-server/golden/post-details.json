@@ -4,10 +4,12 @@
       "id": "u2",
       "name": "Bea"
     },
-    "comments": 3
+    "comments": 3,
+    "excerpt": "The first paragraph, without its markup."
   },
   "p2": {
     "author": null,
-    "comments": 0
+    "comments": 0,
+    "excerpt": ""
   }
 }

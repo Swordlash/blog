@@ -31,7 +31,7 @@ import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift (..))
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (parsePath, renderPath)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (SearchHit (..), SearchQuery (..), searchQuery, snippetText)
@@ -1334,7 +1334,8 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
     pages <- run editor (listPages s.id) >>= ok
     map (\p -> (p.title, slugText p.slug)) pages `shouldBe` [("Home", "home")]
     s.homePage `shouldBe` (\p -> p.id) <$> head pages
-    for_ (head pages) $ \home -> do
+    for_ (head pages) $ \listed -> do
+      home <- run editor (getPage s.id [listed.slug]) >>= ok
       home.body `shouldSatisfy` T.isInfixOf "Team notes"
       versions <- versionsOf run editor home.id
       me <- authorAs run editor

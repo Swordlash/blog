@@ -28,6 +28,7 @@ module Wiki.Server.Storage.Rows
   , loadMembership
   , loadPage
   , loadPages
+  , loadPageSummaries
   , loadAllPages
   , loadAttachment
   , loadDraft
@@ -121,7 +122,7 @@ import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Sibling (..))
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (Page (..), PageSummary (..))
 import Wiki.Core.Path (TreeNode (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Search (bodyText)
@@ -415,6 +416,24 @@ loadPages c sid = do
       (sql ("SELECT " <> attachmentColumns <> ", a.page_id FROM attachments a JOIN pages p ON p.id = a.page_id WHERE p.space_id = ? ORDER BY a.ordinal"))
       (Only sid.text)
   pure (withAttachments rows attached)
+
+-- | The summaries of a space's pages, in no particular order: the pages
+-- without their bodies and attachments, which a list of pages does not
+-- carry.
+loadPageSummaries :: Connection -> SpaceId -> IO [PageSummary]
+loadPageSummaries c sid = queryWith row c "SELECT id, space_id, parent, title, slug, created_at, updated_at, position, template FROM pages WHERE space_id = ?" (Only sid.text)
+  where
+    row = do
+      id <- PageId <$> field
+      space <- SpaceId <$> field
+      parent <- fmap PageId <$> field
+      title <- field
+      slug <- slugField
+      createdAt <- stamp
+      updatedAt <- stamp
+      position <- field
+      template <- field
+      pure PageSummary {id, space, parent, title, slug, createdAt, updatedAt, position, template}
 
 -- | Every page of the wiki with its attachments, by id.
 loadAllPages :: Connection -> IO [Page]

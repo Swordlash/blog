@@ -58,11 +58,11 @@ import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
 import Wiki.Core.Blog (PostDetails (..), excerpt, noDetails, posts)
 import Wiki.Core.Markdown qualified as Md
-import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title, updatedAt))
+import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title, updatedAt), PageSummary (id, updatedAt), summaryOf)
 import Wiki.Core.Space (Space (blog, createdAt, description, id, name))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Address (addressOf, publicAddress)
-import Wiki.Server.Storage (Storage, Who (..), readSettings, runSqliteWiki)
+import Wiki.Server.Storage (Storage, Who (..), readSettings, runSqliteWiki, spacePages)
 
 -- | The two feeds of a blog.
 data FeedKind = Atom | Rss
@@ -123,7 +123,7 @@ feed storage base kind segments =
       Right (Space path) -> do
         found <- runSqliteWiki storage Anonymous $ runExceptT $ do
           space <- ExceptT (getSpace path)
-          pages <- ExceptT (listPages space.id)
+          pages <- ExceptT (spacePages space.id)
           details <- ExceptT (postDetails space.id)
           spaces <- lift listSpaces
           pure (space, pages, details, spaces)
@@ -135,7 +135,9 @@ feed storage base kind segments =
     written space pages details spaces = do
       let spacePath = spacePathOf spaces space.id
           address = addressOf base (Duplex.print route (Space spacePath))
-          newest = take feedSize (posts space pages)
+          -- The posts are chosen among the summaries, and read whole.
+          byId = Map.fromList [(p.id, p) | p <- pages]
+          newest = mapMaybe (\s -> Map.lookup s.id byId) (take feedSize (posts space (map summaryOf pages)))
       entries <- for newest $ \p -> do
         html <- postHtml base spaces space pages p
         pure

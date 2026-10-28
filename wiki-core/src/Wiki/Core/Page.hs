@@ -3,6 +3,8 @@
 -- | Pages: Markdown in a tree within a space.
 module Wiki.Core.Page
   ( Page (..)
+  , PageSummary (..)
+  , summaryOf
   , treePages
   , templatePages
   , childPages
@@ -14,6 +16,7 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
+import Data.Type.Equality (type (~))
 import Protolude
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Id
@@ -66,32 +69,93 @@ instance Sibling Page where
   siblingCreatedAt p = p.createdAt
   siblingPosition p = p.position
 
+-- | 'PageSummary' is a page without its Markdown body and its
+-- attachments. A list of a space's pages holds summaries
+-- ('Wiki.App.Backend.listPages'). The sidebar's tree, the space's view,
+-- the blog's list of posts and the editor's choice of a parent need only
+-- these fields. The body is fetched with the page alone
+-- ('Wiki.App.Backend.getPage'), so a list stays small however long the
+-- pages are.
+data PageSummary = PageSummary
+  { id :: PageId
+  , space :: SpaceId
+  , parent :: Maybe PageId
+  , title :: Text
+  , slug :: Slug
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , position :: Int
+  , template :: Bool
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (FromJSON, ToJSON)
+
+instance TreeNode PageSummary where
+  type NodeId PageSummary = PageId
+  nodeId p = p.id
+  nodeParent p = p.parent
+  nodeSlug p = p.slug
+
+instance Sibling PageSummary where
+  siblingName p = p.title
+  siblingCreatedAt p = p.createdAt
+  siblingPosition p = p.position
+
+-- | The summary of a page: the page without its body and attachments.
+summaryOf :: Page -> PageSummary
+summaryOf p =
+  PageSummary
+    { id = p.id
+    , space = p.space
+    , parent = p.parent
+    , title = p.title
+    , slug = p.slug
+    , createdAt = p.createdAt
+    , updatedAt = p.updatedAt
+    , position = p.position
+    , template = p.template
+    }
+
 -- | The pages a space's tree shows: all except its templates, which are
 -- listed separately ('templatePages'). A page under a template belongs to
 -- the template and is left out with it.
-treePages :: [Page] -> [Page]
+treePages :: [PageSummary] -> [PageSummary]
 treePages pages = [p | p <- pages, not (underTemplate p)]
   where
     byId = Map.fromList [(p.id, p) | p <- pages]
     underTemplate p = p.template || maybe False underTemplate (p.parent >>= (`Map.lookup` byId))
 
 -- | A space's templates, among its pages, by title.
-templatePages :: [Page] -> [Page]
+templatePages :: [PageSummary] -> [PageSummary]
 templatePages pages = sortOn (\p -> p.title) [p | p <- pages, p.template]
 
 -- | The pages under a page ('Nothing' for the space's top level), among the
 -- pages of its space, in the space's page order
 -- ('Wiki.Core.Space.pageOrder'). Every list of pages uses it.
-childPages :: ChildOrder -> [Page] -> Maybe PageId -> [Page]
+childPages :: (Sibling p, NodeId p ~ PageId) => ChildOrder -> [p] -> Maybe PageId -> [p]
 childPages = childrenInOrder
 
 -- | All the pages of a space as one list, each followed by the pages under
 -- it, in the space's page order.
-pageTreeOrder :: ChildOrder -> [Page] -> [Page]
+pageTreeOrder :: (Sibling p, NodeId p ~ PageId) => ChildOrder -> [p] -> [p]
 pageTreeOrder order = treeOrder (const order)
 
 -- | The page at another position among its siblings. (A function, since a
 -- record update of @position@ cannot tell a page's field from a space's
--- where both are in scope.)
+-- or a summary's where they are in scope. The page is built field by field
+-- for the same reason.)
 positionPage :: Int -> Page -> Page
-positionPage position p = p {position}
+positionPage position p =
+  Page
+    { id = p.id
+    , space = p.space
+    , parent = p.parent
+    , title = p.title
+    , slug = p.slug
+    , body = p.body
+    , attachments = p.attachments
+    , createdAt = p.createdAt
+    , updatedAt = p.updatedAt
+    , position
+    , template = p.template
+    }

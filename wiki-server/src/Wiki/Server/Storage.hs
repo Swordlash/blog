@@ -100,6 +100,7 @@ module Wiki.Server.Storage
   , actorOf
   , attachmentFile
   , exportedPage
+  , spacePages
   , blobPath
   , spaceIconFile
   , mayReadPage
@@ -149,14 +150,15 @@ import Wiki.Core.Anchor (Anchor, checkAnchor)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Audit (Actor (..))
 import Wiki.Core.Audit qualified as Audit
-import Wiki.Core.Blog (PostDetails (..))
+import Wiki.Core.Blog (PostDetails (..), isPost)
+import Wiki.Core.Blog qualified as Blog
 import Wiki.Core.Comment (Comment (..), Thread (..), checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Happened (..), Notification (..), Occasion (..), PageLocation (..), Watch, WatchTarget (..), Watcher (..), effectiveMailMode, excerptOf, maxListed, mentionedIn, newlyMentioned, pageWatch, recipients, spaceWatch, withLocation)
 import Wiki.Core.Order (ChildOrder (..), Children (..), Shift, childrenInOrder, nextPosition, orderName, renumber, reposition)
-import Wiki.Core.Page (Page (..), pageTreeOrder)
+import Wiki.Core.Page (Page (..), PageSummary, pageTreeOrder, summaryOf)
 import Wiki.Core.Path (ancestry, childrenOf, findChild, pathOf, resolvePath)
 import Wiki.Core.Permission
   ( GlobalGrant (..)
@@ -992,6 +994,12 @@ attachmentFile aid = run Reads $ do
         SourceUrl _ -> Nothing
     )
 
+-- | The pages of a space, with their bodies and attachments, in the
+-- space's page order, if the 'Who' may view the space. A space's export
+-- and a blog's feed read this ('spacePagesTx').
+spacePages :: (MonadIO m) => SpaceId -> SqliteWiki m (Either WikiError [Page])
+spacePages = run Reads . spacePagesTx
+
 -- | A page by its id, if the 'Who' may read it. An export reads the page
 -- with this ("Wiki.Server.Export"), and reads the rest (its space's pages,
 -- the spaces) through 'MonadWiki', as the application does.
@@ -1078,30 +1086,43 @@ getSpaceTx path = do
     Right c | Just s <- lastMay c -> requireView c $> s
     _ -> failWith NotFound
 
-listPagesTx :: SpaceId -> Tx [Page]
+listPagesTx :: SpaceId -> Tx [PageSummary]
 listPagesTx sid = do
+  (s, c) <- findSpace sid
+  requireView c
+  pageTreeOrder s.pageOrder <$> db (`loadPageSummaries` sid)
+
+-- | The pages of a space with their bodies and attachments, in the space's
+-- page order, for someone who may view the space. The API's list of pages
+-- carries summaries only ('listPagesTx'); the server's own work on a whole
+-- space (a space's export, a blog's feed) needs the bodies.
+spacePagesTx :: SpaceId -> Tx [Page]
+spacePagesTx sid = do
   (s, c) <- findSpace sid
   requireView c
   pageTreeOrder s.pageOrder <$> db (`loadPages` sid)
 
 -- | The details each page of a space is listed with as a blog post: the
--- author of its first version, and how many comments it has. The first
--- version is the earliest, compared as times rather than as the text the
--- times are stored as.
+-- author of its first version, how many comments it has, and its excerpt.
+-- The first version is the earliest, compared as times rather than as the
+-- text the times are stored as.
 postDetailsTx :: SpaceId -> Tx (Map PageId PostDetails)
 postDetailsTx sid = do
-  (_, c) <- findSpace sid
+  (s, c) <- findSpace sid
   requireView c
-  nodes <- db (`pageNodes` sid)
+  pages <- db (`loadPages` sid)
   versions <- db (`loadSpaceVersions` sid)
   counts <- Map.fromList <$> db (`loadCommentCounts` sid)
   let firsts = Map.fromListWith (\a b -> if a.updatedAt <= b.updatedAt then a else b) versions
-      details n =
+      details p =
         PostDetails
-          { author = (Map.lookup n.id firsts >>= \r -> (versionOf n.id r).author)
-          , comments = Map.findWithDefault 0 n.id counts
+          { author = (Map.lookup p.id firsts >>= \r -> (versionOf p.id r).author)
+          , comments = Map.findWithDefault 0 p.id counts
+          , -- Only a post is listed with its excerpt: parsing every page
+            -- of a large space for nothing would slow the answer down.
+            excerpt = if isPost s (summaryOf p) then Blog.excerptOf p.body else ""
           }
-  pure (Map.fromList [(n.id, details n) | n <- nodes])
+  pure (Map.fromList [(p.id, details p) | p <- pages])
 
 getPageTx :: SpaceId -> [Slug] -> Tx Page
 getPageTx sid path = do

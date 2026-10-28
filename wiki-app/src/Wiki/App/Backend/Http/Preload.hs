@@ -19,9 +19,9 @@
 -- The encoding is the API's own. Each response is the JSON the API
 -- returns for that read ("Wiki.Api.Types", @wiki-core@'s records), stored
 -- with the read's arguments, with named fields. A refusal is the API's
--- error body ("Wiki.Api.Error"). A page that a view read by itself is left
--- out when the cached list of its space's pages contains it, since the
--- backend finds it in the list ('cachedPage'): no page is carried twice.
+-- error body ("Wiki.Api.Error"). A space's list of pages holds summaries
+-- without bodies ('Wiki.Core.Page.PageSummary'), so the page shown is
+-- carried once, under @pagesAt@.
 --
 -- The cache is written and read here directly, field by field, rather
 -- than through a record that mirrors it (WP5.9 of docs/PLAN.md). That
@@ -53,7 +53,7 @@ import Protolude
 import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.App.Backend (WikiError (..))
-import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage, emptyCache, kept)
+import Wiki.App.Backend.Http.Cache (Cache (..), emptyCache, kept)
 import Wiki.App.Backend.Http.Request (fromApiError, fromSessionInfo, sessionInfo)
 import Wiki.Core.Notification (WatchTarget (..))
 
@@ -62,7 +62,7 @@ preloadId :: Text
 preloadId = "wiki-preload"
 
 -- | The cache as the page carries it: every response it would answer at
--- once with, and no page twice.
+-- once with.
 --
 -- An object with a field per read. The session is as the API returns it
 -- (@session@, or @null@). The reads without arguments hold their response
@@ -82,7 +82,7 @@ preloadJSON c =
     , "pageCounts" .= c.pageCounts
     , "spacesAt" .= answers "space" (\path -> ["path" .= path]) c.spaceAt
     , "pages" .= answers "pages" (\space -> ["space" .= space]) c.pages
-    , "pagesAt" .= answers "page" (\(space, path) -> ["space" .= space, "path" .= path]) (Map.filterWithKey apart c.pageAt)
+    , "pagesAt" .= answers "page" (\(space, path) -> ["space" .= space, "path" .= path]) c.pageAt
     , "drafts" .= answers "draft" (\page -> ["page" .= page]) c.drafts
     , "searches" .= [object ["query" .= query, "hits" .= hits] | (query, hits) <- c.searches]
     , "versionLists" .= answers "versions" (\page -> ["page" .= page]) c.versionLists
@@ -102,8 +102,6 @@ preloadJSON c =
     , "watches" .= orNull (answers "watch" watchTarget c.watches)
     ]
   where
-    -- A page that its space's cached list holds unchanged is found there.
-    apart (space, path) p = cachedPage space path c {pageAt = mempty} /= Just p
     orNull = \case
       [] -> Nothing
       found -> Just found
