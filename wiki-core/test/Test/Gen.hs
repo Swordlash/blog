@@ -103,7 +103,7 @@ genAttachment :: Gen Attachment
 genAttachment = do
   id <- genAttachmentId
   name <- FileName <$> genText
-  mediaType <- elements ["image/png", "video/mp4", "audio/ogg", "application/pdf", ""]
+  mediaType <- MimeType <$> elements ["image/png", "video/mp4", "audio/ogg", "application/pdf", ""]
   size <- fromIntegral <$> chooseInteger (0, 2 ^ (40 :: Int))
   source <- genSource
   pure Attachment {id, name, mediaType, size, source}

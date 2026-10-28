@@ -29,6 +29,7 @@ import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByM
 import Wiki.Api.ServerSettings (MailTest (..), MailTestResult (..), ProviderCheck (..), SecretState (..), ServerSettingsChange, noServerSettings)
 import Wiki.Api.Types
 import Wiki.Core.Anchor (Anchor (..))
+import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Id (BlobId (..), CommentId (..), CommentThreadId (..), GroupId (..), NotificationId (..), PageId (..), SpaceId (..))
 import Wiki.Core.Notification (MailMode (..), Watch (..), WatchReason (..))
@@ -125,7 +126,7 @@ spec = describe "golden JSON" $ do
     golden "space-name" SpaceName {name = "Guides"}
     golden "space-public" SpacePublic {public = True}
     golden "space-math-macros" SpaceMathMacros {mathMacros = "\\R: \\mathbb{R}"}
-    golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") "image/png"), homePage = Just (PageId "p1"), blog = False}
+    golden "space-profile" SpaceProfile {description = "Guides for writers.", icon = Just (IconImage (BlobId "b1") (MimeType "image/png")), homePage = Just (PageId "p1"), blog = False}
     golden "space-profile-colour" SpaceProfile {description = "", icon = Just (IconColour "teal"), homePage = Nothing, blog = True}
     golden "space-order" SpaceOrder {children = ChildPages, order = NewestFirst}
     golden "space-move" SpaceMove {parent = Nothing}

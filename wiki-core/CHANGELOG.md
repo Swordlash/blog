@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+A media type is a `MimeType` (WP5.15), a newtype over `Text`:
+`Attachment.mediaType`, a space's `IconImage` and `iconMediaTypes`.
+`uploadedMimeType` is how both backends stored an upload's declared type
+(trimmed, `application/octet-stream` when blank), and `mimeEssence` the
+type without parameters in lower case. `mediaKind` takes a `MimeType`, and
+`checkIconUpload` returns one. Nothing refuses a media type, as before.
+
 An attachment's name is a `FileName` (WP5.15), a newtype over `Text`.
 `parseFileName` holds the rule both backends applied by themselves: trimmed,
 not blank, no slash, backslash or control character. `findAttachment` still

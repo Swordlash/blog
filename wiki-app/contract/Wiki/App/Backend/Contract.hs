@@ -26,7 +26,7 @@ import Protolude hiding (reader)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.App.Backend
-import Wiki.Core.Attachment (Attachment (..), FileName (..), findAttachment)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), findAttachment)
 import Wiki.Core.Blog (PostDetails (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
@@ -929,7 +929,7 @@ attachments = describe "uploadAttachment, deleteAttachment and attachmentUrl" $ 
   it "attach a file that the page then has by name" $ \(Fixture run) -> do
     hello <- pageAt run admin "blog" "hello-world"
     a <- run editor (uploadAttachment hello.id "notes.bin" "application/octet-stream" bytes) >>= ok
-    (a.name.text, a.mediaType, a.size) `shouldBe` ("notes.bin", "application/octet-stream", 256)
+    (a.name.text, a.mediaType.text, a.size) `shouldBe` ("notes.bin", "application/octet-stream", 256)
     found <- pageAt run Anonymous "blog" "hello-world"
     findAttachment "notes.bin" found.attachments `shouldBe` Just a
     found.updatedAt `shouldBe` hello.updatedAt
@@ -947,7 +947,7 @@ attachments = describe "uploadAttachment, deleteAttachment and attachmentUrl" $ 
   it "show the demo's attachments" $ \(Fixture run) -> do
     wiki <- pageAt run reader "team/projects" "the-wiki"
     tree <- maybe (assertFailure "the wiki page has no tree.png") pure (findAttachment "tree.png" wiki.attachments)
-    tree.mediaType `shouldBe` "image/png"
+    tree.mediaType.text `shouldBe` "image/png"
     url <- run reader (attachmentUrl tree)
     url `shouldSatisfy` (not . T.null)
 
@@ -1430,7 +1430,7 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
     run admin (setSpaceProfile docs.id (profile "" Nothing (Just (PageId "no-such-page")))) >>= shouldBeInvalid
     run admin (setSpaceProfile docs.id (profile "" (Just (IconColour "#123456")) Nothing)) >>= shouldBeInvalid
     run admin (setSpaceProfile docs.id (profile "" (Just (IconEmoji " ")) Nothing)) >>= shouldBeInvalid
-    run admin (setSpaceProfile docs.id (profile "" (Just (IconImage (BlobId "elsewhere") "image/png")) Nothing)) >>= shouldBeInvalid
+    run admin (setSpaceProfile docs.id (profile "" (Just (IconImage (BlobId "elsewhere") (MimeType "image/png"))) Nothing)) >>= shouldBeInvalid
     run admin (setSpaceProfile docs.id (profile (T.replicate 501 "x") Nothing Nothing)) >>= shouldBeInvalid
     unchanged <- spaceAt run admin "docs"
     unchanged `shouldBe` docs
@@ -1454,7 +1454,7 @@ profiles = describe "home pages, setSpaceProfile, uploadSpaceIcon and pageCounts
     run admin (spaceIconUrl blog) `shouldReturn` ""
     s <- run admin (uploadSpaceIcon blog.id "image/png" png) >>= ok
     case s.icon of
-      Just (IconImage _ mediaType) -> mediaType `shouldBe` "image/png"
+      Just (IconImage _ mediaType) -> mediaType.text `shouldBe` "image/png"
       other -> expectationFailure ("expected an image, got " <> show other)
     (s.description, s.homePage) `shouldBe` (blog.description, blog.homePage)
     seen <- spaceAt run Anonymous "blog"

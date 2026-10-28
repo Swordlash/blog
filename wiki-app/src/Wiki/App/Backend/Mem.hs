@@ -85,7 +85,7 @@ import Wiki.App.Backend.Mem.Persist (Records, Stored (..), attachmentsStore, cha
 import Wiki.App.Backend.Mem.State
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Islands.Monad (MonadIslands)
-import Wiki.Core.Attachment (Attachment (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), MimeType (..), Source (..))
 import Wiki.Core.Export (Archive)
 import Wiki.Core.Id (BlobId (..), PageId, UserId)
 import Wiki.Core.Notification (WatchTarget (..))
@@ -233,7 +233,7 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
 -- for bytes the store does not have. Bytes kept in IndexedDB and not in
 -- memory are read for the URL, which holds them from then on, and are not
 -- kept in memory.
-blobUrl :: (MonadIO m) => Text -> BlobId -> MemWiki m Text
+blobUrl :: (MonadIO m) => MimeType -> BlobId -> MemWiki m Text
 blobUrl mediaType blob =
   readState >>= \st -> case Map.lookup blob st.objectUrls of
     Just url -> pure url
@@ -246,7 +246,7 @@ blobUrl mediaType blob =
       maybe (pure "") urlOf bytes
   where
     urlOf bytes = do
-      made <- liftIO (objectUrl mediaType (Base64.encode bytes))
+      made <- liftIO (objectUrl mediaType.text (Base64.encode bytes))
       -- Two calls at the same time can each make a URL. The one stored
       -- first wins, and the other is revoked so that its bytes are freed.
       MemWiki $ do

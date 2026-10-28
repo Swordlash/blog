@@ -107,7 +107,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Notifications qualified as Notifications
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
@@ -1022,8 +1022,8 @@ keptPrivately = "private, max-age=300"
 
 -- | The media type, if it can go in a header as it is; otherwise
 -- @application/octet-stream@.
-safeMediaType :: Text -> Text
-safeMediaType t
+safeMediaType :: MimeType -> Text
+safeMediaType (MimeType t)
   | not (T.null t) && T.all (\c -> isAscii c && isPrint c) t && "/" `T.isInfixOf` t = t
   | otherwise = "application/octet-stream"
 

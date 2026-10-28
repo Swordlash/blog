@@ -28,7 +28,7 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Export (ExportFormat (..), formatMediaType)
 import Wiki.Api.Links (attachmentUrl, links)
 import Wiki.Api.Types (NewPage (..), SessionInfo (..))
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Export.Zip (unzipFiles)
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), PageId)
@@ -53,11 +53,11 @@ spec = describe "export with pandoc" $ do
 
 -- | An image attachment, whose bytes are in the media bag.
 tree :: Attachment
-tree = Attachment {id = AttachmentId "a1", name = FileName "tree.png", mediaType = "image/png", size = 3, source = SourceBlob (BlobId "b1")}
+tree = Attachment {id = AttachmentId "a1", name = FileName "tree.png", mediaType = MimeType "image/png", size = 3, source = SourceBlob (BlobId "b1")}
 
 -- | A PDF attachment, which a document links to.
 paper :: Attachment
-paper = Attachment {id = AttachmentId "a2", name = FileName "paper.pdf", mediaType = "application/pdf", size = 3, source = SourceBlob (BlobId "b2")}
+paper = Attachment {id = AttachmentId "a2", name = FileName "paper.pdf", mediaType = MimeType "application/pdf", size = 3, source = SourceBlob (BlobId "b2")}
 
 -- | A page of the demo's Docs space, the Tour, with two attachments, in a
 -- wiki at a public address.

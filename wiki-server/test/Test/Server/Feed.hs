@@ -25,7 +25,7 @@ import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..), noServerSettings)
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Page (Page (..))
@@ -198,7 +198,7 @@ html = describe "a post's HTML" $
             , blog = True
             }
         pageOf i t body attachments = Page {id = PageId i, space = blog.id, parent = Nothing, title = t, slug = slugOf i, body, attachments, createdAt = time 1, updatedAt = time 1, position = 0, template = False}
-        tree = Attachment {id = AttachmentId "a1", name = FileName "tree.png", mediaType = "image/png", size = 3, source = SourceBlob (BlobId "b1")}
+        tree = Attachment {id = AttachmentId "a1", name = FileName "tree.png", mediaType = MimeType "image/png", size = 3, source = SourceBlob (BlobId "b1")}
         post =
           pageOf
             "post"

@@ -10,7 +10,7 @@ import Protolude
 import Test.Hspec
 import Wiki.Api (ArchiveApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Links
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Id
 import Wiki.Core.Search (SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug, mkSlug)
@@ -75,4 +75,4 @@ spec = describe "Wiki.Api.Links" $ do
     -- A search of one space alone, for ten hits at most.
     narrow text = SearchQuery {text, space = Just (SpaceId "s1"), includeSubspaces = False, limit = 10, templates = False}
     attachment source name =
-      Attachment {id = AttachmentId "a1", name = FileName name, mediaType = "image/png", size = 1, source}
+      Attachment {id = AttachmentId "a1", name = FileName name, mediaType = MimeType "image/png", size = 1, source}

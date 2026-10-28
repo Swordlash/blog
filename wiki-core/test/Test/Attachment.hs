@@ -19,8 +19,18 @@ spec = describe "Attachment" $ do
     it "takes any other name, such as one with spaces or non-ASCII letters" $
       parseFileName "Zażółć gęślą jaźń.pdf" `shouldBe` Right (FileName "Zażółć gęślą jaźń.pdf")
 
+  describe "uploadedMimeType" $ do
+    it "trims the declared type, and keeps its case and parameters" $
+      uploadedMimeType " Text/Plain; charset=utf-8 " `shouldBe` MimeType "Text/Plain; charset=utf-8"
+    it "stores a type that was not declared as bytes of no known type" $
+      uploadedMimeType "  " `shouldBe` MimeType "application/octet-stream"
+
+  describe "mimeEssence"
+    $ it "is the type without its parameters, in lower case"
+    $ mimeEssence (MimeType " Image/PNG; x=y") `shouldBe` "image/png"
+
   describe "mediaKind" $ do
-    let kind t k = it (show t <> " is " <> show k) $ mediaKind t `shouldBe` k
+    let kind t k = it (show t <> " is " <> show k) $ mediaKind (MimeType t) `shouldBe` k
     kind "image/png" MediaImage
     kind "image/svg+xml" MediaImage
     kind "IMAGE/JPEG" MediaImage
@@ -36,7 +46,7 @@ spec = describe "Attachment" $ do
 
   describe "an attachment" $ do
     let attachment name mediaType =
-          Attachment {id = AttachmentId name, name = FileName name, mediaType, size = 1024, source = SourceUrl (Url ("https://example.com/" <> name))}
+          Attachment {id = AttachmentId name, name = FileName name, mediaType = MimeType mediaType, size = 1024, source = SourceUrl (Url ("https://example.com/" <> name))}
         diagram = attachment "diagram.png" "image/png"
         talk = attachment "talk.webm" "video/webm"
     it "is shown by its media type" $

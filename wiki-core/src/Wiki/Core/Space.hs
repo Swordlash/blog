@@ -40,6 +40,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Numeric.Natural (Natural)
 import Protolude
+import Wiki.Core.Attachment (MimeType (..), mimeEssence)
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Sibling (..), childrenInOrder, treeOrder)
 import Wiki.Core.Path (TreeNode (..))
@@ -148,7 +149,7 @@ data Icon
   | -- | An uploaded image, stored like an attachment's bytes (by its blob
     -- id), with its media type. The backend gives its URL
     -- ('Wiki.App.Backend.spaceIconUrl').
-    IconImage BlobId Text
+    IconImage BlobId MimeType
   deriving stock (Eq, Show, Generic)
 
 -- | @{"emoji": "…"}@, @{"colour": "teal"}@ or @{"image": blob, "mediaType":
@@ -206,8 +207,8 @@ iconLetter name = case T.find isAlphaNum name <|> fmap fst (T.uncons (T.strip na
 -- | The image types a space's icon may have: images a browser shows by
 -- itself and that run nothing. Not SVG, which may carry scripts, and would
 -- be served from the wiki's own origin.
-iconMediaTypes :: [Text]
-iconMediaTypes = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]
+iconMediaTypes :: [MimeType]
+iconMediaTypes = map MimeType ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]
 
 -- | The largest image a space's icon may be, in bytes: 1 MB, plenty for a
 -- picture shown a few dozen pixels wide.
@@ -216,14 +217,14 @@ maxIconSize = 1024 * 1024
 
 -- | Check an upload for a space's icon. The result is its media type,
 -- normalised, or why it cannot be an icon.
-checkIconUpload :: Text -> Natural -> Either Text Text
+checkIconUpload :: Text -> Natural -> Either Text MimeType
 checkIconUpload mediaType size
   | essence `notElem` iconMediaTypes = Left "A space's icon has to be a PNG, JPEG, GIF, WebP or AVIF image."
   | size == 0 = Left "The image is empty."
   | size > maxIconSize = Left "A space's icon can be at most 1 MB."
   | otherwise = Right essence
   where
-    essence = T.toLower (T.strip (T.takeWhile (/= ';') mediaType))
+    essence = MimeType (mimeEssence (MimeType mediaType))
 
 --------------------------------------------------------------------------------
 -- Profiles

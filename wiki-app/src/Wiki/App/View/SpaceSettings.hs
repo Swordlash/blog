@@ -34,6 +34,7 @@ import Wiki.App.Backend (MonadLoad, MonadWiki (..), WikiError (..))
 import Wiki.App.Editor.Browser (PickedFile (..), chosenFiles, pickedFiles, readPickedFile)
 import Wiki.App.View.Common
 import Wiki.App.View.Permissions qualified as Permissions
+import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Page (PageSummary (id, title), pageTreeOrder)
 import Wiki.Core.Space
@@ -148,7 +149,7 @@ component =
               {% end %}
               <label class="button icon-upload">
                 {{ if hasImage then "Upload another image…" else "Upload an image…" :: Text }}
-                <input type="file" {{ [attr "accept" (T.intercalate "," iconMediaTypes)] }} disabled={{ st.busy }} onChange={{ ImageChosen }}>
+                <input type="file" {{ [attr "accept" (T.intercalate "," (map (\t -> t.text) iconMediaTypes))] }} disabled={{ st.busy }} onChange={{ ImageChosen }}>
               </label>
               <p class="field-hint">A PNG, JPEG, GIF, WebP or AVIF image of at most 1 MB, shown small and square. It is used as soon as it is uploaded.</p>
             </fieldset>

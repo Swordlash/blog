@@ -121,7 +121,7 @@ import Numeric (showHex)
 import Protolude
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Audit (AuditEntry (..), encodeAuditEntry, parseAuditEntry)
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor, formerAuthorName)
 import Wiki.Core.Id
@@ -293,8 +293,8 @@ attachmentPath x = "attachments/" <> safeFileName x.name.text
 
 -- | The name of a space's icon image, in its space's directory: @icon.@
 -- with the extension of the image's media type.
-iconFileName :: Text -> Text
-iconFileName mediaType = "icon." <> maybe "bin" snd (find (\(known, _) -> known == T.toLower mediaType) extensions)
+iconFileName :: MimeType -> Text
+iconFileName mediaType = "icon." <> maybe "bin" snd (find (\(known, _) -> known == T.toLower mediaType.text) extensions)
   where
     extensions = [("image/png", "png"), ("image/jpeg", "jpg"), ("image/gif", "gif"), ("image/webp", "webp"), ("image/avif", "avif")]
 
@@ -1026,7 +1026,7 @@ parseAttachment = withObject "attachment" $ \o -> do
   id <- AttachmentId <$> o .: "id"
   page <- PageId <$> o .: "page"
   name <- o .: "name"
-  mediaType <- o .:? "mediaType" .!= "application/octet-stream"
+  mediaType <- o .:? "mediaType" .!= MimeType "application/octet-stream"
   size <- o .:? "size" .!= 0
   url <- o .:? "url"
   blob <- o .:? "blob"

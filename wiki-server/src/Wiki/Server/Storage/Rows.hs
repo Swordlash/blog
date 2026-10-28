@@ -132,7 +132,7 @@ import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Security (AccountEmail (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
 import Wiki.Core.Access (Access (..), accessName, readAccess)
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..), Sibling (..))
@@ -506,7 +506,7 @@ attachmentRow :: RowParser (PageId, Attachment)
 attachmentRow = do
   id <- AttachmentId <$> field
   name <- field
-  mediaType <- field
+  mediaType <- MimeType <$> field
   size <- fromIntegral @Int64 <$> field
   url <- field
   blob <- field
@@ -885,7 +885,7 @@ insertAttachment c page ordinal a =
     [ toField a.id.text
     , toField page.text
     , toField a.name.text
-    , toField a.mediaType
+    , toField a.mediaType.text
     , toField (fromIntegral a.size :: Int64)
     , toField url
     , toField blob

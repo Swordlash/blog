@@ -94,7 +94,7 @@ import Wiki.Api.Links (attachmentUrl)
 import Wiki.Api.ServerSettings (ServerSettingsOf (..))
 import Wiki.App.Backend (MonadWiki (listSpaces), WikiError (..))
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
-import Wiki.Core.Attachment (Attachment (..), MediaKind (..), Source (..), attachmentKind)
+import Wiki.Core.Attachment (Attachment (..), MediaKind (..), MimeType (..), Source (..), attachmentKind)
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Ast (parseMarkdown)
 import Wiki.Core.Math (Macros (..), spaceMacros)
@@ -307,7 +307,7 @@ mediaOf storage pages = do
       present <- doesFileExist file
       if present then Just . (a,) <$> BS.readFile file else pure Nothing
     _ -> pure Nothing
-  let bag = foldl' (\m (a, bytes) -> insertMedia (mediaPath a) (Just a.mediaType) (BSL.fromStrict bytes) m) mempty found
+  let bag = foldl' (\m (a, bytes) -> insertMedia (mediaPath a) (Just a.mediaType.text) (BSL.fromStrict bytes) m) mempty found
       ids = Set.fromList [a.id | (a, _) <- found]
   pure (bag, (`Set.member` ids))
 

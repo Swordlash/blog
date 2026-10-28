@@ -67,7 +67,7 @@ import Wiki.App.Backend (MonadWiki (getSpace, listPages, listSpaces), WikiError 
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.Attachment (Attachment (..), FileName (..), findAttachment)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), findAttachment)
 import Wiki.Core.Blog (excerpt, posts)
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Markdown qualified as Md
@@ -282,7 +282,7 @@ postHtml base spaces space pages p = case Md.parseMarkdown p.body of
         }
     resolve destination = case Md.classifyDestination destination of
       Md.ToAttachment name -> case findAttachment name p.attachments of
-        Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = absolute (attachmentUrl a), mediaType = Just a.mediaType}
+        Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = absolute (attachmentUrl a), mediaType = Just a.mediaType.text}
         Nothing -> Md.Unresolved
       Md.ToUrl url -> Md.External url
       Md.ToAnchor fragment -> Md.External (addressOf base (Duplex.print route (Page spacePath pagePath)) <> "#" <> fragment)

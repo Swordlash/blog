@@ -79,7 +79,7 @@ import Wiki.App.Route (Against (..), Route (..))
 import Wiki.App.Shell qualified as Shell
 import Wiki.App.View.Body qualified as Body
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), CommentId (..), CommentThreadId (..), PageId (..), UserId (..))
@@ -549,7 +549,7 @@ requests = describe "its requests, through fetch" $ do
   it "uploads a file as a multipart form" $ runPage $ do
     serverStarts
     env <- unsafeIOToPageM (newHttpEnv browserTransport)
-    let made = Attachment {id = AttachmentId "a1", name = FileName "notes.txt", mediaType = "text/plain", size = 5, source = SourceUrl (Url "https://example.org/notes.txt")}
+    let made = Attachment {id = AttachmentId "a1", name = FileName "notes.txt", mediaType = MimeType "text/plain", size = 5, source = SourceUrl (Url "https://example.org/notes.txt")}
     answerWith "POST" "api/v1/pages/page%201/attachments" 201 made
     overHttp env (uploadAttachment page "notes.txt" "text/plain" "hello") `shouldReturn` Right made
     [r] <- asked

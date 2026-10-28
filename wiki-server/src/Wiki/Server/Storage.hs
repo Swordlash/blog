@@ -152,7 +152,7 @@ import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Access (Access (..), accessName)
 import Wiki.Core.Anchor (Anchor, checkAnchor)
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..), parseFileName)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..), parseFileName, uploadedMimeType)
 import Wiki.Core.Audit (Actor (..))
 import Wiki.Core.Audit qualified as Audit
 import Wiki.Core.Blog (PostDetails (..), isPost)
@@ -1103,7 +1103,7 @@ blobPath st = blobFile (attachmentsDir st.dataDir)
 -- its URL, so a replaced image gets a new URL. The server's route for
 -- space icons serves this. A blob that is not the space's image is
 -- 'NotFound'.
-spaceIconFile :: (MonadIO m) => SpaceId -> BlobId -> SqliteWiki m (Either WikiError (Text, FilePath))
+spaceIconFile :: (MonadIO m) => SpaceId -> BlobId -> SqliteWiki m (Either WikiError (MimeType, FilePath))
 spaceIconFile sid blob = run Reads $ do
   (s, c) <- findSpace sid
   requireView c
@@ -1746,8 +1746,7 @@ uploadAttachmentTx pid name mediaType size store = do
   n <- either invalid pure (parseFileName name)
   when (size > fromIntegral maxAttachmentSize) $
     invalid ("An attachment can be at most " <> show (maxAttachmentSize `div` (1024 * 1024)) <> " MB.")
-  let declared = T.strip mediaType
-      mt = if T.null declared then "application/octet-stream" else declared
+  let mt = uploadedMimeType mediaType
   dir <- asks (\x -> x.blobs)
   blob <- liftIO (store dir)
   i <- newId

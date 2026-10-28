@@ -38,7 +38,7 @@ import Web.Storage.IndexedDB (Database)
 import Wiki.App.Backend.Mem.Persist (memDatabase)
 import Wiki.App.Backend.Mem.State
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Attachment (FileName (..))
+import Wiki.Core.Attachment (FileName (..), MimeType (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
@@ -101,7 +101,7 @@ demoState now = flip execState emptyState $ do
   tourPage <- page docs Nothing "Tour" 1 tour
   guide <- page docs Nothing "Markdown guide" 2 markdownGuide
   attach guide "tree.png" "image/png" treePng
-  modify (fst . attachUrl guide (FileName "earth.jpg") "image/jpeg" 267290 (Url earthUrl))
+  modify (fst . attachUrl guide (FileName "earth.jpg") (MimeType "image/jpeg") 267290 (Url earthUrl))
   _ <- page docs (Just guide) "Diagrams" 3 diagrams
   _ <- page docs (Just guide) "Mathematics" 3 mathematics
   _ <- page docs (Just guide) "Presentations" 2 presentations
@@ -128,7 +128,7 @@ demoState now = flip execState emptyState $ do
     page sid parent title daysAgo body = state $ \st ->
       let (st', p) = insertPage sid parent title (T.unlines body) (ago daysAgo) st in (p.id, st')
 
-    attach pid name mediaType bytes = modify (fst . attachBytes pid (FileName name) mediaType bytes)
+    attach pid name mediaType bytes = modify (fst . attachBytes pid (FileName name) (MimeType mediaType) bytes)
 
     ago :: NominalDiffTime -> UTCTime
     ago days = addUTCTime (negate (days * 86400)) now

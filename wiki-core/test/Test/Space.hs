@@ -10,6 +10,7 @@ import Test.Gen (genIcon)
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (forAll, (===))
+import Wiki.Core.Attachment (MimeType (..))
 import Wiki.Core.Id
 import Wiki.Core.Order (ChildOrder (..))
 import Wiki.Core.Slug (mkSlug)
@@ -54,7 +55,7 @@ spec = describe "Wiki.Core.Space" $ do
     it "is written as an object with a field per kind" $ do
       toJSON (IconEmoji "📘") `shouldBe` object ["emoji" .= ("📘" :: Text)]
       toJSON (IconColour "teal") `shouldBe` object ["colour" .= ("teal" :: Text)]
-      toJSON (IconImage (BlobId "b1") "image/png") `shouldBe` object ["image" .= ("b1" :: Text), "mediaType" .= ("image/png" :: Text)]
+      toJSON (IconImage (BlobId "b1") (MimeType "image/png")) `shouldBe` object ["image" .= ("b1" :: Text), "mediaType" .= ("image/png" :: Text)]
     it "refuses an object of two kinds" $
       (decode "{\"emoji\":\"x\",\"colour\":\"teal\"}" :: Maybe Icon) `shouldBe` Nothing
 
@@ -77,15 +78,15 @@ spec = describe "Wiki.Core.Space" $ do
 
   describe "checkIconUpload" $ do
     it "takes the images a browser shows, by their media type" $ do
-      checkIconUpload "image/png" 100 `shouldBe` Right "image/png"
-      checkIconUpload " IMAGE/JPEG; q=1" 100 `shouldBe` Right "image/jpeg"
+      checkIconUpload "image/png" 100 `shouldBe` Right (MimeType "image/png")
+      checkIconUpload " IMAGE/JPEG; q=1" 100 `shouldBe` Right (MimeType "image/jpeg")
     it "refuses SVG, which may run scripts, and anything else" $ do
       checkIconUpload "image/svg+xml" 100 `shouldSatisfy` isLeft
       checkIconUpload "text/html" 100 `shouldSatisfy` isLeft
     it "refuses an empty file and one over the limit" $ do
       checkIconUpload "image/png" 0 `shouldSatisfy` isLeft
       checkIconUpload "image/png" (maxIconSize + 1) `shouldSatisfy` isLeft
-      checkIconUpload "image/png" maxIconSize `shouldBe` Right "image/png"
+      checkIconUpload "image/png" maxIconSize `shouldBe` Right (MimeType "image/png")
 
   describe "checkProfile" $ do
     let s = space "docs" "Docs" Nothing
@@ -104,7 +105,7 @@ spec = describe "Wiki.Core.Space" $ do
       checked (profile "" (Just (IconColour "teal")) Nothing) `shouldBe` Right (profile "" (Just (IconColour "teal")) Nothing)
       checked (profile "" (Just (IconColour "#ff0000")) Nothing) `shouldSatisfy` isLeft
     it "keeps the image the space has, and refuses one it has not" $ do
-      let image = IconImage (BlobId "b1") "image/png"
+      let image = IconImage (BlobId "b1") (MimeType "image/png")
       checkProfile (withIcon image s) [] (profile "" (Just image) Nothing) `shouldBe` Right (profile "" (Just image) Nothing)
       checked (profile "" (Just image) Nothing) `shouldSatisfy` isLeft
     it "takes one of the space's pages as its home page, and no other" $ do

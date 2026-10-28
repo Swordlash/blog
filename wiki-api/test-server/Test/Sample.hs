@@ -64,7 +64,7 @@ import Wiki.Api.ServerSettings (Discovered (..), MailSettingsOf (..), ProviderCh
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..))
 import Wiki.Core.Audit qualified as Audit
 import Wiki.Core.Blog (PostDetails (..))
@@ -117,7 +117,7 @@ attachment =
   Attachment
     { id = AttachmentId "a1"
     , name = FileName "diagram.png"
-    , mediaType = "image/png"
+    , mediaType = MimeType "image/png"
     , size = 1024
     , source = SourceBlob (BlobId "sha256-0f1e")
     }

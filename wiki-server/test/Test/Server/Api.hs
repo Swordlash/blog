@@ -26,7 +26,7 @@ import Wiki.Api.Links (attachmentUrl, links, searchUrl, spaceIconUrl)
 import Wiki.Api.Types
 import Wiki.Api.Version (pageVersion)
 import Wiki.App.Backend (maxAttachmentSize)
-import Wiki.Core.Attachment (Attachment (..))
+import Wiki.Core.Attachment (Attachment (..), MimeType (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), BlobId (..), GroupId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Order (ChildOrder (..), Children (..))
@@ -516,7 +516,7 @@ profiles = describe "a space's profile and icon over HTTP" $ do
         team :: Space <- getUrl r (onAdmin r (links.spaces.atPath (either (panic . show) identity (parsePath "team")))) >>= jsonAs 200
         uploaded :: Space <- multipart r (onAdmin r (links.spaces.uploadIcon blog.id)) [] [("file", "icon.png", "image/png; charset=binary", png)] >>= jsonAs 200
         case uploaded.icon of
-          Just (IconImage _ mediaType) -> mediaType `shouldBe` "image/png"
+          Just (IconImage _ mediaType) -> mediaType.text `shouldBe` "image/png"
           other -> expectationFailure ("not an image: " <> show other)
         served <- getUrl r (onPublic r (spaceIconUrl uploaded))
         (served.status, served.body) `shouldBe` (200, png)

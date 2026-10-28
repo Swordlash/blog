@@ -17,7 +17,7 @@ import Test.Hspec
 import Test.QuickCheck (elements, forAll, listOf, property, (==>))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor)
 import Wiki.Core.Export
 import Wiki.Core.Id
@@ -81,7 +81,7 @@ pageOf i s parent sl body =
 
 -- | An attachment whose bytes the wiki keeps, under a blob named for it.
 kept :: Text -> Text -> Attachment
-kept i name = Attachment {id = AttachmentId i, name = FileName name, mediaType = "application/octet-stream", size = fromIntegral (BS.length (bytesOf i)), source = SourceBlob (BlobId ("blob-" <> i))}
+kept i name = Attachment {id = AttachmentId i, name = FileName name, mediaType = MimeType "application/octet-stream", size = fromIntegral (BS.length (bytesOf i)), source = SourceBlob (BlobId ("blob-" <> i))}
 
 bytesOf :: Text -> ByteString
 bytesOf i = "bytes of " <> encodeUtf8 i
@@ -113,7 +113,7 @@ wiki =
           , access = Open
           }
     , spaces =
-        [ (spaceOf "s1" Nothing "docs") {icon = Just (IconImage (BlobId "blob-icon") "image/png"), homePage = Just (PageId "p1"), description = "Guides.", mathMacros = "\\def\\x{1}"}
+        [ (spaceOf "s1" Nothing "docs") {icon = Just (IconImage (BlobId "blob-icon") (MimeType "image/png")), homePage = Just (PageId "p1"), description = "Guides.", mathMacros = "\\def\\x{1}"}
         , spaceOf "s2" (Just "s1") "con"
         , spaceOf "s3" Nothing "nul"
         , (spaceOf "s4" (Just "s2") "aux") {pageOrder = ByHand, createdAt = at 5}
@@ -122,7 +122,7 @@ wiki =
         [ (pageOf "p1" "s1" Nothing "intro" "# Intro\r\n\nZażółć gęślą jaźń.\n")
             { attachments =
                 [ kept "x1" "a/b:c?.txt"
-                , Attachment {id = AttachmentId "x2", name = FileName "web.png", mediaType = "image/png", size = 10, source = SourceUrl (Url "https://example.com/web.png")}
+                , Attachment {id = AttachmentId "x2", name = FileName "web.png", mediaType = MimeType "image/png", size = 10, source = SourceUrl (Url "https://example.com/web.png")}
                 , kept "x3" "con.txt"
                 , kept "x4" ".."
                 , kept "x5" "żółw. "
@@ -199,7 +199,7 @@ spec = describe "Wiki.Core.Export" $ do
     readArchive files `shouldBe` Right wiki
 
   it "reads two attachments that share a blob, as the server keeps them, and refuses their files when they differ" $ do
-    let copy = Attachment {id = AttachmentId "x7", name = FileName "copy.txt", mediaType = "text/plain", size = fromIntegral (BS.length (bytesOf "x1")), source = SourceBlob (BlobId "blob-x1")}
+    let copy = Attachment {id = AttachmentId "x7", name = FileName "copy.txt", mediaType = MimeType "text/plain", size = fromIntegral (BS.length (bytesOf "x1")), source = SourceBlob (BlobId "blob-x1")}
         shared = wiki {pages = [if p.id == PageId "p2" then p {attachments = [copy]} else p | p <- wiki.pages]}
         sharedFiles = Map.fromList (writeArchive shared)
         copyFile = "spaces/docs/pages/intro/pages/prn_/attachments/copy.txt"

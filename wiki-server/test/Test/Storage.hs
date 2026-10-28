@@ -21,7 +21,7 @@ import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Contract (As (As))
-import Wiki.Core.Attachment (Attachment (..), Source (..), findAttachment)
+import Wiki.Core.Attachment (Attachment (..), MimeType (..), Source (..), findAttachment)
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
@@ -224,7 +224,7 @@ attachmentsOnDisk = describe "attachments" $ do
       notes <- pageIn st "blog" "notes-on-haskell"
       a <- asAdmin st (uploadAttachment hello.id "a.bin" "" "the same bytes") >>= ok
       b <- asAdmin st (uploadAttachment notes.id "b.bin" "application/x-thing" "the same bytes") >>= ok
-      (a.mediaType, b.mediaType) `shouldBe` ("application/octet-stream", "application/x-thing")
+      (a.mediaType.text, b.mediaType.text) `shouldBe` ("application/octet-stream", "application/x-thing")
       a.source `shouldBe` SourceBlob (blobOf "the same bytes")
       b.source `shouldBe` a.source
       file <- maybe (panic "not a hash") pure (blobFile (attachmentsDir dir) (blobOf "the same bytes"))

@@ -72,7 +72,7 @@ import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Islands qualified as Islands
 import Wiki.App.Route (PageLink (..), Route (Search), resolvePageLink)
 import Wiki.App.View.Common
-import Wiki.Core.Attachment (Attachment (..), FileName (..), findAttachment)
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), findAttachment)
 import Wiki.Core.Id (AttachmentId)
 import Wiki.Core.Markdown qualified as Md
 import Wiki.Core.Math (spaceMacros)
@@ -264,7 +264,7 @@ options place =
 resolve :: Place -> Text -> Md.LinkTarget PageLink
 resolve place destination = case Md.classifyDestination destination of
   Md.ToAttachment name -> case findAttachment name place.attachments of
-    Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = Map.findWithDefault "" a.id place.urls, mediaType = Just a.mediaType}
+    Just a -> Md.Attachment Md.AttachmentRef {name = a.name.text, url = Map.findWithDefault "" a.id place.urls, mediaType = Just a.mediaType.text}
     Nothing -> Md.Unresolved
   Md.ToUrl url -> Md.External url
   Md.ToAnchor fragment -> Md.External ("#" <> fragment)

@@ -11,6 +11,9 @@ module Wiki.Core.Attachment
   ( Attachment (..)
   , FileName (..)
   , parseFileName
+  , MimeType (..)
+  , uploadedMimeType
+  , mimeEssence
   , Source (..)
   , MediaKind (..)
   , mediaKind
@@ -33,7 +36,7 @@ data Attachment = Attachment
   , name :: FileName
   -- ^ The file name, as the page's Markdown refers to it; unique among the
   -- page's attachments.
-  , mediaType :: Text
+  , mediaType :: MimeType
   -- ^ The media (MIME) type, such as @image/png@, as the upload declared it.
   , size :: Natural
   -- ^ The size in bytes.
@@ -63,6 +66,29 @@ parseFileName raw
   where
     name = T.strip raw
 
+-- | 'MimeType': a media type, such as @image\/png@ or @text\/plain;
+-- charset=utf-8@, as an upload declared it. Nothing refuses a media type:
+-- one that is unknown or does not parse makes the attachment a link
+-- ('mediaKind'), and the server sends it as @application\/octet-stream@.
+-- The JSON is the bare text.
+newtype MimeType = MimeType {text :: Text}
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving newtype (FromJSON, ToJSON)
+
+-- | The media type an upload declared, as it is stored: trimmed of white
+-- space, and @application\/octet-stream@ (bytes of no known type) when
+-- the upload declared none.
+uploadedMimeType :: Text -> MimeType
+uploadedMimeType declared = case T.strip declared of
+  "" -> MimeType "application/octet-stream"
+  t -> MimeType t
+
+-- | A media type without its parameters (@; codecs=…@), trimmed and in
+-- lower case, as browsers compare media types: @Image\/PNG; x=y@ gives
+-- @image\/png@.
+mimeEssence :: MimeType -> Text
+mimeEssence (MimeType t) = T.toLower (T.strip (T.takeWhile (/= ';') t))
+
 -- | 'Source': where an attachment's bytes are.
 data Source
   = -- | A URL anywhere on the web, such as the demo's sample image
@@ -89,16 +115,14 @@ data MediaKind
 -- | The kind of a media type, by its top-level type: @image\/…@, @video\/…@,
 -- @audio\/…@, and anything else, including a type that does not parse. Case
 -- and parameters (@; codecs=…@) are ignored, as browsers ignore them.
-mediaKind :: Text -> MediaKind
-mediaKind mediaType = case T.splitOn "/" essence of
+mediaKind :: MimeType -> MediaKind
+mediaKind mediaType = case T.splitOn "/" (mimeEssence mediaType) of
   [top, sub] | not (T.null sub) -> case top of
     "image" -> MediaImage
     "video" -> MediaVideo
     "audio" -> MediaAudio
     _ -> MediaOther
   _ -> MediaOther
-  where
-    essence = T.toLower (T.strip (T.takeWhile (/= ';') mediaType))
 
 -- | The kind of an attachment, by its media type.
 attachmentKind :: Attachment -> MediaKind

@@ -27,7 +27,7 @@ import Wiki.Api.Version (pageVersion)
 import Wiki.App.View.Common (pagePathOf)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Anchor (Anchor (..))
-import Wiki.Core.Attachment (Attachment (..), FileName (..), Source (..))
+import Wiki.Core.Attachment (Attachment (..), FileName (..), MimeType (..), Source (..))
 import Wiki.Core.Comment (Comment (..), Thread (..), formerAuthor)
 import Wiki.Core.Export (Archive (..), readArchive, writeArchive)
 import Wiki.Core.Export.Zip (unzipFiles, zipFiles)
@@ -111,7 +111,7 @@ pageWith i s parent sl body position attachments =
 
 -- | An attachment kept in an archive, under a blob of the archive's own.
 picture :: Attachment
-picture = Attachment {id = AttachmentId "a1", name = FileName "pic.png", mediaType = "image/png", size = 3, source = SourceBlob (BlobId "b1")}
+picture = Attachment {id = AttachmentId "a1", name = FileName "pic.png", mediaType = MimeType "image/png", size = 3, source = SourceBlob (BlobId "b1")}
 
 -- | An archive of these spaces and pages, with a user and grants that an
 -- import leaves out, and the bytes of 'picture'.
@@ -305,7 +305,7 @@ roundTrip = describe "an export" $ do
 profiled :: Archive
 profiled =
   docs
-    { spaces = [if s.id == SpaceId "s1" then withProfile SpaceProfile {description = "Guides.", icon = Just (IconImage (BlobId "b2") "image/png"), homePage = Just (PageId "p1"), blog = True} s else s | s <- docs.spaces]
+    { spaces = [if s.id == SpaceId "s1" then withProfile SpaceProfile {description = "Guides.", icon = Just (IconImage (BlobId "b2") (MimeType "image/png")), homePage = Just (PageId "p1"), blog = True} s else s | s <- docs.spaces]
     , blobs = docs.blobs <> Map.fromList [(BlobId "b2", "ICON")]
     }
 
@@ -317,7 +317,7 @@ profiles = describe "a space's profile" $ do
     tour <- pageAt r ["docs"] ["tour"]
     (made.description, made.homePage, made.blog) `shouldBe` ("Guides.", Just tour.id, True)
     case made.icon of
-      Just (IconImage b mediaType) -> (b, mediaType) `shouldBe` (blobOf "ICON", "image/png")
+      Just (IconImage b mediaType) -> (b, mediaType.text) `shouldBe` (blobOf "ICON", "image/png")
       other -> expectationFailure ("not an image: " <> show other)
     served <- getUrl r (admin r (spaceIconUrl made))
     (served.status, served.body) `shouldBe` (200, "ICON")
