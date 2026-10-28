@@ -3,8 +3,8 @@
 -- says they do.
 module Test.Markdown.Document (spec) where
 
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
-import Data.Text.IO qualified as T
 import Protolude
 import Test.Hspec
 import Test.Markdown.Html
@@ -15,16 +15,22 @@ import Wiki.Core.Markdown
 guidePath :: FilePath
 guidePath = "../docs/markdown.md"
 
+-- | The guide's text. The file is UTF-8 and is decoded as UTF-8, whatever
+-- the locale says: under the C locale, reading it as text would fail on
+-- the first character outside ASCII.
+readGuide :: IO Text
+readGuide = decodeUtf8 <$> BS.readFile guidePath
+
 spec :: Spec
 spec = describe "docs/markdown.md" $ do
   it "parses into every kind of block it describes" $ do
-    doc <- either (panic . show) identity . parseMarkdown <$> T.readFile guidePath
+    doc <- either (panic . show) identity . parseMarkdown <$> readGuide
     let kinds = map kind (universe doc)
     for_ ["heading", "para", "list", "task", "quote", "break", "code", "mermaid", "tikz", "math", "table", "footnotes", "alert", "div"] $ \k ->
       (k, k `elem` kinds) `shouldBe` (k, True)
 
   it "renders, with the constructs it shows" $ do
-    html <- markdown =<< T.readFile guidePath
+    html <- markdown =<< readGuide
     for_
       [ "<h1 id=\"writing-pages\">Writing pages<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#writing-pages\"></a></h1>"
       , "<h2 id=\"images-video-and-attachments\">Images, video and attachments<a aria-label=\"Link to this section\" class=\"heading-anchor\" href=\"#images-video-and-attachments\"></a></h2>"

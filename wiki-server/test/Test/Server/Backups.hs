@@ -8,6 +8,7 @@
 -- refused the data directory of a running server.
 module Test.Server.Backups (spec) where
 
+import Data.ByteString qualified as BS
 import Data.IORef (readIORef)
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
@@ -38,6 +39,11 @@ spec = describe "the server's backups, over HTTP" $ do
 
 onAdmin :: Running -> Text -> Text
 onAdmin r address = r.admin <> "/admin/" <> address
+
+-- | A file the fake rclone wrote, decoded as UTF-8 whatever the locale
+-- says, so that the test does not depend on the locale it runs in.
+readText :: FilePath -> IO Text
+readText file = decodeUtf8 <$> BS.readFile file
 
 -- | The backups, as the operator reads them.
 backupsOf :: (HasCallStack) => Running -> IO Backups
@@ -170,14 +176,14 @@ offSite = describe "copied off the machine" $ do
         name <- maybe (assertFailure "no file") (pure . toS) made.file
         doesFileExist (base </> "remote" </> "wiki" </> "backups" </> name) `shouldReturn` True
         storedBlobs (base </> "remote" </> "wiki" </> "attachments") >>= (`shouldSatisfy` (not . null))
-        calls <- readFile (base </> "calls")
+        calls <- readText (base </> "calls")
         calls `shouldSatisfy` T.isInfixOf ("copyto " <> toS (backupsDir r.dataDir </> name) <> " fake:wiki/backups/" <> toS name)
         calls `shouldSatisfy` T.isInfixOf "copy "
         calls `shouldSatisfy` T.isInfixOf "fake:wiki/attachments --ignore-existing"
         -- rclone read the configuration from a file that is gone, in a
         -- directory that is gone.
-        readFile (base </> "configs") >>= (`shouldSatisfy` T.isInfixOf config)
-        used <- T.lines <$> readFile (base </> "config-paths")
+        readText (base </> "configs") >>= (`shouldSatisfy` T.isInfixOf config)
+        used <- T.lines <$> readText (base </> "config-paths")
         used `shouldSatisfy` (not . null)
         for_ used $ \p -> doesFileExist (toS p) `shouldReturn` False
         filter (".rclone-" `isPrefixOf`) <$> listDirectory r.dataDir `shouldReturn` []

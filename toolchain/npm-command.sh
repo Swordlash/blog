@@ -22,6 +22,19 @@ fi
 # rewriting the user's file or requiring another installation.
 bootstrap_env=$(sh toolchain/bootstrap.sh env)
 eval "$bootstrap_env"
+# GHC programs read and write text in the locale's encoding, which is ASCII
+# under the C locale: a test that meets a character outside ASCII then fails.
+# A container often starts with no locale set, which means C. So when the
+# locale is unset, C or POSIX, it becomes C.UTF-8, which every glibc since
+# 2.35 has. LC_ALL overrides LANG, so a C or POSIX LC_ALL is changed too.
+case ${LC_ALL:-} in
+  C | POSIX) LC_ALL=C.UTF-8; export LC_ALL ;;
+esac
+if [ -z "${LC_ALL:-}" ]; then
+  case ${LANG:-} in
+    "" | C | POSIX) LANG=C.UTF-8; export LANG ;;
+  esac
+fi
 sh toolchain/bootstrap.sh ready "$command"
 case $command in
   build-native) exec cabal build all --builddir=dist-newstyle/native "$@" ;;
