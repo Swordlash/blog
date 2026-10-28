@@ -3636,6 +3636,37 @@ Amended by the planning session after each work package's report.
   admin/settings` bodies must carry the field (`FromJSON` is derived). Merged after a
   rebase onto a plan-only commit without a second CI run, by the owner's word ("nie
   każdy PR musi być ff"): the tree differs from the green head only in `docs/PLAN.md`.
+- **WP5.16c merged** (2026-10-28, PR #104, merged by the owner on GitHub with a merge
+  commit, `main` at `fe10e39`). Findings 10, 12 and 13, one commit each. Export:
+  `Wiki.Core.Export.archiveFiles` names each attachment and icon by its blob (`FileBlob`)
+  instead of its bytes; `Export.Zip.writeZipFile` (about 100 lines over `zlib` and `digest`,
+  because zip-archive builds the archive in memory) writes the zip one file at a time, from
+  memory or from files on disk read in chunks, byte for byte what `zipFiles` makes (a test
+  says so); the server writes it to `<data>/tmp/` and answers with `responseFile`, the
+  endpoint is `RawM` and pauses Warp's timeout; written in full before the answer so a
+  missing blob is still a 500. Uploads arrive as `Tmp` multipart files (the forms are
+  parameterised by the backend) and `storeBlobFile` copies them into the blob store in 64
+  KiB chunks, hashing on the way; `<data>/tmp/` is emptied when the storage opens. The
+  import reads the archive from its temporary file but still unzips in memory
+  (`--max-import-size` 512 MiB). Metrics: `wiki_blobs` and `wiki_blob_bytes` from one
+  query over `attachments` grouped by blob plus unshared icons; the directory walk is
+  gone, so the samples mean "the blobs the wiki names". Demo: `openMemWiki` reads only the
+  keys of `attachments` and `versions` (`unreadBlobs`, `unreadVersions`); an attachment's
+  bytes are read when its object URL is first made or at export and are not kept in the
+  heap; a page's versions when its history is shown, its first version when its creator
+  is needed; a write saves only the stores `touched` reports (field-by-field `StableName`
+  comparison; pointer equality gave false positives), so a draft save writes the drafts
+  store only. Measured: export of 1,000 pages + 500 MiB of attachments, server peak
+  resident 1,391 MB and cut off by Warp's 30 s timeout in 2 of 3 runs → 121 MB in 19.6 s;
+  a 50 MB upload 186 → 103 MB; `/metrics` with 10,000 blobs 0.39 s → 0.020 s; the demo's
+  load with 200 attachments of 256 KiB reads 50 MiB in 330 ms → no bytes in 2.3 ms
+  (IndexedDB calls timed in Chromium, not the demo itself). New: `wiki-server-memory-test`
+  (`+RTS -T`, live heap under 30 MiB for an export of 100 MiB plus a 50 MB upload; the old
+  export reached 97 MiB), a metrics test with the blob directory deleted,
+  `Test.Counting` (IndexedDB calls recorded) for the demo's laziness, `wiki-server-bench
+  attachments|blobs` seeders. Not done: ZIP64 (4 GiB or 65,535 files refused with a
+  message, as before); the export still holds every page body in memory. Removed:
+  `Wiki.Api.Zip` and `Disposition`. Full gate; CI green.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
