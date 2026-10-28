@@ -3599,6 +3599,26 @@ Amended by the planning session after each work package's report.
   page 100 of 100,000 69 → 2.3 ms. Next free migration: 0016. Noted: `search_fold` as a
   column of `pages` still reads past each body; a separate table would read a quarter of
   the bytes. Full gate; CI green.
+- **WP5.18 merged** (2026-10-28, PR #102, `main` at `e4d9589`). A wiki setting
+  `adminCreatesPasswordAccounts`, on by default (row `admin-creates-password-accounts` of
+  the `settings` table, no migration; a wiki without the row has it on), a checkbox with
+  one sentence of help under "Who may come in", and carried by `Directory` so the Users
+  view makes one read. Off: the "New user" form is replaced by a note naming
+  `wiki-server users add`; `POST admin/users` is refused with 403 before the login,
+  password or address is looked at, and the storage refuses it too
+  (`requireAccountCreator`). The refusal is a plain 403: `Forbidden` carries no text in
+  `wiki-api`, `wiki-app` or `wiki-server`, and the reason is the setting itself, which
+  `GET admin/settings` and the directory show; the brief's "with a message" is dropped.
+  Unaffected: the console (`createAccount` never reads the setting), invitations,
+  accounts people make themselves, sign-in providers, `setPassword`, "Send a password
+  link…". The audit entry `settings.wiki` gains the detail. Tests: contract (refused when
+  off, blank login included; shown in settings and directory; back on works), HTTP on both
+  listeners with a restart in between and the console run beside the live server, the
+  password link still mailed when off, the audit detail, a browser test of the form and
+  the note. `docs/api.md`, the README, three changelogs. Note for later: `PUT
+  admin/settings` bodies must carry the field (`FromJSON` is derived). Merged after a
+  rebase onto a plan-only commit without a second CI run, by the owner's word ("nie
+  każdy PR musi być ff"): the tree differs from the green head only in `docs/PLAN.md`.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
