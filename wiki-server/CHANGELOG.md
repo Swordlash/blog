@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+A deck's steps reach its exports (WP5.20). The Beamer LaTeX and PDF keep
+the pauses (`\pause`) and the `incremental` boxes (`[<+->]` on their lists),
+so the PDF has a page for each step "Present" shows; a pause after an
+incremental list's items is written `\pause[\value{beamerpauses}]`, which
+saves Beamer's empty extra page. PowerPoint animates an incremental list and
+leaves the pauses out, having none. Every other format leaves the pauses
+out, so DOCX, HTML, EPUB and PDF no longer print the three dots. In a
+deck's exports a quotation is shown whole: its three dots stay text and its
+lists are not incremental, which pandoc made a list alone in a quotation.
+`Output` has `ToBeamer` and `ToPowerPoint`; `Export.Document` exports
+`slideSteps`, `withoutPauses` and `isPause`.
+
 The scrape of `/metrics` counts the blobs from the database, not from the
 blob directory (WP5.16c). `wiki_blobs` is now the blobs the attachments and
 the spaces' icons name, each counted once, and `wiki_blob_bytes` their

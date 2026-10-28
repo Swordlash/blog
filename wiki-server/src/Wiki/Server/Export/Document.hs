@@ -50,6 +50,16 @@
 --   gets an untitled one. The other headings on a slide are kept below the
 --   slide level. The @notes@ divs are what pandoc writes as the speaker's
 --   notes (@\\note{}@ in Beamer).
+-- * __Steps__ ("Wiki.Core.Slides"): a pause, @. . .@ alone in a paragraph,
+--   and a box with the class @incremental@ are pandoc's own markers, so its
+--   Beamer writer makes overlays of them (@\\pause@, and @[\<+->]@ on the
+--   lists), one PDF page for each step the wiki shows ('slideSteps'). Its
+--   PowerPoint writer animates an incremental list, but has no pauses. A
+--   pause is read where the wiki reads one, and only there; everywhere else
+--   in a deck the three dots stay text, and a quotation's lists are never
+--   incremental, since the wiki shows a quotation whole. In any other
+--   document a pause is left out ('withoutPauses'), and an incremental box
+--   is an ordinary one.
 module Wiki.Server.Export.Document
   ( -- * Reading a page
     Place (..)
@@ -67,6 +77,9 @@ module Wiki.Server.Export.Document
   , mediaPath
   , tikzPreamble
   , slideBlocks
+  , slideSteps
+  , withoutPauses
+  , isPause
   , htmlBlocks
   , htmlInlines
   , writeHtmlNodes
@@ -127,8 +140,14 @@ data Place = Place
 
 -- | The kind of document being written, as far as reading a page cares.
 data Output
-  = -- | Something LaTeX produces (a PDF, a Beamer deck): a TikZ picture
-    -- can be inserted as it is.
+  = -- | A Beamer presentation, its LaTeX or its PDF: a TikZ picture is
+    -- inserted as it is, and a pause is Beamer's.
+    ToBeamer
+  | -- | A PowerPoint presentation: an incremental list is animated, and a
+    -- pause is left out.
+    ToPowerPoint
+  | -- | A document LaTeX produces, a PDF: a TikZ picture is inserted as it
+    -- is.
     ToTeX
   | -- | Anything else.
     ToOther
@@ -190,7 +209,13 @@ pageBlocks output place source = do
     . walk (concatMap dropOptions)
     . walk htmlInlines
     . walk (concatMap htmlBlock)
+    . steps
     $ filter (not . contentsMarker) read'
+  where
+    steps = case output of
+      ToBeamer -> slideSteps True
+      ToPowerPoint -> slideSteps False
+      _ -> withoutPauses
 
 -- | Whether a block is @[[toc]]@ alone in a paragraph, where the page
 -- shows its table of contents ("Wiki.Core.Markdown.Toc"). Pandoc reads it
@@ -395,13 +420,14 @@ islands output = \case
   P.CodeBlock (_, cls, _) code
     | "math" `elem` cls -> [P.Para [P.Math P.DisplayMath code]]
     | "mermaid" `elem` cls -> islandNote "A Mermaid diagram is drawn here in the wiki; a document cannot draw it. Its source:" code
-    | "tikz" `elem` cls -> case output of
-        -- A picture LaTeX draws, inserted as it is, centred, in a div that
-        -- carries what it loads for the preamble ('tikzPreamble').
-        ToTeX ->
-          let picture = tikzDocument code
-           in [P.Div ("", ["tikz"], [("preamble", picture.preamble)]) [P.RawBlock (P.Format "latex") ("\\begin{center}\n" <> picture.picture <> "\n\\end{center}")]]
-        ToOther -> islandNote "A TikZ picture is drawn here in the wiki, and in a PDF; this document cannot draw it. Its source:" code
+    | "tikz" `elem` cls ->
+        if output `elem` [ToTeX, ToBeamer]
+          then -- A picture LaTeX draws, inserted as it is, centred, in a
+          -- div that carries what it loads for the preamble
+          -- ('tikzPreamble').
+            let picture = tikzDocument code
+             in [P.Div ("", ["tikz"], [("preamble", picture.preamble)]) [P.RawBlock (P.Format "latex") ("\\begin{center}\n" <> picture.picture <> "\n\\end{center}")]]
+          else islandNote "A TikZ picture is drawn here in the wiki, and in a PDF; this document cannot draw it. Its source:" code
   b -> [b]
   where
     islandNote text code = [P.Div ("", ["island-note"], []) [P.Para [P.Emph (B.toList (B.text text))], P.CodeBlock ("", [], []) code]]
@@ -513,6 +539,78 @@ slideBlocks = concatMap slide . filter (not . null) . splitAtRules
       P.Header l attr xs -> P.Header (max 3 l) attr xs
       b -> b
     nullAttr' = ("", [], [])
+
+-- | Whether a block is a pause, as pandoc reads @. . .@ alone in a
+-- paragraph and its slide writers recognise it.
+isPause :: P.Block -> Bool
+isPause = (== P.Para [P.Str ".", P.Space, P.Str ".", P.Space, P.Str "."])
+
+-- | A page's blocks without the pauses the wiki reads ('Wiki.Core.Markdown.Ast.Pause'):
+-- at the top level, in boxes and alerts, and in list items. A document
+-- that is not a presentation shows its content once, and would otherwise
+-- print the three dots.
+withoutPauses :: [P.Block] -> [P.Block]
+withoutPauses = concatMap $ \case
+  b | isPause b -> []
+  P.Div attr bs -> [P.Div attr (withoutPauses bs)]
+  P.BulletList items -> [P.BulletList (map withoutPauses items)]
+  P.OrderedList attrs items -> [P.OrderedList attrs (map withoutPauses items)]
+  b -> [b]
+
+-- | A deck's steps as a slide writer reads them, Beamer's when the flag
+-- says so, PowerPoint's otherwise. The pauses the wiki reads are kept for
+-- Beamer and left out for PowerPoint, which has none, and those in the
+-- speaker's notes are left out for both. Three dots anywhere else (a
+-- quotation, a footnote) are made text that no writer reads as a pause,
+-- and a quotation's lists are made not incremental, which pandoc would
+-- otherwise make them, so that both writers show a quotation as the wiki
+-- does: whole.
+--
+-- Beamer counts a pause after the items of an incremental list from after
+-- the last item, and then one more: @\\pause@ would add a page that shows
+-- nothing new. Such a pause is written @\\pause[\\value{beamerpauses}]@,
+-- which starts the step right after the last item, as the wiki does. The
+-- count starts again at each slide, at each top-level break.
+slideSteps :: Bool -> [P.Block] -> [P.Block]
+slideSteps beamer = walk inNotes . concat . (`evalState` False) . traverse topLevel
+  where
+    topLevel :: P.Block -> State Bool [P.Block]
+    topLevel = \case
+      P.HorizontalRule -> [P.HorizontalRule] <$ put False
+      b -> block False b
+    blocks :: Bool -> [P.Block] -> State Bool [P.Block]
+    blocks incremental = fmap concat . traverse (block incremental)
+    -- The state says whether an incremental list's item has come since
+    -- the last pause.
+    block :: Bool -> P.Block -> State Bool [P.Block]
+    block incremental = \case
+      b | isPause b -> do
+        afterItems <- get
+        put False
+        pure $ case () of
+          _
+            | not beamer -> []
+            | afterItems -> [P.RawBlock (P.Format "latex") "\\pause[\\value{beamerpauses}]"]
+            | otherwise -> [b]
+      P.Div attr@(_, cls, _) bs
+        | "notes" `elem` cls -> pure [P.Div attr (walk (filter (not . isPause)) bs)]
+        | otherwise -> pure . P.Div attr <$> blocks (incrementalIn cls incremental) bs
+      P.BulletList items -> pure . P.BulletList <$> traverse (item incremental) items
+      P.OrderedList attrs items -> pure . P.OrderedList attrs <$> traverse (item incremental) items
+      P.BlockQuote bs -> pure [P.BlockQuote [P.Div ("", ["nonincremental"], []) (walk asText bs)]]
+      b -> pure [b]
+    item incremental bs = do
+      when incremental (put True)
+      blocks incremental bs
+    incrementalIn cls incremental
+      | "incremental" `elem` cls = True
+      | "nonincremental" `elem` cls = False
+      | otherwise = incremental
+    asText b = if isPause b then P.Para [P.Str ". . ."] else b
+    -- A footnote's pause is text too.
+    inNotes = \case
+      P.Note bs -> P.Note (walk asText bs)
+      x -> x
 
 -- | What the preamble needs for the TikZ pictures among some blocks: TikZ
 -- itself and the libraries each picture loads, once each; nothing when

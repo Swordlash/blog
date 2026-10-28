@@ -314,4 +314,5 @@ test-suite wiki-server-test
         wiki-app:contract,
         wiki-core,
         wiki-server,
-        xml-conduit
+        xml-conduit,
+        zlib

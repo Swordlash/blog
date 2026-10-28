@@ -167,7 +167,7 @@ exportPage exports key storage who pid format = oneAtATime exports key . requiri
       now <- getCurrentTime
       let deck = either (const False) isDeck (parseMarkdown page.body)
           looks = either (const (deckOf [])) deckOf (parseMarkdown page.body)
-          output = if needsTeX format || format == BeamerTex then ToTeX else ToOther
+          output = outputOf format
           place = placeOf settings.publicUrl spaces pages page (\_ _ -> Nothing) ""
       if forDecks format && not deck
         then pure (Left (ApiError.Invalid "Only a page written as slides exports as a presentation."))
@@ -204,7 +204,7 @@ exportSpace exports key storage who sid format = oneAtATime exports key . requir
               anchors = Map.fromList [(p.id, "page-" <> show n) | (n, p) <- zip [1 :: Int ..] ordered]
               spacePath = spacePathOf spaces space.id
               inDocument s path = if s == spacePath then head [a | p <- ordered, pagePathOf pages p.id == path, Just a <- [Map.lookup p.id anchors]] else Nothing
-              output = if needsTeX format then ToTeX else ToOther
+              output = outputOf format
           (bag, stored) <- mediaOf storage ordered
           let pageOf p =
                 let anchor = Map.findWithDefault "" p.id anchors
@@ -217,6 +217,17 @@ exportSpace exports key storage who sid format = oneAtATime exports key . requir
                   doc = spaceDocument space ("Exported from the wiki on " <> T.strip made) documentPages
               written <- writeDocument format bag True doc
               pure (Exported (exportFileName space.name format) format <$> written)
+
+-- | What kind of document a format is, as far as reading a page cares.
+outputOf :: ExportFormat -> Output
+outputOf = \case
+  BeamerTex -> ToBeamer
+  BeamerPdf -> ToBeamer
+  Pptx -> ToPowerPoint
+  Pdf -> ToTeX
+  Docx -> ToOther
+  Html -> ToOther
+  Epub -> ToOther
 
 -- | Check the format before anything is read: a PDF needs a TeX engine.
 requiringTeX :: ExportFormat -> IO (Either ApiError a) -> IO (Either ApiError a)
