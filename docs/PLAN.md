@@ -1300,8 +1300,98 @@ must be in before it is.
   and say what they do (the owner, 2026-10-28: "zaktualizować tutorial prezentacji"); the
   README's "Presentations" section mentions steps too.
 
-- **Later, by the owner (2026-10-28, "PRF jest spoko na później"): the assistant's API keys
-  synchronised with a passkey.** The keys stay out of the server today (IndexedDB per user,
+- **WP5.21 Content Security Policy for the application, and the assistant's keys in a
+  passkey-locked vault** (the owner, 2026-10-28, after asking what XSS has to do with the
+  keys: "Zróbmy oba naraz, jeśli to zwiększy bezpieczeństwo", one agent for both). Two parts,
+  one package, one pull request.
+
+  **A. A Content Security Policy for the application page.** Today only an attachment shown
+  in the browser and an exported document carry a policy (`Wiki.Server.Api`); the page
+  itself, with CodeMirror, Mermaid, KaTeX, TikZJax, highlight.js and two provider SDKs in
+  one bundle, carries none. The policy makes a bug in that supply chain, or in the raw HTML
+  allowlist, "does not work" instead of "works for the attacker": no script from another
+  origin, no `eval` in a library, no `<base>`, no form posted elsewhere, and a stolen key with
+  nowhere to go by `fetch`. It does not close every channel (a script already running can
+  still navigate or load an image from anywhere, and pages may embed images from any
+  `https:` address, `Wiki.Core.Markdown.Link.safeSrc`, so `img-src` stays wide); the first
+  defence stays the allowlist. The policy, sent by the server as a header on the page
+  (`Wiki.Server.Static`) and carried by the demo (served by GitHub Pages, which sends no
+  headers) as a `<meta http-equiv>` with the same text, so the two stay one: `default-src
+  'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' <providers>; img-src
+  'self' https: data: blob:; media-src 'self' https: blob:; style-src 'self'
+  'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; manifest-src 'self';
+  object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`, adjusted
+  to what the islands and the service worker actually need (measured, not guessed: the
+  browser test page carries the same policy, so a directive the islands need and the policy
+  lacks fails a test). `'unsafe-inline'` for styles is what KaTeX and Mermaid need;
+  `'wasm-unsafe-eval'` is what `app.wasm` needs; neither is given to scripts.
+  `<providers>` is `https://api.anthropic.com https://api.openai.com` plus the addresses an
+  administrator lists for the assistant's own base URLs (`ProviderSettings.baseUrl`: Ollama,
+  LM Studio, a proxy), a server setting (`--assistant-hosts`, and the server settings page)
+  that the server folds into the header; a base URL outside the list is refused by the
+  browser, and the assistant's settings say so ("Test the key" reports that the address is
+  not allowed by this wiki, with the administrator's list to extend). The sign-in pages the
+  server renders itself (`Wiki.Server.Auth`) get the same policy with `form-action 'self'`
+  and the provider's authorisation address. `X-Content-Type-Options: nosniff` already;
+  add `Referrer-Policy: same-origin` and `Permissions-Policy` turning off camera, microphone,
+  geolocation. Tests: the server's static test finds the header on the page and not on
+  `app.wasm`; the browser suites run under the policy (`wiki-app/test/web/index.html` carries
+  the meta) so Mermaid, KaTeX, TikZ, highlighting, the editor, the assistant with a test
+  fetch and the service worker prove they work under it; a test that a page with `<img
+  onerror>` and `<script>` in raw HTML runs nothing (the allowlist already guarantees it;
+  the test keeps it). CI gains `npm audit --audit-level=high` on the lockfile, failing the
+  build on a known vulnerability in a dependency that ships in the bundle (a dev-only
+  finding is reported, not fatal), so the supply chain is at least checked.
+
+  **B. The assistant's keys in a vault unlocked by a passkey** (the "later" note below,
+  picked up today). The keys stay out of the server's sight; they stop lying in IndexedDB
+  as text and follow the user across devices with one touch. Mechanism: a random vault key
+  (AES-GCM, WebCrypto) encrypts the assistant settings (`Wiki.Core.Assistant.Settings`:
+  keys, models, efforts, base URLs; not the fetched model lists); the vault key is wrapped
+  with a key derived (HKDF-SHA256) from the WebAuthn PRF extension's output for a passkey
+  registered with the wiki as the relying party and a salt chosen per user; the server
+  stores, per user, the ciphertext, the salt, and one wrapped copy of the vault key per
+  passkey (`api/v1/assistant/vault`: `GET`, `PUT`, `DELETE`, and the passkeys under it). The
+  PRF output is in the client extension results, never in the signed assertion, and the
+  client never sends it. On this device the vault key is kept in IndexedDB as a
+  non-extractable `CryptoKey` and the plain key is deleted; at use, the settings are
+  decrypted in memory. A device setting "ask for the passkey each time the wiki opens" keeps
+  no vault key at all (only the ciphertext on disk; one touch per browser start). Without
+  synchronisation the same vault format is used locally with a vault key kept
+  non-extractable (the same code; the plain key never stored again), which is what the demo
+  does too (no server; the "sync" controls are hidden there). The user's flow: in the
+  assistant's settings, "Sync across devices: off" with "Turn on with a passkey" (the
+  browser's own dialog; a passkey without PRF is reported, "This passkey cannot sync the
+  keys", and removed); on a new device the assistant offers "Unlock with passkey" and, in
+  smaller type, "or type a key here" (a key typed locally does not overwrite the vault
+  until it is unlocked); a changed key on any device is re-encrypted and `PUT`, other
+  devices pick the new version up at the next start by ETag and decrypt it with their
+  cached vault key, no touch; "Add passkey" (on an unlocked device only), a list of passkeys
+  with "Remove", "Turn off" (deletes the vault on the server, needs no passkey, the way back
+  after losing every passkey; keys stay where they are locally). WebAuthn on the server is
+  written here, not taken from a package: registration with attestation `none` (the
+  attestation statement is not verified; the credential id and COSE public key, ES256 and
+  RS256, are taken from the authenticator data, parsed with `cborg`), assertion
+  verification with `crypton` (challenge from the server, origin and relying-party id hash,
+  user-presence flag, signature over `authenticatorData || SHA-256(clientDataJSON)`,
+  sign count kept and a decrease reported). Registration and assertion are tied to the
+  signed-in session; they do not sign the user in (a passkey sign-in is a later package on
+  the same table). The relying-party id is the wiki's host; WebAuthn needs HTTPS
+  (localhost excepted), so the setting is hidden on plain HTTP with a sentence why. Client
+  side through `browserJS` (`navigator.credentials`, WebCrypto), no SDK. Tests: pure
+  (`Wiki.Core.Assistant.Vault`: the format, versioning, that a removed passkey's wrapped
+  copy is gone), server (registration and assertion with a fixed ES256 key pair signing as
+  an authenticator would, a wrong origin, a wrong challenge, a replayed sign count, access
+  by another user), browser (hspec-halogen with `navigator.credentials` replaced by a stub
+  in the test page that computes a deterministic PRF from the salt, since the harness has
+  no CDP virtual authenticator: turn on, unlock on a "second device" (a fresh IndexedDB
+  database), change a key, "ask each time", turn off); the real browser dialog is checked by
+  hand and said so in the report. Migration for the passkeys and the vault.
+  `docs/assistant.md` (or where the assistant is documented) gains "Keys across devices".
+
+- **Later, by the owner (2026-10-28, "PRF jest spoko na później"), picked up the same day as
+  WP5.21 B: the assistant's API keys synchronised with a passkey.** The keys stay out of
+  the server today (IndexedDB per user,
   per device; the administrator never sees them), and the owner does not want to type
   anything, so the only way across devices without trusting the server is a passkey with
   the WebAuthn PRF extension: the key material is wrapped with a key derived from the
