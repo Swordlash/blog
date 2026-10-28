@@ -58,7 +58,7 @@ closeWiki :: (HasCallStack) => Running -> IO ()
 closeWiki r = settle r closedSettings
 
 closedSettings :: WikiSettings
-closedSettings = WikiSettings {access = Closed, newAccountsCreateSpaces = False}
+closedSettings = WikiSettings {access = Closed, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True}
 
 -- | Who the public listener takes a request with these headers for.
 sessionOf :: (HasCallStack) => Running -> [Header] -> IO SessionInfo
@@ -112,7 +112,7 @@ open = describe "an open wiki" $ do
     pass
 
   it "gives a new account create-spaces when the settings say so" $ withDemoRunning identity $ \r -> do
-    settle r WikiSettings {access = Open, newAccountsCreateSpaces = True}
+    settle r WikiSettings {access = Open, newAccountsCreateSpaces = True, adminCreatesPasswordAccounts = True}
     reply <- register r [] "maker" "a long password"
     info :: SessionInfo <- jsonAs 200 reply
     info.grants.global `shouldSatisfy` any (\g -> g.permission == CreateSpaces)
@@ -184,7 +184,7 @@ closed = describe "a closed wiki" $ do
     givePassword r "user-editor" "editor's password"
     c <- cookie <$> signInAs r "editor" "editor's password"
     (sendJson r methodPut (onPublic r links.admin.setSettings) closedSettings >>= jsonAs 403) `shouldReturn` Forbidden
-    reply <- send r methodPut (onPublic r links.admin.setSettings) [(hContentType, "application/json"), c] "{\"access\":\"Closed\",\"newAccountsCreateSpaces\":false}"
+    reply <- send r methodPut (onPublic r links.admin.setSettings) [(hContentType, "application/json"), c] "{\"access\":\"Closed\",\"newAccountsCreateSpaces\":false,\"adminCreatesPasswordAccounts\":true}"
     reply.status `shouldBe` 403
     spaceNames r [] `shouldReturn` ["Blog", "Docs"]
 
@@ -242,7 +242,7 @@ invitations = describe "an invitation, where the server mails nothing" $ do
     (accept r token "bea" "a long password") >>= jsonAs @SessionInfo 200 >>= \s -> (\u -> u.login) <$> s.user `shouldBe` Just "bea"
 
   it "gives the account create-spaces when the settings say so" $ withDemoRunning identity $ \r -> do
-    settle r WikiSettings {access = Closed, newAccountsCreateSpaces = True}
+    settle r WikiSettings {access = Closed, newAccountsCreateSpaces = True, adminCreatesPasswordAccounts = True}
     made <- inviteAs r "bea@example.org"
     token <- maybe (panic "no secret") pure made.token
     info :: SessionInfo <- accept r token "bea" "a long password" >>= jsonAs 200

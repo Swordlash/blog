@@ -1063,22 +1063,34 @@ resetsSince c u since = maybe 0 fromOnly . head <$> query c "SELECT count(*) FRO
 
 -- | The wiki's settings, each from its row, or its default for a setting
 -- that has no row (migrations/0003-settings.sql) or a value this program
--- does not know.
+-- does not know. Besides the rows that migration lists, the row
+-- @admin-creates-password-accounts@ (@0@ or @1@) holds
+-- 'adminCreatesPasswordAccounts'. A wiki made before that setting existed
+-- has no such row, and so keeps the default, on.
 loadSettings :: Connection -> IO WikiSettings
 loadSettings c = do
   rows :: [(Text, Text)] <- query_ c "SELECT key, value FROM settings"
   let valueOf key = snd <$> find ((== key) . fst) rows
+      flag key def = maybe def (== "1") (valueOf key)
   pure
     WikiSettings
       { access = fromMaybe defaultSettings.access (valueOf "access" >>= readAccess)
-      , newAccountsCreateSpaces = maybe defaultSettings.newAccountsCreateSpaces (== "1") (valueOf "new-accounts-create-spaces")
+      , newAccountsCreateSpaces = flag "new-accounts-create-spaces" defaultSettings.newAccountsCreateSpaces
+      , adminCreatesPasswordAccounts = flag "admin-creates-password-accounts" defaultSettings.adminCreatesPasswordAccounts
       }
 
 -- | Store the wiki's settings, each in its row.
 storeSettings :: Connection -> WikiSettings -> IO ()
 storeSettings c s =
-  for_ [("access", accessName s.access), ("new-accounts-create-spaces", if s.newAccountsCreateSpaces then "1" else "0")] $ \(key, value :: Text) ->
-    execute c "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value" (key :: Text, value)
+  for_
+    [ ("access", accessName s.access)
+    , ("new-accounts-create-spaces", oneOrZero s.newAccountsCreateSpaces)
+    , ("admin-creates-password-accounts", oneOrZero s.adminCreatesPasswordAccounts)
+    ]
+    $ \(key, value :: Text) ->
+      execute c "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value" (key :: Text, value)
+  where
+    oneOrZero b = if b then "1" else "0"
 
 -- | Every invitation, the latest first, as of a given time (which decides
 -- which have expired).

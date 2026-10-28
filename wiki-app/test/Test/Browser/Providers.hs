@@ -258,9 +258,9 @@ administration m = describe "the administration's accounts" $ do
     demoPeople = unsafeIOToPageM $ do
       wiki <- newMemWiki ((demoState demoNow) {current = Just (UserId "user-admin")})
       runMemWiki wiki ((,) <$> session <*> directory)
-    withIdentities d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = Map.fromList [(UserId "user-editor", ["hub"])], providerOnly = Set.singleton (UserId "user-editor"), secondFactor = d.secondFactor, emails = d.emails, mailing = d.mailing, groups = d.groups, membership = d.membership}
+    withIdentities d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = Map.fromList [(UserId "user-editor", ["hub"])], providerOnly = Set.singleton (UserId "user-editor"), secondFactor = d.secondFactor, emails = d.emails, mailing = d.mailing, adminCreatesPasswordAccounts = d.adminCreatesPasswordAccounts, groups = d.groups, membership = d.membership}
     -- Rita has a verified address, and the server mails or not.
-    mailingTo mailing d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = d.identities, providerOnly = d.providerOnly, secondFactor = d.secondFactor, emails = Map.fromList [(UserId "user-reader", AccountEmail {email = "rita@example.org", verified = True})], mailing, groups = d.groups, membership = d.membership}
+    mailingTo mailing d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = d.identities, providerOnly = d.providerOnly, secondFactor = d.secondFactor, emails = Map.fromList [(UserId "user-reader", AccountEmail {email = "rita@example.org", verified = True})], mailing, adminCreatesPasswordAccounts = d.adminCreatesPasswordAccounts, groups = d.groups, membership = d.membership}
 
 shouldContainText :: Element s -> Text -> PageM s ()
 shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)

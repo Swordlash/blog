@@ -348,7 +348,7 @@ live = describe "the live channel" $ do
 
   it "is closed to someone not signed in in a closed wiki, before the upgrade, and open to who signed in" $ withDemoRunning identity $ \r -> do
     people <- signedIn r
-    _ :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) WikiSettings {access = Closed, newAccountsCreateSpaces = False} >>= jsonAs 200
+    _ :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) WikiSettings {access = Closed, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
     refusedUpgrade r [] `shouldReturn` Left 401
     p <- notesOf r
     channel r [people.reader] (`subscribe` p)

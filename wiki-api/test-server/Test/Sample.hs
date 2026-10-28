@@ -315,6 +315,7 @@ directory =
     , secondFactor = Set.fromList [UserId "u1"]
     , emails = Map.fromList [(UserId "u1", AccountEmail {email = "ada@example.org", verified = True}), (UserId "u2", AccountEmail {email = "edgar@example.org", verified = False})]
     , mailing = True
+    , adminCreatesPasswordAccounts = False
     , groups = [Group {id = GroupId "g1", name = "writers"}]
     , membership = Map.fromList [(GroupId "g1", Set.fromList [UserId "u2"])]
     }
@@ -333,9 +334,10 @@ spaceAccess =
     , groups = directory.groups
     }
 
--- | The wiki's settings: closed, and new accounts may create spaces.
+-- | The wiki's settings: closed, new accounts may create spaces, and
+-- accounts with a password are made on the server's console only.
 settings :: WikiSettings
-settings = WikiSettings {access = Closed, newAccountsCreateSpaces = True}
+settings = WikiSettings {access = Closed, newAccountsCreateSpaces = True, adminCreatesPasswordAccounts = False}
 
 -- | An invitation, not expired.
 invitation :: Invitation

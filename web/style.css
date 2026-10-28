@@ -3211,14 +3211,16 @@ body:has(.slides-view) {
 }
 
 /* The form for a new user, under the table. */
-.user-create {
+.user-create,
+.user-create-console {
   margin: 1rem 0;
   padding: 0.6rem 1rem 0.8rem;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
 
-.user-create h3 {
+.user-create h3,
+.user-create-console h3 {
   margin: 0 0 0.5rem;
   font-size: 1rem;
 }

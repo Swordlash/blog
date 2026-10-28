@@ -1,4 +1,5 @@
 {
   "access": "Closed",
+  "adminCreatesPasswordAccounts": false,
   "newAccountsCreateSpaces": true
 }

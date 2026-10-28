@@ -171,7 +171,7 @@ usersNow r = getUrl r (onAdmin r links.admin.directory) >>= jsonAs 200
 
 settleAccess :: (HasCallStack) => Running -> Access -> IO ()
 settleAccess r access = do
-  _ :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) WikiSettings {access, newAccountsCreateSpaces = False} >>= jsonAs 200
+  _ :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) WikiSettings {access, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
   pass
 
 -- | A request with a JSON body and these headers besides.

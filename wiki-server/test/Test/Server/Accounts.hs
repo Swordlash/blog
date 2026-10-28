@@ -23,16 +23,18 @@ import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AccountApi (..), AdminApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), NewAccount (..), PasswordChange (..), SignInMethods (..))
-import Wiki.Api.Admin (Directory (..), ServerStatus)
+import Wiki.Api.Admin (Directory (..), ServerStatus, WikiSettings (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.Types (NewPage (..), NewSpace (..), SessionInfo (..))
+import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (SpaceId, UserId (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Standing (..), User (..))
+import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.Options (ServeOptions (..))
 
 spec :: Spec
@@ -172,6 +174,44 @@ administration = describe "the administrator on the admin listener" $ do
     short <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "cid", displayName = "", password = "short", email = Nothing}
     short.status `shouldBe` 400
 
+  -- WP5.18 of docs/PLAN.md: a wiki may leave accounts with a password to
+  -- the server's console. The setting is kept in the database, so it
+  -- holds across a restart, and the console is never refused.
+  it "leaves accounts with a password to the console while the wiki's settings say so, across a restart" $
+    withDemoRestarted
+      ( \r -> do
+          settings :: WikiSettings <- getUrl r (onAdmin r links.admin.settings) >>= jsonAs 200
+          settings.adminCreatesPasswordAccounts `shouldBe` True
+          _ :: Account <- sendJson r methodPost (onAdmin r links.admin.createUser) (newAccount "bea") >>= jsonAs 201
+          answered :: WikiSettings <- sendJson r methodPut (onAdmin r links.admin.setSettings) consoleOnly >>= jsonAs 200
+          answered `shouldBe` consoleOnly
+          (sendJson r methodPost (onAdmin r links.admin.createUser) (newAccount "cid") >>= jsonAs 403) `shouldReturn` Forbidden
+          -- Refused before the address is looked at.
+          (sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "cid", displayName = "", password = "cid's password", email = Just "not an address"} >>= jsonAs 403) `shouldReturn` Forbidden
+          -- An administrator signed in on the public listener is refused the same.
+          givePassword r "user-admin" "admin's password"
+          admin <- signInAs r "admin" "admin's password"
+          reply <- send r methodPost (onPublic r links.admin.createUser) [(hContentType, "application/json"), cookie admin] (encode (newAccount "cid"))
+          jsonAs 403 reply `shouldReturn` Forbidden
+          -- An existing user is given a password as before.
+          givePassword r "user-editor" "editor's password"
+      )
+      ( \() again -> do
+          (getUrl again (onAdmin again links.admin.settings) >>= jsonAs 200) `shouldReturn` consoleOnly
+          (sendJson again methodPost (onAdmin again links.admin.createUser) (newAccount "cid") >>= jsonAs 403) `shouldReturn` Forbidden
+          users :: Directory <- getUrl again (onAdmin again links.admin.directory) >>= jsonAs 200
+          users.adminCreatesPasswordAccounts `shouldBe` False
+          map (\u -> u.login) users.users `shouldBe` ["admin", "bea", "editor", "reader"]
+          -- The console makes the account, which signs in.
+          made <- runUsers (const (pure (Right "cid's password"))) Users {dataDir = again.dataDir, command = AddUser "cid" Nothing False True}
+          made `shouldSatisfy` isRight
+          _ <- signInAs again "cid" "cid's password"
+          -- Turned on again, the administration makes accounts again.
+          _ :: WikiSettings <- sendJson again methodPut (onAdmin again links.admin.setSettings) WikiSettings {access = Open, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
+          _ :: Account <- sendJson again methodPost (onAdmin again links.admin.createUser) (newAccount "dee") >>= jsonAs 201
+          pass
+      )
+
   it "is refused the account operations on the public listener unless an administrator is signed in" $ withPasswords identity $ \r -> do
     let attempt hs = send r methodPut (onPublic r (links.admin.setDisabled (UserId "user-reader"))) ((hContentType, "application/json") : hs) (encode AccountDisabled {disabled = True})
     (.status) <$> attempt [] `shouldReturn` 403
@@ -180,6 +220,14 @@ administration = describe "the administrator on the admin listener" $ do
     admin <- signInAs r "admin" "admin's password"
     (attempt [cookie admin] >>= jsonAs 200) >>= \(a :: Account) -> a.disabled `shouldBe` True
     (.status) <$> sendJson r methodPut (onAdmin r (links.admin.setDisabled (UserId "nobody"))) AccountDisabled {disabled = True} `shouldReturn` 404
+
+-- | A user to make, with this login and a password.
+newAccount :: Text -> NewAccount
+newAccount login = NewAccount {login, displayName = "", password = login <> "'s password", email = Nothing}
+
+-- | The wiki's settings with accounts with a password left to the console.
+consoleOnly :: WikiSettings
+consoleOnly = WikiSettings {access = Open, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = False}
 
 endings :: Spec
 endings = describe "a session" $ do

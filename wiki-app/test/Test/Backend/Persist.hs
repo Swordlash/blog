@@ -76,6 +76,7 @@ lasting st =
     , objectUrls = mempty
     , grants = Grants {global = st.grants.global, spaces = sort st.grants.spaces, access = Open}
     , newAccountsCreateSpaces = False
+    , adminCreatesPasswordAccounts = True
     , invitations = mempty
     , server = noServerSettings
     }

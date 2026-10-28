@@ -78,6 +78,7 @@ fromArchive a =
         , -- Nor the wiki's settings, which are the demo's own, nor its
           -- invitations.
           newAccountsCreateSpaces = False
+        , adminCreatesPasswordAccounts = True
         , invitations = mempty
         , server = noServerSettings
         , threads = threadsAmong a.users a

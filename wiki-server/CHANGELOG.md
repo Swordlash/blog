@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+A wiki setting leaves accounts with a password to the console (WP5.18).
+`adminCreatesPasswordAccounts` is kept in the `settings` table as the row
+`admin-creates-password-accounts` (`0` or `1`); no migration, and a wiki
+without the row has it on, as before. While it is off, `createUser` (`POST
+admin/users`, on either listener) is refused with 403 before the login,
+the password or the address is looked at, and the storage refuses it
+too. `wiki-server users add`, invitations, accounts people make
+themselves, sign-in providers, `setPassword` and `sendPasswordLink` are
+not affected. A change of the setting is in the audit entry
+`settings.wiki`, as `administration creates accounts with a password`.
+
 The audit log's Activity reads a page after an entry (`before`) through
 the log's indexes, so page 100 of a long log reads one page of entries
 (WP5.16b). Its list of actors jumps from one actor to the next in the

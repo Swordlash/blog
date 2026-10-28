@@ -400,9 +400,30 @@ letsIn = describe "wikiSettings, invitations and the rest" $ do
     (\s -> s.grants.access) <$> run Anonymous session `shouldReturn` Open
 
   it "keep whether new accounts create spaces" $ \(Fixture run) -> do
-    let creating = WikiSettings {access = Open, newAccountsCreateSpaces = True}
+    let creating = WikiSettings {access = Open, newAccountsCreateSpaces = True, adminCreatesPasswordAccounts = True}
     _ <- run admin (setWikiSettings creating) >>= ok
     run admin wikiSettings >>= ok >>= (`shouldBe` creating)
+
+  it "leave accounts with a password to the console while the setting is off, and nothing else" $ \(Fixture run) -> do
+    let consoleOnly = WikiSettings {access = Open, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = False}
+        bea = NewAccount {login = "bea", displayName = "", password = "bea's password", email = Nothing}
+    (\d -> d.adminCreatesPasswordAccounts) <$> directoryNow run `shouldReturn` True
+    run admin (setWikiSettings consoleOnly) >>= ok >>= (`shouldBe` consoleOnly)
+    run admin wikiSettings >>= ok >>= (`shouldBe` consoleOnly)
+    (\d -> d.adminCreatesPasswordAccounts) <$> directoryNow run `shouldReturn` False
+    run admin (createUser bea) >>= (`shouldFailWith` Forbidden)
+    -- Refused before the login and the password are looked at.
+    run admin (createUser NewAccount {login = "", displayName = "", password = "", email = Nothing}) >>= (`shouldFailWith` Forbidden)
+    map (\u -> u.login) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
+    -- An existing user's password, a link to choose one, and invitations
+    -- are as before: a link is refused only because nothing is mailed.
+    readerId <- idOf run reader
+    (\a -> a.hasPassword) <$> (run admin (setPassword readerId "rita's password") >>= ok) `shouldReturn` True
+    run admin (sendPasswordLink readerId) >>= shouldBeInvalid
+    void (run admin (invite "bea@example.org") >>= ok)
+    -- Turned on again, the administration creates accounts again.
+    run admin (setWikiSettings defaultSettings) >>= ok >>= (`shouldBe` defaultSettings)
+    (\a -> a.user.login) <$> (run admin (createUser bea) >>= ok) `shouldReturn` "bea"
 
   it "invite an address, with the link's secret when it is not mailed, in place of any invitation it had" $ \(Fixture run) -> do
     made <- run admin (invite "  bea@example.org ") >>= ok
@@ -426,7 +447,7 @@ letsIn = describe "wikiSettings, invitations and the rest" $ do
     run admin (revokeInvitation made.invitation.id) >>= (`shouldFailWith` NotFound)
 
 closedWiki :: WikiSettings
-closedWiki = WikiSettings {access = Closed, newAccountsCreateSpaces = False}
+closedWiki = WikiSettings {access = Closed, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True}
 
 --------------------------------------------------------------------------------
 -- The server's own settings

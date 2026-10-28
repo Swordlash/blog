@@ -3,7 +3,8 @@
 -- which shows someone not signed in the way to sign in and nothing else,
 -- and reads nothing else for them; an invitation's page, which makes its
 -- account; and the administration's section, which closes and opens the
--- wiki and invites people.
+-- wiki, invites people, and leaves accounts with a password to the
+-- server's console.
 --
 -- The forms of signing in are the server's, over the backend over HTTP
 -- with a server in fetch's place ("Test.Browser.Http"); the
@@ -179,6 +180,24 @@ panel m = describe "the administration's section on it" $ do
     find ui ".new-accounts-create-spaces .check-help" >>= (`shouldContainText` "by invitation or by signing in with a provider")
     click box
     eventually (find ui ".new-accounts-create-spaces input" >>= (`getProperty` "checked") >>= (`shouldBe` "true"))
+    unmount ui
+
+  it "leaves accounts with a password to the console, and the users' section says so in place of its form" $ runPage $ do
+    ui <- start m (Just "user-admin") Admin
+    box <- find ui ".admin-creates-password-accounts input"
+    getProperty box "checked" `shouldReturn` "true"
+    find ui ".admin-creates-password-accounts" >>= (`shouldContainText` "The administration may create accounts with a password")
+    find ui ".admin-creates-password-accounts .check-help" >>= (`shouldContainText` "wiki-server users add")
+    _ <- find ui ".user-create"
+    length <$> findAll ui ".user-create-console" `shouldReturn` 0
+    click box
+    eventually (find ui ".admin-creates-password-accounts input" >>= (`getProperty` "checked") >>= (`shouldBe` "false"))
+    find ui ".user-create-console" >>= (`shouldContainText` "on the server's console, with wiki-server users add, as")
+    length <$> findAll ui ".user-create" `shouldReturn` 0
+    -- On again, the form is back.
+    find ui ".admin-creates-password-accounts input" >>= click
+    _ <- find ui ".user-create"
+    length <$> findAll ui ".user-create-console" `shouldReturn` 0
     unmount ui
 
 shouldContainText :: Element s -> Text -> PageM s ()

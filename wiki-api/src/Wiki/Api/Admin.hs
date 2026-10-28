@@ -137,6 +137,11 @@ data Directory = Directory
   , mailing :: Bool
   -- ^ Whether the server sends mail. Only then can a new user's address be
   -- verified.
+  , adminCreatesPasswordAccounts :: Bool
+  -- ^ The wiki setting of the same name ('WikiSettings'): whether the
+  -- administration may create accounts with a password. When it is off,
+  -- the panel shows a note in place of its form for a new user. The
+  -- directory carries it so that the panel shows the users from one read.
   , groups :: [Group]
   -- ^ Every group, by name.
   , membership :: Membership
@@ -173,15 +178,24 @@ data WikiSettings = WikiSettings
   -- or with an invitation) may create spaces from the start, by being
   -- granted the global create-spaces permission. Otherwise a new account
   -- has no grant until an administrator gives it one.
+  , adminCreatesPasswordAccounts :: Bool
+  -- ^ Whether the administration may create accounts with a password
+  -- (WP5.18 of docs/PLAN.md). When it is off, @POST
+  -- \/api\/v1\/admin\/users@ is refused, and accounts with a password are
+  -- made only on the server's console, with @wiki-server users add@. It
+  -- does not affect the console, invitations, accounts people make
+  -- themselves in an open wiki, sign-in providers, or a password link
+  -- sent to an existing user.
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
 
--- | A wiki's settings before anyone has changed them: open, and new
--- accounts cannot create spaces. A wiki created before these settings
--- existed keeps working as before.
+-- | A wiki's settings before anyone has changed them: open, new accounts
+-- cannot create spaces, and the administration may create accounts with a
+-- password. A wiki created before these settings existed keeps working as
+-- before.
 defaultSettings :: WikiSettings
-defaultSettings = WikiSettings {access = Open, newAccountsCreateSpaces = False}
+defaultSettings = WikiSettings {access = Open, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True}
 
 -- | 'Invitation': an invitation an administrator has created, as the
 -- administration lists it. Its link's secret is not included: the server

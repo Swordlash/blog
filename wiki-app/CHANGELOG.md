@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The administration can leave accounts with a password to the server's
+console (WP5.18). "Who may come in" has a checkbox, on by default, "The
+administration may create accounts with a password". With it off, the
+Users section shows a note naming `wiki-server users add` in place of
+its form for a new user. The demo keeps the setting for the tab's life,
+as its other wiki settings, and then refuses `createUser` with
+`Forbidden`, as the server does.
+
 The administration's Activity pages through the log with the entry its
 "Older" starts after, not with how many entries to skip (WP5.16b), so
 an old page of a long log is as quick as the first.

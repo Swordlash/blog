@@ -63,7 +63,10 @@
 -- docs/PLAN.md; not on one's own row, where the account panel removes it
 -- with a code). A new user may be given an address, to which the server
 -- mails a verification link; where it sends no mail (and in the demo) the
--- field is disabled, saying why.
+-- field is disabled, saying why. When the wiki's settings leave accounts
+-- with a password to the server's console (WP5.18 of docs/PLAN.md), the
+-- form for a new user is replaced by a note that names the console's
+-- command.
 module Wiki.App.View.Admin
   ( Input (..)
   , component
@@ -270,7 +273,11 @@ component =
               </tbody>
             </table>
           {% end %}
-          {{ newUserForm st d }}
+          {% if d.adminCreatesPasswordAccounts %}
+            {{ newUserForm st d }}
+          {% else %}
+            {{ consoleNote }}
+          {% end %}
         </div>
       |]
 
@@ -420,6 +427,26 @@ component =
                 <span class="admin-note password-hint">{{ noLinkText why }}</span>
               </span>
             |]
+
+    -- 'consoleNote' is shown in place of the form for a new user when the
+    -- wiki's settings leave accounts with a password to the server's
+    -- console. The backend would refuse the form, so the panel says where
+    -- such accounts are made instead. The text before the @code@ element
+    -- ends on the element's line, so that its space stays (hh drops the
+    -- spaces at a line break, as JSX does).
+    consoleNote :: H.ComponentHTML Action Empty m
+    consoleNote =
+      [hh|
+        <div class="user-create-console" role="note">
+          <h3>New user</h3>
+          <p class="admin-note">
+            Accounts with a password are made on the server's console, with <code>wiki-server users add</code>,
+            as this wiki's settings say. Invitations and sign-in providers still make accounts. To
+            create accounts here, turn on "The administration may create accounts with a password"
+            under "Who may come in".
+          </p>
+        </div>
+      |]
 
     newUserForm :: State -> Directory -> H.ComponentHTML Action Empty m
     newUserForm st d =

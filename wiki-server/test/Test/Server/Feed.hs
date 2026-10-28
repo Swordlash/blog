@@ -279,7 +279,7 @@ served = describe "served" $ do
     length (named "lastmod" root) `shouldBe` length locs
 
   it "has neither in a closed wiki" $ withDemoRunning identity $ \r -> do
-    answered :: WikiSettings <- sendJson r "PUT" (r.admin <> "/admin/" <> links.admin.setSettings) WikiSettings {access = Closed, newAccountsCreateSpaces = False} >>= jsonAs 200
+    answered :: WikiSettings <- sendJson r "PUT" (r.admin <> "/admin/" <> links.admin.setSettings) WikiSettings {access = Closed, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = True} >>= jsonAs 200
     answered.access `shouldBe` Closed
     for_ ["/s/blog/feed.xml", "/s/blog/feed.rss", "/sitemap.xml"] $ \path ->
       ((.status) <$> getUrl r (r.public <> path)) `shouldReturn` 404

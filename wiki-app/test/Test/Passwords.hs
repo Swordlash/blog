@@ -60,6 +60,7 @@ mailingOr mailing =
           , (uid "fay", AccountEmail {email = "fay@example.org", verified = True})
           ]
     , mailing
+    , adminCreatesPasswordAccounts = True
     , groups = []
     , membership = mempty
     }

@@ -240,6 +240,10 @@ data MemState = MemState
   -- ^ The wiki's second setting ('Wiki.Api.Admin.WikiSettings'). The
   -- first, whom the wiki is open to, is stored in the grants
   -- ('Wiki.Core.Permission.Grants').
+  , adminCreatesPasswordAccounts :: Bool
+  -- ^ The wiki's third setting: whether the administration may create
+  -- accounts with a password ('createUserIn'). The demo has no console, so
+  -- with it off the demo makes no accounts with a password at all.
   , invitations :: Map InvitationId Pending
   -- ^ The invitations made and not revoked. The demo creates no account
   -- from an invitation, so none is ever used.
@@ -287,6 +291,7 @@ emptyState =
     , disabled = mempty
     , passwords = mempty
     , newAccountsCreateSpaces = False
+    , adminCreatesPasswordAccounts = True
     , invitations = mempty
     , server = noServerSettings
     , threads = mempty
@@ -1193,6 +1198,7 @@ directoryIn st = do
         A.secondFactor = mempty
       , A.emails = mempty
       , A.mailing = False
+      , A.adminCreatesPasswordAccounts = st.adminCreatesPasswordAccounts
       , A.groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) (Map.elems st.groups)
       , A.membership = Map.filter (not . Set.null) (Map.restrictKeys st.membership (Map.keysSet st.groups))
       }
@@ -1224,10 +1230,12 @@ accountIn st u = Account {Acc.user = u, Acc.hasPassword = Set.member u.id st.pas
 
 -- | Create a user, who would sign in with the given password. The demo
 -- stores that they have a password, not the password. Checked as the
--- server checks it.
+-- server checks it, including the wiki's setting that may leave such
+-- accounts to the server's console.
 createUserIn :: NewAccount -> Write Account
 createUserIn new st = do
   requireAdministrator st
+  require st.adminCreatesPasswordAccounts
   login <- first Invalid (checkLogin new.login)
   _ <- first Invalid (checkPassword new.password)
   for_ (find (\u -> T.toCaseFold u.login == T.toCaseFold login) (Map.elems st.users)) $ \_ ->
@@ -1336,14 +1344,19 @@ data Pending = Pending
 wikiSettingsIn :: MemState -> Either WikiError WikiSettings
 wikiSettingsIn st = do
   requireAdministrator st
-  pure WikiSettings {A.access = st.grants.access, A.newAccountsCreateSpaces = st.newAccountsCreateSpaces}
+  pure
+    WikiSettings
+      { A.access = st.grants.access
+      , A.newAccountsCreateSpaces = st.newAccountsCreateSpaces
+      , A.adminCreatesPasswordAccounts = st.adminCreatesPasswordAccounts
+      }
 
 -- | Change the wiki's settings.
 setWikiSettingsIn :: WikiSettings -> Write WikiSettings
 setWikiSettingsIn new st = do
   requireAdministrator st
   let grants = Grants {P.global = st.grants.global, P.spaces = st.grants.spaces, P.access = new.access}
-  pure (st {grants, newAccountsCreateSpaces = new.newAccountsCreateSpaces}, new)
+  pure (st {grants, newAccountsCreateSpaces = new.newAccountsCreateSpaces, adminCreatesPasswordAccounts = new.adminCreatesPasswordAccounts}, new)
 
 -- | The invitations as an administrator lists them at a given time: the
 -- latest first, none of them mailed.

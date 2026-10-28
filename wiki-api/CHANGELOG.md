@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Accounts with a password only from the console (WP5.18). `WikiSettings`
+gains `adminCreatesPasswordAccounts`, true in `defaultSettings`: whether
+the administration may create accounts with a password (`POST
+admin/users`), which answers 403 when it is false. `Directory` gains the
+same field, so that the panel learns it from the read it makes already.
+The JSON of both types has the new field, and a `PUT admin/settings`
+body must carry it.
+
 The audit log's pages after an entry (WP5.16b). `ActivityQuery` gains
 `before`, the id of the oldest entry of the page before, and
 `AdminApi.activity` the query parameter `before`: the page is the entries

@@ -872,7 +872,7 @@ try {
   // and nothing else, rendered so by the server and adopted with nothing to
   // repair; an invitation's link makes them an account, and the wiki opens
   // again for everyone.
-  const closing = await api("admin/settings", { method: "PUT", body: JSON.stringify({ access: "Closed", newAccountsCreateSpaces: false }) });
+  const closing = await api("admin/settings", { method: "PUT", body: JSON.stringify({ access: "Closed", newAccountsCreateSpaces: false, adminCreatesPasswordAccounts: true }) });
   assert.equal(closing.status, 200, "closing the wiki");
   assert.equal((await fetch(url("/api/v1/spaces"))).status, 401, "the spaces of a closed wiki, to a visitor");
   assert.equal((await fetch(url("/s/smoke-public/feed.xml"))).status, 404, "a closed wiki's feed");
@@ -898,7 +898,7 @@ try {
   await outsider.locator("#app .wiki-sidebar a", { hasText: "Smoke public" }).waitFor({ timeout });
   await outsider.context().close();
   assert.ok(!log.includes(invited.body.token), "the invitation's secret is in the server's log");
-  const opening = await api("admin/settings", { method: "PUT", body: JSON.stringify({ access: "Open", newAccountsCreateSpaces: false }) });
+  const opening = await api("admin/settings", { method: "PUT", body: JSON.stringify({ access: "Open", newAccountsCreateSpaces: false, adminCreatesPasswordAccounts: true }) });
   assert.equal(opening.status, 200, "opening the wiki");
   assert.equal((await fetch(url("/api/v1/spaces"))).status, 200, "the spaces of an open wiki, to a visitor");
   console.log("ok: a closed wiki shows a visitor only the way to sign in, an invitation makes them an account, and it opens again");

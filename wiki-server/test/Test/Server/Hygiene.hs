@@ -398,6 +398,13 @@ passwordLink = describe "a password link an administrator has mailed" $ do
     activity :: Activity <- getUrl r (onAdmin r (links.admin.activity Nothing Nothing Nothing)) >>= jsonAs 200
     [(e.actor.login, e.subject.name) | e <- activity.entries, e.action == "user.password-link"] `shouldBe` [("administrator", "editor")]
 
+  it "is mailed as before where the administration may not create accounts with a password" $ withVerifiedEditor $ \r _ -> do
+    let consoleOnly = WikiSettings {access = Open, newAccountsCreateSpaces = False, adminCreatesPasswordAccounts = False}
+    _ <- sendJson r methodPut (onAdmin r links.admin.setSettings) consoleOnly >>= jsonAs @WikiSettings 200
+    (.status) <$> askLink r "user-editor" `shouldReturn` 204
+    token <- maybe (panic "no link") pure =<< latestLink r "https://wiki.example.org/reset-password/"
+    (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = "chosen by edgar"} >>= \x -> pure x.status) `shouldReturn` 204
+
   it "is mailed once a minute, the second click refused" $ withVerifiedEditor $ \r _ -> do
     (.status) <$> askLink r "user-editor" `shouldReturn` 204
     again <- askLink r "user-editor"

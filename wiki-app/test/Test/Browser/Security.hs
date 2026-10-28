@@ -287,6 +287,7 @@ administration m = describe "the administration's accounts" $ do
           , secondFactor = Set.singleton (UserId "user-editor")
           , emails = Map.fromList [(UserId "user-editor", AccountEmail {email = "edgar@example.org", verified = False})]
           , mailing = True
+          , adminCreatesPasswordAccounts = d.adminCreatesPasswordAccounts
           , groups = d.groups
           , membership = d.membership
           }

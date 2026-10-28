@@ -163,8 +163,8 @@ eachWrite = describe "has one entry for each write of the administration" $ do
     summary deleted `shouldBe` ("group.delete", "group", "Proofreaders", [])
 
   it "the wiki's settings, and invitations made and revoked" $ withDemo $ \st -> do
-    settings <- recordsOne st (as st "admin" (setWikiSettings WikiSettings {access = Closed, newAccountsCreateSpaces = True}))
-    summary settings `shouldBe` ("settings.wiki", "settings", "whom the wiki lets in", [("access", "closed"), ("new accounts create spaces", "yes")])
+    settings <- recordsOne st (as st "admin" (setWikiSettings WikiSettings {access = Closed, newAccountsCreateSpaces = True, adminCreatesPasswordAccounts = False}))
+    summary settings `shouldBe` ("settings.wiki", "settings", "whom the wiki lets in", [("access", "closed"), ("administration creates accounts with a password", "no"), ("new accounts create spaces", "yes")])
     invited <- recordsOne st (as st "admin" (invite "bea@example.org"))
     summary invited `shouldBe` ("invitation.create", "invitation", "bea@example.org", [])
     i <- as st "admin" invitations >>= ok >>= \is -> maybe (assertFailure "no invitation") pure (head is.invitations)

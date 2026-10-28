@@ -1,4 +1,5 @@
 {
+  "adminCreatesPasswordAccounts": false,
   "administrators": [
     "u1"
   ],

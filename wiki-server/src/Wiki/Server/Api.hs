@@ -87,7 +87,7 @@ import System.Directory (doesFileExist)
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods)
 import Wiki.Api.Activity (ActivityQuery (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), checkEmail)
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..), checkEmail)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
@@ -530,6 +530,13 @@ handlers env caller =
           , addMember = \g u -> wiki (addMember g u) $> NoContent
           , removeMember = \g u -> wiki (removeMember g u) $> NoContent
           , createUser = \new -> do
+              -- Who may create a user is checked first, so that a caller who
+              -- may not is refused before anything they sent is looked at:
+              -- whoever does not administer the wiki, and everyone when the
+              -- wiki's settings leave accounts with a password to the
+              -- console. The storage checks both again.
+              settings <- wiki wikiSettings
+              unless settings.adminCreatesPasswordAccounts (refuse ApiError.Forbidden)
               -- An address that cannot be one is refused before the user is
               -- made, so that nothing is left half done.
               for_ new.email $ \e -> unless (T.null (T.strip e)) (either (refuse . ApiError.Invalid) (const pass) (checkEmail e))

@@ -3,7 +3,9 @@
 -- | The administration's section on whom the wiki lets in (WP3.5 of
 -- docs/PLAN.md): whether the wiki is open or closed ("Wiki.Core.Access"),
 -- whether every new account (created by its owner, by invitation, or by
--- signing in with a provider) may create spaces, and, in a closed wiki,
+-- signing in with a provider) may create spaces, whether the
+-- administration may create accounts with a password or leaves them to
+-- the server's console (WP5.18 of docs/PLAN.md), and, in a closed wiki,
 -- the invitations, with a form to invite an e-mail address. It is one
 -- component over the administration's backend ("Wiki.App.Backend.Admin"),
 -- the same on the demo's wiki and the server's, and the shell shows it to
@@ -78,6 +80,7 @@ data Action
   | Retry
   | SetAccess Access
   | SetCreateSpaces Bool
+  | SetPasswordAccounts Bool
   | TypedEmail Text
   | MakeInvitation
   | Revoke InvitationId
@@ -141,6 +144,13 @@ component =
             <span>
               Let every new account create spaces
               <small class="check-help">Applies to accounts people make themselves, by invitation or by signing in with a provider. You can also grant it per user in Users.</small>
+            </span>
+          </label>
+          <label class="check admin-creates-password-accounts">
+            <input type="checkbox" checked={{ settings.adminCreatesPasswordAccounts }} disabled={{ st.busy }} onChange={{ const (SetPasswordAccounts (not settings.adminCreatesPasswordAccounts)) }}>
+            <span>
+              The administration may create accounts with a password
+              <small class="check-help">When this is off, accounts with a password are made on the server's console, with wiki-server users add. Sign-in providers and invitations are unaffected.</small>
             </span>
           </label>
           {% if settings.access == Closed %}
@@ -230,8 +240,9 @@ component =
         old <- gets (\st -> st.input.context.revision)
         modify (\st -> st {input})
         when (old /= input.context.revision) load
-      SetAccess access -> withSettings (\s -> WikiSettings {access, newAccountsCreateSpaces = s.newAccountsCreateSpaces})
-      SetCreateSpaces granted -> withSettings (\s -> WikiSettings {access = s.access, newAccountsCreateSpaces = granted})
+      SetAccess access -> withSettings (\s -> s {access})
+      SetCreateSpaces granted -> withSettings (\s -> s {newAccountsCreateSpaces = granted})
+      SetPasswordAccounts allowed -> withSettings (\s -> s {adminCreatesPasswordAccounts = allowed})
       TypedEmail typedEmail -> modify (\st -> st {typedEmail})
       MakeInvitation -> do
         email <- gets (\st -> st.typedEmail)

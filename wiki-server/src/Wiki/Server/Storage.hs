@@ -821,10 +821,11 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
 
   -- A password is checked and hashed before the transaction that keeps
   -- it, since hashing takes tens of milliseconds the database should not
-  -- wait for; and only for an administrator, so that nobody else can make
-  -- the server spend that time. The transaction checks again.
+  -- wait for; and only for an administrator whom the wiki's settings let
+  -- create accounts, so that nobody else can make the server spend that
+  -- time. The transaction checks both again.
   createUser new =
-    run Reads requireAdministrator >>= \case
+    run Reads requireAccountCreator >>= \case
       Left e -> pure (Left e)
       Right () -> case (,) <$> checkLogin new.login <*> checkPassword new.password of
         Left why -> pure (Left (Invalid why))
@@ -835,7 +836,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
                 "" -> login
                 n -> n
           run Writes $ do
-            requireAdministrator
+            requireAccountCreator
             db (\c -> insertAccount c (UserId uid) login name (Just phc)) >>= \case
               Left taken -> failWith (Conflict ("There is a user with the login " <> taken <> " already."))
               Right account -> do
@@ -1836,6 +1837,17 @@ restoreVersionTx pid at base = do
 requireAdministrator :: Tx ()
 requireAdministrator = ask >>= \x -> require (hasGlobalPermission x.principal x.grants Administer)
 
+-- | 'requireAccountCreator' refuses a caller who may not create accounts
+-- with a password in the administration. That is anyone who does not
+-- hold the global administer, and everyone when the wiki's setting
+-- 'adminCreatesPasswordAccounts' is off. With the setting off, accounts
+-- with a password are made only on the server's console, which creates
+-- them through "Wiki.Server.Accounts" and is not checked here.
+requireAccountCreator :: Tx ()
+requireAccountCreator = do
+  requireAdministrator
+  asks (\x -> x.wiki.adminCreatesPasswordAccounts) >>= require
+
 -- | A user by id; the administrator, who is no user, is not found.
 findUser :: UserId -> Tx User
 findUser u = db (`loadUser` u) >>= maybe (failWith NotFound) pure
@@ -1856,6 +1868,7 @@ directoryTx = do
   secondFactor <- db loadSecondFactorUsers
   emails <- db loadEmails
   server <- asks (\x -> x.server)
+  wiki <- asks (\x -> x.wiki)
   let ids = Set.fromList (map (\u -> u.id) users)
       holding p = Set.fromList [u | GlobalGrant (SubjectUser u) p' <- stored.global, p' == p, u `Set.member` ids]
   pure
@@ -1878,6 +1891,7 @@ directoryTx = do
       , emails = Map.restrictKeys emails ids
       , -- As the server's mailer is made ("Wiki.Server.Mail"'s 'mailerFrom').
         mailing = isJust server.publicUrl && isJust server.mail
+      , adminCreatesPasswordAccounts = wiki.adminCreatesPasswordAccounts
       , groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) groups
       , membership = Map.filter (not . Set.null) (Map.restrictKeys membership (Set.fromList (map (\g -> g.id) groups)))
       }
@@ -2009,7 +2023,13 @@ setWikiSettingsTx :: WikiSettings -> Tx WikiSettings
 setWikiSettingsTx new = do
   requireAdministrator
   db (`storeSettings` new)
-  record "settings.wiki" (settingsSubject "whom the wiki lets in") [("access", accessName new.access), ("new accounts create spaces", yesNo new.newAccountsCreateSpaces)]
+  record
+    "settings.wiki"
+    (settingsSubject "whom the wiki lets in")
+    [ ("access", accessName new.access)
+    , ("new accounts create spaces", yesNo new.newAccountsCreateSpaces)
+    , ("administration creates accounts with a password", yesNo new.adminCreatesPasswordAccounts)
+    ]
   pure new
 
 -- | The server's settings with a change written over them, checked
