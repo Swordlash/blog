@@ -3536,6 +3536,31 @@ Amended by the planning session after each work package's report.
   has 15 GB; six at once killed it on 2026-10-27): WP5.16b with WP5.17, then WP5.16c with
   WP5.18, then WP5.15 alone in this repository beside the haskell-halogen package, then the
   pin bump. The Polish interface stays out.
+- **WP5.17 merged** (2026-10-28, PR #101, `main` at `5a19c82`). Five commits. The Anthropic
+  adapter has a list of parts a model may refuse (`thinking`, `output_config`), each with
+  its 400 pattern; a refused part is dropped once and left out for the rest of the chat
+  (Haiku 4.5 live: refuses adaptive thinking first, then the effort, then answers). The
+  native tests run under any locale: `npm-command.sh` exports `LANG=C.UTF-8` when the
+  locale is unset or `C`/`POSIX` (and `LC_ALL` likewise when it is `C`/`POSIX`), and the
+  tests that read files as text (`Test.Markdown.Document`, three reads in
+  `Test.Server.Backups`) decode UTF-8 themselves. The cached draft is `CachedDraft`
+  (`NoDraft | HasDraft Draft | DraftRefused WikiError`; no entry means not known;
+  `forgetDraft`), with `draftAnswer`/`cachedDraft` where the API's `Either WikiError
+  (Maybe Draft)` is still the shape; the preload's JSON unchanged. The two comments say
+  what the code does (choosing a watch or changing the notification settings removes the
+  cached watches; five reads throw `Unreachable`, `mentionable` being the fifth). The
+  rule from the owner's review of #93: `requireView` fails with `NotFound` on both
+  backends, so a space the principal may not view, and everything under it, answers as a
+  missing space; `Forbidden` now only means "may view, may not do this"; `createSpaceTx`
+  and `moveSpaceTx` check view on the parent or destination first; the administration
+  keeps `Forbidden` first. A search scoped to such a space answers `[]`, as for a missing
+  space (the method never refuses, by its type). Tests: a contract block `hiddenSpaces`,
+  an HTTP test (404 not 403; 403 for a save by a viewer), every test expecting
+  `Forbidden` for an unviewable space now expecting `NotFound`, the smoke test; `docs/api.md`
+  states the rule. Visible changes: in a closed wiki someone not signed in gets `NotFound`
+  for the public spaces too; a private space shows "There is nothing here" under "Not
+  found". Left as found: `View/NewSpace.hs` decides `Forbidden` in the client for a parent
+  the user may not view. Full gate; CI green.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
