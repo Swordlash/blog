@@ -18,6 +18,9 @@ module Wiki.App.Backend.Mem.State
   , prepareSearch
   , Saved (..)
   , completeVersions
+  , unreadHistory
+  , unreadFirstVersions
+  , versionsRead
 
     -- * Building it without checks
   , insertUser
@@ -213,16 +216,30 @@ data MemState = MemState
   , pages :: Map PageId Page
   , blobs :: Map BlobId ByteString
   -- ^ The bytes of attachments uploaded into the demo, which their
-  -- 'SourceBlob' names.
+  -- 'SourceBlob' names, when they are in memory.
+  , unreadBlobs :: Set BlobId
+  -- ^ The blobs whose bytes are kept in IndexedDB and are not in memory.
+  -- A wiki loaded from IndexedDB ("Wiki.App.Backend.Mem.Persist") reads no
+  -- attachment's bytes when it starts: "Wiki.App.Backend.Mem" reads one
+  -- when it is shown or exported, and does not keep it in memory. A blob
+  -- is in 'blobs' or here, never in both.
   , objectUrls :: Map BlobId Text
   -- ^ The object URLs given to blobs so far. A browser holds a blob's
   -- bytes for as long as its URL exists, so each blob gets one URL only.
   , drafts :: Map (PageId, UserId) Draft
   -- ^ Each user's draft of a page, by the page and the user.
   , versions :: Map PageId (Map UTCTime Saved)
-  -- ^ Every version of every page, by the page and its @updatedAt@ at that
-  -- version. The current page is included ('completeVersions'): a version
-  -- for the page as it was created, and one for each save.
+  -- ^ Every version of every page that is in memory, by the page and its
+  -- @updatedAt@ at that version. The current page is included
+  -- ('completeVersions'): a version for the page as it was created, and
+  -- one for each save.
+  , unreadVersions :: Map PageId (Set UTCTime)
+  -- ^ The versions kept in IndexedDB that are not in memory, by page and
+  -- time. A wiki loaded from IndexedDB reads no version when it starts.
+  -- "Wiki.App.Backend.Mem" reads a page's versions when its history is
+  -- shown, and its first version when the page's creator is needed (for
+  -- notifications and blog posts), and moves them to 'versions'
+  -- ('versionsRead'). A version is in 'versions' or here, never in both.
   , searchText :: Map PageId Prepared
   -- ^ Each page's title and text in the form the search compares, made
   -- when the page is created or saved, or when the wiki is loaded or
@@ -284,9 +301,11 @@ emptyState =
     , spaces = mempty
     , pages = mempty
     , blobs = mempty
+    , unreadBlobs = mempty
     , objectUrls = mempty
     , drafts = mempty
     , versions = mempty
+    , unreadVersions = mempty
     , searchText = mempty
     , disabled = mempty
     , passwords = mempty
@@ -326,7 +345,38 @@ recordVersion author p st =
 completeVersions :: MemState -> MemState
 completeVersions st = foldr (\p -> if has p then identity else recordVersion Nothing p) st (Map.elems st.pages)
   where
-    has p = maybe False (Map.member p.updatedAt) (Map.lookup p.id st.versions)
+    has p = maybe False (Map.member p.updatedAt) (Map.lookup p.id st.versions) || maybe False (Set.member p.updatedAt) (Map.lookup p.id st.unreadVersions)
+
+-- | The versions of a page that are not in memory: what its history needs
+-- read first.
+unreadHistory :: PageId -> MemState -> [(PageId, UTCTime)]
+unreadHistory pid st = [(pid, at) | at <- maybe [] Set.toList (Map.lookup pid st.unreadVersions)]
+
+-- | The first versions of these pages that are not in memory: what
+-- 'makerOf' needs read first. A page's first version is its earliest,
+-- whether in memory or not.
+unreadFirstVersions :: [PageId] -> MemState -> [(PageId, UTCTime)]
+unreadFirstVersions pids st =
+  [ (pid, at)
+  | pid <- pids
+  , Just at <- [Map.lookup pid st.unreadVersions >>= Set.lookupMin]
+  , maybe True (\(loaded, _) -> at < loaded) (Map.lookup pid st.versions >>= Map.lookupMin)
+  ]
+
+-- | Versions read from IndexedDB, moved from 'unreadVersions' to
+-- 'versions'. A version given as 'Nothing' had no record that could be
+-- read, and is forgotten. A version that is no longer unread (its page was
+-- deleted meanwhile) is left out.
+versionsRead :: [(PageId, UTCTime, Maybe Saved)] -> MemState -> MemState
+versionsRead found st = foldl' step st found
+  where
+    step s (pid, at, saved)
+      | maybe False (Set.member at) (Map.lookup pid s.unreadVersions) =
+          s
+            { unreadVersions = Map.update (\ats -> let rest = Set.delete at ats in if Set.null rest then Nothing else Just rest) pid s.unreadVersions
+            , versions = maybe s.versions (\v -> Map.insertWith (<>) pid (Map.singleton at v) s.versions) saved
+            }
+      | otherwise = s
 
 -- | A page's title and text prepared for the search, and the version of
 -- the page they were made from.
@@ -534,7 +584,7 @@ attachSource page name mediaType size source st0 =
 -- them.
 dropSource :: Source -> MemState -> MemState
 dropSource = \case
-  SourceBlob b -> \st -> st {blobs = Map.delete b st.blobs, objectUrls = Map.delete b st.objectUrls}
+  SourceBlob b -> \st -> st {blobs = Map.delete b st.blobs, unreadBlobs = Set.delete b st.unreadBlobs, objectUrls = Map.delete b st.objectUrls}
   SourceUrl _ -> identity
 
 -- | Delete the bytes of a space's icon image, if its icon is one.
@@ -716,7 +766,7 @@ postDetailsIn sid st = do
   where
     details s p =
       PostDetails
-        { author = authorOf st <$> (Map.lookupMin (Map.findWithDefault mempty p.id st.versions) >>= \(_, v) -> v.author)
+        { author = authorOf st <$> makerOf st p.id
         , comments = sum [length t.comments | t <- Map.findWithDefault [] p.id st.threads]
         , excerpt = if isPost s (summaryOf p) then Blog.excerptOf p.body else ""
         }
@@ -878,6 +928,7 @@ deleteSpaceIn sid st = do
         , pages = alive
         , drafts = Map.filterWithKey (\(pid, _) _ -> Map.member pid alive) st.drafts
         , versions = Map.intersection st.versions alive
+        , unreadVersions = Map.intersection st.unreadVersions alive
         , searchText = Map.intersection st.searchText alive
         , threads = Map.intersection st.threads alive
         , grants =
@@ -1051,6 +1102,7 @@ deletePageIn pid st = do
         { pages = Map.withoutKeys st.pages gone
         , drafts = Map.filterWithKey (\(i, _) _ -> not (i `Set.member` gone)) st.drafts
         , versions = Map.withoutKeys st.versions gone
+        , unreadVersions = Map.withoutKeys st.unreadVersions gone
         , searchText = Map.withoutKeys st.searchText gone
         , threads = Map.withoutKeys st.threads gone
         }
@@ -1611,9 +1663,14 @@ defaultChoices = Choices {mail = Nothing, watchOwn = True}
 choicesOf :: MemState -> UserId -> Choices
 choicesOf st u = Map.findWithDefault defaultChoices u st.choices
 
--- | Who created a page: the author of its first version, if known.
+-- | Who created a page: the author of its first version, if known. A
+-- first version that has not been read from IndexedDB is not known
+-- ('unreadFirstVersions' says which to read first).
 makerOf :: MemState -> PageId -> Maybe UserId
-makerOf st pid = Map.lookup pid st.versions >>= Map.lookupMin >>= \(_, v) -> v.author
+makerOf st pid = do
+  (at, v) <- Map.lookup pid st.versions >>= Map.lookupMin
+  guard (maybe True (> at) (Map.lookup pid st.unreadVersions >>= Set.lookupMin))
+  v.author
 
 -- | The users who may sign in.
 activeUsers :: MemState -> [User]

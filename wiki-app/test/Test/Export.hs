@@ -431,7 +431,8 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
       now <- readIORef opened.wiki
       normal now `shouldBe` normal st {current = (demoState demoNow).current}
       reopened <- runMemDOM (openMemWiki db (demoState demoNow))
-      normal <$> readIORef reopened.wiki `shouldReturn` normal st {current = (demoState demoNow).current}
+      -- Loaded again, with the attachments' bytes and the versions read.
+      normal <$> runMemWikiWith reopened.store reopened.wiki readWholly `shouldReturn` normal st {current = (demoState demoNow).current}
 
     it "changes nothing when the database will not take it" $ do
       st <- edited

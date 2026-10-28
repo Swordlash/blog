@@ -6,29 +6,34 @@
 -- reset puts the demo's content back, there and in the database; its
 -- export, downloaded and imported again, brings back what it held; and a
 -- draft the editor saved by itself is there after a reload, until it is
--- discarded.
+-- discarded. A demo loaded again reads no attachment's bytes until one is
+-- shown, and an autosave of a draft writes the drafts store only.
 module Test.Browser.Persist (spec) where
 
 import Control.Monad.UUID (MonadUUID)
 import Data.ByteString.Base64 qualified as Base64
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text qualified as T
 import Halogen.JSBits (JSText, Safety (..), browserJS, fromJSText, toJSText)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (find)
-import Test.Browser.Mount (clickButton, slugs, startKept, startKeptWith)
+import Test.Browser.Mount (clickButton, slugs, startKept, startKeptWith, startOpened)
 import Test.Browser.Text (editorText, markdown)
+import Test.Counting (Call (..), isRead, runCounting)
 import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (Database (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Backend (MonadWiki (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
-import Wiki.App.Backend.Mem (Opened (..), memArchive, runMemWiki)
-import Wiki.App.Backend.Mem.Persist (memDatabase)
+import Wiki.App.Backend.Mem (Found (..), Opened (..), memArchive, openMemWiki, runMemWiki, runMemWikiWith, switchUser)
+import Wiki.App.Backend.Mem.Persist (attachmentsStore, draftsStore, memDatabase, versionsStore)
 import Wiki.App.Browser (zipFiles)
+import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Export (writeArchive)
+import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Page qualified as P
 import Wiki.Core.Space (Space (..))
 
@@ -153,6 +158,36 @@ spec m = do
     unmount ui
     again <- startKept m db Nothing (Page (slugs ["blog"]) (slugs ["hello-world"]))
     find again ".page-view .page-body p" >>= (`shouldHaveText` "Exported, and brought back.")
+
+  it "reads no attachment's bytes when it loads, one attachment's when it is shown, and writes only the drafts store as a draft is saved" $ runPage $ do
+    db <- fresh m "lazy"
+    -- A demo with 30 attachments on the tour, kept in the database.
+    seeded <- unsafeIOToPageM (runTest (openMemWiki db (demoState demoNow) :: m Opened))
+    uploaded <- unsafeIOToPageM . runMemWikiWith seeded.store seeded.wiki $ do
+      switchUser (Just (UserId "user-admin"))
+      docs <- either (panic . show) pure =<< getSpace (slugs ["docs"])
+      tour <- either (panic . show) pure =<< getPage docs.id (slugs ["tour"])
+      for [1 .. 30 :: Int] $ \i -> either (panic . show) pure =<< uploadAttachment tour.id ("file-" <> show i <> ".bin") "application/octet-stream" (encodeUtf8 (T.replicate 1000 (show i)))
+    calls <- unsafeIOToPageM (newIORef [])
+    opened <- unsafeIOToPageM (runTest (runCounting calls (openMemWiki db (demoState demoNow)) :: m Opened))
+    opened.found `shouldBe` Restored
+    loading <- unsafeIOToPageM (readIORef calls)
+    filter (\c -> isRead attachmentsStore c || isRead versionsStore c) loading `shouldBe` []
+    unsafeIOToPageM (writeIORef calls [])
+    let shown = fromMaybe (panic "nothing uploaded") (head uploaded)
+    url <- unsafeIOToPageM (runMemWikiWith opened.store opened.wiki (attachmentUrl shown))
+    url `shouldSatisfy` ("blob:" `T.isPrefixOf`)
+    length . filter (isRead attachmentsStore) <$> unsafeIOToPageM (readIORef calls) `shouldReturn` 1
+    -- The editor saves a draft a few seconds after the typing stops.
+    ui <- startOpened m opened (Just "user-editor") (EditPage (slugs ["blog"]) (slugs ["hello-world"]))
+    text <- editorText ui
+    unsafeIOToPageM (writeIORef calls [])
+    clear text
+    typeText text "Kept as a draft only."
+    eventuallyWithin 10000 $ find ui ".editor-draft-status" >>= (`shouldHaveText` "Draft saved")
+    written <- unsafeIOToPageM (readIORef calls)
+    [stores | Wrote stores <- written] `shouldSatisfy` (\ws -> not (null ws) && all (all (\(store, _) -> store == draftsStore)) ws)
+    unmount ui
 
 -- | Go to the administration from the header, as admin: the link is there
 -- for nobody else, so whoever is signed in is switched to admin first, if

@@ -9,6 +9,7 @@ module Test.Browser.Mount
   , adopt
   , startKept
   , startKeptWith
+  , startOpened
   , clickButton
   , slugs
   )
@@ -125,12 +126,23 @@ startKeptWith
   -> PageM s (Mounted s Shell.Query Void m, Opened)
 startKeptWith m db who at = do
   opened <- unsafeIOToPageM (runTest (openMemWiki db (demoState demoNow) :: m Opened))
+  (,opened) <$> startOpened m opened who at
+
+-- | The shell mounted over a wiki the test opened itself, as 'startKept'
+-- mounts it.
+startOpened
+  :: forall m
+  ->(MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  => Opened
+  -> Maybe Text
+  -> Route
+  -> PageM s (Mounted s Shell.Query Void m)
+startOpened m opened who at = do
   for_ who $ \login -> unsafeIOToPageM (runMemWiki opened.wiki (switchUser (Just (UserId login))))
   router <- unsafeIOToPageM testRouter
   unsafeIOToPageM forgetStorage
   unsafeIOToPageM (Router.redirect router at)
-  ui <- mount m (H.hoist (NT (runMemWikiWith opened.store opened.wiki)) component) (input router)
-  pure (ui, opened)
+  mount m (H.hoist (NT (runMemWikiWith opened.store opened.wiki)) component) (input router)
 
 -- | A router that keeps the route in the test page's fragment. Natively
 -- there is no browser to make one in, and the suite only reports that it

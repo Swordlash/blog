@@ -21,6 +21,15 @@
 -- saved and how. A wiki made with 'newMemWiki' and run with 'runMemWiki'
 -- (the prerender, most tests) is saved nowhere.
 --
+-- A wiki loaded from IndexedDB does not read the attachments' bytes or the
+-- pages' versions when it starts, only their keys. An attachment's bytes
+-- are read when it is shown (for its object URL) or exported, and are not
+-- kept in memory. A page's versions are read when its history is shown,
+-- and its first version when the page's creator is needed: for the
+-- notifications of a save or a comment, for whether the user watches it,
+-- and for a blog's posts. Natively, and in a wiki that is not kept,
+-- everything is in memory and nothing is read.
+--
 -- There are no passwords: 'switchUser' sets who is signed in, which is how
 -- the demo shows the same wiki as different people. The administration's
 -- account data is stored as far as the demo can: whether a user has a
@@ -42,6 +51,7 @@ module Wiki.App.Backend.Mem
   , runMemWikiWith
   , resetMemWiki
   , memKept
+  , readWholly
 
     -- * Export and import
   , memArchive
@@ -71,13 +81,15 @@ import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Mem.Archive (fromArchive, toArchive)
-import Wiki.App.Backend.Mem.Persist (Records, Stored (..), changes, records, restore, storeNames)
+import Wiki.App.Backend.Mem.Persist (Records, Stored (..), attachmentsStore, changes, changesIn, lazyStores, readVersion, records, restore, storeNames, touched, versionKey, versionsStore)
 import Wiki.App.Backend.Mem.State
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive)
-import Wiki.Core.Id (BlobId, UserId)
+import Wiki.Core.Id (BlobId (..), PageId, UserId)
+import Wiki.Core.Notification (WatchTarget (..))
+import Wiki.Core.Page (Page (..))
 import Wiki.Core.Space (Icon (..), Space (..))
 import Wiki.Core.User (User (..))
 
@@ -190,10 +202,12 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   shiftSpace sid = write . shiftSpaceIn sid
   shiftPage pid = write . shiftPageIn pid
   listPages = query . listPagesIn
-  postDetails = query . postDetailsIn
+  postDetails sid = do
+    needVersions (\st -> unreadFirstVersions [p.id | p <- Map.elems st.pages, p.space == sid] st)
+    query (postDetailsIn sid)
   getPage sid = query . getPageIn sid
   createPage sid parent title body = writeAt (createPageIn sid parent title body)
-  savePage pid base title body = writeAt (savePageIn pid base title body)
+  savePage pid base title body = needFirstVersion pid >> writeAt (savePageIn pid base title body)
   movePage pid sid = write . movePageIn pid sid
   setPageTemplate pid = write . setPageTemplateIn pid
   deletePage = write . deletePageIn
@@ -206,22 +220,31 @@ instance (MonadIO m) => MonadWiki (MemWiki m) where
   getDraft = query . getDraftIn
   saveDraft pid base title body = writeAt (saveDraftIn pid base title body)
   discardDraft = write . discardDraftIn
-  listVersions pid = query . listVersionsIn pid
-  getVersion pid = query . getVersionIn pid
-  restoreVersion pid at base = writeAt (restoreVersionIn pid at base)
+  listVersions pid q = needVersions (unreadHistory pid) >> query (listVersionsIn pid q)
+  getVersion pid at = needVersions (unreadHistory pid) >> query (getVersionIn pid at)
+  restoreVersion pid at base = needVersions (unreadHistory pid) >> writeAt (restoreVersionIn pid at base)
   attachmentUrl a = case a.source of
     SourceUrl url -> pure url
     SourceBlob blob -> blobUrl a.mediaType blob
 
 -- | The URL of bytes the store holds, with a media type: an object URL,
 -- made the first time it is asked for and then remembered. The empty text
--- for bytes the store does not have.
+-- for bytes the store does not have. Bytes kept in IndexedDB and not in
+-- memory are read for the URL, which holds them from then on, and are not
+-- kept in memory.
 blobUrl :: (MonadIO m) => Text -> BlobId -> MemWiki m Text
 blobUrl mediaType blob =
-  readState >>= \st -> case (Map.lookup blob st.objectUrls, Map.lookup blob st.blobs) of
-    (Just url, _) -> pure url
-    (Nothing, Nothing) -> pure ""
-    (Nothing, Just bytes) -> do
+  readState >>= \st -> case Map.lookup blob st.objectUrls of
+    Just url -> pure url
+    Nothing -> do
+      bytes <- case Map.lookup blob st.blobs of
+        Just bytes -> pure (Just bytes)
+        Nothing
+          | Set.member blob st.unreadBlobs -> readBlob blob
+          | otherwise -> pure Nothing
+      maybe (pure "") urlOf bytes
+  where
+    urlOf bytes = do
       made <- liftIO (objectUrl mediaType (Base64.encode bytes))
       -- Two calls at the same time can each make a URL. The one stored
       -- first wins, and the other is revoked so that its bytes are freed.
@@ -231,10 +254,50 @@ blobUrl mediaType blob =
           kept <- atomicModifyIORef' env.wiki $ \s -> case Map.lookup blob s.objectUrls of
             Just url -> (s, url)
             Nothing
-              | Map.member blob s.blobs -> (s {objectUrls = Map.insert blob made s.objectUrls}, made)
+              | Map.member blob s.blobs || Set.member blob s.unreadBlobs -> (s {objectUrls = Map.insert blob made s.objectUrls}, made)
               | otherwise -> (s, made)
           when (kept /= made) (js_revoke_object_url (toJSText made))
           pure kept
+
+-- | A blob's bytes read from IndexedDB, or 'Nothing' if they cannot be
+-- (said on the console).
+readBlob :: (MonadIO m) => BlobId -> MemWiki m (Maybe ByteString)
+readBlob blob = MemWiki $ do
+  env <- ask
+  case env.store of
+    Nothing -> pure Nothing
+    Just store ->
+      liftIO $
+        tried (store.readOne attachmentsStore blob.text) >>= \case
+          Right bytes -> pure bytes
+          Left e -> warn ("An attachment could not be read from this browser (" <> describe e <> ").") $> Nothing
+
+-- | Read from IndexedDB the versions that the state says a read needs and
+-- that are not in memory yet ("Wiki.App.Backend.Mem.State"'s
+-- 'unreadHistory' and 'unreadFirstVersions'), and put them in memory. A
+-- version whose record is missing or does not decode is forgotten; one
+-- that cannot be read now stays unread, and is said on the console.
+needVersions :: (MonadIO m) => (MemState -> [(PageId, UTCTime)]) -> MemWiki m ()
+needVersions which = MemWiki $ do
+  env <- ask
+  for_ env.store $ \store -> liftIO $ do
+    wanted <- which <$> readIORef env.wiki
+    found <- for wanted $ \(pid, at) -> (pid,at,) <$> tried (store.readOne versionsStore (versionKey pid at))
+    for_ (head [e | (_, _, Left e) <- found]) $ \e ->
+      warn ("A page's history could not be read from this browser (" <> describe e <> ").")
+    let got = [(pid, at, readVersion pid at =<< bytes) | (pid, at, Right bytes) <- found]
+    unless (null got) $ atomicModifyIORef' env.wiki (\st -> (versionsRead got st, ()))
+
+-- | Read a page's first version, if it is not in memory: the page's
+-- creator is needed.
+needFirstVersion :: (MonadIO m) => PageId -> MemWiki m ()
+needFirstVersion pid = needVersions (unreadFirstVersions [pid])
+
+-- | Read what 'watchingIn' needs: the first version of a watched page.
+needWatched :: (MonadIO m) => WatchTarget -> MemWiki m ()
+needWatched = \case
+  WatchPage pid -> needFirstVersion pid
+  WatchSpace _ -> pass
 
 -- | The administration's backend, on the same wiki. Its writes are saved
 -- like every other write: the groups and the global grants are already
@@ -289,9 +352,9 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
 -- else's comments need to arrive.
 instance (MonadIO m) => MonadComments (MemWiki m) where
   listThreads = query . listThreadsIn
-  openThread pid anchor = writeAt . openThreadIn pid anchor
-  reply pid tid = writeAt . replyIn pid tid
-  editComment pid tid cid = writeAt . editCommentIn pid tid cid
+  openThread pid anchor text = needFirstVersion pid >> writeAt (openThreadIn pid anchor text)
+  reply pid tid text = needFirstVersion pid >> writeAt (replyIn pid tid text)
+  editComment pid tid cid text = needFirstVersion pid >> writeAt (editCommentIn pid tid cid text)
   deleteComment pid tid = write . deleteCommentIn pid tid
   deleteThread pid = write . deleteThreadIn pid
   setResolved pid tid = write . setResolvedIn pid tid
@@ -304,8 +367,8 @@ instance (MonadIO m) => MonadNotifications (MemWiki m) where
   mentionable = query . mentionableIn
   notifications = query notificationsIn
   markRead = write . markReadIn
-  watching = query . watchingIn
-  setWatching target = write . setWatchingIn target
+  watching target = needWatched target >> query (watchingIn target)
+  setWatching target w = needWatched target >> write (setWatchingIn target w)
   notificationSettings = query notificationSettingsIn
   setNotificationSettings = write . setNotificationSettingsIn
   unsubscribe _ = pure (Left (Invalid "The demo sends no mail, so there is none to turn off."))
@@ -332,15 +395,27 @@ objectUrl mediaType base64
 data MemStore = MemStore
   { writeAll :: [IDB.Write] -> IO ()
   -- ^ 'IDB.writeMany', in one transaction.
+  , readOne :: StoreName -> Text -> IO (Maybe ByteString)
+  -- ^ 'IDB.get': one record that was not read when the wiki was loaded.
   , wipe :: IO ()
   -- ^ 'IDB.deleteDatabase'.
-  , kept :: IORef Records
+  , kept :: IORef Kept
   -- ^ What the stores hold, as far as this program knows. The next write
   -- is worked out against it, so that a write that failed to save is saved
   -- again with the next one.
   , lock :: MVar ()
   -- ^ Held from a change in memory until the change is saved, so that the
   -- stores get the changes in the same order as memory did.
+  }
+
+-- | 'Kept' is what the stores hold, as far as this program knows: their
+-- records, and the wiki they were last saved from. A write saves the
+-- stores whose records may differ between that wiki and the wiki in
+-- memory ("Wiki.App.Backend.Mem.Persist"'s 'touched'). A store whose save
+-- failed still differs, so the next write saves it too.
+data Kept = Kept
+  { wiki :: MemState
+  , records :: Records
   }
 
 -- | A wiki loaded from the browser, or saved to it for the first time.
@@ -382,17 +457,18 @@ data Found
 openMemWiki :: (MonadIndexedDB n, MonadUnliftIO n) => Database -> MemState -> n Opened
 openMemWiki db seed = withRunInIO $ \run -> do
   lock <- newMVar ()
-  let readAll = Map.fromList <$> for storeNames (\name -> (name,) <$> run (IDB.getAll db name))
+  let readAll = Map.fromList <$> for storeNames (\name -> (name,) <$> run (readStore db name))
       wipe = run (IDB.deleteDatabase db.name)
       writeAll = run . IDB.writeMany db
-      storeHolding held = (\kept -> MemStore {writeAll, wipe, kept, lock}) <$> newIORef held
+      readOne name key = run (IDB.get db name key)
+      storeHolding wiki held = (\kept -> MemStore {writeAll, readOne, wipe, kept, lock}) <$> newIORef Kept {wiki, records = held}
       -- The demo's records written over whatever the stores hold, in one
       -- transaction, so that a reload never finds half of them.
       writeOut held = do
-        store <- storeHolding held
+        store <- storeHolding emptyState held
         tried (writeAll (changes held (records seed))) >>= \case
           Left e -> pure (Left e)
-          Right () -> writeIORef store.kept (records seed) $> Right store
+          Right () -> writeIORef store.kept Kept {wiki = seed, records = records seed} $> Right store
       reseed why =
         tried wipe >>= \case
           Left e -> pure (Nothing, NotKept (describe e))
@@ -407,7 +483,9 @@ openMemWiki db seed = withRunInIO $ \run -> do
       Right held -> case restore held of
         -- Signed in as the demo's content says, as the prerendered page
         -- shows it.
-        Stored restored -> (restored {current = seed.current},) . (,Restored) . Just <$> storeHolding held
+        Stored restored ->
+          let start = restored {current = seed.current}
+           in (start,) . (,Restored) . Just <$> storeHolding start held
         Unseeded -> (seed,) . either (\e -> (Nothing, NotKept (describe e))) ((,Seeded) . Just) <$> writeOut held
         Unreadable why -> (seed,) <$> reseed why
   case found of
@@ -429,17 +507,38 @@ resetMemWiki seed = MemWiki $ do
     for_ env.store $ \store -> do
       outcome <- tried $ do
         store.wipe
-        writeIORef store.kept mempty
+        writeIORef store.kept Kept {wiki = emptyState, records = mempty}
         store.writeAll (changes mempty (records seed))
-        writeIORef store.kept (records seed)
+        writeIORef store.kept Kept {wiki = seed, records = records seed}
       for_ (lefts [outcome]) $ \e ->
         warn ("The demo's content could not be written out again (" <> describe e <> "); it is tried again with the next change.")
 
 -- | The whole wiki as an export archive, written now by this program.
+--
+-- The attachments' bytes kept in IndexedDB and not in memory are read for
+-- it, and are not kept in memory afterwards.
 memArchive :: (MonadIO m) => Text -> MemWiki m Archive
 memArchive app = do
   now <- liftIO getCurrentTime
-  toArchive now app <$> readState
+  st <- readState
+  unread <- for (Set.toList st.unreadBlobs) (\b -> fmap (b,) <$> readBlob b)
+  pure (toArchive now app st {blobs = st.blobs <> Map.fromList (catMaybes unread)})
+
+-- | The wiki with everything IndexedDB keeps for it read into memory:
+-- every attachment's bytes and every version. The wiki itself is not
+-- changed. It is what a wiki loaded again is compared with in the tests.
+readWholly :: (MonadIO m) => MemWiki m MemState
+readWholly = do
+  st <- readState
+  blobs <- for (Set.toList st.unreadBlobs) (\b -> (b,) <$> readBlob b)
+  history <- MemWiki $ do
+    env <- ask
+    case env.store of
+      Nothing -> pure []
+      Just store -> liftIO $
+        for [(pid, at) | (pid, ats) <- Map.toList st.unreadVersions, at <- Set.toList ats] $ \(pid, at) ->
+          (pid,at,) . (readVersion pid at <=< join . rightToMaybe) <$> tried (store.readOne versionsStore (versionKey pid at))
+  pure (versionsRead history st) {blobs = st.blobs <> Map.fromList [(b, bytes) | (b, Just bytes) <- blobs], unreadBlobs = Set.fromList [b | (b, Nothing) <- blobs]}
 
 -- | Replace the whole wiki with an archive's content, staying signed in as
 -- the same user if the archive has them. If the wiki is saved, the
@@ -456,9 +555,9 @@ importMemWiki archive = MemWiki $ do
       Nothing -> pure (Right ())
       Just store -> do
         before <- readIORef store.kept
-        tried (store.writeAll (changes before (records new))) >>= \case
+        tried (store.writeAll (changes before.records (records new))) >>= \case
           Left e -> pure (Left ("The browser would not keep it (" <> describe e <> ")"))
-          Right () -> Right <$> writeIORef store.kept (records new)
+          Right () -> Right <$> writeIORef store.kept Kept {wiki = new, records = records new}
     for_ written $ \() -> do
       old <- atomicModifyIORef' env.wiki (new,)
       traverse_ (js_revoke_object_url . toJSText) (Map.elems old.objectUrls)
@@ -490,7 +589,7 @@ memWikiFound db
 -- refused.
 readMemWiki :: (MonadIndexedDB n, MonadUnliftIO n) => Database -> n (Either Text MemState)
 readMemWiki db = withRunInIO $ \run ->
-  tried (Map.fromList <$> for storeNames (\name -> (name,) <$> run (IDB.getAll db name))) <&> \case
+  tried (Map.fromList <$> for storeNames (\name -> (name,) . map Just <$> run (IDB.getAll db name))) <&> \case
     Left e -> Left (describe e)
     Right held -> case restore held of
       Stored st -> Right st
@@ -516,19 +615,30 @@ serially env act = case env.store of
   Nothing -> act
   Just store -> withMVar store.lock (const act)
 
--- | Save what differs between the wiki in memory and what the stores hold.
--- A failure is reported on the console and the change stays in memory;
--- the next write tries again, since the stores are then still behind.
+-- | Save what differs between the wiki in memory and what the stores hold,
+-- in the stores the change may have touched: only their records are
+-- encoded and compared. A failure is reported on the console and the
+-- change stays in memory; the next write tries again, since the stores are
+-- then still behind.
 keep :: MemStore -> MemState -> IO ()
 keep store st = do
   before <- readIORef store.kept
+  stores <- touched before.wiki st
   let after = records st
-  case changes before after of
-    [] -> pass
+      saved = writeIORef store.kept Kept {wiki = st, records = Map.union (Map.restrictKeys after (Set.fromList stores)) before.records}
+  case changesIn stores before.records after of
+    [] -> saved
     writes ->
       tried (store.writeAll writes) >>= \case
         Left e -> warn ("A change to the wiki could not be kept in this browser (" <> describe e <> "); it is tried again with the next one.")
-        Right () -> writeIORef store.kept after
+        Right () -> saved
+
+-- | What a store holds when the wiki is loaded: every record, except in
+-- the 'lazyStores', whose keys only are read.
+readStore :: (MonadIndexedDB n) => Database -> StoreName -> n (Map Text (Maybe ByteString))
+readStore db name
+  | name `elem` lazyStores = Map.fromList . map (,Nothing) <$> IDB.keys db name
+  | otherwise = map Just <$> IDB.getAll db name
 
 -- | Whether a failure to read means the database is not the one this
 -- program uses, rather than that nothing can be saved at all.

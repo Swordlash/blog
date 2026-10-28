@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+The demo starts without reading the attachments' bytes or the pages'
+versions from IndexedDB, only their keys (WP5.16c). An attachment's bytes
+are read when it is shown (for its object URL, which then holds them) or
+exported; a page's versions when its history is shown, and its first
+version when the page's creator is needed. `MemState` gains `unreadBlobs`
+and `unreadVersions`, and `Records` holds `Nothing` for a record not read.
+A write saves only the stores it may have changed (`touched`), so a draft
+saved while typing encodes the drafts and nothing else. `readWholly` gives
+the wiki with everything read, for the tests.
+
 The administration can leave accounts with a password to the server's
 console (WP5.18). "Who may come in" has a checkbox, on by default, "The
 administration may create accounts with a password". With it off, the

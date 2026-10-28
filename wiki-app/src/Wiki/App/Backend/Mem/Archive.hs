@@ -65,11 +65,13 @@ fromArchive a =
         , spaces = Map.fromList [(s.id, s) | s <- a.spaces]
         , pages = Map.fromList [(p.id, p) | p <- a.pages]
         , blobs = a.blobs
+        , unreadBlobs = mempty
         , objectUrls = mempty
         , -- An archive has no drafts: drafts belong to their authors, and
           -- were written for other pages than these.
           drafts = mempty
         , versions = mempty
+        , unreadVersions = mempty
         , searchText = mempty
         , -- Nor account flags: its users come with neither a disabled
           -- login nor a password, as the server imports them.
