@@ -3709,6 +3709,26 @@ Amended by the planning session after each work package's report.
   issue are in the session's scratchpad (`ghc-js-th-splices.md`, `ghc-js-th-repro.tar.gz`),
   handed to the owner. Follow-up noted upstream: `th`'s `unknownHtml`/`unknownSvg` still
   use chain-built rows. Next here: WP5.19, the pin bump.
+- **WP5.19 merged** (2026-10-28, PR #105, `main` at `295a26d`; pushed before the local gate
+  at the owner's word, "pchnąłbym go nawet bez testów i zlecił testowanie CI"; CI green).
+  `cabal.project` pins haskell-halogen `1f934f2` (17 commits past `f7ee7e3`; no toolchain
+  pin moved). The bump needed `Typeable m` where a component's state holds `m` (six
+  components, `Static.startApp`) and, because the browser suite mounts the shell over a
+  polymorphic `m`, in `Test.Browser.Mount`'s helpers and 34 spec files; nothing else in
+  the 17 commits needed a change. Measured, the wasm cabal step of `wiki-app` from an
+  empty build directory, `-j1`, with WP5.15 building beside both runs: wall 445 → 319 s,
+  GHC passes 320 → 218 s, `wiki-app` alone 217 → 115 s; per module (passes / type check)
+  `SignIn` 10.7/5.7 → 3.7/0.2 s, `Editor` 16.9/7.6 → 9.7/0.6, `Page` 7.5/2.6 → 4.3/0.3,
+  `Admin` 11.6/6.7 → 3.9/0.2, `View.Server` 13.9/7.3 → 4.9/0.3, `Shell` 13.0/5.5 →
+  6.8/0.4; `wiki-core` and `wiki-api` unchanged. The views' type check is no longer the
+  cost; the slowest `wiki-app` module is now `Backend.Mem.State` (11.7 s, simplifier and
+  code generation), then `View.Editor` (9.7 s, simplifier 5.0 s). Noted for later: the
+  upstream way to drop `Typeable m` is to build such components with the `Component`
+  constructor and `ComponentInfo {stateType = Nothing}`, which would also free the 34 spec
+  signatures; upstream, a hoisted component no longer renders again after a `get` that
+  leaves the state as it was, and natively an event can be built from JSON
+  (`Halogen.VDom.DOM.Monad.Native.event`), which makes native tests possible for views
+  that only had browser tests.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
