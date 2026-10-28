@@ -1281,6 +1281,23 @@ must be in before it is.
   at the use sites, so a plugin would have to be enabled in every consumer, and plugin
   loading on the wasm and JS cross-compilers is fragile.
 
+- **Later, by the owner (2026-10-28, "PRF jest spoko na później"): the assistant's API keys
+  synchronised with a passkey.** The keys stay out of the server today (IndexedDB per user,
+  per device; the administrator never sees them), and the owner does not want to type
+  anything, so the only way across devices without trusting the server is a passkey with
+  the WebAuthn PRF extension: the key material is wrapped with a key derived from the
+  passkey's PRF output (the same on every synced copy of the passkey), the server keeps
+  the ciphertext per user (`api/v1/assistant/vault`), a new device unwraps it with one
+  touch (Touch ID, Windows Hello, a hardware key) and then caches the unwrapped key as a
+  non-extractable WebCrypto key so it never asks again on that device. Rejected on the
+  way: a vault passphrase (typing per device, the owner: "równie dobrze mogę wpisywać
+  cały klucz"), one key for the organisation ("na pewno nie"), a secret derived from the
+  sign-in provider's tokens (the server sees them and they rotate), OAuth to the providers
+  (neither offers it to third-party applications), the Credential Management API (Chrome
+  only). Needs passkey registration in the wiki (the wiki as the relying party,
+  independent of how one signs in) and browsers with PRF (Chrome 116+, Safari 18+,
+  recent Firefox).
+
 - **Later, by the owner (2026-10-27, "zapisz to na potem"): a migration to PostgreSQL.**
   Not now; when it comes, as one port of the whole storage layer (WP5.7's spike says why
   not half and half), most likely with `rel8`, migrations hand-written, SQLite kept or
