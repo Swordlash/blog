@@ -3729,6 +3729,32 @@ Amended by the planning session after each work package's report.
   leaves the state as it was, and natively an event can be built from JSON
   (`Halogen.VDom.DOM.Monad.Native.event`), which makes native tests possible for views
   that only had browser tests.
+- **WP5.20 merged** (2026-10-28, PR #107, `main` at `bfd3307`). `Block` gains `Pause` (a
+  paragraph of `. . .` at the top level, in a box, an alert or a list item; in a quotation,
+  a footnote or code the dots stay text; a page renders nothing for it). `Slide` gains
+  `steps`: the body keeps all content, later pieces are wrapped in `stepMark`
+  (`div.slide-step` with `data-step`), incremental list items get an `itemMark`; `atStep`
+  and `showingStep` (which only adds `slide-step-later`, so islands are not redrawn).
+  Steps follow Beamer's counter (the first item of an incremental list appears with the
+  content before it, a pause after the list starts the step after its last item,
+  `nonincremental` turns it off). Presenting: → Space PageDown step then slide, ← PageUp
+  back a step or to the previous slide whole, Home (1,1), End the last slide whole, swipe
+  and the Back/Next buttons step; `?slide=3&step=2`; later steps `visibility: hidden` with
+  a 0.3 s fade (none under reduced motion); overview and print show whole slides, "each
+  step on its own page" adds print-only copies at each earlier step. Exports: `Output` has
+  `ToBeamer` and `ToPowerPoint`; Beamer keeps pauses (`\pause`, and
+  `\pause[\value{beamerpauses}]` after an incremental list so Beamer adds no empty page)
+  and `\begin{itemize}[<+->]`; PowerPoint steps incremental lists only (pandoc 3.12's
+  writer has no pause handling, so pauses are dropped there, the plan said otherwise);
+  DOCX, HTML, EPUB and plain PDF drop pauses; a quotation's content is wrapped
+  `nonincremental` in both slide formats (a list alone in a quotation no longer exports
+  as incremental). Tests: steps in `Wiki.Core.Slides`, five browser cases, the Beamer
+  `.tex` and a page count of the Beamer PDF equal to the browser's steps (7; `zlib` in the
+  test suite to inflate PDF streams; pending without xelatex and beamer), the PPTX
+  animation, the DOCX without markers, the smoke test (the demo deck prints 9 pages, 13
+  with steps, a reload returns to `?slide=7&step=2`). The demo deck gains slides 7
+  "Steps" and 8 "One item at a time"; README and `docs/markdown.md` updated. Full gate;
+  CI green.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
