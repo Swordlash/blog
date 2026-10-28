@@ -773,6 +773,14 @@ to the demo, keeping `data/`.
   "Users"; an administrator creates spaces anyway). The server mails invitations
   when it has a mail server (below); otherwise the panel shows each invitation's
   link once, as it is made, to pass on.
+- **Accounts with a password only from the console.** "The administration may
+  create accounts with a password", in "Who may come in" and on by default, lets
+  an administrator make a user with a password under "Users" ("New user"). Turned
+  off, the panel shows a note there instead, and the API refuses such a request:
+  accounts with a password are then made on the machine only, with
+  `wiki-server users add` (above). Invitations, "Create account" in an open wiki,
+  sign-in providers, and a password or "Send a password link…" for a user who
+  exists already work as before. A change of the setting is in "Activity".
 - **The server's settings: the public address, mail and providers.** These are
   set in the administration's "Server" section and nowhere else: on the admin
   listener (`http://127.0.0.1:8081/admin/admin/`, below), which serves it before

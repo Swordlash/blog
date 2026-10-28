@@ -546,7 +546,7 @@ users, groups and grants are not imported) is the plan's WP2.8.
 | POST | `api/v1/accounts` | `NewAccount` `{"login", "displayName", "password"}` | `SessionInfo` of the account made, and `Set-Cookie` with its session | 403 (a closed wiki), 400, 409, 429 | (`register`) |
 | GET | `api/v1/invitations/<secret>` | | `InvitationInfo` `{"email", "expiresAt"}` | 404 (used, revoked, expired or none) | (`invitationFor`) |
 | POST | `api/v1/invitations/<secret>` | `NewAccount` | `SessionInfo` of the account made, and `Set-Cookie`; the invitation is used up | 404, 400, 409, 429 | (`acceptInvitation`) |
-| GET | `api/v1/admin/settings` | | `WikiSettings` `{"access", "newAccountsCreateSpaces"}`, `access` `"Open"` or `"Closed"` | 403 | `wikiSettings` |
+| GET | `api/v1/admin/settings` | | `WikiSettings` `{"access", "newAccountsCreateSpaces", "adminCreatesPasswordAccounts"}`, `access` `"Open"` or `"Closed"` | 403 | `wikiSettings` |
 | PUT | `api/v1/admin/settings` | `WikiSettings` | `WikiSettings` as they now are | 403, 400 | `setWikiSettings` |
 | GET | `api/v1/admin/invitations` | | `Invitations` `{"mailing", "invitations"}`: whether the server mails them, and every `Invitation` `{"id", "email", "createdAt", "expiresAt", "expired"}` not used, the latest first | 403 | `invitations` |
 | POST | `api/v1/admin/invitations` | `NewInvitation` `{"email"}` | 201 `Invited` `{"invitation", "token", "mailError"}` | 403, 400 | `invite` |
@@ -588,6 +588,24 @@ attempts an address in fifteen minutes, every attempt counted, and needs
 the application's header like any write. No secret is ever written in
 the log: the path segment after `invite` or `invitations` is logged as
 `…`.
+
+`adminCreatesPasswordAccounts` (in the panel, "The administration may
+create accounts with a password"; true by default, and for a wiki made
+before the setting) decides whether the administration makes accounts
+with a password (`POST admin/users`, below). When it is false, that
+endpoint answers 403 `Forbidden` to everyone, the operator on the admin
+listener included, before it looks at the login, the password or the
+address. Accounts with a password are then made on the server's console,
+with `wiki-server users add`, and the panel shows a note saying so in
+place of its form for a new user (WP5.18 of the plan). The `Forbidden`
+body carries no text, as every `Forbidden`; the setting, which `GET
+admin/settings` and `GET admin/directory` both return, is the reason. The
+console, invitations, accounts people make themselves in an open wiki,
+sign-in providers, a password an administrator sets for an existing user
+and a link to choose one are not affected. A change of the setting is
+recorded in the audit log with the wiki's other settings
+(`settings.wiki`, whose detail has `administration creates accounts with
+a password`, `yes` or `no`).
 
 ### Signing in with a provider
 
@@ -746,7 +764,7 @@ shows to anyone, as an invitation's.
 | ------ | ---- | ---- | -------- | ------ | ------------ |
 | GET | `api/v1/admin/status` | | `ServerStatus` `{"version", "startedAt", "dataDir", "spaces", "pages", "attachments", "users", "backups", "schemaVersion", "lastBackup", "connections", "errors"}`: the schema's version (its last migration), when the newest backup kept in the data directory was made (`null` for none), how many live channels are open, and the last errors the server logged since it started, the newest first, twenty at most, each `LoggedError` `{"at", "route", "message"}` (`route` a route pattern such as `/api/v1/pages/:page`, or the part of the server, such as `backup-scheduler`; never an address with its ids or secrets) | 403 | `serverStatus` |
 | GET | `api/v1/admin/activity?actor=<user>&before=<entry>` | | `Activity` `{"available", "entries", "more", "actors"}`: the audit log, the newest first, at most 50 entries logged before the entry `before` names (the oldest entry of the page before; none after an id the log does not have), or else from `offset=<n>` on (0 if missing; slower the further it skips), of one actor's (`actor` a user's id, or `~administrator` for the operator) or everyone's; each `AuditEntry` `{"id", "at", "actor": {"id", "login"}, "action", "subject": {"kind", "id", "name"}, "detail", "address"}`; `more` whether older entries follow; `actors` everyone the log has an entry of, by login | 403 | `activity` |
-| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "identities", "providerOnly", "secondFactor", "emails", "mailing", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, the providers each user signs in with by their id (a user with none may be left out), the ids of those who have no password to set (none, and an account at a provider the server has: see "One's own password"), the ids of those with a second factor, each user's e-mail address `{"email", "verified"}` by their id (a user with none left out), whether the server sends mail, every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
+| GET | `api/v1/admin/directory` | | `Directory` `{"users", "administrators", "creators", "disabled", "withPassword", "identities", "providerOnly", "secondFactor", "emails", "mailing", "adminCreatesPasswordAccounts", "groups", "membership"}`: every `User` by login (a disabled one too), the ids of the users granted the global `administer` themselves, of those granted the global `create-spaces` themselves, of those whose login is disabled and of those who have a password, the providers each user signs in with by their id (a user with none may be left out), the ids of those who have no password to set (none, and an account at a provider the server has: see "One's own password"), the ids of those with a second factor, each user's e-mail address `{"email", "verified"}` by their id (a user with none left out), whether the server sends mail, the wiki's setting `adminCreatesPasswordAccounts` (whether the administration may create accounts with a password, above), every `Group` by name, and the members' ids of each group by its id (a group without members may be left out) | 403 | `directory` |
 | PUT | `api/v1/admin/users/<user>/administrator` | `AdministratorFlag` `{"administrator"}` | 204 | 403, 404 | `setAdministrator` |
 | PUT | `api/v1/admin/users/<user>/create-spaces` | `CreateSpacesFlag` `{"createSpaces"}` | 204 | 403, 404 | `setCreateSpaces` |
 | POST | `api/v1/admin/groups` | `GroupName` `{"name"}` | 201 `Group` `{"id", "name"}` | 403, 400 | `createGroup` |
@@ -754,7 +772,7 @@ shows to anyone, as an invitation's.
 | DELETE | `api/v1/admin/groups/<group>` | | 204 | 403, 404 | `deleteGroup` |
 | PUT | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `addMember` |
 | DELETE | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `removeMember` |
-| POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password", "email"}` (`email` optional: a link to verify it is mailed there) | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403, 400, 409 (the login is taken, in any case) | `createUser` |
+| POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password", "email"}` (`email` optional: a link to verify it is mailed there) | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403 (also to an administrator while the wiki's `adminCreatesPasswordAccounts` is false: such accounts are then made on the console), 400, 409 (the login is taken, in any case) | `createUser` |
 | DELETE | `api/v1/admin/users/<user>/second-factor` | | 204: the user signs in with their password alone | 403, 404 (none) | `removeSecondFactor` |
 | PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 (a password that cannot be one, or a user who has no password to set) | `setPassword` |
 | POST | `api/v1/admin/users/<user>/password-link` | | 204: the link "Forgot your password?" mails is mailed to the user's verified address | 403, 404, 400 with the reason (the server sends no mail, the user has no password to set, their login is disabled, they have no verified address, or the mail could not be sent), 429 (a link was mailed to them less than a minute ago) | `sendPasswordLink` |
