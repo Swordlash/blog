@@ -11,10 +11,12 @@
 //   chosen since the chat began applies from the next message), and runs
 //   one turn of the model's, whose events go to the
 //   callback as JSON, in order: {type: "text", text}, as the answer
-//   streams; {type: "tool", call, name, input}, a tool call, which the
-//   turn waits on until the application answers it (wiki_assistant_answer);
-//   and at the end {type: "done"}, {type: "stopped"} or {type: "error",
-//   kind, status, message};
+//   streams; {type: "thinking", text}, as the summary of the model's
+//   thinking streams; {type: "tool-start", name}, when the model begins
+//   writing a tool call; {type: "tool", call, name, input}, the whole tool
+//   call, which the turn waits on until the application answers it
+//   (wiki_assistant_answer); and at the end {type: "done"}, {type:
+//   "stopped"} or {type: "error", kind, status, message};
 // - a stop aborts the turn (the SDK's request with it) and answers any call
 //   still waiting, so that nothing hangs.
 //
@@ -27,10 +29,13 @@
 // every provider, so that a test reaches none: what the application sends
 // a provider (its model, its key, its address) is recorded, and the
 // answers are the script's. Its script is {turns: [[step, ...], ...]},
-// a list of steps for each message in turn: {text} streams text, {tool,
-// input} calls a tool and waits for its answer, {error: {kind, status,
-// message}} ends the turn with that error, {hold: true} waits until the
-// turn is stopped, and {wait} (milliseconds, after any step) paces it. It
+// a list of steps for each message in turn: {text} streams text,
+// {thinking} streams a summary of thinking, {tool, input} starts a tool
+// call and, after {pause} milliseconds if given, makes it and waits for
+// its answer, {error: {kind, status, message}} ends the turn with that
+// error, {hold: true} waits until the turn is stopped, and {wait}
+// (milliseconds, after any step) paces it; a step of {wait} alone is a
+// pause, before the first text for instance. It
 // keeps what it was sent in script.requests and its tools' answers in
 // script.answers, for the tests to read. A provider's list of models is
 // script.lists[provider], [{id, label, created}, ...], or {error: {kind,
@@ -44,8 +49,11 @@
 const wikiAssistantChats = new Map();
 let wikiAssistantNextChat = 0;
 
-// Text streams in many small pieces: they are handed on together, a few
-// times a second, rather than one event each.
+// Text and thinking stream in many small pieces: they are handed on
+// together, a few times a second, rather than one event each. The buffer
+// holds pieces of one kind ("text" or "thinking"); a piece of the other
+// kind, or any other event, first hands on what the buffer holds, so the
+// events keep their order.
 const wikiAssistantFlushAfter = 40;
 
 function wikiAssistantFlush(chat) {
@@ -56,7 +64,7 @@ function wikiAssistantFlush(chat) {
   if (chat.buffer !== "") {
     const text = chat.buffer;
     chat.buffer = "";
-    if (wikiAssistantChats.get(chat.id) === chat) chat.callback(JSON.stringify({ type: "text", text }));
+    if (wikiAssistantChats.get(chat.id) === chat) chat.callback(JSON.stringify({ type: chat.bufferKind, text }));
   }
 }
 
@@ -65,9 +73,23 @@ function wikiAssistantEmit(chat, event) {
   if (wikiAssistantChats.get(chat.id) === chat) chat.callback(JSON.stringify(event));
 }
 
-function wikiAssistantText(chat, text) {
+function wikiAssistantBuffer(chat, kind, text) {
+  if (chat.bufferKind !== kind) {
+    wikiAssistantFlush(chat);
+    chat.bufferKind = kind;
+  }
   chat.buffer += String(text);
   if (chat.timer === null) chat.timer = setTimeout(() => wikiAssistantFlush(chat), wikiAssistantFlushAfter);
+}
+
+// What a chat's provider is handed to tell of its turn (web/src/assistant.js).
+function wikiAssistantHandlers(chat) {
+  return {
+    text: (text) => wikiAssistantBuffer(chat, "text", text),
+    thinking: (text) => wikiAssistantBuffer(chat, "thinking", text),
+    toolStart: (name) => wikiAssistantEmit(chat, { type: "tool-start", name: String(name) }),
+    tool: (name, input) => wikiAssistantAsk(chat, name, input),
+  };
 }
 
 // A tool call, handed to the application, whose answer the turn waits for.
@@ -108,7 +130,11 @@ function wikiAssistantScripted(config) {
       for (const step of steps) {
         if (signal.aborted) return;
         if (step.text !== undefined) handlers.text(step.text);
+        else if (step.thinking !== undefined) handlers.thinking(step.thinking);
         else if (step.tool !== undefined) {
+          handlers.toolStart(step.tool);
+          if (typeof step.pause === "number") await new Promise((resolve) => setTimeout(resolve, step.pause));
+          if (signal.aborted) return;
           const answer = await handlers.tool(step.tool, step.input);
           if (!Array.isArray(script.answers)) script.answers = [];
           script.answers.push({ tool: step.tool, input: step.input, text: answer.text, ok: answer.ok });
@@ -163,6 +189,7 @@ function wiki_assistant_open(config, callback) {
     calls: new Map(),
     nextCall: 0,
     buffer: "",
+    bufferKind: "text",
     timer: null,
   });
   return id;
@@ -190,12 +217,7 @@ function wiki_assistant_send(id, user, request) {
   (async () => {
     try {
       const made = await chat.made;
-      await made.send(
-        String(user),
-        { text: (text) => wikiAssistantText(chat, text), tool: (name, input) => wikiAssistantAsk(chat, name, input) },
-        controller.signal,
-        now,
-      );
+      await made.send(String(user), wikiAssistantHandlers(chat), controller.signal, now);
       chat.controller = null;
       wikiAssistantEmit(chat, controller.signal.aborted ? { type: "stopped" } : { type: "done" });
     } catch (error) {
@@ -290,4 +312,16 @@ function wiki_assistant_prepare() {
 // new line) and outside a composition.
 function wiki_assistant_send_key(event) {
   return event.key === "Enter" && !event.shiftKey && !event.isComposing && !event.ctrlKey && !event.metaKey && !event.altKey;
+}
+
+// Whether a keydown in the message box closes the panel: Escape, outside
+// a composition (where Escape cancels the composition).
+function wiki_assistant_close_key(event) {
+  return event.key === "Escape" && !event.isComposing;
+}
+
+// The time of day of a moment (milliseconds since 1970), as the reader's
+// browser writes a short time in its language ("14:32", or "2:32 PM").
+function wiki_assistant_clock(ms) {
+  return new Date(ms).toLocaleTimeString(undefined, { timeStyle: "short" });
 }

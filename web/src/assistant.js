@@ -13,10 +13,14 @@
 //     user's (with the request it gives, if it gives one: a model or an
 //     effort chosen since the chat began) and
 //     runs the model's turn to its end: the text it writes goes to
-//     handlers.text as it streams, and each tool call to
-//     handlers.tool(name, input), whose promise is the tool's answer
-//     ({text, ok}); the model then goes on, until it answers without a
-//     tool call. The conversation, as the provider gave it (the model's
+//     handlers.text as it streams, the summary of its thinking to
+//     handlers.thinking as it streams, the start of each tool call to
+//     handlers.toolStart(name) as soon as the model begins writing the
+//     call, and each whole tool call to handlers.tool(name, input), whose
+//     promise is the tool's answer ({text, ok}); the model then goes on,
+//     until it answers without a tool call. handlers.thinking and
+//     handlers.toolStart may be left out. The conversation, as the
+//     provider gave it (the model's
 //     thinking and tool calls included, unchanged, as both providers ask),
 //     is kept by the chat for the next message.
 //   checkKey(provider, key, model): the smallest request there is, which
@@ -44,6 +48,13 @@ import OpenAI from "openai";
 // ended: a page's worth of edits, and a guard against a model that loops.
 const maxRounds = 24;
 
+// Whether an error is the provider refusing one part of the request as
+// one this model or account does not support: a 400 whose message
+// matches. The part named is then left out of every later request of the
+// chat (see `dropped` below).
+const refusesPart = (error, pattern) =>
+  (error instanceof Anthropic.BadRequestError || error instanceof OpenAI.BadRequestError) && pattern.test(messageOf(error));
+
 // An empty key is a server's that takes none (OpenAI's API on this
 // machine: Ollama, LM Studio): the SDK will not make a client without a
 // key, so it gets one that is never sent, its Authorization header taken
@@ -64,17 +75,42 @@ const clientOptions = (key, options) => ({
 // the model's answer and, while it calls tools, the tools' results and its
 // next answer. The model's content goes back whole, thinking blocks
 // included, as the API requires of a conversation that goes on.
+//
+// The request asks for adaptive thinking with its summary shown
+// (Wiki.Core.Assistant.Prompt). Older models (Claude Haiku 4.5, Opus 4.5)
+// refuse adaptive thinking with a 400: the request is then sent again
+// without `thinking`, and so is every later request of the chat.
 const anthropicChat = (key, request, options) => {
   const client = new Anthropic(clientOptions(key, options));
   const messages = [];
+  let dropped = false;
+  const asked = (now) => {
+    if (!dropped) return now;
+    const { thinking, ...rest } = now;
+    return rest;
+  };
   return {
     async send(user, handlers, signal, now = request) {
       const turn = [...messages, { role: "user", content: user }];
       try {
         for (let round = 0; round < maxRounds; round++) {
-          const stream = client.messages.stream({ ...now, messages: turn }, { signal });
+          const stream = client.messages.stream({ ...asked(now), messages: turn }, { signal });
           stream.on("text", (delta) => handlers.text(delta));
-          const message = await stream.finalMessage();
+          stream.on("thinking", (delta) => handlers.thinking?.(delta));
+          stream.on("streamEvent", (event) => {
+            if (event.type === "content_block_start" && event.content_block?.type === "tool_use") handlers.toolStart?.(String(event.content_block.name));
+          });
+          let message;
+          try {
+            message = await stream.finalMessage();
+          } catch (error) {
+            if (!dropped && now.thinking !== undefined && refusesPart(error, /adaptive thinking is not supported/i)) {
+              dropped = true;
+              round--;
+              continue;
+            }
+            throw error;
+          }
           if (message.stop_reason === "refusal") {
             throw Object.assign(new Error(message.stop_details?.explanation ?? "The model declined."), { wikiKind: "refusal" });
           }
@@ -105,18 +141,44 @@ const anthropicChat = (key, request, options) => {
 // OpenAI's Responses API: the conversation is the input, sent whole each
 // time (nothing is kept at OpenAI: the request says store: false), with the
 // model's output items as it gave them, its reasoning encrypted.
+//
+// The request asks for a summary of the reasoning (reasoning.summary,
+// Wiki.Core.Assistant.Prompt), which streams in parts before the answer;
+// the parts are handed on separated by a blank line. OpenAI refuses the
+// summary to an organisation it has not verified, with a 400 that names
+// it: the request is then sent again without the summary, and so is every
+// later request of the chat.
 const openAiChat = (key, request, options) => {
   const client = new OpenAI(clientOptions(key, options));
   const input = [];
+  let dropped = false;
+  const asked = (now) => {
+    if (!dropped || now.reasoning === undefined) return now;
+    const { summary, ...reasoning } = now.reasoning;
+    return { ...now, reasoning };
+  };
   return {
     async send(user, handlers, signal, now = request) {
       const turn = [...input, { role: "user", content: user }];
       try {
         for (let round = 0; round < maxRounds; round++) {
-          const stream = await client.responses.create({ ...now, input: turn, stream: true }, { signal });
+          let stream;
+          try {
+            stream = await client.responses.create({ ...asked(now), input: turn, stream: true }, { signal });
+          } catch (error) {
+            if (!dropped && now.reasoning?.summary !== undefined && refusesPart(error, /summar/i)) {
+              dropped = true;
+              round--;
+              continue;
+            }
+            throw error;
+          }
           let response = null;
           for await (const event of stream) {
             if (event.type === "response.output_text.delta") handlers.text(event.delta);
+            else if (event.type === "response.reasoning_summary_text.delta") handlers.thinking?.(event.delta);
+            else if (event.type === "response.reasoning_summary_part.added" && event.summary_index > 0) handlers.thinking?.("\n\n");
+            else if (event.type === "response.output_item.added" && event.item?.type === "function_call") handlers.toolStart?.(String(event.item.name));
             else if (event.type === "response.completed") response = event.response;
             else if (event.type === "response.incomplete") {
               // Cut short: a reasoning model can spend its whole budget on

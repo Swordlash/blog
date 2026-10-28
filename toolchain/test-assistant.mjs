@@ -4,8 +4,11 @@
 // page relies on the SDKs for: the requests they make from what the
 // application assembled (the headers a browser needs, the conversation
 // sent whole each turn, append-only), the stream read as it comes, the tool
-// loop going on with the tools' answers, a stop, the SDKs' typed errors
-// read as the application's kinds, and the providers' lists of models,
+// loop going on with the tools' answers, the thinking's summary and the
+// start of each tool call handed on as they stream, the request sent again
+// without what a model or an organisation refuses (adaptive thinking, a
+// reasoning summary), a stop, the SDKs' typed errors read as the
+// application's kinds, and the providers' lists of models,
 // every page of them, in the one shape the application reads. The browser tests use the scripted
 // provider instead (wiki-app/jsbits/assistant.js); a real provider cannot
 // be reached from here.
@@ -76,6 +79,7 @@ const anthropicMessage = (texts, tools, stopReason) => {
 const anthropicRequest = {
   model: "claude-opus-5-5",
   max_tokens: 32000,
+  thinking: { type: "adaptive", display: "summarized" },
   system: [{ type: "text", text: "REFERENCE", cache_control: { type: "ephemeral" } }],
   tools: [{ name: "replace", description: "d", input_schema: { type: "object", properties: {}, required: [] } }],
 };
@@ -130,7 +134,95 @@ await test("Anthropic: streams the text, runs the tool loop, and keeps the conve
   assert.deepEqual(third.body.messages[4], { role: "user", content: "More." });
   assert.deepEqual(third.body.output_config, { effort: "high" });
   assert.deepEqual(third.body.system, anthropicRequest.system);
-  assert.equal(third.body.thinking, undefined);
+  assert.deepEqual(third.body.thinking, { type: "adaptive", display: "summarized" });
+});
+
+// Anthropic's stream of one message that thinks first: a thinking block
+// whose summary streams in pieces, then text, then tool calls.
+const anthropicThinking = (thoughts, texts, tools, stopReason) => {
+  const events = [
+    ["message_start", { type: "message_start", message: { id: "msg", type: "message", role: "assistant", model: "m", content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } } }],
+    ["content_block_start", { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }],
+    ...thoughts.map((thinking) => ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking } }]),
+    ["content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } }],
+    ["content_block_stop", { type: "content_block_stop", index: 0 }],
+    ["content_block_start", { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }],
+    ...texts.map((text) => ["content_block_delta", { type: "content_block_delta", index: 1, delta: { type: "text_delta", text } }]),
+    ["content_block_stop", { type: "content_block_stop", index: 1 }],
+  ];
+  tools.forEach(([id, name, input], i) => {
+    events.push(
+      ["content_block_start", { type: "content_block_start", index: i + 2, content_block: { type: "tool_use", id, name, input: {} } }],
+      ["content_block_delta", { type: "content_block_delta", index: i + 2, delta: { type: "input_json_delta", partial_json: JSON.stringify(input) } }],
+      ["content_block_stop", { type: "content_block_stop", index: i + 2 }],
+    );
+  });
+  events.push(
+    ["message_delta", { type: "message_delta", delta: { stop_reason: stopReason, stop_sequence: null }, usage: { output_tokens: 2 } }],
+    ["message_stop", { type: "message_stop" }],
+  );
+  return sse(events);
+};
+
+// Handlers that keep every event of a turn, in order.
+const inOrder = () => {
+  const events = [];
+  return {
+    events,
+    handlers: {
+      text: (t) => events.push(["text", t]),
+      thinking: (t) => events.push(["thinking", t]),
+      toolStart: (name) => events.push(["toolStart", name]),
+      tool: async (name) => {
+        events.push(["tool", name]);
+        return { text: "Applied.", ok: true };
+      },
+    },
+  };
+};
+
+await test("Anthropic: hands on the thinking's summary and the start of each tool call as they stream", async () => {
+  const { fetch, requests } = fakeFetch([
+    anthropicThinking(["Weighing ", "the words."], ["I will fix it."], [["tu_1", "replace", { old_text: "a", new_text: "b" }]], "tool_use"),
+    anthropicMessage(["Done."], [], "end_turn"),
+  ]);
+  const chat = startChat("anthropic", "k", anthropicRequest, { fetch, maxRetries: 0 });
+  const { events, handlers } = inOrder();
+  await chat.send("Fix it.", handlers, new AbortController().signal);
+  assert.deepEqual(events, [
+    ["thinking", "Weighing "],
+    ["thinking", "the words."],
+    ["text", "I will fix it."],
+    ["toolStart", "replace"],
+    ["tool", "replace"],
+    ["text", "Done."],
+  ]);
+  assert.deepEqual(requests[0].body.thinking, { type: "adaptive", display: "summarized" });
+  // The thinking block goes back whole, with its signature.
+  assert.deepEqual(requests[1].body.messages[1].content[0], { type: "thinking", thinking: "Weighing the words.", signature: "sig" });
+});
+
+await test("Anthropic: a model that refuses adaptive thinking is asked again without it, for the rest of the chat", async () => {
+  const refused = json(400, { type: "error", error: { type: "invalid_request_error", message: "adaptive thinking is not supported on this model" } });
+  const { fetch, requests } = fakeFetch([refused, anthropicMessage(["Fine."], [], "end_turn"), anthropicMessage(["Again."], [], "end_turn")]);
+  const chat = startChat("anthropic", "k", { ...anthropicRequest, model: "claude-haiku-4-5" }, { fetch, maxRetries: 0 });
+  const { texts, handlers } = collect();
+  await chat.send("x", handlers, new AbortController().signal);
+  await chat.send("y", handlers, new AbortController().signal);
+  assert.equal(texts.join(""), "Fine.Again.");
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[0].body.thinking, { type: "adaptive", display: "summarized" });
+  assert.equal(requests[1].body.thinking, undefined);
+  assert.equal(requests[2].body.thinking, undefined);
+  assert.deepEqual(requests[1].body.messages, [{ role: "user", content: "x" }]);
+});
+
+await test("Anthropic: another 400 is not taken for a refusal of thinking", async () => {
+  const { fetch, requests } = fakeFetch([json(400, { type: "error", error: { type: "invalid_request_error", message: "max_tokens: too large" } })]);
+  const chat = startChat("anthropic", "k", anthropicRequest, { fetch, maxRetries: 0 });
+  const error = await chat.send("x", collect().handlers, new AbortController().signal).then(() => null, (e) => e);
+  assert.equal(describeError(error).kind, "bad_request");
+  assert.equal(requests.length, 1);
 });
 
 await test("Anthropic: a refused tool's answer is marked as an error", async () => {
@@ -206,7 +298,7 @@ const openAiRequest = {
   tools: [{ type: "function", name: "replace", description: "d", parameters: { type: "object", properties: {}, required: [], additionalProperties: false }, strict: true }],
   store: false,
   include: ["reasoning.encrypted_content"],
-  reasoning: { effort: "low" },
+  reasoning: { effort: "low", summary: "auto" },
 };
 
 const openAiResponse = (texts, output) =>
@@ -230,7 +322,7 @@ await test("OpenAI: streams the text, runs the tool loop, and sends the conversa
   assert.match(first.url, /\/v1\/responses$/);
   assert.equal(first.headers.get("authorization"), "Bearer sk-open");
   assert.equal(first.body.store, false);
-  assert.deepEqual(first.body.reasoning, { effort: "low" });
+  assert.deepEqual(first.body.reasoning, { effort: "low", summary: "auto" });
   assert.equal(first.body.max_output_tokens, undefined);
   assert.equal(first.body.instructions, openAiRequest.instructions);
   assert.deepEqual(first.body.input, [{ role: "user", content: "Fix it." }]);
@@ -241,6 +333,53 @@ await test("OpenAI: streams the text, runs the tool loop, and sends the conversa
     { type: "function_call_output", call_id: "call_1", output: "Applied." },
   ]);
   assert.equal(second.body.previous_response_id, undefined);
+});
+
+await test("OpenAI: hands on the reasoning's summary, its parts apart, and the start of each tool call as they stream", async () => {
+  const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "replace", arguments: '{"old_text":"a","new_text":"b"}', status: "completed" };
+  const message = { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Done.", annotations: [] }] };
+  const part = (i, n) => ["response.reasoning_summary_part.added", { type: "response.reasoning_summary_part.added", sequence_number: n, item_id: "rs_1", output_index: 0, summary_index: i, part: { type: "summary_text", text: "" } }];
+  const delta = (i, n, d) => ["response.reasoning_summary_text.delta", { type: "response.reasoning_summary_text.delta", sequence_number: n, item_id: "rs_1", output_index: 0, summary_index: i, delta: d }];
+  const first = sse([
+    ["response.created", { type: "response.created", sequence_number: 0, response: { id: "resp", output: [] } }],
+    part(0, 1),
+    delta(0, 2, "Weighing "),
+    delta(0, 3, "the words."),
+    part(1, 4),
+    delta(1, 5, "Then the edit."),
+    ["response.output_item.added", { type: "response.output_item.added", sequence_number: 6, output_index: 1, item: { ...call, arguments: "", status: "in_progress" } }],
+    ["response.completed", { type: "response.completed", sequence_number: 7, response: { id: "resp", status: "completed", output: [call] } }],
+  ]);
+  const { fetch } = fakeFetch([first, openAiResponse(["Done."], [message])]);
+  const chat = startChat("openai", "k", openAiRequest, { fetch, maxRetries: 0 });
+  const { events, handlers } = inOrder();
+  await chat.send("Fix it.", handlers, new AbortController().signal);
+  assert.deepEqual(events, [
+    ["thinking", "Weighing "],
+    ["thinking", "the words."],
+    ["thinking", "\n\n"],
+    ["thinking", "Then the edit."],
+    ["toolStart", "replace"],
+    ["tool", "replace"],
+    ["text", "Done."],
+  ]);
+});
+
+await test("OpenAI: an organisation refused reasoning summaries is asked again without them, for the rest of the chat", async () => {
+  const refused = json(400, {
+    error: { message: "Your organization must be verified to generate reasoning summaries. Please go to: https://platform.openai.com/settings/organization/general and click on Verify Organization.", type: "invalid_request_error", param: "reasoning.summary", code: "unsupported_value" },
+  });
+  const message = (text) => ({ type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] });
+  const { fetch, requests } = fakeFetch([refused, openAiResponse(["Fine."], [message("Fine.")]), openAiResponse(["Again."], [message("Again.")])]);
+  const chat = startChat("openai", "k", openAiRequest, { fetch, maxRetries: 0 });
+  const { texts, handlers } = collect();
+  await chat.send("x", handlers, new AbortController().signal);
+  await chat.send("y", handlers, new AbortController().signal);
+  assert.equal(texts.join(""), "Fine.Again.");
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[0].body.reasoning, { effort: "low", summary: "auto" });
+  assert.deepEqual(requests[1].body.reasoning, { effort: "low" });
+  assert.deepEqual(requests[2].body.reasoning, { effort: "low" });
 });
 
 await test("OpenAI: an answer cut short is an error, not an empty answer", async () => {
