@@ -76,19 +76,24 @@ const clientOptions = (key, options) => ({
 // next answer. The model's content goes back whole, thinking blocks
 // included, as the API requires of a conversation that goes on.
 //
-// The request asks for adaptive thinking with its summary shown
-// (Wiki.Core.Assistant.Prompt). Older models (Claude Haiku 4.5, Opus 4.5)
-// refuse adaptive thinking with a 400: the request is then sent again
-// without `thinking`, and so is every later request of the chat.
+// The request asks for adaptive thinking with its summary shown, at the
+// effort chosen (output_config.effort, Wiki.Core.Assistant.Prompt). Older
+// models refuse one or both with a 400: Claude Haiku 4.5 refuses both,
+// Opus 4.5 adaptive thinking. The request is then sent again without the
+// part refused (`thinking` or `output_config`), and so is every later
+// request of the chat. A model that refuses both answers the first
+// message after two refusals, one for each part.
 const anthropicChat = (key, request, options) => {
   const client = new Anthropic(clientOptions(key, options));
   const messages = [];
-  let dropped = false;
-  const asked = (now) => {
-    if (!dropped) return now;
-    const { thinking, ...rest } = now;
-    return rest;
-  };
+  // The parts a model may refuse, and the message of the 400 it refuses
+  // each with. `dropped` holds the parts refused so far in this chat.
+  const refusable = [
+    ["thinking", /adaptive thinking is not supported/i],
+    ["output_config", /does not support the effort parameter/i],
+  ];
+  const dropped = new Set();
+  const asked = (now) => Object.fromEntries(Object.entries(now).filter(([part]) => !dropped.has(part)));
   return {
     async send(user, handlers, signal, now = request) {
       const turn = [...messages, { role: "user", content: user }];
@@ -104,8 +109,9 @@ const anthropicChat = (key, request, options) => {
           try {
             message = await stream.finalMessage();
           } catch (error) {
-            if (!dropped && now.thinking !== undefined && refusesPart(error, /adaptive thinking is not supported/i)) {
-              dropped = true;
+            const refused = refusable.find(([part, pattern]) => !dropped.has(part) && now[part] !== undefined && refusesPart(error, pattern));
+            if (refused) {
+              dropped.add(refused[0]);
               round--;
               continue;
             }

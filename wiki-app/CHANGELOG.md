@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+The writing assistant works with Claude Haiku 4.5 again (WP5.17). Since
+the effort picker came (WP4.19), every request has carried
+`output_config.effort`, and Claude Haiku 4.5 refused each one with a 400:
+"This model does not support the effort parameter." The island
+(`web/src/assistant.js`) now sends the request again without
+`output_config` and leaves it out for the rest of the chat, as it already
+did with `thinking` for a model that refuses adaptive thinking. Claude
+Haiku 4.5 refuses both, so its first answer comes after two refusals. The
+effort picker stays: a model that refuses the effort runs without one.
+
 "Export the wiki" writes version 2 of the export format (WP5.8,
 `docs/export.md`): a directory per space and per page, with the page's
 Markdown in `page.md`, its attachments and its comments. "Import a wiki"

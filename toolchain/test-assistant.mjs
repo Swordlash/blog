@@ -6,8 +6,8 @@
 // sent whole each turn, append-only), the stream read as it comes, the tool
 // loop going on with the tools' answers, the thinking's summary and the
 // start of each tool call handed on as they stream, the request sent again
-// without what a model or an organisation refuses (adaptive thinking, a
-// reasoning summary), a stop, the SDKs' typed errors read as the
+// without what a model or an organisation refuses (adaptive thinking, the
+// effort, a reasoning summary), a stop, the SDKs' typed errors read as the
 // application's kinds, and the providers' lists of models,
 // every page of them, in the one shape the application reads. The browser tests use the scripted
 // provider instead (wiki-app/jsbits/assistant.js); a real provider cannot
@@ -79,6 +79,7 @@ const anthropicMessage = (texts, tools, stopReason) => {
 const anthropicRequest = {
   model: "claude-opus-5-5",
   max_tokens: 32000,
+  output_config: { effort: "high" },
   thinking: { type: "adaptive", display: "summarized" },
   system: [{ type: "text", text: "REFERENCE", cache_control: { type: "ephemeral" } }],
   tools: [{ name: "replace", description: "d", input_schema: { type: "object", properties: {}, required: [] } }],
@@ -215,6 +216,51 @@ await test("Anthropic: a model that refuses adaptive thinking is asked again wit
   assert.equal(requests[1].body.thinking, undefined);
   assert.equal(requests[2].body.thinking, undefined);
   assert.deepEqual(requests[1].body.messages, [{ role: "user", content: "x" }]);
+});
+
+// Claude Haiku 4.5's answer to a request with an effort, as it was on
+// 2026-10-28.
+const effortRefused = () =>
+  json(400, { type: "error", error: { type: "invalid_request_error", message: "This model does not support the effort parameter." } });
+
+await test("Anthropic: a model that refuses the effort is asked again without it, for the rest of the chat", async () => {
+  const { fetch, requests } = fakeFetch([effortRefused(), anthropicMessage(["Fine."], [], "end_turn"), anthropicMessage(["Again."], [], "end_turn")]);
+  const chat = startChat("anthropic", "k", { ...anthropicRequest, model: "claude-haiku-4-5" }, { fetch, maxRetries: 0 });
+  const { texts, handlers } = collect();
+  await chat.send("x", handlers, new AbortController().signal);
+  await chat.send("y", handlers, new AbortController().signal, { ...anthropicRequest, model: "claude-haiku-4-5", output_config: { effort: "low" } });
+  assert.equal(texts.join(""), "Fine.Again.");
+  assert.equal(requests.length, 3);
+  assert.deepEqual(requests[0].body.output_config, { effort: "high" });
+  assert.equal(requests[1].body.output_config, undefined);
+  assert.equal(requests[2].body.output_config, undefined);
+  // Only the effort is left out: the thinking is still asked for.
+  assert.deepEqual(requests[1].body.thinking, { type: "adaptive", display: "summarized" });
+  assert.deepEqual(requests[2].body.thinking, { type: "adaptive", display: "summarized" });
+  assert.deepEqual(requests[1].body.messages, [{ role: "user", content: "x" }]);
+});
+
+// Claude Haiku 4.5 refuses adaptive thinking first, and the effort in the
+// request sent again without it (seen on 2026-10-28).
+await test("Anthropic: a model that refuses adaptive thinking and the effort is asked again without both", async () => {
+  const thinkingRefused = json(400, { type: "error", error: { type: "invalid_request_error", message: "adaptive thinking is not supported on this model" } });
+  const { fetch, requests } = fakeFetch([thinkingRefused, effortRefused(), anthropicMessage(["Fine."], [], "end_turn"), anthropicMessage(["Again."], [], "end_turn")]);
+  const chat = startChat("anthropic", "k", { ...anthropicRequest, model: "claude-haiku-4-5" }, { fetch, maxRetries: 0 });
+  const { texts, handlers } = collect();
+  await chat.send("x", handlers, new AbortController().signal);
+  await chat.send("y", handlers, new AbortController().signal);
+  assert.equal(texts.join(""), "Fine.Again.");
+  assert.equal(requests.length, 4);
+  assert.deepEqual([requests[1].body.output_config, requests[1].body.thinking], [{ effort: "high" }, undefined]);
+  for (const r of requests.slice(2)) assert.deepEqual([r.body.output_config, r.body.thinking], [undefined, undefined]);
+});
+
+await test("Anthropic: a refusal of the effort repeated is not asked again", async () => {
+  const { fetch, requests } = fakeFetch([effortRefused(), effortRefused()]);
+  const chat = startChat("anthropic", "k", anthropicRequest, { fetch, maxRetries: 0 });
+  const error = await chat.send("x", collect().handlers, new AbortController().signal).then(() => null, (e) => e);
+  assert.equal(describeError(error).kind, "bad_request");
+  assert.equal(requests.length, 2);
 });
 
 await test("Anthropic: another 400 is not taken for a refusal of thinking", async () => {

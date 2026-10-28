@@ -317,8 +317,9 @@ maxTokens = 32_000
 -- makes the API stream a summary of the thinking, which the panel shows
 -- under "Thinking…". At a low effort a model may think little or not at
 -- all and send no summary; the panel then shows "Thinking…" alone. Older
--- models (Claude Haiku 4.5, Opus 4.5) refuse adaptive thinking. The
--- browser-side code then sends the request again without @thinking@
+-- models (Claude Haiku 4.5, Opus 4.5) refuse adaptive thinking, and Claude
+-- Haiku 4.5 also refuses the effort. The browser-side code then sends the
+-- request again without @thinking@, or without @output_config@
 -- (@web/src/assistant.js@).
 --
 -- A change of effort between messages invalidates Anthropic's cache of
