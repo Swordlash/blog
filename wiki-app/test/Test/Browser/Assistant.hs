@@ -42,7 +42,7 @@ import Wiki.App.Assistant (MonadAssistant (..))
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
-import Wiki.Core.Assistant (ApiKey (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey)
+import Wiki.Core.Assistant (ApiKey (..), ModelName (..), Provider (..), ProviderSettings (..), Settings (..), chooseProvider, defaultSettings, settingsOf, withBaseUrl, withEffort, withKey)
 import Wiki.Core.Id (UserId (..))
 
 $( browserJS
@@ -302,7 +302,7 @@ spec m = do
     find ui ".assistant-model-choice" >>= (`getProperty` "value") >>= (`shouldBe` "claude-opus-5-5")
     eventually $ (\s -> isJust (settingsOf Scripted s).fetched) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` True)
     _ <- unsafeIOToPageM (js_choose (toJSText ".assistant-model-choice") (toJSText "claude-opus-4-8"))
-    eventually $ (\s -> (settingsOf Scripted s).model) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just "claude-opus-4-8")
+    eventually $ (\s -> (settingsOf Scripted s).model) <$> settingsFor m (UserId "user-editor") >>= (`shouldBe` Just (ModelName "claude-opus-4-8"))
     send ui "Hello?"
     eventually $ length <$> requests `shouldReturn` 1
     [request] <- requests

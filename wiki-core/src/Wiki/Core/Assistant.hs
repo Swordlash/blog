@@ -28,6 +28,7 @@ module Wiki.Core.Assistant
   , providerFromKey
   , providerLabel
   , keyPage
+  , ModelName (..)
   , Model (..)
   , models
   , defaultModel
@@ -122,10 +123,19 @@ keyPage = \case
   OpenAI -> Just "https://platform.openai.com/api-keys"
   Scripted -> Nothing
 
+-- | 'ModelName': a model's id as a provider's API takes it, such as
+-- @claude-opus-5-5@ or @gpt-6.1-sol@. Nothing checks it: the user may type
+-- any model the provider accepts, and the provider refuses one it does not
+-- have ('NoSuchModel'). 'withModel' stores a typed one trimmed. The JSON is
+-- the bare text.
+newtype ModelName = ModelName {text :: Text}
+  deriving stock (Eq, Ord, Show)
+  deriving newtype (FromJSON, ToJSON)
+
 -- | 'Model': a model a provider offers, by the id its API takes and the
 -- name it is shown with.
 data Model = Model
-  { id :: Text
+  { id :: ModelName
   , label :: Text
   }
   deriving stock (Eq, Show)
@@ -147,29 +157,29 @@ data Model = Model
 models :: Provider -> [Model]
 models = \case
   Anthropic ->
-    [ Model "claude-opus-5-5" "Claude Opus 5.5"
-    , Model "claude-sonnet-5-5" "Claude Sonnet 5.5"
-    , Model "claude-haiku-5-5" "Claude Haiku 5.5"
-    , Model "claude-fable-5-1" "Claude Fable 5.1"
+    [ Model (ModelName "claude-opus-5-5") "Claude Opus 5.5"
+    , Model (ModelName "claude-sonnet-5-5") "Claude Sonnet 5.5"
+    , Model (ModelName "claude-haiku-5-5") "Claude Haiku 5.5"
+    , Model (ModelName "claude-fable-5-1") "Claude Fable 5.1"
     ]
   OpenAI ->
-    [ Model "gpt-6.1-sol" "GPT-6.1 Sol"
-    , Model "gpt-6.1-terra" "GPT-6.1 Terra"
-    , Model "gpt-6-astra" "GPT-6 Astra"
-    , Model "gpt-6-luna" "GPT-6 Luna"
+    [ Model (ModelName "gpt-6.1-sol") "GPT-6.1 Sol"
+    , Model (ModelName "gpt-6.1-terra") "GPT-6.1 Terra"
+    , Model (ModelName "gpt-6-astra") "GPT-6 Astra"
+    , Model (ModelName "gpt-6-luna") "GPT-6 Luna"
     ]
-  Scripted -> [Model "scripted" "Its script"]
+  Scripted -> [Model (ModelName "scripted") "Its script"]
 
 -- | The default model of the short list: the model used when none was
 -- chosen and there is no fetched list.
-defaultModel :: Provider -> Text
-defaultModel p = maybe "" (\m -> m.id) (head (models p))
+defaultModel :: Provider -> ModelName
+defaultModel p = maybe (ModelName "") (\m -> m.id) (head (models p))
 
 -- | 'Listed': a model as a provider's list gives it. It holds its id, the
 -- name the provider shows it with, if any (Anthropic gives one, OpenAI
 -- does not), and its creation time, in seconds since 1970, if given.
 data Listed = Listed
-  { id :: Text
+  { id :: ModelName
   , label :: Maybe Text
   , created :: Maybe Int64
   }
@@ -244,11 +254,11 @@ groupModels p elsewhere listing =
     picked = case p of
       _ | elsewhere -> [l | l <- kept, isJust (knownLabel p l.id)]
       OpenAI ->
-        let versions = mapMaybe (\l -> gptVersion l.id) kept
+        let versions = mapMaybe (\l -> gptVersion l.id.text) kept
             newestVersion = maximumMay versions
             major = take 1 <$> newestVersion
-            small l = variant l.id `elem` ["mini", "nano"] && (take 1 <$> gptVersion l.id) == major
-         in [l | l <- kept, isJust newestVersion && gptVersion l.id == newestVersion || small l]
+            small l = variant l.id `elem` ["mini", "nano"] && (take 1 <$> gptVersion l.id.text) == major
+         in [l | l <- kept, isJust newestVersion && gptVersion l.id.text == newestVersion || small l]
       _ ->
         mapMaybe
           (head . sortOn newest)
@@ -256,13 +266,13 @@ groupModels p elsewhere listing =
     rank l = (fromMaybe (length known) (elemIndex (variant l.id) known), newest l)
     known = ordNub (map (variant . (\m -> m.id)) (models p))
     newest l = (Down l.created, Down l.id)
-    variant i = case p of
+    variant (ModelName i) = case p of
       OpenAI -> T.dropWhile (== '-') (T.dropWhile (\c -> isDigit c || c == '.') (T.drop 4 i))
       _ -> fromMaybe i (atMay (T.splitOn "-" i) 1)
-    dated i = case lastMay (T.splitOn "-" i) of
+    dated (ModelName i) = case lastMay (T.splitOn "-" i) of
       Just end -> T.length end == 8 && T.all isDigit end
       Nothing -> False
-    forChat i = "gpt-" `T.isPrefixOf` i && not (any (`T.isInfixOf` i) notForChat)
+    forChat (ModelName i) = "gpt-" `T.isPrefixOf` i && not (any (`T.isInfixOf` i) notForChat)
     notForChat = ["audio", "realtime", "tts", "transcribe", "search", "image", "instruct", "embedding", "moderation", "codex", "chat-latest", "-20"]
 
 -- | The version numbers in an OpenAI model's id: @[6, 1]@ for
@@ -276,9 +286,9 @@ gptVersion i = case T.splitOn "." (T.takeWhile (\c -> isDigit c || c == '.') (T.
 -- (those are the names the rest of the wiki uses), else the provider's
 -- own name, else its id.
 named :: Provider -> Listed -> Model
-named p l = Model l.id (fromMaybe l.id (knownLabel p l.id <|> l.label))
+named p l = Model l.id (fromMaybe l.id.text (knownLabel p l.id <|> l.label))
 
-knownLabel :: Provider -> Text -> Maybe Text
+knownLabel :: Provider -> ModelName -> Maybe Text
 knownLabel p i = (\m -> m.label) <$> find (\m -> m.id == i) (models p)
 
 -- | What the pickers offer for a provider: its own fetched list, grouped,
@@ -293,15 +303,15 @@ modelChoices p ps = case groupModels p elsewhere . (\l -> l.listed) <$> ps.fetch
 
 -- | The model to use: the chosen one, or else the first one offered
 -- ('modelChoices'), which is a recommended one if there is one.
-chosenModel :: Provider -> ProviderSettings -> Text
+chosenModel :: Provider -> ProviderSettings -> ModelName
 chosenModel p ps = fromMaybe (maybe (defaultModel p) (\m -> m.id) (head (choices.recommended <> choices.others))) ps.model
   where
     choices = modelChoices p ps
 
 -- | The name a model is shown with: its name in the pickers, or its id.
-modelLabel :: Provider -> ProviderSettings -> Text -> Text
+modelLabel :: Provider -> ProviderSettings -> ModelName -> Text
 modelLabel p ps i =
-  maybe i (\m -> m.label) (find (\m -> m.id == i) (choices.recommended <> choices.others))
+  maybe i.text (\m -> m.label) (find (\m -> m.id == i) (choices.recommended <> choices.others))
   where
     choices = modelChoices p ps
 
@@ -350,7 +360,7 @@ instance Show ApiKey where
 data ProviderSettings = ProviderSettings
   { key :: Maybe ApiKey
   -- ^ The API key, if one was given.
-  , model :: Maybe Text
+  , model :: Maybe ModelName
   -- ^ The chosen model, if any ('chosenModel').
   , effort :: Maybe Text
   -- ^ The effort chosen for new conversations ('efforts'), if any.
@@ -413,7 +423,7 @@ withKey p k = alter p $ \(ProviderSettings old m e b f u) ->
 
 -- | The settings with a provider's model set; an empty one means none chosen, the default.
 withModel :: Provider -> Text -> Settings -> Settings
-withModel p m = alter p $ \(ProviderSettings k _ e b f u) -> ProviderSettings k (trimmed (Just m)) e b f u
+withModel p m = alter p $ \(ProviderSettings k _ e b f u) -> ProviderSettings k (ModelName <$> trimmed (Just m)) e b f u
 
 -- | The settings with a provider's default effort for new conversations
 -- set. The default itself, or an effort the provider does not offer, is
@@ -485,7 +495,7 @@ serviceName p ps = case baseUrlOf p ps of
 -- service, if one is used.
 data Ready = Ready
   { provider :: Provider
-  , model :: Text
+  , model :: ModelName
   , key :: ApiKey
   , effort :: Text
   , baseUrl :: Maybe Url

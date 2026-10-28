@@ -33,8 +33,8 @@ settingsSpec = describe "settings" $ do
   it "start with Anthropic, each provider's newest model, and no key" $ do
     defaultSettings.provider `shouldBe` Anthropic
     (settingsOf Anthropic defaultSettings).model `shouldBe` Nothing
-    chosenModel Anthropic (settingsOf Anthropic defaultSettings) `shouldBe` "claude-opus-5-5"
-    chosenModel OpenAI (settingsOf OpenAI defaultSettings) `shouldBe` "gpt-6.1-sol"
+    chosenModel Anthropic (settingsOf Anthropic defaultSettings) `shouldBe` ModelName "claude-opus-5-5"
+    chosenModel OpenAI (settingsOf OpenAI defaultSettings) `shouldBe` ModelName "gpt-6.1-sol"
     (settingsOf Anthropic defaultSettings).key `shouldBe` Nothing
 
   it "offer the scripted provider only where one is installed" $ do
@@ -55,16 +55,16 @@ settingsSpec = describe "settings" $ do
 
   it "keep a model per provider, an empty one being the default" $ do
     let s = withModel OpenAI "gpt-6-luna" (withModel Anthropic "claude-sonnet-5-5" defaultSettings)
-    (settingsOf Anthropic s).model `shouldBe` Just "claude-sonnet-5-5"
-    (settingsOf OpenAI s).model `shouldBe` Just "gpt-6-luna"
+    (settingsOf Anthropic s).model `shouldBe` Just (ModelName "claude-sonnet-5-5")
+    (settingsOf OpenAI s).model `shouldBe` Just (ModelName "gpt-6-luna")
     (settingsOf OpenAI (withModel OpenAI " " s)).model `shouldBe` Nothing
-    chosenModel OpenAI (settingsOf OpenAI (withModel OpenAI " " s)) `shouldBe` "gpt-6.1-sol"
+    chosenModel OpenAI (settingsOf OpenAI (withModel OpenAI " " s)) `shouldBe` ModelName "gpt-6.1-sol"
 
   it "are ready with the chosen provider's key, and say what is missing" $ do
     let s = withKey Anthropic (Just "sk-a") defaultSettings
-    ready s `shouldBe` Right (Ready Anthropic "claude-opus-5-5" (ApiKey "sk-a") "medium" Nothing)
+    ready s `shouldBe` Right (Ready Anthropic (ModelName "claude-opus-5-5") (ApiKey "sk-a") "medium" Nothing)
     ready (chooseProvider OpenAI s) `shouldSatisfy` isLeft
-    ready (chooseProvider Scripted defaultSettings) `shouldBe` Right (Ready Scripted "scripted" (ApiKey "") "medium" Nothing)
+    ready (chooseProvider Scripted defaultSettings) `shouldBe` Right (Ready Scripted (ModelName "scripted") (ApiKey "") "medium" Nothing)
 
   it "are blank with nothing but defaults in them" $ do
     blankSettings defaultSettings `shouldBe` True
@@ -119,8 +119,8 @@ modelsSpec :: Spec
 modelsSpec = describe "the models offered" $ do
   it "group Anthropic's list: each family's newest undated model, Opus first, then the others, newest first" $ do
     let grouped = groupModels Anthropic False anthropicList
-    map (\m -> m.id) grouped.recommended `shouldBe` ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
-    map (\m -> m.id) grouped.others
+    map (\m -> m.id.text) grouped.recommended `shouldBe` ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
+    map (\m -> m.id.text) grouped.others
       `shouldBe` [ "claude-opus-5"
                  , "claude-sonnet-5"
                  , "claude-fable-5"
@@ -137,35 +137,35 @@ modelsSpec = describe "the models offered" $ do
 
   it "group OpenAI's list: chat models only, the newest generation recommended, the others newest first" $ do
     let grouped = groupModels OpenAI False openAiList
-    map (\m -> m.id) grouped.recommended `shouldBe` ["gpt-6.1-sol", "gpt-6.1-terra"]
-    map (\m -> m.id) grouped.others
+    map (\m -> m.id.text) grouped.recommended `shouldBe` ["gpt-6.1-sol", "gpt-6.1-terra"]
+    map (\m -> m.id.text) grouped.others
       `shouldBe` ["gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "gpt-5.1", "gpt-5-pro", "gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-4.1", "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
     -- An id the short list does not know is shown by itself.
     map (\m -> m.label) (take 1 grouped.others) `shouldBe` ["gpt-6-sol"]
 
   it "recommend the mini and nano of the newest major version beside its newest generation" $ do
-    let older = filter (\l -> not ("gpt-6" `T.isPrefixOf` l.id)) openAiList
-    map (\m -> m.id) (groupModels OpenAI False older).recommended `shouldBe` ["gpt-5.1", "gpt-5-nano", "gpt-5-mini"]
-    let gpt6 = filter (\l -> not ("gpt-6.1" `T.isPrefixOf` l.id)) openAiList
-    map (\m -> m.id) (groupModels OpenAI False gpt6).recommended `shouldBe` ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"]
+    let older = filter (\l -> not ("gpt-6" `T.isPrefixOf` l.id.text)) openAiList
+    map (\m -> m.id.text) (groupModels OpenAI False older).recommended `shouldBe` ["gpt-5.1", "gpt-5-nano", "gpt-5-mini"]
+    let gpt6 = filter (\l -> not ("gpt-6.1" `T.isPrefixOf` l.id.text)) openAiList
+    map (\m -> m.id.text) (groupModels OpenAI False gpt6).recommended `shouldBe` ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"]
 
   it "are a fetched list's, the first recommended the default, else the short list" $ do
     let fetched = withModels OpenAI openAiList today (withKey OpenAI (Just "sk-o") defaultSettings)
         ps = settingsOf OpenAI fetched
     (modelChoices OpenAI ps).recommended `shouldBe` (groupModels OpenAI False openAiList).recommended
-    chosenModel OpenAI ps `shouldBe` "gpt-6.1-sol"
+    chosenModel OpenAI ps `shouldBe` ModelName "gpt-6.1-sol"
     -- Without a list, or with one that recommends nothing, the short one.
     modelChoices OpenAI (settingsOf OpenAI defaultSettings) `shouldBe` ModelChoices (models OpenAI) []
-    modelChoices OpenAI (settingsOf OpenAI (withModels OpenAI [Listed "whisper-1" Nothing Nothing] today defaultSettings))
+    modelChoices OpenAI (settingsOf OpenAI (withModels OpenAI [Listed (ModelName "whisper-1") Nothing Nothing] today defaultSettings))
       `shouldBe` ModelChoices (models OpenAI) []
     -- A list whose families are newer than the short list's: its own.
-    let newer = [Listed "claude-sonnet-6" (Just "Claude Sonnet 6") (Just 1900000000), Listed "claude-opus-6" (Just "Claude Opus 6") (Just 1890000000)] <> anthropicList
-    chosenModel Anthropic (settingsOf Anthropic (withModels Anthropic newer today defaultSettings)) `shouldBe` "claude-opus-6"
+    let newer = [Listed (ModelName "claude-sonnet-6") (Just "Claude Sonnet 6") (Just 1900000000), Listed (ModelName "claude-opus-6") (Just "Claude Opus 6") (Just 1890000000)] <> anthropicList
+    chosenModel Anthropic (settingsOf Anthropic (withModels Anthropic newer today defaultSettings)) `shouldBe` ModelName "claude-opus-6"
     -- A model chosen is the one asked, listed or not; its name is the list's.
     let chosen = settingsOf OpenAI (withModel OpenAI "gpt-5-pro" fetched)
-    chosenModel OpenAI chosen `shouldBe` "gpt-5-pro"
-    modelLabel OpenAI chosen "gpt-6.1-terra" `shouldBe` "GPT-6.1 Terra"
-    modelLabel OpenAI chosen "my-model" `shouldBe` "my-model"
+    chosenModel OpenAI chosen `shouldBe` ModelName "gpt-5-pro"
+    modelLabel OpenAI chosen (ModelName "gpt-6.1-terra") `shouldBe` "GPT-6.1 Terra"
+    modelLabel OpenAI chosen (ModelName "my-model") `shouldBe` "my-model"
 
   it "are fetched again when there is no list or it is more than a day old, and not kept past their key" $ do
     let ps at = settingsOf Anthropic (withModels Anthropic anthropicList at (withKey Anthropic (Just "k") defaultSettings))
@@ -184,18 +184,18 @@ modelsSpec = describe "the models offered" $ do
         ps = settingsOf OpenAI onMachine
     ps.baseUrl `shouldBe` Just (Url "http://localhost:11434/v1")
     -- A server on this machine needs no key.
-    ready onMachine `shouldBe` Right (Ready OpenAI "gpt-6.1-sol" (ApiKey "") "medium" (Just (Url "http://localhost:11434/v1")))
+    ready onMachine `shouldBe` Right (Ready OpenAI (ModelName "gpt-6.1-sol") (ApiKey "") "medium" (Just (Url "http://localhost:11434/v1")))
     usable OpenAI ps `shouldBe` True
     usable Anthropic (settingsOf Anthropic (withBaseUrl Anthropic "http://localhost:1/v1" defaultSettings)) `shouldBe` False
     serviceName OpenAI ps `shouldBe` "localhost:11434"
     serviceName Anthropic ps `shouldBe` "Anthropic"
     -- Its models are its own: all of them, newest first, none dropped.
-    let served = [Listed "llama4:8b" Nothing (Just 20), Listed "qwen3-coder" Nothing (Just 30), Listed "nomic-embed-text" Nothing (Just 10)]
+    let served = [Listed (ModelName "llama4:8b") Nothing (Just 20), Listed (ModelName "qwen3-coder") Nothing (Just 30), Listed (ModelName "nomic-embed-text") Nothing (Just 10)]
         fetched = settingsOf OpenAI (withModels OpenAI served today onMachine)
-    modelChoices OpenAI fetched `shouldBe` ModelChoices [] [Model "qwen3-coder" "qwen3-coder", Model "llama4:8b" "llama4:8b", Model "nomic-embed-text" "nomic-embed-text"]
-    chosenModel OpenAI fetched `shouldBe` "qwen3-coder"
+    modelChoices OpenAI fetched `shouldBe` ModelChoices [] [Model (ModelName "qwen3-coder") "qwen3-coder", Model (ModelName "llama4:8b") "llama4:8b", Model (ModelName "nomic-embed-text") "nomic-embed-text"]
+    chosenModel OpenAI fetched `shouldBe` ModelName "qwen3-coder"
     -- Recommended, only those of the short list it has.
-    (groupModels OpenAI True (Listed "gpt-6-luna" Nothing Nothing : served)).recommended `shouldBe` [Model "gpt-6-luna" "GPT-6 Luna"]
+    (groupModels OpenAI True (Listed (ModelName "gpt-6-luna") Nothing Nothing : served)).recommended `shouldBe` [Model (ModelName "gpt-6-luna") "GPT-6 Luna"]
     -- Another address is another service: what was learnt goes.
     (settingsOf OpenAI (withBaseUrl OpenAI "https://models.github.ai/inference" (withModels OpenAI served today onMachine))).fetched `shouldBe` Nothing
     (settingsOf OpenAI (withBaseUrl OpenAI "" onMachine)).baseUrl `shouldBe` Nothing
@@ -224,7 +224,7 @@ today = UTCTime (fromGregorian 2026 10 27) 0
 anthropicList :: [Listed]
 anthropicList =
   zipWith
-    (\n (i, name) -> Listed i (Just name) (Just (1800000000 - n * 1000000)))
+    (\n (i, name) -> Listed (ModelName i) (Just name) (Just (1800000000 - n * 1000000)))
     [0 ..]
     [ ("claude-haiku-5-5", "Claude Haiku 5.5")
     , ("claude-sonnet-5-5", "Claude Sonnet 5.5")
@@ -248,7 +248,7 @@ anthropicList =
 -- by id.
 openAiList :: [Listed]
 openAiList =
-  [ Listed i Nothing (Just t)
+  [ Listed (ModelName i) Nothing (Just t)
   | (i, t) <-
       [ ("gpt-6.1-sol", 1790000000)
       , ("gpt-6.1-terra", 1790000000)
@@ -396,7 +396,7 @@ requestSpec = describe "the requests" $ do
     markdownReference `shouldSatisfy` T.isInfixOf "[[toc]]"
 
   it "put the reference first in Anthropic's system prompt, marked for caching, and nothing that changes" $ do
-    let request = anthropicRequest "claude-opus-5-5" "low"
+    let request = anthropicRequest (ModelName "claude-opus-5-5") "low"
     field "model" request `shouldBe` Just (String "claude-opus-5-5")
     case field "system" request of
       Just (Array blocks) -> do
@@ -404,16 +404,16 @@ requestSpec = describe "the requests" $ do
       other -> expectationFailure ("no system blocks: " <> show other)
     field "tools" request `shouldBe` Just anthropicTools
     -- The same for every request with the same model: what is cached.
-    encode (anthropicRequest "claude-opus-5-5" "low") `shouldBe` encode request
+    encode (anthropicRequest (ModelName "claude-opus-5-5") "low") `shouldBe` encode request
     field "messages" request `shouldBe` Nothing
     -- Adaptive thinking, with its summary shown, and no budget.
     field "thinking" request `shouldBe` Just (object ["type" .= ("adaptive" :: Text), "display" .= ("summarized" :: Text)])
     -- The effort, as Anthropic takes it.
     field "output_config" request `shouldBe` Just (object ["effort" .= ("low" :: Text)])
-    field "output_config" (anthropicRequest "claude-opus-5-5" "max") `shouldBe` Just (object ["effort" .= ("max" :: Text)])
+    field "output_config" (anthropicRequest (ModelName "claude-opus-5-5") "max") `shouldBe` Just (object ["effort" .= ("max" :: Text)])
 
   it "start OpenAI's instructions with the reference, keep nothing at OpenAI, and change nothing" $ do
-    let request = openAiRequest "gpt-6.1-sol" "low"
+    let request = openAiRequest (ModelName "gpt-6.1-sol") "low"
     case field "instructions" request of
       Just (String text) -> do
         text `shouldSatisfy` T.isPrefixOf markdownReference
@@ -422,10 +422,10 @@ requestSpec = describe "the requests" $ do
     field "store" request `shouldBe` Just (Bool False)
     -- The effort, and a summary of the reasoning, for the panel.
     field "reasoning" request `shouldBe` Just (object ["effort" .= ("low" :: Text), "summary" .= ("auto" :: Text)])
-    field "reasoning" (openAiRequest "gpt-6.1-sol" "minimal") `shouldBe` Just (object ["effort" .= ("minimal" :: Text), "summary" .= ("auto" :: Text)])
+    field "reasoning" (openAiRequest (ModelName "gpt-6.1-sol") "minimal") `shouldBe` Just (object ["effort" .= ("minimal" :: Text), "summary" .= ("auto" :: Text)])
     field "max_output_tokens" request `shouldBe` Nothing
     field "tools" request `shouldBe` Just openAiTools
-    encode (openAiRequest "gpt-6.1-sol" "low") `shouldBe` encode request
+    encode (openAiRequest (ModelName "gpt-6.1-sol") "low") `shouldBe` encode request
 
   it "offer the two tools, every field required, as OpenAI's strict mode wants" $ do
     let names = \case

@@ -59,6 +59,7 @@ import Data.Aeson (ToJSON (toJSON), Value, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Text qualified as T
 import Protolude
+import Wiki.Core.Assistant (ModelName (..))
 import Wiki.Core.Assistant.Reference (markdownReference)
 
 -- | 'Span': characters of the page, from @from@ up to @to@ (not included).
@@ -324,7 +325,7 @@ maxTokens = 32_000
 --
 -- A change of effort between messages invalidates Anthropic's cache of
 -- the conversation, but not of the system prompt before it.
-anthropicRequest :: Text -> Text -> Value
+anthropicRequest :: ModelName -> Text -> Value
 anthropicRequest model effort =
   object
     [ "model" .= model
@@ -354,7 +355,7 @@ anthropicRequest model effort =
 -- not verified. The browser-side code then sends the request again
 -- without it (@web/src/assistant.js@). OpenAI may also send empty
 -- summaries; the panel then shows "Thinking…" alone.
-openAiRequest :: Text -> Text -> Value
+openAiRequest :: ModelName -> Text -> Value
 openAiRequest model effort =
   object
     [ "model" .= model

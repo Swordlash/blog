@@ -63,6 +63,7 @@ import Wiki.Core.Assistant
   , ErrorKind (Unreachable)
   , Model (..)
   , ModelChoices (..)
+  , ModelName (..)
   , Provider (..)
   , ProviderSettings (..)
   , Ready (..)
@@ -291,7 +292,7 @@ component =
               {% end %}
             </div>
             {% if other %}
-              <input type="text" class="assistant-model-name" spellcheck="false" placeholder="A model's id" aria-label={{ "Another model of " <> providerLabel p }} value={{ if listed then typedModel else chosen }} onValueChange={{ TypedModel p }}>
+              <input type="text" class="assistant-model-name" spellcheck="false" placeholder="A model's id" aria-label={{ "Another model of " <> providerLabel p }} value={{ if listed then typedModel else chosen.text }} onValueChange={{ TypedModel p }}>
             {% end %}
             {{ listingView }}
           </fieldset>
@@ -313,7 +314,7 @@ component =
         chosen = chosenModel p ps
         listed = chosen `elem` map (\m -> m.id) (choices.recommended <> choices.others)
         other = Set.member p st.otherModels || not listed
-        option m = [hh|<option value={{ m.id }} selected={{ not other && chosen == m.id }}>{{ m.label }}</option>|]
+        option m = [hh|<option value={{ m.id.text }} selected={{ not other && chosen == m.id }}>{{ m.label }}</option>|]
         canList = usable p ps
         listing = case Map.lookup p st.listings of
           Just Listing -> True
@@ -331,7 +332,7 @@ component =
         checkView = case Map.lookup p st.checks of
           Nothing -> Nothing
           Just Checking -> Just [hh|<p class="assistant-check" role="status">Asking {{ providerLabel p }}…</p>|]
-          Just Works -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The key works, and {{ chosen }} is there.</p>|]
+          Just Works -> Just [hh|<p class="assistant-check assistant-check-works" role="status">The key works, and {{ chosen.text }} is there.</p>|]
           Just (Fails why) -> Just [hh|<p class="error assistant-check assistant-check-fails" role="alert">{{ why }}</p>|]
 
     handleAction :: Action -> H.HalogenM State Action Empty output m ()

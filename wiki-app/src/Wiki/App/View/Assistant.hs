@@ -101,6 +101,7 @@ import Wiki.Core.Assistant
   , ErrorKind (Unreachable)
   , Model (..)
   , ModelChoices (..)
+  , ModelName (..)
   , Provider (..)
   , ProviderSettings (..)
   , Ready (..)
@@ -417,7 +418,7 @@ component =
             chosen = chosenModel s.provider ps
             listed = chosen `elem` map (\m -> m.id) (choices.recommended <> choices.others)
             other = st.otherModel || not listed
-            option m = [hh|<option value={{ m.id }} selected={{ not other && chosen == m.id }}>{{ m.label }}</option>|]
+            option m = [hh|<option value={{ m.id.text }} selected={{ not other && chosen == m.id }}>{{ m.label }}</option>|]
          in Just
               [hh|
                 <div class="assistant-choices">
@@ -442,7 +443,7 @@ component =
                     </select>
                   </label>
                   {% if other %}
-                    <input type="text" class="assistant-model-other" spellcheck="false" aria-label="The model's id" placeholder="A model's id" value={{ if listed then "" else chosen }} disabled={{ st.talking }} onValueChange={{ TypedModel }}>
+                    <input type="text" class="assistant-model-other" spellcheck="false" aria-label="The model's id" placeholder="A model's id" value={{ if listed then "" else chosen.text }} disabled={{ st.talking }} onValueChange={{ TypedModel }}>
                   {% end %}
                   <label class="assistant-choice">
                     <span>Effort</span>

@@ -18,6 +18,7 @@ import Wiki.Core.Assistant
   , AssistantError (..)
   , ErrorKind (..)
   , Listed (..)
+  , ModelName (..)
   , Provider (..)
   , ProviderSettings (..)
   , Settings (..)
@@ -78,7 +79,7 @@ spec = describe "Wiki.App.Assistant's settings" $ do
   it "keeps a provider's list of models, its address and whether it was reached" $ do
     fresh
     let at = UTCTime (fromGregorian 2026 10 27) 0
-        s = withReached Anthropic False (withModels OpenAI [Listed "llama4:8b" Nothing (Just 20)] at (withBaseUrl OpenAI "http://localhost:11434/v1" withKeys))
+        s = withReached Anthropic False (withModels OpenAI [Listed (ModelName "llama4:8b") Nothing (Just 20)] at (withBaseUrl OpenAI "http://localhost:11434/v1" withKeys))
     run (writeSettings db alice s)
     run (readSettings db alice) `shouldReturn` s
 

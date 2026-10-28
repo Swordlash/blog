@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+A model's id is a `ModelName` (WP5.15), a newtype over `Text`:
+`Model.id`, `Listed.id`, `ProviderSettings.model`, `Ready.model`,
+`defaultModel`, `chosenModel`, `modelLabel`'s argument, and the model
+`anthropicRequest` and `openAiRequest` take. `withModel` still takes the
+text typed, trimmed as before; nothing refuses a model's id. The stored
+settings' JSON is unchanged.
+
 The assistant's API key is an `ApiKey` (WP5.15), whose `Show` hides it:
 `ProviderSettings.key`, `Ready.key`, and the key `errorText` and `redact`
 remove from a message. `withKey` still takes the text pasted. The stored
