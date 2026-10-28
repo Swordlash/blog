@@ -3448,6 +3448,34 @@ Amended by the planning session after each work package's report.
   (tab A shows a page, the server's answer changes with no live event, A returns and shows
   the new text; the page fetched twice, the list once). Full gate; CI green. The brief for
   this package still described the subscription window; the agent followed the plan.
+- **WP5.13 merged** (2026-10-28, PR #99, `main` at `3b499cb`). `Wiki.App.Shell`'s cost was
+  row-types' `.+`/`.==` type families, not the number of labels: `Slots` is a synonym, so
+  GHC reduced the families again at every `HasType` site (each `HH.slot`, `H.tell`,
+  `H.queryAll`) and kept each proof as a coercion (29 M coercions after the desugarer, 15.8 M
+  in Tidy Core, against 184 k and 172 k now; terms about 10.7 k either way). The row is now
+  written as a sorted `R '[ … ]` list (`Data.Row.Internal`, since `Data.Row` hides `R`)
+  with six labels: the 14 views with `ViewOutput` share `"view"` (index `ViewSlot`), the 9
+  `Void` children share `"part"` (`PartSlot`), `editor`, `signIn`, `invite` and `reset`
+  keep their own. No behaviour change; no test added (types only; the browser suites and
+  the hydration and smoke tests run every child). Measured with GHC called directly (`-j1`,
+  `-ddump-timings`, `+RTS -s`): wasm GHC passes 86.8 s → 11.0 s, 20.7 GB → 5.4 GB
+  allocated, residency 1.5 GB → 385 MB, wall 117 s → 37 s (23 s of which is Template
+  Haskell's external interpreter starting node and loading the `.so` files, on every
+  single-module wasm rebuild); native 96.4 s → 11.4 s, wall 104 s → 16.5 s. The 27 labels
+  written flat alone give 12.0 s; six labels still built with `.+` give 14.0 s. Not
+  applied, measured: `shared: False` for the whole wasm project rebuilds every store
+  package and breaks splices that run another package's code; per-package `shared:
+  False` on `wiki-core`/`wiki-api` has no effect (dependencies of a shared package are
+  built shared); on `wiki-app` alone it saves 18.9 s of GHC time at `-j1` but needs seven
+  dependencies pinned `shared: True` and a project file for `dev-test.sh`, judged not
+  worth it; the second CodeGen costs 35.4 s in all at `-j1`. `SignIn`: the type check of
+  the generated template code is about 7 s, the `hh` quoter 0.2 s; a micro-benchmark
+  points at haskell-halogen-core's `DOM.HTML.Indexed` element rows (about 60 labels
+  chained with `.+`): an element with no attributes costs 88 ms against 4.5 ms with a flat
+  row, and `hh` emits a bare `[]` for such elements. An upstream change (flat rows in
+  `DOM.HTML.Indexed`) is the next saving on the views. Rule for later: a row named by a
+  synonym and used at many sites is written flat. Full gate; CI green on the rebased head
+  (the wasm job 14 min against 16 before).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
