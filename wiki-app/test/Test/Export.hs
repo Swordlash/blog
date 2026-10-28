@@ -195,6 +195,23 @@ spec = describe "Wiki.Core.Export, with the in-memory wiki" $ do
         Map.elems archive.blobs `shouldContain` [BS.pack [0 .. 255]]
         [c.body | ts <- Map.elems archive.threads, t <- ts, c <- t.comments] `shouldContain` ["Is the tour up to date?", "It is now."]
 
+  it "keeps an attachment's name outside ASCII through the zip file, and escapes what a file system refuses" $ do
+    ref <- newMemWiki (demoState demoNow)
+    runMemWiki ref $ do
+      switchUser (Just (UserId "user-admin"))
+      docs <- either (panic . show) pure =<< getSpace (path "docs")
+      tour <- either (panic . show) pure =<< getPage docs.id (path "tour")
+      for_ ["żółw.png", "x: c?*.txt"] $ \name ->
+        either (panic . show) (const pass) =<< uploadAttachment tour.id name "application/octet-stream" (encodeUtf8 name)
+    st <- readIORef ref
+    let zipped = zipFiles goldenTime (writeArchive (toArchive goldenTime "test" st))
+    unzipped <- either (assertFailure . toS) pure (unzipFiles zipped)
+    Map.lookup "spaces/docs/pages/tour/attachments/żółw.png" unzipped `shouldBe` Just (encodeUtf8 "żółw.png")
+    Map.lookup "spaces/docs/pages/tour/attachments/x%3A c%3F%2A.txt" unzipped `shouldBe` Just "x: c?*.txt"
+    archive <- either (assertFailure . toS) pure (readArchive unzipped)
+    [(x.name, Map.lookup b archive.blobs) | p <- archive.pages, x <- p.attachments, SourceBlob b <- [x.source], x.name /= "tree.png"]
+      `shouldMatchList` [("żółw.png", Just (encodeUtf8 "żółw.png")), ("x: c?*.txt", Just "x: c?*.txt")]
+
   it "writes the manifest, the people, and a directory per space and page with each attachment's bytes as a file" $ do
     st <- edited
     let files = filesOf (toArchive goldenTime "test" st)

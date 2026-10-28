@@ -153,8 +153,9 @@ the import is then recorded itself. The demo's import leaves the log out.
 - **The demo** replaces its whole wiki with the archive's, ids included:
   users, groups, grants, spaces, pages, attachments and comments. Comments'
   authors are matched by login with the archive's users.
-- **The server, into an empty wiki** (`importArchive`, used by the tests and
-  by restoring a wiki) loads everything with its ids, the same way.
+- **The server, into an empty wiki** (`importArchive`, which the server's
+  tests use to load a whole wiki) loads everything with its ids, the same
+  way.
   Comments' authors are matched with the archive's users and with the
   administrator.
 - **The server, into a wiki with content** (the administration's import, a
