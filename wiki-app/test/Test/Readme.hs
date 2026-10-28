@@ -131,7 +131,7 @@ placeOf = \case
   Route.Space s -> isJust (spaceAt s)
   Route.SpacePages s -> isJust (spaceAt s)
   Route.Page s p -> isJust (pageAt s p)
-  Route.PageSlides s p _ -> isJust (pageAt s p)
+  Route.PageSlides s p _ _ -> isJust (pageAt s p)
   Route.PageSource s p -> isJust (pageAt s p)
   _ -> False
 
@@ -140,7 +140,7 @@ placeOf = \case
 textAt :: Text -> Route -> Either Text [Text]
 textAt language at = case (language, at) of
   ("markdown", Route.Page s p) -> body s p
-  ("markdown", Route.PageSlides s p _) -> body s p
+  ("markdown", Route.PageSlides s p _ _) -> body s p
   ("markdown", Route.PageSource s p) -> body s p
   ("tex", Route.SpacePages s) -> maybe (Left "no such space") (\sp -> Right (T.lines sp.mathMacros)) (spaceAt s)
   _ -> Left ("a " <> language <> " example linked to " <> show at)

@@ -126,7 +126,7 @@ serverPage = describe "Wiki.App.Static, the server's page adopted" $ do
       , EditPage (path "blog") (path "hello-world")
       , PageSource (path "docs") (path "tour")
       , PageHistory (path "docs") (path "tour") Nothing AgainstPrevious
-      , PageSlides (path "docs") (path "markdown-guide/presentations") 1
+      , PageSlides (path "docs") (path "markdown-guide/presentations") 1 1
       , NewSpace Nothing
       , Search (Just "words") Nothing True
       , Admin
@@ -191,8 +191,10 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            , PageHistory (path "blog") (path "hello-world") (Just helloMade) AgainstCurrent
            , PageHistory (path "blog") (path "hello-world") (Just demoNow) AgainstPrevious
            , EditPage (path "blog") (path "hello-world")
-           , PageSlides (path "docs") (path "markdown-guide/presentations") 4
-           , PageSlides (path "blog") (path "hello-world") 1
+           , PageSlides (path "docs") (path "markdown-guide/presentations") 4 1
+           , PageSlides (path "docs") (path "markdown-guide/presentations") 7 2
+           , PageSlides (path "docs") (path "markdown-guide/presentations") 8 2
+           , PageSlides (path "blog") (path "hello-world") 1 1
            , Search (Just "haskell") Nothing True
            , Search (Just "tour") (Just (path "docs")) False
            , Posts (path "blog") 2

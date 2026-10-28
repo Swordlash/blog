@@ -1142,27 +1142,50 @@ try {
 
   // A page presented as slides: moved through by the keys with the slide in
   // the address, which a reload comes back to; printed, one slide to a page.
+  // Then a slide's steps: shown one at a time, kept in the address across a
+  // reload, and printed one to a page when "each step on its own page" is
+  // ticked.
   const deck = await newPage();
   await load(deck, "/s/docs/p/markdown-guide/presentations/slides/");
   await deck.locator("#app .slides-view .slide-frame.current .slide-title", { hasText: "Presentations" }).waitFor({ timeout });
   await deck.keyboard.press("ArrowRight");
-  await deck.locator("#app .slides-position", { hasText: "2 / 7" }).waitFor({ timeout });
+  await deck.locator("#app .slides-position", { hasText: "2 / 9" }).waitFor({ timeout });
   assert.equal(new URL(deck.url()).search, "?slide=2", "the slide shown is not in the address");
   await deck.keyboard.press("ArrowRight");
   await deck.locator("#app .slide-frame.current .wiki-math-display .katex-display").waitFor({ timeout });
   await reload(deck);
-  await deck.locator("#app .slides-position", { hasText: "3 / 7" }).waitFor({ timeout });
+  await deck.locator("#app .slides-position", { hasText: "3 / 9" }).waitFor({ timeout });
   await deck.locator("#app .slide-frame.current .wiki-math-display .katex-display").waitFor({ timeout });
   await deck.emulateMedia({ media: "print" });
   const printed = await deck.evaluate(() => ({
     slides: [...document.querySelectorAll("#app .slide-frame")].filter((f) => f.checkVisibility()).length,
     chrome: [".wiki-header", ".wiki-sidebar", ".slides-controls"].filter((s) => document.querySelector(`#app ${s}`)?.checkVisibility()),
   }));
-  assert.deepEqual(printed, { slides: 7, chrome: [] }, "printing shows something else than every slide");
+  assert.deepEqual(printed, { slides: 9, chrome: [] }, "printing shows something else than every slide");
   const pdf = (await deck.pdf({ preferCSSPageSize: true })).toString("latin1");
-  assert.equal(pdf.match(/\/Type\s*\/Page[^s]/g)?.length, 7, "the deck does not print as one page per slide");
+  assert.equal(pdf.match(/\/Type\s*\/Page[^s]/g)?.length, 9, "the deck does not print as one page per slide");
+  await deck.emulateMedia({ media: "screen" });
+  await load(deck, "/s/docs/p/markdown-guide/presentations/slides/?slide=7");
+  await deck.locator("#app .slide-frame.current .slide-title", { hasText: "Steps" }).waitFor({ timeout });
+  const stepsShown = () => deck.evaluate(() => [...document.querySelectorAll("#app .slide-frame.current .slide-step")].map((e) => e.checkVisibility({ visibilityProperty: true })));
+  assert.deepEqual(await stepsShown(), [false, false], "a slide's later steps are shown at its first");
+  await deck.keyboard.press("ArrowRight");
+  await deck.waitForURL((u) => u.search === "?slide=7&step=2", { timeout });
+  assert.deepEqual(await stepsShown(), [true, false], "the next key does not show the next step");
+  await reload(deck);
+  await deck.locator("#app .slide-frame.current .slide-title", { hasText: "Steps" }).waitFor({ timeout });
+  assert.deepEqual(await stepsShown(), [true, false], "a reload does not come back to the step");
+  await deck.locator("#app .slides-print-steps input").check();
+  await deck.emulateMedia({ media: "print" });
+  const printedSteps = await deck.evaluate(() => ({
+    pages: [...document.querySelectorAll("#app .slide-frame")].filter((f) => f.checkVisibility()).length,
+    hidden: [...document.querySelectorAll("#app .slide-frame:not(.slide-step-copy) .slide-step")].filter((e) => !e.checkVisibility({ visibilityProperty: true })).length,
+  }));
+  assert.deepEqual(printedSteps, { pages: 13, hidden: 0 }, "printing each step does not add a page for each step before a slide's last");
+  const stepsPdf = (await deck.pdf({ preferCSSPageSize: true })).toString("latin1");
+  assert.equal(stepsPdf.match(/\/Type\s*\/Page[^s]/g)?.length, 13, "the deck does not print as one page per step");
   await deck.context().close();
-  console.log("ok: a deck moves by its keys, keeps its slide in the address across a reload, and prints a slide to a page");
+  console.log("ok: a deck moves by its keys, keeps its slide and step in the address across a reload, and prints a slide, or a step, to a page");
 
   // Copy puts the Markdown on the clipboard, as written. Headless Chromium
   // lets a page at it only with the permissions granted.

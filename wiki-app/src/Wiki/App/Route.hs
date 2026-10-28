@@ -15,9 +15,9 @@
 -- > /s/docs/p/tour/history/        PageHistory [docs] [tour] Nothing AgainstPrevious
 -- > /s/docs/p/tour/history/?version=2026-10-24T09%3A30%3A12.5Z&against=current
 -- >                                PageHistory [docs] [tour] (Just …) AgainstCurrent
--- > /s/docs/p/presentations/slides/ PageSlides [docs] [presentations] 1
--- > /s/docs/p/presentations/slides/?slide=3
--- >                                PageSlides [docs] [presentations] 3
+-- > /s/docs/p/presentations/slides/ PageSlides [docs] [presentations] 1 1
+-- > /s/docs/p/presentations/slides/?slide=3&step=2
+-- >                                PageSlides [docs] [presentations] 3 2
 -- > /s/docs/new-page/              NewPage [docs] Nothing
 -- > /s/docs/new-page/tour/         NewPage [docs] (Just [tour])
 -- > /new-space/                    NewSpace Nothing
@@ -125,10 +125,11 @@ data Route
     -- shared.
     PageHistory [Slug] [Slug] (Maybe UTCTime) Against
   | -- | A page presented as slides ("Wiki.Core.Slides"), for anyone who may
-    -- read the page: its space's path, its own path there, and the slide
-    -- shown, counted from 1. The slide is a parameter (@slide@, left out
-    -- for the first), so that a reload, or a link, comes back to it.
-    PageSlides [Slug] [Slug] Int
+    -- read the page: its space's path, its own path there, the slide
+    -- shown and the step of it shown, each counted from 1. They are
+    -- parameters (@slide@ and @step@, each left out at 1), so that a
+    -- reload, or a link, comes back to them.
+    PageSlides [Slug] [Slug] Int Int
   | -- | An invitation's page, by the secret its link carries: the form that
     -- creates the invited account (WP3.5 of docs/PLAN.md). Its 'Show' hides
     -- the secret, so that a log line that names a route does not reveal it.
@@ -208,9 +209,9 @@ route =
               (directory ((,) <$> Duplex.lmap fst (spaceAndPage (`suffix` "history")) <*> Duplex.lmap snd historyParams))
           )
       , alternative
-          (\case PageSlides s p n -> Just ((s, p), n); _ -> Nothing)
-          (\((s, p), n) -> PageSlides s p n)
-          (prefix "s" (directory ((,) <$> Duplex.lmap fst (spaceAndPage (`suffix` "slides")) <*> Duplex.lmap snd slideParam)))
+          (\case PageSlides s p n k -> Just ((s, p), (n, k)); _ -> Nothing)
+          (\((s, p), (n, k)) -> PageSlides s p n k)
+          (prefix "s" (directory ((,) <$> Duplex.lmap fst (spaceAndPage (`suffix` "slides")) <*> Duplex.lmap snd slideParams)))
       , alternative
           (\case Invite t -> Just t; _ -> Nothing)
           Invite
@@ -252,15 +253,18 @@ route =
           ( (\a -> if a == Just "current" then AgainstCurrent else AgainstPrevious)
               <$> Duplex.lmap (\a -> if a == AgainstCurrent then Just "current" else Nothing) (Duplex.optional (param "against"))
           )
-    -- The slide shown, counted from 1. The first is left out, and a value
-    -- that is not a number parses as the first. A number past the deck's
-    -- end is for the view to bring back into range.
-    slideParam :: RouteDuplex' Int
-    slideParam =
+    -- The slide shown and its step, each counted from 1. The first is
+    -- left out, and a value that is not a number parses as the first. A
+    -- number past the deck's end, or the slide's, is for the view to bring
+    -- back into range.
+    slideParams :: RouteDuplex' (Int, Int)
+    slideParams = (,) <$> Duplex.lmap fst (counted "slide") <*> Duplex.lmap snd (counted "step")
+    counted :: Text -> RouteDuplex' Int
+    counted name =
       fromMaybe 1
         <$> Duplex.lmap
           (\n -> if n == 1 then Nothing else Just n)
-          (Duplex.optional (as show (\t -> maybe (Left ("not a number: " <> t)) Right (readMaybe t)) (param "slide")))
+          (Duplex.optional (as show (\t -> maybe (Left ("not a number: " <> t)) Right (readMaybe t)) (param name)))
     -- A page of posts, counted from 1, always written; a value that is not
     -- a number parses as the first.
     pageParam :: RouteDuplex' Int

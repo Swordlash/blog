@@ -320,8 +320,8 @@ deckOf :: [Block] -> Deck
 
 | Key | What it does |
 | --- | --- |
-| → Space PageDown | the next slide |
-| ← PageUp | the slide before |
+| → Space PageDown | the next step, then the next slide |
+| ← PageUp | back a step, or to the slide before |
 | Home End | the first and the last |
 | f | full screen (Escape leaves it) |
 | n | the speaker's notes |
@@ -329,6 +329,40 @@ deckOf :: [Block] -> Deck
 
 On a touch screen, swipe. **Print** puts one slide on each page: choose
 "Save as PDF" to keep the deck as a file.
+
+---
+
+## Steps
+
+A slide can show its content a step at a time. Three dots, `. . .`, alone
+on a line between blank lines, are a pause: what follows waits for the next
+press of → or Space.
+
+. . .
+
+Like this line, which waited for you. ← hides it again.
+
+. . .
+
+On the page itself a pause shows nothing. Printed, each slide is whole,
+unless you tick "each step on its own page"; a Beamer PDF has a page for
+each step.
+
+::: notes
+The pauses are pandoc's, so the Beamer export shows the same steps.
+:::
+
+---
+
+## One item at a time
+
+A list in a box with the class `incremental` shows its items one by one:
+
+::: incremental
+- the box is written `::: incremental`, the list, then `:::`;
+- each press of → or Space shows the next item;
+- off the slides, it is an ordinary list.
+:::
 
 ---
 
@@ -345,7 +379,7 @@ Themes are `beamer` (the default), `light` and `dark`; slides are `16:9`
 (the default) or `4:3`.
 ````
 
-It is [these seven slides](https://swordlash.github.io/blog/s/docs/p/markdown-guide/presentations/slides/)
+It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-guide/presentations/slides/)
 (`Wiki.Core.Slides` cuts them):
 
 - **What makes it a deck.** There is no front matter: a page with a `---` at
@@ -361,20 +395,28 @@ It is [these seven slides](https://swordlash.github.io/blog/s/docs/p/markdown-gu
   page, with the macros defined on the slides before.
 - **Notes.** A `::: notes` box holds the speaker's notes of its slide: a box on
   the page, hidden on the slide until **n** shows them under it.
+- **Steps.** Three dots, `. . .`, alone between blank lines, are a pause, as in
+  pandoc: the slide shows what comes after it one press later. A list in a
+  `::: incremental` box shows one item at a time. On the page, a pause shows
+  nothing and the box is an ordinary one. The Beamer export makes the same
+  steps, one PDF page each.
 - **Showing it.** "Present", above a page that is a deck, opens it full screen:
   the arrow keys, Space, PageUp and PageDown move, Home and End go to the ends,
   **f** fills the screen, **o** shows every slide to pick one, and on a touch
-  screen a swipe moves. The slide is in the address (`?slide=3`), so a link or a
-  reload comes back to it. "Print" puts one slide on each page, of the slide's
-  shape, so the browser's "Save as PDF" keeps the deck as a file; "with notes"
-  prints each slide on an A4 page above its notes.
+  screen a swipe moves; the next key shows a slide's next step before the next
+  slide. The slide and its step are in the address (`?slide=3&step=2`), so a
+  link or a reload comes back to them. "Print" puts one slide on each page, of
+  the slide's shape, so the browser's "Save as PDF" keeps the deck as a file;
+  "with notes" prints each slide on an A4 page above its notes, and "each step
+  on its own page" prints a page for each step.
 - **Exporting it.** On a wiki served by `wiki-server` (the demo has no server,
   so no "Export"), "Export" above a deck downloads it as PowerPoint, as Beamer
   LaTeX, or as a Beamer PDF where the server has `xelatex`: its slides cut as
   "Present" cuts them, a first title slide made the title page, the notes as
   Beamer's notes or PowerPoint's speaker notes, `beamer` as Beamer's Madrid
   theme, `light` its plain look and `dark` light on dark, the aspect carried
-  over (PowerPoint gets 16:9). Every page, deck or not, also exports as Word, a
+  over (PowerPoint gets 16:9), the steps as Beamer's overlays (PowerPoint
+  shows an incremental list one item at a time, but has no pauses). Every page, deck or not, also exports as Word, a
   web page, an e-book or a PDF; see
   [docs/markdown.md](docs/markdown.md#exported-as-documents).
 

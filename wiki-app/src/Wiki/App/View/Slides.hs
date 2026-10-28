@@ -8,6 +8,17 @@
 -- each slide on its own page, so that the browser's "Save as PDF" turns
 -- the deck into a file.
 --
+-- A slide may be shown in steps ("Wiki.Core.Slides"): the next key shows
+-- the slide's next step before the next slide, and the previous key hides
+-- the last step shown before it goes back to the slide before, which it
+-- shows whole. All of a slide's content is in the page from its first
+-- step; what a later step shows is hidden with @visibility: hidden@
+-- ('showingStep'), so the content shown already stays where it is, and
+-- fades in when its step comes (without the fade where the reader asks
+-- for reduced motion). The overview and the print show whole slides,
+-- unless "each step on its own page" is ticked: then the print has a page
+-- for each step, made of a copy of the slide at that step.
+--
 -- It fetches the page from the backend as the page view does ('getPage'),
 -- so it is refused where the page is, and for the same reasons. The slides
 -- are the page's Markdown rendered as the page is ("Wiki.App.View.Body"):
@@ -21,23 +32,25 @@
 -- looks the same in a window, on a projector and on paper.
 --
 -- The keys work anywhere on the page, which the view covers: → ↓ Space
--- PageDown Enter for the next slide, ← ↑ PageUp Backspace Shift+Space for
--- the previous one, Home and End for the first and the last, @f@ for full
--- screen (Escape, the browser's own key, leaves it), @n@ or @s@ for the
--- notes, @o@ for the overview, and Escape to close the overview. They are
+-- PageDown Enter for the next step or slide, ← ↑ PageUp Backspace
+-- Shift+Space for the previous one, Home for the first slide, End for the
+-- last one, whole, @f@ for full screen (Escape, the browser's own key,
+-- leaves it), @n@ or @s@ for the notes, @o@ for the overview, and Escape
+-- to close the overview. They are
 -- received through haskell-halogen's window emitter ('Window.keyDown'),
 -- subscribed to while the view is shown. Each is recognised while the
 -- browser dispatches it (@jsbits/slides.js@), so that the browser does not
 -- also scroll for one of them. A key typed into a field, Space or Enter on
 -- a button or a link (which activates it), and a key with Ctrl, Alt or Cmd
 -- held are left to the browser. A swipe to the left or the right on a
--- touch screen goes to the next or the previous slide. The view takes
--- focus when it is shown, so that Tab starts among its controls.
+-- touch screen goes on or back as the keys do. The view takes focus when
+-- it is shown, so that Tab starts among its controls.
 --
--- The slide shown is in the address (@?slide=3@, 'PageSlides'), so that a
--- reload or a link returns to it. Moving between slides replaces the
--- address rather than adding to the session history: the browser's Back
--- leaves the slides, as it leaves a page however far it was scrolled.
+-- The slide and the step shown are in the address (@?slide=3&step=2@,
+-- 'PageSlides'), so that a reload or a link returns to them. Moving between
+-- slides and steps replaces the address rather than adding to the session
+-- history: the browser's Back leaves the slides, as it leaves a page
+-- however far it was scrolled.
 module Wiki.App.View.Slides
   ( Input (..)
   , Slots
@@ -77,7 +90,7 @@ import Wiki.Core.Attachment (Attachment (..))
 import Wiki.Core.Id (AttachmentId)
 import Wiki.Core.Markdown (parseMarkdown)
 import Wiki.Core.Page (Page (attachments, body, title), PageSummary)
-import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, themeName)
+import Wiki.Core.Slides (Aspect (..), Deck (..), DeckOptions (..), RenderedSlide (..), Slide (..), SlideTitle (..), deckOf, showingStep, themeName)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (id))
 import Wiki.Core.Version (Author)
@@ -99,13 +112,14 @@ $( browserJS
 
 -- | The slides view's input: the page at a path in a space the shell has
 -- loaded, with the space's pages (for the links between them), and the
--- requested slide, counted from 1.
+-- requested slide and step of it, each counted from 1.
 data Input = Input
   { context :: Context
   , space :: Space
   , pages :: [PageSummary]
   , path :: [Slug]
   , slide :: Int
+  , step :: Int
   }
 
 type Slots = Body.IslandSlots
@@ -122,16 +136,21 @@ data State = State
   , loaded :: Loaded
   , current :: Int
   -- ^ The slide shown, counted from 1, within the deck once it is loaded.
+  , step :: Int
+  -- ^ The step of the slide shown, counted from 1, within the slide's
+  -- steps once the deck is loaded.
   , notesOpen :: Bool
   -- ^ Whether the speaker's notes are shown below the slide.
   , overview :: Bool
   -- ^ Whether every slide is shown, small, to pick one.
   , printNotes :: Bool
   -- ^ Whether printing puts each slide's notes under it.
-  , asked :: [Int]
-  -- ^ The slides this view has put in the address, latest first. The
-  -- shell passes them back in the input, and they are not slides to go to:
-  -- the view is there already, or has moved on.
+  , printSteps :: Bool
+  -- ^ Whether printing puts each step of a slide on a page of its own.
+  , asked :: [(Int, Int)]
+  -- ^ The slides and steps this view has put in the address, latest
+  -- first. The shell passes them back in the input, and they are not
+  -- places to go to: the view is there already, or has moved on.
   , view :: H.RefLabel
   , touch :: Maybe (Double, Double)
   -- ^ Where a touch on the slides started.
@@ -152,6 +171,7 @@ data Action
   | TouchStart Double Double
   | TouchEnd Double Double
   | SetPrintNotes Bool
+  | SetPrintSteps Bool
   | Print
   | Retry
 
@@ -165,14 +185,17 @@ component =
         initialState = \input -> do
           view <- H.newRefLabel "slides"
           loaded <- fromMaybe Loading <$> atOnce (fetch input)
+          let (current, step) = within loaded (input.slide, input.step)
           pure
             State
               { input
               , loaded
-              , current = within loaded input.slide
+              , current
+              , step
               , notesOpen = False
               , overview = False
               , printNotes = False
+              , printSteps = False
               , asked = []
               , view
               , touch = Nothing
@@ -195,7 +218,15 @@ component =
       Ready page urls deck people ->
         let place = Body.Place {context = st.input.context, space = st.input.space, pages = st.input.pages, path = st.input.path, attachments = page.attachments, urls, people}
             count = length deck.slides
-            rendered = zip3 [1 ..] deck.slides (Body.slides place deck)
+            -- The slide shown at its step; every other slide whole. The
+            -- copies for printing come after the slides in the document
+            -- rendered, so that the slides' islands keep their keys when
+            -- the copies come and go.
+            shown = [showingStep (if n == st.current && not st.overview then st.step else s.steps) s | (n, s) <- zip [1 ..] deck.slides]
+            copies = [(n, k, showingStep k Slide {title = s.title, body = s.body, notes = [], steps = s.steps}) | st.printSteps, (n, s) <- zip [1 ..] deck.slides, k <- [1 .. s.steps - 1]]
+            (rendered, renderedCopies) = splitAt count (Body.slides place deck {slides = shown <> [c | (_, _, c) <- copies]})
+            frames = zip3 [1 ..] deck.slides rendered
+            copiesOf n = [(k, c, html) | ((m, k, c), html) <- zip copies renderedCopies, m == n]
          in [hh|
               <div
                 ref={{ st.view }}
@@ -208,7 +239,10 @@ component =
                   {{ HE.handler' (EventType "touchstart") (touchAt TouchStart) }}
                   {{ HE.handler' (EventType "touchend") (touchAt TouchEnd) }}
                 >
-                  {% for (n, s, html) in rendered %}
+                  {% for (n, s, html) in frames %}
+                    {% for (k, c, copy) in copiesOf n %}
+                      {{ stepCopy page count n k c copy }}
+                    {% end %}
                     {{ slideFrame st page count n s html }}
                   {% end %}
                 </div>
@@ -238,6 +272,27 @@ component =
       where
         titlePage = maybe False (\t -> t.level == 1) s.title
 
+    -- A copy of a slide at one of its steps before the last, for the print
+    -- with each step on its own page: hidden on the screen, printed before
+    -- the slide itself, which is printed whole.
+    stepCopy :: Page -> Int -> Int -> Int -> Slide -> RenderedSlide (H.ComponentSlot Slots m Action) Action -> H.ComponentHTML Action Slots m
+    stepCopy page count n k s html =
+      [hh|
+        <div class="slide-frame slide-step-copy" data-slide={{ show n :: Text }} data-step={{ show k :: Text }}>
+          <div class="slide-slot">
+            <section class="slide{% if titlePage %} slide-title-page{% end %}{% if isNothing s.title %} slide-untitled{% end %}" {{ [attr "aria-label" ("Slide " <> position n count <> ", step " <> show k)] }}>
+              {% if isJust s.title %}
+                <header class="slide-title">{{ html.title }}</header>
+              {% end %}
+              <div class="slide-body page-body">{{ html.body }}</div>
+              <footer class="slide-footer"><span class="slide-footer-title">{{ page.title }}</span><span class="slide-number">{{ position n count }}</span></footer>
+            </section>
+          </div>
+        </div>
+      |]
+      where
+        titlePage = maybe False (\t -> t.level == 1) s.title
+
     progress :: State -> Int -> H.ComponentHTML Action Slots m
     progress st count =
       [hh|
@@ -251,14 +306,15 @@ component =
       [hh|
         <nav class="slides-controls" aria-label="Slides">
           {{ back st.input }}
-          <button type="button" class="slides-previous" disabled={{ st.current <= 1 }} title="Previous slide (←)" aria-label="Previous slide" onClick={{ const (Key Previous) }}>‹</button>
+          <button type="button" class="slides-previous" disabled={{ (st.current, st.step) <= (1, 1) }} title="Back (←)" aria-label="Back" onClick={{ const (Key Previous) }}>‹</button>
           <span class="slides-position" role="status">{{ position st.current count }}</span>
-          <button type="button" class="slides-next" disabled={{ st.current >= count }} title="Next slide (→)" aria-label="Next slide" onClick={{ const (Key Next) }}>›</button>
+          <button type="button" class="slides-next" disabled={{ st.current >= count && st.step >= stepsOf st.loaded st.current }} title="Next (→)" aria-label="Next" onClick={{ const (Key Next) }}>›</button>
           <button type="button" class="slides-notes-toggle" aria-pressed={{ ariaBool st.notesOpen }} title="Speaker notes (n)" onClick={{ const (Key ToggleNotes) }}>Notes</button>
           <button type="button" class="slides-overview-toggle" aria-pressed={{ ariaBool st.overview }} title="All slides (o)" onClick={{ const (Key ToggleOverview) }}>Overview</button>
           <button type="button" class="slides-fullscreen" title="Full screen (f)" onClick={{ const (Key ToggleFullscreen) }}>Full screen</button>
           <button type="button" class="slides-print" title="Print, or save as PDF" onClick={{ const Print }}>Print</button>
           <label class="slides-print-notes"><input type="checkbox" checked={{ st.printNotes }} onChecked={{ SetPrintNotes }}> with notes</label>
+          <label class="slides-print-steps"><input type="checkbox" checked={{ st.printSteps }} onChecked={{ SetPrintSteps }}> each step on its own page</label>
         </nav>
       |]
 
@@ -304,21 +360,23 @@ component =
         case () of
           _
             | elsewhere -> do
-                modify (\s -> s {loaded = Loading, current = 1, notesOpen = False, overview = False, asked = []})
+                modify (\s -> s {loaded = Loading, current = 1, step = 1, notesOpen = False, overview = False, asked = []})
                 load
             | old.context.revision /= input.context.revision -> load
-            -- Another slide in the address: the shell waits to learn that
-            -- it is shown (a render of the shell passes the same input
-            -- again, which needs no reply). The view goes to it, unless the
-            -- view put it there itself, in which case it is already there or
-            -- has moved on; a slide from elsewhere (a link) is gone to.
-            | input.slide /= old.slide -> do
+            -- Another slide or step in the address: the shell waits to
+            -- learn that it is shown (a render of the shell passes the same
+            -- input again, which needs no reply). The view goes to it,
+            -- unless the view put it there itself, in which case it is
+            -- already there or has moved on; a place from elsewhere (a
+            -- link) is gone to.
+            | (input.slide, input.step) /= (old.slide, old.step) -> do
+                let wanted = (input.slide, input.step)
                 -- This view requested it: the oldest request for it is
                 -- answered, and the requests before that were already.
-                if input.slide `elem` st.asked
+                if wanted `elem` st.asked
                   then
-                    modify (\s -> s {asked = reverse (drop 1 (dropWhile (/= input.slide) (reverse s.asked)))})
-                  else modify (\s -> s {current = within s.loaded input.slide, asked = []})
+                    modify (\s -> s {asked = reverse (drop 1 (dropWhile (/= wanted) (reverse s.asked)))})
+                  else modify (\s -> let (current, step) = within s.loaded wanted in s {current, step, asked = []})
                 H.raise Loaded
             | otherwise -> pass
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
@@ -328,13 +386,13 @@ component =
       Key command -> do
         st <- get
         case command of
-          Next -> goTo (st.current + 1)
-          Previous -> goTo (st.current - 1)
-          ToFirst -> goTo 1
-          ToLast -> goTo (slideCount st.loaded)
+          Next -> goTo (forward st)
+          Previous -> goTo (backward st)
+          ToFirst -> goTo (1, 1)
+          ToLast -> let n = slideCount st.loaded in goTo (n, stepsOf st.loaded n)
           Choose
             | st.overview -> modify (\s -> s {overview = False})
-            | otherwise -> goTo (st.current + 1)
+            | otherwise -> goTo (forward st)
           ToggleFullscreen -> H.getRef st.view >>= traverse_ (H.liftEffect . liftIO . js_slides_toggle_fullscreen)
           ToggleNotes -> modify (\s -> s {notesOpen = not s.notesOpen})
           ToggleOverview -> modify (\s -> s {overview = not s.overview})
@@ -345,7 +403,7 @@ component =
         gets (\st -> st.overview) >>= \case
           True -> do
             modify (\s -> s {overview = False})
-            goTo n
+            goTo (n, 1)
           False -> pass
       TouchStart x y -> modify (\st -> st {touch = Just (x, y)})
       -- A swipe: further across than up or down, and far enough not to be
@@ -356,19 +414,21 @@ component =
         for_ started $ \(x0, y0) -> do
           let dx = x - x0
           when (abs dx > 50 && abs dx > abs (y - y0)) $
-            gets (\st -> st.current) >>= \n -> goTo (if dx < 0 then n + 1 else n - 1)
+            get >>= \st -> goTo (if dx < 0 then forward st else backward st)
       SetPrintNotes b -> modify (\st -> st {printNotes = b})
+      SetPrintSteps b -> modify (\st -> st {printSteps = b})
       Print -> H.liftEffect (liftIO js_slides_print)
 
-    -- Show a slide, and put it in the address, replacing the one there.
-    goTo :: Int -> H.HalogenM State Action Slots ViewOutput m ()
+    -- Show a slide at a step, and put them in the address, replacing the
+    -- ones there.
+    goTo :: (Int, Int) -> H.HalogenM State Action Slots ViewOutput m ()
     goTo wanted = do
       st <- get
-      let n = within st.loaded wanted
-      when (n /= st.current) $ do
-        put st {current = n, asked = take 20 (n : st.asked)}
+      let (n, k) = within st.loaded wanted
+      when ((n, k) /= (st.current, st.step)) $ do
+        put st {current = n, step = k, asked = take 20 ((n, k) : st.asked)}
         let input = st.input
-        Router.redirect input.context.router (PageSlides (spacePathOf input.context.spaces input.space.id) input.path n)
+        Router.redirect input.context.router (PageSlides (spacePathOf input.context.spaces input.space.id) input.path n k)
 
     -- Focus into the view, where Tab then finds its controls.
     focusView :: H.HalogenM State Action Slots ViewOutput m ()
@@ -382,7 +442,9 @@ component =
       -- navigation may have overtaken this load.
       now <- gets (\st -> st.input)
       when (now.space.id == input.space.id && now.path == input.path) $ do
-        modify (\st -> st {loaded, current = within loaded (if null st.asked then now.slide else st.current)})
+        modify $ \st ->
+          let (current, step) = within loaded (if null st.asked then (now.slide, now.step) else (st.current, st.step))
+           in st {loaded, current, step}
         focusView
         H.raise Loaded
 
@@ -445,9 +507,32 @@ slideCount = \case
   Ready _ _ deck _ -> length deck.slides
   _ -> 1
 
--- | A slide number brought within the deck's range.
-within :: Loaded -> Int -> Int
-within loaded n = max 1 (min (slideCount loaded) n)
+-- | How many steps a slide has, by its number.
+stepsOf :: Loaded -> Int -> Int
+stepsOf loaded n = case loaded of
+  Ready _ _ deck _ | Just s <- atMay deck.slides (n - 1) -> s.steps
+  _ -> 1
+
+-- | A slide and a step brought within the deck's range and the slide's.
+within :: Loaded -> (Int, Int) -> (Int, Int)
+within loaded (n, k) = (n', max 1 (min (stepsOf loaded n') k))
+  where
+    n' = max 1 (min (slideCount loaded) n)
+
+-- | Where the next key goes: the next step, or else the next slide's first.
+forward :: State -> (Int, Int)
+forward st
+  | st.step < stepsOf st.loaded st.current = (st.current, st.step + 1)
+  | st.current < slideCount st.loaded = (st.current + 1, 1)
+  | otherwise = (st.current, st.step)
+
+-- | Where the previous key goes: the step before, or else the slide
+-- before, whole.
+backward :: State -> (Int, Int)
+backward st
+  | st.step > 1 = (st.current, st.step - 1)
+  | st.current > 1 = (st.current - 1, stepsOf st.loaded (st.current - 1))
+  | otherwise = (st.current, st.step)
 
 -- | The view's classes besides its own: the deck's theme and shape, and
 -- which panels are open.
@@ -458,6 +543,7 @@ viewClasses st deck =
         <> ["notes-open" | st.notesOpen]
         <> ["overview" | st.overview]
         <> ["print-notes" | st.printNotes]
+        <> ["print-steps" | st.printSteps]
     )
   where
     aspectClass = \case

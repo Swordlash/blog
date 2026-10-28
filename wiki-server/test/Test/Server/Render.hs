@@ -119,7 +119,12 @@ anonymous = describe "for someone not signed in" $ do
     slidesStatus `shouldBe` 200
     slides `shouldSatisfy` T.isInfixOf "<title>Slides · Presentations · Wiki</title>"
     appIn slides `shouldSatisfy` T.isInfixOf "<div class=\"slide-frame current\" data-slide=\"3\">"
-    appIn slides `shouldSatisfy` T.isInfixOf ">3 / 7</span>"
+    appIn slides `shouldSatisfy` T.isInfixOf ">3 / 9</span>"
+    -- A slide at a step: what the steps after it show is there, hidden.
+    (_, stepped) <- page r r.public "/s/docs/p/markdown-guide/presentations/slides/?slide=7&step=2"
+    appIn stepped `shouldSatisfy` T.isInfixOf "<div class=\"slide-frame current\" data-slide=\"7\">"
+    appIn stepped `shouldSatisfy` T.isInfixOf "<div class=\"slide-step\"><p>Like this line"
+    appIn stepped `shouldSatisfy` T.isInfixOf "<div class=\"slide-step slide-step-later\"><p>On the page itself"
     (searchStatus, search) <- page r r.public "/search/?q=tour"
     searchStatus `shouldBe` 200
     appIn search `shouldSatisfy` T.isInfixOf "class=\"search-hit\""
@@ -235,7 +240,7 @@ addresses = describe "a request's address" $ do
     routeOf "/" "/s/docs/p/tour/" `shouldReturn` Page (slugs "docs") (slugs "tour")
     routeOf "/admin/" "/admin/s/docs/p/tour/source/" `shouldReturn` PageSource (slugs "docs") (slugs "tour")
     routeOf "/" "/s/docs/p/tour/history/?against=current" `shouldReturn` PageHistory (slugs "docs") (slugs "tour") Nothing AgainstCurrent
-    routeOf "/" "/s/docs/p/tour/slides/?slide=2" `shouldReturn` PageSlides (slugs "docs") (slugs "tour") 2
+    routeOf "/" "/s/docs/p/tour/slides/?slide=2" `shouldReturn` PageSlides (slugs "docs") (slugs "tour") 2 1
     routeOf "/wiki/" "/wiki/search/?q=a%20b&only" `shouldReturn` Search (Just "a b") Nothing False
     routeOf "/" "/s/docs" `shouldReturn` Space (slugs "docs")
     routeOf "/" "/elsewhere/" `shouldReturn` Unknown

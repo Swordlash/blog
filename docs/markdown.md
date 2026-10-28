@@ -446,18 +446,53 @@ it is cut into slides is written in it:
 :::
 ```
 
+A slide can show its content in steps, with pandoc's own markers:
+
+- Three dots separated by spaces, `. . .`, alone on a line between blank
+  lines, are a pause: what follows it on the slide is shown one step later.
+  A pause is read on the slide itself, in a box and in a list item; in a
+  quotation, a footnote or code the three dots stay text.
+- A box with the class `incremental` shows the items of the lists in it one
+  at a time: the first with what comes before the list, each further one a
+  step later, nested lists' items in their turn. What follows the list
+  without a pause shows with its first item, as in Beamer; a pause after the
+  list waits for its last item.
+
+```markdown
+## Plan
+
+First this.
+
+. . .
+
+Then this.
+
+::: incremental
+- one
+- two
+:::
+```
+
+On the page, where nothing is presented, a pause shows nothing and an
+`incremental` box is an ordinary box.
+
 Everything a page shows a slide shows: formulas set with the macros defined
 on the slides before them, diagrams, pictures, code, tables, images and the
 HTML a page may hold.
 
-Presenting, the arrow keys, Space, PageUp and PageDown move between slides,
-Home and End go to the first and the last, **f** fills the screen (Escape
-leaves it), **n** shows the notes and **o** every slide, to pick one; on a
-touch screen, swipe. The slide shown is in the address (`?slide=3`), so a
-reload or a link comes back to it. "Print" puts one slide on each page, the
-page the slide's shape, so that the browser's "Save as PDF" keeps the deck
-as a file; with "with notes" ticked, each slide is printed on its own A4
-page above its notes.
+Presenting, the right arrow, Space and PageDown show the next step of the
+slide and then the next slide; the left arrow and PageUp hide the last step
+shown, or go back to the slide before, whole. Home and End go to the first
+slide and the last, **f** fills the screen (Escape leaves it), **n** shows
+the notes and **o** every slide, whole, to pick one; on a touch screen,
+swipe. A step appears in place, with a short fade (none where the system
+asks for reduced motion): the content shown already does not move. The
+slide and the step shown are in the address (`?slide=3&step=2`), so a
+reload or a link comes back to them. "Print" puts one slide on each page,
+whole, the page the slide's shape, so that the browser's "Save as PDF" keeps
+the deck as a file; with "with notes" ticked, each slide is printed on its
+own A4 page above its notes, and with "each step on its own page" ticked, a
+slide with steps takes a page for each step.
 
 ### Exported as documents
 
@@ -475,7 +510,14 @@ on the wiki. A deck's slides are cut as "Present" cuts them; its first
 slide, when it is a title slide, is the presentation's title page; its theme
 and aspect carry over to Beamer (`beamer` is Beamer's Madrid, `light` its
 plain look, `dark` light on dark), while PowerPoint gets 16:9 and its own
-plain look.
+plain look. A deck's steps are Beamer's overlays: a pause is `\pause` and an
+`incremental` box's lists are `[<+->]`, so a Beamer PDF has a page for each
+step, the same steps "Present" shows. That page per step is what a
+transition is in a PDF: PDF viewers show no animated transitions, and the
+wiki writes none. PowerPoint shows an incremental list one item at a time;
+it has no pauses, so a pause there is left out and the slide is shown at
+once. Every other document shows a deck's content once, without the pauses,
+and an `incremental` box as an ordinary one.
 
 ## HTML
 

@@ -917,8 +917,8 @@ component =
           PageSource _ path -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path} FromView
           PageHistory _ path version against ->
             HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
-          PageSlides _ path slide ->
-            HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide} FromView
+          PageSlides _ path slide step ->
+            HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide, step} FromView
           -- One editor per page edited: another page's editor is a
           -- separate component, with its own draft.
           EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path, feed = st.feed} FromView
@@ -1289,7 +1289,7 @@ spaceOfRoute = \case
   EditPage path _ -> Just path
   PageSource path _ -> Just path
   PageHistory path _ _ _ -> Just path
-  PageSlides path _ _ -> Just path
+  PageSlides path _ _ _ -> Just path
   NewPage path _ -> Just path
   _ -> Nothing
 
@@ -1329,7 +1329,7 @@ currentPage st = case (st.route, st.here) of
   (EditPage _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageSource _ path, InSpace _ _ pages) -> currentPageOf pages path
   (PageHistory _ path _ _, InSpace _ _ pages) -> currentPageOf pages path
-  (PageSlides _ path _, InSpace _ _ pages) -> currentPageOf pages path
+  (PageSlides _ path _ _, InSpace _ _ pages) -> currentPageOf pages path
   _ -> Nothing
 
 -- | The breadcrumbs: inside a space, the directory of spaces first, then
@@ -1361,7 +1361,7 @@ crumbs st = case st.route of
   PageHistory path pagePath _ _ ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("History", Nothing) | not (null page)]
-  PageSlides path pagePath _ ->
+  PageSlides path pagePath _ _ ->
     let page = spaceCrumbs path <> pageCrumbs path pagePath
      in page <> [("Slides", Nothing) | not (null page)]
   NewPage path parent -> spaceCrumbs path <> foldMap (pageCrumbs path) parent <> [("New page", Nothing)]

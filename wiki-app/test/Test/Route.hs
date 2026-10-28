@@ -49,7 +49,7 @@ genRoute =
         <*> genPath
         <*> oneof [pure Nothing, Just <$> elements [demoTime, addUTCTime 0.000123456789 demoTime, addUTCTime 86399.5 demoTime]]
         <*> elements [AgainstPrevious, AgainstCurrent]
-    , PageSlides <$> genPath <*> genPath <*> oneof [pure 1, chooseInt (-3, 40)]
+    , PageSlides <$> genPath <*> genPath <*> oneof [pure 1, chooseInt (-3, 40)] <*> oneof [pure 1, chooseInt (-3, 9)]
     , SpacePages <$> genPath
     , Posts <$> genPath <*> chooseInt (-3, 40)
     , Invite . InvitationToken <$> elements ["c2VjcmV0", "a-b_C9", "x"]
@@ -119,18 +119,22 @@ spec = describe "Wiki.App.Route" $ do
       parse route "/s/a/p/b/history/?version=yesterday&against=tomorrow" `shouldBe` Right (PageHistory (slugs ["a"]) (slugs ["b"]) Nothing AgainstPrevious)
       parse route "/s/a/p/b/history" `shouldBe` Right (PageHistory (slugs ["a"]) (slugs ["b"]) Nothing AgainstPrevious)
 
-    it "writes a page's slides, with the slide shown as a parameter unless it is the first" $ do
-      print route (PageSlides (slugs ["docs"]) (slugs ["presentations"]) 1) `shouldBe` "/s/docs/p/presentations/slides/"
-      print route (PageSlides (slugs ["docs"]) (slugs ["presentations"]) 3) `shouldBe` "/s/docs/p/presentations/slides/?slide=3"
-      parse route "/s/docs/p/presentations/slides" `shouldBe` Right (PageSlides (slugs ["docs"]) (slugs ["presentations"]) 1)
-      parse route "/s/docs/p/presentations/slides/?slide=12" `shouldBe` Right (PageSlides (slugs ["docs"]) (slugs ["presentations"]) 12)
+    it "writes a page's slides, with the slide and the step shown as parameters unless they are the first" $ do
+      let presentations = PageSlides (slugs ["docs"]) (slugs ["presentations"])
+      print route (presentations 1 1) `shouldBe` "/s/docs/p/presentations/slides/"
+      print route (presentations 3 1) `shouldBe` "/s/docs/p/presentations/slides/?slide=3"
+      print route (presentations 3 2) `shouldBe` "/s/docs/p/presentations/slides/?slide=3&step=2"
+      print route (presentations 1 4) `shouldBe` "/s/docs/p/presentations/slides/?step=4"
+      parse route "/s/docs/p/presentations/slides" `shouldBe` Right (presentations 1 1)
+      parse route "/s/docs/p/presentations/slides/?slide=12" `shouldBe` Right (presentations 12 1)
+      parse route "/s/docs/p/presentations/slides/?step=2&slide=3" `shouldBe` Right (presentations 3 2)
       print route (Page (slugs ["a"]) (slugs ["slides"])) `shouldBe` "/s/a/p/~slides/"
-      parse route "/s/a/p/~slides/slides/" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["slides"]) 1)
+      parse route "/s/a/p/~slides/slides/" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["slides"]) 1 1)
       parse route "/s/a/p/slides/" `shouldSatisfy` isLeft
-      -- A slide that is not a number is the first; one beyond the deck is
-      -- the view's to bring back into it.
-      parse route "/s/a/p/b/slides/?slide=last" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 1)
-      parse route "/s/a/p/b/slides/?slide=99" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 99)
+      -- A slide or a step that is not a number is the first; one beyond
+      -- the deck, or the slide, is the view's to bring back into it.
+      parse route "/s/a/p/b/slides/?slide=last&step=next" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 1 1)
+      parse route "/s/a/p/b/slides/?slide=99&step=99" `shouldBe` Right (PageSlides (slugs ["a"]) (slugs ["b"]) 99 99)
       print route (Invite (InvitationToken "c2VjcmV0-_x")) `shouldBe` "/invite/c2VjcmV0-_x/"
       parse route "/invite/c2VjcmV0" `shouldBe` Right (Invite (InvitationToken "c2VjcmV0"))
       print route (ResetPassword (MailToken "c2VjcmV0-_x")) `shouldBe` "/reset-password/c2VjcmV0-_x/"

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Presenting shows a slide's steps (WP5.20). The right arrow, Space and
+PageDown show the next step before the next slide; the left arrow and
+PageUp hide the last step, or go back to the slide before, whole; End goes
+to the last slide, whole. A later step's content is in place from the
+start, hidden with `visibility: hidden`, and fades in (not where reduced
+motion is asked for). `PageSlides` has a step after the slide, written
+`?step=2` and left out at 1, and the slides view's `Input` has `step`. The
+overview and the print show whole slides; "each step on its own page"
+prints a copy of a slide at each of its steps before the slide. The demo's
+Presentations deck has two more slides, "Steps" and "One item at a time".
+
 The browser application compiles faster, and nothing else changes
 (WP5.19): haskell-halogen is pinned to the commit that writes its element
 rows as flat lists of labels.

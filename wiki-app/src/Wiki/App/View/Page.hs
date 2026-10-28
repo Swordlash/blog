@@ -311,7 +311,7 @@ component =
         history = Router.link input.context.router Followed (PageHistory spacePath input.path Nothing AgainstPrevious) [HP.class_ "button"] [HH.text "History"]
         -- Also presenting it, if it is written as slides: any page can be
         -- shown as slides by its address, but only a deck offers it.
-        present = [Router.link input.context.router Followed (PageSlides spacePath input.path 1) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
+        present = [Router.link input.context.router Followed (PageSlides spacePath input.path 1 1) [HP.class_ "button page-present"] [HH.text "Present"] | deck]
         -- Also exporting it as a document, on a backend that makes them:
         -- a deck as a presentation too.
         export = exportMenu (pageFormats deck input.context.session.exports) (pageExportUrl page.id) page.title

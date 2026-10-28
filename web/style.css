@@ -2076,6 +2076,37 @@ body:has(.slides-view) {
   display: none;
 }
 
+/* A slide's steps (Wiki.Core.Slides): what a later step shows is in place
+   already, hidden, so nothing moves when it appears. It fades in; going
+   back hides it at once. An item of an incremental list is hidden whole,
+   marker and all, by the empty mark at its end. */
+.slide-step,
+.slide li:has(> .slide-step-item) {
+  transition:
+    opacity 0.3s ease,
+    visibility 0s;
+}
+
+.slide-step-later,
+.slide li:has(> .slide-step-item.slide-step-later) {
+  visibility: hidden;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-step,
+  .slide li:has(> .slide-step-item) {
+    transition: none;
+  }
+}
+
+/* A copy of a slide at an earlier step is only for printing, with "each step
+   on its own page". */
+.slide-step-copy,
+.overview .slide-step-copy {
+  display: none;
+}
+
 /* A page's speaker notes, read on the page itself rather than presented. */
 .page-body .notes {
   margin: 1rem 0;
@@ -2152,6 +2183,24 @@ body:has(.slides-view) {
 
   .slide-frame + .slide-frame {
     break-before: page;
+  }
+
+  /* A slide is printed whole, whatever step it is shown at; its copies at
+     the steps before, when there are copies, are printed as they are. */
+  .slide-step-copy,
+  .overview .slide-step-copy {
+    display: block;
+  }
+
+  .slide-frame:not(.slide-step-copy) .slide-step-later,
+  .slide-frame:not(.slide-step-copy) li:has(> .slide-step-item.slide-step-later) {
+    visibility: visible;
+    opacity: 1;
+  }
+
+  .slide-step,
+  .slide li:has(> .slide-step-item) {
+    transition: none;
   }
 
   .slides-standard .slide-frame {

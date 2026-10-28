@@ -121,7 +121,7 @@ prerenderedRoutes st =
          | p <- Map.elems st.pages
          , Just sp <- [spacePath p.space]
          , Just pp <- [pathOf (`Map.lookup` st.pages) p.id]
-         , r <- [Page sp pp, PageSource sp pp, PageHistory sp pp Nothing AgainstPrevious] <> [PageSlides sp pp 1 | deck p.body]
+         , r <- [Page sp pp, PageSource sp pp, PageHistory sp pp Nothing AgainstPrevious] <> [PageSlides sp pp 1 1 | deck p.body]
          ]
   where
     spacePath = pathOf (`Map.lookup` st.spaces)
