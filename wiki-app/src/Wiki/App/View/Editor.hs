@@ -203,7 +203,9 @@ import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Events (PageEvent (PageChanged))
 import Wiki.Api.Events qualified as Event
-import Wiki.App.Assistant (MonadAssistant (..), updateAssistantSettings)
+import Wiki.App.Assistant (MonadAssistant (..))
+import Wiki.App.Assistant.Keys (Keys (..), changeKeys, loadFollowedKeys)
+import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..), maxAttachmentSize)
 import Wiki.App.Backend.Notifications (MonadNotifications)
 import Wiki.App.Editor.Browser
@@ -535,7 +537,7 @@ savedNoticeTime = 3_000_000
 
 component
   :: forall m
-   . (MonadLoad m, MonadNotifications m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
+   . (MonadLoad m, MonadNotifications m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m, MonadBrowserDOM m, MonadIO m)
   => H.Component Query Input ViewOutput m
 component =
   H.mkComponent
@@ -1417,13 +1419,21 @@ component =
         _ -> pass
 
     -- Read the user's assistant settings, then ask each provider that can
-    -- be asked for its list of models.
+    -- be asked for its list of models. Settings that sync from the user's
+    -- other devices and are still locked on this one, with nothing typed
+    -- here meanwhile, say where to unlock them.
+    unlockedSettings :: Keys -> Either Text Settings
+    unlockedSettings k
+      | k.locked && not (any (\p -> usable p (settingsOf p k.settings)) [minBound .. maxBound]) =
+          Left "Your keys sync from your other devices and are locked in this browser: unlock them with a passkey on the assistant's settings page."
+      | otherwise = Right k.settings
+
     loadAssistant :: H.HalogenM State Action Slots ViewOutput m ()
     loadAssistant =
       gets me >>= \case
         Nothing -> modify (\st -> st {assistantSettings = Just (Left "Sign in to use the assistant: its settings are kept for each user.")})
         Just user -> do
-          settings <- lift (assistantSettings user)
+          settings <- lift (loadFollowedKeys user) <&> (>>= unlockedSettings)
           modify (\st -> st {assistantSettings = Just settings})
           scripted <- gets (\st -> st.scripted)
           for_ (rightToMaybe settings) $ \s ->
@@ -1438,8 +1448,8 @@ component =
       gets me
         >>= traverse_
           ( \user ->
-              lift (updateAssistantSettings user f) >>= \case
-                Right s -> modify (\st -> st {assistantSettings = Just (Right s), assistantProblem = Nothing})
+              lift (changeKeys user f) >>= \case
+                Right k -> modify (\st -> st {assistantSettings = Just (Right k.settings), assistantProblem = Nothing})
                 Left why -> modify (\st -> st {assistantProblem = Just why})
           )
 

@@ -33,6 +33,7 @@ import Test.Browser.Shell qualified as Shell
 import Test.Browser.Slides qualified as Slides
 import Test.Browser.Source qualified as Source
 import Test.Browser.Spaces qualified as Spaces
+import Test.Browser.Vault qualified as Vault
 #endif
 
 -- | Built as a reactor exporting @hs_start@, which the browser test runner
@@ -80,6 +81,7 @@ main = runBrowserTests $ do
   describe "Reading offline and installing" (Offline.spec BrowserDOM)
   describe "Tables of contents and templates" (Contents.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)
+  describe "The assistant's keys across devices" (Vault.spec BrowserDOM)
   -- Last: what the whole suite made the browser refuse under the policy.
   describe "The page's Content Security Policy, after the suite" Policy.afterTheSuite
 #endif

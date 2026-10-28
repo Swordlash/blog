@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+The assistant's settings are sealed in a vault (WP5.21): `MonadAssistant`
+stores the device's record (`deviceRecord`, `keepDeviceRecord`) instead of
+the settings (`assistantSettings`, `keepAssistantSettings`,
+`updateAssistantSettings`, `readSettings` and `writeSettings` are gone), and
+gains WebCrypto and WebAuthn (`sealWith`, `openWith`, `deviceKey`,
+`createPasskey`, `usePasskey`, `wrapWith`, `unwrapWith`, ...).
+`Wiki.App.Assistant.Keys` reads and changes the settings (`loadKeys`,
+`readKeys`, `changeKeys`) and syncs them (`turnOnSync`, `unlockKeys`,
+`addPasskey`, `removePasskey`, `turnOffSync`, `setAskEachTime`).
+`MonadVault` (`Wiki.App.Assistant.Sync`) is the server's half, with
+instances for `HttpWiki` and, keeping nothing, `MemWiki`, `BrowserDOM` and
+`MemDOM`; the shell, the editor and the assistant's settings page need it.
+
 The assistant checks another service's base URL against the page's
 Content Security Policy before it sends anything (WP5.21): an address the
 page does not allow fails at once with `Blocked`, saying which addresses

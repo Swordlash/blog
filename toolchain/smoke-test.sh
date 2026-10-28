@@ -15,6 +15,10 @@
 # providers' APIs do (it needs no build), and toolchain/test-tikz-letters.mjs:
 # the error a TikZ picture shows for a letter TikZJax's fonts lack.
 #
+# After them, toolchain/test-passkeys.mjs: the assistant's keys synced with a
+# real passkey, from Chromium's virtual authenticator, against a real
+# wiki-server.
+#
 # The second needs wiki-server and wiki-app-prerender built natively, which
 # this builds first (quickly, when npm run build-native has).
 set -eu
@@ -28,3 +32,4 @@ node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON toolchain/test-assistant.mjs
 node toolchain/test-tikz-letters.mjs
 node toolchain/smoke-test.mjs "$@"
 node toolchain/smoke-test-server.mjs "$@"
+node toolchain/test-passkeys.mjs "$@"

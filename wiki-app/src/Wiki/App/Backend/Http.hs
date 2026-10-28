@@ -90,7 +90,7 @@ import Halogen.VDom.DOM.Monad.Class (MonadAttributes, MonadBrowserDOM, MonadDOM)
 import Protolude
 import System.Timeout (timeout)
 import Web.Storage.IndexedDB (MonadIndexedDB)
-import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), PasswordResetApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AssistantApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), PasswordResetApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
 import Wiki.Api.Activity (ActivityQuery (..), firstPage)
 import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
@@ -109,17 +109,19 @@ import Wiki.Api.Upload (archivePart, attachmentPart, choicesPart)
 import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend (MonadLoad (..), MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Http.Cache
-import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, fromSessionInfo, ifMatch, multipart, multipartForm, sessionInfo, withJson)
+import Wiki.App.Backend.Http.Request (Body (..), Part (..), Request (..), Response (..), answer, answerNothing, fromSessionInfo, ifMatch, multipart, multipartForm, sessionInfo, withHeader, withJson)
 import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Islands.Monad (MonadIslands)
 import Wiki.App.Live (Feed, MonadLive (..), newFeed)
 import Wiki.App.Offline (forgetReads)
 import Wiki.App.Security (MonadSecurity (..))
+import Wiki.Core.Assistant.Vault (VaultTag (..))
 import Wiki.Core.Comment (Thread (..))
 import Wiki.Core.Id (PageId)
 import Wiki.Core.Notification (WatchTarget (..))
@@ -700,6 +702,27 @@ instance (MonadIO m) => MonadSecurity (HttpWiki m) where
   removeOwnSecondFactor code = withPassword (withJson "POST" links.account.removeSecondFactor OneTimeCode {code})
   ownEmail = answer <$> call (R.get links.account.email)
   setOwnEmail email password = withPassword (withJson "PUT" links.account.setEmail EmailChange {email, password})
+
+-- | The assistant's vault and passkeys, over the API's @assistant\/…@
+-- endpoints ("Wiki.Api.Vault"). Nothing is cached: the vault is fetched
+-- with the tag of the version this device has, and the server answers
+-- 304 when it is the same. The cookie of the session goes with each, as
+-- with every request: a passkey is made and used for the signed-in user.
+instance (MonadIO m) => MonadVault (HttpWiki m) where
+  vaultSync = pure True
+  fetchVault known =
+    call (maybe identity (\t -> withHeader "If-None-Match" t.text) known (R.get links.assistant.vault)) <&> \case
+      Right r | r.status == 304 -> Right Unchanged
+      Right r | r.status == 404 -> Right NoVault
+      answered -> Fetched <$> answer answered
+  storeVault base v = answer <$> call (maybe identity (\t -> withHeader "If-Match" t.text) base (withJson "PUT" links.assistant.storeVault v))
+  deleteVault = answerNothing <$> call (R.delete links.assistant.deleteVault)
+  listPasskeys = answer <$> call (R.get links.assistant.passkeys)
+  beginRegistration = answer <$> call (R.post links.assistant.beginRegistration)
+  finishRegistration r = answer <$> call (withJson "PUT" links.assistant.finishRegistration r)
+  beginAssertion = answer <$> call (R.post links.assistant.beginAssertion)
+  finishAssertion r = answer <$> call (withJson "PUT" links.assistant.finishAssertion r)
+  dropPasskey c = answer <$> call (R.delete (links.assistant.removePasskey c))
 
 -- | A request that signs someone in (signing in, creating one's own
 -- account, accepting an invitation). The result is the new session, with

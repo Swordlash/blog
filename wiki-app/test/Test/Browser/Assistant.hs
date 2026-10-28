@@ -39,6 +39,8 @@ import Test.Browser.Mount (slugs, startWith)
 import Test.Browser.Text (editorText, markdown)
 import Test.Hspec.Halogen
 import Wiki.App.Assistant (MonadAssistant (..))
+import Wiki.App.Assistant.Keys (Keys (..), changeKeys, readKeys)
+import Wiki.App.Assistant.Sync (MonadVault)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.App.Shell qualified as Shell
@@ -57,7 +59,7 @@ $( browserJS
      ]
  )
 
-spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m) => Spec
+spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m) => Spec
 spec m = do
   it "sends a selection, streams the answer, and makes its edit a change that Accept keeps and Ctrl+Z undoes" $ runPage $ do
     script [[text "I will ", text "make it the very first.", replace "the first post" "the very first post", text " Done."]]
@@ -428,7 +430,7 @@ spec m = do
 -- provider chosen and the panel open; and the page's Markdown.
 openAssistantWith
   :: forall m
-  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m)
   => PageM s (Mounted s Shell.Query Void m, Text)
 openAssistantWith m = do
   keep m (UserId "user-editor") (chooseProvider Scripted defaultSettings)
@@ -450,7 +452,7 @@ openAssistantKeptWith m = do
 
 openAssistant
   :: forall m
-  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m)
+  ->(Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadVault m, MonadUUID m)
   => PageM s (Mounted s Shell.Query Void m)
 openAssistant m = fst <$> openAssistantWith m
 
@@ -470,11 +472,11 @@ send ui message = do
   find ui ".assistant-input" >>= (`typeText` message)
   find ui ".assistant-send" >>= click
 
-keep :: forall m -> (MonadBrowserTest m, MonadAssistant m) => UserId -> Settings -> PageM s ()
-keep m user settings = void (unsafeIOToPageM (runTest (keepAssistantSettings user settings :: m (Either Text ()))))
+keep :: forall m -> (MonadBrowserTest m, MonadAssistant m, MonadVault m) => UserId -> Settings -> PageM s ()
+keep m user settings = void (unsafeIOToPageM (runTest (changeKeys user (const settings) :: m (Either Text Keys))))
 
 settingsFor :: forall m -> (MonadBrowserTest m, MonadAssistant m) => UserId -> PageM s Settings
-settingsFor m user = unsafeIOToPageM (either (const defaultSettings) identity <$> runTest (assistantSettings user :: m (Either Text Settings)))
+settingsFor m user = unsafeIOToPageM (either (const defaultSettings) (\k -> k.settings) <$> runTest (readKeys user :: m (Either Text Keys)))
 
 -- | Install the scripted provider's script: the steps of each turn.
 script :: [[Value]] -> PageM s ()

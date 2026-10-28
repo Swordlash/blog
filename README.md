@@ -437,9 +437,10 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
   OpenRouter, Ollama on your own machine): a chat beside the Markdown, whose
   model edits the page through tools, each edit shown as a change you accept or
   reject, with the models the provider lists for your key. The key stays in
-  your browser and goes to its provider only; every request sends
+  your browser, sealed, and goes to its provider only; every request sends
   [docs/markdown.md](docs/markdown.md) first, cached by the provider, so the
-  model writes this wiki's Markdown.
+  model writes this wiki's Markdown. Over `wiki-server`, the keys follow you
+  to your other devices, unlocked by a passkey ([below](#keys-across-devices)).
 - **Slides** made of any page, presented, printed and exported
   ([above](#presentations)).
 - **History**: every save a version, its changes shown word by word, and any
@@ -466,6 +467,39 @@ It is [these nine slides](https://swordlash.github.io/blog/s/docs/p/markdown-gui
 - **For the operator** of `wiki-server`: backups (before every deploy, on a
   schedule, copied off the machine), an administration panel, health and
   Prometheus metrics ([below](#the-wikis-server)).
+
+### Keys across devices
+
+The assistant's API keys stay out of the server's sight. In the browser they
+are sealed (AES-GCM, with WebCrypto) under a vault key the browser keeps and
+cannot export, so even this browser's storage holds no key as text, in the
+demo too. Over `wiki-server` the assistant's settings page offers **Sync
+across devices**:
+
+- **Turn on with a passkey.** The browser asks you to make a passkey for the
+  wiki (Touch ID, Windows Hello, your phone, a security key, or the passkeys
+  of Google Password Manager or iCloud Keychain, which follow you). The
+  passkey's PRF extension gives the browser a secret no one else can compute;
+  the vault key is encrypted with a key derived from it, and the server keeps
+  the sealed settings and that encrypted vault key, neither of which it can
+  open. A passkey without the PRF extension is said to be one, and removed.
+- **Unlock with passkey**, on another device: one touch, and the keys are
+  there. A key typed there before unlocking stays there, and joins the
+  synced keys once you unlock; it never replaces a synced one.
+- **A changed key** is sealed and sent again; your other devices fetch it
+  the next time the wiki opens there, with no touch.
+- **Add passkey** (on a device where the keys are unlocked: one touch of a
+  passkey you have, then the new one), **Remove**, and **Ask for the
+  passkey each time the wiki opens**, which keeps no key on the device, only
+  the sealed vault.
+- **Turn off** deletes the vault and the passkeys on the server and needs no
+  passkey, which is the way back after losing every one; the keys stay in
+  your browsers.
+
+Passkeys need HTTPS (or the machine's own address), so over plain HTTP the
+page says so instead. They need a browser with the PRF extension: Chrome and
+Edge 116 or later, Safari 18 or later, a recent Firefox. A passkey here does
+not sign you in; it only unlocks the assistant's keys.
 
 ## How it is built
 

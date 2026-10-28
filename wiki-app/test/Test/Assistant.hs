@@ -1,36 +1,29 @@
--- | The writing assistant's settings as this browser keeps them
--- ("Wiki.App.Assistant"), over the in-memory IndexedDB the native tests
--- have, which behaves as the browser's: each user's apart, under their id,
--- in a database of the assistant's own, a key forgotten on request,
--- nothing kept once nothing is set, a provider's list of models and
--- address kept with the rest, and a change made to them as they are kept.
+-- | The writing assistant's settings as a device keeps them
+-- ("Wiki.App.Assistant", "Wiki.App.Assistant.Keys"), over the in-memory
+-- document the native tests have. Its IndexedDB behaves as the browser's:
+-- each user's record apart, under their id, in a database of the
+-- assistant's own, deleted on request. It has no WebCrypto, so it cannot
+-- seal the settings: a change fails there rather than store a key as
+-- text. The settings sealed, per user, forgotten, synced and unlocked are
+-- the browser tests' (Test.Browser.Assistant, Test.Browser.Vault).
 module Test.Assistant (spec) where
 
-import Data.Time (UTCTime (..), fromGregorian)
+import Data.Aeson (encode)
+import Data.ByteString.Lazy qualified as BSL
 import Halogen.VDom.DOM.Monad (MemDOM, runMemDOM)
 import Protolude
 import Test.Hspec
 import Web.Storage.IndexedDB (Database (..))
 import Web.Storage.IndexedDB qualified as IDB
-import Wiki.App.Assistant (MonadAssistant (..), assistantDatabase, readSettings, updateAssistantSettings, writeSettings)
+import Wiki.App.Assistant (MonadAssistant (..), assistantDatabase, readRecord, writeRecord)
+import Wiki.App.Assistant.Keys (Keys (..), changeKeys, readKeys)
 import Wiki.Core.Assistant
-  ( ApiKey (..)
-  , AssistantError (..)
+  ( AssistantError (..)
   , ErrorKind (..)
-  , Listed (..)
-  , ModelName (..)
   , Provider (..)
-  , ProviderSettings (..)
-  , Settings (..)
-  , chooseProvider
   , defaultSettings
   , readyFor
-  , settingsOf
-  , withBaseUrl
   , withKey
-  , withModel
-  , withModels
-  , withReached
   )
 import Wiki.Core.Id (UserId (..))
 
@@ -40,70 +33,41 @@ spec = describe "Wiki.App.Assistant's settings" $ do
       fresh = run (IDB.deleteDatabase db.name)
       alice = UserId "user-alice"
       bob = UserId "user-bob"
-      withKeys = withKey OpenAI (Just "sk-open") (withKey Anthropic (Just "sk-ant") defaultSettings)
+      withKeys = withKey OpenAI (Just "test-key-open") (withKey Anthropic (Just "test-key-ant") defaultSettings)
 
-  it "reads the defaults where nothing is kept" $ do
+  it "keeps each user's record apart, under their id, and deletes it on request" $ do
     fresh
-    run (readSettings db alice) `shouldReturn` defaultSettings
-
-  it "keeps a user's settings, and reads them back" $ do
-    fresh
-    let s = chooseProvider OpenAI (withModel OpenAI "gpt-6-luna" withKeys)
-    run (writeSettings db alice s)
-    run (readSettings db alice) `shouldReturn` s
-
-  it "keeps each user's apart, under their id" $ do
-    fresh
-    run (writeSettings db alice withKeys)
-    run (readSettings db bob) `shouldReturn` defaultSettings
-    run (writeSettings db bob (withKey Anthropic (Just "sk-bob") defaultSettings))
-    (\s -> (settingsOf Anthropic s).key) <$> run (readSettings db alice) `shouldReturn` Just (ApiKey "sk-ant")
-    (\s -> (settingsOf Anthropic s).key) <$> run (readSettings db bob) `shouldReturn` Just (ApiKey "sk-bob")
+    run (readRecord db alice) `shouldReturn` Nothing
+    run (writeRecord db alice (Just "alice's"))
+    run (writeRecord db bob (Just "bob's"))
+    run (readRecord db alice) `shouldReturn` Just "alice's"
     sort <$> run (IDB.keys db "settings") `shouldReturn` ["user-alice", "user-bob"]
+    run (writeRecord db alice Nothing)
+    run (IDB.keys db "settings") `shouldReturn` ["user-bob"]
 
-  it "forgets a key on request, and keeps nothing once nothing is set" $ do
-    fresh
-    run (writeSettings db alice withKeys)
-    run (writeSettings db alice (withKey OpenAI Nothing withKeys))
-    s <- run (readSettings db alice)
-    (settingsOf OpenAI s).key `shouldBe` Nothing
-    (settingsOf Anthropic s).key `shouldBe` Just (ApiKey "sk-ant")
-    run (writeSettings db alice (withKey Anthropic Nothing s))
-    run (IDB.keys db "settings") `shouldReturn` []
-
-  it "reads what it cannot read as the defaults" $ do
-    fresh
-    run (IDB.put db "settings" alice.text "not settings")
-    run (readSettings db alice) `shouldReturn` defaultSettings
-
-  it "keeps a provider's list of models, its address and whether it was reached" $ do
-    fresh
-    let at = UTCTime (fromGregorian 2026 10 27) 0
-        s = withReached Anthropic False (withModels OpenAI [Listed (ModelName "llama4:8b") Nothing (Just 20)] at (withBaseUrl OpenAI "http://localhost:11434/v1" withKeys))
-    run (writeSettings db alice s)
-    run (readSettings db alice) `shouldReturn` s
-
-  it "changes the settings as they are kept now, not as they were read" $ do
+  it "reads the defaults where nothing is kept, in a database of the assistant's own" $ do
     run (IDB.deleteDatabase assistantDatabase.name)
-    run (keepAssistantSettings alice withKeys) `shouldReturn` Right ()
-    -- Kept since by someone else: a provider found unreachable.
-    run (keepAssistantSettings alice (withReached OpenAI False withKeys)) `shouldReturn` Right ()
-    run (updateAssistantSettings alice (withModel OpenAI "gpt-6-luna"))
-      `shouldReturn` Right (withModel OpenAI "gpt-6-luna" (withReached OpenAI False withKeys))
-    run (assistantSettings alice) `shouldReturn` Right (withModel OpenAI "gpt-6-luna" (withReached OpenAI False withKeys))
+    assistantDatabase.name `shouldBe` "wiki-assistant"
+    fmap (\k -> (k.settings, k.locked, k.synced)) <$> run (readKeys alice) `shouldReturn` Right (defaultSettings, False, False)
+
+  it "stores no key as text where it cannot seal it" $ do
+    run (IDB.deleteDatabase assistantDatabase.name)
+    run (changeKeys alice (const withKeys)) >>= (`shouldSatisfy` isLeft)
+    run (IDB.keys assistantDatabase "settings") `shouldReturn` []
+
+  it "leaves the settings stored as text before the vault for a browser to seal" $ do
+    -- The in-memory document cannot seal them, so it refuses to read
+    -- them, and leaves them as they were for a browser to seal.
+    run (IDB.deleteDatabase assistantDatabase.name)
+    let old = BSL.toStrict (encode withKeys)
+    run (keepDeviceRecord alice (Just old)) `shouldReturn` Right ()
+    run (readKeys alice) >>= (`shouldSatisfy` isLeft)
+    run (deviceRecord alice) `shouldReturn` Right (Just old)
 
   it "reaches no provider in the in-memory document" $
     case readyFor Anthropic withKeys of
       Left why -> expectationFailure (toS why)
       Right r -> (either (\e -> Just e.kind) (const Nothing) <$> run (listModels r)) `shouldReturn` Just Unreachable
-
-  it "is the class's, in a database of the assistant's own" $ do
-    run (IDB.deleteDatabase assistantDatabase.name)
-    run (keepAssistantSettings alice withKeys) `shouldReturn` Right ()
-    run (assistantSettings alice) `shouldReturn` Right withKeys
-    run (IDB.keys assistantDatabase "settings") `shouldReturn` ["user-alice"]
-    assistantDatabase.name `shouldBe` "wiki-assistant"
-    fmap (\s -> s.provider) <$> run (assistantSettings bob) `shouldReturn` Right Anthropic
   where
     run :: MemDOM a -> IO a
     run = runMemDOM

@@ -58,7 +58,10 @@ import Halogen qualified as H
 import Halogen.HTML.Events qualified as HE
 import Halogen.TH (hh)
 import Protolude hiding (State)
+import Wiki.Api.Vault (PasskeyInfo (..))
 import Wiki.App.Assistant (MonadAssistant (..))
+import Wiki.App.Assistant.Keys (Keys (..), addPasskey, changeKeys, loadKeys, removePasskey, setAskEachTime, turnOffSync, turnOnSync, unlockKeys)
+import Wiki.App.Assistant.Sync (MonadVault (..))
 import Wiki.App.Backend (Session (..))
 import Wiki.App.View.Common (Context (..), attr)
 import Wiki.Core.Assistant
@@ -95,6 +98,7 @@ import Wiki.Core.Assistant
   , withModels
   , withReached
   )
+import Wiki.Core.Assistant.Vault (CredentialId)
 import Wiki.Core.Id (UserId)
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (User (id))
@@ -106,6 +110,29 @@ data Check = Checking | Works | Fails Text
 
 -- | 'Listing': the state of fetching a provider's model list.
 data Listing = Listing | Fetched Int | NotFetched Text
+
+-- | 'Offer': whether this page can sync the keys across devices.
+data Offer
+  = -- | No server keeps a vault: the demo.
+    NoServer
+  | -- | A server does, but this page is not served over HTTPS, and a
+    -- browser offers passkeys only on a secure page.
+    NotSecure
+  | Offered
+
+-- | 'Sync': the keys across devices, as the page shows them.
+data Sync = Sync
+  { offer :: Offer
+  , synced :: Bool
+  , locked :: Bool
+  , askEachTime :: Bool
+  , passkeys :: [PasskeyInfo]
+  , working :: Maybe Text
+  -- ^ What is being done, while it is: the browser's passkey dialog may
+  -- be open.
+  , trouble :: Maybe Text
+  -- ^ Why the last step failed, if it did.
+  }
 
 data State = State
   { input :: Input
@@ -122,6 +149,7 @@ data State = State
   -- ^ The providers for which "Other…" is chosen, which shows its text field.
   , problem :: Maybe Text
   , busy :: Bool
+  , sync :: Sync
   }
 
 data Action
@@ -137,8 +165,14 @@ data Action
   | Refresh Provider
   | TypedBaseUrl Provider Text
   | ChooseEffort Provider Text
+  | TurnOn
+  | Unlock
+  | AddPasskey
+  | RemovePasskey CredentialId
+  | TurnOff
+  | AskEachTime Bool
 
-component :: forall query output m. (MonadAssistant m, MonadIO m) => H.Component query Input output m
+component :: forall query output m. (MonadAssistant m, MonadVault m, MonadIO m) => H.Component query Input output m
 component =
   H.mkComponent
     H.ComponentSpec
@@ -157,6 +191,7 @@ component =
               , otherModels = mempty
               , problem = Nothing
               , busy = False
+              , sync = noSync
               }
       , render
       , eval =
@@ -192,7 +227,7 @@ component =
           <p class="assistant-intro">
             The assistant in the editor edits a page with you, through Anthropic's Claude or OpenAI's models, with an API key of your own.
             Each key is billed by its provider, to your account there, for every request the assistant makes.
-            It stays in this browser, kept for you alone, and goes from here to its provider only, never to this wiki's server.
+            It stays in this browser, kept for you alone and sealed with a key the browser keeps, and goes from here to its provider only, never to this wiki's server in the clear: with syncing on, the server keeps your keys sealed, and cannot open them.
             Each request also sends the wiki's Markdown reference, about seven thousand tokens, which the provider caches where it can, so that a request soon after another costs less.
           </p>
           {% if not st.secure %}
@@ -200,6 +235,7 @@ component =
               This page was not served over HTTPS. Your key still goes to its provider over an encrypted connection, but anyone between you and this wiki could change this page to read what you type into it. Use the assistant from an HTTPS address of this wiki.
             </p>
           {% end %}
+          {{ syncView st.sync }}
           <fieldset class="assistant-provider" disabled={{ st.busy }}>
             <legend>The assistant asks</legend>
             {% for p in providers st.scripted %}
@@ -217,6 +253,67 @@ component =
           {% end %}
         </div>
       |]
+
+    -- Sync across devices (WP5.21 of docs/PLAN.md, "Wiki.App.Assistant.Keys").
+    syncView :: Sync -> H.ComponentHTML Action Empty m
+    syncView sy = case sy.offer of
+      NoServer -> [hh|<span class="assistant-sync-none"></span>|]
+      NotSecure ->
+        [hh|
+          <section class="assistant-sync" aria-label="Sync across devices">
+            <h2>Sync across devices</h2>
+            <p class="account-note assistant-sync-unavailable">Syncing your keys across your devices needs a passkey, and a browser offers passkeys only on a page served over HTTPS: open this wiki at its HTTPS address to turn it on.</p>
+          </section>
+        |]
+      Offered ->
+        [hh|
+          <section class="assistant-sync" aria-label="Sync across devices">
+            <h2>Sync across devices</h2>
+            {% if sy.synced && sy.locked %}
+              <p class="assistant-sync-state assistant-sync-locked">Your keys sync from your other devices, and are locked in this browser.</p>
+              <div class="actions">
+                <button type="button" class="primary assistant-unlock" disabled={{ isJust sy.working }} onClick={{ const Unlock }}>Unlock with passkey</button>
+              </div>
+              <p class="account-note assistant-type-here">or type a key here, below: it stays in this browser, and joins your synced keys once you unlock them.</p>
+            {% else %}
+              {% if sy.synced %}
+                <p class="assistant-sync-state assistant-sync-on">Sync across devices: on. Your keys are sealed in a vault this wiki's server keeps and cannot open; one of your passkeys opens it on your other devices, with one touch.</p>
+                <ul class="assistant-passkeys">
+                  {% for pk in sy.passkeys %}
+                    <li class="assistant-passkey">
+                      <span class="assistant-passkey-name">{{ pk.name }}</span>
+                      {% if not pk.unlocks %}
+                        <span class="account-note"> (cannot unlock the keys)</span>
+                      {% end %}
+                      <button type="button" class="danger assistant-remove-passkey" disabled={{ isJust sy.working }} onClick={{ const (RemovePasskey pk.id) }}>Remove</button>
+                    </li>
+                  {% end %}
+                </ul>
+                <div class="actions">
+                  <button type="button" class="assistant-add-passkey" disabled={{ isJust sy.working }} onClick={{ const AddPasskey }}>Add passkey</button>
+                  <button type="button" class="danger assistant-sync-off" disabled={{ isJust sy.working }} onClick={{ const TurnOff }}>Turn off</button>
+                </div>
+                <label class="choice">
+                  <input type="checkbox" class="assistant-ask-each-time" checked={{ sy.askEachTime }} disabled={{ isJust sy.working }} onChange={{ const (AskEachTime (not sy.askEachTime)) }}>
+                  <span>Ask for the passkey each time the wiki opens</span>
+                </label>
+                <p class="account-note">Asked each time, this browser keeps no key that opens your settings, only the sealed vault. "Turn off" deletes the vault on the server, and needs no passkey; your keys stay in this browser.</p>
+              {% else %}
+                <p class="assistant-sync-state assistant-sync-off-state">Sync across devices: off. Your keys are sealed in this browser only.</p>
+                <div class="actions">
+                  <button type="button" class="assistant-sync-on-button" disabled={{ isJust sy.working }} onClick={{ const TurnOn }}>Turn on with a passkey</button>
+                </div>
+                <p class="account-note">Your browser asks you to make a passkey for this wiki: Touch ID, Windows Hello, your phone or a security key. One touch of it unlocks your keys on your other devices. The wiki's server keeps them sealed, and cannot open them.</p>
+              {% end %}
+            {% end %}
+            {% for doing in maybeToList sy.working %}
+              <p class="assistant-sync-working" role="status">{{ doing }}</p>
+            {% end %}
+            {% for why in maybeToList sy.trouble %}
+              <p class="error assistant-sync-problem" role="alert">{{ why }}</p>
+            {% end %}
+          </section>
+        |]
 
     providerView :: State -> Settings -> Provider -> H.ComponentHTML Action Empty m
     providerView st s p =
@@ -394,6 +491,21 @@ component =
             when (isNothing result) (fetchModels p)
           _ -> pass
       Refresh p -> fetchModels p
+      TurnOn -> syncStep "Waiting for your new passkey…" turnOnSync
+      Unlock -> syncStep "Waiting for your passkey…" unlockKeys
+      AddPasskey -> syncStep "Waiting for a passkey you have, then for the new one…" addPasskey
+      TurnOff -> syncStep "Turning syncing off…" turnOffSync
+      AskEachTime asking -> syncStep "Changing how this browser keeps the key…" (`setAskEachTime` asking)
+      RemovePasskey credential ->
+        gets (\st -> st.user)
+          >>= traverse_
+            ( \user -> do
+                modify (\st -> st {sync = st.sync {working = Just "Removing the passkey…", trouble = Nothing}})
+                result <- lift (removePasskey user credential)
+                modify $ \st -> case result of
+                  Right left -> st {sync = st.sync {working = Nothing, passkeys = left}}
+                  Left why -> st {sync = st.sync {working = Nothing, trouble = Just why}}
+            )
       ChooseEffort p e -> change (withEffort p e)
       TypedBaseUrl p url -> do
         change (withBaseUrl p url)
@@ -426,9 +538,40 @@ component =
       gets (\st -> st.user)
         >>= traverse_
           ( \user -> do
-              settings <- lift (assistantSettings user)
+              keys <- lift (loadKeys user)
+              offer <- offerHere
+              passkeys <- case keys of
+                Right k | k.synced -> either (const []) identity <$> lift listPasskeys
+                _ -> pure []
               -- Only if the same user is still signed in.
-              whenM (gets (\st -> st.user == Just user)) $ modify (\st -> st {settings = Just settings})
+              whenM (gets (\st -> st.user == Just user)) $
+                modify (\st -> st {settings = Just ((\k -> k.settings) <$> keys), sync = (syncOf keys st.sync) {offer, passkeys}})
+          )
+
+    -- Whether this page can sync the keys: a server keeps vaults, and the
+    -- browser offers passkeys here.
+    offerHere :: H.HalogenM State Action Empty output m Offer
+    offerHere =
+      lift vaultSync >>= \case
+        False -> pure NoServer
+        True -> bool NotSecure Offered <$> H.liftEffect passkeysHere
+
+    -- A step of syncing, which may wait on the browser's passkey dialog:
+    -- said while it runs, and then the settings and the passkeys as they
+    -- are after it, or why it failed.
+    syncStep :: Text -> (UserId -> m (Either Text Keys)) -> H.HalogenM State Action Empty output m ()
+    syncStep saying step =
+      gets (\st -> st.user)
+        >>= traverse_
+          ( \user -> do
+              modify (\st -> st {sync = st.sync {working = Just saying, trouble = Nothing}})
+              result <- lift (step user)
+              passkeys <- case result of
+                Right k | k.synced -> either (const []) identity <$> lift listPasskeys
+                _ -> pure []
+              modify $ \st -> case result of
+                Right k -> st {settings = Just (Right k.settings), sync = (syncOf result st.sync) {working = Nothing, passkeys}}
+                Left why -> st {sync = st.sync {working = Nothing, trouble = Just why}}
           )
 
     -- Change the settings, and store them immediately.
@@ -438,11 +581,21 @@ component =
         (Just user, Just (Right s)) -> do
           let new = f s
           modify (\st -> st {busy = True, problem = Nothing})
-          result <- lift (keepAssistantSettings user new)
+          result <- lift (changeKeys user (const new))
           modify $ \st -> case result of
-            Right () -> st {busy = False, settings = Just (Right new)}
+            Right k -> st {busy = False, settings = Just (Right k.settings), sync = syncOf result st.sync}
             Left why -> st {busy = False, problem = Just why}
         _ -> pass
 
 userOf :: Input -> Maybe UserId
 userOf input = (\u -> u.id) <$> input.context.session.user
+
+-- | Syncing before anything is known: not offered.
+noSync :: Sync
+noSync = Sync {offer = NoServer, synced = False, locked = False, askEachTime = False, passkeys = [], working = Nothing, trouble = Nothing}
+
+-- | Syncing as the keys say it is, the rest as it was.
+syncOf :: Either Text Keys -> Sync -> Sync
+syncOf keys sy = case keys of
+  Right k -> Sync {offer = sy.offer, synced = k.synced, locked = k.locked, askEachTime = k.askEachTime, passkeys = sy.passkeys, working = sy.working, trouble = sy.trouble}
+  Left _ -> sy

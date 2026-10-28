@@ -26,6 +26,7 @@ module Wiki.App.Backend.Http.Request
   , delete
   , withJson
   , ifMatch
+  , withHeader
   , multipart
   , Part (..)
   , multipartForm
@@ -104,6 +105,10 @@ withJson method url value = Request {method, url, headers = [requestMarker], bod
 -- ("Wiki.Api.Version").
 ifMatch :: UTCTime -> Request -> Request
 ifMatch base r = r {headers = ("If-Match", toUrlPiece (PageVersion base)) : r.headers}
+
+-- | A request with one more header.
+withHeader :: Text -> Text -> Request -> Request
+withHeader name value r = r {headers = (name, value) : r.headers}
 
 -- | A @POST@ of a multipart form (@multipart\/form-data@) with one file in
 -- it: the part's name, the file's name, its media type and its bytes, in

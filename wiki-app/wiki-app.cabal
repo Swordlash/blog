@@ -67,6 +67,8 @@ library
       Wiki.App
       Wiki.App.Account
       Wiki.App.Assistant
+      Wiki.App.Assistant.Keys
+      Wiki.App.Assistant.Sync
       Wiki.App.Backend
       Wiki.App.Backend.Admin
       Wiki.App.Backend.Comments
@@ -346,6 +348,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Source
       Test.Browser.Spaces
       Test.Browser.Text
+      Test.Browser.Vault
       Test.Counting
   build-depends:
       aeson,

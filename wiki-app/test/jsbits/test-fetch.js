@@ -54,6 +54,7 @@ function wiki_test_server_start() {
   if (wikiTestServer.fetch === null) wikiTestServer.fetch = globalThis.fetch;
   if (wikiTestServer.WebSocket === null) wikiTestServer.WebSocket = globalThis.WebSocket;
   for (const socket of wikiTestServer.sockets) socket.hangUp(1001);
+  globalThis.wikiTestHandlers = [];
   Object.assign(wikiTestServer, { answers: new Map(), asked: [], offline: false, holdAll: false, heldAt: new Set(), held: null, release: null, sockets: [], said: [] });
   globalThis.WebSocket = WikiTestSocket;
   globalThis.fetch = async (url, init = {}) => {
@@ -86,9 +87,17 @@ function wiki_test_server_start() {
     }
     if (signal?.aborted) throw abortError();
     if (wikiTestServer.offline) throw new TypeError("Failed to fetch");
-    const answer = wikiTestServer.answers.get(`${method} ${url}`) ?? { status: 404, body: '{"error":"NotFound"}' };
+    // A handler a test installed answers first, if it answers at all (the
+    // vault's server, test-passkeys.js, which is in another file's scope,
+    // so the handlers are a global); then the table.
+    let answer = null;
+    for (const handle of globalThis.wikiTestHandlers ?? []) {
+      answer = handle(request);
+      if (answer) break;
+    }
+    if (answer === null) answer = wikiTestServer.answers.get(`${method} ${url}`) ?? { status: 404, body: '{"error":"NotFound"}' };
     const empty = answer.status === 204 || answer.status === 304;
-    return new Response(empty ? null : answer.body, { status: answer.status, headers: { "Content-Type": "application/json" } });
+    return new Response(empty ? null : answer.body, { status: answer.status, headers: { "Content-Type": "application/json", ...(answer.headers ?? {}) } });
   };
 }
 

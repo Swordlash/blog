@@ -7,12 +7,24 @@
 -- The settings (a key per provider, the chosen provider and each
 -- provider's model: "Wiki.Core.Assistant") are stored in this browser's
 -- IndexedDB, in a separate database ('assistantDatabase'), under the
--- user's id. So another user of the same browser has their own settings
--- and cannot see anyone else's key. The settings are never sent to the
--- wiki's server (there is no API for them) and never logged. They are not
--- deleted when the user signs out of the wiki: they belong to this
--- browser and this user, and the user finds them again on signing in, as
--- with a password manager. "Forget" is the way to delete a key.
+-- user's id, sealed in a vault (WP5.21, "Wiki.Core.Assistant.Vault"):
+-- this class stores the device's record ('deviceRecord'), and seals and
+-- opens it with a key the browser keeps and never exports ('sealWith',
+-- 'deviceKey'). "Wiki.App.Assistant.Keys" reads and changes the settings
+-- through it. So another user of the same browser has their own settings
+-- and cannot see anyone else's key, and no key is stored as text. The
+-- settings never reach the wiki's server in the clear and are never
+-- logged. They are not deleted when the user signs out of the wiki: they
+-- belong to this browser and this user, and the user finds them again on
+-- signing in, as with a password manager. "Forget" is the way to delete a
+-- key.
+--
+-- The vault can follow the user to their other devices, unlocked there by
+-- a passkey: the class makes and uses passkeys ('createPasskey',
+-- 'usePasskey') and wraps the vault's key with what a passkey's PRF
+-- extension gives ('wrapWith', 'unwrapWith'), all in the browser
+-- (@jsbits\/vault.js@). A key is held by the page and known here by a
+-- number ('KeyRef'); its bytes never reach Haskell.
 --
 -- A chat is one conversation with a provider ('openTalk'), which the
 -- browser-side code keeps for the editing session. Each message sent
@@ -44,18 +56,23 @@ module Wiki.App.Assistant
   , closesPanel
   , clockTime
 
+    -- * The vault in the browser
+  , KeyRef
+  , Made (..)
+  , Used (..)
+  , PasskeyRefusal (..)
+
     -- * Settings
-  , updateAssistantSettings
   , assistantDatabase
-  , readSettings
-  , writeSettings
+  , readRecord
+  , writeRecord
   )
 where
 
 import Control.Monad.IO.Unlift (MonadUnliftIO, withRunInIO)
 import Control.Monad.Trans.Class (MonadTrans)
-import Data.Aeson (FromJSON (..), Value (Object), eitherDecodeStrict, encode, object, withObject, (.:), (.=))
-import Data.Aeson.Types (Pair, parseEither)
+import Data.Aeson (FromJSON (..), Object, ToJSON (..), Value (Object), eitherDecodeStrict, encode, object, withObject, (.!=), (.:), (.:?), (.=))
+import Data.Aeson.Types (Pair, Parser, parseEither)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -69,16 +86,21 @@ import Web.Event.Event (Event (..))
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
 import Wiki.Api.ContentPolicy (allowsConnect, extraHosts, originOf)
-import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Listed, Ready (..), Settings, blankSettings, defaultSettings, providerKey)
+import Wiki.Api.Vault (AssertionOptions, AssertionResponse, RegistrationOptions, RegistrationResponse)
+import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Listed, Ready (..), providerKey)
+import Wiki.Core.Assistant.Vault (CredentialId (..), Sealed (..), WrappedKey (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Url (Url (..))
 
 -- The chat's bindings return immediately: a turn reports its events
 -- through the callback. "Test the key" and the model list wait for the
 -- provider's response, so they are safe imports, whose result on wasm is
--- a thunk until it is forced.
+-- a thunk until it is forced. The vault's (jsbits/vault.js) answer with
+-- WebCrypto's and WebAuthn's promises, so most are safe imports too; their
+-- results are JSON, or a key's handle (0 for none). One splice holds both
+-- files: a module has room for one.
 $( browserJS
-     ["jsbits/assistant.js"]
+     ["jsbits/assistant.js", "jsbits/vault.js"]
      [ ("js_open", "wiki_assistant_open", Unsafe, [t|JSText -> Callback -> IO Int|])
      , ("js_send", "wiki_assistant_send", Unsafe, [t|Int -> JSText -> JSText -> IO ()|])
      , ("js_answer", "wiki_assistant_answer", Unsafe, [t|Int -> Int -> JSText -> Bool -> IO ()|])
@@ -94,8 +116,56 @@ $( browserJS
      , ("js_clock", "wiki_assistant_clock", Unsafe, [t|Double -> IO JSText|])
      , ("js_page_policy", "wiki_assistant_page_policy", Unsafe, [t|IO JSText|])
      , ("js_page_origin", "wiki_assistant_page_origin", Unsafe, [t|IO JSText|])
+     , ("js_new_key", "wiki_vault_new_key", Safe, [t|Bool -> IO Int|])
+     , ("js_seal", "wiki_vault_seal", Safe, [t|Int -> JSText -> JSText -> IO JSText|])
+     , ("js_open_sealed", "wiki_vault_open", Safe, [t|Int -> JSText -> JSText -> JSText -> IO JSText|])
+     , ("js_forget_key", "wiki_vault_forget_key", Unsafe, [t|Int -> IO ()|])
+     , ("js_salt", "wiki_vault_salt", Unsafe, [t|IO JSText|])
+     , ("js_keep_key", "wiki_vault_keep_key", Safe, [t|JSText -> Int -> Bool -> IO JSText|])
+     , ("js_device_key", "wiki_vault_device_key", Safe, [t|JSText -> IO Int|])
+     , ("js_drop_key", "wiki_vault_drop_key", Safe, [t|JSText -> IO ()|])
+     , ("js_passkeys_here", "wiki_vault_passkeys_here", Unsafe, [t|IO Bool|])
+     , ("js_create", "wiki_vault_create", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
+     , ("js_get", "wiki_vault_get", Safe, [t|JSText -> JSText -> JSText -> IO JSText|])
+     , ("js_wrap", "wiki_vault_wrap", Safe, [t|Int -> Int -> JSText -> IO JSText|])
+     , ("js_unwrap", "wiki_vault_unwrap", Safe, [t|Int -> JSText -> JSText -> JSText -> Bool -> IO JSText|])
+     , ("js_discard", "wiki_vault_discard", Safe, [t|JSText -> JSText -> IO ()|])
      ]
  )
+
+-- | 'KeyRef': a key the page holds (a vault key, or the key that wraps it
+-- for a passkey), by its number in @jsbits\/vault.js@. Its bytes stay in
+-- the browser.
+newtype KeyRef = KeyRef Int
+  deriving stock (Eq, Show)
+
+-- | 'Made': a passkey just made: the browser's answer for the server to
+-- check, whether the passkey has the PRF extension, and the key that
+-- wraps the vault key for it, when its authenticator gave the PRF output
+-- at once (otherwise a use of the passkey gives it).
+data Made = Made
+  { response :: RegistrationResponse
+  , prf :: Bool
+  , wrapping :: Maybe KeyRef
+  }
+  deriving stock (Show)
+
+-- | 'Used': a passkey just used: the browser's answer for the server to
+-- check, and the key that wraps the vault key for it, if the passkey
+-- gave its PRF output.
+data Used = Used
+  { response :: AssertionResponse
+  , wrapping :: Maybe KeyRef
+  }
+  deriving stock (Show)
+
+-- | 'PasskeyRefusal': why a passkey was not made or used.
+data PasskeyRefusal
+  = -- | The person closed the browser's dialog, or let it time out.
+    Cancelled
+  | -- | Anything else, in the browser's words.
+    PasskeyFailed Text
+  deriving stock (Eq, Show)
 
 -- | 'Talk': an open chat. It holds the chat's number in the browser-side
 -- code, the callback its events come back through, which closing the chat
@@ -193,16 +263,98 @@ class (Monad m) => MonadAssistant m where
   default assistantHere :: (MonadTrans t, MonadAssistant n, m ~ t n) => m Bool
   assistantHere = lift assistantHere
 
-  -- | A user's settings, or why they cannot be read (a browser that stores
-  -- nothing, as in some private windows).
-  assistantSettings :: UserId -> m (Either Text Settings)
-  default assistantSettings :: (MonadTrans t, MonadAssistant n, m ~ t n) => UserId -> m (Either Text Settings)
-  assistantSettings = lift . assistantSettings
+  -- | What this device stores for a user ("Wiki.Core.Assistant.Vault"'s
+  -- 'Wiki.Core.Assistant.Vault.DeviceRecord', as JSON), if anything, or
+  -- why it cannot be read (a browser that stores nothing, as in some
+  -- private windows).
+  deviceRecord :: UserId -> m (Either Text (Maybe ByteString))
+  default deviceRecord :: (MonadTrans t, MonadAssistant n, m ~ t n) => UserId -> m (Either Text (Maybe ByteString))
+  deviceRecord = lift . deviceRecord
 
-  -- | Store a user's settings, replacing the stored ones.
-  keepAssistantSettings :: UserId -> Settings -> m (Either Text ())
-  default keepAssistantSettings :: (MonadTrans t, MonadAssistant n, m ~ t n) => UserId -> Settings -> m (Either Text ())
-  keepAssistantSettings user = lift . keepAssistantSettings user
+  -- | Store what this device keeps for a user, replacing what it kept; or,
+  -- with nothing, delete it.
+  keepDeviceRecord :: UserId -> Maybe ByteString -> m (Either Text ())
+  default keepDeviceRecord :: (MonadTrans t, MonadAssistant n, m ~ t n) => UserId -> Maybe ByteString -> m (Either Text ())
+  keepDeviceRecord user = lift . keepDeviceRecord user
+
+  -- | A new vault key (AES-GCM), which can be exported only if asked: to
+  -- be wrapped for a passkey.
+  newVaultKey :: Bool -> m KeyRef
+  default newVaultKey :: (MonadTrans t, MonadAssistant n, m ~ t n) => Bool -> m KeyRef
+  newVaultKey = lift . newVaultKey
+
+  -- | Seal text with a vault key, authenticating the given data with it.
+  sealWith :: KeyRef -> Text -> Text -> m (Either Text Sealed)
+  default sealWith :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> Text -> Text -> m (Either Text Sealed)
+  sealWith key text = lift . sealWith key text
+
+  -- | Open what 'sealWith' sealed, with the same key and data; or why not.
+  openWith :: KeyRef -> Sealed -> Text -> m (Either Text Text)
+  default openWith :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> Sealed -> Text -> m (Either Text Text)
+  openWith key sealed = lift . openWith key sealed
+
+  -- | Let the page forget a key it holds.
+  forgetKey :: KeyRef -> m ()
+  default forgetKey :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> m ()
+  forgetKey = lift . forgetKey
+
+  -- | 32 random bytes, in base64url: a new vault's salt.
+  newSalt :: m Text
+  default newSalt :: (MonadTrans t, MonadAssistant n, m ~ t n) => m Text
+  newSalt = lift newSalt
+
+  -- | Keep a vault key as this device's for a user: for the page's life,
+  -- and in IndexedDB too unless told not to ("ask for the passkey each
+  -- time"), as a key that cannot be exported.
+  keepDeviceKey :: UserId -> KeyRef -> Bool -> m (Either Text ())
+  default keepDeviceKey :: (MonadTrans t, MonadAssistant n, m ~ t n) => UserId -> KeyRef -> Bool -> m (Either Text ())
+  keepDeviceKey user key = lift . keepDeviceKey user key
+
+  -- | The vault key this device holds for a user, if any.
+  deviceKey :: UserId -> m (Maybe KeyRef)
+  default deviceKey :: (MonadTrans t, MonadAssistant n, m ~ t n) => UserId -> m (Maybe KeyRef)
+  deviceKey = lift . deviceKey
+
+  -- | Let go of this device's vault key for a user.
+  dropDeviceKey :: UserId -> m ()
+  default dropDeviceKey :: (MonadTrans t, MonadAssistant n, m ~ t n) => UserId -> m ()
+  dropDeviceKey = lift . dropDeviceKey
+
+  -- | Whether passkeys can be used here: a browser with WebAuthn, on a
+  -- secure page.
+  passkeysHere :: m Bool
+  default passkeysHere :: (MonadTrans t, MonadAssistant n, m ~ t n) => m Bool
+  passkeysHere = lift passkeysHere
+
+  -- | Make a passkey with the server's options, asking for its PRF on the
+  -- salt, whose output gives the wrapping key with this HKDF info.
+  createPasskey :: RegistrationOptions -> Text -> Text -> m (Either PasskeyRefusal Made)
+  default createPasskey :: (MonadTrans t, MonadAssistant n, m ~ t n) => RegistrationOptions -> Text -> Text -> m (Either PasskeyRefusal Made)
+  createPasskey options salt = lift . createPasskey options salt
+
+  -- | Use one of the user's passkeys, with the server's options, asking
+  -- for its PRF on the salt, as 'createPasskey'.
+  usePasskey :: AssertionOptions -> Text -> Text -> m (Either PasskeyRefusal Used)
+  default usePasskey :: (MonadTrans t, MonadAssistant n, m ~ t n) => AssertionOptions -> Text -> Text -> m (Either PasskeyRefusal Used)
+  usePasskey options salt = lift . usePasskey options salt
+
+  -- | Wrap a vault key (one that can be exported) with a passkey's
+  -- wrapping key, authenticating the given data with it.
+  wrapWith :: KeyRef -> KeyRef -> Text -> m (Either Text WrappedKey)
+  default wrapWith :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> KeyRef -> Text -> m (Either Text WrappedKey)
+  wrapWith wrapping key = lift . wrapWith wrapping key
+
+  -- | Unwrap a vault key with a passkey's wrapping key, as one that can be
+  -- exported only if asked.
+  unwrapWith :: KeyRef -> WrappedKey -> Text -> Bool -> m (Either Text KeyRef)
+  default unwrapWith :: (MonadTrans t, MonadAssistant n, m ~ t n) => KeyRef -> WrappedKey -> Text -> Bool -> m (Either Text KeyRef)
+  unwrapWith wrapping wrapped info = lift . unwrapWith wrapping wrapped info
+
+  -- | Tell the person's password manager that a passkey of this relying
+  -- party is not the wiki's any more, where the browser can.
+  discardPasskey :: Text -> CredentialId -> m ()
+  default discardPasskey :: (MonadTrans t, MonadAssistant n, m ~ t n) => Text -> CredentialId -> m ()
+  discardPasskey rpId = lift . discardPasskey rpId
 
   -- | Whether a test installed the scripted provider.
   scriptedInstalled :: m Bool
@@ -270,8 +422,38 @@ instance (MonadAssistant m) => MonadAssistant (ReaderT r m)
 -- runs 'BrowserDOM' there, but code written against it still type-checks.
 instance MonadAssistant BrowserDOM where
   assistantHere = pure inBrowser
-  assistantSettings = settingsIn
-  keepAssistantSettings = keepIn
+  deviceRecord = recordIn
+  keepDeviceRecord = keepRecordIn
+  newVaultKey exportable = liftIO (KeyRef <$> (evaluate =<< js_new_key exportable))
+  sealWith (KeyRef k) text info = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_seal k (toJSText text) (toJSText info)
+    pure (answered (\o -> Sealed <$> o .: "nonce" <*> o .: "ciphertext") answer)
+  openWith (KeyRef k) sealed info = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_open_sealed k (toJSText sealed.nonce) (toJSText sealed.ciphertext) (toJSText info)
+    pure (answered (.: "text") answer)
+  forgetKey (KeyRef k) = liftIO (js_forget_key k)
+  newSalt = liftIO (fromJSText <$> js_salt)
+  keepDeviceKey user (KeyRef k) onDisk = liftIO $ do
+    failure <- evaluate . fromJSText =<< js_keep_key (toJSText user.text) k onDisk
+    pure (if T.null failure then Right () else Left ("This browser could not keep the vault's key: " <> failure))
+  deviceKey user = liftIO $ do
+    k <- evaluate =<< js_device_key (toJSText user.text)
+    pure (if k == 0 then Nothing else Just (KeyRef k))
+  dropDeviceKey user = liftIO (evaluate =<< js_drop_key (toJSText user.text))
+  passkeysHere = liftIO js_passkeys_here
+  createPasskey options salt info = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_create (toJSText (json (toJSON options))) (toJSText salt) (toJSText info)
+    pure . passkeyAnswer answer $ \o -> Made <$> o .: "response" <*> o .: "prf" <*> (keyRefOf <$> o .: "wrapping")
+  usePasskey options salt info = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_get (toJSText (json (toJSON options))) (toJSText salt) (toJSText info)
+    pure . passkeyAnswer answer $ \o -> Used <$> o .: "response" <*> (keyRefOf <$> o .: "wrapping")
+  wrapWith (KeyRef wrapping) (KeyRef k) info = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_wrap wrapping k (toJSText info)
+    pure (answered (\o -> WrappedKey <$> o .: "nonce" <*> o .: "key") answer)
+  unwrapWith (KeyRef wrapping) wrapped info exportable = liftIO $ do
+    answer <- evaluate . fromJSText =<< js_unwrap wrapping (toJSText wrapped.nonce) (toJSText wrapped.key) (toJSText info) exportable
+    pure (answered (\o -> KeyRef <$> o .: "handle") answer)
+  discardPasskey rpId credential = liftIO (evaluate =<< js_discard (toJSText rpId) (toJSText credential.text))
   scriptedInstalled = liftIO js_scripted
   secureContext = liftIO js_secure
   prepareAssistant = liftIO js_prepare
@@ -307,14 +489,28 @@ instance MonadAssistant BrowserDOM where
           answer <- evaluate . fromJSText =<< js_models (toJSText (json (endpointJSON r [])))
           pure (listedOf answer)
 
--- | The in-memory document's instance: settings stored as in the browser,
--- in its in-memory IndexedDB (which the native tests read and write), and
--- no provider. Since it is not a browser, no assistant is shown
--- ('assistantHere').
+-- | The in-memory document's instance: records stored as in the browser,
+-- in its in-memory IndexedDB, but no WebCrypto to seal them with, no
+-- passkeys and no provider. Since it is not a browser, no assistant is
+-- shown ('assistantHere'), and nothing reads its settings.
 instance MonadAssistant MemDOM where
   assistantHere = pure False
-  assistantSettings = settingsIn
-  keepAssistantSettings = keepIn
+  deviceRecord = recordIn
+  keepDeviceRecord = keepRecordIn
+  newVaultKey _ = pure (KeyRef 0)
+  sealWith _ _ _ = pure (Left noBrowser)
+  openWith _ _ _ = pure (Left noBrowser)
+  forgetKey _ = pass
+  newSalt = pure ""
+  keepDeviceKey _ _ _ = pure (Left noBrowser)
+  deviceKey _ = pure Nothing
+  dropDeviceKey _ = pass
+  passkeysHere = pure False
+  createPasskey _ _ _ = pure (Left (PasskeyFailed noBrowser))
+  usePasskey _ _ _ = pure (Left (PasskeyFailed noBrowser))
+  wrapWith _ _ _ = pure (Left noBrowser)
+  unwrapWith _ _ _ _ = pure (Left noBrowser)
+  discardPasskey _ _ = pass
   scriptedInstalled = pure False
   secureContext = pure True
   prepareAssistant = pass
@@ -357,43 +553,60 @@ blockedMessage policy url =
     <> ". On a wiki with a server, an administrator can add it to the assistant's hosts, in the administration's server settings."
 
 -- | The database the assistant's settings are stored in, separate from the
--- demo's wiki: one store, @settings@, keyed by user id, each value a
--- user's 'Settings' as JSON.
+-- demo's wiki: one store, @settings@, keyed by user id, each value what this
+-- device keeps for a user ("Wiki.Core.Assistant.Vault"'s
+-- 'Wiki.Core.Assistant.Vault.DeviceRecord', or, written before the vault,
+-- the settings as text, which are sealed and replaced the first time they
+-- are read). The vault's key is kept apart, by @jsbits\/vault.js@, in a
+-- database of its own (@wiki-assistant-keys@), since IndexedDB stores a
+-- WebCrypto key only as the key itself.
 assistantDatabase :: Database
 assistantDatabase = Database {name = "wiki-assistant", version = 1, stores = ["settings"]}
 
--- | A user's settings as stored in a database: the defaults if nothing is
--- stored (or the stored value cannot be decoded, as after a format change).
-readSettings :: (MonadIndexedDB m) => Database -> UserId -> m Settings
-readSettings db user =
-  IDB.get db "settings" user.text <&> \case
-    Just bytes -> fromRight defaultSettings (eitherDecodeStrict bytes)
-    Nothing -> defaultSettings
+-- | What a database keeps for a user, if anything.
+readRecord :: (MonadIndexedDB m) => Database -> UserId -> m (Maybe ByteString)
+readRecord db user = IDB.get db "settings" user.text
 
--- | Change a user's stored settings, and store the result. The stored
--- settings are read again first, so that a change made elsewhere since
--- this caller read them (the editor fetching a provider's model list while
--- the panel changes the model) is not lost. The result is the settings
--- after the change.
-updateAssistantSettings :: (MonadAssistant m) => UserId -> (Settings -> Settings) -> m (Either Text Settings)
-updateAssistantSettings user f =
-  assistantSettings user >>= \case
-    Left why -> pure (Left why)
-    Right s -> let new = f s in (new <$) <$> keepAssistantSettings user new
+-- | Store what is kept for a user in a database, or delete it.
+writeRecord :: (MonadIndexedDB m) => Database -> UserId -> Maybe ByteString -> m ()
+writeRecord db user = \case
+  Nothing -> IDB.delete db "settings" user.text
+  Just bytes -> IDB.put db "settings" user.text bytes
 
--- | Store a user's settings in a database. Settings with nothing set (no
--- key, nothing chosen) are deleted instead, so that "Forget" on the last
--- key leaves nothing stored.
-writeSettings :: (MonadIndexedDB m) => Database -> UserId -> Settings -> m ()
-writeSettings db user settings
-  | blankSettings settings = IDB.delete db "settings" user.text
-  | otherwise = IDB.put db "settings" user.text (BSL.toStrict (encode settings))
+recordIn :: (MonadIndexedDB m, MonadUnliftIO m) => UserId -> m (Either Text (Maybe ByteString))
+recordIn user = failingAs (readRecord assistantDatabase user)
 
-settingsIn :: (MonadIndexedDB m, MonadUnliftIO m) => UserId -> m (Either Text Settings)
-settingsIn user = failingAs (readSettings assistantDatabase user)
+keepRecordIn :: (MonadIndexedDB m, MonadUnliftIO m) => UserId -> Maybe ByteString -> m (Either Text ())
+keepRecordIn user record = failingAs (writeRecord assistantDatabase user record)
 
-keepIn :: (MonadIndexedDB m, MonadUnliftIO m) => UserId -> Settings -> m (Either Text ())
-keepIn user settings = failingAs (writeSettings assistantDatabase user settings)
+-- | What the in-memory document says of what only a browser does.
+noBrowser :: Text
+noBrowser = "There is no browser here to keep the assistant's keys in."
+
+-- | A key's handle from the browser: 0 for none.
+keyRefOf :: Int -> Maybe KeyRef
+keyRefOf k = if k == 0 then Nothing else Just (KeyRef k)
+
+-- | An answer of @jsbits\/vault.js@: JSON with what was asked for, or
+-- @{error}@.
+answered :: (Object -> Parser a) -> Text -> Either Text a
+answered parse answer =
+  case eitherDecodeStrict (encodeUtf8 answer) >>= parseEither (withObject "Answer" (\o -> (Left <$> o .: "error") <|> (Right <$> parse o))) of
+    Left why -> Left ("The browser's answer could not be read: " <> toS why)
+    Right result -> result
+
+-- | A passkey's answer: what was asked for, or why not, with a dialog the
+-- person closed told apart.
+passkeyAnswer :: Text -> (Object -> Parser a) -> Either PasskeyRefusal a
+passkeyAnswer answer parse =
+  case eitherDecodeStrict (encodeUtf8 answer) >>= parseEither (withObject "Answer" (\o -> (Left <$> refusal o) <|> (Right <$> parse o))) of
+    Left why -> Left (PasskeyFailed ("The browser's answer could not be read: " <> toS why))
+    Right result -> result
+  where
+    refusal o = do
+      why <- o .: "error"
+      cancelled <- o .:? "cancelled" .!= False
+      pure (if cancelled then Cancelled else PasskeyFailed why)
 
 -- | An IndexedDB failure, as a message to the user.
 failingAs :: (MonadUnliftIO m) => m a -> m (Either Text a)
