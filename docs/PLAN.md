@@ -1281,6 +1281,21 @@ must be in before it is.
   at the use sites, so a plugin would have to be enabled in every consumer, and plugin
   loading on the wasm and JS cross-compilers is fragile.
 
+- **WP5.20 Steps on a slide: `. . .`, `::: incremental`, and `\pause` in the exports** (the
+  owner, 2026-10-28: "żeby prezentacje się ładnie do PDF robiły, łącznie z przejściami (mamy w
+  ogóle support do \pause?)"). pandoc's own markers, so the exports get it almost for free:
+  `. . .` on a line of its own cuts a slide into steps, and a box with the class
+  `incremental` shows a list one item at a time; on an ordinary page both change nothing.
+  Presenting: the right arrow (Space, PageDown) shows the next step before the next slide,
+  the left arrow hides it or goes back a slide; the step is in the address
+  (`?slide=3&step=2`); the overview and the print show whole slides, with a "each step on
+  its own page" choice in the print. Exports: pandoc writes `. . .` as `\pause` in Beamer
+  (one PDF page per step, which is what a "transition" in a PDF is; viewers show no
+  animated transitions worth having) and as a step in PPTX, and `incremental` as
+  `\item<+->`; DOCX, HTML and EPUB ignore both. Tests: `Wiki.Core.Slides` cutting steps,
+  hspec-halogen for the keys and the address, the server's export test finding `\pause` in
+  the Beamer source. `docs/markdown.md`'s "Presentations" says it.
+
 - **Later, by the owner (2026-10-28, "PRF jest spoko na później"): the assistant's API keys
   synchronised with a passkey.** The keys stay out of the server today (IndexedDB per user,
   per device; the administrator never sees them), and the owner does not want to type
