@@ -3561,6 +3561,38 @@ Amended by the planning session after each work package's report.
   for the public spaces too; a private space shows "There is nothing here" under "Not
   found". Left as found: `View/NewSpace.hs` decides `Forbidden` in the client for a parent
   the user may not view. Full gate; CI green.
+- **WP5.16b merged** (2026-10-28, PR #103, `main` at `3237886`). Findings 5, 7, 8, 9 and 11,
+  one commit each. Search: migration 0014 adds `pages.search_fold` (title and search text
+  folded with `foldText`), the index `pages (space_id, template)` and a partial index
+  `pages_unfolded`; the fold is backfilled at startup 500 rows at a time (SQL cannot
+  fold); `searchPagesTx` matches in SQL (`instr(search_fold, ?) > 0` per word, the spaces
+  searched, `template = 0` unless asked) and folds only the matches; paths through
+  `withAncestors`. Sitemap and feeds: `sitemapPages` reads nodes of every viewable space in
+  one query; a feed picks its 20 posts among summaries and reads only those (`feedPosts`,
+  first author by join); `FeedCache` keeps each answer 60 s (keyed by route and public
+  address, 404s not kept, at most 1,000), `public, max-age=60`. Page views: `mentionable`
+  with `WHERE login IN`; `watching` through `loadMarksOn` (the page and its chain);
+  paths through `resolvePathM` over `childPage`; create, move and shift read siblings
+  only; the subtree is a recursive CTE (`subtreeIds`); delete and `locatedTx` take the
+  path from `lineageOf`; `attachmentFile` reads the attachment with its space in one
+  query and only that chain's grants (`readWithin`); attachments and space icons answer
+  `private, max-age=300`; `loadTelling` and `loadAllMarks` are gone. History:
+  `postDetails` through the first-version join, bodies only of pages that can be posts;
+  `listVersions` takes `VersionsQuery {before, limit}` (default 50, at most 500; query
+  parameters on the versions route); `VersionInfo.number`; migration 0015 indexes
+  `page_versions (page_id, rtrim(updated_at, 'Z'))`; the History view lists 50 with
+  "Older…", and a deep version opened by address fetches pages until it is loaded. Audit
+  log: `ActivityQuery.before` (an entry id, keyset `(at, id) <`), `offset` still answered;
+  the actor list is a recursive skip scan over `audit_log_actor` (the brief's `GROUP BY`
+  still reads every row); "Newer" keeps a stack of cursors. Bench medians, `d08cf3c` →
+  this: search of a word on 1 page of 20,000 716 → 58 ms (on every page 737 → 687 ms:
+  ranking folds every match, FTS5 is the next step; in one 2,000-page space 660 → 12 ms);
+  sitemap written 231 → 131 ms, repeated within a minute 0.12 ms; feed of a 2,000-page
+  blog 7,016 → 264 ms; page view (getPage, watching, mentionable for 3) 124 → 2.2 ms;
+  blog listing of 2,000 posts × 20 versions 1,095 → 222 ms (excerpt parsing now); Activity
+  page 100 of 100,000 69 → 2.3 ms. Next free migration: 0016. Noted: `search_fold` as a
+  column of `pages` still reads past each body; a separate table would read a quarter of
+  the bytes. Full gate; CI green.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
