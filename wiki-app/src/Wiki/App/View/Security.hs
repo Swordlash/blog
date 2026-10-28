@@ -63,7 +63,7 @@ import Wiki.App.Backend (WikiError)
 import Wiki.App.Editor.Browser (focusElement)
 import Wiki.App.Security (MonadSecurity (..))
 import Wiki.App.View.Common (attr, errorMessage)
-import Wiki.Core.User (Password (..))
+import Wiki.Core.User (Email (..), Password (..))
 
 data State = State
   { available :: Bool
@@ -426,7 +426,7 @@ component =
       -- The current address: send its link again, which needs no password.
       ResendEmail ->
         gets (\st -> st.mailbox) >>= \case
-          Just (Right EmailState {email = Just address}) -> emailChange address Nothing
+          Just (Right EmailState {email = Just address}) -> emailChange address.text Nothing
           _ -> pass
       ClearEmail ->
         gets (\st -> st.mailbox) >>= \case
@@ -488,7 +488,7 @@ component =
               , typedPassword = ""
               , emailTold = case (e.email, e.mailError) of
                   (_, Just why) -> Just ("The link could not be mailed: " <> why)
-                  (Just a, Nothing) | not e.verified -> Just ("A link to verify it has been mailed to " <> a <> ".")
+                  (Just a, Nothing) | not e.verified -> Just ("A link to verify it has been mailed to " <> a.text <> ".")
                   (Nothing, Nothing) -> Just "Your address is removed."
                   _ -> Nothing
               }
@@ -558,6 +558,6 @@ addressText e = case e.email of
     | e.asksPassword -> "None: a forgotten password can then only be reset by an administrator."
     | otherwise -> "None: you sign in with your provider's account, and have no password to reset."
   Just address
-    | not e.verified -> address <> ", not verified yet: follow the link mailed to it."
-    | e.asksPassword -> address <> ", verified: a forgotten password can be reset by mail."
-    | otherwise -> address <> ", verified: the wiki's mail to you goes there."
+    | not e.verified -> address.text <> ", not verified yet: follow the link mailed to it."
+    | e.asksPassword -> address.text <> ", verified: a forgotten password can be reset by mail."
+    | otherwise -> address.text <> ", verified: the wiki's mail to you goes there."

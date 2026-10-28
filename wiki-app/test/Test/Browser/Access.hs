@@ -32,7 +32,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (Grants (..))
-import Wiki.Core.User (Standing (..))
+import Wiki.Core.User (Email (..), Standing (..))
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
@@ -116,7 +116,7 @@ invited m = describe "an invitation's page" $ do
     serveDemo
     rita <- signedInAs "user-reader"
     answerWith "GET" "api/v1/session" 200 (nobodyIn Closed)
-    answerWith "GET" "api/v1/invitations/s3cr3t" 200 InvitationInfo {email = "rita@example.org", expiresAt = demoNow}
+    answerWith "GET" "api/v1/invitations/s3cr3t" 200 InvitationInfo {email = Email "rita@example.org", expiresAt = demoNow}
     answerWith "POST" "api/v1/invitations/s3cr3t" 200 rita
     ui <- startServer m (Invite (InvitationToken "s3cr3t"))
     find ui ".invitation-form strong" >>= (`shouldHaveText` "rita@example.org")

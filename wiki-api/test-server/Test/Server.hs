@@ -56,7 +56,7 @@ import Wiki.Core.Page qualified as Page (Page (..))
 import Wiki.Core.Permission (SpacePermission (..), Subject (..))
 import Wiki.Core.Search (Piece (..), SearchHit (..), SearchQuery (..), Snippet (..), searchQuery)
 import Wiki.Core.Space qualified as Space
-import Wiki.Core.User (Group (..), Login (..), Password (..), Standing (..), User (..))
+import Wiki.Core.User (Email (..), Group (..), Login (..), Password (..), Standing (..), User (..))
 import Wiki.Core.Version (VersionInfo)
 
 -- | Refuse a request as the server's handlers will: the error's status, and
@@ -123,7 +123,7 @@ stubs =
           , confirmTotp = \body -> if body.code == "287082" then pure RecoveryCodes {codes = ["abcd-efgh-ijkl-mnop"]} else refuse Unauthenticated
           , removeSecondFactor = \body -> if body.code == "287082" then pure SecondFactorState {enabled = False, recoveryCodesLeft = 0, asksPassword = True} else refuse Unauthenticated
           , email = pure Sample.emailState
-          , setEmail = \body -> pure EmailState {email = Just body.email, verified = False, mailing = True, mailError = Nothing, asksPassword = True}
+          , setEmail = \body -> pure EmailState {email = Just (Email body.email), verified = False, mailing = True, mailError = Nothing, asksPassword = True}
           }
     , spaces =
         SpacesApi
@@ -292,7 +292,7 @@ stubs =
 invitedAs :: Text -> Invited
 invitedAs email =
   Invited
-    { invitation = Invitation {id = InvitationId "i1", email, createdAt = Sample.time, expiresAt = Sample.later, expired = False}
+    { invitation = Invitation {id = InvitationId "i1", email = Email email, createdAt = Sample.time, expiresAt = Sample.later, expired = False}
     , token = Sample.invited.token
     , mailError = Sample.invited.mailError
     }
@@ -724,7 +724,7 @@ spec = describe "a server of the API's type" $ do
     it "reads and gives the user's e-mail address, and follows the link that verifies it" $ do
       links.account.email `shouldBe` "api/v1/account/email"
       answers (getAt links.account.email) 200 Sample.emailState
-      answers (sendJson methodPut links.account.setEmail EmailChange {email = "ada@example.com", password = Just (Password "the current one")}) 200 EmailState {email = Just "ada@example.com", verified = False, mailing = True, mailError = Nothing, asksPassword = True}
+      answers (sendJson methodPut links.account.setEmail EmailChange {email = "ada@example.com", password = Just (Password "the current one")}) 200 EmailState {email = Just (Email "ada@example.com"), verified = False, mailing = True, mailError = Nothing, asksPassword = True}
       links.emailVerification (MailToken "secret") `shouldBe` "api/v1/email-verification/secret"
       (status <$> request methodPost (links.emailVerification (MailToken "secret")) [] "") `shouldReturn` 204
       answers (request methodPost (links.emailVerification (MailToken "other")) [] "") 404 NotFound

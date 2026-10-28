@@ -61,7 +61,7 @@ import Protolude
 import Wiki.Api.Notifications (ReadMark (..))
 import Wiki.Core.Id
 import Wiki.Core.Notification (Kind (..), MailMode (..), Mark, Notification (..), WatchTarget (..), keptNotifications, mailModeName, readMailMode)
-import Wiki.Core.User (Login (..), Membership, User (..))
+import Wiki.Core.User (Email (..), Login (..), Membership, User (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Storage.Rows (Stamp (..), stamp)
 
@@ -290,7 +290,7 @@ markNotificationsRead c u now m
 -- mailing them needs.
 data Pending = Pending
   { user :: User
-  , email :: Maybe Text
+  , email :: Maybe Email
   , verified :: Bool
   , mail :: Maybe MailMode
   , notifications :: [Notification]
@@ -304,7 +304,7 @@ loadPending c = do
   users <- query_ c "SELECT id, login, display_name, email, email_verified_at IS NOT NULL, notification_mail FROM users WHERE id IN (SELECT user_id FROM notifications WHERE mail = 1)"
   for users $ \(i, login, displayName, email, verified, mail :: Maybe Text) -> do
     ns <- catMaybes <$> queryWith notificationRow c (notificationColumns <> "WHERE user_id = ? AND mail = 1 ORDER BY seq") (Only i)
-    pure Pending {user = User {id = UserId i, login = Login login, displayName}, email, verified = verified /= (0 :: Int), mail = mail >>= readMailMode, notifications = ns}
+    pure Pending {user = User {id = UserId i, login = Login login, displayName}, email = Email <$> email, verified = verified /= (0 :: Int), mail = mail >>= readMailMode, notifications = ns}
 
 -- | Remove these notifications from the mail queue: they were mailed, or
 -- will not be.

@@ -36,7 +36,7 @@ import Wiki.App.View.Security (qrRuns)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (Grants (..))
-import Wiki.Core.User (Standing (..))
+import Wiki.Core.User (Email (..), Standing (..))
 
 type Specs m = (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m)
 
@@ -151,7 +151,7 @@ panel m = describe "the account panel" $ do
 
   it "gives an e-mail address, which a mailed link is to verify" $ runPage $ do
     opened
-    answerWith "PUT" "api/v1/account/email" 200 EmailState {email = Just "rita@example.org", verified = False, mailing = True, mailError = Nothing, asksPassword = True}
+    answerWith "PUT" "api/v1/account/email" 200 EmailState {email = Just (Email "rita@example.org"), verified = False, mailing = True, mailError = Nothing, asksPassword = True}
     ui <- startServer m Home
     find ui ".account-toggle" >>= click
     find ui ".email-current" >>= (`shouldContainText` "None")
@@ -285,7 +285,7 @@ administration m = describe "the administration's accounts" $ do
           , identities = d.identities
           , providerOnly = d.providerOnly
           , secondFactor = Set.singleton (UserId "user-editor")
-          , emails = Map.fromList [(UserId "user-editor", AccountEmail {email = "edgar@example.org", verified = False})]
+          , emails = Map.fromList [(UserId "user-editor", AccountEmail {email = Email "edgar@example.org", verified = False})]
           , mailing = True
           , adminCreatesPasswordAccounts = d.adminCreatesPasswordAccounts
           , groups = d.groups

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Addresses are `Email` inside the server (WP5.15): a mail's `Message.to`,
+the mail functions of `Wiki.Server.Mail`, the reset and verification
+functions of `Wiki.Server.Reset`, the queued notifications, and what a
+provider says about an account (`Claimed.email`).
+
 Passwords are `Password` inside the server (WP5.15): `hashPassword`,
 `hashWith`, `verifyPassword`, the accounts' `signIn`, `createAccount`,
 `setPassword`, `changePassword`, `currentPasswordIs` and the reset's

@@ -47,6 +47,7 @@ import Wiki.App.Route qualified as Route
 import Wiki.App.View.Common
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (InvitationId)
+import Wiki.Core.User (Email (..))
 
 newtype Input = Input {context :: Context}
 
@@ -58,7 +59,7 @@ data Loaded
 -- | An invitation just made, as the panel reports it: to whom, whether it
 -- was mailed, and its link if it was not.
 data Made = Made
-  { email :: Text
+  { email :: Email
   , link :: Maybe Text
   , mailError :: Maybe Text
   }
@@ -186,8 +187,8 @@ component =
               </thead>
               <tbody>
                 {% for i in listed.invitations %}
-                  <tr class="invitation-row{% if i.expired %} expired{% end %}" data-email={{ i.email }}>
-                    <td>{{ i.email }}</td>
+                  <tr class="invitation-row{% if i.expired %} expired{% end %}" data-email={{ i.email.text }}>
+                    <td>{{ i.email.text }}</td>
                     <td>{{ expiry i }}</td>
                     <td><button type="button" class="invitation-revoke" disabled={{ st.busy }} onClick={{ const (Revoke i.id) }}>Revoke</button></td>
                   </tr>
@@ -212,10 +213,10 @@ component =
       [hh|
         <div class="invitation-made" role="status">
           {% if isNothing m.link %}
-            <p>{{ m.email }} is invited: the link is in their mail.</p>
+            <p>{{ m.email.text }} is invited: the link is in their mail.</p>
           {% end %}
           {% for url in maybeToList m.link %}
-            <p>{{ m.email }} is invited. {{ notMailed }}</p>
+            <p>{{ m.email.text }} is invited. {{ notMailed }}</p>
             <div class="invitation-link-row">
               <input type="text" class="invitation-link" readonly value={{ url }} aria-label="The invitation's link" {{ HP.ref st.linkField }}>
               <button type="button" class="invitation-copy" onClick={{ const (CopyLink url) }}>{{ if st.copied then "Copied" else "Copy link" :: Text }}</button>

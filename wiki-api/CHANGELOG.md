@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The addresses in responses are `Email` (WP5.15): `Invitation.email`,
+`InvitationInfo.email`, `AccountEmail.email`, `EmailState.email` and
+`LinkedIdentity.email`. The addresses a request carries as typed
+(`NewInvitation`, `NewAccount.email`, `EmailChange`, `MailTest`) stay
+`Text`, checked by the backend. `checkEmail` is gone from
+`Wiki.Api.Admin`: it is `Wiki.Core.User.parseEmail`. The JSON is
+unchanged.
+
 Every password in a request is a `Password` (WP5.15, from
 `Wiki.Core.User`): `Credentials`, `NewAccount`, `NewPassword`,
 `PasswordChange`, `CurrentPassword`, `EmailChange` and

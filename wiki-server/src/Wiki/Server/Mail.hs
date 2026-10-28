@@ -54,7 +54,7 @@ import System.Timeout (timeout)
 import Text.Show (Show (showsPrec))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), Security (..), ServerSettingsOf (..), securityFor, securityName)
 import Wiki.Core.Notification (DigestGroup (..), Notification (..), PageLocation, notificationText)
-import Wiki.Core.User (Login (..))
+import Wiki.Core.User (Email (..), Login (..))
 import Wiki.Server.Secret (Kept, revealed)
 
 -- | Where mail goes, and the wiki's address its links start with.
@@ -69,7 +69,7 @@ data Mailer = Mailer
 
 -- | A mail to send.
 data Message = Message
-  { to :: Text
+  { to :: Email
   , subject :: Text
   , body :: Text
   }
@@ -78,7 +78,7 @@ data Message = Message
 -- | Shows a message without its body, which may carry a link that lets
 -- its reader in.
 instance Show Message where
-  showsPrec _ m rest = "Message {to = " <> show m.to <> ", subject = " <> show m.subject <> ", body = <hidden>}" <> rest
+  showsPrec _ m rest = "Message {to = " <> show m.to.text <> ", subject = " <> show m.subject <> ", body = <hidden>}" <> rest
 
 -- | The link of an invitation: its page in the application, under the
 -- wiki's address.
@@ -87,7 +87,7 @@ inviteLink publicUrl token = publicUrl <> "invite/" <> token <> "/"
 
 -- | The mail that invites someone, with the link that creates their
 -- account and when the link expires.
-invitationMessage :: Text -> Text -> Text -> UTCTime -> Message
+invitationMessage :: Text -> Email -> Text -> UTCTime -> Message
 invitationMessage publicUrl email token expiresAt =
   Message
     { to = email
@@ -116,7 +116,7 @@ verificationLink publicUrl token = publicUrl <> "verify-email/" <> token <> "/"
 
 -- | The mail with a password reset link (WP4.11 of docs/PLAN.md), sent to
 -- a user's verified address, for their login.
-resetMessage :: Text -> Text -> Login -> Text -> UTCTime -> Message
+resetMessage :: Text -> Email -> Login -> Text -> UTCTime -> Message
 resetMessage publicUrl email login token expiresAt =
   Message
     { to = email
@@ -137,7 +137,7 @@ resetMessage publicUrl email login token expiresAt =
     }
 
 -- | The mail that verifies an address set for a user's account.
-verificationMessage :: Text -> Text -> Login -> Text -> Message
+verificationMessage :: Text -> Email -> Login -> Text -> Message
 verificationMessage publicUrl email login token =
   Message
     { to = email
@@ -168,7 +168,7 @@ unsubscribeLink publicUrl token = publicUrl <> "unsubscribe/" <> token <> "/"
 notificationMessage
   :: Text
   -- ^ The wiki's address.
-  -> Text
+  -> Email
   -- ^ The address mailed.
   -> Text
   -- ^ The secret of the user's unsubscribe link.
@@ -267,7 +267,7 @@ mailerFrom send s = do
   pure Mailer {publicUrl, deliver = send smtp password}
 
 -- | The mail that confirms the mail server works.
-testMessage :: Text -> Text -> Message
+testMessage :: Text -> Email -> Message
 testMessage publicUrl recipient =
   Message
     { to = recipient
@@ -306,9 +306,9 @@ smtpSend smtp password m = do
         -- The library fails with its own words when the server refuses,
         -- and they contain nothing secret.
         void (liftIO (sendCommand c (AUTH LOGIN (toS u) (toS (fromMaybe "" password)))))
-      rendered <- liftIO (renderMail' (simpleMail sender [address m.to] [] [] m.subject [plainPart (TL.fromStrict m.body)]))
+      rendered <- liftIO (renderMail' (simpleMail sender [address m.to.text] [] [] m.subject [plainPart (TL.fromStrict m.body)]))
       expect "MAIL FROM" 250 =<< liftIO (sendCommand c (MAIL (encodeUtf8 sender.addressEmail)))
-      expect "RCPT TO" 250 =<< liftIO (sendCommand c (RCPT (encodeUtf8 (T.strip m.to))))
+      expect "RCPT TO" 250 =<< liftIO (sendCommand c (RCPT (encodeUtf8 (T.strip m.to.text))))
       expect "DATA" 250 =<< liftIO (sendCommand c (DATA (BSL.toStrict rendered)))
     expect :: Text -> Int -> (Int, ByteString) -> ExceptT Text IO ()
     expect what wanted (code, reply)

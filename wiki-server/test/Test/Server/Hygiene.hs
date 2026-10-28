@@ -38,7 +38,7 @@ import Wiki.App.Backend.Admin (MonadAdmin (setServerSettings))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (Login (..), Password (..), User (..))
+import Wiki.Core.User (Email (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (Resolved (..), createAccount, resolveSession, seenEvery, signIn)
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Reset (ResetMail (..), requestReset, resetPassword, setEmail, verifyEmail)
@@ -273,9 +273,9 @@ email = describe "an e-mail address" $ do
   it "is verified by the link mailed to it, once, and not if it has changed since" $ withEditor $ \r t -> do
     mailing r
     given :: EmailState <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.org", password = Just (Password "editor\'s password")}) >>= jsonAs 200
-    (given.email, given.verified, given.mailing, given.mailError) `shouldBe` (Just "edgar@example.org", False, True, Nothing)
+    ((\e -> e.text) <$> given.email, given.verified, given.mailing, given.mailError) `shouldBe` (Just "edgar@example.org", False, True, Nothing)
     sent <- readIORef r.outbox
-    map (\m -> m.to) sent `shouldBe` ["edgar@example.org"]
+    map (\m -> m.to.text) sent `shouldBe` ["edgar@example.org"]
     first' <- maybe (panic "no link") pure =<< linkIn r "https://wiki.example.org/verify-email/"
     -- A new address: the first link no longer verifies anything.
     _ <- as r t methodPut links.account.setEmail (encode EmailChange {email = "edgar@example.com", password = Just (Password "editor\'s password")}) >>= jsonAs @EmailState 200
@@ -284,10 +284,10 @@ email = describe "an e-mail address" $ do
     second' `shouldNotBe` first'
     -- Anyone with the link verifies it, signed in or not.
     (.status) <$> send r methodPost (onPublic r (links.emailVerification (MailToken second'))) [] "" `shouldReturn` 204
-    (as r t methodGet links.account.email "" >>= jsonAs 200) `shouldReturn` EmailState {email = Just "edgar@example.com", verified = True, mailing = True, mailError = Nothing, asksPassword = True}
+    (as r t methodGet links.account.email "" >>= jsonAs 200) `shouldReturn` EmailState {email = Just (Email "edgar@example.com"), verified = True, mailing = True, mailError = Nothing, asksPassword = True}
     (send r methodPost (onPublic r (links.emailVerification (MailToken second'))) [] "" >>= jsonAs 404) `shouldReturn` NotFound
     directory :: Directory <- getUrl r (onAdmin r links.admin.directory) >>= jsonAs 200
-    directory.emails `shouldBe` Map.singleton (UserId "user-editor") AccountEmail {email = "edgar@example.com", verified = True}
+    directory.emails `shouldBe` Map.singleton (UserId "user-editor") AccountEmail {email = Email "edgar@example.com", verified = True}
     directory.mailing `shouldBe` True
 
   it "may be given to a new user by the administration, which mails it the link" $ withDemoRunning identity $ \r -> do
@@ -296,9 +296,9 @@ email = describe "an e-mail address" $ do
       >>= (`shouldSatisfy` \case Invalid _ -> True; _ -> False)
     made :: Account <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "bea", displayName = "", password = Password "bea's password", email = Just "bea@example.org"} >>= jsonAs 201
     sent <- readIORef r.outbox
-    map (\m -> m.to) sent `shouldBe` ["bea@example.org"]
+    map (\m -> m.to.text) sent `shouldBe` ["bea@example.org"]
     directory :: Directory <- getUrl r (onAdmin r links.admin.directory) >>= jsonAs 200
-    directory.emails `shouldBe` Map.singleton made.user.id AccountEmail {email = "bea@example.org", verified = False}
+    directory.emails `shouldBe` Map.singleton made.user.id AccountEmail {email = Email "bea@example.org", verified = False}
 
 --------------------------------------------------------------------------------
 
@@ -330,7 +330,7 @@ reset = describe "a password reset" $ do
       (known.status, known.body) `shouldBe` (unknown.status, unknown.body)
       eventually ((== 2) . length <$> readIORef r.outbox)
       sent <- readIORef r.outbox
-      map (\m -> m.to) sent `shouldBe` ["edgar@example.org", "edgar@example.org"]
+      map (\m -> m.to.text) sent `shouldBe` ["edgar@example.org", "edgar@example.org"]
       token <- maybe (panic "no link") pure =<< linkIn r "https://wiki.example.org/reset-password/"
       show sent `shouldSatisfy` (not . T.isInfixOf token)
       -- By the verified address too, whatever its case.
@@ -386,7 +386,7 @@ passwordLink = describe "a password link an administrator has mailed" $ do
     reply <- askLink r "user-editor"
     reply.status `shouldBe` 204
     sent <- readIORef r.outbox
-    map (\m -> m.to) sent `shouldBe` ["edgar@example.org", "edgar@example.org"]
+    map (\m -> m.to.text) sent `shouldBe` ["edgar@example.org", "edgar@example.org"]
     -- The reset's own mail, link and all.
     token <- maybe (panic "no link") pure =<< latestLink r "https://wiki.example.org/reset-password/"
     (sendJson r methodPost (onPublic r (links.passwordReset.reset (MailToken token))) NewPasswordByMail {password = Password "chosen by edgar"} >>= \x -> pure x.status) `shouldReturn` 204
@@ -427,7 +427,7 @@ passwordLink = describe "a password link an administrator has mailed" $ do
     (askLink r "user-editor" >>= jsonAs 400) >>= (`shouldSatisfy` saysThat "disabled")
     (askLink r "user-nobody" >>= jsonAs 404) `shouldReturn` NotFound
     -- Nothing mailed but the address's own link.
-    map (\m -> m.to) <$> readIORef r.outbox `shouldReturn` ["bea@example.org"]
+    map (\m -> m.to.text) <$> readIORef r.outbox `shouldReturn` ["bea@example.org"]
 
   it "is asked for by an administrator only" $ withVerifiedEditor $ \r t -> do
     (as r t methodPost (links.admin.sendPasswordLink (UserId "user-editor")) "" >>= jsonAs 403) `shouldReturn` Forbidden
@@ -471,8 +471,8 @@ storageRules = describe "the storage's rules" $ do
     let linkAt seconds secret = runSqliteWiki st Administrator (passwordLinkFor True (addUTCTime seconds now) secret u) >>= either (panic . show) pure
     length . concat <$> replicateM 3 (requestReset st now "ada") `shouldReturn` 3
     -- Not held back by the three an hour, but by the minute since the last.
-    (\l -> (\x -> x.email) <$> l) <$> linkAt 30 "first" `shouldReturn` Nothing
-    (\l -> (\x -> x.email) <$> l) <$> linkAt 61 "second" `shouldReturn` Just "ada@example.org"
+    (\l -> (\x -> x.email.text) <$> l) <$> linkAt 30 "first" `shouldReturn` Nothing
+    (\l -> (\x -> x.email.text) <$> l) <$> linkAt 61 "second" `shouldReturn` Just "ada@example.org"
     isJust <$> linkAt 90 "third" `shouldReturn` False
     isJust <$> linkAt 122 "fourth" `shouldReturn` True
     -- They count against the account's three an hour.

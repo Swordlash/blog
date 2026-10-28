@@ -46,6 +46,7 @@ import Wiki.Core.Notification (Kind (..), MailMode (..), Notification (..), Watc
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
+import Wiki.Core.User (Email (..))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Mail (Message (..))
@@ -207,7 +208,7 @@ eventually condition = go (100 :: Int)
     go n = condition >>= \held -> unless held (threadDelay 50_000 >> go (n - 1))
 
 mailsTo :: Running -> Text -> IO [Message]
-mailsTo r address = filter (\m -> m.to == address) <$> readIORef r.outbox
+mailsTo r address = filter (\m -> m.to.text == address) <$> readIORef r.outbox
 
 byMail :: Spec
 byMail = describe "by mail" $
@@ -274,7 +275,7 @@ inTheStorage = describe "in the storage" $ do
     readIORef sent `shouldReturn` []
     mailRound notifier (at 2 7)
     digests <- readIORef sent
-    map (\m -> m.to) digests `shouldBe` ["rita@example.org"]
+    map (\m -> m.to.text) digests `shouldBe` ["rita@example.org"]
     for_ digests $ \m -> do
       m.subject `shouldSatisfy` T.isInfixOf "digest"
       -- The page with the latest notification first, each page's in order.

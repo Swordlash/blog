@@ -36,7 +36,7 @@ import Wiki.Api.Auth (Purpose (..), startUrl)
 import Wiki.App.Account (Accounts (..), accountErrorText)
 import Wiki.App.Backend (MonadLoad (..), Session (..), WikiError (..))
 import Wiki.App.View.Common (failureView)
-import Wiki.Core.User (Password (..), SignInProvider (..), User (..), minimumPasswordLength)
+import Wiki.Core.User (Email (..), Password (..), SignInProvider (..), User (..), minimumPasswordLength)
 
 data Input m = Input
   { accounts :: Maybe (Accounts m)
@@ -118,7 +118,7 @@ component =
         form info =
           [hh|
             <form class="invitation-form" aria-label="Create your account" {{ HE.preventingDefault (HE.onSubmit (const Submit)) }}>
-              <p>You are invited to this wiki as <strong>{{ info.email }}</strong>. Choose how you will sign in.</p>
+              <p>You are invited to this wiki as <strong>{{ info.email.text }}</strong>. Choose how you will sign in.</p>
               <label class="field">
                 <span>Login</span>
                 <input type="text" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required onValueInput={{ TypedLogin }}>

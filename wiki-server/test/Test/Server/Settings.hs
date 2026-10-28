@@ -22,7 +22,7 @@ import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings
 import Wiki.Api.Types qualified as Types
-import Wiki.Core.User (SignInProvider (..))
+import Wiki.Core.User (Email (..), SignInProvider (..))
 import Wiki.Server.Mail (Message (..))
 
 spec :: Spec
@@ -185,7 +185,7 @@ testMails = describe "a test mail" $ do
     _ <- setServer r withAddress {mail = Just (mailServer "mail.test" Nothing)}
     (sendJson r "POST" (onAdmin r links.admin.testMail) MailTest {to = "ada@example.org"} >>= jsonAs 200) `shouldReturn` MailTestResult {failure = Nothing}
     sent <- readIORef r.outbox
-    map (\m -> (m.to, m.subject)) sent `shouldBe` [("ada@example.org", "A test mail from the wiki at wiki.example.org")]
+    map (\m -> (m.to.text, m.subject)) sent `shouldBe` [("ada@example.org", "A test mail from the wiki at wiki.example.org")]
 
   it "says why it was not sent" $ withDemoRunning identity $ \r -> do
     _ <- setServer r withAddress {mail = Just (mailServer "unreachable.test" Nothing)}

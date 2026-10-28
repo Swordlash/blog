@@ -139,7 +139,7 @@ import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Audit (Actor (..), Subject (..))
 import Wiki.Core.Id (InvitationId (..), UserId (..))
-import Wiki.Core.User (Login (..), Password (..), User (..), parseLogin)
+import Wiki.Core.User (Email (..), Login (..), Password (..), User (..), parseLogin)
 import Wiki.Server.Password (checkNewPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
 import Wiki.Server.Storage (Storage, readServerSettings, readSettings, settingsWith, withDatabase, withReadConnection)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
@@ -338,7 +338,7 @@ data Claimed = Claimed
   -- ^ The provider, by the name the configuration gives it.
   , subject :: Text
   -- ^ The account's permanent id at the provider.
-  , email :: Maybe Text
+  , email :: Maybe Email
   -- ^ Its e-mail address, only if the provider verified it.
   , name :: Maybe Text
   -- ^ The person's name, as they gave it at the provider.
@@ -474,7 +474,7 @@ loginCandidates claimed = base : [base <> "-" <> show n | n <- [2 :: Int ..]]
   where
     -- A login that is an e-mail address (Microsoft's are) gives its local
     -- part.
-    base = fromMaybe "user" (find (not . T.null) (map loginOf (catMaybes [localPart <$> claimed.login, localPart <$> claimed.email, claimed.name])))
+    base = fromMaybe "user" (find (not . T.null) (map loginOf (catMaybes [localPart <$> claimed.login, (\e -> localPart e.text) <$> claimed.email, claimed.name])))
     localPart = T.takeWhile (/= '@')
     loginOf = T.take 40 . T.intercalate "-" . filter (not . T.null) . T.split (not . allowed) . T.toLower
     allowed ch = isAscii ch && (isAlphaNum ch || ch == '.' || ch == '_')

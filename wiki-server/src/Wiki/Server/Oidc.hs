@@ -107,7 +107,7 @@ import Protolude
 import Text.Show (Show (showsPrec))
 import Web.FormUrlEncoded (urlEncodeParams)
 import Wiki.Api.ServerSettings (ProviderKind (..), ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, readKind, redirectUri)
-import Wiki.Core.User (SignInProvider (..))
+import Wiki.Core.User (Email (..), SignInProvider (..))
 import Wiki.Server.Accounts (Claimed (..), Intent)
 import Wiki.Server.Password (newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret, revealed)
@@ -362,7 +362,7 @@ claimsFor p s answer = runExceptT $ do
         Claimed
           { provider = p.option.name
           , subject = merged.sub
-          , email = mfilter (const (merged.emailVerified == Just True)) merged.email
+          , email = Email <$> mfilter (const (merged.emailVerified == Just True)) merged.email
           , name = merged.name <|> appleName <|> joinedName merged
           , login = merged.preferredUsername
           }
@@ -450,7 +450,7 @@ gitHubUser p e access = runExceptT $ do
           , Just (address, isPrimary, verified) <- [parseMaybe (withObject "email" (\o -> (,,) <$> o .: "email" <*> o .: "primary" <*> o .: "verified")) entry]
           , isPrimary && verified
           ]
-  pure Claimed {provider = p.option.name, subject = show uid, email = primary, name = mfilter (not . T.null) name, login}
+  pure Claimed {provider = p.option.name, subject = show uid, email = Email <$> primary, name = mfilter (not . T.null) name, login}
 
 -- | A GET whose response is JSON.
 fetchJson :: Provider -> [(HeaderName, ByteString)] -> Text -> IO (Either Text Value)

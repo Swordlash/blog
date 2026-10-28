@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+An e-mail address is an `Email` (WP5.15), a newtype over `Text`.
+`parseEmail` moves here from `Wiki.Api.Admin.checkEmail`, with the same
+rules, and returns an `Email`.
+
 A password is a `Password` (WP5.15), a newtype over `Text` whose `Show`
 prints `Password <hidden>`. `checkNewPassword :: Password -> Either Text
 Password` replaces `checkPassword`, with the same rules for a new password.

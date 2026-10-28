@@ -89,7 +89,7 @@ import System.IO (hClose, openBinaryTempFile)
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods)
 import Wiki.Api.Activity (ActivityQuery (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..), checkEmail)
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..))
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
@@ -112,7 +112,7 @@ import Wiki.Core.Id
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Search (SearchQuery (..))
-import Wiki.Core.User (Login (..), Password, User (..))
+import Wiki.Core.User (Email (..), Login (..), Password, User (..), parseEmail)
 import Wiki.Core.Version (VersionsQuery (VersionsQuery), versionsPageSize)
 import Wiki.Server.Accounts (endSession)
 import Wiki.Server.Accounts qualified as Accounts
@@ -448,7 +448,7 @@ handlers env caller =
               -- required. The same address again (to send its link again)
               -- changes nothing.
               (before, _) <- liftIO (Reset.emailOf env.storage u) >>= maybe (refuse ApiError.Unauthenticated) pure
-              let same = (T.toCaseFold <$> before) == Just (T.toCaseFold (T.strip body.email))
+              let same = ((\e -> T.toCaseFold e.text) <$> before) == Just (T.toCaseFold (T.strip body.email))
                   nothingThere = isNothing before && T.null (T.strip body.email)
               unless (same || nothingThere) (reauthenticated u body.password)
               now <- liftIO getCurrentTime
@@ -544,7 +544,7 @@ handlers env caller =
               unless settings.adminCreatesPasswordAccounts (refuse ApiError.Forbidden)
               -- An address that cannot be one is refused before the user is
               -- made, so that nothing is left half done.
-              for_ new.email $ \e -> unless (T.null (T.strip e)) (either (refuse . ApiError.Invalid) (const pass) (checkEmail e))
+              for_ new.email $ \e -> unless (T.null (T.strip e)) (either (refuse . ApiError.Invalid) (const pass) (parseEmail e))
               made <- wiki (createUser new)
               for_ (mfilter (not . T.null . T.strip) new.email) $ \e -> do
                 now <- liftIO getCurrentTime
@@ -778,7 +778,7 @@ handlers env caller =
       pure EmailState {email, verified, mailing, mailError, asksPassword}
     -- Mail the link that verifies a user's address. The result is the
     -- reason it was not sent, if it was not.
-    mailVerification :: UserId -> (Text, Text) -> IO (Maybe Text)
+    mailVerification :: UserId -> (Email, Text) -> IO (Maybe Text)
     mailVerification u (address, token) =
       currentMailer env >>= \case
         Nothing -> pure (Just "This wiki does not send mail yet.")
@@ -890,7 +890,7 @@ checkingProvider env name given = do
 
 -- | Send a test mail through the mail server as set.
 sendingTestMail :: Env -> MailTest -> IO (Either ApiError MailTestResult)
-sendingTestMail env body = case checkEmail body.to of
+sendingTestMail env body = case parseEmail body.to of
   Left why -> pure (Left (ApiError.Invalid why))
   Right recipient ->
     currentMailer env >>= \case

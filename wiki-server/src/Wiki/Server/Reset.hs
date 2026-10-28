@@ -49,11 +49,10 @@ import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Database.SQLite.Simple (Connection, Only (..), changes, execute, query)
 import Protolude
-import Wiki.Api.Admin (checkEmail)
 import Wiki.Api.Security (MailToken (..), resetLifetime, verificationLifetime)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (Password)
+import Wiki.Core.User (Email (..), Password, parseEmail)
 import Wiki.Server.Accounts (immediately)
 import Wiki.Server.Password (checkNewPassword, hashPassword, newToken, tokenHash)
 import Wiki.Server.Storage (Storage, readServerSettings, withDatabase)
@@ -64,10 +63,10 @@ import Wiki.Server.Storage.Rows (Stamp (..), deleteSessionsOf, insertResetToken,
 
 -- | A user's address, if they have one, and whether it is verified;
 -- 'Nothing' for a user who does not exist.
-emailOf :: Storage -> UserId -> IO (Maybe (Maybe Text, Bool))
+emailOf :: Storage -> UserId -> IO (Maybe (Maybe Email, Bool))
 emailOf st u = withDatabase st $ \c ->
   head
-    . map (\(e, v) -> (e, v /= (0 :: Int)))
+    . map (\(e, v) -> (Email <$> e, v /= (0 :: Int)))
     <$> query c "SELECT email, email_verified_at IS NOT NULL FROM users WHERE id = ?" (Only u.text)
 
 -- | Set a user's address, or none (blank). The result is the address and
@@ -75,7 +74,7 @@ emailOf st u = withDatabase st $ \c ->
 -- none. An invalid address is 'Invalid'. Setting the address the user
 -- already has keeps it as it is, verified or not, and makes another link if
 -- it is not verified.
-setEmail :: Storage -> UTCTime -> UserId -> Text -> IO (Either WikiError (Maybe (Text, Text)))
+setEmail :: Storage -> UTCTime -> UserId -> Text -> IO (Either WikiError (Maybe (Email, Text)))
 setEmail st now u raw
   | T.null (T.strip raw) = withDatabase st $ \c -> immediately c $ do
       gone <- userThere c u
@@ -85,7 +84,7 @@ setEmail st now u raw
           execute c "UPDATE users SET email = NULL, email_verified_at = NULL WHERE id = ?" (Only u.text)
           execute c "DELETE FROM email_verifications WHERE user_id = ?" (Only u.text)
           pure (Right Nothing)
-  | otherwise = case checkEmail raw of
+  | otherwise = case parseEmail raw of
       Left why -> pure (Left (Invalid why))
       Right address -> do
         token <- newToken
@@ -94,32 +93,32 @@ setEmail st now u raw
             query c "SELECT email, email_verified_at IS NOT NULL FROM users WHERE id = ?" (Only u.text) >>= \case
               [] -> pure (Left NotFound)
               (before, verified) : _
-                | before == Just address && verified /= (0 :: Int) -> pure (Right Nothing)
+                | before == Just address.text && verified /= (0 :: Int) -> pure (Right Nothing)
                 | otherwise -> do
-                    execute c "UPDATE users SET email = ?, email_verified_at = NULL WHERE id = ?" (address, u.text)
+                    execute c "UPDATE users SET email = ?, email_verified_at = NULL WHERE id = ?" (address.text, u.text)
                     Right . Just . (address,) <$> verificationLink c now u address token
   where
     userThere c who = not . null <$> (query c "SELECT 1 FROM users WHERE id = ?" (Only who.text) :: IO [Only Int])
 
 -- | A verification link for a user's current address, if they have one
 -- that is not verified: the address and the link's secret, to mail there.
-startVerification :: Storage -> UTCTime -> UserId -> IO (Maybe (Text, Text))
+startVerification :: Storage -> UTCTime -> UserId -> IO (Maybe (Email, Text))
 startVerification st now u = do
   token <- newToken
   withDatabase st $ \c ->
     query c "SELECT email FROM users WHERE id = ? AND email IS NOT NULL AND email_verified_at IS NULL" (Only u.text) >>= \case
-      [Only address] -> Just . (address,) <$> verificationLink c now u address token
+      [Only address] -> Just . (Email address,) <$> verificationLink c now u (Email address) token
       _ -> pure Nothing
 
 -- | Store a new verification link for an address, replacing the user's
 -- earlier ones.
-verificationLink :: Connection -> UTCTime -> UserId -> Text -> Text -> IO Text
+verificationLink :: Connection -> UTCTime -> UserId -> Email -> Text -> IO Text
 verificationLink c now u address token = do
   execute c "DELETE FROM email_verifications WHERE user_id = ? OR expires_at <= ?" (u.text, Stamp now)
   execute
     c
     "INSERT INTO email_verifications (token_hash, user_id, email, created_at, expires_at) VALUES (?, ?, ?, ?, ?)"
-    (tokenHash token, u.text, address, Stamp now, Stamp (addUTCTime verificationLifetime now))
+    (tokenHash token, u.text, address.text, Stamp now, Stamp (addUTCTime verificationLifetime now))
   pure token
 
 -- | Follow a link that verifies an address: the user's address is
@@ -143,7 +142,7 @@ verifyEmail st now token = withDatabase st $ \c -> immediately c $ do
 -- | A reset link to mail: to whom, and its secret.
 data ResetMail = ResetMail
   { user :: UserId
-  , email :: Text
+  , email :: Email
   , token :: Text
   , expiresAt :: UTCTime
   }
@@ -191,7 +190,7 @@ resetMail c now u address = do
   token <- newToken
   let expiresAt = addUTCTime resetLifetime now
   insertResetToken c u (tokenHash token) now expiresAt
-  pure ResetMail {user = u, email = address, token, expiresAt}
+  pure ResetMail {user = u, email = Email address, token, expiresAt}
 
 -- | Delete a reset link that could not be mailed, so that it neither
 -- works nor counts against the user's links.

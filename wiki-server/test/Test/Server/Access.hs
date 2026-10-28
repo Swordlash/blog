@@ -32,7 +32,7 @@ import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (InvitationId (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
+import Wiki.Core.User (Email (..), Login (..), Password (..), Standing (..), User (..))
 import Wiki.Server.Mail (Message (..))
 import Wiki.Server.Storage.Layout (databaseFile)
 
@@ -208,13 +208,13 @@ invitations = describe "an invitation, where the server mails nothing" $ do
   it "is made with its link's secret, makes one account, once, and signs its maker in" $ withDemoRunning identity $ \r -> do
     closeWiki r
     made <- inviteAs r "bea@example.org"
-    made.invitation.email `shouldBe` "bea@example.org"
+    made.invitation.email.text `shouldBe` "bea@example.org"
     made.mailError `shouldBe` Nothing
     token <- maybe (panic "no secret") pure made.token
     listed :: Invitations <- getUrl r (onAdmin r links.admin.invitations) >>= jsonAs 200
-    (listed.mailing, map (\i -> (i.email, i.expired)) listed.invitations) `shouldBe` (False, [("bea@example.org", False)])
+    (listed.mailing, map (\i -> (i.email.text, i.expired)) listed.invitations) `shouldBe` (False, [("bea@example.org", False)])
     info :: InvitationInfo <- details r token >>= jsonAs 200
-    info.email `shouldBe` "bea@example.org"
+    info.email.text `shouldBe` "bea@example.org"
     -- Its page is for them, closed wiki or not.
     page <- getUrl r (r.public <> "/invite/" <> token <> "/")
     page.status `shouldBe` 200
@@ -294,11 +294,11 @@ mailed = describe "an invitation, where the server mails them" $ do
     listed :: Invitations <- getUrl r (onAdmin r links.admin.invitations) >>= jsonAs 200
     listed.mailing `shouldBe` True
     sent <- readIORef r.outbox
-    map (\m -> m.to) sent `shouldBe` ["bea@example.org"]
+    map (\m -> m.to.text) sent `shouldBe` ["bea@example.org"]
     let mailedLink = head [w | m <- sent, w <- T.words m.body, "https://wiki.example.org/invite/" `T.isPrefixOf` w]
     token <- maybe (panic "no link in the mail") (pure . T.dropEnd 1 . T.drop (T.length "https://wiki.example.org/invite/")) mailedLink
     info :: InvitationInfo <- details r token >>= jsonAs 200
-    info.email `shouldBe` "bea@example.org"
+    info.email.text `shouldBe` "bea@example.org"
     _ <- accept r token "bea" "a long password" >>= jsonAs @SessionInfo 200
     -- The mail's body is not something a Show writes.
     show sent `shouldSatisfy` (not . T.isInfixOf token)

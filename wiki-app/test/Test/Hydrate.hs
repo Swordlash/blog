@@ -64,7 +64,7 @@ import Wiki.Core.Page qualified as P
 import Wiki.Core.Path (parsePath, pathOf)
 import Wiki.Core.Permission (Grants (..))
 import Wiki.Core.Space qualified as S
-import Wiki.Core.User (SignInProvider (..))
+import Wiki.Core.User (Email (..), SignInProvider (..))
 import Wiki.Core.Version (Author, latestVersions)
 
 spec :: Spec
@@ -283,7 +283,7 @@ apiOver providers st = do
               : (links.admin.activity Nothing Nothing Nothing, answerOf logged)
               : (links.admin.status, answerOf (Right status :: Either WikiError ServerStatus))
               : (links.notifications.list, answerOf told)
-              : (links.invitations.details (InvitationToken "valid"), answerOf (Right InvitationInfo {email = "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
+              : (links.invitations.details (InvitationToken "valid"), answerOf (Right InvitationInfo {email = Email "bea@example.org", expiresAt = now} :: Either WikiError InvitationInfo))
               : concat perSpace
           )
       )

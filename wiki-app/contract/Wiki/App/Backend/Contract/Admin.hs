@@ -30,7 +30,7 @@ import Wiki.Core.Id
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
+import Wiki.Core.User (Email (..), Group (..), Login (..), Password (..), User (..))
 
 admin, editor, reader :: As
 admin = As "admin"
@@ -427,12 +427,12 @@ letsIn = describe "wikiSettings, invitations and the rest" $ do
 
   it "invite an address, with the link's secret when it is not mailed, in place of any invitation it had" $ \(Fixture run) -> do
     made <- run admin (invite "  bea@example.org ") >>= ok
-    (made.invitation.email, made.invitation.expired, isJust made.token) `shouldBe` ("bea@example.org", False, True)
+    (made.invitation.email.text, made.invitation.expired, isJust made.token) `shouldBe` ("bea@example.org", False, True)
     made.invitation.expiresAt `shouldSatisfy` (> made.invitation.createdAt)
     again <- run admin (invite "BEA@example.org") >>= ok
     again.token `shouldNotBe` made.token
     listed <- run admin invitations >>= ok
-    map (\i -> i.email) listed.invitations `shouldBe` ["BEA@example.org"]
+    map (\i -> i.email.text) listed.invitations `shouldBe` ["BEA@example.org"]
     _ <- run admin (invite "cy@example.org") >>= ok
     length . (\l -> l.invitations) <$> (run admin invitations >>= ok) `shouldReturn` 2
 

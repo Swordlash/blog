@@ -78,7 +78,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (Piece (..), SearchHit (..), Snippet (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..))
-import Wiki.Core.User (Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Email (..), Group (..), Login (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..))
 
 -- | A time with a fraction of a second, as a page's version has.
@@ -313,7 +313,7 @@ directory =
     , identities = Map.fromList [(UserId "u2", ["github", "google"])]
     , providerOnly = Set.fromList [UserId "u2"]
     , secondFactor = Set.fromList [UserId "u1"]
-    , emails = Map.fromList [(UserId "u1", AccountEmail {email = "ada@example.org", verified = True}), (UserId "u2", AccountEmail {email = "edgar@example.org", verified = False})]
+    , emails = Map.fromList [(UserId "u1", AccountEmail {email = Email "ada@example.org", verified = True}), (UserId "u2", AccountEmail {email = Email "edgar@example.org", verified = False})]
     , mailing = True
     , adminCreatesPasswordAccounts = False
     , groups = [Group {id = GroupId "g1", name = "writers"}]
@@ -341,14 +341,14 @@ settings = WikiSettings {access = Closed, newAccountsCreateSpaces = True, adminC
 
 -- | An invitation, not expired.
 invitation :: Invitation
-invitation = Invitation {id = InvitationId "i1", email = "bea@example.org", createdAt = time, expiresAt = later, expired = False}
+invitation = Invitation {id = InvitationId "i1", email = Email "bea@example.org", createdAt = time, expiresAt = later, expired = False}
 
 -- | The invitations, of a server that mails none.
 invitations :: Invitations
 invitations =
   Invitations
     { mailing = False
-    , invitations = [invitation, Invitation {id = InvitationId "i0", email = "cy@example.org", createdAt = time, expiresAt = time, expired = True}]
+    , invitations = [invitation, Invitation {id = InvitationId "i0", email = Email "cy@example.org", createdAt = time, expiresAt = time, expired = True}]
     }
 
 -- | An invitation just made and not mailed, with its link's secret.
@@ -357,14 +357,14 @@ invited = Invited {invitation, token = Just "c2VjcmV0IG9mIGFuIGludml0YXRpb24gZm9
 
 -- | An invitation as its link shows it.
 invitationInfo :: InvitationInfo
-invitationInfo = InvitationInfo {email = "bea@example.org", expiresAt = later}
+invitationInfo = InvitationInfo {email = Email "bea@example.org", expiresAt = later}
 
 -- | How a user signs in: with a password, and an account at GitHub.
 signInMethods :: SignInMethods
 signInMethods =
   SignInMethods
     { password = True
-    , identities = [LinkedIdentity {provider = "github", email = Just "ada@example.org", name = Just "Ada Lovelace", linkedAt = time}]
+    , identities = [LinkedIdentity {provider = "github", email = Just (Email "ada@example.org"), name = Just "Ada Lovelace", linkedAt = time}]
     }
 
 -- | A user's sessions: this one, and one elsewhere.
@@ -389,7 +389,7 @@ enrolment =
 
 -- | An address given and not yet verified, where mail is sent.
 emailState :: EmailState
-emailState = EmailState {email = Just "ada@example.org", verified = False, mailing = True, mailError = Nothing, asksPassword = True}
+emailState = EmailState {email = Just (Email "ada@example.org"), verified = False, mailing = True, mailError = Nothing, asksPassword = True}
 
 -- | The server's settings as they are read: an address, a mail server whose
 -- password is set, and two providers, one of them without its secret.

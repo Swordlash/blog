@@ -6,6 +6,7 @@ module Wiki.Core.User
   ( User (..)
   , Login (..)
   , Password (..)
+  , Email (..)
   , Standing (..)
   , SignInProvider (..)
   , Group (..)
@@ -15,6 +16,7 @@ module Wiki.Core.User
     -- * Accounts
   , parseLogin
   , checkNewPassword
+  , parseEmail
   , minimumPasswordLength
   , maximumPasswordLength
   )
@@ -64,6 +66,15 @@ newtype Password = Password {text :: Text}
 
 instance Show Password where
   showsPrec _ _ rest = "Password <hidden>" <> rest
+
+-- | 'Email': an e-mail address, such as @ada\@example.org@: a user's, an
+-- invitation's, or one a sign-in provider gave. 'parseEmail' checks a new
+-- one. The JSON is the bare text, and decoding it applies no rule, for
+-- the same reason as 'Login''s. The server compares addresses without
+-- regard to case.
+newtype Email = Email {text :: Text}
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving newtype (FromJSON, ToJSON)
 
 -- | 'Standing': how the current requester is identified, which decides
 -- whether they may sign in or out. A requester who is not signed in may
@@ -149,3 +160,21 @@ minimumPasswordLength = 8
 -- hashing one cannot be used to keep the server busy.
 maximumPasswordLength :: Int
 maximumPasswordLength = 1024
+
+-- | A new e-mail address as it is stored, or why it is invalid: trimmed of
+-- white space, at most 254 characters, with one @\@@ that has text on
+-- each side, a dot in the domain, and no white space inside. Not a full
+-- check of the address's syntax, which only the receiving mail server can
+-- make, but enough to catch a typo.
+parseEmail :: Text -> Either Text Email
+parseEmail raw
+  | T.null address = Left "An e-mail address cannot be blank."
+  | T.length address > 254 = Left "An e-mail address has at most 254 characters."
+  | T.any (\c -> isSpace c || isControl c) address = Left "An e-mail address cannot have a blank in it."
+  | [mailbox, domain] <- T.splitOn "@" address
+  , not (T.null mailbox)
+  , "." `T.isInfixOf` T.dropEnd 1 (T.drop 1 domain) =
+      Right (Email address)
+  | otherwise = Left "This is not an e-mail address."
+  where
+    address = T.strip raw

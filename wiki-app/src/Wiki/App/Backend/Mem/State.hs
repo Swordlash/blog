@@ -151,7 +151,6 @@ import Wiki.Api.Admin
   , Invited (Invited)
   , ServerStatus
   , WikiSettings (WikiSettings)
-  , checkEmail
   , invitationLifetime
   )
 import Wiki.Api.Admin qualified as A
@@ -202,7 +201,7 @@ import Wiki.Core.Permission qualified as P
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable, candidate, searchPlain, searchable)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
-import Wiki.Core.User (Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseLogin)
+import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, Password, Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (Version), VersionInfo, VersionsQuery, versionInfo, versionsPage)
 import Wiki.Core.Version qualified as V
 
@@ -1385,7 +1384,7 @@ removeMemberIn = setMember False
 -- | An invitation as the demo stores it. Neither the invitation nor its
 -- secret leaves the browser, so the secret is stored as it is.
 data Pending = Pending
-  { email :: Text
+  { email :: Email
   , createdAt :: UTCTime
   , expiresAt :: UTCTime
   , token :: Text
@@ -1426,10 +1425,10 @@ invitationOf now i p = Invitation {A.id = i, A.email = p.email, A.createdAt = p.
 inviteIn :: UTCTime -> Text -> Text -> Write Invited
 inviteIn now token raw st = do
   requireAdministrator st
-  email <- first Invalid (checkEmail raw)
+  email <- first Invalid (parseEmail raw)
   let (i, st1) = newId "invitation" st
       pending = Pending {email, createdAt = now, expiresAt = addUTCTime invitationLifetime now, token}
-      others = Map.filter (\p -> T.toCaseFold p.email /= T.toCaseFold email) st1.invitations
+      others = Map.filter (\p -> T.toCaseFold p.email.text /= T.toCaseFold email.text) st1.invitations
       st2 = st1 {invitations = Map.insert (InvitationId i) pending others}
   pure (st2, Invited {A.invitation = invitationOf now (InvitationId i) pending, A.token = Just token, A.mailError = Nothing})
 

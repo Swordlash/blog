@@ -142,7 +142,7 @@ import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..
 import Wiki.Core.Search (bodyText, foldText)
 import Wiki.Core.Slug (Slug, mkSlug, slugText)
 import Wiki.Core.Space (Space (..))
-import Wiki.Core.User (Group (..), Login (..), Membership, User (..))
+import Wiki.Core.User (Email (..), Group (..), Login (..), Membership, User (..))
 import Wiki.Server.Secret (Kept, Secret (..), revealed)
 
 --------------------------------------------------------------------------------
@@ -974,7 +974,7 @@ loadSecondFactorUsers c = Set.fromList . map (UserId . fromOnly) <$> query_ c "S
 loadEmails :: Connection -> IO (Map UserId AccountEmail)
 loadEmails c = do
   rows <- query_ c "SELECT id, email, email_verified_at IS NOT NULL FROM users WHERE email IS NOT NULL"
-  pure (Map.fromList [(UserId u, AccountEmail {email, verified = verified /= (0 :: Int)}) | (u, email, verified) <- rows])
+  pure (Map.fromList [(UserId u, AccountEmail {email = Email email, verified = verified /= (0 :: Int)}) | (u, email, verified) <- rows])
 
 --------------------------------------------------------------------------------
 -- Identities
@@ -1002,22 +1002,22 @@ identitiesOf c u =
 
 identityRow :: (Text, Text, Text, Maybe Text, Maybe Text, Stamp) -> IdentityRow
 identityRow (provider, subject, uid, email, name, Stamp linkedAt) =
-  IdentityRow {provider, subject, user = UserId uid, identity = LinkedIdentity {provider, email, name, linkedAt}}
+  IdentityRow {provider, subject, user = UserId uid, identity = LinkedIdentity {provider, email = Email <$> email, name, linkedAt}}
 
 -- | Connect a provider's account to a user. The caller has made sure that
 -- it belongs to nobody, and that the user has none at that provider.
-insertIdentity :: Connection -> UTCTime -> UserId -> Text -> Text -> Maybe Text -> Maybe Text -> IO ()
+insertIdentity :: Connection -> UTCTime -> UserId -> Text -> Text -> Maybe Email -> Maybe Text -> IO ()
 insertIdentity c now u provider subject email name =
   execute
     c
     "INSERT INTO identities (provider, subject, user_id, email, display_name, linked_at) VALUES (?, ?, ?, ?, ?, ?)"
-    (provider, subject, u.text, email, name, Stamp now)
+    (provider, subject, u.text, (\e -> e.text) <$> email, name, Stamp now)
 
 -- | Store what a provider now says about an account, for the next time it
 -- is shown.
-refreshIdentity :: Connection -> Text -> Text -> Maybe Text -> Maybe Text -> IO ()
+refreshIdentity :: Connection -> Text -> Text -> Maybe Email -> Maybe Text -> IO ()
 refreshIdentity c provider subject email name =
-  execute c "UPDATE identities SET email = ?, display_name = ? WHERE provider = ? AND subject = ?" (email, name, provider, subject)
+  execute c "UPDATE identities SET email = ?, display_name = ? WHERE provider = ? AND subject = ?" ((\e -> e.text) <$> email, name, provider, subject)
 
 -- | Disconnect a user's account at a provider. The result is whether they
 -- had one.
@@ -1100,7 +1100,7 @@ loadInvitations c now = do
   pure
     ( sortOn
         (\i -> (Down i.createdAt, i.id))
-        [ Invitation {id = InvitationId i, email, createdAt, expiresAt, expired = expiresAt <= now}
+        [ Invitation {id = InvitationId i, email = Email email, createdAt, expiresAt, expired = expiresAt <= now}
         | (i, email, Stamp createdAt, Stamp expiresAt) <- rows
         ]
     )
@@ -1109,8 +1109,8 @@ loadInvitations c now = do
 -- any invitation for the same address.
 insertInvitation :: Connection -> Invitation -> Text -> IO ()
 insertInvitation c i secretHash = do
-  execute c "DELETE FROM invitations WHERE email = ? COLLATE NOCASE" (Only i.email)
-  execute c "INSERT INTO invitations (id, email, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)" (i.id.text, i.email, secretHash, Stamp i.createdAt, Stamp i.expiresAt)
+  execute c "DELETE FROM invitations WHERE email = ? COLLATE NOCASE" (Only i.email.text)
+  execute c "INSERT INTO invitations (id, email, token_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)" (i.id.text, i.email.text, secretHash, Stamp i.createdAt, Stamp i.expiresAt)
 
 -- | Delete an invitation. The result is whether there was one.
 deleteInvitation :: Connection -> InvitationId -> IO Bool
@@ -1124,7 +1124,7 @@ pendingInvitation :: Connection -> UTCTime -> Text -> IO (Maybe (InvitationId, I
 pendingInvitation c now secretHash = do
   rows <- query c "SELECT id, email, expires_at FROM invitations WHERE token_hash = ?" (Only secretHash)
   pure $ case rows of
-    [(i, email, Stamp expiresAt)] | expiresAt > now -> Just (InvitationId i, InvitationInfo {email, expiresAt})
+    [(i, email, Stamp expiresAt)] | expiresAt > now -> Just (InvitationId i, InvitationInfo {email = Email email, expiresAt})
     _ -> Nothing
 
 -- | Grant a user the global create-spaces directly.

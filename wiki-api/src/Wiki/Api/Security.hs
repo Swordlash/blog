@@ -84,7 +84,7 @@ import Data.Time (NominalDiffTime, UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
-import Wiki.Core.User (Password)
+import Wiki.Core.User (Email, Password)
 
 --------------------------------------------------------------------------------
 -- Sessions
@@ -175,7 +175,7 @@ instance Show RecoveryCodes where
 
 -- | 'EmailState': a user's e-mail address as they see it, @GET \/api\/v1\/account\/email@.
 data EmailState = EmailState
-  { email :: Maybe Text
+  { email :: Maybe Email
   , verified :: Bool
   -- ^ Whether the user has followed a link sent to it since it was set.
   , mailing :: Bool
@@ -197,6 +197,8 @@ data EmailState = EmailState
 -- where the user has one.
 data EmailChange = EmailChange
   { email :: Text
+  -- ^ The address as typed, which the backend checks with
+  -- 'Wiki.Core.User.parseEmail'; blank removes the address.
   , password :: Maybe Password
   }
   deriving stock (Eq, Show, Generic)
@@ -204,7 +206,7 @@ data EmailChange = EmailChange
 
 -- | 'AccountEmail': a user's address, as the administration sees it.
 data AccountEmail = AccountEmail
-  { email :: Text
+  { email :: Email
   , verified :: Bool
   }
   deriving stock (Eq, Show, Generic)

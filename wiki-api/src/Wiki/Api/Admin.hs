@@ -33,20 +33,18 @@ module Wiki.Api.Admin
   , Invitations (..)
   , NewInvitation (..)
   , Invited (..)
-  , checkEmail
   , invitationLifetime
   )
 where
 
 import Data.Aeson (FromJSON, ToJSON)
-import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
 import Wiki.Api.Security (AccountEmail)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (InvitationId, UserId)
-import Wiki.Core.User (Group, Membership, User)
+import Wiki.Core.User (Email, Group, Membership, User)
 
 -- | 'ServerStatus': the response to @GET \/api\/v1\/admin\/status@.
 data ServerStatus = ServerStatus
@@ -202,7 +200,7 @@ defaultSettings = WikiSettings {access = Open, newAccountsCreateSpaces = False, 
 -- stores only its hash.
 data Invitation = Invitation
   { id :: InvitationId
-  , email :: Text
+  , email :: Email
   -- ^ The address it was created for.
   , createdAt :: UTCTime
   , expiresAt :: UTCTime
@@ -227,6 +225,8 @@ data Invitations = Invitations
 -- | The body of @POST \/api\/v1\/admin\/invitations@: invite someone, by
 -- their e-mail address. An address that already has an invitation gets a
 -- new one, which replaces it.
+-- The address is the text typed; the backend checks it with
+-- 'Wiki.Core.User.parseEmail'.
 newtype NewInvitation = NewInvitation {email :: Text}
   deriving stock (Eq, Show, Generic)
   deriving anyclass (FromJSON, ToJSON)
@@ -247,24 +247,6 @@ data Invited = Invited
 
 instance Show Invited where
   showsPrec _ i rest = "Invited {invitation = " <> show i.invitation <> ", token = " <> (if isJust i.token then "<hidden>" else "Nothing") <> ", mailError = " <> show i.mailError <> "}" <> rest
-
--- | An e-mail address as it is stored, or why it is invalid: trimmed of
--- white space, at most 254 characters, with one @\@@ that has text on
--- each side, a dot in the domain, and no white space inside. Not a full
--- check of the address's syntax, which only the receiving mail server can
--- make, but enough to catch a typo.
-checkEmail :: Text -> Either Text Text
-checkEmail raw
-  | T.null address = Left "An e-mail address cannot be blank."
-  | T.length address > 254 = Left "An e-mail address has at most 254 characters."
-  | T.any (\c -> isSpace c || isControl c) address = Left "An e-mail address cannot have a blank in it."
-  | [mailbox, domain] <- T.splitOn "@" address
-  , not (T.null mailbox)
-  , "." `T.isInfixOf` T.dropEnd 1 (T.drop 1 domain) =
-      Right address
-  | otherwise = Left "This is not an e-mail address."
-  where
-    address = T.strip raw
 
 -- | How long an invitation's link can create an account: a week, long
 -- enough for someone away for a few days, short enough that a link

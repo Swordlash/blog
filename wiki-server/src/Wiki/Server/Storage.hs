@@ -140,7 +140,7 @@ import Database.SQLite.Simple (Connection, Only (..), close, execute, execute_, 
 import Protolude
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize, removePathForcibly)
 import Wiki.Api.Account (Account (..), NewAccount (..), providerOnly)
-import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), checkEmail, invitationLifetime)
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), invitationLifetime)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Notifications (NotificationSettings (..), NotificationSettingsChange (..), Notifications (..), ReadMark)
@@ -189,7 +189,7 @@ import Wiki.Core.Permission qualified as Permission
 import Wiki.Core.Search (Candidate (..), SearchHit, SearchQuery (..), Searchable (..), folded, queryWords, searchPlain)
 import Wiki.Core.Slug (Slug, freshSlug, mkSlug, slugText, slugify)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..), checkIconUpload, checkProfile, homeBody, homeTitle, positionSpace, spaceTreeOrder, withProfile)
-import Wiki.Core.User (Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseLogin)
+import Wiki.Core.User (Email (..), Group (..), Login (..), Standing (..), User (..), checkNewPassword, parseEmail, parseLogin)
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery (..), maxVersionsPageSize, versionInfo)
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
@@ -1951,7 +1951,7 @@ requirePasswordToSet user = do
 -- secret is not in it: the caller made the secret and keeps it.
 data PasswordLink = PasswordLink
   { user :: User
-  , email :: Text
+  , email :: Email
   , expiresAt :: UTCTime
   }
 
@@ -1984,7 +1984,7 @@ passwordLinkFor mailing at token u = run Writes $ do
           let expiresAt = addUTCTime resetLifetime at
           db (\c -> insertResetToken c u (tokenHash token) at expiresAt)
           record "user.password-link" (userSubject user) []
-          pure (Just PasswordLink {user, email, expiresAt})
+          pure (Just PasswordLink {user, email = Email email, expiresAt})
     _ -> invalid (user.displayName <> " has no verified address: type a password for them.")
 
 -- | A group's name, checked: not blank, and no other group's but for case.
@@ -2121,12 +2121,12 @@ invitationsTx = do
 inviteTx :: Text -> Text -> Tx Invited
 inviteTx raw token = do
   requireAdministrator
-  email <- either invalid pure (checkEmail raw)
+  email <- either invalid pure (parseEmail raw)
   i <- InvitationId <$> newId
   t <- now
   let invitation = Invitation {id = i, email, createdAt = t, expiresAt = addUTCTime invitationLifetime t, expired = False}
   db (\c -> insertInvitation c invitation (tokenHash token))
-  record "invitation.create" Audit.Subject {kind = "invitation", id = Just i.text, name = email} []
+  record "invitation.create" Audit.Subject {kind = "invitation", id = Just i.text, name = email.text} []
   pure Invited {invitation, token = Just token, mailError = Nothing}
 
 revokeInvitationTx :: InvitationId -> Tx ()

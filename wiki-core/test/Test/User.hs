@@ -1,4 +1,5 @@
--- | Tests of the rules for a new account's login and password ("Wiki.Core.User").
+-- | Tests of the rules for a new account's login, password and e-mail
+-- address ("Wiki.Core.User").
 module Test.User (spec) where
 
 import Data.Aeson (decode, encode)
@@ -39,3 +40,16 @@ spec = describe "Wiki.Core.User" $ do
       (show (Password "hunter2") :: Text) `shouldBe` "Password <hidden>"
     it "is the bare text in JSON" $
       encode (Password "hunter2") `shouldBe` "\"hunter2\""
+
+  describe "parseEmail" $ do
+    it "trims an address of white space" $
+      parseEmail " ada@example.org\n" `shouldBe` Right (Email "ada@example.org")
+    it "refuses a blank address, and one of more than 254 characters" $ do
+      parseEmail " " `shouldBe` Left "An e-mail address cannot be blank."
+      parseEmail (T.replicate 243 "a" <> "@example.org") `shouldBe` Left "An e-mail address has at most 254 characters."
+    it "refuses white space inside an address" $
+      parseEmail "ada lovelace@example.org" `shouldBe` Left "An e-mail address cannot have a blank in it."
+    it "needs one @ with text before it, and a dot inside the domain" $ do
+      for_ ["ada.example.org", "@example.org", "ada@example", "ada@.org", "ada@org.", "a@b@example.org"] $ \t ->
+        parseEmail t `shouldBe` Left "This is not an e-mail address."
+      parseEmail "a@b.c" `shouldBe` Right (Email "a@b.c")

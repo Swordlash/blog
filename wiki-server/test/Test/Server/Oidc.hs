@@ -40,7 +40,7 @@ import Wiki.Api.ServerSettings (ProviderChange, ProviderKind (..), ProviderSetti
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.Core.Access (Access (..))
-import Wiki.Core.User (Login (..), Password (..), SignInProvider (..), Standing (..), User (..))
+import Wiki.Core.User (Email (..), Login (..), Password (..), SignInProvider (..), Standing (..), User (..))
 import Wiki.Server.Accounts (Claimed (..), loginCandidates)
 import Wiki.Server.Auth (safeNext)
 import Wiki.Server.Console (OidcCheck (..), runOidcCheck)
@@ -263,13 +263,13 @@ overHttp = describe "over HTTP" $ do
     me <- sessionOf r [c]
     (\u -> (u.login.text, u.displayName)) <$> me.user `shouldBe` Just ("octo-cat", "Octo Cat")
     methods :: SignInMethods <- getUrlWith r (onPublic r links.account.identities) [c] >>= jsonAs 200
-    map (\i -> (i.provider, i.email)) methods.identities `shouldBe` [("hub", Just "octo@example.org")]
+    map (\i -> (i.provider, (\e -> e.text) <$> i.email)) methods.identities `shouldBe` [("hub", Just "octo@example.org")]
 
   it "keeps no address the provider has not verified" $ withOidc $ \fake r -> do
     writeIORef fake.user (someone "una" (Just "una@example.org") False (Just "Una") (Just "una") True)
     c <- signedInWith r "acme" "next=%2F" []
     methods :: SignInMethods <- getUrlWith r (onPublic r links.account.identities) [c] >>= jsonAs 200
-    map (\i -> i.email) methods.identities `shouldBe` [Nothing]
+    map (\i -> (\e -> e.text) <$> i.email) methods.identities `shouldBe` [Nothing]
 
   it "asks the user info for what the ID token does not say" $ withOidc $ \fake r -> do
     writeIORef fake.user (someone "ida" (Just "ida@example.org") True (Just "Ida Info") (Just "ida") False)
@@ -561,7 +561,7 @@ claims = describe "an ID token's claims" $ do
 
 logins :: Spec
 logins = describe "the logins of accounts made with a provider" $ do
-  let claimed login email name = Claimed {provider = "p", subject = "1", email, name, login}
+  let claimed login email name = Claimed {provider = "p", subject = "1", email = Email <$> email, name, login}
   it "come from the provider's login, then the address, then the name, else user" $ do
     take 1 (loginCandidates (claimed (Just "Octo.Cat") (Just "x@y.z") Nothing)) `shouldBe` ["octo.cat"]
     take 1 (loginCandidates (claimed Nothing (Just "ada.l@example.org") (Just "Ada"))) `shouldBe` ["ada.l"]

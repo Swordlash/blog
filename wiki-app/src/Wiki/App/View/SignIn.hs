@@ -90,7 +90,7 @@ import Wiki.App.View.NotificationSettings qualified as NotificationSettingsView
 import Wiki.App.View.Security qualified as SecurityView
 import Wiki.Core.Access (takesNewAccounts)
 import Wiki.Core.Permission (Grants (..))
-import Wiki.Core.User (Password (..), SignInProvider (..), Standing (..), User (..), minimumPasswordLength)
+import Wiki.Core.User (Email (..), Password (..), SignInProvider (..), Standing (..), User (..), minimumPasswordLength)
 
 data Input m = Input
   { accounts :: Accounts m
@@ -443,7 +443,7 @@ component =
                     <li class="identity">
                       <span class="identity-provider">{{ labelOf i.provider }}</span>
                       {% for e in maybeToList i.email %}
-                        <span class="identity-email">{{ e }}</span>
+                        <span class="identity-email">{{ e.text }}</span>
                       {% end %}
                       <button
                         type="button"

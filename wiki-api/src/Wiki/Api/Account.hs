@@ -63,7 +63,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Text.Show (Show (showsPrec))
 import Web.HttpApiData (FromHttpApiData, ToHttpApiData)
-import Wiki.Core.User (Password, User)
+import Wiki.Core.User (Email, Password, User)
 
 -- | 'Credentials': what a user signs in with, @POST \/api\/v1\/session@.
 -- The login is the text typed: sign-in looks it up, trimmed and in any
@@ -85,7 +85,8 @@ data NewAccount = NewAccount
   , password :: Password
   -- ^ Checked by the backend with 'Wiki.Core.User.checkNewPassword'.
   , email :: Maybe Text
-  -- ^ Their e-mail address, verified by a link sent to it (WP4.11 of
+  -- ^ Their e-mail address as typed, checked by the backend with
+  -- 'Wiki.Core.User.parseEmail', and verified by a link sent to it (WP4.11 of
   -- docs/PLAN.md). Only the administration's "New user" form sets one, and
   -- it is optional; the JSON leaves the field out when there is none.
   }
@@ -144,7 +145,7 @@ data Account = Account
 -- needs it.
 data LinkedIdentity = LinkedIdentity
   { provider :: Text
-  , email :: Maybe Text
+  , email :: Maybe Email
   -- ^ Their e-mail address, if the provider says it has verified one.
   , name :: Maybe Text
   -- ^ Their name at the provider, if it gave one.
@@ -212,7 +213,7 @@ instance Show InvitationToken where
 -- \/api\/v1\/invitations\/\<token>@. An invitation that has been used,
 -- revoked or has expired is not found.
 data InvitationInfo = InvitationInfo
-  { email :: Text
+  { email :: Email
   -- ^ The address the invitation was sent to.
   , expiresAt :: UTCTime
   }

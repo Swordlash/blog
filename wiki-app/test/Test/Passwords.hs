@@ -23,7 +23,7 @@ import Wiki.App.View.Admin (NoLink (..), PasswordControl (..), passwordControl)
 import Wiki.App.View.Security (addressText, factorOffText)
 import Wiki.App.View.SignIn (passwordOffer)
 import Wiki.Core.Id (UserId (..))
-import Wiki.Core.User (Login (..), SignInProvider (..), User (..))
+import Wiki.Core.User (Email (..), Login (..), SignInProvider (..), User (..))
 
 spec :: Spec
 spec = describe "what the views offer for a password" $ do
@@ -53,11 +53,11 @@ mailingOr mailing =
     , secondFactor = mempty
     , emails =
         Map.fromList
-          [ (uid "ada", AccountEmail {email = "ada@example.org", verified = True})
-          , (uid "bea", AccountEmail {email = "bea@example.org", verified = False})
-          , (uid "dee", AccountEmail {email = "dee@example.org", verified = True})
-          , (uid "eve", AccountEmail {email = "eve@example.org", verified = True})
-          , (uid "fay", AccountEmail {email = "fay@example.org", verified = True})
+          [ (uid "ada", AccountEmail {email = Email "ada@example.org", verified = True})
+          , (uid "bea", AccountEmail {email = Email "bea@example.org", verified = False})
+          , (uid "dee", AccountEmail {email = Email "dee@example.org", verified = True})
+          , (uid "eve", AccountEmail {email = Email "eve@example.org", verified = True})
+          , (uid "fay", AccountEmail {email = Email "fay@example.org", verified = True})
           ]
     , mailing
     , adminCreatesPasswordAccounts = True
@@ -111,7 +111,7 @@ ownMenu = describe "the button in the menu under a user's name" $ do
 
 ownSafety :: Spec
 ownSafety = describe "the panel's second factor and address" $ do
-  let stateOf email verified asksPassword = EmailState {email, verified, mailing = True, mailError = Nothing, asksPassword}
+  let stateOf email verified asksPassword = EmailState {email = Email <$> email, verified, mailing = True, mailError = Nothing, asksPassword}
   it "speak of the password of a user who has one" $ do
     factorOffText True `shouldBe` "Off: your password alone signs you in."
     addressText (stateOf Nothing False True) `shouldBe` "None: a forgotten password can then only be reset by an administrator."

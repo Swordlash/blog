@@ -96,7 +96,7 @@ import Wiki.App.View.Common
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (GroupId, UserId)
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..), canCreateSpaces, principal)
-import Wiki.Core.User (Group (..), Login (..), Password (..), SignInProvider (..), User (..))
+import Wiki.Core.User (Email (..), Group (..), Login (..), Password (..), SignInProvider (..), User (..))
 
 newtype Input = Input {context :: Context}
 
@@ -322,7 +322,7 @@ component =
           <td class="user-account">
             <span class="account-state">{{ accountState }}</span>
             {% for e in maybeToList email %}
-              <span class="account-email">{{ e.email <> (if e.verified then "" else " (not verified)") }}</span>
+              <span class="account-email">{{ e.email.text <> (if e.verified then "" else " (not verified)") }}</span>
             {% end %}
             {% if secondFactor %}
               <span class="account-second-factor">With a second factor</span>
@@ -775,7 +775,7 @@ passwordControl d u
   | not d.mailing = TypePassword NoMail
   | u `Set.member` d.disabled = TypePassword LoginDisabled
   | otherwise = case Map.lookup u d.emails of
-      Just e | e.verified -> SendLink e.email
+      Just e | e.verified -> SendLink e.email.text
       _ -> TypePassword NoVerifiedAddress
 
 -- | Why no link is mailed, as written under the button.

@@ -37,7 +37,7 @@ import Wiki.App.Route (Route (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.Permission (Grants (..))
-import Wiki.Core.User (SignInProvider (..), Standing (..))
+import Wiki.Core.User (Email (..), SignInProvider (..), Standing (..))
 
 spec :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 spec m = do
@@ -115,7 +115,7 @@ inviting m = describe "an invitation's page" $
       serverStarts
       serveDemo
       answerWith "GET" "api/v1/session" 200 (nobodyWith named Closed)
-      answerWith "GET" "api/v1/invitations/s3cr3t" 200 InvitationInfo {email = "rita@example.org", expiresAt = demoNow}
+      answerWith "GET" "api/v1/invitations/s3cr3t" 200 InvitationInfo {email = Email "rita@example.org", expiresAt = demoNow}
       ui <- startServer m (Invite (InvitationToken "s3cr3t"))
       -- Once the invitation is read.
       _ <- find ui ".invitation-form .provider-link"
@@ -128,7 +128,7 @@ inviting m = describe "an invitation's page" $
 
 ownPanel :: forall m -> (Typeable m, MonadBrowserTest m, MonadBrowserDOM m, MonadIslands m, MonadAssistant m, MonadUUID m, MonadIndexedDB m) => Spec
 ownPanel m = describe "the panel of how a user signs in" $ do
-  let google = LinkedIdentity {provider = "google", email = Just "rita@example.org", name = Just "Rita", linkedAt = demoNow}
+  let google = LinkedIdentity {provider = "google", email = Just (Email "rita@example.org"), name = Just "Rita", linkedAt = demoNow}
       hub = LinkedIdentity {provider = "hub", email = Nothing, name = Nothing, linkedAt = demoNow}
 
   it "lists the user's accounts at providers, offers to connect the others, and keeps the last way in" $ runPage $ do
@@ -260,7 +260,7 @@ administration m = describe "the administration's accounts" $ do
       runMemWiki wiki ((,) <$> session <*> directory)
     withIdentities d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = Map.fromList [(UserId "user-editor", ["hub"])], providerOnly = Set.singleton (UserId "user-editor"), secondFactor = d.secondFactor, emails = d.emails, mailing = d.mailing, adminCreatesPasswordAccounts = d.adminCreatesPasswordAccounts, groups = d.groups, membership = d.membership}
     -- Rita has a verified address, and the server mails or not.
-    mailingTo mailing d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = d.identities, providerOnly = d.providerOnly, secondFactor = d.secondFactor, emails = Map.fromList [(UserId "user-reader", AccountEmail {email = "rita@example.org", verified = True})], mailing, adminCreatesPasswordAccounts = d.adminCreatesPasswordAccounts, groups = d.groups, membership = d.membership}
+    mailingTo mailing d = Directory {users = d.users, administrators = d.administrators, creators = d.creators, disabled = d.disabled, withPassword = d.withPassword, identities = d.identities, providerOnly = d.providerOnly, secondFactor = d.secondFactor, emails = Map.fromList [(UserId "user-reader", AccountEmail {email = Email "rita@example.org", verified = True})], mailing, adminCreatesPasswordAccounts = d.adminCreatesPasswordAccounts, groups = d.groups, membership = d.membership}
 
 shouldContainText :: Element s -> Text -> PageM s ()
 shouldContainText element part = textContent element >>= (`shouldSatisfy` T.isInfixOf part)
