@@ -1407,7 +1407,71 @@ must be in before it is.
   independent of how one signs in) and browsers with PRF (Chrome 116+, Safari 18+,
   recent Firefox).
 
-- **Later, by the owner (2026-10-27, "zapisz to na potem"): a migration to PostgreSQL.**
+- **WP5.22 A choice of database: PostgreSQL by default, SQLite as an option, one typed storage
+  layer** (the owner, 2026-10-28: "Chciałbym jednak dać możliwość wyboru backendu … Chce jak
+  najbardziej typowane api. Bez ręcznego sqla, może oprócz migracji. Pod postgresem wszystkie
+  featury … Pod sqlite - workaroundy, jeśli dostępne, a jeśli nie to po prostu ukryte w UI";
+  and no carrying over of existing data: "na razie nic tam specjalnego nie trzymam. Więc
+  migracje możemy olać"). This replaces the "later" note on PostgreSQL below.
+
+  **One storage layer, written once.** `Wiki.Server.Storage` (and `Storage/*`, ~5200 lines of
+  `sqlite-simple`) is rewritten on **Beam** (`beam-core`, `beam-sqlite`, `beam-postgres`):
+  queries are Haskell, not SQL strings, typed end to end (joins, aggregates, subqueries),
+  and the backend is a type parameter. A portable query compiles for both backends; a query
+  that uses a PostgreSQL feature (`tsvector`, `jsonb`, `SKIP LOCKED`, `LISTEN/NOTIFY`) has
+  the type `Postgres` and cannot be called from the SQLite backend, so "everything under
+  PostgreSQL, a workaround or nothing under SQLite" is checked by the compiler, not by
+  `if`s. Decision 7 (keep `sqlite-simple`) is withdrawn. Not two implementations of the
+  storage interface (every later feature would be written twice); not persistent/esqueleto
+  (looser types, `rawSql` at hand); not rel8, Opaleye, Squeal or hasql (PostgreSQL only);
+  not selda (unmaintained). The storage package may enable field selectors where Beam's
+  `Columnar` records need them, scoped to the modules that define tables. The storage
+  contract tests (`wiki-server/test`) run on both backends: SQLite in memory as today;
+  PostgreSQL in CI as a GitHub Actions service container (`postgres:17`), and locally on a
+  temporary cluster (`initdb`/`pg_ctl` on a scratch directory) when the binaries are in
+  `PATH`, else that half reports "not run". SQLite stays a first-class backend in CI, so it
+  cannot rot.
+
+  **Schema, not data, is migrated.** The fifteen SQLite migrations are collapsed into one
+  initial schema per backend (hand-written SQL, the one place SQL stays; `Migrate.hs` keeps
+  the versioning and its test), numbering restarts at `0001`. No migration from the old
+  schema: a deployment with a database of the old shape is refused with a sentence that
+  says so and names the way (export the archive with the old server, import it with the
+  new). Existing content moves by export and import (WP5.8), not by SQL.
+
+  **What differs by backend**, named in one place (`Wiki.Api.Info` gains the backend's
+  capabilities, and the application reads them instead of guessing):
+  - Search: PostgreSQL `tsvector` with ranking (`websearch_to_tsquery`, a generated column
+    with a GIN index, per page version's text); SQLite keeps the folded-text search of
+    today (`Wiki.Core.Search`, `search_fold`). Same results shape; the capability says
+    which one answers.
+  - Events between server instances, the export queue, the sign-in limiter: PostgreSQL
+    `LISTEN/NOTIFY` and `SKIP LOCKED` where a later multi-instance package needs them; not
+    in this package beyond leaving the door open (the schema and the storage interface do
+    not assume one process). SQLite is one instance, as today.
+  - Everything else (JSON settings, transactions, indexes, the audit log, notifications,
+    comments, blobs on disk) is modelled portably.
+
+  **Deployment.** `wiki-server` takes `--database postgres://…` (the password from a file
+  or `WIKI_DATABASE_URL`, never on the command line in the clear) or `--sqlite <file>`; the
+  data directory keeps the attachments and the backups as today. `docker-compose.yml` gains
+  a `postgres:17` service with a named volume and a healthcheck, and the wiki waits for it;
+  the compose file is the default deployment; `--sqlite` is the one without a second
+  container. `toolchain/deploy-local.sh` (and `deploy-server.mjs`) default to PostgreSQL in
+  compose and take `--sqlite`; a deployment directory with a `wiki.sqlite` of the old shape
+  stops with a warning that the state is incompatible and goes on only with `--fresh` (or
+  "yes" at the prompt), after moving the old file aside, never deleting it. `backup` works
+  for both (`VACUUM INTO` for SQLite, `pg_dump` for PostgreSQL, into `data/backups/`), and
+  `restore` likewise. The README's operator section and `docs/api.md` say all of it.
+
+  **Tests:** the storage contracts on both backends; the migration test on both; the server
+  API suite on both (a parameter of the fixture); search tested on both with the same
+  cases; `test-deploy-local.sh` and `test-deploy-server.mjs` for `--fresh`, `--sqlite` and
+  the refusal; the smoke test runs the server against PostgreSQL when a cluster is at hand.
+
+- **Later, by the owner (2026-10-27, "zapisz to na potem"), picked up on 2026-10-28 as
+  WP5.22 with a different shape (a choice of backend, no data migration): a migration to
+  PostgreSQL.**
   Not now; when it comes, as one port of the whole storage layer (WP5.7's spike says why
   not half and half), most likely with `rel8`, migrations hand-written, SQLite kept or
   dropped as the owner decides then.
