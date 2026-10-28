@@ -131,7 +131,7 @@ import Control.Monad.UUID (MonadUUID (..))
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID.Types qualified as UUID
-import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, execute_, query, query_)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), ToRow, execute, execute_, query, query_)
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), InvitationToken (..), LinkedIdentity (..), NewAccount (..), SignInMethods (..), signsInSomehow, withoutIdentity)
 import Wiki.Api.Admin (WikiSettings (..))
@@ -142,7 +142,7 @@ import Wiki.Core.Audit (Actor (..), Subject (..))
 import Wiki.Core.Id (InvitationId (..), UserId (..))
 import Wiki.Core.User (User (..), checkLogin)
 import Wiki.Server.Password (checkPassword, hashPassword, newPublicId, newToken, tokenHash, verifyPassword)
-import Wiki.Server.Storage (Storage, readServerSettings, readSettings, settingsWith, withDatabase)
+import Wiki.Server.Storage (Storage, readServerSettings, readSettings, settingsWith, withDatabase, withReadConnection)
 import Wiki.Server.Storage.Audit (Recorded (..), consoleAddress, insertAudit, operator)
 import Wiki.Server.Storage.Rows (AccountRow, IdentityRow (..), Stamp (..), accountFromRow, deleteIdentity, deleteInvitation, deleteSessionsOf, grantCreateSpaces, identitiesOf, identityOf, insertAccount, insertIdentity, loadAccount, noPasswordToSet, pendingInvitation, providerNames, refreshIdentity, selectAccounts, totpEnabled, updateDisabled, updatePasswordHash)
 
@@ -652,25 +652,36 @@ data Resolved = Resolved
 -- disabled) is deleted, and belongs to nobody. Its use is recorded at most
 -- every 'seenEvery', and its end moved later at most every 'refreshEvery'
 -- (the last such move is its end minus 'idleTime').
+--
+-- Every request asks for its session, so the session is read on one of
+-- the storage's readers ('withReadConnection'), which does not wait for
+-- writes. Only deleting a session or recording its use takes the writer,
+-- for that one statement. If the user signs out in another tab between
+-- the read and the write, the write changes no row, and this request is
+-- still answered as signed in. That is the same answer as when the
+-- sign-out comes just after the request.
 resolveSession :: Storage -> UTCTime -> Text -> Text -> IO (Maybe Resolved)
-resolveSession st now address token = withDatabase st $ \c -> do
+resolveSession st now address token = do
   let key = tokenHash token
+      write :: (ToRow q) => Query -> q -> IO ()
+      write statement params = withDatabase st (\c -> execute c statement params)
   rows <-
-    query
-      c
-      "SELECT s.user_id, s.last_seen_at, s.expires_at, u.disabled FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = ?"
-      (Only key)
+    withReadConnection st $ \c ->
+      query
+        c
+        "SELECT s.user_id, s.last_seen_at, s.expires_at, u.disabled FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = ?"
+        (Only key)
   case rows of
     [(uid, Stamp seen, Stamp expires, disabled)]
       | expires <= now || disabled /= (0 :: Int) -> do
-          execute c "DELETE FROM sessions WHERE id_hash = ?" (Only key)
+          write "DELETE FROM sessions WHERE id_hash = ?" (Only key)
           pure Nothing
       | diffUTCTime now (addUTCTime (negate idleTime) expires) >= refreshEvery -> do
-          execute c "UPDATE sessions SET last_seen_at = ?, address = ?, expires_at = ? WHERE id_hash = ?" (Stamp now, address, Stamp (addUTCTime idleTime now), key)
+          write "UPDATE sessions SET last_seen_at = ?, address = ?, expires_at = ? WHERE id_hash = ?" (Stamp now, address, Stamp (addUTCTime idleTime now), key)
           pure (Just Resolved {user = UserId uid, refreshed = True})
       | otherwise -> do
           when (diffUTCTime now seen >= seenEvery) $
-            execute c "UPDATE sessions SET last_seen_at = ?, address = ? WHERE id_hash = ?" (Stamp now, address, key)
+            write "UPDATE sessions SET last_seen_at = ?, address = ? WHERE id_hash = ?" (Stamp now, address, key)
           pure (Just Resolved {user = UserId uid, refreshed = False})
     _ -> pure Nothing
 

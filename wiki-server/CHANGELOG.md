@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Reads no longer wait for writes, or for one another (WP5.16a). The storage
+opens four read-only SQLite connections beside the one that writes. Every
+operation that only reads runs on one of them, and so do the lookup of a
+request's session and the live channel's permission checks. A backup
+copies the database through a connection of its own, so requests go on
+while it runs. An import still holds the writer for its whole length, but
+no longer stops reads. Writes still run one after another, in the order
+they commit. The new `wiki-server-bench` executable times a big wiki's
+page view, save, backup and comment, to compare two versions of the
+storage.
+
 The static files' server sends a `.bin` file as `application/octet-stream`,
 named so explicitly (WP5.5): TikZJax's compressed files are now zlib streams
 named `.bin` rather than gzip files named `.gz`, since a corporate proxy may

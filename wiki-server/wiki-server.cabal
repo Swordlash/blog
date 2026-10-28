@@ -175,6 +175,36 @@ executable wiki-server
         protolude,
         wiki-server
 
+-- The storage timed at the size of a big wiki (WP5.16a of docs/PLAN.md):
+-- run by hand to compare two versions of it, and built with everything
+-- else so that it keeps compiling. Native only, as the server is.
+executable wiki-server-bench
+  import:           shared
+  main-is:          Bench.hs
+  hs-source-dirs:   bench
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-N"
+
+  if arch(wasm32)
+    buildable: False
+  else
+    build-depends:
+        aeson,
+        base,
+        directory,
+        filepath,
+        protolude,
+        sqlite-simple,
+        temporary,
+        text,
+        time,
+        wai,
+        warp,
+        websockets,
+        wiki-api,
+        wiki-app,
+        wiki-core,
+        wiki-server
+
 -- The storage against the backend's contract (wiki-app:contract), over a
 -- database made afresh in a temporary directory for each example, and what
 -- only the storage does: migrations, backups, attachments on disk. Then the
@@ -223,6 +253,7 @@ test-suite wiki-server-test
         Test.Storage.Contract
         Test.Storage.Fixture
         Test.Storage.Migrate
+        Test.Storage.Scale
     build-depends:
         HUnit,
         aeson,

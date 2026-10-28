@@ -15,9 +15,9 @@
 -- before each event is sent, since a grant may have been removed since.
 --
 -- The answer to a subscription carries the page's threads, read as that
--- user may read them. The subscription is made while the storage's
--- connection is held for that read, and writes publish their events while
--- they hold it too. So every change committed after the read is sent after
+-- user may read them. The subscription is made while the storage's writer
+-- is held for that read, and writes publish their events while they hold
+-- the writer too. So every change committed after the read is sent after
 -- the answer, and none committed before it is sent as new. A tab that
 -- shows the answer's threads and applies the events it receives then
 -- misses nothing.
@@ -148,7 +148,7 @@ outboxSize :: Natural
 outboxSize = 256
 
 -- | Send an event on a page to every connection subscribed to it. It never
--- waits: it is called while the storage holds its connection.
+-- waits: it is called while the storage holds its writer.
 publish :: Hub -> PageId -> PageEvent -> IO ()
 publish hub page event = atomically $ do
   connections <- readTVar hub.connections
@@ -157,7 +157,7 @@ publish hub page event = atomically $ do
     when subscribed $ enqueue c (Tell page event)
 
 -- | Send each user's notification to every connection of that user. It
--- never waits: it is called while the storage holds its connection.
+-- never waits: it is called while the storage holds its writer.
 notify :: Hub -> [(UserId, Notification)] -> IO ()
 notify hub told = atomically $ do
   connections <- readTVar hub.connections

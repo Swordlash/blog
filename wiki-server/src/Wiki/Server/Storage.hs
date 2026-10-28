@@ -22,25 +22,38 @@
 --
 -- = Transactions
 --
--- The storage has one database connection, used by one operation at a
--- time. Each operation is one transaction. It reads what it needs: every
+-- Each operation is one transaction. It reads what it needs: every
 -- space and grant, since every permission rule looks at a space's
 -- ancestors, and the pages the operation is about. It then checks what the
 -- class's Haddock says it checks, in that order, and only then writes. An
 -- operation that fails writes nothing, and one that throws (on a full
--- disk, say) is rolled back. The database is in WAL mode, so a backup
--- taken by another process meanwhile reads without waiting
--- ("Wiki.Server.Storage.Backup").
+-- disk, say) is rolled back.
+--
+-- The storage has two kinds of database connection. The writer is one
+-- connection, used by one operation at a time. Every write runs on it, so
+-- writes happen one after another, and the callbacks a write calls after
+-- its commit ('publish', 'notify') are called in commit order. The readers
+-- are a small pool of connections that only read ('readConnections' of
+-- them). An operation that only reads takes a reader. It does not wait for
+-- a write or for another read, and no write waits for it. The database is
+-- in WAL mode, which lets a reader read the last committed state while the
+-- writer writes. A backup copies the database through a connection of its
+-- own ('copyDatabase'), so it holds neither the writer nor a reader.
 --
 -- = The wiki's settings
 --
 -- The wiki's settings include whom the wiki lets in ("Wiki.Core.Access"),
 -- which every request needs: the listener checks it, and every permission
 -- rule sees it through the grants. So the storage keeps the settings in
--- memory after the first read ('readSettings'). A change made through the
--- storage updates that copy before anything else can use the connection.
--- A change made by another process would only be seen at the next start,
--- but no other process makes one.
+-- memory. They are read when the storage opens, before any reader exists.
+-- A change made through the storage updates that copy right after its
+-- commit, before any other write may begin. A read transaction takes the
+-- settings from memory, not from the database it reads. So for a moment
+-- a read can see the settings from before a change with the rows from
+-- after it, or the other way round. That is harmless: each half is what a
+-- request a moment earlier or later would see. A change made by another
+-- process would only be seen at the next start, but no other process
+-- makes one.
 --
 -- The server's own settings ("Wiki.Server.Secret") are kept in memory the
 -- same way: its public address, its mail server and its sign-in providers.
@@ -57,6 +70,8 @@ module Wiki.Server.Storage
   , withStorage
   , withStorageAside
   , withDatabase
+  , withReadConnection
+  , readConnections
   , storageDataDir
   , DataDirInUse (..)
 
@@ -105,6 +120,7 @@ module Wiki.Server.Storage
   )
 where
 
+import Control.Concurrent.STM (TVar, modifyTVar', newTVarIO, readTVar, writeTVar)
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID (..))
 import Data.ByteString qualified as BS
@@ -180,16 +196,18 @@ import Wiki.Server.Storage.Rows
 --------------------------------------------------------------------------------
 -- The storage
 
--- | An open storage: the database's connection, and the directory it and
+-- | An open storage: the database's connections, and the directory it and
 -- the attachments are in.
 data Storage = Storage
   { connection :: MVar Connection
+  -- ^ The writer: the one connection every write runs on.
+  , readers :: Readers
   , dataDir :: FilePath
   , config :: Config
   , settings :: IORef (Maybe WikiSettings)
-  -- ^ The wiki's settings, after the first read. Only the holder of the
-  -- connection fills or changes this, so settings read before a change can
-  -- never overwrite the changed ones.
+  -- ^ The wiki's settings, read when the storage opens. Only the holder of
+  -- the writer changes this, so settings read before a change can never
+  -- overwrite the changed ones.
   , serverKept :: IORef (Maybe Kept)
   -- ^ The server's own settings, kept the same way.
   , lock :: Maybe DataLock
@@ -211,8 +229,7 @@ data Config = Config
   -- ^ The callback that reports what happens to a page to the server's
   -- live channel ("Wiki.Server.Events"): every change to the page's
   -- comments, and every save of the page. It is called once the change is
-  -- committed, before anyone else may use the connection, so it must not
-  -- wait.
+  -- committed, before any other write may begin, so it must not wait.
   , notify :: [(UserId, Notification)] -> IO ()
   -- ^ The callback that receives the notifications a write made
   -- ("Wiki.Core.Notification") and passes them to the users' tabs over the
@@ -262,18 +279,81 @@ openWith collect config dataDir = do
   lock <- if collect then Just <$> (lockDataDir dataDir >>= either (throwIO . DataDirInUse) pure) else pure Nothing
   c <- open (databaseFile dataDir) `onException` traverse_ unlockDataDir lock
   flip onException (close c >> traverse_ unlockDataDir lock) $ do
-    execute_ c "PRAGMA busy_timeout = 10000"
+    configure c
     -- This pragma returns a row, and execute_ refuses a statement that
     -- returns rows.
     _ <- query_ c "PRAGMA journal_mode = WAL" :: IO [Only Text]
     execute_ c "PRAGMA synchronous = NORMAL"
-    execute_ c "PRAGMA foreign_keys = ON"
     _ <- migrate c
     when collect (collectGarbage c dataDir)
-  connection <- newMVar c
-  settings <- newIORef Nothing
-  serverKept <- newIORef Nothing
-  pure Storage {connection, dataDir, config, settings, serverKept, lock}
+    -- The settings are read here, on the writer, before any reader is
+    -- open. A reader then always finds them in memory, and never writes
+    -- the in-memory copy.
+    settings <- newIORef . Just =<< loadSettings c
+    serverKept <- newIORef . Just =<< loadServerSettings c
+    readers <- openReaders (databaseFile dataDir)
+    connection <- newMVar c
+    pure Storage {connection, readers, dataDir, config, settings, serverKept, lock}
+
+-- | Set up a connection the way every connection of the storage needs:
+-- wait up to ten seconds for another connection's lock before failing, and
+-- check foreign keys.
+configure :: Connection -> IO ()
+configure c = do
+  execute_ c "PRAGMA busy_timeout = 10000"
+  execute_ c "PRAGMA foreign_keys = ON"
+
+--------------------------------------------------------------------------------
+-- The readers
+
+-- | 'Readers' is the storage's pool of read-only connections. Each is used
+-- by one operation at a time. 'free' holds the readers no operation is
+-- using. 'every' holds all of them, so that they can be closed.
+data Readers = Readers
+  { free :: TVar [Connection]
+  , every :: [Connection]
+  }
+
+-- | The number of readers a storage opens: four. A read waits for a
+-- reader only while four other reads run. Each connection has its own page
+-- cache (about 2 MB), so more readers use more memory.
+readConnections :: Int
+readConnections = 4
+
+-- | Open the readers on a database file. Each is set up as the writer is
+-- ('configure') and made read-only (@query_only@). A write on a reader by
+-- mistake then fails at once, instead of running outside the writer's
+-- order.
+openReaders :: FilePath -> IO Readers
+openReaders file = do
+  every <- for [1 .. readConnections] $ \_ -> do
+    c <- open file
+    (configure c >> execute_ c "PRAGMA query_only = ON") `onException` close c
+    pure c
+  free <- newTVarIO every
+  pure Readers {free, every}
+
+-- | Close every reader, after waiting until no operation uses one.
+closeReaders :: Readers -> IO ()
+closeReaders rs = do
+  atomically $ readTVar rs.free >>= \cs -> check (length cs == length rs.every)
+  traverse_ close rs.every
+
+-- | Run something with a reader. A write on the reader fails. The reader
+-- does not wait for writes, and writes do not wait for it. It waits only
+-- while every reader is in use. Several statements see the same state of
+-- the database only inside a transaction (@BEGIN@ … @COMMIT@). The action
+-- must end any transaction it begins, since the reader goes back to the
+-- pool afterwards.
+withReadConnection :: Storage -> (Connection -> IO a) -> IO a
+withReadConnection st = bracket takeReader giveBack
+  where
+    takeReader =
+      atomically $
+        readTVar st.readers.free >>= \case
+          c : rest -> writeTVar st.readers.free rest $> c
+          [] -> retry
+    giveBack c = atomically (modifyTVar' st.readers.free (c :))
 
 -- | The error for a data directory that another storage has open, or that
 -- a restore is writing into.
@@ -283,17 +363,19 @@ newtype DataDirInUse = DataDirInUse Text
 instance Exception DataDirInUse where
   displayException (DataDirInUse why) = toS why
 
--- | Close the storage's database, and release its directory's lock.
+-- | Close the storage's database, and release its directory's lock. The
+-- readers are closed once no operation uses them, and the writer once no
+-- operation holds it.
 closeStorage :: Storage -> IO ()
-closeStorage st = withMVar st.connection close `finally` traverse_ unlockDataDir st.lock
+closeStorage st = (closeReaders st.readers >> withMVar st.connection close) `finally` traverse_ unlockDataDir st.lock
 
 -- | Run something with the storage open, and close it afterwards.
 withStorage :: Config -> FilePath -> (Storage -> IO a) -> IO a
 withStorage config dir = bracket (openStorage config dir) closeStorage
 
--- | Run something on the database connection directly, for what the
--- interface does not do: tests that inspect the database, and
--- maintenance. Nothing else uses the connection meanwhile.
+-- | Run something on the writer directly, for what the interface does
+-- not do: tests that inspect the database, and maintenance. No other
+-- write runs meanwhile. Reads go on, on the readers ('withReadConnection').
 withDatabase :: Storage -> (Connection -> IO a) -> IO a
 withDatabase st = withMVar st.connection
 
@@ -301,14 +383,13 @@ withDatabase st = withMVar st.connection
 storageDataDir :: Storage -> FilePath
 storageDataDir st = st.dataDir
 
--- | The wiki's settings as they are now: from memory, once they have been
--- read.
+-- | The wiki's settings as they are now, from memory.
 readSettings :: Storage -> IO WikiSettings
 readSettings st = readIORef st.settings >>= maybe (withMVar st.connection (settingsWith st)) pure
 
--- | The wiki's settings, for a caller that holds the storage's connection
--- (inside 'withDatabase'). They are read from the database the first time
--- and kept in memory.
+-- | The wiki's settings, for a caller that holds a connection of the
+-- storage's. They come from memory. The database is read only when memory
+-- has none, which does not happen once 'openWith' has filled it.
 settingsWith :: Storage -> Connection -> IO WikiSettings
 settingsWith st c =
   readIORef st.settings >>= \case
@@ -318,12 +399,13 @@ settingsWith st c =
       writeIORef st.settings (Just s)
       pure s
 
--- | The server's own settings as they are now, with their secrets: from
--- memory, once they have been read.
+-- | The server's own settings as they are now, with their secrets, from
+-- memory.
 readServerSettings :: Storage -> IO Kept
 readServerSettings st = readIORef st.serverKept >>= maybe (withMVar st.connection (serverSettingsWith st)) pure
 
--- | The server's own settings, for someone who holds the connection.
+-- | The server's own settings, for a caller that holds a connection of
+-- the storage's. They come from memory, as in 'settingsWith'.
 serverSettingsWith :: Storage -> Connection -> IO Kept
 serverSettingsWith st c =
   readIORef st.serverKept >>= \case
@@ -415,9 +497,20 @@ data Ctx = Ctx
 newtype Tx a = Tx (ReaderT Ctx (ExceptT WikiError IO) a)
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadReader Ctx, MonadError WikiError)
 
--- | Whether a transaction writes. One that does takes the database's write
--- lock as it begins, so that what it read is still true when it writes.
-data Mode = Reads | Writes
+-- | Whether a transaction writes, and which connection it runs on.
+data Mode
+  = -- | It only reads, on a reader.
+    Reads
+  | -- | It writes, on the writer. It takes the database's write lock as it
+    -- begins, so that what it read is still true when it writes.
+    Writes
+  | -- | It only reads, but on the writer, so that no write can commit
+    -- between its read and the action run after it ('transactThen'). The
+    -- live channel subscribes this way ('threadsThen'): every change
+    -- committed after the read is reported after the answer, and no change
+    -- committed before the read is reported as new (decision 23 of
+    -- docs/PLAN.md).
+    ReadsOnWriter
 
 -- | Run an operation as someone, in a transaction of its own: committed if
 -- it succeeds, rolled back if it fails or throws.
@@ -428,15 +521,16 @@ transact st who = transactFrom st who ""
 transactFrom :: Storage -> Who -> Text -> Mode -> Tx a -> IO (Either WikiError a)
 transactFrom st who address mode body = transactThenFrom st who address mode body (const pass)
 
--- | 'transact', then an action on the result, run after the commit and
--- before anyone else may use the connection.
+-- | 'transact', then an action on the result, run after the commit. For a
+-- transaction on the writer ('Writes', 'ReadsOnWriter') the action runs
+-- before any other write may begin.
 transactThen :: Storage -> Who -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
 transactThen st who = transactThenFrom st who ""
 
 -- | 'transactThen', for a request from an address.
 transactThenFrom :: Storage -> Who -> Text -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
-transactThenFrom st who address mode (Tx body) committed = withMVar st.connection $ \c -> do
-  execute_ c (case mode of Reads -> "BEGIN"; Writes -> "BEGIN IMMEDIATE")
+transactThenFrom st who address mode (Tx body) committed = holding $ \c -> do
+  execute_ c (case mode of Writes -> "BEGIN IMMEDIATE"; _ -> "BEGIN")
   ctx <- context st c who address `onException` execute_ c "ROLLBACK"
   result <- runExceptT (runReaderT body ctx) `onException` execute_ c "ROLLBACK"
   case result of
@@ -447,6 +541,11 @@ transactThenFrom st who address mode (Tx body) committed = withMVar st.connectio
       made <- readIORef ctx.told
       unless (null made) (st.config.notify (reverse made))
   pure result
+  where
+    holding = case mode of
+      Reads -> withReadConnection st
+      Writes -> withMVar st.connection
+      ReadsOnWriter -> withMVar st.connection
 
 -- | The context an operation starts from. Its grants include whom the wiki
 -- is open to, because the permission rules read that from the grants.
@@ -726,7 +825,7 @@ instance (MonadIO m) => MonadAdmin (SqliteWiki m) where
   wikiSettings = run Reads (requireAdministrator >> asks (\x -> x.wiki))
 
   -- The settings kept in memory are the new ones as soon as they are
-  -- committed, before the connection is released.
+  -- committed, before any other write may begin.
   setWikiSettings new = SqliteWiki $ do
     env <- ask
     liftIO (transactThenFrom env.storage env.who env.address Writes (setWikiSettingsTx new) (writeIORef env.storage.settings . Just))
@@ -796,14 +895,18 @@ readLastBackup st = withDatabase st loadLastBackup
 writeLastBackup :: Storage -> BackupRecord -> IO ()
 writeLastBackup st r = withDatabase st (`storeLastBackup` r)
 
--- | Write a copy of the database into a new file. The copy holds the
--- storage's connection while it runs, as every operation holds it for its
--- transaction.
+-- | Write a copy of the database into a new file, through a connection
+-- opened for the copy alone. The copy reads the last committed state, as a
+-- reader does, so neither reads nor writes wait for it, however long it
+-- takes. It cannot use a reader: a reader refuses to write, and SQLite
+-- counts writing the copy's file as a write.
 copyDatabase :: Storage -> FilePath -> IO ()
-copyDatabase st target = withDatabase st (`backupInto` target)
+copyDatabase st target = withConnection (databaseFile st.dataDir) $ \c -> configure c >> backupInto c target
 
 -- | Whether a 'Who' may read a page that exists. The live channel checks
 -- this before it sends them events about the page ("Wiki.Server.Events").
+-- It runs on a reader, so the checks of many tabs run side by side and no
+-- write waits for them.
 mayReadPage :: Storage -> Who -> PageId -> IO Bool
 mayReadPage st who pid = isRight <$> transact st who Reads (findNode pid >>= chainOfPage >>= requireView)
 
@@ -835,8 +938,14 @@ editorOf st who pid =
 -- can commit. The live channel subscribes with this ("Wiki.Server.Events"):
 -- every change after the read is sent after the threads, and no change can
 -- fall between the read and the subscription unsent.
+--
+-- This is the one read that runs on the writer ('ReadsOnWriter'), not on a
+-- reader. The guarantee needs the read and the subscription to happen
+-- before any write commits, and only the writer can promise that: a write
+-- runs its callbacks ('publish') on the writer too, so a write that
+-- commits after the read reports its change after the subscription.
 threadsThen :: Storage -> Who -> PageId -> ([Thread] -> IO ()) -> IO (Either WikiError [Thread])
-threadsThen st who pid = transactThen st who Reads (listThreadsTx pid)
+threadsThen st who pid = transactThen st who ReadsOnWriter (listThreadsTx pid)
 
 -- | The comment operations, as the class's Haddock describes them
 -- ("Wiki.App.Backend.Comments"). Each operation is one transaction, and
@@ -2244,17 +2353,20 @@ exportArchive :: Storage -> Text -> IO (Either Text Archive)
 exportArchive st app = do
   createdAt <- getCurrentTime
   (users, groups, membership, grants, spaces, pages, audit) <-
-    withDatabase st $ \c -> do
+    withReadConnection st $ \c -> do
       execute_ c "BEGIN"
+      -- A reader goes back to the pool after this, so a failed read must
+      -- not leave its transaction open.
       records <-
-        (,,,,,,)
-          <$> loadUsers c
-          <*> loadGroups c
-          <*> loadMembership c
-          <*> loadGrants c
-          <*> (Map.elems <$> loadSpaces c)
-          <*> loadAllPages c
-          <*> loadAuditLog c
+        flip onException (execute_ c "ROLLBACK") $
+          (,,,,,,)
+            <$> loadUsers c
+            <*> loadGroups c
+            <*> loadMembership c
+            <*> loadGrants c
+            <*> (Map.elems <$> loadSpaces c)
+            <*> loadAllPages c
+            <*> loadAuditLog c
       execute_ c "COMMIT"
       pure records
   blobs <- for [(x, b) | p <- pages, x <- p.attachments, SourceBlob b <- [x.source]] $ \(x, b) ->
