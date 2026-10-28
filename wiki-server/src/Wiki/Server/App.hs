@@ -221,11 +221,11 @@ listenerRoutes logger env site l caller request respond = do
           "auth" : provider : more -> authApplication logger env caller l.mount provider more request respond
           -- A blog's feeds and the sitemap, with what anyone may read
           -- ("Wiki.Server.Feed"), whoever asks.
-          ["sitemap.xml"] | readOnly -> sitemapApplication env.storage l.mount request respond
+          ["sitemap.xml"] | readOnly -> sitemapApplication env.storage env.feeds l.mount request respond
           "s" : rest
             | readOnly
             , Just (path, kind) <- feedOf rest ->
-                feedApplication env.storage l.mount kind path request respond
+                feedApplication env.storage env.feeds l.mount kind path request respond
           rest -> maybe notFound (\s -> serveStatic s l.mount (Just pages) rest request respond) site
     | readOnly && null segments -> redirect (encodeUtf8 l.mount)
     | otherwise -> notFound

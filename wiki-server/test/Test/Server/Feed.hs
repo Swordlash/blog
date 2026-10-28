@@ -233,6 +233,8 @@ served = describe "served" $ do
     atom <- getUrl r (r.public <> "/s/blog/feed.xml")
     atom.status `shouldBe` 200
     header "Content-Type" atom `shouldBe` Just "application/atom+xml; charset=utf-8"
+    -- Anyone may read it, and keep it for the minute the server does.
+    header "Cache-Control" atom `shouldBe` Just "public, max-age=60"
     let atomText = decodeUtf8 (BSL.toStrict atom.body)
     root <- parsed atomText
     map (map textOf . children "title") (children "entry" root) `shouldBe` [["Notes on Haskell"], ["Hello, world"]]
@@ -250,8 +252,8 @@ served = describe "served" $ do
     atom <- getUrl r (r.public <> "/s/blog/feed.xml")
     root <- parsed (decodeUtf8 (BSL.toStrict atom.body))
     map textOf (children "id" root) `shouldBe` ["https://wiki.example.org/s/blog/"]
-    sitemap <- getUrl r (r.public <> "/sitemap.xml")
-    decodeUtf8 (BSL.toStrict sitemap.body) `shouldSatisfy` T.isInfixOf "<loc>https://wiki.example.org/s/blog/p/hello-world/</loc>"
+    mapped <- getUrl r (r.public <> "/sitemap.xml")
+    decodeUtf8 (BSL.toStrict mapped.body) `shouldSatisfy` T.isInfixOf "<loc>https://wiki.example.org/s/blog/p/hello-world/</loc>"
 
   it "has no feed for a space that is not a blog, not public or not there, whoever asks" $ withDemoRunning identity $ \r -> do
     for_ ["/s/docs/feed.xml", "/s/docs/feed.rss", "/s/team/feed.xml", "/s/nowhere/feed.xml", "/s/blog/p/hello-world/feed.xml"] $ \path ->
@@ -267,6 +269,7 @@ served = describe "served" $ do
     reply <- getUrl r (r.public <> "/sitemap.xml")
     reply.status `shouldBe` 200
     header "Content-Type" reply `shouldBe` Just "application/xml; charset=utf-8"
+    header "Cache-Control" reply `shouldBe` Just "public, max-age=60"
     root <- parsed (decodeUtf8 (BSL.toStrict reply.body))
     let locs = map textOf (named "loc" root)
     locs `shouldSatisfy` elem (r.public <> "/s/blog/")

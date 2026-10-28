@@ -16,11 +16,21 @@
 -- ('Wiki.Core.Permission.publicTo'). The feed of a space that is private,
 -- not shown as a blog, or does not exist is a 404, and so are both in a
 -- closed wiki, which has nothing public.
+--
+-- Both are written at most once a minute for each address, and kept in
+-- the server's memory in between ('FeedCache'): a feed reads only the
+-- posts it carries, and the sitemap only where each page is, but crawlers
+-- and feed readers ask often.
 module Wiki.Server.Feed
   ( -- * Serving them
     FeedKind (..)
   , feedApplication
   , sitemapApplication
+  , FeedCache
+  , newFeedCache
+  , feedLifetime
+  , feed
+  , sitemap
 
     -- * Writing them
   , FeedHead (..)
@@ -37,10 +47,12 @@ module Wiki.Server.Feed
 where
 
 import Data.ByteString.Lazy qualified as BSL
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
 import Data.Row (Empty)
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (NominalDiffTime, UTCTime, defaultTimeLocale, diffUTCTime, formatTime, getCurrentTime)
+import Data.Type.Equality (type (~))
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.Router.Duplex qualified as Duplex
@@ -51,18 +63,21 @@ import Network.Wai (Application, Response, responseLBS)
 import Protolude
 import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Api.Links (attachmentUrl)
-import Wiki.App.Backend (MonadWiki (getSpace, listPages, listSpaces, postDetails))
+import Wiki.App.Backend (MonadWiki (getSpace, listPages, listSpaces), WikiError (NotFound))
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.App.View.Common (pagePathOf, spacePathOf)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Attachment (Attachment (..), findAttachment)
-import Wiki.Core.Blog (PostDetails (..), excerpt, noDetails, posts)
+import Wiki.Core.Blog (excerpt, posts)
+import Wiki.Core.Id (PageId)
 import Wiki.Core.Markdown qualified as Md
-import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title, updatedAt), PageSummary (id, updatedAt), summaryOf)
+import Wiki.Core.Page (Page (attachments, body, createdAt, id, slug, title, updatedAt), PageSummary (id))
+import Wiki.Core.Path (TreeNode (..), pathOf)
 import Wiki.Core.Space (Space (blog, createdAt, description, id, name))
 import Wiki.Core.Version (Author (..))
 import Wiki.Server.Address (addressOf, publicAddress)
-import Wiki.Server.Storage (Storage, Who (..), readSettings, runSqliteWiki, spacePages)
+import Wiki.Server.Storage (Storage, Who (..), feedPosts, readSettings, runSqliteWiki, sitemapPages)
+import Wiki.Server.Storage.Rows (SitemapNode (..))
 
 -- | The two feeds of a blog.
 data FeedKind = Atom | Rss
@@ -81,31 +96,39 @@ maxSitemapUrls = 50000
 
 -- | A blog's feed, for the space at the path the request names under
 -- @s\/@ (its segments, as the router writes them), on a listener serving
--- the wiki at this path.
-feedApplication :: Storage -> Text -> FeedKind -> [Text] -> Application
-feedApplication storage mount kind segments request respond = do
+-- the wiki at this path. Caches and proxies may keep it for a minute, as
+-- the server does ('FeedCache').
+feedApplication :: Storage -> FeedCache -> Text -> FeedKind -> [Text] -> Application
+feedApplication storage cache mount kind segments request respond = do
   base <- publicAddress storage mount request
-  feed storage base kind segments >>= \case
+  feed storage cache base kind segments >>= \case
     Nothing -> respond notFound
     Just xml ->
       respond $
         responseLBS
           status200
           [ (hContentType, if kind == Atom then "application/atom+xml; charset=utf-8" else "application/rss+xml; charset=utf-8")
-          , (hCacheControl, "no-cache")
+          , (hCacheControl, publicMinute)
           , ("X-Content-Type-Options", "nosniff")
           ]
           (BSL.fromStrict (encodeUtf8 xml))
 
 -- | The sitemap of the public pages, on a listener serving the wiki at
--- this path.
-sitemapApplication :: Storage -> Text -> Application
-sitemapApplication storage mount request respond = do
+-- this path. Caches and proxies may keep it for a minute, as the server
+-- does ('FeedCache').
+sitemapApplication :: Storage -> FeedCache -> Text -> Application
+sitemapApplication storage cache mount request respond = do
   base <- publicAddress storage mount request
-  sitemap storage base >>= \case
+  sitemap storage cache base >>= \case
     Nothing -> respond notFound
     Just xml ->
-      respond (responseLBS status200 [(hContentType, "application/xml; charset=utf-8"), (hCacheControl, "no-cache")] (BSL.fromStrict (encodeUtf8 xml)))
+      respond (responseLBS status200 [(hContentType, "application/xml; charset=utf-8"), (hCacheControl, publicMinute)] (BSL.fromStrict (encodeUtf8 xml)))
+
+-- | How long a cache may keep a feed or the sitemap: as long as the
+-- server's own cache does, and anyone's cache, since they hold only what
+-- anyone may read.
+publicMinute :: ByteString
+publicMinute = "public, max-age=" <> show (round feedLifetime :: Int)
 
 notFound :: Response
 notFound = responseLBS status404 [(hContentType, "text/plain; charset=utf-8")] "Not found\n"
@@ -114,31 +137,82 @@ notFound = responseLBS status404 [(hContentType, "text/plain; charset=utf-8")] "
 open :: Storage -> IO Bool
 open storage = (\s -> s.access == Open) <$> readSettings storage
 
+--------------------------------------------------------------------------------
+-- The cache
+
+-- | 'FeedCache' is the server's cache of the feeds and the sitemap it has
+-- written, by address. Feed readers poll a feed every few minutes, and
+-- search engines fetch the sitemap again and again, often from many
+-- places at once. Each written answer is kept for 'feedLifetime', so a
+-- poll within that time reads nothing from the database. A change to a
+-- post or a page shows in the feeds and the sitemap at most that long
+-- after it is saved.
+--
+-- The key is the address asked for, with the wiki's public address the
+-- answer was written under, which can come from the request's @Host@. An
+-- answer that is not found is not kept, and every answer older than
+-- 'feedLifetime' is dropped whenever another is kept, so the cache holds
+-- at most what was written in the last 'feedLifetime', and never more
+-- than 'maxCachedFeeds' answers.
+newtype FeedCache = FeedCache (IORef (Map Text (UTCTime, Text)))
+
+-- | An empty cache, for a server that is starting.
+newFeedCache :: IO FeedCache
+newFeedCache = FeedCache <$> newIORef mempty
+
+-- | How long a feed or the sitemap is kept once written: a minute.
+feedLifetime :: NominalDiffTime
+feedLifetime = 60
+
+-- | The most answers the cache holds. Past this many written within
+-- 'feedLifetime', a new answer is written for every request and not kept.
+maxCachedFeeds :: Int
+maxCachedFeeds = 1000
+
+-- | The answer kept for a key, if it was written less than 'feedLifetime'
+-- ago; otherwise the answer written now, kept if there is one.
+cached :: FeedCache -> Text -> IO (Maybe Text) -> IO (Maybe Text)
+cached (FeedCache ref) key write = do
+  now <- getCurrentTime
+  let fresh (at, _) = diffUTCTime now at < feedLifetime
+  kept <- (\m -> Map.lookup key m >>= \entry -> snd entry <$ guard (fresh entry)) <$> readIORef ref
+  case kept of
+    Just xml -> pure (Just xml)
+    Nothing -> do
+      written <- write
+      for_ written $ \xml ->
+        atomicModifyIORef' ref $ \m ->
+          let current = Map.filter fresh m
+           in (if Map.size current < maxCachedFeeds then Map.insert key (now, xml) current else current, ())
+      pure written
+
+--------------------------------------------------------------------------------
+-- Writing them for a request
+
 -- | The feed of the space at a path, as an anonymous reader may read it;
--- 'Nothing' for a space that has none.
-feed :: Storage -> Text -> FeedKind -> [Text] -> IO (Maybe Text)
-feed storage base kind segments =
+-- 'Nothing' for a space that has none. The posts are chosen among the
+-- space's page summaries, and only the 'feedSize' posts it carries are
+-- read whole ('feedPosts'). Kept in the cache for 'feedLifetime'.
+feed :: Storage -> FeedCache -> Text -> FeedKind -> [Text] -> IO (Maybe Text)
+feed storage cache base kind segments =
   ifM (not <$> open storage) (pure Nothing) $
     case Duplex.parse route ("/s/" <> T.intercalate "/" segments <> "/") of
-      Right (Space path) -> do
+      Right (Space path) -> cached cache (T.unwords [kindName, base, T.intercalate "/" segments]) $ do
         found <- runSqliteWiki storage Anonymous $ runExceptT $ do
           space <- ExceptT (getSpace path)
-          pages <- ExceptT (spacePages space.id)
-          details <- ExceptT (postDetails space.id)
+          unless space.blog (throwError NotFound)
+          pages <- ExceptT (listPages space.id)
+          chosen <- ExceptT (feedPosts space.id [p.id | p <- take feedSize (posts space pages)])
           spaces <- lift listSpaces
-          pure (space, pages, details, spaces)
-        case found of
-          Right (space, pages, details, spaces) | space.blog -> Just <$> written space pages details spaces
-          _ -> pure Nothing
+          pure (space, pages, chosen, spaces)
+        either (const (pure Nothing)) (fmap Just . written) found
       _ -> pure Nothing
   where
-    written space pages details spaces = do
+    kindName = if kind == Atom then "atom" else "rss"
+    written (space, pages, chosen, spaces) = do
       let spacePath = spacePathOf spaces space.id
           address = addressOf base (Duplex.print route (Space spacePath))
-          -- The posts are chosen among the summaries, and read whole.
-          byId = Map.fromList [(p.id, p) | p <- pages]
-          newest = mapMaybe (\s -> Map.lookup s.id byId) (take feedSize (posts space (map summaryOf pages)))
-      entries <- for newest $ \p -> do
+      entries <- for chosen $ \(p, author) -> do
         html <- postHtml base spaces space pages p
         pure
           FeedEntry
@@ -146,7 +220,7 @@ feed storage base kind segments =
             , url = addressOf base (Duplex.print route (Page spacePath [p.slug]))
             , published = p.createdAt
             , updated = p.updatedAt
-            , author = (\a -> a.name) <$> (Map.findWithDefault noDetails p.id details).author
+            , author = (\a -> a.name) <$> author
             , summary = either (const "") excerpt (Md.parseMarkdown p.body)
             , html
             }
@@ -160,22 +234,27 @@ feed storage base kind segments =
       pure (if kind == Atom then atomFeed h entries else rssFeed h entries)
 
 -- | The public spaces and pages, as an anonymous reader may read them;
--- 'Nothing' in a closed wiki.
-sitemap :: Storage -> Text -> IO (Maybe Text)
-sitemap storage base =
-  ifM (not <$> open storage) (pure Nothing) $ do
-    urls <- runSqliteWiki storage Anonymous $ do
-      spaces <- listSpaces
-      -- A space listed only for its name (an ancestor of a public one)
-      -- refuses access to its pages, and is left out.
-      fmap concat . for spaces $ \s ->
-        listPages s.id <&> \case
-          Left _ -> []
-          Right pages ->
-            let spacePath = spacePathOf spaces s.id
-                at r = addressOf base (Duplex.print route r)
-             in SitemapUrl {loc = at (Space spacePath), lastmod = foldl' max s.createdAt [p.updatedAt | p <- pages]}
-                  : [SitemapUrl {loc = at (Page spacePath (pagePathOf pages p.id)), lastmod = p.updatedAt} | p <- pages]
+-- 'Nothing' in a closed wiki. The pages are read in one query, without
+-- their titles or text ('sitemapPages'), and the whole sitemap is kept in
+-- the cache for 'feedLifetime'.
+sitemap :: Storage -> FeedCache -> Text -> IO (Maybe Text)
+sitemap storage cache base =
+  ifM (not <$> open storage) (pure Nothing) . cached cache ("sitemap " <> base) $ do
+    (spaces, pages) <- runSqliteWiki storage Anonymous ((,) <$> listSpaces <*> sitemapPages)
+    let at r = addressOf base (Duplex.print route r)
+        -- A space listed only for its name (an ancestor of a public one)
+        -- has no pages here, and is left out.
+        urls =
+          concat
+            [ SitemapUrl {loc = at (Space spacePath), lastmod = foldl' max s.createdAt [p.updatedAt | p <- ps]}
+                : sortOn (\u -> u.loc) [SitemapUrl {loc = at (Page spacePath (pathIn p)), lastmod = p.updatedAt} | p <- ps]
+            | s <- spaces
+            , Just ps <- [Map.lookup s.id pages]
+            , let spacePath = spacePathOf spaces s.id
+                  -- Each page's path, through its space's pages by id.
+                  byId = Map.fromList [(p.id, p) | p <- ps]
+                  pathIn p = fromMaybe [] (pathOf (`Map.lookup` byId) p.id)
+            ]
     pure (Just (sitemapXml (take maxSitemapUrls urls)))
 
 --------------------------------------------------------------------------------
@@ -186,7 +265,7 @@ sitemap storage base =
 -- attachments under the wiki's public address (a feed is read away from
 -- the wiki), and its formulas, diagrams and code as the plain text the
 -- islands start from, since a feed reader runs no script.
-postHtml :: Text -> [Space] -> Space -> [Page] -> Page -> IO Text
+postHtml :: (TreeNode page, NodeId page ~ PageId) => Text -> [Space] -> Space -> [page] -> Page -> IO Text
 postHtml base spaces space pages p = case Md.parseMarkdown p.body of
   Left _ -> pure ("<pre>" <> xmlText p.body <> "</pre>")
   Right blocks -> renderToHtml (H.mkComponent H.ComponentSpec {initialState = \_ -> pure (), render = \_ -> HH.div_ (Md.renderBlocks options blocks), eval = H.mkEval H.defaultEval}) ()

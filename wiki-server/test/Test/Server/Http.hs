@@ -35,6 +35,7 @@ import Wiki.Server.Api (Env (..))
 import Wiki.Server.Backups (newBackupService)
 import Wiki.Server.Events (newHub)
 import Wiki.Server.Export (newExports)
+import Wiki.Server.Feed (newFeedCache)
 import Wiki.Server.Limiter (defaultLimits, newLimiter)
 import Wiki.Server.Log (newErrorRing, silentLogger)
 import Wiki.Server.Metrics (newMetrics)
@@ -121,4 +122,5 @@ apiEnv storage = do
   pending <- newPendingSignIns
   errors <- newErrorRing
   metrics <- newMetrics
-  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups, resets, pending, logger = silentLogger (const pass), errors, metrics}
+  feeds <- newFeedCache
+  pure Env {storage, version = "wiki-server-test", startedAt, dataDir = "", maxImportSize = 64 * 1024 * 1024, limiter, registrations, sendMail = \_ _ _ -> pure (Left "no mail here"), providerCache, flows, events, exports, backups, resets, pending, logger = silentLogger (const pass), errors, metrics, feeds}

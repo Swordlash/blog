@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+The sitemap is written from where each page is, without its text, in one
+query, and a feed reads only the posts it carries (WP5.16b). Both are kept
+in memory for a minute for each address, and answered with
+`Cache-Control: public, max-age=60`.
+
 The search matches a query in SQL against each page's stored fold
 (`search_fold`, migration 0014), in the spaces searched only, and folds
 again only the pages that match (WP5.16b). The storage fills in the fold

@@ -16,6 +16,8 @@ module Wiki.Server.Storage.Rows
   , allPageNodes
   , pageNode
   , pageNodesWithIds
+  , SitemapNode (..)
+  , loadSitemapNodes
 
     -- * Reads
   , loadSpaces
@@ -35,6 +37,7 @@ module Wiki.Server.Storage.Rows
   , loadDraft
   , VersionRow (..)
   , loadVersions
+  , loadFirstVersion
   , loadSpaceVersions
   , loadCommentCounts
   , loadVersion
@@ -269,6 +272,37 @@ pageNodesWithIds :: Connection -> [PageId] -> IO [PageNode]
 pageNodesWithIds c pids =
   concat <$> for (chunksOf 500 (ordNub pids)) (\ids -> queryWith nodeRow c (sql ("SELECT " <> nodeColumns <> " FROM pages WHERE id IN (" <> marks ids <> ")")) (map (\p -> p.text) ids))
 
+-- | 'SitemapNode' is a page as the sitemap lists it: its place in its
+-- space's tree, and when it last changed. It has no title and no text,
+-- so a sitemap of a large wiki reads little of each page's row.
+data SitemapNode = SitemapNode
+  { id :: PageId
+  , space :: SpaceId
+  , parent :: Maybe PageId
+  , slug :: Slug
+  , updatedAt :: UTCTime
+  }
+
+instance TreeNode SitemapNode where
+  type NodeId SitemapNode = PageId
+  nodeId p = p.id
+  nodeParent p = p.parent
+  nodeSlug p = p.slug
+
+-- | The pages of these spaces, as the sitemap lists them, in no
+-- particular order.
+loadSitemapNodes :: Connection -> [SpaceId] -> IO [SitemapNode]
+loadSitemapNodes c spaces =
+  concat <$> for (chunksOf 500 spaces) (\chunk -> queryWith row c (sql ("SELECT id, space_id, parent, slug, updated_at FROM pages WHERE space_id IN (" <> marks chunk <> ")")) (map (\s -> s.text) chunk))
+  where
+    row = do
+      id <- PageId <$> field
+      space <- SpaceId <$> field
+      parent <- fmap PageId <$> field
+      slug <- slugField
+      updatedAt <- stamp
+      pure SitemapNode {id, space, parent, slug, updatedAt}
+
 -- | Values for a query in groups of at most this many. SQLite limits the
 -- number of parameters one statement may have, and a list of ids can be
 -- longer than that limit.
@@ -500,6 +534,20 @@ loadVersions c page =
     c
     "SELECT v.updated_at, v.title, '', v.author, u.display_name FROM page_versions v LEFT JOIN users u ON u.id = v.author WHERE v.page_id = ?"
     (Only page.text)
+
+-- | The first version of a page, without its body: the version saved when
+-- the page was created, so the one whose time is the page's creation
+-- time. The primary key of @page_versions@ finds it at once. A page an
+-- import made has its first version at another time, with no author, so
+-- it has none here, and no first author either way.
+loadFirstVersion :: Connection -> PageId -> IO (Maybe VersionRow)
+loadFirstVersion c page =
+  head
+    <$> queryWith
+      versionRow
+      c
+      "SELECT v.updated_at, v.title, '', v.author, u.display_name FROM pages p JOIN page_versions v ON v.page_id = p.id AND v.updated_at = p.created_at LEFT JOIN users u ON u.id = v.author WHERE p.id = ?"
+      (Only page.text)
 
 -- | Every version of every page of a space, without their bodies, by
 -- page: what each page's first author is read from. In no particular

@@ -101,6 +101,8 @@ module Wiki.Server.Storage
   , attachmentFile
   , exportedPage
   , spacePages
+  , sitemapPages
+  , feedPosts
   , blobPath
   , spaceIconFile
   , mayReadPage
@@ -1007,9 +1009,37 @@ attachmentFile aid = run Reads $ do
 
 -- | The pages of a space, with their bodies and attachments, in the
 -- space's page order, if the 'Who' may view the space. A space's export
--- and a blog's feed read this ('spacePagesTx').
+-- reads this ('spacePagesTx'). A blog's feed reads only its posts
+-- ('feedPosts').
 spacePages :: (MonadIO m) => SpaceId -> SqliteWiki m (Either WikiError [Page])
 spacePages = run Reads . spacePagesTx
+
+-- | The pages of every space the 'Who' may view, by space, as the sitemap
+-- lists them: without their titles or text, all in one query. A space
+-- the 'Who' may view with no pages has an empty list; a space they may
+-- not view is not there.
+sitemapPages :: (MonadIO m) => SqliteWiki m (Map SpaceId [SitemapNode])
+sitemapPages = answer mempty $ do
+  ctx <- ask
+  let viewable = [sid | sid <- Map.keys ctx.spaces, canView ctx.principal ctx.grants (chainOf ctx sid)]
+  -- SQLite would read every page for an empty @IN ()@.
+  nodes <- if null viewable then pure [] else db (`loadSitemapNodes` viewable)
+  pure (Map.fromListWith (<>) ([(sid, []) | sid <- viewable] <> [(n.space, [n]) | n <- nodes]))
+
+-- | Some pages of a space, whole, each with the author of its first
+-- version, if the 'Who' may view the space. A blog's feed reads the posts
+-- it carries with this, and no other page's body. A page that is not in
+-- the space, or not there at all, is left out.
+feedPosts :: (MonadIO m) => SpaceId -> [PageId] -> SqliteWiki m (Either WikiError [(Page, Maybe Author)])
+feedPosts sid pids = run Reads $ do
+  (_, c) <- findSpace sid
+  requireView c
+  fmap catMaybes . for pids $ \pid ->
+    db (`loadPage` pid) >>= \case
+      Just p | p.space == sid -> do
+        made <- db (`loadFirstVersion` pid)
+        pure (Just (p, made >>= \r -> (versionOf pid r).author))
+      _ -> pure Nothing
 
 -- | A page by its id, if the 'Who' may read it. An export reads the page
 -- with this ("Wiki.Server.Export"), and reads the rest (its space's pages,
@@ -1106,7 +1136,7 @@ listPagesTx sid = do
 -- | The pages of a space with their bodies and attachments, in the space's
 -- page order, for someone who may view the space. The API's list of pages
 -- carries summaries only ('listPagesTx'); the server's own work on a whole
--- space (a space's export, a blog's feed) needs the bodies.
+-- space (a space's export) needs the bodies.
 spacePagesTx :: SpaceId -> Tx [Page]
 spacePagesTx sid = do
   (s, c) <- findSpace sid

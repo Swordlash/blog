@@ -39,6 +39,7 @@ import Wiki.Server.Backups (newBackupService, runScheduler)
 import Wiki.Server.Events (closeAll, newHub)
 import Wiki.Server.Events qualified as Events
 import Wiki.Server.Export (newExports)
+import Wiki.Server.Feed (newFeedCache)
 import Wiki.Server.Limiter (Limits (..), defaultLimits, newLimiter)
 import Wiki.Server.Log (Level (..), Logger, keepingErrors, logWith, newErrorRing, stdoutLogger)
 import Wiki.Server.Mail (SendMail, smtpSend)
@@ -115,6 +116,7 @@ withServerUsing given raw sendMail action = do
   events <- newHub
   wake <- newWake
   exports <- newExports
+  feeds <- newFeedCache
   -- A data directory another server has open is a configuration this one
   -- cannot run with, reported like the others.
   handle (\(DataDirInUse why) -> throwIO (ServerError [why])) $ withStorage Config {attachmentAddress = attachmentUrl, iconAddress = spaceIconUrl, publish = Events.publish events, notify = \told -> Events.notify events told >> wakeUp wake} options.dataDir $ \storage -> do
@@ -140,6 +142,7 @@ withServerUsing given raw sendMail action = do
             , logger
             , errors
             , metrics
+            , feeds
             }
         public =
           Listener

@@ -118,6 +118,7 @@ import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Backups (BackupService, currentBackups, requestBackup, settingsChanged)
 import Wiki.Server.Events (Hub, openConnections)
 import Wiki.Server.Export (Exported (..), Exports, availableFormats, exportPage, exportSpace)
+import Wiki.Server.Feed (FeedCache)
 import Wiki.Server.Import (applyImport, planImport, readUpload)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
@@ -179,6 +180,9 @@ data Env = Env
   -- the administration's status shows.
   , metrics :: Metrics
   -- ^ The requests counted ("Wiki.Server.Metrics").
+  , feeds :: FeedCache
+  -- ^ The feeds and the sitemap written in the last minute
+  -- ("Wiki.Server.Feed").
   }
 
 -- | 'Caller' is who sent a request, as the listener identified them.

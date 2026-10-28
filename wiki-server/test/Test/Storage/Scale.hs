@@ -10,7 +10,8 @@
 --
 -- WP5.16b adds the reads of an ordinary visit. A search reads the pages
 -- of the spaces it searches, and folds the text of only the pages that
--- match.
+-- match. The sitemap reads where each page is, not what it says, and a
+-- feed reads the posts it carries; both are written once a minute.
 --
 -- What the storage reads is seen through SQLite's trace of each statement
 -- a connection runs ('statementsOf'), and SQLite's plan for each
@@ -48,6 +49,7 @@ import Wiki.Core.Slug (mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Accounts (Resolved (..), resolveSession, startSession)
 import Wiki.Server.Events (eventsApplication, newHub, publish)
+import Wiki.Server.Feed (FeedKind (..), feed, feedSize, newFeedCache, sitemap)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Rows (Stamp (..), insertPage)
 
@@ -58,6 +60,7 @@ spec = describe "the storage, at scale" $ do
   bell
   hub
   search
+  feeds
 
 -- | An action that must end within two seconds: one that waits for a lock
 -- another operation holds does not.
@@ -384,3 +387,41 @@ search = describe "the search" $ do
     [pid] <- addPagesWith st asked.id "polish" "Zażółć gęślą jaźń, sagt die Straße." 1
     hits <- searching st (asking "ZAZOLC strasse jaz" (Just asked.id))
     map (\h -> h.page) hits `shouldBe` [pid]
+
+feeds :: Spec
+feeds = describe "the sitemap and the feeds" $ do
+  let base = "https://wiki.example/"
+      -- A statement that reads a page's text.
+      readsText t = "FROM pages" `T.isInfixOf` t && any (`T.isInfixOf` t) ["body", "search_text", "search_fold"]
+
+  it "write the sitemap of a 2,000-page space with the same statements as of the demo, reading no page's text" $ withDemo $ \st -> do
+    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    (_, small) <- statementsOf st (newFeedCache >>= \cache -> sitemap st cache base)
+    _ <- addPages st blog.id "bulk" 2000
+    (xml, statements) <- statementsOf st (newFeedCache >>= \cache -> sitemap st cache base)
+    fmap (T.count "<url>") xml `shouldSatisfy` maybe False (> 2000)
+    filter readsText statements `shouldBe` []
+    length statements `shouldBe` length small
+
+  it "write a feed from the text of the posts it carries alone" $ withDemo $ \st -> do
+    blog <- runSqliteWiki st Administrator (getSpace (path "blog")) >>= ok
+    _ <- addPagesWith st blog.id "post" "A post, with some text." 100
+    cache <- newFeedCache
+    (xml, statements) <- statementsOf st (feed st cache base Atom ["blog"])
+    fmap (T.count "<entry>") xml `shouldBe` Just feedSize
+    length (filter readsText statements) `shouldBe` feedSize
+
+  it "write each address once a minute, and keep it for whoever asks again" $ withDemo $ \st -> do
+    cache <- newFeedCache
+    (kept, written) <- statementsOf st (sitemap st cache base)
+    written `shouldSatisfy` (not . null)
+    statementsOf st (sitemap st cache base) `shouldReturn` (kept, [])
+    (atom, writtenAtom) <- statementsOf st (feed st cache base Atom ["blog"])
+    atom `shouldSatisfy` isJust
+    writtenAtom `shouldSatisfy` (not . null)
+    statementsOf st (feed st cache base Atom ["blog"]) `shouldReturn` (atom, [])
+    -- Another address, or the other feed, is written for itself.
+    (_, other) <- statementsOf st (sitemap st cache "https://other.example/")
+    other `shouldSatisfy` (not . null)
+    (_, rss) <- statementsOf st (feed st cache base Rss ["blog"])
+    rss `shouldSatisfy` (not . null)
