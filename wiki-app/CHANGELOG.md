@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+`Wiki.App.Shell` compiles in an eighth of its time (WP5.13): 11 s instead
+of 87 s on wasm, and 5.4 GB allocated instead of 21 GB. Its `Slots` row has
+six labels instead of 27: the views whose output is `ViewOutput` share the
+label `"view"`, indexed by `ViewSlot`, and the children with no output
+share `"part"`, indexed by `PartSlot`. The row is written as a sorted list
+with `Data.Row.Internal`'s `R` and `:->`, not with `.+` and `.==`, because
+the compiler reduced those type families again at every slot and kept the
+proofs in the compiled code. Nothing a user sees changes.
+
 The writing assistant's chat shows that the model is working (WP5.11).
 From Send until the first text, the model's message shows "Thinking" with
 three animated dots (still when the reader prefers reduced motion). After

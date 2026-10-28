@@ -108,7 +108,7 @@ where
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.UUID (MonadUUID)
 import Data.Map.Strict qualified as Map
-import Data.Row (type (.+), type (.==))
+import Data.Row.Internal (LT (..), Row (R))
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
@@ -198,34 +198,69 @@ data Input m = Input
 -- server wait for this before they take the page's HTML.
 data Query a = Settled (Maybe Head -> a)
 
+-- | 'Slots' is the row type of the shell's child components. Each label
+-- holds one kind of child: its query type, its output type and the type of
+-- its index.
+--
+-- Children with the same query type and output type share a label, and the
+-- index ('ViewSlot', 'PartSlot') says which child it is. Each index is always
+-- used with the same component. So Halogen keeps a child, or replaces it,
+-- exactly as it did when each child had a label of its own.
+--
+-- The row is written as a sorted list of labels, with the constructors of
+-- "Data.Row.Internal", and not with row-types' operators @.+@ and @.==@.
+-- The operators are type families, and 'Slots' is a type synonym. The
+-- compiler expands the synonym at every 'HH.slot', 'H.tell' and
+-- 'H.queryAll', and reduces the type families there again. The compiled code
+-- keeps a proof of each reduction (a coercion), and the simplifier works
+-- through every copy. With the 27 labels the shell once had, written with
+-- the operators, those coercions took almost nine tenths of this module's
+-- compile time. The list stays sorted by label, the order the operators produce, so
+-- the row is the same type the operators would build. A new label goes in at
+-- its place in alphabetical order.
 type Slots =
-  ("space" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("directory" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("page" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("blog" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("source" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("history" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("newSpace" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("newPage" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("editor" .== H.Slot Editor.Query ViewOutput [Slug])
-    .+ ("searchBox" .== H.Slot (Const Void) Void ())
-    .+ ("searchResults" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("importer" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("people" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("signIn" .== H.Slot SignInView.Query SignInView.Output ())
-    .+ ("slides" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("access" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("server" .== H.Slot (Const Void) ViewOutput ())
-    .+ ("invite" .== H.Slot (Const Void) InviteView.Output ())
-    .+ ("reset" .== H.Slot (Const Void) ResetView.Output ())
-    .+ ("verifyEmail" .== H.Slot (Const Void) Void ())
-    .+ ("demoAccount" .== H.Slot (Const Void) Void ())
-    .+ ("activity" .== H.Slot (Const Void) Void ())
-    .+ ("demoNotifications" .== H.Slot (Const Void) Void ())
-    .+ ("bell" .== H.Slot (Const Void) Void ())
-    .+ ("unsubscribe" .== H.Slot (Const Void) Void ())
-    .+ ("offlineCopy" .== H.Slot (Const Void) Void ())
-    .+ ("assistantSettings" .== H.Slot (Const Void) Void ())
+  R
+    '[ "editor" :-> H.Slot Editor.Query ViewOutput [Slug]
+     , "invite" :-> H.Slot (Const Void) InviteView.Output ()
+     , "part" :-> H.Slot (Const Void) Void PartSlot
+     , "reset" :-> H.Slot (Const Void) ResetView.Output ()
+     , "signIn" :-> H.Slot SignInView.Query SignInView.Output ()
+     , "view" :-> H.Slot (Const Void) ViewOutput ViewSlot
+     ]
+
+-- | 'ViewSlot' is the index of a child under the label "view". These
+-- children are the views whose output is 'ViewOutput': each tells the shell
+-- when it has loaded and when it has changed the wiki.
+data ViewSlot
+  = DirectorySlot
+  | SpaceSlot
+  | PageSlot
+  | BlogSlot
+  | SourceSlot
+  | HistorySlot
+  | SlidesSlot
+  | NewSpaceSlot
+  | NewPageSlot
+  | SearchResultsSlot
+  | ImporterSlot
+  | AccessSlot
+  | ServerSlot
+  | PeopleSlot
+  deriving stock (Eq, Ord)
+
+-- | 'PartSlot' is the index of a child under the label "part". The output
+-- type of these children is 'Void': the shell gets nothing from them.
+data PartSlot
+  = SearchBoxSlot
+  | BellSlot
+  | OfflineCopySlot
+  | DemoAccountSlot
+  | DemoNotificationsSlot
+  | ActivitySlot
+  | VerifyEmailSlot
+  | UnsubscribeSlot
+  | AssistantSettingsSlot
+  deriving stock (Eq, Ord)
 
 -- | The space the route is in, as far as it has been loaded.
 data Here
@@ -447,7 +482,7 @@ component =
             Just
               [hh|
                 <p class="offline-copy" role="status">
-                  You are reading an offline copy from {{ HH.slot_ "offlineCopy" () Islands.component (Islands.LocalTime at) }}.
+                  You are reading an offline copy from {{ HH.slot_ "part" OfflineCopySlot Islands.component (Islands.LocalTime at) }}.
                 </p>
               |]
       _ -> Nothing
@@ -496,7 +531,7 @@ component =
         </header>
       |]
       where
-        searchBox = HH.slot_ "searchBox" () SearchBox.component SearchBox.Input {context = context st}
+        searchBox = HH.slot_ "part" SearchBoxSlot SearchBox.component SearchBox.Input {context = context st}
 
     breadcrumbs :: State m -> H.ComponentHTML Action Slots m
     breadcrumbs st =
@@ -547,7 +582,7 @@ component =
     bell :: State m -> Maybe (H.ComponentHTML Action Slots m)
     bell st =
       guard (st.world == WorldReady && notified (context st))
-        $> HH.slot_ "bell" () BellView.component BellView.Input {context = context st, feed = st.feed}
+        $> HH.slot_ "part" BellSlot BellView.component BellView.Input {context = context st, feed = st.feed}
 
     -- Who is signed in: the demo's menu to switch between its users, or,
     -- where people do not switch, their name, once it is known, with a
@@ -598,10 +633,10 @@ component =
             <section class="account-panel demo-account-panel" aria-label="Your account">
               <h2>Your account</h2>
               <p class="account-note">The demo has no passwords: you switch between its users above.</p>
-              {{ HH.slot_ "demoAccount" () SecurityView.component () }}
+              {{ HH.slot_ "part" DemoAccountSlot SecurityView.component () }}
               <section class="account-notifications" aria-label="Notifications">
                 <h3>Notifications</h3>
-                {{ HH.slot_ "demoNotifications" () NotificationSettingsView.component () }}
+                {{ HH.slot_ "part" DemoNotificationsSlot NotificationSettingsView.component () }}
               </section>
               <div class="actions">
                 <button type="button" onClick={{ const ToggleDemoAccount }}>Close</button>
@@ -625,10 +660,10 @@ component =
                 <p class="admin-intro">{{ dataIntro }}</p>
                 {{ dataControls st }}
               </section>
-              {{ HH.slot "access" () AccessView.component AccessView.Input {context = context st} FromView }}
-              {{ HH.slot "server" () ServerView.component ServerView.Input {context = context st} FromView }}
-              {{ HH.slot "people" () AdminView.component AdminView.Input {context = context st} FromView }}
-              {{ HH.slot_ "activity" () ActivityView.component ActivityView.Input {context = context st} }}
+              {{ HH.slot "view" AccessSlot AccessView.component AccessView.Input {context = context st} FromView }}
+              {{ HH.slot "view" ServerSlot ServerView.component ServerView.Input {context = context st} FromView }}
+              {{ HH.slot "view" PeopleSlot AdminView.component AdminView.Input {context = context st} FromView }}
+              {{ HH.slot_ "part" ActivitySlot ActivityView.component ActivityView.Input {context = context st} }}
             </section>
           |]
       | otherwise =
@@ -673,7 +708,7 @@ component =
         </div>
       |]
       where
-        importer migration = HH.slot "importer" () ImportView.component ImportView.Input {migration} FromView
+        importer migration = HH.slot "view" ImporterSlot ImportView.component ImportView.Input {migration} FromView
 
     -- The demo's content as a whole: whether it is saved, exporting it,
     -- importing one, and resetting it; the last two ask for confirmation
@@ -854,17 +889,17 @@ component =
 
     routeContent :: State m -> Route -> H.ComponentHTML Action Slots m
     routeContent st = \case
-      Home -> HH.slot "directory" () DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
+      Home -> HH.slot "view" DirectorySlot DirectoryView.component DirectoryView.Input {context = context st, welcome = st.welcome} FromView
       Unknown -> notFound st
       Admin -> admin st
-      NewSpace parent -> HH.slot "newSpace" () NewSpaceView.component NewSpaceView.Input {context = context st, parent} FromView
+      NewSpace parent -> HH.slot "view" NewSpaceSlot NewSpaceView.component NewSpaceView.Input {context = context st, parent} FromView
       Search text space subspaces ->
-        HH.slot "searchResults" () SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
+        HH.slot "view" SearchResultsSlot SearchResultsView.component SearchResultsView.Input {context = context st, text, space, subspaces} FromView
       Invite token -> HH.slot "invite" () InviteView.component InviteView.Input {accounts = st.accounts, token, session = st.session, home = Router.href st.router Home} FromInvite
       ResetPassword token -> HH.slot "reset" () ResetView.component ResetView.Input {accounts = st.accounts, token, session = st.session} FromReset
-      VerifyEmail token -> HH.slot_ "verifyEmail" () VerifyEmailView.component VerifyEmailView.Input {accounts = st.accounts, token}
-      Unsubscribe token -> HH.slot_ "unsubscribe" () UnsubscribeView.component UnsubscribeView.Input {token}
-      AssistantSettings -> HH.slot_ "assistantSettings" () AssistantSettingsView.component AssistantSettingsView.Input {context = context st}
+      VerifyEmail token -> HH.slot_ "part" VerifyEmailSlot VerifyEmailView.component VerifyEmailView.Input {accounts = st.accounts, token}
+      Unsubscribe token -> HH.slot_ "part" UnsubscribeSlot UnsubscribeView.component UnsubscribeView.Input {token}
+      AssistantSettings -> HH.slot_ "part" AssistantSettingsSlot AssistantSettingsView.component AssistantSettingsView.Input {context = context st}
       _ -> case st.here of
         NoSpace -> notFound st
         LoadingSpace _ -> loading
@@ -878,19 +913,19 @@ component =
           Space _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
           Posts _ _ | Just home <- homeOf space pages -> pageView space pages (pagePathOf pages home.id)
           Page _ path -> pageView space pages path
-          PageSource _ path -> HH.slot "source" () SourceView.component SourceView.Input {context = context st, space, path} FromView
+          PageSource _ path -> HH.slot "view" SourceSlot SourceView.component SourceView.Input {context = context st, space, path} FromView
           PageHistory _ path version against ->
-            HH.slot "history" () HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
+            HH.slot "view" HistorySlot HistoryView.component HistoryView.Input {context = context st, space, path, version, against} FromView
           PageSlides _ path slide ->
-            HH.slot "slides" () SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide} FromView
+            HH.slot "view" SlidesSlot SlidesView.component SlidesView.Input {context = context st, space, pages, path, slide} FromView
           -- One editor per page edited: another page's editor is a
           -- separate component, with its own draft.
           EditPage _ path -> HH.slot "editor" path Editor.component Editor.Input {context = context st, space, pages, path, feed = st.feed} FromView
-          NewPage _ parent -> HH.slot "newPage" () NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
-          _ -> HH.slot "space" () SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
+          NewPage _ parent -> HH.slot "view" NewPageSlot NewPageView.component NewPageView.Input {context = context st, space, pages, parent} FromView
+          _ -> HH.slot "view" SpaceSlot SpaceView.component SpaceView.Input {context = context st, space, pages} FromView
       where
-        pageView space pages path = HH.slot "page" () PageView.component PageView.Input {context = context st, space, pages, path, feed = st.feed} FromView
-        blogView space pages page = HH.slot "blog" () BlogView.component BlogView.Input {context = context st, space, pages, page} FromView
+        pageView space pages path = HH.slot "view" PageSlot PageView.component PageView.Input {context = context st, space, pages, path, feed = st.feed} FromView
+        blogView space pages page = HH.slot "view" BlogSlot BlogView.component BlogView.Input {context = context st, space, pages, page} FromView
 
     loading :: H.ComponentHTML Action Slots m
     loading = [hh|<p class="loading">Loading…</p>|]
