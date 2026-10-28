@@ -3378,6 +3378,34 @@ Amended by the planning session after each work package's report.
   TikZJax. Full gate on the head; CI green. Found on the way: `test-native` needs
   `LANG=C.UTF-8` (two `wiki-core-html-test` tests read `docs/markdown.md` as text; the same
   on `main`), a toolchain fix for later.
+- **WP5.16a merged** (2026-10-28, PR #96, `main` at `ee4c7eb`). Findings 1, 3, 6 and 4 of
+  the audit, one commit each. A pool of four read-only connections (`PRAGMA query_only`)
+  beside the writer carries `Reads` transactions, `resolveSession`, `mayReadPage`,
+  `editorOf` and the export; the backup's `VACUUM INTO` has a connection of its own;
+  `threadsThen` stays on the writer (`ReadsOnWriter`) for decision 23's guarantee. The
+  write path loads only the users a save or comment could tell (a `UNION` of indexed
+  queries; a single `OR` query scanned `users` and the new test caught it), watches only
+  for the page and its chain of spaces, the page's maker through the first version;
+  migration 0013 indexes `notifications (seq)`, `watches (page_id)`, `watches (space_id)`
+  and `group_members (user_id)` (the last from finding 8f, needed here). The bell reads
+  `ORDER BY seq DESC LIMIT 50` (a further 50 when some are about pages the user can no
+  longer read), one `pageNodes` per distinct space, and `unread` is a count grouped by
+  space and filtered to viewable spaces (the brief's plain count would have counted
+  unviewable pages). The hub makes one permission check per user per event (a shared
+  `Check` in a `TVar`, the first connection asks, the rest wait); the client's reconnect
+  backoff is jittered ±30 % (`jittered` in `Live.hs`, longest wait 39 s). Tests:
+  `Test.Storage.Scale` (reads beside a held read, a held write and a backup; a save with
+  300 users and 3,000 watches scanning no table but spaces and grants, with the same
+  statement count as with one of each; the bell with 500 notifications in a 2,000-page
+  space loading the pages once; 100 sockets of 3 users making 3 checks) and
+  `Test.Live` for the jitter. Measured with the new `wiki-server-bench` (1,000 users,
+  10,000 watches, 2,000 pages, 200,000 notifications): the bell 21 s → 52 ms; a save 50
+  users watch 600 ms → 56 ms; a comment with 100 tabs 530 ms → 10 ms committed, 20 ms
+  all told; the slowest read during a backup 430 ms → 92 ms. Unchanged, for 8b and 8c:
+  a page view's reads at about 60 ms (`watching`/`loadMarks`, `getPageTx`/`locatedTx`
+  loading the whole space; `lineageOf` can replace the latter), `mentionable`, and
+  `attachments` without an index on `page_id`. Seen once on `main`'s code in the bench, not
+  reproduced: an uncaught "cannot rollback - no transaction is active". Full gate; CI green.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
