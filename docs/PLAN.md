@@ -3360,6 +3360,24 @@ Amended by the planning session after each work package's report.
   first; `Backend.attempt`'s list of reads that throw has three entries where the module
   comment has four. The test suites' comments are not rewritten. Reduced gate (comments
   only): native build with no warnings, fourmolu; CI green on the head.
+- **WP5.10 merged** (2026-10-28, PR #95, `main` at `8d3bb0a`). TikZ pictures draw the Polish
+  and German letters: `web/src/tikz-patch.mjs`, run by `web/bundle.sh` on the copied
+  `tikzjax/run-tex.js`, makes three checked string replacements in dvi2html (the metrics
+  loop now reads code 127, the umlaut; the glyph table gets code 32, the stroke of `ł`/`Ł`,
+  for the 46 fonts laid out as BaKoMa's OT1 text fonts; dvi2html's errors get a `dvi2html: `
+  prefix), each of which must match exactly once or the build stops, with
+  `tikzjax/NOTICE.txt` listing them. `\k` (the ogonek) is defined for OT1 in the island
+  (`web/src/tikz-letters.mjs`, a TikZ-drawn hook sized in em), not in
+  `Wiki.Core.Markdown.Tikz`'s preamble, because the PDF export passes that preamble to
+  xelatex, whose fonts have a real ogonek; so acceptance item 3's preamble tests do not
+  apply. A character the fonts lack (TS1 signs: `€ ° £ § © µ ± × · ½`) gives "The fonts TeX
+  has here cannot draw '€' (line 2)." with a pointer to the guide; guillemets and `„` give
+  TeX's own error. A missing-font rejection in the worker is marked handled so it no longer
+  reaches the page's console. Tests: `toolchain/test-tikz-letters.mjs` and a smoke-test
+  check drawing 109 letters beyond ASCII in a node and a pgfplots label through the real
+  TikZJax. Full gate on the head; CI green. Found on the way: `test-native` needs
+  `LANG=C.UTF-8` (two `wiki-core-html-test` tests read `docs/markdown.md` as text; the same
+  on `main`), a toolchain fix for later.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
