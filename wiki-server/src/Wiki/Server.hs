@@ -144,6 +144,7 @@ withServerUsing given raw sendMail action = do
             , errors
             , metrics
             , feeds
+            , assistantHosts = options.assistantHosts
             }
         public =
           Listener

@@ -5,6 +5,7 @@ module Main (main) where
 
 import Protolude
 import Test.Backups qualified as Backups
+import Test.ContentPolicy qualified as ContentPolicy
 import Test.Error qualified as Error
 import Test.Events qualified as Events
 import Test.Hspec (hspec)
@@ -28,3 +29,4 @@ main = hspec $ do
   ServerSettings.spec
   Events.spec
   Backups.spec
+  ContentPolicy.spec

@@ -68,8 +68,10 @@ import Protolude
 import Web.Event.Event (Event (..))
 import Web.Storage.IndexedDB (Database (..), IndexedDBError (..), MonadIndexedDB)
 import Web.Storage.IndexedDB qualified as IDB
+import Wiki.Api.ContentPolicy (allowsConnect, extraHosts, originOf)
 import Wiki.Core.Assistant (AssistantError (..), ErrorKind (..), Listed, Ready (..), Settings, blankSettings, defaultSettings, providerKey)
 import Wiki.Core.Id (UserId (..))
+import Wiki.Core.Url (Url (..))
 
 -- The chat's bindings return immediately: a turn reports its events
 -- through the callback. "Test the key" and the model list wait for the
@@ -90,6 +92,8 @@ $( browserJS
      , ("js_send_key", "wiki_assistant_send_key", Unsafe, [t|Event -> Bool|])
      , ("js_close_key", "wiki_assistant_close_key", Unsafe, [t|Event -> Bool|])
      , ("js_clock", "wiki_assistant_clock", Unsafe, [t|Double -> IO JSText|])
+     , ("js_page_policy", "wiki_assistant_page_policy", Unsafe, [t|IO JSText|])
+     , ("js_page_origin", "wiki_assistant_page_origin", Unsafe, [t|IO JSText|])
      ]
  )
 
@@ -100,6 +104,9 @@ data Talk = Talk
   { chat :: Int
   , callback :: Maybe Callback
   , heard :: Heard -> IO ()
+  , blocked :: Maybe AssistantError
+  -- ^ Why no message can be sent, when the page's policy refuses the
+  -- chat's address ('blockedBy'): each message then fails with it.
   }
 
 -- | 'Opening': what a chat is opened with. The provider, the model and the
@@ -271,23 +278,34 @@ instance MonadAssistant BrowserDOM where
   openTalk opening heard = liftIO $ do
     callback <- mkSyncCallback (heard . heardOf . jsValText)
     chat <- js_open (toJSText (json (openingJSON opening))) callback
-    pure Talk {chat, callback = Just callback, heard}
-  sayTo talk request user = liftIO (js_send talk.chat (toJSText user) (toJSText (json request)))
+    blocked <- blockedBy opening.ready
+    pure Talk {chat, callback = Just callback, heard, blocked}
+  sayTo talk request user = liftIO $ case talk.blocked of
+    Just e -> talk.heard (HeardFailed e)
+    Nothing -> js_send talk.chat (toJSText user) (toJSText (json request))
   answerCall talk call text ok = liftIO (js_answer talk.chat call (toJSText text) ok)
   stopTalk talk = liftIO (js_stop talk.chat)
   closeTalk talk = liftIO $ do
     js_close talk.chat
     traverse_ freeCallback talk.callback
-  checkKey r = liftIO $ do
-    -- On wasm a safe import's result waits for its promise only when forced.
-    answer <- evaluate . fromJSText =<< js_check (toJSText (json (endpointJSON r ["model" .= r.model])))
-    pure $
-      if T.null answer
-        then Nothing
-        else Just (either (\why -> AssistantError Failed Nothing (toS why)) identity (eitherDecodeStrict (encodeUtf8 answer)))
-  listModels r = liftIO $ do
-    answer <- evaluate . fromJSText =<< js_models (toJSText (json (endpointJSON r [])))
-    pure (listedOf answer)
+  checkKey r =
+    liftIO $
+      blockedBy r >>= \case
+        Just e -> pure (Just e)
+        Nothing -> do
+          -- On wasm a safe import's result waits for its promise only when forced.
+          answer <- evaluate . fromJSText =<< js_check (toJSText (json (endpointJSON r ["model" .= r.model])))
+          pure $
+            if T.null answer
+              then Nothing
+              else Just (either (\why -> AssistantError Failed Nothing (toS why)) identity (eitherDecodeStrict (encodeUtf8 answer)))
+  listModels r =
+    liftIO $
+      blockedBy r >>= \case
+        Just e -> pure (Left e)
+        Nothing -> do
+          answer <- evaluate . fromJSText =<< js_models (toJSText (json (endpointJSON r [])))
+          pure (listedOf answer)
 
 -- | The in-memory document's instance: settings stored as in the browser,
 -- in its in-memory IndexedDB (which the native tests read and write), and
@@ -300,13 +318,43 @@ instance MonadAssistant MemDOM where
   scriptedInstalled = pure False
   secureContext = pure True
   prepareAssistant = pass
-  openTalk _ heard = pure Talk {chat = 0, callback = Nothing, heard}
+  openTalk _ heard = pure Talk {chat = 0, callback = Nothing, heard, blocked = Nothing}
   sayTo talk _ _ = liftIO (talk.heard (HeardFailed (AssistantError Unreachable Nothing "There is no browser here to reach a provider from.")))
   answerCall _ _ _ _ = pass
   stopTalk _ = pass
   closeTalk _ = pass
   checkKey _ = pure (Just (AssistantError Unreachable Nothing "There is no browser here to reach a provider from."))
   listModels _ = pure (Left (AssistantError Unreachable Nothing "There is no browser here to reach a provider from."))
+
+-- | Why the browser would refuse a request to another service's base URL,
+-- if it would: the page's Content Security Policy ("Wiki.Api.ContentPolicy")
+-- does not allow its address. Checked before a request is made, so that
+-- the settings and the chat say why at once, instead of the SDK retrying
+-- a refused connection and reporting the network as down. A page without
+-- a policy, and the scripted provider of the tests (which sends nothing),
+-- refuse nothing.
+blockedBy :: Ready -> IO (Maybe AssistantError)
+blockedBy r = case r.baseUrl of
+  Nothing -> pure Nothing
+  Just url ->
+    js_scripted >>= \case
+      True -> pure Nothing
+      False -> do
+        policy <- fromJSText <$> js_page_policy
+        origin <- fromJSText <$> js_page_origin
+        pure $
+          if T.null policy || allowsConnect origin policy url.text
+            then Nothing
+            else Just (AssistantError Blocked Nothing (blockedMessage policy url))
+
+-- | What the assistant says of an address the page does not allow: the
+-- addresses it does allow, and who can add one.
+blockedMessage :: Text -> Url -> Text
+blockedMessage policy url =
+  maybe url.text identity (originOf url.text)
+    <> " is not among the addresses they allow: "
+    <> T.intercalate ", " (extraHosts policy)
+    <> ". On a wiki with a server, an administrator can add it to the assistant's hosts, in the administration's server settings."
 
 -- | The database the assistant's settings are stored in, separate from the
 -- demo's wiki: one store, @settings@, keyed by user id, each value a

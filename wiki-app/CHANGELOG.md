@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The assistant checks another service's base URL against the page's
+Content Security Policy before it sends anything (WP5.21): an address the
+page does not allow fails at once with `Blocked`, saying which addresses
+it does allow. The server section of the administration sets the
+assistant's hosts. The browser tests run under the page's policy, and
+fail on any violation.
+
 The routes and backend methods for mailed links take the new token types
 (WP5.15): `ResetPassword ResetToken`, `VerifyEmail VerificationToken`,
 `Unsubscribe UnsubscribeToken`, and `resetPassword`, `verifyEmail` and

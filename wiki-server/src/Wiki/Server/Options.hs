@@ -46,6 +46,7 @@ import Network.Socket (HostAddress6, hostAddressToTuple)
 import Network.Socket qualified as Socket
 import Options.Applicative
 import Protolude
+import Wiki.Api.ContentPolicy (parseAssistantHost)
 
 -- | An address to listen on: a numeric IPv4 or IPv6 address and a port
 -- (port 0 for any free one, which the tests use).
@@ -165,6 +166,12 @@ data ServeOptions = ServeOptions
   -- when the administration sets an rclone remote ("Wiki.Server.Backups"):
   -- its name, looked up on the path, or its path. Whether there are backups
   -- at all is set in the administration, not by an option.
+  , assistantHosts :: [Text]
+  -- ^ Addresses the writing assistant may reach from the browser besides
+  -- the providers' APIs (@--assistant-hosts@), as origins
+  -- ('Wiki.Api.ContentPolicy.parseAssistantHost'). The page's Content
+  -- Security Policy allows these and those of the administration's
+  -- "Server" section together.
   }
   deriving stock (Eq, Show)
 
@@ -181,6 +188,7 @@ defaultServeOptions dataDir =
     , staticDir = Nothing
     , maxImportSize = defaultMaxImportSize
     , rclone = "rclone"
+    , assistantHosts = []
     }
 
 -- | 512 MiB: an archive holds every attachment of the wiki, each up to 50
@@ -201,6 +209,7 @@ serveOptions = do
   basePath <- strOption (long "base-path" <> metavar "PATH" <> value "/" <> showDefault <> help "The path the wiki is served under, as the application was built for")
   staticDir <- optional (strOption (long "static" <> metavar "DIR" <> help "The built application to serve (its index.html, 404.html, app.wasm, ...)"))
   rclone <- strOption (long "rclone" <> metavar "PATH" <> value "rclone" <> showDefault <> help "The rclone program, for backups the administration copies to an rclone remote")
+  assistantHosts <- concat <$> many (option hosts (long "assistant-hosts" <> metavar "ADDRESSES" <> help "Addresses the writing assistant may reach from the browser besides Anthropic's and OpenAI's APIs, separated by commas (https://openrouter.ai,http://localhost:11434); the administration's Server section adds more"))
   maxImportMb <- option auto (long "max-import-size" <> metavar "MB" <> value (defaultMaxImportSize `div` (1024 * 1024)) <> showDefault <> help "The largest archive an import takes, in MiB")
   -- The options of earlier versions that the administration's "Server"
   -- section replaced: refused, with where they went, rather than left to
@@ -218,9 +227,11 @@ serveOptions = do
       , staticDir
       , maxImportSize = maxImportMb * 1024 * 1024
       , rclone
+      , assistantHosts
       }
   where
     address = eitherReader (first toS . parseListen . toS)
+    hosts = eitherReader (first toS . traverse parseAssistantHost . filter (not . T.null) . map T.strip . T.splitOn "," . toS)
     gone :: ReadM ()
     gone = eitherReader (const (Left (toS removedMessage)))
 

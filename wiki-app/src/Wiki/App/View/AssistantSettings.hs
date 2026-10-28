@@ -32,9 +32,12 @@
 -- any service that implements the API: GitHub Models, OpenRouter, or a
 -- server on this machine (Ollama, LM Studio), which needs no key. A base
 -- URL over plain HTTP to another machine gets the same warning: the key
--- would cross the network unencrypted. A provider that could not be
--- reached on the last attempt (because a network blocks it) is marked as
--- unreachable.
+-- would cross the network unencrypted. A base URL that the page's
+-- Content Security Policy does not allow (WP5.21 of docs/PLAN.md) is
+-- refused before anything is sent: "Test the key" says so, with the
+-- addresses the page allows and who can add one ("Wiki.App.Assistant"). A
+-- provider that could not be reached on the last attempt (because a
+-- network blocks it) is marked as unreachable.
 --
 -- Everything is read in the initializer, in the browser. A page rendered
 -- ahead of the program (by the prerender or the server), which has no
@@ -234,7 +237,7 @@ component =
                 <span>Base URL</span>
                 <input type="url" class="assistant-base-url" spellcheck="false" placeholder="https://api.openai.com/v1" value={{ maybe "" (\u -> u.text) ps.baseUrl }} disabled={{ st.busy }} onValueChange={{ TypedBaseUrl p }}>
               </label>
-              <p class="account-note assistant-base-url-hint">Empty for OpenAI's own; or another service that speaks its API: GitHub Models (https://models.github.ai/inference, with a GitHub token as the key), OpenRouter (https://openrouter.ai/api/v1), or a server on this machine such as Ollama (http://localhost:11434/v1), which needs no key.</p>
+              <p class="account-note assistant-base-url-hint">Empty for OpenAI's own; or another service that speaks its API: GitHub Models (https://models.github.ai/inference, with a GitHub token as the key), OpenRouter (https://openrouter.ai/api/v1), or a server on this machine such as Ollama (http://localhost:11434/v1), which needs no key. The browser reaches only the addresses this wiki allows: OpenAI's, and those its administrator adds in the server settings.</p>
               {% for url in maybeToList ps.baseUrl %}
                 {% if insecureUrl url.text %}
                   <p class="warning assistant-insecure-base-url" role="alert">This address is plain HTTP to another machine: your key and your pages would cross the network unencrypted, for anyone on the way to read. Use an HTTPS address, or a server on this machine.</p>

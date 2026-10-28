@@ -17,6 +17,7 @@ import Test.Link qualified as Link
 import Test.Live qualified as Live
 import Test.Manifest qualified as Manifest
 import Test.Passwords qualified as Passwords
+import Test.Policy qualified as Policy
 import Test.Readme qualified as Readme
 import Test.Route qualified as Route
 import Test.Server qualified as Server
@@ -40,6 +41,7 @@ main = hspec $ do
   Hydrate.spec
   Import.spec
   Manifest.spec
+  Policy.spec
   Licence.spec
   Readme.spec
   Assistant.spec

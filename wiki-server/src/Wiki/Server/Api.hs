@@ -56,6 +56,7 @@ module Wiki.Server.Api
   , handlers
   , currentMailer
   , currentProviders
+  , currentAssistantHosts
 
     -- * Errors
   , toApiError
@@ -185,6 +186,10 @@ data Env = Env
   , feeds :: FeedCache
   -- ^ The feeds and the sitemap written in the last minute
   -- ("Wiki.Server.Feed").
+  , assistantHosts :: [Text]
+  -- ^ The assistant's hosts given on the command line
+  -- (@--assistant-hosts@); 'currentAssistantHosts' adds the
+  -- administration's.
   }
 
 -- | 'Caller' is who sent a request, as the listener identified them.
@@ -861,6 +866,15 @@ handlers env caller =
 -- server.
 currentMailer :: Env -> IO (Maybe Mailer)
 currentMailer env = mailerFrom env.sendMail <$> readServerSettings env.storage
+
+-- | The addresses the writing assistant may reach from the browser besides
+-- the providers' APIs, which every page's Content Security Policy allows
+-- ("Wiki.Api.ContentPolicy"): those of the command line, then those of the
+-- administration's "Server" section, each once. They are read for each
+-- page, so that a change in the administration applies to the next page
+-- loaded.
+currentAssistantHosts :: Env -> IO [Text]
+currentAssistantHosts env = (\s -> ordNub (env.assistantHosts <> s.assistantHosts)) <$> readServerSettings env.storage
 
 -- | The providers people may sign in with, as the settings are now.
 currentProviders :: Env -> IO [Provider]

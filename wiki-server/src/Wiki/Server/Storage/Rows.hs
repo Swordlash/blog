@@ -1137,10 +1137,12 @@ grantCreateSpaces c u = execute c "INSERT OR IGNORE INTO global_grants (subject_
 
 -- | The server's settings (migrations/0005-server-settings.sql): none
 -- where nothing is set. A provider of a kind this program does not know
--- is left out, and a mail server without a host counts as none.
+-- is left out, and a mail server without a host counts as none. The
+-- assistant's hosts (WP5.21) are one row, @assistant-hosts@, one host per
+-- line.
 loadServerSettings :: Connection -> IO Kept
 loadServerSettings c = do
-  rows :: [(Text, Text)] <- query_ c "SELECT key, value FROM settings WHERE key = 'public-url' OR key LIKE 'mail-%'"
+  rows :: [(Text, Text)] <- query_ c "SELECT key, value FROM settings WHERE key IN ('public-url', 'assistant-hosts') OR key LIKE 'mail-%'"
   providerRows :: [(Text, Text, Text, Maybe Text, Maybe Text)] <- query_ c "SELECT name, kind, client_id, issuer, secret FROM sign_in_providers ORDER BY position, name"
   let valueOf key = mfilter (not . T.null) (snd <$> find ((== key) . fst) rows)
       port = fromMaybe defaultMailPort (valueOf "mail-port" >>= readMaybe)
@@ -1162,14 +1164,16 @@ loadServerSettings c = do
           | (name, k, clientId, issuer, secret) <- providerRows
           , Just kind <- [readKind k]
           ]
+      , assistantHosts = maybe [] (filter (not . T.null) . map T.strip . T.lines) (valueOf "assistant-hosts")
       }
 
 -- | Store the server's settings, replacing those stored before.
 storeServerSettings :: Connection -> Kept -> IO ()
 storeServerSettings c s = do
-  execute_' "DELETE FROM settings WHERE key = 'public-url' OR key LIKE 'mail-%'"
+  execute_' "DELETE FROM settings WHERE key IN ('public-url', 'assistant-hosts') OR key LIKE 'mail-%'"
   let rows =
         [("public-url", u.text) | Just u <- [s.publicUrl]]
+          <> [("assistant-hosts", T.unlines s.assistantHosts) | not (null s.assistantHosts)]
           <> case s.mail of
             Nothing -> []
             Just m ->

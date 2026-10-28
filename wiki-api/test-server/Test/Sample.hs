@@ -403,6 +403,7 @@ serverSettings =
         [ ProviderSettings {name = "google", kind = Google, clientId = "id.apps.example", issuer = Nothing, secret = Set}
         , ProviderSettings {name = "corp", kind = Generic, clientId = "wiki", issuer = Just (Url "https://id.example.org/realms/corp"), secret = NotSet}
         ]
+    , assistantHosts = ["http://localhost:11434"]
     }
 
 -- | A change of them: the mail's password kept (left out), one provider's
@@ -416,6 +417,7 @@ serverChange =
         [ ProviderSettings {name = "google", kind = Google, clientId = "id.apps.example", issuer = Nothing, secret = Just "a new secret"}
         , ProviderSettings {name = "hub", kind = GitHub, clientId = "Iv1.abc", issuer = Nothing, secret = Just ""}
         ]
+    , assistantHosts = ["https://openrouter.ai"]
     }
 
 -- | The backups of a server that makes them every six hours, keeping a

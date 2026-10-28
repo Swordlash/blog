@@ -302,6 +302,20 @@ function wiki_assistant_secure() {
   return globalThis.isSecureContext === true;
 }
 
+// The page's Content Security Policy, as its meta element carries it (the
+// server writes its header's text there too), or "" for a page without
+// one; and the page's origin. The application checks another service's
+// base URL against them before the browser would refuse it
+// (Wiki.App.Assistant, Wiki.Api.ContentPolicy).
+function wiki_assistant_page_policy() {
+  const meta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+  return meta === null ? "" : String(meta.getAttribute("content") ?? "");
+}
+
+function wiki_assistant_page_origin() {
+  return String(location.origin);
+}
+
 // Start fetching the providers' island, so that it is there by the time a
 // message is sent.
 function wiki_assistant_prepare() {

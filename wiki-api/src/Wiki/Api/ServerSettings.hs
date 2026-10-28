@@ -77,11 +77,12 @@ module Wiki.Api.ServerSettings
 where
 
 import Control.Monad.Fail (fail)
-import Data.Aeson (FromJSON (..), ToJSON (..), withText)
+import Data.Aeson (FromJSON (..), ToJSON (..), withObject, withText, (.!=), (.:), (.:?))
 import Data.Char (isAsciiLower)
 import Data.Text qualified as T
 import Protolude
 import Wiki.Api.Auth (callbackPath)
+import Wiki.Api.ContentPolicy (parseAssistantHost)
 import Wiki.Core.Url (Url (..))
 
 --------------------------------------------------------------------------------
@@ -100,6 +101,13 @@ data ServerSettingsOf s = ServerSettings
   -- pass on.
   , providers :: [ProviderSettingsOf s]
   -- ^ The providers users may sign in with, in the order of their buttons.
+  , assistantHosts :: [Text]
+  -- ^ The addresses besides Anthropic's and OpenAI's APIs that the
+  -- writing assistant may reach from the browser (WP5.21 of docs/PLAN.md):
+  -- the origins of the base URLs its users set, such as a server of
+  -- Ollama or LM Studio, or a proxy. The page's Content Security Policy
+  -- allows them ("Wiki.Api.ContentPolicy"), and refuses every other
+  -- address. Each is an origin, as 'parseAssistantHost' writes it.
   }
   deriving stock (Eq, Show, Generic, Functor)
 
@@ -111,7 +119,17 @@ type ServerSettingsChange = ServerSettingsOf (Maybe Text)
 
 instance (ToJSON s) => ToJSON (ServerSettingsOf s)
 
-instance (FromJSON s) => FromJSON (ServerSettingsOf s)
+-- | Read by hand rather than derived, so that settings without
+-- @assistantHosts@, from before the field existed (in a demo's stored
+-- state, or from an older client), read as having none.
+instance (FromJSON s) => FromJSON (ServerSettingsOf s) where
+  parseJSON = withObject "ServerSettings" $ \o ->
+    ServerSettings
+      <$> o
+      .:? "publicUrl"
+      <*> o .:? "mail"
+      <*> o .: "providers"
+      <*> o .:? "assistantHosts" .!= []
 
 -- | 'MailSettingsOf': a mail server, reached over SMTP.
 data MailSettingsOf s = MailSettings
@@ -164,7 +182,7 @@ instance (FromJSON s) => FromJSON (ProviderSettingsOf s)
 -- server, no provider. A wiki created before these settings existed keeps
 -- working as before.
 noServerSettings :: ServerSettingsOf s
-noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = []}
+noServerSettings = ServerSettings {publicUrl = Nothing, mail = Nothing, providers = [], assistantHosts = []}
 
 --------------------------------------------------------------------------------
 -- Secrets
@@ -198,6 +216,7 @@ applyChange keep old new =
     { publicUrl = new.publicUrl
     , mail = (\m -> withPassword (resolve (old.mail >>= \o -> o.password) m.password) m) <$> new.mail
     , providers = [withSecret (resolve (previous p.name) p.secret) p | p <- new.providers]
+    , assistantHosts = new.assistantHosts
     }
   where
     previous name = find (\o -> o.name == name) old.providers >>= \o -> o.secret
@@ -327,7 +346,8 @@ checkServerSettings isSet s = do
     Left "The mail needs the wiki's public address: the links it carries start with it."
   when (isNothing publicUrl && not (null providers)) $
     Left "The providers need the wiki's public address: they send people back below it."
-  pure ServerSettings {publicUrl, mail, providers}
+  assistantHosts <- ordNub <$> traverse parseAssistantHost (filter (not . T.null . T.strip) s.assistantHosts)
+  pure ServerSettings {publicUrl, mail, providers, assistantHosts}
   where
     checkMail m = do
       let host = T.strip m.host

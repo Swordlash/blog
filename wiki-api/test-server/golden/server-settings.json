@@ -1,4 +1,7 @@
 {
+  "assistantHosts": [
+    "http://localhost:11434"
+  ],
   "mail": {
     "from": "Wiki <wiki@example.org>",
     "host": "mail.example.org",

@@ -34,6 +34,7 @@ import Test.Server.Fixture
 import Wiki.Api (AccountApi (..), AdminApi (..), InvitationsApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationToken (..), LinkedIdentity (..), NewPassword (..), PasswordChange (..), SignInMethods (..))
 import Wiki.Api.Admin (Directory (..), Invited (..), NewInvitation (..), WikiSettings (..))
+import Wiki.Api.ContentPolicy (signInPolicy)
 import Wiki.Api.Links (links)
 import Wiki.Api.Security (CurrentPassword (..), OneTimeCode (..), RecoveryCodes, TotpEnrolment (..))
 import Wiki.Api.ServerSettings (ProviderChange, ProviderKind (..), ProviderSettingsOf (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
@@ -79,7 +80,7 @@ fakeProviders fake =
 
 -- | The server's settings with these providers.
 signingInWith :: [ProviderChange] -> ServerSettingsChange
-signingInWith providers = ServerSettings {publicUrl = Just (Url publicUrl), mail = Nothing, providers}
+signingInWith providers = ServerSettings {publicUrl = Just (Url publicUrl), mail = Nothing, providers, assistantHosts = []}
 
 -- | A server over the demo's wiki, with the fake's providers set by its
 -- operator once it runs.
@@ -479,6 +480,16 @@ overHttp = describe "over HTTP" $ do
       noCookie.status `shouldBe` 400
       unknown `says` "start it again"
 
+    it "sends its pages with the application's policy, their forms let lead to the provider" $ withOidc $ \fake r -> do
+      missing <- getUrl r (onPublic r "auth/nobody/start?next=%2F")
+      header "Content-Security-Policy" missing `shouldBe` Just (encodeUtf8 (signInPolicy []))
+      -- Once the provider has said how to sign in (at the first start),
+      -- its authorisation address is known.
+      _ <- getUrl r (onPublic r "auth/acme/start?next=%2F")
+      unknown <- getUrlWith r (onPublic r "auth/acme/callback?code=c&state=nothing") [("Cookie", "wiki_oidc=nothing")]
+      header "Content-Security-Policy" unknown `shouldBe` Just (encodeUtf8 (signInPolicy [fake.url]))
+      (header "Referrer-Policy" unknown, header "Permissions-Policy" unknown) `shouldBe` (Just "no-referrer", Just "camera=(), microphone=(), geolocation=()")
+
     it "answers a provider it does not have with 404, and nothing on the admin listener" $ withOidc $ \_ r -> do
       (\x -> x.status) <$> getUrl r (onPublic r "auth/nobody/start?next=%2F") `shouldReturn` 404
       (\x -> x.status) <$> getUrl r (onAdmin r "auth/acme/start?next=%2F") `shouldReturn` 404
@@ -583,7 +594,7 @@ checking = describe "wiki-server oidc check" $ do
         test dir
   it "asks each provider set how to sign in, and prints the redirect URI to register" $ withFakeProvider $ \fake -> do
     let acme = ProviderSettings {name = "acme", kind = Generic, clientId = "acme-client", issuer = Just (Url fake.url), secret = Just "x"}
-    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org"), mail = Nothing, providers = [acme]} $ \dir -> do
+    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org"), mail = Nothing, providers = [acme], assistantHosts = []} $ \dir -> do
       (fine, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Nothing}
       fine `shouldBe` True
       lines' `shouldContain` ["  redirect URI to register: https://wiki.example.org/auth/acme/callback"]
@@ -592,7 +603,7 @@ checking = describe "wiki-server oidc check" $ do
       T.unlines lines' `shouldSatisfy` (not . T.isInfixOf "\"x\"")
   it "checks only the one named, and says when none is set" $ withFakeProvider $ \fake -> do
     let named n = ProviderSettings {name = n, kind = Generic, clientId = "c", issuer = Just (Url fake.url), secret = Just "x"}
-    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [named n | n <- ["a", "b"]]} $ \dir -> do
+    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [named n | n <- ["a", "b"]], assistantHosts = []} $ \dir -> do
       (_, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Just "b"}
       filter ("auth/" `T.isInfixOf`) lines' `shouldBe` ["  redirect URI to register: https://wiki.example.org/auth/b/callback"]
       (fine, nobody) <- runOidcCheck OidcCheck {dataDir = dir, only = Just "c"}
@@ -603,7 +614,7 @@ checking = describe "wiki-server oidc check" $ do
       T.unlines lines' `shouldSatisfy` T.isInfixOf "Server section"
   it "fails for a provider that cannot be reached" $ do
     let gone = ProviderSettings {name = "gone", kind = Generic, clientId = "c", issuer = Just (Url "http://127.0.0.1:9"), secret = Just "x"}
-    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [gone]} $ \dir -> do
+    inData ServerSettings {publicUrl = Just (Url "https://wiki.example.org/"), mail = Nothing, providers = [gone], assistantHosts = []} $ \dir -> do
       (fine, lines') <- runOidcCheck OidcCheck {dataDir = dir, only = Nothing}
       fine `shouldBe` False
       T.unlines lines' `shouldSatisfy` T.isInfixOf "cannot be asked how to sign in"

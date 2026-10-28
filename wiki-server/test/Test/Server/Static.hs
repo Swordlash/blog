@@ -12,9 +12,13 @@ import System.Directory (createFileLink)
 import System.FilePath ((</>))
 import Test.Hspec
 import Test.Server.Fixture
+import Wiki.Api.ContentPolicy (headerPolicy, pagePolicy)
 import Wiki.Api.Info (ServerInfo (..))
+import Wiki.Api.ServerSettings (noServerSettings)
+import Wiki.Api.ServerSettings qualified as Settings
 import Wiki.Server.Options (ServeOptions (..))
-import Wiki.Server.Static (withBaseHref)
+import Wiki.Server.Options qualified as Options
+import Wiki.Server.Static (withBaseHref, withPolicyMeta)
 
 spec :: Spec
 spec = describe "the application's files" $ do
@@ -22,6 +26,7 @@ spec = describe "the application's files" $ do
   adminListener
   basePath
   baseHref
+  policy
 
 bodyText :: Reply -> Text
 bodyText reply = decodeUtf8 (BSL.toStrict reply.body)
@@ -144,3 +149,33 @@ baseHref = describe "a page's <base href>" $ do
 
   it "is added first in the head of a page without one" $
     withBaseHref "/a&b/" "<html><head><title>x</title></head>" `shouldBe` "<html><head>\n    <base href=\"/a&amp;b/\"><title>x</title></head>"
+
+policy :: Spec
+policy = describe "a page's Content Security Policy" $ do
+  it "comes with every page, and with no other file" $ withRunning $ \r -> do
+    for_ ["/", "/s/blog/", "/s/made-since/", "/offline.html"] $ \page -> do
+      reply <- getUrl r (r.public <> page)
+      header "Content-Security-Policy" reply `shouldBe` Just (encodeUtf8 (headerPolicy []))
+      header "Referrer-Policy" reply `shouldBe` Just "same-origin"
+      header "Permissions-Policy" reply `shouldBe` Just "camera=(), microphone=(), geolocation=()"
+    for_ ["/app.wasm", "/index.js", "/sw.js", "/style.css", "/manifest.webmanifest"] $ \file -> do
+      reply <- getUrl r (r.public <> file)
+      reply.status `shouldBe` 200
+      header "Content-Security-Policy" reply `shouldBe` Nothing
+
+  it "is the same in the header and the page's meta element, the assistant's hosts in both" $
+    withRunningAs (\o -> o {Options.assistantHosts = ["http://localhost:11434"]}) $ \r -> do
+      plain <- getUrl r (r.public <> "/policed/")
+      header "Content-Security-Policy" plain `shouldBe` Just (encodeUtf8 (headerPolicy ["http://localhost:11434"]))
+      bodyText plain `shouldSatisfy` T.isInfixOf ("<meta http-equiv=\"Content-Security-Policy\" content=\"" <> pagePolicy ["http://localhost:11434"] <> "\">")
+      -- The administration's hosts are added to the command line's, from
+      -- the next page on.
+      _ <- setServer r noServerSettings {Settings.assistantHosts = ["https://openrouter.ai"]}
+      changed <- getUrlWith r (r.public <> "/policed/") [("If-None-Match", fromMaybe "" (header "ETag" plain))]
+      changed.status `shouldBe` 200
+      header "Content-Security-Policy" changed `shouldBe` Just (encodeUtf8 (headerPolicy ["http://localhost:11434", "https://openrouter.ai"]))
+      bodyText changed `shouldSatisfy` T.isInfixOf (pagePolicy ["http://localhost:11434", "https://openrouter.ai"])
+
+  it "replaces the policy of a page's meta element, and leaves a page without one alone" $ do
+    withPolicyMeta "a 'b'" "<head><meta http-equiv=\"Content-Security-Policy\" content=\"x\"><title>t</title>" `shouldBe` "<head><meta http-equiv=\"Content-Security-Policy\" content=\"a 'b'\"><title>t</title>"
+    withPolicyMeta "a" "<head><title>t</title>" `shouldBe` "<head><title>t</title>"

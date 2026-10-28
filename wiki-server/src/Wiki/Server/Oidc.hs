@@ -68,6 +68,7 @@ module Wiki.Server.Oidc
     -- * The round trip
   , Endpoints (..)
   , endpointsOf
+  , knownAuthorization
   , Secrets (..)
   , newSecrets
   , challengeOf
@@ -242,6 +243,15 @@ baseOf o = T.dropWhileEnd (== '/') $ fromMaybe own o.issuer
       Apple -> "https://appleid.apple.com"
       GitHub -> "https://github.com"
       Generic -> ""
+
+-- | A provider's authorisation address, if it is known without asking the
+-- provider: GitHub's fixed one, or the one its discovery found. The sign-in
+-- pages' Content Security Policy lets their forms lead there
+-- ("Wiki.Server.Auth").
+knownAuthorization :: Provider -> IO (Maybe Text)
+knownAuthorization p = case p.option.kind of
+  GitHub -> either (const Nothing) (\e -> Just e.authorization) <$> endpointsOf p
+  _ -> fmap (\e -> e.authorization) <$> readIORef p.discovered
 
 -- | A provider's endpoints: GitHub's fixed ones, or what discovery finds,
 -- asked once and kept. A 'Left' says why they could not be found, in words

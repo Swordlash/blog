@@ -23,6 +23,7 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
+import Wiki.Api.ContentPolicy (headerPolicy, pagePolicy)
 import Wiki.Api.Links (links, searchUrl)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), draftAnswer)
@@ -32,6 +33,7 @@ import Wiki.App.Route (Against (..), Route (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
 import Wiki.Server.Options (ServeOptions (..))
+import Wiki.Server.Options qualified as Options
 import Wiki.Server.Render (routeOf)
 import Wiki.Server.Storage.Layout (databaseFile)
 
@@ -87,6 +89,13 @@ anonymous = describe "for someone not signed in" $ do
     appIn html `shouldSatisfy` T.isInfixOf "class=\"sign-in-toggle\""
     appIn html `shouldNotSatisfy` T.isInfixOf "Team"
     appIn html `shouldNotSatisfy` T.isInfixOf "Loading…"
+
+  it "sends a rendered page with its Content Security Policy, in the header and the page alike" $
+    withDemoRunning (\o -> o {Options.assistantHosts = ["http://localhost:11434"]}) $ \r -> do
+      reply <- getUrl r (r.public <> "/")
+      reply.status `shouldBe` 200
+      header "Content-Security-Policy" reply `shouldBe` Just (encodeUtf8 (headerPolicy ["http://localhost:11434"]))
+      decodeUtf8 (BSL.toStrict reply.body) `shouldSatisfy` T.isInfixOf ("<meta http-equiv=\"Content-Security-Policy\" content=\"" <> pagePolicy ["http://localhost:11434"] <> "\">")
 
   it "renders a space, a page, its source and a search with what they show" $ withDemoRunning identity $ \r -> do
     (spaceStatus, space) <- page r r.public "/s/docs/"

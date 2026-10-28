@@ -67,6 +67,15 @@
 -- the invitation's secret are in the addresses' queries, which the log
 -- leaves out ("Wiki.Server.Log"), and the provider's responses stay inside
 -- "Wiki.Server.Oidc".
+--
+-- = The pages' policy
+--
+-- Every answer carries the application page's Content Security Policy
+-- (WP5.21 of docs/PLAN.md), with @form-action@ allowing the provider's
+-- authorisation address as well as the wiki ('signInPolicy'), and the
+-- same @Permissions-Policy@. The pages keep @Referrer-Policy: no-referrer@,
+-- stricter than the application's, because the callback's address carries
+-- the provider's code.
 module Wiki.Server.Auth
   ( authApplication
   , flowCookieName
@@ -79,7 +88,7 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Network.HTTP.Types (Header, Status, hCacheControl, hContentType, hCookie, hLocation, hSetCookie, methodGet, methodHead, methodPost, parseQueryText, status200, status302, status400, status401, status403, status404, status405, status429, status502)
-import Network.Wai (Application, Request (..), Response, responseLBS, strictRequestBody)
+import Network.Wai (Application, Request (..), Response, mapResponseHeaders, responseLBS, strictRequestBody)
 import Protolude
 import Web.FormUrlEncoded (urlEncodeParams)
 import Wiki.Api.Account
@@ -87,6 +96,7 @@ import Wiki.Api.Account
   , InvitationToken (..)
   )
 import Wiki.Api.Auth (callbackPath)
+import Wiki.Api.ContentPolicy (originOf, signInPolicy)
 import Wiki.Core.Id (UserId (..))
 import Wiki.Core.User (Login (..), User (..))
 import Wiki.Server.Accounts (Intent (..), Landing (..), Refusal (..), accountOf, endSession, landWith, startSession)
@@ -94,7 +104,7 @@ import Wiki.Server.Api (Caller (..), Env (..), Signing (..), currentProviders, r
 import Wiki.Server.Limiter (Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
 import Wiki.Server.Log (Level (..), Logger, logWith)
-import Wiki.Server.Oidc (Answer (..), OidcOption (..), Pending (..), Provider (..), Secrets (..), authorizeUrl, claimsFor, endpointsOf, flowLifetime, newSecrets, remember, takePending)
+import Wiki.Server.Oidc (Answer (..), OidcOption (..), Pending (..), Provider (..), Secrets (..), authorizeUrl, claimsFor, endpointsOf, flowLifetime, knownAuthorization, newSecrets, remember, takePending)
 import Wiki.Server.SecondFactor (PendingSignIn (..), checkCode, finishPending, holdSignIn, pendingCookie, pendingSignIn, requestPending, wrongCode)
 import Wiki.Server.Session (CookieSettings (..), sessionCookie)
 import Wiki.Server.Storage (Who (..), withDatabase)
@@ -106,11 +116,14 @@ flowCookieName = "wiki_oidc"
 -- | The routes under @auth\/@ of a listener that serves the wiki at this
 -- path, as the given 'Caller': the provider's name, and what follows it.
 authApplication :: Logger -> Env -> Caller -> Text -> Text -> [Text] -> Application
-authApplication logger env caller mount name rest request respond = do
+authApplication logger env caller mount name rest request respondWithout = do
   -- The providers as the administration has them now: one added a moment
   -- ago signs people in, one removed no longer does.
   providers <- currentProviders env
-  case (find (\p -> p.option.name == name) providers, caller.signing, rest) of
+  let found = find (\p -> p.option.name == name) providers
+  targets <- maybe (pure []) (fmap (maybe [] (maybeToList . originOf)) . knownAuthorization) found
+  let respond = respondWithout . mapResponseHeaders (<> policyHeaders targets)
+  case (found, caller.signing, rest) of
     (Just p, Just signing, ["start"])
       | readOnly -> start logger env caller signing mount p request respond
     (Just p, Just signing, ["callback"])
@@ -334,6 +347,14 @@ flowCookieOf request =
 
 --------------------------------------------------------------------------------
 -- Pages
+
+-- | The policy headers of every answer, with the given addresses a form
+-- may lead to besides the wiki.
+policyHeaders :: [Text] -> [Header]
+policyHeaders targets =
+  [ ("Content-Security-Policy", encodeUtf8 (signInPolicy targets))
+  , ("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+  ]
 
 -- | A page of this module, never stored by a cache, and sending no
 -- @Referer@ onwards (the callback's address carries the provider's code).

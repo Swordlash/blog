@@ -461,6 +461,7 @@ serverWith user password secret =
     { publicUrl = Just (Url "https://wiki.example.org/")
     , mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user, password, from = "wiki@example.org"}
     , providers = [ProviderSettings {name = "google", kind = Google, clientId = "id.example", issuer = Nothing, secret}]
+    , assistantHosts = []
     }
 
 serverSide :: (MonadAdmin m) => SpecWith (Fixture m)

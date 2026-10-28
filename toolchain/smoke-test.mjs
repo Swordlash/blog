@@ -599,6 +599,22 @@ try {
     }
     console.log(`ok: TikZJax's ${bins.length} compressed files are .bin, served as application/octet-stream, and none as gzip`);
   }
+  // The page's Content Security Policy (Wiki.Api.ContentPolicy), which
+  // GitHub Pages, sending no headers of its own, gets from the page: every
+  // page and the offline page carry it, and every page here runs under it
+  // (a violation is a console error, which fails the test).
+  {
+    for (const path of ["/", "/404.html", "/offline.html", "/s/docs/p/tour/"]) {
+      const html = await (await fetch(url(path))).text();
+      assert.match(
+        html,
+        /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; [^"]*">/,
+        `${path} carries no Content Security Policy`,
+      );
+    }
+    console.log("ok: every page, the offline page too, carries the Content Security Policy");
+  }
+
   // And the notices of what esbuild bundled into the page's scripts and
   // styles (web/src/licenses.mjs), each with its licence's text: the
   // libraries the README's licence section names, and Mermaid's own

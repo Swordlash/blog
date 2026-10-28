@@ -1,4 +1,7 @@
 {
+  "assistantHosts": [
+    "https://openrouter.ai"
+  ],
   "mail": {
     "from": "wiki@example.org",
     "host": "mail.example.org",

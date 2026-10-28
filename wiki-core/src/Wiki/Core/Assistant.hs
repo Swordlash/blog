@@ -582,6 +582,11 @@ data ErrorKind
     Declined
   | -- | The request was refused as malformed (400, 422).
     BadRequest
+  | -- | The page's Content Security Policy does not let the browser reach
+    -- the address (WP5.21 of docs/PLAN.md): another service's base URL
+    -- that the wiki's administrator has not allowed. No request was sent.
+    -- The message says which addresses the page allows.
+    Blocked
   | -- | Anything else.
     Failed
   deriving stock (Eq, Show, Enum, Bounded)
@@ -609,14 +614,18 @@ instance FromJSON AssistantError where
         "connection" -> pure Unreachable
         "refusal" -> pure Declined
         "bad_request" -> pure BadRequest
+        "blocked" -> pure Blocked
         _ -> pure Failed
 
 -- | The message the panel and the settings show for an error: what it
 -- means, then the provider's own message and the status, with the key
 -- removed ('redact') wherever it appears, since a provider may quote it.
+-- A 'Blocked' address is no provider's answer: its message is the wiki's
+-- own, and follows the meaning as it is.
 errorText :: Maybe ApiKey -> AssistantError -> Text
-errorText key e =
-  meaning <> (if T.null said then "" else " The provider said: " <> said) <> maybe "" (\s -> " (" <> show s <> ")") e.status
+errorText key e
+  | e.kind == Blocked = meaning <> (if T.null said then "" else " " <> said)
+  | otherwise = meaning <> (if T.null said then "" else " The provider said: " <> said) <> maybe "" (\s -> " (" <> show s <> ")") e.status
   where
     said = redact key (T.strip e.message)
     meaning = case e.kind of
@@ -628,6 +637,7 @@ errorText key e =
       Unreachable -> "The provider could not be reached."
       Declined -> "The model declined to answer."
       BadRequest -> "The provider refused the request."
+      Blocked -> "This wiki's pages do not let the assistant reach that address, so the browser sent nothing."
       Failed -> "The request failed."
 
 -- | A message with the key removed: the key itself, wherever it appears,

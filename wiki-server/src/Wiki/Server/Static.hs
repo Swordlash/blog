@@ -46,12 +46,26 @@
 -- under the admin listener's @\/admin\/@. A page whose @\<base href>@ is
 -- already right is sent as its file (or its precompressed sibling); one
 -- that is not is rewritten as it is sent.
+--
+-- The page's Content Security Policy (WP5.21 of docs/PLAN.md,
+-- "Wiki.Api.ContentPolicy"): every page is sent with the policy as a
+-- header ('pageHeaders'), with the assistant's hosts the server allows
+-- folded into its @connect-src@. The page's own copy of the policy, its
+-- @\<meta http-equiv=\"Content-Security-Policy\">@, is rewritten to the
+-- same text ('withPolicyMeta'), because a browser applies both, and a meta
+-- element without the hosts would refuse them. A page whose meta element
+-- already says the same is sent as its file, as for the base. Only pages
+-- get the policy: a script, a style sheet or @app.wasm@ is not a document,
+-- and a worker's script is the worker's own document, which the policy
+-- would stop from compiling TikZ's WebAssembly.
 module Wiki.Server.Static
   ( StaticSite
   , openStaticSite
   , PageRenderer
   , serveStatic
   , withBaseHref
+  , withPolicyMeta
+  , pageHeaders
   , mediaType
   )
 where
@@ -69,6 +83,7 @@ import Protolude
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, getFileSize, getModificationTime)
 import System.FilePath (joinPath, takeExtension, (</>))
 import Text.Printf (printf)
+import Wiki.Api.ContentPolicy (headerPolicy, pagePolicy)
 
 -- | A directory of files to serve, as the server found it at start.
 newtype StaticSite = StaticSite {root :: FilePath}
@@ -89,9 +104,11 @@ type PageRenderer = Text -> Request -> IO (Either Text (Status, Text))
 -- | Answer a request for a file, by its path under the path the site is
 -- served at (the request's 'pathInfo' with that path's segments removed),
 -- whose own address is the @\<base href>@ its pages get; or for a page,
--- prerendered if the build has a template and a renderer is given.
-serveStatic :: StaticSite -> Text -> Maybe PageRenderer -> [Text] -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
-serveStatic site base renderer segments request respond
+-- prerendered if the build has a template and a renderer is given. The
+-- hosts are those the assistant may reach, which every page's policy
+-- allows.
+serveStatic :: StaticSite -> Text -> [Text] -> Maybe PageRenderer -> [Text] -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+serveStatic site base hosts renderer segments request respond
   | requestMethod request `notElem` [methodGet, methodHead] =
       respond (plain status405 "Method not allowed" [(hAllow, "GET, HEAD")])
   | not (wellEscaped (rawPathInfo request)) || any (T.any (\c -> c == '\0' || c == '/' || c == '\\')) segments =
@@ -105,10 +122,10 @@ serveStatic site base renderer segments request respond
       isDirectory <- doesDirectoryExist file
       found <- regularFile site file
       let built
-            | found = send site base request status200 file >>= respond
+            | found = send site base hosts request status200 file >>= respond
             | otherwise =
                 regularFile site (site.root </> "404.html") >>= \case
-                  True -> send site base request status404 (site.root </> "404.html") >>= respond
+                  True -> send site base hosts request status404 (site.root </> "404.html") >>= respond
                   False -> respond (plain status404 "Not found" [])
       if
         | isDirectory && not directoryAddress ->
@@ -120,7 +137,7 @@ serveStatic site base renderer segments request respond
               Nothing -> built
               Just template ->
                 render template request >>= \case
-                  Right (status, page) -> respond (rendered status page)
+                  Right (status, page) -> respond (rendered hosts status page)
                   Left _ -> built
         | otherwise -> built
 
@@ -136,16 +153,53 @@ readTemplate site = do
 -- shows what its reader may see and who they are, so it belongs to the
 -- browser alone (@private@: no cache between it and the server stores it)
 -- and varies with the session cookie.
-rendered :: Status -> Text -> Response
-rendered status page =
+rendered :: [Text] -> Status -> Text -> Response
+rendered hosts status page =
   responseLBS
     status
-    [ (hContentType, "text/html; charset=utf-8")
-    , (hCacheControl, "private, no-cache")
-    , (hVary, "Cookie")
-    , ("X-Content-Type-Options", "nosniff")
-    ]
-    (BSL.fromStrict (encodeUtf8 page))
+    ( [ (hContentType, "text/html; charset=utf-8")
+      , (hCacheControl, "private, no-cache")
+      , (hVary, "Cookie")
+      , ("X-Content-Type-Options", "nosniff")
+      ]
+        <> pageHeaders hosts
+    )
+    (BSL.fromStrict (encodeUtf8 (withPolicyMeta (pagePolicy hosts) page)))
+
+-- | The headers a page is sent with besides its type and caching: its
+-- Content Security Policy with these assistant hosts ('headerPolicy'),
+-- @Referrer-Policy: same-origin@ (another site that a page links to is not
+-- told which page the link was on), and a @Permissions-Policy@ that turns
+-- off the camera, the microphone and the location, which the wiki never
+-- uses, so that a script slipped into a page cannot ask for them.
+pageHeaders :: [Text] -> [Header]
+pageHeaders hosts =
+  [ ("Content-Security-Policy", encodeUtf8 (headerPolicy hosts))
+  , ("Referrer-Policy", "same-origin")
+  , ("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+  ]
+
+-- | A page with the given policy in its @\<meta http-equiv=\"Content-Security-Policy\">@,
+-- replacing the policy the meta element has. A page without one is left
+-- as it is: the header alone carries the policy then.
+withPolicyMeta :: Text -> Text -> Text
+withPolicyMeta policy page = case T.breakOn marker page of
+  (before, rest)
+    | not (T.null rest) ->
+        let (element, after) = T.breakOn ">" rest
+         in case T.breakOn "content=\"" element of
+              (start, attr)
+                | not (T.null attr) ->
+                    let afterValue = T.dropWhile (/= '"') (T.drop (T.length "content=\"") attr)
+                     in before <> start <> "content=\"" <> escapeAttribute policy <> afterValue <> after
+              _ -> page
+  _ -> page
+  where
+    marker = "<meta http-equiv=\"Content-Security-Policy\""
+
+-- | Text escaped for a double-quoted attribute.
+escapeAttribute :: Text -> Text
+escapeAttribute = T.concatMap (\case '&' -> "&amp;"; '"' -> "&quot;"; '<' -> "&lt;"; '>' -> "&gt;"; c -> T.singleton c)
 
 -- | Whether every @%@ of a raw path starts an escape of two hex digits: a
 -- path that fails this is not an address at all, rather than an address of
@@ -170,18 +224,19 @@ regularFile site file =
     (pure False)
 
 -- | A file's response: the file, its precompressed sibling, or (for a
--- page whose base is not this path's) the page rewritten.
-send :: StaticSite -> Text -> Request -> Status -> FilePath -> IO Response
-send site base request status file = do
+-- page whose base or policy is not this path's) the page rewritten.
+send :: StaticSite -> Text -> [Text] -> Request -> Status -> FilePath -> IO Response
+send site base hosts request status file = do
   let extension = map toLower (takeExtension file)
       compressed = extension `elem` [".gz", ".br"]
       encodings = if compressed then [] else acceptedEncodings (fromMaybe "" (lookup "Accept-Encoding" (requestHeaders request)))
+      isPage = extension == ".html"
   rewritten <-
-    if extension == ".html"
+    if isPage
       then do
         -- Read as bytes: the locale a service runs in may not be UTF-8.
         page <- decodeUtf8 <$> BS.readFile file
-        let based = withBaseHref base page
+        let based = withPolicyMeta (pagePolicy hosts) (withBaseHref base page)
         pure (if based == page then Nothing else Just based)
       else pure Nothing
   sibling <- case rewritten of
@@ -198,7 +253,7 @@ send site base request status file = do
         "\""
           <> T.pack (printf "%x-%x" size (floor (utcTimeToPOSIXSeconds modified * 1000) :: Integer))
           <> maybe "" (("-" <>) . fst) sibling
-          <> maybe "" (const "-based") rewritten
+          <> maybe "" (const ("-based-" <> T.pack (printf "%x" (fingerprint (base <> T.unwords hosts))))) rewritten
           <> "\""
       headers =
         [ (hContentType, encodeUtf8 (mediaType file))
@@ -208,6 +263,7 @@ send site base request status file = do
         , ("X-Content-Type-Options", "nosniff")
         ]
           <> [(hContentEncoding, encodeUtf8 name) | Just (name, _) <- [sibling]]
+          <> (if isPage then pageHeaders hosts else [])
   if status == status200 && lookup hIfNoneMatch (requestHeaders request) == Just (encodeUtf8 tag)
     then pure (responseLBS status304 headers "")
     else case rewritten of
@@ -222,6 +278,12 @@ send site base request status file = do
             then pure Nothing
             else (\n -> Just FilePart {filePartOffset = 0, filePartByteCount = n, filePartFileSize = n}) <$> getFileSize body
         pure (responseFile status headers body part)
+
+-- | A short fingerprint of a text (FNV-1a, 32 bits), for an ETag: a page
+-- rewritten for another base or other assistant hosts is a different page,
+-- which a browser must not keep under the old tag.
+fingerprint :: Text -> Word32
+fingerprint = T.foldl' (\h c -> (h `xor` fromIntegral (ord c)) * 16777619) 2166136261
 
 -- | The encodings an @Accept-Encoding@ header accepts, except those it
 -- gives a quality of zero.

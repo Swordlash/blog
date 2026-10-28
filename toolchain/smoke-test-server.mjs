@@ -538,6 +538,21 @@ try {
   assert.match(frontHtml, /<section class="directory">.*<h1>Spaces<\/h1>/s, "the front page, the directory of spaces, is not rendered");
   assert.ok(!frontHtml.includes("Loading…"), "the front page is the application loading");
   assert.match(frontHtml, /<script type="application\/json" id="wiki-preload">/, "the front page carries nothing for the program");
+  // The page's Content Security Policy (Wiki.Api.ContentPolicy): sent as a
+  // header, and the same text in the page's meta element, but for
+  // frame-ancestors, which only a header can carry. Every page below runs
+  // under it, and a violation is a console error, which fails the test.
+  {
+    const header = front.headers.get("content-security-policy") ?? "";
+    const meta = /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(frontHtml)?.[1] ?? "";
+    assert.ok(meta.includes("script-src 'self' 'wasm-unsafe-eval'"), `the front page's policy: ${meta}`);
+    assert.equal(header, `${meta}; frame-ancestors 'none'`, "the policy's header and its meta element differ");
+    assert.equal(front.headers.get("referrer-policy"), "same-origin");
+    assert.equal(front.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+    const wasm = await fetch(url("/app.wasm"));
+    assert.equal(wasm.headers.get("content-security-policy"), null, "app.wasm has a policy of its own");
+    console.log("ok: every page is sent with its Content Security Policy, the same in its header and its meta element");
+  }
   const page = await newPage({ anonymous: true });
   const atFront = await loadAdopted(page, "/");
   assert.deepEqual(atFront.repairs, [], "adopting the front page repaired it");

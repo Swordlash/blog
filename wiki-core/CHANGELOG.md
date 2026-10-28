@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+`ErrorKind` gains `Blocked`: an address the page's Content Security Policy
+does not let the browser reach (WP5.21).
+
 A model's id is a `ModelName` (WP5.15), a newtype over `Text`:
 `Model.id`, `Listed.id`, `ProviderSettings.model`, `Ready.model`,
 `defaultModel`, `chosenModel`, `modelLabel`'s argument, and the model

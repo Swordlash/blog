@@ -277,6 +277,7 @@ test-suite wiki-app-test
         Test.Live
         Test.Manifest
         Test.Passwords
+        Test.Policy
         Test.Readme
         Test.Route
         Test.Server
@@ -335,6 +336,7 @@ test-suite wiki-app-browser-test
       Test.Browser.Order
       Test.Browser.Permissions
       Test.Browser.Persist
+      Test.Browser.Policy
       Test.Browser.Providers
       Test.Browser.Search
       Test.Browser.Security

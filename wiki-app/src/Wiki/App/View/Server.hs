@@ -82,6 +82,8 @@ data Editing
   | EditingMail MailForm
   | -- | A provider, by the name it had ('Nothing' for a new one).
     EditingProvider (Maybe Text) ProviderForm
+  | -- | The assistant's hosts, as typed: one per line.
+    EditingHosts Text
 
 -- | The mail server's form, as typed.
 data MailForm = MailForm
@@ -160,6 +162,9 @@ data Action
   | Cancel
   | TypedTestTo Text
   | SendTest
+  | EditHosts
+  | TypedHosts Text
+  | SaveHosts
 
 component :: forall query m. (MonadAdmin m, MonadLoad m, MonadIO m) => H.Component query Input ViewOutput m
 component =
@@ -207,6 +212,7 @@ component =
           {{ urlView st settings }}
           {{ mailView st settings }}
           {{ providersView st settings }}
+          {{ hostsView st settings }}
           {{ exportView st.input.context.session.exports }}
         </div>
       |]
@@ -232,6 +238,55 @@ component =
           {% end %}
         </div>
       |]
+
+    -- The addresses the writing assistant may reach besides Anthropic's
+    -- and OpenAI's APIs: the page's Content Security Policy refuses every
+    -- other one ("Wiki.Api.ContentPolicy").
+    hostsView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
+    hostsView st settings =
+      [hh|
+        <div class="server-part server-assistant-hosts">
+          <h3>The assistant's hosts</h3>
+          <p class="admin-intro">
+            The writing assistant runs in each reader's browser, and this wiki's pages let it reach Anthropic's and OpenAI's APIs only.
+            A user who sets another base URL in the assistant's settings (a server of Ollama or LM Studio, a proxy, OpenRouter) needs its address here.
+            The browser refuses every other address, so that a script slipped into a page cannot send a key elsewhere.
+          </p>
+          {{ inside }}
+        </div>
+      |]
+      where
+        inside = case st.editing of
+          EditingHosts typed ->
+            [hh|
+              <form class="server-hosts-form" aria-label="The assistant's hosts" {{ HE.preventingDefault (HE.onSubmit (const SaveHosts)) }}>
+                <label class="field">
+                  <span>One address per line, such as https://openrouter.ai or http://localhost:11434</span>
+                  <textarea name="hosts" rows="4" spellcheck="false" value={{ typed }} onValueInput={{ TypedHosts }}></textarea>
+                </label>
+                <div class="actions">
+                  <button type="submit" class="primary" disabled={{ st.busy }}>Save</button>
+                  <button type="button" class="server-cancel" onClick={{ const Cancel }}>Cancel</button>
+                </div>
+              </form>
+            |]
+          _ ->
+            [hh|
+              <div class="server-hosts-shown">
+                {% if null settings.assistantHosts %}
+                  <p class="server-hosts-none">None: the assistant reaches Anthropic and OpenAI only.</p>
+                {% else %}
+                  <ul class="server-hosts">
+                    {% for host in settings.assistantHosts %}
+                      <li>{{ host }}</li>
+                    {% end %}
+                  </ul>
+                {% end %}
+                <div class="actions">
+                  <button type="button" class="server-hosts-edit" disabled={{ editingSomething st }} onClick={{ const EditHosts }}>Change</button>
+                </div>
+              </div>
+            |]
 
     -- The public address.
     urlView :: State -> ServerSettings -> H.ComponentHTML Action Slots m
@@ -572,6 +627,12 @@ component =
         modify (\st -> st {checks = Map.insert name Checking st.checks})
         result <- lift (checkProvider name Nothing)
         modify (\st -> st {checks = Map.insert name (CheckedAs result) st.checks})
+      EditHosts -> withSettings $ \s -> modify (\st -> st {editing = EditingHosts (T.unlines s.assistantHosts), refusal = Nothing})
+      TypedHosts t -> modify (\st -> st {editing = EditingHosts t})
+      SaveHosts ->
+        gets (\st -> st.editing) >>= \case
+          EditingHosts typed -> save (\s -> (unchanged s) {assistantHosts = filter (not . T.null) (map T.strip (T.lines typed))})
+          _ -> pass
       TypedTestTo t -> modify (\st -> st {testTo = t})
       SendTest -> do
         to' <- gets (\st -> st.testTo)

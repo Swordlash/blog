@@ -2,6 +2,9 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8">
+    <!-- The same Content Security Policy as index.html's, which a test
+         keeps equal (wiki-app's Test.Policy). -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' https://api.anthropic.com https://api.openai.com; img-src 'self' https: data: blob:; media-src 'self' https: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Offline - Wiki</title>
     <!-- The wiki's offline page: what its service worker (web/src/sw.js)

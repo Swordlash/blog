@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Every page is sent with the application's Content Security Policy
+(WP5.21), with `Referrer-Policy: same-origin` and a `Permissions-Policy`
+that turns off the camera, the microphone and the location; the page's
+own meta element is rewritten to the same text. `serveStatic` takes the
+assistant's hosts, which `--assistant-hosts` and the administration's
+server settings give (`currentAssistantHosts`). The sign-in pages of
+`Wiki.Server.Auth` carry the policy with the provider's authorisation
+address in `form-action` (`Wiki.Server.Oidc.knownAuthorization`).
+
 A session's secret is a `SessionToken` (WP5.15, in `Wiki.Server.Password`)
 and a waiting sign-in's a `PendingToken` (in `Wiki.Server.SecondFactor`),
 each with a hidden `Show`. The accounts' session functions, the cookie

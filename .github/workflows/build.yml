@@ -396,6 +396,18 @@ jobs:
     - name: Install JavaScript dependencies
       run: npm ci
 
+    # The supply chain, checked against the advisories npm knows (WP5.21 of
+    # docs/PLAN.md): a known vulnerability of high severity or worse in a
+    # package the page ships (package.json's dependencies, all bundled into
+    # it) fails the build; one in a development tool only (esbuild,
+    # Playwright, http-server) is reported as a warning.
+    - name: Audit the JavaScript dependencies
+      run: |
+        if ! npm audit --audit-level=high; then
+          echo "::warning title=npm audit::a known vulnerability in the JavaScript dependencies (above); the next step fails if the page ships it"
+        fi
+        npm audit --omit=dev --audit-level=high
+
     - name: Update Cabal package index
       run: cabal update
 

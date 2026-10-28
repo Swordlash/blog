@@ -91,6 +91,9 @@ site =
   [ ("index.html", "<!doctype html><html><head>\n    <base href=\"/\"><title>front</title></head><body>front</body></html>")
   , ("404.html", "<!doctype html><html><head>\n    <base href=\"/\"><title>missing</title></head><body>missing</body></html>")
   , ("s/blog/index.html", "<!doctype html><html><head>\n    <base href=\"/\"><title>blog</title></head><body>blog</body></html>")
+  , -- A page with its Content Security Policy in a meta element, as
+    -- web/index.html has it.
+    ("policed/index.html", "<!doctype html><html><head>\n    <base href=\"/\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'\"><title>policed</title></head><body>policed</body></html>")
   , ("app.wasm", "\0asm\1\0\0\0")
   , ("app.wasm.br", "brotli bytes")
   , ("index.js", "console.log('index');")
@@ -115,6 +118,7 @@ template =
     , "  <head>"
     , "    <base href=\"/\">"
     , "    <meta charset=\"utf-8\">"
+    , "    <meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'\">"
     , "    <meta name=\"wiki-backend\" content=\"server\">"
     , "    <title>Wiki</title>"
     , "  </head>"

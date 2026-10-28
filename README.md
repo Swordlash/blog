@@ -802,6 +802,18 @@ to the demo, keeping `data/`.
   typing a password for them (mailed at once, at most one a minute); where the
   server sends no mail, or the user has no verified address, the table types one
   instead ("Set password…", "Reset password…") and says why under the button.
+- **What a page may load and run.** Every page carries a Content Security
+  Policy (`Wiki.Api.ContentPolicy`): scripts from the wiki only, no text
+  evaluated as code, connections to the wiki and to Anthropic's and OpenAI's
+  APIs only, no forms posted elsewhere, no frames of the wiki on other sites.
+  The demo carries it in its pages; the server sends it as a header too, and
+  turns off the camera, the microphone and the location. So a script slipped
+  into a page, past the allowlist of its HTML, has nowhere to send an
+  assistant's key. A user whose assistant talks to another service (Ollama,
+  LM Studio, OpenRouter, a proxy) needs its address among the assistant's
+  hosts: the "Server" section's "The assistant's hosts", or
+  `--assistant-hosts https://openrouter.ai,http://localhost:11434`. The
+  assistant's settings say so when an address is not allowed.
 - **Open or closed.** The administration's "Who may come in" says whether the
   wiki is open (the default: anyone reads the public spaces, and "Create account"
   beside "Sign in" lets anyone make an account, which holds no grant until given

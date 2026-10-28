@@ -22,6 +22,7 @@ import Test.Browser.Offline qualified as Offline
 import Test.Browser.Order qualified as Order
 import Test.Browser.Permissions qualified as Permissions
 import Test.Browser.Persist qualified as Persist
+import Test.Browser.Policy qualified as Policy
 import Test.Browser.Providers qualified as Providers
 import Test.Browser.Search qualified as Search
 import Test.Browser.Activity qualified as Activity
@@ -51,6 +52,7 @@ main :: IO ()
 main = runBrowserTests $ do
   describe "Wiki.App.Islands" (Islands.spec BrowserDOM)
 #if defined(wasm32_HOST_ARCH)
+  describe "The page's Content Security Policy" (Policy.spec BrowserDOM)
   describe "Wiki.App.Shell" (Shell.spec BrowserDOM)
   describe "One space at a time" (Spaces.spec BrowserDOM)
   describe "Wiki.App.View.Search" (Search.spec BrowserDOM)
@@ -78,6 +80,8 @@ main = runBrowserTests $ do
   describe "Reading offline and installing" (Offline.spec BrowserDOM)
   describe "Tables of contents and templates" (Contents.spec BrowserDOM)
   describe "The writing assistant" (Assistant.spec BrowserDOM)
+  -- Last: what the whole suite made the browser refuse under the policy.
+  describe "The page's Content Security Policy, after the suite" Policy.afterTheSuite
 #endif
 
 #if defined(wasm32_HOST_ARCH) && !defined(INTERACTIVE)

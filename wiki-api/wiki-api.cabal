@@ -9,6 +9,11 @@ maintainer:         mateusz.goslinowski@gmail.com
 category:           Web
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md
+-- The application's page, whose Content Security Policy
+-- Wiki.Api.ContentPolicy reads when this package is compiled: web/index.html,
+-- reached through a symbolic link in the package (cabal accepts no file
+-- outside it).
+extra-source-files: page/index.html
 
 -- haskell-halogen's examples' stanza: the warnings every package here is built
 -- with (cabal.project makes them errors) and the extensions its code assumes.
@@ -59,6 +64,8 @@ library
       Wiki.Api.Auth
       Wiki.Api.Backups
       Wiki.Api.Comments
+      Wiki.Api.ContentPolicy
+      Wiki.Api.ContentPolicy.Embed
       Wiki.Api.Error
       Wiki.Api.Events
       Wiki.Api.Export
@@ -80,6 +87,7 @@ library
       protolude,
       servant >= 0.20.3 && < 0.21,
       servant-multipart-api >= 0.13 && < 0.14,
+      template-haskell,
       text,
       time,
       wiki-core
@@ -94,6 +102,7 @@ test-suite wiki-api-test
   main-is:          Test.hs
   other-modules:
       Test.Backups
+      Test.ContentPolicy
       Test.Error
       Test.Events
       Test.Gen

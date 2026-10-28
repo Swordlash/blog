@@ -68,7 +68,7 @@ import Wiki.Api.Admin (WikiSettings (..))
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Id (UserId (..))
 import Wiki.Server.Accounts (Resolved (..), resolveSession)
-import Wiki.Server.Api (Caller (..), Env (..), Signing (..), apiApplication)
+import Wiki.Server.Api (Caller (..), Env (..), Signing (..), apiApplication, currentAssistantHosts)
 import Wiki.Server.Auth (authApplication)
 import Wiki.Server.Events (eventsApplication)
 import Wiki.Server.Feed (FeedKind (..), feedApplication, sitemapApplication)
@@ -226,7 +226,9 @@ listenerRoutes logger env site l caller request respond = do
             | readOnly
             , Just (path, kind) <- feedOf rest ->
                 feedApplication env.storage env.feeds l.mount kind path request respond
-          rest -> maybe notFound (\s -> serveStatic s l.mount (Just pages) rest request respond) site
+          rest -> do
+            hosts <- currentAssistantHosts env
+            maybe notFound (\s -> serveStatic s l.mount hosts (Just pages) rest request respond) site
     | readOnly && null segments -> redirect (encodeUtf8 l.mount)
     | otherwise -> notFound
   where
