@@ -3406,6 +3406,29 @@ Amended by the planning session after each work package's report.
   loading the whole space; `lineageOf` can replace the latter), `mentionable`, and
   `attachments` without an index on `page_id`. Seen once on `main`'s code in the bench, not
   reproduced: an uncaught "cannot rollback - no transaction is active". Full gate; CI green.
+- **WP5.11 merged** (2026-10-28, PR #97, `main` at `4d1727d`). The chat shows the model is
+  working: "Thinking" with three animated dots from Send until the first text, the seconds
+  waited after 3 s of silence, the thinking summary streamed into a collapsed `<details>`
+  that stays at the top of the message as "Thought", "Editing the page…" while a tool call
+  arrives (the edit's note replaces it), a blinking cursor on streaming text, a time on
+  each message and a duration on each answer; still under `prefers-reduced-motion`. The
+  requests ask for the summary (Anthropic `thinking: {type: adaptive, display:
+  summarized}`, OpenAI `reasoning.summary: auto`); a 400 for that part makes the island
+  resend without it and leave it out for the rest of the chat (verified live on Opus 4.5
+  and Haiku 4.5, which refuse adaptive thinking). Two island events, `thinking` and
+  `tool-start` (`HeardThinking`, `HeardToolStart`); the scripted provider can pace tests
+  with `{wait}`, `{thinking}` and a `pause` on a tool step. "Close" replaces the × and Esc
+  in the message box closes too. Default effort `medium` on both providers, an "Effort"
+  select per provider on the settings page (`ProviderSettings.effort :: Maybe Text`, read
+  through `effortOf`; the old `effort` field is not read, so stored settings read as
+  medium); the picker under the chat changes the conversation only. Seen live: the 5.5
+  models send the summary as one block just before the text (Haiku 5.5 about 6 s
+  before), so most of a wait shows "Thinking…" alone; OpenAI's gpt-6.1-sol and gpt-6-luna
+  accept `summary` and send empty ones. Found, not fixed (outside the package): Haiku 4.5
+  gets a 400 on every request, "This model does not support the effort parameter", because
+  `output_config.effort` has been sent since WP4.19; a later package drops it on that 400
+  as the island drops `thinking`. Seven new browser cases, island and native tests; full
+  gate; CI green.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
