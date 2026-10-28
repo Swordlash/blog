@@ -3667,6 +3667,29 @@ Amended by the planning session after each work package's report.
   attachments|blobs` seeders. Not done: ZIP64 (4 GiB or 65,535 files refused with a
   message, as before); the export still holds every page body in memory. Removed:
   `Wiki.Api.Zip` and `Disposition`. Full gate; CI green.
+- **Flat element rows merged upstream** (2026-10-28, haskell-halogen PR #93, `master` at
+  `1f934f2`, merged by the planning session after Codex's review at the owner's word).
+  Every element row of `DOM.HTML.Indexed` (108) and `Halogen.Svg.Indexed` (22) is defined
+  inside one declaration splice per module, `$(flatRows [d| type HTMLdiv = Interactive
+  ("onScroll" .== Event) … |])`, with the old definitions verbatim inside;
+  `Halogen.Row.TH.flatRows` reifies each group once, collects the labels, refuses a
+  duplicate, sorts in `CmpSymbol` order and defines each synonym as `R '[ … ]`; `flatRow`
+  does one row for users and accepts a row already flat (`HTMLdiv .+ "custom" .== Text`)
+  and substitutes a synonym's parameters inside field types (both found by Codex, fixed).
+  `Test.IndexedRows` proves each of the 130 rows and 26 groups equal to its old
+  definition with `Refl`. Numbers: 200 `HH.div [] []` 15.5 s → 0.2 s natively; the wiki's
+  `SignIn` 12.4 → 3.5 s (type check 8.2 → 0.4 s), `Editor` 18.0 → 9.4 s; `core` from
+  nothing 86 → 31 s natively, 65 → 27 s on wasm (wall 91 → 49 s), 159 → 67 s on the
+  JavaScript backend (peak 11.4 → 4.7 GB). On the way, a GHC finding: the JavaScript
+  backend (9.12.2) keeps about 50 MB and 0.75 s of its own memory per Template Haskell
+  splice in a module, linear in the number of splices, the JS linker running once per
+  splice and keeping its dependency records (heap profile: `ExportedFun`, `BlockDeps`,
+  `Module`/`RealUnit`); 108 per-row splices (the PR's first head, `5125414`) took CI's
+  16 GB runner past its memory twice, which is why it is one splice per module. The
+  reproduction (N trivial splices, N = 10/50/100, JS and native) and a writeup for a GHC
+  issue are in the session's scratchpad (`ghc-js-th-splices.md`, `ghc-js-th-repro.tar.gz`),
+  handed to the owner. Follow-up noted upstream: `th`'s `unknownHtml`/`unknownSvg` still
+  use chain-built rows. Next here: WP5.19, the pin bump.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
