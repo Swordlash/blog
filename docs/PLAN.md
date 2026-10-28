@@ -1389,6 +1389,35 @@ must be in before it is.
   hand and said so in the report. Migration for the passkeys and the vault.
   `docs/assistant.md` (or where the assistant is documented) gains "Keys across devices".
 
+- **WP5.23 The browser's HTTP client derived from the API type: `servant-client-core` over
+  `fetch`** (the owner, 2026-10-28, reviewing #108: "we are hand rolling our own request
+  types, there are packages like `http-client`!"; `http-client` needs `network`, which does
+  not build for wasm32-wasi, so the answer is servant's own client core; the owner: "Zleć to
+  w następnym PRze"). `Wiki.App.Backend.Http.Request` (its `Request`, `Body`, `Response`,
+  the hand-written multipart form) and the hand-written calls of `Wiki.App.Backend.Http`
+  (`R.get links.account.email` and the ~790 lines around it) go away. In their place:
+  `servant-client-core` (pure Haskell, builds on wasm; `wiki-api`'s `WikiApi` is already a
+  servant type) with a `RunClient` instance for the HTTP backend's monad whose transport is
+  `Halogen.Net.Fetch` in the browser, the API's WAI application in the same process in the
+  server's tests (as `Wiki.Server.Test.Http` does today), and a scripted transport in the
+  application's own tests; `servant-multipart-client` for the attachment and archive
+  uploads. The client functions come from `client`/`genericClient` on `WikiApi`'s records,
+  so an endpoint that changes in `wiki-api` changes its client at compile time, and the
+  application cannot send a request the API does not declare (today `Wiki.Api.Links` only
+  guarantees the path). What the hand-written code did that servant's core does not must be
+  kept and is the package's real work: the session re-check after a 401/403 (`call`), the
+  request time limits (`timeLimit`, `uploadTimeout`), the `If-Match`/`If-None-Match`
+  headers (as API combinators in `wiki-api`, so the server declares them too), reading a
+  refusal's `ApiError` body into `WikiError` and a 2xx with a wrong body into
+  `Unreachable` (`answer`), the 304 answers of the vault, the `cacheOnly` mode and the
+  silent transport for a prerendered page. `Wiki.Api.Links` stays for the addresses the
+  application puts into the page (attachments, exports, search) and loses the rest. The
+  server's tests of the API keep passing unchanged, which is the check that the wire format
+  did not move; the application's native tests of the backend (`Test.Backend.Http`,
+  `Test.Server.Http`) and the browser tests (`Test.Browser.Http` with `test-fetch.js`) keep
+  their coverage on the derived client. Not in scope: changing any endpoint, or the
+  server's side of the API.
+
 - **Later, by the owner (2026-10-28, "PRF jest spoko na później"), picked up the same day as
   WP5.21 B: the assistant's API keys synchronised with a passkey.** The keys stay out of
   the server today (IndexedDB per user,
