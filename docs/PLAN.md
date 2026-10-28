@@ -3755,6 +3755,31 @@ Amended by the planning session after each work package's report.
   with steps, a reload returns to `?slide=7&step=2`). The demo deck gains slides 7
   "Steps" and 8 "One item at a time"; README and `docs/markdown.md` updated. Full gate;
   CI green.
+- **WP5.15 merged** (2026-10-28, PR #106, `main` at `82f6825`, nine commits). `docs/newtypes.md`
+  is the inventory: every `Text` field and argument of `wiki-api` and `wiki-core` grouped by
+  what the text is, with today's rules, where they run, the decision, and what stays `Text`.
+  The newtypes: `Login` (`parseLogin`, the old `checkLogin` rules), `Password` (`Show` prints
+  `Password <hidden>`; `checkNewPassword :: Password -> Either Text Password`, since a
+  password typed at sign-in is one too; the hand-written `Show` instances that hid passwords
+  are gone), `Email` (`parseEmail`, moved from `Wiki.Api.Admin`), `Url` (new `Wiki.Core.Url`:
+  the public address, an issuer, `Discovered`, `redirectUri`, the assistant's base URL,
+  `SourceUrl`; no shared parser, the three rules stay where they were), `FileName`
+  (`parseFileName`, the rule both backends had written separately), `MimeType`
+  (`uploadedMimeType`, `mimeEssence`), the tokens each with a hiding `Show`
+  (`ResetToken`, `VerificationToken`, `UnsubscribeToken` replacing `MailToken` in
+  `wiki-api`; `InvitationToken` now `Maybe` in `Invited`; `SessionToken` in
+  `Wiki.Server.Password`, `PendingToken` in `SecondFactor`; `ApiKey` in `Wiki.Core.Assistant`)
+  and `ModelName`. The JSON instances check nothing, so a bad value in a request still gets
+  the backend's own `Invalid` message: request fields the backend checks stay `Text` and the
+  backend parses where it checked before; responses, stored records and internal
+  functions use the newtypes. No `IsString`; no `ToField`/`FromField` (orphans). Wire
+  formats, cookies, the archive and IndexedDB records unchanged; no golden file changed.
+  Kept as today and noted: an archive restored into an empty server keeps logins without
+  `parseLogin`; a provider's e-mail is stored as given. Stays `Text` by design: logins used
+  only as lookups, `Oidc.Endpoints`, the renderer's `AttachmentRef`, `TotpEnrolment.uri`,
+  the server-settings secrets. Tests: `Test.User`, `Test.Attachment` additions, the `Show`
+  of the keys and tokens. Full gate on the first head; after the rebase over WP5.20 (only
+  changelog conflicts) the native gate again, wasm and smoke by CI; CI green.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
