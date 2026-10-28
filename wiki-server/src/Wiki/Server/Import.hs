@@ -52,6 +52,7 @@
 module Wiki.Server.Import
   ( -- * Reading an upload
     readUpload
+  , readUploadFile
 
     -- * The plan
   , SpaceMatch (..)
@@ -77,7 +78,7 @@ import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Audit (Actor, Subject (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Export (Archive (..), readArchive, threadsAmong)
-import Wiki.Core.Export.Zip (unzipFiles)
+import Wiki.Core.Export.Zip (unzipFile, unzipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Order (nextPosition)
 import Wiki.Core.Page (Page (..), pageTreeOrder)
@@ -95,6 +96,15 @@ import Wiki.Server.Storage.Rows
 -- or why it is not one this program reads.
 readUpload :: ByteString -> Either Text Archive
 readUpload bytes = unzipFiles bytes >>= readArchive
+
+-- | 'readUpload' of the zip file at this path: an upload the server
+-- received into a temporary file. The zip file is read from disk as it is
+-- parsed, so the upload is never in memory as a whole as well as its
+-- files; every file of the archive still is, about the archive's size in
+-- all (more for files the zip compresses), which the server's
+-- @--max-import-size@ bounds.
+readUploadFile :: FilePath -> IO (Either Text Archive)
+readUploadFile file = (>>= readArchive) <$> unzipFile file
 
 --------------------------------------------------------------------------------
 -- The plan

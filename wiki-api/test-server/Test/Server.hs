@@ -174,7 +174,7 @@ stubs =
           , template = \p body -> pure Sample.page {Page.id = p, Page.template = body.template}
           , delete = \p -> if p == Sample.page.id then pure NoContent else refuse Forbidden
           , upload = \_ u ->
-              pure Sample.attachment {Attachment.name = u.name, Attachment.mediaType = u.mediaType, Attachment.size = fromIntegral (BSL.length u.bytes)}
+              liftIO (BS.readFile u.payload) <&> \bytes -> Sample.attachment {Attachment.name = u.name, Attachment.mediaType = u.mediaType, Attachment.size = fromIntegral (BS.length bytes)}
           , draft = \p -> pure (if p == Sample.page.id then Just Sample.draft else Nothing)
           , saveDraft = \p body -> pure Sample.draft {Draft.page = p, Draft.base = body.base, Draft.title = body.title, Draft.body = body.body}
           , discardDraft = \_ -> pure NoContent
@@ -210,13 +210,16 @@ stubs =
               ]
     , archive =
         ArchiveApi
-          { export = pure (addHeader (exportDisposition Sample.time) "PK zipped")
+          { export = \_ respond ->
+              liftIO . respond $
+                responseLBS (toEnum 200) [(hContentType, "application/zip"), ("Content-Disposition", encodeUtf8 (exportDisposition Sample.time))] "PK zipped"
           , importPreview = \upload ->
-              pure ImportPlan {spaces = [SpacePlan {path = [], name = decodeUtf8 (BSL.toStrict upload.archive), status = SpaceNew, pages = []}]}
+              liftIO (BS.readFile upload.archive) <&> \archive ->
+                ImportPlan {spaces = [SpacePlan {path = [], name = decodeUtf8 archive, status = SpaceNew, pages = []}]}
           , importApply = \apply ->
-              pure
+              liftIO (BS.readFile apply.archive) <&> \archive ->
                 Sample.importSummary
-                  { spacesCreated = fromIntegral (BSL.length apply.archive)
+                  { spacesCreated = fromIntegral (BS.length archive)
                   , pagesReplaced = length apply.choices.conflicts
                   , pagesSkipped = length apply.choices.skipPages + length apply.choices.skipSpaces
                   }

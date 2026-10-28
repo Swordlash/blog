@@ -206,6 +206,32 @@ executable wiki-server-bench
         wiki-core,
         wiki-server
 
+-- The live heap of an export of 100 MiB of attachments and of an upload of
+-- 50 MB, measured by the runtime (-T). A suite of its own, since the measure
+-- is the largest over the whole process.
+test-suite wiki-server-memory-test
+  import:           shared
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   test-memory
+  main-is:          Memory.hs
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-T"
+
+  if arch(wasm32)
+    buildable: False
+  else
+    build-depends:
+        HUnit,
+        base,
+        bytestring,
+        containers,
+        filepath,
+        hspec >= 2,
+        protolude,
+        temporary,
+        wiki-app,
+        wiki-core,
+        wiki-server
+
 -- The storage against the backend's contract (wiki-app:contract), over a
 -- database made afresh in a temporary directory for each example, and what
 -- only the storage does: migrations, backups, attachments on disk. Then the

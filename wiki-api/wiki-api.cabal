@@ -71,14 +71,12 @@ library
       Wiki.Api.Types
       Wiki.Api.Upload
       Wiki.Api.Version
-      Wiki.Api.Zip
   build-depends:
       aeson,
       base,
       bytestring,
       containers,
       http-api-data,
-      http-media,
       protolude,
       servant >= 0.20.3 && < 0.21,
       servant-multipart-api >= 0.13 && < 0.14,

@@ -75,15 +75,17 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Database.SQLite.Simple (Only (..), query_)
-import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, hSetCookie, hVary, methodGet, methodHead, status200, status304, status405, status503)
+import Network.HTTP.Types (Header, Status (..), hCacheControl, hContentType, hETag, hIfNoneMatch, hSetCookie, hVary, methodGet, methodHead, status200, status304, status405, status500, status503)
 import Network.HTTP.Types.URI (urlEncode)
 import Network.Wai (Application, Middleware, Request (..), Response, mapResponseHeaders, responseFile, responseHeaders, responseLBS, responseStatus)
+import Network.Wai.Handler.Warp (pauseTimeout)
 import Network.Wai.Parse (defaultParseRequestBodyOptions, setMaxRequestFileSize, setMaxRequestNumFiles, setMaxRequestParmsSize)
 import Protolude hiding (Handler)
-import Servant (Context (..), ErrorFormatters, Handler, NoContent (..), ServerError (..), addHeader, bodyParserErrorFormatter, defaultErrorFormatters, err500, err503, headerParseErrorFormatter, notFoundErrorFormatter, serveWithContext, urlParseErrorFormatter)
-import Servant.Multipart (Mem, MultipartOptions (..))
+import Servant (Context (..), ErrorFormatters, Handler, NoContent (..), ServerError (..), addHeader, bodyParserErrorFormatter, defaultErrorFormatters, err503, headerParseErrorFormatter, notFoundErrorFormatter, serveWithContext, urlParseErrorFormatter)
+import Servant.Multipart (MultipartOptions (..), Tmp, TmpBackendOptions (..))
 import Servant.Server.Generic (AsServer)
-import System.Directory (doesFileExist)
+import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
+import System.IO (hClose, openBinaryTempFile)
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods)
 import Wiki.Api.Activity (ActivityQuery (..))
@@ -106,8 +108,6 @@ import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.App.Backend.Notifications qualified as Notifications
 import Wiki.Core.Attachment (Attachment (..), Source (..))
-import Wiki.Core.Export (writeArchive)
-import Wiki.Core.Export.Zip (zipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..))
@@ -120,7 +120,7 @@ import Wiki.Server.Backups (BackupService, currentBackups, requestBackup, settin
 import Wiki.Server.Events (Hub, openConnections)
 import Wiki.Server.Export (Exported (..), Exports, availableFormats, exportPage, exportSpace)
 import Wiki.Server.Feed (FeedCache)
-import Wiki.Server.Import (applyImport, planImport, readUpload)
+import Wiki.Server.Import (applyImport, planImport, readUploadFile)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
 import Wiki.Server.Limiter qualified as Limiter
 import Wiki.Server.Log (ErrorRing, Level (..), Logger, logWith, recentErrors)
@@ -135,7 +135,7 @@ import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Session (CookieSettings, clearCookie, sessionCookie)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup (backupFiles, backupTime)
-import Wiki.Server.Storage.Layout (backupsDir)
+import Wiki.Server.Storage.Layout (backupsDir, temporaryDir)
 import Wiki.Server.Totp (otpauthUri, qrRows, secretText)
 
 -- | What the handlers work with, the same for every request.
@@ -223,8 +223,9 @@ callerAs who = Caller {who, address = "", signing = Nothing}
 -- It combines two servant applications of the same API, which differ only
 -- in the largest file a form may carry. The import's form carries an
 -- archive of a whole wiki. Every other form carries one attachment of at
--- most 'maxAttachmentSize'. A form over its limit is refused with a 413
--- while it is read, before more than the limit is held in memory.
+-- most 'maxAttachmentSize'. A form's file is written to a temporary file
+-- as it arrives ('uploadOptions'), and a form over its limit is refused
+-- with a 413 while it is read, before more than the limit is written.
 --
 -- Its answers depend on who asks, so they are marked as private to that
 -- browser and revalidated every time (see 'privately'), and as varying
@@ -235,22 +236,29 @@ apiApplication env caller = jsonErrors . privately $ \request ->
     then imports request
     else others request
   where
-    serveWith limit = serveWithContext api (errorFormatters :. uploadOptions limit :. EmptyContext) (handlers env caller)
+    serveWith limit = serveWithContext api (errorFormatters :. uploadOptions env.dataDir limit :. EmptyContext) (handlers env caller)
     imports = serveWith (fromIntegral env.maxImportSize)
     others = serveWith (fromIntegral maxAttachmentSize)
 
--- | The multipart options for forms whose file is at most this many bytes:
--- one file per form, and text parts up to 16 MiB (an import's choices
--- include a list of what to skip, which may be long).
-uploadOptions :: Int64 -> MultipartOptions Mem
-uploadOptions limit =
+-- | The multipart options for forms whose file is at most this many bytes,
+-- for a server with this data directory: one file per form, and text parts
+-- up to 16 MiB (an import's choices include a list of what to skip, which
+-- may be long). The file is written as it arrives to a temporary file in
+-- the data directory ('temporaryDir'), which is deleted when the request
+-- ends. So an upload of 50 MB costs 50 MB of disk, not of memory.
+uploadOptions :: FilePath -> Int64 -> MultipartOptions Tmp
+uploadOptions dataDir limit =
   MultipartOptions
     { generalOptions =
         setMaxRequestFileSize limit
           . setMaxRequestNumFiles 1
           . setMaxRequestParmsSize (16 * 1024 * 1024)
           $ defaultParseRequestBodyOptions
-    , backendOptions = ()
+    , backendOptions =
+        TmpBackendOptions
+          { getTmpDir = createDirectoryIfMissing True (temporaryDir dataDir) $> temporaryDir dataDir
+          , filenamePat = "upload"
+          }
     }
 
 -- | Mark every answer as meant for one browser: @Cache-Control: private,
@@ -458,7 +466,7 @@ handlers env caller =
           , setPublic = \s body -> wiki (setSpacePublic s body.public)
           , setMathMacros = \s body -> wiki (setSpaceMathMacros s body.mathMacros)
           , setProfile = \s body -> wiki (setSpaceProfile s body)
-          , uploadIcon = \s u -> wiki (uploadSpaceIcon s u.mediaType (BSL.toStrict u.bytes))
+          , uploadIcon = \s u -> wiki (uploadSpaceIconFile s u.mediaType u.payload)
           , icon = \s b request respond -> liftIO (iconContent env caller.who s b request respond)
           , setOrder = \s body -> wiki (setSpaceOrder s body.children body.order)
           , move = \s body -> wiki (moveSpace s body.parent)
@@ -479,7 +487,7 @@ handlers env caller =
           , shift = \p body -> wiki (shiftPage p body.shift)
           , template = \p body -> wiki (setPageTemplate p body.template)
           , delete = \p -> wiki (deletePage p) $> NoContent
-          , upload = \p u -> wiki (uploadAttachment p u.name u.mediaType (BSL.toStrict u.bytes))
+          , upload = \p u -> wiki (uploadAttachmentFile p u.name u.mediaType u.payload)
           , draft = wiki . getDraft
           , saveDraft = \p body -> wiki (saveDraft p body.base body.title body.body)
           , discardDraft = \p -> wiki (discardDraft p) $> NoContent
@@ -499,19 +507,16 @@ handlers env caller =
         ask' (searchPages (clampLimit (searchQueryOf q space only limit templates)))
     , archive =
         ArchiveApi
-          { export = do
+          { export = \request respond -> do
               administrator
-              made <- liftIO getCurrentTime
-              liftIO (exportArchive env.storage env.version) >>= \case
-                Left reason -> throwError err500 {errBody = BSL.fromStrict (encodeUtf8 reason)}
-                Right archive -> pure (addHeader (exportDisposition made) (BSL.fromStrict (zipFiles made (writeArchive archive))))
+              liftIO (exportingWiki request respond)
           , importPreview = \upload -> do
               administrator
-              archive <- either (refuse . notAnArchive) pure (readUpload (BSL.toStrict upload.archive))
+              archive <- liftIO (readUploadFile upload.archive) >>= either (refuse . notAnArchive) pure
               liftIO (planImport env.storage archive)
           , importApply = \apply -> do
               administrator
-              archive <- either (refuse . notAnArchive) pure (readUpload (BSL.toStrict apply.archive))
+              archive <- liftIO (readUploadFile apply.archive) >>= either (refuse . notAnArchive) pure
               actor <- liftIO (actorOf env.storage who)
               liftIO (applyImport env.storage actor caller.address archive apply.choices)
           }
@@ -632,6 +637,30 @@ handlers env caller =
       | requestMethod request `notElem` [methodGet, methodHead] =
           respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An export is fetched with GET.")))
       | otherwise = make exportKey >>= respond . either refusal exportedResponse
+    -- The whole wiki as a zip file, written to a temporary file in the
+    -- data directory and sent from there, then deleted. Writing it first
+    -- costs disk rather than memory, and the answer can still say that the
+    -- export failed (an attachment's file missing) before anything is sent.
+    exportingWiki :: Request -> (Response -> IO b) -> IO b
+    exportingWiki request respond
+      | requestMethod request `notElem` [methodGet, methodHead] =
+          respond (responseLBS status405 [jsonHeader, ("Allow", "GET, HEAD")] (encode (ApiError.Invalid "An export is fetched with GET.")))
+      | otherwise = do
+          -- Warp closes a connection that sends nothing for 30 seconds,
+          -- and writing the zip file of a large wiki takes longer (half a
+          -- gigabyte of attachments, about as long). The request is the
+          -- administrator's, so its connection may wait.
+          pauseTimeout request
+          let dir = temporaryDir env.dataDir
+              made = do
+                createDirectoryIfMissing True dir
+                (file, h) <- openBinaryTempFile dir "export.zip"
+                hClose h
+                pure file
+          bracket made removeFile $ \file ->
+            writeExport env.storage env.version file >>= \case
+              Left reason -> respond (responseLBS status500 [] (BSL.fromStrict (encodeUtf8 reason)))
+              Right at -> respond (responseFile status200 [(hContentType, "application/zip"), ("Content-Disposition", encodeUtf8 (exportDisposition at))] file Nothing)
     exportKey = case who of
       AsUser u -> "user:" <> u.text
       Administrator -> "operator"

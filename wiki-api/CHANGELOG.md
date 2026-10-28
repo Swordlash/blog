@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+The upload forms take servant-multipart's backend as a parameter
+(WP5.16c): `AttachmentUpload tag`, `ArchiveUpload tag` and `ImportApply
+tag`, whose file is `MultipartResult tag` (the field `bytes` of
+`AttachmentUpload` is now `payload`). The API serves `Tmp` forms, so that
+the server writes an upload to disk as it arrives. `ArchiveApi.export` is
+`RawM`, since the server sends the zip file from disk; `Wiki.Api.Zip` and
+`Disposition` are gone with the typed response. What travels over HTTP is
+unchanged.
+
 Accounts with a password only from the console (WP5.18). `WikiSettings`
 gains `adminCreatesPasswordAccounts`, true in `defaultSettings`: whether
 the administration may create accounts with a password (`POST

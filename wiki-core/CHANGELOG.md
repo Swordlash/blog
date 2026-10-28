@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+An export can be written without holding its attachments (WP5.16c).
+`archiveFiles` gives an archive's files in `writeArchive`'s order, with
+each attachment's and icon's file as the blob it names (`FileBlob`) rather
+than its bytes; `writeArchive` is now made from it. Natively,
+`Wiki.Core.Export.Zip` gains `writeZipFile`, which writes a zip file on
+disk one file at a time from bytes or from files (`ZipSource`), the same
+zip file as `zipFiles` byte for byte, and throws `ZipTooLarge` when it
+would need ZIP64; and `unzipFile`, which reads one from disk. The module
+now depends on `zlib` and `digest` directly.
+
 A history is listed a page at a time (WP5.16b). `VersionInfo` gains
 `number`, the version's place in its page's history counted from the
 first, so `versionInfo` takes the number first. `VersionsQuery` (`before`,

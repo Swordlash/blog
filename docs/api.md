@@ -481,6 +481,14 @@ there is a link to it.
 
 Both need the global `administer` permission.
 
+The server writes the export's zip file into `<data>/tmp/` one file at a
+time, copying each attachment from its file, then sends it and deletes it:
+an export costs disk the size of the archive, and memory for the wiki's
+records but not its attachments. A form's file (an attachment, an icon, an
+archive to import) is written to `<data>/tmp/` as it arrives too, and deleted when the request ends. An
+import reads the archive's files into memory, about the archive's size in
+all; `--max-import-size` (512 MiB by default) bounds it.
+
 An import merges an archive into the wiki rather than replacing it, in two
 steps. The preview reads the archive and answers what importing it would do:
 

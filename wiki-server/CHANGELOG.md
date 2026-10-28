@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+"Export the wiki" no longer holds the wiki in memory (WP5.16c). The server
+writes the zip file into `<data>/tmp/` one file at a time, copying each
+attachment from its blob's file, and sends it from there with the file's
+length. A wiki with 500 MiB of attachments took 1.4 GB of resident memory
+to export and often failed at Warp's 30-second timeout; it now takes 34 MB
+more than an idle server and is not timed out. The zip file is the one the
+export wrote before, byte for byte. An archive that needs ZIP64 (4 GiB or
+more, or 65,535 files or more) is refused with a message that says so, as
+it was before by the library. An upload (an attachment, an icon, an archive
+to import) is written to `<data>/tmp/` as it arrives and copied into the
+blob store in chunks, hashed on the way: a 50 MB upload costs 16 MB of
+memory, not 104 MB. An import reads the archive from that file. The
+directory is emptied when the server starts.
+
 A wiki setting leaves accounts with a password to the console (WP5.18).
 `adminCreatesPasswordAccounts` is kept in the `settings` table as the row
 `admin-creates-password-accounts` (`0` or `1`); no migration, and a wiki

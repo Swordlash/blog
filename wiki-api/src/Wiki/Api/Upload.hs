@@ -1,12 +1,17 @@
 -- | Upload forms: what the API's multipart forms carry, an attachment's
 -- file or an archive to import.
 --
--- Each form is read into memory (servant-multipart's 'Mem'): an attachment
--- is at most 50 MB (decision 17 of the plan, @maxAttachmentSize@ in
--- @wiki-app@), and @MonadWiki@'s @uploadAttachment@ takes the bytes in
--- memory anyway. The largest form the server accepts is the server's own
--- setting (servant-multipart's @MultipartOptions@), not part of the API's
--- type.
+-- Each form type takes servant-multipart's backend as a parameter: 'Tmp',
+-- where the file part is a temporary file on disk, or 'Mem', where it is
+-- bytes in memory. The API serves 'Tmp' forms, so that the server writes
+-- an upload to disk as it arrives rather than holding it in memory: an
+-- attachment of up to 50 MB (decision 17 of the plan, @maxAttachmentSize@
+-- in @wiki-app@), or an archive of a whole wiki to import. 'Mem' forms are
+-- what the tests build and read. The largest form the server accepts is
+-- the server's own setting (servant-multipart's @MultipartOptions@), not
+-- part of the API's type. Each instance says that the form's backend is
+-- the type's (@tag ~ form@) rather than requiring them to be one variable,
+-- so that the backend of a form is inferred from either.
 --
 -- A browser sends either form with @fetch@ and a @FormData@: for an
 -- attachment, @form.append(\"file\", blob, name)@, which gives the part the
@@ -28,75 +33,100 @@ where
 
 import Data.Aeson (eitherDecodeStrict', encode)
 import Data.ByteString.Lazy qualified as BSL
+import Data.Type.Equality (type (~))
 import Protolude
-import Servant.Multipart.API (FileData (..), FromMultipart (..), Input (..), Mem, MultipartData (..), ToMultipart (..), lookupFile, lookupInput)
+import Servant.Multipart.API (FileData (..), FromMultipart (..), Input (..), Mem, MultipartData (..), MultipartResult, Tmp, ToMultipart (..), lookupFile, lookupInput)
 import Wiki.Api.Import (ImportChoices)
 
 -- | 'AttachmentUpload': a file to attach to a page, with
 -- @uploadAttachment@'s name, media type and bytes, sent as the form's one
 -- file part, named 'attachmentPart'. The attachment's name is the part's
--- file name, and its media type the part's @Content-Type@.
-data AttachmentUpload = AttachmentUpload
+-- file name, and its media type the part's @Content-Type@. The bytes are
+-- the 'payload': the path of a temporary file for a 'Tmp' form, the bytes
+-- themselves for a 'Mem' one.
+data AttachmentUpload tag = AttachmentUpload
   { name :: Text
   , mediaType :: Text
-  , bytes :: LByteString
+  , payload :: MultipartResult tag
   }
-  deriving stock (Eq, Show)
+
+deriving stock instance Eq (AttachmentUpload Mem)
+
+deriving stock instance Show (AttachmentUpload Mem)
+
+deriving stock instance Eq (AttachmentUpload Tmp)
+
+deriving stock instance Show (AttachmentUpload Tmp)
 
 -- | The name of the form's part that holds an attachment's file.
 attachmentPart :: Text
 attachmentPart = "file"
 
-instance FromMultipart Mem AttachmentUpload where
+instance (tag ~ form) => FromMultipart tag (AttachmentUpload form) where
   fromMultipart form = do
     file <- lookupFile attachmentPart form
-    pure AttachmentUpload {name = fdFileName file, mediaType = fdFileCType file, bytes = fdPayload file}
+    pure AttachmentUpload {name = fdFileName file, mediaType = fdFileCType file, payload = fdPayload file}
 
-instance ToMultipart Mem AttachmentUpload where
+instance (tag ~ form) => ToMultipart tag (AttachmentUpload form) where
   toMultipart u =
     MultipartData
       { inputs = []
-      , files = [FileData {fdInputName = attachmentPart, fdFileName = u.name, fdFileCType = u.mediaType, fdPayload = u.bytes}]
+      , files = [FileData {fdInputName = attachmentPart, fdFileName = u.name, fdFileCType = u.mediaType, fdPayload = u.payload}]
       }
 
 -- | 'ArchiveUpload': an archive ("Wiki.Core.Export", zipped) for an
 -- import's preview, sent as the form's file part named 'archivePart'. Its
--- file name and media type are ignored.
-newtype ArchiveUpload = ArchiveUpload {archive :: LByteString}
-  deriving stock (Eq, Show)
+-- file name and media type are ignored. The archive is a temporary file's
+-- path for a 'Tmp' form, the bytes for a 'Mem' one.
+newtype ArchiveUpload tag = ArchiveUpload {archive :: MultipartResult tag}
+
+deriving stock instance Eq (ArchiveUpload Mem)
+
+deriving stock instance Show (ArchiveUpload Mem)
+
+deriving stock instance Eq (ArchiveUpload Tmp)
+
+deriving stock instance Show (ArchiveUpload Tmp)
 
 -- | The name of the form's part that holds an archive.
 archivePart :: Text
 archivePart = "archive"
 
-instance FromMultipart Mem ArchiveUpload where
+instance (tag ~ form) => FromMultipart tag (ArchiveUpload form) where
   fromMultipart form = ArchiveUpload . fdPayload <$> lookupFile archivePart form
 
-instance ToMultipart Mem ArchiveUpload where
+instance (tag ~ form) => ToMultipart tag (ArchiveUpload form) where
   toMultipart u = MultipartData {inputs = [], files = [archiveFile u.archive]}
 
 -- | 'ImportApply': an import to run. It holds the archive the preview was
 -- made from, sent again (the server stores nothing between the two steps),
 -- and the choices made in the dialog, as JSON in the form part named
 -- 'choicesPart'.
-data ImportApply = ImportApply
-  { archive :: LByteString
+data ImportApply tag = ImportApply
+  { archive :: MultipartResult tag
   , choices :: ImportChoices
   }
-  deriving stock (Eq, Show)
+
+deriving stock instance Eq (ImportApply Mem)
+
+deriving stock instance Show (ImportApply Mem)
+
+deriving stock instance Eq (ImportApply Tmp)
+
+deriving stock instance Show (ImportApply Tmp)
 
 -- | The name of the form's part that holds an import's choices.
 choicesPart :: Text
 choicesPart = "choices"
 
-instance FromMultipart Mem ImportApply where
+instance (tag ~ form) => FromMultipart tag (ImportApply form) where
   fromMultipart form = do
     file <- lookupFile archivePart form
     json <- lookupInput choicesPart form
     choices <- eitherDecodeStrict' (encodeUtf8 json)
     pure ImportApply {archive = fdPayload file, choices}
 
-instance ToMultipart Mem ImportApply where
+instance (tag ~ form) => ToMultipart tag (ImportApply form) where
   toMultipart u =
     MultipartData
       { inputs = [Input {iName = choicesPart, iValue = decodeUtf8 (BSL.toStrict (encode u.choices))}]
@@ -104,5 +134,5 @@ instance ToMultipart Mem ImportApply where
       }
 
 -- | An archive as a form's file part.
-archiveFile :: LByteString -> FileData Mem
-archiveFile bytes = FileData {fdInputName = archivePart, fdFileName = "wiki.zip", fdFileCType = "application/zip", fdPayload = bytes}
+archiveFile :: MultipartResult tag -> FileData tag
+archiveFile payload = FileData {fdInputName = archivePart, fdFileName = "wiki.zip", fdFileCType = "application/zip", fdPayload = payload}

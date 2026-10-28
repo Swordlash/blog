@@ -68,7 +68,6 @@ module Wiki.Api
   , versioned
 
     -- * Archives
-  , Disposition
   , exportDisposition
   )
 where
@@ -76,7 +75,7 @@ where
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Protolude
 import Servant.API
-import Servant.Multipart.API (Mem, MultipartForm)
+import Servant.Multipart.API (MultipartForm, Tmp)
 import Wiki.Api.Account (Account, AccountDisabled, Credentials, InvitationInfo, InvitationToken, NewAccount, NewPassword, PasswordChange, SignInMethods)
 import Wiki.Api.Activity (Activity)
 import Wiki.Api.Admin (AdministratorFlag, CreateSpacesFlag, Directory, GroupName, Invitations, Invited, NewInvitation, ServerStatus, WikiSettings)
@@ -91,7 +90,6 @@ import Wiki.Api.ServerSettings (MailTest, MailTestResult, ProviderChange, Provid
 import Wiki.Api.Types
 import Wiki.Api.Upload (ArchiveUpload, AttachmentUpload, ImportApply)
 import Wiki.Api.Version (PageVersion, VersionTime, pageVersion)
-import Wiki.Api.Zip (Zip)
 import Wiki.Core.Attachment (Attachment)
 import Wiki.Core.Blog (PostDetails)
 import Wiki.Core.Draft (Draft)
@@ -202,7 +200,7 @@ data SpacesApi mode = SpacesApi
   -- ^ @setSpaceMathMacros@.
   , setProfile :: mode :- Capture "space" SpaceId :> "profile" :> ReqBody '[JSON] SpaceProfile :> Put '[JSON] Space
   -- ^ @setSpaceProfile@: its description, icon and home page.
-  , uploadIcon :: mode :- Capture "space" SpaceId :> "icon" :> MultipartForm Mem AttachmentUpload :> Post '[JSON] Space
+  , uploadIcon :: mode :- Capture "space" SpaceId :> "icon" :> MultipartForm Tmp (AttachmentUpload Tmp) :> Post '[JSON] Space
   -- ^ @uploadSpaceIcon@: an image for the space's icon, as a form's file
   -- part, as for an attachment ("Wiki.Api.Upload"). The part's file name
   -- is ignored.
@@ -258,7 +256,7 @@ data PagesApi mode = PagesApi
   -- ^ @setPageTemplate@: whether the page is one of its space's templates.
   , delete :: mode :- Capture "page" PageId :> DeleteNoContent
   -- ^ @deletePage@.
-  , upload :: mode :- Capture "page" PageId :> "attachments" :> MultipartForm Mem AttachmentUpload :> PostCreated '[JSON] Attachment
+  , upload :: mode :- Capture "page" PageId :> "attachments" :> MultipartForm Tmp (AttachmentUpload Tmp) :> PostCreated '[JSON] Attachment
   -- ^ @uploadAttachment@.
   , draft :: mode :- Capture "page" PageId :> "draft" :> Get '[JSON] (Maybe Draft)
   -- ^ @getDraft@: the signed-in user's draft of the page, @null@ if they
@@ -310,11 +308,15 @@ data AttachmentsApi mode = AttachmentsApi
 
 -- | 'ArchiveApi': a whole wiki as an archive ("Wiki.Core.Export"), exported and imported.
 data ArchiveApi mode = ArchiveApi
-  { export :: mode :- "export" :> Get '[Zip] (Headers '[Disposition] LByteString)
-  -- ^ The wiki as a zip file, as a download ('exportDisposition').
-  , importPreview :: mode :- "import" :> "preview" :> MultipartForm Mem ArchiveUpload :> Post '[JSON] ImportPlan
+  { export :: mode :- "export" :> RawM
+  -- ^ The wiki as a zip file (@application\/zip@), as a download
+  -- ('exportDisposition'). Raw rather than a typed response, because the
+  -- server writes the zip file to disk first and sends it from there, so
+  -- that an export never holds the whole wiki in memory. The server
+  -- responds to @GET@ and @HEAD@.
+  , importPreview :: mode :- "import" :> "preview" :> MultipartForm Tmp (ArchiveUpload Tmp) :> Post '[JSON] ImportPlan
   -- ^ A preview of what importing an archive would do ("Wiki.Api.Import").
-  , importApply :: mode :- "import" :> "apply" :> MultipartForm Mem ImportApply :> Post '[JSON] ImportSummary
+  , importApply :: mode :- "import" :> "apply" :> MultipartForm Tmp (ImportApply Tmp) :> Post '[JSON] ImportSummary
   -- ^ Import an archive, with the choices made after the preview.
   }
   deriving stock (Generic)
@@ -554,9 +556,6 @@ type IfMatch = Header' '[Required, Strict] "If-Match" PageVersion
 -- | A page, with its version.
 versioned :: Page -> Versioned Page
 versioned p = addHeader (pageVersion p) p
-
--- | 'Disposition': the header that makes a browser save a response as a file.
-type Disposition = Header "Content-Disposition" Text
 
 -- | The @Content-Disposition@ of an export made at this time: a file named
 -- as the demo names its own exports, @wiki-\<date>.zip@.

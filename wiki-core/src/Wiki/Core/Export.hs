@@ -7,6 +7,9 @@
 --
 -- An archive is a set of files, by path. 'writeArchive' produces them, and
 -- 'readArchive' consumes them; the zip container is the caller's business.
+-- 'archiveFiles' gives the same files with each attachment's and icon's
+-- bytes named by their blob, for a caller that keeps blobs on disk and
+-- copies them into the zip file one at a time (the server).
 -- Version 2 of the format, the one written now, is a tree of directories:
 --
 -- * @manifest.json@: @{"format": "wiki-export", "formatVersion": 2,
@@ -71,6 +74,8 @@ module Wiki.Core.Export
     Archive (..)
   , currentVersion
   , writeArchive
+  , ArchiveFile (..)
+  , archiveFiles
   , readArchive
   , safeDirectoryName
   , safeFileName
@@ -182,13 +187,35 @@ formatName = "wiki-export"
 -- archive. A page whose space is not in the archive has no directory to be
 -- in, and is left out.
 writeArchive :: Archive -> [(Text, ByteString)]
-writeArchive a =
-  [ ("manifest.json", encodeJson manifest)
-  , ("users.json", encodeJson [encodeUser u | u <- a.users])
-  , ("groups.json", encodeJson [encodeGroup g (Map.findWithDefault mempty g.id a.membership) | g <- a.groups])
-  , ("grants.json", encodeJson (encodeGrants a.grants))
+writeArchive a = [(path, bytes) | (path, file) <- archiveFiles a, Just bytes <- [contents file]]
+  where
+    contents = \case
+      FileBytes bytes -> Just bytes
+      FileBlob blob -> Map.lookup blob a.blobs
+
+-- | 'ArchiveFile' is what one file of an archive holds, as 'archiveFiles'
+-- gives it: bytes, or the bytes of a blob, named by its id.
+data ArchiveFile
+  = FileBytes ByteString
+  | FileBlob BlobId
+  deriving stock (Eq, Show)
+
+-- | The archive's files, by path, in the order 'writeArchive' gives them.
+-- The file of an attachment or an icon names its blob instead of holding
+-- its bytes, and is there whether or not the archive's 'blobs' has them.
+-- So an archive whose 'blobs' is empty gives every file, and the caller
+-- fetches each blob's bytes as it writes the file: the server copies them
+-- from the blob store into the zip file ("Wiki.Core.Export.Zip"), so that
+-- an export never holds every attachment in memory. The list is made as
+-- it is consumed.
+archiveFiles :: Archive -> [(Text, ArchiveFile)]
+archiveFiles a =
+  [ ("manifest.json", FileBytes (encodeJson manifest))
+  , ("users.json", FileBytes (encodeJson [encodeUser u | u <- a.users]))
+  , ("groups.json", FileBytes (encodeJson [encodeGroup g (Map.findWithDefault mempty g.id a.membership) | g <- a.groups]))
+  , ("grants.json", FileBytes (encodeJson (encodeGrants a.grants)))
   ]
-    <> [("audit.json", encodeJson (map encodeAuditEntry a.audit)) | not (null a.audit)]
+    <> [("audit.json", FileBytes (encodeJson (map encodeAuditEntry a.audit))) | not (null a.audit)]
     <> concatMap (spaceFiles "") [s | s <- a.spaces, not (spaceUnderParent s)]
   where
     manifest =
@@ -219,19 +246,19 @@ writeArchive a =
 
     spaceFiles above s =
       let dir = above <> "spaces/" <> safeDirectoryName (slugText s.slug) <> "/"
-       in (dir <> "space.json", encodeJson (object (spaceFields (iconFileName <$> imageOf s) s)))
-            : [(dir <> iconFileName mediaType, bytes) | Just (IconImage blob mediaType) <- [s.icon], Just bytes <- [Map.lookup blob a.blobs]]
+       in (dir <> "space.json", FileBytes (encodeJson (object (spaceFields (iconFileName <$> imageOf s) s))))
+            : [(dir <> iconFileName mediaType, FileBlob blob) | Just (IconImage blob mediaType) <- [s.icon]]
               <> concatMap (pageFiles dir) (Map.findWithDefault [] s.id topPages)
               <> concatMap (spaceFiles dir) (Map.findWithDefault [] s.id subspaces)
 
     pageFiles above p =
       let dir = above <> "pages/" <> safeDirectoryName (slugText p.slug) <> "/"
           discussed = Map.findWithDefault [] p.id a.threads
-       in [ (dir <> "page.json", encodeJson (object (pageFields p <> ["attachments" .= map (\x -> object (attachmentFields (attachmentPath x) x)) p.attachments])))
-          , (dir <> "page.md", encodeUtf8 p.body)
+       in [ (dir <> "page.json", FileBytes (encodeJson (object (pageFields p <> ["attachments" .= map (\x -> object (attachmentFields (attachmentPath x) x)) p.attachments]))))
+          , (dir <> "page.md", FileBytes (encodeUtf8 p.body))
           ]
-            <> [(dir <> attachmentPath x, bytes) | x <- p.attachments, SourceBlob blob <- [x.source], Just bytes <- [Map.lookup blob a.blobs]]
-            <> [(dir <> "comments.json", encodeJson (map (encodeThread authorRecord) discussed)) | not (null discussed)]
+            <> [(dir <> attachmentPath x, FileBlob blob) | x <- p.attachments, SourceBlob blob <- [x.source]]
+            <> [(dir <> "comments.json", FileBytes (encodeJson (map (encodeThread authorRecord) discussed))) | not (null discussed)]
             <> concatMap (pageFiles dir) (Map.findWithDefault [] p.id subpages)
 
     -- The users win over the comment authors of the same id: they are the

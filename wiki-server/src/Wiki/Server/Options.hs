@@ -184,7 +184,8 @@ defaultServeOptions dataDir =
     }
 
 -- | 512 MiB: an archive holds every attachment of the wiki, each up to 50
--- MB, and is held in memory twice over (the upload and its files).
+-- MB. The upload is written to disk as it arrives, and the import holds the
+-- archive's files in memory, about the archive's size.
 defaultMaxImportSize :: Int
 defaultMaxImportSize = 512 * 1024 * 1024
 

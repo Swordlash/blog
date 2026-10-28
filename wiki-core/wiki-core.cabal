@@ -118,10 +118,15 @@ library
 
   -- An archive as a zip file, natively only: zip-archive needs the C zlib
   -- through digest, which the WebAssembly toolchain lacks; the browser zips
-  -- with fflate instead (web/src/archive.js).
+  -- with fflate instead (web/src/archive.js). The zip file written on disk
+  -- one entry at a time compresses with zlib and checksums with digest
+  -- directly, as zip-archive does.
   if !arch(wasm32)
     exposed-modules: Wiki.Core.Export.Zip
-    build-depends:   zip-archive >= 0.4.3 && < 0.6
+    build-depends:   digest >= 0.0.1 && < 0.1,
+                     filepath,
+                     zip-archive >= 0.4.3 && < 0.6,
+                     zlib >= 0.6 && < 0.8
 
 -- Runs natively, and under Node on wasm through toolchain/test-wasm.sh.
 test-suite wiki-core-test
