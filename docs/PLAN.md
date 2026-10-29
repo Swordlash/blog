@@ -1621,6 +1621,32 @@ must be in before it is.
   in the Progress entry. Behaviour unchanged, the existing tests prove it; a replacement
   that changes a wire format or a stored value is not one.
 
+- **WP5.28 Completion for `@` mentions in the editor** (the owner, 2026-10-29: "musisz dodać
+  podpowiadanie do @ mentions"). The editor (CodeMirror 6, `web/src/editor.js`) gets
+  completion from `@codemirror/autocomplete` (the library; nothing written by hand beyond
+  its source function and the styling of its list): typing `@` followed by letters opens a
+  list of users whose login or display name starts with what was typed, display name
+  first and login after it, at most ten, chosen with the arrows and Enter or Tab (Escape
+  closes), which inserts `@login` and a space; the list follows the same rule as the
+  renderer (`Wiki.Core.Markdown.Mention`: not inside code, links or embeds, which the
+  source checks with the syntax tree). The names come from a new endpoint
+  `GET api/v1/notifications/people/search?q=<prefix>` (declared in `wiki-api`'s
+  `NotificationsApi` beside `people`, called through the derived client), for someone
+  signed in only (a visitor gets an empty list, as `people` does), answering logins and
+  display names of enabled users, prefix on either, case-folded, at most ten, ordered by
+  display name; served from the storage with one indexed query (a shared `Rows` function
+  with WP5.25's paged users if that has merged, else its own). The editor asks after a
+  short debounce (`@codemirror/autocomplete`'s own, not ours) and the source caches the
+  answers for the editor's life. Comments: the comment box is a plain textarea, not
+  CodeMirror; it gets the same completion only if `@codemirror/autocomplete` can be
+  attached to it cheaply, else it is noted for later. The demo's in-memory backend
+  implements the search over its users. Tests: server (the endpoint: prefix on login and
+  on display name, folded, a disabled user left out, the limit, a visitor's empty answer),
+  browser (hspec-halogen: typing `@an` shows the matching users, Enter inserts `@anna `,
+  nothing opens inside a code fence or a link, Escape closes), and the native test of the
+  editor's JavaScript if the editor has one. `docs/markdown.md`'s mentions section says
+  that the editor completes them; `docs/api.md` the endpoint.
+
 - **Later, by the owner (2026-10-28, "PRF jest spoko na później"), picked up the same day as
   WP5.21 B: the assistant's API keys synchronised with a passkey.** The keys stay out of
   the server today (IndexedDB per user,
