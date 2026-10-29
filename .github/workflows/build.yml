@@ -233,7 +233,7 @@ jobs:
         tex_ready() {
           command -v xelatex >/dev/null && command -v kpsewhich >/dev/null || return 1
           xelatex --version >/dev/null || return 1
-          for file in mhchem.sty tikz.sty soul.sty beamer.cls; do
+          for file in lmodern.sty mhchem.sty tikz.sty soul.sty beamer.cls; do
             tex_file=$(kpsewhich "$file") || return 1
             [ -n "$tex_file" ] || return 1
           done
@@ -241,7 +241,7 @@ jobs:
         if ! tex_ready; then
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
-            texlive-xetex texlive-science texlive-pictures \
+            texlive-xetex lmodern texlive-science texlive-pictures \
             texlive-plain-generic texlive-latex-recommended
         fi
         tex_ready

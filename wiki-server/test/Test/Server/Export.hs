@@ -394,6 +394,8 @@ pagesOf r space = ok200 (getUrl r (r.admin <> "/admin/" <> links.spaces.listPage
 -- | The bytes of an export, which must have been made, with its media type.
 exported :: (HasCallStack) => Reply -> ExportFormat -> IO ByteString
 exported reply format = do
+  when (reply.status /= 200) $
+    expectationFailure ("export returned " <> show reply.status <> ": " <> show reply.body)
   (reply.status, header "Content-Type" reply) `shouldBe` (200, Just (encodeUtf8 (formatMediaType format)))
   header "Content-Disposition" reply `shouldSatisfy` maybe False ("attachment; filename=\"" `BS.isPrefixOf`)
   BSL.length reply.body `shouldSatisfy` (> 0)
