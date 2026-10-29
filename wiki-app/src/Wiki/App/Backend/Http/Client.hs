@@ -105,10 +105,14 @@ prepare r = do
           Left why -> throwIO (noResponse ("its body could not be written: " <> toS why))
           Right chunks -> pure (BSL.toStrict (mconcat chunks))
 
--- | A request's path as servant builds it (@\/api\/v1\/…@), without the
--- leading slash: relative to the page's base.
+-- | A request's path as servant builds it, without the leading slash:
+-- relative to the page's base. servant starts every path with a slash
+-- (@\/api\/v1\/…@, each segment added as @\/segment@); a path without one
+-- is kept as it is.
 relativePath :: Builder -> Text
-relativePath = T.drop 1 . decodeUtf8 . BSL.toStrict . toLazyByteString
+relativePath builder = fromMaybe path (T.stripPrefix "/" path)
+  where
+    path = decodeUtf8 (BSL.toStrict (toLazyByteString builder))
 
 -- | The address a call of the client asks for, relative to the page's
 -- base, worked out without sending anything: for a test that answers
@@ -116,14 +120,21 @@ relativePath = T.drop 1 . decodeUtf8 . BSL.toStrict . toLazyByteString
 -- writes it. servant writes some addresses differently from
 -- "Wiki.Api.Links" (a list in the query, a colon in a path), and the
 -- server reads both.
+--
+-- Every endpoint's client starts by sending its request. A call that does
+-- not (one that fails before it sends anything, or sends nothing) has no
+-- address, and is a mistake in the test: this stops the test with the
+-- reason, rather than give it an address no request has.
 endpointUrl :: (WikiApi Mem (AsClientT (Free ClientF)) -> Free ClientF a) -> Text
 endpointUrl endpoint = case endpoint (clientIn (Proxy @ClientApi) (Proxy @(Free ClientF))) of
   Free (RunRequest r _) -> requestUrl (relativePath <$> r)
-  _ -> ""
+  Free (Throw e) -> panic ("endpointUrl: the call fails before it sends a request: " <> show e)
+  Pure _ -> panic "endpointUrl: the call sends no request"
 
 -- | Call an endpoint that takes a multipart form, with a new boundary.
--- servant-multipart-client wants the boundary with the form; it is random
--- (55 letters and digits), so that no file's bytes contain it.
+-- servant-multipart-client wants the boundary with the form, and does not
+-- look at the form's bytes to choose it. It is random, 55 letters and
+-- digits: long enough that a file is vanishingly unlikely to contain it.
 withBoundary :: (MonadIO m) => ((BSL.ByteString, form) -> m a) -> form -> m a
 withBoundary endpoint form = liftIO genBoundary >>= \boundary -> endpoint (boundary, form)
 

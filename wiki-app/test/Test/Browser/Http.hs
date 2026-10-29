@@ -57,10 +57,9 @@ import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
 import Wiki.Api.Comments (CommentsApi (..), NewThread (..))
 import Wiki.Api.Events (ClientMessage (..), PageEvent (CommentAdded, Editing, PageChanged), ServerMessage (..))
 import Wiki.Api.Events qualified as Events
-import Wiki.Api.Links (links)
 import Wiki.Api.Notifications (Notifications (..), NotificationsApi (..))
 import Wiki.Api.ServerSettings (ServerSettings, noServerSettings)
-import Wiki.Api.Types (SessionInfo (..))
+import Wiki.Api.Types (DraftEdit (..), SessionInfo (..))
 import Wiki.Api.Version (PageVersion (..), VersionTime (..))
 import Wiki.App (component, serverInput, serverInputWith)
 import Wiki.App.Assistant (MonadAssistant)
@@ -191,26 +190,26 @@ serveDemo = do
         (logins,) <$> mentionable logins
       watched <-
         (<>)
-          <$> for (concatMap (\(_, ps, _, _) -> ps) pages) (\p -> (links.notifications.pageWatch p.id,) . fromRight (Watch False Unchosen) <$> watching (WatchPage p.id))
-          <*> for spaces (\s -> (links.notifications.spaceWatch s.id,) . fromRight (Watch False Unchosen) <$> watching (WatchSpace s.id))
+          <$> for (concatMap (\(_, ps, _, _) -> ps) pages) (\p -> (endpointUrl (\e -> e.notifications.pageWatch p.id),) . fromRight (Watch False Unchosen) <$> watching (WatchPage p.id))
+          <*> for spaces (\s -> (endpointUrl (\e -> e.notifications.spaceWatch s.id),) . fromRight (Watch False Unchosen) <$> watching (WatchSpace s.id))
       pure (named, watched)
-  answerWith "GET" links.notifications.list 200 Notifications {unread = 0, items = []}
+  answerWith "GET" (endpointUrl (\e -> e.notifications.list)) 200 Notifications {unread = 0, items = []}
   for_ named $ \(logins, found) -> unless (null logins) (answerWith "GET" (endpointUrl (\e -> e.notifications.people logins)) 200 found)
   for_ watched $ \(url, w) -> answerWith "GET" url 200 w
-  for_ threads $ \(p, ts) -> answerWith "GET" (links.comments p).list 200 ts
+  for_ threads $ \(p, ts) -> answerWith "GET" (endpointUrl (\e -> (e.comments p).list)) 200 ts
   answerWith "GET" "api/v1/session" 200 SessionInfo {user = me.user, groups = me.groups, grants = me.grants, standing = me.standing, providers = [], exports = []}
-  for_ people (answerWith "GET" links.admin.directory 200)
-  answerWith "GET" links.admin.server 200 (noServerSettings :: ServerSettings)
-  answerWith "GET" links.admin.backups 200 Backups {available = True, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
-  answerWith "GET" (links.admin.activity Nothing Nothing Nothing) 200 Activity {available = True, entries = [], more = False, actors = []}
-  answerWith "GET" links.admin.status 200 quietServer
+  for_ people (answerWith "GET" (endpointUrl (\e -> e.admin.directory)) 200)
+  answerWith "GET" (endpointUrl (\e -> e.admin.server)) 200 (noServerSettings :: ServerSettings)
+  answerWith "GET" (endpointUrl (\e -> e.admin.backups)) 200 Backups {available = True, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
+  answerWith "GET" (endpointUrl (\e -> e.admin.activity Nothing Nothing Nothing)) 200 Activity {available = True, entries = [], more = False, actors = []}
+  answerWith "GET" (endpointUrl (\e -> e.admin.status)) 200 quietServer
   answerWith "GET" "api/v1/spaces" 200 spaces
-  answerWith "GET" links.spaces.pageCounts 200 counts
+  answerWith "GET" (endpointUrl (\e -> e.spaces.pageCounts)) 200 counts
   for_ pages $ \(s, ps, details, full) -> do
-    answerWith "GET" (links.spaces.atPath (spacePathOf spaces s.id)) 200 s
-    answerWith "GET" (links.spaces.listPages s.id) 200 ps
-    for_ full $ \p -> answerWith "GET" (links.spaces.pageAt s.id (pagePathOf ps p.id)) 200 p
-    answerWith "GET" (links.spaces.postDetails s.id) 200 details
+    answerWith "GET" (endpointUrl (\e -> e.spaces.atPath (spacePathOf spaces s.id))) 200 s
+    answerWith "GET" (endpointUrl (\e -> e.spaces.listPages s.id)) 200 ps
+    for_ full $ \p -> answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt s.id (pagePathOf ps p.id))) 200 p
+    answerWith "GET" (endpointUrl (\e -> e.spaces.postDetails s.id)) 200 details
     for_ ps $ \p -> answerWith "GET" ("api/v1/pages/" <> p.id.text <> "/draft") 200 (Nothing :: Maybe ())
 
 -- | A server's status with nothing to say: what 'serveDemo' answers.
@@ -407,7 +406,7 @@ accounts m = describe "signing in and out" $ do
     -- The session ends on the server: what Ada could read is refused, and
     -- the server says nobody is asking.
     answerWith "GET" "api/v1/session" 200 nobody
-    answerRaw "GET" (links.spaces.atPath (slugs ["team"])) 403 "{\"error\":\"Forbidden\"}"
+    answerRaw "GET" (endpointUrl (\e -> e.spaces.atPath (slugs ["team"]))) 403 "{\"error\":\"Forbidden\"}"
     find ui ".wiki-sidebar a[href$='#/s/team/']" >>= click
     find ui ".sign-in-notice" >>= (`shouldHaveText` "Your session has ended. Sign in again to go on.")
     _ <- find ui ".sign-in-form input[name=login]"
@@ -591,11 +590,11 @@ requests = describe "its requests, through fetch" $ do
     eventually (map (\r -> (r.url, r.aborted)) <$> asked `shouldReturn` [(team, True)])
     serverStops
   where
-    team = links.spaces.atPath (slugs ["team"])
+    team = endpointUrl (\e -> e.spaces.atPath (slugs ["team"]))
 
 refusals :: Spec
 refusals = describe "its refusals, through fetch" $ do
-  let at = links.spaces.atPath (slugs ["team"])
+  let at = endpointUrl (\e -> e.spaces.atPath (slugs ["team"]))
       -- With a backend of its own each time, since a refusal is kept.
       getTeam :: HttpEnv -> PageM s (Either WikiError S.Space)
       getTeam _ = unsafeIOToPageM (newHttpEnv browserTransport) >>= \fresh -> overHttp fresh (getSpace (slugs ["team"]))
@@ -654,7 +653,7 @@ views m = describe "the application over it" $ do
     tourPage <- unsafeIOToPageM tourOfDocs
     ui <- startServer m tour
     find ui ".page-body h1" >>= (`shouldHaveText` "Tour")
-    let tourAt = links.spaces.pageAt tourPage.space (slugs ["tour"])
+    let tourAt = endpointUrl (\e -> e.spaces.pageAt tourPage.space (slugs ["tour"]))
         fetchesOf url = length . filter (\r -> r.method == "GET" && r.url == url) <$> asked
         listsAsked = length . filter (\r -> "/pages" `T.isSuffixOf` r.url) <$> asked
     fetchesOf tourAt `shouldReturn` 1
@@ -713,7 +712,7 @@ views m = describe "the application over it" $ do
     serveDemo
     hello <- unsafeIOToPageM helloWorld
     let saveAt = "api/v1/pages/" <> hello.id.text
-        draftAt = links.pages.saveDraft hello.id
+        draftAt = endpointUrl (\e -> e.pages.saveDraft hello.id DraftEdit {base = hello.updatedAt, title = "", body = ""})
         requestsTo url = filter (\r -> r.method == "PUT" && r.url == url) <$> asked
     answerWith "PUT" saveAt 200 hello
     answerWith "PUT" draftAt 200 Draft {page = hello.id, author = UserId "user-admin", title = hello.title, body = "", base = hello.updatedAt, savedAt = hello.updatedAt}
@@ -943,13 +942,13 @@ comments m = describe "a page's comments" $ do
     let ada = Author {id = UserId "user-admin", name = "Ada Admin"}
         comment' tid cid body = Comment {id = CommentId cid, thread = CommentThreadId tid, author = ada, body, createdAt = demoNow, editedAt = Nothing}
         made = Thread {id = CommentThreadId "thread-new", page = hello.id, anchor = Nothing, resolved = False, createdAt = demoNow, comments = [comment' "thread-new" "comment-new" "Sent."]}
-    answerWith "POST" (links.comments hello.id).open 201 made
+    answerWith "POST" (endpointUrl (\e -> (e.comments hello.id).open NewThread {anchor = Nothing, body = ""})) 201 made
     text <- find ui ".page-comments .comment-new textarea"
     typeText text "Sent."
     clickButton ui ".page-comments .comment-new button" "Comment"
     find ui ".page-comments #comment-thread-thread-new .comment-body" >>= (`shouldHaveText` "Sent.")
     posted <- filter (\r -> r.method == "POST") <$> asked
-    map (\r -> (r.url, eitherDecodeStrict' (encodeUtf8 r.body))) posted `shouldBe` [((links.comments hello.id).open, Right NewThread {anchor = Nothing, body = "Sent."})]
+    map (\r -> (r.url, eitherDecodeStrict' (encodeUtf8 r.body))) posted `shouldBe` [(endpointUrl (\e -> (e.comments hello.id).open NewThread {anchor = Nothing, body = ""}), Right NewThread {anchor = Nothing, body = "Sent."})]
     -- Another tab replies: heard, and shown.
     tell (Event hello.id (CommentAdded (comment' "thread-hello-3" "comment-elsewhere" "From another tab.")))
     eventually $ (traverse textContent =<< findAll ui "#comment-thread-thread-hello-3 .comment-body") `shouldReturn` ["Welcome! Comments here are about the whole post; select some of its text to comment on that.", "Thanks, that works.", "From another tab."]
@@ -957,7 +956,7 @@ comments m = describe "a page's comments" $ do
     -- again; the server's answer has the comments as they are now, which
     -- the page shows without reading them itself (were they read, the
     -- demo's three threads would come back).
-    let threadsAt = (links.comments hello.id).list
+    let threadsAt = endpointUrl (\e -> (e.comments hello.id).list)
         readsSoFar = length . filter (\r -> r.method == "GET" && r.url == threadsAt) <$> asked
     before <- readsSoFar
     unsafeIOToPageM js_server_hang_up
@@ -1052,8 +1051,8 @@ presence m = describe "who is editing" $ do
     -- Saved elsewhere: read again and shown, with no button to ask for it.
     let later = addUTCTime 60 hello.updatedAt
         saved = hello {P.body = "Saved in another tab.", P.updatedAt = later}
-    answerWith "GET" (links.spaces.listPages hello.space) 200 [if p.id == hello.id then P.summaryOf saved else p | p <- blogPages]
-    answerWith "GET" (links.spaces.pageAt hello.space helloAt) 200 saved
+    answerWith "GET" (endpointUrl (\e -> e.spaces.listPages hello.space)) 200 [if p.id == hello.id then P.summaryOf saved else p | p <- blogPages]
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt hello.space helloAt)) 200 saved
     tell (Event hello.id (PageChanged later))
     eventuallyWithin 5000 $ (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved in another tab.")
     length <$> findAll ui ".page-changed" `shouldReturn` 0
@@ -1068,8 +1067,8 @@ presence m = describe "who is editing" $ do
     _ <- find ui ".page-view .inline-form"
     let again = addUTCTime 120 hello.updatedAt
         savedAgain = saved {P.body = "Saved once more.", P.updatedAt = again}
-    answerWith "GET" (links.spaces.listPages hello.space) 200 [if p.id == hello.id then P.summaryOf savedAgain else p | p <- blogPages]
-    answerWith "GET" (links.spaces.pageAt hello.space helloAt) 200 savedAgain
+    answerWith "GET" (endpointUrl (\e -> e.spaces.listPages hello.space)) 200 [if p.id == hello.id then P.summaryOf savedAgain else p | p <- blogPages]
+    answerWith "GET" (endpointUrl (\e -> e.spaces.pageAt hello.space helloAt)) 200 savedAgain
     tell (Event hello.id (PageChanged again))
     _ <- find ui ".page-actions .page-live .page-changed"
     (find ui ".page-view" >>= textContent) >>= (`shouldSatisfy` T.isInfixOf "Saved in another tab.")

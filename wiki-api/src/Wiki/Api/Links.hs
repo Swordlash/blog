@@ -1,15 +1,21 @@
 -- | API links: the URLs of the API's endpoints, built from its type.
 --
--- The application puts some of these into its pages, for the browser to
--- follow or load rather than for the application to fetch: an
--- attachment's bytes ('attachmentUrl'), a space's icon ('spaceIconUrl'),
--- the exports ('pageExportUrl', 'spaceExportUrl', 'archiveExportUrl').
--- The application's own requests do not use these links: its HTTP backend
+-- These links are for two uses. The application puts some of them into
+-- its pages, for the browser to follow or load rather than for the
+-- application to fetch: an attachment's bytes ('attachmentUrl'), a
+-- space's icon ('spaceIconUrl'), the exports ('pageExportUrl',
+-- 'spaceExportUrl', 'archiveExportUrl'). And the server's tests of the API
+-- send their requests to 'links' and 'searchUrl'.
+--
+-- The application's own requests do not use these links. Its HTTP backend
 -- sends them through a client derived from the API's type
--- (@Wiki.App.Backend.Http.Client@), which also fixes each request's
--- method, headers and body. The tests of the server and of the
--- application use 'links' and 'searchUrl' to name the addresses they
--- request or answer.
+-- (@Wiki.App.Backend.Http.Client@), which fixes each request's method,
+-- headers and body as well as its address. servant's client writes some
+-- addresses differently from these links: a list in the query is
+-- @login=a&login=b@ rather than @login[]=a&login[]=b@, and a colon in a
+-- path segment is not percent-encoded. The server reads both forms. A test
+-- of the application that answers the client's requests by their address
+-- names the address with the client (@endpointUrl@), not with 'links'.
 --
 -- Every URL is relative, without a leading slash (@api\/v1\/spaces@). A
 -- browser resolves it against the page's base URL, the @\<base href>@ the

@@ -19,9 +19,9 @@ import Test.Hspec.Halogen
 import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AdminApi (..), WikiApi (..))
 import Wiki.Api.Backups
-import Wiki.Api.Links (links)
 import Wiki.Api.ServerSettings (SecretState (..))
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 
@@ -63,9 +63,10 @@ overHttp m = describe "over HTTP" $
           at h = UTCTime (fromGregorian 2026 10 25) (fromIntegral (h * 3600 :: Int))
           off = Backups {available = True, settings = defaultBackupSettings, last = Nothing, running = False, next = Nothing, kept = 0}
           turnedOn = off {settings = onEverySix, next = Just (at 3)} :: Backups
+          changed = BackupSettings {enabled = True, schedule = EveryHours 6, keep = Retention {daily = 7, weekly = 4}, destination = Just (ToRclone "b2:wiki" (Just config))} :: BackupSettingsChange
           made = BackupRecord {startedAt = at 9, finishedAt = at 9, trigger = Manual, file = Just "20261025T090000.000Z.sqlite", size = Just 1253376, failure = Nothing, offSite = Just OffSite {to = "b2:wiki", problem = Nothing}}
-      answerWith "GET" links.admin.backups 200 off
-      answerWith "PUT" links.admin.setBackups 200 turnedOn
+      answerWith "GET" (endpointUrl (\e -> e.admin.backups)) 200 off
+      answerWith "PUT" (endpointUrl (\e -> e.admin.setBackups changed)) 200 turnedOn
       ui <- startServer m Admin
       eventually (find ui ".backups-state") >>= (`shouldContainText` "Off")
       find ui ".backups-now" >>= (`getProperty` "disabled") >>= (`shouldBe` "true")
@@ -84,7 +85,7 @@ overHttp m = describe "over HTTP" $
       eventually $ do
         puts <- filter (\r -> r.method == "PUT") <$> asked
         map (\r -> (r.url, eitherDecodeStrict' (encodeUtf8 r.body))) puts
-          `shouldBe` [(links.admin.setBackups, Right (BackupSettings {enabled = True, schedule = EveryHours 6, keep = Retention {daily = 7, weekly = 4}, destination = Just (ToRclone "b2:wiki" (Just config))} :: BackupSettingsChange))]
+          `shouldBe` [(endpointUrl (\e -> e.admin.setBackups changed), Right changed)]
       eventually (find ui ".backups-state" >>= (`shouldContainText` "On: every 6 hours"))
       find ui ".backups-state" >>= (`shouldContainText` "copied to b2:wiki.")
       find ui ".backups-next" >>= (`shouldHaveText` "2026-10-25 03:00 UTC")
@@ -97,16 +98,16 @@ overHttp m = describe "over HTTP" $
       find ui ".backups-cancel" >>= click
       -- Back up now: the server says it is under way, and the part reads
       -- them again until it is done.
-      answerWith "POST" links.admin.backUpNow 200 turnedOn {running = True}
-      answerWith "GET" links.admin.backups 200 turnedOn {running = True}
+      answerWith "POST" (endpointUrl (\e -> e.admin.backUpNow)) 200 turnedOn {running = True}
+      answerWith "GET" (endpointUrl (\e -> e.admin.backups)) 200 turnedOn {running = True}
       eventually (find ui ".backups-now") >>= click
       eventually (find ui ".backups-running") >>= (`shouldContainText` "Making a backup")
       -- Still under way when read again (every two seconds); then done.
       eventuallyWithin 10_000 $ do
-        looked <- filter (\r -> r.method == "GET" && r.url == links.admin.backups) <$> asked
+        looked <- filter (\r -> r.method == "GET" && r.url == endpointUrl (\e -> e.admin.backups)) <$> asked
         length looked `shouldSatisfy` (>= 3)
       find ui ".backups-running" >>= (`shouldContainText` "Making a backup")
-      answerWith "GET" links.admin.backups 200 turnedOn {last = Just made, kept = 3}
+      answerWith "GET" (endpointUrl (\e -> e.admin.backups)) 200 turnedOn {last = Just made, kept = 3}
       eventuallyWithin 10_000 (find ui ".backups-last" >>= (`shouldHaveText` "2026-10-25 09:00 UTC, by hand: made, 1.2 MB, and copied to b2:wiki."))
       length <$> findAll ui ".backups-running" `shouldReturn` 0
       find ui ".backups-kept" >>= (`shouldHaveText` "3 backups in the data directory.")

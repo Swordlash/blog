@@ -538,6 +538,16 @@ accounts = describe "signing in and out" $ do
     _ <- runHttpWiki env' (getSpace (slugs "docs"))
     length <$> readIORef asked `shouldReturn` 3
 
+  it "asks who is asking once after a refusal, even when that question is refused too" $ do
+    -- The question goes through the same client as every request; were it
+    -- to ask again after its own refusal, it would never stop.
+    (transport, asked) <- scripted (const (status 403 "{\"error\":\"Forbidden\"}"))
+    env' <- newHttpEnvWith transport (withSession (fromSessionInfo signedIn) emptyCache)
+    runHttpWiki env' (getSpace (slugs "team")) `shouldReturn` Left Forbidden
+    map requestUrl <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/spaces/at/team"]
+    -- What the backend knew of the session stays.
+    runHttpWiki env' (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
+
 preload :: Spec
 preload = describe "what a page it is rendered into carries" $ do
   let hello = demoPage "blog" "hello-world"

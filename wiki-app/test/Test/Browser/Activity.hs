@@ -18,8 +18,8 @@ import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AdminApi (..), WikiApi (..))
 import Wiki.Api.Activity (Activity (..))
 import Wiki.Api.Admin (LoggedError (..), ServerStatus (..))
-import Wiki.Api.Links (links)
 import Wiki.App.Assistant (MonadAssistant)
+import Wiki.App.Backend.Http.Client (endpointUrl)
 import Wiki.App.Islands (MonadIslands)
 import Wiki.App.Route (Route (..))
 import Wiki.Core.Audit (Actor (..), AuditEntry (..), Subject (..))
@@ -71,10 +71,10 @@ overHttp m = describe "over HTTP" $
           made = entry "e2" 8 operator "user.create" Subject {kind = "user", id = Just "u1", name = "ada"} [("login", "ada")] "console"
           older = entry "e1" 7 operator "settings.wiki" Subject {kind = "settings", id = Nothing, name = "whom the wiki lets in"} [("access", "closed")] "127.0.0.1"
           firstPage = Activity {available = True, entries = [granted, made], more = True, actors = [ada, operator]}
-      answerWith "GET" (links.admin.activity Nothing Nothing Nothing) 200 firstPage
-      answerWith "GET" (links.admin.activity Nothing Nothing (Just "e2")) 200 firstPage {entries = [older], more = False}
-      answerWith "GET" (links.admin.activity (Just ada.id) Nothing Nothing) 200 firstPage {entries = [granted], more = False}
-      answerWith "GET" links.admin.status 200 quietServer {errors = [LoggedError {at = at 10, route = "/api/v1/pages/:page", message = "SQLite3 returned ErrorIO"}]}
+      answerWith "GET" (endpointUrl (\e -> e.admin.activity Nothing Nothing Nothing)) 200 firstPage
+      answerWith "GET" (endpointUrl (\e -> e.admin.activity Nothing Nothing (Just "e2"))) 200 firstPage {entries = [older], more = False}
+      answerWith "GET" (endpointUrl (\e -> e.admin.activity (Just ada.id) Nothing Nothing)) 200 firstPage {entries = [granted], more = False}
+      answerWith "GET" (endpointUrl (\e -> e.admin.status)) 200 quietServer {errors = [LoggedError {at = at 10, route = "/api/v1/pages/:page", message = "SQLite3 returned ErrorIO"}]}
       ui <- startServer m Admin
       rows <- eventually $ do
         rs <- findAll ui ".activity-row"
@@ -99,7 +99,7 @@ overHttp m = describe "over HTTP" $
       choose ui ".activity-filter select" 1
       eventually $ do
         urls <- map (\r -> r.url) . filter (\r -> r.method == "GET") <$> asked
-        urls `shouldSatisfy` elem (links.admin.activity (Just ada.id) Nothing Nothing)
+        urls `shouldSatisfy` elem (endpointUrl (\e -> e.admin.activity (Just ada.id) Nothing Nothing))
       eventually $ do
         rs <- findAll ui ".activity-row"
         length rs `shouldBe` 1
@@ -109,7 +109,7 @@ overHttp m = describe "over HTTP" $
       find ui ".server-status .status-error-route" >>= (`shouldHaveText` "/api/v1/pages/:page")
       find ui ".server-status .status-error-message" >>= (`shouldHaveText` "SQLite3 returned ErrorIO")
       -- Read again by "Refresh", with nothing to say any more.
-      answerWith "GET" links.admin.status 200 quietServer
+      answerWith "GET" (endpointUrl (\e -> e.admin.status)) 200 quietServer
       find ui ".status-refresh" >>= click
       eventually (find ui ".status-no-errors" >>= (`shouldHaveText` "None since the server started."))
       unmount ui
