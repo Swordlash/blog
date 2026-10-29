@@ -10,26 +10,27 @@
 -- the administrators edit it.
 --
 -- The guide is the space the installation made, and no other: the
--- setting @guide-installed@ records its id and the paths of the pages it
--- has had ('Installed'). A space an administrator puts at @/guide@ is
--- theirs, and nothing here touches it.
+-- setting @guide-installed@ records its id and, for each page the guide
+-- has written, the page's path and a hash of the title and text the guide
+-- last wrote there ('Installed'). A space an administrator puts at
+-- @/guide@ is theirs, and nothing here touches it.
 --
 -- Afterwards the console puts the guide back if it was deleted
 -- (@wiki-server guide install@, 'installGuide', which the
 -- administration's Overview offers too), and brings its pages up to this
--- release's text (@wiki-server guide update@, 'updateGuide'), which the
--- deploy runs after it starts a new server. An update writes a new version
--- of each page whose text differs from this release's, so the page's
--- history keeps what was there, and adds a page the release has and the
--- guide never had. A page that is no longer where the release puts it,
--- or whose title is not the release's, was moved, deleted or renamed by an
--- administrator: it is left as it is, and named in what the update says.
--- An update brings in text and new pages only: an attachment a release
--- adds to a page the guide has already is not brought in, and the update
--- says so.
+-- release (@wiki-server guide update@, 'updateGuide'), which the deploy
+-- runs after it starts a new server. A page whose title and text are still
+-- the ones the guide last wrote gets this release's title and text, as a
+-- new version, so the page's history keeps what was there; a page the
+-- release has and the guide never had is added. A page an administrator
+-- edited, renamed, moved or deleted is theirs: it is left as it is, and
+-- named in what the update says. An update brings in titles, text and new
+-- pages only: an attachment a release adds to a page the guide has
+-- already is not brought in, and the update says so.
 module Wiki.Server.Guide
   ( -- * The guide's space
     Installed (..)
+  , writtenHash
   , guideIn
   , canInstallGuide
   , guideArchive
@@ -46,12 +47,13 @@ module Wiki.Server.Guide
 where
 
 import Control.Monad.UUID (generateV4)
+import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (FromJSON (..), ToJSON (..), decodeStrict', encode, object, withObject, (.:), (.=))
+import Data.ByteString.Builder (byteStringHex, toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Data.UUID.Types qualified as UUID
 import Protolude
 import Wiki.Api.Events (PageEvent (..))
@@ -62,7 +64,7 @@ import Wiki.Core.Attachment (Attachment (..), FileName (..))
 import Wiki.Core.Audit (Actor, Subject (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Id
-import Wiki.Core.Page (Page (..))
+import Wiki.Core.Page (Page (..), savedAs)
 import Wiki.Core.Path (findChild, pathOf, resolvePath)
 import Wiki.Core.Slug (Slug, slugText)
 import Wiki.Core.Space (Space (..))
@@ -87,21 +89,31 @@ guideArchive now = toArchive now serverVersion (guideState now)
 -- What the wiki has
 
 -- | 'Installed' is what the setting @guide-installed@ records: the space
--- the guide was installed as, and the path of every page the guide has had
--- in it, as the release that installed or added it put them. The update
--- tells a page an administrator moved or deleted (a path the guide had)
--- from one a later release adds (a path it never had).
+-- the guide was installed as, and every page the guide has written in it,
+-- by its path in the space, with the 'writtenHash' of the title and text
+-- the guide last wrote there. The update compares a page with its hash:
+-- the same, and nobody has changed the page since, so the update may
+-- write over it; different, and an administrator changed it. A path the
+-- guide has written and that has no page now was moved or deleted; a path
+-- it never wrote is one a later release adds.
 data Installed = Installed
   { space :: SpaceId
-  , pages :: Set Text
+  , pages :: Map Text Text
   }
   deriving stock (Eq, Show)
 
 instance ToJSON Installed where
-  toJSON i = object ["space" .= i.space, "pages" .= Set.toList i.pages]
+  toJSON i = object ["space" .= i.space, "pages" .= i.pages]
 
 instance FromJSON Installed where
-  parseJSON = withObject "Installed" $ \o -> Installed <$> o .: "space" <*> (Set.fromList <$> o .: "pages")
+  parseJSON = withObject "Installed" $ \o -> Installed <$> o .: "space" <*> o .: "pages"
+
+-- | The hash the record keeps of a page's title and text: the SHA-256 of
+-- both, in hexadecimal. The title's length comes first, so that no other
+-- title and text make the same input.
+writtenHash :: Text -> Text -> Text
+writtenHash title body =
+  decodeUtf8 (BSL.toStrict (toLazyByteString (byteStringHex (SHA256.hash (encodeUtf8 (show (T.length title) <> ":" <> title <> body))))))
 
 installedKey :: Text
 installedKey = "guide-installed"
@@ -109,13 +121,11 @@ installedKey = "guide-installed"
 -- | The record of the guide's installation, if the wiki has one it can
 -- read.
 installedRecord :: (Backend be) => Db be (Maybe Installed)
-installedRecord = (\rows -> lookup installedKey rows >>= decodeStrict' . encodeUtf8) <$> settingsLike installedKey
-  where
-    lookup k = fmap snd . find ((== k) . fst)
+installedRecord = (>>= decodeStrict' . encodeUtf8) <$> settingValue installedKey
 
 -- | Whether the wiki ever had the guide installed.
 everInstalled :: (Backend be) => Db be Bool
-everInstalled = not . null . filter ((== installedKey) . fst) <$> settingsLike installedKey
+everInstalled = isJust <$> settingValue installedKey
 
 writeRecord :: (Backend be) => Installed -> Db be ()
 writeRecord = storeSetting installedKey . decodeUtf8 . BSL.toStrict . encode
@@ -171,15 +181,23 @@ installGuide st actor address = do
       (Nothing, Nothing) -> Right <$> install st now actor address
 
 -- | The installation itself, inside the caller's transaction: the guide's
--- archive merged into the wiki, the space and its pages recorded, and an
--- entry in the audit log. The caller has checked that nothing is at
--- @/guide@, so the import makes the space there.
+-- archive merged into the wiki, the space and its pages recorded as the
+-- import stored them, and an entry in the audit log. The caller has
+-- checked that nothing is at @/guide@, so the import makes the space
+-- there.
 install :: (Backend be) => Storage -> UTCTime -> Actor -> Text -> Db be ImportSummary
 install st now actor address = do
   let archive = guideArchive now
   (s, _) <- mergeArchive (attachmentsDir (storageDataDir st)) archive importEverything
   made <- guideIn <$> loadSpaces
-  for_ made $ \g -> writeRecord Installed {space = g.id, pages = Set.fromList [pathText r.path | r <- releasePages archive]}
+  for_ made $ \g -> do
+    pages <- loadPages g.id
+    let byId = Map.fromList [(p.id, p) | p <- pages]
+    writeRecord
+      Installed
+        { space = g.id
+        , pages = Map.fromList [(pathText path, writtenHash p.title p.body) | p <- pages, Just path <- [pathOf (`Map.lookup` byId) p.id]]
+        }
   insertAudit
     Recorded
       { actor
@@ -209,8 +227,8 @@ data GuideUpdate
       , current :: Int
       -- ^ How many pages had this release's text already.
       , leftAlone :: [Text]
-      -- ^ The pages left as they are, each with why: moved, deleted or
-      -- renamed by an administrator.
+      -- ^ The pages left as they are, each with why: edited, renamed,
+      -- moved or deleted by an administrator.
       , attachmentsLeftOut :: [Text]
       -- ^ The pages whose attachments in this release include some the
       -- page has not, with their names: not brought in.
@@ -241,13 +259,17 @@ data Outcome
   | Current
   | LeftAlone Text
   | AttachmentsLeftOut Text
+  | -- | The guide wrote this title and text at this path: the path and
+    -- the 'writtenHash', for the record.
+    Wrote Text Text
 
 -- | Bring the wiki's guide up to this release, as this actor asking from
--- this address, in one transaction: each page whose text differs from the
--- release's gets the release's title and text as a new version, a page the
--- guide never had is added with its attachments under the page the
--- release puts it under, and a page an administrator moved, deleted or
--- renamed is left alone. Once committed, each rewritten page is reported
+-- this address, in one transaction: each page that still has the title
+-- and text the guide last wrote, and differs from the release, gets the
+-- release's title and text as a new version; a page the guide never had is
+-- added with its attachments under the page the release puts it under;
+-- and a page an administrator edited, renamed, moved or deleted is left
+-- alone. Once committed, each rewritten page is reported
 -- to the server's live channel, as a save is, so that a tab showing it
 -- fetches it again. Run from the console, beside a running server, there
 -- is no channel to report to: those tabs see the new text at their next
@@ -267,6 +289,7 @@ updateGuide st actor address = do
           outcomes <- concat <$> for (releasePages archive) (step now archive g record)
           let addedPaths = [t | Added t <- outcomes]
               rewritten = [p | Rewritten _ p <- outcomes]
+              written = Map.fromList [(path, h) | Wrote path h <- outcomes]
               done =
                 GuideUpdated
                   { updated = [t | Rewritten t _ <- outcomes]
@@ -275,7 +298,7 @@ updateGuide st actor address = do
                   , leftAlone = [t | LeftAlone t <- outcomes]
                   , attachmentsLeftOut = [t | AttachmentsLeftOut t <- outcomes]
                   }
-          unless (null addedPaths) $ writeRecord Installed {space = record.space, pages = record.pages <> Set.fromList addedPaths}
+          unless (Map.null written) $ writeRecord Installed {space = record.space, pages = Map.union written record.pages}
           unless (null rewritten && null addedPaths) $
             insertAudit
               Recorded
@@ -294,31 +317,32 @@ updateGuide st actor address = do
       pages <- loadPages g.id
       let at = pathText r.path
           found = either (const Nothing) lastMay (resolvePath (findChild pages) r.path)
+          recorded = Map.lookup at record.pages
+          release = writtenHash r.page.title r.page.body
+          hashOf p = writtenHash p.title p.body
+          missing p = [x.name.text | x <- r.page.attachments, x.name `notElem` map (\y -> y.name) p.attachments]
+          leftOut p = [AttachmentsLeftOut (at <> ": " <> T.intercalate ", " (missing p)) | not (null (missing p))]
       case found of
         Just p
-          | p.title /= r.page.title -> pure [LeftAlone (at <> ": titled " <> p.title <> " rather than " <> r.page.title <> " (renamed), so left alone")]
-          | otherwise -> do
-              let missing = [x.name.text | x <- r.page.attachments, x.name `notElem` map (\y -> y.name) p.attachments]
-                  leftOut = [AttachmentsLeftOut (at <> ": " <> T.intercalate ", " missing) | not (null missing)]
-              if p.body == r.page.body
-                then pure (Current : leftOut)
-                else do
-                  -- Later than the version it replaces even if the clock
-                  -- says otherwise, as a save makes it.
-                  let updatedAt = if micro now > p.updatedAt then micro now else addUTCTime 0.000001 p.updatedAt
-                      new = withText r.page.title r.page.body updatedAt p
-                  updatePageText p.id new.title new.body updatedAt
-                  insertVersion new Nothing
-                  pure (Rewritten at new : leftOut)
+          | hashOf p == release -> pure ([Current] <> [Wrote at release | recorded /= Just release] <> leftOut p)
+          | recorded == Just (hashOf p) -> do
+              -- The guide wrote what the page has, so the release's title
+              -- and text go over it, as a new version.
+              let new = savedAs (micro now) r.page.title r.page.body p
+              updatePageText p.id new.title new.body new.updatedAt
+              insertVersion new Nothing
+              pure ([Rewritten at new, Wrote at release] <> leftOut p)
+          | isJust recorded -> pure [LeftAlone (at <> ": changed by an administrator since the guide wrote it, so left alone")]
+          | otherwise -> pure [LeftAlone (at <> ": a page the guide did not write, so left alone")]
         Nothing
-          | at `Set.member` record.pages -> pure [LeftAlone (at <> ": not where this release puts it (moved, renamed or deleted), so left alone")]
+          | Map.member at record.pages -> pure [LeftAlone (at <> ": not where this release puts it (moved, renamed or deleted), so left alone")]
           | otherwise -> case unsnoc r.path of
               Nothing -> pure []
               Just (parentPath, _) -> do
                 let parent = if null parentPath then Right Nothing else maybe (Left ()) (Right . Just) (either (const Nothing) lastMay (resolvePath (findChild pages) parentPath))
                 case parent of
                   Left () -> pure [LeftAlone (at <> ": new in this release, but the page it goes under is not at " <> pathText parentPath <> ", so not added")]
-                  Right under -> [Added at] <$ addPage now archive g under r
+                  Right under -> [Added at, Wrote at (writtenHash r.page.title r.page.body)] <$ addPage now archive g under r
 
     -- A page of the release the guide never had, under its parent, last
     -- among its siblings, with its attachments.
@@ -343,23 +367,6 @@ updateGuide st actor address = do
       insertPage page
       insertVersion page Nothing
       void (attach (attachmentsDir (storageDataDir st)) archive i r.page.attachments)
-
--- | A page with another title and text, written at another time.
-withText :: Text -> Text -> UTCTime -> Page -> Page
-withText title body updatedAt p =
-  Page
-    { id = p.id
-    , space = p.space
-    , parent = p.parent
-    , title
-    , slug = p.slug
-    , body
-    , attachments = p.attachments
-    , createdAt = p.createdAt
-    , updatedAt
-    , position = p.position
-    , template = p.template
-    }
 
 pathText :: [Slug] -> Text
 pathText = T.intercalate "/" . map slugText

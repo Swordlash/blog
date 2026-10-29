@@ -2,16 +2,16 @@
 -- a first start with no spaces installs it, with its pages and their
 -- attachments, once, and not with @--no-guide@; @guide install@ puts it
 -- back once it is deleted, and only then; @guide update@ gives the pages
--- whose text differs this release's text, as new versions, and leaves a
--- page that was renamed or moved alone; and the Overview's status says
--- whether the wiki has the guide, and installs it.
+-- that still have what the guide wrote this release's title and text, as
+-- new versions, and leaves a page an administrator edited, renamed or
+-- moved alone; and the Overview's status says whether the wiki has the
+-- guide, and installs it.
 module Test.Server.Guide (spec) where
 
-import Data.Aeson (encode)
+import Data.Aeson (decodeStrict', encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Network.HTTP.Types (methodPost)
 import Protolude
@@ -34,7 +34,7 @@ import Wiki.Server.Guide
 import Wiki.Server.Options qualified as Options
 import Wiki.Server.Storage (Config (..), Storage, Who (..), defaultConfig, reading, runStoredWiki, withStorage, writing)
 import Wiki.Server.Storage.Audit (operator)
-import Wiki.Server.Storage.Rows (loadPages, loadSpaces, storeSetting, updatePageText)
+import Wiki.Server.Storage.Rows (loadPages, loadSpaces, settingValue, storeSetting, updatePageText)
 
 spec :: Backing -> Spec
 spec backing = describe "the guide" $ do
@@ -152,7 +152,8 @@ updating backing = describe "updating it to this release" $ do
       -- As if the release that installed the guide had no Markdown guide
       -- page (nor its subpages): a later release adds them.
       for_ ["Diagrams", "Mathematics", "Presentations", "Markdown guide"] $ \t -> runStoredWiki st Administrator (deletePage (at t).id) >>= ok
-      writing st (storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = g.id, pages = Set.fromList ["tour"]}))))
+      let tour = at "Tour"
+      writing st (storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = g.id, pages = Map.fromList [("tour", writtenHash tour.title tour.body)]}))))
       added <- updateGuide' st
       added `shouldBe` GuideUpdated {updated = [], added = ["markdown-guide", "markdown-guide/diagrams", "markdown-guide/mathematics", "markdown-guide/presentations"], current = 1, leftAlone = [], attachmentsLeftOut = []}
       markdown <- runStoredWiki st Administrator (getPage g.id [slug "markdown-guide"]) >>= ok
@@ -191,13 +192,13 @@ updating backing = describe "updating it to this release" $ do
         g <- guideOf st
         pages <- reading st (loadPages g.id)
         let tour = maybe (panic "no tour") identity (find (\p -> p.title == "Tour") pages)
-        writing st (updatePageText tour.id tour.title "# Tour\n\nOld.\n" tour.updatedAt)
+        earlierRelease st tour "tour" tour.title "# Tour\n\nOld.\n"
         _ <- updateGuide' st
         rewritten <- reading st (loadPages g.id)
         let now' = maybe (panic "no tour") identity (find (\p -> p.title == "Tour") rewritten)
         readIORef told `shouldReturn` [(tour.id, PageChanged now'.updatedAt)]
 
-  it "writes this release's text over a page that differs, as a new version, and leaves renamed and moved pages alone" $
+  it "writes this release's title and text over a page the guide wrote, as a new version, and leaves edited, renamed and moved pages alone" $
     withStorageIn backing $ \_ st -> do
       _ <- installGuide st operator "console" >>= ok
       g <- guideOf st
@@ -207,10 +208,13 @@ updating backing = describe "updating it to this release" $ do
           maths = at "Mathematics"
           tour = at "Tour"
           slides = at "Presentations"
-      -- The text of an earlier release, on Diagrams.
-      writing st (updatePageText diagrams.id diagrams.title "# Diagrams\n\nAn older text.\n" diagrams.updatedAt)
-      -- An administrator renames Mathematics, and moves Presentations to
-      -- the top of the space.
+          markdown = at "Markdown guide"
+      -- The title and text of an earlier release, on Diagrams: this
+      -- release renames the page.
+      earlierRelease st diagrams "markdown-guide/diagrams" "Charts" "# Charts\n\nAn older text.\n"
+      -- An administrator edits the Markdown guide's text, renames
+      -- Mathematics, and moves Presentations to the top of the space.
+      edited <- runStoredWiki st Administrator (savePage markdown.id markdown.updatedAt markdown.title (markdown.body <> "\nOur note.\n")) >>= ok
       renamed <- runStoredWiki st Administrator (savePage maths.id maths.updatedAt "Maths" "# Maths\n\nOur own.\n") >>= ok
       _ <- runStoredWiki st Administrator (movePage slides.id g.id Nothing) >>= ok
       versionsBefore <- runStoredWiki st Administrator (listVersions tour.id latestVersions) >>= ok
@@ -219,9 +223,10 @@ updating backing = describe "updating it to this release" $ do
         `shouldBe` GuideUpdated
           { updated = ["markdown-guide/diagrams"]
           , added = []
-          , current = 2
+          , current = 1
           , leftAlone =
-              [ "markdown-guide/mathematics: titled Maths rather than Mathematics (renamed), so left alone"
+              [ "markdown-guide: changed by an administrator since the guide wrote it, so left alone"
+              , "markdown-guide/mathematics: changed by an administrator since the guide wrote it, so left alone"
               , "markdown-guide/presentations: not where this release puts it (moved, renamed or deleted), so left alone"
               ]
           , attachmentsLeftOut = []
@@ -231,12 +236,24 @@ updating backing = describe "updating it to this release" $ do
       (now "Diagrams").body `shouldNotSatisfy` T.isInfixOf "An older text."
       (now "Diagrams").body `shouldSatisfy` T.isInfixOf "```mermaid"
       (now "Maths").body `shouldBe` renamed.body
+      (now "Markdown guide").body `shouldBe` edited.body
+      [p.title | p <- updatedPages] `shouldNotContain` ["Charts"]
       runStoredWiki st Administrator (listVersions diagrams.id latestVersions) >>= ok >>= (`shouldSatisfy` ((>= 2) . length))
       runStoredWiki st Administrator (listVersions tour.id latestVersions) >>= ok >>= (`shouldBe` versionsBefore)
       -- A second update finds nothing more to do.
       updateGuide' st >>= \case
         GuideUpdated {updated, added} -> (updated, added) `shouldBe` ([], [])
         other -> expectationFailure (show other)
+
+-- | Give a page of the guide this title and text, as an earlier release
+-- would have written them: the page and the record of what the guide
+-- wrote at this path.
+earlierRelease :: Storage -> Page -> Text -> Text -> Text -> IO ()
+earlierRelease st p path title body = writing st $ do
+  updatePageText p.id title body p.updatedAt
+  record <- (>>= decodeStrict' . encodeUtf8) <$> settingValue "guide-installed"
+  for_ record $ \(i :: Installed) ->
+    storeSetting "guide-installed" (decodeUtf8 (BSL.toStrict (encode Installed {space = i.space, pages = Map.insert path (writtenHash title body) i.pages})))
 
 -- | The guide's space, which must be there.
 guideOf :: Storage -> IO Space
