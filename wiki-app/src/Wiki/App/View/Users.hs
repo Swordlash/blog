@@ -20,7 +20,9 @@
 -- ("Wiki.App.View.UserDialog"). The dialog's changes are saved at once; the
 -- table then tells the shell ('Changed'), which reloads who is signed in
 -- and increments the context's revision, and the table fetches its page
--- again, which gives the open dialog the user as they are now.
+-- again, which gives the open dialog the user as they are now. When the
+-- dialog removes the account, it closes, and the table says so above the
+-- rows.
 --
 -- The page is read as every view reads its data: at once where the backend
 -- answers at once, and otherwise in the initializer. While a later page is
@@ -470,6 +472,11 @@ component =
       Manage u -> modify (\st -> st {managing = Just u, told = Nothing, problem = Nothing})
       FromDialog UserDialog.Closed -> modify (\st -> st {managing = Nothing})
       FromDialog UserDialog.Saved -> H.raise (Changed Nothing)
+      -- The account is gone, and the dialog with it: the page is fetched
+      -- again without the user, and the message stays above the table.
+      FromDialog (UserDialog.Removed saying) -> do
+        modify (\st -> st {managing = Nothing, told = Just saying, problem = Nothing})
+        H.raise (Changed Nothing)
       ToggleCreating -> modify (\st -> st {creating = not st.creating, problem = Nothing, told = Nothing})
       TypedLogin t -> modify (\st -> st {newUser = st.newUser {typedLogin = t}})
       TypedDisplayName t -> modify (\st -> st {newUser = st.newUser {typedName = t}})

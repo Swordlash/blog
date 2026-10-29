@@ -25,6 +25,13 @@ section no longer mounts the status and the backups, which are sections of
 their own, and the wiki's export and import moved under the backups. The
 HTTP backend's cache gains `userPages`, used once from a prerendered page.
 
+`MonadAdmin` gains `removeUser` (WP5.25), and the dialog's account part
+offers "Remove the account…" for a disabled login that is not one's own,
+confirmed by typing the login; the dialog then closes with the new output
+`Removed`. The demo removes the account as the server does, and keeps each
+removed account's login (`MemState.removed`, saved with the accounts'
+flags) to name the author of the versions it saved.
+
 The HTTP backend's client is derived from the API's type with
 servant-client-core (WP5.23). `Wiki.App.Backend.Http.Request` is gone: its
 `Request`, `Body`, `Response`, `multipart` and `multipartForm` are replaced

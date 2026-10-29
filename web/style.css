@@ -3844,6 +3844,27 @@ body:has(.slides-view) {
   margin: 0;
 }
 
+/* Removing an account is the one change here that cannot be undone. Its
+   question has a border in the danger colour, and the field for the login
+   to type takes the whole width. */
+.user-dialog .remove-confirm {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.user-dialog .remove-confirm .field {
+  flex-basis: 100%;
+}
+
+.user-dialog .remove-confirm .field .user-login {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.user-remove-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
+
 button.danger-outline {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));

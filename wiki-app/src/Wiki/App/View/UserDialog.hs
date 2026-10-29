@@ -6,7 +6,7 @@
 -- may create spaces, how they sign in (their address, their password, the
 -- sign-in providers' accounts connected to them), the groups they are in,
 -- and the account's dangerous actions (disabling their login, removing
--- their second factor). The table of users ("Wiki.App.View.Users") opens
+-- their second factor, removing the account). The table of users ("Wiki.App.View.Users") opens
 -- it from a row's "Manage" button, and the row keeps only the user's
 -- badges.
 --
@@ -26,9 +26,14 @@
 -- visible. Disabling a login and removing a second factor ask for
 -- confirmation first, in place; so does mailing a password link.
 --
+-- Removing the account is offered only once the login is disabled, so that
+-- it is a second, deliberate step. It is confirmed by typing the user's
+-- login. Once the account is removed the dialog closes and tells the table
+-- ('Removed'), since there is no user left to show.
+--
 -- The rules of the old rows of buttons stay. An administrator is not
 -- offered to remove their own administrator status, nor to disable their
--- own login, nor to remove their own second factor or disconnect their own
+-- own login, nor to remove their own second factor or account, or disconnect their own
 -- providers' accounts: from the administration that would lock them out,
 -- or belongs to their own account panel. The operator on the server's
 -- admin listener is not a user and may change everyone. An administrator
@@ -74,6 +79,7 @@ import Wiki.Api.Security (AccountEmail (..), resetLifetime)
 import Wiki.App.Backend (Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Browser (closeDialog, showDialog)
+import Wiki.App.Editor.Browser (focusElement)
 import Wiki.App.View.Common
 import Wiki.Core.Id (GroupId)
 import Wiki.Core.User (Email (..), Group (..), Login (..), Password (..), SignInProvider (..), User (..))
@@ -100,6 +106,9 @@ data Output
     Closed
   | -- | A change was saved: the users are fetched again.
     Saved
+  | -- | The account was removed, and the dialog has closed. The text is
+    -- what to tell the reader.
+    Removed Text
 
 -- | A question the dialog asks before it acts, or a form it shows in place
 -- of a button.
@@ -111,10 +120,16 @@ data Asking
     ConfirmingLink Text
   | -- | The new password, as typed.
     TypingPassword Text
+  | -- | Remove the account? With the login typed so far, which must be the
+    -- user's login before the account can be removed.
+    ConfirmingRemove Text
 
 data State = State
   { input :: Input
   , element :: H.RefLabel
+  , removeField :: H.RefLabel
+  -- ^ The field the login is typed into to remove the account, focused
+  -- when it appears, since the button that showed it is gone.
   , asking :: Asking
   , busy :: Bool
   -- ^ A change has been requested, and the user not received again since.
@@ -160,6 +175,9 @@ data Action
   | ChooseGroup Int
   | AddToGroup
   | RemoveFromGroup GroupId
+  | AskRemove
+  | TypedRemoval Text
+  | RemoveAccount
 
 component :: forall query m. (MonadAdmin m, MonadUUID m, MonadIO m) => H.Component query Input Output m
 component =
@@ -167,7 +185,8 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           element <- H.newRefLabel "user-dialog"
-          pure State {input, element, asking = NotAsking, busy = False, waitingFor = Nothing, pressedOnBackdrop = False, told = Nothing, notice = Nothing, problem = Nothing, chosenGroup = 0}
+          removeField <- H.newRefLabel "user-remove-login"
+          pure State {input, element, removeField, asking = NotAsking, busy = False, waitingFor = Nothing, pressedOnBackdrop = False, told = Nothing, notice = Nothing, problem = Nothing, chosenGroup = 0}
       , render
       , eval =
           H.mkEval
@@ -424,7 +443,9 @@ component =
                 </div>
               </div>
           {% elif yourself st %}
-                <p class="admin-note disable-self">You cannot disable your own login, nor remove your own second factor, here.</p>
+                <p class="admin-note disable-self">You cannot disable your own login, nor remove your own second factor or your own account, here.</p>
+          {% elif confirmingRemove %}
+              {{ removeConfirm }}
           {% else %}
                 <div class="actions user-dialog-dangers">
                   {% if u.secondFactor %}
@@ -432,10 +453,14 @@ component =
                   {% end %}
                   {% if u.disabled %}
                     <button type="button" class="disable-toggle" disabled={{ st.busy }} onClick={{ const (SetDisabled False) }}>Enable login</button>
+                    <button type="button" class="danger-outline user-remove" disabled={{ st.busy }} onClick={{ const AskRemove }}>Remove the account…</button>
                   {% else %}
                     <button type="button" class="danger-outline disable-toggle" disabled={{ st.busy }} onClick={{ const AskDisable }}>Disable login…</button>
                   {% end %}
                 </div>
+                {% if not u.disabled %}
+                  <p class="admin-note user-remove-hint">To remove the account, disable the login first.</p>
+                {% end %}
           {% end %}
         </section>
       |]
@@ -445,6 +470,27 @@ component =
           ConfirmingDisable -> (True, False)
           ConfirmingSecondFactor -> (False, True)
           _ -> (False, False)
+        (confirmingRemove, typedLogin) = case st.asking of
+          ConfirmingRemove typed | u.disabled -> (True, typed)
+          _ -> (False, "")
+        login = u.user.login.text
+        -- The button stays disabled until the login is typed exactly, so
+        -- that the account removed is the one the reader means.
+        removeConfirm =
+          [hh|
+            <form class="confirm remove-confirm" role="alertdialog" aria-labelledby="user-remove-question" {{ HE.preventingDefault (HE.onSubmit (const RemoveAccount)) }}>
+              <p id="user-remove-question"><strong>{{ "Remove " <> u.user.displayName <> "'s account?" }}</strong>{{ " This cannot be undone." :: Text }}</p>
+              <p>{{ "Their sessions end, and their groups, permissions, passkeys, drafts, watches and notifications are deleted. The pages, versions and comments they wrote stay, under the login " <> login <> ", which a new account may then take." }}</p>
+              <label class="field">
+                <span>{{ "Type " :: Text }}<span class="user-login">{{ login }}</span>{{ " to confirm" :: Text }}</span>
+                <input type="text" class="remove-confirm-login" autocomplete="off" autocapitalize="none" spellcheck="false" value={{ typedLogin }} onValueInput={{ TypedRemoval }} required {{ HP.ref st.removeField }}>
+              </label>
+              <div class="actions">
+                <button type="submit" class="danger remove-confirm-button" disabled={{ st.busy || typedLogin /= login }}>Remove the account</button>
+                {{ button "Cancel" Cancel }}
+              </div>
+            </form>
+          |]
 
     handleAction :: Action -> H.HalogenM State Action Empty Output m ()
     handleAction = \case
@@ -510,6 +556,26 @@ component =
           modify (\s -> s {chosenGroup = 0})
           withUser (\u -> addMember g.id u.user.id) ("Saved: in " <> g.name <> " now.")
       RemoveFromGroup g -> withUser (\u -> removeMember g u.user.id) "Saved."
+      AskRemove -> do
+        open (ConfirmingRemove "")
+        gets (\st -> st.removeField) >>= H.getRef >>= traverse_ (H.liftEffect . focusElement)
+      TypedRemoval t -> modify $ \st -> case st.asking of
+        ConfirmingRemove _ -> st {asking = ConfirmingRemove t}
+        _ -> st
+      -- The login typed is checked again here, since a form can be
+      -- submitted with Enter whatever its button shows.
+      RemoveAccount -> do
+        st <- get
+        let u = st.input.user
+        case st.asking of
+          ConfirmingRemove typed | typed == u.user.login.text && u.disabled && not st.busy -> do
+            modify (\s -> s {busy = True, problem = Nothing})
+            removeUser u.user.id >>= \case
+              Left e -> modify (\s -> s {busy = False, problem = Just e})
+              Right () -> do
+                H.getRef st.element >>= traverse_ (H.liftEffect . closeDialog)
+                H.raise (Removed (u.user.displayName <> "'s account (" <> u.user.login.text <> ") is removed. What they wrote stays, under their login."))
+          _ -> pass
       where
         open a = modify (\st -> st {asking = a, problem = Nothing})
 

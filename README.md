@@ -887,8 +887,9 @@ to the demo, keeping `data/`.
   The same command gives a user a new password (`users password LOGIN`, which
   signs them out), makes or unmakes an administrator (`users admin LOGIN --on`,
   `--off`), disables a login (`users disable LOGIN --on`, which signs them out;
-  `--off` enables it) and takes away a second factor its user has lost
-  (`users second-factor-remove LOGIN`). It is also how an installation whose
+  `--off` enables it), takes away a second factor its user has lost
+  (`users second-factor-remove LOGIN`) and removes the account of a disabled
+  login (`users remove LOGIN`), keeping what the person wrote under the login. It is also how an installation whose
   administrators are all locked out is recovered. Sign in on the public address
   with that login. Sessions last two weeks without use. Behind HTTPS the server
   must run with `--secure-cookies`, which the deploy script passes over HTTPS;
@@ -1044,7 +1045,11 @@ to the demo, keeping `data/`.
   user: administrator, creates spaces, how they sign in (a new password or a
   password link, a provider's account to disconnect), their address, their
   groups, and, apart and asked once, disabling their login and removing their
-  second factor. Each change is saved as it is made. Who may read, edit and
+  second factor. Once a login is disabled, the dialog also offers to remove the
+  account, confirmed by typing the login: the account goes with its sessions,
+  groups, permissions, passkeys and drafts, while the pages, versions and
+  comments the person wrote stay under their login, which is then free for a
+  new account. Each change is saved as it is made. Who may read, edit and
   administer a space is in that space's "Space settings". `docs/api.md` says
   what each listener serves
   ([The two listeners](docs/api.md#the-two-listeners)).

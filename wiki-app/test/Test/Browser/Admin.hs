@@ -9,7 +9,8 @@
 -- backdrop, giving the focus back to its button; and through it, an
 -- administrator marking another user as one, who then has the
 -- administration, letting a user create spaces, giving a password,
--- disabling and enabling a login, and putting a user in a group. Groups are
+-- disabling and enabling a login, removing a disabled account once its
+-- login is typed, and putting a user in a group. Groups are
 -- made, renamed and deleted in their own section, and what a group may do
 -- follows its members.
 module Test.Browser.Admin (spec) where
@@ -214,6 +215,44 @@ spec m = do
       switchTo ui "reader"
       find ui ".user-switcher-toggle" >>= (`shouldContainText` "Rita Reader")
 
+    it "removes a disabled account once its login is typed, and says so above the table" $ runPage $ do
+      ui <- start m (Just "user-admin") (Admin (Users allUsers))
+      _ <- manage ui "reader"
+      -- An enabled login cannot be removed: the dialog says what comes first.
+      length <$> findAll ui ".user-dialog .user-remove" `shouldReturn` 0
+      find ui ".user-dialog .user-remove-hint" >>= (`shouldHaveText` "To remove the account, disable the login first.")
+      find ui ".user-dialog .disable-toggle" >>= click
+      find ui ".user-dialog .disable-confirm-button" >>= click
+      eventually (find ui ".user-row[data-login=reader]" >>= (`shouldHaveClass` "user-disabled"))
+      eventually (find ui ".user-dialog .user-remove" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing))
+      length <$> findAll ui ".user-dialog .user-remove-hint" `shouldReturn` 0
+      -- Asked, then cancelled: nothing happens.
+      find ui ".user-dialog .user-remove" >>= click
+      find ui ".user-dialog .remove-confirm" >>= (`shouldContainText` "Remove Rita Reader's account? This cannot be undone.")
+      clickButton ui ".user-dialog .remove-confirm button" "Cancel"
+      eventually (length <$> findAll ui ".user-dialog .remove-confirm" `shouldReturn` 0)
+      -- Asked again: the field for the login has the focus, and the button
+      -- waits for the login exactly.
+      find ui ".user-dialog .user-remove" >>= click
+      eventually (focusedIs ".user-dialog .remove-confirm-login" `shouldReturn` True)
+      button <- find ui ".user-dialog .remove-confirm-button"
+      getAttribute button "disabled" `shouldReturn` Just ""
+      find ui ".user-dialog .remove-confirm-login" >>= (`typeText` "Reader")
+      press "Enter"
+      settle
+      length <$> findAll ui ".user-dialog" `shouldReturn` 1
+      getAttribute button "disabled" `shouldReturn` Just ""
+      find ui ".user-dialog .remove-confirm-login" >>= \field -> focus field >> replicateM_ 6 (press "Backspace") >> typeText field "reader"
+      eventually (getAttribute button "disabled" `shouldReturn` Nothing)
+      click button
+      -- The dialog closes, the table says so, and Rita is gone, from the
+      -- table and from the demo's switcher.
+      eventually (length <$> findAll ui ".user-dialog" `shouldReturn` 0)
+      eventually (find ui ".admin-told" >>= (`shouldContainText` "Rita Reader's account (reader) is removed"))
+      eventually (map' ui ".user-row" "data-login" `shouldReturn` ["admin", "editor"])
+      find ui ".user-switcher-toggle" >>= click
+      eventually (length <$> findAll ui ".user-menu button[data-login=reader]" `shouldReturn` 0)
+
   it "marks a user as an administrator, who then has the administration, and unmarks them" $ runPage $ do
     ui <- start m (Just "user-admin") (Admin (Users allUsers))
     _ <- manage ui "editor"
@@ -244,6 +283,7 @@ spec m = do
     find ui ".user-dialog .user-dialog-permissions" >>= (`shouldContainText` "That is you")
     find ui ".user-dialog .disable-self" >>= (`shouldContainText` "You cannot disable your own login")
     length <$> findAll ui ".user-dialog .disable-toggle" `shouldReturn` 0
+    length <$> findAll ui ".user-dialog .user-remove" `shouldReturn` 0
     press "Escape"
     -- Everyone else's switch works.
     _ <- manage ui "reader"
