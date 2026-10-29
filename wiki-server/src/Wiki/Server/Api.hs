@@ -89,7 +89,7 @@ import System.IO (hClose, openBinaryTempFile)
 import Wiki.Api
 import Wiki.Api.Account (Account (..), AccountDisabled (..), Credentials (..), InvitationInfo, InvitationToken, NewAccount (..), NewPassword (..), PasswordChange (..), SignInMethods)
 import Wiki.Api.Activity (ActivityQuery (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), Invitation (..), Invitations (..), Invited (..), NewInvitation (..), ServerStatus (..), WikiSettings (..), userQueryOf)
 import Wiki.Api.Comments (CommentText (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error (ApiError, errorForStatus, errorStatus)
 import Wiki.Api.Error qualified as ApiError
@@ -544,6 +544,7 @@ handlers env caller =
           , -- The storage checks who may: these are the administration's
             -- own operations ("Wiki.App.Backend.Admin").
             directory = wiki directory
+          , users = \offset limit q administrators disabled -> wiki (userPage (userQueryOf offset limit q administrators disabled))
           , setAdministrator = \u flag -> wiki (setAdministrator u flag.administrator) $> NoContent
           , setCreateSpaces = \u flag -> wiki (setCreateSpaces u flag.createSpaces) $> NoContent
           , createGroup = \body -> wiki (createGroup body.name)

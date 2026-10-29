@@ -305,6 +305,7 @@ needWatched = \case
 -- records of the store ("Wiki.App.Backend.Mem.Persist").
 instance (MonadIO m) => MonadAdmin (MemWiki m) where
   directory = query directoryIn
+  userPage = query . userPageIn
   setAdministrator u = write . setAdministratorIn u
   setCreateSpaces u = write . setCreateSpacesIn u
   createUser = write . createUserIn

@@ -76,6 +76,10 @@ module Wiki.Server.Storage.Rows
   , loadSecondFactorUsers
   , loadEmails
   , verifiedEmail
+  , ListedUser (..)
+  , loadUserPage
+  , loadUsersDetails
+  , UserDetails (..)
 
     -- * Identities
   , IdentityRow (..)
@@ -180,6 +184,7 @@ import Database.Beam
   , limit_
   , lower_
   , max_
+  , offset_
   , orderBy_
   , runDelete
   , runInsert
@@ -195,13 +200,14 @@ import Database.Beam
   , (==.)
   , (==?.)
   , (>.)
+  , (||.)
   )
 import Database.Beam qualified as Beam
 import Database.Beam.Backend.SQL (BeamSqlBackend)
 import Database.Beam.Backend.SQL.BeamExtensions (anyConflict, conflictingFields, insertOnConflict, onConflictDoNothing, onConflictUpdateSet)
 import Protolude
 import Wiki.Api.Account (Account (..), InvitationInfo (..), LinkedIdentity (..), providerOnly)
-import Wiki.Api.Admin (Invitation (..), WikiSettings (..), defaultSettings)
+import Wiki.Api.Admin (Invitation (..), UserQuery (..), WikiSettings (..), defaultSettings)
 import Wiki.Api.Security (AccountEmail (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderSettingsOf (..), ServerSettingsOf (..), defaultMailPort, kindName, readKind, readSecurity, securityFor, securityName)
 import Wiki.Core.Access (Access (..), accessName, readAccess)
@@ -877,6 +883,88 @@ loadEmails :: (Backend be) => Db be (Map UserId AccountEmail)
 loadEmails = do
   rows <- runSelectReturningList (select ((\u -> (u.id, u.email, u.email_verified_at)) <$> filter_ (\u -> Beam.isJust_ u.email) (all_ wikiDb.users)))
   pure (Map.fromList [(UserId u, AccountEmail {email = Email e, verified = isJust at}) | (u, Just e, at) <- rows])
+
+-- | 'ListedUser' is a user as a page of users reads them from the users
+-- table: the user, whether they are disabled, whether they have a
+-- password, and their address.
+data ListedUser = ListedUser
+  { user :: User
+  , disabled :: Bool
+  , hasPassword :: Bool
+  , email :: Maybe AccountEmail
+  }
+
+-- | One page of the users a query names ('Wiki.Api.Admin.UserQuery', whose
+-- meaning 'Wiki.Api.Admin.pageOfDirectory' gives), and how many users the
+-- query matches in all. The administrators filter needs the ids of the
+-- users granted the global administer, which the caller passes. The page
+-- is read in the order of the index on @lower(login)@, with an offset.
+--
+-- Each word searched for is matched with @LIKE@ against the login and the
+-- display name, both lowered. Beam writes no @ESCAPE@ clause, and the two
+-- databases differ on the default escape character (none in SQLite, a
+-- backslash in PostgreSQL). So a @%@, a @_@ or a backslash in a word is
+-- replaced by @_@, which matches any one character on both: such a word
+-- finds what it names, and perhaps a few more users.
+loadUserPage :: forall be. (Backend be) => [UserId] -> UserQuery -> Db be (Int, [ListedUser])
+loadUserPage administrators q = do
+  let wild c = if c `elem` ['%', '_', '\\'] then '_' else c
+      patterns = ["%" <> T.map wild w <> "%" | w <- T.words (T.toLower q.search)] :: [Text]
+      matches :: forall s. S.Users (QExpr be s) -> QExpr be s Bool
+      matches u =
+        foldr
+          (&&.)
+          (val_ True)
+          ( [lower_ u.login `like_` val_ p ||. lower_ u.display_name `like_` val_ p | p <- patterns]
+              <> [u.disabled ==. val_ True | q.disabled]
+              <> [if null administrators then val_ False else u.id `in_` map (\a -> val_ a.text) administrators | q.administrators]
+          )
+  counted <- runSelectReturningOne (select (aggregate_ (\_ -> as_ @Int64 countAll_) (filter_ matches (all_ wikiDb.users))))
+  rows <-
+    runSelectReturningList
+      . select
+      . limit_ (fromIntegral q.limit)
+      . offset_ (fromIntegral q.offset)
+      . orderBy_ (\u -> (asc_ (lower_ u.login), asc_ u.login, asc_ u.id))
+      $ filter_ matches (all_ wikiDb.users)
+  pure
+    ( maybe 0 fromIntegral counted
+    , [ ListedUser
+          { user = userOf r
+          , disabled = r.disabled
+          , hasPassword = isJust r.password_hash
+          , email = (\e -> AccountEmail {email = Email e, verified = isJust r.email_verified_at}) <$> r.email
+          }
+      | r <- rows
+      ]
+    )
+
+-- | 'UserDetails' is what a page of users shows of its users besides
+-- their rows: the providers each signs in with, who has a second factor,
+-- and the groups each is in.
+data UserDetails = UserDetails
+  { identities :: Map UserId [Text]
+  , secondFactor :: Set UserId
+  , groups :: Map UserId [GroupId]
+  }
+
+-- | The details of these users, read for them alone, a chunk of ids at a
+-- time.
+loadUsersDetails :: (Backend be) => [UserId] -> Db be UserDetails
+loadUsersDetails users = do
+  let ids = map (\u -> u.text) users
+  linked <- inChunks ids $ \chunk ->
+    runSelectReturningList (select (orderBy_ (\(_, p) -> asc_ p) ((\i -> (i.user_id, i.provider)) <$> filter_ (\i -> i.user_id `in_` map val_ chunk) (all_ wikiDb.identities))))
+  factors <- inChunks ids $ \chunk ->
+    runSelectReturningList (select ((\t -> t.user_id) <$> filter_ (\t -> Beam.isJust_ t.enabled_at &&. t.user_id `in_` map val_ chunk) (all_ wikiDb.totp)))
+  members <- inChunks ids $ \chunk ->
+    runSelectReturningList (select ((\m -> (m.user_id, m.group_id)) <$> filter_ (\m -> m.user_id `in_` map val_ chunk) (all_ wikiDb.group_members)))
+  pure
+    UserDetails
+      { identities = Map.fromListWith (flip (<>)) [(UserId u, [p]) | (u, p) <- linked]
+      , secondFactor = Set.fromList (map UserId factors)
+      , groups = Map.fromListWith (<>) [(UserId u, [GroupId g]) | (u, g) <- members]
+      }
 
 -- | A user's address, if it is verified.
 verifiedEmail :: (Backend be) => UserId -> Db be (Maybe Email)

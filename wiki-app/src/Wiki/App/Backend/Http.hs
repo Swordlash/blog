@@ -102,7 +102,7 @@ import Web.Storage.IndexedDB (MonadIndexedDB)
 import Wiki.Api (AccountApi (..), AdminApi (..), ArchiveApi (..), AssistantApi (..), AttachmentsApi (..), InvitationsApi (..), PagesApi (..), PasswordResetApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (AccountDisabled (..), Credentials (..), NewAccount, NewPassword (..))
 import Wiki.Api.Activity (ActivityQuery (..), firstPage)
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), GroupName (..), NewInvitation (..), UserQuery (..))
 import Wiki.Api.Backups (Backups (..))
 import Wiki.Api.Comments (CommentText (..), CommentsApi (..), NewThread (..), ThreadResolution (..))
 import Wiki.Api.Error qualified as ApiError
@@ -466,6 +466,15 @@ instance (MonadIO m) => MonadWiki (HttpWiki m) where
 -- render. The writes empty the cache, as every write does.
 instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   directory = cached (\c -> c.directory) endpoints.admin.directory withDirectory
+
+  -- Used once from the prerendered page, as the audit log's first page is,
+  -- and fetched afresh after that.
+  userPage q =
+    once
+      (\c -> Map.lookup q c.userPages)
+      (forgetUserPage q)
+      (endpoints.admin.users (Just q.offset) (Just q.limit) (mfilter (/= "") (Just q.search)) q.administrators q.disabled)
+      (withUserPage q)
   setAdministrator u administrator = write_ (endpoints.admin.setAdministrator u AdministratorFlag {administrator})
   setCreateSpaces u createSpaces = write_ (endpoints.admin.setCreateSpaces u CreateSpacesFlag {createSpaces})
   createUser new = write (endpoints.admin.createUser new)

@@ -76,6 +76,7 @@ module Wiki.App.Backend.Mem.State
 
     -- * Administration
   , directoryIn
+  , userPageIn
   , setAdministratorIn
   , setCreateSpacesIn
   , createUserIn
@@ -150,8 +151,12 @@ import Wiki.Api.Admin
   , Invitations (Invitations)
   , Invited (Invited)
   , ServerStatus
+  , UserPage
+  , UserQuery
   , WikiSettings (WikiSettings)
+  , checkUserQuery
   , invitationLifetime
+  , pageOfDirectory
   )
 import Wiki.Api.Admin qualified as A
 import Wiki.Api.Backups (Backups (..), defaultBackupSettings)
@@ -1229,6 +1234,14 @@ findGroup :: MemState -> GroupId -> Either WikiError Group
 findGroup st g = maybe (Left NotFound) Right (Map.lookup g st.groups)
 
 -- | Every user and group, as the administration shows them.
+-- | A page of the users, as 'pageOfDirectory' defines it, read from the
+-- directory: the demo's wiki has a handful of users.
+userPageIn :: UserQuery -> MemState -> Either WikiError UserPage
+userPageIn q st = do
+  requireAdministrator st
+  checked <- first Invalid (checkUserQuery q)
+  pageOfDirectory checked <$> directoryIn st
+
 directoryIn :: MemState -> Either WikiError Directory
 directoryIn st = do
   requireAdministrator st

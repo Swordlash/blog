@@ -50,6 +50,14 @@ the copy in memory when it matches, so another process's change is seen
 at the next read. A write still reads the permission context from the
 database. A page view goes from 29 statements to 17 on both databases.
 
+`GET api/v1/admin/users` answers a page of the users (WP5.25): the storage
+reads one page in SQL (`Rows.loadUserPage`, ordered by `lower(login)`, the
+words matched with `LIKE` against the lowered login and display name, `%`,
+`_` and backslash read as any one character), and the details of those
+users alone (`Rows.loadUsersDetails`). A limit outside 1 to 100 and an
+offset below 0 are refused with a 400, after the check that the caller
+administers the wiki.
+
 `Wiki.Server.Render.inProcess`, the transport that hands the application's
 requests to the API in the same process, takes servant's request and
 returns servant's response, as the application's client is now derived

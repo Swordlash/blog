@@ -131,7 +131,7 @@ import Halogen.Query.HalogenM (HalogenM)
 import Protolude
 import Wiki.Api.Account (Account, NewAccount)
 import Wiki.Api.Activity (Activity, ActivityQuery)
-import Wiki.Api.Admin (Directory, Invitations, Invited, ServerStatus, WikiSettings)
+import Wiki.Api.Admin (Directory, Invitations, Invited, ServerStatus, UserPage, UserQuery, WikiSettings)
 import Wiki.Api.Backups (BackupSettingsChange, Backups)
 import Wiki.Api.ServerSettings (MailTestResult, ProviderChange, ProviderCheck, ServerSettings, ServerSettingsChange)
 import Wiki.App.Backend (WikiError (..))
@@ -150,6 +150,15 @@ class (Monad m) => MonadAdmin m where
   directory :: m (Either WikiError Directory)
   default directory :: (MonadTrans t, m ~ t n, MonadAdmin n) => m (Either WikiError Directory)
   directory = lift directory
+
+  -- | One page of the users ('Wiki.Api.Admin.UserQuery'), in the order and
+  -- with the matching 'Wiki.Api.Admin.pageOfDirectory' defines: the
+  -- administration's table of users reads the users this way, so that a
+  -- wiki of thousands of users is never read whole. A query
+  -- 'Wiki.Api.Admin.checkUserQuery' refuses is 'Invalid'.
+  userPage :: UserQuery -> m (Either WikiError UserPage)
+  default userPage :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserQuery -> m (Either WikiError UserPage)
+  userPage = lift . userPage
 
   -- | Grant a user the global administer, or take it from them.
   setAdministrator :: UserId -> Bool -> m (Either WikiError ())

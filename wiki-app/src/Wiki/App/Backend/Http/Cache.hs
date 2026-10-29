@@ -90,7 +90,9 @@
 --   page with its hits, and the program then shows them at once;
 -- * for the administration, which the server prerenders: the directory of
 --   the wiki's users and groups, the wiki's settings and invitations, and
---   the server's own settings (without their secrets);
+--   the server's own settings (without their secrets); and, used once like
+--   the audit log's first page, the page of users the users section asked
+--   for;
 -- * an invitation as its link shows it to the invited person, by the
 --   secret in the link;
 -- * the user's notifications, which the bell shows (WP4.13 of
@@ -136,6 +138,8 @@ module Wiki.App.Backend.Http.Cache
   , withBackups
   , withActivity
   , withStatus
+  , withUserPage
+  , forgetUserPage
   , forgetActivity
   , forgetStatus
   , withThreads
@@ -158,7 +162,7 @@ import Data.Time (UTCTime)
 import Protolude
 import Wiki.Api.Account (InvitationInfo, InvitationToken)
 import Wiki.Api.Activity (Activity)
-import Wiki.Api.Admin (Directory, Invitations, ServerStatus, WikiSettings)
+import Wiki.Api.Admin (Directory, Invitations, ServerStatus, UserPage, UserQuery, WikiSettings)
 import Wiki.Api.Backups (Backups)
 import Wiki.Api.Events (PageEvent (..), applyEvent)
 import Wiki.Api.Notifications (Notifications (..))
@@ -228,6 +232,12 @@ data Cache = Cache
   , status :: Maybe (Either WikiError ServerStatus)
   -- ^ 'Wiki.App.Backend.Admin.serverStatus', cached and removed in the
   -- same way as 'activity'.
+  , userPages :: Map UserQuery (Either WikiError UserPage)
+  -- ^ 'Wiki.App.Backend.Admin.userPage', by query: the page of users the
+  -- server put into the prerendered users section. Each is used for one
+  -- read and then removed, as 'activity' is, since accounts change on the
+  -- server by themselves (a user who signs in with a provider for the
+  -- first time is made there).
   , threads :: Map PageId (Either WikiError [Thread])
   -- ^ 'Wiki.App.Backend.Comments.listThreads', by page.
   , people :: Map Text (Maybe Author)
@@ -291,6 +301,7 @@ emptyCache =
     , backups = Nothing
     , activity = Nothing
     , status = Nothing
+    , userPages = mempty
     , threads = mempty
     , people = mempty
     , notices = Nothing
@@ -392,6 +403,13 @@ forgetActivity c = c {activity = Nothing}
 -- | Remove the cached server status, once it has been used for a read.
 forgetStatus :: Cache -> Cache
 forgetStatus c = c {status = Nothing}
+
+withUserPage :: UserQuery -> Either WikiError UserPage -> Cache -> Cache
+withUserPage q p c = c {userPages = Map.insert q p c.userPages}
+
+-- | Remove a cached page of users, once it has been used for a read.
+forgetUserPage :: UserQuery -> Cache -> Cache
+forgetUserPage q c = c {userPages = Map.delete q c.userPages}
 
 withThreads :: PageId -> Either WikiError [Thread] -> Cache -> Cache
 withThreads pid ts c = c {threads = Map.insert pid ts c.threads}

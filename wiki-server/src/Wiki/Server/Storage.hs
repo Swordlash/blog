@@ -174,7 +174,7 @@ import Data.UUID.Types qualified as UUID
 import Protolude
 import System.Directory (createDirectoryIfMissing, doesFileExist, getFileSize, removePathForcibly)
 import Wiki.Api.Account (Account (..), InvitationToken (..), NewAccount (..), providerOnly)
-import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), invitationLifetime)
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), UserPage (..), UserQuery (..), UserSummary (..), WikiSettings (..), checkUserQuery, invitationLifetime)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsChange, BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), applyBackupChange, checkBackupSettings, destinationText, scheduleText)
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Info (Capabilities)
@@ -1034,6 +1034,7 @@ instance (MonadIO m) => MonadWiki (StoredWiki m) where
 -- administrator always does, and a user does through a grant.
 instance (MonadIO m) => MonadAdmin (StoredWiki m) where
   directory = run Reads directoryTx
+  userPage = run Reads . userPageTx
   setAdministrator u = run Writes . setGlobalGrantTx Administer u
   setCreateSpaces u = run Writes . setGlobalGrantTx CreateSpaces u
 
@@ -2116,6 +2117,50 @@ directoryTx = do
       , adminCreatesPasswordAccounts = wiki.adminCreatesPasswordAccounts
       , groups = sortOn (\g -> (T.toCaseFold g.name, g.id)) groups
       , membership = Map.filter (not . Set.null) (Map.restrictKeys membership (Set.fromList (map (\g -> g.id) groups)))
+      }
+
+-- | One page of the users, read from the database a page at a time
+-- ("Wiki.Server.Storage.Rows"' 'loadUserPage'), with the details of those
+-- users alone. The answer is what 'Wiki.Api.Admin.pageOfDirectory' gives
+-- for the directory of every user; the contract tests check that.
+userPageTx :: UserQuery -> Tx UserPage
+userPageTx q = do
+  requireAdministrator
+  checked <- either invalid pure (checkUserQuery q)
+  stored <- db loadGrants
+  let holding p = [u | GlobalGrant (SubjectUser u) p' <- stored.global, p' == p]
+      administrators = holding Administer
+      creators = Set.fromList (holding CreateSpaces)
+  (total, listed) <- db (loadUserPage administrators checked)
+  details <- db (loadUsersDetails (map (\l -> l.user.id) listed))
+  groups <- sortOn (\g -> (T.toCaseFold g.name, g.id)) <$> db loadGroups
+  server <- asks (\x -> x.server)
+  wiki <- asks (\x -> x.wiki)
+  let byName = Map.fromList (zip (map (\g -> g.id) groups) [0 :: Int ..])
+      summary l =
+        let providers = Map.findWithDefault [] l.user.id details.identities
+         in UserSummary
+              { user = l.user
+              , administrator = l.user.id `elem` administrators
+              , createsSpaces = l.user.id `Set.member` creators
+              , disabled = l.disabled
+              , hasPassword = l.hasPassword
+              , identities = providers
+              , -- By the providers the server has now, as the directory says.
+                providerOnly = providerOnly (providerNames server) l.hasPassword providers
+              , secondFactor = l.user.id `Set.member` details.secondFactor
+              , email = l.email
+              , groups = sortOn (`Map.lookup` byName) (Map.findWithDefault [] l.user.id details.groups)
+              }
+  pure
+    UserPage
+      { users = map summary listed
+      , total
+      , offset = checked.offset
+      , groups
+      , -- As 'directoryTx' says it.
+        mailing = isJust server.publicUrl && isJust server.mail
+      , adminCreatesPasswordAccounts = wiki.adminCreatesPasswordAccounts
       }
 
 -- | Grant a global permission to a user directly, or take it away: the

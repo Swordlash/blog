@@ -19,7 +19,7 @@ import Test.HUnit (assertFailure)
 import Test.Hspec
 import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Activity (Activity (..), firstPage)
-import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), WikiSettings (..), defaultSettings)
+import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), UserPage (..), UserQuery (..), UserSummary (..), WikiSettings (..), defaultSettings, pageOfDirectory)
 import Wiki.Api.Backups (BackupSettingsOf (..), Backups (..), defaultBackupSettings)
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
 import Wiki.App.Backend
@@ -43,6 +43,7 @@ reader = As "reader"
 spec :: forall m -> (MonadWiki m, MonadAdmin m) => (ActionWith (Fixture m) -> IO ()) -> Spec
 spec _ withFixture = around withFixture $ describe "MonadAdmin contract" $ do
   reading
+  paging
   refusing
   administrators
   creators
@@ -123,6 +124,65 @@ reading = describe "directory" $ do
     map (\g -> g.name) d.groups `shouldBe` ["writers"]
     Map.elems d.membership `shouldBe` [Set.singleton editorId]
     Map.keys d.membership `shouldBe` map (\g -> g.id) d.groups
+
+--------------------------------------------------------------------------------
+-- A page of users
+
+-- | A query for users, built whole.
+users :: Int -> Int -> Text -> Bool -> Bool -> UserQuery
+users offset limit search onlyAdministrators onlyDisabled = UserQuery {offset, limit, search, administrators = onlyAdministrators, disabled = onlyDisabled}
+
+-- | The logins of a page's users.
+loginsOf :: UserPage -> [Text]
+loginsOf p = [u.user.login.text | u <- p.users]
+
+paging :: (MonadWiki m, MonadAdmin m) => SpecWith (Fixture m)
+paging = describe "userPage" $ do
+  it "orders the users by login ignoring case, pages them, and counts them all" $ \(Fixture run) -> do
+    for_ ["Zoe", "bob", "Carla"] $ \login ->
+      run admin (createUser NewAccount {login, displayName = login <> " Example", password = Password "a good password", email = Nothing}) >>= ok
+    page1 <- run admin (userPage (users 0 4 "" False False)) >>= ok
+    loginsOf page1 `shouldBe` ["admin", "bob", "Carla", "editor"]
+    (page1.total, page1.offset) `shouldBe` (6, 0)
+    page2 <- run admin (userPage (users 4 4 "" False False)) >>= ok
+    loginsOf page2 `shouldBe` ["reader", "Zoe"]
+    (page2.total, page2.offset) `shouldBe` (6, 4)
+    beyond <- run admin (userPage (users 8 4 "" False False)) >>= ok
+    (loginsOf beyond, beyond.total) `shouldBe` ([], 6)
+
+  it "finds every word in the login or the display name, ignoring case" $ \(Fixture run) -> do
+    loginsOf <$> (run admin (userPage (users 0 25 "EDI" False False)) >>= ok) `shouldReturn` ["editor"]
+    loginsOf <$> (run admin (userPage (users 0 25 "rita" False False)) >>= ok) `shouldReturn` ["reader"]
+    loginsOf <$> (run admin (userPage (users 0 25 "ad min" False False)) >>= ok) `shouldReturn` ["admin"]
+    nobody <- run admin (userPage (users 0 25 "nobody" False False)) >>= ok
+    (loginsOf nobody, nobody.total) `shouldBe` ([], 0)
+
+  it "keeps only the administrators, or only the disabled accounts" $ \(Fixture run) -> do
+    readerId <- idOf run reader
+    void (run admin (setDisabled readerId True) >>= ok)
+    loginsOf <$> (run admin (userPage (users 0 25 "" True False)) >>= ok) `shouldReturn` ["admin"]
+    disabled <- run admin (userPage (users 0 25 "" False True)) >>= ok
+    loginsOf disabled `shouldBe` ["reader"]
+    (\u -> u.disabled) <$> disabled.users `shouldBe` [True]
+    loginsOf <$> (run admin (userPage (users 0 25 "" True True)) >>= ok) `shouldReturn` []
+
+  it "answers what the directory says, user by user, with every group" $ \(Fixture run) -> do
+    writers <- groupNamed run "writers"
+    page <- run admin (userPage (users 0 25 "" False False)) >>= ok
+    d <- directoryNow run
+    page `shouldBe` pageOfDirectory (users 0 25 "" False False) d
+    (\u -> (u.user.login.text, u.administrator, u.createsSpaces, u.groups)) <$> page.users
+      `shouldBe` [("admin", True, False, []), ("editor", False, True, [writers.id]), ("reader", False, False, [])]
+    map (\g -> g.name) page.groups `shouldBe` ["writers"]
+
+  it "refuses an offset below 0 and a limit outside 1 to 100, and anyone who does not administer the wiki first" $ \(Fixture run) -> do
+    run admin (userPage (users 0 0 "" False False)) >>= shouldBeInvalid
+    run admin (userPage (users 0 101 "" False False)) >>= shouldBeInvalid
+    run admin (userPage (users (-1) 25 "" False False)) >>= shouldBeInvalid
+    void (run admin (userPage (users 0 100 "" False False)) >>= ok)
+    for_ [Anonymous, editor, reader] $ \who -> do
+      run who (userPage (users 0 25 "" False False)) >>= (`shouldFailWith` Forbidden)
+      run who (userPage (users 0 0 "" False False)) >>= (`shouldFailWith` Forbidden)
 
 --------------------------------------------------------------------------------
 -- Refusals

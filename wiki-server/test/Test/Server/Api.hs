@@ -20,7 +20,7 @@ import Test.Hspec
 import Test.Server.Fixture
 import Wiki.Api (AdminApi (..), AttachmentsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (Account (..), AccountDisabled (..), NewAccount (..), NewPassword (..))
-import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..))
+import Wiki.Api.Admin (AdministratorFlag (..), CreateSpacesFlag (..), Directory (..), GroupName (..), ServerStatus (..), UserPage (..), UserSummary (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Links (attachmentUrl, links, searchUrl, spaceIconUrl)
 import Wiki.Api.Types
@@ -49,6 +49,7 @@ spec backing = describe "the API over HTTP" $ do
   refusals backing
   status backing
   people backing
+  usersPaged backing
   permissions backing
   profiles backing
 
@@ -401,6 +402,70 @@ people backing = describe "the wiki's people" $ do
   where
     loginId :: Directory -> Text -> UserId
     loginId d login = maybe (panic ("no user " <> login)) (\u -> u.id) (find (\u -> u.login.text == login) d.users)
+
+-- | The users a page at a time (@GET admin\/users@, WP5.25 of docs/PLAN.md):
+-- in order of login ignoring case, from an offset, searched over login and
+-- display name, filtered to the administrators or the disabled accounts,
+-- with a limit between 1 and 100 and 25 when none is given.
+usersPaged :: Backing -> Spec
+usersPaged backing = describe "the users, a page at a time" $ do
+  it "pages them in order of login, searches them, and filters them, as the query says" $ withDemoRunning backing identity $ \r -> do
+    let page :: Maybe Int -> Maybe Int -> Maybe Text -> Bool -> Bool -> IO UserPage
+        page offset limit q administrators disabled = ok200 (getUrl r (onAdmin r (links.admin.users offset limit q administrators disabled)))
+        logins p = [u.user.login.text | u <- (p :: UserPage).users]
+    for_ ["Zed", "bob", "Carla", "dora"] $ \login -> do
+      made <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login, displayName = login <> " Doe", password = Password "a good password", email = Nothing}
+      made.status `shouldBe` 201
+    everyone <- page Nothing Nothing Nothing False False
+    logins everyone `shouldBe` ["admin", "bob", "Carla", "dora", "editor", "reader", "Zed"]
+    (everyone.total, everyone.offset) `shouldBe` (7, 0)
+    middle <- page (Just 3) (Just 3) Nothing False False
+    (logins middle, middle.total, middle.offset) `shouldBe` (["dora", "editor", "reader"], 7, 3)
+    logins <$> page (Just 6) (Just 3) Nothing False False `shouldReturn` ["Zed"]
+    logins <$> page (Just 9) (Just 3) Nothing False False `shouldReturn` []
+    -- Every word, in the login or the display name, ignoring case.
+    logins <$> page Nothing Nothing (Just "DOE") False False `shouldReturn` ["bob", "Carla", "dora", "Zed"]
+    logins <$> page Nothing Nothing (Just "doe car") False False `shouldReturn` ["Carla"]
+    logins <$> page Nothing Nothing (Just "rita") False False `shouldReturn` ["reader"]
+    -- A word with a character LIKE reads finds what it names.
+    logins <$> page Nothing Nothing (Just "50%_\\") False False `shouldReturn` []
+    -- The filters.
+    let rita = case find (\u -> u.user.login.text == "reader") everyone.users of
+          Just u -> u.user.id
+          Nothing -> panic "no reader"
+    off <- sendJson r methodPut (onAdmin r (links.admin.setDisabled rita)) AccountDisabled {disabled = True}
+    off.status `shouldBe` 200
+    logins <$> page Nothing Nothing Nothing True False `shouldReturn` ["admin"]
+    disabled <- page Nothing Nothing Nothing False True
+    (logins disabled, map (\u -> u.disabled) disabled.users) `shouldBe` (["reader"], [True])
+    logins <$> page Nothing Nothing (Just "rit") False True `shouldReturn` ["reader"]
+    logins <$> page Nothing Nothing Nothing True True `shouldReturn` []
+
+  it "answers 25 at most when no limit is given, and refuses a limit outside 1 to 100 or an offset below 0" $ withDemoRunning backing identity $ \r -> do
+    let get' address = getUrl r (onAdmin r address)
+        invalid reply = do
+          reply.status `shouldBe` 400
+          jsonAs 400 reply >>= \case
+            Invalid _ -> pass
+            other -> expectationFailure ("expected Invalid, got " <> show other)
+    for_ [1 .. 30 :: Int] $ \i -> do
+      made <- sendJson r methodPost (onAdmin r links.admin.createUser) NewAccount {login = "user" <> show i, displayName = "", password = Password "a good password", email = Nothing}
+      made.status `shouldBe` 201
+    first25 :: UserPage <- ok200 (get' (links.admin.users Nothing Nothing Nothing False False))
+    (length first25.users, first25.total) `shouldBe` (25, 33)
+    hundred :: UserPage <- ok200 (get' (links.admin.users Nothing (Just 100) Nothing False False))
+    length hundred.users `shouldBe` 33
+    get' (links.admin.users Nothing (Just 101) Nothing False False) >>= invalid
+    get' (links.admin.users Nothing (Just 0) Nothing False False) >>= invalid
+    get' (links.admin.users (Just (-1)) Nothing Nothing False False) >>= invalid
+
+  it "is refused to anyone who does not administer the wiki, before the query is read" $ withAdminSession backing identity $ \r _ -> do
+    givePassword r "user-editor" "editor's password"
+    editor <- cookie <$> signInAs r "editor" "editor's password"
+    let forbidden reply = jsonAs 403 reply >>= (`shouldBe` Forbidden)
+    getUrl r (onPublic r (links.admin.users Nothing Nothing Nothing False False)) >>= forbidden
+    getUrlWith r (onPublic r (links.admin.users Nothing Nothing Nothing False False)) [editor] >>= forbidden
+    getUrlWith r (onPublic r (links.admin.users Nothing (Just 1000) Nothing False False)) [editor] >>= forbidden
 
 -- | Who may do what, given over HTTP by an administrator's session on the
 -- public listener, and kept to by the server for each user's own: the

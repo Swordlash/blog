@@ -581,7 +581,7 @@ preload = describe "what a page it is rendered into carries" $ do
 
   it "writes what is not kept as nothing, and nothing as null" $
     encodePreload (withSpaceAt (slugs "away") (Left (Unreachable "offline")) emptyCache)
-      `shouldBe` "{\"activity\":null,\"backups\":null,\"directory\":null,\"drafts\":[],\"invitations\":null,\"invitationsAt\":null,\"notices\":null,\"pageCounts\":null,\"pages\":[],\"pagesAt\":[],\"people\":null,\"postDetails\":null,\"searches\":[],\"server\":null,\"session\":null,\"settings\":null,\"spaces\":null,\"spacesAt\":[],\"status\":null,\"threads\":null,\"versionLists\":[],\"versions\":[],\"watches\":null}"
+      `shouldBe` "{\"activity\":null,\"backups\":null,\"directory\":null,\"drafts\":[],\"invitations\":null,\"invitationsAt\":null,\"notices\":null,\"pageCounts\":null,\"pages\":[],\"pagesAt\":[],\"people\":null,\"postDetails\":null,\"searches\":[],\"server\":null,\"session\":null,\"settings\":null,\"spaces\":null,\"spacesAt\":[],\"status\":null,\"threads\":null,\"userPages\":null,\"versionLists\":[],\"versions\":[],\"watches\":null}"
 
   it "says why a payload cannot be read" $
     decodePreload "{\"spaces\": 3}" `shouldSatisfy` isLeft
