@@ -47,7 +47,9 @@ In Claude Code, start it with the `implementer` definition in
 subagent with model `gpt-6.1-sol` and reasoning effort `high`, following the same
 implementer instructions; the Claude model setting does not apply to Codex.
 One package per agent, one agent per package; independent packages may run in parallel,
-each on its own branch.
+each on its own branch. On one machine, only one of them builds or tests at a time
+(the planning session gives them a lock to take around every build and test command);
+editing goes on in parallel.
 
 A brief contains, in this order:
 
