@@ -20,7 +20,8 @@
 module Wiki.Server.Storage.Backend
   ( Backend (..)
   , Column
-  , rollBackOnError
+  , withTransaction
+  , withTransactionEither
   , Capabilities (..)
   , SearchKind (..)
   , Sqlite
@@ -123,17 +124,41 @@ class
   -- page that has all the words, which "Wiki.Core.Search" then ranks.
   searchMatches :: [Text] -> Bool -> [Text] -> Text -> Int -> Db be [(PageNodes Identity, Text, Maybe Double)]
 
--- | Run an action in a transaction on a connection, and roll the
--- transaction back if the action throws. The action's exception is the one
--- that goes on: a rollback that fails too (on a connection the exception
--- left in the middle of a statement, as an asynchronous exception that
--- stops a thread does) is ignored, since the connection is then closed
--- anyway ('Data.Pool.withResource' closes a connection whose action threw).
--- Were the rollback's exception to go on instead, a thread being stopped
--- would see an ordinary error in place of the exception that stops it, and
--- go on running.
-rollBackOnError :: (Backend be) => Connection be -> IO a -> IO a
-rollBackOnError c act = act `onException` try @SomeException (rollbackTransaction c)
+-- | 'withTransaction' runs an action in a transaction on a connection: it
+-- begins a transaction (one that writes, for @True@), runs the action, and
+-- commits. If the action throws, or the commit throws, the transaction is
+-- rolled back and the exception goes on. So the connection is left with no
+-- transaction open, whatever happens, and goes back to its pool ready for
+-- the next transaction.
+--
+-- Asynchronous exceptions (a thread being stopped) are masked between the
+-- steps: one can come while the action runs or while a statement waits for
+-- the database, but not between the beginning and the action, or between
+-- the action's end and the commit, where it would leave the transaction
+-- open with nobody to close it.
+--
+-- A rollback that fails too, on a connection the exception left in the
+-- middle of a statement, is ignored, and the first exception goes on. The
+-- connection is then closed anyway: 'Data.Pool.withResource' closes a
+-- connection whose action threw. If the rollback's exception went on
+-- instead, a thread being stopped would see an ordinary error in place of
+-- the exception that stops it, and go on running.
+withTransaction :: (Backend be) => Bool -> Connection be -> IO a -> IO a
+withTransaction writes c body = either absurd identity <$> withTransactionEither writes c (Right <$> body)
+
+-- | 'withTransaction' for an action whose result is an 'Either': a 'Right'
+-- is committed, and a 'Left' is rolled back, as an exception is. A
+-- refused operation then writes nothing.
+withTransactionEither :: (Backend be) => Bool -> Connection be -> IO (Either e a) -> IO (Either e a)
+withTransactionEither writes c body = mask $ \restore -> do
+  begin writes c
+  result <- restore body `onException` rollBackQuietly
+  case result of
+    Left _ -> rollbackTransaction c
+    Right _ -> commitTransaction c `onException` rollBackQuietly
+  pure result
+  where
+    rollBackQuietly = try @SomeException (rollbackTransaction c)
 
 instance Backend Sqlite where
   type Db Sqlite = SqliteM

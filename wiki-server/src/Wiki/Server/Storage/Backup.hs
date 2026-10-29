@@ -86,7 +86,7 @@ import System.IO.Error (isAlreadyInUseError, userError)
 import Wiki.Api.Backups (BackupRecord, BackupSettingsOf (..), DestinationOf (..), Retention (..), Schedule (..), defaultBackupSettings, retained)
 import Wiki.Core.Id (BlobId (..))
 import Wiki.Server.Secret (Secret (..), revealed)
-import Wiki.Server.Storage.Backend (Backend (..), rollBackOnError)
+import Wiki.Server.Storage.Backend (Backend (..), withTransaction)
 import Wiki.Server.Storage.Blobs (blobFile, storedBlobs)
 import Wiki.Server.Storage.Layout (Database (..), PgDatabase, attachmentsDir)
 import Wiki.Server.Storage.Migrate (Migration (..), databaseVersion, migrationsFor, schemaVersion)
@@ -152,11 +152,9 @@ backupInto programs database dir t = do
 dumpWithFacts :: PgPrograms -> PgDatabase -> FilePath -> IO (Either Text ())
 dumpWithFacts programs db target = bracket (openPostgres db) closePostgres $ \c -> do
   -- A read-only transaction whose snapshot the dump reads: the facts
-  -- kept beside the dump are read in the same snapshot.
-  begin False c
-  -- The transaction only reads: it ends with a rollback, whether the
-  -- dump worked or not.
-  (<* rollbackTransaction c) . rollBackOnError c $ do
+  -- kept beside the dump are read in the same snapshot. The transaction
+  -- only reads, so its commit changes nothing.
+  withTransaction False c $ do
     snapshot <- runDb c exportSnapshot
     facts <- DumpFacts <$> schemaVersion c <*> (map (\b -> b.text) . Set.toList <$> runDb c referencedBlobs)
     dumped <- dumpPostgres programs db (Just snapshot) target

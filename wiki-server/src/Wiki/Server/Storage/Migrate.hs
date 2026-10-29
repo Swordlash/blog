@@ -46,7 +46,7 @@ import Data.Time (getCurrentTime)
 import Database.Beam (aggregate_, all_, insert, insertValues, max_, runInsert, runSelectReturningOne, select)
 import Protolude
 import System.FilePath (dropExtension, takeBaseName, takeExtension)
-import Wiki.Server.Storage.Backend (Backend (..), rollBackOnError)
+import Wiki.Server.Storage.Backend (Backend (..), withTransaction)
 import Wiki.Server.Storage.Schema (SchemaDb (..), WikiSchema (..), schemaDb)
 
 -- | One step of the schema, on one database.
@@ -90,9 +90,8 @@ migrate c = applyMigrations (migrationsFor (schemaSuffix c)) c
 -- that holds tables but no version of this schema ('OldSchema'); either is
 -- left alone.
 applyMigrations :: (Backend be) => [Migration] -> Connection be -> IO [Int]
-applyMigrations steps c = do
-  begin True c
-  rollBackOnError c $ do
+applyMigrations steps c =
+  withTransaction True c $ do
     current <- versionOf c
     let known = maybe 0 (\m -> m.version) (lastMay steps)
     when (current > known) $
@@ -102,7 +101,6 @@ applyMigrations steps c = do
       runScript c m.statements
       now <- getCurrentTime
       runDb c (runInsert (insert schemaDb.wiki_schema (insertValues [SchemaRow {version = fromIntegral m.version, applied_at = now}])))
-    commitTransaction c
     pure (map (\m -> m.version) pending)
 
 -- | The error for a database at a schema version this program does not

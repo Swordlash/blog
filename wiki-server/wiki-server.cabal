@@ -297,6 +297,7 @@ test-suite wiki-server-test
         Test.Storage.Fixture
         Test.Storage.Migrate
         Test.Storage.Scale
+        Test.Storage.Transactions
     build-depends:
         HUnit,
         aeson,

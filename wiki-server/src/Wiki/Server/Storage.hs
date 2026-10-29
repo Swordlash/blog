@@ -212,7 +212,7 @@ import Wiki.Core.Version (Author (..), Version (..), VersionInfo, VersionsQuery 
 import Wiki.Server.Password (hashPassword, newToken, tokenHash)
 import Wiki.Server.Secret (Kept, Secret (..), hideSecrets)
 import Wiki.Server.Storage.Audit (Recorded (..), insertAudit, loadActivity, loadAuditLog, restoreAudit)
-import Wiki.Server.Storage.Backend (Backend (..), rollBackOnError)
+import Wiki.Server.Storage.Backend (Backend (..), withTransaction, withTransactionEither)
 import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupBlobs, backupFiles, backupInto, loadBackupSettings, loadLastBackup, lockDataDir, storeBackupSettings, storeLastBackup, unlockDataDir)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFile)
 import Wiki.Server.Storage.Comments qualified as Comments
@@ -413,29 +413,23 @@ writing st action = either absurd identity <$> writingEither st (Right <$> actio
 -- the transaction back, as an exception does.
 writingEither :: Storage -> (forall be. (Backend be) => Db be (Either e a)) -> IO (Either e a)
 writingEither st action = case st.engine of
-  Engine p -> retrying p.writer $ \c -> do
-    tracer <- beginTraced st True c
-    result <- rollBackOnError c (runTraced tracer c action)
-    case result of
-      Left _ -> rollbackTransaction c
-      Right _ -> rollBackOnError c (commitTransaction c)
-    pure result
+  Engine p -> retrying p.writer $ \c -> withTransactionEither True c $ do
+    tracer <- tracedBegin st True
+    runTraced tracer c action
 
 -- | Run statements on a reader, in a transaction that sees one state of
 -- the database throughout. A write there fails.
 reading :: Storage -> (forall be. (Backend be) => Db be a) -> IO a
 reading st action = case st.engine of
-  Engine p -> withResource p.readers $ \c -> do
-    tracer <- beginTraced st False c
-    -- A reader goes back to the pool after this, so a failed read must
-    -- not leave its transaction open.
-    result <- rollBackOnError c (runTraced tracer c action)
-    rollBackOnError c (commitTransaction c)
-    pure result
+  Engine p -> withResource p.readers $ \c -> withTransaction False c $ do
+    tracer <- tracedBegin st False
+    runTraced tracer c action
 
 -- | Run a transaction on a connection of a pool, and run it again, up to
 -- three times in all, when it failed only because of another transaction
--- beside it ('retryable': on PostgreSQL, another process's write).
+-- beside it ('retryable': on PostgreSQL, another process's write). The
+-- transaction is rolled back before it runs again ('withTransaction'), so
+-- the same connection is used again.
 --
 -- Any other exception leaves 'withResource' as an exception, so that the
 -- pool closes the connection instead of handing it to the next operation:
@@ -449,13 +443,13 @@ retrying pool body = go (3 :: Int)
         Right a -> pure a
         Left () -> go (n - 1)
 
--- | Begin a transaction on a connection, as 'begin' does, and give back
--- the function its statements are traced with, while 'traceStatements'
--- runs. The transaction's beginning is traced too: @BEGIN@ for one that
--- reads, @BEGIN IMMEDIATE@ for one that writes, as SQLite would say it.
-beginTraced :: (Backend be) => Storage -> Bool -> Connection be -> IO (Maybe (Text -> IO ()))
-beginTraced st writes c = do
-  begin writes c
+-- | The function a transaction's statements are traced with, while
+-- 'traceStatements' runs, called first thing in a transaction that
+-- 'withTransaction' has begun. The transaction's beginning is traced too:
+-- @BEGIN@ for one that reads, @BEGIN IMMEDIATE@ for one that writes, as
+-- SQLite would say it.
+tracedBegin :: Storage -> Bool -> IO (Maybe (Text -> IO ()))
+tracedBegin st writes = do
   tracer <- readIORef st.tracer
   for_ tracer ($ if writes then "BEGIN IMMEDIATE" else "BEGIN")
   pure tracer
@@ -639,17 +633,17 @@ transactThen st who = transactThenFrom st who ""
 transactThenFrom :: Storage -> Who -> Text -> Mode -> Tx a -> (a -> IO ()) -> IO (Either WikiError a)
 transactThenFrom st who address mode (Tx body) committed = case st.engine of
   Engine p -> retrying (if mode == Reads then p.readers else p.writer) $ \c -> do
-    tracer <- beginTraced st (mode == Writes) c
-    ctx <- rollBackOnError c (context st (Conn tracer c) who address)
-    result <- rollBackOnError c (runExceptT (runReaderT body ctx))
-    case result of
-      Left _ -> rollbackTransaction c
-      Right a -> do
-        rollBackOnError c (commitTransaction c)
-        committed a
-        made <- readIORef ctx.told
-        unless (null made) (st.config.notify (reverse made))
-    pure result
+    outcome <- withTransactionEither (mode == Writes) c $ do
+      tracer <- tracedBegin st (mode == Writes)
+      ctx <- context st (Conn tracer c) who address
+      fmap (ctx,) <$> runExceptT (runReaderT body ctx)
+    -- Committed: the action and the notifications come after the commit,
+    -- still on the connection, so before any other write may begin.
+    for_ outcome $ \(ctx, a) -> do
+      committed a
+      made <- readIORef ctx.told
+      unless (null made) (st.config.notify (reverse made))
+    pure (snd <$> outcome)
 
 -- | The context an operation starts from. Its grants include whom the wiki
 -- is open to, because the permission rules read that from the grants.
@@ -697,21 +691,15 @@ contextWith st c who address spaces rows = do
 -- wiki. The operation must not look at any other space.
 readWithin :: Storage -> Who -> (forall be. (Backend be) => Db be (Maybe (SpaceId, b))) -> (SpaceId -> b -> Tx a) -> IO (Either WikiError a)
 readWithin st who locate body = case st.engine of
-  Engine p -> withResource p.readers $ \c -> do
-    tracer <- beginTraced st False c
-    -- A reader goes back to the pool after this, so a failed read must not
-    -- leave its transaction open.
-    result <-
-      rollBackOnError c $
-        runTraced tracer c locate >>= \case
-          Nothing -> pure (Left NotFound)
-          Just (sid, found) -> do
-            spaces <- runTraced tracer c (loadChain sid)
-            ctx <- contextWith st (Conn tracer c) who "" spaces =<< runTraced tracer c (loadGrantsOn (Map.keys spaces))
-            let Tx tx = body sid found
-            runExceptT (runReaderT tx ctx)
-    rollBackOnError c (commitTransaction c)
-    pure result
+  Engine p -> withResource p.readers $ \c -> withTransaction False c $ do
+    tracer <- tracedBegin st False
+    runTraced tracer c locate >>= \case
+      Nothing -> pure (Left NotFound)
+      Just (sid, found) -> do
+        spaces <- runTraced tracer c (loadChain sid)
+        ctx <- contextWith st (Conn tracer c) who "" spaces =<< runTraced tracer c (loadGrantsOn (Map.keys spaces))
+        let Tx tx = body sid found
+        runExceptT (runReaderT tx ctx)
 
 -- | Run statements on the transaction's connection.
 db :: (forall be. (Backend be) => Db be a) -> Tx a

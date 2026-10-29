@@ -37,6 +37,7 @@ import Test.Storage.Backup qualified as Backup
 import Test.Storage.Contract qualified as Contract
 import Test.Storage.Migrate qualified as Migrate
 import Test.Storage.Scale qualified as Scale
+import Test.Storage.Transactions qualified as Transactions
 
 main :: IO ()
 main = withBackings $ \backings -> hspec $ do
@@ -49,6 +50,7 @@ main = withBackings $ \backings -> hspec $ do
     Http.spec b
     Storage.spec b
     Migrate.spec b
+    Transactions.spec b
     Scale.spec b
     Backup.spec b
     StorageAccounts.spec b

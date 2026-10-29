@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Every transaction of the storage runs in one bracket,
+`Wiki.Server.Storage.Backend.withTransaction` (and `withTransactionEither`
+for a body that returns an `Either`, rolled back on a `Left`), which
+begins, commits, and rolls back on an exception in the body or in the
+commit, with asynchronous exceptions masked between the steps (WP5.24). A
+connection goes back to its pool with no transaction open, whatever
+happened. `rollBackOnError` is gone.
+
 `Wiki.Server.Render.inProcess`, the transport that hands the application's
 requests to the API in the same process, takes servant's request and
 returns servant's response, as the application's client is now derived
