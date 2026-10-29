@@ -34,6 +34,8 @@ import Protolude
 import Servant.Client.Core (Response)
 import Test.Hspec
 import Test.Scripted (jsonResponse, methodOf)
+import Web.Storage.Storage (StorageKind (..))
+import Web.Storage.Storage qualified as Storage
 import Wiki.Api (AdminApi (..), InvitationsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Activity (firstPage)
@@ -58,6 +60,7 @@ import Wiki.App.Demo (demoNow, demoState)
 import Wiki.App.Route (AdminSection (..), Against (..), Route (..), UserFilter (..), UserListing (..), adminSections)
 import Wiki.App.Static (Rendered (..), Start (..), prerenderedRoutes, renderLoading, startLoading, startRoute, startServed)
 import Wiki.App.View.Body qualified as Body
+import Wiki.App.View.Users (pageSizeKey)
 import Wiki.Core.Access (Access (..))
 import Wiki.Core.Comment (Comment (..), Thread (..))
 import Wiki.Core.Id (SpaceId (..), UserId (..))
@@ -74,6 +77,7 @@ spec = do
   demoPages
   serverPage
   servedPages
+  keptPageSize
 
 -- At the root, and under the base path GitHub Pages serves the demo at
 -- (@\/blog\/@, the repository's name), which is in every link the page has:
@@ -217,9 +221,35 @@ servedPages = describe "Wiki.App.Static, the pages a server renders, adopted" $
            ]
         <> map Admin adminSections
 
--- | The users section's query, at the page size it starts with.
-usersFrom :: Int -> Text -> UserQuery
-usersFrom offset search = UserQuery {offset, limit = 25, search, administrators = False, disabled = False}
+-- | The users at the page size this browser keeps (50), which the server
+-- does not know: the program adopts the page the server rendered at 25
+-- users, every node kept, and then asks once for the page at 50.
+keptPageSize :: Spec
+keptPageSize = describe "Wiki.App.Static, the users at the page size the browser keeps" $
+  it "adopts the page rendered at the first size, and then asks once for the kept size" $ do
+    let wiki = savedOnce {current = Just (UserId "user-admin")}
+        at = Admin (Users (UserListing "" 1 Everyone))
+    transport <- apiOver [] wiki
+    rendering <- newImmediateHttpEnv transport
+    container <- detached (fmap snd . startServed Build rendering "/" at)
+    original <- nodesOf container
+    carried <- either (panic . ("the preload: " <>)) pure . decodePreload . encodePreload =<< cacheOf rendering
+    asked <- newIORef []
+    adopting <- newHttpEnvWith (Transport (\r -> atomicModifyIORef' asked (\rs -> (requestUrl r : rs, ())) >> (case transport of Transport t -> t r))) carried
+    flip finally (runMemDOM (Storage.removeItem LocalStorage pageSizeKey)) $ do
+      runMemDOM (Storage.setItem LocalStorage pageSizeKey (50 :: Int))
+      (_, dispose) <- startServed Adopt adopting "/" at container
+      adopted <- nodesOf container
+      html <- markup container
+      dispose
+      map fst adopted `shouldBe` map fst original
+      readIORef asked `shouldReturn` [endpointUrl (\e -> e.admin.users (Just 0) (Just 50) Nothing False False)]
+      html `shouldSatisfy` T.isInfixOf "<option selected>50</option>"
+
+-- | The users section's query for everyone: from an offset, at a page
+-- size, with the words searched for.
+usersFrom :: Int -> Int -> Text -> UserQuery
+usersFrom offset limit search = UserQuery {offset, limit, search, administrators = False, disabled = False}
 
 -- | The demo with its first post saved once by the editor.
 savedOnce :: MemState
@@ -248,7 +278,7 @@ apiOver providers st = do
   table <- runMemWiki wiki $ do
     me <- session
     people <- directory
-    usersPages <- for [usersFrom 0 "", usersFrom 0 "ed", usersFrom 25 ""] $ \q ->
+    usersPages <- for [usersFrom 0 25 "", usersFrom 0 25 "ed", usersFrom 25 25 "", usersFrom 0 50 ""] $ \q ->
       (endpointUrl (\e -> e.admin.users (Just q.offset) (Just q.limit) (mfilter (/= "") (Just q.search)) q.administrators q.disabled),) . answerOf <$> userPage q
     settings <- wikiSettings
     invited <- invitations

@@ -13,7 +13,8 @@
 -- It is a @\<dialog>@ element shown as a modal ('showDialog'): the browser
 -- draws a backdrop, makes the rest of the page inert (so the focus stays in
 -- the dialog), closes it on Escape, and gives the focus back to the
--- "Manage" button when it closes. A click on the backdrop closes it too.
+-- "Manage" button when it closes. A click on the backdrop closes it too,
+-- one that starts there: not a selection let go outside.
 -- The dialog tells the table when it has closed ('Closed').
 --
 -- Each change is saved as soon as it is made, and a short "Saved" says so.
@@ -79,12 +80,18 @@ import Wiki.Core.User (Email (..), Group (..), Login (..), Password (..), SignIn
 
 -- | What the dialog shows: the shell's context (who is asking, the
 -- server's providers), the user, every group, and whether the server sends
--- mail.
+-- mail; and how far the table's fetches have got, for the dialog to know
+-- when the user it was given is the user after its own change.
 data Input = Input
   { context :: Context
   , user :: UserSummary
   , groups :: [Group]
   , mailing :: Bool
+  , asked :: Int
+  -- ^ How many times the table has asked for its users.
+  , shown :: Int
+  -- ^ Which of those requests answered the users the table shows, 'user'
+  -- among them.
   }
 
 -- | What the dialog tells the table of users.
@@ -111,6 +118,15 @@ data State = State
   , asking :: Asking
   , busy :: Bool
   -- ^ A change has been requested, and the user not received again since.
+  , waitingFor :: Maybe Int
+  -- ^ After a change: the first of the table's requests that was asked
+  -- after it ('asked'). The controls stay disabled until the user that
+  -- request answered is received ('shown'), so that they never show the
+  -- user as they were before the change.
+  , pressedOnBackdrop :: Bool
+  -- ^ Whether the pointer went down on the backdrop, rather than in the
+  -- dialog: only a click that starts there closes the dialog, so that
+  -- selecting text and letting go outside closes nothing.
   , told :: Maybe Text
   -- ^ What the last change did, shown for a few seconds.
   , notice :: Maybe H.ForkId
@@ -124,6 +140,8 @@ data Action
   = Initialize
   | Receive Input
   | Close
+  | ClickedDialog
+  | Pressed Bool
   | Inside
   | ClosedByBrowser
   | SetAdministrator Bool
@@ -149,7 +167,7 @@ component =
     H.ComponentSpec
       { initialState = \input -> do
           element <- H.newRefLabel "user-dialog"
-          pure State {input, element, asking = NotAsking, busy = False, told = Nothing, notice = Nothing, problem = Nothing, chosenGroup = 0}
+          pure State {input, element, asking = NotAsking, busy = False, waitingFor = Nothing, pressedOnBackdrop = False, told = Nothing, notice = Nothing, problem = Nothing, chosenGroup = 0}
       , render
       , eval =
           H.mkEval
@@ -160,8 +178,9 @@ component =
               }
       }
   where
-    -- The body stops the clicks inside it, so that a click that reaches
-    -- the dialog element itself is one on the backdrop around the body.
+    -- The body stops the clicks and the pointer's presses inside it, so
+    -- that one that reaches the dialog element itself is on the backdrop
+    -- around the body.
     render :: State -> H.ComponentHTML Action Empty m
     render st =
       [hh|
@@ -171,11 +190,11 @@ component =
           aria-modal="true"
           aria-labelledby="user-dialog-title"
           data-login={{ u.user.login.text }}
-          onClick={{ const Close }}
+          onClick={{ const ClickedDialog }}
           {{ HP.ref st.element }}
-          {{ [HE.handler (EventType "close") (const ClosedByBrowser)] }}
+          {{ [HE.handler (EventType "close") (const ClosedByBrowser), HE.onPointerDown (const (Pressed True))] }}
         >
-          <div class="user-dialog-body" {{ [HE.stoppingPropagation (HE.onClick (const Inside))] }}>
+          <div class="user-dialog-body" {{ [HE.stoppingPropagation (HE.onClick (const Inside)), HE.stoppingPropagation (HE.onPointerDown (const (Pressed False)))] }}>
             <header class="user-dialog-header">
               <div class="user-dialog-who">
                 <h2 id="user-dialog-title">{{ u.user.displayName }}</h2>
@@ -431,14 +450,20 @@ component =
     handleAction = \case
       Initialize -> gets (\st -> st.element) >>= H.getRef >>= traverse_ (H.liftEffect . showDialog)
       -- The user as the table fetched them again: after a change of this
-      -- dialog's, the controls are enabled again.
-      Receive input -> do
-        old <- gets (\st -> st.input.context.revision)
-        modify (\st -> st {input, busy = st.busy && old == input.context.revision})
+      -- dialog's, once the request asked after it has answered, the
+      -- controls are enabled again.
+      Receive input -> modify $ \st -> case st.waitingFor of
+        Just n | input.shown >= n -> st {input, busy = False, waitingFor = Nothing}
+        _ -> st {input}
       Close -> do
         gets (\st -> st.element) >>= H.getRef >>= traverse_ (H.liftEffect . closeDialog)
         H.raise Closed
       Inside -> pass
+      Pressed onBackdrop -> modify (\st -> st {pressedOnBackdrop = onBackdrop})
+      ClickedDialog -> do
+        onBackdrop <- gets (\st -> st.pressedOnBackdrop)
+        modify (\st -> st {pressedOnBackdrop = False})
+        when onBackdrop (handleAction Close)
       ClosedByBrowser -> H.raise Closed
       SetAdministrator granted -> withUser (\u -> setAdministrator u.user.id granted) "Saved."
       SetCreateSpaces granted -> withUser (\u -> setCreateSpaces u.user.id granted) "Saved."
@@ -498,7 +523,7 @@ component =
       request u >>= \case
         Left e -> modify (\st -> st {busy = False, problem = Just e})
         Right () -> do
-          modify (\st -> st {asking = NotAsking})
+          modify (\st -> st {asking = NotAsking, waitingFor = Just (st.input.asked + 1)})
           tell saying
           H.raise Saved
 

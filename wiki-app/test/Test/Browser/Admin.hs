@@ -40,6 +40,7 @@ $( browserJS
      , ("js_focused_matches", "wiki_test_focused_matches", Unsafe, [t|JSText -> IO Bool|])
      , ("js_go_to_fragment", "wiki_test_go_to_fragment", Unsafe, [t|JSText -> IO ()|])
      , ("js_click_itself", "wiki_test_click_itself", Unsafe, [t|JSText -> IO ()|])
+     , ("js_drag_out", "wiki_test_drag_out", Unsafe, [t|JSText -> JSText -> IO ()|])
      ]
  )
 
@@ -94,6 +95,17 @@ spec m = do
       kept <- unsafeIOToPageM (runTest (Storage.getItem LocalStorage "admin-users-page-size" :: m (Maybe (Either Text Int))))
       kept `shouldBe` Just (Right 50)
 
+    it "keeps what is typed in the search box when a pause writes it into the address" $ runPage $ do
+      ui <- start m (Just "user-admin") (Admin (Users allUsers))
+      box <- find ui ".users-search-input"
+      typeText box "rita "
+      eventually (locationHash `shouldReturn` "#/admin/users/?q=rita")
+      getProperty box "value" `shouldReturn` "rita "
+      typeText box "reader"
+      getProperty box "value" `shouldReturn` "rita reader"
+      eventually (locationHash `shouldReturn` "#/admin/users/?q=rita%20reader")
+      eventually (map' ui ".user-row" "data-login" `shouldReturn` ["reader"])
+
     it "searches by login and display name, with the words and the page in the address" $ runPage $ do
       ui <- startChanged m (withUsers 60) (Just "user-admin") (Admin (Users allUsers))
       find ui ".users-search-input" >>= (`typeText` "Person 4")
@@ -137,6 +149,11 @@ spec m = do
       find ui ".user-dialog .user-dialog-done" >>= click
       eventually (length <$> findAll ui ".user-dialog" `shouldReturn` 0)
       _ <- manage ui "reader"
+      -- A selection made in the dialog and let go over the backdrop is not
+      -- a click on the backdrop: the dialog stays.
+      unsafeIOToPageM (js_drag_out (toJSText ".user-dialog .user-dialog-login .user-login") (toJSText ".user-dialog"))
+      settle
+      length <$> findAll ui ".user-dialog" `shouldReturn` 1
       -- The dialog element itself is clicked only on the backdrop around
       -- its body.
       unsafeIOToPageM (js_click_itself (toJSText ".user-dialog"))
@@ -150,6 +167,27 @@ spec m = do
       switchShouldBe ui ".administrator-switch" True
       find ui ".user-dialog-saved" >>= (`shouldHaveText` "Saved.")
       eventually (length <$> findAll ui ".user-row[data-login=editor] .badge-administrator" `shouldReturn` 1)
+
+    it "keeps showing a user a change took off the page, as they are now" $ runPage $ do
+      ui <- start m (Just "user-admin") (Admin (Users allUsers))
+      _ <- manage ui "editor"
+      find ui ".user-dialog .administrator-switch" >>= click
+      switchShouldBe ui ".administrator-switch" True
+      press "Escape"
+      eventually (length <$> findAll ui ".user-dialog" `shouldReturn` 0)
+      -- Only the administrators: Ada and Edgar.
+      select <- find ui ".users-filter"
+      focus select
+      press "ArrowDown"
+      eventually (map' ui ".user-row" "data-login" `shouldReturn` ["admin", "editor"])
+      _ <- manage ui "editor"
+      find ui ".user-dialog .administrator-switch" >>= click
+      -- Edgar leaves the page, and the dialog shows him as he is now, its
+      -- switch off and ready for the next change.
+      eventually (map' ui ".user-row" "data-login" `shouldReturn` ["admin"])
+      switchShouldBe ui ".administrator-switch" False
+      eventually (find ui ".user-dialog .administrator-switch" >>= (`getAttribute` "disabled") >>= (`shouldBe` Nothing))
+      length <$> findAll ui ".user-dialog .badge-administrator" `shouldReturn` 0
 
     it "asks before disabling a login, and enables it again without asking, which the switcher follows" $ runPage $ do
       ui <- start m (Just "user-admin") (Admin (Users allUsers))
@@ -415,6 +453,8 @@ spec m = do
     groupNames ui = findAll ui ".group-name" >>= traverse textContent
 
     getAttribute' element name = fromMaybe "" <$> getAttribute element name
+
+    map' ui selector name = findAll ui selector >>= traverse (`getAttribute'` name)
 
     locationHash = unsafeIOToPageM (fromJSText <$> js_location_hash)
 

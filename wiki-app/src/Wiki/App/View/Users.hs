@@ -31,6 +31,7 @@ module Wiki.App.View.Users
   , component
   , pageWindow
   , countText
+  , pageSizeKey
   )
 where
 
@@ -41,7 +42,6 @@ import Data.Text qualified as T
 import Halogen qualified as H
 import Halogen.HTML qualified as HH
 import Halogen.HTML.Events qualified as HE
-import Halogen.JSBits (inBrowser)
 import Halogen.Router (Follow)
 import Halogen.Router qualified as Router
 import Halogen.TH (hh)
@@ -50,7 +50,7 @@ import Protolude hiding (State)
 import Web.Storage.Storage (StorageKind (..))
 import Web.Storage.Storage qualified as Storage
 import Wiki.Api.Account (Account (..), NewAccount (..))
-import Wiki.Api.Admin (UserPage (..), UserQuery (..), UserSummary (..), userPageSizes)
+import Wiki.Api.Admin (UserPage (..), UserQuery (..), UserSummary (..), maxUserPageSize, userPageSizes)
 import Wiki.App.Backend (MonadLoad (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Route (AdminSection (Users), Route (..), UserFilter (..), UserListing (..))
@@ -89,7 +89,17 @@ noNewUser = NewUser {typedLogin = "", typedName = "", typedPassword = "", typedE
 data State = State
   { input :: Input
   , size :: Int
-  -- ^ How many users a page holds.
+  -- ^ How many users a page holds: the page shown, or the page asked for.
+  , kept :: Int
+  -- ^ The page size the reader chose, kept in the browser. It differs from
+  -- 'size' only on a page the server prerendered, at the size it
+  -- prerendered (25), until the page at this size has been fetched.
+  , asked :: Int
+  -- ^ How many pages have been asked for. An answer is shown only if no
+  -- page has been asked for after it: answers can arrive out of order.
+  , shown :: Int
+  -- ^ The number of the request whose answer is shown, as 'asked' counted
+  -- it: the dialog waits for a number past the one current when it saved.
   , loaded :: Loaded
   , fetching :: Bool
   -- ^ Another page is being fetched while 'loaded' is shown.
@@ -99,7 +109,9 @@ data State = State
   -- ^ The thread that writes the typed words into the address after a
   -- pause in typing.
   , managing :: Maybe UserSummary
-  -- ^ The user the dialog is open for, as last fetched.
+  -- ^ The user the dialog is open for, as last fetched: from the page, or
+  -- by themself when a change took them off it (a filter on
+  -- administrators, and the switch turned off).
   , creating :: Bool
   -- ^ Whether the form for a new user is open.
   , newUser :: NewUser
@@ -132,15 +144,27 @@ component =
   H.mkComponent
     H.ComponentSpec
       { initialState = \input -> do
-          size <- readPageSize
+          kept <- readPageSize
           -- Read here when the backend answers at once, so that the first
           -- render is the page a prerender or the server shows; otherwise
-          -- in 'Initialize'.
-          loaded <- maybe Loading (either Failed Ready) <$> atOnce (userPage (queryOf size input.listing))
+          -- in 'Initialize'. The server prerenders the page at the first
+          -- page size, not knowing the size this browser keeps: that page
+          -- is shown first, and the one at the kept size fetched after.
+          atKept <- atOnce (userPage (queryOf kept input.listing))
+          (size, loaded) <- case atKept of
+            Just answer -> pure (kept, either Failed Ready answer)
+            Nothing
+              | kept /= defaultPageSize ->
+                  maybe (kept, Loading) (\answer -> (defaultPageSize, either Failed Ready answer))
+                    <$> atOnce (userPage (queryOf defaultPageSize input.listing))
+            Nothing -> pure (kept, Loading)
           pure
             State
               { input
               , size
+              , kept
+              , asked = 0
+              , shown = 0
               , loaded
               , fetching = False
               , typed = input.listing.search
@@ -217,7 +241,7 @@ component =
           Ready p -> pageView st p
         dialog = case (st.managing, st.loaded) of
           (Just u, Ready p) ->
-            Just (HH.slot "dialog" u.user.id UserDialog.component UserDialog.Input {context = st.input.context, user = u, groups = p.groups, mailing = p.mailing} FromDialog)
+            Just (HH.slot "dialog" u.user.id UserDialog.component UserDialog.Input {context = st.input.context, user = u, groups = p.groups, mailing = p.mailing, asked = st.asked, shown = st.shown} FromDialog)
           _ -> Nothing
 
     pageView :: State -> UserPage -> H.ComponentHTML Action Slots m
@@ -385,10 +409,13 @@ component =
 
     handleAction :: Action -> H.HalogenM State Action Slots ViewOutput m ()
     handleAction = \case
-      Initialize ->
-        gets (\st -> st.loaded) >>= \case
+      Initialize -> do
+        st <- get
+        case st.loaded of
           Loading -> load
-          Ready p -> checkInRange p
+          Ready p
+            | st.size /= st.kept -> modify (\s -> s {size = s.kept}) >> load
+            | otherwise -> checkInRange p
           _ -> pass
       Retry -> do
         modify (\st -> st {loaded = Loading})
@@ -401,7 +428,13 @@ component =
         modify $ \st ->
           st
             { input
-            , typed = if isNothing st.pending && old.listing.search /= input.listing.search then input.listing.search else st.typed
+            , -- Not when the box holds those words already: the pause in
+              -- typing that wrote them may have come before a space the
+              -- reader goes on from.
+              typed =
+                if isNothing st.pending && old.listing.search /= input.listing.search && T.strip st.typed /= input.listing.search
+                  then input.listing.search
+                  else st.typed
             }
         when (old.listing /= input.listing || old.context.revision /= input.context.revision) load
       Followed f -> gets (\st -> st.input.context.router) >>= (`Router.follow` f)
@@ -429,7 +462,7 @@ component =
           Router.navigate st.input.context.router (Admin (Users UserListing {search = st.input.listing.search, page = 1, only}))
       ChoseSize n -> for_ (atMay userPageSizes n) $ \size -> do
         H.liftEffect (writePageSize size)
-        modify (\st -> st {size})
+        modify (\st -> st {size, kept = size})
         st <- get
         if st.input.listing.page /= 1
           then Router.navigate st.input.context.router (Admin (Users UserListing {search = st.input.listing.search, page = 1, only = st.input.listing.only}))
@@ -471,23 +504,40 @@ component =
             H.raise (Changed Nothing)
 
     -- Fetch the page the address asks for. The page shown stays, dimmed,
-    -- until the new one arrives. The open dialog gets its user as they are
-    -- now, if they are on the new page.
+    -- until the new one arrives. An answer to a request made before
+    -- another is dropped: the reader has gone on to another page. The open
+    -- dialog gets its user as they are now, from the page, or fetched by
+    -- themself when they are no longer on it.
     load :: H.HalogenM State Action Slots ViewOutput m ()
     load = do
+      modify (\s -> s {fetching = True, asked = s.asked + 1})
       st <- get
-      modify (\s -> s {fetching = True})
       result <- userPage (queryOf st.size st.input.listing)
-      modify $ \s ->
-        s
-          { loaded = either Failed Ready result
-          , fetching = False
-          , busy = False
-          , managing = case result of
-              Right p -> (\m -> fromMaybe m (find (\u -> u.user.id == m.user.id) p.users)) <$> s.managing
-              Left _ -> s.managing
-          }
-      either (const pass) checkInRange result
+      latest <- gets (\s -> s.asked == st.asked)
+      when latest $ do
+        managing <- case (result, st.managing) of
+          (Right p, Just m) -> Just <$> maybe (alone m) pure (find (\u -> u.user.id == m.user.id) p.users)
+          _ -> pure st.managing
+        modify $ \s ->
+          s
+            { loaded = either Failed Ready result
+            , fetching = False
+            , busy = False
+            , -- Unless the dialog was closed, or opened for someone else,
+              -- meanwhile.
+              managing = case (s.managing, managing) of
+                (Just now, Just fresh) | now.user.id == fresh.user.id -> Just fresh
+                _ -> s.managing
+            , shown = st.asked
+            }
+        either (const pass) checkInRange result
+      where
+        -- A user by themself: among the users whose login has theirs in
+        -- it, with no filter. The summary held is kept if they are not
+        -- found (a hundred others have their login in theirs).
+        alone m =
+          either (const m) (fromMaybe m . find (\u -> u.user.id == m.user.id) . (\p -> p.users))
+            <$> userPage UserQuery {offset = 0, limit = maxUserPageSize, search = m.user.login.text, administrators = False, disabled = False}
 
     -- A page past the last (the users were fewer when the address was
     -- written) is replaced by the last page.
@@ -546,15 +596,16 @@ pageSizeKey :: Text
 pageSizeKey = "admin-users-page-size"
 
 -- | The page size this browser keeps, if it is one the section offers;
--- the first otherwise.
+-- the first otherwise. Natively the store is the program's own, in
+-- memory, which nothing writes but a test.
 readPageSize :: (MonadBrowserDOM m) => m Int
-readPageSize
-  | inBrowser = do
-      kept <- (>>= rightToMaybe) <$> Storage.getItem LocalStorage pageSizeKey
-      pure (fromMaybe defaultSize (mfilter (`elem` userPageSizes) kept))
-  | otherwise = pure defaultSize
-  where
-    defaultSize = fromMaybe 25 (head userPageSizes)
+readPageSize = do
+  kept <- (>>= rightToMaybe) <$> Storage.getItem LocalStorage pageSizeKey
+  pure (fromMaybe defaultPageSize (mfilter (`elem` userPageSizes) kept))
 
 writePageSize :: (MonadBrowserDOM m) => Int -> m ()
-writePageSize n = when inBrowser (Storage.setItem LocalStorage pageSizeKey n)
+writePageSize = Storage.setItem LocalStorage pageSizeKey
+
+-- | The page size a page starts at, and the one the server prerenders at.
+defaultPageSize :: Int
+defaultPageSize = fromMaybe 25 (head userPageSizes)
