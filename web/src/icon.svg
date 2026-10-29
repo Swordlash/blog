@@ -1,10 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <!-- The wiki's icon: a page on the wiki's blue. web/src/pwa.mjs draws
-       the PNG icons of the manifest from it, and reads only what is used
-       here: rects (x, y, width, height, rx, fill) and paths of straight
-       lines (M, L, H, V, Z, absolute), filled. The one with
+       the PNG icons of the manifest from it. The rect with
        id="background" is the ground, drawn edge to edge, without its
-       corners, in the maskable icons, which have everything else drawn
+       corners, in the maskable icons, which have everything after it drawn
        smaller, within the circle a platform's mask keeps. -->
   <rect id="background" x="0" y="0" width="512" height="512" rx="104" fill="#0969da"/>
   <path d="M136 88 H316 L376 148 V424 H136 Z" fill="#ffffff"/>
