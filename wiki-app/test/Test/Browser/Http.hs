@@ -241,7 +241,7 @@ quietServer =
     , lastBackup = Nothing
     , connections = 1
     , errors = []
-    , guide = True
+    , guideInstallable = False
     }
 
 -- | The shell over the backend over HTTP, through the page's fetch, at a

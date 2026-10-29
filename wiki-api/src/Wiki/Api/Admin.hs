@@ -89,9 +89,11 @@ data ServerStatus = ServerStatus
   , errors :: [LoggedError]
   -- ^ The last errors the server logged since it started, newest first, at
   -- most twenty (WP4.10 of docs/PLAN.md). They are kept in memory only.
-  , guide :: Bool
-  -- ^ Whether the wiki has its guide, the space at @/guide@ (WP5.29 of
-  -- docs/PLAN.md). Where it has none, the Overview offers to install it
+  , guideInstallable :: Bool
+  -- ^ Whether the guide can be installed (WP5.29 of docs/PLAN.md): the
+  -- wiki does not have it (the space it was installed as is gone, or it
+  -- never was), and no space of the wiki's own is at @/guide@, where it
+  -- goes. The Overview then offers to install it
   -- (@POST \/api\/v1\/admin\/guide@).
   }
   deriving stock (Eq, Show, Generic)

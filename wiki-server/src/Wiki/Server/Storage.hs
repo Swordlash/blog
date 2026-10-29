@@ -101,6 +101,8 @@ module Wiki.Server.Storage
   , postgresAt
   , writing
   , writingEither
+  , writingThen
+  , publishing
   , reading
   , readConnections
   , storageDataDir
@@ -439,6 +441,23 @@ writingEither st action = case st.engine of
   Engine p -> retrying p.writer $ \c -> withTransactionEither True c $ do
     tracer <- tracedBegin st True
     runTraced tracer c action
+
+-- | 'writing', then, once the transaction is committed and before any
+-- other write may begin, the given action on its result, as a save
+-- publishes its change ('Config' @publish@). The guide's update reports
+-- the pages it rewrote this way ("Wiki.Server.Guide").
+writingThen :: Storage -> (forall be. (Backend be) => Db be a) -> (a -> IO ()) -> IO a
+writingThen st action committed = case st.engine of
+  Engine p -> retrying p.writer $ \c -> do
+    outcome <- withTransactionEither True c $ do
+      tracer <- tracedBegin st True
+      runTraced tracer c (Right <$> action)
+    either absurd (\a -> a <$ committed a) outcome
+
+-- | The callback that reports a change of a page to the server's live
+-- channel ('Config' @publish@), for a write made with 'writingThen'.
+publishing :: Storage -> PageId -> PageEvent -> IO ()
+publishing st = st.config.publish
 
 -- | Run statements on a reader, in a transaction that sees one state of
 -- the database throughout. A write there fails.

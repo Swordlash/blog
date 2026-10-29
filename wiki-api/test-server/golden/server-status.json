@@ -10,7 +10,7 @@
       "route": "/api/v1/pages/:page"
     }
   ],
-  "guide": true,
+  "guideInstallable": false,
   "lastBackup": "2026-10-24T09:30:12.345678Z",
   "pages": 12,
   "schemaVersion": 9,

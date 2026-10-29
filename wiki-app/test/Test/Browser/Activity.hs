@@ -70,7 +70,7 @@ overHttp m = describe "over HTTP" $ do
     runPage $ do
       serverStarts
       serveDemo
-      answerWith "GET" (endpointUrl (\e -> e.admin.status)) 200 quietServer {guide = False}
+      answerWith "GET" (endpointUrl (\e -> e.admin.status)) 200 quietServer {guideInstallable = True}
       answerWith "POST" (endpointUrl (\e -> e.admin.installGuide)) 409 (Conflict "The wiki has a space at /guide already.")
       ui <- startServer m (Admin R.Overview)
       find ui ".status-guide" >>= (`shouldContainText` "The wiki has no guide")

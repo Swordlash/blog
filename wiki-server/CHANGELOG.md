@@ -7,7 +7,11 @@ Guide at `/guide` with the wiki's documentation, in one transaction, by the
 same path as an import (WP5.29); `--no-guide` starts without it.
 `wiki-server guide install` puts it back once deleted, and `wiki-server
 guide update` gives its pages the running version's text, as new versions,
-leaving a renamed or moved page alone; `deploy-local.sh --server` runs the
+and adds the pages a newer version brings, leaving a renamed, moved or
+deleted page alone (an attachment a version adds to an existing page is not
+brought in). The guide is the space the server installed, recorded by its
+id in the setting `guide-installed`: a space of the wiki's own at `/guide`
+is never touched; `deploy-local.sh --server` runs the
 update after it starts a new server. The kinds of box are kept as JSON in
 the setting `boxes`, so no migration. Exports read a box of any kind,
 `> [!KIND]` with an optional title, from the quotation pandoc makes of it:

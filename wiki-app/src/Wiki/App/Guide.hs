@@ -20,6 +20,7 @@ module Wiki.App.Guide
   , insertGuide
   , guideState
   , guideSpaceName
+  , guideSlug
   , guideMacros
   , guideProfile
 
@@ -40,6 +41,7 @@ import Wiki.Core.Attachment (FileName (..), MimeType (..))
 import Wiki.Core.Id
 import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..))
 import Wiki.Core.Page (Page (..))
+import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.Url (Url (..))
 
@@ -69,6 +71,11 @@ insertGuide which sid ago = do
 -- | The name of the space a server keeps the guide in.
 guideSpaceName :: Text
 guideSpaceName = "Guide"
+
+-- | The address of the space a server keeps the guide in, @/guide@, at the
+-- top level: the slug its name gives.
+guideSlug :: Slug
+guideSlug = either (panic . show) identity (mkSlug "guide")
 
 -- | The guide's space as a server installs it, alone in a wiki, at this
 -- time: public, so that everyone the wiki is open to reads it, with the

@@ -123,7 +123,7 @@ import Wiki.Server.Backups (BackupService, currentBackups, requestBackup, settin
 import Wiki.Server.Events (Hub, openConnections)
 import Wiki.Server.Export (Exported (..), Exports, availableFormats, exportPage, exportSpace)
 import Wiki.Server.Feed (FeedCache)
-import Wiki.Server.Guide (guideInstalled)
+import Wiki.Server.Guide (canInstallGuide)
 import Wiki.Server.Guide qualified as Guide
 import Wiki.Server.Import (applyImport, planImport, readUploadFile)
 import Wiki.Server.Limiter (Limiter, Verdict (..))
@@ -1161,7 +1161,7 @@ statusOfServer env = do
   schemaVersion <- schemaVersionOf env.storage
   connections <- openConnections env.events
   errors <- recentErrors env.errors
-  guide <- guideInstalled env.storage
+  guideInstallable <- canInstallGuide env.storage
   case counts of
     [spaces, pages, attachments, users] ->
       pure
@@ -1178,6 +1178,6 @@ statusOfServer env = do
           , lastBackup = lastMay files >>= backupTime
           , connections
           , errors
-          , guide
+          , guideInstallable
           }
     _ -> panic "four counts were asked for"

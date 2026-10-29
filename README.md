@@ -958,8 +958,12 @@ to the demo, keeping `data/`.
   puts it back once deleted, as the administration's "Overview" does with
   "Install the guide"; `wiki-server guide update --data <dir>/data` gives each
   of its pages whose text differs from the running version's that text, as a new
-  version (the page's history keeps what was there), and leaves alone a page an
-  administrator renamed or moved, saying so. `deploy-local.sh --server` runs the
+  version (the page's history keeps what was there), adds a page a newer version
+  brings, and leaves alone a page an administrator renamed, moved or deleted,
+  saying so. An attachment a newer version adds to a page the guide has already
+  is not brought in, and the update says which. The guide is the space the server
+  installed, recorded by its id: a space of the wiki's own put at `/guide` is
+  never touched, and the update says so. `deploy-local.sh --server` runs the
   update after it starts a new server, so the guide follows the wiki's version.
 - **The server's settings: the public address, mail and providers.** These are
   set in the administration's "Server" section and nowhere else: on the admin

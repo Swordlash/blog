@@ -64,6 +64,7 @@ module Wiki.Server.Import
   , planImport
   , applyImport
   , mergeArchive
+  , attach
   )
 where
 

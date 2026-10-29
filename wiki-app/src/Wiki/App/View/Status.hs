@@ -29,9 +29,9 @@ import Protolude hiding (State)
 import Wiki.Api.Admin (LoggedError (..), ServerStatus (..))
 import Wiki.App.Backend (MonadLoad (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
+import Wiki.App.Guide (guideSlug)
 import Wiki.App.Route (Route (Space))
 import Wiki.App.View.Common
-import Wiki.Core.Slug (Slug, mkSlug)
 
 newtype Input = Input {context :: Context}
 
@@ -125,7 +125,7 @@ component =
               {% end %}
             </ol>
           {% end %}
-          {% if not s.guide %}
+          {% if s.guideInstallable %}
             <div class="status-guide">
               <h4>The guide</h4>
               <p class="admin-intro">
@@ -177,7 +177,3 @@ countsText :: ServerStatus -> Text
 countsText s = T.intercalate ", " [counted s.spaces "space", counted s.pages "page", counted s.attachments "attachment", counted s.users "user"]
   where
     counted n what = show n <> " " <> what <> (if n == 1 then "" else "s")
-
--- | The guide's space's slug, @guide@, where the server installs it.
-guideSlug :: Slug
-guideSlug = either (panic . show) identity (mkSlug "guide")
