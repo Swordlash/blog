@@ -1639,7 +1639,7 @@ must be in before it is.
   in the Progress entry. Behaviour unchanged, the existing tests prove it; a replacement
   that changes a wire format or a stored value is not one.
 
-- **WP5.28 Completion for `@` mentions in the editor** (the owner, 2026-10-29: "musisz dodać
+- **WP5.28 (merged 2026-10-29, PR #113; see Progress) Completion for `@` mentions in the editor** (the owner, 2026-10-29: "musisz dodać
   podpowiadanie do @ mentions"). The editor (CodeMirror 6, `web/src/editor.js`) gets
   completion from `@codemirror/autocomplete` (the library; nothing written by hand beyond
   its source function and the styling of its list): typing `@` followed by letters opens a
@@ -4590,6 +4590,52 @@ Amended by the planning session after each work package's report.
   `loadUserPage` (LIKE, offset) and WP5.28's `loadUsersStartingWith` (indexed prefix) stay
   separate; the in-flight-close and failed-refetch paths are untested in the browser
   because the demo answers at once.
+
+- **WP5.28 merged** (2026-10-29, PR #113, `main` at `ed56dd9`, eight commits, two review
+  rounds: Claude Code at high and Codex `gpt-6.1-sol` at high on each head, 12 + 11
+  findings, all but two confirmed and fixed). **Endpoint** `GET api/v1/notifications/people/
+  search?q=<letters>` (`NotificationsApi.searchPeople`, `[User]`): users who may sign in
+  whose login or display name starts with the letters, case-folded by the database's own
+  `lower()` (one `SELECT lower(?)` first, so the comparison folds as the indexed expression
+  does: ASCII only on SQLite, the cluster's ctype on PostgreSQL; `@Łu` finds Łukasz on
+  SQLite, `@łu` does not, documented), at least two letters (`minPeopleSearch`, to slow an
+  enumeration of the directory; `people` only confirms logins the caller knows), at most
+  ten (`maxPeopleFound`), ordered by display name then login by code points (WP5.25's
+  `byCodePoints`), only logins a mention can name: `Wiki.Core.Markdown.Ast.mentionsWhole`
+  is `parseMarkdown ("@" <> login) == Right [Para [Mention login]]` (so `anna-`, `_anna_`,
+  `anna*` are left out); the storage reads a further page only when dropped logins fill
+  one, inside one read transaction (REPEATABLE READ on PostgreSQL, one `BEGIN` on SQLite).
+  Migration `0003-users-by-prefix`: indexes on `lower(display_name)` (and on PostgreSQL
+  `lower(login)` and `lower(display_name)` in collation "C"); the prefix is a range (`>=`
+  the letters, `<` `prefixEnd`, which raises the last code point and skips surrogates),
+  because neither database answers `LIKE` from an index on an expression; the Scale suite
+  checks the plan on both backends (PostgreSQL with `enable_seqscan` off). `MonadNotifications.
+  mentionCandidates :: Text -> m (Either WikiError [User])` on the demo, the storage and the
+  HTTP backend (only a 404 from a server without the endpoint becomes `Right []`; other
+  errors are asked again later). **Editor:** `@codemirror/autocomplete` 6.20.4 (pinned),
+  `autocompletion({override: [source], defaultKeymap: false})` with the library's keymap at
+  `Prec.highest` and `stopPropagation` (Tab accepts; Escape acts only when the list is
+  shown, else it reaches the form); the Mac-only Emacs bindings for Ctrl-b/e/k are dropped
+  from the text's keymap so Ctrl+B is the toolbar's; the source asks the component with a
+  `wiki-mention` event and the component answers through `Editor.Browser.answerMention`;
+  answers kept per letters as typed for the editor's life, questions in flight shared, given
+  up for the list after 10 s but the late answer kept; `@login` plus a space unless one
+  follows. Where a mention counts follows the renderer: not in code, inline links, images,
+  wiki links `[[…]]`, references whose label the document defines (an undefined `[note
+  @an]` is text, as commonmark-hs renders it), HTML, and not in TeX math, for which the
+  editor's syntax tree gains a `TeXMath` node. **Recorded exception to decision 25:** no
+  lezer-markdown math extension exists on npm, so `web/src/editor.js` carries two small
+  inline parsers for `$…$`/`$$…$$` (commonmark-extensions' rules) and `\(…\)`/`\[…\]`
+  (`TexMath`'s), tested in the browser against `parseMarkdown` on twenty cases, plus the
+  link check: about 230 hand-written lines beyond the source function. The comment box
+  (a plain textarea) gets no completion; later, if ever. Styling through
+  `.cm-tooltip-autocomplete` with the theme's tokens, light and dark. Tests: wiki-core
+  (`mentionsWhole`, `prefixEnd`), server HTTP (prefixes, folding per backend, a disabled
+  user, the limit, the two-letter minimum, the visitor's `[]`, the 400), Scale, contract
+  on Mem/SQLite/PostgreSQL/HTTP, the stub server, browser (the list, Enter, Tab, Escape,
+  code, links, undefined brackets, math, the Mac shortcuts, a login with `@` not offered).
+  Gate: 1815 server examples on SQLite and PostgreSQL, wasm 106/890/297. For later:
+  `loadUsersStartingWith` and WP5.25's `loadUserPage` stay separate (different shapes).
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
