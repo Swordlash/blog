@@ -59,7 +59,7 @@ backend's `createUser`.
 | `Wiki.Api.Account.NewAccount.login` | `Text`: what was typed, parsed by the backend |
 | `Wiki.Api.Account.Credentials.login` | `Text`: sign-in only looks the login up (trimmed, any case); `checkLogin` is not applied, and applying it would answer `~x` with a new refusal instead of "wrong login or password" |
 | `Wiki.Api.Security.ResetRequest.login` | `Text`: a login or an e-mail address |
-| the console's `LOGIN` argument of `users password`, `admin`, `disable`, `second-factor-remove` | `Text`: a lookup, like sign-in |
+| the console's `LOGIN` argument of `users password`, `admin`, `disable`, `second-factor-remove`, `remove` | `Text`: a lookup, like sign-in |
 | mentions (`Wiki.Core.Notification.mentionedIn`, `mentionable`) | `Text`: an `@name` in a page is a lookup of a login, not a login |
 
 Accepted today though the rule refuses it, kept as it is:

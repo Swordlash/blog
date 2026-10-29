@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+The activity log has the action `user.remove`, "Removed a user's account"
+(WP5.25).
+
 `Wiki.Core.Search.searchRanked` makes hits of the candidates a database's
 own search found and ranked (WP5.22: PostgreSQL's full-text search), the
 query's words marked in each, but for a word to leave out, `or` and the

@@ -77,6 +77,9 @@ fromArchive a =
           -- login nor a password, as the server imports them.
           disabled = mempty
         , passwords = mempty
+        , -- Its users are all there: an export names a removed account's
+          -- content by the login already ('Wiki.Core.Comment.formerAuthor').
+          removed = mempty
         , -- Nor the wiki's settings, which are the demo's own, nor its
           -- invitations.
           newAccountsCreateSpaces = False

@@ -20,6 +20,10 @@ match. `Wiki.Api.Admin` gains `UserQuery` (`firstUsers`, `userQueryOf`,
 the meaning every backend's answer must have (`userMatches`, `userOrder`,
 `summaryOf`). The directory endpoint stays.
 
+`AdminApi.removeUser` is `DELETE api/v1/admin/users/<user>` (WP5.25): it
+removes the account of a disabled login (409 for an enabled one, 400 for
+one's own), keeping what the user wrote under their login.
+
 The records of the API with an upload (`WikiApi`, `SpacesApi`, `PagesApi`,
 `ArchiveApi`) take the multipart backend of their forms as their first
 parameter (WP5.23): `Api` is `ApiWith Tmp`, what the server serves, and the

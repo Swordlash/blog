@@ -72,6 +72,7 @@ module Wiki.Server.Storage.Rows
   , passwordHashOf
   , updateDisabled
   , deleteSessionsOf
+  , deleteUserRows
   , totpEnabled
   , deleteSecondFactor
   , loadSecondFactorUsers
@@ -860,6 +861,25 @@ updateDisabled u disabled = runUpdate (update wikiDb.users (\r -> r.disabled <-.
 -- | End every session of a user.
 deleteSessionsOf :: (Backend be) => UserId -> Db be ()
 deleteSessionsOf u = runDelete (delete wikiDb.sessions (\s -> s.user_id ==. val_ u.text))
+
+-- | Delete a user's account. Their sessions, memberships, sign-in
+-- identities, second factor, password links, passkeys, assistant vault,
+-- watches and notifications go with the users row: their tables refer to
+-- it with @ON DELETE CASCADE@. Their grants and drafts do not refer to
+-- it, so they are deleted here. The page versions and comments the user
+-- wrote stay, with their author column set to @keptAs@, so that they name
+-- the person after the account is gone. So do other users' notifications
+-- of what the user did, with their actor set to @keptAs@ and the name they
+-- were made with.
+deleteUserRows :: (Backend be) => UserId -> UserId -> Db be ()
+deleteUserRows u keptAs = do
+  runUpdate (update wikiDb.page_versions (\r -> r.author <-. val_ (Just keptAs.text)) (\r -> r.author ==. val_ (Just u.text)))
+  runUpdate (update wikiDb.comments (\r -> r.author <-. val_ keptAs.text) (\r -> r.author ==. val_ u.text))
+  runUpdate (update wikiDb.notifications (\r -> r.actor <-. val_ keptAs.text) (\r -> r.actor ==. val_ u.text))
+  runDelete (delete wikiDb.drafts (\d -> d.author ==. val_ u.text))
+  runDelete (delete wikiDb.global_grants (\r -> r.subject_kind ==. val_ "user" &&. r.subject_id ==. val_ u.text))
+  runDelete (delete wikiDb.space_grants (\r -> r.subject_kind ==. val_ "user" &&. r.subject_id ==. val_ u.text))
+  runDelete (delete wikiDb.users (\r -> r.id ==. val_ u.text))
 
 -- | Whether a user has a second factor that signing in asks for: one they
 -- have confirmed.

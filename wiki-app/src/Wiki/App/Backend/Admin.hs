@@ -200,6 +200,18 @@ class (Monad m) => MonadAdmin m where
   default setDisabled :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> Bool -> m (Either WikiError Account)
   setDisabled u = lift . setDisabled u
 
+  -- | Remove a user's account (WP5.25 of docs/PLAN.md). Only a disabled
+  -- login is removed ('Conflict' otherwise), and never one's own
+  -- ('Invalid'). What belongs to the account goes with it: grants,
+  -- memberships, sessions, sign-in providers' accounts, second factor,
+  -- passkeys and vault, watches, notifications and drafts. The pages,
+  -- versions and comments the user wrote stay, kept by their login
+  -- ('Wiki.Core.Comment.formerAuthor'), so that they still say who wrote
+  -- them, and the login may be taken again.
+  removeUser :: UserId -> m (Either WikiError ())
+  default removeUser :: (MonadTrans t, m ~ t n, MonadAdmin n) => UserId -> m (Either WikiError ())
+  removeUser = lift . removeUser
+
   -- | Create a group with this name and nobody in it.
   createGroup :: Text -> m (Either WikiError Group)
   default createGroup :: (MonadTrans t, m ~ t n, MonadAdmin n) => Text -> m (Either WikiError Group)

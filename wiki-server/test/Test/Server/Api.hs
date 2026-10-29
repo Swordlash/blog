@@ -50,6 +50,7 @@ spec backing = describe "the API over HTTP" $ do
   status backing
   people backing
   usersPaged backing
+  removingUsers backing
   permissions backing
   profiles backing
 
@@ -466,6 +467,41 @@ usersPaged backing = describe "the users, a page at a time" $ do
     getUrl r (onPublic r (links.admin.users Nothing Nothing Nothing False False)) >>= forbidden
     getUrlWith r (onPublic r (links.admin.users Nothing Nothing Nothing False False)) [editor] >>= forbidden
     getUrlWith r (onPublic r (links.admin.users Nothing (Just 1000) Nothing False False)) [editor] >>= forbidden
+
+-- | Removing an account (@DELETE admin\/users\/:id@, WP5.25 of
+-- docs/PLAN.md), as each listener and caller is answered: only a disabled
+-- login, never by its own user, and only by whoever administers the wiki.
+-- What the removal deletes and keeps is "Test.Storage.Removal"'s.
+removingUsers :: Backing -> Spec
+removingUsers backing = describe "removing an account" $ do
+  it "removes a disabled login, and refuses an enabled one, one's own, and anyone else's caller" $ withAdminSession backing identity $ \r session -> do
+    givePassword r "user-editor" "editor's password"
+    editor <- cookie <$> signInAs r "editor" "editor's password"
+    d :: Directory <- ok200 (getUrl r (onAdmin r links.admin.directory))
+    let idOf login = maybe (panic ("no user " <> login)) (\u -> u.id) (find (\u -> u.login.text == login) d.users)
+        remove headers u = send r methodDelete (onPublic r (links.admin.removeUser u)) headers ""
+        refused :: Int -> Reply -> IO ApiError
+        refused = jsonAs
+    -- An enabled login: a conflict, which says what to do first.
+    remove [session] (idOf "reader") >>= refused 409 >>= \case
+      Conflict why -> why `shouldSatisfy` T.isInfixOf "Disable"
+      other -> expectationFailure ("expected a conflict, got " <> show other)
+    -- One's own account: refused, whatever its state.
+    remove [session] (idOf "admin") >>= refused 400 >>= \case
+      Invalid _ -> pass
+      other -> expectationFailure ("expected Invalid, got " <> show other)
+    off <- sendJson r methodPut (onAdmin r (links.admin.setDisabled (idOf "reader"))) AccountDisabled {disabled = True}
+    off.status `shouldBe` 200
+    -- Anyone who does not administer the wiki, signed in or not.
+    remove [editor] (idOf "reader") >>= refused 403 >>= (`shouldBe` Forbidden)
+    remove [] (idOf "reader") >>= refused 403 >>= (`shouldBe` Forbidden)
+    remove [] (UserId "user-nobody") >>= refused 403 >>= (`shouldBe` Forbidden)
+    -- The administrator, on the public listener, and the operator on the
+    -- admin one, who finds nobody for an id that is no user's.
+    (\x -> x.status) <$> remove [session] (idOf "reader") `shouldReturn` 204
+    (\x -> x.status) <$> send r methodDelete (onAdmin r (links.admin.removeUser (idOf "reader"))) [] "" `shouldReturn` 404
+    left :: Directory <- ok200 (getUrl r (onAdmin r links.admin.directory))
+    map (\u -> u.login.text) left.users `shouldBe` ["admin", "editor"]
 
 -- | Who may do what, given over HTTP by an administrator's session on the
 -- public listener, and kept to by the server for each user's own: the

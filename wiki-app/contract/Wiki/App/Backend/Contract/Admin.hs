@@ -21,17 +21,24 @@ import Wiki.Api.Account (Account (..), NewAccount (..))
 import Wiki.Api.Activity (Activity (..), firstPage)
 import Wiki.Api.Admin (Directory (..), Invitation (..), Invitations (..), Invited (..), UserPage (..), UserQuery (..), UserSummary (..), WikiSettings (..), defaultSettings, pageOfDirectory)
 import Wiki.Api.Backups (BackupSettingsOf (..), Backups (..), defaultBackupSettings)
+import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.ServerSettings (MailSettingsOf (..), ProviderKind (..), ProviderSettingsOf (..), SecretState (..), Security (..), ServerSettingsChange, ServerSettingsOf (..), noServerSettings)
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin
+import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Contract (As (..), Fixture (..), Run)
+import Wiki.App.Backend.Notifications (MonadNotifications (..))
 import Wiki.Core.Access (Access (..))
+import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, formerAuthor)
 import Wiki.Core.Id
-import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceGrant (..), SpacePermission (..))
+import Wiki.Core.Notification (Notification (..), WatchTarget (..))
+import Wiki.Core.Page (Page (..))
+import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), SpaceAccess (..), SpaceGrant (..), SpacePermission (..), Subject (..))
 import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Email (..), Group (..), Login (..), Password (..), User (..))
+import Wiki.Core.Version (Author (..), VersionInfo (..), latestVersions)
 
 admin, editor, reader :: As
 admin = As "admin"
@@ -40,7 +47,7 @@ reader = As "reader"
 
 -- | The contract, for a backend made afresh for each example, as in
 -- "Wiki.App.Backend.Contract".
-spec :: forall m -> (MonadWiki m, MonadAdmin m) => (ActionWith (Fixture m) -> IO ()) -> Spec
+spec :: forall m -> (MonadWiki m, MonadComments m, MonadNotifications m, MonadAdmin m) => (ActionWith (Fixture m) -> IO ()) -> Spec
 spec _ withFixture = around withFixture $ describe "MonadAdmin contract" $ do
   reading
   paging
@@ -48,6 +55,7 @@ spec _ withFixture = around withFixture $ describe "MonadAdmin contract" $ do
   administrators
   creators
   accounts
+  removing
   groups
   membership
   letsIn
@@ -353,6 +361,61 @@ accounts = describe "createUser, setPassword, sendPasswordLink and setDisabled" 
     (\s -> (\u -> u.login.text) <$> s.user) <$> run reader session `shouldReturn` Just "reader"
     void (run reader (listPages projects.id) >>= ok)
     run admin (setDisabled (UserId "user-nobody") True) >>= (`shouldFailWith` NotFound)
+
+--------------------------------------------------------------------------------
+-- Removing an account
+
+removing :: (MonadWiki m, MonadComments m, MonadNotifications m, MonadAdmin m) => SpecWith (Fixture m)
+removing = describe "removeUser" $ do
+  it "refuses an enabled login, one's own account, anyone but an administrator, and an id that is no user's" $ \(Fixture run) -> do
+    editorId <- idOf run editor
+    adminId <- idOf run admin
+    readerId <- idOf run reader
+    run admin (removeUser editorId) >>= \case
+      Left (Conflict _) -> pass
+      other -> expectationFailure ("expected a conflict, got " <> show other)
+    run admin (removeUser adminId) >>= shouldBeInvalid
+    void (run admin (setDisabled readerId True) >>= ok)
+    run editor (removeUser readerId) >>= (`shouldFailWith` Forbidden)
+    run admin (removeUser (UserId "user-nobody")) >>= (`shouldFailWith` NotFound)
+    map (\u -> u.login.text) . (\d -> d.users) <$> directoryNow run `shouldReturn` ["admin", "editor", "reader"]
+
+  it "removes a disabled account with its groups and grants, keeps what they wrote under their login, and frees the login" $ \(Fixture run) -> do
+    editorId <- idOf run editor
+    editorName <- run editor currentUser >>= maybe (assertFailure "nobody is the editor") (pure . (\u -> u.displayName))
+    blog <- run admin (getSpace [slug "blog"]) >>= ok
+    void (run admin (setWatching (WatchSpace blog.id) True) >>= ok)
+    made <- run editor (createPage blog.id Nothing "Field notes" "First words.") >>= ok
+    saved <- run editor (savePage made.id made.updatedAt "Field notes" "Second words.") >>= ok
+    void (run editor (saveDraft saved.id saved.updatedAt "Field notes" "Words not saved yet.") >>= ok)
+    void (run editor (openThread saved.id Nothing "A note on these notes.") >>= ok)
+    void (run admin (setSpaceGrant blog.id (SubjectUser editorId) AdministerSpace True) >>= ok)
+    void (run admin (setCreateSpaces editorId True) >>= ok)
+    void (run admin (setDisabled editorId True) >>= ok)
+    run admin (removeUser editorId) >>= ok
+    d <- directoryNow run
+    map (\u -> u.login.text) d.users `shouldBe` ["admin", "reader"]
+    Set.member editorId (d.creators <> d.disabled) `shouldBe` False
+    writers <- groupNamed run "writers"
+    membersOf run writers `shouldReturn` []
+    access <- run admin (spaceAccess blog.id) >>= ok
+    [g | g <- access.grants, g.subject == SubjectUser editorId] `shouldBe` []
+    -- The page, its versions and the comment stay, by the login.
+    let former = absentAuthor (formerAuthor "editor")
+        authors = map (\v -> v.author) <$> (run admin (listVersions saved.id latestVersions) >>= ok)
+        commenters = (\ts -> [c.author | t <- ts, c <- t.comments]) <$> (run admin (listThreads saved.id) >>= ok)
+    authors `shouldReturn` [Just former, Just former]
+    commenters `shouldReturn` [former]
+    -- The administrator's notifications of what they did stay, by the name
+    -- they had then.
+    told <- (\n -> n.items) <$> (run admin notifications >>= ok)
+    told `shouldNotBe` []
+    [(n.actor.id, n.actor.name) | n <- told] `shouldBe` [(formerAuthor "editor", editorName) | _ <- told]
+    -- The login may be taken by a new account, which is someone else.
+    again <- run admin (createUser NewAccount {login = "editor", displayName = "Another editor", password = Password "a new editor's password", email = Nothing}) >>= ok
+    again.user.id `shouldNotBe` editorId
+    authors `shouldReturn` [Just former, Just former]
+    commenters `shouldReturn` [former]
 
 --------------------------------------------------------------------------------
 -- Groups

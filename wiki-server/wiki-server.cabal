@@ -305,6 +305,7 @@ test-suite wiki-server-test
         Test.Storage.Fixture
         Test.Storage.Migrate
         Test.Storage.Permissions
+        Test.Storage.Removal
         Test.Storage.Scale
         Test.Storage.Transactions
     build-depends:

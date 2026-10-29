@@ -245,6 +245,13 @@ stubs =
           , setPassword = \u _ -> pure Account {user = adaAs u, hasPassword = True, disabled = False}
           , sendPasswordLink = \u -> if u == UserId "u1" then pure NoContent else refuse (Invalid "No verified address.")
           , setDisabled = \u body -> pure Account {user = adaAs u, hasPassword = True, disabled = body.disabled}
+          , removeUser = \u ->
+              if u == UserId "u2"
+                then pure NoContent
+                else
+                  if u == UserId "u1"
+                    then refuse (Conflict "Disable ada's login before removing the account.")
+                    else refuse NotFound
           , settings = pure Sample.settings
           , setSettings = pure
           , invitations = pure Sample.invitations
@@ -654,6 +661,10 @@ spec = describe "a server of the API's type" $ do
       answers (sendJson methodPut (links.admin.setPassword (UserId "u7")) NewPassword {password = Password "y"}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = False}
       answers (sendJson methodPut (links.admin.setDisabled (UserId "u7")) AccountDisabled {disabled = True}) 200 Account {user = adaAs (UserId "u7"), hasPassword = True, disabled = True}
       links.admin.setDisabled (UserId "u7") `shouldBe` "api/v1/admin/users/u7/disabled"
+      links.admin.removeUser (UserId "u2") `shouldBe` "api/v1/admin/users/u2"
+      (status <$> request methodDelete (links.admin.removeUser (UserId "u2")) [] "") `shouldReturn` 204
+      answers (request methodDelete (links.admin.removeUser (UserId "u1")) [] "") 409 (Conflict "Disable ada's login before removing the account.")
+      answers (request methodDelete (links.admin.removeUser (UserId "u9")) [] "") 404 NotFound
 
     it "mails a user the link to choose a password, at password-link, answering with nothing" $ do
       links.admin.sendPasswordLink (UserId "u1") `shouldBe` "api/v1/admin/users/u1/password-link"

@@ -312,6 +312,7 @@ instance (MonadIO m) => MonadAdmin (MemWiki m) where
   setPassword u = write . setPasswordIn u
   sendPasswordLink = query . sendPasswordLinkIn
   setDisabled u = write . setDisabledIn u
+  removeUser = write . removeUserIn
   createGroup = write . createGroupIn
   renameGroup g = write . renameGroupIn g
   deleteGroup = write . deleteGroupIn

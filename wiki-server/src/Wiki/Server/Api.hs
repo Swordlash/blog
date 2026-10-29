@@ -573,6 +573,7 @@ handlers env caller =
           , setPassword = \u body -> wiki (setPassword u body.password)
           , sendPasswordLink = mailPasswordLink
           , setDisabled = \u body -> wiki (setDisabled u body.disabled)
+          , removeUser = \u -> wiki (removeUser u) $> NoContent
           , settings = wiki wikiSettings
           , setSettings = wiki . setWikiSettings
           , invitations = do

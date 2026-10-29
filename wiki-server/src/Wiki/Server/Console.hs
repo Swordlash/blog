@@ -13,6 +13,7 @@
 -- > wiki-server users admin    --data DIR LOGIN (--on | --off)
 -- > wiki-server users disable  --data DIR LOGIN (--on | --off)
 -- > wiki-server users second-factor-remove --data DIR LOGIN
+-- > wiki-server users remove   --data DIR LOGIN
 --
 -- Each runs on the data directory, as @backup@ does, and may do so while
 -- the server runs on it: the database waits for the server's writes
@@ -67,7 +68,7 @@ import System.IO (hFlush, hGetEcho, hIsTerminalDevice, hSetEcho)
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.ServerSettings (ProviderSettingsOf (..), ServerSettingsOf (..), kindName, providerLabel, providerProblems, redirectUri)
 import Wiki.App.Backend (WikiError (..))
-import Wiki.App.Backend.Admin (MonadAdmin (removeSecondFactor))
+import Wiki.App.Backend.Admin (MonadAdmin (removeSecondFactor, removeUser))
 import Wiki.Core.Url (Url (..))
 import Wiki.Core.User (Login (..), Password (..), User (..))
 import Wiki.Server.Accounts (accountByLogin, createAccount, listAccounts, setAdministrator, setDisabled, setPassword)
@@ -102,6 +103,9 @@ data UsersCommand
   | -- | Remove a user's second factor (WP4.11 of docs/PLAN.md), for someone
     -- who has lost it and whose administrators cannot sign in either.
     RemoveSecondFactor Text
+  | -- | Remove a user's account (WP5.25 of docs/PLAN.md), whose login must
+    -- be disabled first. What they wrote stays, under their login.
+    RemoveUser Text
   deriving stock (Eq, Show)
 
 -- | The options of @wiki-server users@.
@@ -114,6 +118,7 @@ usersParser =
         <> command "admin" (info (users (SetUserAdministrator <$> login <*> onOff "an administrator")) (progDesc "Make a user an administrator (--on), or not (--off)"))
         <> command "disable" (info (users (SetUserDisabled <$> login <*> onOff "disabled")) (progDesc "Disable a user's login (--on), which signs them out, or enable it again (--off)"))
         <> command "second-factor-remove" (info (users (RemoveSecondFactor <$> login)) (progDesc "Take a user's second factor away, so that they sign in with their password alone"))
+        <> command "remove" (info (users (RemoveUser <$> login)) (progDesc "Remove a disabled user's account; their pages, versions and comments stay, under their login, and the login is free again"))
     )
   where
     users c = Users <$> placeOptions <*> c
@@ -164,6 +169,11 @@ runUsers askPassword u = (`onPlace` u.place) $ \at -> withStorageAside at $ \st 
     -- The user exists: what is missing is their second factor.
     _ <- withExceptT (const (describe a.user <> " has no second factor.")) (ExceptT (runStoredWikiFrom st Administrator consoleAddress (removeSecondFactor a.user.id)))
     pure [describe a.user <> " signs in with their password alone now."]
+  RemoveUser login -> do
+    a <- found st login
+    unless a.disabled (throwError (describe a.user <> " can still sign in: disable the login first (wiki-server users disable --data " <> toS u.place.dataDir <> " " <> login <> " --on)."))
+    _ <- wiki (runStoredWikiFrom st Administrator consoleAddress (removeUser a.user.id))
+    pure [describe a.user <> " is removed. What they wrote stays, under the login " <> a.user.login.text <> ", which is free to be taken again."]
   where
     wiki :: IO (Either WikiError a) -> ExceptT Text IO a
     wiki = withExceptT explain . ExceptT

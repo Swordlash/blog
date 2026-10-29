@@ -192,7 +192,7 @@ import Wiki.Core.Audit (Actor (..))
 import Wiki.Core.Audit qualified as Audit
 import Wiki.Core.Blog (PostDetails (..), isPost)
 import Wiki.Core.Blog qualified as Blog
-import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
+import Wiki.Core.Comment (Comment (..), Thread (..), absentAuthor, checkCommentBody, formerAuthor, mayComment, mayDeleteComment, mayDeleteThread, mayEditComment)
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Export (Archive (..), ArchiveFile (..), archiveFiles, threadsAmong)
 import Wiki.Core.Export qualified as Export
@@ -1105,6 +1105,7 @@ instance (MonadIO m) => MonadAdmin (StoredWiki m) where
   revokeInvitation = run Writes . revokeInvitationTx
   unlinkUserIdentity u = run Writes . unlinkUserIdentityTx u
   removeSecondFactor = run Writes . removeSecondFactorTx
+  removeUser = run Writes . removeUserTx
 
   -- The server's own settings: kept in memory as soon as they are
   -- committed, as the wiki's are, and never returned with their secrets.
@@ -2012,14 +2013,15 @@ discardDraftTx pid = do
 
 -- | A version as the class gives it, its author named: a user by their
 -- display name, the administrator as 'administratorUser', and anyone else
--- (no longer a user) by their id.
+-- (no longer a user, such as one whose account was removed) as
+-- 'absentAuthor' names them.
 versionOf :: PageId -> VersionRow -> Version
 versionOf page r =
   Version {page, updatedAt = r.updatedAt, title = r.title, body = r.body, author = named <$> r.author}
   where
     named u
       | u == administratorId = Author {id = u, name = administratorUser.displayName}
-      | otherwise = Author {id = u, name = fromMaybe u.text r.authorName}
+      | otherwise = maybe (absentAuthor u) (\n -> Author {id = u, name = n}) r.authorName
 
 -- | A page of a page's history, each version with its number: the first
 -- of them is numbered with how many versions there are up to it, and the
@@ -2406,6 +2408,24 @@ removeSecondFactorTx u = do
   had <- db (deleteSecondFactor u)
   unless had (failWith NotFound)
   record "user.second-factor-remove" (userSubject user) []
+
+-- | An administrator removes a user's account (WP5.25 of docs/PLAN.md).
+-- The login must be disabled first, so that removing an account is a
+-- second, deliberate step after stopping it from signing in. Nobody
+-- removes their own account here. 'deleteUserRows' deletes the account
+-- and what belongs to it. The page versions and comments the user wrote
+-- stay, kept under 'formerAuthor' with the login, so that they still name
+-- the person; the login is then free for a new account.
+removeUserTx :: UserId -> Tx ()
+removeUserTx u = do
+  requireAdministrator
+  user <- findUser u
+  self <- asks (\x -> (\p -> p.user) <$> x.principal)
+  when (self == Just u) (failWith (Invalid "You cannot remove your own account."))
+  account <- db (loadAccount u) >>= maybe (failWith NotFound) pure
+  unless account.disabled (failWith (Conflict ("Disable " <> user.login.text <> "'s login before removing the account.")))
+  db (deleteUserRows u (formerAuthor user.login.text))
+  record "user.remove" (userSubject user) []
 
 --------------------------------------------------------------------------------
 -- Comments

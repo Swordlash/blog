@@ -483,6 +483,7 @@ instance (MonadIO m) => MonadAdmin (HttpWiki m) where
   -- Sending a mail changes nothing in the cache.
   sendPasswordLink u = send_ (endpoints.admin.sendPasswordLink u)
   setDisabled u disabled = write (endpoints.admin.setDisabled u AccountDisabled {disabled})
+  removeUser u = write_ (endpoints.admin.removeUser u)
   createGroup name = write (endpoints.admin.createGroup GroupName {name})
   renameGroup g name = write (endpoints.admin.renameGroup g GroupName {name})
   deleteGroup g = write_ (endpoints.admin.deleteGroup g)

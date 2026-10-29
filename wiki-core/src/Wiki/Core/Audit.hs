@@ -110,6 +110,7 @@ actionText a = Map.findWithDefault a a actions
         , ("user.password-link", "Mailed a user a link to choose a password")
         , ("user.disable", "Disabled a user's login")
         , ("user.enable", "Enabled a user's login")
+        , ("user.remove", "Removed a user's account")
         , ("user.second-factor-remove", "Removed a user's second factor")
         , ("user.identity-remove", "Disconnected a user's account at a provider")
         , ("group.create", "Made a group")

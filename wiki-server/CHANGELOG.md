@@ -60,6 +60,17 @@ those users alone (`Rows.loadUsersDetails`). A limit outside 1 to 100 and an
 offset below 0 are refused with a 400, after the check that the caller
 administers the wiki.
 
+`DELETE api/v1/admin/users/<user>` removes a disabled login's account
+(WP5.25), and so does the console's `wiki-server users remove LOGIN`. The
+users row goes, and with it, by the schema's cascades, the sessions,
+memberships, identities, second factor, password links, passkeys, vault,
+watches and notifications; `Rows.deleteUserRows` deletes the grants and
+drafts, and sets the author of the user's page versions and comments, and
+the actor of others' notifications of what they did, to
+`Wiki.Core.Comment.formerAuthor` with the login. No migration is needed.
+A version's author who is no longer a user is named as `absentAuthor`
+names them.
+
 `Wiki.Server.Render.inProcess`, the transport that hands the application's
 requests to the API in the same process, takes servant's request and
 returns servant's response, as the application's client is now derived

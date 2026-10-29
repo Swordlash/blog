@@ -443,6 +443,15 @@ data AdminApi mode = AdminApi
   , setDisabled :: mode :- "users" :> Capture "user" UserId :> "disabled" :> ReqBody '[JSON] AccountDisabled :> Put '[JSON] Account
   -- ^ @setDisabled@: disable a user's account, which ends their sessions,
   -- or enable it again.
+  , removeUser :: mode :- "users" :> Capture "user" UserId :> DeleteNoContent
+  -- ^ @removeUser@: remove a user's account, whose login must be disabled
+  -- first ('Wiki.Api.Error.Conflict' otherwise), and never one's own
+  -- ('Wiki.Api.Error.Invalid'). Their sessions end, and what belongs to
+  -- the account goes with it: grants, memberships, sign-in providers'
+  -- accounts, second factor, passkeys and vault, watches and
+  -- notifications, drafts. The pages, versions and comments they wrote
+  -- stay, kept by their login ('Wiki.Core.Comment.formerAuthor'), and the
+  -- login may be taken again.
   , settings :: mode :- "settings" :> Get '[JSON] WikiSettings
   -- ^ @wikiSettings@: who the wiki lets in, and what a new account may do.
   , setSettings :: mode :- "settings" :> ReqBody '[JSON] WikiSettings :> Put '[JSON] WikiSettings

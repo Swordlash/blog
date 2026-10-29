@@ -842,6 +842,7 @@ not checked: the wiki asks for none. Neither signs anyone in.
 | DELETE | `api/v1/admin/groups/<group>/members/<user>` | | 204 | 403, 404 | `removeMember` |
 | POST | `api/v1/admin/users` | `NewAccount` `{"login", "displayName", "password", "email"}` (`email` optional: a link to verify it is mailed there) | 201, `Account` `{"user", "hasPassword", "disabled"}` | 403 (also to an administrator while the wiki's `adminCreatesPasswordAccounts` is false: such accounts are then made on the console), 400, 409 (the login is taken, in any case) | `createUser` |
 | DELETE | `api/v1/admin/users/<user>/second-factor` | | 204: the user signs in with their password alone | 403, 404 (none) | `removeSecondFactor` |
+| DELETE | `api/v1/admin/users/<user>` | | 204: the account is removed with its sessions, memberships, grants, second factor, passkeys, vault, drafts, watches and notifications; the page versions and comments the user wrote, and others' notifications of what they did, stay under the id `~former:<login>` (shown as the login, "not a user here"), and the login may be taken again; the activity log records `user.remove` | 403, 404, 409 (the login is not disabled), 400 (one's own account) | `removeUser` |
 | PUT | `api/v1/admin/users/<user>/password` | `NewPassword` `{"password"}` | `Account`; the user's sessions end | 403, 404, 400 (a password that cannot be one, or a user who has no password to set) | `setPassword` |
 | POST | `api/v1/admin/users/<user>/password-link` | | 204: the link "Forgot your password?" mails is mailed to the user's verified address | 403, 404, 400 with the reason (the server sends no mail, the user has no password to set, their login is disabled, they have no verified address, or the mail could not be sent), 429 (a link was mailed to them less than a minute ago) | `sendPasswordLink` |
 | PUT | `api/v1/admin/users/<user>/disabled` | `AccountDisabled` `{"disabled"}` | `Account`; disabling ends the user's sessions | 403, 404 | `setDisabled` |
@@ -858,7 +859,7 @@ owner, deletions of spaces and pages, imports; and what the console does
 entry's `action` is one of `space.grant`, `space.revoke`, `space.public`,
 `space.profile`, `space.delete`, `page.delete`, `user.create`, `user.register`,
 `user.administrator`, `user.create-spaces`, `user.password`,
-`user.disable`, `user.enable`, `user.second-factor-remove`,
+`user.disable`, `user.enable`, `user.remove`, `user.second-factor-remove`,
 `user.identity-remove`, `group.create`, `group.rename`, `group.delete`,
 `group.member-add`, `group.member-remove`, `settings.wiki`,
 `settings.server`, `settings.backups`, `invitation.create`,

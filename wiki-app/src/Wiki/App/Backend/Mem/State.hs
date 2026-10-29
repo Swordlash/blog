@@ -83,6 +83,7 @@ module Wiki.App.Backend.Mem.State
   , setPasswordIn
   , sendPasswordLinkIn
   , setDisabledIn
+  , removeUserIn
   , createGroupIn
   , renameGroupIn
   , deleteGroupIn
@@ -258,6 +259,9 @@ data MemState = MemState
   -- ^ The users who have a password. The demo has no passwords and stores
   -- none: only whether a user would have one on a server, which its
   -- administration shows.
+  , removed :: Map UserId Text
+  -- ^ The login of each account removed ('removeUserIn'), by its id: what
+  -- names the author of the versions that user saved.
   , newAccountsCreateSpaces :: Bool
   -- ^ The wiki's second setting ('Wiki.Api.Admin.WikiSettings'). The
   -- first, whom the wiki is open to, is stored in the grants
@@ -314,6 +318,7 @@ emptyState =
     , searchText = mempty
     , disabled = mempty
     , passwords = mempty
+    , removed = mempty
     , newAccountsCreateSpaces = False
     , adminCreatesPasswordAccounts = True
     , invitations = mempty
@@ -1179,9 +1184,13 @@ discardDraftIn pid st = do
 -- History
 
 -- | Who saved a version or wrote a comment, as the wiki names them: a
--- user by their display name, and anyone else as 'absentAuthor' says.
+-- user by their display name, and anyone else as 'absentAuthor' says. A
+-- user whose account was removed is named by their login, under
+-- 'C.formerAuthor', as the server names them.
 authorOf :: MemState -> UserId -> Author
-authorOf st u = maybe (absentAuthor u) (\x -> Author {id = u, name = x.displayName}) (Map.lookup u st.users)
+authorOf st u = case Map.lookup u st.users of
+  Just x -> Author {id = u, name = x.displayName}
+  Nothing -> absentAuthor (maybe u C.formerAuthor (Map.lookup u st.removed))
 
 -- | A page's version in the form the class returns it.
 versionOf :: MemState -> PageId -> UTCTime -> Saved -> Version
@@ -1332,6 +1341,58 @@ setDisabledIn uid off st = do
   u <- findUser st uid
   let st1 = st {disabled = (if off then Set.insert else Set.delete) uid st.disabled}
   pure (st1, accountIn st1 u)
+
+-- | Remove a user's account, as the server does: only a disabled login,
+-- and never the account of whoever is signed in. The account goes with
+-- its memberships, grants, drafts, notifications, watches and choices.
+-- The versions and comments the user wrote stay. A comment's author is set
+-- to 'C.formerAuthor' with the login, as the server sets it. A version is
+-- never rewritten once saved ("Wiki.App.Backend.Mem.Persist" writes each
+-- one once), so the login is kept in 'removed' under the user's id, and
+-- 'authorOf' names the versions' author from there. Other users'
+-- notifications of what the user did keep the name they were made with,
+-- under the same id.
+removeUserIn :: UserId -> Write ()
+removeUserIn uid st = do
+  requireAdministrator st
+  u <- findUser st uid
+  when (st.current == Just uid) (Left (Invalid "You cannot remove your own account."))
+  unless (Set.member uid st.disabled) (Left (Conflict ("Disable " <> u.login.text <> "'s login before removing the account.")))
+  let former = C.formerAuthor u.login.text
+      keptComment c = if c.author.id == uid then c {C.author = absentAuthor former} else c
+      keptNotice n
+        | n.actor.id == uid =
+            Notice.Notification
+              { Notice.id = n.id
+              , Notice.kind = n.kind
+              , Notice.page = n.page
+              , Notice.thread = n.thread
+              , Notice.actor = Author {id = former, name = n.actor.name}
+              , Notice.title = n.title
+              , Notice.excerpt = n.excerpt
+              , Notice.createdAt = n.createdAt
+              , Notice.read = n.read
+              , Notice.location = n.location
+              }
+        | otherwise = n
+      notUser :: Subject -> Bool
+      notUser = (/= SubjectUser uid)
+  pure
+    ( st
+        { users = Map.delete uid st.users
+        , membership = Map.map (Set.delete uid) st.membership
+        , grants = st.grants {P.global = filter (\g -> notUser g.subject) st.grants.global, P.spaces = filter (\g -> notUser g.subject) st.grants.spaces}
+        , drafts = Map.filterWithKey (\(_, author) _ -> author /= uid) st.drafts
+        , disabled = Set.delete uid st.disabled
+        , passwords = Set.delete uid st.passwords
+        , removed = Map.insert uid u.login.text st.removed
+        , notices = map (map keptNotice) (Map.delete uid st.notices)
+        , watches = Map.delete uid st.watches
+        , choices = Map.delete uid st.choices
+        , threads = Map.map (map (\t -> t {C.comments = map keptComment t.comments})) st.threads
+        }
+    , ()
+    )
 
 -- | A group's name, checked: not blank, and not another group's name,
 -- ignoring case.

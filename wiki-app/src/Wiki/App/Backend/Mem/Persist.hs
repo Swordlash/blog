@@ -18,7 +18,7 @@
 -- records lack: the id counter (new ids are made from it, and a counter
 -- that started over would make an id a record already has), the global
 -- grants, and the accounts' flags (which users are disabled, and which
--- have a password). Who is signed in, and the object URLs a tab has made
+-- have a password), with the logins of the accounts removed. Who is signed in, and the object URLs a tab has made
 -- for attachments, last only as long as the tab.
 --
 -- Some data is saved although the export leaves it out. Drafts
@@ -219,7 +219,7 @@ records st =
       , encoded
           [ (counterKey, encodeJson st.counter)
           , (globalGrantsKey, encodeJson (map encodeGlobalGrant st.grants.global))
-          , (accountsKey, encodeJson (object ["disabled" .= st.disabled, "passwords" .= st.passwords]))
+          , (accountsKey, encodeJson (object ["disabled" .= st.disabled, "passwords" .= st.passwords, "removed" .= Map.mapKeys (\u -> u.text) st.removed]))
           ]
       )
     , (draftsStore, encoded [(draftKey d, encodeJson (encodeDraft d)) | d <- Map.elems st.drafts])
@@ -259,6 +259,7 @@ touched old new = do
   grants <- same (\x -> x.grants)
   disabled <- same (\x -> x.disabled)
   passwords <- same (\x -> x.passwords)
+  removed <- same (\x -> x.removed)
   drafts <- same (\x -> x.drafts)
   versions <- same (\x -> x.versions)
   unreadVersions <- same (\x -> x.unreadVersions)
@@ -275,7 +276,7 @@ touched old new = do
         , (pagesStore, pages)
         , (attachmentsStore, blobs && unreadBlobs)
         , (grantsStore, grants)
-        , (metaStore, old.counter == new.counter && grants && disabled && passwords)
+        , (metaStore, old.counter == new.counter && grants && disabled && passwords && removed)
         , (draftsStore, drafts)
         , (versionsStore, versions && unreadVersions)
         , (threadsStore, threads)
@@ -350,10 +351,17 @@ readVersion page at bytes = case decodeJson parseVersion bytes of
   Right (p, t, v) | p == page && t == at -> Just v
   _ -> Nothing
 
--- | Parse the accounts' flags: the users who are disabled, and those who
--- have a password.
-parseAccounts :: Value -> Parser (Set UserId, Set UserId)
-parseAccounts = withObject "accounts" $ \o -> (,) <$> o .:? "disabled" .!= mempty <*> o .:? "passwords" .!= mempty
+-- | Parse the accounts' flags: the users who are disabled, those who have
+-- a password, and the logins of the accounts removed, by their ids. A
+-- record saved before accounts could be removed has none.
+parseAccounts :: Value -> Parser (Set UserId, Set UserId, Map UserId Text)
+parseAccounts = withObject "accounts" $ \o ->
+  (,,)
+    <$> o
+    .:? "disabled"
+    .!= mempty
+    <*> o .:? "passwords" .!= mempty
+    <*> (Map.mapKeys UserId <$> o .:? "removed" .!= mempty)
 
 -- | A draft's record, with named fields, like the export's records.
 encodeDraft :: Draft -> Value
@@ -463,7 +471,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
   Just counterBytes -> either Unreadable Stored $ do
     counter <- first (failure metaStore counterKey . toS) (eitherDecodeStrict' counterBytes :: Either [Char] Natural)
     global <- maybe (Right []) (decoding metaStore globalGrantsKey (listOf parseGlobalGrant)) (Map.lookup globalGrantsKey (holding metaStore))
-    (disabled, passwords) <- maybe (Right mempty) (decoding metaStore accountsKey parseAccounts) (Map.lookup accountsKey (holding metaStore))
+    (disabled, passwords, removed) <- maybe (Right mempty) (decoding metaStore accountsKey parseAccounts) (Map.lookup accountsKey (holding metaStore))
     users <- keyed usersStore parseUser (\u -> u.id.text) UserId
     groupsAndMembers <- keyed groupsStore parseGroup (\(g, _) -> g.id.text) GroupId
     pages <- keyed pagesStore parseStoredPage (\p -> p.id.text) PageId
@@ -511,6 +519,7 @@ restore stored = case Map.lookup counterKey (holding metaStore) of
           grants = Grants {global, spaces = grants, access = Open}
         , disabled
         , passwords
+        , removed
         , counter
         }
   where
