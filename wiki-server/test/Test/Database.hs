@@ -4,7 +4,9 @@
 --
 -- The PostgreSQL the tests use is the one @WIKI_TEST_DATABASE_URL@ names
 -- (a URL to a database of a server the tests may create databases on, as
--- CI's service container), or else a cluster of its own that the tests
+-- CI's container), with the @pg_dump@ and @pg_restore@ that
+-- @WIKI_TEST_PG_DUMP@ and @WIKI_TEST_PG_RESTORE@ name (else those on the
+-- PATH, which must be of the server's major version or newer), or else a cluster of its own that the tests
 -- start in a temporary directory with @initdb@ and @pg_ctl@, found on the
 -- @PATH@ or in the @bin@ directory of a version under
 -- @\/usr\/lib\/postgresql@, and stop at the end.
@@ -82,7 +84,9 @@ withBackings act =
   lookupEnv "WIKI_TEST_DATABASE_URL" >>= \case
     Just url -> do
       made <- newIORef 0
-      act [OnSqlite, OnPostgres PgServer {url = T.pack url, made, programs = defaultPgPrograms}]
+      dump <- fromMaybe defaultPgPrograms.dump <$> lookupEnv "WIKI_TEST_PG_DUMP"
+      restore <- fromMaybe defaultPgPrograms.restore <$> lookupEnv "WIKI_TEST_PG_RESTORE"
+      act [OnSqlite, OnPostgres PgServer {url = T.pack url, made, programs = PgPrograms {dump, restore}}]
     Nothing ->
       findPostgres >>= \case
         Nothing -> act [OnSqlite, PostgresNotRun "PostgreSQL is not at hand: set WIKI_TEST_DATABASE_URL, or put initdb and pg_ctl on the PATH"]

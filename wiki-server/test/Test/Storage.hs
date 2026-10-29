@@ -30,7 +30,8 @@ import Wiki.Core.Export.Zip (ZipSource (..), unzipFile, writeZipFile, zipFiles)
 import Wiki.Core.Id
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Permission (GlobalGrant (..), GlobalPermission (..), Grants (..), Subject (..))
-import Wiki.Core.Search (SearchHit (..), bodyText, foldText, searchQuery)
+import Wiki.Api.Info (Capabilities (..), SearchKind (..))
+import Wiki.Core.Search (SearchHit (..), SearchQuery (..), bodyText, foldText, searchQuery)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Group (..), Login (..), User (..))
 import Wiki.Core.Version (Author (..), Version (..), VersionInfo (..), VersionsQuery (..), latestVersions)
@@ -46,6 +47,7 @@ spec backing = describe "StoredWiki, besides the contract" $ do
   versionsAndSearchText backing
   attachmentsOnDisk backing
   wholeWikis backing
+  searching backing
 
 -- | Run as the demo's administrator user.
 asAdmin :: Storage -> StoredWiki IO a -> IO a
@@ -405,3 +407,58 @@ byHash a =
     rehash x = case x.source of
       SourceBlob b | Just bytes <- Map.lookup b a.blobs -> x {source = SourceBlob (blobOf bytes)}
       _ -> x
+
+-- | The search, with the same cases on both databases: SQLite's folded
+-- text, and PostgreSQL's full-text search ("Wiki.Api.Info"'s
+-- 'SearchKind'). Where the two differ by design (a part of a word, the
+-- syntax of a web search engine), the case says what each does.
+searching :: Backing -> Spec
+searching backing = describe "the search" $ do
+  -- A space of four pages: one with the word in its title, one with it in
+  -- its text alone, one without it, and a template with it.
+  let withPages act = withDemo backing $ \st -> do
+        kind <- (\c -> c.search) <$> storageCapabilities st
+        space <- asAdmin st (createSpace Nothing "Zoo") >>= ok
+        let made title body = asAdmin st (createPage space.id Nothing title body) >>= ok
+        inTitle <- made "Wombat burrows" "Burrowing animals of Australia."
+        inText <- made "Marsupials" "A short note about the wombat and the quokka. Żółw is Polish for a turtle."
+        without <- made "Birds" "The emu and the kookaburra."
+        template <- made "Wombat form" "A template that names the wombat."
+        _ <- asAdmin st (setPageTemplate template.id True) >>= ok
+        act st kind space (inTitle, inText, without, template)
+      hits st q = map (\h -> h.page) <$> asAdmin st (searchPages q)
+      within space text = SearchQuery {text, space = Just space.id, includeSubspaces = True, limit = 50, templates = False}
+
+  it "finds a word in a title or a text, the title first, and nothing for a word nowhere" $ withPages $ \st _ space (inTitle, inText, _, _) -> do
+    hits st (within space "wombat") `shouldReturn` [inTitle.id, inText.id]
+    hits st (within space "platypus") `shouldReturn` []
+
+  it "ignores case and diacritics, in the query and in the page" $ withPages $ \st _ space (_, inText, _, _) -> do
+    hits st (within space "QUOKKA") `shouldReturn` [inText.id]
+    hits st (within space "zolw") `shouldReturn` [inText.id]
+    hits st (within space "ŻÓŁW") `shouldReturn` [inText.id]
+
+  it "leaves the templates out unless asked, and keeps to the space asked" $ withPages $ \st _ space (inTitle, inText, _, template) -> do
+    hits st (within space "wombat") {templates = True} >>= (`shouldMatchList` [inTitle.id, inText.id, template.id])
+    blog <- asAdmin st (getSpace (path "blog")) >>= ok
+    hits st (within blog "wombat") `shouldReturn` []
+
+  it "finds a part of a word on SQLite only, whose search is the demo's" $ withPages $ \st kind space (inTitle, inText, _, _) ->
+    case kind of
+      FoldedText -> hits st (within space "womb") `shouldReturn` [inTitle.id, inText.id]
+      FullText -> do
+        hits st (within space "womb") `shouldReturn` []
+        -- Nor another form of the word: PostgreSQL's 'simple' configuration
+        -- has no stemming, which is a language's.
+        hits st (within space "burrow") `shouldReturn` []
+
+  it "takes a phrase, or and a word to leave out on PostgreSQL, and every word on SQLite" $ withPages $ \st kind space (inTitle, inText, without, _) ->
+    case kind of
+      FullText -> do
+        hits st (within space "\"wombat and the quokka\"") `shouldReturn` [inText.id]
+        hits st (within space "\"quokka and the wombat\"") `shouldReturn` []
+        hits st (within space "emu or quokka") >>= (`shouldMatchList` [inText.id, without.id])
+        hits st (within space "wombat -quokka") `shouldReturn` [inTitle.id]
+      FoldedText -> do
+        hits st (within space "wombat quokka") `shouldReturn` [inText.id]
+        hits st (within space "emu quokka") `shouldReturn` []
