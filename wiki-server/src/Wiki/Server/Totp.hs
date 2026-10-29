@@ -47,7 +47,7 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector.Unboxed qualified as V
 import Network.HTTP.Types.URI (urlEncode)
-import OTP.Commons (mkDigits)
+import OTP.Commons (Digits, mkDigits)
 import OTP.HOTP (hotpSHA1)
 import Protolude
 import Sel.HMAC.SHA256 qualified as HMAC
@@ -64,23 +64,32 @@ import Text.Show (Show (showsPrec))
 -- 20 ('newSecret'). HMAC pads a key shorter than its block (64 bytes for
 -- SHA-1) with zero bytes, so a key and the same key with zero bytes after
 -- it give the same codes: the secret is given to the package padded to 32
--- bytes. A key longer than 32 bytes cannot be given to it; the wiki makes
--- none ('secretFromText' refuses one).
-hotp :: Int -> ByteString -> Word64 -> Text
-hotp digits key = hotpWith digits (paddedKey key)
+-- bytes. A key longer than 32 bytes cannot be given to it: no key of 32
+-- bytes gives the same codes as one of 33 to 64. For such a key, and for
+-- fewer than six digits, which the package refuses, there is no code
+-- ('Nothing'). The wiki makes no such key ('secretFromText' refuses one).
+hotp :: Int -> ByteString -> Word64 -> Maybe Text
+hotp digits key counter = do
+  d <- mkDigits (fromIntegral digits)
+  k <- paddedKey key
+  pure (hotpWith d k counter)
 
 -- | 'hotp' with the key as the package takes it, made once ('paddedKey'):
 -- each key the package makes is a buffer of libsodium's own, with guard
 -- pages around it, so a 'Secret' carries its key made already.
-hotpWith :: Int -> HMAC.AuthenticationKey -> Word64 -> Text
-hotpWith digits key counter = display (hotpSHA1 key counter (fromMaybe (panic "a one-time password has six digits or more") (mkDigits (fromIntegral digits))))
+hotpWith :: Digits -> HMAC.AuthenticationKey -> Word64 -> Text
+hotpWith digits key counter = display (hotpSHA1 key counter digits)
+
+-- | Six digits, as every authenticator application shows its codes.
+sixDigits :: Digits
+sixDigits = fromMaybe (panic "six digits are a number of digits the package takes") (mkDigits 6)
 
 -- | A key of at most 32 bytes as the package takes it: padded with zero
--- bytes to 32.
-paddedKey :: ByteString -> HMAC.AuthenticationKey
-paddedKey key =
-  either (\why -> panic ("not a one-time password's key: " <> why)) identity $
-    HMAC.authenticationKeyFromHexByteString (convertToBase Base16 (key <> BS.replicate (32 - BS.length key) 0))
+-- bytes to 32. 'Nothing' for a longer key.
+paddedKey :: ByteString -> Maybe HMAC.AuthenticationKey
+paddedKey key
+  | BS.length key > 32 = Nothing
+  | otherwise = rightToMaybe (HMAC.authenticationKeyFromHexByteString (convertToBase Base16 (key <> BS.replicate (32 - BS.length key) 0)))
 
 -- | The RFC 6238 time step a moment falls in: the number of whole
 -- 30-second periods since the Unix epoch.
@@ -89,7 +98,7 @@ counterAt t = floor (utcTimeToPOSIXSeconds t / 30)
 
 -- | The six-digit code of a secret at a moment, as an application shows it.
 codeAt :: Secret -> UTCTime -> Text
-codeAt secret t = hotpWith 6 secret.key (counterAt t)
+codeAt secret t = hotpWith sixDigits secret.key (counterAt t)
 
 -- | How many steps either side of now a code is accepted from: one, so
 -- that a clock thirty seconds off, or a code typed as it changed, still
@@ -104,7 +113,7 @@ window = 1
 matchingCounter :: Secret -> UTCTime -> Maybe Word64 -> Text -> Maybe Word64
 matchingCounter secret t lastUsed typed =
   find
-    (\c -> maybe True (c >) lastUsed && encodeUtf8 (hotpWith 6 secret.key c) `BA.constEq` encodeUtf8 code)
+    (\c -> maybe True (c >) lastUsed && encodeUtf8 (hotpWith sixDigits secret.key c) `BA.constEq` encodeUtf8 code)
     [now - window .. now + window]
   where
     now = max window (counterAt t)
@@ -125,9 +134,10 @@ data Secret = Secret
 instance Eq Secret where
   a == b = a.bytes == b.bytes
 
--- | A secret of these bytes, at most 32 of them.
-secretOf :: ByteString -> Secret
-secretOf bytes = Secret {bytes, key = paddedKey bytes}
+-- | A secret of these bytes; 'Nothing' for more than 32 of them, which
+-- 'hotp' cannot use.
+secretOf :: ByteString -> Maybe Secret
+secretOf bytes = (\key -> Secret {bytes, key}) <$> paddedKey bytes
 
 instance Show Secret where
   showsPrec _ _ rest = "Secret <hidden>" <> rest
@@ -135,7 +145,7 @@ instance Show Secret where
 -- | A new secret: 20 random bytes, the length of SHA-1's output, as RFC 4226
 -- recommends.
 newSecret :: IO Secret
-newSecret = secretOf <$> getRandomBytes 20
+newSecret = getRandomBytes 20 >>= maybe (panic "20 bytes are a key the package takes") pure . secretOf
 
 -- | A secret as people type it into an application and as it is stored:
 -- in base32 without padding (32 letters and digits for 20 bytes).
@@ -148,7 +158,7 @@ secretFromText :: Text -> Maybe Secret
 secretFromText t =
   let cleaned = T.toUpper (T.filter (\c -> not (isSpace c) && c /= '=') t)
       padded = cleaned <> T.replicate ((8 - T.length cleaned `mod` 8) `mod` 8) "="
-   in either (const Nothing) (\key -> if BS.length key <= 32 then Just (secretOf key) else Nothing) (convertFromBase Base32 (encodeUtf8 padded))
+   in either (const Nothing) secretOf (convertFromBase Base32 (encodeUtf8 padded))
 
 -- | The URI that gives an application a secret (the "Key Uri Format" that
 -- Google Authenticator defined and every application reads): who it is

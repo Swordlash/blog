@@ -4,6 +4,7 @@
 -- application reads, its QR code, and the recovery codes.
 module Test.Server.Totp (spec) where
 
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -24,7 +25,7 @@ spec :: Spec
 spec = describe "second factor arithmetic" $ do
   it "computes RFC 4226's HOTP values (appendix D) for counters 0 to 9" $
     map (hotp 6 rfcKey) [0 .. 9]
-      `shouldBe` ["755224", "287082", "359152", "969429", "338314", "254676", "287922", "162583", "399871", "520489"]
+      `shouldBe` map Just ["755224", "287082", "359152", "969429", "338314", "254676", "287922", "162583", "399871", "520489"]
 
   it "computes RFC 6238's TOTP values with SHA-1 (appendix B), as eight digits, and their last six as an application shows them" $ do
     let vectors =
@@ -36,8 +37,14 @@ spec = describe "second factor arithmetic" $ do
           , (20000000000, "65353130")
           ]
     for_ vectors $ \(seconds, expected) -> do
-      hotp 8 rfcKey (counterAt (at seconds)) `shouldBe` expected
-      hotp 6 rfcKey (counterAt (at seconds)) `shouldBe` T.takeEnd 6 expected
+      hotp 8 rfcKey (counterAt (at seconds)) `shouldBe` Just expected
+      hotp 6 rfcKey (counterAt (at seconds)) `shouldBe` Just (T.takeEnd 6 expected)
+
+  it "computes no code for a key it cannot take, of more than 32 bytes, or for fewer than six digits" $ do
+    hotp 6 (BS.replicate 33 1) 0 `shouldBe` Nothing
+    hotp 6 (BS.replicate 64 1) 0 `shouldBe` Nothing
+    hotp 5 rfcKey 0 `shouldBe` Nothing
+    hotp 6 (BS.replicate 32 1) 0 `shouldSatisfy` isJust
 
   it "counts steps of thirty seconds from the epoch" $ do
     map (counterAt . at) [0, 29, 30, 59, 60, 1111111109] `shouldBe` [0, 0, 1, 1, 2, 37037036]
