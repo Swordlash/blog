@@ -23,7 +23,8 @@
 # this builds first (quickly, when npm run build-native has). It runs on
 # SQLite, and then again on PostgreSQL when one is at hand:
 # WIKI_TEST_DATABASE_URL names a database of a server on which this may make
-# two databases of its own (postgres://user@host:port/postgres, no query),
+# two databases of its own (postgres://user@host:port/postgres, with a query
+# such as ?host=/run/postgresql when it is on a socket),
 # with psql (WIKI_TEST_PSQL, else the PATH's) to make and drop them, and the
 # pg_dump and pg_restore the server's backups run (WIKI_TEST_PG_DUMP and
 # WIKI_TEST_PG_RESTORE, else the PATH's), as toolchain/ci-postgres.sh gives
@@ -47,8 +48,12 @@ if [ -n "${WIKI_TEST_DATABASE_URL:-}" ]; then
   drop() { "$psql" "$base" -q -c "DROP DATABASE IF EXISTS $live WITH (FORCE)" -c "DROP DATABASE IF EXISTS $restored WITH (FORCE)" || true; }
   trap drop EXIT
   "$psql" "$base" -q -c "CREATE DATABASE $live" -c "CREATE DATABASE $restored"
+  # The URLs of the two databases: the given one with its database's name
+  # replaced, which is the last part of the path before any query.
+  path=${base%%\?*}
+  query=${base#"$path"}
   printf 'smoke-test: the server again, on PostgreSQL\n'
-  WIKI_DATABASE_URL=${base%/*}/$live WIKI_SMOKE_RESTORE_DATABASE_URL=${base%/*}/$restored \
+  WIKI_DATABASE_URL=${path%/*}/$live$query WIKI_SMOKE_RESTORE_DATABASE_URL=${path%/*}/$restored$query \
     WIKI_PG_DUMP=${WIKI_TEST_PG_DUMP:-} WIKI_PG_RESTORE=${WIKI_TEST_PG_RESTORE:-} \
     node toolchain/smoke-test-server.mjs "$@"
 else
