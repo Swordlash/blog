@@ -350,7 +350,7 @@ jobs:
       run: node --check toolchain/screenshots.mjs
 
     - name: Report incremental build size
-      run: du -sh dist-newstyle/native >> "$GITHUB_STEP_SUMMARY"
+      run: du -sh dist-newstyle/native | tee -a "$GITHUB_STEP_SUMMARY"
 
   wasm:
     needs: plan
@@ -633,8 +633,8 @@ jobs:
 
     - name: Report incremental build sizes
       run: |
-        du -sh dist-newstyle/native >> "$GITHUB_STEP_SUMMARY"
-        du -sh --exclude=public dist-newstyle/wasm >> "$GITHUB_STEP_SUMMARY"
+        du -sh dist-newstyle/native | tee -a "$GITHUB_STEP_SUMMARY"
+        du -sh --exclude=public dist-newstyle/wasm | tee -a "$GITHUB_STEP_SUMMARY"
 
     # The built page, kept with the run as the artifact `app`: the deploy job
     # publishes it, from this run or, on a push to main the plan job
