@@ -1665,7 +1665,7 @@ must be in before it is.
   editor's JavaScript if the editor has one. `docs/markdown.md`'s mentions section says
   that the editor completes them; `docs/api.md` the endpoint.
 
-- **WP5.29 Boxes of your own, and the guide on every server** (the owner, 2026-10-29:
+- **WP5.29 (merged 2026-10-29, PR #114; see Progress) Boxes of your own, and the guide on every server** (the owner, 2026-10-29:
   "gdzie jest lista znaczników typu [!TIP]? chyba nie ma tego w guide. Da się dodać swój,
   np exercise?" and "zróbmy też by default że serwer wyświetla też guide. Na świeżym
   serwerze nie mam teraz tour/guide'a"). Two parts, one package.
@@ -4636,6 +4636,63 @@ Amended by the planning session after each work package's report.
   code, links, undefined brackets, math, the Mac shortcuts, a login with `@` not offered).
   Gate: 1815 server examples on SQLite and PostgreSQL, wasm 106/890/297. For later:
   `loadUsersStartingWith` and WP5.25's `loadUserPage` stay separate (different shapes).
+
+- **WP5.29 merged** (2026-10-29, PR #114, merged by the owner as `07bae7a`, nine commits, two review
+  rounds: Claude Code at high and Codex `gpt-6.1-sol` at high on each head, 10 + 10
+  findings, all confirmed and fixed). **A. Boxes.** `> [!KIND]` takes any kind (letters and dashes, any case, stored
+  lower; `validKindName` refuses the five, `title` and `icon`, whose classes the box's parts
+  use) and an optional title after the marker, plain text as written; `AlertKind` is the
+  five plus `Custom Text`, in the new `Wiki.Core.Markdown.Box`; `Alert kind title blocks`.
+  commonmark-extensions' `alertSpec` has a closed kind type, so `Ast` carries its own block
+  spec modelled on it (the one place a library could not serve). An administrator defines
+  kinds in the Server section's "Boxes" (`BoxKind`: name, label, a colour by name from the
+  five's palette plus teal, orange, pink and grey, an icon from a fixed set of inline SVG
+  masks: none, info, lightbulb, pencil, question, check, star, book, flag), kept as JSON
+  in the settings row `boxes` (no migration) and carried on every `SessionInfo`, so the
+  prerender and the first render agree; the renderer (`Render.boxOf`, shared with the
+  settings' preview) writes `alert alert-<name>`, the title (written, else the label, else
+  the name capitalised) and, for a defined kind, `--box-colour`/`--box-icon` as custom
+  properties (reset to `initial` on every box so a nested undefined kind stays grey);
+  `web/style.css` changed once. Exports: pandoc's `Ext_alerts` off; the wiki's parser
+  decides what is a box (`Ast.boxMarkers`, line and column), `Export.Document.withBoxes`
+  replaces each marker with a placeholder pandoc reads as one word (`wikibox` + 8 hex of
+  SHA-256 of the source, 16 or 64 if the source holds that start, + a number + `z`, so a page
+  cannot spell its own placeholder; a quoted blank line follows it so a table, a `:::` div
+  or HTML on the first line stays a block; a placeholder pandoc read as anything but a
+  quotation, in any text node, is written back and the page re-read; `\r\n` and lone `\r`
+  normalised for both parsers; one parse per page, `Ast.parseWithMarkers`/`Export.readPage`),
+  `boxesOf` makes the five pandoc's alert divs and the others `div.alert-<name>` with a
+  title div; the page and the export agree on `> [!NOTE]**x**` (a quotation), `> \[!NOTE]`
+  (text), markers in code, raw titles. The Markdown guide gains "Notes and boxes"; the demo
+  defines `exercise` (teal, pencil) and keeps its server settings across reload and import.
+  **B. The guide on every server.** The texts live in `Wiki.App.Guide` (demo and server;
+  two tours: the demo's and the server's: signing in, your spaces, editing, the assistant,
+  search, where Administration is). `Wiki.Server.Guide`: a first start with no spaces
+  installs the public space "Guide" at `/guide` (pages, attachments, macros, the tour as
+  home page) in one transaction through `Import.mergeArchive`; `--no-guide` skips it; the
+  setting `guide-installed` records the installed space's id and the guide's page paths,
+  and install, update and the Overview work on that space only (a space of the wiki's own
+  at `/guide` is never touched; `ServerStatus.guideInstallable` is true only when no guide
+  exists and nothing holds `/guide`). `wiki-server guide install` puts it back; `guide
+  update` keeps per page a hash of the title and text the guide last wrote: a page still as
+  written gets the release's title and text (a release rename included), a page an
+  administrator changed is left alone and named, a page the guide did not write is left
+  alone; it adds a page a release brings that the guide never had (with its attachments; not attachments added to an
+  existing page, named in the output), leaves a moved or deleted page alone and names it, publishes `PageChanged` for what it rewrote
+  (`Storage.writingThen`; from the console no live channel reaches the running server's
+  tabs, which re-read on reconnect after the deploy's restart); both commands in the audit
+  log. The Overview offers "Install the guide" (`POST api/v1/admin/guide`,
+  `MonadAdmin.installGuide`). `deploy-local.sh --server` runs `guide update` after the new
+  server answers (a failure is a warning; `test-deploy-local.sh` covers it). The smoke
+  test's server and the test fixture's start with `--no-guide`. Tests: wiki-core (parsing
+  kinds and titles, rendering, `Test.Markdown.Box` property that the settings accept
+  exactly the names a page reads), exports, settings validation, server (first start,
+  not twice, `--no-guide`, own space at `/guide` untouched, update/add/leave-alone, the
+  event), browser (Boxes section, a drawn box, Install the guide), deploy. `Wiki.Core.Page.savedAs` is the one
+  place a page's new version is made (`savePageTx`, the import, the guide). For later: a
+  wiki that ran an earlier head of this branch has a `guide-installed` row of the old shape
+  (delete the row and the Guide space, then `guide install`); `guide update` from the
+  console cannot reach the running server's live channel; the demo's own tour is unchanged.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
