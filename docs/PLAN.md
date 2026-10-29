@@ -273,6 +273,13 @@ confirms it against reality and the plan is amended if it does not hold.
     browser); a package that does not build on wasm is a reason to look for another, not
     to write the thing by hand, unless nothing exists, which the plan then records. The
     hand-written code that predates this rule is listed for review in WP5.27.
+26. **Browsers: the last year of releases** (the owner, 2026-10-29, when a review found the
+    platform's `Uint8Array.toBase64` raising the floor: "można zostawić te base64, nie
+    musimy supportować starszych niż rok wersji"). The application supports browsers
+    released within the last year (as of WP5.24: Chrome and Edge 140, Firefox 133, Safari
+    18.2, or later) and uses the platform's APIs rather than polyfills or fallbacks for
+    them. The README states the floor in one place; a package that raises it says so in
+    its changelog.
 
 ## Repository layout
 
