@@ -424,6 +424,14 @@ jobs:
         sh toolchain/bootstrap.sh toolchain
         sh toolchain/bootstrap.sh path >> "$GITHUB_PATH"
 
+    # The prerender is built natively with every package's dependencies,
+    # the server's among them: libsodium's development files, which sel
+    # (under the second factor's codes) builds against, and libpq's, as in
+    # the native job. A self-hosted runner has them from the bootstrap.
+    - name: Install libpq and libsodium (hosted)
+      if: runner.environment == 'github-hosted'
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev libsodium-dev
+
     - name: Install JavaScript dependencies
       run: npm ci
 
