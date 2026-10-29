@@ -32,7 +32,24 @@ app=/opt/wiki/app
 
 if [ "${1:-}" = serve ]; then
   shift
-  if ! wiki-server backup --data "$data"; then
+  # The backup is of the database the server is about to open: the same
+  # options that name it, when the command gives some.
+  backup_args=
+  previous=
+  for arg in "$@"; do
+    case $previous in
+      --sqlite | --database | --database-password-file | --pg-dump | --pg-restore)
+        backup_args="$backup_args $previous $arg" ;;
+    esac
+    case $arg in
+      --sqlite=* | --database=* | --database-password-file=* | --pg-dump=* | --pg-restore=*)
+        backup_args="$backup_args $arg" ;;
+    esac
+    previous=$arg
+  done
+  # The words are options and paths without spaces, as the image's are.
+  # shellcheck disable=SC2086
+  if ! wiki-server backup --data "$data" $backup_args; then
     printf 'wiki-entrypoint: backing up %s failed (see above), so the server was not started\n' "$data" >&2
     exit 1
   fi

@@ -221,7 +221,7 @@ jobs:
     # bootstrap.
     - name: Install libpq (hosted)
       if: runner.environment == 'github-hosted'
-      run: sudo apt-get install --yes --no-install-recommends libpq-dev
+      run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libpq-dev
 
     - name: Update Cabal package index
       run: cabal update

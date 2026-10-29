@@ -1111,8 +1111,8 @@ there with the compose file beside it.
   PostgreSQL's; the attachments and the backups in `wiki_wiki-data`, mounted at
   `/data`, as in a deployment's `data/`. They outlive the containers and every
   image; only `docker compose down --volumes` (or `docker volume rm`) deletes
-  them. Without PostgreSQL, `docker compose run --service-ports wiki serve
-  --sqlite /data/wiki.sqlite --listen 0.0.0.0:8080 --admin-listen
+  them. Without PostgreSQL, `docker compose run --no-deps --service-ports wiki
+  serve --sqlite /data/wiki.sqlite --listen 0.0.0.0:8080 --admin-listen
   127.0.0.1:8081` keeps the database a file in `wiki_wiki-data` instead. The server runs as uid 10001,
   which owns the volume; to keep the data in a directory of the host's instead,
   bind it to `/data` and `chown 10001:10001` it first.
