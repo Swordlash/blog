@@ -1541,7 +1541,8 @@ must be in before it is.
   and `docs/api.md` are updated.
 
 - **WP5.26 The assistant through the wiki's own identity: Workload Identity Federation,
-  per user** (the owner, 2026-10-29, after the question whether users signed in through
+  per user** (not now: the owner, 2026-10-29, "federacja nie musi być teraz"; the plan text
+  stays for when it is picked up) (the owner, 2026-10-29, after the question whether users signed in through
   Google or GitHub could reach Claude without a key: "to zróbmy to. Niech będzie tak że
   można to ustawić w ustawieniach admina, i każdemu userowi można włączyć opcję, czy może
   korzystać z klucza serwera"). Anthropic's Workload Identity Federation exchanges a
@@ -1603,7 +1604,9 @@ must be in before it is.
   settings (WP5.21) so they follow the user across devices.
 
 - **WP5.27 Libraries over hand-rolled code: the review** (decision 25, the owner,
-  2026-10-29). The code written by hand before the rule, each judged against a maintained
+  2026-10-29; folded into WP5.24's branch and pull request the same day, "cleanup może być
+  szybciej, dodaj nawet do 24 bo to taki refactor": the WP5.24 agent does it after its two
+  parts, one replacement per commit). The code written by hand before the rule, each judged against a maintained
   package: `Wiki.Server.WebAuthn` (343 lines; `webauthn` 0.12 on Hackage covers
   registration and assertion with attestation formats and COSE keys), the ID token reading
   in `Wiki.Server.Oidc` (`jose` for the JWT, the discovery and the token exchange kept, or
