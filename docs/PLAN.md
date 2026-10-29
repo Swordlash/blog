@@ -1826,6 +1826,13 @@ must be in before it is.
   modules are reused, a source edit still rebuilds its affected modules, and all
   normal build/test steps continue to run. Do not cache the generated public site as
   a substitute for rebuilding it. Report measured cache sizes and the verification.
+  Extended again by the owner: the hosted native job installs XeLaTeX when
+  missing, with the TeX packages required by the PDF export tests (`mhchem`,
+  TikZ, `soul` and Beamer). A machine with the complete setup skips installation.
+  Acceptance: CI verifies the engine and required TeX files before testing;
+  the PDF export and TeX file-access tests run instead of being pending because
+  the engine or its packages are missing. The test for refusing PDF without an
+  engine may still be pending on a machine with XeLaTeX, as designed.
 
 - **WP5.22 A choice of database: PostgreSQL by default, SQLite as an option, one typed storage
   layer** (the owner, 2026-10-28: "Chciałbym jednak dać możliwość wyboru backendu … Chce jak
