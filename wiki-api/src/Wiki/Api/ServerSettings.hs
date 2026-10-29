@@ -384,12 +384,21 @@ providerProblems p =
   | not (validName p.name)
   ]
     <> ["The provider " <> p.name <> " needs its client id." | T.null (T.strip p.clientId)]
+    -- Google takes the short form of its client ids when a person signs
+    -- in, but names the full one in the ID token, which the server then
+    -- refuses: a short id would fail every sign-in only at its end.
+    <> [ "The provider " <> p.name <> "'s client id should end with " <> googleSuffix <> ", as Google writes it."
+       | p.kind == Google
+       , not (T.null (T.strip p.clientId))
+       , not (googleSuffix `T.isSuffixOf` T.strip p.clientId)
+       ]
     <> ["The provider " <> p.name <> ", of kind oidc, needs its issuer: https://issuer.example.org" | p.kind == Generic, isNothing p.issuer]
     <> [ "The provider " <> p.name <> "'s address " <> i.text <> " must start with https:// (or http:// on this machine, for a test)."
        | Just i <- [p.issuer]
        , not (secureAddress i)
        ]
   where
+    googleSuffix = ".apps.googleusercontent.com"
     validName n =
       not (T.null n)
         && T.length n <= 32

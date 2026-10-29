@@ -17,7 +17,7 @@ mailWith :: Maybe Text -> Maybe s -> Maybe (MailSettingsOf (Maybe s))
 mailWith user password = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user, password, from = "wiki@example.org"}
 
 providerWithSecret :: Text -> Maybe s -> ProviderSettingsOf (Maybe s)
-providerWithSecret name secret = ProviderSettings {name, kind = Google, clientId = "id", issuer = Nothing, secret}
+providerWithSecret name secret = ProviderSettings {name, kind = Google, clientId = "id.apps.googleusercontent.com", issuer = Nothing, secret}
 
 kept :: Kept
 kept =
@@ -78,6 +78,12 @@ spec = describe "the server's settings" $ do
       refused kept {providers = [ProviderSettings {name = "corp", kind = Generic, clientId = "c", issuer = Just (Url "http://id.example.org"), secret = Just "x"}]} "must start with https://"
       refused kept {providers = [providerWithSecret "Bad Name" (Just "x")]} "lower-case letters"
       refused kept {providers = [ProviderSettings {name = "g", kind = Google, clientId = " ", issuer = Nothing, secret = Just "x"}]} "needs its client id"
+      refused kept {providers = [ProviderSettings {name = "g", kind = Google, clientId = "1234-abcd", issuer = Nothing, secret = Just "x"}]} "The provider g's client id should end with .apps.googleusercontent.com, as Google writes it."
+    it "take a Google client id only in the form Google writes it, and any other kind's as it is" $ do
+      providerProblems ProviderSettings {name = "g", kind = Google, clientId = "1234-abcd.apps.googleusercontent.com", issuer = Nothing, secret = ()} `shouldBe` []
+      providerProblems ProviderSettings {name = "g", kind = Google, clientId = "1234-abcd", issuer = Nothing, secret = ()}
+        `shouldBe` ["The provider g's client id should end with .apps.googleusercontent.com, as Google writes it."]
+      providerProblems ProviderSettings {name = "hub", kind = GitHub, clientId = "Iv1.abc", issuer = Nothing, secret = ()} `shouldBe` []
     it "let a provider on this machine be talked to over plain HTTP, for a test" $
       providerProblems ProviderSettings {name = "local", kind = Generic, clientId = "c", issuer = Just (Url "http://127.0.0.1:9000"), secret = ()} `shouldBe` []
 

@@ -460,7 +460,7 @@ serverWith user password secret =
   ServerSettings
     { publicUrl = Just (Url "https://wiki.example.org/")
     , mail = Just MailSettings {host = "mail.example.org", port = 587, security = StartTls, user, password, from = "wiki@example.org"}
-    , providers = [ProviderSettings {name = "google", kind = Google, clientId = "id.example", issuer = Nothing, secret}]
+    , providers = [ProviderSettings {name = "google", kind = Google, clientId = "id.apps.googleusercontent.com", issuer = Nothing, secret}]
     , assistantHosts = []
     }
 

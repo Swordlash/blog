@@ -211,7 +211,7 @@ demo m = describe "over the demo's wiki" $ do
     ui <- start m (Just "user-admin") Admin
     find ui ".server-provider-add" >>= click
     find ui ".server-provider-form input[name=name]" >>= (`typeText` "google")
-    find ui ".server-provider-form input[name=client-id]" >>= (`typeText` "id")
+    find ui ".server-provider-form input[name=client-id]" >>= (`typeText` "id.apps.googleusercontent.com")
     find ui ".server-provider-form input[name=secret]" >>= (`typeText` "s")
     find ui ".server-provider-form button[type=submit]" >>= click
     find ui ".admin-server .error" >>= (`shouldContainText` "The providers need the wiki's public address")
