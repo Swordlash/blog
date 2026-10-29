@@ -30,6 +30,7 @@ module Wiki.Server.Storage.Rows
     -- * Reads
   , loadSpaces
   , loadGrants
+  , loadGlobalGrants
   , loadUser
   , loadUserByLogin
   , loadActiveUsersByLogin
@@ -898,7 +899,8 @@ data ListedUser = ListedUser
 -- meaning 'Wiki.Api.Admin.pageOfDirectory' gives), and how many users the
 -- query matches in all. The administrators filter needs the ids of the
 -- users granted the global administer, which the caller passes. The page
--- is read in the order of the index on @lower(login)@, with an offset.
+-- is read in order of the lowered login by its code points ('byCodePoints',
+-- so that both databases and the application agree), with an offset.
 --
 -- Each word searched for is matched with @LIKE@ against the login and the
 -- display name, both lowered. Beam writes no @ESCAPE@ clause, and the two
@@ -925,7 +927,7 @@ loadUserPage administrators q = do
       . select
       . limit_ (fromIntegral q.limit)
       . offset_ (fromIntegral q.offset)
-      . orderBy_ (\u -> (asc_ (lower_ u.login), asc_ u.login, asc_ u.id))
+      . orderBy_ (\u -> (asc_ (byCodePoints (lower_ u.login)), asc_ (byCodePoints u.login), asc_ u.id))
       $ filter_ matches (all_ wikiDb.users)
   pure
     ( maybe 0 fromIntegral counted

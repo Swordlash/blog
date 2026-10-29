@@ -2127,8 +2127,8 @@ userPageTx :: UserQuery -> Tx UserPage
 userPageTx q = do
   requireAdministrator
   checked <- either invalid pure (checkUserQuery q)
-  stored <- db loadGrants
-  let holding p = [u | GlobalGrant (SubjectUser u) p' <- stored.global, p' == p]
+  global <- db loadGlobalGrants
+  let holding p = [u | GlobalGrant (SubjectUser u) p' <- global, p' == p]
       administrators = holding Administer
       creators = Set.fromList (holding CreateSpaces)
   (total, listed) <- db (loadUserPage administrators checked)

@@ -30,7 +30,7 @@ module Wiki.Server.Storage.Backend
 where
 
 import Data.Time (UTCTime)
-import Database.Beam (FromBackendRow, HasQBuilder, HasSqlEqualityCheck, MonadBeam)
+import Database.Beam (FromBackendRow, HasQBuilder, HasSqlEqualityCheck, MonadBeam, QExpr)
 import Database.Beam.Backend.SQL (BeamSqlBackend, BeamSqlBackendCanSerialize, BeamSqlBackendIsString, SqlNull)
 import Database.Beam.Backend.SQL.BeamExtensions (BeamHasInsertOnConflict)
 import Database.Beam.Postgres (Pg, Postgres, runBeamPostgres, runBeamPostgresDebug)
@@ -39,7 +39,7 @@ import Database.PostgreSQL.Simple qualified as Pg
 import Database.SQLite.Simple qualified as Sqlite
 import Protolude
 import Wiki.Api.Info (Capabilities (..), SearchKind (..))
-import Wiki.Server.Storage.Postgres (beginPostgres, closePostgres, commitPostgres, postgresSearch, postgresSize, postgresTables, retryablePostgres, rollbackPostgres, runPostgresScript)
+import Wiki.Server.Storage.Postgres (beginPostgres, closePostgres, commitPostgres, postgresCodePoints, postgresSearch, postgresSize, postgresTables, retryablePostgres, rollbackPostgres, runPostgresScript)
 import Wiki.Server.Storage.Schema (PageNodes)
 import Wiki.Server.Storage.Sqlite (beginSqlite, closeSqlite, commitSqlite, rollbackSqlite, runSqliteScript, sqliteObjects, sqliteSearch)
 
@@ -124,6 +124,13 @@ class
   -- page that has all the words, which "Wiki.Core.Search" then ranks.
   searchMatches :: [Text] -> Bool -> [Text] -> Text -> Int -> Db be [(PageNodes Identity, Text, Maybe Double)]
 
+  -- | A text as ordered by its code points, the order the application
+  -- sorts in ("Wiki.Api.Admin"'s 'Wiki.Api.Admin.userOrder'). SQLite
+  -- compares text by its bytes, which is that order already; PostgreSQL
+  -- compares by the database's collation, so there the text is given the
+  -- collation @C@.
+  byCodePoints :: QExpr be s Text -> QExpr be s Text
+
 -- | 'withTransaction' runs an action in a transaction on a connection: it
 -- begins a transaction (one that writes, for @True@), runs the action, and
 -- commits. If the action throws, or the commit throws, the transaction is
@@ -182,6 +189,7 @@ instance Backend Sqlite where
   databaseSize = pure Nothing
   capabilities _ = Capabilities {database = "sqlite", search = FoldedText}
   searchMatches spaces templates ws _ _ = map (\(n, t) -> (n, t, Nothing)) <$> sqliteSearch spaces templates ws
+  byCodePoints = identity
 
 instance Backend Postgres where
   type Db Postgres = Pg
@@ -199,3 +207,4 @@ instance Backend Postgres where
   databaseSize = Just . fromIntegral <$> postgresSize
   capabilities _ = Capabilities {database = "postgres", search = FullText}
   searchMatches spaces templates _ folded most = map (\(n, t, r) -> (n, t, Just r)) <$> postgresSearch spaces templates folded most
+  byCodePoints = postgresCodePoints

@@ -43,6 +43,7 @@ module Wiki.Server.Storage.Postgres
 
     -- * The search
   , postgresSearch
+  , postgresCodePoints
 
     -- * Backups
   , exportSnapshot
@@ -288,6 +289,15 @@ postgresSearch spaces templates folded most =
     websearch = customExpr_ (\t -> "websearch_to_tsquery('simple', " <> t <> ")")
     rankOf :: Beam.QGenExpr ctx Postgres s TsVector -> Beam.QGenExpr ctx Postgres s TsQuery -> Beam.QGenExpr ctx Postgres s Double
     rankOf = customExpr_ (\v q -> "ts_rank(" <> v <> ", " <> q <> ")")
+
+-- | 'postgresCodePoints' is a text compared by its code points
+-- (@COLLATE "C"@), whatever collation the database was made with. A
+-- database made in a locale such as @en_US.utf8@ (the @postgres@ image's)
+-- orders by that language's rules, which pass over punctuation, so
+-- @j.smith@ and @jsmith@ would sort apart from where SQLite and the
+-- application ("Wiki.Api.Admin"'s 'Wiki.Api.Admin.userOrder') put them.
+postgresCodePoints :: Beam.QGenExpr ctx Postgres s Text -> Beam.QGenExpr ctx Postgres s Text
+postgresCodePoints = customExpr_ (\t -> "(" <> t <> " COLLATE \"C\")")
 
 --------------------------------------------------------------------------------
 -- Backups

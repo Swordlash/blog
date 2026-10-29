@@ -150,6 +150,14 @@ paging = describe "userPage" $ do
     beyond <- run admin (userPage (users 8 4 "" False False)) >>= ok
     (loginsOf beyond, beyond.total) `shouldBe` ([], 6)
 
+  it "orders logins with punctuation by their code points, as the application does" $ \(Fixture run) -> do
+    for_ ["jsmith", "j.smith", "ja", "J.Zed"] $ \login ->
+      run admin (createUser NewAccount {login, displayName = "", password = Password "a good password", email = Nothing}) >>= ok
+    -- A database ordering by a language's rules would pass over the dots:
+    -- ja, j.smith, jsmith, J.Zed.
+    loginsOf <$> (run admin (userPage (users 0 25 "j" False False)) >>= ok) `shouldReturn` ["j.smith", "J.Zed", "ja", "jsmith"]
+    loginsOf <$> (run admin (userPage (users 1 2 "j" False False)) >>= ok) `shouldReturn` ["J.Zed", "ja"]
+
   it "finds every word in the login or the display name, ignoring case" $ \(Fixture run) -> do
     loginsOf <$> (run admin (userPage (users 0 25 "EDI" False False)) >>= ok) `shouldReturn` ["editor"]
     loginsOf <$> (run admin (userPage (users 0 25 "rita" False False)) >>= ok) `shouldReturn` ["reader"]
