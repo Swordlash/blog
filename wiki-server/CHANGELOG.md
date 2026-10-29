@@ -26,18 +26,17 @@ A read transaction no longer reads every space, every grant, the user and
 their groups (WP5.24). The storage keeps that permission context in
 memory for one generation, and the database keeps the generation in a new
 table, `permissions_generation` (migration `0002-permissions-generation`
-on both databases): every write to `spaces`, `global_grants`,
-`space_grants` or `group_members`, and every write that adds or deletes a
-user or changes their `login`, `display_name` or `disabled`, bumps it in
-the same transaction, once per write however many rows it touches, through
-the writes of `Wiki.Server.Storage.Rows` (`bumpPermissions`, whose
-Haddock lists the columns). A write to a user's other columns does not. A read transaction reads
-the generation with one statement and uses the copy in memory when it
-matches, so a change by another process (the console) is seen at the next
-read. A write still reads the permission context from the database. Code
-that writes those tables with its own Beam statements must call
-`bumpPermissions` in the same transaction. A page view goes from 29
-statements to 17 on both databases.
+on both databases). Triggers bump it in the same transaction as every
+change to `spaces`, `global_grants`, `space_grants` or `group_members`, and
+every change that adds or deletes a user or changes their `login`,
+`display_name` or `disabled`, whoever makes it: the storage, the console in
+another process, a foreign key's action, or a statement typed by hand. A
+change to a user's other columns does not bump it. On SQLite the triggers
+run for each row; on PostgreSQL once for each statement that changed a
+row. A read transaction reads the generation with one statement and uses
+the copy in memory when it matches, so another process's change is seen
+at the next read. A write still reads the permission context from the
+database. A page view goes from 29 statements to 17 on both databases.
 
 `Wiki.Server.Render.inProcess`, the transport that hands the application's
 requests to the API in the same process, takes servant's request and

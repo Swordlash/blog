@@ -42,9 +42,10 @@
 -- The permission context is what a permission check reads: every space,
 -- every grant, and the user asking with their groups. It is the same on
 -- every read until a write changes it, so the storage keeps it in memory
--- ('Permissions'), for one generation at a time. Every write that changes
--- a space, a grant, a user or a group's members bumps the generation in
--- the database (@permissions_generation@), in the same transaction. A read
+-- ('Permissions'), for one generation at a time. The database bumps the
+-- generation (@permissions_generation@) by itself, with triggers, in every
+-- transaction that changes a space, a grant, a user or a group's members,
+-- whoever makes the change. A read
 -- transaction reads the generation first, and takes the permission
 -- context from memory when the generation there is the same, and from
 -- the database otherwise. A write always reads the permission context
@@ -726,8 +727,8 @@ activeUser c u = viaConn c (loadActiveUser u) >>= traverse (\found -> (found,) <
 -- read transactions of that generation asked as, each with their groups
 -- ('Nothing' for a user who may not act). The generation is the number in
 -- the database's @permissions_generation@ ('permissionsGeneration'), which
--- every write that changes the permission context bumps in the same
--- transaction ("Wiki.Server.Storage.Rows" does it, in each such write).
+-- the database's triggers bump in every transaction that changes the
+-- permission context (the migration @0002-permissions-generation@).
 --
 -- So a read transaction reads the generation, one statement, and when it
 -- is the one kept here, the spaces, the grants and the user come from
@@ -1892,12 +1893,8 @@ movePageTx pid destination parent = do
     placePage pid destination parent slug position
     setPageSpace destination (Set.toList (Set.delete pid subtree))
     -- A page that leaves its space is no longer its home page.
-    when (destination /= p.space) $ clearHomePage (homePagesAmong ctx subtree)
+    when (destination /= p.space) $ clearHomePage (Set.toList subtree)
   findPage pid
-
--- | The pages among these that are a space's home page.
-homePagesAmong :: Ctx -> Set PageId -> [PageId]
-homePagesAmong ctx pages = [h | sp <- Map.elems ctx.spaces, Just h <- [sp.homePage], Set.member h pages]
 
 -- | Make a page one of its space's templates, or not. Not a save: nothing
 -- else of the page changes, and no version is kept.
@@ -1918,15 +1915,10 @@ deletePageTx pid = do
   p <- findNode pid
   c <- chainOfPage p
   requireEdit c
-  subtree <- db (subtreeIds pid)
-  let under = Set.size subtree - 1
+  under <- subtract 1 . Set.size <$> db (subtreeIds pid)
   above <- lineageOf pid
   let path = maybe "" (T.intercalate "/" . map slugText) (pathOf (`Map.lookup` above) pid)
-  ctx <- ask
-  -- The schema would clear a deleted home page from its space by itself
-  -- (ON DELETE SET NULL). The storage clears it first, so that the
-  -- permission context's generation is bumped, since a space changes.
-  db (clearHomePage (homePagesAmong ctx subtree) >> deletePageRow pid)
+  db (deletePageRow pid)
   record
     "page.delete"
     Audit.Subject {kind = "page", id = Just pid.text, name = p.title}

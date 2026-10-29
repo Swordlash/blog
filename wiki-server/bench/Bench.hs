@@ -77,7 +77,7 @@ import Wiki.Server.Feed (FeedKind (..), feedApplication, newFeedCache, sitemapAp
 import Wiki.Server.Storage (Config (..), Place (..), Storage, Who (..), backUp, defaultConfig, inDataDir, postgresAt, runStoredWiki, withStorage, writing)
 import Wiki.Server.Storage qualified as Storage
 import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)
-import Wiki.Server.Storage.Rows (bumpPermissions, chunksOf, insertPage, insertVersion, micro)
+import Wiki.Server.Storage.Rows (chunksOf, insertPage, insertVersion, micro)
 import Wiki.Server.Storage.Schema (AuditLog (..), Notifications (..), PageVersions (..), Spaces (..), Users (..), Watches (..), WikiDb (..), wikiDb)
 
 users, pages, watches, kept, watchers, tabs, tabUsers :: Int
@@ -206,8 +206,6 @@ grow st space = do
   now <- micro <$> getCurrentTime
   writing st $ do
     runUpdate (update wikiDb.spaces (\x -> x.blog <-. val_ True) (\x -> x.id ==. val_ space.text))
-    -- A space changed: the readers' permission context is read again.
-    bumpPermissions
     for_ (zip [0 :: Int ..] others) $ \(k, s) ->
       for_ [0 .. 999] $ \j -> insertPage (pageOf s.id now (pages + k * 1000 + j))
     for_ (chunksOf 500 [(i, v) | i <- [0 .. pages - 1], v <- [1 .. 19 :: Int]]) $ \chunk ->
@@ -235,8 +233,6 @@ seed st = do
     for_ (chunksOf 500 [0 .. users - 1]) $ \chunk ->
       runInsert . insert wikiDb.users $
         insertValues [UserRow {id = userId i, login = loginOf i, display_name = "User " <> show i, password_hash = Nothing, disabled = False, email = Nothing, email_verified_at = Nothing, notification_mail = Nothing, watch_own = True} | i <- chunk]
-    -- Users added: the readers' permission context is read again.
-    bumpPermissions
     for_ [0 .. pages - 1] $ \i -> do
       let p = pageOf space.id now i
       insertPage p

@@ -836,7 +836,6 @@ insertAccount u login displayName phc =
               , watch_own = True
               }
           ]
-      bumpPermissions
       maybe (Left login) Right <$> loadAccount u
 
 -- | Replace a user's password hash.
@@ -852,7 +851,6 @@ passwordHashOf u = runSelectReturningOne (select ((\r -> r.password_hash) <$> fi
 updateDisabled :: (Backend be) => UserId -> Bool -> Db be ()
 updateDisabled u disabled = do
   runUpdate (update wikiDb.users (\r -> r.disabled <-. val_ disabled) (\r -> r.id ==. val_ u.text))
-  bumpPermissions
 
 -- | End every session of a user.
 deleteSessionsOf :: (Backend be) => UserId -> Db be ()
@@ -988,46 +986,21 @@ resetsSince u since =
 permissionsGeneration :: (Backend be) => Db be Int64
 permissionsGeneration = maybe 0 (\r -> r.generation) <$> runSelectReturningOne (select (all_ wikiDb.permissions_generation))
 
--- | Bump the generation of the permission context, in the running
--- transaction. A server's copy of the permission context in memory is
--- then read again from the database at the next read, whichever process
--- made the change: the server, or the console's @wiki-server users …@
--- beside it.
---
--- The permission context holds these columns, and a write that changes
--- any of them must bump the generation in the same transaction:
---
--- * every column of @spaces@;
--- * every column of @global_grants@ and @space_grants@;
--- * @users@: a row added or deleted, and @id@, @login@, @display_name@
---   and @disabled@ (a rename, which WP5.25 brings, is such a change);
--- * every column of @group_members@.
---
--- The writes here that change them call it: 'insertAccount',
--- 'insertUsers', 'updateDisabled', 'insertMembers', 'deleteMember',
--- 'deleteGroupRows', 'deleteGlobalGrant', 'deleteSpaceGrant',
--- 'insertGrants', 'insertSpaces', 'updateSpaces', 'setSpacePositions',
--- 'deleteSpaceRow' and 'clearHomePage', once for each call, however many
--- rows the call writes. Code that writes those columns with statements
--- of its own must call it too. A write to the other columns of @users@
--- (the password, the e-mail address and its verification, the
--- notification settings: "Wiki.Server.Storage.Notifications",
--- "Wiki.Server.Reset") does not change the permission context, and does
--- not bump it.
---
--- A write that bumps the generation and is then rolled back leaves it as
--- it was.
+-- | Start a new generation of the permission context without changing
+-- anything else, in the running transaction: what a test does to have the
+-- next read load the permission context from the database. The database
+-- bumps the generation by itself whenever the permission context changes
+-- (the triggers of the migration @0002-permissions-generation@), so no write
+-- of the storage calls this.
 bumpPermissions :: (Backend be) => Db be ()
 bumpPermissions = runUpdate (update wikiDb.permissions_generation (\r -> r.generation <-. Beam.current_ r.generation + val_ 1) (\r -> r.id ==. val_ 1))
 
 --------------------------------------------------------------------------------
 -- Writes
 
--- | Add users, as an import brings them: no password, enabled. The
--- permission context's generation is bumped once for all of them.
+-- | Add users, as an import brings them: no password, enabled.
 insertUsers :: (Backend be) => [User] -> Db be ()
 insertUsers us = unless (null us) $ do
-  bumpPermissions
   for_ (chunksOf 500 us) $ \chunk ->
     runInsert . insert wikiDb.users $
       insertValues
@@ -1054,11 +1027,9 @@ insertMember :: (Backend be) => GroupId -> UserId -> Db be ()
 insertMember g u = insertMembers [(g, u)]
 
 -- | Put users in groups, each pair a group and a user; a user who is in a
--- group already stays. The permission context's generation is bumped once
--- for all of them.
+-- group already stays.
 insertMembers :: (Backend be) => [(GroupId, UserId)] -> Db be ()
 insertMembers pairs = unless (null pairs) $ do
-  bumpPermissions
   for_ pairs $ \(g, u) ->
     runInsert (insertOnConflict wikiDb.group_members (insertValues [S.MemberRow {group_id = g.text, user_id = u.text}]) anyConflict onConflictDoNothing)
 
@@ -1066,7 +1037,6 @@ insertMembers pairs = unless (null pairs) $ do
 deleteMember :: (Backend be) => GroupId -> UserId -> Db be ()
 deleteMember g u = do
   runDelete (delete wikiDb.group_members (\m -> m.group_id ==. val_ g.text &&. m.user_id ==. val_ u.text))
-  bumpPermissions
 
 -- | Rename a group.
 renameGroupRow :: (Backend be) => GroupId -> Text -> Db be ()
@@ -1080,7 +1050,6 @@ deleteGroupRows g = do
   runDelete (delete wikiDb.global_grants (\r -> r.subject_kind ==. val_ "group" &&. r.subject_id ==. val_ g.text))
   runDelete (delete wikiDb.space_grants (\r -> r.subject_kind ==. val_ "group" &&. r.subject_id ==. val_ g.text))
   runDelete (delete wikiDb.groups (\r -> r.id ==. val_ g.text))
-  bumpPermissions
 
 -- | Grant a global permission, or take it away.
 setGlobalGrant :: (Backend be) => Bool -> GlobalGrant -> Db be ()
@@ -1094,7 +1063,6 @@ deleteGlobalGrant g =
   let (kind, i) = subjectColumns g.subject
    in do
         runDelete (delete wikiDb.global_grants (\r -> r.subject_kind ==. val_ kind &&. r.subject_id ==. val_ i &&. r.permission ==. val_ (globalText g.permission)))
-        bumpPermissions
 
 -- | Remove a grant on a space, if it exists.
 deleteSpaceGrant :: (Backend be) => SpaceGrant -> Db be ()
@@ -1106,13 +1074,11 @@ deleteSpaceGrant g =
               wikiDb.space_grants
               (\r -> r.space_id ==. val_ g.space.text &&. r.subject_kind ==. val_ kind &&. r.subject_id ==. val_ i &&. r.permission ==. val_ (spaceText g.permission))
           )
-        bumpPermissions
 
 -- | Add these grants, in order, each numbered after the last; a grant that
 -- already exists is left as it is.
 insertGrants :: (Backend be) => Grants -> Db be ()
 insertGrants grants = do
-  unless (null grants.global && null grants.spaces) bumpPermissions
   for_ grants.global $ \g ->
     let (kind, i) = subjectColumns g.subject
      in runInsert $
@@ -1135,22 +1101,18 @@ insertSpace :: (Backend be) => Space -> Db be ()
 insertSpace s = insertSpaces [s]
 
 -- | Add spaces, in the order given, so that a space can come after its
--- parent. The permission context's generation is bumped once for all of
--- them.
+-- parent.
 insertSpaces :: (Backend be) => [Space] -> Db be ()
 insertSpaces ss = unless (null ss) $ do
-  bumpPermissions
   for_ ss $ \s -> runInsert (insert wikiDb.spaces (insertValues [spaceRow s]))
 
 -- | Overwrite the space with this id: every column of it.
 updateSpace :: (Backend be) => Space -> Db be ()
 updateSpace s = updateSpaces [s]
 
--- | Overwrite these spaces, each by its id. The permission context's
--- generation is bumped once for all of them.
+-- | Overwrite these spaces, each by its id.
 updateSpaces :: (Backend be) => [Space] -> Db be ()
 updateSpaces ss = unless (null ss) $ do
-  bumpPermissions
   for_ ss $ \s -> do
     let r = spaceRow s
     runUpdate $
@@ -1175,25 +1137,20 @@ updateSpaces ss = unless (null ss) $ do
         )
         (\x -> x.id ==. val_ r.id)
 
--- | Give spaces their positions among their siblings. The permission
--- context's generation is bumped once for all of them.
+-- | Give spaces their positions among their siblings.
 setSpacePositions :: (Backend be) => [(SpaceId, Int)] -> Db be ()
 setSpacePositions placed = unless (null placed) $ do
-  bumpPermissions
   for_ placed $ \(sid, n) -> runUpdate (update wikiDb.spaces (\x -> x.position <-. val_ (fromIntegral n)) (\x -> x.id ==. val_ sid.text))
 
 -- | Delete a space: its subspaces, their pages, the pages' versions,
 -- attachments and drafts, and the grants on all of them go with it, as the
 -- schema's foreign keys cascade.
 deleteSpaceRow :: (Backend be) => SpaceId -> Db be ()
-deleteSpaceRow sid = runDelete (delete wikiDb.spaces (\x -> x.id ==. val_ sid.text)) >> bumpPermissions
+deleteSpaceRow sid = runDelete (delete wikiDb.spaces (\x -> x.id ==. val_ sid.text))
 
--- | Make the spaces whose home page is one of these pages have none. The
--- caller gives only pages that are a space's home page, so that a page
--- that is none does not bump the permission context's generation.
+-- | Make the spaces whose home page is one of these pages have none.
 clearHomePage :: (Backend be) => [PageId] -> Db be ()
 clearHomePage pids = do
-  unless (null pids) bumpPermissions
   for_ (chunksOf 500 pids) $ \chunk -> runUpdate (update wikiDb.spaces (\x -> x.home_page <-. val_ Nothing) (\x -> x.home_page `in_` map (\p -> just_ (val_ p.text)) chunk))
 
 -- | The fold a search matches a page against: its title and its search

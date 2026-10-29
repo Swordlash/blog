@@ -9,9 +9,10 @@
 -- context: a change to @spaces@, @global_grants@, @space_grants@ or
 -- @group_members@, a user added or deleted, or a change to a user's
 -- @login@, @display_name@ or @disabled@ (the columns the permission context
--- reads; 'Wiki.Server.Storage.Rows.bumpPermissions' lists them). A change
--- to a user's other columns (password, e-mail, notification settings) does
--- not move it. The first test runs every write the storage has once, in turn,
+-- reads). The database's triggers bump it (the migration
+-- @0002-permissions-generation@), so a statement typed by hand bumps it as
+-- the storage's own writes do. A change to a user's other columns
+-- (password, e-mail, notification settings) does not move it. The first test runs every write the storage has once, in turn,
 -- and checks two things after each: the generation went up exactly for the
 -- writes listed as changing the permission context, and the permission
 -- context read afresh from the database did not change without the
@@ -27,7 +28,7 @@
 module Test.Storage.Permissions (spec) where
 
 import Protolude
-import Test.Database (Backing)
+import Test.Database (Backing, withConnectionTo)
 import Test.HUnit (assertFailure)
 import Test.Hspec
 import Test.Storage.Fixture
@@ -45,6 +46,7 @@ import Wiki.Core.Space (Icon (..), Space (..), SpaceProfile (..))
 import Wiki.Core.User (Group (..), Login (..), Password (..), User (..))
 import Wiki.Server.Accounts qualified as Accounts
 import Wiki.Server.Storage
+import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Rows (loadAccountFlags, loadGrants, loadMembership, loadSpaces, loadUsers, permissionsGeneration)
 
 spec :: Backing -> Spec
@@ -91,7 +93,7 @@ spec backing = describe "the permission context kept in memory" $ do
           , ("renameGroup", False, void (admin (renameGroup crew.id "Renamed group") >>= ok))
           , ("addMember", True, void (admin (addMember crew.id ritaId) >>= ok))
           , ("removeMember", True, void (admin (removeMember crew.id ritaId) >>= ok))
-          , ("deleteGroup", True, void (admin (deleteGroup crew.id) >>= ok))
+          , ("deleteGroup of a group with no members and no grants", False, void (admin (deleteGroup crew.id) >>= ok))
           , ("setAdministrator", True, void (admin (setAdministrator ritaId True) >>= ok))
           , ("setCreateSpaces", True, void (admin (setCreateSpaces ritaId True) >>= ok))
           , ("createUser", True, void (admin (createUser NewAccount {login = "fresh", displayName = "Fresh", password = Password "a long enough password", email = Nothing}) >>= ok))
@@ -103,6 +105,9 @@ spec backing = describe "the permission context kept in memory" $ do
           , ("Accounts.setDisabled again", True, void (Accounts.setDisabled st ritaId False >>= ok))
           , ("Accounts.setAdministrator", True, void (Accounts.setAdministrator st ritaId False >>= ok))
           , ("Accounts.setPassword", False, void (Accounts.setPassword st ritaId (Password "a third long password") >>= ok))
+          , ("an UPDATE of a space typed by hand", True, byHand st "UPDATE spaces SET description = description || ' by hand'")
+          , ("an UPDATE of a user's e-mail typed by hand", False, byHand st "UPDATE users SET email = 'rita@example.org' WHERE login = 'reader'")
+          , ("an UPDATE of a user's name typed by hand", True, byHand st "UPDATE users SET display_name = 'Rita by hand' WHERE login = 'reader'")
           , ("deleteSpace", True, void (admin (deleteSpace space.id) >>= ok))
           ]
     for_ writes $ \(name, bumps, write) -> do
@@ -161,6 +166,10 @@ spec backing = describe "the permission context kept in memory" $ do
     withStorageAside (storagePlace st) $ \console -> void (Accounts.setDisabled console ritaId False >>= ok)
     runStoredWiki st rita session >>= \s -> (\u -> u.login.text) <$> s.user `shouldBe` Just "reader"
   where
+    -- A statement run on a connection of its own, as someone at the
+    -- database's prompt would.
+    byHand :: Storage -> Text -> IO ()
+    byHand st statement = withConnectionTo (storagePlace st) (\c -> runScript c statement)
     userId st login = userByLogin st login >>= maybe (assertFailure ("no user " <> toS login)) (\u -> pure u.id)
     -- A read of a space's home, which needs the right to view the space.
     spaceHome sid = fmap (const ()) <$> listPages sid

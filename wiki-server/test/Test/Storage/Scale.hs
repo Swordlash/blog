@@ -111,11 +111,10 @@ holding st toWrite statement act = do
 countPages :: (Backend be) => Db be ()
 countPages = void (runSelectReturningList (select (all_ wikiDb.pages)))
 
--- | A statement that renames the blog, for a long write to hold, and
--- bumps the permission context's generation as the storage's own writes
--- of a space do.
+-- | A statement that renames the blog, for a long write to hold. The
+-- database's trigger bumps the permission context's generation with it.
 renameBlog :: (Backend be) => Db be ()
-renameBlog = runUpdate (update wikiDb.spaces (\x -> x.name <-. val_ "Renamed") (\x -> x.slug ==. val_ "blog")) >> bumpPermissions
+renameBlog = runUpdate (update wikiDb.spaces (\x -> x.name <-. val_ "Renamed") (\x -> x.slug ==. val_ "blog"))
 
 readers :: Backing -> Spec
 readers backing = describe "reads" $ do
