@@ -872,9 +872,13 @@ to the demo, keeping `data/`.
   standard input:
 
   ```sh
-  ~/wiki-demo/bin/wiki-server users add --data ~/wiki-demo/data you --display-name "Your Name" --admin
-  ~/wiki-demo/bin/wiki-server users list --data ~/wiki-demo/data
+  ~/wiki-demo/bin/wiki users add --data ~/wiki-demo/data you --display-name "Your Name" --admin
+  ~/wiki-demo/bin/wiki users list --data ~/wiki-demo/data
   ```
+
+  `bin/wiki` is `wiki-server` with the deployment's database (PostgreSQL in its
+  container, or the SQLite file of `--sqlite`); `bin/wiki-server` alone would open
+  `data/wiki.sqlite`, which a PostgreSQL deployment does not use.
 
   The same command gives a user a new password (`users password LOGIN`, which
   signs them out), makes or unmakes an administrator (`users admin LOGIN --on`,
