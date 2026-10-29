@@ -15,7 +15,10 @@
 -- the dialog), closes it on Escape, and gives the focus back to the
 -- "Manage" button when it closes. A click on the backdrop closes it too,
 -- one that starts there: not a selection let go outside.
--- The dialog tells the table when it has closed ('Closed').
+-- The dialog tells the table when it has closed ('Closed'). It does not
+-- close while a request to the backend is on its way ('requesting'):
+-- closing removes the component, and with it the handling of the answer,
+-- so the table would not hear of a change the backend made.
 --
 -- Each change is saved as soon as it is made, and a short "Saved" says so.
 -- The dialog then tells the table ('Saved'), which tells the shell: the
@@ -138,6 +141,15 @@ data State = State
   -- after it ('asked'). The controls stay disabled until the user that
   -- request answered is received ('shown'), so that they never show the
   -- user as they were before the change.
+  , requesting :: Bool
+  -- ^ A request to the backend is on its way. The dialog does not close
+  -- meanwhile: closing it removes the component, which would stop the
+  -- request's handling, so a change the backend made would not be told to
+  -- the table.
+  , closeWhenDone :: Bool
+  -- ^ The browser closed the dialog while a request was on its way (it
+  -- may, on a second Escape): the table is told once the request is
+  -- handled.
   , pressedOnBackdrop :: Bool
   -- ^ Whether the pointer went down on the backdrop, rather than in the
   -- dialog: only a click that starts there closes the dialog, so that
@@ -186,7 +198,7 @@ component =
       { initialState = \input -> do
           element <- H.newRefLabel "user-dialog"
           removeField <- H.newRefLabel "user-remove-login"
-          pure State {input, element, removeField, asking = NotAsking, busy = False, waitingFor = Nothing, pressedOnBackdrop = False, told = Nothing, notice = Nothing, problem = Nothing, chosenGroup = 0}
+          pure State {input, element, removeField, asking = NotAsking, busy = False, waitingFor = Nothing, requesting = False, closeWhenDone = False, pressedOnBackdrop = False, told = Nothing, notice = Nothing, problem = Nothing, chosenGroup = 0}
       , render
       , eval =
           H.mkEval
@@ -211,7 +223,7 @@ component =
           data-login={{ u.user.login.text }}
           onClick={{ const ClickedDialog }}
           {{ HP.ref st.element }}
-          {{ [HE.handler (EventType "close") (const ClosedByBrowser), HE.onPointerDown (const (Pressed True))] }}
+          {{ [HE.handler (EventType "close") (const ClosedByBrowser), HE.onPointerDown (const (Pressed True))] <> [HE.preventingDefault (HE.handler (EventType "cancel") (const Inside)) | st.requesting] }}
         >
           <div class="user-dialog-body" {{ [HE.stoppingPropagation (HE.onClick (const Inside)), HE.stoppingPropagation (HE.onPointerDown (const (Pressed False)))] }}>
             <header class="user-dialog-header">
@@ -219,7 +231,7 @@ component =
                 <h2 id="user-dialog-title">{{ u.user.displayName }}</h2>
                 <p class="user-dialog-login"><span class="user-login">{{ u.user.login.text }}</span>{{ badges }}</p>
               </div>
-              <button type="button" class="user-dialog-close" aria-label="Close" onClick={{ const Close }}>×</button>
+              <button type="button" class="user-dialog-close" aria-label="Close" disabled={{ st.requesting }} onClick={{ const Close }}>×</button>
             </header>
             <div class="user-dialog-status" aria-live="polite">
               {{ errorView <$> st.problem }}
@@ -232,7 +244,7 @@ component =
             {{ groupsPart st }}
             {{ accountPart st }}
             <footer class="user-dialog-footer">
-              <button type="button" class="user-dialog-done" onClick={{ const Close }}>Done</button>
+              <button type="button" class="user-dialog-done" disabled={{ st.requesting }} onClick={{ const Close }}>Done</button>
             </footer>
           </div>
         </dialog>
@@ -503,7 +515,10 @@ component =
       Receive input -> modify $ \st -> case st.waitingFor of
         Just n | input.shown >= n -> st {input, busy = False, waitingFor = Nothing}
         _ -> st {input}
-      Close -> do
+      -- Not while a request is on its way: Done and the close button are
+      -- disabled then, Escape is prevented, and a click on the backdrop
+      -- does nothing.
+      Close -> unlessM (gets (\st -> st.requesting)) $ do
         gets (\st -> st.element) >>= H.getRef >>= traverse_ (H.liftEffect . closeDialog)
         H.raise Closed
       Inside -> pass
@@ -512,7 +527,10 @@ component =
         onBackdrop <- gets (\st -> st.pressedOnBackdrop)
         modify (\st -> st {pressedOnBackdrop = False})
         when onBackdrop (handleAction Close)
-      ClosedByBrowser -> H.raise Closed
+      ClosedByBrowser ->
+        gets (\st -> st.requesting) >>= \case
+          True -> modify (\st -> st {closeWhenDone = True})
+          False -> H.raise Closed
       SetAdministrator granted -> withUser (\u -> setAdministrator u.user.id granted) "Saved."
       SetCreateSpaces granted -> withUser (\u -> setCreateSpaces u.user.id granted) "Saved."
       AskDisable -> open ConfirmingDisable
@@ -538,7 +556,7 @@ component =
       AskLink address -> open (ConfirmingLink address)
       -- A mail changes nothing the table shows, so the users are not
       -- fetched again.
-      MailLink address -> do
+      MailLink address -> inFlight $ do
         st <- get
         modify (\s -> s {busy = True, problem = Nothing})
         sendPasswordLink st.input.user.user.id >>= \case
@@ -570,11 +588,13 @@ component =
         st <- get
         let u = st.input.user
         case st.asking of
-          ConfirmingRemove typed | typed == u.user.login.text && u.disabled && not st.busy -> do
+          ConfirmingRemove typed | typed == u.user.login.text && u.disabled && not st.busy -> inFlight $ do
             modify (\s -> s {busy = True, problem = Nothing})
             removeUser u.user.id >>= \case
               Left e -> modify (\s -> s {busy = False, problem = Just e})
               Right () -> do
+                -- 'Removed' closes the dialog for the table: not 'Closed' too.
+                modify (\s -> s {requesting = False, closeWhenDone = False})
                 H.getRef st.element >>= traverse_ (H.liftEffect . closeDialog)
                 H.raise (Removed (u.user.displayName <> "'s account (" <> u.user.login.text <> ") is removed. What they wrote stays, under their login."))
           _ -> pass
@@ -585,7 +605,7 @@ component =
     -- the controls stay disabled until the user is received again. If it
     -- is refused, the reason is shown, and the controls are enabled again.
     withUser :: (UserSummary -> H.HalogenM State Action Empty Output m (Either WikiError ())) -> Text -> H.HalogenM State Action Empty Output m ()
-    withUser request saying = do
+    withUser request saying = inFlight $ do
       u <- gets (\st -> st.input.user)
       modify (\st -> st {busy = True, problem = Nothing})
       request u >>= \case
@@ -594,6 +614,17 @@ component =
           modify (\st -> st {asking = NotAsking, waitingFor = Just (st.input.asked + 1)})
           tell saying
           H.raise Saved
+
+    -- Make a request, during which the dialog does not close
+    -- ('requesting'). If the browser closed it anyway, the table is told
+    -- once the request is handled.
+    inFlight :: H.HalogenM State Action Empty Output m () -> H.HalogenM State Action Empty Output m ()
+    inFlight request = do
+      modify (\st -> st {requesting = True})
+      request
+      closing <- gets (\st -> st.closeWhenDone)
+      modify (\st -> st {requesting = False, closeWhenDone = False})
+      when closing (H.raise Closed)
 
     -- Say what was done, for a few seconds.
     tell :: Text -> H.HalogenM State Action Empty Output m ()
