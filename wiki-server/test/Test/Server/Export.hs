@@ -22,6 +22,7 @@ import Test.Database (Backing)
 import Test.Hspec
 import Test.Server.Fixture
 import Test.Storage.Fixture (demoArchive)
+import Text.Pandoc.Builder qualified as B
 import Text.Pandoc.Definition qualified as P
 import Text.Pandoc.Walk (query)
 import Wiki.Api (PagesApi (..), SpacesApi (..), WikiApi (..))
@@ -180,6 +181,30 @@ reading = describe "a page's Markdown, as pandoc's document" $ do
     quote <- blocksOf ToOther place "> [!NOTE]s are text\n\n> [!TODO2]\n> x\n"
     boxClasses quote `shouldBe` []
     [() | P.BlockQuote _ <- quote] `shouldBe` [(), ()]
+
+  it "finds the boxes the page has and no others, with the title as the page shows it" $ do
+    let titles = query (\case P.Div (_, ["title"], _) [P.Para xs] -> [xs]; _ -> [])
+        boxClasses bs = query (\case P.Div (_, cls, _) _ | cls /= ["title"] -> [cls]; _ -> []) bs :: [[Text]]
+    -- No space after the marker: a quotation on the page, so in the
+    -- document too, its text kept.
+    glued <- blocksOf ToOther place "> [!NOTE]**x**\n"
+    boxClasses glued `shouldBe` []
+    [() | P.BlockQuote _ <- glued] `shouldBe` [()]
+    -- An escaped marker is text.
+    escaped <- blocksOf ToOther place "> \\[!NOTE]\n> y\n"
+    boxClasses escaped `shouldBe` []
+    query (\case P.Str t -> [t]; _ -> []) escaped `shouldSatisfy` elem "[!NOTE]"
+    -- In code, a marker is code.
+    fenced <- blocksOf ToOther place "```\n> [!NOTE]\n```\n"
+    boxClasses fenced `shouldBe` []
+    -- The title is the text written, as the page shows it, not Markdown.
+    written <- blocksOf ToOther place "> [!NOTE] Read *this* &amp; that\n> Body.\n"
+    titles written `shouldBe` [B.toList (B.text "Read *this* &amp; that")]
+    -- Nested in a list, and the second of two, each where the page has it.
+    nested <- blocksOf ToOther place "- item\n\n  > [!TIP] One\n  > a\n\n> [!EXERCISE] Two\n> b\n"
+    boxClasses nested `shouldBe` [["tip", "alert"], ["alert-exercise"]]
+    titles nested `shouldBe` [[P.Str "One"], [P.Str "Two"]]
+    show nested `shouldNotSatisfy` T.isInfixOf "wikibox"
 
   it "notes a Mermaid diagram with its source, and a TikZ picture unless LaTeX draws it" $ do
     let source = "```mermaid\nflowchart LR\n  a --> b\n```\n\n```tikz\n\\usetikzlibrary{arrows}\n\\draw (0,0) -- (1,1);\n```\n"

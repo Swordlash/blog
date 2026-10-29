@@ -63,7 +63,8 @@ import Wiki.Api.ServerSettings
 import Wiki.App.Backend (MonadLoad (..), Session (exports), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.View.Common
-import Wiki.Core.Markdown.Box (BoxColour (..), BoxIcon (..), BoxKind (..), boxStyle, colourName, iconName, kindTitle, readColour, readIcon)
+import Wiki.Core.Markdown.Box (AlertKind (Custom), BoxColour (..), BoxIcon (..), BoxKind (..), colourName, iconName, kindTitle, readColour, readIcon)
+import Wiki.Core.Markdown.Render qualified as Md
 import Wiki.Core.Url (Url (..))
 
 newtype Input = Input {context :: Context}
@@ -847,21 +848,11 @@ boxFormOf' b = BoxForm {typedKind = b.name, typedLabel = b.label, chosenColour =
 boxOf :: BoxForm -> BoxKind
 boxOf f = BoxKind {name = T.strip f.typedKind, label = T.strip f.typedLabel, colour = f.chosenColour, icon = f.chosenIcon}
 
--- | A box of a kind as a page shows it, with its title and nothing in it:
--- in a @page-body@, whose rules draw it.
+-- | A box of a kind as a page shows it, with its title and nothing in it
+-- ("Wiki.Core.Markdown.Render"'s 'Md.boxOf'), in a @page-body@, whose
+-- rules draw it.
 boxPreview :: BoxKind -> HH.HTML w i
-boxPreview b =
-  HH.div
-    [HP.class_ (HH.ClassName "page-body server-box-preview")]
-    [ HH.div
-        [HP.class_ (HH.ClassName ("alert alert-" <> b.name)), HP.styleText (boxStyle b)]
-        [ HH.p
-            [HP.class_ (HH.ClassName "alert-title")]
-            ( [HH.span [HP.class_ (HH.ClassName "alert-icon"), HP.attr (HH.AttrName "aria-hidden") "true"] [] | b.icon /= NoIcon]
-                <> [HH.text (if T.null b.label then kindTitle b.name else b.label)]
-            )
-        ]
-    ]
+boxPreview b = HH.div [HP.class_ (HH.ClassName "page-body server-box-preview")] [Md.boxOf (Just b) (Custom b.name) Nothing []]
 
 providerFormOf :: State -> Maybe ProviderForm
 providerFormOf st = case st.editing of

@@ -10,9 +10,10 @@
 -- ("Wiki.Core.Markdown.Ast", 'wikiExtensions'): pipe tables, footnotes,
 -- fenced divs, @$…$@ and @\\(…\\)@ math, GitHub's task lists,
 -- strikethrough, bare links, emoji and wiki links, and attributes in
--- braces. Boxes, @> [!KIND]@, are read from the quotations pandoc makes
--- of them ('boxesOf'), since pandoc's reader knows only GitHub's five
--- kinds and no title after the marker. Raw HTML is read as raw, and goes through the wiki's
+-- braces. Boxes, @> [!KIND]@, are found by the wiki's own parser, not by
+-- pandoc's, whose reader knows only GitHub's five kinds and no title
+-- after the marker ('withBoxes'), so a document has a box exactly where
+-- the page has one, with the same title. Raw HTML is read as raw, and goes through the wiki's
 -- allowlist ("Wiki.Core.Markdown.Html") before pandoc sees it. A raw block
 -- is reduced to what the allowlist keeps, written out again and read by
 -- pandoc's HTML reader. Tags in the text are read together with the text
@@ -108,7 +109,8 @@ import Text.TeXMath.Readers.TeX.Macros (Macro, applyMacros, parseMacroDefinition
 import Wiki.App.Route (PageLink (..), Route (..), resolvePageLink, route)
 import Wiki.Core.Attachment (Attachment (..), FileName (..), MediaKind (..), attachmentKind, findAttachment)
 import Wiki.Core.Id (AttachmentId (..))
-import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind, alertKindName, boxLabel, readAlertKind)
+import Wiki.Core.Markdown.Ast (BoxMarker (..), boxMarkers)
+import Wiki.Core.Markdown.Box (AlertKind (..), BoxKind, alertKindName, boxLabel, definedKind)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link (Destination (..), classifyDestination)
 import Wiki.Core.Markdown.Tikz (TikzDocument (..), tikzDocument)
@@ -169,7 +171,7 @@ data Output
 -- own reader reads ("Wiki.Core.Markdown.Ast"), and no others: in
 -- particular no raw TeX, no Markdown inside HTML, and no divs or spans
 -- made of HTML, so that every piece of HTML stays raw for the allowlist.
--- Nor @alerts@: a box is read by 'boxesOf', every kind the same way.
+-- Nor @alerts@: the boxes are the wiki parser's ('withBoxes').
 wikiExtensions :: Extensions
 wikiExtensions =
   extensionsFromList
@@ -212,7 +214,8 @@ mediaPath a = toS ("attachments/" <> a.id.text <> "/" <> T.map safe a.name.text)
 -- | A page's Markdown as blocks, with everything the wiki adds applied.
 pageBlocks :: Output -> Place -> Text -> Either PandocError [P.Block]
 pageBlocks output place source = do
-  P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = wikiExtensions} source)
+  let (marked, boxes) = withBoxes source
+  P.Pandoc _ read' <- runPure (readMarkdown def {readerExtensions = wikiExtensions} marked)
   pure
     . expandMacros place.macros
     . walk (resolveInlines place)
@@ -222,7 +225,8 @@ pageBlocks output place source = do
     . walk htmlInlines
     . walk (concatMap htmlBlock)
     . steps
-    . walk (boxesOf place.boxes)
+    . walk (concatMap (placeholdersBack boxes))
+    . walk (boxesOf place.boxes boxes)
     $ filter (not . contentsMarker) read'
   where
     steps = case output of
@@ -310,35 +314,71 @@ shiftHeadings by = walk $ \case
 ----------------------------------------------------------------------
 -- Boxes
 
--- | A quotation that starts with a box's marker, @[!KIND]@ alone or with a
--- title after it on its first line, as the box it is ('Wiki.Core.Markdown.Ast'
--- reads the same marker): GitHub's five kinds as pandoc's alerts are made
--- (a div with the kind's class and @alert@), any other kind as a div with
--- the class @alert-@ and its name, each starting with a @title@ div that
--- holds the box's title. Any other block is left as it is.
-boxesOf :: [BoxKind] -> P.Block -> P.Block
-boxesOf defined = \case
-  P.BlockQuote (P.Para xs : rest)
-    | Just (kind, title, after) <- marker xs ->
-        let label = fromMaybe (boxLabel defined kind) title
-            classes = case kind of
+-- | 'Boxes' are the boxes of a page, each by the placeholder its marker
+-- was replaced with ('withBoxes'): its marker as the wiki's parser read
+-- it, and the text the placeholder replaced.
+type Boxes = Map Text (BoxMarker, Text)
+
+-- | A page's source with the marker of each box the wiki's parser finds
+-- (@[!KIND]@ and the title after it, "Wiki.Core.Markdown.Ast"'s
+-- 'boxMarkers') replaced by a placeholder, a word the source does not
+-- hold; and the boxes by their placeholders. Pandoc reads each such box as
+-- a quotation that starts with its placeholder, which 'boxesOf' makes the
+-- box. So pandoc never decides what is a box: a marker the wiki reads as
+-- text (escaped, in code, with no space before a title) is text in the
+-- document too, and a title is the text the page shows.
+withBoxes :: Text -> (Text, Boxes)
+withBoxes raw = (T.intercalate "\n" (zipWith rewrite [1 ..] lines'), Map.fromList [(placeholder, (m, original)) | (_, (placeholder, m, _, original)) <- Map.toList placed])
+  where
+    source = T.replace "\r\n" "\n" raw
+    lines' = T.splitOn "\n" source
+    prefix = fromMaybe "wikibox" (find (not . (`T.isInfixOf` source)) ["wikibox" <> T.replicate n "q" | n <- [0 :: Int ..]])
+    placed =
+      Map.fromList
+        [ (m.markerLine, (prefix <> show n, m, start, T.drop start text))
+        | (n, m) <- zip [1 :: Int ..] (boxMarkers source)
+        , Just text <- [atMay lines' (m.markerLine - 1)]
+        , Just start <- [markerStart m text]
+        ]
+    -- The marker starts at its column and runs to the end of the line. A
+    -- tab before it counts to a tab stop, so the column is checked, and
+    -- the line searched where it does not hold the marker.
+    markerStart m text
+      | "[!" `T.isPrefixOf` T.drop (m.markerColumn - 1) text = Just (m.markerColumn - 1)
+      | otherwise = case T.breakOn "[!" text of
+          (_, "") -> Nothing
+          (before, _) -> Just (T.length before)
+    rewrite n text = case Map.lookup n placed of
+      Just (placeholder, _, start, _) -> T.take start text <> placeholder
+      Nothing -> text
+
+-- | A placeholder ('withBoxes') that pandoc did not read as the start of a
+-- quotation, as the text it replaced, so that nothing of the page is lost.
+placeholdersBack :: Boxes -> P.Inline -> [P.Inline]
+placeholdersBack boxes = \case
+  P.Str t | Just (_, original) <- Map.lookup t boxes -> B.toList (B.text original)
+  x -> [x]
+
+-- | A quotation that starts with a box's placeholder ('withBoxes') as the
+-- box: GitHub's five kinds as pandoc's alerts are made (a div with the
+-- kind's class and @alert@), any other kind as a div with the class
+-- @alert-@ and its name, each starting with a @title@ div that holds the
+-- box's title (the one written after the marker, else the kind's label).
+-- Any other block is left as it is.
+boxesOf :: [BoxKind] -> Boxes -> P.Block -> P.Block
+boxesOf defined boxes = \case
+  P.BlockQuote (P.Para (P.Str placeholder : after) : rest)
+    | Just (m, _) <- Map.lookup placeholder boxes ->
+        let label = fromMaybe (boxLabel (definedKind defined m.boxKind) m.boxKind) m.boxTitle
+            classes = case m.boxKind of
               Custom name -> ["alert-" <> name]
               builtIn -> [alertKindName builtIn, "alert"]
-         in P.Div ("", classes, []) (P.Div ("", ["title"], []) [P.Para (B.toList (B.text label))] : [P.Para after | not (null after)] <> rest)
+            firstPara = case after of
+              b : more | lineBreak b -> more
+              more -> more
+         in P.Div ("", classes, []) (P.Div ("", ["title"], []) [P.Para (B.toList (B.text label))] : [P.Para firstPara | not (null firstPara)] <> rest)
   b -> b
   where
-    -- The marker is the first word of the quotation's first line, which
-    -- pandoc reads as one piece of text (@[!EXERCISE]@); the rest of that
-    -- line is the title, and the lines after it the box's first
-    -- paragraph.
-    marker xs = do
-      let (line, after) = break lineBreak xs
-      (written, rest) <- case line of
-        P.Str t : more -> Just (t, more)
-        _ -> Nothing
-      kind <- readAlertKind =<< T.stripSuffix "]" =<< T.stripPrefix "[!" written
-      let title = T.strip (plain rest)
-      pure (kind, if T.null title then Nothing else Just title, drop 1 after)
     lineBreak = \case
       P.SoftBreak -> True
       P.LineBreak -> True

@@ -14,7 +14,12 @@ kinds an administrator gives a label, a colour and an icon (`BoxKind`,
 custom properties a box of such a kind carries (`boxStyle`). The
 renderer's `Options` gain `boxes`; a box of another kind than the five
 is `<div class="alert alert-<name>">`, titled with its name capitalised.
-The search text holds a box's title. The activity log has the actions
+The search text holds a box's title. `boxMarkers` gives where each box's
+marker is in a page's source, for a reader of the source other than this
+parser (the server's export). `definedKind` finds a kind's definition,
+`boxLabel` takes it, and `Wiki.Core.Markdown.Render.boxOf` draws a box.
+Neither `title` nor `icon` may be a kind, since a box's own parts have
+those classes. The activity log has the actions
 `guide.install` and `guide.update`.
 
 `Wiki.Core.Markdown.Ast` gains `mentionsWhole`: whether a page that says

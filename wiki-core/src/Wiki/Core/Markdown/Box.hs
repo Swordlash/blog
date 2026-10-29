@@ -30,6 +30,7 @@ module Wiki.Core.Markdown.Box
   , readIcon
   , checkBoxKinds
   , boxStyle
+  , definedKind
   , boxLabel
   , maxLabelLength
   )
@@ -73,15 +74,23 @@ readAlertKind written
 
 -- | Whether a name may be a kind of box of its own: lower-case ASCII
 -- letters and dashes, starting with a letter, at most 32 characters, and
--- neither one of the five nor @title@. The box's class is @alert-@ and
--- the name, and the title in a box has the class @alert-title@, so a kind
--- called @title@ would style its whole box as a title.
+-- neither one of the five nor a name the box's own parts use. The box's
+-- class is @alert-@ and the name, and the parts of a box have the classes
+-- @alert-title@ (its title) and @alert-icon@ (its icon), so a kind called
+-- @title@ or @icon@ would style its whole box as that part. The parser
+-- ("Wiki.Core.Markdown.Ast") and the server's settings ('checkBoxKinds')
+-- both take a name by this rule, so a kind the settings accept is one a
+-- page can write.
 validKindName :: Text -> Bool
 validKindName name =
   maybe False (isAsciiLower . fst) (T.uncons name)
     && T.length name <= 32
     && T.all (\c -> isAsciiLower c || c == '-') name
-    && name `notElem` ("title" : map alertKindName builtInKinds)
+    && name `notElem` (reservedNames <> map alertKindName builtInKinds)
+
+-- | The names of a box's parts, which no kind may have ('validKindName').
+reservedNames :: [Text]
+reservedNames = ["title", "icon"]
 
 -- | The title a box of a kind nobody defined gets: its name, capitalised,
 -- with spaces for its dashes (@exercise@ gives @Exercise@, @fun-fact@
@@ -195,7 +204,7 @@ checkBoxKinds kinds = do
       when (name `elem` map alertKindName builtInKinds) $
         Left ("The kind of box " <> name <> " is one of GitHub's five (note, tip, important, warning, caution), which keep their own look.")
       unless (validKindName name) $
-        Left ("A kind of box's name is letters and dashes, starting with a letter, at most 32 characters, and not title: " <> name)
+        Left ("A kind of box's name is letters and dashes, starting with a letter, at most 32 characters, and neither title nor icon: " <> name)
       when (T.length label > maxLabelLength) $
         Left ("The label of the kind of box " <> name <> " is longer than " <> show maxLabelLength <> " characters.")
       pure BoxKind {name, label = if T.null label then kindTitle name else label, colour = k.colour, icon = k.icon}
@@ -210,10 +219,17 @@ boxStyle k =
     ["--box-colour: var(" <> colourVariable k.colour <> ")"]
       <> ["--box-icon: var(--box-icon-" <> iconName k.icon <> ")" | k.icon /= NoIcon]
 
--- | The title a box of a kind shows when it gives none of its own: the
--- five's names, a defined kind's label, or any other kind's name
--- capitalised.
-boxLabel :: [BoxKind] -> AlertKind -> Text
-boxLabel defined = \case
-  Custom name -> maybe (kindTitle name) (\k -> k.label) (find (\k -> k.name == name) defined)
-  builtIn -> kindTitle (alertKindName builtIn)
+-- | The definition of a kind among those the administrator gave: none for
+-- GitHub's five, which keep their own look, nor for a kind nobody defined.
+definedKind :: [BoxKind] -> AlertKind -> Maybe BoxKind
+definedKind defined = \case
+  Custom name -> find (\k -> k.name == name) defined
+  _ -> Nothing
+
+-- | The title a box shows when it gives none of its own, from its kind and
+-- the kind's definition ('definedKind'): a defined kind's label, or else
+-- the kind's name capitalised (@Note@, @Exercise@).
+boxLabel :: Maybe BoxKind -> AlertKind -> Text
+boxLabel defined kind = case defined of
+  Just k | not (T.null (T.strip k.label)) -> k.label
+  _ -> kindTitle (alertKindName kind)

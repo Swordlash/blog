@@ -440,8 +440,9 @@ lightbulb, pencil, question, check, star, book, flag, or none). A kind
 nobody defined is a plain box. The five keep their own look and cannot be
 defined.
 
-Text after the kind, on the same line, is that box's title, for any kind,
-the five too:
+Text after the kind, on the same line, after a space, is that box's
+title, for any kind, the five too. The title is plain text, shown as
+written: Markdown in it is not read.
 
 > [!TIP] Before you start
 > Read the whole page once.

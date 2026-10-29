@@ -42,8 +42,10 @@
 -- 'RawHtmlBlock'. The allowlist in "Wiki.Core.Markdown.Html" decides what
 -- of it reaches the page, when it is rendered.
 --
--- Source positions are not kept: nothing needs them yet. Adding them
--- means giving 'Rangeable' a real instance and the constructors a field.
+-- Source positions are not kept in the tree. The one place that needs
+-- one is the export, which reads a page with pandoc's own reader and must
+-- find the boxes this parser found: 'boxMarkers' gives where each box's
+-- marker is in the source.
 module Wiki.Core.Markdown.Ast
   ( -- * The tree
     Block (..)
@@ -59,6 +61,8 @@ module Wiki.Core.Markdown.Ast
     -- * Parsing
   , ParseError (..)
   , parseMarkdown
+  , BoxMarker (..)
+  , boxMarkers
 
     -- * Reading the tree
   , plainText
@@ -81,6 +85,7 @@ import Data.Text qualified as T
 import Data.Tree (Tree (..))
 import Protolude hiding (try)
 import Text.Parsec (getPosition, many1, option, try)
+import Text.Parsec qualified as Parsec
 import Wiki.Core.Markdown.Box (AlertKind (..), readAlertKind)
 import Wiki.Core.Markdown.Mention (splitMentions)
 import Wiki.Core.Markdown.TexMath (texMathSpec)
@@ -210,8 +215,31 @@ newtype ParseError = ParseError Text
 
 -- | Parse a page's Markdown.
 parseMarkdown :: Text -> Either ParseError [Block]
-parseMarkdown source =
-  bimap (ParseError . show) (\(Blocks bs) -> withHeadingIds (map (withPauses . contentsMarker . withMentions) (toList bs)))
+parseMarkdown source = (\(Blocks bs _) -> withHeadingIds (map (withPauses . contentsMarker . withMentions) (toList bs))) <$> parsed source
+
+-- | 'BoxMarker' is where a box's marker, @[!KIND]@, is in a page's source:
+-- its line and column (from 1; a tab counts to the next multiple of four
+-- columns, as CommonMark counts it), with the box's kind and its title as
+-- the parser read them. The export rewrites the source at these places
+-- before pandoc reads it ("Wiki.Server.Export.Document"), so that a
+-- document has a box exactly where the page has one.
+data BoxMarker = BoxMarker
+  { markerLine :: Int
+  , markerColumn :: Int
+  , boxKind :: AlertKind
+  , boxTitle :: Maybe Text
+  }
+  deriving stock (Eq, Ord, Show)
+
+-- | Every box's marker in a page's source, in the order of the source;
+-- none when the source cannot be parsed.
+boxMarkers :: Text -> [BoxMarker]
+boxMarkers source = either (const []) (\(Blocks _ ms) -> sortOn (\m -> (m.markerLine, m.markerColumn)) (ordNub ms)) (parsed source)
+
+-- | The source parsed, as the parser builds it.
+parsed :: Text -> Either ParseError Blocks
+parsed source =
+  first (ParseError . show)
     $ runIdentity
     $ CM.commonmarkWith syntax "markdown" terminated
   where
@@ -414,21 +442,36 @@ instance Semigroup Inlines where
 instance Monoid Inlines where
   mempty = Inlines Seq.empty
 
-newtype Blocks = Blocks (Seq Block)
+-- | Blocks as the parser builds them, with the markers of the boxes among
+-- them, nested ones too ('boxMarkers'). Every block made of other blocks
+-- keeps their markers.
+data Blocks = Blocks (Seq Block) [BoxMarker]
   deriving stock (Show)
-  deriving newtype (Semigroup, Monoid)
+
+instance Semigroup Blocks where
+  Blocks xs ms <> Blocks ys ns = Blocks (xs <> ys) (ms <> ns)
+
+instance Monoid Blocks where
+  mempty = Blocks Seq.empty []
 
 inline :: Inline -> Inlines
 inline = Inlines . Seq.singleton
 
 block :: Block -> Blocks
-block = Blocks . Seq.singleton
+block b = Blocks (Seq.singleton b) []
+
+-- | One block made of others, with their markers.
+around :: ([Block] -> Block) -> Blocks -> Blocks
+around make bs = Blocks (Seq.singleton (make (blocks bs))) (markersOf bs)
+
+markersOf :: Blocks -> [BoxMarker]
+markersOf (Blocks _ ms) = ms
 
 inlines :: Inlines -> [Inline]
 inlines (Inlines xs) = toList xs
 
 blocks :: Blocks -> [Block]
-blocks (Blocks xs) = toList xs
+blocks (Blocks xs _) = toList xs
 
 instance CM.Rangeable Inlines where
   ranged _ = identity
@@ -446,7 +489,7 @@ instance CM.HasAttributes Inlines where
         other -> other
 
 instance CM.HasAttributes Blocks where
-  addAttributes new (Blocks xs) = Blocks (add <$> xs)
+  addAttributes new (Blocks xs ms) = Blocks (add <$> xs) ms
     where
       add = \case
         Heading l attrs xs' -> Heading l (attrs <> new) xs'
@@ -479,14 +522,14 @@ instance CM.IsBlock Inlines Blocks where
   paragraph = splitDisplayMath Para . inlines
   plain = splitDisplayMath Plain . inlines
   thematicBreak = block ThematicBreak
-  blockQuote = block . BlockQuote . blocks
+  blockQuote = around BlockQuote
   codeBlock info = block . codeBlockWith [] (head (T.words info))
   heading level = block . Heading level [] . inlines
   rawBlock _ = block . RawHtmlBlock
 
   -- A definition has done its job once the links that use it are parsed.
   referenceLinkDefinition _ _ = mempty
-  list kind _ = block . List (listKind kind) . map (ListItem Nothing . blocks)
+  list kind _ items = Blocks (Seq.singleton (List (listKind kind) (map (ListItem Nothing . blocks) items))) (concatMap markersOf items)
 
 instance CME.HasMath Inlines where
   inlineMath = inline . Math InlineMath
@@ -512,18 +555,20 @@ instance CME.HasPipeTable Inlines Blocks where
         CME.DefaultAlignedCol -> AlignDefault
 
 instance CME.HasTaskList Inlines Blocks where
-  taskList kind _ = block . List (listKind kind) . map (\(done, b) -> ListItem (Just done) (blocks b))
+  taskList kind _ items = Blocks (Seq.singleton (List (listKind kind) [ListItem (Just done) (blocks b) | (done, b) <- items])) (concatMap (markersOf . snd) items)
 
 instance CME.HasFootnote Inlines Blocks where
-  footnote number label = block . Footnotes . pure . Footnote number label . blocks
-  footnoteList notes = block (Footnotes (concat [ns | Footnotes ns <- blocks (mconcat notes)]))
+  footnote number label = around (Footnotes . pure . Footnote number label)
+  footnoteList notes =
+    let all' = mconcat notes
+     in Blocks (Seq.singleton (Footnotes (concat [ns | Footnotes ns <- blocks all']))) (markersOf all')
 
   -- The note's contents come along for formats that show a note where it
   -- is referenced; here they are shown once, in 'Footnotes'.
   footnoteRef number label _ = inline (FootnoteRef (fromMaybe 0 (readMaybe number)) label)
 
 instance CME.HasDiv Blocks where
-  div_ = block . Div [] . blocks
+  div_ = around (Div [])
 
 -- | Boxes, @> [!KIND]@ with an optional title after the marker: GitHub's
 -- alerts and the wiki's own kinds ("Wiki.Core.Markdown.Box").
@@ -534,7 +579,9 @@ instance CME.HasDiv Blocks where
 -- syntax, the library's with those two differences. The marker is @[!@,
 -- a name of letters and dashes in any case, and @]@ ('readAlertKind'); a
 -- marker with any other name leaves the block an ordinary quotation. What
--- follows it on the line, after a space, is the box's title, as written.
+-- follows it on the line, after a space, is the box's title, as written:
+-- plain text, in which Markdown is not read (@> [!TIP] *Read* this@ is
+-- titled with the asterisks).
 alertSpec :: CM.SyntaxSpec Identity Inlines Blocks
 alertSpec = mempty {CM.syntaxBlockSpecs = [alertBlockSpec]}
 
@@ -547,6 +594,7 @@ alertBlockSpec =
         pos <- getPosition
         _ <- CM.symbol '>'
         _ <- option 0 (CM.gobbleSpaces 1)
+        at <- getPosition
         _ <- CM.symbol '['
         _ <- CM.symbol '!'
         name <- many1 (CM.satisfyTok (\t -> CM.hasType CM.WordChars t || CM.hasType (CM.Symbol '-') t))
@@ -558,7 +606,7 @@ alertBlockSpec =
         guard (maybe True (CM.hasType CM.Spaces) (head rest))
         let title = mfilter (not . T.null) (Just (T.strip (CM.untokenize rest)))
         CM.addNodeToStack $
-          Node (CM.defBlockData alertBlockSpec) {CM.blockData = toDyn (kind, title), CM.blockStartPos = [pos]} []
+          Node (CM.defBlockData alertBlockSpec) {CM.blockData = toDyn BoxMarker {markerLine = Parsec.sourceLine at, markerColumn = Parsec.sourceColumn at, boxKind = kind, boxTitle = title}, CM.blockStartPos = [pos]} []
         pure CM.BlockStartMatch
     , CM.blockCanContain = const True
     , CM.blockContainsLines = False
@@ -570,8 +618,9 @@ alertBlockSpec =
         _ <- CM.gobbleUpToSpaces 1
         pure (pos, n)
     , CM.blockConstructor = \node -> do
-        let (kind, title) = fromMaybe (Note, Nothing) (fromDynamic (CM.blockData (rootLabel node)))
-        block . Alert kind title . blocks . mconcat <$> CM.renderChildren node
+        let marker = fromMaybe BoxMarker {markerLine = 0, markerColumn = 0, boxKind = Note, boxTitle = Nothing} (fromDynamic (CM.blockData (rootLabel node)))
+        inside <- mconcat <$> CM.renderChildren node
+        pure (Blocks (Seq.singleton (Alert marker.boxKind marker.boxTitle (blocks inside))) (marker : markersOf inside))
     , CM.blockFinalize = CM.defaultFinalizer
     }
 

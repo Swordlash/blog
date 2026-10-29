@@ -67,6 +67,7 @@ module Wiki.Core.Markdown.Render
   , renderBlocks
   , renderSections
   , renderRawHtml
+  , boxOf
   )
 where
 
@@ -78,7 +79,7 @@ import Halogen.HTML qualified as HH
 import Halogen.HTML.Properties qualified as HP
 import Protolude
 import Wiki.Core.Markdown.Ast
-import Wiki.Core.Markdown.Box (BoxIcon (..), BoxKind (..), alertKindName, boxLabel, boxStyle)
+import Wiki.Core.Markdown.Box (BoxIcon (..), BoxKind (..), alertKindName, boxLabel, boxStyle, definedKind)
 import Wiki.Core.Markdown.Html qualified as Html
 import Wiki.Core.Markdown.Link
 import Wiki.Core.Markdown.Toc (contentsNav, tableOfContents)
@@ -210,13 +211,7 @@ renderSections opts sections = evalState (traverse renderBlocks' sections) (Coun
       Div attrs bs -> single . HH.div (idAndClasses attrs []) <$> renderBlocks' bs
       Alert kind title bs -> do
         inner <- renderBlocks' bs
-        let defined = case kind of
-              Custom name -> find (\k -> k.name == name) opts.boxes
-              _ -> Nothing
-            style = [HP.styleText (boxStyle k) | Just k <- [defined]]
-            icon = [HH.span [classesProp ["alert-icon"], HP.attr (HH.AttrName "aria-hidden") "true"] [] | Just k <- [defined], k.icon /= NoIcon]
-            heading' = HH.p [classesProp ["alert-title"]] (icon <> [HH.text (fromMaybe (boxLabel opts.boxes kind) title)])
-        pure [HH.div (classesProp ["alert", "alert-" <> alertKindName kind] : style) (heading' : inner)]
+        pure [boxOf (definedKind opts.boxes kind) kind title inner]
       -- A slide shows the notes it refers to, which need not start at the
       -- first ("Wiki.Core.Slides").
       Footnotes notes ->
@@ -474,6 +469,18 @@ alignment = \case
 
 classesProp :: (HasType "class" Text r) => [Text] -> HP.IProp r i
 classesProp = HP.class_ . HH.ClassName . T.unwords
+
+-- | A box, @> [!KIND]@: its kind's definition among the administrator's
+-- ('definedKind'), its kind, the title written after its marker if there
+-- is one, and what it holds. The administration's preview of a kind is
+-- drawn by this too ("Wiki.App.View.Server").
+boxOf :: Maybe BoxKind -> AlertKind -> Maybe Text -> [HH.HTML w i] -> HH.HTML w i
+boxOf defined kind title inner =
+  HH.div
+    (classesProp ["alert", "alert-" <> alertKindName kind] : [HP.styleText (boxStyle k) | Just k <- [defined]])
+    (HH.p [classesProp ["alert-title"]] (icon <> [HH.text (fromMaybe (boxLabel defined kind) title)]) : inner)
+  where
+    icon = [HH.span [classesProp ["alert-icon"], HP.attr (HH.AttrName "aria-hidden") "true"] [] | Just k <- [defined], k.icon /= NoIcon]
 
 -- | The @id@ and the classes of some attributes, after classes of the
 -- element's own.

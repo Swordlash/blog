@@ -1325,7 +1325,7 @@ select {
    carries its colour, --box-colour, and its icon, --box-icon, in its
    style attribute; a kind nobody defined has neither, and is drawn plain.
    The icon is a mask in the title's colour. */
-.page-body .alert-icon {
+.page-body .alert-title > .alert-icon {
   display: inline-block;
   width: 1.1em;
   height: 1.1em;
