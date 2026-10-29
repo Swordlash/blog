@@ -56,6 +56,12 @@ source-repository-package
 -- beam-sqlite and beam-postgres need) on containers does too: the server
 -- reaches PostgreSQL through beam-postgres over postgresql-simple
 -- (Wiki.Server.Storage.Postgres).
+-- network 3.2.10.0 (2026-10) exports getHostName from Network.Socket, which
+-- smtp-mail 0.5.0.1 also imports from Network.BSD, so smtp-mail no longer
+-- compiles with it (an ambiguous occurrence). Until smtp-mail is fixed, the
+-- solver is kept on the network before it.
+constraints: network < 3.2.10
+
 allow-newer:
   protolude:*,
   servant:QuickCheck,
