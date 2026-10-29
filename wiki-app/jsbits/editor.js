@@ -71,16 +71,9 @@ function wiki_editor_file_size(files, i) {
 }
 
 // A file's bytes, as base64 text: bytes cross the FFI as text the same way
-// on every backend (as jsbits/object-url.js has them the other way). Built
-// from chunks, since one String.fromCharCode call over a whole file would
-// pass more arguments than an engine takes.
+// on every backend (as jsbits/object-url.js has them the other way).
 async function wiki_editor_read_file(files, i) {
-  const bytes = new Uint8Array(await files[i].arrayBuffer());
-  let binary = "";
-  for (let at = 0; at < bytes.length; at += 0x8000) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(at, at + 0x8000));
-  }
-  return btoa(binary);
+  return new Uint8Array(await files[i].arrayBuffer()).toBase64();
 }
 
 // Put CodeMirror in the host in place of the textarea, once its module has

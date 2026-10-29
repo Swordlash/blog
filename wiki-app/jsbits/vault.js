@@ -59,19 +59,14 @@ function wikiVaultKey(handle) {
   return key;
 }
 
+// Bytes as base64url without padding, and back (with or without it), by
+// the platform's own Uint8Array.prototype.toBase64 and Uint8Array.fromBase64.
 function wikiVaultToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return new Uint8Array(buffer).toBase64({ alphabet: "base64url", omitPadding: true });
 }
 
 function wikiVaultFromBase64(text) {
-  const standard = String(text).replace(/-/g, "+").replace(/_/g, "/");
-  const binary = atob(standard + "===".slice((standard.length + 3) % 4));
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+  return Uint8Array.fromBase64(String(text), { alphabet: "base64url" });
 }
 
 function wikiVaultText(text) {

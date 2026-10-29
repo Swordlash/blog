@@ -5,10 +5,7 @@
 // every backend.
 
 function wiki_object_url(base64, mediaType) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return URL.createObjectURL(new Blob([bytes], { type: mediaType }));
+  return URL.createObjectURL(new Blob([Uint8Array.fromBase64(base64)], { type: mediaType }));
 }
 
 function wiki_revoke_object_url(url) {
