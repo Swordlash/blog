@@ -1791,6 +1791,10 @@ must be in before it is.
 
 Each work package goes to one agent (Opus 5.5, high effort), one at a time within a
 phase unless two packages are independent (then in parallel, on separate branches).
+Every pull request is reviewed twice before it merges (the owner, 2026-10-29: "każdy PR
+przed wypchnięciem testuj na 6.1 sol high"): Claude Code's code review at high effort,
+and Codex with `gpt-6.1-sol` at high reasoning effort, as `AGENTS.md` says; the findings
+go to the implementing agent, and the merge follows the green push that answers them.
 The brief is written from this plan and contains:
 
 1. The goal and the acceptance criteria of the work package, verbatim from above.

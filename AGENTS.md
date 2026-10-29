@@ -25,6 +25,14 @@ decision confirmed or changed, acceptance criteria met or carried over. It may m
 edits of its own (the plan, a README line, a one-line fix found in review). Changes to
 `docs/PLAN.md` alone go straight to `main`, without a pull request; code goes through one.
 
+Before a pull request merges, the planning session reviews it twice, on the pushed head:
+Claude Code's code review at high effort, and Codex (`codex exec review --base <merge-base>
+-m gpt-6.1-sol -c model_reasoning_effort=high`, in a detached checkout of the head, with the
+owner's key given on standard input and the saved credential removed afterwards; a model
+or effort below that is not a review). The findings go back to the implementing agent,
+which verifies each, fixes the real ones and pushes; the planning session merges after
+that push is green. Every pull request, every time; a second round after large fixes.
+
 Pull requests are rebased onto `main`, never merged with it. When `main` has moved, the
 branch is rebased (and force-pushed: work-package branches belong to the session), its
 CI runs on the rebased head, and once that is green the planning session fast-forwards
