@@ -1412,7 +1412,7 @@ To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
    bootstrap makes the pinned GHC and cabal ghcup's defaults for whoever runs it.
 2. Install, once, the Debian packages the bootstrap and Chromium need, since the
    runner cannot `sudo`. The bootstrap's own are `build-essential curl git jq unzip
-   xz-utils zstd libgmp-dev libpq-dev libsodium-dev`. Chromium's are those `npx playwright install-deps
+   xz-utils zstd libgmp-dev libpq-dev libsodium-dev pkg-config`. Chromium's are those `npx playwright install-deps
    --dry-run chromium` names in a checkout after `npm ci` (and that the bootstrap
    prints when Chromium does not start); on Ubuntu 24.04 they are `libasound2t64
    libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64

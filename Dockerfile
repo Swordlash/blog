@@ -45,7 +45,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # bash for pipefail: the build pipes find into the compressor.
 SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
 # The bootstrap installs the Debian packages it needs itself (the C
-# toolchain, and GMP's, libpq's and libsodium's development files), but downloads
+# toolchain, GMP's, libpq's and libsodium's development files, and
+# pkg-config, which finds libsodium for its bindings), but downloads
 # them with curl over HTTPS first, which needs the CA certificates; and git,
 # for cabal to fetch haskell-halogen at the commit cabal.project pins.
 # hadolint ignore=DL3008
