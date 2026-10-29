@@ -11,7 +11,7 @@ import Test.QuickCheck
 import Wiki.Api.Account (Credentials (..), NewAccount (..), NewPassword (..), PasswordChange (..))
 import Wiki.Api.Error (ApiError (..))
 import Wiki.Api.Security (CurrentPassword (..), EmailChange (..), NewPasswordByMail (..), OneTimeCode (..), RecoveryCodes (..), ResetToken (..), TotpEnrolment (..), UnsubscribeToken (..), VerificationToken (..))
-import Wiki.Api.Types (SpaceName (..))
+import Wiki.Api.Types (SessionInfo (..), SpaceName (..))
 import Wiki.Core.User (Password (..))
 
 -- | A property that values of a type, as the generator makes them, come
@@ -81,3 +81,7 @@ spec = describe "JSON" $ do
 
   it "reads a change of password without a current one, for a user who has none" $
     decode "{\"new\":\"a new password\"}" `shouldBe` Just PasswordChange {current = Nothing, new = Password "a new password"}
+
+  it "reads a session written before kinds of box existed as having none" $
+    ((\s -> s.boxes) <$> (decode "{\"user\":null,\"groups\":[],\"grants\":{\"global\":[],\"spaces\":[],\"access\":\"Open\"},\"standing\":\"NotSignedIn\",\"providers\":[],\"exports\":[]}" :: Maybe SessionInfo))
+      `shouldBe` Just []
