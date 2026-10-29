@@ -1477,6 +1477,100 @@ must be in before it is.
   change by another process (a second `Storage` on the same database in the test) is seen
   by the next read, a user's group change is seen, a disabled user is refused at once.
 
+- **WP5.25 The administration as pages: a left navigation, one section per page, users
+  paged with one "Manage" dialog** (the owner, 2026-10-29: "lista na adminie robi się za duża
+  wzdłuż i wszerz. Niech strona ma podzakładki z lewej jak spaces, każda osobno (data,
+  access, user management, etc.). Niech users ma listę z max per page i pages, i zamiast
+  tych przycisków jeden przycisk 'manage' gdzie otwiera się okienko wszystkich opcji dla
+  usera. Zrób to ładnie"). Today `/admin/` is one long page that mounts the people
+  (`View/Admin.hs`: users and groups), the server settings (`View/Server.hs`), the global
+  permissions (`View/Permissions.hs`), the backups (`View/Backups.hs`) and the activity,
+  one under the other, and every user row carries every button. After: the route gains a
+  section, `/admin/<section>/` (`Route.Admin AdminSection`, the first section when none is
+  given, with a redirect from `/admin/`), and the administration is a two-column layout: a
+  left navigation like the spaces directory's column (the same width, type and spacing as
+  the rest of the application; on a narrow screen it becomes a strip of tabs above the
+  content), with one entry per section, the current one marked and in the document title,
+  and the section's content on the right. Sections, in this order: **Overview** (the
+  status: counts, the last backup, errors; what "Status" shows today), **Users**,
+  **Groups**, **Permissions** (the global grants), **Invitations** (if they are a part of
+  the people page today, else under Users), **Server** (public address, mail, sign-in
+  providers, the assistant's hosts), **Backups**, **Activity**. Each section is the
+  existing component mounted alone, with its own loading and errors, so a slow section
+  does not hold the others; nothing a section does changes in this package beyond the
+  users list. Users: a table paged on the server (`GET admin/users` with `offset`, `limit`
+  and `q`; the directory endpoint stays for what else needs it), a page size the reader
+  chooses (25, 50, 100; remembered in `localStorage`), page numbers with first/previous/
+  next/last, a search box over login and display name (debounced, in the address as `q`
+  and `page` so a page can be shared), a filter for administrators and disabled accounts,
+  the count ("1–25 of 312"). Each row: display name, login, how they sign in (password,
+  provider, both), badges (administrator, creates spaces, second factor, disabled), the
+  last sign-in if the directory knows it, and one button, **Manage**. Manage opens a
+  dialog (`role="dialog"`, `aria-modal`, focus trapped, Escape and the backdrop close it,
+  focus returns to the button) with everything the row's buttons did: administrator,
+  creates spaces, disable, set a password, send a password link, remove the second
+  factor, unlink an identity, the e-mail address, group membership (add to a group, remove
+  from one), each change saved at once with a short "Saved" and the row refreshed, and
+  the account's dangerous actions (disable, remove the second factor) asked once. The
+  dialog is one component with its own state, reusable for the per-user settings a later
+  package adds (the assistant's access, WP5.26). Design: the owner asked for it to be
+  nice, so care is part of the work: consistent spacing and type with the rest of the
+  application, light and dark, hover and focus states, no layout jump when a page loads,
+  a quiet empty state, the dialog centred with a backdrop and a width that fits its
+  content, buttons grouped by what they do, the destructive ones apart and in the danger
+  style. Screenshots of the users page and the dialog (light and dark) go into
+  `docs/screenshots/` through `toolchain/screenshots.mjs` and into the pull request. Tests:
+  hspec-halogen for the navigation (each section mounts alone, the address changes, the
+  first section opens from `/admin/`), the paging (page size, page numbers, search in the
+  address), the dialog (opens with the user's state, saves one change, closes on Escape
+  and returns focus, a dangerous action asks); server tests for the paged users endpoint
+  (order, paging, search, filters, bounds on `limit`). The README's administration section
+  and `docs/api.md` are updated.
+
+- **WP5.26 The assistant through the wiki's own identity: Workload Identity Federation,
+  per user** (the owner, 2026-10-29, after the question whether users signed in through
+  Google or GitHub could reach Claude without a key: "to zróbmy to. Niech będzie tak że
+  można to ustawić w ustawieniach admina, i każdemu userowi można włączyć opcję, czy może
+  korzystać z klucza serwera"). Anthropic's Workload Identity Federation exchanges a
+  short-lived JWT from a registered OIDC issuer for an Anthropic access token bound to a
+  service account of the organisation that registered the issuer; the organisation pays
+  and the token is as powerful as a workspace API key (`workspace:developer`). So this is
+  the "organisation pays" model, in its best form: no static key anywhere, tokens that
+  live minutes, per-user switching on and off, and the wiki is the identity provider. The
+  wiki as an OIDC issuer: under the public address it serves
+  `/.well-known/openid-configuration` and `/.well-known/jwks.json` (one ES256 key pair,
+  made when federation is first turned on and kept as a `Secret` in the server settings;
+  a "new key" button rotates it, the old public key stays published for an hour). For a
+  user allowed to, `POST api/v1/assistant/token` mints a JWT (`iss` the public address,
+  `sub` the user's id, `aud` `https://api.anthropic.com`, `exp` five minutes, a random
+  `jti`, since Anthropic takes each `jti` once), exchanges it at
+  `https://api.anthropic.com/v1/oauth/token` (`jwt-bearer` grant, with the federation rule,
+  organisation, service account and workspace ids from the settings) and answers the
+  browser with the access token and its `expires_in`; the server keeps no token. The
+  browser's assistant gets a provider choice "Claude through this wiki" when the user is
+  allowed, uses the token as the SDK's `authToken` (Bearer) and asks for a new one before
+  it expires; the user's own keys and the vault (WP5.21) stay for the other choices. In
+  the administration (WP5.25's Server section, or a section of its own, "Assistant"):
+  turned on or off; the organisation, workspace, federation rule and service account ids;
+  the issuer URL and the JWKS URL shown to copy into Anthropic's console (the console's
+  "Custom OIDC" issuer with discovery, a rule matching `audience` and a `subject_prefix`);
+  a "Test" button that performs one exchange and reports the result or Anthropic's
+  reason; a sentence that the organisation pays for every user allowed, with a link to
+  spend limits, and that a workspace of its own for the wiki is the safe setting. Per
+  user, in the Manage dialog of WP5.25: "May use the wiki's assistant access", off by
+  default, stored with the user (a migration per backend); the token endpoint refuses
+  everyone else with `Forbidden`. The activity log records each token issued (user, time)
+  so an administrator sees who uses it; usage caps per user are a later decision. The
+  Content Security Policy already allows `api.anthropic.com`. OpenAI has no equivalent,
+  so this is Anthropic only. Tests: server (the discovery document and the JWKS; the JWT
+  verifies against the published key and carries the claims; the exchange against a fake
+  Anthropic in the test that fetches the JWKS, verifies the signature and the claims, and
+  answers a token; a user not allowed gets `Forbidden`; a `jti` is never reused; the key
+  rotation keeps the old key published), browser (the provider choice appears only when
+  allowed, the token is used as Bearer and refreshed, a refusal is shown), the admin's
+  settings and the per-user switch. The README gets "The assistant through the wiki's
+  identity" with the console steps; `docs/api.md` the endpoints.
+
 - **Later, by the owner (2026-10-28, "PRF jest spoko na później"), picked up the same day as
   WP5.21 B: the assistant's API keys synchronised with a passkey.** The keys stay out of
   the server today (IndexedDB per user,
