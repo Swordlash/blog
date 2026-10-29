@@ -18,7 +18,7 @@ import Test.Storage.Fixture (countWhere, ok, path, tableRows, withDemo, withPlac
 import Wiki.Api.Account (Account (..))
 import Wiki.Api.Notifications (Notifications (..))
 import Wiki.Api.Vault (PasskeyInfo (..))
-import Wiki.App.Backend (MonadWiki (..), WikiError (..))
+import Wiki.App.Backend (MonadWiki (..), Session (..), WikiError (..))
 import Wiki.App.Backend.Admin (MonadAdmin (removeUser, setCreateSpaces))
 import Wiki.App.Backend.Comments (MonadComments (..))
 import Wiki.App.Backend.Notifications (MonadNotifications (..))
@@ -35,6 +35,7 @@ import Wiki.Server.Accounts (createAccount, setDisabled, setPassword, signIn)
 import Wiki.Server.Console (Users (..), UsersCommand (..), runUsers)
 import Wiki.Server.SecondFactor (enrol)
 import Wiki.Server.Storage (Storage, Who (..), defaultConfig, reading, runStoredWiki, userByLogin, withStorage)
+import Wiki.Server.Storage.Rows (permissionsGeneration)
 import Wiki.Server.Storage.Schema (AuditLog (..), WikiDb (..), wikiDb)
 import Wiki.Server.Vault (registerPasskey, storeVault)
 import Wiki.Server.WebAuthn (NewCredential (..))
@@ -92,7 +93,17 @@ spec backing = describe "removing an account" $ do
       Left (Conflict _) -> pass
       other -> expectationFailure ("expected a conflict, got " <> show other)
     void (ok =<< setDisabled st u True)
+    -- Read as the user, so that the permission context of this generation
+    -- is kept in memory.
+    void (asEditor session)
+    generation <- reading st permissionsGeneration
     ok =<< asAdmin (removeUser u)
+    -- The removal bumped the generation, so the next read does not take
+    -- the context kept before it: the user is nobody, and their grant on
+    -- the blog is gone.
+    reading st permissionsGeneration >>= (`shouldSatisfy` (> generation))
+    (\s -> s.user) <$> asEditor session `shouldReturn` Nothing
+    asEditor (spaceAccess blog.id) >>= (`shouldSatisfy` isLeft)
     -- Only the activity log still names the account's id: what it says
     -- happened stays true.
     tablesMentioning u.text st `shouldReturn` ["audit_log"]

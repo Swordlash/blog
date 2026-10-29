@@ -105,6 +105,8 @@ spec backing = describe "the permission context kept in memory" $ do
           , ("Accounts.setDisabled again", True, void (Accounts.setDisabled st ritaId False >>= ok))
           , ("Accounts.setAdministrator", True, void (Accounts.setAdministrator st ritaId False >>= ok))
           , ("Accounts.setPassword", False, void (Accounts.setPassword st ritaId (Password "a third long password") >>= ok))
+          , ("setDisabled of a user to remove", True, userId st "fresh" >>= \fresh -> void (admin (setDisabled fresh True) >>= ok))
+          , ("removeUser", True, userId st "fresh" >>= \fresh -> admin (removeUser fresh) >>= ok)
           , ("an UPDATE of a space typed by hand", True, byHand st "UPDATE spaces SET description = description || ' by hand'")
           , ("an UPDATE of a user's e-mail typed by hand", False, byHand st "UPDATE users SET email = 'rita@example.org' WHERE login = 'reader'")
           , ("an UPDATE of a user's name typed by hand", True, byHand st "UPDATE users SET display_name = 'Rita by hand' WHERE login = 'reader'")
