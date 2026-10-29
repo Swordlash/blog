@@ -46,27 +46,26 @@ module Wiki.Server.Render
 where
 
 import Data.ByteString.Lazy qualified as BSL
-import Data.CaseInsensitive qualified as CI
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
+import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import Halogen.Router qualified as Router
 import Halogen.Static (embed, fillMountPoint)
 import Halogen.VDom.DOM.Monad (runMemDOM)
-import Network.HTTP.Types (Status, status200, status401, status403, status404, statusCode)
+import Network.HTTP.Types (Status, http11, status200, status401, status403, status404, statusCode)
 import Network.Wai (Request (..), defaultRequest)
 import Network.Wai.Test (SRequest (..), SResponse (..), runSession, setPath, srequest)
 import Protolude
+import Servant.Client.Core qualified as Servant
 import System.Timeout (timeout)
 import Text.Printf (printf)
 import Wiki.Api.Links (attachmentUrl, spaceIconUrl)
 import Wiki.App.Backend (WikiError (..), shutOut)
-import Wiki.App.Backend.Http (Transport (..))
+import Wiki.App.Backend.Http (Transport (..), requestHeaderList, requestUrl)
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedPage)
 import Wiki.App.Backend.Http.Preload (encodePreload, preloadId)
-import Wiki.App.Backend.Http.Request (Body (..))
-import Wiki.App.Backend.Http.Request qualified as R
 import Wiki.App.Head (Site (..))
 import Wiki.App.Route (Route (..), route, routeOfHref)
 import Wiki.App.Static (Served (..), renderServed, withHead)
@@ -95,7 +94,7 @@ renderPage logger env who mount template request = do
   let Transport answering = inProcess env who
       recorded = Transport $ \r -> do
         answer <- answering r
-        atomicModifyIORef' answered (\as -> ((r.url, (\a -> a.status) <$> answer) : as, ()))
+        atomicModifyIORef' answered (\as -> ((requestUrl r, (\a -> statusCode a.responseStatusCode) <$> answer) : as, ()))
         pure answer
   outcome <- timeout renderTimeout (tryNotAsync (renderServed recorded mount at))
   site <- siteFor env mount request
@@ -220,16 +219,21 @@ withPreload cache page = case T.breakOnEnd "</body>" page of
 -- the browser's are relative to the page's.
 inProcess :: Env -> Who -> Transport
 inProcess env who = Transport $ \r -> do
-  let headers = r.headers <> [("Content-Type", mediaType) | Body mediaType _ <- [r.body]]
-      request =
+  let request =
         setPath
           defaultRequest
-            { requestMethod = encodeUtf8 r.method
-            , requestHeaders = [(CI.mk (encodeUtf8 k), encodeUtf8 v) | (k, v) <- headers]
+            { requestMethod = r.requestMethod
+            , requestHeaders = requestHeaderList r
             }
-          (encodeUtf8 ("/" <> r.url))
-      body = case r.body of
-        NoBody -> ""
-        Body _ bytes -> BSL.fromStrict bytes
+          (encodeUtf8 ("/" <> requestUrl r))
+      body = maybe "" (BSL.fromStrict . fst) r.requestBody
   response <- runSession (srequest (SRequest request body)) (apiApplication env (callerAs who))
-  pure (Right R.Response {status = statusCode (simpleStatus response), body = BSL.toStrict (simpleBody response)})
+  pure
+    ( Right
+        Servant.Response
+          { Servant.responseStatusCode = simpleStatus response
+          , Servant.responseHeaders = Seq.fromList (simpleHeaders response)
+          , Servant.responseHttpVersion = http11
+          , Servant.responseBody = simpleBody response
+          }
+    )

@@ -139,6 +139,7 @@ library
         qrcode-core >= 0.9.11 && < 0.10,
         ram,
         row-types,
+        servant-client-core,
         servant-multipart,
         servant-server,
         smtp-mail >= 0.5.0.1,

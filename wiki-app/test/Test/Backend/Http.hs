@@ -1,8 +1,9 @@
 {-# LANGUAGE MultiWayIf #-}
 
 -- | The backend over HTTP, natively, over a transport the test answers: the
--- requests it makes (addresses, methods, headers, bodies), how it reads
--- answers and refusals, and what it keeps of what it read. That the
+-- requests its client, derived from the API's type, makes (addresses,
+-- methods, headers, bodies), how it reads answers and refusals, and what
+-- it keeps of what it read. That the
 -- server reads those requests as meant is @wiki-server-test@'s
 -- (@Test.Server.Http@ runs the whole backend contract over them), and that
 -- the browser's @fetch@ carries them is the browser suite's.
@@ -10,6 +11,7 @@ module Test.Backend.Http (spec) where
 
 import Data.Aeson (ToJSON, encode)
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as BSL
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -17,46 +19,53 @@ import Data.Text qualified as T
 import Halogen.Net.Fetch qualified as Fetch
 import Halogen.Subscription qualified as HS
 import Protolude
+import Servant.Client.Core (Response)
 import Test.Hspec
 import Wiki.Api.Account (PasswordChange (..), SignInMethods (..))
+import Wiki.Api.Error qualified as ApiError
+import Wiki.Api.Vault (StoredVault (..))
 import Wiki.Api.Events (PageEvent (..))
 import Wiki.Api.Import (ImportChoices (..), ImportPlan (..), ImportSummary (..), importEverything)
+import Wiki.Api.Links (searchUrl)
 import Wiki.Api.Types (SessionInfo (..))
 import Wiki.App.Account (MonadAccount (..), SignInError (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Http
 import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), afterEvent, cachedPage, emptyCache, withDraft, withPageAt, withPages, withSearch, withSession, withSpaceAt, withSpaces)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
-import Wiki.App.Backend.Http.Request
+import Wiki.App.Backend.Http.Client (fromSessionInfo)
+import Wiki.App.Assistant.Sync (Fetched (..), MonadVault (..))
 import Wiki.App.Backend.Mem.State (MemState (..))
 import Wiki.App.Demo (demoNow, demoState)
+import Wiki.Core.Assistant.Vault (Sealed (..), Vault (..), VaultTag (..))
 import Wiki.Core.Draft (Draft (..))
 import Wiki.Core.Id (AttachmentId (..), PageId (..), SpaceId (..), UserId (..))
 import Wiki.Core.Page (Page (..), summaryOf)
 import Wiki.Core.Path (parsePath, pathOf)
-import Wiki.Core.Search (SearchHit, searchQuery)
+import Wiki.Core.Search (SearchHit, SearchQuery (..), searchQuery)
 import Wiki.Core.Slug (Slug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Core.User (Login (..), Password (..), Standing (..), User (..))
+import Test.Scripted (jsonResponse, responseWith, bodyOf, formOf, headersOf, methodOf)
 
 -- | A transport that answers as the function says, and keeps every request
 -- it was given, the latest first.
-scripted :: (Request -> Either Text Response) -> IO (Transport, IORef [Request])
+scripted :: (HttpRequest -> Either Text Response) -> IO (Transport, IORef [HttpRequest])
 scripted respond = do
   asked <- newIORef []
   pure (Transport (\r -> atomicModifyIORef' asked (\rs -> (r : rs, ())) $> respond r), asked)
 
 -- | A backend over a scripted transport, and the requests it made.
-backend :: (Request -> Either Text Response) -> IO (HttpEnv, IORef [Request])
+backend :: (HttpRequest -> Either Text Response) -> IO (HttpEnv, IORef [HttpRequest])
 backend respond = do
   (transport, asked) <- scripted respond
   (,asked) <$> newHttpEnv transport
 
 ok :: (ToJSON a) => a -> Either Text Response
-ok a = Right (Response 200 (toS (encode a)))
+ok a = Right (jsonResponse 200 (encode a))
 
-status :: Int -> ByteString -> Either Text Response
-status n body = Right (Response n body)
+status :: Int -> BSL.ByteString -> Either Text Response
+status n body = Right (jsonResponse n body)
 
 demo :: MemState
 demo = demoState demoNow
@@ -75,6 +84,10 @@ demoPage s p =
 
 slugs :: Text -> [Slug]
 slugs = either (panic . show) identity . parsePath
+
+-- | A vault as the server stores it; its contents do not matter here.
+demoVault :: Vault
+demoVault = Vault {format = 1, salt = "salt", sealed = Sealed {nonce = "nonce", ciphertext = "ciphertext"}, wrapped = mempty}
 
 spec :: Spec
 spec = describe "Wiki.App.Backend.Http" $ do
@@ -102,9 +115,11 @@ browserFetch = describe "the browser's transport" $ do
 
   it "gives an upload longer than any other request" $ do
     let hello = demoPage "blog" "hello-world"
-    timeLimit (multipart "u" "file" "f" "text/plain" "bytes") `shouldBe` uploadTimeout
-    timeLimit (withJson "PUT" "u" ()) `shouldBe` requestTimeout
-    timeLimit (ifMatch hello.updatedAt (Request {method = "GET", url = "u", headers = [], body = NoBody})) `shouldBe` requestTimeout
+    (env, asked) <- backend (const (status 500 ""))
+    _ <- runHttpWiki env (uploadAttachment hello.id "f" "text/plain" "bytes")
+    _ <- runHttpWiki env (savePage hello.id hello.updatedAt "t" "b")
+    _ <- runHttpWiki env (getSpace (slugs "docs"))
+    map timeLimit <$> readIORef asked `shouldReturn` [requestTimeout, requestTimeout, uploadTimeout]
 
   it "has no network natively, which the backend takes for the wiki out of reach" $ do
     env <- newHttpEnv browserTransport
@@ -119,67 +134,86 @@ requests = describe "its requests" $ do
     _ <- runHttpWiki env (getPage hello.space (slugs "a/b"))
     _ <- runHttpWiki env (searchPages (searchQuery "two words"))
     rs <- reverse <$> readIORef asked
-    map (\r -> (r.method, r.url, r.body)) rs
-      `shouldBe` [ ("GET", "api/v1/spaces", NoBody)
-                 , ("GET", "api/v1/spaces/" <> hello.space.text <> "/pages/at/a/b", NoBody)
-                 , ("GET", "api/v1/search?q=two%20words&limit=50", NoBody)
+    map (\r -> (methodOf r, requestUrl r, bodyOf r)) rs
+      `shouldBe` [ ("GET", "api/v1/spaces", Nothing)
+                 , ("GET", "api/v1/spaces/" <> hello.space.text <> "/pages/at/a/b", Nothing)
+                 , ("GET", "api/v1/search?q=two%20words&limit=50", Nothing)
                  ]
+
+  it "writes a search's query as the server reads it back" $ do
+    (env, asked) <- backend (const (ok ([] :: [SearchHit])))
+    let q = (searchQuery "x y") {space = Just hello.space, includeSubspaces = False, templates = True}
+    _ <- runHttpWiki env (searchPages q)
+    map requestUrl <$> readIORef asked `shouldReturn` ["api/v1/search?q=x%20y&space=" <> hello.space.text <> "&only&limit=50&templates"]
+    map requestUrl <$> readIORef asked `shouldReturn` [searchUrl q]
 
   it "saves against the version it started from, in If-Match, with the edit as JSON" $ do
     (env, asked) <- backend (const (ok hello))
     _ <- runHttpWiki env (savePage hello.id hello.updatedAt "New title" "New body")
     [r] <- readIORef asked
-    r.method `shouldBe` "PUT"
-    r.url `shouldBe` "api/v1/pages/" <> hello.id.text
-    r.headers `shouldBe` [("If-Match", "\"2026-09-01T12:00:00Z\""), ("X-Wiki-Request", "1")]
-    r.body `shouldBe` Body "application/json" "{\"body\":\"New body\",\"title\":\"New title\"}"
+    methodOf r `shouldBe` "PUT"
+    requestUrl r `shouldBe` "api/v1/pages/" <> hello.id.text
+    headersOf r
+      `shouldBe` [ ("If-Match", "\"2026-09-01T12:00:00Z\"")
+                 , ("X-Wiki-Request", "1")
+                 , ("Accept", "application/json;charset=utf-8,application/json")
+                 , ("Content-Type", "application/json;charset=utf-8")
+                 ]
+    bodyOf r `shouldBe` Just ("application/json;charset=utf-8", "{\"body\":\"New body\",\"title\":\"New title\"}")
 
   it "keeps a draft with the version it started from in the body" $ do
     (env, asked) <- backend (const (ok Draft {page = hello.id, author = UserId "admin", title = "t", body = "b", base = hello.updatedAt, savedAt = hello.updatedAt}))
     _ <- runHttpWiki env (saveDraft hello.id hello.updatedAt "t" "b")
     [r] <- readIORef asked
-    (r.method, r.url) `shouldBe` ("PUT", "api/v1/pages/" <> hello.id.text <> "/draft")
-    r.body `shouldBe` Body "application/json" "{\"base\":\"2026-09-01T12:00:00Z\",\"body\":\"b\",\"title\":\"t\"}"
+    (methodOf r, requestUrl r) `shouldBe` ("PUT", "api/v1/pages/" <> hello.id.text <> "/draft")
+    snd <$> bodyOf r `shouldBe` Just "{\"base\":\"2026-09-01T12:00:00Z\",\"body\":\"b\",\"title\":\"t\"}"
 
   it "deletes with DELETE, and takes a 204 for done" $ do
     (env, asked) <- backend (const (status 204 ""))
     runHttpWiki env (deleteAttachment (AttachmentId "a 1")) `shouldReturn` Right ()
-    map (\r -> (r.method, r.url)) <$> readIORef asked `shouldReturn` [("DELETE", "api/v1/attachments/a%201")]
+    map (\r -> (methodOf r, requestUrl r)) <$> readIORef asked `shouldReturn` [("DELETE", "api/v1/attachments/a%201")]
 
   it "uploads a file as a multipart form, its name quoted" $ do
     (env, asked) <- backend (const (status 500 ""))
     _ <- runHttpWiki env (uploadAttachment hello.id "say \"hi\" ü.txt" "text/plain" "the bytes")
     [r] <- readIORef asked
-    (r.method, r.url) `shouldBe` ("POST", "api/v1/pages/" <> hello.id.text <> "/attachments")
-    case r.body of
-      Body mediaType form -> do
-        mediaType `shouldBe` "multipart/form-data; boundary=wiki-form-boundary-0"
+    (methodOf r, requestUrl r) `shouldBe` ("POST", "api/v1/pages/" <> hello.id.text <> "/attachments")
+    fst <$> bodyOf r `shouldSatisfy` maybe False ("multipart/form-data;boundary=" `T.isPrefixOf`)
+    case formOf r of
+      Just (boundary, form) ->
         form
           `shouldBe` mconcat
-            [ "--wiki-form-boundary-0\r\n"
+            [ "--" <> boundary <> "\r\n"
             , "Content-Disposition: form-data; name=\"file\"; filename=\"say \\\"hi\\\" "
             , encodeUtf8 "ü"
-            , ".txt\"\r\nContent-Type: text/plain\r\n\r\nthe bytes\r\n--wiki-form-boundary-0--\r\n"
+            , ".txt\"\r\nContent-Type: text/plain\r\n\r\nthe bytes\r\n--" <> boundary <> "--"
             ]
-      NoBody -> expectationFailure "no form"
+      Nothing -> expectationFailure "no form"
 
-  it "chooses a boundary the file does not hold" $ do
-    let r = multipart "u" "file" "f" "text/plain" "--wiki-form-boundary-0 and --wiki-form-boundary-1"
-    case r.body of
-      Body mediaType form -> do
-        mediaType `shouldBe` "multipart/form-data; boundary=wiki-form-boundary-2"
-        BS.length form `shouldSatisfy` (> 0)
-      NoBody -> expectationFailure "no form"
+  it "writes each form with a boundary of its own, too long for a file to hold by chance" $ do
+    (env, asked) <- backend (const (status 500 ""))
+    _ <- runHttpWiki env (uploadAttachment hello.id "a.txt" "text/plain" "a")
+    _ <- runHttpWiki env (uploadAttachment hello.id "b.txt" "text/plain" "b")
+    boundaries <- mapMaybe (fmap fst . formOf) <$> readIORef asked
+    length boundaries `shouldBe` 2
+    ordNub boundaries `shouldBe` boundaries
+    map BS.length boundaries `shouldBe` [55, 55]
 
   it "asks for an import's preview with the archive as the form's file" $ do
     (env, asked) <- backend (const (ok (ImportPlan [])))
     runHttpWiki env (previewImport "PK zipped") `shouldReturn` Right (ImportPlan [])
     [r] <- readIORef asked
-    (r.method, r.url) `shouldBe` ("POST", "api/v1/import/preview")
-    r.body
-      `shouldBe` Body
-        "multipart/form-data; boundary=wiki-form-boundary-0"
-        "--wiki-form-boundary-0\r\nContent-Disposition: form-data; name=\"archive\"; filename=\"wiki.zip\"\r\nContent-Type: application/zip\r\n\r\nPK zipped\r\n--wiki-form-boundary-0--\r\n"
+    (methodOf r, requestUrl r) `shouldBe` ("POST", "api/v1/import/preview")
+    case formOf r of
+      Just (boundary, form) ->
+        form
+          `shouldBe` ( "--"
+                         <> boundary
+                         <> "\r\nContent-Disposition: form-data; name=\"archive\"; filename=\"wiki.zip\"\r\nContent-Type: application/zip\r\n\r\nPK zipped\r\n--"
+                         <> boundary
+                         <> "--"
+                     )
+      Nothing -> expectationFailure "no form"
 
   it "applies an import with the archive again and the choices as a field that is not a file" $ do
     let summary = ImportSummary {spacesCreated = 1, spacesMerged = 0, pagesCreated = 2, pagesReplaced = 0, pagesKept = 0, pagesSkipped = 0, attachments = 0}
@@ -187,28 +221,22 @@ requests = describe "its requests" $ do
     (env, asked) <- backend (const (ok summary))
     runHttpWiki env (applyImport "PK zipped" choices) `shouldReturn` Right summary
     [r] <- readIORef asked
-    (r.method, r.url) `shouldBe` ("POST", "api/v1/import/apply")
-    r.body
-      `shouldBe` Body
-        "multipart/form-data; boundary=wiki-form-boundary-0"
-        ( mconcat
-            [ "--wiki-form-boundary-0\r\nContent-Disposition: form-data; name=\"archive\"; filename=\"wiki.zip\"\r\nContent-Type: application/zip\r\n\r\nPK zipped\r\n"
-            , "--wiki-form-boundary-0\r\nContent-Disposition: form-data; name=\"choices\"\r\n\r\n"
+    (methodOf r, requestUrl r) `shouldBe` ("POST", "api/v1/import/apply")
+    case formOf r of
+      Just (boundary, form) ->
+        form
+          `shouldBe` mconcat
+            [ "--" <> boundary <> "\r\nContent-Disposition: form-data; name=\"choices\"\r\nContent-Type: text/plain\r\n\r\n"
             , toS (encode choices)
-            , "\r\n--wiki-form-boundary-0--\r\n"
+            , "\r\n--" <> boundary <> "\r\nContent-Disposition: form-data; name=\"archive\"; filename=\"wiki.zip\"\r\nContent-Type: application/zip\r\n\r\nPK zipped\r\n"
+            , "--" <> boundary <> "--"
             ]
-        )
-
-  it "chooses a boundary that no part of a form holds" $ do
-    let r = multipartForm "u" [FilePart {part = "a", name = "f", mediaType = "text/plain", bytes = "--wiki-form-boundary-0"}, TextPart {part = "b", value = "--wiki-form-boundary-1"}]
-    case r.body of
-      Body mediaType _ -> mediaType `shouldBe` "multipart/form-data; boundary=wiki-form-boundary-2"
-      NoBody -> expectationFailure "no form"
+      Nothing -> expectationFailure "no form"
 
   it "forgets what it read once an import has been applied" $ do
     let summary = ImportSummary {spacesCreated = 0, spacesMerged = 0, pagesCreated = 0, pagesReplaced = 0, pagesKept = 0, pagesSkipped = 0, attachments = 0}
     (env, _) <- backend $ \r ->
-      if r.url == "api/v1/spaces" then ok ([] :: [Space]) else ok summary
+      if requestUrl r == "api/v1/spaces" then ok ([] :: [Space]) else ok summary
     _ <- runHttpWiki env listSpaces
     ((\c -> c.spaces) <$> cacheOf env) `shouldReturn` Just []
     _ <- runHttpWiki env (applyImport "PK" importEverything)
@@ -223,27 +251,36 @@ requests = describe "its requests" $ do
 
 answers :: Spec
 answers = describe "its answers" $ do
-  let read' :: Either Text Response -> Either WikiError Space
-      read' = answer
+  let read' :: Either Text Response -> IO (Either WikiError Space)
+      read' answered = do
+        (env, _) <- backend (const answered)
+        runHttpWiki env (getSpace (slugs "docs"))
   it "reads a refusal by the error its body names" $ do
-    read' (status 404 "{\"error\":\"NotFound\"}") `shouldBe` Left NotFound
-    read' (status 403 "{\"error\":\"Forbidden\"}") `shouldBe` Left Forbidden
-    read' (status 409 "{\"error\":\"Conflict\",\"message\":\"Saved since.\"}") `shouldBe` Left (Conflict "Saved since.")
-    read' (status 400 "{\"error\":\"Invalid\",\"message\":\"A title, please.\"}") `shouldBe` Left (Invalid "A title, please.")
+    read' (status 404 "{\"error\":\"NotFound\"}") `shouldReturn` Left NotFound
+    read' (status 403 "{\"error\":\"Forbidden\"}") `shouldReturn` Left Forbidden
+    read' (status 409 "{\"error\":\"Conflict\",\"message\":\"Saved since.\"}") `shouldReturn` Left (Conflict "Saved since.")
+    read' (status 400 "{\"error\":\"Invalid\",\"message\":\"A title, please.\"}") `shouldReturn` Left (Invalid "A title, please.")
 
   it "reads a refusal without such a body by its status" $ do
-    read' (status 404 "") `shouldBe` Left NotFound
-    read' (status 401 "") `shouldBe` Left Forbidden
-    read' (status 413 "Too large") `shouldBe` Left (Invalid "Too large")
-    read' (status 405 "<html>a proxy's page</html>") `shouldBe` Left (Invalid "The request was refused (405).")
+    read' (status 404 "") `shouldReturn` Left NotFound
+    read' (status 401 "") `shouldReturn` Left Forbidden
+    read' (status 413 "Too large") `shouldReturn` Left (Invalid "Too large")
+    read' (status 405 "<html>a proxy's page</html>") `shouldReturn` Left (Invalid "The request was refused (405).")
 
   it "takes a failing server, a broken answer and no answer for out of reach" $ do
-    read' (status 500 "") `shouldBe` Left (Unreachable "the server failed, with status 500")
-    read' (status 502 "<html>Bad gateway</html>") `shouldBe` Left (Unreachable "the server failed, with status 502")
-    read' (Left "the network or the server is down") `shouldBe` Left (Unreachable "the network or the server is down")
-    read' (status 200 "<html>a captive portal</html>") `shouldSatisfy` \case
-      Left (Unreachable _) -> True
-      _ -> False
+    read' (status 500 "") `shouldReturn` Left (Unreachable "the server failed, with status 500")
+    read' (status 502 "<html>Bad gateway</html>") `shouldReturn` Left (Unreachable "the server failed, with status 502")
+    read' (Left "the network or the server is down") `shouldReturn` Left (Unreachable "the network or the server is down")
+    let outOfReach = \case
+          Left (Unreachable _) -> True
+          _ -> False
+    -- A captive portal's page, which is no JSON.
+    read' (Right (responseWith 200 [("Content-Type", "text/html")] "<html>a captive portal</html>")) >>= (`shouldSatisfy` outOfReach)
+    -- JSON, but not the space the API declares.
+    read' (status 200 "<html>a captive portal</html>") >>= (`shouldSatisfy` outOfReach)
+    read' (status 200 "{\"spaces\": 3}") >>= (`shouldSatisfy` outOfReach)
+    -- A success, but not the one the API declares for a read.
+    read' (status 201 "{}") `shouldReturn` Left (Unreachable "its answer was not one the wiki can read: status 201")
 
   it "throws from a read without an Either, for attempt to catch" $ do
     (env, _) <- backend (const (Left "down"))
@@ -256,16 +293,32 @@ answers = describe "its answers" $ do
     (env, _) <- backend (const (status 403 "{\"error\":\"Forbidden\"}"))
     runHttpWiki env (getSpace (slugs "team")) `shouldReturn` Left Forbidden
 
+  it "fetches the vault against the version it has, and takes a 304 for that version and a 404 for none" $ do
+    let stored = StoredVault {tag = VaultTag "v2", vault = demoVault}
+        vaultAnswer = \case
+          Just (VaultTag "v2") -> status 304 ""
+          Just _ -> ok stored
+          Nothing -> status 404 (encode ApiError.NotFound)
+    (env, asked) <- backend $ \r -> vaultAnswer (VaultTag <$> lookup "If-None-Match" (headersOf r))
+    runHttpWiki env (fetchVault (Just (VaultTag "v2"))) `shouldReturn` Right Unchanged
+    runHttpWiki env (fetchVault (Just (VaultTag "v1"))) `shouldReturn` Right (Fetched stored)
+    runHttpWiki env (fetchVault Nothing) `shouldReturn` Right NoVault
+    map (\r -> (methodOf r, requestUrl r, lookup "If-None-Match" (headersOf r))) . reverse <$> readIORef asked
+      `shouldReturn` [ ("GET", "api/v1/assistant/vault", Just "v2")
+                     , ("GET", "api/v1/assistant/vault", Just "v1")
+                     , ("GET", "api/v1/assistant/vault", Nothing)
+                     ]
+
 caching :: Spec
 caching = describe "what it keeps" $ do
   let hello = demoPage "blog" "hello-world"
       blogPages = [p | p <- Map.elems demo.pages, p.space == hello.space]
       answering r
-        | r.method /= "GET" = status 204 ""
-        | "/draft" `T.isSuffixOf` r.url = ok (Nothing :: Maybe Draft)
-        | "/pages" `T.isSuffixOf` r.url = ok (map summaryOf blogPages)
-        | "/pages/at/" `T.isInfixOf` r.url = ok hello
-        | "api/v1/search" `T.isPrefixOf` r.url = ok ([] :: [SearchHit])
+        | methodOf r /= "GET" = status 204 ""
+        | "/draft" `T.isSuffixOf` requestUrl r = ok (Nothing :: Maybe Draft)
+        | "/pages" `T.isSuffixOf` requestUrl r = ok (map summaryOf blogPages)
+        | "/pages/at/" `T.isInfixOf` requestUrl r = ok hello
+        | "api/v1/search" `T.isPrefixOf` requestUrl r = ok ([] :: [SearchHit])
         | otherwise = ok (Map.elems demo.spaces)
   it "answers at once only what it has read, and asks nothing meanwhile" $ do
     (env, asked) <- backend answering
@@ -343,7 +396,7 @@ caching = describe "what it keeps" $ do
 
   it "keeps a refusal the wiki decided, and asks again after one it did not" $ do
     (env, asked) <- backend $ \r ->
-      if "/team" `T.isSuffixOf` r.url then status 403 "{\"error\":\"Forbidden\"}" else status 503 ""
+      if "/team" `T.isSuffixOf` requestUrl r then status 403 "{\"error\":\"Forbidden\"}" else status 503 ""
     runHttpWiki env (getSpace (slugs "team")) `shouldReturn` Left Forbidden
     runHttpWiki env (atOnce (getSpace (slugs "team"))) `shouldReturn` Just (Left Forbidden)
     runHttpWiki env (getSpace (slugs "docs")) `shouldReturn` Left (Unreachable "the server failed, with status 503")
@@ -351,7 +404,7 @@ caching = describe "what it keeps" $ do
     length <$> readIORef asked `shouldReturn` 2
 
   it "keeps a search's hits by its query, until a write" $ do
-    (env, asked) <- backend (\r -> if r.method == "GET" then ok ([] :: [SearchHit]) else status 204 "")
+    (env, asked) <- backend (\r -> if methodOf r == "GET" then ok ([] :: [SearchHit]) else status 204 "")
     runHttpWiki env (searchPages (searchQuery "tour")) `shouldReturn` []
     runHttpWiki env (atOnce (searchPages (searchQuery "tour"))) `shouldReturn` Just []
     runHttpWiki env (atOnce (searchPages (searchQuery "other"))) `shouldReturn` Nothing
@@ -399,18 +452,18 @@ accounts = describe "signing in and out" $ do
     _ <- runHttpWiki env (deletePage (PageId "x"))
     _ <- runHttpWiki env (attempt listSpaces)
     rs <- readIORef asked
-    map (\r -> lookup "X-Wiki-Request" r.headers) rs `shouldBe` [Just "1", Just "1"]
+    map (\r -> lookup "X-Wiki-Request" (headersOf r)) rs `shouldBe` [Just "1", Just "1"]
 
   it "signs in with the credentials as JSON, and starts over with the session it answers" $ do
     (env, asked) <- backend $ \r ->
       if
-        | r.method == "POST" -> ok signedIn
+        | methodOf r == "POST" -> ok signedIn
         | otherwise -> ok (Map.elems demo.spaces)
     _ <- runHttpWiki env listSpaces
     s <- runHttpWiki env (signIn "admin" (Password "correct horse"))
     (\x -> (x.user, x.standing)) <$> s `shouldBe` Right (signedIn.user, SignedIn)
     [r, _] <- readIORef asked
-    (r.method, r.url, r.body) `shouldBe` ("POST", "api/v1/session", Body "application/json" "{\"login\":\"admin\",\"password\":\"correct horse\"}")
+    (methodOf r, requestUrl r, bodyOf r) `shouldBe` ("POST", "api/v1/session", Just ("application/json;charset=utf-8", "{\"login\":\"admin\",\"password\":\"correct horse\"}"))
     -- What was read as nobody is gone; who is asking is known.
     runHttpWiki env (atOnce listSpaces) `shouldReturn` Nothing
     runHttpWiki env (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
@@ -425,12 +478,12 @@ accounts = describe "signing in and out" $ do
   it "changes the password with PUT, keeps what it has read, and says why it could not" $ do
     (env, asked) <- backend $ \r ->
       if
-        | r.method == "PUT" -> ok SignInMethods {password = True, identities = []}
+        | methodOf r == "PUT" -> ok SignInMethods {password = True, identities = []}
         | otherwise -> ok (Map.elems demo.spaces)
     _ <- runHttpWiki env listSpaces
     runHttpWiki env (changePassword PasswordChange {current = Just (Password "old one"), new = Password "a new one"}) `shouldReturn` Right SignInMethods {password = True, identities = []}
     (r : _) <- readIORef asked
-    (r.method, r.url, r.body) `shouldBe` ("PUT", "api/v1/account/password", Body "application/json" "{\"current\":\"old one\",\"new\":\"a new one\"}")
+    (methodOf r, requestUrl r, bodyOf r) `shouldBe` ("PUT", "api/v1/account/password", Just ("application/json;charset=utf-8", "{\"current\":\"old one\",\"new\":\"a new one\"}"))
     -- Who is asking is the same: what was read stays.
     isJust <$> runHttpWiki env (atOnce listSpaces) `shouldReturn` True
     let failing n body = backend (const (status n body)) >>= \(e, _) -> runHttpWiki e (changePassword PasswordChange {current = Just (Password "wrong"), new = Password "a new one"})
@@ -442,7 +495,7 @@ accounts = describe "signing in and out" $ do
     changed <- newIORef False
     (transport, asked) <- scripted $ \r ->
       if
-        | r.url == "api/v1/session" -> ok signedIn
+        | requestUrl r == "api/v1/session" -> ok signedIn
         | otherwise -> status 401 "{\"error\":\"Unauthenticated\"}"
     env' <- newHttpEnvWith transport (withSession (fromSessionInfo signedIn) emptyCache)
     changes <- runHttpWiki env' sessionChanges
@@ -450,19 +503,19 @@ accounts = describe "signing in and out" $ do
     runHttpWiki env' (changePassword PasswordChange {current = Just (Password "wrong"), new = Password "a new one"}) `shouldReturn` Left WrongCredentials
     readIORef changed `shouldReturn` False
     runHttpWiki env' (atOnce session) `shouldReturn` Just (fromSessionInfo signedIn)
-    map (\r -> r.url) <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/account/password"]
+    map requestUrl <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/account/password"]
 
   it "signs out with DELETE, and starts over as nobody" $ do
     (env, asked) <- backend (const (ok nobody))
     runHttpWiki env signOut `shouldReturn` Right (fromSessionInfo nobody)
-    map (\r -> (r.method, r.url)) <$> readIORef asked `shouldReturn` [("DELETE", "api/v1/session")]
+    map (\r -> (methodOf r, requestUrl r)) <$> readIORef asked `shouldReturn` [("DELETE", "api/v1/session")]
     runHttpWiki env (atOnce session) `shouldReturn` Just anonymous
 
   it "asks who is asking after a refusal while someone is signed in, and says when that has changed" $ do
     ended <- newIORef False
     (transport, asked) <- scripted $ \r ->
       if
-        | r.url == "api/v1/session" -> ok nobody
+        | requestUrl r == "api/v1/session" -> ok nobody
         | otherwise -> status 403 "{\"error\":\"Forbidden\"}"
     env' <- newHttpEnvWith transport (withSession (fromSessionInfo signedIn) emptyCache)
     changes <- runHttpWiki env' sessionChanges
@@ -470,7 +523,7 @@ accounts = describe "signing in and out" $ do
     runHttpWiki env' (getSpace (slugs "team")) `shouldReturn` Left Forbidden
     readIORef ended `shouldReturn` True
     runHttpWiki env' (atOnce session) `shouldReturn` Just anonymous
-    map (\r -> r.url) <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/spaces/at/team"]
+    map requestUrl <$> readIORef asked `shouldReturn` ["api/v1/session", "api/v1/spaces/at/team"]
     -- Nobody is signed in now: another refusal asks nothing more.
     _ <- runHttpWiki env' (getSpace (slugs "docs"))
     length <$> readIORef asked `shouldReturn` 3

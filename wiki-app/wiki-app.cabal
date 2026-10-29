@@ -74,8 +74,9 @@ library
       Wiki.App.Backend.Comments
       Wiki.App.Backend.Http
       Wiki.App.Backend.Http.Cache
+      Wiki.App.Backend.Http.Client
       Wiki.App.Backend.Http.Preload
-      Wiki.App.Backend.Http.Request
+      Wiki.App.Backend.Http.Transport
       Wiki.App.Backend.Mem
       Wiki.App.Backend.Mem.Archive
       Wiki.App.Backend.Mem.Persist
@@ -150,11 +151,17 @@ library
       base,
       base64-bytestring,
       bytestring,
+      case-insensitive,
       containers,
-      http-api-data,
+      http-media,
+      http-types,
       primitive,
       protolude,
       row-types,
+      servant,
+      servant-client-core >= 0.20.3 && < 0.21,
+      servant-multipart-api,
+      servant-multipart-client >= 0.13 && < 0.14,
       text,
       time,
       transformers,
@@ -282,6 +289,7 @@ test-suite wiki-app-test
         Test.Policy
         Test.Readme
         Test.Route
+        Test.Scripted
         Test.Server
         Test.Shell
     build-depends:
@@ -291,10 +299,14 @@ test-suite wiki-app-test
         base,
         base64-bytestring,
         bytestring,
+        case-insensitive,
         containers,
         directory,
         hspec >= 2,
+        http-media,
+        http-types,
         protolude,
+        servant-client-core,
         text,
         time,
         unliftio-core,

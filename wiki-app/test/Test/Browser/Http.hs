@@ -542,7 +542,13 @@ requests = describe "its requests, through fetch" $ do
     overHttp env (savePage hello.id hello.updatedAt "Title" "Body") `shouldReturn` Right hello
     [r] <- asked
     (r.method, r.url) `shouldBe` ("PUT", "api/v1/pages/" <> hello.id.text)
-    r.headers `shouldBe` Map.fromList [("If-Match", "\"2026-09-01T12:00:00Z\""), ("Content-Type", "application/json"), ("X-Wiki-Request", "1")]
+    r.headers
+      `shouldBe` Map.fromList
+        [ ("If-Match", "\"2026-09-01T12:00:00Z\"")
+        , ("Accept", "application/json;charset=utf-8,application/json")
+        , ("Content-Type", "application/json;charset=utf-8")
+        , ("X-Wiki-Request", "1")
+        ]
     r.body `shouldBe` "{\"body\":\"Body\",\"title\":\"Title\"}"
     serverStops
 
@@ -554,7 +560,7 @@ requests = describe "its requests, through fetch" $ do
     overHttp env (uploadAttachment page "notes.txt" "text/plain" "hello") `shouldReturn` Right made
     [r] <- asked
     (r.method, r.url) `shouldBe` ("POST", "api/v1/pages/page%201/attachments")
-    fromMaybe "" (Map.lookup "Content-Type" r.headers) `shouldSatisfy` T.isPrefixOf "multipart/form-data; boundary="
+    fromMaybe "" (Map.lookup "Content-Type" r.headers) `shouldSatisfy` T.isPrefixOf "multipart/form-data;boundary="
     r.body `shouldSatisfy` T.isInfixOf "Content-Disposition: form-data; name=\"file\"; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n"
     serverStops
 

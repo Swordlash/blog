@@ -54,7 +54,7 @@ import Wiki.Api.Error (ApiError)
 import Wiki.Api.Error qualified as ApiError
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), cachedDraft, draftAnswer, emptyCache, kept)
-import Wiki.App.Backend.Http.Request (fromApiError, fromSessionInfo, sessionInfo)
+import Wiki.App.Backend.Http.Client (fromApiError, fromSessionInfo, sessionInfo)
 import Wiki.Core.Notification (WatchTarget (..))
 import Wiki.Core.Version (VersionsQuery (..), versionsPageSize)
 

@@ -220,7 +220,7 @@ page p = space "docs" <> " > .import-pages .import-page[data-path='" <> p <> "']
 formPart :: Text -> Asked -> Maybe ByteString
 formPart name r = do
   bytes <- rightToMaybe (Base64.decode (encodeUtf8 r.bytes))
-  boundary <- encodeUtf8 <$> (T.stripPrefix "multipart/form-data; boundary=" =<< Map.lookup "Content-Type" r.headers)
+  boundary <- encodeUtf8 <$> (T.stripPrefix "multipart/form-data;boundary=" =<< Map.lookup "Content-Type" r.headers)
   let (_, fromPart) = BS.breakSubstring ("Content-Disposition: form-data; name=\"" <> encodeUtf8 name <> "\"") bytes
       (_, afterHeaders) = BS.breakSubstring "\r\n\r\n" fromPart
       (content, _) = BS.breakSubstring ("\r\n--" <> boundary) (BS.drop 4 afterHeaders)

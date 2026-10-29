@@ -121,8 +121,7 @@ import Halogen.TH (hh)
 import Halogen.VDom.DOM.Monad.Class (MonadBrowserDOM)
 import Protolude hiding (State)
 import Web.Event.Event (Event)
-import Wiki.Api (ArchiveApi (..), WikiApi (..))
-import Wiki.Api.Links (links)
+import Wiki.Api.Links (archiveExportUrl)
 import Wiki.App.Account (Accounts (..))
 import Wiki.App.Assistant (MonadAssistant)
 import Wiki.App.Assistant.Sync (MonadVault)
@@ -704,7 +703,7 @@ component =
       [hh|
         <div class="demo-controls server-controls">
           <div class="actions">
-            <a class="button demo-export" href={{ links.archive.export }} download>Export the wiki</a>
+            <a class="button demo-export" href={{ archiveExportUrl }} download>Export the wiki</a>
           </div>
           {{ importer <$> st.migration }}
         </div>

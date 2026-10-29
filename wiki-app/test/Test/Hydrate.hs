@@ -31,7 +31,9 @@ import Halogen.Router.Duplex (decodeComponent)
 import Halogen.VDom.DOM.Monad (appendChild, runMemDOM)
 import Halogen.VDom.DOM.Monad.Native qualified as N
 import Protolude
+import Servant.Client.Core (Response)
 import Test.Hspec
+import Test.Scripted (jsonResponse, methodOf)
 import Wiki.Api (AdminApi (..), InvitationsApi (..), NotificationsApi (..), PagesApi (..), SpacesApi (..), WikiApi (..))
 import Wiki.Api.Account (InvitationInfo (..), InvitationToken (..))
 import Wiki.Api.Activity (firstPage)
@@ -45,9 +47,8 @@ import Wiki.Api.Version (VersionTime (..))
 import Wiki.App.Backend
 import Wiki.App.Backend.Admin (MonadAdmin (..))
 import Wiki.App.Backend.Comments (MonadComments (..))
-import Wiki.App.Backend.Http (Transport (..), cacheOf, newHttpEnvWith, newImmediateHttpEnv)
+import Wiki.App.Backend.Http (Transport (..), cacheOf, newHttpEnvWith, newImmediateHttpEnv, requestUrl)
 import Wiki.App.Backend.Http.Preload (decodePreload, encodePreload)
-import Wiki.App.Backend.Http.Request (Request (..), Response (..))
 import Wiki.App.Backend.Mem (newMemWiki, runMemWiki)
 import Wiki.App.Backend.Mem.State (MemState (..), savePageIn)
 import Wiki.App.Backend.Mem.State qualified as M
@@ -287,7 +288,7 @@ apiOver providers st = do
               : concat perSpace
           )
       )
-  pure . Transport $ \r -> case (r.method, Map.lookup r.url table, searchOf r.url) of
+  pure . Transport $ \r -> case (methodOf r, Map.lookup (requestUrl r) table, searchOf (requestUrl r)) of
     ("GET", Just answered, _) -> pure (Right answered)
     ("GET", _, Just q) -> Right . answerOf . Right @WikiError <$> runMemWiki wiki (searchPages q)
     _ -> pure (Right (refusal ApiError.NotFound))
@@ -311,10 +312,10 @@ apiOver providers st = do
         }
     answerOf :: (ToJSON a) => Either WikiError a -> Response
     answerOf = \case
-      Right a -> Response 200 (toS (encode a))
+      Right a -> jsonResponse 200 (encode a)
       Left e -> refusal (apiError e)
     refusal :: ApiError -> Response
-    refusal e = Response (errorStatus e) (toS (encode e))
+    refusal e = jsonResponse (errorStatus e) (encode e)
     apiError = \case
       NotFound -> ApiError.NotFound
       Forbidden -> ApiError.Forbidden

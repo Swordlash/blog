@@ -28,7 +28,7 @@ import Wiki.Api.Links (links, searchUrl)
 import Wiki.App.Backend (WikiError (..))
 import Wiki.App.Backend.Http.Cache (Cache (..), CachedDraft (..), draftAnswer)
 import Wiki.App.Backend.Http.Preload
-import Wiki.App.Backend.Http.Request (sessionInfo)
+import Wiki.App.Backend.Http.Client (sessionInfo)
 import Wiki.App.Route (Against (..), Route (..))
 import Wiki.Core.Path (parsePath)
 import Wiki.Core.Slug (Slug)
