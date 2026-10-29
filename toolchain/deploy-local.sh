@@ -5,6 +5,7 @@
 #
 #   sh toolchain/deploy-local.sh [--server | --static] [--http | --https] [--port N]
 #                                [--bind ADDRESS] [--admin-port N] [--dir DIR] [--name NAME]
+#                                [--postgres | --sqlite] [--db-port N] [--fresh]
 #                                [--no-build] [--no-firewall] [--enable-linger] [--force]
 #   sh toolchain/deploy-local.sh --stop [--name NAME]
 #   sh toolchain/deploy-local.sh --status [--name NAME]
@@ -18,9 +19,27 @@
 #      with --server also wiki-server, natively with this repository's packages
 #      at -O2 (cabal-native-opt.project, into dist-newstyle/native-opt).
 #      Any failure stops here, before the running service is touched.
+#      With --server the wiki's database is PostgreSQL by default: the
+#      postgres service of docker-compose.yml (postgres:17), run with Docker
+#      as the compose project <name>, its data in the named volume
+#      <name>_wiki-db, its port on 127.0.0.1 only (--db-port, default 5433).
+#      The first run makes it, with a password of its own in
+#      ~/.config/wiki-demo/<name>.postgres/db-password, and waits for its
+#      health check; a later run finds it, and starts it if it was stopped.
+#      A machine without Docker is refused, saying that --sqlite keeps the
+#      database a file in data/ (wiki.sqlite) instead, with no container. A
+#      data/ that holds a wiki.sqlite the deployment cannot use (one of a
+#      wiki-server from before the schema of PostgreSQL and SQLite alike, or a
+#      SQLite wiki when PostgreSQL is chosen) stops the deploy before anything
+#      changes, with a warning: its content moves by an export with the
+#      running server and an import into the new one. --fresh (or "yes" at
+#      the question, on a terminal) goes on, moving the file aside into
+#      data/replaced/<time>/, never deleting it.
 #   2. Install: stop the running service; with --server, back its database up
-#      (`wiki-server backup`, into data/backups/) with the new binary, and if
-#      that fails start the old service again and stop. Then empty the target
+#      (`wiki-server backup`, into data/backups/: VACUUM INTO on SQLite,
+#      pg_dump on PostgreSQL, the container's own) with the new binary, and if
+#      that fails start the old service again and stop. The new server then
+#      brings the database's schema up to its own as it starts. Then empty the target
 #      directory (default ~/<name>, so ~/wiki-demo) but for its data/, which
 #      is never deleted, and copy into it the built page (app/), a brotli'd
 #      copy of each compressible file beside it, and either a small static
@@ -77,6 +96,15 @@
 #                    (`tailscale ip -4`), or 127.0.0.1 with a warning when Tailscale
 #                    does not answer; any address but 127.0.0.1 implies --http, and
 #                    0.0.0.0 listens everywhere
+#   --postgres       --server: keep the wiki in PostgreSQL, in Docker (the first run's
+#                    default); remembered for the next run
+#   --sqlite         --server: keep the wiki in data/wiki.sqlite instead, with no Docker
+#                    and no second process; remembered for the next run
+#   --db-port N      --server on PostgreSQL: the database's port on 127.0.0.1 (default the
+#                    previous one, or 5433)
+#   --fresh          --server: go on over a data/wiki.sqlite this deployment cannot use,
+#                    moving it aside into data/replaced/<time>/ (export the wiki with the
+#                    running server first, and import it into the new one after)
 #   --admin-port N   --server: the port of the admin listener on 127.0.0.1, which serves
 #                    the administration to whoever is on this machine (default the
 #                    previous one, or 8081); from elsewhere, through
@@ -96,7 +124,7 @@
 #
 # The public address serves whoever signs in there, and anyone else as an
 # anonymous reader. The first administrator is made on this machine, with the
-# console: <dir>/bin/wiki-server users add --data <dir>/data LOGIN --admin
+# console, <dir>/bin/wiki (wiki-server with the deployment's database): <dir>/bin/wiki users add --data <dir>/data LOGIN --admin
 # (it asks for the password); they then sign in at the public address. The
 # --trust-network of earlier versions, which took everyone there for the
 # administrator, is gone, and a deployment that had it loses it on its next
@@ -126,7 +154,7 @@ usage() {
 }
 
 name=wiki-demo
-opt_port='' opt_bind='' opt_dir='' opt_mode='' opt_admin_port='' opt_https=''
+opt_port='' opt_bind='' opt_dir='' opt_mode='' opt_admin_port='' opt_https='' opt_db='' opt_db_port='' fresh=''
 action=deploy
 build=1 no_firewall='' enable_linger='' force=''
 need_value() { [ "$1" -ge 2 ] || die "$2 needs a value"; }
@@ -142,12 +170,17 @@ while [ $# -gt 0 ]; do
     --https) opt_https=yes ;;
     --admin-port) need_value $# "$1"; opt_admin_port=$2; shift ;;
     --admin-port=*) opt_admin_port=${1#*=} ;;
+    --postgres) opt_db=postgres ;;
+    --sqlite) opt_db=sqlite ;;
+    --db-port) need_value $# "$1"; opt_db_port=$2; shift ;;
+    --db-port=*) opt_db_port=${1#*=} ;;
+    --fresh) fresh=1 ;;
     --smtp-host | --smtp-host=* | --smtp-port | --smtp-port=* | --smtp-security | --smtp-security=* | \
       --smtp-user | --smtp-user=* | --smtp-from | --smtp-from=* | --smtp-password | --smtp-password=* | \
       --public-url | --public-url=* | --oidc | --oidc=* | --oidc-secret | --oidc-secret=* | --no-smtp | --no-oidc)
       die "${1%%=*} is gone: the wiki's public address, its mail server and its sign-in providers are set in the administration's Server section, on the admin listener (http://127.0.0.1:<admin-port>/admin/admin/), where they take effect at once, without a deploy" ;;
     --trust-network | --no-trust-network)
-      die "$1 is gone: the public address serves whoever signs in. Make an administrator with the console (<dir>/bin/wiki-server users add --data <dir>/data LOGIN --admin, which asks for the password) and sign in as them" ;;
+      die "$1 is gone: the public address serves whoever signs in. Make an administrator with the console (<dir>/bin/wiki users add --data <dir>/data LOGIN --admin, which asks for the password) and sign in as them" ;;
     --dir) need_value $# "$1"; opt_dir=$2; shift ;;
     --dir=*) opt_dir=${1#*=} ;;
     --name) need_value $# "$1"; name=$2; shift ;;
@@ -188,6 +221,10 @@ prev_trust=$(state_get trust)
 prev_https=$(state_get https)
 prev_https_host=$(state_get https_host)
 prev_serve_port=$(state_get serve_port)
+# Unset in a server deployment of a version before PostgreSQL: its data/
+# holds a wiki.sqlite of the earlier schema.
+prev_db=$(state_get db)
+prev_db_port=$(state_get db_port)
 # What a deployment of an earlier version passed the server as options, which
 # the administration's Server section now sets: told, and dropped, once.
 prev_smtp_host=$(state_get smtp_host)
@@ -285,6 +322,81 @@ linger_report() {
   esac
 }
 
+# The URL of the deployment's PostgreSQL database, without its password,
+# which is in the file pg_files writes.
+db_url() { printf 'postgres://wiki@127.0.0.1:%s/wiki\n' "$db_port"; }
+
+# The deployment's PostgreSQL files ('pg_dir'): a copy of
+# docker-compose.yml, whose postgres service runs the database; local.yml,
+# which publishes its port on this machine's loopback for the server; the
+# database's password, made once and kept; and pg_dump and pg_restore,
+# which run the container's own, of the server's major version (a pg_dump
+# older than the server refuses it), for the backups the server makes.
+pg_files() {
+  pd=$(pg_dir)
+  mkdir -p "$pd"
+  chmod 700 "$pd"
+  cp "$ROOT/docker-compose.yml" "$pd/docker-compose.yml"
+  cat >"$pd/local.yml" <<EOF
+# Written by toolchain/deploy-local.sh for the deployment $name: the
+# database's port, published on this machine's loopback for the wiki's
+# server, which runs as the systemd user service $name.service.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:\${WIKI_DB_PORT}:5432"
+EOF
+  if [ ! -s "$pd/db-password" ]; then
+    (umask 077 && od -An -tx1 -N24 /dev/urandom | tr -d ' \n' >"$pd/db-password")
+  fi
+  for program in pg_dump pg_restore; do
+    cat >"$pd/$program" <<EOF
+#!/bin/sh
+# $program of the PostgreSQL container of the deployment $name, written by
+# toolchain/deploy-local.sh: wiki-server runs it for a backup or a restore
+# with --dbname=<the URL it connects to>, which is this machine's address of
+# the container; inside the container the program connects to its own
+# socket instead, as the user wiki, to the database wiki.
+n=\$#
+named=
+while [ "\$n" -gt 0 ]; do
+  arg=\$1
+  shift
+  n=\$((n - 1))
+  case \$arg in
+    --dbname=*) named=1 ;;
+    *) set -- "\$@" "\$arg" ;;
+  esac
+done
+[ -z "\$named" ] || set -- --username=wiki --dbname=wiki "\$@"
+WIKI_DB_PASSWORD_FILE='$pd/db-password' WIKI_DB_PORT='$db_port' exec docker compose --project-name '$name' \\
+  --file '$pd/docker-compose.yml' --file '$pd/local.yml' exec -T postgres $program "\$@"
+EOF
+    chmod 700 "$pd/$program"
+  done
+}
+
+# The console of a deployment, <dir>/bin/wiki: wiki-server with the
+# deployment's database, for `users`, `backup`, `restore` and `oidc check`
+# with --data alone. The database is given in the environment, which
+# wiki-server reads when no option names one, and never on a command line.
+console_wrapper() {
+  printf '#!/bin/sh\n'
+  printf '# wiki-server with the database of the deployment %s, written by\n' "$name"
+  printf '# toolchain/deploy-local.sh. For example: %s/bin/wiki users list --data %s/data\n' "$dir" "$dir"
+  if [ "$db" = postgres ]; then
+    printf "WIKI_DATABASE_URL='%s'\n" "$(db_url)"
+    printf "WIKI_DATABASE_PASSWORD_FILE='%s'\n" "$(pg_dir)/db-password"
+    printf "WIKI_PG_DUMP='%s'\n" "$(pg_dir)/pg_dump"
+    printf "WIKI_PG_RESTORE='%s'\n" "$(pg_dir)/pg_restore"
+    printf 'export WIKI_DATABASE_URL WIKI_DATABASE_PASSWORD_FILE WIKI_PG_DUMP WIKI_PG_RESTORE\n'
+  else
+    printf '# The database is the SQLite file in the data directory.\n'
+    printf 'unset WIKI_DATABASE_URL WIKI_DATABASE_PASSWORD_FILE\n'
+  fi
+  printf "exec '%s/bin/wiki-server' \"\$@\"\n" "$dir"
+}
+
 if [ "$action" = status ]; then
   if [ ! -f "$state_file" ] && [ ! -f "$unit_file" ]; then
     say "nothing is deployed under the name $name"
@@ -293,11 +405,23 @@ if [ "$action" = status ]; then
   say "deployment $name: $prev_dir, on $prev_bind:$prev_port"
   if [ "$prev_mode" = server ]; then
     say "the wiki's server, its data in $prev_dir/data; its admin listener on 127.0.0.1:$prev_admin_port"
+    case $prev_db in
+      postgres)
+        say "its database: PostgreSQL in Docker, the compose project $name, on 127.0.0.1:$prev_db_port, its data in the volume ${name}_wiki-db"
+        db=$prev_db db_port=$prev_db_port
+        if docker_ready; then
+          pg_compose ps postgres 2>/dev/null | sed 's/^/    /' || true
+        else
+          say "Docker does not answer, so the container's state is not known"
+        fi ;;
+      sqlite) say "its database: SQLite, $prev_dir/data/wiki.sqlite" ;;
+      *) say "its database: $prev_dir/data/wiki.sqlite, of a version before PostgreSQL; the next deploy asks what to do with it" ;;
+    esac
     [ "$prev_trust" != yes ] || say "it was deployed with --trust-network, which is gone: the next deploy serves the public address to whoever signs in there"
-    backups=$(ls "$prev_dir/data/backups" 2>/dev/null | grep -c '[.]sqlite$' || true)
-    latest=$(ls "$prev_dir/data/backups" 2>/dev/null | grep '[.]sqlite$' | tail -n 1 || true)
+    backups=$(ls "$prev_dir/data/backups" 2>/dev/null | grep -c '[.]\(sqlite\|pgdump\)$' || true)
+    latest=$(ls "$prev_dir/data/backups" 2>/dev/null | grep '[.]\(sqlite\|pgdump\)$' | tail -n 1 || true)
     say "backups: ${backups:-0} in $prev_dir/data/backups${latest:+, the latest $latest}"
-    say "users: $prev_dir/bin/wiki-server users list --data $prev_dir/data (the first administrator: users add --data $prev_dir/data LOGIN --admin)"
+    say "users: $prev_dir/bin/wiki users list --data $prev_dir/data (the first administrator: users add --data $prev_dir/data LOGIN --admin)"
     say "its public address, mail server and sign-in providers: the administration's Server section, http://127.0.0.1:$prev_admin_port/admin/admin/"
     if [ -n "$prev_smtp_host$prev_public_url$prev_oidc" ] || [ -f "$env_file" ]; then
       say "it was deployed with --smtp-host, --public-url or --oidc, which are gone: the next deploy drops them${prev_smtp_host:+ (mail through $prev_smtp_host)}${prev_oidc:+ (providers: $prev_oidc)}; set them in the Server section"
@@ -372,6 +496,26 @@ if [ "$mode" = server ]; then
   [ "$admin_port" != "$port" ] || die "--admin-port and --port are both $port: choose two ports"
 else
   [ -z "$opt_admin_port" ] || die "--admin-port is for the wiki's server: add --server"
+  [ -z "$opt_db$opt_db_port$fresh" ] || die "--postgres, --sqlite, --db-port and --fresh are for the wiki's server: add --server"
+fi
+
+# The wiki's database: PostgreSQL in Docker unless --sqlite said otherwise,
+# now or on an earlier run. The demo keeps what a server before it chose,
+# for the server deployed after it.
+db=$prev_db db_port=$prev_db_port
+if [ "$mode" = server ]; then
+  db=${opt_db:-${prev_db:-postgres}}
+  if [ "$db" = postgres ]; then
+    db_port=${opt_db_port:-${prev_db_port:-5433}}
+    case $db_port in
+      '' | 0* | *[!0-9]*) die "invalid --db-port '$db_port': a number from 1024 to 65535" ;;
+    esac
+    { [ "$db_port" -ge 1024 ] && [ "$db_port" -le 65535 ]; } || die "invalid --db-port $db_port: a number from 1024 to 65535"
+    { [ "$db_port" != "$port" ] && [ "$db_port" != "$admin_port" ]; } || die "--db-port $db_port is the port of a listener: choose another"
+    docker_ready || die "the wiki's database is PostgreSQL, which runs in Docker (docker compose), and Docker is not installed here or does not answer (docker info): install Docker and its compose plugin, or deploy with --sqlite, which keeps the database a file in the data directory, with no container"
+  else
+    [ -z "$opt_db_port" ] || die "--db-port is for a database on PostgreSQL: drop --sqlite"
+  fi
 fi
 
 # The directory, absolute and with symbolic links resolved, so that the
@@ -567,6 +711,42 @@ if [ "$mode" = server ] && ! { [ "$prev_mode" = server ] && [ "$admin_port" = "$
   can_listen "$admin_port" 127.0.0.1 || die "cannot listen on 127.0.0.1:$admin_port (see above): choose another --admin-port"
 fi
 
+# The wiki's database. On PostgreSQL its files are written and its
+# container is made, or started, and waited for; this changes nothing the
+# running deployment uses. Then a data/wiki.sqlite this deployment cannot
+# use stops the deploy, unless --fresh (or a "yes") moves it aside below.
+if [ "$mode" = server ]; then
+  if [ "$db" = postgres ]; then
+    pg_files
+    say "starting PostgreSQL in Docker (the compose project $name, on 127.0.0.1:$db_port) and waiting for it"
+    pg_compose up --detach --wait postgres ||
+      die "PostgreSQL did not start (see above): if the port is taken, choose another with --db-port, or deploy with --sqlite"
+  fi
+  # On SQLite, a file of the earlier schema is found by the backup below
+  # (wiki-server backup exits with 3).
+  incompatible=
+  if [ -f "$dir/data/wiki.sqlite" ] && [ "$db" = postgres ]; then
+    if [ -z "$prev_db" ]; then
+      incompatible="$dir/data/wiki.sqlite holds a wiki of a wiki-server from before PostgreSQL (or one on SQLite), and this deployment keeps the wiki in PostgreSQL"
+    else
+      incompatible="$dir/data/wiki.sqlite holds the wiki in SQLite, and this deployment keeps it in PostgreSQL"
+    fi
+  fi
+  # --fresh moves a data/wiki.sqlite aside whatever it holds.
+  [ -z "$fresh" ] || [ ! -f "$dir/data/wiki.sqlite" ] || incompatible=${incompatible:-$dir/data/wiki.sqlite is set aside (--fresh)}
+  if [ -n "$incompatible" ] && [ -z "$fresh" ]; then
+    warn "the state is incompatible: $incompatible. Its content moves by export and import: export the wiki with the running server (Administration, Wiki data, Export the wiki), go on here, then import the archive into the new wiki (Administration, Wiki data, Import). Going on moves the file aside into $dir/data/replaced/<time>/; it is never deleted"
+    if [ -t 0 ] && [ -t 1 ]; then
+      printf '%s: type yes to move it aside and start an empty wiki: ' "$PROG"
+      read -r answer || answer=
+      [ "$answer" = yes ] || die "nothing was changed"
+      fresh=1
+    else
+      die "nothing was changed: run this again with --fresh to move $dir/data/wiki.sqlite aside and start an empty wiki"
+    fi
+  fi
+fi
+
 # From here on the running deployment changes.
 
 was_installed=
@@ -578,12 +758,28 @@ fi
 # The database is copied aside before the new server, which may migrate it,
 # first opens it, and with the old one stopped, so that the copy has every
 # write. If that fails, the old deployment goes on as it was.
+if [ "$mode" = server ] && [ -n "$incompatible" ]; then
+  aside=$dir/data/replaced/$(date -u +%Y%m%dT%H%M%SZ)
+  mkdir -p "$aside"
+  for file in wiki.sqlite wiki.sqlite-wal wiki.sqlite-shm; do
+    [ ! -f "$dir/data/$file" ] || mv "$dir/data/$file" "$aside/"
+  done
+  say "moved $dir/data/wiki.sqlite aside into $aside: the new wiki starts empty"
+fi
 if [ "$mode" = server ]; then
   say "backing the database up into $dir/data/backups"
-  if ! "$server_bin" backup --data "$dir/data"; then
+  status=0
+  if [ "$db" = postgres ]; then
+    "$server_bin" backup --data "$dir/data" --database "$(db_url)" --database-password-file "$(pg_dir)/db-password" \
+      --pg-dump "$(pg_dir)/pg_dump" --pg-restore "$(pg_dir)/pg_restore" || status=$?
+  else
+    "$server_bin" backup --data "$dir/data" --sqlite "$dir/data/wiki.sqlite" || status=$?
+  fi
+  if [ "$status" != 0 ]; then
     if [ -n "$was_installed" ]; then
       systemctl --user start "$name.service" || true
     fi
+    [ "$status" != 3 ] || die "the state is incompatible: the database is an earlier wiki-server's (see above), so nothing was changed. Export the wiki with the running server, run this again with --fresh, and import the archive into the new wiki"
     die "the backup of $dir/data failed (see above), so nothing was changed"
   fi
 fi
@@ -619,6 +815,8 @@ if [ "$mode" = server ]; then
   mkdir -p "$dir/bin" "$dir/data"
   chmod 700 "$dir/data"
   cp "$server_bin" "$dir/bin/wiki-server"
+  console_wrapper >"$dir/bin/wiki"
+  chmod 755 "$dir/bin/wiki"
 else
   cp "$ROOT/toolchain/deploy-server.mjs" "$dir/server.mjs"
   [ ! -d "$dir/data" ] || say "keeping the server's data in $dir/data"
@@ -642,6 +840,13 @@ if [ "$mode" = server ]; then
   # make signing in impossible: only behind tailscale serve. The admin
   # listener uses no cookie.
   [ -z "$https_host" ] || exec_start="$exec_start --secure-cookies"
+  # The database: PostgreSQL by its URL, without the password, which is in
+  # a file of the owner's; or the SQLite file in the data directory.
+  if [ "$db" = postgres ]; then
+    exec_start="$exec_start --database $(db_url) --database-password-file $(unit_word "$(pg_dir)/db-password") --pg-dump $(unit_word "$(pg_dir)/pg_dump") --pg-restore $(unit_word "$(pg_dir)/pg_restore")"
+  else
+    exec_start="$exec_start --sqlite $(unit_word "$dir/data/wiki.sqlite")"
+  fi
   # The data is the owner's alone, and a stop lets the requests under way
   # finish (the server gives them ten seconds).
   service_extra="UMask=0077
@@ -821,6 +1026,12 @@ panel_public_url() {
 if [ "$mode" = server ]; then
   printf '\nThe wiki is served from %s, its data in %s/data. Open:\n' "$dir" "$dir"
   print_urls "$bind" "$port"
+  if [ "$db" = postgres ]; then
+    printf 'Its database is PostgreSQL in Docker (docker compose --project-name %s ps), on\n' "$name"
+    printf '127.0.0.1:%s, its data in the volume %s_wiki-db; its password is in %s/db-password.\n' "$db_port" "$name" "$(pg_dir)"
+  else
+    printf 'Its database is SQLite, %s/data/wiki.sqlite.\n' "$dir"
+  fi
   # The public address stays a setting of the panel (decision 11 of
   # docs/PLAN.md): the script only says what to set it to.
   if [ -n "$https_host" ]; then
@@ -838,9 +1049,9 @@ if [ "$mode" = server ]; then
   cat <<EOF
 Administration, on this machine only: http://127.0.0.1:$admin_port/admin/
   from another: ssh -L $admin_port:127.0.0.1:$admin_port $user@<this machine>, then the same address
-Backups: $dir/data/backups (one before every deploy; another: $dir/bin/wiki-server backup --data $dir/data)
-Users:   $dir/bin/wiki-server users list --data $dir/data
-  the first administrator: $dir/bin/wiki-server users add --data $dir/data LOGIN --admin (asks for the password)
+Backups: $dir/data/backups (one before every deploy; another: $dir/bin/wiki backup --data $dir/data)
+Users:   $dir/bin/wiki users list --data $dir/data
+  the first administrator: $dir/bin/wiki users add --data $dir/data LOGIN --admin (asks for the password)
 Logs:    journalctl --user -u $name -f
 Status:  sh toolchain/deploy-local.sh --status --name $name
 Stop:    sh toolchain/undeploy-local.sh --name $name   (--purge deletes the files but data/, --purge-data that too)
@@ -852,7 +1063,7 @@ EOF
   printf 'The wiki'"'"'s public address, the mail server invitations go through and the\n'
   printf 'providers people sign in with are set in its "Server" section, at\n'
   printf '  http://127.0.0.1:%s/admin/admin/\n' "$admin_port"
-  printf 'where they take effect at once (check the providers: %s/bin/wiki-server oidc check --data %s/data).\n' "$dir" "$dir"
+  printf 'where they take effect at once (check the providers: %s/bin/wiki oidc check --data %s/data).\n' "$dir" "$dir"
   if [ -n "$prev_smtp_host$prev_public_url$prev_oidc" ]; then
     printf '%s: the previous deployment passed the server --smtp-host, --public-url or --oidc,\n' "$PROG"
     printf '%s: which are gone; set them again in the Server section:\n' "$PROG"
@@ -865,7 +1076,7 @@ EOF
   if [ "$prev_trust" = yes ]; then
     printf '%s: the previous deployment took everyone at %s for the administrator\n' "$PROG" "$listen"
     printf '%s: (--trust-network); that is gone. Sign in as an administrator there, made with\n' "$PROG"
-    printf '%s:   %s/bin/wiki-server users add --data %s/data LOGIN --admin\n' "$PROG" "$dir" "$dir"
+    printf '%s:   %s/bin/wiki users add --data %s/data LOGIN --admin\n' "$PROG" "$dir" "$dir"
   fi
 else
   printf '\nThe demo is served from %s. Open:\n' "$dir"

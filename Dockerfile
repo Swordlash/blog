@@ -109,15 +109,19 @@ FROM scratch AS release
 COPY --from=build /out/ /
 
 FROM ${DEBIAN} AS runtime
-# libgmp is the one library the binary links beyond glibc (SQLite is compiled
-# into it); curl is for the health check and for reaching the admin listener
-# from inside the container (`docker compose exec wiki curl ...`); the CA
-# certificates are what the server checks a mail server's TLS certificate
-# against, when it mails invitations, and a sign-in provider's (both set in
-# the administration's "Server" section; see docker-compose.yml).
+# libgmp and libpq (PostgreSQL's client library) are the libraries the
+# binary links beyond glibc (SQLite is compiled into it); PostgreSQL's
+# client programs, of the major version of docker-compose.yml's postgres:17,
+# are what a backup and a restore of a PostgreSQL database run (pg_dump
+# refuses a server newer than itself); curl is for the health check and for
+# reaching the admin listener from inside the container (`docker compose
+# exec wiki curl ...`); the CA certificates are what the server checks a mail
+# server's TLS certificate against, when it mails invitations, and a sign-in
+# provider's (both set in the administration's "Server" section; see
+# docker-compose.yml).
 # hadolint ignore=DL3008
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 \
+ && apt-get install --yes --no-install-recommends ca-certificates curl libgmp10 libpq5 postgresql-client-17 \
  && rm -rf /var/lib/apt/lists/*
 # The PDF exports, optionally: the server makes every other document with the
 # pandoc linked into it, and a PDF with xelatex where it finds one, which

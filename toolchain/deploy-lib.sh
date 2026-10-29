@@ -20,7 +20,16 @@
 #     deleted;
 #   - a systemd user unit, $UNIT_DIR/<name>.service;
 #   - for the wiki's server, a data directory, <dir>/data, which no deploy
-#     ever deletes and undeploy deletes only when told --purge-data.
+#     ever deletes and undeploy deletes only when told --purge-data;
+#   - for the wiki's server on PostgreSQL (db=postgres in its state, the
+#     default; --sqlite keeps the database a file in data/ instead), the
+#     postgres service of docker-compose.yml, run as the compose project
+#     <name> with its data in the named volume <name>_wiki-db and its port
+#     published on 127.0.0.1:<db_port> for the server, and its files in
+#     $STATE_DIR/<name>.postgres/ ('pg_dir'): the compose file, the
+#     database's password (db-password, the owner's alone), and pg_dump and
+#     pg_restore, which run PostgreSQL's own in its container. Undeploying
+#     stops the container and keeps the volume; --purge-data deletes it.
 #
 # Two variables exist for the regression tests (toolchain/test-deploy-local.sh)
 # and need not be set otherwise: WIKI_DEPLOY_SBIN, the directories searched for
@@ -80,6 +89,8 @@ state_write() {
     printf 'https=%s\n' "${https:-}"
     printf 'https_host=%s\n' "${https_host:-}"
     printf 'serve_port=%s\n' "${serve_port:-}"
+    printf 'db=%s\n' "${db:-}"
+    printf 'db_port=%s\n' "${db_port:-}"
   } >"$state_file.tmp"
   mv "$state_file.tmp" "$state_file"
 }
@@ -305,6 +316,44 @@ serve_off() {
   fi
 }
 
+# --- PostgreSQL in Docker ---------------------------------------------------
+
+# The directory of a deployment's PostgreSQL files.
+pg_dir() { printf '%s/%s.postgres\n' "$STATE_DIR" "$name"; }
+
+# Whether Docker and its compose plugin are here and the daemon answers.
+docker_ready() {
+  command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+# docker compose on the deployment's project, with its files and port.
+pg_compose() {
+  WIKI_DB_PASSWORD_FILE=$(pg_dir)/db-password WIKI_DB_PORT=${db_port:-5433} \
+    docker compose --project-name "$name" --file "$(pg_dir)/docker-compose.yml" --file "$(pg_dir)/local.yml" "$@"
+}
+
+# Stop the deployment's PostgreSQL container, keeping its volume; with
+# purge_data, delete the container, the volume and the files too.
+pg_down() {
+  [ -d "$(pg_dir)" ] || return 0
+  if ! docker_ready; then
+    warn "Docker does not answer, so the PostgreSQL container of $name was left as it is (docker compose --project-name $name stop)"
+    return 0
+  fi
+  if [ -n "${purge_data:-}" ]; then
+    if pg_compose down --volumes >/dev/null 2>&1; then
+      rm -rf "$(pg_dir)"
+      say "deleted the PostgreSQL container of $name and its volume ${name}_wiki-db"
+    else
+      warn "could not delete the PostgreSQL container of $name (docker compose --project-name $name down --volumes)"
+    fi
+  elif pg_compose stop postgres >/dev/null 2>&1; then
+    say "stopped the PostgreSQL container of $name; its data stays in the volume ${name}_wiki-db"
+  else
+    warn "could not stop the PostgreSQL container of $name (docker compose --project-name $name stop postgres)"
+  fi
+}
+
 # Take the deployment down: stop and disable the service, remove its unit,
 # close the firewall rule it opened, and turn off its `tailscale serve`. With
 # purge set, also delete the target directory (only if it carries this
@@ -337,6 +386,9 @@ undeploy() {
   https=$(state_get https)
   https_host=$(state_get https_host)
   serve_port=$(state_get serve_port)
+  db=$(state_get db)
+  db_port=$(state_get db_port)
+  [ "$db" != postgres ] || pg_down
   if [ -n "$serve_port" ]; then
     serve_off "$serve_port"
     serve_port='' https_host=''

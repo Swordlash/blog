@@ -1,6 +1,15 @@
-# The wiki's server in Docker, in one command:
+# The wiki's server in Docker, in one command, with its database in
+# PostgreSQL beside it:
 #
+#   mkdir -p secrets && openssl rand -hex 24 >secrets/db-password   # once
 #   docker compose up -d --build
+#
+# The database's password is the file secrets/db-password (WIKI_DB_PASSWORD_FILE
+# names another), given to both containers as a secret: it is never in this
+# file, the environment or a command line. The PostgreSQL container keeps its
+# data in the named volume wiki-db, and the wiki starts only once the
+# database answers its health check. The wiki's server then makes its schema,
+# or brings an older one up to date (wiki-server/migrations), as it starts.
 #
 # The Dockerfile builds the image (the first build takes well over an hour;
 # see its header). The public listener is published on port 8080 of the host
@@ -11,12 +20,18 @@
 #
 #   docker compose exec wiki curl -s http://127.0.0.1:8081/admin/api/v1/admin/status
 #
-# The data (the database, the attachments, the backups) is in the named volume
-# wiki-data, which outlives the container and every image. Each start backs
-# the database up into it first (/data/backups); for one more:
+# The attachments and the backups are in the named volume wiki-data, which,
+# with wiki-db, outlives the containers and every image. Each start of the
+# wiki backs the database up into it first (/data/backups, with pg_dump); for
+# one more:
 #
 #   docker compose exec wiki wiki-server backup --data /data   # while it runs
 #   docker compose run --rm backup                             # or while it is stopped
+#
+# Without PostgreSQL: the wiki alone, its database a SQLite file in the
+# wiki-data volume, is `docker compose run --service-ports wiki serve --sqlite
+# /data/wiki.sqlite --listen 0.0.0.0:8080 --admin-listen 127.0.0.1:8081`, or
+# toolchain/deploy-local.sh --sqlite on a machine of one's own.
 #
 # The published port serves whoever signs in there. Make the first
 # administrator with the console, then sign in as them:
@@ -28,7 +43,7 @@
 # GitHub, Apple or another OpenID Connect provider) are the administration's
 # to set, in its "Server" section, as that administrator signed in on the
 # published port; they take effect at once, and their secrets are kept in
-# the wiki's database in the volume, never in this file or the environment.
+# the wiki's database, never in this file or the environment.
 # To check the providers set: docker compose exec wiki wiki-server oidc check --data /data
 name: wiki
 
@@ -41,16 +56,60 @@ services:
       - "${WIKI_BIND:-0.0.0.0}:${WIKI_PORT:-8080}:8080"
     volumes:
       - wiki-data:/data
+    # Every wiki-server command reads these when it names no database: the
+    # database by its URL, without the password, and the password's file.
+    environment:
+      WIKI_DATABASE_URL: postgres://wiki@postgres:5432/wiki
+      WIKI_DATABASE_PASSWORD_FILE: /run/secrets/db-password
+    secrets:
+      - db-password
+    depends_on:
+      postgres:
+        condition: service_healthy
     # The server lets requests in flight finish for up to 10 s after SIGTERM.
     stop_grace_period: 15s
+
+  # The wiki's database. Its port is not published: only the wiki's
+  # container reaches it, over the compose network.
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wiki
+      POSTGRES_DB: wiki
+      POSTGRES_PASSWORD_FILE: /run/secrets/db-password
+    secrets:
+      - db-password
+    volumes:
+      - wiki-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=wiki --dbname=wiki"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    stop_grace_period: 30s
 
   # A one-off: `docker compose run --rm backup`. Not started by `up`.
   backup:
     image: ${WIKI_IMAGE:-wiki-server:latest}
     profiles: [tools]
     command: [backup, --data, /data]
+    environment:
+      WIKI_DATABASE_URL: postgres://wiki@postgres:5432/wiki
+      WIKI_DATABASE_PASSWORD_FILE: /run/secrets/db-password
+    secrets:
+      - db-password
     volumes:
       - wiki-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+secrets:
+  db-password:
+    file: ${WIKI_DB_PASSWORD_FILE:-./secrets/db-password}
 
 volumes:
   wiki-data:
+  wiki-db:

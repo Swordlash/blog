@@ -493,11 +493,12 @@ as_root() {
 }
 
 # Debian packages: a C toolchain (GHC links with it), GMP's development files
-# (native programs link libgmp), and what ghc-wasm-meta's setup.sh runs.
+# (native programs link libgmp), libpq's (wiki-server reaches PostgreSQL
+# through postgresql-libpq), and what ghc-wasm-meta's setup.sh runs.
 system_packages() {
   missing=
   if command -v dpkg-query >/dev/null 2>&1; then
-    for pkg in build-essential curl git jq unzip xz-utils zstd libgmp-dev; do
+    for pkg in build-essential curl git jq unzip xz-utils zstd libgmp-dev libpq-dev; do
       if ! dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
         missing="$missing $pkg"
       fi

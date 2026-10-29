@@ -3,8 +3,11 @@
 # touching the developer's home, systemd, firewall or toolchain: each case runs
 # in a temporary $HOME with a fake repository whose bootstrap and npm build a
 # tiny page, whose cabal builds a fake wiki-server (a script that logs how it
-# was called, backs up by copying, and serves with Node), and fakes for
-# systemctl, loginctl, ufw, sudo, tailscale, curl and id. The fake systemctl
+# was called, backs up by copying a SQLite file or by running the pg_dump it
+# is given, and serves with Node), and fakes for systemctl, loginctl, ufw,
+# sudo, tailscale, curl, id and docker. The fake docker keeps a deployment's
+# PostgreSQL container as a file that says whether it was made and is
+# running, and its pg_dump writes a line that names the database. The fake systemctl
 # really starts the unit's ExecStart line, so the server the deployment
 # installs is started as systemd would start it and is fetched over HTTP. The
 # fake tailscale keeps a serve configuration as tailscaled would, and the fake
@@ -78,6 +81,7 @@ fixture() {
   for script in deploy-local.sh undeploy-local.sh deploy-lib.sh deploy-server.mjs compress.mjs; do
     cp "$SOURCE_DIR/$script" "$case_dir/repo/toolchain/"
   done
+  cp "$SOURCE_DIR/../docker-compose.yml" "$case_dir/repo/"
   HOME=$case_dir/home
   EVENTS=$case_dir/events
   FAKE_SYSTEMD=$case_dir/systemd
@@ -88,7 +92,10 @@ fixture() {
   WIKI_DEPLOY_HTTPS_WAIT=10
   FAKE_TS_SERVE=$case_dir/serve
   export HOME EVENTS FAKE_SYSTEMD PATH WIKI_DEPLOY_SBIN WIKI_DEPLOY_UFW_CONF WIKI_DEPLOY_WAIT WIKI_DEPLOY_HTTPS_WAIT FAKE_TS_SERVE
-  unset XDG_CONFIG_HOME FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL \
+  FAKE_DOCKER=$case_dir/docker
+  export FAKE_DOCKER
+  mkdir -p "$FAKE_DOCKER"
+  unset XDG_CONFIG_HOME FAKE_SUDO_PASSWORD FAKE_TS_DOWN FAKE_BUILD_FAIL FAKE_NO_SYSTEMD FAKE_LINGER FAKE_BACKUP_FAIL FAKE_NO_DOCKER \
     FAKE_TS_NO_OPERATOR FAKE_TS_NO_MAGICDNS FAKE_TS_NO_CERTS FAKE_TS_VERSION FAKE_TS_FUNNEL FAKE_HTTPS_DOWN FAKE_PUBLIC_URL
   printf 'ENABLED=yes\n' >"$WIKI_DEPLOY_UFW_CONF"
   : >"$EVENTS"
@@ -109,20 +116,31 @@ EOF
 printf 'wiki-server %s\n' "\$*" >>"$EVENTS"
 command=\$1
 shift
-data= listen= admin= static=
+data= listen= admin= static= sqlite= database= dump=
 while [ \$# -gt 0 ]; do
   case \$1 in
     --data) data=\$2; shift ;;
     --listen) listen=\$2; shift ;;
     --admin-listen) admin=\$2; shift ;;
     --static) static=\$2; shift ;;
+    --sqlite) sqlite=\$2; shift ;;
+    --database) database=\$2; shift ;;
+    --pg-dump) dump=\$2; shift ;;
   esac
   shift
 done
 case \$command in
   backup)
     [ -z "\${FAKE_BACKUP_FAIL:-}" ] || { printf 'fake backup failure\n' >&2; exit 1; }
-    if [ -f "\$data/wiki.sqlite" ]; then
+    if [ -n "\$database" ]; then
+      # As wiki-server does: pg_dump with the URL, the password elsewhere.
+      mkdir -p "\$data/backups"
+      "\$dump" --format=custom "--dbname=\$database" >"\$data/backups/\$(ls "\$data/backups" | wc -l | tr -d ' ').pgdump" || exit 1
+      printf 'Backed up\n'
+    elif grep -q 'an earlier schema' "\$data/wiki.sqlite" 2>/dev/null; then
+      printf 'wiki-server: The database holds a wiki of an earlier wiki-server\n' >&2
+      exit 3
+    elif [ -f "\$data/wiki.sqlite" ]; then
       mkdir -p "\$data/backups"
       cp "\$data/wiki.sqlite" "\$data/backups/\$(ls "\$data/backups" | wc -l | tr -d ' ').sqlite"
       printf 'Backed up\n'
@@ -131,7 +149,7 @@ case \$command in
     fi ;;
   serve)
     mkdir -p "\$data"
-    [ -f "\$data/wiki.sqlite" ] || printf 'a database\n' >"\$data/wiki.sqlite"
+    [ -z "\$sqlite" ] || [ -f "\$sqlite" ] || printf 'a database\n' >"\$sqlite"
     exec "$NODE_REAL" -e '
       const http = require("node:http");
       const fs = require("node:fs");
@@ -264,6 +282,46 @@ case $name in
     exec "$NODE_REAL" -e '
       fetch(process.argv[1]).then((r) => process.exit(r.status === 200 ? 0 : 22), () => process.exit(7));
     ' "${target%/}/${url#https://box.tail1234.ts.net/}" ;;
+  docker)
+    [ -z "${FAKE_NO_DOCKER:-}" ] || { printf 'failed to connect to the docker API at unix:///var/run/docker.sock\n' >&2; exit 1; }
+    printf 'docker %s\n' "$*" >>"$EVENTS"
+    [ "$1" != info ] || exit 0
+    [ "$1" = compose ] || { printf 'fake docker: unexpected %s\n' "$*" >&2; exit 91; }
+    shift
+    [ "$1" != version ] || { printf 'Docker Compose version v2.40.0\n'; exit 0; }
+    project=
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --project-name) project=$2; shift 2 ;;
+        --file)
+          [ -f "$2" ] || { printf 'fake docker: no file %s\n' "$2" >&2; exit 92; }
+          shift 2 ;;
+        *) break ;;
+      esac
+    done
+    [ -s "${WIKI_DB_PASSWORD_FILE:-}" ] || { printf 'fake docker: no password file\n' >&2; exit 93; }
+    container=$FAKE_DOCKER/$project
+    case "$*" in
+      'up --detach --wait postgres')
+        if [ -f "$container" ]; then
+          printf 'started on %s\n' "$WIKI_DB_PORT" >"$container"
+          printf 'docker: started the container of %s\n' "$project" >>"$EVENTS"
+        else
+          printf 'started on %s\n' "$WIKI_DB_PORT" >"$container"
+          printf 'docker: created the container and the volume of %s\n' "$project" >>"$EVENTS"
+        fi ;;
+      'stop postgres') [ ! -f "$container" ] || printf 'stopped\n' >"$container" ;;
+      'down --volumes') rm -f "$container" ;;
+      'ps postgres') cat "$container" 2>/dev/null || true ;;
+      'exec -T postgres pg_dump '* | 'exec -T postgres pg_restore '*)
+        grep -q '^started' "$container" 2>/dev/null || { printf 'service "postgres" is not running\n' >&2; exit 1; }
+        shift 3
+        printf '%s of %s:' "$1" "$project"
+        shift
+        printf ' %s' "$@"
+        printf '\n' ;;
+      *) printf 'fake docker: unexpected compose %s\n' "$*" >&2; exit 91 ;;
+    esac ;;
   systemctl)
     [ "$1" = --user ] || { printf 'fake systemctl: --user expected\n' >&2; exit 91; }
     shift
@@ -310,7 +368,7 @@ EOF
   chmod +x "$case_dir/bin/tool"
   FAKE_SERVER=$case_dir/fake-wiki-server
   export FAKE_SERVER
-  for cmd in id npm cabal sudo ufw loginctl tailscale curl systemctl; do
+  for cmd in id npm cabal sudo ufw loginctl tailscale curl systemctl docker; do
     ln -s tool "$case_dir/bin/$cmd"
   done
 }
@@ -591,17 +649,156 @@ out=$case_dir/first
 deploy --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the first install without a mode failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
 assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
-assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$HOME/wiki-demo/data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p --admin-listen 127.0.0.1:$a --secure-cookies"
+pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
+assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$HOME/wiki-demo/data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p --admin-listen 127.0.0.1:$a --secure-cookies --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file \"$pgd/db-password\" --pg-dump \"$pgd/pg_dump\" --pg-restore \"$pgd/pg_restore\""
 [ ! -e "$HOME/wiki-demo/server.mjs" ] || fail 'the first install without a mode installed the demo'
 [ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer'
 [ "$(state mode)" = server ] || fail 'state does not record the server'
+{ [ "$(state db)" = postgres ] && [ "$(state db_port)" = 5433 ]; } || fail 'state does not record PostgreSQL'
 : >"$EVENTS"
 deploy --no-build >"$case_dir/again" 2>&1 || fail 'the redeploy without a mode failed'
 assert_contains "$HOME/$unit" '/bin/wiki-server" serve'
+assert_contains "$HOME/$unit" '--database postgres://wiki@127.0.0.1:5433/wiki'
 assert_contains "$EVENTS" 'wiki-server backup'
 [ "$(state mode)" = server ] || fail 'the redeploy forgot the server'
 undeploy --purge-data >/dev/null 2>&1
-pass 'a first install without --server or --static deploys the server, and the next run keeps it'
+pass 'a first install without --server or --static deploys the server on PostgreSQL, and the next run keeps both'
+
+# PostgreSQL in Docker (WP5.22): the first deploy makes the container, with
+# its volume and a password of its own, and waits for it before the backup
+# and the server; the next deploy finds it, starts it if it was stopped, and
+# backs the database up with the container's pg_dump. The password is in a
+# file of the owner's alone, and never in the unit, the state, the console
+# or a command line.
+fixture postgres
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+pgd=$HOME/.config/wiki-demo/wiki-demo.postgres
+data=$HOME/wiki-demo/data
+out=$case_dir/first
+deploy --server --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the first deploy on PostgreSQL failed'
+assert_contains "$EVENTS" 'docker: created the container and the volume of wiki-demo'
+{ [ "$(line_of "$EVENTS" 'docker compose --project-name wiki-demo')" -lt "$(line_of "$EVENTS" 'wiki-server backup')" ] &&
+  [ "$(line_of "$EVENTS" 'wiki-server backup')" -lt "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" ]; } ||
+  fail 'PostgreSQL did not start before the backup and the server'
+assert_contains "$EVENTS" 'up --detach --wait postgres'
+[ "$(stat -c %a "$pgd/db-password")" = 600 ] || fail 'the password file is not the owner'"'"'s alone'
+[ "$(stat -c %a "$pgd")" = 700 ] || fail 'the PostgreSQL directory is not the owner'"'"'s alone'
+password=$(cat "$pgd/db-password")
+[ "${#password}" -ge 32 ] || fail 'the password is too short'
+for file in "$HOME/$unit" "$HOME/.config/wiki-demo/wiki-demo.state" "$HOME/wiki-demo/bin/wiki" "$EVENTS" "$out"; do
+  assert_lacks "$file" "$password"
+done
+assert_contains "$pgd/local.yml" '127.0.0.1:${WIKI_DB_PORT}:5432'
+assert_contains "$HOME/wiki-demo/bin/wiki" "WIKI_DATABASE_URL='postgres://wiki@127.0.0.1:5433/wiki'"
+assert_contains "$HOME/wiki-demo/bin/wiki" "WIKI_DATABASE_PASSWORD_FILE='$pgd/db-password'"
+[ ! -e "$data/wiki.sqlite" ] || fail 'a server on PostgreSQL made data/wiki.sqlite'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer'
+assert_contains "$out" 'Its database is PostgreSQL in Docker'
+pass 'the first deploy on PostgreSQL makes the container with its volume and its own password, waits for it, then backs up and starts the server'
+
+: >"$EVENTS"
+out=$case_dir/again
+deploy --no-build >"$out" 2>&1 || fail 'a redeploy on PostgreSQL failed'
+assert_contains "$EVENTS" 'docker: started the container of wiki-demo'
+assert_lacks "$EVENTS" 'docker: created'
+[ "$(cat "$pgd/db-password")" = "$password" ] || fail 'the redeploy made another password'
+assert_contains "$EVENTS" "wiki-server backup --data $data --database postgres://wiki@127.0.0.1:5433/wiki --database-password-file $pgd/db-password --pg-dump $pgd/pg_dump --pg-restore $pgd/pg_restore"
+# The fake server makes a dump on the first deploy too, where wiki-server
+# finds no wiki yet: this one is the second.
+assert_contains "$data/backups/1.pgdump" 'pg_dump of wiki-demo: --username=wiki --dbname=wiki --format=custom'
+{ [ "$(line_of "$EVENTS" 'systemctl stop wiki-demo.service')" -lt "$(line_of "$EVENTS" 'wiki-server backup')" ] &&
+  [ "$(line_of "$EVENTS" 'wiki-server backup')" -lt "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" ]; } ||
+  fail 'the backup was not taken between the old server and the new'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the redeployed server does not answer'
+out=$case_dir/status
+deploy --status >"$out" 2>&1
+assert_contains "$out" 'its database: PostgreSQL in Docker, the compose project wiki-demo, on 127.0.0.1:5433'
+assert_contains "$out" 'backups: 2 in'
+pass 'a redeploy finds the container, backs the database up with its pg_dump between the old server and the new, and keeps the password'
+
+undeploy >"$case_dir/down" 2>&1 || fail 'the undeploy failed'
+assert_contains "$case_dir/down" 'stopped the PostgreSQL container of wiki-demo; its data stays in the volume wiki-demo_wiki-db'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+: >"$EVENTS"
+deploy --no-build >"$case_dir/back" 2>&1 || fail 'a deploy over a stopped container failed'
+assert_contains "$EVENTS" 'docker: started the container of wiki-demo'
+undeploy --purge-data >"$case_dir/purged" 2>&1 || fail 'the purge failed'
+assert_contains "$case_dir/purged" 'deleted the PostgreSQL container of wiki-demo and its volume wiki-demo_wiki-db'
+[ ! -e "$FAKE_DOCKER/wiki-demo" ] || fail 'the container is still there'
+[ ! -e "$pgd" ] || fail 'the PostgreSQL files are still there'
+pass 'an undeploy stops the container and keeps its volume, a deploy starts it again, and --purge-data deletes both'
+
+# Without Docker: the deploy on PostgreSQL stops before building, naming
+# --sqlite, which deploys without it.
+fixture no-docker
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+out=$case_dir/refused
+if FAKE_NO_DOCKER=1 deploy --server --port "$p" --admin-port "$a" >"$out" 2>&1; then fail 'a deploy on PostgreSQL went on without Docker'; fi
+assert_contains "$out" 'Docker is not installed here or does not answer'
+assert_contains "$out" 'or deploy with --sqlite'
+assert_lacks "$EVENTS" 'npm run build-wasm-opt'
+assert_lacks "$EVENTS" 'systemctl stop'
+FAKE_NO_DOCKER=1 deploy --server --sqlite --port "$p" --admin-port "$a" >"$case_dir/sqlite" 2>&1 || fail 'the deploy with --sqlite failed without Docker'
+assert_contains "$HOME/$unit" "--sqlite \"$HOME/wiki-demo/data/wiki.sqlite\""
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the server on SQLite does not answer'
+FAKE_NO_DOCKER=1 deploy --no-build >"$case_dir/again" 2>&1 || fail 'the redeploy kept from --sqlite needed Docker'
+[ "$(state db)" = sqlite ] || fail 'the redeploy forgot --sqlite'
+undeploy --purge-data >/dev/null 2>&1
+pass 'without Docker a deploy on PostgreSQL is refused before the build, naming --sqlite, which works and is remembered'
+
+# A deployment of a version before PostgreSQL: its data/wiki.sqlite has the
+# earlier schema. The deploy stops before the service is touched, saying the
+# state is incompatible and how its content moves; --fresh moves the file
+# aside, never deleting it, and starts an empty wiki on PostgreSQL.
+fixture old-sqlite
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+data=$HOME/wiki-demo/data
+mkdir -p "$data" "$HOME/.config/wiki-demo"
+printf 'name=wiki-demo\ncreated-by=toolchain/deploy-local.sh\n' >"$HOME/wiki-demo/.wiki-demo-deployment"
+printf 'a wiki of an earlier schema\n' >"$data/wiki.sqlite"
+printf 'name=wiki-demo\ndir=%s\nport=%s\nbind=127.0.0.1\nbind_choice=auto\nrule_port=\nmode=server\nadmin_port=%s\nhttps=no\n' \
+  "$HOME/wiki-demo" "$p" "$a" >"$HOME/.config/wiki-demo/wiki-demo.state"
+out=$case_dir/refused
+if deploy --port "$p" --admin-port "$a" </dev/null >"$out" 2>&1; then fail 'a deploy over a wiki.sqlite of the earlier schema went on'; fi
+assert_contains "$out" 'the state is incompatible'
+assert_contains "$out" 'export the wiki with the running server'
+assert_contains "$out" 'run this again with --fresh'
+assert_lacks "$EVENTS" 'systemctl stop'
+assert_lacks "$EVENTS" 'wiki-server backup'
+assert_contains "$data/wiki.sqlite" 'a wiki of an earlier schema'
+out=$case_dir/fresh
+deploy --fresh --port "$p" --admin-port "$a" >"$out" 2>&1 || fail 'the deploy with --fresh failed'
+[ ! -e "$data/wiki.sqlite" ] || fail 'data/wiki.sqlite is still where it was'
+moved=$(find "$data/replaced" -name wiki.sqlite | head -n 1)
+[ -n "$moved" ] || fail 'the old wiki.sqlite was not kept'
+assert_contains "$moved" 'a wiki of an earlier schema'
+assert_contains "$out" 'moved'
+[ "$(state db)" = postgres ] || fail 'the fresh deploy is not on PostgreSQL'
+[ "$(http_get "http://127.0.0.2:$p/api/v1/info")" = '200 application/json' ] || fail 'the fresh server does not answer'
+undeploy --purge >/dev/null 2>&1
+pass 'a data/wiki.sqlite of the earlier schema stops the deploy before anything changes; --fresh moves it aside and starts on PostgreSQL'
+
+# With --sqlite, the backup tells the earlier schema apart (exit code 3):
+# the old service goes on, and the deploy says the state is incompatible.
+fixture old-schema-backup
+p=$(free_port 127.0.0.1)
+a=$(other_port "$p")
+deploy --server --sqlite --port "$p" --admin-port "$a" >"$case_dir/first" 2>&1 || fail 'the deploy with --sqlite failed'
+printf 'a wiki of an earlier schema\n' >"$HOME/wiki-demo/data/wiki.sqlite"
+: >"$EVENTS"
+out=$case_dir/refused
+if deploy --no-build >"$out" 2>&1; then fail 'a deploy over a database the backup refused went on'; fi
+assert_contains "$out" 'the state is incompatible: the database is an earlier wiki-server'"'"'s'
+assert_contains "$EVENTS" 'systemctl start wiki-demo.service'
+[ "$(http_get "http://127.0.0.1:$p/api/v1/info")" = '200 application/json' ] || fail 'the old server was not started again'
+deploy --no-build --fresh >"$case_dir/fresh" 2>&1 || fail 'the deploy with --fresh on SQLite failed'
+find "$HOME/wiki-demo/data/replaced" -name wiki.sqlite | grep -q . || fail 'the old wiki.sqlite was not kept'
+assert_lacks "$HOME/wiki-demo/data/wiki.sqlite" 'earlier schema'
+undeploy --purge-data >/dev/null 2>&1
+pass 'a backup that finds the earlier schema stops the deploy, and the old service goes on; --fresh sets the file aside'
 
 # The wiki's server.
 fixture server
@@ -609,10 +806,12 @@ p1=$(free_port 127.0.0.1)
 a1=$(other_port "$p1")
 data=$HOME/wiki-demo/data
 out=$case_dir/first
-deploy --server --port "$p1" --admin-port "$a1" >"$out" 2>&1 || fail 'the first server deploy failed'
+deploy --server --sqlite --port "$p1" --admin-port "$a1" >"$out" 2>&1 || fail 'the first server deploy failed'
 assert_contains "$EVENTS" 'npm run build-wasm-opt HALOGEN_BASE_PATH=/ WIKI_BACKEND=server'
 assert_contains "$EVENTS" 'cabal build -v0 --project-file=cabal-native-opt.project --builddir=dist-newstyle/native-opt wiki-server:exe:wiki-server'
-assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p1 --admin-listen 127.0.0.1:$a1 --secure-cookies"
+assert_contains "$HOME/$unit" "ExecStart=\"$HOME/wiki-demo/bin/wiki-server\" serve --data \"$data\" --static \"$HOME/wiki-demo/app\" --listen 127.0.0.1:$p1 --admin-listen 127.0.0.1:$a1 --secure-cookies --sqlite \"$data/wiki.sqlite\""
+assert_lacks "$EVENTS" 'docker'
+[ "$(state db)" = sqlite ] || fail 'state does not record SQLite'
 assert_lacks "$HOME/$unit" 'trust-network'
 assert_contains "$HOME/$unit" 'UMask=0077'
 assert_contains "$HOME/$unit" 'Description=Wiki server (wiki-demo)'
@@ -620,7 +819,7 @@ for file in .wiki-demo-deployment bin/wiki-server app/index.html app/app.wasm ap
   [ -f "$HOME/wiki-demo/$file" ] || fail "missing $file"
 done
 [ ! -e "$HOME/wiki-demo/server.mjs" ] || fail 'the static server was installed beside wiki-server'
-assert_contains "$EVENTS" "wiki-server backup --data $data"
+assert_contains "$EVENTS" "wiki-server backup --data $data --sqlite $data/wiki.sqlite"
 { [ "$(line_of "$EVENTS" 'wiki-server backup')" -lt "$(line_of "$EVENTS" 'systemctl restart wiki-demo.service')" ]; } ||
   fail 'the backup did not run before the new server started'
 [ "$(http_get "http://127.0.0.1:$p1/api/v1/info")" = '200 application/json' ] || fail 'the server does not answer'
@@ -639,7 +838,8 @@ assert_lacks "$EVENTS" "port $a1"
 [ "$(line_of "$out" 'Open:')" -lt "$(line_of "$out" "  $https_url")" ] || fail 'the HTTPS address is not among the ones to open'
 assert_contains "$out" "The wiki has no public address yet: set it to $https_url in the administration's"
 assert_contains "$out" "Server section (http://127.0.0.1:$a1/admin/admin/)"
-pass '--server builds wiki-server at -O2, installs it with the page, and runs it with its data and admin listener, over HTTPS with Secure cookies'
+assert_contains "$HOME/wiki-demo/bin/wiki" 'unset WIKI_DATABASE_URL'
+pass '--server --sqlite builds wiki-server at -O2, installs it with the page, and runs it with its data, its database in data/ and its admin listener, over HTTPS with Secure cookies'
 
 : >"$EVENTS"
 printf 'precious\n' >>"$data/wiki.sqlite"
@@ -718,7 +918,7 @@ for flag in --trust-network --no-trust-network; do
   out=$case_dir/trusted$flag
   if deploy --no-build "$flag" >"$out" 2>&1; then fail "$flag was taken"; fi
   assert_contains "$out" "$flag is gone"
-  assert_contains "$out" 'wiki-server users add --data <dir>/data LOGIN --admin'
+  assert_contains "$out" 'wiki users add --data <dir>/data LOGIN --admin'
 done
 assert_lacks "$EVENTS" 'systemctl stop'
 deploy --status >"$case_dir/trusted-status" 2>&1
@@ -727,7 +927,7 @@ out=$case_dir/untrusted
 deploy --no-build >"$out" 2>&1 || fail 'the redeploy of a trusting deployment failed'
 assert_lacks "$HOME/$unit" 'trust-network'
 assert_contains "$out" "that is gone. Sign in as an administrator there, made with"
-assert_contains "$out" "$HOME/wiki-demo/bin/wiki-server users add --data $HOME/wiki-demo/data LOGIN --admin"
+assert_contains "$out" "$HOME/wiki-demo/bin/wiki users add --data $HOME/wiki-demo/data LOGIN --admin"
 [ -z "$(state trust)" ] || fail 'the state still says the network is trusted'
 pass '--trust-network is refused before anything changes, pointing at the console, and a deployment that had it loses it'
 
@@ -760,7 +960,7 @@ undeploy --purge >"$case_dir/purge" 2>&1 || fail 'undeploy --purge failed'
 [ ! -e "$HOME/.config/wiki-demo/wiki-demo.state" ] || fail '--purge kept the state'
 assert_contains "$case_dir/purge" 'kept the wiki'"'"'s data'
 p2=$(other_port "$a1")
-deploy --server --no-build --port "$p2" --admin-port "$a1" >"$case_dir/back" 2>&1 || fail 'a server deploy over kept data failed'
+deploy --server --sqlite --no-build --port "$p2" --admin-port "$a1" >"$case_dir/back" 2>&1 || fail 'a server deploy over kept data failed'
 assert_contains "$data/wiki.sqlite" 'precious'
 undeploy --purge-data >"$case_dir/purge-data" 2>&1 || fail 'undeploy --purge-data failed'
 [ ! -e "$HOME/wiki-demo" ] || fail '--purge-data kept the data'
