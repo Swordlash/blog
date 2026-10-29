@@ -6,7 +6,10 @@
 kind Google whose client id does not end with
 `.apps.googleusercontent.com`. Google takes the short form when a person
 signs in, but writes the full id into the ID token, which the server then
-refused only at the end of the sign-in.
+refused only at the end of the sign-in. A wiki that already holds a short
+Google id cannot save any other change to the server settings (the mail,
+the public address) until the provider's id is fixed: the message names
+the provider. Sign-in with it did not work before either.
 
 The records of the API with an upload (`WikiApi`, `SpacesApi`, `PagesApi`,
 `ArchiveApi`) take the multipart backend of their forms as their first
