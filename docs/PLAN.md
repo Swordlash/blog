@@ -1498,7 +1498,7 @@ must be in before it is.
   change by another process (a second `Storage` on the same database in the test) is seen
   by the next read, a user's group change is seen, a disabled user is refused at once.
 
-- **WP5.25 The administration as pages: a left navigation, one section per page, users
+- **WP5.25 (merged 2026-10-29, PR #112; see Progress) The administration as pages: a left navigation, one section per page, users
   paged with one "Manage" dialog** (the owner, 2026-10-29: "lista na adminie robi się za duża
   wzdłuż i wszerz. Niech strona ma podzakładki z lewej jak spaces, każda osobno (data,
   access, user management, etc.). Niech users ma listę z max per page i pages, i zamiast
@@ -4532,6 +4532,63 @@ Amended by the planning session after each work package's report.
   100/886/282, the smoke test on SQLite and PostgreSQL (round two; nothing in the browser
   changed after). For later: a second server instance needs the generation shared
   (`LISTEN/NOTIFY`); `Env.ceremonies` stays per process.
+
+- **WP5.25 merged** (2026-10-29, PR #112, `main` at `9b3b48c`, sixteen commits, two review
+  rounds: Claude Code at high and Codex `gpt-6.1-sol` at high on each head, 10 + 7 findings,
+  all but one fixed). **The administration as pages:** `Route.Admin` takes an `AdminSection`
+  (`overview`, `users`, `groups`, `permissions`, `server`, `backups`, `activity`), one
+  address each under `/admin/<section>/`, `/admin/` redirected to `overview` by the shell
+  (`Router.redirect`); on these routes the shell's sidebar is the administration's
+  navigation (a row of tabs on a narrow screen), breadcrumb and title name the section, each
+  section mounts its view alone with its own loading and errors. Choices: no Invitations
+  section (they stay inside Access, mounted as Permissions); export and import under
+  "Backups and data"; no "Last sign-in" (nothing stores it; sessions go on sign-out, so the
+  newest session is not it). **Users paged:** `GET api/v1/admin/users?offset=&limit=&q=
+  &administrators&disabled` (limit 25 by default, 1–100; `Wiki.Api.Admin.pageOfDirectory`
+  defines the answer every backend must give; the server reads one page in SQL, `Rows.
+  loadUserPage`, ordered by `lower(login)` by code points with `COLLATE "C"` on PostgreSQL
+  (`Backend.byCodePoints`), the administrators filter an `EXISTS` on `global_grants`, then
+  the details of those users only; the HTTP backend starts from the prerendered page as the
+  audit log does; `directory` stays for the groups). `View/Users.hs`: search over login and
+  display name (every word, case-folded; Beam writes no `ESCAPE`, so `%`, `_`, `\` match a
+  character; SQLite folds ASCII only), filter (everyone, administrators, disabled), page and
+  query in the address (a page below 1 or past the last redirected into range; the shell's
+  `canonicalAdmin` compares with `Router.current` so a view's redirect is not written back),
+  25/50/100 a page in `localStorage` (the shown page's size from the answer, the kept size
+  for the next request), "1–25 of 312", the page shown stays dimmed at its height while the
+  next is fetched, answers applied only when latest (re-checked after the second fetch for
+  a managed user who left the filter). **The Manage dialog** (`View/UserDialog.hs`): a
+  `<dialog>` through `showModal` (two one-line `browserJS` bindings; the browser gives the
+  backdrop, inertness, Escape, focus return; no package needed), one scrolling column:
+  Permissions (administrator, creates spaces), Signing in (password, password link where
+  the server mails, address, disconnect a provider), Groups, Account (danger style, asked
+  once: disable, remove the second factor, remove the account); every change saved at once
+  with a short "Saved" and the row refreshed; drawn from `managing` plus the last page
+  received, so a failed refetch neither tears it out nor reopens it; it refuses to close
+  while a request is in flight (Done and × disabled, `cancel` prevented, backdrop ignored;
+  if the browser closes it anyway the table hears `Closed` after the answer). **Removing an
+  account** (the owner's addition): offered only for a disabled login, never one's own, the
+  login typed to confirm; `DELETE api/v1/admin/users/<user>` (409 enabled, 400 oneself, 403,
+  404), `Rows.deleteUserRows` in the write bracket (cascades take sessions, memberships,
+  identities, second factor, recovery codes, links, verifications, passkeys, vault, watches,
+  notifications; grants and drafts deleted explicitly; migration 0002's users delete
+  trigger bumps the permission generation, tested); versions and comments stay under
+  `formerAuthor <login>` (`~former:<login>`, shown as "login (not a user here)"), others'
+  notifications keep the actor under the same former id; no migration; the login is free
+  again; `user.remove` in the activity log, the only table keeping the old id; console
+  `wiki-server users remove --data DIR LOGIN`; the demo keeps removed logins by id
+  (`MemState.removed`, its IndexedDB store never rewrites a version). Screenshots by
+  `toolchain/screenshots.mjs` (users, dialog, removal; light and dark) in the README.
+  Not changed from review: `keptNotice` rebuilds the record because `n {Notice.actor = …}`
+  is ambiguous under GHC 9.14 (`Happened` has `actor` too). Tests: pure (`Test.Users`),
+  stub server, contract on five backends, `Test.Storage.Removal`, a Scale case with 70,000
+  administer grants (more than a statement's parameters), HTTP, prerender, hydrate,
+  routes, and hspec-halogen for navigation, paging, the dialog and the removal. Gate on
+  `a40edd7` (then rebased on plan-only commits): 1799 server examples on SQLite and
+  PostgreSQL, wasm 106/886/295, the smoke test on SQLite and PostgreSQL. For later:
+  `loadUserPage` (LIKE, offset) and WP5.28's `loadUsersStartingWith` (indexed prefix) stay
+  separate; the in-flight-close and failed-refetch paths are untested in the browser
+  because the demo answers at once.
 
 The owner's pick of 2026-10-25 for what follows (from the planning session's list): of the
 productionisation items backups, observability and account hygiene (not HTTPS yet); of the
