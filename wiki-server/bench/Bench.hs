@@ -42,6 +42,7 @@ import Data.Aeson (decode, encode)
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as BSL
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List (lookup, (!!))
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
@@ -147,10 +148,12 @@ timings postgres = do
       let (space, target) = fst seeded
           viewer = AsUser (UserId (userId 0))
           saver = AsUser (UserId (userId 1))
-      report "page view: session, getPage, watching" 20 $ runStoredWiki st viewer $ do
-        _ <- session
-        _ <- getPage space [slugOf target]
-        void (watching (WatchPage (pageId target)))
+      let pageView = runStoredWiki st viewer $ do
+            _ <- session
+            _ <- getPage space [slugOf target]
+            void (watching (WatchPage (pageId target)))
+      report "page view: session, getPage, watching" 20 pageView
+      counted st pageView
       report "page view: the bell (500 notifications)" 5 (void (runStoredWiki st viewer notifications))
       report "save of a page 50 users watch" 10 $ do
         p <- runStoredWiki st saver (getPage space [slugOf target]) >>= either (panic . show) pure
@@ -313,6 +316,17 @@ report :: Text -> Int -> IO () -> IO ()
 report what n act = do
   ts <- sort <$> replicateM n (snd <$> timed act)
   printf "%-45s median %8.2f ms, slowest %8.2f ms (%d runs)\n" what (1000 * (ts !! (n `div` 2))) (1000 * foldr max 0 ts) n
+
+-- | Run an action once and print how many statements the storage sent the
+-- database meanwhile: the statements 'Storage.traceStatements' gives, and
+-- one @COMMIT@ for each @BEGIN@ among them, which the trace leaves out.
+counted :: Storage -> IO () -> IO ()
+counted st act = do
+  seen <- newIORef []
+  Storage.traceStatements st (\s -> modifyIORef' seen (s :)) act
+  statements <- readIORef seen
+  let transactions = length (filter ("BEGIN" `T.isPrefixOf`) statements)
+  printf "%-45s %d statements in %d transactions\n" ("  the same, statements" :: Text) (length statements + transactions) transactions
 
 -- | Make a backup into the data directory's backups, and delete it (and
 -- what is kept beside it) again.
