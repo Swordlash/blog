@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+An ID token for another client is refused with a message that names the
+token's clients and the wiki's client id ("is for the client X and not for
+this wiki's Y."), so that an operator sees the mismatch.
+
 Every transaction of the storage runs in one bracket,
 `Wiki.Server.Storage.Backend.withTransaction` (and `withTransactionEither`
 for a body that returns an `Either`, rolled back on a `Left`), which

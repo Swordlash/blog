@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+`providerProblems`, and so `checkServerSettings`, refuse a provider of
+kind Google whose client id does not end with
+`.apps.googleusercontent.com`. Google takes the short form when a person
+signs in, but writes the full id into the ID token, which the server then
+refused only at the end of the sign-in.
+
 The records of the API with an upload (`WikiApi`, `SpacesApi`, `PagesApi`,
 `ArchiveApi`) take the multipart backend of their forms as their first
 parameter (WP5.23): `Api` is `ApiWith Tmp`, what the server serves, and the
