@@ -388,7 +388,9 @@ undeploy() {
   serve_port=$(state_get serve_port)
   db=$(state_get db)
   db_port=$(state_get db_port)
-  [ "$db" != postgres ] || pg_down
+  # A deployment that moved from PostgreSQL to --sqlite still has the
+  # stopped container and its volume: --purge deletes them too.
+  pg_down
   if [ -n "$serve_port" ]; then
     serve_off "$serve_port"
     serve_port='' https_host=''

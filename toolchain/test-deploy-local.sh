@@ -717,6 +717,32 @@ assert_contains "$out" 'its database: PostgreSQL in Docker, the compose project 
 assert_contains "$out" 'backups: 2 in'
 pass 'a redeploy finds the container, backs the database up with its pg_dump between the old server and the new, and keeps the password'
 
+# From PostgreSQL to --sqlite: the wiki would start empty in a file, so the
+# deploy stops before it changes anything, unless --fresh; then the
+# container is stopped with its volume kept, and --postgres (with --fresh,
+# since the wiki is then in data/wiki.sqlite) goes back to it.
+: >"$EVENTS"
+out=$case_dir/to-sqlite
+if deploy --no-build --sqlite </dev/null >"$out" 2>&1; then fail 'a deploy from PostgreSQL to --sqlite went on without --fresh'; fi
+assert_contains "$out" 'the state is incompatible: this deployment kept the wiki in PostgreSQL (the volume wiki-demo_wiki-db)'
+assert_contains "$out" 'run this again with --fresh'
+assert_lacks "$EVENTS" 'systemctl stop'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'started'
+assert_contains "$HOME/$unit" '--database postgres://wiki@127.0.0.1:5433/wiki'
+[ "$(state db)" = postgres ] || fail 'the refused deploy changed the state'
+deploy --no-build --sqlite --fresh >"$out" 2>&1 || fail 'a deploy from PostgreSQL to --sqlite --fresh failed'
+assert_contains "$out" 'stopped the PostgreSQL container of wiki-demo; its data stays in the volume wiki-demo_wiki-db'
+assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'
+assert_contains "$HOME/$unit" "--sqlite \"$data/wiki.sqlite\""
+[ "$(state db)" = sqlite ] || fail 'the state does not record SQLite'
+[ ! -d "$data/replaced" ] || fail 'a directory of replaced files was made with nothing in it'
+: >"$EVENTS"
+deploy --no-build --postgres --fresh >"$out" 2>&1 || fail 'the deploy back to PostgreSQL failed'
+assert_contains "$EVENTS" 'docker: started the container of wiki-demo'
+assert_contains "$HOME/$unit" '--database postgres://wiki@127.0.0.1:5433/wiki'
+find "$data/replaced" -name wiki.sqlite | grep -q . || fail 'the SQLite wiki was not kept'
+pass 'a move from PostgreSQL to --sqlite is refused without --fresh, and with it stops the container and keeps its volume, which --postgres goes back to'
+
 undeploy >"$case_dir/down" 2>&1 || fail 'the undeploy failed'
 assert_contains "$case_dir/down" 'stopped the PostgreSQL container of wiki-demo; its data stays in the volume wiki-demo_wiki-db'
 assert_contains "$FAKE_DOCKER/wiki-demo" 'stopped'

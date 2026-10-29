@@ -732,17 +732,22 @@ if [ "$mode" = server ]; then
       incompatible="$dir/data/wiki.sqlite holds the wiki in SQLite, and this deployment keeps it in PostgreSQL"
     fi
   fi
+  # From PostgreSQL to SQLite: the new wiki starts empty in a file, and the
+  # old one stays in the container's volume, which is stopped below.
+  if [ "$db" = sqlite ] && [ "$prev_db" = postgres ]; then
+    incompatible="this deployment kept the wiki in PostgreSQL (the volume ${name}_wiki-db), and --sqlite keeps it in $dir/data/wiki.sqlite, so the new wiki starts empty; the PostgreSQL container is stopped and its volume kept, and --postgres goes back to it"
+  fi
   # --fresh moves a data/wiki.sqlite aside whatever it holds.
   [ -z "$fresh" ] || [ ! -f "$dir/data/wiki.sqlite" ] || incompatible=${incompatible:-$dir/data/wiki.sqlite is set aside (--fresh)}
   if [ -n "$incompatible" ] && [ -z "$fresh" ]; then
-    warn "the state is incompatible: $incompatible. Its content moves by export and import: export the wiki with the running server (Administration, Wiki data, Export the wiki), go on here, then import the archive into the new wiki (Administration, Wiki data, Import). Going on moves the file aside into $dir/data/replaced/<time>/; it is never deleted"
+    warn "the state is incompatible: $incompatible. Its content moves by export and import: export the wiki with the running server (Administration, Wiki data, Export the wiki), go on here, then import the archive into the new wiki (Administration, Wiki data, Import). Going on moves a data/wiki.sqlite aside into $dir/data/replaced/<time>/; nothing is deleted"
     if [ -t 0 ] && [ -t 1 ]; then
-      printf '%s: type yes to move it aside and start an empty wiki: ' "$PROG"
+      printf '%s: type yes to start an empty wiki: ' "$PROG"
       read -r answer || answer=
       [ "$answer" = yes ] || die "nothing was changed"
       fresh=1
     else
-      die "nothing was changed: run this again with --fresh to move $dir/data/wiki.sqlite aside and start an empty wiki"
+      die "nothing was changed: run this again with --fresh to start an empty wiki"
     fi
   fi
 fi
@@ -759,12 +764,17 @@ fi
 # first opens it, and with the old one stopped, so that the copy has every
 # write. If that fails, the old deployment goes on as it was.
 if [ "$mode" = server ] && [ -n "$incompatible" ]; then
-  aside=$dir/data/replaced/$(date -u +%Y%m%dT%H%M%SZ)
-  mkdir -p "$aside"
-  for file in wiki.sqlite wiki.sqlite-wal wiki.sqlite-shm; do
-    [ ! -f "$dir/data/$file" ] || mv "$dir/data/$file" "$aside/"
-  done
-  say "moved $dir/data/wiki.sqlite aside into $aside: the new wiki starts empty"
+  if [ -f "$dir/data/wiki.sqlite" ]; then
+    aside=$dir/data/replaced/$(date -u +%Y%m%dT%H%M%SZ)
+    mkdir -p "$aside"
+    for file in wiki.sqlite wiki.sqlite-wal wiki.sqlite-shm; do
+      [ ! -f "$dir/data/$file" ] || mv "$dir/data/$file" "$aside/"
+    done
+    say "moved $dir/data/wiki.sqlite aside into $aside: the new wiki starts empty"
+  fi
+  if [ "$db" = sqlite ] && [ "$prev_db" = postgres ]; then
+    (db_port=$prev_db_port && pg_down)
+  fi
 fi
 if [ "$mode" = server ]; then
   say "backing the database up into $dir/data/backups"
