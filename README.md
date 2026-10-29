@@ -1453,6 +1453,28 @@ the machine instead of being cached to GitHub; the built page is uploaded as the
 `native` and `format` run in parallel on hosted runners. When another run has a job
 on the machine, `plan` sends wasm to the hosted runners too (see above).
 
+Hosted builds cache `dist-newstyle` as well as the dependency store. The native
+job has a snapshot of `dist-newstyle/native`; wasm has a separate snapshot of its
+native programs and its wasm objects, interfaces and Cabal metadata. The keys
+include the runner environment, OS and architecture, compiler pins and project
+configuration. A source change can restore an older compatible snapshot; changes
+to the toolchain or configuration start a new one. Identical source reuses the
+same immutable snapshot rather than uploading another one. Every build and test
+still runs: Cabal resolves dependencies against the current package index, and
+Cabal and GHC decide which modules need recompiling. If dependency versions change
+without a source change, they rebuild as needed; the snapshot remains an older
+starting point until the next source change gives it a new key. A pull request's
+cache belongs to that pull request; after merging this workflow change, run it
+once on `main` with `runner: hosted` to seed the default-branch incremental caches
+that other branches can restore. The weekly hosted run keeps those caches warm.
+
+On the owner's runner, checkout retains only `dist-newstyle/native` and
+`dist-newstyle/wasm`, and an explicit `git clean` removes all other untracked and
+ignored workspace files. Those build directories stay with the same local cabal
+store; they are never shared with hosted runners. The generated `wasm/public`
+site is removed, never cached, and rebuilt before the tests and upload. Both build
+jobs report their incremental directory sizes in the run's summary.
+
 To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 
 1. Register a runner for this repository (Settings, Actions, Runners, New self-hosted

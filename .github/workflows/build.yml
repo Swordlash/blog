@@ -250,6 +250,19 @@ jobs:
           ${{ env.key }}-${{ env.plan }}-
           ${{ env.key }}-
 
+    # The store holds dependencies; this snapshot also keeps the wiki's own
+    # object and interface files. A source edit restores a compatible older
+    # snapshot, then Cabal and GHC rebuild what changed. An exact hit still
+    # runs every build and test step and creates no duplicate snapshot.
+    - name: Cache native build directories
+      uses: actions/cache@v5
+      env:
+        compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-native-build-v1-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}-${{ hashFiles('cabal*.project*', '**/*.cabal', 'toolchain/*.sh', 'package*.json') }}
+      with:
+        path: dist-newstyle/native
+        key: ${{ env.compatibility }}-${{ hashFiles('wiki-*/**', 'web/**') }}
+        restore-keys: ${{ env.compatibility }}-
+
     # Cheap when the restored store already satisfies the plan, and it keeps
     # dependency failures apart from failures in our own packages.
     - name: Install dependencies
@@ -315,6 +328,9 @@ jobs:
     - name: Check screenshots.mjs parses
       run: node --check toolchain/screenshots.mjs
 
+    - name: Report incremental build size
+      run: du -sh dist-newstyle/native >> "$GITHUB_STEP_SUMMARY"
+
   wasm:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
@@ -333,6 +349,17 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
+      with:
+        clean: ${{ runner.environment != 'self-hosted' }}
+
+    # Checkout normally deletes ignored build directories. On the owner's
+    # runner keep only these two, clean every other untracked file, and
+    # discard the generated site so every run builds it afresh.
+    - name: Clean the self-hosted workspace, keeping incremental builds
+      if: runner.environment == 'self-hosted'
+      run: |
+        git clean -ffdx -e /dist-newstyle/native/ -e /dist-newstyle/wasm/
+        rm -rf dist-newstyle/wasm/public
 
     - name: Pin the cabal directory
       if: runner.environment == 'github-hosted'
@@ -467,6 +494,26 @@ jobs:
           ${{ env.key }}-${{ env.plan }}-
           ${{ env.key }}-
 
+    # Separate from native's snapshot: the wasm job also builds native
+    # prerender, browser-test and smoke-test programs. Only Cabal's build
+    # directories are cached; public/ is generated afresh by build-wasm.sh.
+    # There is no fallback across toolchain or project changes, or between
+    # hosted and self-hosted stores, whose registration paths differ.
+    - name: Cache wasm and native build directories
+      if: runner.environment == 'github-hosted'
+      uses: actions/cache@v5
+      env:
+        compatibility: ${{ runner.os }}-${{ runner.arch }}-${{ runner.environment }}-wasm-build-v1-ghc-${{ env.GHC_VERSION }}-cabal-${{ env.CABAL_VERSION }}-wasm-${{ env.WASM_GHC_VERSION }}-${{ env.GHC_WASM_META_REV }}-${{ hashFiles('cabal*.project*', '**/*.cabal', 'toolchain/*.sh', 'package*.json') }}
+      with:
+        path: |
+          dist-newstyle/native
+          dist-newstyle/wasm/build
+          dist-newstyle/wasm/cache
+          dist-newstyle/wasm/packagedb
+          dist-newstyle/wasm/src
+        key: ${{ env.compatibility }}-${{ hashFiles('wiki-*/**', 'web/**') }}
+        restore-keys: ${{ env.compatibility }}-
+
     # ghc-lib-parser (under haskell-halogen-th) runs alex and happy while it
     # compiles. For the wasm build cabal makes them for wasm too (alex.wasm,
     # happy.wasm), cannot run those, and falls back to PATH, where native ones
@@ -562,6 +609,11 @@ jobs:
     - name: Stop PostgreSQL
       if: always()
       run: sh toolchain/ci-postgres.sh stop
+
+    - name: Report incremental build sizes
+      run: |
+        du -sh dist-newstyle/native >> "$GITHUB_STEP_SUMMARY"
+        du -sh --exclude=public dist-newstyle/wasm >> "$GITHUB_STEP_SUMMARY"
 
     # The built page, kept with the run as the artifact `app`: the deploy job
     # publishes it, from this run or, on a push to main the plan job
