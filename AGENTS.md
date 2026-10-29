@@ -112,4 +112,11 @@ Those of haskell-halogen's `AGENTS.md` apply unchanged, in short:
   restate the code, but a comment that explains why in riddles explains nothing. Commit
   subjects are short imperative sentences, optionally prefixed with the package
   (`wiki-core: …`); bodies say why, in the same plain English.
+- Libraries over hand-rolled code (decision in `docs/PLAN.md`, 2026-10-29): where a
+  maintained package covers a need (a protocol, a format, a browser capability), use it;
+  write by hand only what is this wiki's own and the glue a library needs. Nothing is
+  vendored when a package exists on Hackage or npm. A package that does not build on wasm
+  is a reason to look for another, not to reimplement it; if nothing exists, say so in the
+  report so the plan records it. Keep JavaScript to `browserJS` bindings and a few lines
+  around a library's call.
 - Each package keeps a `CHANGELOG.md` with an `Unreleased` section once it has users.

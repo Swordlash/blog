@@ -260,6 +260,19 @@ confirms it against reality and the plan is amended if it does not hold.
     (GPL-3.0-or-later, served unmodified as its own worker beside its licence text) and its
     BaKoMa Computer Modern fonts, whose licence the release package must determine and
     name (the npm package ships none).
+25. **Libraries over hand-rolled code** (the owner, 2026-10-29: "wszędzie używamy
+    bibliotek, jak najmniej vendorowanego kodu, jak najmniej hand rolled javascriptu").
+    Where a maintained library covers a need, it is used: a protocol (JWT and JWKS through
+    `jose`, WebAuthn, OIDC, TOTP, multipart, HTTP), a data structure, a browser capability
+    (a service worker through Workbox rather than by hand, an editor through CodeMirror).
+    Hand-written code is for what is this wiki's own (the domain, the permission rules,
+    the Markdown allowlist) and for the glue a library needs to be called from Haskell
+    (`browserJS` bindings, a few lines around a library's call). Nothing is vendored into
+    the repository when a package exists (Hackage, npm). A package is chosen for being
+    maintained and building on the targets (native, and wasm where the code runs in the
+    browser); a package that does not build on wasm is a reason to look for another, not
+    to write the thing by hand, unless nothing exists, which the plan then records. The
+    hand-written code that predates this rule is listed for review in WP5.27.
 
 ## Repository layout
 
@@ -1539,7 +1552,8 @@ must be in before it is.
   live minutes, per-user switching on and off, and the wiki is the identity provider. The
   wiki as an OIDC issuer: under the public address it serves
   `/.well-known/openid-configuration` and `/.well-known/jwks.json` (one ES256 key pair,
-  made when federation is first turned on and kept as a `Secret` in the server settings;
+  made when federation is first turned on and kept as a `Secret` in the server settings,
+  the JWT signed and the JWKS written with the `jose` package, nothing by hand;
   a "new key" button rotates it, the old public key stays published for an hour). For a
   user allowed to, `POST api/v1/assistant/token` mints a JWT (`iss` the public address,
   `sub` the user's id, `aud` `https://api.anthropic.com`, `exp` five minutes, a random
@@ -1587,6 +1601,22 @@ must be in before it is.
   says next to Save. Tests: hspec-halogen for both modes, the countdown and its stops,
   the setting kept across a reload; the mode and the timeout are part of the vault's
   settings (WP5.21) so they follow the user across devices.
+
+- **WP5.27 Libraries over hand-rolled code: the review** (decision 25, the owner,
+  2026-10-29). The code written by hand before the rule, each judged against a maintained
+  package: `Wiki.Server.WebAuthn` (343 lines; `webauthn` 0.12 on Hackage covers
+  registration and assertion with attestation formats and COSE keys), the ID token reading
+  in `Wiki.Server.Oidc` (`jose` for the JWT, the discovery and the token exchange kept, or
+  an OIDC client package if one is maintained), `Wiki.Server.Totp` (171 lines of RFC 6238
+  over crypton; `otp-authenticator` or a maintained alternative), `Wiki.Server.Limiter`
+  (109 lines; a rate-limiting package if one fits), `Wiki.Server.Address` (the proxy
+  headers; `wai-extra`'s middleware), the service worker and its registration
+  (`web/src/sw.js`, `pwa.mjs`, ~500 lines; Workbox), and the JavaScript under
+  `wiki-app/jsbits/` and `web/src/` line by line: what is glue around a library stays,
+  what reimplements one goes. For each: replaced, or kept with the reason (no maintained
+  package, does not build on wasm, the package does less than the code needs), recorded
+  in the Progress entry. Behaviour unchanged, the existing tests prove it; a replacement
+  that changes a wire format or a stored value is not one.
 
 - **Later, by the owner (2026-10-28, "PRF jest spoko na później"), picked up the same day as
   WP5.21 B: the assistant's API keys synchronised with a passkey.** The keys stay out of
