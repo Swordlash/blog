@@ -15,12 +15,12 @@ on:
       - '**.md'
   workflow_dispatch:
     inputs:
-      # Which runner a run by hand takes: the owner's (the default) when it
-      # is free, as for a push, or GitHub's hosted ones whatever the owner's
+      # Which runner wasm takes on a run by hand: the owner's (the default)
+      # when it is free, as for a push, or GitHub's hosted ones whatever the owner's
       # machine is doing, to exercise the hosted path, or to get a run going
       # while the machine is off.
       runner:
-        description: "Where to run: self-hosted (the owner's machine, when it is free) or hosted (ubuntu-latest)"
+        description: "Where to run wasm: self-hosted (the owner's machine, when it is free) or hosted (ubuntu-latest)"
         type: choice
         options:
           - self-hosted
@@ -28,8 +28,8 @@ on:
         default: self-hosted
   # Once a week, on the hosted runners whatever the owner's machine is doing
   # (plan sends a scheduled run there): GitHub evicts a cache nobody has
-  # read for seven days, and the hosted caches on main (the cabal stores,
-  # the wasm toolchain, Chromium) are read only by runs that go hosted, a
+  # read for seven days, and the hosted wasm caches on main (the cabal store,
+  # the wasm toolchain, Chromium) are read only when wasm goes hosted, a
   # fork's or a bot's pull request or a busy week. The run reads them, and
   # saves them again, so a pull request that lands on the hosted runners
   # never starts from an empty store (the wasm store takes three quarters
@@ -53,10 +53,12 @@ concurrency:
 permissions:
   contents: read
 
-# Where the jobs run is decided once, by the first job, `plan`, which runs
-# on GitHub's hosted runners for every run (seconds, and free on a public
-# repository) and hands its answer to every other job's `runs-on`. It goes
-# by trust first, by one expression (`plan`'s TRUSTED). The
+# Only wasm may use the owner's runner. native, format and deploy always
+# run on ubuntu-latest; the three build jobs run in parallel after plan.
+# The first job, `plan`, runs on GitHub's hosted runners for every run
+# (seconds, and free on a public repository) and hands its runner choice
+# only to wasm's `runs-on`. It goes by trust first, by one expression
+# (`plan`'s TRUSTED). The
 # self-hosted runner registered for this repository is the owner's machine,
 # and a job there runs whatever the checked-out tree builds (Template
 # Haskell, cabal's dependencies, npm's scripts) as the runner's user. So it
@@ -126,7 +128,7 @@ env:
 jobs:
   # What the run does and where, decided on a hosted runner for every run:
   # whether the build jobs need to run at all (on a push), and which runner
-  # they and the deploy take (see the top).
+  # wasm takes (see the top).
   plan:
     runs-on: ubuntu-latest
     permissions:
@@ -160,13 +162,13 @@ jobs:
         REQUIRE_ARTIFACT: ${{ github.event.repository.private == false && 'app' || '' }}
       run: sh toolchain/ci-already-tested.sh "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
-    # For every event, on a push too (the deploy needs a runner even when
-    # the build jobs skip). TRUSTED is the trust rule (see the top): false
-    # for a pull request from a fork, anything a bot started, and a run by
-    # hand asking for the hosted runners. The weekly run asks for them too:
+    # For every event, pick only wasm's runner. TRUSTED is the trust rule
+    # (see the top): false for a pull request from a fork, anything a bot
+    # started, and a run by hand asking for the hosted runners. The weekly
+    # run asks for them too:
     # it is there to keep the hosted caches alive. The script prints its
     # answer and why in one line, in the log and in the run's summary.
-    - name: Pick the runner
+    - name: Pick the wasm runner
       id: pick
       env:
         GH_TOKEN: ${{ github.token }}
@@ -177,8 +179,7 @@ jobs:
   native:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
-    # The runner plan picked; see the top.
-    runs-on: ${{ needs.plan.outputs.runner }}
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
@@ -582,8 +583,7 @@ jobs:
   format:
     needs: plan
     if: needs.plan.outputs.tested != 'true'
-    # The runner plan picked; see the top.
-    runs-on: ${{ needs.plan.outputs.runner }}
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout code
@@ -647,8 +647,7 @@ jobs:
       github.event.repository.private == false &&
       (needs.plan.outputs.tested == 'true' ||
       (needs.native.result == 'success' && needs.wasm.result == 'success' && needs.format.result == 'success')) }}
-    # The runner plan picked for the build jobs; see the top.
-    runs-on: ${{ needs.plan.outputs.runner }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read

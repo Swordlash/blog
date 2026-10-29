@@ -1343,10 +1343,10 @@ the store complete can wait for that with `sh toolchain/bootstrap.sh warm`.
 ## CI
 
 `.github/workflows/build.yml` runs three build jobs on every pull request to `main` and
-every push to it, after a first job, `plan` (below): `native` (build and test natively,
-and test the deploy scripts with `toolchain/test-deploy-local.sh`), `wasm` (build for
-wasm, run the test suites and the smoke test in headless Chromium, and keep the built
-page as the run's `app` artifact) and `format` (`npm run format-check`).
+every push to it, in parallel after a first job, `plan` (below): `native` (build and
+test natively, and test the deploy scripts with `toolchain/test-deploy-local.sh`),
+`wasm` (build for wasm, run the test suites and the smoke test in headless Chromium,
+and keep the built page as the run's `app` artifact) and `format` (`npm run format-check`).
 
 A fourth, `deploy`, publishes the demo on GitHub Pages, at
 <https://swordlash.github.io/blog/>, on a push to `main` once the three have
@@ -1372,16 +1372,17 @@ fast-forwarded to their head, so the push to `main` is normally that very commit
 
 ### Which runner, and who may run on it
 
-The build jobs and the deploy run on one of two kinds of runner, which the first
-job, `plan`, picks for the whole run. `plan` itself runs on GitHub's hosted runners
-for everyone (a few seconds, free on a public repository), and every other job's
-`runs-on` is its answer:
+`native`, `format` and `deploy` always run on GitHub's hosted runners
+(`ubuntu-latest`). Only `wasm` uses the runner the first job, `plan`, picks.
+`plan` itself runs on GitHub's hosted runners for everyone (a few seconds, free on
+a public repository). It chooses where `wasm` runs:
 
 - **GitHub's hosted runners** (`ubuntu-latest`) for a run that is not trusted: a
   pull request from a fork (its head's repository is not this one), anything a
   bot started (an actor whose name ends in `[bot]`, such as Dependabot, whose
   branches are in this repository), and a run by hand with the input `runner` set
-  to `hosted`. The rule is one expression in the workflow, `plan`'s `TRUSTED`.
+  to `hosted`. The weekly scheduled run also uses hosted runners to keep the wasm
+  caches warm. The rule is one expression in the workflow, `plan`'s `TRUSTED`.
 - For a trusted run (a push to `main`, a run by hand, a pull request whose head
   branch is in this repository, which only someone with write access pushes: the
   owner, and the Claude sessions working for them), **the self-hosted runner**
@@ -1396,8 +1397,8 @@ for everyone (a few seconds, free on a public repository), and every other job's
 GitHub has no "whichever is free" of its own (`runs-on` with several labels asks for
 a runner that carries them all), hence the extra job. `plan` writes what it picked
 and why in one line in the run's summary. Two runs that start within seconds of each
-other can both find the machine free and queue there one after the other, as every
-run did before. What the token cannot see is whether the machine is on (that needs
+other can both find the machine free and queue their wasm jobs there one after
+the other. What the token cannot see is whether the machine is on (that needs
 `administration: read`, which a workflow's token cannot have): a run sent to it while
 it is off waits in the queue until it is back. The way out is to cancel it and run the
 workflow by hand with `runner: hosted` (*Run workflow*; the input is `self-hosted`,
@@ -1442,15 +1443,15 @@ What remains:
 On a hosted
 runner the toolchain comes from `haskell-actions/setup`, `setup-node`, ghc-wasm-meta
 and caches of the cabal store and the wasm tools, as in haskell-halogen. On a
-self-hosted runner every job runs `sh toolchain/bootstrap.sh toolchain` instead, which
-installs the toolchain into the runner user's home the first time (a while: GHC, the
-wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and puts it on
-`PATH` with `sh toolchain/bootstrap.sh path`. Nothing is cached or uploaded to GitHub
-there (the account's artifact storage quota refused uploads while the repository was
-private): the toolchain, the cabal
-store and the built page stay on the machine. One runner runs one job at a time, so
-a run's jobs queue there one after another, and a run that finds another's jobs on
-the machine goes to the hosted runners (see above).
+self-hosted runner the wasm job runs `sh toolchain/bootstrap.sh toolchain` instead,
+which installs the toolchain into the runner user's home the first time (a while:
+GHC, the wasm compiler, Node, Chromium, fourmolu) and only checks it afterwards, and
+puts it on
+`PATH` with `sh toolchain/bootstrap.sh path`. The toolchain and cabal store stay on
+the machine instead of being cached to GitHub; the built page is uploaded as the
+`app` artifact while the repository is public. Only wasm can queue on this runner;
+`native` and `format` run in parallel on hosted runners. When another run has a job
+on the machine, `plan` sends wasm to the hosted runners too (see above).
 
 To run CI on a machine of your own (x86_64 Linux, Debian or Ubuntu):
 
