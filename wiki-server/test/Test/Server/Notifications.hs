@@ -315,6 +315,25 @@ inTheStorage backing = describe "in the storage" $ do
     readIORef sent `shouldReturn` []
     Storage.reading st (countWhere wikiDb.notifications (\n -> n.mail)) `shouldReturn` 0
 
+  it "mails nothing to a user who may not sign in, and takes their notifications out of the mail queue" $ withDemo backing $ \st -> do
+    mailOn st
+    sent <- newIORef []
+    wake <- newWake
+    let notifier = newNotifier (silentLogger (const pass)) (\_ _ m -> Right <$> modifyIORef' sent (m :)) wake st
+    writing st (verify "user-reader" "rita@example.org")
+    blog <- as' st "admin" (getSpace (path "blog")) >>= ok
+    notes <- as' st "admin" (getPage blog.id (path "notes-on-haskell")) >>= ok
+    _ <- as' st "editor" (savePage notes.id notes.updatedAt notes.title "For @reader.") >>= ok
+    writing st (runUpdate (update wikiDb.users (\u -> u.disabled <-. val_ True) (\u -> u.id ==. val_ "user-reader")))
+    now <- getCurrentTime
+    mailRound notifier now
+    readIORef sent `shouldReturn` []
+    Storage.reading st (countWhere wikiDb.notifications (\n -> n.mail)) `shouldReturn` 0
+    -- Enabled again, they are not mailed what was queued while they were not.
+    writing st (runUpdate (update wikiDb.users (\u -> u.disabled <-. val_ False) (\u -> u.id ==. val_ "user-reader")))
+    mailRound notifier now
+    readIORef sent `shouldReturn` []
+
   it "signs the unsubscribe link, which turns off only its user's mail" $ withDemo backing $ \st -> do
     let mailOf user = Storage.reading st (runSelectReturningOne (select ((\u -> u.notification_mail) <$> filter_ (\u -> u.id ==. val_ user) (all_ wikiDb.users))))
     token <- writing st (unsubscribeToken (UserId "user-reader"))

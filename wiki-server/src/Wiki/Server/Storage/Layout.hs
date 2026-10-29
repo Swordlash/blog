@@ -12,6 +12,8 @@
 -- names), or a PostgreSQL database elsewhere ('Database').
 module Wiki.Server.Storage.Layout
   ( Database (..)
+  , PgDatabase (..)
+  , postgresAt
   , defaultDatabase
   , databaseFile
   , attachmentsDir
@@ -25,38 +27,83 @@ import Data.ByteString.Char8 qualified as BC
 import GHC.Show qualified
 import Protolude
 import System.FilePath ((</>))
+import Wiki.Server.Secret (Secret)
 
 -- | 'Database' is where the wiki's database is: a SQLite file, or a
--- PostgreSQL database by its connection URL or libpq connection string.
--- The URL may hold a password, so its 'Show' hides it ('withoutPassword').
+-- PostgreSQL database ('PgDatabase').
 data Database
   = SqliteFile FilePath
-  | PostgresAt ByteString
+  | PostgresAt PgDatabase
+  deriving stock (Eq, Show)
+
+-- | 'PgDatabase' is a PostgreSQL database: its connection URL (or libpq
+-- connection string), and its password when the password comes from a
+-- file. The password is kept apart from the URL so that nothing that shows
+-- the URL (the start-up log, an error, 'Show') can show it. It joins the
+-- URL only where a connection is opened ("Wiki.Server.Storage.Postgres").
+-- A URL given whole, with its password in it (@WIKI_DATABASE_URL@ may be),
+-- is shown with the password replaced ('withoutPassword').
+data PgDatabase = PgDatabase
+  { url :: ByteString
+  , password :: Maybe Secret
+  }
   deriving stock (Eq)
 
-instance Show Database where
-  showsPrec d = \case
-    SqliteFile f -> GHC.Show.showParen (d > 10) (GHC.Show.showString "SqliteFile " . GHC.Show.showsPrec 11 f)
-    PostgresAt url -> GHC.Show.showParen (d > 10) (GHC.Show.showString "PostgresAt " . GHC.Show.showsPrec 11 (withoutPassword url))
+instance Show PgDatabase where
+  showsPrec d db =
+    GHC.Show.showParen (d > 10) $
+      GHC.Show.showString "PgDatabase {url = "
+        . GHC.Show.showsPrec 0 (withoutPassword db.url)
+        . GHC.Show.showString ", password = "
+        . GHC.Show.showsPrec 0 db.password
+        . GHC.Show.showString "}"
+
+-- | The PostgreSQL database at a URL that needs no password apart from it.
+postgresAt :: ByteString -> Database
+postgresAt url = PostgresAt PgDatabase {url, password = Nothing}
 
 -- | The database a data directory has when nothing else is said: the
 -- SQLite file in it ('databaseFile').
 defaultDatabase :: FilePath -> Database
 defaultDatabase = SqliteFile . databaseFile
 
--- | A connection URL with its password, if it has one, replaced by @***@,
--- for logs and messages: @postgres:\/\/wiki:***\@db\/wiki@.
+-- | A connection URL with its passwords replaced by @***@, for logs and
+-- messages: the password of the URL's user part
+-- (@postgres:\/\/wiki:***\@db\/wiki@), and the value of every
+-- @password=@ parameter, in a URL's query (@?password=***@) or in a libpq
+-- connection string (@password=***@).
 withoutPassword :: ByteString -> ByteString
-withoutPassword url = case BC.breakSubstring "://" url of
-  (scheme, rest)
-    | not (BC.null rest)
-    , (authority, path) <- BC.break (== '/') (BC.drop 3 rest)
-    , (credentials, host) <- BC.breakSubstring "@" authority
-    , not (BC.null host)
-    , (user, password) <- BC.break (== ':') credentials
-    , not (BC.null password) ->
-        scheme <> "://" <> user <> ":***" <> host <> path
-  _ -> url
+withoutPassword = parameters . userPart
+  where
+    userPart url = case BC.breakSubstring "://" url of
+      (scheme, rest)
+        | not (BC.null rest)
+        , (authority, path) <- BC.break (== '/') (BC.drop 3 rest)
+        , (credentials, host) <- BC.breakSubstring "@" authority
+        , not (BC.null host)
+        , (user, password) <- BC.break (== ':') credentials
+        , not (BC.null password) ->
+            scheme <> "://" <> user <> ":***" <> host <> path
+      _ -> url
+    -- Each "password=" with its value, up to the next parameter (an & in
+    -- a URL, a space in a connection string), replaced. A quoted value in
+    -- a connection string ends at its closing quote.
+    parameters url = case BC.breakSubstring "password=" url of
+      (before, found)
+        | BC.null found -> url
+        | otherwise ->
+            let value = BC.drop (BC.length "password=") found
+                rest
+                  | "'" `BC.isPrefixOf` value = BC.drop 1 (quoted (BC.drop 1 value))
+                  | otherwise = BC.dropWhile (\ch -> ch /= '&' && ch /= ' ') value
+             in before <> "password=***" <> parameters rest
+    -- The text from a quoted value's closing quote on, given the text
+    -- after its opening quote. A backslash escapes the character after it.
+    quoted v = case BC.uncons v of
+      Just ('\\', more) -> quoted (BC.drop 1 more)
+      Just ('\'', _) -> v
+      Just (_, more) -> quoted more
+      Nothing -> v
 
 -- | The SQLite database a data directory has by default.
 databaseFile :: FilePath -> FilePath

@@ -73,7 +73,7 @@ import Wiki.Core.Slug (Slug, mkSlug)
 import Wiki.Core.Space (Space (..))
 import Wiki.Server.Events qualified as Events
 import Wiki.Server.Feed (FeedKind (..), feedApplication, newFeedCache, sitemapApplication)
-import Wiki.Server.Storage (Config (..), Database (..), Place (..), Storage, Who (..), backUp, defaultConfig, inDataDir, runStoredWiki, withStorage, writing)
+import Wiki.Server.Storage (Config (..), Place (..), Storage, Who (..), backUp, defaultConfig, inDataDir, postgresAt, runStoredWiki, withStorage, writing)
 import Wiki.Server.Storage qualified as Storage
 import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)
 import Wiki.Server.Storage.Rows (chunksOf, insertPage, insertVersion, micro)
@@ -139,7 +139,7 @@ timings postgres = do
   withSystemTempDirectory "wiki-bench" $ \dir -> do
     let at = case postgres of
           Nothing -> inDataDir (dir </> "data")
-          Just url -> Place {dataDir = dir </> "data", database = PostgresAt url, programs = defaultPgPrograms {dump}}
+          Just url -> Place {dataDir = dir </> "data", database = postgresAt url, programs = defaultPgPrograms {dump}}
     printf "on %s\n" (maybe "SQLite" (const "PostgreSQL") postgres :: Text)
     withStorage defaultConfig {publish = Events.publish hub, notify = Events.notify hub} at $ \st -> do
       seeded <- timed (seed st)

@@ -33,7 +33,12 @@
 -- A backup is restored with 'restore' (@wiki-server restore@), into a data
 -- directory no server has open: a running server holds the directory's
 -- lock file ('lockDataDir'), which the operating system releases when the
--- process ends, however it ends.
+-- process ends, however it ends. On PostgreSQL that is not enough, since
+-- servers on other data directories may use the same database: every
+-- open storage also holds the database's advisory lock shared, and a
+-- restore takes it alone ('withDatabaseAlone'), so it refuses to run while
+-- any server or console has the database open. PostgreSQL releases that
+-- lock when the connection that holds it ends.
 module Wiki.Server.Storage.Backup
   ( -- * Backups
     backupInto
@@ -83,9 +88,9 @@ import Wiki.Core.Id (BlobId (..))
 import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Storage.Backend (Backend (..), rollBackOnError)
 import Wiki.Server.Storage.Blobs (blobFile, storedBlobs)
-import Wiki.Server.Storage.Layout (Database (..), attachmentsDir)
+import Wiki.Server.Storage.Layout (Database (..), PgDatabase, attachmentsDir)
 import Wiki.Server.Storage.Migrate (Migration (..), databaseVersion, migrationsFor, schemaVersion)
-import Wiki.Server.Storage.Postgres (PgPrograms, checkDump, closePostgres, dumpPostgres, exportSnapshot, openPostgres, restorePostgres)
+import Wiki.Server.Storage.Postgres (PgPrograms, checkDump, closePostgres, dumpPostgres, exportSnapshot, openPostgres, restorePostgres, withDatabaseAlone)
 import Wiki.Server.Storage.Rows (deleteSettingsLike, referencedBlobs, settingValue, settingsLike, storeSetting)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, integrityProblems, openSqlite, vacuumInto)
 
@@ -136,21 +141,27 @@ backupInto programs database dir t = do
   where
     copy target = case database of
       SqliteFile file -> Right <$> bracket (openSqlite ReadWrite file) closeSqlite (`vacuumInto` target)
-      PostgresAt url -> bracket (openPostgres url) closePostgres $ \c -> do
-        -- A read-only transaction whose snapshot the dump reads: the facts
-        -- kept beside the dump are read in the same snapshot.
-        begin False c
-        -- The transaction only reads: it ends with a rollback, whether
-        -- the dump worked or not.
-        (<* rollbackTransaction c) . rollBackOnError c $ do
-          snapshot <- runDb c exportSnapshot
-          facts <- DumpFacts <$> schemaVersion c <*> (map (\b -> b.text) . Set.toList <$> runDb c referencedBlobs)
-          dumped <- dumpPostgres programs url (Just snapshot) target
-          for_ dumped (\() -> encodeFile (factsFile target) facts)
-          pure dumped
+      PostgresAt db -> dumpWithFacts programs db target
     problemsOf target
       | ".pgdump" `T.isSuffixOf` T.pack target = either (: []) (const []) <$> checkDump programs target
       | otherwise = integrityProblems target
+
+-- | Dump a PostgreSQL database into a file, with its facts beside it
+-- ('factsFile'): a backup, or the database a restore replaces, which can
+-- then be restored as a backup is.
+dumpWithFacts :: PgPrograms -> PgDatabase -> FilePath -> IO (Either Text ())
+dumpWithFacts programs db target = bracket (openPostgres db) closePostgres $ \c -> do
+  -- A read-only transaction whose snapshot the dump reads: the facts
+  -- kept beside the dump are read in the same snapshot.
+  begin False c
+  -- The transaction only reads: it ends with a rollback, whether the
+  -- dump worked or not.
+  (<* rollbackTransaction c) . rollBackOnError c $ do
+    snapshot <- runDb c exportSnapshot
+    facts <- DumpFacts <$> schemaVersion c <*> (map (\b -> b.text) . Set.toList <$> runDb c referencedBlobs)
+    dumped <- dumpPostgres programs db (Just snapshot) target
+    for_ dumped (\() -> encodeFile (factsFile target) facts)
+    pure dumped
 
 -- | Back up a database into a data directory's backups, and delete all
 -- but the last @keep@ of them (never the one just made): what the deploy
@@ -163,7 +174,7 @@ backupNow :: PgPrograms -> Database -> FilePath -> Int -> IO (Either Text (Maybe
 backupNow programs database dataDir keep = do
   there <- case database of
     SqliteFile file -> ifM (doesFileExist file) (bracket (openSqlite ReadOnly file) closeSqlite (fmap (> 0) . databaseVersion)) (pure False)
-    PostgresAt url -> bracket (openPostgres url) closePostgres (fmap (> 0) . databaseVersion)
+    PostgresAt db -> bracket (openPostgres db) closePostgres (fmap (> 0) . databaseVersion)
   if not there
     then pure (Right Nothing)
     else do
@@ -380,13 +391,16 @@ data Restore = Restore
 -- The backup is checked first (a sound copy, of a wiki, at a schema
 -- version this program knows, of the same kind of database), and the
 -- directory's lock is taken, so that a server running on it, or one
--- started meanwhile, is refused. The database it replaces is not deleted:
--- a SQLite file is moved as it is, with its @-wal@ and @-shm@ files, into
--- @replaced\/\<time>\/@ beside the data, and a PostgreSQL database is
--- dumped there first, so that a restore made by mistake can itself be
--- undone. The backup stays among the backups. The attachment files the
--- restored database refers to and the directory lacks are listed, so that
--- the operator knows to bring them.
+-- started meanwhile, is refused. On PostgreSQL the database's lock is
+-- taken too, which refuses a server or console on any data directory.
+--
+-- The database it replaces is not deleted: a SQLite file is moved as it
+-- is, with its @-wal@ and @-shm@ files, into @replaced\/\<time>\/@ beside
+-- the data, and a PostgreSQL database is dumped there first, with its
+-- facts as a backup has them, so that a restore made by mistake can itself
+-- be undone with 'restore'. The backup stays among the backups. The
+-- attachment files the restored database refers to and the directory
+-- lacks are listed, so that the operator knows to bring them.
 restore :: Restore -> IO (Either Text [Text])
 restore r = runExceptT $ do
   present <- liftIO (doesFileExist r.backupFile)
@@ -395,7 +409,7 @@ restore r = runExceptT $ do
   let ofPostgres = ".pgdump" `T.isSuffixOf` T.pack r.backupFile
   (wanted, steps) <- case (ofPostgres, r.database) of
     (False, SqliteFile file) -> restoreSqlite r file
-    (True, PostgresAt url) -> restorePostgresDump r url
+    (True, PostgresAt db) -> restorePostgresDump r db
     (False, PostgresAt _) -> throwError "This is a backup of a wiki on SQLite, and the database is PostgreSQL's: export the wiki from a server on that backup, and import the archive into this one."
     (True, SqliteFile _) -> throwError "This is a backup of a wiki on PostgreSQL, and the database is a SQLite file: give the PostgreSQL database to restore it into (--database), or export the wiki from a server on that backup and import the archive."
   brought <- liftIO (maybe (pure 0) (copyBlobs (attachmentsDir r.dataDir)) r.attachments)
@@ -431,8 +445,18 @@ withLock dataDir body = do
   ExceptT (runExceptT body `finally` unlockDataDir lock)
 
 -- | Where a restore keeps what it replaced.
+-- The directory is named by the time, and is a new one: a second restore
+-- in the same second (one that undoes the first, from what the first set
+-- aside) gets a name with a number after it, and never writes over the
+-- file it restores.
 asideIn :: FilePath -> IO FilePath
-asideIn dataDir = (\now -> dataDir </> "replaced" </> formatTime defaultTimeLocale "%Y%m%dT%H%M%SZ" now) <$> getCurrentTime
+asideIn dataDir = do
+  now <- getCurrentTime
+  let base = dataDir </> "replaced" </> formatTime defaultTimeLocale "%Y%m%dT%H%M%SZ" now
+      free n = do
+        let dir = if n == 1 then base else base <> "-" <> show n
+        ifM (doesDirectoryExist dir) (free (n + 1)) (pure dir)
+  free (1 :: Int)
 
 restoreSqlite :: Restore -> FilePath -> ExceptT Text IO (Set BlobId, [Text])
 restoreSqlite r database = do
@@ -456,23 +480,28 @@ restoreSqlite r database = do
           <> ["The database it replaced is kept in " <> toS aside <> "." | not (null existing)]
       )
 
-restorePostgresDump :: Restore -> ByteString -> ExceptT Text IO (Set BlobId, [Text])
-restorePostgresDump r url = do
+restorePostgresDump :: Restore -> PgDatabase -> ExceptT Text IO (Set BlobId, [Text])
+restorePostgresDump r db = do
   ExceptT (checkDump r.programs r.backupFile)
   facts <- ExceptT (first (\e -> "The facts kept beside the backup cannot be read (" <> toS (factsFile r.backupFile) <> "): " <> T.pack e) <$> eitherDecodeFileStrict' @DumpFacts (factsFile r.backupFile))
   checkVersion r.backupFile "postgres" facts.schema
-  withLock r.dataDir $ do
+  -- The data directory's lock keeps a server off this directory; the
+  -- database's lock, taken alone, keeps every server and console off the
+  -- database, whatever directory they run on.
+  withLock r.dataDir $ ExceptT $ fmap (fromMaybe (Left inUse)) $ withDatabaseAlone db $ runExceptT $ do
     aside <- liftIO (asideIn r.dataDir)
-    had <- liftIO (bracket (openPostgres url) closePostgres (\c -> not . null <$> runDb c tableNames))
+    had <- liftIO (bracket (openPostgres db) closePostgres (\c -> not . null <$> runDb c tableNames))
     when had $ do
       liftIO (createDirectoryIfMissing True aside)
-      ExceptT (first ("The database to be replaced could not be set aside: " <>) <$> dumpPostgres r.programs url Nothing (aside </> "wiki.pgdump"))
-    ExceptT (first ("The backup could not be restored, and the database is as it was: " <>) <$> restorePostgres r.programs url r.backupFile)
+      ExceptT (first ("The database to be replaced could not be set aside: " <>) <$> dumpWithFacts r.programs db (aside </> "wiki.pgdump"))
+    ExceptT (first ("The backup could not be restored, and the database is as it was: " <>) <$> restorePostgres r.programs db r.backupFile)
     pure
       ( Set.fromList (map BlobId facts.blobs)
       , ["Restored " <> toS r.backupFile <> " into the PostgreSQL database; the server brings it up to its schema when it starts."]
-          <> ["The database it replaced is kept, dumped, in " <> toS (aside </> "wiki.pgdump") <> "." | had]
+          <> ["The database it replaced is kept, dumped, in " <> toS (aside </> "wiki.pgdump") <> ", which wiki-server restore takes as it takes a backup." | had]
       )
+  where
+    inUse = "The PostgreSQL database is open in a running server or console (from this data directory or another): stop it, and restore again."
 
 -- | Copy into a directory of blobs the files of another that it lacks (a
 -- blob's file never changes, so one that is there is the right one). The

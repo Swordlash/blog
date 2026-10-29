@@ -79,6 +79,8 @@ module Wiki.Server.Storage
   , Place (..)
   , inDataDir
   , Database (..)
+  , PgDatabase (..)
+  , postgresAt
   , writing
   , writingEither
   , reading
@@ -214,10 +216,10 @@ import Wiki.Server.Storage.Backend (Backend (..), rollBackOnError)
 import Wiki.Server.Storage.Backup (DataLock, KeptBackups, backupBlobs, backupFiles, backupInto, loadBackupSettings, loadLastBackup, lockDataDir, storeBackupSettings, storeLastBackup, unlockDataDir)
 import Wiki.Server.Storage.Blobs (blobFile, collectBlobs, storeBlob, storeBlobFile)
 import Wiki.Server.Storage.Comments qualified as Comments
-import Wiki.Server.Storage.Layout (Database (..), attachmentsDir, backupsDir, defaultDatabase, temporaryDir)
+import Wiki.Server.Storage.Layout (Database (..), PgDatabase (..), attachmentsDir, backupsDir, defaultDatabase, postgresAt, temporaryDir)
 import Wiki.Server.Storage.Migrate (migrate, schemaVersion)
 import Wiki.Server.Storage.Notifications qualified as Notifications
-import Wiki.Server.Storage.Postgres (PgPrograms, defaultPgPrograms, openPostgres)
+import Wiki.Server.Storage.Postgres (PgPrograms, defaultPgPrograms, holdDatabaseShared, openPostgres)
 import Wiki.Server.Storage.Rows
 import Wiki.Server.Storage.Sqlite (Access (..), openSqlite)
 
@@ -243,6 +245,12 @@ data Storage = Storage
   -- ^ The data directory's lock. A storage opened with 'openStorage',
   -- which may delete files in the directory, holds it. A storage opened
   -- beside a running server ('withStorageAside') does not.
+  , release :: IO ()
+  -- ^ Release the database's lock: on PostgreSQL, every storage holds it
+  -- shared while it is open, so that a restore, which takes it alone,
+  -- cannot replace the database under it
+  -- ('Wiki.Server.Storage.Postgres.holdDatabaseShared'). On SQLite this
+  -- does nothing: the data directory's lock does the same there.
   }
 
 -- | 'Engine' is the storage's connections to its database, of whichever
@@ -336,24 +344,28 @@ openWith collect config place = do
   createDirectoryIfMissing True place.dataDir
   lock <- if collect then Just <$> (lockDataDir place.dataDir >>= either (throwIO . DataDirInUse) pure) else pure Nothing
   flip onException (traverse_ unlockDataDir lock) $ do
-    engine <- case place.database of
-      SqliteFile file -> Engine <$> pools (openSqlite ReadWrite file) (openSqlite ReadOnly file)
-      PostgresAt url -> Engine <$> pools (openPostgres url) (openPostgres url)
-    flip onException (closeEngine engine) $ do
-      (settings, serverKept) <- case engine of
-        Engine p -> withResource p.writer $ \c -> do
-          _ <- migrate c
-          when collect $ do
-            collectGarbage c place.dataDir
-            -- Uploads and exports left by a server that stopped: nothing
-            -- is writing them now.
-            removePathForcibly (temporaryDir place.dataDir)
-          -- The settings are read here, on the writer, before any reader
-          -- is used. A reader then always finds them in memory, and never
-          -- writes the in-memory copy.
-          (,) <$> (newIORef . Just =<< runDb c loadSettings) <*> (newIORef . Just =<< runDb c loadServerSettings)
-      tracer <- newIORef Nothing
-      pure Storage {engine, place, config, settings, serverKept, tracer, lock}
+    release <- case place.database of
+      SqliteFile _ -> pure pass
+      PostgresAt pg -> holdDatabaseShared pg >>= maybe (throwIO (DataDirInUse "The PostgreSQL database is being restored (wiki-server restore holds its lock): start the server once the restore has ended.")) pure
+    flip onException release $ do
+      engine <- case place.database of
+        SqliteFile file -> Engine <$> pools (openSqlite ReadWrite file) (openSqlite ReadOnly file)
+        PostgresAt pg -> Engine <$> pools (openPostgres pg) (openPostgres pg)
+      flip onException (closeEngine engine) $ do
+        (settings, serverKept) <- case engine of
+          Engine p -> withResource p.writer $ \c -> do
+            _ <- migrate c
+            when collect $ do
+              collectGarbage c place.dataDir
+              -- Uploads and exports left by a server that stopped: nothing
+              -- is writing them now.
+              removePathForcibly (temporaryDir place.dataDir)
+            -- The settings are read here, on the writer, before any reader
+            -- is used. A reader then always finds them in memory, and never
+            -- writes the in-memory copy.
+            (,) <$> (newIORef . Just =<< runDb c loadSettings) <*> (newIORef . Just =<< runDb c loadServerSettings)
+        tracer <- newIORef Nothing
+        pure Storage {engine, place, config, settings, serverKept, tracer, lock, release}
 
 -- | The pools of a database's connections: one writer, and the readers.
 -- A connection unused for ten minutes is closed.
@@ -383,7 +395,7 @@ instance Exception DataDirInUse where
 
 -- | Close the storage's database, and release its directory's lock.
 closeStorage :: Storage -> IO ()
-closeStorage st = closeEngine st.engine `finally` traverse_ unlockDataDir st.lock
+closeStorage st = closeEngine st.engine `finally` st.release `finally` traverse_ unlockDataDir st.lock
 
 -- | Run something with the storage open, and close it afterwards.
 withStorage :: Config -> Place -> (Storage -> IO a) -> IO a
@@ -469,9 +481,14 @@ storagePlace st = st.place
 
 -- | What the storage's database can do, as the API says it
 -- ("Wiki.Api.Info").
+-- They follow from the kind of database alone, so no connection is used:
+-- the application asks for them on every page it loads.
 storageCapabilities :: Storage -> IO Capabilities
 storageCapabilities st = case st.engine of
-  Engine p -> withResource p.readers (pure . capabilities)
+  Engine p -> pure (capabilitiesOf p)
+  where
+    capabilitiesOf :: forall be. (Backend be) => Pools be -> Capabilities
+    capabilitiesOf _ = capabilities (Proxy @be)
 
 -- | The wiki's settings as they are now, from memory.
 readSettings :: Storage -> IO WikiSettings

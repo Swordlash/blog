@@ -52,7 +52,7 @@ import Wiki.Server.SecondFactor (newPendingSignIns)
 import Wiki.Server.Session (CookieSettings (..))
 import Wiki.Server.Static (openStaticSite)
 import Wiki.Server.Storage (Config (..), DataDirInUse (..), Database (..), Place (..), readServerSettings, withStorage)
-import Wiki.Server.Storage.Layout (withoutPassword)
+import Wiki.Server.Storage.Layout (PgDatabase (..), withoutPassword)
 import Wiki.Server.Storage.Migrate (OldSchema, SchemaTooNew)
 import Wiki.Server.Vault (newCeremonies)
 import Wiki.Server.Version (serverVersion)
@@ -251,4 +251,4 @@ showAddress a = "http://" <> T.pack (show a)
 databaseName :: Database -> Text
 databaseName = \case
   SqliteFile file -> "sqlite:" <> toS file
-  PostgresAt url -> decodeUtf8 (withoutPassword url)
+  PostgresAt db -> decodeUtf8 (withoutPassword db.url)

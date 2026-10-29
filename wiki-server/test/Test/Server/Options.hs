@@ -6,6 +6,8 @@ module Test.Server.Options (spec) where
 import Data.Text qualified as T
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, info)
 import Protolude
+import System.Directory (emptyPermissions, setOwnerExecutable, setOwnerReadable, setPermissions)
+import System.Environment (setEnv, unsetEnv)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Timeout (timeout)
@@ -15,11 +17,16 @@ import Test.Server.Fixture (withRunningAs)
 import Wiki.Server (Server (..), ServerError (..), withServer)
 import Wiki.Server.Log (silentLogger)
 import Wiki.Server.Options
+import Wiki.Server.Secret (Secret (..))
+import Wiki.Server.Storage (Database (..), PgDatabase (..), Place (..))
+import Wiki.Server.Storage.Layout (withoutPassword)
+import Wiki.Server.Storage.Postgres (PgPrograms (..), connectionString, defaultPgPrograms, dumpPostgres)
 
 spec :: Backing -> Spec
 spec backing = describe "the server's options" $ do
   addresses
   rules
+  database
   refusedAtStart backing
 
 addresses :: Spec
@@ -74,6 +81,65 @@ rules = describe "a configuration" $ do
       case parsed (["--data", "data"] <> args) of
         Failure f -> show f `shouldSatisfy` T.isInfixOf "Server section"
         _ -> expectationFailure ("taken: " <> show args)
+
+-- | The options that name a PostgreSQL database, through the parser the
+-- command line goes through, and where its password goes from there.
+database :: Spec
+database = describe "a PostgreSQL database" $ do
+  let parsed args = case execParserPure defaultPrefs (info serveOptions mempty) (["--data", "data"] <> args) of
+        Success o -> Right o.database
+        Failure f -> Left (show f :: Text)
+        CompletionInvoked _ -> Left "completion"
+      url = "postgres://wiki@127.0.0.1:5433/wiki"
+
+  it "is a URL with a user and no password, the password in a file, as the deploy gives them" $ do
+    parsed ["--database", toS url, "--database-password-file", "/run/secrets/db-password"] `shouldBe` Right (PostgresChosen url (Just "/run/secrets/db-password"))
+    for_ ["postgres://127.0.0.1/wiki", "postgresql://wiki@db/wiki?sslmode=require", "postgres://wiki@[::1]:5432/wiki", "postgres://wiki@db:5432/wiki?host=/run/postgresql"] $ \u ->
+      parsed ["--database", toS u] `shouldBe` Right (PostgresChosen u Nothing)
+
+  it "is refused with a password in its text, which every user of the machine could read" $
+    for_ ["postgres://wiki:secret@db/wiki", "postgresql://:secret@db/wiki", "postgres://wiki@db/wiki?password=secret", "postgres://wiki@db/wiki?sslmode=require&password=secret" :: Text] $ \u ->
+      parsed ["--database", toS u] `shouldSatisfy` either (T.isInfixOf "--database-password-file") (const False)
+
+  it "keeps the file's password apart from the URL, so that nothing that shows the place shows it" $
+    withSystemTempDirectory "wiki-options-test" $ \dir -> do
+      writeFile (dir </> "password") "s3cr+et/&é\n"
+      resolvePlace dir (PostgresChosen url (Just (dir </> "password"))) defaultPgPrograms >>= \case
+        Left why -> expectationFailure (toS why)
+        Right place -> do
+          place.database `shouldBe` PostgresAt PgDatabase {url = encodeUtf8 url, password = Just (Secret "s3cr+et/&é")}
+          show place `shouldNotSatisfy` T.isInfixOf "s3cr"
+          -- libpq takes it percent-encoded, a + as %2B: it decodes a
+          -- parameter of a URL by percent-decoding only.
+          case place.database of
+            PostgresAt db -> connectionString db `shouldBe` encodeUtf8 url <> "?password=s3cr%2Bet%2F%26%C3%A9"
+            SqliteFile _ -> expectationFailure "on SQLite"
+      resolvePlace dir (PostgresChosen url (Just (dir </> "none"))) defaultPgPrograms >>= (`shouldSatisfy` either (T.isInfixOf "cannot be read") (const False))
+
+  it "shows a URL given whole with its passwords hidden, in every form libpq takes one" $ do
+    withoutPassword "postgres://wiki:secret@db:5432/wiki" `shouldBe` "postgres://wiki:***@db:5432/wiki"
+    withoutPassword "postgres://wiki@db/wiki?password=secret" `shouldBe` "postgres://wiki@db/wiki?password=***"
+    withoutPassword "postgres://wiki@db/wiki?sslmode=require&password=se%20cret&application_name=x" `shouldBe` "postgres://wiki@db/wiki?sslmode=require&password=***&application_name=x"
+    withoutPassword "host=db dbname=wiki password=secret user=wiki" `shouldBe` "host=db dbname=wiki password=*** user=wiki"
+    withoutPassword "host=db password='se \\'cret' user=wiki" `shouldBe` "host=db password=*** user=wiki"
+    withoutPassword "postgres://wiki@db/wiki" `shouldBe` "postgres://wiki@db/wiki"
+    show (PostgresAt PgDatabase {url = "postgres://wiki:secret@db/wiki", password = Just (Secret "other")}) `shouldNotSatisfy` (\t -> any (`T.isInfixOf` t) ["secret", "other"])
+
+  it "gives its password to pg_dump in the environment: its own, the URL's decoded as libpq does, or else the server's PGPASSWORD" $
+    withSystemTempDirectory "wiki-options-test" $ \dir -> do
+      -- A pg_dump that writes the password it was given, and its
+      -- arguments, as its dump.
+      let program = dir </> "pg_dump"
+      writeFile program "#!/bin/sh\nprintf '%s|%s' \"$PGPASSWORD\" \"$*\"\n"
+      setPermissions program (setOwnerExecutable True (setOwnerReadable True emptyPermissions))
+      let given db = do
+            dumped <- dumpPostgres defaultPgPrograms {dump = program} db Nothing (dir </> "out")
+            dumped `shouldBe` Right ()
+            readFile (dir </> "out")
+      given PgDatabase {url = encodeUtf8 url, password = Just (Secret "from a file")} `shouldReturn` ("from a file|--format=custom --no-owner --no-privileges --dbname=" <> url)
+      given PgDatabase {url = "postgres://wiki@db/wiki?password=a+b%20c&sslmode=require", password = Nothing} `shouldReturn` "a+b c|--format=custom --no-owner --no-privileges --dbname=postgres://wiki@db/wiki?sslmode=require"
+      bracket_ (setEnv "PGPASSWORD" "inherited") (unsetEnv "PGPASSWORD") $
+        given PgDatabase {url = encodeUtf8 url, password = Nothing} `shouldReturn` ("inherited|--format=custom --no-owner --no-privileges --dbname=" <> url)
 
 refusedAtStart :: Backing -> Spec
 refusedAtStart backing = describe "a server" $ do

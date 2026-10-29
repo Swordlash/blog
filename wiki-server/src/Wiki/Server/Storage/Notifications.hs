@@ -36,6 +36,7 @@ module Wiki.Server.Storage.Notifications
     -- * Mail
   , Pending (..)
   , loadPending
+  , unqueueUsers
   , clearPending
   , pruneNotifications
   , unsubscribeToken
@@ -50,6 +51,7 @@ import Crypto.MAC.HMAC (HMAC (..), hmac)
 import Crypto.Random (getRandomBytes)
 import Data.ByteArray qualified as BA
 import Data.ByteArray.Encoding (Base (Base16), convertFromBase, convertToBase)
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -301,16 +303,18 @@ data Pending = Pending
   , notifications :: [Notification]
   }
 
--- | Every user who may sign in and has notifications queued for mail.
-loadPending :: (Backend be) => Db be [Pending]
+-- | Every user who may sign in and has notifications queued for mail; and
+-- the users who may not sign in (disabled) and still have some queued,
+-- whose queue 'unqueueUsers' empties, since they are mailed nothing, now
+-- or later. This only reads, so it runs on a reader: the mail queue is
+-- checked every round, and the writer is not taken for that.
+loadPending :: (Backend be) => Db be ([UserId], [Pending])
 loadPending = do
-  -- A user who may not sign in is mailed nothing, now or later.
-  disabled <- runSelectReturningList (select ((\u -> u.id) <$> filter_ (\u -> u.disabled ==. val_ True) (all_ wikiDb.users)))
-  for_ (chunksOf 500 disabled) $ \chunk -> unqueue (\n -> n.user_id `in_` map val_ chunk)
   waiting <- runSelectReturningList . select . aggregate_ (\n -> group_ n.user_id) $ filter_ (\n -> n.mail ==. val_ True) (all_ wikiDb.notifications)
   users <- fmap concat . for (chunksOf 500 waiting) $ \chunk ->
     runSelectReturningList (select (orderBy_ (\u -> asc_ u.id) (filter_ (\u -> u.id `in_` map val_ chunk) (all_ wikiDb.users))))
-  for users $ \r -> do
+  let (disabled, enabled) = List.partition (\r -> r.disabled) users
+  pending <- for enabled $ \r -> do
     ns <- mapMaybe notificationOf <$> runSelectReturningList (select (orderBy_ (\n -> asc_ n.seq) (filter_ (\n -> n.user_id ==. val_ r.id &&. n.mail ==. val_ True) (all_ wikiDb.notifications))))
     pure
       Pending
@@ -320,6 +324,12 @@ loadPending = do
         , mail = r.notification_mail >>= readMailMode
         , notifications = ns
         }
+  pure (map (\r -> UserId r.id) disabled, pending)
+
+-- | Remove these users' notifications from the mail queue: users who may
+-- not sign in ('loadPending').
+unqueueUsers :: (Backend be) => [UserId] -> Db be ()
+unqueueUsers us = for_ (chunksOf 500 us) $ \chunk -> unqueue (\n -> n.user_id `in_` map (\u -> val_ u.text) chunk)
 
 -- | Remove these notifications from the mail queue: they were mailed, or
 -- will not be.

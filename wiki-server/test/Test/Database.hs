@@ -45,7 +45,7 @@ import System.Posix.User (getEffectiveUserID)
 import System.Process (callProcess, readProcessWithExitCode)
 import Test.Hspec (pendingWith)
 import Wiki.Server.Options (DatabaseChoice (..), PlaceOptions (..))
-import Wiki.Server.Storage (Database (..), Place (..), inDataDir)
+import Wiki.Server.Storage (Database (..), PgDatabase (..), Place (..), inDataDir, postgresAt)
 import Wiki.Server.Storage.Backend (Backend (..))
 import Wiki.Server.Storage.Postgres (PgPrograms (..), closePostgres, defaultPgPrograms, openPostgres)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, openSqlite)
@@ -170,14 +170,14 @@ withPlace backing dir act = case backing of
         admin = BC.pack (toS server.url)
         statement q = bracket (Pg.connectPostgreSQL admin) Pg.close (\c -> void (Pg.execute_ c (Query (encodeUtf8 q))))
     bracket_ (statement ("CREATE DATABASE " <> name)) (statement ("DROP DATABASE IF EXISTS " <> name <> " WITH (FORCE)")) $
-      act Place {dataDir = dir, database = PostgresAt (encodeUtf8 (databaseUrl server.url name)), programs = server.programs}
+      act Place {dataDir = dir, database = postgresAt (encodeUtf8 (databaseUrl server.url name)), programs = server.programs}
 
 -- | The command line's choice of a database, for a place: what a test
 -- gives a server or a console command to find the place's database.
 choiceOf :: Database -> DatabaseChoice
 choiceOf = \case
   SqliteFile file -> SqliteChosen file
-  PostgresAt url -> PostgresChosen (decodeUtf8 url) Nothing
+  PostgresAt db -> PostgresChosen (decodeUtf8 db.url) Nothing
 
 -- | The console's options for a place.
 placeOptionsOf :: Place -> PlaceOptions
@@ -189,4 +189,4 @@ placeOptionsOf at = PlaceOptions {dataDir = at.dataDir, database = choiceOf at.d
 withConnectionTo :: Place -> (forall be. (Backend be) => Connection be -> IO a) -> IO a
 withConnectionTo at act = case at.database of
   SqliteFile file -> bracket (openSqlite ReadWrite file) closeSqlite act
-  PostgresAt url -> bracket (openPostgres url) closePostgres act
+  PostgresAt db -> bracket (openPostgres db) closePostgres act

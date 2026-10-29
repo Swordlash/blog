@@ -23,7 +23,12 @@ module Wiki.Server.Storage.Postgres
   ( -- * Connections
     Connection
   , openPostgres
+  , connectionString
   , closePostgres
+
+    -- * The database's lock
+  , holdDatabaseShared
+  , withDatabaseAlone
 
     -- * Transactions
   , beginPostgres
@@ -52,13 +57,15 @@ where
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BC
+import Data.Char (isAsciiLower, isAsciiUpper)
 import Data.List qualified as List
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, Generic, Table (..), TableEntity, all_, customExpr_, defaultDbSettings, desc_, filter_, guard_, in_, limit_, orderBy_, select, val_, (==.))
 import Database.Beam qualified as Beam
 import Database.Beam.Postgres (Pg, Postgres, TsQuery, TsVector, (@@))
-import Database.PostgreSQL.Simple (Connection, SqlError (..), close, connectPostgreSQL, execute_)
+import Database.PostgreSQL.Simple (Connection, Only (..), SqlError (..), close, connectPostgreSQL, execute_)
+import Database.PostgreSQL.Simple qualified as Pg
 import Database.PostgreSQL.Simple.Transaction (IsolationLevel (..), ReadWriteMode (..), TransactionMode (..), beginMode, commit, isSerializationError, rollback)
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Network.HTTP.Types.URI (urlDecode)
@@ -66,18 +73,77 @@ import Protolude hiding (Generic)
 import System.Environment (getEnvironment)
 import System.IO (hClose)
 import System.Process (CreateProcess (..), StdStream (..), proc, waitForProcess, withCreateProcess)
+import Text.Printf (printf)
+import Wiki.Server.Secret (Secret (..))
+import Wiki.Server.Storage.Layout (PgDatabase (..))
 import Wiki.Server.Storage.Schema (PageNodes (..))
 
 --------------------------------------------------------------------------------
 -- Connections
 
--- | Open a connection to a database, given as a libpq connection string
--- or URL (@postgres:\/\/user\@host\/database@).
-openPostgres :: ByteString -> IO Connection
-openPostgres = connectPostgreSQL
+-- | Open a connection to a database ('PgDatabase': a libpq connection
+-- string or URL, @postgres:\/\/user\@host\/database@, and its password
+-- when that is kept apart).
+openPostgres :: PgDatabase -> IO Connection
+openPostgres = connectPostgreSQL . connectionString
+
+-- | The text libpq connects with: the database's URL or connection
+-- string, with its password added when that is kept apart. This text is
+-- given to libpq and to nothing else, since it holds the password.
+connectionString :: PgDatabase -> ByteString
+connectionString db = case db.password of
+  Nothing -> db.url
+  Just (Secret p)
+    | "://" `BS.isInfixOf` db.url ->
+        db.url <> (if "?" `BC.isInfixOf` db.url then "&" else "?") <> "password=" <> percentEncoded (encodeUtf8 p)
+    | otherwise -> db.url <> " password='" <> BC.concatMap escaped (encodeUtf8 p) <> "'"
+  where
+    -- A libpq URL's parameter is percent-decoded and nothing else (a +
+    -- stays a +), so every byte but the unreserved ones is percent-encoded.
+    percentEncoded = BC.concatMap $ \ch ->
+      if isAsciiUpper ch || isAsciiLower ch || isDigit ch || ch `elem` ("-._~" :: [Char])
+        then BC.singleton ch
+        else BC.pack (printf "%%%02X" (ord ch))
+    -- A quoted value of a connection string escapes quotes and backslashes.
+    escaped ch = if ch == '\'' || ch == '\\' then BC.pack ['\\', ch] else BC.singleton ch
 
 closePostgres :: Connection -> IO ()
 closePostgres = close
+
+--------------------------------------------------------------------------------
+-- The database's lock
+
+-- | The key of the advisory lock that says who has the database open
+-- ('holdDatabaseShared', 'withDatabaseAlone'): the bytes of "wiki-ser". An
+-- advisory lock belongs to one database, so wikis in other databases of
+-- the same PostgreSQL server do not share it.
+databaseLockKey :: Int64
+databaseLockKey = 0x77696b692d736572
+
+-- | Take the database's lock shared, as one of the storages that have the
+-- database open (a server, the console), on a connection of its own that
+-- holds the lock until it is closed. The data directory's lock does not
+-- do this on PostgreSQL: two data directories may name one database. The
+-- result is the action that releases the lock, or 'Nothing' when a
+-- restore holds it ('withDatabaseAlone').
+holdDatabaseShared :: PgDatabase -> IO (Maybe (IO ()))
+holdDatabaseShared db = do
+  c <- openPostgres db
+  took <- tryLock c "pg_try_advisory_lock_shared" `onException` close c
+  if took then pure (Just (close c)) else close c $> Nothing
+
+-- | Run an action with the database's lock taken alone, as a restore
+-- does: no storage has the database open while the action runs, and none
+-- can open it. The result is 'Nothing', and the action is not run, when a
+-- storage has the database open.
+withDatabaseAlone :: PgDatabase -> IO a -> IO (Maybe a)
+withDatabaseAlone db act = bracket (openPostgres db) close $ \c ->
+  ifM (tryLock c "pg_try_advisory_lock") (Just <$> act) (pure Nothing)
+
+-- | Try to take the database's lock with one of PostgreSQL's functions
+-- for it, which answers whether it took the lock.
+tryLock :: Connection -> ByteString -> IO Bool
+tryLock c function = (== [Only True]) <$> Pg.query c (Query ("SELECT " <> function <> "(?)")) (Only databaseLockKey)
 
 --------------------------------------------------------------------------------
 -- Transactions
@@ -254,38 +320,43 @@ defaultPgPrograms = PgPrograms {dump = "pg_dump", restore = "pg_restore"}
 -- dump is written to the program's output, so that a program that runs
 -- @pg_dump@ somewhere else (in a container) can hand it over. The result
 -- is why it failed, if it did.
-dumpPostgres :: PgPrograms -> ByteString -> Maybe Text -> FilePath -> IO (Either Text ())
-dumpPostgres programs url snapshot target =
+dumpPostgres :: PgPrograms -> PgDatabase -> Maybe Text -> FilePath -> IO (Either Text ())
+dumpPostgres programs db snapshot target =
   withFile target WriteMode $ \out ->
-    runProgram programs.dump url (["--format=custom", "--no-owner", "--no-privileges"] <> ["--snapshot=" <> s | Just s <- [snapshot]]) Nothing (Just out)
+    runProgram programs.dump (Just db) (["--format=custom", "--no-owner", "--no-privileges"] <> ["--snapshot=" <> s | Just s <- [snapshot]]) Nothing (Just out)
 
 -- | Restore a dump into a database, in one transaction: every object of
 -- the wiki is dropped and made again from the dump. The result is why it
 -- failed, if it did; then the database is as it was.
-restorePostgres :: PgPrograms -> ByteString -> FilePath -> IO (Either Text ())
-restorePostgres programs url dumpFile =
+restorePostgres :: PgPrograms -> PgDatabase -> FilePath -> IO (Either Text ())
+restorePostgres programs db dumpFile =
   withFile dumpFile ReadMode $ \input ->
-    runProgram programs.restore url ["--clean", "--if-exists", "--no-owner", "--no-privileges", "--single-transaction", "--exit-on-error"] (Just input) Nothing
+    runProgram programs.restore (Just db) ["--clean", "--if-exists", "--no-owner", "--no-privileges", "--single-transaction", "--exit-on-error"] (Just input) Nothing
 
 -- | Whether a file is a dump @pg_restore@ can read: it lists the dump's
 -- contents, and fails for anything else.
 checkDump :: PgPrograms -> FilePath -> IO (Either Text ())
 checkDump programs dumpFile =
   withFile dumpFile ReadMode $ \input ->
-    runProgram programs.restore "" ["--list"] (Just input) Nothing
+    runProgram programs.restore Nothing ["--list"] (Just input) Nothing
 
 -- | Run a program with these arguments, its input from a handle and its
 -- output into one when given. Its error output is the reason given when
--- it fails. A database's URL, when one is given, is added as @--dbname@
--- without its password, and the password goes to the program in
--- @PGPASSWORD@: every user of the machine can read a process's arguments,
--- but not its environment.
-runProgram :: FilePath -> ByteString -> [Text] -> Maybe Handle -> Maybe Handle -> IO (Either Text ())
-runProgram program url args input output = do
+-- it fails. A database, when one is given, is added as @--dbname@ without
+-- its password, and the password goes to the program in @PGPASSWORD@:
+-- every user of the machine can read a process's arguments, but not its
+-- environment. Without a password of the database's own, the program
+-- keeps the @PGPASSWORD@ the server has, which libpq reads as the server's
+-- connections do.
+runProgram :: FilePath -> Maybe PgDatabase -> [Text] -> Maybe Handle -> Maybe Handle -> IO (Either Text ())
+runProgram program db args input output = do
   inherited <- getEnvironment
-  let (bare, password) = splitPassword url
-      dbname = ["--dbname=" <> decodeUtf8 bare | not (BS.null url)]
-      env = [("PGPASSWORD", BC.unpack p) | Just p <- [password]] <> filter ((/= "PGPASSWORD") . fst) inherited
+  let (bare, fromUrl) = maybe ("", Nothing) (splitPassword . (.url)) db
+      password = ((\(Secret p) -> encodeUtf8 p) <$> (db >>= (.password))) <|> fromUrl
+      dbname = ["--dbname=" <> decodeUtf8 bare | isJust db]
+      env = case password of
+        Just p -> ("PGPASSWORD", BC.unpack p) : filter ((/= "PGPASSWORD") . fst) inherited
+        Nothing -> inherited
   ran <- try @SomeException
     $ withCreateProcess
       (proc program (map toS (args <> dbname)))
@@ -308,11 +379,11 @@ runProgram program url args input output = do
     Right (ExitSuccess, _) -> Right ()
     Right (ExitFailure n, complaint) -> Left (T.pack program <> " failed (exit code " <> show n <> "): " <> T.strip (decodeUtf8 complaint))
 
--- | A connection URL without its password, and the password, decoded: the
--- password of the URL's user part (@postgres:\/\/user:password\@host\/db@)
--- or of its @password@ parameter (@?password=…@, as "Wiki.Server.Options"
--- adds one read from a file). A libpq connection string that is no URL is
--- given back whole.
+-- | A connection URL without its password, and the password, decoded as
+-- libpq decodes it (percent-decoding only: a + stays a +): the password of
+-- the URL's user part (@postgres:\/\/user:password\@host\/db@) or of its
+-- @password@ parameter (@?password=…@), as a URL given whole may have. A
+-- libpq connection string that is no URL is given back whole.
 splitPassword :: ByteString -> (ByteString, Maybe ByteString)
 splitPassword url = case BC.breakSubstring "://" url of
   (scheme, rest)
@@ -326,7 +397,7 @@ splitPassword url = case BC.breakSubstring "://" url of
             (path, query) = BC.break (== '?') pathAndQuery
             parameters = filter (not . BS.null) (BC.split '&' (BS.drop 1 query))
             (passwords, others) = List.partition ("password=" `BS.isPrefixOf`) parameters
-            fromQuery = urlDecode True . BS.drop (BS.length "password=") <$> head passwords
+            fromQuery = urlDecode False . BS.drop (BS.length "password=") <$> head passwords
             kept = if null others then "" else "?" <> BS.intercalate "&" others
          in (scheme <> "://" <> host <> path <> kept, fromUser <|> fromQuery)
   _ -> (url, Nothing)

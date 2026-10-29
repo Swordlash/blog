@@ -113,7 +113,7 @@ class
 
   -- | What this database can do that the other cannot, as the API tells
   -- the application ("Wiki.Api.Info").
-  capabilities :: Connection be -> Capabilities
+  capabilities :: Proxy be -> Capabilities
 
   -- | The pages of these spaces that the query finds, templates only if
   -- asked for, with the text a hit's snippet is cut from. The words are

@@ -49,7 +49,7 @@ import Wiki.Core.User (User (..))
 import Wiki.Server.Log (Level (..), Logger, logWith)
 import Wiki.Server.Mail (Mailer (..), SendMail, mailerFrom, notificationMessage)
 import Wiki.Server.Storage (Storage, locatedFor, readServerSettings, reading, writing)
-import Wiki.Server.Storage.Notifications (Pending (..), clearPending, lastDigest, loadPending, pruneNotifications, storeLastDigest, unsubscribeToken)
+import Wiki.Server.Storage.Notifications (Pending (..), clearPending, lastDigest, loadPending, pruneNotifications, storeLastDigest, unqueueUsers, unsubscribeToken)
 
 -- | What wakes the thread: incremented when notifications are created.
 newtype Wake = Wake (TVar Int)
@@ -114,7 +114,8 @@ mailRound n now = do
   last' <- reading n.storage lastDigest
   let today = utctDay now
       digestDue = todHour (timeToTimeOfDay (utctDayTime now)) >= digestHour && last' < Just today
-  pending <- writing n.storage loadPending
+  (disabled, pending) <- reading n.storage loadPending
+  unless (null disabled) $ writing n.storage (unqueueUsers disabled)
   for_ pending $ \p -> do
     let ids = map (\x -> x.id) p.notifications
         mode = effectiveMailMode p.verified p.mail

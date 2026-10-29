@@ -14,7 +14,7 @@ import Protolude
 import System.Directory (copyFile, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, listDirectory)
 import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Database (Backing)
+import Test.Database (Backing (..))
 import Test.Hspec
 import Test.Storage.Fixture
 import Wiki.Api.Backups (BackupSettingsOf (..), Backups (..), DestinationOf (..), Retention (..), Schedule (..), defaultBackupSettings)
@@ -25,12 +25,12 @@ import Wiki.Core.Attachment (Attachment (..), Source (..))
 import Wiki.Core.Export (Archive (..))
 import Wiki.Core.Page (Page (..))
 import Wiki.Core.Space (Space (..))
-import Wiki.Server.Secret (revealed)
+import Wiki.Server.Secret (Secret (..), revealed)
 import Wiki.Server.Storage
 import Wiki.Server.Storage.Backup
 import Wiki.Server.Storage.Blobs (blobFile, storedBlobs)
 import Wiki.Server.Storage.Layout (attachmentsDir, backupsDir)
-import Wiki.Server.Storage.Postgres (PgPrograms (..), checkDump)
+import Wiki.Server.Storage.Postgres (PgPrograms (..), checkDump, withDatabaseAlone)
 import Wiki.Server.Storage.Sqlite (Access (..), closeSqlite, integrityProblems, openSqlite)
 
 spec :: Backing -> Spec
@@ -183,13 +183,52 @@ restoring backing = describe "restore" $ do
         whenM (doesFileExist (made <> ".json")) (copyFile (made <> ".json") (copy <> ".json"))
         pure copy
       withPlaceIn backing $ \at -> do
-        withStorage defaultConfig at (\st -> importArchive st demoArchive) >>= ok
+        rows <- withStorage defaultConfig at (\st -> importArchive st demoArchive >>= ok >> tableRows st)
         said <- restore (restoreInto at file Nothing) >>= either (panic . toS) pure
         T.unlines said `shouldSatisfy` T.isInfixOf "Warning: 1 of the attachments' files"
         replaced <- listDirectory (at.dataDir </> "replaced")
         length replaced `shouldBe` 1
-        kept <- listDirectory (at.dataDir </> "replaced" </> fromMaybe "" (head replaced))
+        let aside = at.dataDir </> "replaced" </> fromMaybe "" (head replaced)
+        kept <- listDirectory aside
         kept `shouldContain` [keptName at]
+        -- What was replaced restores as a backup does, which undoes the
+        -- restore: a dump has its facts beside it, as a backup has.
+        _ <- restore (restoreInto at (aside </> keptName at) Nothing) >>= either (panic . toS) pure
+        withStorageAside at tableRows `shouldReturn` rows
+        length <$> listDirectory (at.dataDir </> "replaced") `shouldReturn` 2
+
+  case backing of
+    OnPostgres _ -> it "refuses a PostgreSQL database that a storage on another data directory has open, and a storage cannot open one being restored" $
+      withContent backing $ \at st -> do
+        file <- backupOf at
+        was <- tableRows st
+        withSystemTempDirectory "wiki-restore-test" $ \other -> do
+          let elsewhere = Place {dataDir = other, database = at.database, programs = at.programs}
+          restore (restoreInto elsewhere file Nothing) >>= \case
+            Left why -> why `shouldSatisfy` T.isInfixOf "open in a running server or console"
+            Right _ -> expectationFailure "restored a database that a storage has open"
+          doesDirectoryExist (other </> "replaced") `shouldReturn` False
+        tableRows st `shouldReturn` was
+        withPlaceIn backing $ \fresh -> case fresh.database of
+          PostgresAt db -> do
+            withStorage defaultConfig fresh (const pass)
+            opened <- withDatabaseAlone db (try @DataDirInUse (withStorage defaultConfig fresh (const pass)))
+            either (\(DataDirInUse why) -> why) (const "opened") <$> opened `shouldBe` Just "The PostgreSQL database is being restored (wiki-server restore holds its lock): start the server once the restore has ended."
+          SqliteFile _ -> expectationFailure "a place on SQLite"
+    _ -> pass
+  case backing of
+    -- The test server trusts every connection and ignores the password;
+    -- what this checks is that the password, kept apart from the URL,
+    -- makes a connection string libpq takes, and reaches pg_dump.
+    OnPostgres _ -> it "opens and backs up a PostgreSQL database whose password is kept apart from its URL" $
+      withPlaceIn backing $ \plain -> case plain.database of
+        PostgresAt db -> do
+          let at = Place {dataDir = plain.dataDir, database = PostgresAt PgDatabase {url = db.url, password = Just (Secret "pass + word/&é")}, programs = plain.programs}
+          withStorage defaultConfig at $ \st -> importArchive st demoArchive >>= ok
+          file <- backupOf at
+          problemsOf at file `shouldReturn` []
+        SqliteFile _ -> expectationFailure "a place on SQLite"
+    _ -> pass
 
   it "refuses what is not a sound backup of a wiki, and a directory of attachments that is not there" $
     withSystemTempDirectory "wiki-restore-test" $ \dir -> withPlaceIn backing $ \at -> do

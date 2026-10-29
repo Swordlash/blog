@@ -31,7 +31,16 @@ which search answers. Options: `--database URL` (with
 `--pg-restore` (or `WIKI_PG_DUMP` and `WIKI_PG_RESTORE`). `backup` makes a
 `pg_dump` on PostgreSQL, with the facts it cannot hold beside it
 (`<time>.pgdump.json`), and exits with 3 for a database of an earlier
-wiki-server; `restore` restores one with `pg_restore`.
+wiki-server; `restore` restores one with `pg_restore`. A PostgreSQL
+database is a `PgDatabase`: its URL, and the password read from
+`--database-password-file` kept apart from it (`Wiki.Server.Secret`), so
+that no log line or `Show` holds the password; it joins the URL only to
+connect (`connectionString`), and reaches `pg_dump` and `pg_restore` in
+`PGPASSWORD`, or else the server's own `PGPASSWORD` passes through. Every
+open storage holds an advisory lock on the PostgreSQL database shared, and
+`restore` takes it alone, so a restore refuses a database that any server
+or console has open, from whatever data directory; the database a restore
+replaces is dumped with its facts and restores as a backup does.
 
 The assistant's vault and passkeys (WP5.21): migration
 `0016-assistant-vault.sql` (`passkeys`, `assistant_vaults`),

@@ -52,15 +52,15 @@ module Wiki.Server.Options
 where
 
 import Data.Text qualified as T
-import Network.HTTP.Types.URI (urlEncode)
 import Network.Socket (HostAddress6, hostAddressToTuple)
 import Network.Socket qualified as Socket
 import Options.Applicative
 import Protolude
 import System.Environment (lookupEnv)
 import Wiki.Api.ContentPolicy (parseAssistantHost)
+import Wiki.Server.Secret (Secret (..))
 import Wiki.Server.Storage (Database (..), Place (..))
-import Wiki.Server.Storage.Layout (defaultDatabase)
+import Wiki.Server.Storage.Layout (PgDatabase (..), defaultDatabase, postgresAt)
 import Wiki.Server.Storage.Postgres (PgPrograms (..), defaultPgPrograms)
 
 -- | An address to listen on: a numeric IPv4 or IPv6 address and a port
@@ -300,8 +300,14 @@ databaseChoice = sqlite <|> postgres <|> pure InDataDirectory
        in if hasPassword t
             then Left "a --database URL with a password in it would show the password to every user of the machine: put the password in --database-password-file FILE, or the whole URL in WIKI_DATABASE_URL"
             else Right t
-    hasPassword t = case T.breakOn "@" (snd (T.breakOn "://" t)) of
-      (credentials, rest) -> not (T.null rest) && ":" `T.isInfixOf` credentials || "password=" `T.isInfixOf` t
+    hasPassword t = userPassword t || "password=" `T.isInfixOf` t
+    -- A password in the URL's user part: a colon before the @ of the part
+    -- between the scheme and the path (postgres://wiki:secret@host/db).
+    userPassword t = case T.breakOn "://" t of
+      (_, rest)
+        | T.null rest -> False
+        | otherwise -> case T.breakOn "@" (T.takeWhile (/= '/') (T.drop 3 rest)) of
+            (credentials, at) -> not (T.null at) && ":" `T.isInfixOf` credentials
 
 -- | The options that name the programs a PostgreSQL backup and restore
 -- run: @--pg-dump@ and @--pg-restore@, or else @WIKI_PG_DUMP@ and
@@ -353,16 +359,14 @@ resolvePlace dataDir choice programs = runExceptT $ do
     fromEnvironment default' variable given
       | given == default' = fromMaybe given . mfilter (not . null) <$> liftIO (lookupEnv variable)
       | otherwise = pure given
+    -- The password stays apart from the URL ('PgDatabase'), so that
+    -- nothing that shows the URL shows it.
     postgres url = \case
-      Nothing -> pure (PostgresAt (encodeUtf8 url))
+      Nothing -> pure (postgresAt (encodeUtf8 url))
       Just file -> do
         read' <- liftIO (try @SomeException (readFile file))
         password <- either (\e -> throwError ("The database's password file " <> toS file <> " cannot be read: " <> show e)) (pure . T.strip) read'
-        pure (PostgresAt (encodeUtf8 (withPassword url password)))
-    -- The password as a parameter of the URL, which libpq reads as it
-    -- reads one in the URL's user part, escaped as a URL's query is.
-    withPassword url password =
-      url <> (if "?" `T.isInfixOf` url then "&" else "?") <> "password=" <> decodeUtf8 (urlEncode True (encodeUtf8 password))
+        pure (PostgresAt PgDatabase {url = encodeUtf8 url, password = Just (Secret password)})
 
 -- | The options the administration's "Server" section replaced (WP4.4).
 removedOptions :: [[Char]]
